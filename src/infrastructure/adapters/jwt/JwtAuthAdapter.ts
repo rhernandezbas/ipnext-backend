@@ -1,9 +1,10 @@
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import { AuthProvider, CookieConfig, LoginCredentials } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import { AuthenticationError } from '@domain/errors';
 import { config } from '../../config';
-import { SplynxClient } from '../splynx/SplynxClient';
+import { prisma } from '../../database/prisma';
 
 const COOKIE_NAME = 'auth_token';
 const MAX_AGE_SECONDS = 8 * 60 * 60; // 8 hours
@@ -16,29 +17,36 @@ interface JwtPayload {
 }
 
 export class JwtAuthAdapter implements AuthProvider {
-  constructor(private readonly splynxClient: SplynxClient) {}
-
   async login(credentials: LoginCredentials): Promise<{ user: User; cookieValue: string; cookieOptions: CookieConfig }> {
-    // Authenticate against Splynx
-    let splynxUser: Record<string, unknown>;
-    try {
-      splynxUser = await this.splynxClient.post<Record<string, unknown>>('/api/2.0/admin/auth/login', {
-        login: credentials.username,
-        password: credentials.password,
-      });
-    } catch {
+    const admin = await prisma.admin.findFirst({
+      where: {
+        OR: [
+          { email: credentials.username },
+          { name: credentials.username },
+        ],
+        status: 'active',
+      },
+    });
+
+    if (!admin || !admin.passwordHash) {
       throw new AuthenticationError('Invalid credentials');
     }
 
-    if (!splynxUser || !splynxUser['admin_id']) {
+    const valid = await bcrypt.compare(credentials.password, admin.passwordHash);
+    if (!valid) {
       throw new AuthenticationError('Invalid credentials');
     }
+
+    await prisma.admin.update({
+      where: { id: admin.id },
+      data: { lastLogin: new Date() },
+    });
 
     const user: User = {
-      id: String(splynxUser['admin_id']),
-      username: credentials.username,
-      email: String(splynxUser['email'] ?? ''),
-      role: String(splynxUser['role'] ?? 'admin'),
+      id: admin.id,
+      username: admin.name,
+      email: admin.email,
+      role: admin.role,
     };
 
     const payload: JwtPayload = { userId: user.id, username: user.username, email: user.email, role: user.role };
