@@ -16,9 +16,23 @@ jobs:
 
       - name: Deploy container
         run: |
+          docker network create ipnext-net 2>/dev/null || true
           docker stop ipnext-new-backend 2>/dev/null || true
           docker rm ipnext-new-backend 2>/dev/null || true
-          docker run -d             --name ipnext-new-backend             --restart unless-stopped             -p 8291:3000             -e NODE_ENV=production             -e PORT=3000             -e DATABASE_URL="${{ secrets.DATABASE_URL }}"             -e JWT_SECRET="${{ secrets.JWT_SECRET }}"             ipnext-backend:latest
+          docker run -d \
+            --name ipnext-new-backend \
+            --network ipnext-net \
+            --network-alias backend \
+            --restart unless-stopped \
+            -p 8291:3000 \
+            -e NODE_ENV=production \
+            -e PORT=3000 \
+            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            -e SPLYNX_API_URL="http://localhost" \
+            -e SPLYNX_API_KEY="test" \
+            -e SPLYNX_API_SECRET="test" \
+            ipnext-backend:latest
 
       - name: Verify
         run: |
