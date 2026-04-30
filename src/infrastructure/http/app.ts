@@ -60,7 +60,9 @@ import { CreateBackup } from '@application/use-cases/CreateBackup';
 import { GetClientPortalSettings } from '@application/use-cases/GetClientPortalSettings';
 import { UpdateClientPortalSettings } from '@application/use-cases/UpdateClientPortalSettings';
 import { createSchedulingRouter } from './routes/scheduling.routes';
+import { createProjectsRouter } from './routes/projects.routes';
 import { InMemorySchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
+import { PrismaProjectRepository } from '../adapters/prisma/PrismaProjectRepository';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { GetTask } from '@application/use-cases/GetTask';
 import { CreateTask } from '@application/use-cases/CreateTask';
@@ -511,6 +513,8 @@ export function createApp() {
   app.use('/api/billing', createProformasRouter(listProformas, createProforma, convertToInvoice, cancelProforma));
   app.use('/api/billing', createFinanceHistoryRouter(listFinanceHistory));
   app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus));
+  const projectRepo = new PrismaProjectRepository();
+  app.use('/api/projects', createProjectsRouter(projectRepo));
   app.use('/api/voip', createVozRouter(listVoipCategories, createVoipCategory, listVoipCdrs, listVoipPlans, createVoipPlan));
   app.use('/api/leads', createLeadsRouter(listLeads, getLead, createLead, updateLead, deleteLead, convertLeadToClient));
   app.use('/api/locations', createUbicacionesRouter(listUbicaciones, getUbicacion, createUbicacion, updateUbicacion, deleteUbicacion));
