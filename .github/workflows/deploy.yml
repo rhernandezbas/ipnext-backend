@@ -1,0 +1,37 @@
+name: Deploy ipnext-backend
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t ipnext-backend:latest .
+
+      - name: Deploy container
+        run: |
+          docker stop ipnext-new-backend 2>/dev/null || true
+          docker rm ipnext-new-backend 2>/dev/null || true
+          docker run -d \
+            --name ipnext-new-backend \
+            --restart unless-stopped \
+            -p 8291:3000 \
+            -e NODE_ENV=production \
+            -e PORT=3000 \
+            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            -e SPLYNX_API_URL="${{ secrets.SPLYNX_API_URL }}" \
+            -e SPLYNX_API_KEY="${{ secrets.SPLYNX_API_KEY }}" \
+            -e SPLYNX_API_SECRET="${{ secrets.SPLYNX_API_SECRET }}" \
+            -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            ipnext-backend:latest
+
+      - name: Verify
+        run: |
+          sleep 5
+          docker ps | grep ipnext-new-backend
