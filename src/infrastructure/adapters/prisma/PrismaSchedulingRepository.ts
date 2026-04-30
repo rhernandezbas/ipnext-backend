@@ -21,6 +21,8 @@ function toTask(row: any): ScheduledTask {
       ? { lat: row.lat, lng: row.lng }
       : null,
     category: row.category,
+    projectId: row.projectId ?? null,
+    projectName: row.project?.title ?? null,
     completedAt: row.completedAt
       ? (row.completedAt instanceof Date ? row.completedAt.toISOString() : row.completedAt)
       : null,
@@ -30,17 +32,24 @@ function toTask(row: any): ScheduledTask {
 
 export class InMemorySchedulingRepository implements SchedulingRepository {
   async listTasks(): Promise<ScheduledTask[]> {
-    const rows = await prisma.scheduledTask.findMany({ orderBy: { createdAt: 'desc' } });
+    const rows = await prisma.scheduledTask.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { project: true },
+    });
     return rows.map(toTask);
   }
 
   async getTask(id: string): Promise<ScheduledTask | null> {
-    const row = await prisma.scheduledTask.findUnique({ where: { id } });
+    const row = await prisma.scheduledTask.findUnique({
+      where: { id },
+      include: { project: true },
+    });
     return row ? toTask(row) : null;
   }
 
   async createTask(data: Omit<ScheduledTask, 'id'>): Promise<ScheduledTask> {
     const row = await prisma.scheduledTask.create({
+      include: { project: true },
       data: {
         title: data.title,
         description: data.description ?? null,
@@ -57,6 +66,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
         lat: data.coordinates?.lat ?? null,
         lng: data.coordinates?.lng ?? null,
         category: data.category,
+        projectId: data.projectId ?? null,
         notes: data.notes ?? null,
         completedAt: data.completedAt ? new Date(data.completedAt) : null,
       },
@@ -68,6 +78,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     try {
       const row = await prisma.scheduledTask.update({
         where: { id },
+        include: { project: true },
         data: {
           ...(data.title !== undefined && { title: data.title }),
           ...(data.description !== undefined && { description: data.description }),
@@ -86,6 +97,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
             lng: data.coordinates?.lng ?? null,
           }),
           ...(data.category !== undefined && { category: data.category }),
+          ...(data.projectId !== undefined && { projectId: data.projectId }),
           ...(data.notes !== undefined && { notes: data.notes }),
           ...(data.completedAt !== undefined && {
             completedAt: data.completedAt ? new Date(data.completedAt) : null,

@@ -17,6 +17,8 @@ export interface ScheduledTask {
   address: string;
   coordinates: { lat: number; lng: number } | null;
   category: 'installation' | 'repair' | 'maintenance' | 'inspection' | 'other';
+  projectId: string | null;
+  projectName: string | null;
   completedAt: string | null;
   notes: string;
 }
