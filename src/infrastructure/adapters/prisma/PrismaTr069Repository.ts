@@ -36,7 +36,7 @@ function toDevice(row: any): Tr069Device {
   };
 }
 
-export class InMemoryTr069Repository implements Tr069Repository {
+export class PrismaTr069Repository implements Tr069Repository {
   async findAllProfiles(): Promise<Tr069Profile[]> {
     const rows = await prisma.tr069Profile.findMany();
     return rows.map(toProfile);

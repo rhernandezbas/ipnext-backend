@@ -48,7 +48,7 @@ const ACTIVITY: RecentActivity[] = [
   },
 ];
 
-export class InMemoryDashboardRepository implements DashboardRepository {
+export class PrismaDashboardRepository implements DashboardRepository {
   async getStats(): Promise<DashboardStats> {
     let row = await prisma.dashboardStat.findUnique({ where: { id: 'singleton' } });
     if (!row) {

@@ -28,7 +28,7 @@ function toSession(row: any): RadiusSession {
   };
 }
 
-export class InMemoryRadiusSessionRepository implements RadiusSessionRepository {
+export class PrismaRadiusSessionRepository implements RadiusSessionRepository {
   async listSessions(): Promise<RadiusSession[]> {
     const rows = await prisma.radiusSession.findMany({ orderBy: { startedAt: 'desc' } });
     return rows.map(toSession);

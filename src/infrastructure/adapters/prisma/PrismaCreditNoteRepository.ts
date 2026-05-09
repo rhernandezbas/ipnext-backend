@@ -22,7 +22,7 @@ function toCreditNote(row: any): CreditNote {
   };
 }
 
-export class InMemoryCreditNoteRepository implements CreditNoteRepository {
+export class PrismaCreditNoteRepository implements CreditNoteRepository {
   async findAll(): Promise<CreditNote[]> {
     const rows = await prisma.creditNote.findMany({ orderBy: { createdAt: 'desc' } });
     return rows.map(toCreditNote);

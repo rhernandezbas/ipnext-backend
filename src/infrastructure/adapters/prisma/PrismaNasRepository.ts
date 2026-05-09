@@ -36,7 +36,7 @@ function toRadiusConfig(row: any): RadiusConfig {
   };
 }
 
-export class InMemoryNasRepository implements NasRepository {
+export class PrismaNasRepository implements NasRepository {
   async findAllNasServers(): Promise<NasServer[]> {
     const rows = await prisma.nasServer.findMany({ orderBy: { createdAt: 'asc' } });
     return rows.map(toNasServer);

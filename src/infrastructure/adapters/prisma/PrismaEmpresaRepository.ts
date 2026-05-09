@@ -85,7 +85,7 @@ function toInventoryUnit(row: any): InventoryUnit {
   };
 }
 
-export class InMemoryEmpresaRepository implements EmpresaRepository {
+export class PrismaEmpresaRepository implements EmpresaRepository {
   async findAllServicePlans(subtype?: string): Promise<ServicePlan[]> {
     const rows = await prisma.servicePlan.findMany({
       where: subtype ? { planSubtype: subtype } : undefined,

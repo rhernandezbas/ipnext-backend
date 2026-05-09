@@ -28,7 +28,7 @@ function toCpe(row: any): CpeDevice {
   };
 }
 
-export class InMemoryCpeRepository implements CpeRepository {
+export class PrismaCpeRepository implements CpeRepository {
   async findAll(): Promise<CpeDevice[]> {
     const rows = await prisma.cpeDevice.findMany({ orderBy: { createdAt: 'asc' } });
     return rows.map(toCpe);

@@ -12,7 +12,7 @@ function toComment(row: any): ClientComment {
   };
 }
 
-export class InMemoryClientCommentRepository implements ClientCommentRepository {
+export class PrismaClientCommentRepository implements ClientCommentRepository {
   async findByClientId(clientId: string): Promise<ClientComment[]> {
     const rows = await prisma.clientComment.findMany({
       where: { clientId },

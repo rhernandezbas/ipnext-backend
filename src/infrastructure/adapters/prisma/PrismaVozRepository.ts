@@ -40,7 +40,7 @@ function toPlan(row: any): VoipPlan {
   };
 }
 
-export class InMemoryVozRepository implements VozRepository {
+export class PrismaVozRepository implements VozRepository {
   async listVoipCategories(): Promise<VoipCategory[]> {
     const rows = await prisma.voipCategory.findMany();
     return rows.map(toCategory);

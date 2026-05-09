@@ -39,7 +39,7 @@ function toLead(row: any): Lead {
   };
 }
 
-export class InMemoryLeadRepository implements LeadRepository {
+export class PrismaLeadRepository implements LeadRepository {
   async findAll(): Promise<Lead[]> {
     const rows = await prisma.lead.findMany({ orderBy: { createdAt: 'desc' } });
     return rows.map(toLead);

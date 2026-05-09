@@ -18,7 +18,7 @@ function toNotification(row: any): Notification {
   };
 }
 
-export class InMemoryNotificationRepository implements NotificationRepository {
+export class PrismaNotificationRepository implements NotificationRepository {
   async findAll(unreadOnly?: boolean): Promise<Notification[]> {
     const rows = await prisma.notification.findMany({
       where: unreadOnly ? { read: false } : undefined,

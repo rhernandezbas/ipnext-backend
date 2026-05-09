@@ -12,7 +12,7 @@ function toRole(row: any): AdminRole_Definition {
   };
 }
 
-export class InMemoryRoleRepository implements RoleRepository {
+export class PrismaRoleRepository implements RoleRepository {
   async findAll(): Promise<AdminRole_Definition[]> {
     const rows = await prisma.adminRoleDefinition.findMany({ orderBy: { createdAt: 'asc' } });
     return rows.map(toRole);

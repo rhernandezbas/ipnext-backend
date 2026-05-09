@@ -117,7 +117,7 @@ function toPortalSettings(row: any): ClientPortalSettings {
   };
 }
 
-export class InMemorySettingsRepository implements SettingsRepository {
+export class PrismaSettingsRepository implements SettingsRepository {
   async getSystemSettings(): Promise<SystemSettings> {
     let row = await prisma.systemSettings.findUnique({ where: { id: 'singleton' } });
     if (!row) {

@@ -30,7 +30,7 @@ function toTask(row: any): ScheduledTask {
   };
 }
 
-export class InMemorySchedulingRepository implements SchedulingRepository {
+export class PrismaSchedulingRepository implements SchedulingRepository {
   async listTasks(): Promise<ScheduledTask[]> {
     const rows = await prisma.scheduledTask.findMany({
       orderBy: { createdAt: 'desc' },

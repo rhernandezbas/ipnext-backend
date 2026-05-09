@@ -17,7 +17,7 @@ function toEvent(row: any): FinanceHistoryEvent {
   };
 }
 
-export class InMemoryFinanceHistoryRepository implements FinanceHistoryRepository {
+export class PrismaFinanceHistoryRepository implements FinanceHistoryRepository {
   async findAll(filter?: FinanceHistoryFilter): Promise<FinanceHistoryEvent[]> {
     const where: any = {};
 

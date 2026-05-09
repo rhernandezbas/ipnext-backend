@@ -21,7 +21,7 @@ import { ListTransactions } from '@application/use-cases/ListTransactions';
 import { GetClientComments } from '@application/use-cases/GetClientComments';
 import { CreateClientComment } from '@application/use-cases/CreateClientComment';
 import { GetMonthlyBilling } from '@application/use-cases/GetMonthlyBilling';
-import { InMemoryClientCommentRepository } from '../adapters/prisma/PrismaClientCommentRepository';
+import { PrismaClientCommentRepository } from '../adapters/prisma/PrismaClientCommentRepository';
 import { InMemoryMonthlyBillingRepository } from '../adapters/in-memory/InMemoryMonthlyBillingRepository';
 import { createAuthRouter } from './routes/auth.routes';
 import { createClientsRouter } from './routes/clients.routes';
@@ -33,9 +33,9 @@ import { createFinanceHistoryRouter } from './routes/financeHistory.routes';
 import { createClientCommentsRouter } from './routes/clientComments.routes';
 import { createBillingMonthlyRouter } from './routes/billingMonthly.routes';
 import { createAdminRouter } from './routes/admin.routes';
-import { InMemoryAdminRepository } from '../adapters/prisma/PrismaAdminRepository';
+import { PrismaAdminRepository } from '../adapters/prisma/PrismaAdminRepository';
 import { createSettingsRouter } from './routes/settings.routes';
-import { InMemorySettingsRepository } from '../adapters/prisma/PrismaSettingsRepository';
+import { PrismaSettingsRepository } from '../adapters/prisma/PrismaSettingsRepository';
 import { GetSystemSettings } from '@application/use-cases/GetSystemSettings';
 import { UpdateSystemSettings } from '@application/use-cases/UpdateSystemSettings';
 import { GetEmailSettings } from '@application/use-cases/GetEmailSettings';
@@ -61,7 +61,7 @@ import { GetClientPortalSettings } from '@application/use-cases/GetClientPortalS
 import { UpdateClientPortalSettings } from '@application/use-cases/UpdateClientPortalSettings';
 import { createSchedulingRouter } from './routes/scheduling.routes';
 import { createProjectsRouter } from './routes/projects.routes';
-import { InMemorySchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
+import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
 import { PrismaProjectRepository } from '../adapters/prisma/PrismaProjectRepository';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { GetTask } from '@application/use-cases/GetTask';
@@ -70,7 +70,7 @@ import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { UpdateTaskStatus } from '@application/use-cases/UpdateTaskStatus';
 import { createVozRouter } from './routes/voz.routes';
-import { InMemoryVozRepository } from '../adapters/prisma/PrismaVozRepository';
+import { PrismaVozRepository } from '../adapters/prisma/PrismaVozRepository';
 import { ListVoipCategories } from '@application/use-cases/ListVoipCategories';
 import { CreateVoipCategory } from '@application/use-cases/CreateVoipCategory';
 import { ListVoipCdrs } from '@application/use-cases/ListVoipCdrs';
@@ -86,16 +86,16 @@ import { Get2FAStatus } from '@application/use-cases/Get2FAStatus';
 import { Enable2FA } from '@application/use-cases/Enable2FA';
 import { Disable2FA } from '@application/use-cases/Disable2FA';
 import { createEmpresaRouter } from './routes/empresa.routes';
-import { InMemoryEmpresaRepository } from '../adapters/prisma/PrismaEmpresaRepository';
+import { PrismaEmpresaRepository } from '../adapters/prisma/PrismaEmpresaRepository';
 import { createPartnerRouter } from './routes/partner.routes';
-import { InMemoryPartnerRepository } from '../adapters/prisma/PrismaPartnerRepository';
+import { PrismaPartnerRepository } from '../adapters/prisma/PrismaPartnerRepository';
 import { ListPartners } from '@application/use-cases/ListPartners';
 import { GetPartner } from '@application/use-cases/GetPartner';
 import { CreatePartner } from '@application/use-cases/CreatePartner';
 import { UpdatePartner } from '@application/use-cases/UpdatePartner';
 import { DeletePartner } from '@application/use-cases/DeletePartner';
 import { createRoleRouter } from './routes/role.routes';
-import { InMemoryRoleRepository } from '../adapters/prisma/PrismaRoleRepository';
+import { PrismaRoleRepository } from '../adapters/prisma/PrismaRoleRepository';
 import { ListRoles } from '@application/use-cases/ListRoles';
 import { GetRole } from '@application/use-cases/GetRole';
 import { CreateRole } from '@application/use-cases/CreateRole';
@@ -124,7 +124,7 @@ import { UpdateInventoryProduct } from '@application/use-cases/UpdateInventoryPr
 import { DeleteInventoryProduct } from '@application/use-cases/DeleteInventoryProduct';
 import { DeleteInventoryUnit } from '@application/use-cases/DeleteInventoryUnit';
 import { createIpNetworkRouter } from './routes/ipNetwork.routes';
-import { InMemoryIpNetworkRepository } from '../adapters/prisma/PrismaIpNetworkRepository';
+import { PrismaIpNetworkRepository } from '../adapters/prisma/PrismaIpNetworkRepository';
 import { ListIpNetworks } from '@application/use-cases/ListIpNetworks';
 import { CreateIpNetwork } from '@application/use-cases/CreateIpNetwork';
 import { DeleteIpNetwork } from '@application/use-cases/DeleteIpNetwork';
@@ -133,22 +133,22 @@ import { CreateIpPool } from '@application/use-cases/CreateIpPool';
 import { DeleteIpPool } from '@application/use-cases/DeleteIpPool';
 import { ListIpAssignments } from '@application/use-cases/ListIpAssignments';
 import { createNasRouter } from './routes/nas.routes';
-import { InMemoryNasRepository } from '../adapters/prisma/PrismaNasRepository';
+import { PrismaNasRepository } from '../adapters/prisma/PrismaNasRepository';
 import { createDashboardRouter } from './routes/dashboard.routes';
-import { InMemoryDashboardRepository } from '../adapters/prisma/PrismaDashboardRepository';
+import { PrismaDashboardRepository } from '../adapters/prisma/PrismaDashboardRepository';
 import { GetDashboardStats } from '@application/use-cases/GetDashboardStats';
 import { GetDashboardShortcuts } from '@application/use-cases/GetDashboardShortcuts';
 import { GetRecentActivity } from '@application/use-cases/GetRecentActivity';
 import { createMessagesRouter } from './routes/messages.routes';
-import { InMemoryMessageRepository } from '../adapters/prisma/PrismaMessageRepository';
+import { PrismaMessageRepository } from '../adapters/prisma/PrismaMessageRepository';
 import { ListMessages } from '@application/use-cases/ListMessages';
 import { GetMessage } from '@application/use-cases/GetMessage';
 import { CreateMessage } from '@application/use-cases/CreateMessage';
 import { MarkMessageAsRead } from '@application/use-cases/MarkMessageAsRead';
 import { DeleteMessage } from '@application/use-cases/DeleteMessage';
-import { InMemoryCreditNoteRepository } from '../adapters/prisma/PrismaCreditNoteRepository';
-import { InMemoryProformaRepository } from '../adapters/prisma/PrismaProformaRepository';
-import { InMemoryFinanceHistoryRepository } from '../adapters/prisma/PrismaFinanceHistoryRepository';
+import { PrismaCreditNoteRepository } from '../adapters/prisma/PrismaCreditNoteRepository';
+import { PrismaProformaRepository } from '../adapters/prisma/PrismaProformaRepository';
+import { PrismaFinanceHistoryRepository } from '../adapters/prisma/PrismaFinanceHistoryRepository';
 import { ListCreditNotes } from '@application/use-cases/ListCreditNotes';
 import { GetCreditNote } from '@application/use-cases/GetCreditNote';
 import { CreateCreditNote } from '@application/use-cases/CreateCreditNote';
@@ -167,14 +167,14 @@ import { DeleteNasServer } from '@application/use-cases/DeleteNasServer';
 import { GetRadiusConfig } from '@application/use-cases/GetRadiusConfig';
 import { UpdateRadiusConfig } from '@application/use-cases/UpdateRadiusConfig';
 import { createNetworkSiteRouter } from './routes/networkSite.routes';
-import { InMemoryNetworkSiteRepository } from '../adapters/prisma/PrismaNetworkSiteRepository';
+import { PrismaNetworkSiteRepository } from '../adapters/prisma/PrismaNetworkSiteRepository';
 import { ListNetworkSites } from '@application/use-cases/ListNetworkSites';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
 import { DeleteNetworkSite } from '@application/use-cases/DeleteNetworkSite';
 import { createCpeRouter } from './routes/cpe.routes';
-import { InMemoryCpeRepository } from '../adapters/prisma/PrismaCpeRepository';
+import { PrismaCpeRepository } from '../adapters/prisma/PrismaCpeRepository';
 import { ListCpeDevices } from '@application/use-cases/ListCpeDevices';
 import { GetCpeDevice } from '@application/use-cases/GetCpeDevice';
 import { CreateCpeDevice } from '@application/use-cases/CreateCpeDevice';
@@ -182,7 +182,7 @@ import { UpdateCpeDevice } from '@application/use-cases/UpdateCpeDevice';
 import { DeleteCpeDevice } from '@application/use-cases/DeleteCpeDevice';
 import { AssignCpeToClient } from '@application/use-cases/AssignCpeToClient';
 import { createTr069Router } from './routes/tr069.routes';
-import { InMemoryTr069Repository } from '../adapters/prisma/PrismaTr069Repository';
+import { PrismaTr069Repository } from '../adapters/prisma/PrismaTr069Repository';
 import { ListTr069Profiles } from '@application/use-cases/ListTr069Profiles';
 import { CreateTr069Profile } from '@application/use-cases/CreateTr069Profile';
 import { UpdateTr069Profile } from '@application/use-cases/UpdateTr069Profile';
@@ -193,14 +193,14 @@ import { DeleteTr069Device } from '@application/use-cases/DeleteTr069Device';
 import { ListIpv6Networks } from '@application/use-cases/ListIpv6Networks';
 import { CreateIpv6Network } from '@application/use-cases/CreateIpv6Network';
 import { createHardwareRouter } from './routes/hardware.routes';
-import { InMemoryHardwareRepository } from '../adapters/prisma/PrismaHardwareRepository';
+import { PrismaHardwareRepository } from '../adapters/prisma/PrismaHardwareRepository';
 import { ListHardwareAssets } from '@application/use-cases/ListHardwareAssets';
 import { CreateHardwareAsset } from '@application/use-cases/CreateHardwareAsset';
 import { UpdateHardwareAsset } from '@application/use-cases/UpdateHardwareAsset';
 import { DeleteHardwareAsset } from '@application/use-cases/DeleteHardwareAsset';
 import { DomainError } from '@domain/errors';
 import { createGponRouter } from './routes/gpon.routes';
-import { InMemoryGponRepository } from '../adapters/prisma/PrismaGponRepository';
+import { PrismaGponRepository } from '../adapters/prisma/PrismaGponRepository';
 import { ListOlts } from '@application/use-cases/ListOlts';
 import { GetOlt } from '@application/use-cases/GetOlt';
 import { CreateOlt } from '@application/use-cases/CreateOlt';
@@ -210,11 +210,11 @@ import { ListOnusByOlt } from '@application/use-cases/ListOnusByOlt';
 import { CreateOnu } from '@application/use-cases/CreateOnu';
 import { UpdateOnuStatus } from '@application/use-cases/UpdateOnuStatus';
 import { createRadiusRouter } from './routes/radius.routes';
-import { InMemoryRadiusSessionRepository } from '../adapters/prisma/PrismaRadiusSessionRepository';
+import { PrismaRadiusSessionRepository } from '../adapters/prisma/PrismaRadiusSessionRepository';
 import { ListRadiusSessions } from '@application/use-cases/ListRadiusSessions';
 import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 import { createLeadsRouter } from './routes/leads.routes';
-import { InMemoryLeadRepository } from '../adapters/prisma/PrismaLeadRepository';
+import { PrismaLeadRepository } from '../adapters/prisma/PrismaLeadRepository';
 import { ListLeads } from '@application/use-cases/ListLeads';
 import { GetLead } from '@application/use-cases/GetLead';
 import { CreateLead } from '@application/use-cases/CreateLead';
@@ -222,7 +222,7 @@ import { UpdateLead } from '@application/use-cases/UpdateLead';
 import { DeleteLead } from '@application/use-cases/DeleteLead';
 import { ConvertLeadToClient } from '@application/use-cases/ConvertLeadToClient';
 import { createUbicacionesRouter } from './routes/ubicaciones.routes';
-import { InMemoryUbicacionRepository } from '../adapters/prisma/PrismaUbicacionRepository';
+import { PrismaUbicacionRepository } from '../adapters/prisma/PrismaUbicacionRepository';
 import { ListUbicaciones } from '@application/use-cases/ListUbicaciones';
 import { GetUbicacion } from '@application/use-cases/GetUbicacion';
 import { CreateUbicacion } from '@application/use-cases/CreateUbicacion';
@@ -242,7 +242,7 @@ import { AcknowledgeAlert } from '@application/use-cases/AcknowledgeAlert';
 import { createSearchRouter } from './routes/search.routes';
 import { GlobalSearch } from '@application/use-cases/GlobalSearch';
 import { createNotificationsRouter } from './routes/notifications.routes';
-import { InMemoryNotificationRepository } from '../adapters/prisma/PrismaNotificationRepository';
+import { PrismaNotificationRepository } from '../adapters/prisma/PrismaNotificationRepository';
 import { ListNotifications } from '@application/use-cases/ListNotifications';
 import { MarkNotificationRead } from '@application/use-cases/MarkNotificationRead';
 import { MarkAllNotificationsRead } from '@application/use-cases/MarkAllNotificationsRead';
@@ -277,14 +277,14 @@ export function createApp() {
   const listPayments = new ListPayments(billingAdapter);
   const listTransactions = new ListTransactions(billingAdapter);
 
-  const commentRepo = new InMemoryClientCommentRepository();
+  const commentRepo = new PrismaClientCommentRepository();
   const getComments = new GetClientComments(commentRepo);
   const createComment = new CreateClientComment(commentRepo);
 
   const monthlyRepo = new InMemoryMonthlyBillingRepository();
   const getMonthly = new GetMonthlyBilling(monthlyRepo);
 
-  const settingsRepo = new InMemorySettingsRepository();
+  const settingsRepo = new PrismaSettingsRepository();
   const getSystemSettings = new GetSystemSettings(settingsRepo);
   const updateSystemSettings = new UpdateSystemSettings(settingsRepo);
   const getEmailSettings = new GetEmailSettings(settingsRepo);
@@ -309,7 +309,7 @@ export function createApp() {
   const getClientPortalSettings = new GetClientPortalSettings(settingsRepo);
   const updateClientPortalSettings = new UpdateClientPortalSettings(settingsRepo);
 
-  const schedulingRepo = new InMemorySchedulingRepository();
+  const schedulingRepo = new PrismaSchedulingRepository();
   const listTasks = new ListTasks(schedulingRepo);
   const getTask = new GetTask(schedulingRepo);
   const createTask = new CreateTask(schedulingRepo);
@@ -317,14 +317,14 @@ export function createApp() {
   const deleteTask = new DeleteTask(schedulingRepo);
   const updateTaskStatus = new UpdateTaskStatus(schedulingRepo);
 
-  const vozRepo = new InMemoryVozRepository();
+  const vozRepo = new PrismaVozRepository();
   const listVoipCategories = new ListVoipCategories(vozRepo);
   const createVoipCategory = new CreateVoipCategory(vozRepo);
   const listVoipCdrs = new ListVoipCdrs(vozRepo);
   const listVoipPlans = new ListVoipPlans(vozRepo);
   const createVoipPlan = new CreateVoipPlan(vozRepo);
 
-  const empresaRepo = new InMemoryEmpresaRepository();
+  const empresaRepo = new PrismaEmpresaRepository();
   const listServicePlans = new ListServicePlans(empresaRepo);
   const getServicePlan = new GetServicePlan(empresaRepo);
   const createServicePlan = new CreateServicePlan(empresaRepo);
@@ -348,21 +348,21 @@ export function createApp() {
   const deleteInventoryProduct = new DeleteInventoryProduct(empresaRepo);
   const deleteInventoryUnit = new DeleteInventoryUnit(empresaRepo);
 
-  const partnerRepo = new InMemoryPartnerRepository();
+  const partnerRepo = new PrismaPartnerRepository();
   const listPartners = new ListPartners(partnerRepo);
   const getPartner = new GetPartner(partnerRepo);
   const createPartner = new CreatePartner(partnerRepo);
   const updatePartner = new UpdatePartner(partnerRepo);
   const deletePartner = new DeletePartner(partnerRepo);
 
-  const roleRepo = new InMemoryRoleRepository();
+  const roleRepo = new PrismaRoleRepository();
   const listRoles = new ListRoles(roleRepo);
   const getRole = new GetRole(roleRepo);
   const createRole = new CreateRole(roleRepo);
   const updateRole = new UpdateRole(roleRepo);
   const deleteRole = new DeleteRole(roleRepo);
 
-  const adminRepo = new InMemoryAdminRepository();
+  const adminRepo = new PrismaAdminRepository();
   const listAdmins = new ListAdmins(adminRepo);
   const getAdmin = new GetAdmin(adminRepo);
   const createAdmin = new CreateAdmin(adminRepo);
@@ -373,7 +373,7 @@ export function createApp() {
   const enable2FA = new Enable2FA(adminRepo);
   const disable2FA = new Disable2FA(adminRepo);
 
-  const ipNetworkRepo = new InMemoryIpNetworkRepository();
+  const ipNetworkRepo = new PrismaIpNetworkRepository();
   const listIpNetworks = new ListIpNetworks(ipNetworkRepo);
   const createIpNetwork = new CreateIpNetwork(ipNetworkRepo);
   const deleteIpNetwork = new DeleteIpNetwork(ipNetworkRepo);
@@ -382,19 +382,19 @@ export function createApp() {
   const deleteIpPool = new DeleteIpPool(ipNetworkRepo);
   const listIpAssignments = new ListIpAssignments(ipNetworkRepo);
 
-  const dashboardRepo = new InMemoryDashboardRepository();
+  const dashboardRepo = new PrismaDashboardRepository();
   const getDashboardStats = new GetDashboardStats(dashboardRepo);
   const getDashboardShortcuts = new GetDashboardShortcuts(dashboardRepo);
   const getRecentActivity = new GetRecentActivity(dashboardRepo);
 
-  const messageRepo = new InMemoryMessageRepository();
+  const messageRepo = new PrismaMessageRepository();
   const listMessages = new ListMessages(messageRepo);
   const getMessage = new GetMessage(messageRepo);
   const createMessage = new CreateMessage(messageRepo);
   const markMessageAsRead = new MarkMessageAsRead(messageRepo);
   const deleteMessage = new DeleteMessage(messageRepo);
 
-  const leadRepo = new InMemoryLeadRepository();
+  const leadRepo = new PrismaLeadRepository();
   const listLeads = new ListLeads(leadRepo);
   const getLead = new GetLead(leadRepo);
   const createLead = new CreateLead(leadRepo);
@@ -402,7 +402,7 @@ export function createApp() {
   const deleteLead = new DeleteLead(leadRepo);
   const convertLeadToClient = new ConvertLeadToClient(leadRepo);
 
-  const ubicacionRepo = new InMemoryUbicacionRepository();
+  const ubicacionRepo = new PrismaUbicacionRepository();
   const listUbicaciones = new ListUbicaciones(ubicacionRepo);
   const getUbicacion = new GetUbicacion(ubicacionRepo);
   const createUbicacion = new CreateUbicacion(ubicacionRepo);
@@ -414,23 +414,23 @@ export function createApp() {
   const generateReport = new GenerateReport(reportRepo);
   const exportReport = new ExportReport(reportRepo);
 
-  const creditNoteRepo = new InMemoryCreditNoteRepository();
+  const creditNoteRepo = new PrismaCreditNoteRepository();
   const listCreditNotes = new ListCreditNotes(creditNoteRepo);
   const getCreditNote = new GetCreditNote(creditNoteRepo);
   const createCreditNote = new CreateCreditNote(creditNoteRepo);
   const applyCreditNote = new ApplyCreditNote(creditNoteRepo);
   const voidCreditNote = new VoidCreditNote(creditNoteRepo);
 
-  const proformaRepo = new InMemoryProformaRepository();
+  const proformaRepo = new PrismaProformaRepository();
   const listProformas = new ListProformas(proformaRepo);
   const createProforma = new CreateProforma(proformaRepo);
   const convertToInvoice = new ConvertToInvoice(proformaRepo);
   const cancelProforma = new CancelProforma(proformaRepo);
 
-  const financeHistoryRepo = new InMemoryFinanceHistoryRepository();
+  const financeHistoryRepo = new PrismaFinanceHistoryRepository();
   const listFinanceHistory = new ListFinanceHistory(financeHistoryRepo);
 
-  const nasRepo = new InMemoryNasRepository();
+  const nasRepo = new PrismaNasRepository();
   const listNasServers = new ListNasServers(nasRepo);
   const getNasServer = new GetNasServer(nasRepo);
   const createNasServer = new CreateNasServer(nasRepo);
@@ -439,14 +439,14 @@ export function createApp() {
   const getRadiusConfig = new GetRadiusConfig(nasRepo);
   const updateRadiusConfig = new UpdateRadiusConfig(nasRepo);
 
-  const networkSiteRepo = new InMemoryNetworkSiteRepository();
+  const networkSiteRepo = new PrismaNetworkSiteRepository();
   const listNetworkSites = new ListNetworkSites(networkSiteRepo);
   const getNetworkSite = new GetNetworkSite(networkSiteRepo);
   const createNetworkSite = new CreateNetworkSite(networkSiteRepo);
   const updateNetworkSite = new UpdateNetworkSite(networkSiteRepo);
   const deleteNetworkSite = new DeleteNetworkSite(networkSiteRepo);
 
-  const cpeRepo = new InMemoryCpeRepository();
+  const cpeRepo = new PrismaCpeRepository();
   const listCpeDevices = new ListCpeDevices(cpeRepo);
   const getCpeDevice = new GetCpeDevice(cpeRepo);
   const createCpeDevice = new CreateCpeDevice(cpeRepo);
@@ -454,7 +454,7 @@ export function createApp() {
   const deleteCpeDevice = new DeleteCpeDevice(cpeRepo);
   const assignCpeToClient = new AssignCpeToClient(cpeRepo);
 
-  const tr069Repo = new InMemoryTr069Repository();
+  const tr069Repo = new PrismaTr069Repository();
   const listTr069Profiles = new ListTr069Profiles(tr069Repo);
   const createTr069Profile = new CreateTr069Profile(tr069Repo);
   const updateTr069Profile = new UpdateTr069Profile(tr069Repo);
@@ -466,13 +466,13 @@ export function createApp() {
   const listIpv6Networks = new ListIpv6Networks(ipNetworkRepo);
   const createIpv6Network = new CreateIpv6Network(ipNetworkRepo);
 
-  const hardwareRepo = new InMemoryHardwareRepository();
+  const hardwareRepo = new PrismaHardwareRepository();
   const listHardwareAssets = new ListHardwareAssets(hardwareRepo);
   const createHardwareAsset = new CreateHardwareAsset(hardwareRepo);
   const updateHardwareAsset = new UpdateHardwareAsset(hardwareRepo);
   const deleteHardwareAsset = new DeleteHardwareAsset(hardwareRepo);
 
-  const gponRepo = new InMemoryGponRepository();
+  const gponRepo = new PrismaGponRepository();
   const listOlts = new ListOlts(gponRepo);
   const getOlt = new GetOlt(gponRepo);
   const createOlt = new CreateOlt(gponRepo);
@@ -482,7 +482,7 @@ export function createApp() {
   const createOnu = new CreateOnu(gponRepo);
   const updateOnuStatus = new UpdateOnuStatus(gponRepo);
 
-  const radiusRepo = new InMemoryRadiusSessionRepository();
+  const radiusRepo = new PrismaRadiusSessionRepository();
   const listRadiusSessions = new ListRadiusSessions(radiusRepo);
   const disconnectSession = new DisconnectSession(radiusRepo);
 
@@ -494,7 +494,7 @@ export function createApp() {
 
   const globalSearch = new GlobalSearch();
 
-  const notificationRepo = new InMemoryNotificationRepository();
+  const notificationRepo = new PrismaNotificationRepository();
   const listNotifications = new ListNotifications(notificationRepo);
   const markNotificationRead = new MarkNotificationRead(notificationRepo);
   const markAllNotificationsRead = new MarkAllNotificationsRead(notificationRepo);

@@ -21,7 +21,7 @@ function toSite(row: any): NetworkSite {
   };
 }
 
-export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
+export class PrismaNetworkSiteRepository implements NetworkSiteRepository {
   async findAll(): Promise<NetworkSite[]> {
     const rows = await prisma.networkSite.findMany({ orderBy: { createdAt: 'asc' } });
     return rows.map(toSite);

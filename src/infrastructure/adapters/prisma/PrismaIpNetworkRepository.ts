@@ -70,7 +70,12 @@ function toAssignment(row: any): IpAssignment {
   };
 }
 
-export class InMemoryIpNetworkRepository implements IpNetworkRepository {
+/**
+ * @debt IPv6 — `ipv6Networks` array and all `*Ipv6*` methods in this class
+ * operate on an in-memory stub because there is no `Ipv6Network` table in
+ * `schema.prisma` yet. Migrate to Prisma once the schema is extended.
+ */
+export class PrismaIpNetworkRepository implements IpNetworkRepository {
   async findAllNetworks(): Promise<IpNetwork[]> {
     const rows = await prisma.ipNetwork.findMany({ orderBy: { createdAt: 'asc' } });
     return rows.map(toNetwork);

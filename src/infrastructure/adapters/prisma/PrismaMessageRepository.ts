@@ -22,7 +22,7 @@ function toMessage(row: any): Message {
   };
 }
 
-export class InMemoryMessageRepository implements MessageRepository {
+export class PrismaMessageRepository implements MessageRepository {
   async findAll(filter?: 'inbox' | 'sent' | 'draft'): Promise<Message[]> {
     let where: any = {};
     if (filter === 'inbox') where.status = { in: ['unread', 'read'] };

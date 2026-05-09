@@ -22,7 +22,7 @@ function toUbicacion(row: any): Ubicacion {
   };
 }
 
-export class InMemoryUbicacionRepository implements UbicacionRepository {
+export class PrismaUbicacionRepository implements UbicacionRepository {
   async findAll(): Promise<Ubicacion[]> {
     const rows = await prisma.ubicacion.findMany({ orderBy: { createdAt: 'asc' } });
     return rows.map(toUbicacion);

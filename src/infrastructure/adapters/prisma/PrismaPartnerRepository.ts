@@ -21,7 +21,7 @@ function toPartner(row: any): Partner {
   };
 }
 
-export class InMemoryPartnerRepository implements PartnerRepository {
+export class PrismaPartnerRepository implements PartnerRepository {
   async findAll(): Promise<Partner[]> {
     const rows = await prisma.partner.findMany({ orderBy: { createdAt: 'asc' } });
     return rows.map(toPartner);

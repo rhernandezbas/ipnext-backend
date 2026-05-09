@@ -22,7 +22,7 @@ function toProforma(row: any): ProformaInvoice {
   };
 }
 
-export class InMemoryProformaRepository implements ProformaRepository {
+export class PrismaProformaRepository implements ProformaRepository {
   async findAll(): Promise<ProformaInvoice[]> {
     const rows = await prisma.proformaInvoice.findMany({ orderBy: { createdAt: 'desc' } });
     return rows.map(toProforma);

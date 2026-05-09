@@ -23,7 +23,7 @@ function toAsset(row: any): HardwareAsset {
   };
 }
 
-export class InMemoryHardwareRepository implements HardwareRepository {
+export class PrismaHardwareRepository implements HardwareRepository {
   async findAll(): Promise<HardwareAsset[]> {
     const rows = await prisma.hardwareAsset.findMany({ orderBy: { createdAt: 'asc' } });
     return rows.map(toAsset);

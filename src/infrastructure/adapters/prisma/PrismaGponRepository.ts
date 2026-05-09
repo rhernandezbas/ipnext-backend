@@ -42,7 +42,7 @@ function toOnu(row: any): OnuDevice {
   };
 }
 
-export class InMemoryGponRepository implements GponRepository {
+export class PrismaGponRepository implements GponRepository {
   async listOlts(): Promise<OltDevice[]> {
     const rows = await prisma.oltDevice.findMany({ orderBy: { createdAt: 'asc' } });
     return rows.map(toOlt);
