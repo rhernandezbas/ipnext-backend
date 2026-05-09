@@ -1,8 +1,8 @@
 import { ReportType } from '@domain/entities/report';
-import { InMemoryReportRepository } from '@infrastructure/adapters/in-memory/InMemoryReportRepository';
+import { ReportRepository } from '@domain/ports/ReportRepository';
 
 export class ExportReport {
-  constructor(private readonly repo: InMemoryReportRepository) {}
+  constructor(private readonly repo: ReportRepository) {}
 
   execute(type: ReportType, filters: Record<string, string>): string {
     const result = this.repo.generateReport(type, filters);

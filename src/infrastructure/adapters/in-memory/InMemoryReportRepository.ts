@@ -1,4 +1,5 @@
 import { ReportType, ReportResult, ReportDefinition, ReportCategory } from '@domain/entities/report';
+import { ReportRepository } from '@domain/ports/ReportRepository';
 
 export const REPORT_DEFINITIONS: ReportDefinition[] = [
   // Clients
@@ -566,7 +567,7 @@ function generateRows(type: ReportType, _filters: Record<string, string>): {
   }
 }
 
-export class InMemoryReportRepository {
+export class InMemoryReportRepository implements ReportRepository {
   getDefinitions(): ReportDefinition[] {
     return REPORT_DEFINITIONS;
   }
