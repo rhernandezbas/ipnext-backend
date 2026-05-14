@@ -13,8 +13,8 @@ export function toTask(row: any): ScheduledTask {
     clientName: row.clientName ?? null,
     status: row.status as TaskStatus,
     priority: row.priority,
-    scheduledDate: row.scheduledDate,
-    scheduledTime: row.scheduledTime,
+    scheduledDate: row.scheduledDate ?? null,
+    scheduledTime: row.scheduledTime ?? null,
     estimatedHours: row.estimatedHours,
     address: row.address ?? null,
     coordinates: (row.lat != null && row.lng != null)

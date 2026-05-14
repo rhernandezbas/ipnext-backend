@@ -131,6 +131,27 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       completedAt: null,
       notes: 'Cancelado por condiciones climáticas adversas',
     },
+    {
+      id: '7',
+      title: 'Tarea pendiente de agendar',
+      description: 'Esperando confirmación de fecha por parte del cliente',
+      assignedTo: null,
+      assignedToId: null,
+      clientId: null,
+      clientName: 'Empresa XYZ',
+      status: 'pending',
+      priority: 'low',
+      scheduledDate: null,
+      scheduledTime: null,
+      estimatedHours: 2,
+      address: null,
+      coordinates: null,
+      category: 'inspection',
+      projectId: null,
+      projectName: null,
+      completedAt: null,
+      notes: 'Coordinar con el cliente antes de agendar',
+    },
   ];
 
   async listTasks(): Promise<ScheduledTask[]> {
