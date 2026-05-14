@@ -33,6 +33,7 @@ jobs:
             -e SPLYNX_API_KEY="test" \
             -e SPLYNX_API_SECRET="test" \
             ipnext-backend:latest
+          docker network connect easypanel-bd_owners ipnext-new-backend
 
       - name: Verify
         run: |
