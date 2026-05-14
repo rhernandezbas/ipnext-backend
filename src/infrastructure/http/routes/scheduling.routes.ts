@@ -47,7 +47,7 @@ export function createSchedulingRouter(
       projectId: parsed.data.projectId ?? null,
       projectName: parsed.data.projectName ?? null,
     };
-    const task = await createTask.execute(normalized as Omit<ScheduledTask, 'id'>);
+    const task = await createTask.execute(normalized as Omit<ScheduledTask, 'id' | 'sequenceNumber'>);
     res.status(201).json(task);
   });
 

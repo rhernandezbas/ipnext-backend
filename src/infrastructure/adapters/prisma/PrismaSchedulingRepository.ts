@@ -5,6 +5,7 @@ import { prisma } from '../../database/prisma';
 export function toTask(row: any): ScheduledTask {
   return {
     id: row.id,
+    sequenceNumber: row.sequenceNumber,
     title: row.title,
     description: row.description ?? null,
     assignedTo: row.assignedTo ?? null,
@@ -47,7 +48,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     return row ? toTask(row) : null;
   }
 
-  async createTask(data: Omit<ScheduledTask, 'id'>): Promise<ScheduledTask> {
+  async createTask(data: Omit<ScheduledTask, 'id' | 'sequenceNumber'>): Promise<ScheduledTask> {
     const row = await prisma.scheduledTask.create({
       include: { project: true },
       data: {

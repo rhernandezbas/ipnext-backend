@@ -2,11 +2,14 @@ import { ScheduledTask, TaskStatus } from '@domain/entities/scheduling';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 
 let nextId = 7;
+// Monotonic sequence — never reused, even after deletion (matches Postgres serial behaviour).
+let nextSequenceNumber = 8;
 
 export class InMemorySchedulingRepository implements SchedulingRepository {
   private tasks: ScheduledTask[] = [
     {
       id: '1',
+      sequenceNumber: 1,
       title: 'Instalación fibra óptica - García',
       description: 'Instalación de servicio de fibra óptica residencial',
       assignedTo: 'Carlos Técnico',
@@ -28,6 +31,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     },
     {
       id: '2',
+      sequenceNumber: 2,
       title: 'Reparación de señal - López',
       description: 'Cliente reporta pérdida intermitente de señal',
       assignedTo: 'María Técnica',
@@ -49,6 +53,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     },
     {
       id: '3',
+      sequenceNumber: 3,
       title: 'Mantenimiento preventivo nodo norte',
       description: 'Revisión y limpieza de nodo de distribución norte',
       assignedTo: 'Carlos Técnico',
@@ -70,6 +75,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     },
     {
       id: '4',
+      sequenceNumber: 4,
       title: 'Inspección infraestructura poste 45',
       description: 'Verificación estado de instalación aérea en poste 45',
       assignedTo: 'Pedro Inspector',
@@ -91,6 +97,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     },
     {
       id: '5',
+      sequenceNumber: 5,
       title: 'Instalación cámara de seguridad - Martínez',
       description: 'Instalación de sistema de vigilancia IP',
       assignedTo: 'María Técnica',
@@ -112,6 +119,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     },
     {
       id: '6',
+      sequenceNumber: 6,
       title: 'Reparación cable dañado por tormenta',
       description: 'Cable de distribución dañado por tormenta del 27/04',
       assignedTo: 'Carlos Técnico',
@@ -133,6 +141,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     },
     {
       id: '7',
+      sequenceNumber: 7,
       title: 'Tarea pendiente de agendar',
       description: 'Esperando confirmación de fecha por parte del cliente',
       assignedTo: null,
@@ -162,9 +171,10 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return this.tasks.find(t => t.id === id) ?? null;
   }
 
-  async createTask(data: Omit<ScheduledTask, 'id'>): Promise<ScheduledTask> {
+  async createTask(data: Omit<ScheduledTask, 'id' | 'sequenceNumber'>): Promise<ScheduledTask> {
     const task: ScheduledTask = {
       id: String(nextId++),
+      sequenceNumber: nextSequenceNumber++,
       ...data,
     };
     this.tasks.push(task);
