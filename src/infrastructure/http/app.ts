@@ -2,7 +2,7 @@ import express, { Router, Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { SplynxClient } from '../adapters/splynx/SplynxClient';
-import { SplynxCustomerAdapter } from '../adapters/splynx/SplynxCustomerAdapter';
+import { PrismaCustomerRepository } from '../adapters/prisma/PrismaCustomerRepository';
 import { SplynxTicketAdapter } from '../adapters/splynx/SplynxTicketAdapter';
 import { SplynxBillingAdapter } from '../adapters/splynx/SplynxBillingAdapter';
 import { JwtAuthAdapter } from '../adapters/jwt/JwtAuthAdapter';
@@ -265,7 +265,7 @@ export function createApp() {
 
   // Wire up adapters
   const splynxClient = new SplynxClient();
-  const customerAdapter = new SplynxCustomerAdapter(splynxClient);
+  const customerAdapter = new PrismaCustomerRepository();
   const ticketAdapter = new SplynxTicketAdapter(splynxClient);
   const billingAdapter = new SplynxBillingAdapter(splynxClient);
   const authAdapter = new JwtAuthAdapter();
