@@ -14,6 +14,14 @@ jobs:
       - name: Build image
         run: docker build -t ipnext-backend:latest .
 
+      - name: Run DB migrations
+        run: |
+          docker run --rm \
+            --network easypanel-bd_owners \
+            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            ipnext-backend:latest \
+            npx prisma migrate deploy
+
       - name: Deploy container
         run: |
           docker network create ipnext-net 2>/dev/null || true
