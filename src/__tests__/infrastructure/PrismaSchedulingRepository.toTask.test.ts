@@ -9,6 +9,7 @@ describe('PrismaSchedulingRepository.toTask — nullable field mapping (REQ-NULL
   it('maps null description to null (not undefined)', () => {
     const row = {
       id: 'test-1',
+      sequenceNumber: 1,
       title: 'Test',
       description: null,
       assignedTo: null,
@@ -40,6 +41,7 @@ describe('PrismaSchedulingRepository.toTask — nullable field mapping (REQ-NULL
   it('maps non-null description to a string', () => {
     const row = {
       id: 'test-2',
+      sequenceNumber: 2,
       title: 'Test',
       description: 'Some description',
       assignedTo: 'Carlos',
@@ -73,6 +75,7 @@ describe('PrismaSchedulingRepository.toTask — projectName mapping (REQ-STATUS-
   it('maps project.title to projectName when project is present', () => {
     const row = {
       id: 'test-3',
+      sequenceNumber: 3,
       title: 'Test',
       description: null,
       assignedTo: null,
@@ -97,9 +100,37 @@ describe('PrismaSchedulingRepository.toTask — projectName mapping (REQ-STATUS-
     expect(task.projectName).toBe('My Project');
   });
 
+  it('maps row.sequenceNumber to task.sequenceNumber', () => {
+    const row = {
+      id: 'test-seq',
+      sequenceNumber: 123,
+      title: 'X',
+      description: null,
+      assignedTo: null,
+      assignedToId: null,
+      clientId: null,
+      clientName: null,
+      status: 'pending',
+      priority: 'normal',
+      scheduledDate: '2026-05-10',
+      scheduledTime: '09:00',
+      estimatedHours: 1,
+      address: null,
+      lat: null,
+      lng: null,
+      category: 'other',
+      projectId: null,
+      project: null,
+      completedAt: null,
+      notes: null,
+    };
+    expect(toTask(row).sequenceNumber).toBe(123);
+  });
+
   it('maps null scheduledDate and scheduledTime to null', () => {
     const row = {
       id: 'test-unscheduled',
+      sequenceNumber: 42,
       title: 'Pending to schedule',
       description: null,
       assignedTo: null,
@@ -128,6 +159,7 @@ describe('PrismaSchedulingRepository.toTask — projectName mapping (REQ-STATUS-
   it('maps null project to null projectName', () => {
     const row = {
       id: 'test-4',
+      sequenceNumber: 4,
       title: 'Test',
       description: null,
       assignedTo: null,
