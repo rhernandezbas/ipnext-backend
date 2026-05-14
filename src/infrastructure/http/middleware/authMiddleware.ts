@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
+import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import { AuthenticationError } from '@domain/errors';
 
@@ -11,7 +11,7 @@ declare global {
   }
 }
 
-export function createAuthMiddleware(authProvider: JwtAuthAdapter) {
+export function createAuthMiddleware(authProvider: AuthProvider) {
   return async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
     const token: string | undefined = req.cookies?.['auth_token'];
     if (!token) {
