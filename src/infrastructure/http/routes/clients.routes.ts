@@ -6,7 +6,7 @@ import { GetClientInvoices } from '@application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '@application/use-cases/GetClientLogs';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
-import { ClientNotFoundError } from '@domain/errors';
+import { ClientNotFoundError, SplynxUnavailableError } from '@domain/errors';
 import { incrementClients, decrementClients } from '../../adapters/in-memory/shared-stores';
 
 // Module-level online sessions store
@@ -94,9 +94,17 @@ export function createClientsRouter(
   const auth = createAuthMiddleware(authProvider);
 
   router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
-    const { page, limit, search, status } = req.query as Record<string, string>;
-    const result = await listClients.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, search, status });
-    res.json(result);
+    try {
+      const { page, limit, search, status } = req.query as Record<string, string>;
+      const result = await listClients.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, search, status });
+      res.json(result);
+    } catch (err) {
+      if (err instanceof SplynxUnavailableError) {
+        res.status(503).json({ error: 'Clients backend unavailable', code: 'CLIENTS_UNAVAILABLE' });
+        return;
+      }
+      res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+    }
   });
 
   // Online sessions — must be before /:id to avoid param capture
