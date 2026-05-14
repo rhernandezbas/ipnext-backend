@@ -368,8 +368,8 @@ model ScheduledTask {
   clientName     String?
   status         String    @default("pending")
   priority       String    @default("normal")
-  scheduledDate  String
-  scheduledTime  String
+  scheduledDate  String?
+  scheduledTime  String?
   estimatedHours Float     @default(1)
   address        String?
   lat            Float?
