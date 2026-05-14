@@ -167,6 +167,86 @@ model Message {
   @@index([status])
 }
 
+model Client {
+  id               String       @id @default(uuid())
+  splynxId         String?      @unique
+  name             String
+  email            String
+  phone            String
+  status           ClientStatus @default(active)
+  address          String?
+  city             String?
+  country          String?
+  login            String       @unique
+  customAttributes Json?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  services         Service[]
+  logs             ClientLog[]
+  invoices         Invoice[]
+
+  @@index([status])
+  @@index([email])
+}
+
+enum ClientStatus {
+  active
+  late
+  blocked
+  inactive
+}
+
+model Service {
+  id        String    @id @default(uuid())
+  clientId  String
+  type      String
+  plan      String
+  ip        String?
+  status    String    @default("active")
+  startDate DateTime
+  endDate   DateTime?
+  createdAt DateTime  @default(now())
+  client    Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([status])
+}
+
+model ClientLog {
+  id          String   @id @default(uuid())
+  clientId    String
+  timestamp   DateTime @default(now())
+  eventType   String
+  description String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+}
+
+model Invoice {
+  id           String        @id @default(uuid())
+  number       String        @unique
+  clientId     String
+  customerName String
+  issueDate    DateTime
+  dueDate      DateTime
+  amount       Decimal       @db.Decimal(12, 2)
+  status       InvoiceStatus @default(pendiente)
+  lineItems    Json
+  createdAt    DateTime      @default(now())
+  client       Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+enum InvoiceStatus {
+  pagada
+  pendiente
+  vencida
+}
+
 model ClientComment {
   id         String   @id @default(uuid())
   clientId   String
