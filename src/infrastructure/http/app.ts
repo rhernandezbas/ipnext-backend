@@ -61,8 +61,15 @@ import { GetClientPortalSettings } from '@application/use-cases/GetClientPortalS
 import { UpdateClientPortalSettings } from '@application/use-cases/UpdateClientPortalSettings';
 import { createSchedulingRouter } from './routes/scheduling.routes';
 import { createProjectsRouter } from './routes/projects.routes';
+import { createTaskTemplateRouter } from './routes/taskTemplate.routes';
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
 import { PrismaProjectRepository } from '../adapters/prisma/PrismaProjectRepository';
+import { PrismaTaskTemplateRepository } from '../adapters/prisma/PrismaTaskTemplateRepository';
+import { ListTaskTemplates } from '@application/use-cases/ListTaskTemplates';
+import { GetTaskTemplate } from '@application/use-cases/GetTaskTemplate';
+import { CreateTaskTemplate } from '@application/use-cases/CreateTaskTemplate';
+import { UpdateTaskTemplate } from '@application/use-cases/UpdateTaskTemplate';
+import { DeleteTaskTemplate } from '@application/use-cases/DeleteTaskTemplate';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { GetTask } from '@application/use-cases/GetTask';
 import { CreateTask } from '@application/use-cases/CreateTask';
@@ -515,6 +522,18 @@ export function createApp() {
   app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, authAdapter));
   const projectRepo = new PrismaProjectRepository();
   app.use('/api/projects', createProjectsRouter(projectRepo));
+  const taskTemplateRepo = new PrismaTaskTemplateRepository();
+  app.use(
+    '/api/task-templates',
+    createTaskTemplateRouter(
+      new ListTaskTemplates(taskTemplateRepo),
+      new GetTaskTemplate(taskTemplateRepo),
+      new CreateTaskTemplate(taskTemplateRepo),
+      new UpdateTaskTemplate(taskTemplateRepo),
+      new DeleteTaskTemplate(taskTemplateRepo),
+      authAdapter,
+    ),
+  );
   app.use('/api/voip', createVozRouter(listVoipCategories, createVoipCategory, listVoipCdrs, listVoipPlans, createVoipPlan));
   app.use('/api/leads', createLeadsRouter(listLeads, getLead, createLead, updateLead, deleteLead, convertLeadToClient));
   app.use('/api/locations', createUbicacionesRouter(listUbicaciones, getUbicacion, createUbicacion, updateUbicacion, deleteUbicacion));
