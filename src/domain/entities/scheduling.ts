@@ -11,8 +11,8 @@ export interface ScheduledTask {
   clientName: string | null;
   status: TaskStatus;
   priority: TaskPriority;
-  scheduledDate: string;
-  scheduledTime: string;
+  scheduledDate: string | null;
+  scheduledTime: string | null;
   estimatedHours: number;
   address: string | null;
   coordinates: { lat: number; lng: number } | null;
