@@ -361,6 +361,7 @@ model Project {
 
 model ScheduledTask {
   id             String    @id @default(uuid())
+  sequenceNumber Int       @unique @default(autoincrement())
   title          String
   description    String?
   assignedTo     String?
