@@ -3,6 +3,7 @@ export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
 export interface ScheduledTask {
   id: string;
+  sequenceNumber: number;
   title: string;
   description: string | null;
   assignedTo: string | null;
