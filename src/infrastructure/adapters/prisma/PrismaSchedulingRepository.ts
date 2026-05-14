@@ -2,11 +2,11 @@ import { ScheduledTask, TaskStatus } from '@domain/entities/scheduling';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { prisma } from '../../database/prisma';
 
-function toTask(row: any): ScheduledTask {
+export function toTask(row: any): ScheduledTask {
   return {
     id: row.id,
     title: row.title,
-    description: row.description ?? undefined,
+    description: row.description ?? null,
     assignedTo: row.assignedTo ?? null,
     assignedToId: row.assignedToId ?? null,
     clientId: row.clientId ?? null,
@@ -123,6 +123,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     try {
       const row = await prisma.scheduledTask.update({
         where: { id },
+        include: { project: true },
         data: {
           status,
           ...(status === 'completed' && { completedAt: new Date() }),
