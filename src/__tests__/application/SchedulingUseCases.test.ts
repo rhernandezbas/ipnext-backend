@@ -9,13 +9,13 @@ function makeRepo() {
 }
 
 describe('ListTasks', () => {
-  it('returns 6 seeded tasks', async () => {
+  it('returns 7 seeded tasks', async () => {
     const repo = makeRepo();
     const uc = new ListTasks(repo);
 
     const result = await uc.execute();
 
-    expect(result).toHaveLength(6);
+    expect(result).toHaveLength(7);
     expect(result.every(t => t.id && t.title && t.status)).toBe(true);
   });
 });

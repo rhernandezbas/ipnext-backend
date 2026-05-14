@@ -97,6 +97,34 @@ describe('PrismaSchedulingRepository.toTask — projectName mapping (REQ-STATUS-
     expect(task.projectName).toBe('My Project');
   });
 
+  it('maps null scheduledDate and scheduledTime to null', () => {
+    const row = {
+      id: 'test-unscheduled',
+      title: 'Pending to schedule',
+      description: null,
+      assignedTo: null,
+      assignedToId: null,
+      clientId: null,
+      clientName: null,
+      status: 'pending',
+      priority: 'normal',
+      scheduledDate: null,
+      scheduledTime: null,
+      estimatedHours: 1,
+      address: null,
+      lat: null,
+      lng: null,
+      category: 'other',
+      projectId: null,
+      project: null,
+      completedAt: null,
+      notes: null,
+    };
+    const task = toTask(row);
+    expect(task.scheduledDate).toBeNull();
+    expect(task.scheduledTime).toBeNull();
+  });
+
   it('maps null project to null projectName', () => {
     const row = {
       id: 'test-4',

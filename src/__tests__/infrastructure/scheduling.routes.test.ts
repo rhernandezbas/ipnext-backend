@@ -99,7 +99,7 @@ describe('Auth: routes reject missing cookie', () => {
 // ─── Happy path tests (with cookie) ─────────────────────────────────────────
 
 describe('GET /api/scheduling', () => {
-  it('returns 200 with array of 6 tasks', async () => {
+  it('returns 200 with array of 7 tasks', async () => {
     const app = buildApp();
     const res = await request(app)
       .get('/api/scheduling')
@@ -107,7 +107,7 @@ describe('GET /api/scheduling', () => {
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(6);
+    expect(res.body).toHaveLength(7);
   });
 });
 
@@ -280,6 +280,18 @@ describe('POST /api/scheduling - validation', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('REQ-CREATE-7: scheduledDate and scheduledTime as null → 201 created', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBody, scheduledDate: null, scheduledTime: null });
+
+    expect(res.status).toBe(201);
+    expect(res.body.scheduledDate).toBeNull();
+    expect(res.body.scheduledTime).toBeNull();
   });
 });
 
