@@ -2,7 +2,7 @@ export interface Admin {
   id: string;
   name: string;
   email: string;
-  role: 'superadmin' | 'admin' | 'viewer';
+  role: 'superadmin' | 'admin' | 'viewer' | 'engineer' | 'financial_manager' | 'support_agent' | 'technician';
   status: 'active' | 'inactive';
   createdAt: string;
   lastLogin: string | null;

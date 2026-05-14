@@ -32,6 +32,15 @@ export class InMemoryAdminRepository implements AdminRepository {
       createdAt: '2024-06-01T00:00:00Z',
       lastLogin: null,
     },
+    {
+      id: '4',
+      name: 'Carlos Técnico',
+      email: 'carlos@ipnext.com.ar',
+      role: 'technician',
+      status: 'active',
+      createdAt: '2025-01-15T00:00:00Z',
+      lastLogin: null,
+    },
   ];
 
   private activityLog: AdminActivityLog[] = [
@@ -157,8 +166,8 @@ export class InMemoryAdminRepository implements AdminRepository {
     },
   ];
 
-  async findAll(): Promise<Admin[]> {
-    return [...this.admins];
+  async findAll(role?: string): Promise<Admin[]> {
+    return role ? this.admins.filter(a => a.role === role) : [...this.admins];
   }
 
   async findById(id: string): Promise<Admin | null> {

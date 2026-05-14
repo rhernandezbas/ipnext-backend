@@ -33,6 +33,7 @@ enum AdminRole {
   engineer
   financial_manager
   support_agent
+  technician
 }
 
 enum AdminStatus {
@@ -385,6 +386,15 @@ model ScheduledTask {
   @@index([status])
   @@index([scheduledDate])
   @@index([projectId])
+}
+
+model TaskTemplate {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  category    String   @default("other")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // =============================================
