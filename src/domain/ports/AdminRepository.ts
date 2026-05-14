@@ -1,7 +1,7 @@
 import { Admin, AdminActivityLog, ActivityCategory, Admin2FA } from '../entities/admin';
 
 export interface AdminRepository {
-  findAll(): Promise<Admin[]>;
+  findAll(role?: string): Promise<Admin[]>;
   findById(id: string): Promise<Admin | null>;
   create(data: Omit<Admin, 'id' | 'createdAt' | 'lastLogin'>): Promise<Admin>;
   update(id: string, data: Partial<Admin>): Promise<Admin | null>;

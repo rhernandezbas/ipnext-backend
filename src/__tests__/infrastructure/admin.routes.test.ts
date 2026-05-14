@@ -38,7 +38,25 @@ describe('GET /api/admins', () => {
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(3);
+    expect(res.body).toHaveLength(4);
+  });
+
+  it('returns only technicians when ?role=technician', async () => {
+    const app = buildApp();
+    const res = await request(app).get('/api/admins?role=technician');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].role).toBe('technician');
+  });
+
+  it('returns empty array when filter matches nothing', async () => {
+    const app = buildApp();
+    const res = await request(app).get('/api/admins?role=engineer');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
   });
 });
 

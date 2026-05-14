@@ -17,10 +17,11 @@ describe('ListAdmins', () => {
 
     const result = await uc.execute();
 
-    expect(result).toHaveLength(3);
+    expect(result).toHaveLength(4);
     expect(result[0].name).toBe('Super Admin');
     expect(result[1].name).toBe('Carlos López');
     expect(result[2].name).toBe('María Fernández');
+    expect(result[3].name).toBe('Carlos Técnico');
   });
 });
 
@@ -94,7 +95,7 @@ describe('DeleteAdmin', () => {
 
     const listUc = new ListAdmins(repo);
     const remaining = await listUc.execute();
-    expect(remaining).toHaveLength(2);
+    expect(remaining).toHaveLength(3);
     expect(remaining.find(a => a.id === '3')).toBeUndefined();
   });
 });

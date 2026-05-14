@@ -33,8 +33,11 @@ function toActivityLog(row: any): AdminActivityLog {
 const twoFAStatuses: Map<string, Admin2FA> = new Map();
 
 export class PrismaAdminRepository implements AdminRepository {
-  async findAll(): Promise<Admin[]> {
-    const rows = await prisma.admin.findMany({ orderBy: { createdAt: 'asc' } });
+  async findAll(role?: string): Promise<Admin[]> {
+    const rows = await prisma.admin.findMany({
+      where: role ? { role: role as never } : undefined,
+      orderBy: { createdAt: 'asc' },
+    });
     return rows.map(toAdmin);
   }
 

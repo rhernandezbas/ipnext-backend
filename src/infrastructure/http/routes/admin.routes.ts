@@ -29,8 +29,9 @@ export function createAdminRouter(
     res.json(log);
   });
 
-  router.get('/', async (_req: Request, res: Response): Promise<void> => {
-    const admins = await listAdmins.execute();
+  router.get('/', async (req: Request, res: Response): Promise<void> => {
+    const role = typeof req.query['role'] === 'string' ? req.query['role'] : undefined;
+    const admins = await listAdmins.execute(role);
     res.json(admins);
   });
 
