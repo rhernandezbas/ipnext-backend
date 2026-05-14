@@ -512,7 +512,7 @@ export function createApp() {
   app.use('/api/billing', createCreditNotesRouter(listCreditNotes, getCreditNote, createCreditNote, applyCreditNote, voidCreditNote));
   app.use('/api/billing', createProformasRouter(listProformas, createProforma, convertToInvoice, cancelProforma));
   app.use('/api/billing', createFinanceHistoryRouter(listFinanceHistory));
-  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus));
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, authAdapter));
   const projectRepo = new PrismaProjectRepository();
   app.use('/api/projects', createProjectsRouter(projectRepo));
   app.use('/api/voip', createVozRouter(listVoipCategories, createVoipCategory, listVoipCdrs, listVoipPlans, createVoipPlan));
