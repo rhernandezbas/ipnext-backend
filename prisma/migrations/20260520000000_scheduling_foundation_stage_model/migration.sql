@@ -51,39 +51,45 @@ CREATE TABLE "ProjectType" (
 );
 CREATE UNIQUE INDEX "ProjectType_name_lower_key" ON "ProjectType" (LOWER("name"));
 
--- 3. Bootstrap Default workflow + 11 stages (idempotent — ON CONFLICT DO NOTHING)
-WITH new_wf AS (
-  INSERT INTO "Workflow" ("id", "name", "description", "updatedAt")
-  VALUES (
-    gen_random_uuid()::text,
-    'Default',
-    'Default workflow seeded by scheduling-foundation-stage-model',
-    NOW()
-  )
-  ON CONFLICT (LOWER("name")) DO NOTHING
-  RETURNING "id"
-),
-wf AS (
-  SELECT "id" FROM new_wf
-  UNION ALL
-  SELECT "id" FROM "Workflow" WHERE LOWER("name") = 'default' LIMIT 1
-)
-INSERT INTO "Stage" ("id", "workflowId", "name", "category", "order")
-SELECT gen_random_uuid()::text, wf.id, s.name, s.category::"StageCategory", s.ord
-FROM wf, (VALUES
-  ('Nuevo',                'nuevo',      0),
-  ('Confirmado',           'nuevo',      1),
-  ('Pospuesta',            'nuevo',      2),
-  ('No Factible',          'nuevo',      3),
-  ('Enviar a IClass',      'nuevo',      4),
-  ('Registrado en IClass', 'nuevo',      5),
-  ('Notificado',           'nuevo',      6),
-  ('En progreso',          'enProgreso', 7),
-  ('Instalado',            'hecho',      8),
-  ('Hecho',                'hecho',      9),
-  ('Anulado-Cancelado',    'hecho',      10)
-) AS s(name, category, ord)
-ON CONFLICT ON CONSTRAINT "Stage_workflowId_name_lower_key" DO NOTHING;
+-- 3. Bootstrap Default workflow + 11 stages (idempotent via WHERE NOT EXISTS)
+-- Uses a DO block because Postgres ON CONFLICT cannot target expression-based
+-- unique indexes via constraint names (only via expression columns), and
+-- WHERE NOT EXISTS is the most portable idempotent pattern here.
+DO $$
+DECLARE
+  default_wf_id TEXT;
+BEGIN
+  -- Get-or-create the Default workflow
+  SELECT "id" INTO default_wf_id FROM "Workflow" WHERE LOWER("name") = 'default' LIMIT 1;
+
+  IF default_wf_id IS NULL THEN
+    default_wf_id := gen_random_uuid()::text;
+    INSERT INTO "Workflow" ("id", "name", "description", "updatedAt")
+    VALUES (default_wf_id, 'Default', 'Default workflow seeded by scheduling-foundation-stage-model', NOW());
+  END IF;
+
+  -- Insert each stage only if a stage with the same (workflowId, lower(name)) doesn't exist
+  INSERT INTO "Stage" ("id", "workflowId", "name", "category", "order")
+  SELECT gen_random_uuid()::text, default_wf_id, s.name, s.category::"StageCategory", s.ord
+  FROM (VALUES
+    ('Nuevo',                'nuevo',      0),
+    ('Confirmado',           'nuevo',      1),
+    ('Pospuesta',            'nuevo',      2),
+    ('No Factible',          'nuevo',      3),
+    ('Enviar a IClass',      'nuevo',      4),
+    ('Registrado en IClass', 'nuevo',      5),
+    ('Notificado',           'nuevo',      6),
+    ('En progreso',          'enProgreso', 7),
+    ('Instalado',            'hecho',      8),
+    ('Hecho',                'hecho',      9),
+    ('Anulado-Cancelado',    'hecho',      10)
+  ) AS s(name, category, ord)
+  WHERE NOT EXISTS (
+    SELECT 1 FROM "Stage" existing
+    WHERE existing."workflowId" = default_wf_id
+      AND LOWER(existing."name") = LOWER(s.name)
+  );
+END $$;
 
 -- 4. Add stageId column to ScheduledTask (nullable first for backfill)
 ALTER TABLE "ScheduledTask" ADD COLUMN "stageId" TEXT;

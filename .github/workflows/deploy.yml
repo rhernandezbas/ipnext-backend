@@ -24,9 +24,10 @@ jobs:
 
       - name: Deploy container
         run: |
+          set -e
           docker network create ipnext-net 2>/dev/null || true
-          docker stop ipnext-new-backend 2>/dev/null || true
-          docker rm ipnext-new-backend 2>/dev/null || true
+          # Force-remove old container (stop+rm in one). Fail loud if it can't.
+          docker rm -f ipnext-new-backend 2>/dev/null || true
           docker run -d \
             --name ipnext-new-backend \
             --network ipnext-net \
@@ -45,5 +46,18 @@ jobs:
 
       - name: Verify
         run: |
+          set -e
           sleep 5
           docker ps | grep ipnext-new-backend
+          # Verify the container image SHA matches the freshly built :latest tag.
+          # Catches the case where stop/rm silently failed and an old container
+          # (with the previous image) keeps running.
+          CONTAINER_IMG=$(docker inspect ipnext-new-backend --format '{{.Image}}')
+          LATEST_IMG=$(docker inspect ipnext-backend:latest --format '{{.Id}}')
+          if [ "$CONTAINER_IMG" != "$LATEST_IMG" ]; then
+            echo "ERROR: container is running stale image"
+            echo "  container: $CONTAINER_IMG"
+            echo "  latest:    $LATEST_IMG"
+            exit 1
+          fi
+          echo "OK — container image SHA matches latest: $CONTAINER_IMG"
