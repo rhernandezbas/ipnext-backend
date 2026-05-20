@@ -13,6 +13,7 @@ import { StageCategory } from '@domain/entities/workflow';
 import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
 import { StageNotFoundError } from '@domain/errors/scheduling';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
+import { TaskListFilter } from '@application/dto/scheduling.dto';
 import { prisma } from '../../database/prisma';
 
 // Maps a Stage's category + name to the deprecated status string (REQ-STAGE-DEP-3)
@@ -131,8 +132,16 @@ const INCLUDE = {
 } as const;
 
 export class PrismaSchedulingRepository implements SchedulingRepository {
-  async listTasks(): Promise<ScheduledTask[]> {
+  async listTasks(filter?: TaskListFilter): Promise<ScheduledTask[]> {
+    const where: Record<string, unknown> = {};
+    if (filter?.projectId) where['projectId'] = filter.projectId;
+    if (filter?.stageIds?.length) where['stageId'] = { in: filter.stageIds };
+    if (filter?.partnerId) where['partnerId'] = filter.partnerId;
+    if (filter?.assigneeId) where['assigneeId'] = filter.assigneeId;
+    if (filter?.q) where['title'] = { contains: filter.q, mode: 'insensitive' };
+
     const rows = await (prisma.scheduledTask as any).findMany({
+      where,
       orderBy: { createdAt: 'desc' },
       include: INCLUDE,
     });

@@ -5,6 +5,7 @@ import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/
 import { StageRepository } from '@domain/ports/StageRepository';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskTemplateRepository } from '@domain/ports/TaskTemplateRepository';
+import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 // Default stage IDs used in the in-memory repo for seeded tasks — valid UUID format
 const DEFAULT_STAGE_ID_PENDING     = '10000000-0000-4000-a000-000000000001';
@@ -242,8 +243,18 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     }),
   ];
 
-  async listTasks(): Promise<ScheduledTask[]> {
-    return this.tasks.map(t => ({ ...t }));
+  async listTasks(filter?: TaskListFilter): Promise<ScheduledTask[]> {
+    let tasks = this.tasks.map(t => ({ ...t }));
+    if (!filter) return tasks;
+    if (filter.projectId) tasks = tasks.filter(t => t.projectId === filter.projectId);
+    if (filter.stageIds?.length) tasks = tasks.filter(t => filter.stageIds!.includes(t.stageId));
+    if (filter.partnerId) tasks = tasks.filter(t => t.partnerId === filter.partnerId);
+    if (filter.assigneeId) tasks = tasks.filter(t => t.assigneeId === filter.assigneeId);
+    if (filter.q) {
+      const q = filter.q.toLowerCase();
+      tasks = tasks.filter(t => t.title.toLowerCase().includes(q));
+    }
+    return tasks;
   }
 
   async getTask(id: string): Promise<ScheduledTask | null> {

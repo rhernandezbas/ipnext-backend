@@ -74,3 +74,17 @@ export type CreateTaskInput = z.infer<typeof CreateTaskSchema>;
 export type UpdateTaskInput = z.infer<typeof UpdateTaskSchema>;
 export type MoveStageInput = z.infer<typeof MoveStageSchema>;
 export type UpdateStatusInput = z.infer<typeof UpdateStatusSchema>;
+
+// ── Filter DTO ───────────────────────────────────────────────────────────────
+// Wire format decision (REQ-URL-SYNC-4 & tasks.md 1.6):
+// Frontend sends ?stageIds[]=a&stageIds[]=b; Express parses as req.query['stageIds[]'].
+// The route normalises the raw query before passing here so this schema uses
+// the JS-friendly key `stageIds`.
+export const ListTasksFilterSchema = z.object({
+  projectId:  z.string().min(1).optional(),
+  stageIds:   z.array(z.string().min(1)).optional(),
+  partnerId:  z.string().min(1).optional(),
+  assigneeId: z.string().min(1).optional(),
+  q:          z.string().optional(),
+});
+export type TaskListFilter = z.infer<typeof ListTasksFilterSchema>;

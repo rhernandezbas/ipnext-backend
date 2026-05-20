@@ -21,6 +21,7 @@ import {
   UpdateTaskSchema,
   UpdateStatusSchema,
   MoveStageSchema,
+  ListTasksFilterSchema,
 } from '@application/dto/scheduling.dto';
 import {
   AddChecklistItemSchema,
@@ -74,8 +75,33 @@ export function createSchedulingRouter(
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
 
-  router.get('/', auth, async (_req: Request, res: Response): Promise<void> => {
-    const tasks = await listTasks.execute();
+  router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
+    // Wire format: frontend sends ?stageIds[]=a&stageIds[]=b
+    // Express 4 uses `qs` internally and auto-strips bracket notation:
+    //   ?stageIds[]=a&stageIds[]=b → req.query.stageIds = ['a', 'b']
+    // We normalise to array if a single string was provided.
+    const rawStageIds = req.query['stageIds'];
+    const stageIds = rawStageIds === undefined
+      ? undefined
+      : Array.isArray(rawStageIds)
+        ? rawStageIds as string[]
+        : [rawStageIds as string];
+
+    const rawQuery = {
+      projectId:  req.query['projectId'],
+      stageIds,
+      partnerId:  req.query['partnerId'],
+      assigneeId: req.query['assigneeId'],
+      q:          req.query['q'],
+    };
+
+    const parsed = ListTasksFilterSchema.safeParse(rawQuery);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+      return;
+    }
+
+    const tasks = await listTasks.execute(parsed.data);
     res.json(tasks);
   });
 

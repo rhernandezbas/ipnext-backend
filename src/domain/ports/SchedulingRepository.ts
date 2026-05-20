@@ -1,5 +1,6 @@
 import { ScheduledTask, TaskStatus } from '../entities/scheduling';
 import { TaskChecklistItem } from '../entities/checklist';
+import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
   'id' | 'sequenceNumber' | 'stageCategory' | 'status' | 'customerName' | 'assigneeName' | 'watcherIds'
@@ -10,7 +11,7 @@ export interface CreateTaskInput extends Omit<ScheduledTask,
 export interface UpdateTaskInput extends Partial<CreateTaskInput> {}
 
 export interface SchedulingRepository {
-  listTasks(): Promise<ScheduledTask[]>;
+  listTasks(filter?: TaskListFilter): Promise<ScheduledTask[]>;
   getTask(id: string): Promise<ScheduledTask | null>;
   createTask(data: CreateTaskInput): Promise<ScheduledTask>;
   updateTask(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null>;
