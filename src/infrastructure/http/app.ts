@@ -570,7 +570,9 @@ export function createApp() {
   app.use('/api/billing', createCreditNotesRouter(listCreditNotes, getCreditNote, createCreditNote, applyCreditNote, voidCreditNote));
   app.use('/api/billing', createProformasRouter(listProformas, createProforma, convertToInvoice, cancelProforma));
   app.use('/api/billing', createFinanceHistoryRouter(listFinanceHistory));
-  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, moveTaskToStage, authAdapter, stageRepo));
+  // IMPORTANT: workflows router MUST be mounted BEFORE scheduling router because
+  // both share the /api/scheduling prefix and scheduling has a /:id catch-all
+  // that would otherwise swallow /workflows, /project-categories, /project-types.
   app.use('/api/scheduling', createWorkflowsRouter(
     authAdapter,
     listWorkflows, getWorkflow, createWorkflowUC, updateWorkflowUC, deleteWorkflowUC,
@@ -578,6 +580,7 @@ export function createApp() {
     listProjectCategory, getProjectCategory, createProjectCategory, updateProjectCategory, deleteProjectCategory,
     listProjectType, getProjectType, createProjectType, updateProjectType, deleteProjectType,
   ));
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, moveTaskToStage, authAdapter, stageRepo));
   const projectRepo = new PrismaProjectRepository();
   app.use('/api/projects', createProjectsRouter(projectRepo));
   const taskTemplateRepo = new PrismaTaskTemplateRepository();
