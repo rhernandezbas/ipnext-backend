@@ -2,3 +2,14 @@ node_modules/
 .env
 dist/
 build/
+
+# Local tooling
+.claude/
+.atl/
+
+# Playwright artifacts (local exploration only)
+.playwright-mcp/
+
+# Splynx exploration artifacts (kept locally, see md/splynx-scheduling/OVERVIEW.md)
+md/splynx-scheduling/screenshots/
+md/splynx-scheduling/snapshots/
