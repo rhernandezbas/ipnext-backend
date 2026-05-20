@@ -103,6 +103,10 @@ export function toTask(row: any): ScheduledTask {
           updatedAt: ci.updatedAt instanceof Date ? ci.updatedAt.toISOString() : ci.updatedAt,
         }))
       : [],
+    // Task timestamps — the frontend type declares these non-nullable; the
+    // Edad column in TasksTableView crashes with "NaN días" if they are missing.
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
   };
 }
 

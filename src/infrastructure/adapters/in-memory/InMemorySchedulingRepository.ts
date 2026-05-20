@@ -43,10 +43,17 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function makeTask(raw: Omit<ScheduledTask, 'stageCategory' | 'status'> & { stageId: string }): ScheduledTask {
+function makeTask(raw: Omit<ScheduledTask, 'stageCategory' | 'status' | 'createdAt' | 'updatedAt'> & { stageId: string; createdAt?: string; updatedAt?: string }): ScheduledTask {
   const stageCategory = deriveStageCategory(raw.stageId);
   const status = deriveLegacyStatus(raw.stageId, stageCategory);
-  return { ...raw, stageCategory, status };
+  const now = new Date().toISOString();
+  return {
+    ...raw,
+    stageCategory,
+    status,
+    createdAt: raw.createdAt ?? now,
+    updatedAt: raw.updatedAt ?? now,
+  };
 }
 
 // NEW fields default for existing seeded tasks (no breaking changes to fixtures)
@@ -302,6 +309,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       watcherIds: data.watcherIds ? [...data.watcherIds] : [],
       travelTimeTo: data.travelTimeTo ?? null,
       travelTimeFrom: data.travelTimeFrom ?? null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     this.tasks.push(task);
     return { ...task };
