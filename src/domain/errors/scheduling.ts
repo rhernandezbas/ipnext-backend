@@ -1,5 +1,14 @@
 import { DomainError } from './index';
 
+export type ReferenceKind = 'customer' | 'service' | 'partner' | 'reporter' | 'assignee' | 'watcher';
+
+export class ReferenceNotFoundError extends Error {
+  constructor(public readonly kind: ReferenceKind, public readonly id: string) {
+    super(`${kind} not found: ${id}`);
+    this.name = 'ReferenceNotFoundError';
+  }
+}
+
 export class TaskNotFoundError extends DomainError {
   constructor(id: string) {
     super(`Task with id ${id} not found`, 'TASK_NOT_FOUND');

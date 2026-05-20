@@ -11,20 +11,23 @@ generator client {
 // =============================================
 
 model Admin {
-  id           String             @id @default(uuid())
-  name         String
-  email        String             @unique
-  role         AdminRole
-  status       AdminStatus        @default(active)
-  twoFaEnabled Boolean            @default(false)
-  twoFaSecret  String?
-  lastLogin    DateTime?
-  passwordHash String?
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
-  activityLogs AdminActivityLog[]
-  sessions     AdminSession[]
-  projectsLed  Project[]
+  id              String             @id @default(uuid())
+  name            String
+  email           String             @unique
+  role            AdminRole
+  status          AdminStatus        @default(active)
+  twoFaEnabled    Boolean            @default(false)
+  twoFaSecret     String?
+  lastLogin       DateTime?
+  passwordHash    String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  activityLogs    AdminActivityLog[]
+  sessions        AdminSession[]
+  projectsLed     Project[]
+  tasksReported   ScheduledTask[]    @relation("TaskReporter")
+  tasksAssigned   ScheduledTask[]    @relation("TaskAssignee")
+  tasksWatching   TaskWatcher[]      @relation("TaskWatcher")
 }
 
 enum AdminRole {
@@ -144,6 +147,7 @@ model Partner {
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
   projects     ProjectPartner[]
+  tasks        ScheduledTask[]
 }
 
 // =============================================
@@ -170,22 +174,23 @@ model Message {
 }
 
 model Client {
-  id               String       @id @default(uuid())
-  splynxId         String?      @unique
+  id               String          @id @default(uuid())
+  splynxId         String?         @unique
   name             String
   email            String
   phone            String
-  status           ClientStatus @default(active)
+  status           ClientStatus    @default(active)
   address          String?
   city             String?
   country          String?
-  login            String       @unique
+  login            String          @unique
   customAttributes Json?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
   services         Service[]
   logs             ClientLog[]
   invoices         Invoice[]
+  tasks            ScheduledTask[]
 
   @@index([status])
   @@index([email])
@@ -199,16 +204,17 @@ enum ClientStatus {
 }
 
 model Service {
-  id        String    @id @default(uuid())
+  id        String          @id @default(uuid())
   clientId  String
   type      String
   plan      String
   ip        String?
-  status    String    @default("active")
+  status    String          @default("active")
   startDate DateTime
   endDate   DateTime?
-  createdAt DateTime  @default(now())
-  client    Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now())
+  client    Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tasks     ScheduledTask[]
 
   @@index([clientId])
   @@index([status])
@@ -513,15 +519,22 @@ model ScheduledTask {
   sequenceNumber Int       @unique @default(autoincrement())
   title          String
   description    String?
+  /// @deprecated use assigneeId; will be removed in cleanup change
   assignedTo     String?
+  /// @deprecated use assigneeId; will be removed in cleanup change
   assignedToId   String?
+  /// @deprecated use customerId; will be removed in cleanup change
   clientId       String?
+  /// @deprecated use customerName (derived from JOIN); will be removed in cleanup change
   clientName     String?
+  /// @deprecated use stageCategory; will be removed in cleanup change
   status         String    @default("pending")
   stageId        String
   stage          Stage     @relation(fields: [stageId], references: [id], onDelete: Restrict)
   priority       String    @default("normal")
+  /// @deprecated use startDate; will be removed in cleanup change
   scheduledDate  String?
+  /// @deprecated use startDate; will be removed in cleanup change
   scheduledTime  String?
   estimatedHours Float     @default(1)
   address        String?
@@ -535,10 +548,50 @@ model ScheduledTask {
   projectId      String?
   project        Project?  @relation(fields: [projectId], references: [id])
 
+  // NEW — datetime envelope
+  startDate      DateTime?
+  endDate        DateTime?
+
+  // NEW — FK relations
+  customerId     String?
+  customer       Client?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  serviceId      String?
+  service        Service?  @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  partnerId      String?
+  partnerRef     Partner?  @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  reporterId     String?
+  reporter       Admin?    @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
+  assigneeId     String?
+  assignee       Admin?    @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  // NEW — travel time (minutes)
+  travelTimeTo   Int?
+  travelTimeFrom Int?
+
+  // NEW — watchers pivot back-relation
+  watchers       TaskWatcher[]
+
   @@index([status])
   @@index([stageId])
   @@index([scheduledDate])
   @@index([projectId])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([customerId])
+  @@index([serviceId])
+  @@index([partnerId])
+  @@index([assigneeId])
+  @@index([reporterId])
+}
+
+model TaskWatcher {
+  taskId   String
+  adminId  String
+  task     ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  admin    Admin         @relation("TaskWatcher", fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, adminId])
+  @@index([adminId])
 }
 
 model TaskTemplate {

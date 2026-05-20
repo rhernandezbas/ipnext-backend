@@ -3,6 +3,12 @@ import { ListTasks } from '../../application/use-cases/ListTasks';
 import { GetTask } from '../../application/use-cases/GetTask';
 import { CreateTask } from '../../application/use-cases/CreateTask';
 import { UpdateTaskStatus } from '../../application/use-cases/UpdateTaskStatus';
+import { EntityLookup } from '../../domain/ports/EntityLookup';
+
+class StubLookup implements EntityLookup {
+  async findById(_id: string) { return null; }
+}
+const emptyLookup = new StubLookup();
 
 // Default stage IDs used by InMemorySchedulingRepository — valid UUID format
 const DEFAULT_STAGE_ID_PENDING = '10000000-0000-4000-a000-000000000001';
@@ -40,7 +46,7 @@ describe('GetTask', () => {
 describe('CreateTask', () => {
   it('creates task with stageId and stageCategory', async () => {
     const repo = makeRepo();
-    const uc = new CreateTask(repo);
+    const uc = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
 
     const result = await uc.execute({
       title: 'Nueva tarea de prueba',
@@ -59,6 +65,16 @@ describe('CreateTask', () => {
       category: 'other',
       completedAt: null,
       notes: '',
+      startDate: null,
+      endDate: null,
+      customerId: null,
+      serviceId: null,
+      partnerId: null,
+      reporterId: null,
+      assigneeId: null,
+      watcherIds: [],
+      travelTimeTo: null,
+      travelTimeFrom: null,
     });
 
     expect(result.id).toBeTruthy();

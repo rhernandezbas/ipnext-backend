@@ -1,6 +1,6 @@
 import { ScheduledTask, TaskStatus } from '@domain/entities/scheduling';
 import { StageCategory } from '@domain/entities/workflow';
-import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
+import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
 
 // Default stage IDs used in the in-memory repo for seeded tasks — valid UUID format
@@ -40,6 +40,22 @@ function makeTask(raw: Omit<ScheduledTask, 'stageCategory' | 'status'> & { stage
   return { ...raw, stageCategory, status };
 }
 
+// NEW fields default for existing seeded tasks (no breaking changes to fixtures)
+const NEW_FIELDS_DEFAULTS = {
+  startDate: null,
+  endDate: null,
+  customerId: null,
+  customerName: null,
+  serviceId: null,
+  partnerId: null,
+  reporterId: null,
+  assigneeId: null,
+  assigneeName: null,
+  watcherIds: [] as string[],
+  travelTimeTo: null,
+  travelTimeFrom: null,
+};
+
 export class InMemorySchedulingRepository implements SchedulingRepository {
   // Optional stage repo for accurate category resolution (useful in tests with non-sentinel IDs)
   private stageRepo?: StageRepository;
@@ -69,6 +85,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       projectName: null,
       completedAt: null,
       notes: 'Llevar ONT y cable UTP cat6',
+      ...NEW_FIELDS_DEFAULTS,
     }),
     makeTask({
       id: '2',
@@ -91,6 +108,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       projectName: null,
       completedAt: null,
       notes: 'Verificar empalme en caja de distribución',
+      ...NEW_FIELDS_DEFAULTS,
     }),
     makeTask({
       id: '3',
@@ -113,6 +131,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       projectName: null,
       completedAt: null,
       notes: 'Llevar kit de limpieza de conectores',
+      ...NEW_FIELDS_DEFAULTS,
     }),
     makeTask({
       id: '4',
@@ -135,6 +154,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       projectName: null,
       completedAt: '2026-04-25T16:00:00Z',
       notes: 'Todo en orden, documentado',
+      ...NEW_FIELDS_DEFAULTS,
     }),
     makeTask({
       id: '5',
@@ -157,6 +177,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       projectName: null,
       completedAt: null,
       notes: 'Cliente solicita 2 cámaras exteriores',
+      ...NEW_FIELDS_DEFAULTS,
     }),
     makeTask({
       id: '6',
@@ -179,6 +200,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       projectName: null,
       completedAt: null,
       notes: 'Cancelado por condiciones climáticas adversas',
+      ...NEW_FIELDS_DEFAULTS,
     }),
     makeTask({
       id: '7',
@@ -201,6 +223,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       projectName: null,
       completedAt: null,
       notes: 'Coordinar con el cliente antes de agendar',
+      ...NEW_FIELDS_DEFAULTS,
     }),
   ];
 
@@ -212,27 +235,102 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return this.tasks.find(t => t.id === id) ? { ...this.tasks.find(t => t.id === id)! } : null;
   }
 
-  async createTask(data: Omit<ScheduledTask, 'id' | 'sequenceNumber' | 'stageCategory' | 'status'>): Promise<ScheduledTask> {
-    const stageCategory = deriveStageCategory(data.stageId);
-    const status = deriveLegacyStatus(data.stageId, stageCategory);
+  async createTask(data: CreateTaskInput): Promise<ScheduledTask> {
+    const stageCategory = deriveStageCategory(data.stageId ?? DEFAULT_STAGE_ID_PENDING);
+    const status = deriveLegacyStatus(data.stageId ?? DEFAULT_STAGE_ID_PENDING, stageCategory);
     const task: ScheduledTask = {
       id: String(nextId++),
       sequenceNumber: nextSequenceNumber++,
-      ...data,
+      // Deprecated fields (accepted but not authoritative)
+      assignedTo: data.assignedTo ?? null,
+      assignedToId: data.assignedToId ?? null,
+      clientId: data.clientId ?? null,
+      clientName: data.clientName ?? null,
+      scheduledDate: data.scheduledDate ?? null,
+      scheduledTime: data.scheduledTime ?? null,
+      // Core fields
+      title: data.title,
+      description: data.description ?? null,
+      stageId: data.stageId ?? DEFAULT_STAGE_ID_PENDING,
+      priority: data.priority,
+      estimatedHours: data.estimatedHours,
+      address: data.address ?? null,
+      coordinates: data.coordinates ?? null,
+      category: data.category,
+      projectId: data.projectId ?? null,
+      projectName: data.projectName ?? null,
+      completedAt: data.completedAt ?? null,
+      notes: data.notes ?? null,
       stageCategory,
       status,
+      // New fields
+      startDate: data.startDate ?? null,
+      endDate: data.endDate ?? null,
+      customerId: data.customerId ?? null,
+      customerName: null, // In-memory: no JOIN, derived by Prisma adapter
+      serviceId: data.serviceId ?? null,
+      partnerId: data.partnerId ?? null,
+      reporterId: data.reporterId ?? null,
+      assigneeId: data.assigneeId ?? null,
+      assigneeName: null, // In-memory: no JOIN
+      watcherIds: data.watcherIds ? [...data.watcherIds] : [],
+      travelTimeTo: data.travelTimeTo ?? null,
+      travelTimeFrom: data.travelTimeFrom ?? null,
     };
     this.tasks.push(task);
     return { ...task };
   }
 
-  async updateTask(id: string, data: Partial<ScheduledTask>): Promise<ScheduledTask | null> {
+  async updateTask(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null> {
     const index = this.tasks.findIndex(t => t.id === id);
     if (index === -1) return null;
-    const merged = { ...this.tasks[index], ...data };
-    const stageCategory = deriveStageCategory(merged.stageId);
-    const status = deriveLegacyStatus(merged.stageId, stageCategory);
-    this.tasks[index] = { ...merged, stageCategory, status };
+
+    const current = this.tasks[index];
+    const stageId = data.stageId ?? current.stageId;
+    const stageCategory = deriveStageCategory(stageId);
+    const status = deriveLegacyStatus(stageId, stageCategory);
+
+    // Watcher replace-set: present → authoritative; omitted → preserve
+    const watcherIds = data.watcherIds !== undefined
+      ? [...data.watcherIds]
+      : [...current.watcherIds];
+
+    this.tasks[index] = {
+      ...current,
+      // Deprecated fields — update if present in data
+      ...(data.assignedTo !== undefined && { assignedTo: data.assignedTo }),
+      ...(data.assignedToId !== undefined && { assignedToId: data.assignedToId }),
+      ...(data.clientId !== undefined && { clientId: data.clientId }),
+      ...(data.clientName !== undefined && { clientName: data.clientName }),
+      ...(data.scheduledDate !== undefined && { scheduledDate: data.scheduledDate }),
+      ...(data.scheduledTime !== undefined && { scheduledTime: data.scheduledTime }),
+      // Core fields
+      ...(data.title !== undefined && { title: data.title }),
+      ...(data.description !== undefined && { description: data.description }),
+      stageId,
+      stageCategory,
+      status,
+      ...(data.priority !== undefined && { priority: data.priority }),
+      ...(data.estimatedHours !== undefined && { estimatedHours: data.estimatedHours }),
+      ...(data.address !== undefined && { address: data.address }),
+      ...(data.coordinates !== undefined && { coordinates: data.coordinates }),
+      ...(data.category !== undefined && { category: data.category }),
+      ...(data.projectId !== undefined && { projectId: data.projectId }),
+      ...(data.projectName !== undefined && { projectName: data.projectName }),
+      ...(data.completedAt !== undefined && { completedAt: data.completedAt }),
+      ...(data.notes !== undefined && { notes: data.notes }),
+      // New fields
+      ...(data.startDate !== undefined && { startDate: data.startDate }),
+      ...(data.endDate !== undefined && { endDate: data.endDate }),
+      ...(data.customerId !== undefined && { customerId: data.customerId }),
+      ...(data.serviceId !== undefined && { serviceId: data.serviceId }),
+      ...(data.partnerId !== undefined && { partnerId: data.partnerId }),
+      ...(data.reporterId !== undefined && { reporterId: data.reporterId }),
+      ...(data.assigneeId !== undefined && { assigneeId: data.assigneeId }),
+      ...(data.travelTimeTo !== undefined && { travelTimeTo: data.travelTimeTo }),
+      ...(data.travelTimeFrom !== undefined && { travelTimeFrom: data.travelTimeFrom }),
+      watcherIds,
+    };
     return { ...this.tasks[index] };
   }
 

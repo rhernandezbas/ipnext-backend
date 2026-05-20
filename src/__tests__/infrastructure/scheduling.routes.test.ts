@@ -14,6 +14,30 @@ import { createSchedulingRouter } from '../../infrastructure/http/routes/schedul
 import { User } from '../../domain/entities/auth';
 import { AuthProvider } from '../../domain/ports/AuthProvider';
 import { Stage } from '../../domain/entities/workflow';
+import { EntityLookup } from '../../domain/ports/EntityLookup';
+
+// Simple in-memory lookup for tests
+class StubLookup implements EntityLookup {
+  private ids: Set<string>;
+  constructor(...ids: string[]) { this.ids = new Set(ids); }
+  async findById(id: string) { return this.ids.has(id) ? { id } : null; }
+}
+
+const emptyLookup = new StubLookup();
+
+// Default new fields for repo.createTask calls (backward-compat with pre-enrich tests)
+const NEW_TASK_FIELDS = {
+  startDate: null as null,
+  endDate: null as null,
+  customerId: null as null,
+  serviceId: null as null,
+  partnerId: null as null,
+  reporterId: null as null,
+  assigneeId: null as null,
+  watcherIds: [] as string[],
+  travelTimeTo: null as null,
+  travelTimeFrom: null as null,
+};
 
 // FakeAuthProvider: implements AuthProvider port, always grants access
 class FakeAuthProvider implements AuthProvider {
@@ -57,8 +81,8 @@ function buildApp() {
 
   const listTasks = new ListTasks(repo);
   const getTask = new GetTask(repo);
-  const createTask = new CreateTask(repo);
-  const updateTask = new UpdateTask(repo);
+  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
   const deleteTask = new DeleteTask(repo);
   const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
@@ -437,6 +461,7 @@ describe('PATCH /:id/stage - projectName', () => {
       projectName: 'My Project',
       completedAt: null,
       notes: null,
+      ...NEW_TASK_FIELDS,
     });
 
     const app = express();
@@ -446,8 +471,8 @@ describe('PATCH /:id/stage - projectName', () => {
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
     const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
     app.use('/api/scheduling', createSchedulingRouter(
-      new ListTasks(repo), new GetTask(repo), new CreateTask(repo),
-      new UpdateTask(repo), new DeleteTask(repo), updateTaskStatus,
+      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo), updateTaskStatus,
       moveTaskToStage, new FakeAuthProvider(),
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -492,6 +517,7 @@ describe('PATCH /:id/stage - completedAt', () => {
       projectName: null,
       completedAt: null,
       notes: null,
+      ...NEW_TASK_FIELDS,
     });
 
     const app = express();
@@ -500,8 +526,8 @@ describe('PATCH /:id/stage - completedAt', () => {
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
     const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
     app.use('/api/scheduling', createSchedulingRouter(
-      new ListTasks(repo), new GetTask(repo), new CreateTask(repo),
-      new UpdateTask(repo), new DeleteTask(repo), updateTaskStatus,
+      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo), updateTaskStatus,
       moveTaskToStage, new FakeAuthProvider(),
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -542,6 +568,7 @@ describe('PATCH /:id/stage - completedAt', () => {
       projectName: null,
       completedAt: null,
       notes: null,
+      ...NEW_TASK_FIELDS,
     });
 
     const app = express();
@@ -550,8 +577,8 @@ describe('PATCH /:id/stage - completedAt', () => {
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
     const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
     app.use('/api/scheduling', createSchedulingRouter(
-      new ListTasks(repo), new GetTask(repo), new CreateTask(repo),
-      new UpdateTask(repo), new DeleteTask(repo), updateTaskStatus,
+      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo), updateTaskStatus,
       moveTaskToStage, new FakeAuthProvider(),
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -649,8 +676,8 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
 
     const listTasks = new ListTasks(repo);
     const getTask = new GetTask(repo);
-    const createTask = new CreateTask(repo);
-    const updateTask = new UpdateTask(repo);
+    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+    const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
     const deleteTask = new DeleteTask(repo);
     const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
@@ -693,8 +720,8 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
     app.use('/api/scheduling', createSchedulingRouter(
-      new ListTasks(repo), new GetTask(repo), new CreateTask(repo),
-      new UpdateTask(repo), new DeleteTask(repo), updateTaskStatus,
+      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo), updateTaskStatus,
       moveTaskToStage, new FakeAuthProvider(), stageRepo,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -740,5 +767,240 @@ describe('GET /api/scheduling/:id', () => {
 
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('TASK_NOT_FOUND');
+  });
+});
+
+// ─── FK validation (new fields) ─────────────────────────────────────────────
+
+function buildEnrichedApp(opts: {
+  customerLookup?: StubLookup;
+  serviceLookup?: StubLookup;
+  partnerLookup?: StubLookup;
+  adminLookup?: StubLookup;
+} = {}) {
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+
+  const repo = new InMemorySchedulingRepository();
+  const stageRepo = new InMemoryStageRepository();
+  makeDefaultStages(stageRepo);
+
+  const customerLookup = opts.customerLookup ?? emptyLookup;
+  const serviceLookup  = opts.serviceLookup  ?? emptyLookup;
+  const partnerLookup  = opts.partnerLookup  ?? emptyLookup;
+  const adminLookup    = opts.adminLookup    ?? emptyLookup;
+
+  const createTask = new CreateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup);
+  const updateTask = new UpdateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup);
+  const deleteTask = new DeleteTask(repo);
+  const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
+  const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
+
+  app.use('/api/scheduling', createSchedulingRouter(
+    new ListTasks(repo), new GetTask(repo), createTask, updateTask, deleteTask,
+    updateTaskStatus, moveTaskToStage, new FakeAuthProvider(),
+  ));
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  });
+
+  return { app, repo };
+}
+
+const validBase = {
+  title: 'Enrich test',
+  priority: 'normal',
+  estimatedHours: 1,
+  category: 'installation',
+};
+
+describe('POST /api/scheduling — FK errors (new fields)', () => {
+  it('POST with customerId: "ghost" → 404 CUSTOMER_NOT_FOUND', async () => {
+    const { app } = buildEnrichedApp({ customerLookup: new StubLookup() });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, customerId: 'ghost' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CUSTOMER_NOT_FOUND');
+  });
+
+  it('POST with serviceId: "ghost" → 404 SERVICE_NOT_FOUND', async () => {
+    const { app } = buildEnrichedApp({ serviceLookup: new StubLookup() });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, serviceId: 'ghost' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('SERVICE_NOT_FOUND');
+  });
+
+  it('POST with partnerId: "ghost" → 404 PARTNER_NOT_FOUND', async () => {
+    const { app } = buildEnrichedApp({ partnerLookup: new StubLookup() });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, partnerId: 'ghost' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PARTNER_NOT_FOUND');
+  });
+
+  it('POST with reporterId: "ghost" → 404 REPORTER_NOT_FOUND', async () => {
+    const { app } = buildEnrichedApp({ adminLookup: new StubLookup() });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, reporterId: 'ghost' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REPORTER_NOT_FOUND');
+  });
+
+  it('POST with assigneeId: "ghost" → 404 ASSIGNEE_NOT_FOUND', async () => {
+    const { app } = buildEnrichedApp({ adminLookup: new StubLookup() });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, assigneeId: 'ghost' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('ASSIGNEE_NOT_FOUND');
+  });
+
+  it('POST with ghost watcherIds[0] → 404 WATCHER_NOT_FOUND', async () => {
+    const { app } = buildEnrichedApp({ adminLookup: new StubLookup() });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, watcherIds: ['ghost-watcher'] });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('WATCHER_NOT_FOUND');
+  });
+
+  it('POST with valid customerId → 201, customerName in response', async () => {
+    const { app } = buildEnrichedApp({ customerLookup: new StubLookup('cust-1') });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, customerId: 'cust-1' });
+    expect(res.status).toBe(201);
+    expect(res.body.customerId).toBe('cust-1');
+  });
+
+  it('POST with endDate < startDate → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildEnrichedApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({
+        ...validBase,
+        startDate: '2026-05-21T11:00:00-03:00',
+        endDate:   '2026-05-21T09:00:00-03:00',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('POST with travelTimeTo: -5 → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildEnrichedApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, travelTimeTo: -5 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('POST with valid ISO startDate/endDate → 201 echoes back ISO strings', async () => {
+    const { app } = buildEnrichedApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({
+        ...validBase,
+        startDate: '2026-05-21T09:00:00-03:00',
+        endDate:   '2026-05-21T11:00:00-03:00',
+      });
+    expect(res.status).toBe(201);
+    expect(typeof res.body.startDate).toBe('string');
+    expect(typeof res.body.endDate).toBe('string');
+  });
+});
+
+describe('PUT /api/scheduling/:id — watcher replace-set (new fields)', () => {
+  it('PUT watcherIds: ["a1","a2"] then ["a1"] → second response has watcherIds: ["a1"]', async () => {
+    const { app, repo } = buildEnrichedApp({ adminLookup: new StubLookup('a1', 'a2') });
+    // First create a task with watchers (via repo directly to bypass validation)
+    const task = await repo.createTask({ ...validBase as any, stageId: DEFAULT_STAGE_ID_PENDING, ...NEW_TASK_FIELDS });
+    // Update with 2 watchers — need admin lookup to have them
+    const res1 = await request(app)
+      .put(`/api/scheduling/${task.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ watcherIds: ['a1', 'a2'] });
+    expect(res1.status).toBe(200);
+    expect(res1.body.watcherIds).toEqual(['a1', 'a2']);
+
+    // Update with 1 watcher
+    const res2 = await request(app)
+      .put(`/api/scheduling/${task.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ watcherIds: ['a1'] });
+    expect(res2.status).toBe(200);
+    expect(res2.body.watcherIds).toEqual(['a1']);
+  });
+
+  it('PUT watcherIds: [] → response has watcherIds: []', async () => {
+    const { app, repo } = buildEnrichedApp({ adminLookup: new StubLookup('a1') });
+    const task = await repo.createTask({ ...validBase as any, stageId: DEFAULT_STAGE_ID_PENDING, ...NEW_TASK_FIELDS, watcherIds: ['a1'] });
+    const res = await request(app)
+      .put(`/api/scheduling/${task.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ watcherIds: [] });
+    expect(res.status).toBe(200);
+    expect(res.body.watcherIds).toEqual([]);
+  });
+
+  it('PUT without watcherIds → existing set preserved', async () => {
+    const { app, repo } = buildEnrichedApp();
+    const task = await repo.createTask({ ...validBase as any, stageId: DEFAULT_STAGE_ID_PENDING, ...NEW_TASK_FIELDS, watcherIds: ['a1', 'a2'] });
+    const res = await request(app)
+      .put(`/api/scheduling/${task.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ title: 'Changed title' });
+    expect(res.status).toBe(200);
+    expect(res.body.watcherIds).toEqual(['a1', 'a2']);
+  });
+
+  it('PUT with ghost watcherIds[0] → 404 WATCHER_NOT_FOUND, not persisted', async () => {
+    const { app, repo } = buildEnrichedApp({ adminLookup: new StubLookup('valid-watcher') });
+    const task = await repo.createTask({ ...validBase as any, stageId: DEFAULT_STAGE_ID_PENDING, ...NEW_TASK_FIELDS, watcherIds: ['valid-watcher'] });
+    const res = await request(app)
+      .put(`/api/scheduling/${task.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ watcherIds: ['valid-watcher', 'ghost'] });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('WATCHER_NOT_FOUND');
+    // Verify watchers not changed (still ['valid-watcher'])
+    const taskAfter = await repo.getTask(task.id);
+    expect(taskAfter?.watcherIds).toEqual(['valid-watcher']);
+  });
+});
+
+describe('GET /api/scheduling — response includes legacy fields (REQ-DEPRECATED-1)', () => {
+  it('GET response includes both new fields and legacy fields', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/scheduling/1')
+      .set('Cookie', 'auth_token=fake');
+    expect(res.status).toBe(200);
+    // Legacy fields still present
+    expect(res.body).toHaveProperty('scheduledDate');
+    expect(res.body).toHaveProperty('clientId');
+    expect(res.body).toHaveProperty('assignedTo');
+    expect(res.body).toHaveProperty('status');
+    // New fields also present
+    expect(res.body).toHaveProperty('startDate');
+    expect(res.body).toHaveProperty('customerId');
+    expect(res.body).toHaveProperty('watcherIds');
   });
 });

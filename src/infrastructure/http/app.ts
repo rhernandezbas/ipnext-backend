@@ -235,6 +235,7 @@ import { CreateHardwareAsset } from '@application/use-cases/CreateHardwareAsset'
 import { UpdateHardwareAsset } from '@application/use-cases/UpdateHardwareAsset';
 import { DeleteHardwareAsset } from '@application/use-cases/DeleteHardwareAsset';
 import { DomainError } from '@domain/errors';
+import { prisma } from '../database/prisma';
 import { createGponRouter } from './routes/gpon.routes';
 import { PrismaGponRepository } from '../adapters/prisma/PrismaGponRepository';
 import { ListOlts } from '@application/use-cases/ListOlts';
@@ -284,6 +285,13 @@ import { MarkNotificationRead } from '@application/use-cases/MarkNotificationRea
 import { MarkAllNotificationsRead } from '@application/use-cases/MarkAllNotificationsRead';
 import { DeleteNotification } from '@application/use-cases/DeleteNotification';
 import { profileRoutes } from './routes/profile.routes';
+
+/** Minimal FK lookup for scheduling use-case FK validation. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function prismaClientLookup(model: 'Client' | 'Service' | 'Partner', id: string): Promise<{ id: string } | null> {
+  const table = (prisma as any)[model[0].toLowerCase() + model.slice(1)];
+  return table.findUnique({ where: { id }, select: { id: true } });
+}
 
 export function createApp() {
   const app = express();
@@ -353,8 +361,22 @@ export function createApp() {
 
   const listTasks = new ListTasks(schedulingRepo);
   const getTask = new GetTask(schedulingRepo);
-  const createTask = new CreateTask(schedulingRepo);
-  const updateTask = new UpdateTask(schedulingRepo);
+  const adminRepoForScheduling = new PrismaAdminRepository();
+  const createTask = new CreateTask(
+    schedulingRepo,
+    // EntityLookup wrappers for FK validation (return { id } | null)
+    { findById: (id: string) => prismaClientLookup('Client', id) },
+    { findById: (id: string) => prismaClientLookup('Service', id) },
+    { findById: (id: string) => prismaClientLookup('Partner', id) },
+    adminRepoForScheduling, // AdminRepository.findById returns Admin | null — satisfies EntityLookup
+  );
+  const updateTask = new UpdateTask(
+    schedulingRepo,
+    { findById: (id: string) => prismaClientLookup('Client', id) },
+    { findById: (id: string) => prismaClientLookup('Service', id) },
+    { findById: (id: string) => prismaClientLookup('Partner', id) },
+    adminRepoForScheduling,
+  );
   const deleteTask = new DeleteTask(schedulingRepo);
   const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo);
   const updateTaskStatus = new UpdateTaskStatus(schedulingRepo, stageRepo);

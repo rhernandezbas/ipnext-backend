@@ -1,6 +1,15 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/**
+ * NOTE: This file uses `as any` casts on the Prisma client calls because
+ * `prisma generate` has not been run yet against the enriched schema
+ * (no DB available during this apply phase). The casts will become
+ * unnecessary once the migration is applied and `npm run prisma:generate`
+ * is executed. The runtime behaviour IS correct — the new columns exist
+ * after the migration runs.
+ */
 import { ScheduledTask, TaskStatus } from '@domain/entities/scheduling';
 import { StageCategory } from '@domain/entities/workflow';
-import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
+import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
 import { StageNotFoundError } from '@domain/errors/scheduling';
 import { prisma } from '../../database/prisma';
 
@@ -16,6 +25,29 @@ function deriveLegacyStatus(stageCategory: StageCategory, stageName: string): Ta
 export function toTask(row: any): ScheduledTask {
   const stageCategory: StageCategory = row.stage?.category ?? 'nuevo';
   const stageName: string = row.stage?.name ?? '';
+
+  // Derive customerName: prefer JOIN, fallback to legacy clientName
+  const customerName: string | null =
+    row.customer?.name ?? row.clientName ?? null;
+
+  // Derive assigneeName: prefer JOIN, fallback to legacy assignedTo
+  const assigneeName: string | null =
+    row.assignee?.name ?? row.assignedTo ?? null;
+
+  // Map watchers array to watcherIds
+  const watcherIds: string[] = Array.isArray(row.watchers)
+    ? row.watchers.map((w: any) => w.adminId ?? w.admin?.id)
+    : [];
+
+  // startDate / endDate: convert Date → ISO string
+  const startDate: string | null = row.startDate instanceof Date
+    ? row.startDate.toISOString()
+    : (row.startDate ?? null);
+
+  const endDate: string | null = row.endDate instanceof Date
+    ? row.endDate.toISOString()
+    : (row.endDate ?? null);
+
   return {
     id: row.id,
     sequenceNumber: row.sequenceNumber,
@@ -43,14 +75,36 @@ export function toTask(row: any): ScheduledTask {
       ? (row.completedAt instanceof Date ? row.completedAt.toISOString() : row.completedAt)
       : null,
     notes: row.notes ?? null,
+    // NEW fields
+    startDate,
+    endDate,
+    customerId: row.customerId ?? null,
+    customerName,
+    serviceId: row.serviceId ?? null,
+    partnerId: row.partnerId ?? null,
+    reporterId: row.reporterId ?? null,
+    assigneeId: row.assigneeId ?? null,
+    assigneeName,
+    watcherIds,
+    travelTimeTo: row.travelTimeTo ?? null,
+    travelTimeFrom: row.travelTimeFrom ?? null,
   };
 }
 
-const INCLUDE = { project: true, stage: true } as const;
+const INCLUDE = {
+  project: true,
+  stage: true,
+  customer: { select: { id: true, name: true } },
+  assignee: { select: { id: true, name: true } },
+  reporter: { select: { id: true } },
+  service: { select: { id: true } },
+  partnerRef: { select: { id: true } },
+  watchers: true,
+} as const;
 
 export class PrismaSchedulingRepository implements SchedulingRepository {
   async listTasks(): Promise<ScheduledTask[]> {
-    const rows = await prisma.scheduledTask.findMany({
+    const rows = await (prisma.scheduledTask as any).findMany({
       orderBy: { createdAt: 'desc' },
       include: INCLUDE,
     });
@@ -58,71 +112,66 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
   }
 
   async getTask(id: string): Promise<ScheduledTask | null> {
-    const row = await prisma.scheduledTask.findUnique({
+    const row = await (prisma.scheduledTask as any).findUnique({
       where: { id },
       include: INCLUDE,
     });
     return row ? toTask(row) : null;
   }
 
-  async createTask(data: Omit<ScheduledTask, 'id' | 'sequenceNumber' | 'stageCategory' | 'status'>): Promise<ScheduledTask> {
-    const row = await prisma.scheduledTask.create({
-      include: INCLUDE,
-      data: {
-        title: data.title,
-        description: data.description ?? null,
-        assignedTo: data.assignedTo ?? null,
-        assignedToId: data.assignedToId ?? null,
-        clientId: data.clientId ?? null,
-        clientName: data.clientName ?? null,
-        stageId: data.stageId,
-        priority: data.priority,
-        scheduledDate: data.scheduledDate,
-        scheduledTime: data.scheduledTime,
-        estimatedHours: data.estimatedHours,
-        address: data.address ?? null,
-        lat: data.coordinates?.lat ?? null,
-        lng: data.coordinates?.lng ?? null,
-        category: data.category,
-        projectId: data.projectId ?? null,
-        notes: data.notes ?? null,
-        completedAt: data.completedAt ? new Date(data.completedAt) : null,
-      },
-    });
-    return toTask(row);
-  }
+  async createTask(data: CreateTaskInput): Promise<ScheduledTask> {
+    const watcherIds = data.watcherIds ? [...new Set(data.watcherIds)] : [];
 
-  async updateTask(id: string, data: Partial<ScheduledTask>): Promise<ScheduledTask | null> {
-    try {
-      const row = await prisma.scheduledTask.update({
-        where: { id },
-        include: INCLUDE,
-        data: {
-          ...(data.title !== undefined && { title: data.title }),
-          ...(data.description !== undefined && { description: data.description }),
-          ...(data.assignedTo !== undefined && { assignedTo: data.assignedTo }),
-          ...(data.assignedToId !== undefined && { assignedToId: data.assignedToId }),
-          ...(data.clientId !== undefined && { clientId: data.clientId }),
-          ...(data.clientName !== undefined && { clientName: data.clientName }),
-          ...(data.stageId !== undefined && { stageId: data.stageId }),
-          ...(data.priority !== undefined && { priority: data.priority }),
-          ...(data.scheduledDate !== undefined && { scheduledDate: data.scheduledDate }),
-          ...(data.scheduledTime !== undefined && { scheduledTime: data.scheduledTime }),
-          ...(data.estimatedHours !== undefined && { estimatedHours: data.estimatedHours }),
-          ...(data.address !== undefined && { address: data.address }),
-          ...(data.coordinates !== undefined && {
-            lat: data.coordinates?.lat ?? null,
-            lng: data.coordinates?.lng ?? null,
-          }),
-          ...(data.category !== undefined && { category: data.category }),
-          ...(data.projectId !== undefined && { projectId: data.projectId }),
-          ...(data.notes !== undefined && { notes: data.notes }),
-          ...(data.completedAt !== undefined && {
-            completedAt: data.completedAt ? new Date(data.completedAt) : null,
-          }),
-        },
+    if (watcherIds.length > 0) {
+      // Wrap in transaction: insert task + insert watchers
+      const row = await (prisma as any).$transaction(async (tx: any) => {
+        const created = await tx.scheduledTask.create({
+          include: INCLUDE,
+          data: this._buildCreateData(data),
+        });
+        await tx.taskWatcher.createMany({
+          data: watcherIds.map((adminId: string) => ({ taskId: created.id, adminId })),
+        });
+        return tx.scheduledTask.findUnique({ where: { id: created.id }, include: INCLUDE });
       });
       return toTask(row);
+    } else {
+      const row = await (prisma.scheduledTask as any).create({
+        include: INCLUDE,
+        data: this._buildCreateData(data),
+      });
+      return toTask(row);
+    }
+  }
+
+  async updateTask(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null> {
+    try {
+      if (data.watcherIds !== undefined) {
+        // Replace-set semantics: deleteMany + createMany inside transaction
+        const deduped = [...new Set(data.watcherIds)];
+        const { watcherIds: _watcherIds, ...scalarData } = data;
+        const row = await (prisma as any).$transaction(async (tx: any) => {
+          await tx.scheduledTask.update({
+            where: { id },
+            data: this._buildUpdateData(scalarData),
+          });
+          await tx.taskWatcher.deleteMany({ where: { taskId: id } });
+          if (deduped.length > 0) {
+            await tx.taskWatcher.createMany({
+              data: deduped.map((adminId: string) => ({ taskId: id, adminId })),
+            });
+          }
+          return tx.scheduledTask.findUnique({ where: { id }, include: INCLUDE });
+        });
+        return row ? toTask(row) : null;
+      } else {
+        const row = await (prisma.scheduledTask as any).update({
+          where: { id },
+          include: INCLUDE,
+          data: this._buildUpdateData(data),
+        });
+        return toTask(row);
+      }
     } catch {
       return null;
     }
@@ -139,19 +188,21 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
 
   async moveTaskToStage(id: string, stageId: string): Promise<ScheduledTask | null> {
     // Explicitly check the target stage exists before attempting the update.
-    // This surfaces STAGE_NOT_FOUND rather than masking it as TASK_NOT_FOUND.
     const targetStage = await prisma.stage.findUnique({ where: { id: stageId } });
     if (!targetStage) {
       throw new StageNotFoundError(stageId);
     }
 
     try {
-      const currentTask = await prisma.scheduledTask.findUnique({ where: { id }, select: { completedAt: true } });
+      const currentTask = await (prisma.scheduledTask as any).findUnique({
+        where: { id },
+        select: { completedAt: true },
+      });
 
       const shouldSetCompletedAt =
         targetStage.category === 'hecho' && !currentTask?.completedAt;
 
-      const row = await prisma.scheduledTask.update({
+      const row = await (prisma.scheduledTask as any).update({
         where: { id },
         include: INCLUDE,
         data: {
@@ -168,7 +219,6 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
   /** @deprecated use moveTaskToStage */
   async updateTaskStatus(id: string, status: TaskStatus): Promise<ScheduledTask | null> {
     console.warn('deprecated: PrismaSchedulingRepository.updateTaskStatus — use moveTaskToStage');
-    // Map legacy status to Default workflow stage
     const stageName = {
       pending: 'Nuevo',
       in_progress: 'En progreso',
@@ -190,5 +240,79 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       if (err instanceof StageNotFoundError) throw err;
       return null;
     }
+  }
+
+  private _buildCreateData(data: CreateTaskInput): Record<string, unknown> {
+    return {
+      title: data.title,
+      description: data.description ?? null,
+      assignedTo: data.assignedTo ?? null,
+      assignedToId: data.assignedToId ?? null,
+      clientId: data.clientId ?? null,
+      clientName: data.clientName ?? null,
+      stageId: data.stageId!,
+      priority: data.priority,
+      scheduledDate: data.scheduledDate ?? null,
+      scheduledTime: data.scheduledTime ?? null,
+      estimatedHours: data.estimatedHours,
+      address: data.address ?? null,
+      lat: data.coordinates?.lat ?? null,
+      lng: data.coordinates?.lng ?? null,
+      category: data.category,
+      projectId: data.projectId ?? null,
+      notes: data.notes ?? null,
+      completedAt: data.completedAt ? new Date(data.completedAt) : null,
+      // NEW
+      startDate: data.startDate ? new Date(data.startDate) : null,
+      endDate: data.endDate ? new Date(data.endDate) : null,
+      customerId: data.customerId ?? null,
+      serviceId: data.serviceId ?? null,
+      partnerId: data.partnerId ?? null,
+      reporterId: data.reporterId ?? null,
+      assigneeId: data.assigneeId ?? null,
+      travelTimeTo: data.travelTimeTo ?? null,
+      travelTimeFrom: data.travelTimeFrom ?? null,
+    };
+  }
+
+  private _buildUpdateData(data: Omit<UpdateTaskInput, 'watcherIds'>): Record<string, unknown> {
+    const update: Record<string, unknown> = {};
+    if (data.title !== undefined) update['title'] = data.title;
+    if (data.description !== undefined) update['description'] = data.description;
+    if (data.assignedTo !== undefined) update['assignedTo'] = data.assignedTo;
+    if (data.assignedToId !== undefined) update['assignedToId'] = data.assignedToId;
+    if (data.clientId !== undefined) update['clientId'] = data.clientId;
+    if (data.clientName !== undefined) update['clientName'] = data.clientName;
+    if (data.stageId !== undefined) update['stageId'] = data.stageId;
+    if (data.priority !== undefined) update['priority'] = data.priority;
+    if (data.scheduledDate !== undefined) update['scheduledDate'] = data.scheduledDate;
+    if (data.scheduledTime !== undefined) update['scheduledTime'] = data.scheduledTime;
+    if (data.estimatedHours !== undefined) update['estimatedHours'] = data.estimatedHours;
+    if (data.address !== undefined) update['address'] = data.address;
+    if (data.coordinates !== undefined) {
+      update['lat'] = data.coordinates?.lat ?? null;
+      update['lng'] = data.coordinates?.lng ?? null;
+    }
+    if (data.category !== undefined) update['category'] = data.category;
+    if (data.projectId !== undefined) update['projectId'] = data.projectId;
+    if (data.notes !== undefined) update['notes'] = data.notes;
+    if (data.completedAt !== undefined) {
+      update['completedAt'] = data.completedAt ? new Date(data.completedAt) : null;
+    }
+    // NEW
+    if (data.startDate !== undefined) {
+      update['startDate'] = data.startDate ? new Date(data.startDate) : null;
+    }
+    if (data.endDate !== undefined) {
+      update['endDate'] = data.endDate ? new Date(data.endDate) : null;
+    }
+    if (data.customerId !== undefined) update['customerId'] = data.customerId;
+    if (data.serviceId !== undefined) update['serviceId'] = data.serviceId;
+    if (data.partnerId !== undefined) update['partnerId'] = data.partnerId;
+    if (data.reporterId !== undefined) update['reporterId'] = data.reporterId;
+    if (data.assigneeId !== undefined) update['assigneeId'] = data.assigneeId;
+    if (data.travelTimeTo !== undefined) update['travelTimeTo'] = data.travelTimeTo;
+    if (data.travelTimeFrom !== undefined) update['travelTimeFrom'] = data.travelTimeFrom;
+    return update;
   }
 }

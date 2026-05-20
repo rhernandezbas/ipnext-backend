@@ -6,7 +6,6 @@ import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { UpdateTaskStatus } from '@application/use-cases/UpdateTaskStatus';
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
-import { ScheduledTask } from '@domain/entities/scheduling';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -19,7 +18,18 @@ import {
 import {
   StageNotFoundError,
   TaskNotFoundError,
+  ReferenceNotFoundError,
+  ReferenceKind,
 } from '@domain/errors/scheduling';
+
+const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
+  customer: 'CUSTOMER_NOT_FOUND',
+  service:  'SERVICE_NOT_FOUND',
+  partner:  'PARTNER_NOT_FOUND',
+  reporter: 'REPORTER_NOT_FOUND',
+  assignee: 'ASSIGNEE_NOT_FOUND',
+  watcher:  'WATCHER_NOT_FOUND',
+};
 
 export function createSchedulingRouter(
   listTasks: ListTasks,
@@ -58,7 +68,6 @@ export function createSchedulingRouter(
     const data = parsed.data;
 
     // Resolve default stageId: if stageRepo is injected, look up the real "Nuevo" stage UUID.
-    // This ensures the Prisma path never receives a sentinel string that would cause a FK violation.
     let stageId = data.stageId;
     if (!stageId) {
       if (stageRepo) {
@@ -69,7 +78,6 @@ export function createSchedulingRouter(
         }
         stageId = defaultStage.id;
       } else {
-        // Fallback for in-memory / test environments without stageRepo: use InMemory sentinel
         stageId = '10000000-0000-4000-a000-000000000001';
       }
     }
@@ -93,12 +101,27 @@ export function createSchedulingRouter(
       projectName: data.projectName ?? null,
       completedAt: data.completedAt ?? null,
       notes: data.notes ?? null,
+      // NEW fields
+      startDate: data.startDate ?? null,
+      endDate: data.endDate ?? null,
+      customerId: data.customerId ?? null,
+      serviceId: data.serviceId ?? null,
+      partnerId: data.partnerId ?? null,
+      reporterId: data.reporterId ?? null,
+      assigneeId: data.assigneeId ?? null,
+      watcherIds: data.watcherIds ?? [],
+      travelTimeTo: data.travelTimeTo ?? null,
+      travelTimeFrom: data.travelTimeFrom ?? null,
     };
 
     try {
       const task = await createTask.execute(normalized);
       res.status(201).json(task);
     } catch (err: unknown) {
+      if (err instanceof ReferenceNotFoundError) {
+        res.status(404).json({ error: err.message, code: REFERENCE_TO_CODE[err.kind] });
+        return;
+      }
       if (err instanceof StageNotFoundError) {
         res.status(404).json({ error: err.message, code: err.code });
         return;
@@ -113,12 +136,21 @@ export function createSchedulingRouter(
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
     }
-    const task = await updateTask.execute(req.params['id'] as string, parsed.data as Partial<ScheduledTask>);
-    if (!task) {
-      res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
-      return;
+
+    try {
+      const task = await updateTask.execute(req.params['id'] as string, parsed.data);
+      if (!task) {
+        res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
+        return;
+      }
+      res.json(task);
+    } catch (err: unknown) {
+      if (err instanceof ReferenceNotFoundError) {
+        res.status(404).json({ error: err.message, code: REFERENCE_TO_CODE[err.kind] });
+        return;
+      }
+      throw err;
     }
-    res.json(task);
   });
 
   // NEW: move to stage

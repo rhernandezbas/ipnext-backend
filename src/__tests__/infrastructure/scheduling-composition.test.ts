@@ -43,6 +43,12 @@ import { UpdateProjectType } from '../../application/use-cases/UpdateProjectType
 import { DeleteProjectType } from '../../application/use-cases/DeleteProjectType';
 import { User } from '../../domain/entities/auth';
 import { AuthProvider } from '../../domain/ports/AuthProvider';
+import { EntityLookup } from '../../domain/ports/EntityLookup';
+
+class StubLookup implements EntityLookup {
+  async findById(_id: string) { return null; }
+}
+const emptyLookup = new StubLookup();
 
 class FakeAuthProvider implements AuthProvider {
   async login() {
@@ -94,8 +100,8 @@ function buildApp() {
   app.use('/api/scheduling', createSchedulingRouter(
     new ListTasks(schedRepo),
     new GetTask(schedRepo),
-    new CreateTask(schedRepo),
-    new UpdateTask(schedRepo),
+    new CreateTask(schedRepo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+    new UpdateTask(schedRepo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
     new DeleteTask(schedRepo),
     new UpdateTaskStatus(schedRepo, stageRepo),
     new MoveTaskToStage(schedRepo, stageRepo),
