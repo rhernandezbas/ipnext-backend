@@ -75,6 +75,11 @@ import { GetTaskTemplate } from '@application/use-cases/GetTaskTemplate';
 import { CreateTaskTemplate } from '@application/use-cases/CreateTaskTemplate';
 import { UpdateTaskTemplate } from '@application/use-cases/UpdateTaskTemplate';
 import { DeleteTaskTemplate } from '@application/use-cases/DeleteTaskTemplate';
+import { ListProjects } from '@application/use-cases/ListProjects';
+import { GetProject } from '@application/use-cases/GetProject';
+import { CreateProject } from '@application/use-cases/CreateProject';
+import { UpdateProject } from '@application/use-cases/UpdateProject';
+import { DeleteProject } from '@application/use-cases/DeleteProject';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { GetTask } from '@application/use-cases/GetTask';
 import { CreateTask } from '@application/use-cases/CreateTask';
@@ -582,7 +587,12 @@ export function createApp() {
   ));
   app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, moveTaskToStage, authAdapter, stageRepo));
   const projectRepo = new PrismaProjectRepository();
-  app.use('/api/projects', createProjectsRouter(projectRepo));
+  const listProjectsUC   = new ListProjects(projectRepo);
+  const getProjectUC     = new GetProject(projectRepo);
+  const createProjectUC  = new CreateProject(projectRepo, projectCategoryRepo, projectTypeRepo, workflowRepo, adminRepo, partnerRepo);
+  const updateProjectUC  = new UpdateProject(projectRepo, projectCategoryRepo, projectTypeRepo, workflowRepo, adminRepo, partnerRepo);
+  const deleteProjectUC  = new DeleteProject(projectRepo);
+  app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter));
   const taskTemplateRepo = new PrismaTaskTemplateRepository();
   app.use(
     '/api/task-templates',

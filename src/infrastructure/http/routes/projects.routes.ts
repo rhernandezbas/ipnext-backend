@@ -1,16 +1,48 @@
 import { Router, Request, Response } from 'express';
-import { ProjectRepository } from '@domain/ports/ProjectRepository';
+import { AuthProvider } from '@domain/ports/AuthProvider';
+import { ReferenceNotFoundError, ReferenceKind } from '@domain/errors/projects';
+import { createAuthMiddleware } from '../middleware/authMiddleware';
+import { CreateProjectSchema, UpdateProjectSchema, ListProjectsQuerySchema } from '@application/dto/projects.dto';
+import { ListProjects } from '@application/use-cases/ListProjects';
+import { GetProject } from '@application/use-cases/GetProject';
+import { CreateProject } from '@application/use-cases/CreateProject';
+import { UpdateProject } from '@application/use-cases/UpdateProject';
+import { DeleteProject } from '@application/use-cases/DeleteProject';
 
-export function createProjectsRouter(repo: ProjectRepository): Router {
+const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
+  category: 'CATEGORY_NOT_FOUND',
+  type:     'TYPE_NOT_FOUND',
+  workflow: 'WORKFLOW_NOT_FOUND',
+  lead:     'LEAD_NOT_FOUND',
+  partner:  'PARTNER_NOT_FOUND',
+};
+
+export function createProjectsRouter(
+  listProjects: ListProjects,
+  getProject: GetProject,
+  createProject: CreateProject,
+  updateProject: UpdateProject,
+  deleteProject: DeleteProject,
+  authProvider: AuthProvider,
+): Router {
   const router = Router();
+  const auth = createAuthMiddleware(authProvider);
 
-  router.get('/', async (_req: Request, res: Response): Promise<void> => {
-    const projects = await repo.list();
+  router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
+    const parsed = ListProjectsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+      return;
+    }
+    const filter = parsed.data.visible !== undefined
+      ? { visible: parsed.data.visible === 'true' }
+      : undefined;
+    const projects = await listProjects.execute(filter);
     res.json(projects);
   });
 
-  router.get('/:id', async (req: Request, res: Response): Promise<void> => {
-    const project = await repo.get(req.params['id'] as string);
+  router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+    const project = await getProject.execute(req.params['id'] as string);
     if (!project) {
       res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
       return;
@@ -18,28 +50,48 @@ export function createProjectsRouter(repo: ProjectRepository): Router {
     res.json(project);
   });
 
-  router.post('/', async (req: Request, res: Response): Promise<void> => {
-    const { title, description } = req.body as { title: string; description?: string };
-    if (!title?.trim()) {
-      res.status(400).json({ error: 'Title is required', code: 'VALIDATION_ERROR' });
+  router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
+    const parsed = CreateProjectSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
     }
-    const project = await repo.create({ title: title.trim(), description: description ?? null });
-    res.status(201).json(project);
+    try {
+      const project = await createProject.execute(parsed.data);
+      res.status(201).json(project);
+    } catch (err) {
+      if (err instanceof ReferenceNotFoundError) {
+        res.status(404).json({ error: err.message, code: REFERENCE_TO_CODE[err.reference] });
+        return;
+      }
+      throw err;
+    }
   });
 
-  router.put('/:id', async (req: Request, res: Response): Promise<void> => {
-    const { title, description } = req.body as { title?: string; description?: string };
-    const project = await repo.update(req.params['id'] as string, { title, description });
-    if (!project) {
-      res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+  router.put('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+    const parsed = UpdateProjectSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
     }
-    res.json(project);
+    try {
+      const project = await updateProject.execute(req.params['id'] as string, parsed.data);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+        return;
+      }
+      res.json(project);
+    } catch (err) {
+      if (err instanceof ReferenceNotFoundError) {
+        res.status(404).json({ error: err.message, code: REFERENCE_TO_CODE[err.reference] });
+        return;
+      }
+      throw err;
+    }
   });
 
-  router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
-    const deleted = await repo.delete(req.params['id'] as string);
+  router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+    const deleted = await deleteProject.execute(req.params['id'] as string);
     if (!deleted) {
       res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
       return;

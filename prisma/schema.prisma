@@ -24,6 +24,7 @@ model Admin {
   updatedAt    DateTime           @updatedAt
   activityLogs AdminActivityLog[]
   sessions     AdminSession[]
+  projectsLed  Project[]
 }
 
 enum AdminRole {
@@ -126,9 +127,9 @@ model Lead {
 }
 
 model Partner {
-  id           String   @id @default(uuid())
+  id           String           @id @default(uuid())
   name         String
-  status       String   @default("active")
+  status       String           @default("active")
   primaryEmail String?
   phone        String?
   address      String?
@@ -137,11 +138,12 @@ model Partner {
   timezone     String?
   currency     String?
   logoUrl      String?
-  clientCount  Int      @default(0)
-  adminCount   Int      @default(0)
+  clientCount  Int              @default(0)
+  adminCount   Int              @default(0)
   comision     Float?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  projects     ProjectPartner[]
 }
 
 // =============================================
@@ -435,12 +437,13 @@ enum StageCategory {
 }
 
 model Workflow {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   name        String
   description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   stages      Stage[]
+  projects    Project[]
 }
 
 model Stage {
@@ -456,26 +459,53 @@ model Stage {
 }
 
 model ProjectCategory {
-  id          String  @id @default(uuid())
+  id          String    @id @default(uuid())
   name        String
   description String?
+  projects    Project[]
 }
 
 model ProjectType {
-  id          String  @id @default(uuid())
+  id          String    @id @default(uuid())
   name        String
   description String?
+  projects    Project[]
 }
 
 model Project {
-  id          String          @id @default(uuid())
-  title       String
-  description String?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  tasks       ScheduledTask[]
+  id            String           @id @default(uuid())
+  title         String
+  description   String?
+  typeId        String?
+  type          ProjectType?     @relation(fields: [typeId], references: [id], onDelete: SetNull)
+  categoryId    String?
+  category      ProjectCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  workflowId    String?
+  workflow      Workflow?        @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  projectLeadId String?
+  projectLead   Admin?           @relation(fields: [projectLeadId], references: [id], onDelete: SetNull)
+  visible       Boolean          @default(true)
+  partners      ProjectPartner[]
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  tasks         ScheduledTask[]
 
   @@index([title])
+  @@index([categoryId])
+  @@index([typeId])
+  @@index([workflowId])
+  @@index([projectLeadId])
+  @@index([visible])
+}
+
+model ProjectPartner {
+  projectId String
+  partnerId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  partner   Partner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+
+  @@id([projectId, partnerId])
+  @@index([partnerId])
 }
 
 model ScheduledTask {
