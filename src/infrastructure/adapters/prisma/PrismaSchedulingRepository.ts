@@ -8,9 +8,11 @@
  * after the migration runs.
  */
 import { ScheduledTask, TaskStatus } from '@domain/entities/scheduling';
+import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory } from '@domain/entities/workflow';
 import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
 import { StageNotFoundError } from '@domain/errors/scheduling';
+import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { prisma } from '../../database/prisma';
 
 // Maps a Stage's category + name to the deprecated status string (REQ-STAGE-DEP-3)
@@ -88,6 +90,31 @@ export function toTask(row: any): ScheduledTask {
     watcherIds,
     travelTimeTo: row.travelTimeTo ?? null,
     travelTimeFrom: row.travelTimeFrom ?? null,
+    checklist: Array.isArray(row.checklist)
+      ? row.checklist.map((ci: any) => ({
+          id: ci.id,
+          taskId: ci.taskId,
+          text: ci.text,
+          done: ci.done,
+          order: ci.order,
+          fromTemplateItemId: ci.fromTemplateItemId ?? null,
+          createdAt: ci.createdAt instanceof Date ? ci.createdAt.toISOString() : ci.createdAt,
+          updatedAt: ci.updatedAt instanceof Date ? ci.updatedAt.toISOString() : ci.updatedAt,
+        }))
+      : [],
+  };
+}
+
+function toChecklistItem(row: any): TaskChecklistItem {
+  return {
+    id: row.id,
+    taskId: row.taskId,
+    text: row.text,
+    done: row.done,
+    order: row.order,
+    fromTemplateItemId: row.fromTemplateItemId ?? null,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
   };
 }
 
@@ -100,6 +127,7 @@ const INCLUDE = {
   service: { select: { id: true } },
   partnerRef: { select: { id: true } },
   watchers: true,
+  checklist: { orderBy: { order: 'asc' } },
 } as const;
 
 export class PrismaSchedulingRepository implements SchedulingRepository {
@@ -240,6 +268,142 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       if (err instanceof StageNotFoundError) throw err;
       return null;
     }
+  }
+
+  // ── Checklist methods ────────────────────────────────────────────────────
+
+  async getTaskWithChecklist(id: string): Promise<(ScheduledTask & { checklist: TaskChecklistItem[] }) | null> {
+    const row = await (prisma.scheduledTask as any).findUnique({
+      where: { id },
+      include: INCLUDE,
+    });
+    if (!row) return null;
+    const task = toTask(row);
+    const checklist = Array.isArray(row.checklist)
+      ? row.checklist.map(toChecklistItem)
+      : [];
+    return { ...task, checklist };
+  }
+
+  async addChecklistItem(taskId: string, text: string): Promise<TaskChecklistItem> {
+    const maxResult = await (prisma as any).taskChecklistItem.aggregate({
+      where: { taskId },
+      _max: { order: true },
+    });
+    const maxOrder = maxResult._max?.order ?? -1;
+    const row = await (prisma as any).taskChecklistItem.create({
+      data: {
+        taskId,
+        text,
+        order: maxOrder + 1,
+        updatedAt: new Date(),
+      },
+    });
+    return toChecklistItem(row);
+  }
+
+  async toggleChecklistItem(itemId: string): Promise<TaskChecklistItem> {
+    try {
+      // Read then write in a transaction for atomicity
+      const result = await (prisma as any).$transaction(async (tx: any) => {
+        const current = await tx.taskChecklistItem.findUnique({ where: { id: itemId } });
+        if (!current) throw new ChecklistItemNotFoundError(itemId);
+        return tx.taskChecklistItem.update({
+          where: { id: itemId },
+          data: { done: !current.done, updatedAt: new Date() },
+        });
+      });
+      return toChecklistItem(result);
+    } catch (err) {
+      if (err instanceof ChecklistItemNotFoundError) throw err;
+      throw new ChecklistItemNotFoundError(itemId);
+    }
+  }
+
+  async updateChecklistItem(itemId: string, text: string): Promise<TaskChecklistItem> {
+    try {
+      const row = await (prisma as any).taskChecklistItem.update({
+        where: { id: itemId },
+        data: { text, updatedAt: new Date() },
+      });
+      return toChecklistItem(row);
+    } catch {
+      throw new ChecklistItemNotFoundError(itemId);
+    }
+  }
+
+  async removeChecklistItem(itemId: string): Promise<boolean> {
+    try {
+      await (prisma as any).taskChecklistItem.delete({ where: { id: itemId } });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async reorderChecklistItems(taskId: string, orderedIds: string[]): Promise<TaskChecklistItem[]> {
+    // Verify all IDs belong to this task
+    const existing = await (prisma as any).taskChecklistItem.findMany({ where: { taskId } });
+    const existingIds = new Set(existing.map((i: any) => i.id));
+    for (const id of orderedIds) {
+      if (!existingIds.has(id)) {
+        throw new OrderingError(`Item ${id} does not belong to task ${taskId}`);
+      }
+    }
+    for (const item of existing) {
+      if (!orderedIds.includes(item.id)) {
+        throw new OrderingError(`Item ${item.id} is missing from ordered list`);
+      }
+    }
+    const now = new Date();
+    // Run updates + final read inside the same transaction (W-2 from verify report):
+    // returning the transaction-execution order is brittle under concurrent reorders;
+    // a fresh ordered findMany at the end is the single source of truth.
+    const final = await (prisma as any).$transaction(async (tx: any) => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await tx.taskChecklistItem.update({
+          where: { id: orderedIds[i] },
+          data: { order: i, updatedAt: now },
+        });
+      }
+      return tx.taskChecklistItem.findMany({
+        where: { taskId },
+        orderBy: { order: 'asc' },
+      });
+    });
+    return final.map(toChecklistItem);
+  }
+
+  async assignTemplateToTask(taskId: string, templateId: string): Promise<TaskChecklistItem[]> {
+    const templateItems = await (prisma as any).taskTemplateItem.findMany({
+      where: { templateId },
+      orderBy: { order: 'asc' },
+    });
+    const now = new Date();
+    const result = await (prisma as any).$transaction(async (tx: any) => {
+      await tx.taskChecklistItem.deleteMany({ where: { taskId } });
+      if (templateItems.length > 0) {
+        await tx.taskChecklistItem.createMany({
+          data: templateItems.map((ti: any, index: number) => ({
+            taskId,
+            text: ti.text,
+            done: false,
+            order: index,
+            fromTemplateItemId: ti.id,
+            updatedAt: now,
+          })),
+        });
+      }
+      return tx.taskChecklistItem.findMany({
+        where: { taskId },
+        orderBy: { order: 'asc' },
+      });
+    });
+    return result.map(toChecklistItem);
+  }
+
+  async clearChecklist(taskId: string): Promise<void> {
+    await (prisma as any).taskChecklistItem.deleteMany({ where: { taskId } });
   }
 
   private _buildCreateData(data: CreateTaskInput): Record<string, unknown> {

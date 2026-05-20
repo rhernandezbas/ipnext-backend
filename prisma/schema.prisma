@@ -571,6 +571,9 @@ model ScheduledTask {
   // NEW — watchers pivot back-relation
   watchers       TaskWatcher[]
 
+  // NEW — checklist back-relation
+  checklist      TaskChecklistItem[]
+
   @@index([status])
   @@index([stageId])
   @@index([scheduledDate])
@@ -595,12 +598,41 @@ model TaskWatcher {
 }
 
 model TaskTemplate {
-  id          String   @id @default(uuid())
-  name        String   @unique
+  id          String             @id @default(uuid())
+  name        String             @unique
   description String?
-  category    String   @default("other")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  category    String             @default("other")
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  items       TaskTemplateItem[]
+}
+
+model TaskTemplateItem {
+  id         String            @id @default(uuid())
+  templateId String
+  template   TaskTemplate      @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  text       String
+  order      Int
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  checklistCopies TaskChecklistItem[]
+
+  @@index([templateId, order])
+}
+
+model TaskChecklistItem {
+  id                 String            @id @default(uuid())
+  taskId             String
+  task               ScheduledTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  text               String
+  done               Boolean           @default(false)
+  order              Int
+  fromTemplateItemId String?
+  fromTemplateItem   TaskTemplateItem? @relation(fields: [fromTemplateItemId], references: [id], onDelete: SetNull)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  @@index([taskId, order])
 }
 
 // =============================================

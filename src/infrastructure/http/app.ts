@@ -61,6 +61,14 @@ import { GetClientPortalSettings } from '@application/use-cases/GetClientPortalS
 import { UpdateClientPortalSettings } from '@application/use-cases/UpdateClientPortalSettings';
 import { createSchedulingRouter } from './routes/scheduling.routes';
 import { createWorkflowsRouter } from './routes/workflows.routes';
+import { ReplaceTaskTemplateItems } from '@application/use-cases/ReplaceTaskTemplateItems';
+import { AddChecklistItem } from '@application/use-cases/AddChecklistItem';
+import { ToggleChecklistItem } from '@application/use-cases/ToggleChecklistItem';
+import { UpdateChecklistItem } from '@application/use-cases/UpdateChecklistItem';
+import { RemoveChecklistItem } from '@application/use-cases/RemoveChecklistItem';
+import { ReorderChecklistItems } from '@application/use-cases/ReorderChecklistItems';
+import { AssignTemplateToTask } from '@application/use-cases/AssignTemplateToTask';
+import { ClearTaskChecklist } from '@application/use-cases/ClearTaskChecklist';
 import { createProjectsRouter } from './routes/projects.routes';
 import { createTaskTemplateRouter } from './routes/taskTemplate.routes';
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
@@ -607,7 +615,26 @@ export function createApp() {
     listProjectCategory, getProjectCategory, createProjectCategory, updateProjectCategory, deleteProjectCategory,
     listProjectType, getProjectType, createProjectType, updateProjectType, deleteProjectType,
   ));
-  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, moveTaskToStage, authAdapter, stageRepo));
+  // Instantiate checklist use cases (change 5)
+  const taskTemplateRepoForChecklist = new PrismaTaskTemplateRepository();
+  const replaceTemplateItemsUC = new ReplaceTaskTemplateItems(taskTemplateRepoForChecklist);
+  const addChecklistItemUC = new AddChecklistItem(schedulingRepo);
+  const toggleChecklistItemUC = new ToggleChecklistItem(schedulingRepo);
+  const updateChecklistItemUC = new UpdateChecklistItem(schedulingRepo);
+  const removeChecklistItemUC = new RemoveChecklistItem(schedulingRepo);
+  const reorderChecklistItemsUC = new ReorderChecklistItems(schedulingRepo);
+  const assignTemplateToTaskUC = new AssignTemplateToTask(schedulingRepo, taskTemplateRepoForChecklist);
+  const clearTaskChecklistUC = new ClearTaskChecklist(schedulingRepo);
+
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, moveTaskToStage, authAdapter, stageRepo, {
+    addChecklistItem: addChecklistItemUC,
+    toggleChecklistItem: toggleChecklistItemUC,
+    updateChecklistItem: updateChecklistItemUC,
+    removeChecklistItem: removeChecklistItemUC,
+    reorderChecklistItems: reorderChecklistItemsUC,
+    assignTemplateToTask: assignTemplateToTaskUC,
+    clearTaskChecklist: clearTaskChecklistUC,
+  }));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);
@@ -625,6 +652,7 @@ export function createApp() {
       new UpdateTaskTemplate(taskTemplateRepo),
       new DeleteTaskTemplate(taskTemplateRepo),
       authAdapter,
+      replaceTemplateItemsUC,
     ),
   );
   app.use('/api/voip', createVozRouter(listVoipCategories, createVoipCategory, listVoipCdrs, listVoipPlans, createVoipPlan));

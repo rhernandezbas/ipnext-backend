@@ -1,5 +1,12 @@
 import { TaskTemplate, TaskTemplateCategory } from '@domain/entities/taskTemplate';
+import { TaskTemplateItem } from '@domain/entities/checklist';
 import { TaskTemplateRepository } from '@domain/ports/TaskTemplateRepository';
+
+let nextItemId = 1;
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
 
 export class InMemoryTaskTemplateRepository implements TaskTemplateRepository {
   private templates: TaskTemplate[] = [
@@ -28,6 +35,9 @@ export class InMemoryTaskTemplateRepository implements TaskTemplateRepository {
       category: 'inspection',
     },
   ];
+
+  // Items keyed by templateId
+  private items: Map<string, TaskTemplateItem[]> = new Map();
 
   async findAll(): Promise<TaskTemplate[]> {
     return [...this.templates];
@@ -61,6 +71,28 @@ export class InMemoryTaskTemplateRepository implements TaskTemplateRepository {
     const idx = this.templates.findIndex(t => t.id === id);
     if (idx === -1) return false;
     this.templates.splice(idx, 1);
+    this.items.delete(id);
     return true;
+  }
+
+  async replaceItems(templateId: string, items: { text: string }[]): Promise<TaskTemplateItem[]> {
+    const now = nowIso();
+    const created: TaskTemplateItem[] = items.map((item, index) => ({
+      id: `item-${nextItemId++}`,
+      templateId,
+      text: item.text,
+      order: index,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    this.items.set(templateId, created);
+    return [...created];
+  }
+
+  async findByIdWithItems(id: string): Promise<(TaskTemplate & { items: TaskTemplateItem[] }) | null> {
+    const template = this.templates.find(t => t.id === id);
+    if (!template) return null;
+    const items = (this.items.get(id) ?? []).slice().sort((a, b) => a.order - b.order);
+    return { ...template, items };
   }
 }

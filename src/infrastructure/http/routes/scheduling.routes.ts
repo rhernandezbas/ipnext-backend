@@ -6,6 +6,13 @@ import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { UpdateTaskStatus } from '@application/use-cases/UpdateTaskStatus';
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
+import { AddChecklistItem } from '@application/use-cases/AddChecklistItem';
+import { ToggleChecklistItem } from '@application/use-cases/ToggleChecklistItem';
+import { UpdateChecklistItem } from '@application/use-cases/UpdateChecklistItem';
+import { RemoveChecklistItem } from '@application/use-cases/RemoveChecklistItem';
+import { ReorderChecklistItems } from '@application/use-cases/ReorderChecklistItems';
+import { AssignTemplateToTask } from '@application/use-cases/AssignTemplateToTask';
+import { ClearTaskChecklist } from '@application/use-cases/ClearTaskChecklist';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -16,11 +23,22 @@ import {
   MoveStageSchema,
 } from '@application/dto/scheduling.dto';
 import {
+  AddChecklistItemSchema,
+  UpdateChecklistItemSchema,
+  ReorderChecklistSchema,
+  AssignTemplateSchema,
+} from '@application/dto/checklists.dto';
+import {
   StageNotFoundError,
   TaskNotFoundError,
   ReferenceNotFoundError,
   ReferenceKind,
 } from '@domain/errors/scheduling';
+import {
+  ChecklistItemNotFoundError,
+  TemplateNotFoundError,
+  OrderingError,
+} from '@domain/errors/checklist';
 
 const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
   customer: 'CUSTOMER_NOT_FOUND',
@@ -30,6 +48,16 @@ const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
   assignee: 'ASSIGNEE_NOT_FOUND',
   watcher:  'WATCHER_NOT_FOUND',
 };
+
+export interface ChecklistUseCases {
+  addChecklistItem: AddChecklistItem;
+  toggleChecklistItem: ToggleChecklistItem;
+  updateChecklistItem: UpdateChecklistItem;
+  removeChecklistItem: RemoveChecklistItem;
+  reorderChecklistItems: ReorderChecklistItems;
+  assignTemplateToTask: AssignTemplateToTask;
+  clearTaskChecklist: ClearTaskChecklist;
+}
 
 export function createSchedulingRouter(
   listTasks: ListTasks,
@@ -41,6 +69,7 @@ export function createSchedulingRouter(
   moveTaskToStage: MoveTaskToStage,
   authProvider: AuthProvider,
   stageRepo?: StageRepository,
+  checklist?: ChecklistUseCases,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -49,6 +78,114 @@ export function createSchedulingRouter(
     const tasks = await listTasks.execute();
     res.json(tasks);
   });
+
+  // ── Checklist sub-routes — MUST be registered BEFORE /:id to avoid shadowing ──
+
+  if (checklist) {
+    // POST /:id/checklist — add ad-hoc item
+    router.post('/:id/checklist', auth, async (req: Request, res: Response): Promise<void> => {
+      const parsed = AddChecklistItemSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      const item = await checklist.addChecklistItem.execute(req.params['id'] as string, parsed.data.text);
+      if (!item) {
+        res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
+        return;
+      }
+      res.status(201).json(item);
+    });
+
+    // POST /:id/checklist/assign-template — MUST come before /:id/checklist/:itemId
+    router.post('/:id/checklist/assign-template', auth, async (req: Request, res: Response): Promise<void> => {
+      const parsed = AssignTemplateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const items = await checklist.assignTemplateToTask.execute(req.params['id'] as string, parsed.data.templateId);
+        res.json(items);
+      } catch (err) {
+        if (err instanceof TemplateNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    });
+
+    // DELETE /:id/checklist — clear all items
+    router.delete('/:id/checklist', auth, async (req: Request, res: Response): Promise<void> => {
+      await checklist.clearTaskChecklist.execute(req.params['id'] as string);
+      res.status(204).send();
+    });
+
+    // PUT /:id/checklist/order — reorder items — MUST come before /:id/checklist/:itemId
+    router.put('/:id/checklist/order', auth, async (req: Request, res: Response): Promise<void> => {
+      const parsed = ReorderChecklistSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const items = await checklist.reorderChecklistItems.execute(req.params['id'] as string, parsed.data.orderedIds);
+        res.json(items);
+      } catch (err) {
+        if (err instanceof OrderingError) {
+          res.status(400).json({ error: err.message, code: 'VALIDATION_ERROR' });
+          return;
+        }
+        throw err;
+      }
+    });
+
+    // PATCH /:id/checklist/:itemId/toggle — toggle done
+    router.patch('/:id/checklist/:itemId/toggle', auth, async (req: Request, res: Response): Promise<void> => {
+      try {
+        const item = await checklist.toggleChecklistItem.execute(req.params['itemId'] as string);
+        res.json(item);
+      } catch (err) {
+        if (err instanceof ChecklistItemNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    });
+
+    // PATCH /:id/checklist/:itemId — update text
+    router.patch('/:id/checklist/:itemId', auth, async (req: Request, res: Response): Promise<void> => {
+      const parsed = UpdateChecklistItemSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const item = await checklist.updateChecklistItem.execute(req.params['itemId'] as string, parsed.data.text);
+        res.json(item);
+      } catch (err) {
+        if (err instanceof ChecklistItemNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    });
+
+    // DELETE /:id/checklist/:itemId — remove single item
+    router.delete('/:id/checklist/:itemId', auth, async (req: Request, res: Response): Promise<void> => {
+      const deleted = await checklist.removeChecklistItem.execute(req.params['itemId'] as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'Checklist item not found', code: 'CHECKLIST_ITEM_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    });
+  }
+
+  // ── End checklist sub-routes ────────────────────────────────────────────
 
   router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const task = await getTask.execute(req.params['id'] as string);

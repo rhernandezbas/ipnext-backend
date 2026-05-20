@@ -1,3 +1,5 @@
+import { TaskTemplateItem } from './checklist';
+
 export type TaskTemplateCategory = 'installation' | 'repair' | 'maintenance' | 'inspection' | 'other';
 
 export interface TaskTemplate {
@@ -5,4 +7,5 @@ export interface TaskTemplate {
   name: string;
   description: string | null;
   category: TaskTemplateCategory;
+  items?: TaskTemplateItem[];
 }

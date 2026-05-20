@@ -1,4 +1,5 @@
 import { StageCategory } from './workflow';
+import { TaskChecklistItem } from './checklist';
 
 /** @deprecated use stageCategory; will be removed next change */
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
@@ -58,4 +59,7 @@ export interface ScheduledTask {
   // NEW — travel time (minutes)
   travelTimeTo: number | null;
   travelTimeFrom: number | null;
+
+  // NEW — checklist (change 5)
+  checklist?: TaskChecklistItem[];
 }

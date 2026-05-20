@@ -4,10 +4,13 @@ import { GetTaskTemplate } from '@application/use-cases/GetTaskTemplate';
 import { CreateTaskTemplate } from '@application/use-cases/CreateTaskTemplate';
 import { UpdateTaskTemplate } from '@application/use-cases/UpdateTaskTemplate';
 import { DeleteTaskTemplate } from '@application/use-cases/DeleteTaskTemplate';
+import { ReplaceTaskTemplateItems } from '@application/use-cases/ReplaceTaskTemplateItems';
 import { TaskTemplate } from '@domain/entities/taskTemplate';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { CreateTaskTemplateSchema, UpdateTaskTemplateSchema } from '@application/dto/taskTemplate.dto';
+import { ReplaceTemplateItemsSchema } from '@application/dto/checklists.dto';
+import { TemplateNotFoundError } from '@domain/errors/checklist';
 
 export function createTaskTemplateRouter(
   listTemplates: ListTaskTemplates,
@@ -16,6 +19,7 @@ export function createTaskTemplateRouter(
   updateTemplate: UpdateTaskTemplate,
   deleteTemplate: DeleteTaskTemplate,
   authProvider: AuthProvider,
+  replaceTemplateItems?: ReplaceTaskTemplateItems,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -66,6 +70,27 @@ export function createTaskTemplateRouter(
     }
     res.status(204).send();
   });
+
+  // NEW: replace-set template items
+  if (replaceTemplateItems) {
+    router.put('/:id/items', auth, async (req: Request, res: Response): Promise<void> => {
+      const parsed = ReplaceTemplateItemsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const items = await replaceTemplateItems.execute(req.params['id'] as string, parsed.data.items);
+        res.json(items);
+      } catch (err) {
+        if (err instanceof TemplateNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    });
+  }
 
   return router;
 }

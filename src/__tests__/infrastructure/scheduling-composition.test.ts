@@ -12,6 +12,7 @@ import cookieParser from 'cookie-parser';
 import { createSchedulingRouter } from '../../infrastructure/http/routes/scheduling.routes';
 import { createWorkflowsRouter } from '../../infrastructure/http/routes/workflows.routes';
 import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
+import { InMemoryTaskTemplateRepository } from '../../infrastructure/adapters/in-memory/InMemoryTaskTemplateRepository';
 import { InMemoryWorkflowRepository } from '../../infrastructure/adapters/in-memory/InMemoryWorkflowRepository';
 import { InMemoryStageRepository } from '../../infrastructure/adapters/in-memory/InMemoryStageRepository';
 import { InMemoryProjectCategoryRepository } from '../../infrastructure/adapters/in-memory/InMemoryProjectCategoryRepository';
@@ -23,6 +24,13 @@ import { UpdateTask } from '../../application/use-cases/UpdateTask';
 import { DeleteTask } from '../../application/use-cases/DeleteTask';
 import { UpdateTaskStatus } from '../../application/use-cases/UpdateTaskStatus';
 import { MoveTaskToStage } from '../../application/use-cases/MoveTaskToStage';
+import { AddChecklistItem } from '../../application/use-cases/AddChecklistItem';
+import { ToggleChecklistItem } from '../../application/use-cases/ToggleChecklistItem';
+import { UpdateChecklistItem } from '../../application/use-cases/UpdateChecklistItem';
+import { RemoveChecklistItem } from '../../application/use-cases/RemoveChecklistItem';
+import { ReorderChecklistItems } from '../../application/use-cases/ReorderChecklistItems';
+import { AssignTemplateToTask } from '../../application/use-cases/AssignTemplateToTask';
+import { ClearTaskChecklist } from '../../application/use-cases/ClearTaskChecklist';
 import { ListWorkflows } from '../../application/use-cases/ListWorkflows';
 import { GetWorkflow } from '../../application/use-cases/GetWorkflow';
 import { CreateWorkflow } from '../../application/use-cases/CreateWorkflow';
@@ -67,7 +75,8 @@ function buildApp() {
   app.use(cookieParser());
   app.use(express.json());
 
-  const schedRepo = new InMemorySchedulingRepository();
+  const templateRepo = new InMemoryTaskTemplateRepository();
+  const schedRepo = new InMemorySchedulingRepository(undefined, templateRepo);
   const wfRepo = new InMemoryWorkflowRepository();
   const stageRepo = new InMemoryStageRepository();
   const catRepo = new InMemoryProjectCategoryRepository();
@@ -107,6 +116,15 @@ function buildApp() {
     new MoveTaskToStage(schedRepo, stageRepo),
     authProvider,
     stageRepo,
+    {
+      addChecklistItem: new AddChecklistItem(schedRepo),
+      toggleChecklistItem: new ToggleChecklistItem(schedRepo),
+      updateChecklistItem: new UpdateChecklistItem(schedRepo),
+      removeChecklistItem: new RemoveChecklistItem(schedRepo),
+      reorderChecklistItems: new ReorderChecklistItems(schedRepo),
+      assignTemplateToTask: new AssignTemplateToTask(schedRepo, templateRepo),
+      clearTaskChecklist: new ClearTaskChecklist(schedRepo),
+    },
   ));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -159,5 +177,51 @@ describe('Composition: scheduling + workflows routers on same prefix', () => {
       .set('Cookie', cookie);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('TASK_NOT_FOUND');
+  });
+
+  it('POST /api/scheduling/:id/checklist/assign-template does NOT return TASK_NOT_FOUND (returns TEMPLATE_NOT_FOUND)', async () => {
+    // This verifies the sub-route is not shadowed by the /:id catch-all.
+    // Using an unknown templateId so we get TEMPLATE_NOT_FOUND, not TASK_NOT_FOUND.
+    const res = await request(buildApp())
+      .post('/api/scheduling/00000000-0000-4000-a000-000000000001/checklist/assign-template')
+      .set('Cookie', cookie)
+      .send({ templateId: 'nonexistent-tpl' });
+    // The route handler is reached (not the /:id catch-all), so code must NOT be TASK_NOT_FOUND
+    expect(res.body.code).not.toBe('TASK_NOT_FOUND');
+    // Should be TEMPLATE_NOT_FOUND (the sub-route ran and template lookup failed)
+    expect(res.body.code).toBe('TEMPLATE_NOT_FOUND');
+  });
+
+  it('PUT /api/scheduling/:id/checklist/order does NOT return TASK_NOT_FOUND', async () => {
+    // This verifies /:id PUT handler doesn't shadow the sub-route.
+    const res = await request(buildApp())
+      .put('/api/scheduling/00000000-0000-4000-a000-000000000001/checklist/order')
+      .set('Cookie', cookie)
+      .send({ orderedIds: [] });
+    expect(res.body.code).not.toBe('TASK_NOT_FOUND');
+    // Should return 200 (empty list, no-op) or 400 validation error — NOT TASK_NOT_FOUND
+    expect([200, 400]).toContain(res.status);
+  });
+
+  // W-3 from verify report — DELETE sub-routes also share the /:id prefix and
+  // must not fall through to the scheduling /:id DELETE catch-all.
+  it('DELETE /api/scheduling/:id/checklist does NOT return TASK_NOT_FOUND', async () => {
+    const res = await request(buildApp())
+      .delete('/api/scheduling/00000000-0000-4000-a000-000000000001/checklist')
+      .set('Cookie', cookie);
+    expect(res.body.code).not.toBe('TASK_NOT_FOUND');
+    // Should return 204 (clear, no-op when no items) or 404 with a checklist-specific code
+    expect([204, 404]).toContain(res.status);
+  });
+
+  it('DELETE /api/scheduling/checklist/:itemId does NOT return TASK_NOT_FOUND', async () => {
+    // This URL doesn't even contain a task /:id segment, but we still assert the
+    // router resolves to the correct handler (not a 404 from the scheduling /:id).
+    const res = await request(buildApp())
+      .delete('/api/scheduling/checklist/00000000-0000-4000-a000-000000000001')
+      .set('Cookie', cookie);
+    expect(res.body.code).not.toBe('TASK_NOT_FOUND');
+    // Item doesn't exist → 404 CHECKLIST_ITEM_NOT_FOUND (or similar) is the expected response
+    expect([204, 404]).toContain(res.status);
   });
 });

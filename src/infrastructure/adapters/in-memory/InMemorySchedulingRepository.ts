@@ -1,7 +1,10 @@
 import { ScheduledTask, TaskStatus } from '@domain/entities/scheduling';
+import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory } from '@domain/entities/workflow';
 import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
+import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
+import { TaskTemplateRepository } from '@domain/ports/TaskTemplateRepository';
 
 // Default stage IDs used in the in-memory repo for seeded tasks — valid UUID format
 const DEFAULT_STAGE_ID_PENDING     = '10000000-0000-4000-a000-000000000001';
@@ -33,6 +36,11 @@ const LEGACY_STATUS_TO_STAGE: Record<TaskStatus, { stageId: string; category: St
 
 let nextId = 7;
 let nextSequenceNumber = 8;
+let nextChecklistItemId = 1;
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
 
 function makeTask(raw: Omit<ScheduledTask, 'stageCategory' | 'status'> & { stageId: string }): ScheduledTask {
   const stageCategory = deriveStageCategory(raw.stageId);
@@ -60,8 +68,15 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
   // Optional stage repo for accurate category resolution (useful in tests with non-sentinel IDs)
   private stageRepo?: StageRepository;
 
-  constructor(stageRepo?: StageRepository) {
+  // Optional template repo for assignTemplateToTask
+  private templateRepo?: TaskTemplateRepository;
+
+  // Checklist storage keyed by taskId
+  private checklist: Map<string, TaskChecklistItem[]> = new Map();
+
+  constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository) {
     this.stageRepo = stageRepo;
+    this.templateRepo = templateRepo;
   }
   private tasks: ScheduledTask[] = [
     makeTask({
@@ -362,5 +377,132 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
   async updateTaskStatus(id: string, status: TaskStatus): Promise<ScheduledTask | null> {
     const stageData = LEGACY_STATUS_TO_STAGE[status];
     return this.moveTaskToStage(id, stageData.stageId);
+  }
+
+  // ── Checklist methods ────────────────────────────────────────────────────
+
+  async getTaskWithChecklist(id: string): Promise<(ScheduledTask & { checklist: TaskChecklistItem[] }) | null> {
+    const task = await this.getTask(id);
+    if (!task) return null;
+    const checklist = (this.checklist.get(id) ?? []).slice().sort((a, b) => a.order - b.order);
+    return { ...task, checklist };
+  }
+
+  async addChecklistItem(taskId: string, text: string): Promise<TaskChecklistItem> {
+    const existing = this.checklist.get(taskId) ?? [];
+    const maxOrder = existing.length > 0 ? Math.max(...existing.map(i => i.order)) : -1;
+    const now = nowIso();
+    const item: TaskChecklistItem = {
+      id: `ci-${nextChecklistItemId++}`,
+      taskId,
+      text,
+      done: false,
+      order: maxOrder + 1,
+      fromTemplateItemId: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.checklist.set(taskId, [...existing, item]);
+    return { ...item };
+  }
+
+  async toggleChecklistItem(itemId: string): Promise<TaskChecklistItem> {
+    for (const [taskId, items] of this.checklist) {
+      const idx = items.findIndex(i => i.id === itemId);
+      if (idx !== -1) {
+        const now = nowIso();
+        const updated = { ...items[idx], done: !items[idx].done, updatedAt: now };
+        const newItems = [...items];
+        newItems[idx] = updated;
+        this.checklist.set(taskId, newItems);
+        return { ...updated };
+      }
+    }
+    throw new ChecklistItemNotFoundError(itemId);
+  }
+
+  async updateChecklistItem(itemId: string, text: string): Promise<TaskChecklistItem> {
+    for (const [taskId, items] of this.checklist) {
+      const idx = items.findIndex(i => i.id === itemId);
+      if (idx !== -1) {
+        const now = nowIso();
+        const updated = { ...items[idx], text, updatedAt: now };
+        const newItems = [...items];
+        newItems[idx] = updated;
+        this.checklist.set(taskId, newItems);
+        return { ...updated };
+      }
+    }
+    throw new ChecklistItemNotFoundError(itemId);
+  }
+
+  async removeChecklistItem(itemId: string): Promise<boolean> {
+    for (const [taskId, items] of this.checklist) {
+      const idx = items.findIndex(i => i.id === itemId);
+      if (idx !== -1) {
+        const newItems = items.filter(i => i.id !== itemId);
+        this.checklist.set(taskId, newItems);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async reorderChecklistItems(taskId: string, orderedIds: string[]): Promise<TaskChecklistItem[]> {
+    const existing = this.checklist.get(taskId) ?? [];
+    const existingIds = new Set(existing.map(i => i.id));
+
+    // Validate: all provided IDs must belong to this task
+    for (const id of orderedIds) {
+      if (!existingIds.has(id)) {
+        throw new OrderingError(`Item ${id} does not belong to task ${taskId}`);
+      }
+    }
+
+    // Validate: all existing items must be present in orderedIds
+    for (const item of existing) {
+      if (!orderedIds.includes(item.id)) {
+        throw new OrderingError(`Item ${item.id} is missing from the ordered list`);
+      }
+    }
+
+    const now = nowIso();
+    const reordered = orderedIds.map((id, index) => {
+      const item = existing.find(i => i.id === id)!;
+      return { ...item, order: index, updatedAt: now };
+    });
+    this.checklist.set(taskId, reordered);
+    return reordered.map(i => ({ ...i }));
+  }
+
+  async assignTemplateToTask(taskId: string, templateId: string): Promise<TaskChecklistItem[]> {
+    if (!this.templateRepo) {
+      // No template repo injected — cannot clone; used for isolated unit tests
+      this.checklist.set(taskId, []);
+      return [];
+    }
+    const template = await this.templateRepo.findByIdWithItems(templateId);
+    if (!template) {
+      // Caller should have validated before reaching here; return empty
+      this.checklist.set(taskId, []);
+      return [];
+    }
+    const now = nowIso();
+    const items: TaskChecklistItem[] = template.items.map((ti, index) => ({
+      id: `ci-${nextChecklistItemId++}`,
+      taskId,
+      text: ti.text,
+      done: false,
+      order: index,
+      fromTemplateItemId: ti.id,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    this.checklist.set(taskId, items);
+    return items.map(i => ({ ...i }));
+  }
+
+  async clearChecklist(taskId: string): Promise<void> {
+    this.checklist.set(taskId, []);
   }
 }
