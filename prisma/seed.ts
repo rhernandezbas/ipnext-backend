@@ -225,9 +225,79 @@ async function seedFromSplynx() {
   }
 }
 
+async function seedSchedulingFoundation() {
+  console.log('Seeding scheduling foundation (Default workflow + stages)...')
+
+  // Upsert Default workflow
+  const defaultWf = await (prisma as any).workflow.upsert({
+    where: { id: 'wf-default-00000000-0000-0000-0000-000000000001' },
+    update: {},
+    create: {
+      id: 'wf-default-00000000-0000-0000-0000-000000000001',
+      name: 'Default',
+      description: 'Default workflow seeded by scheduling-foundation-stage-model',
+    },
+  })
+
+  const stages = [
+    { name: 'Nuevo',                category: 'nuevo',      order: 0 },
+    { name: 'Confirmado',           category: 'nuevo',      order: 1 },
+    { name: 'Pospuesta',            category: 'nuevo',      order: 2 },
+    { name: 'No Factible',          category: 'nuevo',      order: 3 },
+    { name: 'Enviar a IClass',      category: 'nuevo',      order: 4 },
+    { name: 'Registrado en IClass', category: 'nuevo',      order: 5 },
+    { name: 'Notificado',           category: 'nuevo',      order: 6 },
+    { name: 'En progreso',          category: 'enProgreso', order: 7 },
+    { name: 'Instalado',            category: 'hecho',      order: 8 },
+    { name: 'Hecho',                category: 'hecho',      order: 9 },
+    { name: 'Anulado-Cancelado',    category: 'hecho',      order: 10 },
+  ]
+
+  for (const stage of stages) {
+    // Upsert by workflowId + name (case-insensitive via findFirst)
+    const existing = await (prisma as any).stage.findFirst({
+      where: {
+        workflowId: defaultWf.id,
+        name: { equals: stage.name, mode: 'insensitive' },
+      },
+    })
+    if (!existing) {
+      await (prisma as any).stage.create({
+        data: {
+          workflowId: defaultWf.id,
+          name: stage.name,
+          category: stage.category,
+          order: stage.order,
+        },
+      })
+      console.log(`  Created stage: ${stage.name}`)
+    }
+  }
+
+  // Upsert Default ProjectCategory and Instalacion ProjectType
+  const existingCat = await (prisma as any).projectCategory.findFirst({ where: { name: { equals: 'Default Category', mode: 'insensitive' } } })
+  if (!existingCat) {
+    await (prisma as any).projectCategory.create({ data: { name: 'Default Category', description: 'Default project category' } })
+    console.log('  Created ProjectCategory: Default Category')
+  }
+
+  const existingType = await (prisma as any).projectType.findFirst({ where: { name: { equals: 'Instalacion', mode: 'insensitive' } } })
+  if (!existingType) {
+    await (prisma as any).projectType.create({ data: { name: 'Instalacion', description: 'Instalacion de servicio' } })
+    console.log('  Created ProjectType: Instalacion')
+  }
+
+  console.log('  Scheduling foundation seeded.')
+}
+
 async function main() {
   console.log('Starting seed...')
   await seedMockData()
+  try {
+    await seedSchedulingFoundation()
+  } catch (err) {
+    console.warn('  Could not seed scheduling foundation (migration may not be applied yet):', (err as any).message)
+  }
   await seedFromSplynx()
   console.log('Seed complete!')
 }

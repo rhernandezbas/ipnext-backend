@@ -1,8 +1,21 @@
 import { ScheduledTask, TaskStatus } from '@domain/entities/scheduling';
+import { StageCategory } from '@domain/entities/workflow';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
+import { StageNotFoundError } from '@domain/errors/scheduling';
 import { prisma } from '../../database/prisma';
 
+// Maps a Stage's category + name to the deprecated status string (REQ-STAGE-DEP-3)
+function deriveLegacyStatus(stageCategory: StageCategory, stageName: string): TaskStatus {
+  const lowerName = stageName.toLowerCase();
+  if (lowerName.includes('cancel') || lowerName.includes('anul')) return 'cancelled';
+  if (stageCategory === 'hecho') return 'completed';
+  if (stageCategory === 'enProgreso') return 'in_progress';
+  return 'pending';
+}
+
 export function toTask(row: any): ScheduledTask {
+  const stageCategory: StageCategory = row.stage?.category ?? 'nuevo';
+  const stageName: string = row.stage?.name ?? '';
   return {
     id: row.id,
     sequenceNumber: row.sequenceNumber,
@@ -12,7 +25,9 @@ export function toTask(row: any): ScheduledTask {
     assignedToId: row.assignedToId ?? null,
     clientId: row.clientId ?? null,
     clientName: row.clientName ?? null,
-    status: row.status as TaskStatus,
+    stageId: row.stageId,
+    stageCategory,
+    status: deriveLegacyStatus(stageCategory, stageName),
     priority: row.priority,
     scheduledDate: row.scheduledDate ?? null,
     scheduledTime: row.scheduledTime ?? null,
@@ -31,11 +46,13 @@ export function toTask(row: any): ScheduledTask {
   };
 }
 
+const INCLUDE = { project: true, stage: true } as const;
+
 export class PrismaSchedulingRepository implements SchedulingRepository {
   async listTasks(): Promise<ScheduledTask[]> {
     const rows = await prisma.scheduledTask.findMany({
       orderBy: { createdAt: 'desc' },
-      include: { project: true },
+      include: INCLUDE,
     });
     return rows.map(toTask);
   }
@@ -43,14 +60,14 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
   async getTask(id: string): Promise<ScheduledTask | null> {
     const row = await prisma.scheduledTask.findUnique({
       where: { id },
-      include: { project: true },
+      include: INCLUDE,
     });
     return row ? toTask(row) : null;
   }
 
-  async createTask(data: Omit<ScheduledTask, 'id' | 'sequenceNumber'>): Promise<ScheduledTask> {
+  async createTask(data: Omit<ScheduledTask, 'id' | 'sequenceNumber' | 'stageCategory' | 'status'>): Promise<ScheduledTask> {
     const row = await prisma.scheduledTask.create({
-      include: { project: true },
+      include: INCLUDE,
       data: {
         title: data.title,
         description: data.description ?? null,
@@ -58,7 +75,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
         assignedToId: data.assignedToId ?? null,
         clientId: data.clientId ?? null,
         clientName: data.clientName ?? null,
-        status: data.status,
+        stageId: data.stageId,
         priority: data.priority,
         scheduledDate: data.scheduledDate,
         scheduledTime: data.scheduledTime,
@@ -79,7 +96,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     try {
       const row = await prisma.scheduledTask.update({
         where: { id },
-        include: { project: true },
+        include: INCLUDE,
         data: {
           ...(data.title !== undefined && { title: data.title }),
           ...(data.description !== undefined && { description: data.description }),
@@ -87,7 +104,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
           ...(data.assignedToId !== undefined && { assignedToId: data.assignedToId }),
           ...(data.clientId !== undefined && { clientId: data.clientId }),
           ...(data.clientName !== undefined && { clientName: data.clientName }),
-          ...(data.status !== undefined && { status: data.status }),
+          ...(data.stageId !== undefined && { stageId: data.stageId }),
           ...(data.priority !== undefined && { priority: data.priority }),
           ...(data.scheduledDate !== undefined && { scheduledDate: data.scheduledDate }),
           ...(data.scheduledTime !== undefined && { scheduledTime: data.scheduledTime }),
@@ -120,18 +137,57 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     }
   }
 
-  async updateTaskStatus(id: string, status: TaskStatus): Promise<ScheduledTask | null> {
+  async moveTaskToStage(id: string, stageId: string): Promise<ScheduledTask | null> {
+    // Explicitly check the target stage exists before attempting the update.
+    // This surfaces STAGE_NOT_FOUND rather than masking it as TASK_NOT_FOUND.
+    const targetStage = await prisma.stage.findUnique({ where: { id: stageId } });
+    if (!targetStage) {
+      throw new StageNotFoundError(stageId);
+    }
+
     try {
+      const currentTask = await prisma.scheduledTask.findUnique({ where: { id }, select: { completedAt: true } });
+
+      const shouldSetCompletedAt =
+        targetStage.category === 'hecho' && !currentTask?.completedAt;
+
       const row = await prisma.scheduledTask.update({
         where: { id },
-        include: { project: true },
+        include: INCLUDE,
         data: {
-          status,
-          ...(status === 'completed' && { completedAt: new Date() }),
+          stageId,
+          ...(shouldSetCompletedAt && { completedAt: new Date() }),
         },
       });
       return toTask(row);
     } catch {
+      return null;
+    }
+  }
+
+  /** @deprecated use moveTaskToStage */
+  async updateTaskStatus(id: string, status: TaskStatus): Promise<ScheduledTask | null> {
+    console.warn('deprecated: PrismaSchedulingRepository.updateTaskStatus — use moveTaskToStage');
+    // Map legacy status to Default workflow stage
+    const stageName = {
+      pending: 'Nuevo',
+      in_progress: 'En progreso',
+      completed: 'Hecho',
+      cancelled: 'Anulado-Cancelado',
+    }[status];
+
+    try {
+      const defaultWorkflow = await prisma.workflow.findFirst({
+        where: { name: { equals: 'Default', mode: 'insensitive' } },
+        include: { stages: true },
+      });
+      const stage = defaultWorkflow?.stages.find(s => s.name === stageName);
+      if (!stage) {
+        throw new StageNotFoundError(`default-workflow-stage-for-status:${status}`);
+      }
+      return this.moveTaskToStage(id, stage.id);
+    } catch (err) {
+      if (err instanceof StageNotFoundError) throw err;
       return null;
     }
   }

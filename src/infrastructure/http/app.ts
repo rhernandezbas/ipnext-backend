@@ -60,9 +60,14 @@ import { CreateBackup } from '@application/use-cases/CreateBackup';
 import { GetClientPortalSettings } from '@application/use-cases/GetClientPortalSettings';
 import { UpdateClientPortalSettings } from '@application/use-cases/UpdateClientPortalSettings';
 import { createSchedulingRouter } from './routes/scheduling.routes';
+import { createWorkflowsRouter } from './routes/workflows.routes';
 import { createProjectsRouter } from './routes/projects.routes';
 import { createTaskTemplateRouter } from './routes/taskTemplate.routes';
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
+import { PrismaWorkflowRepository } from '../adapters/prisma/PrismaWorkflowRepository';
+import { PrismaStageRepository } from '../adapters/prisma/PrismaStageRepository';
+import { PrismaProjectCategoryRepository } from '../adapters/prisma/PrismaProjectCategoryRepository';
+import { PrismaProjectTypeRepository } from '../adapters/prisma/PrismaProjectTypeRepository';
 import { PrismaProjectRepository } from '../adapters/prisma/PrismaProjectRepository';
 import { PrismaTaskTemplateRepository } from '../adapters/prisma/PrismaTaskTemplateRepository';
 import { ListTaskTemplates } from '@application/use-cases/ListTaskTemplates';
@@ -76,6 +81,25 @@ import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { UpdateTaskStatus } from '@application/use-cases/UpdateTaskStatus';
+import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
+import { ListWorkflows } from '@application/use-cases/ListWorkflows';
+import { GetWorkflow } from '@application/use-cases/GetWorkflow';
+import { CreateWorkflow } from '@application/use-cases/CreateWorkflow';
+import { UpdateWorkflow } from '@application/use-cases/UpdateWorkflow';
+import { DeleteWorkflow } from '@application/use-cases/DeleteWorkflow';
+import { AddStageToWorkflow } from '@application/use-cases/AddStageToWorkflow';
+import { RemoveStageFromWorkflow } from '@application/use-cases/RemoveStageFromWorkflow';
+import { ReorderStages } from '@application/use-cases/ReorderStages';
+import { ListProjectCategory } from '@application/use-cases/ListProjectCategory';
+import { GetProjectCategory } from '@application/use-cases/GetProjectCategory';
+import { CreateProjectCategory } from '@application/use-cases/CreateProjectCategory';
+import { UpdateProjectCategory } from '@application/use-cases/UpdateProjectCategory';
+import { DeleteProjectCategory } from '@application/use-cases/DeleteProjectCategory';
+import { ListProjectType } from '@application/use-cases/ListProjectType';
+import { GetProjectType } from '@application/use-cases/GetProjectType';
+import { CreateProjectType } from '@application/use-cases/CreateProjectType';
+import { UpdateProjectType } from '@application/use-cases/UpdateProjectType';
+import { DeleteProjectType } from '@application/use-cases/DeleteProjectType';
 import { createVozRouter } from './routes/voz.routes';
 import { PrismaVozRepository } from '../adapters/prisma/PrismaVozRepository';
 import { ListVoipCategories } from '@application/use-cases/ListVoipCategories';
@@ -317,12 +341,39 @@ export function createApp() {
   const updateClientPortalSettings = new UpdateClientPortalSettings(settingsRepo);
 
   const schedulingRepo = new PrismaSchedulingRepository();
+  const workflowRepo = new PrismaWorkflowRepository();
+  const stageRepo = new PrismaStageRepository();
+  const projectCategoryRepo = new PrismaProjectCategoryRepository();
+  const projectTypeRepo = new PrismaProjectTypeRepository();
+
   const listTasks = new ListTasks(schedulingRepo);
   const getTask = new GetTask(schedulingRepo);
   const createTask = new CreateTask(schedulingRepo);
   const updateTask = new UpdateTask(schedulingRepo);
   const deleteTask = new DeleteTask(schedulingRepo);
-  const updateTaskStatus = new UpdateTaskStatus(schedulingRepo);
+  const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo);
+  const updateTaskStatus = new UpdateTaskStatus(schedulingRepo, stageRepo);
+
+  const listWorkflows = new ListWorkflows(workflowRepo);
+  const getWorkflow = new GetWorkflow(workflowRepo);
+  const createWorkflowUC = new CreateWorkflow(workflowRepo);
+  const updateWorkflowUC = new UpdateWorkflow(workflowRepo);
+  const deleteWorkflowUC = new DeleteWorkflow(workflowRepo, stageRepo);
+  const addStageToWorkflow = new AddStageToWorkflow(workflowRepo, stageRepo);
+  const removeStageFromWorkflow = new RemoveStageFromWorkflow(stageRepo);
+  const reorderStages = new ReorderStages(workflowRepo, stageRepo);
+
+  const listProjectCategory = new ListProjectCategory(projectCategoryRepo);
+  const getProjectCategory = new GetProjectCategory(projectCategoryRepo);
+  const createProjectCategory = new CreateProjectCategory(projectCategoryRepo);
+  const updateProjectCategory = new UpdateProjectCategory(projectCategoryRepo);
+  const deleteProjectCategory = new DeleteProjectCategory(projectCategoryRepo);
+
+  const listProjectType = new ListProjectType(projectTypeRepo);
+  const getProjectType = new GetProjectType(projectTypeRepo);
+  const createProjectType = new CreateProjectType(projectTypeRepo);
+  const updateProjectType = new UpdateProjectType(projectTypeRepo);
+  const deleteProjectType = new DeleteProjectType(projectTypeRepo);
 
   const vozRepo = new PrismaVozRepository();
   const listVoipCategories = new ListVoipCategories(vozRepo);
@@ -519,7 +570,14 @@ export function createApp() {
   app.use('/api/billing', createCreditNotesRouter(listCreditNotes, getCreditNote, createCreditNote, applyCreditNote, voidCreditNote));
   app.use('/api/billing', createProformasRouter(listProformas, createProforma, convertToInvoice, cancelProforma));
   app.use('/api/billing', createFinanceHistoryRouter(listFinanceHistory));
-  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, authAdapter));
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, moveTaskToStage, authAdapter, stageRepo));
+  app.use('/api/scheduling', createWorkflowsRouter(
+    authAdapter,
+    listWorkflows, getWorkflow, createWorkflowUC, updateWorkflowUC, deleteWorkflowUC,
+    addStageToWorkflow, removeStageFromWorkflow, reorderStages,
+    listProjectCategory, getProjectCategory, createProjectCategory, updateProjectCategory, deleteProjectCategory,
+    listProjectType, getProjectType, createProjectType, updateProjectType, deleteProjectType,
+  ));
   const projectRepo = new PrismaProjectRepository();
   app.use('/api/projects', createProjectsRouter(projectRepo));
   const taskTemplateRepo = new PrismaTaskTemplateRepository();
@@ -621,8 +679,23 @@ export function createApp() {
       const statusMap: Record<string, number> = {
         CLIENT_NOT_FOUND: 404,
         TICKET_NOT_FOUND: 404,
+        TASK_NOT_FOUND: 404,
+        STAGE_NOT_FOUND: 404,
+        WORKFLOW_NOT_FOUND: 404,
+        PROJECT_CATEGORY_NOT_FOUND: 404,
+        PROJECT_TYPE_NOT_FOUND: 404,
         AUTHENTICATION_ERROR: 401,
         SPLYNX_UNAVAILABLE: 502,
+        WORKFLOW_NAME_CONFLICT: 409,
+        DEFAULT_WORKFLOW_PROTECTED: 409,
+        WORKFLOW_IN_USE: 409,
+        STAGE_IN_USE: 409,
+        STAGE_NAME_CONFLICT: 409,
+        PROJECT_CATEGORY_NAME_CONFLICT: 409,
+        PROJECT_CATEGORY_IN_USE: 409,
+        PROJECT_TYPE_NAME_CONFLICT: 409,
+        PROJECT_TYPE_IN_USE: 409,
+        REORDER_SET_MISMATCH: 400,
       };
       const status = statusMap[err.code] ?? 400;
       res.status(status).json({ error: err.message, code: err.code });

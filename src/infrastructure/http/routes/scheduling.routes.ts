@@ -5,10 +5,21 @@ import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { UpdateTaskStatus } from '@application/use-cases/UpdateTaskStatus';
-import { ScheduledTask, TaskStatus } from '@domain/entities/scheduling';
+import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
+import { ScheduledTask } from '@domain/entities/scheduling';
 import { AuthProvider } from '@domain/ports/AuthProvider';
+import { StageRepository } from '@domain/ports/StageRepository';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
-import { CreateTaskSchema, UpdateTaskSchema, UpdateStatusSchema } from '@application/dto/scheduling.dto';
+import {
+  CreateTaskSchema,
+  UpdateTaskSchema,
+  UpdateStatusSchema,
+  MoveStageSchema,
+} from '@application/dto/scheduling.dto';
+import {
+  StageNotFoundError,
+  TaskNotFoundError,
+} from '@domain/errors/scheduling';
 
 export function createSchedulingRouter(
   listTasks: ListTasks,
@@ -17,7 +28,9 @@ export function createSchedulingRouter(
   updateTask: UpdateTask,
   deleteTask: DeleteTask,
   updateTaskStatus: UpdateTaskStatus,
+  moveTaskToStage: MoveTaskToStage,
   authProvider: AuthProvider,
+  stageRepo?: StageRepository,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -42,13 +55,56 @@ export function createSchedulingRouter(
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
     }
+    const data = parsed.data;
+
+    // Resolve default stageId: if stageRepo is injected, look up the real "Nuevo" stage UUID.
+    // This ensures the Prisma path never receives a sentinel string that would cause a FK violation.
+    let stageId = data.stageId;
+    if (!stageId) {
+      if (stageRepo) {
+        const defaultStage = await stageRepo.getDefaultWorkflowStageByLegacyStatus('pending');
+        if (!defaultStage) {
+          res.status(500).json({ error: 'Default workflow not seeded', code: 'INTERNAL_ERROR' });
+          return;
+        }
+        stageId = defaultStage.id;
+      } else {
+        // Fallback for in-memory / test environments without stageRepo: use InMemory sentinel
+        stageId = '10000000-0000-4000-a000-000000000001';
+      }
+    }
+
     const normalized = {
-      ...parsed.data,
-      projectId: parsed.data.projectId ?? null,
-      projectName: parsed.data.projectName ?? null,
+      title: data.title,
+      description: data.description ?? null,
+      assignedTo: data.assignedTo ?? null,
+      assignedToId: data.assignedToId ?? null,
+      clientId: data.clientId ?? null,
+      clientName: data.clientName ?? null,
+      stageId,
+      priority: data.priority,
+      scheduledDate: data.scheduledDate ?? null,
+      scheduledTime: data.scheduledTime ?? null,
+      estimatedHours: data.estimatedHours,
+      address: data.address ?? null,
+      coordinates: data.coordinates ?? null,
+      category: data.category,
+      projectId: data.projectId ?? null,
+      projectName: data.projectName ?? null,
+      completedAt: data.completedAt ?? null,
+      notes: data.notes ?? null,
     };
-    const task = await createTask.execute(normalized as Omit<ScheduledTask, 'id' | 'sequenceNumber'>);
-    res.status(201).json(task);
+
+    try {
+      const task = await createTask.execute(normalized);
+      res.status(201).json(task);
+    } catch (err: unknown) {
+      if (err instanceof StageNotFoundError) {
+        res.status(404).json({ error: err.message, code: err.code });
+        return;
+      }
+      throw err;
+    }
   });
 
   router.put('/:id', auth, async (req: Request, res: Response): Promise<void> => {
@@ -65,14 +121,38 @@ export function createSchedulingRouter(
     res.json(task);
   });
 
+  // NEW: move to stage
+  router.patch('/:id/stage', auth, async (req: Request, res: Response): Promise<void> => {
+    const parsed = MoveStageSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+      return;
+    }
+    try {
+      const task = await moveTaskToStage.execute(req.params['id'] as string, parsed.data.stageId);
+      res.json(task);
+    } catch (err: unknown) {
+      if (err instanceof StageNotFoundError) {
+        res.status(404).json({ error: err.message, code: err.code });
+        return;
+      }
+      if (err instanceof TaskNotFoundError) {
+        res.status(404).json({ error: err.message, code: err.code });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // DEPRECATED: kept for one release as an alias
   router.patch('/:id/status', auth, async (req: Request, res: Response): Promise<void> => {
+    console.warn('deprecated route: PATCH /api/scheduling/:id/status — use /:id/stage instead');
     const parsed = UpdateStatusSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
     }
-    const { status } = parsed.data as { status: TaskStatus };
-    const task = await updateTaskStatus.execute(req.params['id'] as string, status);
+    const task = await updateTaskStatus.execute(req.params['id'] as string, parsed.data.status);
     if (!task) {
       res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
       return;

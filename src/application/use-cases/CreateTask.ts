@@ -4,7 +4,7 @@ import { ScheduledTask } from '@domain/entities/scheduling';
 export class CreateTask {
   constructor(private readonly repo: SchedulingRepository) {}
 
-  execute(data: Omit<ScheduledTask, 'id' | 'sequenceNumber'>): Promise<ScheduledTask> {
+  execute(data: Omit<ScheduledTask, 'id' | 'sequenceNumber' | 'stageCategory' | 'status'>): Promise<ScheduledTask> {
     return this.repo.createTask(data);
   }
 }

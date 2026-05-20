@@ -87,7 +87,7 @@ model AdminRoleDefinition {
 // =============================================
 
 enum LeadStatus {
-  new_lead @map("new")
+  new_lead      @map("new")
   contacted
   qualified
   proposal_sent
@@ -428,6 +428,45 @@ model ClientPortalSettings {
 // SCHEDULING DOMAIN
 // =============================================
 
+enum StageCategory {
+  nuevo
+  enProgreso
+  hecho
+}
+
+model Workflow {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  stages      Stage[]
+}
+
+model Stage {
+  id         String          @id @default(uuid())
+  workflowId String
+  workflow   Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  name       String
+  category   StageCategory
+  order      Int
+  tasks      ScheduledTask[]
+
+  @@index([workflowId, order])
+}
+
+model ProjectCategory {
+  id          String  @id @default(uuid())
+  name        String
+  description String?
+}
+
+model ProjectType {
+  id          String  @id @default(uuid())
+  name        String
+  description String?
+}
+
 model Project {
   id          String          @id @default(uuid())
   title       String
@@ -449,6 +488,8 @@ model ScheduledTask {
   clientId       String?
   clientName     String?
   status         String    @default("pending")
+  stageId        String
+  stage          Stage     @relation(fields: [stageId], references: [id], onDelete: Restrict)
   priority       String    @default("normal")
   scheduledDate  String?
   scheduledTime  String?
@@ -465,6 +506,7 @@ model ScheduledTask {
   project        Project?  @relation(fields: [projectId], references: [id])
 
   @@index([status])
+  @@index([stageId])
   @@index([scheduledDate])
   @@index([projectId])
 }
@@ -549,16 +591,16 @@ model NetworkDevice {
 }
 
 model InventoryItem {
-  id        String @id @default(uuid())
+  id        String  @id @default(uuid())
   name      String
   category  String
   sku       String?
-  quantity  Int    @default(0)
-  minStock  Int    @default(0)
-  unitPrice Float  @default(0)
+  quantity  Int     @default(0)
+  minStock  Int     @default(0)
+  unitPrice Float   @default(0)
   supplier  String?
   location  String?
-  status    String @default("in_stock")
+  status    String  @default("in_stock")
 }
 
 model InventoryProduct {

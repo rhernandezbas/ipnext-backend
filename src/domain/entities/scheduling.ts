@@ -1,3 +1,6 @@
+import { StageCategory } from './workflow';
+
+/** @deprecated use stageCategory; will be removed next change */
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
@@ -10,6 +13,9 @@ export interface ScheduledTask {
   assignedToId: string | null;
   clientId: string | null;
   clientName: string | null;
+  stageId: string;                      // NEW — primary
+  stageCategory: StageCategory;         // NEW — read-only derived from Stage
+  /** @deprecated use stageCategory; will be removed next change */
   status: TaskStatus;
   priority: TaskPriority;
   scheduledDate: string | null;
