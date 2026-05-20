@@ -261,6 +261,14 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       const q = filter.q.toLowerCase();
       tasks = tasks.filter(t => t.title.toLowerCase().includes(q));
     }
+    if (filter.from) {
+      const from = new Date(filter.from).getTime();
+      tasks = tasks.filter(t => t.startDate != null && new Date(t.startDate).getTime() >= from);
+    }
+    if (filter.to) {
+      const to = new Date(filter.to).getTime();
+      tasks = tasks.filter(t => t.startDate != null && new Date(t.startDate).getTime() <= to);
+    }
     return tasks;
   }
 

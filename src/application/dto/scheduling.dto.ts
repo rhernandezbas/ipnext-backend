@@ -86,5 +86,7 @@ export const ListTasksFilterSchema = z.object({
   partnerId:  z.string().min(1).optional(),
   assigneeId: z.string().min(1).optional(),
   q:          z.string().optional(),
+  from:       z.string().datetime({ offset: true }).optional(),
+  to:         z.string().datetime({ offset: true }).optional(),
 });
 export type TaskListFilter = z.infer<typeof ListTasksFilterSchema>;

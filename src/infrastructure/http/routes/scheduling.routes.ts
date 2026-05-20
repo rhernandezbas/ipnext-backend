@@ -93,6 +93,8 @@ export function createSchedulingRouter(
       partnerId:  req.query['partnerId'],
       assigneeId: req.query['assigneeId'],
       q:          req.query['q'],
+      from:       req.query['from'],
+      to:         req.query['to'],
     };
 
     const parsed = ListTasksFilterSchema.safeParse(rawQuery);
