@@ -1,10 +1,10 @@
 # Splynx Scheduling Replica — Release Notes
 
-**Fecha**: 2026-05-20
+**Fecha**: 2026-05-21 (último update)
 **Repos**: `ipnext-backend` + `ipnext-frontend`
 **Branch**: `main` (deployado en producción)
-**Backend HEAD**: `c423b793`
-**Frontend HEAD**: `6cfc250`
+**Backend HEAD**: `e5a735cb`
+**Frontend HEAD**: `52ab23c`
 
 ---
 
@@ -207,6 +207,10 @@ Documentadas para no repetir y para que los próximos sub-agents las apliquen:
    `import('@/pages/scheduling/SchedulingTasksPage')` apuntando a un directorio (sin sibling `.tsx`) PRODUCE BUILD SIN ERROR pero el chunk resultante es vacío. La ruta queda sin renderizar (React Router 404).
    **Fix**: sibling re-export shim. Si la página vive en un directorio, crear `SchedulingTasksPage.tsx` hermano que `export { default } from './SchedulingTasksPage/index';`. Mirror del patrón de `SchedulingTaskDetailPage`.
 
+5. **Smoke E2E con URL directa esconde bugs de navegación** (cazado por user post-release):
+   Todos los smokes de los 7 changes navegaron a `/admin/scheduling/tasks` con URL directa via Playwright. Pasaron OK. Pero el sidebar tenía el link `Tareas` apuntando a la URL vieja (`/admin/scheduling`) que ruteaba a la legacy page. El usuario real entraba a `Scheduling → Tareas` desde el menú y caía en la pantalla vieja. Nunca lo detectamos porque mi flujo de Playwright skip-eaba el sidebar.
+   **Fix definitivo**: SIEMPRE el smoke E2E debe empezar desde `/login`, hacer auth, y navegar la página objetivo via clicks reales en el sidebar/breadcrumbs/menús. NUNCA `page.goto(URL completa)` para el path de verificación. URL directa puede usarse como pre-condición de fixtures, no como navegación de validación.
+
 ---
 
 ## Bug fixes incluidos en este release
@@ -219,6 +223,7 @@ Documentadas para no repetir y para que los próximos sub-agents las apliquen:
 - **MoveTaskStage swallowing STAGE_NOT_FOUND** (cazado en verify del change 1): el catch-all del adapter Prisma escondía errores de stage missing y devolvía `TASK_NOT_FOUND` engañoso. Fixed con check explícito antes del update.
 - **InMemoryProjectRepository.update no sincronizaba `partners` array** (cazado en verify del change 2): faithless test double. Fixed.
 - **Bare `catch {}` en PrismaProjectRepository.update/delete** (cazado en verify del change 2): swallowed cualquier error. Fixed para solo capturar Prisma P2025.
+- **Sidebar `Tareas` linkeaba a la página vieja** (post-release, cazado por user): `Sidebar.tsx:102` apuntaba a `/admin/scheduling` que ruteaba a la legacy `empresa/SchedulingPage` (toggle Lista/Kanban/Calendario rojo, KPI cards, columnas Técnico/Categoría/Estado). La página nueva del change 6 vivía en `/admin/scheduling/tasks` pero el sidebar nunca la apuntaba. Fixed con commit `52ab23c`: link del sidebar actualizado + redirect de `/admin/scheduling` → `/admin/scheduling/tasks` para bookmarks viejos + lazy import del legacy page comentado.
 
 ---
 
@@ -266,6 +271,7 @@ ca7bd316  feat(scheduling): add Workflow + Stage foundation model               
 ### Frontend (`ipnext-frontend`)
 
 ```
+52ab23c   fix(scheduling): point sidebar 'Tareas' to /tasks + redirect legacy URL  [post-release fix]
 6cfc250   feat(scheduling): rewrite Calendar page with resource-timeline           [change 7]
 f19429d   fix(scheduling): align Tasks page UI with the system's design pattern    [hot-fix]
 8ada911   fix(scheduling): add SchedulingTasksPage.tsx re-export shim              [change 6 hotfix]
@@ -283,7 +289,7 @@ f19429d   fix(scheduling): align Tasks page UI with the system's design pattern 
 
 | Métrica | Valor |
 |---|---|
-| Changes SDD ejecutados | 7 (+1 hot-fix sin SDD formal) |
+| Changes SDD ejecutados | 7 (+2 hot-fixes sin SDD formal) |
 | Migraciones Prisma | 4 |
 | Tests backend (Jest) | 745 (delta +273 desde el inicio) |
 | Tests frontend (Vitest) | 838 (delta +96 nuevos) |
@@ -291,10 +297,12 @@ f19429d   fix(scheduling): align Tasks page UI with the system's design pattern 
 | Líneas agregadas frontend | ~8.000 |
 | Páginas frontend nuevas | 2 (TaskDetail + TasksPage) |
 | Páginas frontend reescritas | 1 (Calendar) |
-| Deploys exitosos a producción | 14 (8 backend + 6 frontend) |
+| Deploys exitosos a producción | 15 (8 backend + 7 frontend) |
+| Bugs descubiertos post-release | 1 (sidebar Tareas linkeaba a legacy page) |
 | Bugs de CI/CD descubiertos y fixeados | 4 |
+| Lecciones de E2E aprendidas | 1 (no usar URL directa para validar nav) |
 | Skill `impeccable` aplicada | en design.md de changes 4, 6, 7 |
-| Smoke E2E con Playwright | sí, en cada change |
+| Smoke E2E con Playwright | sí, en cada change (con URL directa — gap descubierto) |
 
 ---
 
