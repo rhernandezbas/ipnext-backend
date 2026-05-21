@@ -257,6 +257,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (filter.stageIds?.length) tasks = tasks.filter(t => filter.stageIds!.includes(t.stageId));
     if (filter.partnerId) tasks = tasks.filter(t => t.partnerId === filter.partnerId);
     if (filter.assigneeId) tasks = tasks.filter(t => t.assigneeId === filter.assigneeId);
+    if (filter.priority) tasks = tasks.filter(t => t.priority === filter.priority);
     if (filter.q) {
       const q = filter.q.toLowerCase();
       tasks = tasks.filter(t => t.title.toLowerCase().includes(q));

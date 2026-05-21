@@ -92,6 +92,7 @@ export function createSchedulingRouter(
       stageIds,
       partnerId:  req.query['partnerId'],
       assigneeId: req.query['assigneeId'],
+      priority:   req.query['priority'],
       q:          req.query['q'],
       from:       req.query['from'],
       to:         req.query['to'],

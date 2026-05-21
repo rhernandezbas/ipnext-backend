@@ -142,6 +142,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     if (filter?.stageIds?.length) where['stageId'] = { in: filter.stageIds };
     if (filter?.partnerId) where['partnerId'] = filter.partnerId;
     if (filter?.assigneeId) where['assigneeId'] = filter.assigneeId;
+    if (filter?.priority) where['priority'] = filter.priority;
     if (filter?.q) where['title'] = { contains: filter.q, mode: 'insensitive' };
     if (filter?.from || filter?.to) {
       const startDateFilter: Record<string, Date> = {};

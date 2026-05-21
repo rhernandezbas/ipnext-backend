@@ -85,6 +85,7 @@ export const ListTasksFilterSchema = z.object({
   stageIds:   z.array(z.string().min(1)).optional(),
   partnerId:  z.string().min(1).optional(),
   assigneeId: z.string().min(1).optional(),
+  priority:   TaskPrioritySchema.optional(),
   q:          z.string().optional(),
   from:       z.string().datetime({ offset: true }).optional(),
   to:         z.string().datetime({ offset: true }).optional(),
