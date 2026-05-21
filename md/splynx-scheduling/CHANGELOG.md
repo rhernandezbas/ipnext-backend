@@ -3,8 +3,8 @@
 **Fecha**: 2026-05-21 (último update)
 **Repos**: `ipnext-backend` + `ipnext-frontend`
 **Branch**: `main` (deployado en producción)
-**Backend HEAD**: `e5a735cb`
-**Frontend HEAD**: `52ab23c`
+**Backend HEAD**: `0458f28d`
+**Frontend HEAD**: `7bdc3da`
 
 ---
 
@@ -19,6 +19,8 @@ Lo que entra a producción en este ciclo:
 - **Página detalle de tarea**: ruta `/admin/scheduling/tasks/:id` con editor TipTap, mapa Leaflet, datos del proyecto/asignado/cliente, checklist editable.
 - **Checklists**: items de plantilla + items de tarea + assign-template-to-task (clona items en una transacción).
 - **Vista de tareas**: ruta `/admin/scheduling/tasks` con Tabla + Flujo de Trabajo (Kanban con drag&drop sobre stages), filtros multi-select sincronizados a URL.
+- **Filtros completos en Tasks page (post-release iteration)**: dropdowns Socio / Asignado / Prioridad además del Proyecto + Etapas + Buscar existentes. Todos URL-synced.
+- **Column visibility selector en Tasks page (post-release iteration)**: dropdown "Columnas ▾" con checkbox por columna + "Restaurar todas". Selección persiste en `localStorage` (key `scheduling-tasks-visible-columns`).
 - **Calendar**: ruta `/admin/scheduling/calendars` reescrita con resource-timeline (Día/Semana/Mes), reemplaza el placeholder anterior.
 - **Seguridad**: auth middleware en `projects.routes.ts` (faltaba — bug histórico).
 
@@ -43,7 +45,7 @@ Spec previo: `openspec/specs/scheduling/spec.md` (post-change-1 + change-3 delta
 
 **API**:
 - `PATCH /api/scheduling/:id/stage` (cambio 1, nuevo) — reemplaza `PATCH /:id/status` para mover tareas entre stages. El status endpoint queda como deprecation shim que mapea a stages del workflow Default.
-- `GET /api/scheduling?projectId=&stageIds=&partnerId=&assigneeId=&q=&from=&to=` (cambios 6 y 7) — filtros opcionales. `stageIds` acepta múltiples valores (`?stageIds=a&stageIds=b`). `from`/`to` son ISO datetimes para filtrar por `startDate` range.
+- `GET /api/scheduling?projectId=&stageIds=&partnerId=&assigneeId=&priority=&q=&from=&to=` (cambios 6, 7 y post-release iteration) — filtros opcionales. `stageIds` acepta múltiples valores (`?stageIds=a&stageIds=b`). `from`/`to` son ISO datetimes para filtrar por `startDate` range. `priority` es enum (`low|normal|high|urgent`) validado vía `TaskPrioritySchema.optional()`.
 - Composition test extendido para verificar que las nuevas sub-rutas no son sombreadas por el `/:id` catch-all.
 
 ### Capability: `scheduling-workflows` (nueva, cambio 1)
@@ -122,9 +124,11 @@ Página: `src/pages/scheduling/SchedulingTaskDetailPage.tsx` en ruta `/admin/sch
 Página: `src/pages/scheduling/SchedulingTasksPage.tsx` en ruta `/admin/scheduling/tasks`.
 
 - Toggle Tabla / Flujo de Trabajo (Kanban) sobre el mismo modelo de tareas
-- Filtros sincronizados a URL: `?view=table|kanban&projectId=&stageIds=&q=`
+- Filtros sincronizados a URL: `?view=table|kanban&projectId=&stageIds=&partnerId=&assigneeId=&priority=&q=`
 - Tabla: DataTable sortable, paginated, selectable. BulkActionBar con "Mover etapa" modal + Delete
 - Kanban: columnas derivadas de los stages del workflow del proyecto seleccionado (soft prompt cuando no hay project filter — sin proyecto no hay workflow del cual derivar columnas). Drag&drop entre stages calls `PATCH /:id/stage` con optimistic UI
+- **Filtros adicionales (post-release iteration)**: tres `<select>` nativos en `TaskFilterBar` — "Todos los socios" (usa `usePartners`), "Cualquier asignado" (usa `useAdmins`), "Cualquier prioridad" (baja/normal/alta/urgente). Cada filtro activo agrega un chip removible (`Socio: Acme ×`, `Prioridad: Alta ×`). Botón "Limpiar todo" resetea los siete filtros de una.
+- **Column visibility selector (post-release iteration)**: dropdown "Columnas ▾" en el header del page (al lado de Recargar y Añadir), visible solo en vista Tabla. Cada una de las 9 columnas (`#`, Etapa, Proyecto, Dirección, Cliente, Inicio, Asignado, Prioridad, Edad) tiene un checkbox. El trigger muestra `Columnas (N ocultas)` cuando hay alguna oculta. Selección persistida en `localStorage` (key `scheduling-tasks-visible-columns`) — sobrevive reload y login. Click-outside y `Escape` cierran el menú. Botón "Restaurar todas" vuelve al default.
 
 ### Frontend: `scheduling-calendar` (cambio 7, follow-up)
 
@@ -211,6 +215,10 @@ Documentadas para no repetir y para que los próximos sub-agents las apliquen:
    Todos los smokes de los 7 changes navegaron a `/admin/scheduling/tasks` con URL directa via Playwright. Pasaron OK. Pero el sidebar tenía el link `Tareas` apuntando a la URL vieja (`/admin/scheduling`) que ruteaba a la legacy page. El usuario real entraba a `Scheduling → Tareas` desde el menú y caía en la pantalla vieja. Nunca lo detectamos porque mi flujo de Playwright skip-eaba el sidebar.
    **Fix definitivo**: SIEMPRE el smoke E2E debe empezar desde `/login`, hacer auth, y navegar la página objetivo via clicks reales en el sidebar/breadcrumbs/menús. NUNCA `page.goto(URL completa)` para el path de verificación. URL directa puede usarse como pre-condición de fixtures, no como navegación de validación.
 
+6. **Type widening de filter sin actualizar URL-sync hook** (cazado en verify de la post-release iteration):
+   Agregamos `priority?: TaskPriority` al type `TaskListFilter` y los 3 dropdowns nuevos del `TaskFilterBar`. El dropdown UI actualizó el state local correctamente, pero `useTasksFilterUrl` solo conocía 5 campos (`projectId`, `stageIds`, `partnerId`, `assigneeId`, `q`) — el `priority` se perdía en el merge antes de escribirse al URL, así que ni la URL cambiaba ni el query refetcheaba. **Los 12 page-level Vitest tests pasaron verde** porque el bug está en URL serialization, no en render. La verificación E2E (URL search params + count de filas filtradas) lo cazó.
+   **Fix definitivo**: cuando agregás un campo a un type `*Filter`, actualizá EN PARALELO el hook `use*FilterUrl` correspondiente (parser desde URL + writer hacia URL). Smoke E2E mínimo: cambiar el filtro + `expect(page.url()).toContain('?priority=')` + `expect(rows.length).toBeLessThan(initialCount)`.
+
 ---
 
 ## Bug fixes incluidos en este release
@@ -224,6 +232,7 @@ Documentadas para no repetir y para que los próximos sub-agents las apliquen:
 - **InMemoryProjectRepository.update no sincronizaba `partners` array** (cazado en verify del change 2): faithless test double. Fixed.
 - **Bare `catch {}` en PrismaProjectRepository.update/delete** (cazado en verify del change 2): swallowed cualquier error. Fixed para solo capturar Prisma P2025.
 - **Sidebar `Tareas` linkeaba a la página vieja** (post-release, cazado por user): `Sidebar.tsx:102` apuntaba a `/admin/scheduling` que ruteaba a la legacy `empresa/SchedulingPage` (toggle Lista/Kanban/Calendario rojo, KPI cards, columnas Técnico/Categoría/Estado). La página nueva del change 6 vivía en `/admin/scheduling/tasks` pero el sidebar nunca la apuntaba. Fixed con commit `52ab23c`: link del sidebar actualizado + redirect de `/admin/scheduling` → `/admin/scheduling/tasks` para bookmarks viejos + lazy import del legacy page comentado.
+- **Dropdown `Prioridad` no filtraba la tabla** (post-release, cazado en verify): el filtro de prioridad agregado al TaskFilterBar (commit `4591732`) tenía el UI funcionando — dropdown mostraba "Alta", click cambiaba la option — pero `useTasksFilterUrl` no conocía el campo `priority` y lo descartaba durante URL serialization. Resultado: query refetch nunca se disparaba, tabla seguía mostrando todas las prioridades. Fixed con commit `7bdc3da`: parser desde URL con whitelist de 4 valores (`low|normal|high|urgent`) + writer del campo en el URL merger.
 
 ---
 
@@ -254,6 +263,7 @@ Estos elementos están marcados como deprecated y se removerán en un próximo "
 ### Backend (`ipnext-backend`)
 
 ```
+0458f28d  feat(scheduling): add priority to GET /api/scheduling filter             [post-release]
 c423b793  feat(scheduling): add from/to date range filter to GET /api/scheduling   [change 7]
 5a387cc3  fix(scheduling): expose ScheduledTask createdAt/updatedAt in API         [hot-fix]
 51247345  feat(scheduling): add filter query params to GET /api/scheduling         [change 6]
@@ -271,6 +281,9 @@ ca7bd316  feat(scheduling): add Workflow + Stage foundation model               
 ### Frontend (`ipnext-frontend`)
 
 ```
+7bdc3da   fix(scheduling): wire priority filter through useTasksFilterUrl          [post-release fix]
+4591732   feat(scheduling): add Partner/Asignado/Prioridad dropdowns to FilterBar  [post-release]
+ca5a916   feat(scheduling): column visibility dropdown in Tasks table              [post-release]
 52ab23c   fix(scheduling): point sidebar 'Tareas' to /tasks + redirect legacy URL  [post-release fix]
 6cfc250   feat(scheduling): rewrite Calendar page with resource-timeline           [change 7]
 f19429d   fix(scheduling): align Tasks page UI with the system's design pattern    [hot-fix]
@@ -289,18 +302,18 @@ f19429d   fix(scheduling): align Tasks page UI with the system's design pattern 
 
 | Métrica | Valor |
 |---|---|
-| Changes SDD ejecutados | 7 (+2 hot-fixes sin SDD formal) |
+| Changes SDD ejecutados | 7 (+2 hot-fixes + 1 post-release iteration sin SDD formal) |
 | Migraciones Prisma | 4 |
 | Tests backend (Jest) | 745 (delta +273 desde el inicio) |
 | Tests frontend (Vitest) | 838 (delta +96 nuevos) |
-| Líneas agregadas backend | ~15.000 |
-| Líneas agregadas frontend | ~8.000 |
+| Líneas agregadas backend | ~15.100 |
+| Líneas agregadas frontend | ~8.300 |
 | Páginas frontend nuevas | 2 (TaskDetail + TasksPage) |
 | Páginas frontend reescritas | 1 (Calendar) |
-| Deploys exitosos a producción | 15 (8 backend + 7 frontend) |
-| Bugs descubiertos post-release | 1 (sidebar Tareas linkeaba a legacy page) |
+| Deploys exitosos a producción | 19 (9 backend + 10 frontend) |
+| Bugs descubiertos post-release | 2 (sidebar Tareas legacy + priority filter dead) |
 | Bugs de CI/CD descubiertos y fixeados | 4 |
-| Lecciones de E2E aprendidas | 1 (no usar URL directa para validar nav) |
+| Lecciones de E2E aprendidas | 2 (URL directa esconde nav bugs, type widening sin URL-hook update) |
 | Skill `impeccable` aplicada | en design.md de changes 4, 6, 7 |
 | Smoke E2E con Playwright | sí, en cada change (con URL directa — gap descubierto) |
 
@@ -318,6 +331,8 @@ URLs verificadas con Playwright + curl autenticado (admin):
 - `POST /api/scheduling/:id/checklist/assign-template` clona items con `fromTemplateItemId` set
 - `GET /admin/scheduling/calendars?view=month&date=2026-06-20` muestra event pills en días con tareas
 - `GET /api/scheduling?from=2026-01-01&to=2026-12-31` filtra por ventana de tiempo
+- `GET /admin/scheduling/tasks?priority=high` filtra a 1 de 3 tareas + chip activo + URL sync (verificado con Playwright)
+- `localStorage['scheduling-tasks-visible-columns']` persiste selección entre sesiones
 
 Backend container: `ipnext-new-backend` (puerto 8291).
 Frontend container: `ipnext-new-frontend` (puerto 7778).
