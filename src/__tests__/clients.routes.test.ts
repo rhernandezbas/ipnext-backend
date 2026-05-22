@@ -58,7 +58,7 @@ function buildApp() {
 
   app.use(
     '/api/clients',
-    createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authProvider, createCustomer as never),
+    createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authProvider, createCustomer as never, { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {

@@ -5,6 +5,7 @@ import { GetClientServices } from '@application/use-cases/GetClientServices';
 import { GetClientInvoices } from '@application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '@application/use-cases/GetClientLogs';
 import { CreateCustomer } from '@application/use-cases/CreateCustomer';
+import { GetClientStats } from '@application/use-cases/GetClientStats';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { ClientNotFoundError, SplynxUnavailableError } from '@domain/errors';
@@ -91,9 +92,22 @@ export function createClientsRouter(
   getLogs: GetClientLogs,
   authProvider: JwtAuthAdapter,
   createCustomer: CreateCustomer,
+  getClientStats: GetClientStats,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
+
+  // IMPORTANT: /stats MUST be declared before /:id so the catch-all does not
+  // swallow it (Express matches in declaration order).
+  router.get('/stats', auth, async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const stats = await getClientStats.execute();
+      res.json(stats);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load client stats';
+      res.status(500).json({ error: message, code: 'INTERNAL_ERROR' });
+    }
+  });
 
   router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
     try {

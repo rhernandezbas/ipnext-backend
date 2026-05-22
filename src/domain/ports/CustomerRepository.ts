@@ -23,10 +23,19 @@ export interface CreateCustomerInput {
   customAttributes?: Record<string, unknown> | null;
 }
 
+export interface ClientStats {
+  total: number;
+  active: number;
+  inactive: number;
+  blocked: number;
+  late: number;
+}
+
 export interface CustomerRepository {
   list(query: ListClientsQuery): Promise<PaginatedResult<Customer>>;
   findById(id: string): Promise<Customer>;
   create(data: CreateCustomerInput): Promise<Customer>;
+  stats(): Promise<ClientStats>;
   listServices(clientId: string): Promise<Service[]>;
   listInvoices(clientId: string): Promise<import('../entities/billing').Invoice[]>;
   listLogs(query: ListLogsQuery): Promise<PaginatedResult<ClientLog>>;

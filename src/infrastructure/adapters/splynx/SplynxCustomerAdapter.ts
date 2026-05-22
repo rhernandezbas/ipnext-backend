@@ -85,6 +85,10 @@ export class SplynxCustomerAdapter implements CustomerRepository {
     throw new Error('SplynxCustomerAdapter.create is not implemented — clients are persisted by PrismaCustomerRepository');
   }
 
+  async stats(): Promise<never> {
+    throw new Error('SplynxCustomerAdapter.stats is not implemented — stats come from PrismaCustomerRepository');
+  }
+
   async listServices(clientId: string): Promise<Service[]> {
     const raw = await this.client.get<SplynxService[]>(
       `/api/2.0/admin/customers/internet-service`,

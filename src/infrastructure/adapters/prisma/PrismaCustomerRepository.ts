@@ -1,4 +1,4 @@
-import { CustomerRepository, ListClientsQuery, ListLogsQuery, CreateCustomerInput } from '@domain/ports/CustomerRepository';
+import { CustomerRepository, ListClientsQuery, ListLogsQuery, CreateCustomerInput, ClientStats } from '@domain/ports/CustomerRepository';
 import { Customer, CustomerStatus, Service, ClientLog } from '@domain/entities/customer';
 import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
 import { PaginatedResult } from '@application/dto/pagination';
@@ -90,6 +90,21 @@ export class PrismaCustomerRepository implements CustomerRepository {
     const row = await prisma.client.findUnique({ where: { id } });
     if (!row) throw new ClientNotFoundError(id);
     return toCustomer(row);
+  }
+
+  async stats(): Promise<ClientStats> {
+    const groups = await prisma.client.groupBy({
+      by: ['status'],
+      _count: { _all: true },
+    });
+    const out: ClientStats = { total: 0, active: 0, inactive: 0, blocked: 0, late: 0 };
+    for (const g of groups) {
+      const count = g._count._all;
+      out.total += count;
+      const key = g.status as keyof Omit<ClientStats, 'total'>;
+      if (key in out) out[key] = count;
+    }
+    return out;
   }
 
   async create(data: CreateCustomerInput): Promise<Customer> {

@@ -9,6 +9,7 @@ import { JwtAuthAdapter } from '../adapters/jwt/JwtAuthAdapter';
 import { ListClients } from '@application/use-cases/ListClients';
 import { GetClientDetail } from '@application/use-cases/GetClientDetail';
 import { CreateCustomer } from '@application/use-cases/CreateCustomer';
+import { GetClientStats } from '@application/use-cases/GetClientStats';
 import { GetClientServices } from '@application/use-cases/GetClientServices';
 import { GetClientInvoices } from '@application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '@application/use-cases/GetClientLogs';
@@ -323,6 +324,7 @@ export function createApp() {
   const getInvoices = new GetClientInvoices(customerAdapter);
   const getLogs = new GetClientLogs(customerAdapter);
   const createCustomer = new CreateCustomer(customerAdapter);
+  const getClientStats = new GetClientStats(customerAdapter);
   const listTickets = new ListTickets(ticketAdapter);
   const getStats = new GetTicketStats(ticketAdapter);
   const createTicket = new CreateTicket(ticketAdapter);
@@ -599,7 +601,7 @@ export function createApp() {
   app.use('/api/dashboard', createDashboardRouter(getDashboardStats, getDashboardShortcuts, getRecentActivity));
   app.use('/api/messages', createMessagesRouter(listMessages, getMessage, createMessage, markMessageAsRead, deleteMessage));
   app.use('/api/auth', createAuthRouter(authAdapter));
-  app.use('/api/clients', createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authAdapter, createCustomer));
+  app.use('/api/clients', createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authAdapter, createCustomer, getClientStats));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
   app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, authAdapter));
   app.use('/api/billing', createBillingRouter(getSummary, listInvoices, listPayments, listTransactions, authAdapter));
