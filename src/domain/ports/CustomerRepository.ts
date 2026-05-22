@@ -10,9 +10,23 @@ export interface ListLogsQuery extends PaginatedQuery {
   clientId: string;
 }
 
+export interface CreateCustomerInput {
+  name: string;
+  email: string;
+  phone: string;
+  login: string;
+  status?: 'active' | 'inactive' | 'blocked' | 'new';
+  address?: string | null;
+  city?: string | null;
+  country?: string | null;
+  splynxId?: string | null;
+  customAttributes?: Record<string, unknown> | null;
+}
+
 export interface CustomerRepository {
   list(query: ListClientsQuery): Promise<PaginatedResult<Customer>>;
   findById(id: string): Promise<Customer>;
+  create(data: CreateCustomerInput): Promise<Customer>;
   listServices(clientId: string): Promise<Service[]>;
   listInvoices(clientId: string): Promise<import('../entities/billing').Invoice[]>;
   listLogs(query: ListLogsQuery): Promise<PaginatedResult<ClientLog>>;

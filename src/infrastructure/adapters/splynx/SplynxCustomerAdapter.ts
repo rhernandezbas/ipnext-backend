@@ -78,6 +78,13 @@ export class SplynxCustomerAdapter implements CustomerRepository {
     return this.mapCustomer(raw);
   }
 
+  async create(): Promise<Customer> {
+    // Splynx is a READ-ONLY legacy source in this codebase; client creation
+    // happens against the Postgres-backed adapter. Surface a clear error so a
+    // misconfigured DI never silently writes to Splynx.
+    throw new Error('SplynxCustomerAdapter.create is not implemented — clients are persisted by PrismaCustomerRepository');
+  }
+
   async listServices(clientId: string): Promise<Service[]> {
     const raw = await this.client.get<SplynxService[]>(
       `/api/2.0/admin/customers/internet-service`,

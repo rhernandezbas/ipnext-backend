@@ -19,6 +19,7 @@ function makeRepo(overrides?: Partial<CustomerRepository>): CustomerRepository {
   return {
     list: jest.fn().mockResolvedValue({ data: [mockCustomer], total: 1, page: 1, totalPages: 1 }),
     findById: jest.fn(),
+    create: jest.fn(),
     listServices: jest.fn(),
     listInvoices: jest.fn(),
     listLogs: jest.fn(),

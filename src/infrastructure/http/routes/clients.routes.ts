@@ -4,6 +4,7 @@ import { GetClientDetail } from '@application/use-cases/GetClientDetail';
 import { GetClientServices } from '@application/use-cases/GetClientServices';
 import { GetClientInvoices } from '@application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '@application/use-cases/GetClientLogs';
+import { CreateCustomer } from '@application/use-cases/CreateCustomer';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { ClientNotFoundError, SplynxUnavailableError } from '@domain/errors';
@@ -89,6 +90,7 @@ export function createClientsRouter(
   getInvoices: GetClientInvoices,
   getLogs: GetClientLogs,
   authProvider: JwtAuthAdapter,
+  createCustomer: CreateCustomer,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -171,13 +173,17 @@ export function createClientsRouter(
   });
 
   router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
-    const { firstName, lastName, email, phone, address, status } = req.body as {
+    const { firstName, lastName, email, phone, address, city, country, status, login, splynxId } = req.body as {
       firstName?: string;
       lastName?: string;
       email?: string;
       phone?: string;
       address?: string;
-      status?: 'active' | 'inactive';
+      city?: string;
+      country?: string;
+      status?: 'active' | 'inactive' | 'blocked' | 'new';
+      login?: string;
+      splynxId?: string;
     };
 
     if (!firstName || !lastName || !email || !phone) {
@@ -188,21 +194,34 @@ export function createClientsRouter(
       return;
     }
 
-    const newClient: NewClient = {
-      id: String(nextClientId++),
-      name: `${firstName} ${lastName}`,
-      firstName,
-      lastName,
-      email,
-      phone,
-      address: address ?? '',
-      status: status ?? 'active',
-      createdAt: new Date().toISOString(),
-    };
-
-    newClientsStore.push(newClient);
-    incrementClients();
-    res.status(201).json(newClient);
+    try {
+      const customer = await createCustomer.execute({
+        firstName,
+        lastName,
+        email,
+        phone,
+        address,
+        city,
+        country,
+        status,
+        login,
+        splynxId,
+      });
+      incrementClients();
+      res.status(201).json(customer);
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      // Prisma P2002 — unique constraint (email or login already used)
+      if (code === 'P2002') {
+        res.status(409).json({
+          error: 'A client with that email or login already exists',
+          code: 'DUPLICATE_CLIENT',
+        });
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Failed to create client';
+      res.status(500).json({ error: message, code: 'INTERNAL_ERROR' });
+    }
   });
 
   router.patch('/:id', auth, async (req: Request, res: Response): Promise<void> => {
