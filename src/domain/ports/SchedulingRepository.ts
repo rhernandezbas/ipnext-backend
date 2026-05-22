@@ -3,7 +3,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'status' | 'customerName' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'status' | 'customerName' | 'customerCity' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt'
 > {
   watcherIds?: string[];
 }

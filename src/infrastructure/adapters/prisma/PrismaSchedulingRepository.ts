@@ -32,6 +32,8 @@ export function toTask(row: any): ScheduledTask {
   // Derive customerName: prefer JOIN, fallback to legacy clientName
   const customerName: string | null =
     row.customer?.name ?? row.clientName ?? null;
+  // city from the customer JOIN — populates the Tasks list 'Localidad' column.
+  const customerCity: string | null = row.customer?.city ?? null;
 
   // Derive assigneeName: prefer JOIN, fallback to legacy assignedTo
   const assigneeName: string | null =
@@ -83,6 +85,7 @@ export function toTask(row: any): ScheduledTask {
     endDate,
     customerId: row.customerId ?? null,
     customerName,
+    customerCity,
     serviceId: row.serviceId ?? null,
     partnerId: row.partnerId ?? null,
     reporterId: row.reporterId ?? null,
@@ -126,7 +129,7 @@ function toChecklistItem(row: any): TaskChecklistItem {
 const INCLUDE = {
   project: true,
   stage: true,
-  customer: { select: { id: true, name: true } },
+  customer: { select: { id: true, name: true, city: true } },
   assignee: { select: { id: true, name: true } },
   reporter: { select: { id: true } },
   service: { select: { id: true } },

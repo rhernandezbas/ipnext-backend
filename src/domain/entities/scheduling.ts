@@ -47,6 +47,7 @@ export interface ScheduledTask {
   // NEW — FK relations
   customerId: string | null;
   customerName: string | null;   // derived from Client.name via JOIN
+  customerCity: string | null;   // derived from Client.city via JOIN — for Tasks 'Localidad' column
   serviceId: string | null;
   partnerId: string | null;
   reporterId: string | null;

@@ -62,6 +62,7 @@ const NEW_FIELDS_DEFAULTS = {
   endDate: null,
   customerId: null,
   customerName: null,
+  customerCity: null,
   serviceId: null,
   partnerId: null,
   reporterId: null,
@@ -310,6 +311,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       endDate: data.endDate ?? null,
       customerId: data.customerId ?? null,
       customerName: null, // In-memory: no JOIN, derived by Prisma adapter
+      customerCity: null, // idem
       serviceId: data.serviceId ?? null,
       partnerId: data.partnerId ?? null,
       reporterId: data.reporterId ?? null,
