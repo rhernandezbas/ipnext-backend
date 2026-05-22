@@ -99,7 +99,10 @@ export function createClientsRouter(
     try {
       const { page, limit, search, status } = req.query as Record<string, string>;
       const result = await listClients.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, search, status });
-      res.json(result);
+      // Compute totalPages for the frontend — derived from total / limit so the
+      // pagination component can render N pages instead of just prev/next buttons.
+      const totalPages = result.limit > 0 ? Math.max(1, Math.ceil(result.total / result.limit)) : 1;
+      res.json({ ...result, totalPages });
     } catch (err) {
       if (err instanceof SplynxUnavailableError) {
         res.status(503).json({ error: 'Clients backend unavailable', code: 'CLIENTS_UNAVAILABLE' });
