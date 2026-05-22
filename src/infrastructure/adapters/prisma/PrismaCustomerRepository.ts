@@ -107,6 +107,18 @@ export class PrismaCustomerRepository implements CustomerRepository {
     return out;
   }
 
+  async delete(id: string): Promise<boolean> {
+    try {
+      await prisma.client.delete({ where: { id } });
+      return true;
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      // Prisma P2025 -> row to delete does not exist; treat as a not-found.
+      if (code === 'P2025') return false;
+      throw err;
+    }
+  }
+
   async create(data: CreateCustomerInput): Promise<Customer> {
     const row = await prisma.client.create({
       data: {

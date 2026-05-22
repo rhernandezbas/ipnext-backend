@@ -85,6 +85,10 @@ export class SplynxCustomerAdapter implements CustomerRepository {
     throw new Error('SplynxCustomerAdapter.create is not implemented — clients are persisted by PrismaCustomerRepository');
   }
 
+  async delete(): Promise<boolean> {
+    throw new Error('SplynxCustomerAdapter.delete is not implemented — deletes go through PrismaCustomerRepository');
+  }
+
   async stats(): Promise<never> {
     throw new Error('SplynxCustomerAdapter.stats is not implemented — stats come from PrismaCustomerRepository');
   }

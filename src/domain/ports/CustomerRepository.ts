@@ -35,6 +35,8 @@ export interface CustomerRepository {
   list(query: ListClientsQuery): Promise<PaginatedResult<Customer>>;
   findById(id: string): Promise<Customer>;
   create(data: CreateCustomerInput): Promise<Customer>;
+  /** Returns true when a row was deleted, false when the id did not exist. */
+  delete(id: string): Promise<boolean>;
   stats(): Promise<ClientStats>;
   listServices(clientId: string): Promise<Service[]>;
   listInvoices(clientId: string): Promise<import('../entities/billing').Invoice[]>;

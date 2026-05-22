@@ -6,6 +6,7 @@ import { GetClientInvoices } from '@application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '@application/use-cases/GetClientLogs';
 import { CreateCustomer } from '@application/use-cases/CreateCustomer';
 import { GetClientStats } from '@application/use-cases/GetClientStats';
+import { DeleteCustomer } from '@application/use-cases/DeleteCustomer';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { ClientNotFoundError, SplynxUnavailableError } from '@domain/errors';
@@ -93,6 +94,7 @@ export function createClientsRouter(
   authProvider: JwtAuthAdapter,
   createCustomer: CreateCustomer,
   getClientStats: GetClientStats,
+  deleteCustomer: DeleteCustomer,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -157,20 +159,28 @@ export function createClientsRouter(
   });
 
   router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
-    const numId = parseInt(req.params['id'] as string);
-    if (deletedClientsStore.has(numId)) {
-      res.status(404).json({ error: 'Client not found', code: 'CLIENT_NOT_FOUND' });
-      return;
+    const id = req.params['id'] as string;
+    try {
+      const deleted = await deleteCustomer.execute(id);
+      if (!deleted) {
+        res.status(404).json({ error: 'Client not found', code: 'CLIENT_NOT_FOUND' });
+        return;
+      }
+      decrementClients();
+      res.status(204).send();
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      // Prisma P2003 -> FK constraint (the client is referenced by tasks/services/etc.)
+      if (code === 'P2003') {
+        res.status(409).json({
+          error: 'Cannot delete: client is referenced by other records (tasks, services, invoices). Detach those first.',
+          code: 'CLIENT_HAS_REFERENCES',
+        });
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Failed to delete client';
+      res.status(500).json({ error: message, code: 'INTERNAL_ERROR' });
     }
-    // Only newly created clients can be deleted via this in-memory store
-    const inNew = newClientsStore.find((c) => parseInt(c.id) === numId);
-    if (!inNew) {
-      res.status(404).json({ error: 'Client not found', code: 'CLIENT_NOT_FOUND' });
-      return;
-    }
-    deletedClientsStore.add(numId);
-    decrementClients();
-    res.status(204).send();
   });
 
   router.get('/:id/services', auth, async (req: Request, res: Response): Promise<void> => {
