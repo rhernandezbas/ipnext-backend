@@ -18,7 +18,7 @@ export const CreateProjectSchema = z.object({
 export const UpdateProjectSchema = CreateProjectSchema.partial();
 
 export const ListProjectsQuerySchema = z.object({
-  visible: z.enum(['true', 'false']).optional(),
+  visible: z.enum(['true', 'false', 'all']).optional(),
 });
 
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>;

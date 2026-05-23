@@ -152,11 +152,21 @@ describe('GET /api/projects', () => {
     expect(res.body[0].title).toBe('Visible');
   });
 
-  it('REQ-LIST-4: no visible filter returns all', async () => {
+  it('REQ-LIST-4: no visible filter defaults to visible=true (soft-deleted hidden)', async () => {
     const { app, projectRepo } = await buildApp();
     await projectRepo.create({ title: 'Visible', visible: true });
     await projectRepo.create({ title: 'Hidden', visible: false });
     const res = await request(app).get('/api/projects').set('Cookie', AUTH_COOKIE);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].title).toBe('Visible');
+  });
+
+  it('REQ-LIST-4: visible=all returns both enabled and disabled projects', async () => {
+    const { app, projectRepo } = await buildApp();
+    await projectRepo.create({ title: 'Visible', visible: true });
+    await projectRepo.create({ title: 'Hidden', visible: false });
+    const res = await request(app).get('/api/projects?visible=all').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
   });

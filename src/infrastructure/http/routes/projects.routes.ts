@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
-import { ReferenceNotFoundError, ReferenceKind } from '@domain/errors/projects';
+import { ReferenceNotFoundError, ReferenceKind, ProjectHasActiveTasksError } from '@domain/errors/projects';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { CreateProjectSchema, UpdateProjectSchema, ListProjectsQuerySchema } from '@application/dto/projects.dto';
 import { ListProjects } from '@application/use-cases/ListProjects';
@@ -34,9 +34,17 @@ export function createProjectsRouter(
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
     }
-    const filter = parsed.data.visible !== undefined
-      ? { visible: parsed.data.visible === 'true' }
-      : undefined;
+    // Default behaviour: only return enabled projects. Callers must opt in to
+    // see disabled projects with ?visible=false, or pass ?visible=all to get
+    // everything (for restore-aware UIs).
+    let filter: { visible?: boolean } | undefined;
+    if (parsed.data.visible === undefined) {
+      filter = { visible: true };
+    } else if (parsed.data.visible === 'all') {
+      filter = undefined;
+    } else {
+      filter = { visible: parsed.data.visible === 'true' };
+    }
     const projects = await listProjects.execute(filter);
     res.json(projects);
   });
@@ -91,12 +99,24 @@ export function createProjectsRouter(
   });
 
   router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
-    const deleted = await deleteProject.execute(req.params['id'] as string);
-    if (!deleted) {
-      res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
-      return;
+    try {
+      const deleted = await deleteProject.execute(req.params['id'] as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      if (err instanceof ProjectHasActiveTasksError) {
+        res.status(409).json({
+          error: 'Project has active tasks (nuevo / enProgreso). Close or cancel them before disabling the project.',
+          code: err.code,
+          details: err.activeCounts,
+        });
+        return;
+      }
+      throw err;
     }
-    res.status(204).send();
   });
 
   return router;

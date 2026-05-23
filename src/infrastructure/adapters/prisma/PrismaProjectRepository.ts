@@ -140,9 +140,14 @@ export class PrismaProjectRepository implements ProjectRepository {
     }
   }
 
+  /**
+   * Soft delete: marks the project as not visible. The row stays in the DB so
+   * its tasks keep their FK reference. Idempotent — already-disabled projects
+   * stay disabled. Returns false only when the project does not exist.
+   */
   async delete(id: string): Promise<boolean> {
     try {
-      await prisma.project.delete({ where: { id } });
+      await (prisma.project as any).update({ where: { id }, data: { visible: false } });
       return true;
     } catch (err) {
       if ((err as { code?: string })?.code === 'P2025') return false;

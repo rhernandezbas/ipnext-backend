@@ -88,6 +88,20 @@ export class InMemoryProjectRepository implements ProjectRepository {
     return this.projects.delete(id);
   }
 
+  /**
+   * Test helper: overwrite the cached taskCounts on a project. Production
+   * (Prisma) computes these from a JOIN; in-memory has no scheduling repo
+   * reference, so tests inject the counts directly.
+   */
+  seedTaskCounts(
+    projectId: string,
+    counts: { nuevo: number; enProgreso: number; hecho: number; total: number },
+  ): void {
+    const existing = this.projects.get(projectId);
+    if (!existing) throw new Error(`Cannot seed taskCounts: project ${projectId} not found`);
+    this.projects.set(projectId, { ...existing, taskCounts: { ...counts } });
+  }
+
   /** Test helper: seed a project with specific partnerIds resolved to partner objects */
   seedWithPartners(
     project: Omit<Project, 'partners'> & { partnerIds: string[] },
