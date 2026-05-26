@@ -1,4 +1,6 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response } from 'express';
+import { AuthProvider } from '@domain/ports/AuthProvider';
+import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { ListTaskCategory } from '@application/use-cases/ListTaskCategory';
 import { GetTaskCategory } from '@application/use-cases/GetTaskCategory';
 import { CreateTaskCategory } from '@application/use-cases/CreateTaskCategory';
@@ -12,7 +14,7 @@ import {
 } from '@domain/errors/scheduling';
 
 export function createTaskCategoriesRouter(
-  auth: RequestHandler,
+  authProvider: AuthProvider,
   listTaskCategory: ListTaskCategory,
   getTaskCategory: GetTaskCategory,
   createTaskCategory: CreateTaskCategory,
@@ -20,6 +22,7 @@ export function createTaskCategoriesRouter(
   deleteTaskCategory: DeleteTaskCategory,
 ): Router {
   const router = Router();
+  const auth = createAuthMiddleware(authProvider);
 
   router.get('/task-categories', auth, async (_req: Request, res: Response): Promise<void> => {
     res.json(await listTaskCategory.execute());
