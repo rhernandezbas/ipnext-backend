@@ -14,7 +14,7 @@ model Admin {
   id              String             @id @default(uuid())
   name            String
   email           String             @unique
-  role            AdminRole
+  role            String             // role-definition name (editable, backed by AdminRoleDefinition)
   status          AdminStatus        @default(active)
   twoFaEnabled    Boolean            @default(false)
   twoFaSecret     String?

@@ -48,7 +48,7 @@ export function createAdminRouter(
     const { name, email, role, status } = req.body as {
       name: string;
       email: string;
-      role: 'superadmin' | 'admin' | 'viewer';
+      role: string;
       status: 'active' | 'inactive';
     };
     const admin = await createAdmin.execute({ name, email, role, status });
