@@ -15,6 +15,7 @@ describe('workflow domain types', () => {
       name: 'Nuevo',
       category: 'nuevo',
       order: 0,
+      color: null,
     };
     expect(stage.id).toBe('stage-1');
     expect(stage.workflowId).toBe('wf-1');

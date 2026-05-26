@@ -104,6 +104,7 @@ import { CreateWorkflow } from '@application/use-cases/CreateWorkflow';
 import { UpdateWorkflow } from '@application/use-cases/UpdateWorkflow';
 import { DeleteWorkflow } from '@application/use-cases/DeleteWorkflow';
 import { AddStageToWorkflow } from '@application/use-cases/AddStageToWorkflow';
+import { UpdateStageColor } from '@application/use-cases/UpdateStageColor';
 import { RemoveStageFromWorkflow } from '@application/use-cases/RemoveStageFromWorkflow';
 import { ReorderStages } from '@application/use-cases/ReorderStages';
 import { ListProjectCategory } from '@application/use-cases/ListProjectCategory';
@@ -417,6 +418,7 @@ export function createApp() {
   const addStageToWorkflow = new AddStageToWorkflow(workflowRepo, stageRepo);
   const removeStageFromWorkflow = new RemoveStageFromWorkflow(stageRepo);
   const reorderStages = new ReorderStages(workflowRepo, stageRepo);
+  const updateStageColor = new UpdateStageColor(stageRepo);
 
   const listProjectCategory = new ListProjectCategory(projectCategoryRepo);
   const getProjectCategory = new GetProjectCategory(projectCategoryRepo);
@@ -645,7 +647,7 @@ export function createApp() {
   app.use('/api/scheduling', createWorkflowsRouter(
     authAdapter,
     listWorkflows, getWorkflow, createWorkflowUC, updateWorkflowUC, deleteWorkflowUC,
-    addStageToWorkflow, removeStageFromWorkflow, reorderStages,
+    addStageToWorkflow, removeStageFromWorkflow, reorderStages, updateStageColor,
     listProjectCategory, getProjectCategory, createProjectCategory, updateProjectCategory, deleteProjectCategory,
     listProjectType, getProjectType, createProjectType, updateProjectType, deleteProjectType,
   ));

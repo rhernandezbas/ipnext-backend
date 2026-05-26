@@ -17,6 +17,7 @@ function toStage(row: any): Stage {
     name: row.name,
     category: row.category,
     order: row.order,
+    color: row.color ?? null,
   };
 }
 
@@ -44,6 +45,15 @@ export class PrismaStageRepository implements StageRepository {
       },
     });
     return toStage(row);
+  }
+
+  async updateColor(stageId: string, color: string): Promise<Stage | null> {
+    try {
+      const row = await (prisma.stage as any).update({ where: { id: stageId }, data: { color } });
+      return toStage(row);
+    } catch {
+      return null;
+    }
   }
 
   async remove(stageId: string): Promise<boolean> {

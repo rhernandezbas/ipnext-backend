@@ -61,10 +61,10 @@ const DEFAULT_STAGE_ID_CANCELLED   = '10000000-0000-4000-a000-000000000004';
 // Default stages for InMemoryStageRepository — IDs must match those in InMemorySchedulingRepository
 function makeDefaultStages(stageRepo: InMemoryStageRepository): void {
   const stages: Stage[] = [
-    { id: DEFAULT_STAGE_ID_PENDING,     workflowId: 'wf-default', name: 'Nuevo',            category: 'nuevo',      order: 0 },
-    { id: DEFAULT_STAGE_ID_IN_PROGRESS, workflowId: 'wf-default', name: 'En progreso',       category: 'enProgreso', order: 7 },
-    { id: DEFAULT_STAGE_ID_COMPLETED,   workflowId: 'wf-default', name: 'Hecho',             category: 'hecho',      order: 9 },
-    { id: DEFAULT_STAGE_ID_CANCELLED,   workflowId: 'wf-default', name: 'Anulado-Cancelado', category: 'hecho',      order: 10 },
+    { id: DEFAULT_STAGE_ID_PENDING,     workflowId: 'wf-default', name: 'Nuevo',            category: 'nuevo',      order: 0,  color: null },
+    { id: DEFAULT_STAGE_ID_IN_PROGRESS, workflowId: 'wf-default', name: 'En progreso',       category: 'enProgreso', order: 7,  color: null },
+    { id: DEFAULT_STAGE_ID_COMPLETED,   workflowId: 'wf-default', name: 'Hecho',             category: 'hecho',      order: 9,  color: null },
+    { id: DEFAULT_STAGE_ID_CANCELLED,   workflowId: 'wf-default', name: 'Anulado-Cancelado', category: 'hecho',      order: 10, color: null },
   ];
   stages.forEach(s => stageRepo.addDirect(s));
 }

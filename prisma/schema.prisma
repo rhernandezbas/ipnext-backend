@@ -459,6 +459,7 @@ model Stage {
   name       String
   category   StageCategory
   order      Int
+  color      String?
   tasks      ScheduledTask[]
 
   @@index([workflowId, order])

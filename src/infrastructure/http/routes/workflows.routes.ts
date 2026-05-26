@@ -17,6 +17,7 @@ import { CreateWorkflow } from '@application/use-cases/CreateWorkflow';
 import { UpdateWorkflow } from '@application/use-cases/UpdateWorkflow';
 import { DeleteWorkflow } from '@application/use-cases/DeleteWorkflow';
 import { AddStageToWorkflow } from '@application/use-cases/AddStageToWorkflow';
+import { UpdateStageColor } from '@application/use-cases/UpdateStageColor';
 import { RemoveStageFromWorkflow } from '@application/use-cases/RemoveStageFromWorkflow';
 import { ReorderStages } from '@application/use-cases/ReorderStages';
 import { ListProjectCategory } from '@application/use-cases/ListProjectCategory';
@@ -56,6 +57,7 @@ export function createWorkflowsRouter(
   addStageToWorkflow: AddStageToWorkflow,
   removeStageFromWorkflow: RemoveStageFromWorkflow,
   reorderStages: ReorderStages,
+  updateStageColor: UpdateStageColor,
   listProjectCategory: ListProjectCategory,
   getProjectCategory: GetProjectCategory,
   createProjectCategory: CreateProjectCategory,
@@ -208,6 +210,24 @@ export function createWorkflowsRouter(
       }
       if (err instanceof StageInUseError) {
         res.status(409).json({ error: err.message, code: err.code, details: { taskCount: err.taskCount } });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  router.patch('/workflows/:id/stages/:stageId/color', auth, async (req: Request, res: Response): Promise<void> => {
+    const { color } = req.body as { color?: string };
+    if (!color || typeof color !== 'string') {
+      res.status(400).json({ error: 'color is required', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    try {
+      const stage = await updateStageColor.execute(req.params['stageId'] as string, color);
+      res.json(stage);
+    } catch (err) {
+      if (err instanceof StageNotFoundError) {
+        res.status(404).json({ error: err.message, code: err.code });
         return;
       }
       throw err;

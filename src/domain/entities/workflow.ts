@@ -6,6 +6,8 @@ export interface Stage {
   name: string;
   category: StageCategory;
   order: number;
+  /** Editable hex colour for the stage badge. Null → UI falls back to category colour. */
+  color: string | null;
 }
 
 export interface Workflow {

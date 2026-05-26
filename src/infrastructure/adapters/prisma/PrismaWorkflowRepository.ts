@@ -9,6 +9,7 @@ function toStage(row: any): Stage {
     name: row.name,
     category: row.category,
     order: row.order,
+    color: row.color ?? null,
   };
 }
 

@@ -39,9 +39,17 @@ export class InMemoryStageRepository implements StageRepository {
       name: data.name,
       category: data.category,
       order: data.order,
+      color: null,
     };
     this.stages.push(stage);
     return { ...stage };
+  }
+
+  async updateColor(stageId: string, color: string): Promise<Stage | null> {
+    const s = this.stages.find(s => s.id === stageId);
+    if (!s) return null;
+    s.color = color;
+    return { ...s };
   }
 
   async remove(stageId: string): Promise<boolean> {

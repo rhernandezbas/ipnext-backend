@@ -32,6 +32,7 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
       name: s.name,
       category: s.category,
       order: s.order,
+      color: null,
     }));
     const wf: Workflow = {
       id: wfId,
