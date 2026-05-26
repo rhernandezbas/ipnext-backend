@@ -471,6 +471,18 @@ model ProjectCategory {
   projects    Project[]
 }
 
+// Editable catalog of task categories. ScheduledTask.category stores the name
+// (free text), so there is no FK relation here — the catalog drives the UI dropdown.
+model TaskCategory {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("TaskCategory")
+}
+
 model ProjectType {
   id          String    @id @default(uuid())
   name        String

@@ -96,6 +96,27 @@ export class ProjectCategoryInUseError extends DomainError {
   }
 }
 
+export class TaskCategoryNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`TaskCategory with id ${id} not found`, 'TASK_CATEGORY_NOT_FOUND');
+    this.name = 'TaskCategoryNotFoundError';
+  }
+}
+
+export class TaskCategoryNameConflictError extends DomainError {
+  constructor(name: string) {
+    super(`A task category named "${name}" already exists`, 'TASK_CATEGORY_NAME_CONFLICT');
+    this.name = 'TaskCategoryNameConflictError';
+  }
+}
+
+export class TaskCategoryInUseError extends DomainError {
+  constructor(public readonly taskCount: number) {
+    super(`TaskCategory is in use by ${taskCount} task(s)`, 'TASK_CATEGORY_IN_USE');
+    this.name = 'TaskCategoryInUseError';
+  }
+}
+
 export class ProjectTypeNotFoundError extends DomainError {
   constructor(id: string) {
     super(`ProjectType with id ${id} not found`, 'PROJECT_TYPE_NOT_FOUND');

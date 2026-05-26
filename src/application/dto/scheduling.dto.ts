@@ -3,7 +3,17 @@ import { z } from 'zod';
 /** @deprecated use MoveStageSchema; will be removed next change */
 export const TaskStatusSchema = z.enum(['pending', 'in_progress', 'completed', 'cancelled']);
 export const TaskPrioritySchema = z.enum(['low', 'normal', 'high', 'urgent']);
+/** @deprecated category is now a free-text value backed by the TaskCategory catalog. */
 export const TaskCategorySchema = z.enum(['installation', 'repair', 'maintenance', 'inspection', 'other']);
+
+// TaskCategory catalog DTOs (mirror ProjectCategory)
+export const CreateTaskCategorySchema = z.object({
+  name: z.string().min(1),
+  description: z.string().nullable().optional(),
+});
+export const UpdateTaskCategorySchema = CreateTaskCategorySchema.partial();
+export type CreateTaskCategoryInput = z.infer<typeof CreateTaskCategorySchema>;
+export type UpdateTaskCategoryInput = z.infer<typeof UpdateTaskCategorySchema>;
 
 export const CoordinatesSchema = z.object({ lat: z.number(), lng: z.number() }).nullable();
 
@@ -36,7 +46,7 @@ const CreateTaskBaseSchema = z.object({
   estimatedHours: z.number().nonnegative(),
   address:        z.string().nullable().optional(),
   coordinates:    CoordinatesSchema.optional(),
-  category:       TaskCategorySchema,
+  category:       z.string().min(1),   // free text backed by the TaskCategory catalog
   projectId:      z.string().nullable().optional(),
   projectName:    z.string().nullable().optional(),
   completedAt:    z.string().nullable().optional(),

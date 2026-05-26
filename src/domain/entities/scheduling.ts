@@ -34,7 +34,7 @@ export interface ScheduledTask {
   estimatedHours: number;
   address: string | null;
   coordinates: { lat: number; lng: number } | null;
-  category: 'installation' | 'repair' | 'maintenance' | 'inspection' | 'other';
+  category: string;   // free text backed by the TaskCategory catalog
   projectId?: string | null;
   projectName?: string | null;
   completedAt: string | null;

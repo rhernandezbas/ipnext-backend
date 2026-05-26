@@ -111,6 +111,13 @@ import { GetProjectCategory } from '@application/use-cases/GetProjectCategory';
 import { CreateProjectCategory } from '@application/use-cases/CreateProjectCategory';
 import { UpdateProjectCategory } from '@application/use-cases/UpdateProjectCategory';
 import { DeleteProjectCategory } from '@application/use-cases/DeleteProjectCategory';
+import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
+import { createTaskCategoriesRouter } from './routes/taskCategories.routes';
+import { ListTaskCategory } from '@application/use-cases/ListTaskCategory';
+import { GetTaskCategory } from '@application/use-cases/GetTaskCategory';
+import { CreateTaskCategory } from '@application/use-cases/CreateTaskCategory';
+import { UpdateTaskCategory } from '@application/use-cases/UpdateTaskCategory';
+import { DeleteTaskCategory } from '@application/use-cases/DeleteTaskCategory';
 import { ListProjectType } from '@application/use-cases/ListProjectType';
 import { GetProjectType } from '@application/use-cases/GetProjectType';
 import { CreateProjectType } from '@application/use-cases/CreateProjectType';
@@ -410,6 +417,13 @@ export function createApp() {
   const updateProjectCategory = new UpdateProjectCategory(projectCategoryRepo);
   const deleteProjectCategory = new DeleteProjectCategory(projectCategoryRepo);
 
+  const taskCategoryRepo = new PrismaTaskCategoryRepository();
+  const listTaskCategory = new ListTaskCategory(taskCategoryRepo);
+  const getTaskCategory = new GetTaskCategory(taskCategoryRepo);
+  const createTaskCategory = new CreateTaskCategory(taskCategoryRepo);
+  const updateTaskCategory = new UpdateTaskCategory(taskCategoryRepo);
+  const deleteTaskCategory = new DeleteTaskCategory(taskCategoryRepo);
+
   const listProjectType = new ListProjectType(projectTypeRepo);
   const getProjectType = new GetProjectType(projectTypeRepo);
   const createProjectType = new CreateProjectType(projectTypeRepo);
@@ -620,6 +634,11 @@ export function createApp() {
     addStageToWorkflow, removeStageFromWorkflow, reorderStages,
     listProjectCategory, getProjectCategory, createProjectCategory, updateProjectCategory, deleteProjectCategory,
     listProjectType, getProjectType, createProjectType, updateProjectType, deleteProjectType,
+  ));
+  // TaskCategory catalog — mounted before the scheduling catch-all router.
+  app.use('/api/scheduling', createTaskCategoriesRouter(
+    authAdapter,
+    listTaskCategory, getTaskCategory, createTaskCategory, updateTaskCategory, deleteTaskCategory,
   ));
   // Instantiate checklist use cases (change 5)
   const taskTemplateRepoForChecklist = new PrismaTaskTemplateRepository();
