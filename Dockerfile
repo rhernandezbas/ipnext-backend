@@ -17,4 +17,6 @@ COPY prisma ./prisma
 COPY prisma.config.ts ./
 
 EXPOSE 3000
-CMD ["node", "dist/main.js"]
+# Apply pending migrations before starting. If a migration fails the container
+# stops (fail-fast) instead of serving against a drifted schema.
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]
