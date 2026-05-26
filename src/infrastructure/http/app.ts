@@ -118,6 +118,13 @@ import { GetTaskCategory } from '@application/use-cases/GetTaskCategory';
 import { CreateTaskCategory } from '@application/use-cases/CreateTaskCategory';
 import { UpdateTaskCategory } from '@application/use-cases/UpdateTaskCategory';
 import { DeleteTaskCategory } from '@application/use-cases/DeleteTaskCategory';
+import { PrismaTaskPriorityRepository } from '../adapters/prisma/PrismaTaskPriorityRepository';
+import { createTaskPrioritiesRouter } from './routes/taskPriorities.routes';
+import { ListTaskPriority } from '@application/use-cases/ListTaskPriority';
+import { GetTaskPriority } from '@application/use-cases/GetTaskPriority';
+import { CreateTaskPriority } from '@application/use-cases/CreateTaskPriority';
+import { UpdateTaskPriority } from '@application/use-cases/UpdateTaskPriority';
+import { DeleteTaskPriority } from '@application/use-cases/DeleteTaskPriority';
 import { ListProjectType } from '@application/use-cases/ListProjectType';
 import { GetProjectType } from '@application/use-cases/GetProjectType';
 import { CreateProjectType } from '@application/use-cases/CreateProjectType';
@@ -424,6 +431,13 @@ export function createApp() {
   const updateTaskCategory = new UpdateTaskCategory(taskCategoryRepo);
   const deleteTaskCategory = new DeleteTaskCategory(taskCategoryRepo);
 
+  const taskPriorityRepo = new PrismaTaskPriorityRepository();
+  const listTaskPriority = new ListTaskPriority(taskPriorityRepo);
+  const getTaskPriority = new GetTaskPriority(taskPriorityRepo);
+  const createTaskPriority = new CreateTaskPriority(taskPriorityRepo);
+  const updateTaskPriority = new UpdateTaskPriority(taskPriorityRepo);
+  const deleteTaskPriority = new DeleteTaskPriority(taskPriorityRepo);
+
   const listProjectType = new ListProjectType(projectTypeRepo);
   const getProjectType = new GetProjectType(projectTypeRepo);
   const createProjectType = new CreateProjectType(projectTypeRepo);
@@ -639,6 +653,11 @@ export function createApp() {
   app.use('/api/scheduling', createTaskCategoriesRouter(
     authAdapter,
     listTaskCategory, getTaskCategory, createTaskCategory, updateTaskCategory, deleteTaskCategory,
+  ));
+  // TaskPriority catalog — also before the scheduling catch-all router.
+  app.use('/api/scheduling', createTaskPrioritiesRouter(
+    authAdapter,
+    listTaskPriority, getTaskPriority, createTaskPriority, updateTaskPriority, deleteTaskPriority,
   ));
   // Instantiate checklist use cases (change 5)
   const taskTemplateRepoForChecklist = new PrismaTaskTemplateRepository();

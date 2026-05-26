@@ -24,7 +24,7 @@ export interface ScheduledTask {
   stageCategory: StageCategory;         // read-only derived from Stage
   /** @deprecated use stageCategory; will be removed next change */
   status: TaskStatus;
-  priority: TaskPriority;
+  priority: string;   // free text backed by the TaskPriority catalog
 
   /** @deprecated use startDate; will be removed in cleanup change */
   scheduledDate: string | null;

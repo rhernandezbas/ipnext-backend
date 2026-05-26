@@ -358,15 +358,28 @@ describe('POST /api/scheduling - validation', () => {
     expect(res.body.code).toBe('VALIDATION_ERROR');
   });
 
-  it('REQ-CREATE-5: invalid priority value → 400 VALIDATION_ERROR', async () => {
+  it('REQ-CREATE-5: empty priority → 400 VALIDATION_ERROR', async () => {
+    // priority is now free text backed by the TaskPriority catalog; only an
+    // empty value is rejected (any non-empty catalog value is accepted).
     const app = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
-      .send({ ...validBody, priority: 'critical' });
+      .send({ ...validBody, priority: '' });
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('REQ-CREATE-5b: custom (non-enum) priority value → 201 created', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBody, priority: 'Crítica' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.priority).toBe('Crítica');
   });
 
   it('REQ-CREATE-6: empty category → 400 VALIDATION_ERROR', async () => {

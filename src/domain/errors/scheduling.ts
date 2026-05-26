@@ -117,6 +117,27 @@ export class TaskCategoryInUseError extends DomainError {
   }
 }
 
+export class TaskPriorityNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`TaskPriority with id ${id} not found`, 'TASK_PRIORITY_NOT_FOUND');
+    this.name = 'TaskPriorityNotFoundError';
+  }
+}
+
+export class TaskPriorityNameConflictError extends DomainError {
+  constructor(name: string) {
+    super(`A task priority named "${name}" already exists`, 'TASK_PRIORITY_NAME_CONFLICT');
+    this.name = 'TaskPriorityNameConflictError';
+  }
+}
+
+export class TaskPriorityInUseError extends DomainError {
+  constructor(public readonly taskCount: number) {
+    super(`TaskPriority is in use by ${taskCount} task(s)`, 'TASK_PRIORITY_IN_USE');
+    this.name = 'TaskPriorityInUseError';
+  }
+}
+
 export class ProjectTypeNotFoundError extends DomainError {
   constructor(id: string) {
     super(`ProjectType with id ${id} not found`, 'PROJECT_TYPE_NOT_FOUND');

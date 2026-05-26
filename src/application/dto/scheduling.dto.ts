@@ -2,7 +2,18 @@ import { z } from 'zod';
 
 /** @deprecated use MoveStageSchema; will be removed next change */
 export const TaskStatusSchema = z.enum(['pending', 'in_progress', 'completed', 'cancelled']);
+/** @deprecated priority is now a free-text value backed by the TaskPriority catalog. */
 export const TaskPrioritySchema = z.enum(['low', 'normal', 'high', 'urgent']);
+
+// TaskPriority catalog DTOs (name + color + sort weight)
+export const CreateTaskPrioritySchema = z.object({
+  name: z.string().min(1),
+  color: z.string().min(1),
+  weight: z.number().int(),
+});
+export const UpdateTaskPrioritySchema = CreateTaskPrioritySchema.partial();
+export type CreateTaskPriorityInput = z.infer<typeof CreateTaskPrioritySchema>;
+export type UpdateTaskPriorityInput = z.infer<typeof UpdateTaskPrioritySchema>;
 /** @deprecated category is now a free-text value backed by the TaskCategory catalog. */
 export const TaskCategorySchema = z.enum(['installation', 'repair', 'maintenance', 'inspection', 'other']);
 
@@ -42,7 +53,7 @@ const CreateTaskBaseSchema = z.object({
   scheduledTime:  z.string().nullable().optional(),
 
   stageId:        z.string().min(1).optional(),
-  priority:       TaskPrioritySchema,
+  priority:       z.string().min(1),   // free text backed by the TaskPriority catalog
   estimatedHours: z.number().nonnegative(),
   address:        z.string().nullable().optional(),
   coordinates:    CoordinatesSchema.optional(),
@@ -95,7 +106,7 @@ export const ListTasksFilterSchema = z.object({
   stageIds:   z.array(z.string().min(1)).optional(),
   partnerId:  z.string().min(1).optional(),
   assigneeId: z.string().min(1).optional(),
-  priority:   TaskPrioritySchema.optional(),
+  priority:   z.string().min(1).optional(),   // free text backed by the TaskPriority catalog
   q:          z.string().optional(),
   from:       z.string().datetime({ offset: true }).optional(),
   to:         z.string().datetime({ offset: true }).optional(),

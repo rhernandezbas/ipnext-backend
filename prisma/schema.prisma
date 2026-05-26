@@ -483,6 +483,19 @@ model TaskCategory {
   @@map("TaskCategory")
 }
 
+// Editable catalog of task priorities, with a colour and a sort weight.
+// ScheduledTask.priority stores the name (free text).
+model TaskPriority {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  color     String
+  weight    Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("TaskPriority")
+}
+
 model ProjectType {
   id          String    @id @default(uuid())
   name        String
