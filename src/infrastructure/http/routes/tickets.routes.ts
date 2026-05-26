@@ -5,6 +5,27 @@ import { CreateTicket } from '@application/use-cases/CreateTicket';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { incrementTickets, decrementTickets } from '../../adapters/in-memory/shared-stores';
+import { SplynxUnavailableError } from '@domain/errors';
+
+/**
+ * Wrap an async handler so a Splynx outage (or any error) returns a clean HTTP
+ * response instead of bubbling into an unhandled rejection that crashes the
+ * process. Splynx down → 503; anything else → 500.
+ */
+function splynxSafe(fn: (req: Request, res: Response) => Promise<void>) {
+  return async (req: Request, res: Response): Promise<void> => {
+    try {
+      await fn(req, res);
+    } catch (err) {
+      if (err instanceof SplynxUnavailableError) {
+        res.status(503).json({ error: 'El servicio Splynx no está disponible temporalmente', code: 'SPLYNX_UNAVAILABLE' });
+        return;
+      }
+      console.error('[tickets] unexpected error', err);
+      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
+    }
+  };
+}
 
 export interface TicketReply {
   id: number;
@@ -56,19 +77,19 @@ export function createTicketsRouter(
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
 
-  router.get('/stats', auth, async (_req: Request, res: Response): Promise<void> => {
+  router.get('/stats', auth, splynxSafe(async (_req: Request, res: Response): Promise<void> => {
     const stats = await getStats.execute();
     res.json(stats);
-  });
+  }));
 
-  router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
+  router.get('/', auth, splynxSafe(async (req: Request, res: Response): Promise<void> => {
     const { page, limit, search, status, priority } = req.query as Record<string, string>;
     const result = await listTickets.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, search, status, priority });
     const filtered = { ...result, data: result.data.filter((t) => !deletedTicketsStore.has(Number(t.id))) };
     res.json(filtered);
-  });
+  }));
 
-  router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.get('/:id', auth, splynxSafe(async (req: Request, res: Response): Promise<void> => {
     const id = req.params['id'] as string;
     if (deletedTicketsStore.has(Number(id))) {
       res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
@@ -84,7 +105,7 @@ export function createTicketsRouter(
     const statusOverride = ticketStatusStore.get(Number(id));
     const edits = ticketEditsStore[Number(id)] ?? {};
     res.json({ ...ticket, ...(statusOverride ? { status: statusOverride } : {}), ...edits });
-  });
+  }));
 
   router.patch('/:id/status', auth, async (req: Request, res: Response): Promise<void> => {
     const id = req.params['id'] as string;
