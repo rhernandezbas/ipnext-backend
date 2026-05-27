@@ -3,6 +3,7 @@ import { CreateServiceOrderInput } from '@domain/ports/IClassPort';
 import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/iclass';
 
 const baseInput: CreateServiceOrderInput = {
+  soCode: '4274',
   customerCode: 'C1',
   customerName: 'Juan Perez',
   phone: '099111222',
@@ -104,6 +105,10 @@ describe('IClassClient', () => {
     expect(body.serviceOrder.typeSOSummary).toBe('INSTALL');
     expect(body.serviceOrder.customerCode).toBe('C1');
     expect(body.customer.name).toBe('Juan Perez');
+    // soCode/addressCode all carry input.soCode (the task sequenceNumber).
+    expect(body.serviceOrder.soCode).toBe('4274');
+    expect(body.serviceOrder.addressCode).toBe('4274');
+    expect(body.address.addressCode).toBe('4274');
   });
 
   it('maps listNodes codigo/descricao to code/description', async () => {
@@ -156,22 +161,23 @@ describe('IClassClient', () => {
     await expect(client.listNodes()).rejects.toBeInstanceOf(IClassUnavailableError);
   });
 
-  it('builds a SHORT soCode/addressCode (<=20 chars, NOT containing the customerCode)', async () => {
+  it('soCode/addressCode come from input.soCode (NOT the customerCode), customerCode passed through', async () => {
     const longCustomer = '76e8b565-74e3-44c3-b57d-22f791d1d09e';
     const { http, calls } = makeHttp({ post: [LOGIN_OK, CREATE_OK], get: [] });
     const client = new IClassClient({ ...opts, http: http as never });
 
-    await client.createServiceOrder({ ...baseInput, customerCode: longCustomer });
+    await client.createServiceOrder({ ...baseInput, soCode: '4274', customerCode: longCustomer });
 
     const create = calls.find(c => c.url === '/serviceorders')!;
     const body = create.body as Record<string, Record<string, unknown>>;
     const soCode = body.serviceOrder.soCode as string;
     const addressCode = body.address.addressCode as string;
-    expect(soCode.length).toBeLessThanOrEqual(20);
-    expect(addressCode.length).toBeLessThanOrEqual(20);
+    // soCode comes from input.soCode (task sequenceNumber), not derived from the customerCode.
+    expect(soCode).toBe('4274');
+    expect(addressCode).toBe('4274');
+    expect(body.serviceOrder.addressCode).toBe('4274');
     expect(soCode).not.toContain(longCustomer);
     expect(addressCode).not.toContain(longCustomer);
-    // soCode === addressCode (same short stamp) and customerCode is passed through unchanged.
     expect(soCode).toBe(addressCode);
     expect(body.serviceOrder.customerCode).toBe(longCustomer);
   });

@@ -167,12 +167,13 @@ describe('SendTaskToIClass', () => {
   it('happy path → creates OS without date, stores orderCode, moves to "Registrado en IClass" (REQ-MOVE-OS-1)', async () => {
     const { tasks, iclass, useCase } = setup();
     iclass.nextOrderCode = 'OS-999';
-    fullTask(tasks);
+    fullTask(tasks, { sequenceNumber: 4274 });
 
     const result = await useCase.execute('t1', ENVIAR_STAGE.id);
 
     expect(iclass.createdOrders).toHaveLength(1);
     expect(iclass.createdOrders[0].input).toMatchObject({
+      soCode: '4274', // task sequenceNumber as the OS code
       customerCode: 'GR-12345', // short code (grClienteId), NOT the customerId UUID
       customerName: 'Juan Pérez',
       phone: '341555000',
@@ -186,6 +187,16 @@ describe('SendTaskToIClass', () => {
     const persisted = await tasks.getTask('t1');
     expect(persisted!.iclassOrderCode).toBe('OS-999');
     expect(persisted!.stageId).toBe(REGISTRADO_STAGE.id);
+  });
+
+  it('sends soCode = String(task.sequenceNumber) so the OS correlates to the backend task', async () => {
+    const { tasks, iclass, useCase } = setup();
+    fullTask(tasks, { sequenceNumber: 4274 });
+
+    await useCase.execute('t1', ENVIAR_STAGE.id);
+
+    expect(iclass.createdOrders).toHaveLength(1);
+    expect(iclass.createdOrders[0].input.soCode).toBe('4274');
   });
 
   it('sends the SHORT customerCode (grClienteId) to IClass, NOT the customerId UUID', async () => {

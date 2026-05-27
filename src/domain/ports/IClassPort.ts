@@ -9,6 +9,11 @@ export interface IClassNode {
  * upsert of customer + address, so all fields the OS needs travel together.
  */
 export interface CreateServiceOrderInput {
+  /**
+   * Short, unique code for the OS used as soCode/addressCode in IClass. Carries the
+   * task sequenceNumber so the IClass OS can be correlated back to the backend task.
+   */
+  soCode: string;
   /** Backend client id (upsert inline in IClass as customerCode). */
   customerCode: string;
   customerName: string;

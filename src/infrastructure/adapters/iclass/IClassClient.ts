@@ -117,15 +117,15 @@ export class IClassClient implements IClassPort {
 
   /** Build the ServiceOrderV1In payload. nodeCode = city, NO scheduledDate (REQ-OS-1, AD-5). */
   private buildServiceOrderPayload(input: CreateServiceOrderInput) {
-    // Short, unique code for soCode/addressCode (~8 chars). IClass enforces a char
-    // limit on these codes (ICLERR_0050); the customerCode + full timestamp form
-    // overflowed it. base36 of the current epoch ms keeps it compact and unique.
-    const stamp = this.now().getTime().toString(36).toUpperCase();
+    // soCode/addressCode carry the task sequenceNumber: short, unique per task, and
+    // lets us correlate the IClass OS back to the backend task. IClass enforces a char
+    // limit on these codes (ICLERR_0050); the sequenceNumber stays well within it.
+    const soCode = input.soCode;
     return {
       serviceOrder: {
-        soCode: stamp,
+        soCode,
         customerCode: input.customerCode,
-        addressCode: stamp,
+        addressCode: soCode,
         typeSOSummary: this.defaultSoType,
         openedDate: formatOpenedDate(this.now()),
         observation: input.description,
@@ -135,7 +135,7 @@ export class IClassClient implements IClassPort {
         name: input.customerName,
       },
       address: {
-        addressCode: stamp,
+        addressCode: soCode,
         customerCode: input.customerCode,
         address: input.address,
         number: '',

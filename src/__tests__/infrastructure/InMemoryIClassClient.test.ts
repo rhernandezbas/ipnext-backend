@@ -3,6 +3,7 @@ import { CreateServiceOrderInput } from '@domain/ports/IClassPort';
 import { IClassUnavailableError } from '@domain/errors/iclass';
 
 const baseInput: CreateServiceOrderInput = {
+  soCode: '4274',
   customerCode: 'C1',
   customerName: 'Juan Perez',
   phone: '099111222',
