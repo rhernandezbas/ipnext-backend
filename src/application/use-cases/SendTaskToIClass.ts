@@ -86,7 +86,7 @@ export class SendTaskToIClass {
 
     // 5. Create the OS (no scheduledDate). Failure propagates IClassUnavailableError.
     const { orderCode } = await this.iclass.createServiceOrder({
-      customerCode: task.customerId!,
+      customerCode: task.customerCode!,
       customerName: task.customerName!,
       phone: task.customerPhone!,
       address: task.address!,

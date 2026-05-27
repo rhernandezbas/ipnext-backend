@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { IClassPort, IClassNode, CreateServiceOrderInput } from '@domain/ports/IClassPort';
-import { IClassUnavailableError } from '@domain/errors/iclass';
+import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/iclass';
 
 export interface IClassClientOptions {
   baseUrl: string;
@@ -19,8 +19,30 @@ export interface IClassClientOptions {
 }
 
 /** Minimal shape of an axios-style transport error. */
-function isAxiosLikeError(e: unknown): e is { response?: { status?: number } } {
+function isAxiosLikeError(e: unknown): e is { response?: { status?: number; data?: { erros?: unknown } } } {
   return typeof e === 'object' && e !== null && 'isAxiosError' in e;
+}
+
+/**
+ * Serialize IClass `erros` to a human-readable string. Each error is `code: description`,
+ * joined by "; ". Falls back to String() for unexpected shapes. Never leaks raw JSON
+ * across the layer boundary — the result is a plain string carried by the domain error.
+ */
+function formatIClassErrors(erros: unknown): string {
+  if (Array.isArray(erros)) {
+    return erros
+      .map(e => {
+        if (e && typeof e === 'object') {
+          const o = e as { code?: unknown; description?: unknown };
+          const code = o.code != null ? String(o.code) : '';
+          const desc = o.description != null ? String(o.description) : '';
+          return code && desc ? `${code}: ${desc}` : code || desc || String(e);
+        }
+        return String(e);
+      })
+      .join('; ');
+  }
+  return String(erros);
 }
 
 /**
@@ -84,7 +106,7 @@ export class IClassClient implements IClassPort {
       payload,
     );
     if (data.erros !== null && data.erros !== undefined) {
-      throw new IClassUnavailableError(`IClass rejected the service order: ${String(data.erros)}`);
+      throw new IClassRejectedError(formatIClassErrors(data.erros));
     }
     const orderCode = data.codigoOS;
     if (!orderCode) {
@@ -95,7 +117,10 @@ export class IClassClient implements IClassPort {
 
   /** Build the ServiceOrderV1In payload. nodeCode = city, NO scheduledDate (REQ-OS-1, AD-5). */
   private buildServiceOrderPayload(input: CreateServiceOrderInput) {
-    const stamp = `${input.customerCode}-${this.now().getTime()}`;
+    // Short, unique code for soCode/addressCode (~8 chars). IClass enforces a char
+    // limit on these codes (ICLERR_0050); the customerCode + full timestamp form
+    // overflowed it. base36 of the current epoch ms keeps it compact and unique.
+    const stamp = this.now().getTime().toString(36).toUpperCase();
     return {
       serviceOrder: {
         soCode: stamp,
@@ -173,9 +198,14 @@ export class IClassClient implements IClassPort {
 
   /** Translate transport errors to a domain error. Never leak axios cross-layer. */
   private mapError(e: unknown): Error {
-    if (e instanceof IClassUnavailableError) return e;
+    if (e instanceof IClassUnavailableError || e instanceof IClassRejectedError) return e;
     if (isAxiosLikeError(e)) {
       const status = e.response?.status;
+      // HTTP 400 carrying business `erros` is an explicit rejection, not an outage.
+      const erros = e.response?.data?.erros;
+      if (status === 400 && erros !== null && erros !== undefined) {
+        return new IClassRejectedError(formatIClassErrors(erros));
+      }
       return new IClassUnavailableError(
         status ? `IClass responded with HTTP ${status}` : 'IClass connection failed',
       );

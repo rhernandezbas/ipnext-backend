@@ -1,5 +1,5 @@
 import { IClassPort, IClassNode, CreateServiceOrderInput } from '@domain/ports/IClassPort';
-import { IClassUnavailableError } from '@domain/errors/iclass';
+import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/iclass';
 
 interface CreatedOrder {
   input: CreateServiceOrderInput;
@@ -17,8 +17,13 @@ export class InMemoryIClassClient implements IClassPort {
   createdOrders: CreatedOrder[] = [];
   /** When set, the next createServiceOrder returns this code instead of an auto one. */
   nextOrderCode?: string;
-  /** When 'unavailable', both methods throw IClassUnavailableError. */
-  failureMode?: 'unavailable';
+  /**
+   * 'unavailable' → both methods throw IClassUnavailableError.
+   * 'rejected'    → createServiceOrder throws IClassRejectedError (listNodes still works).
+   */
+  failureMode?: 'unavailable' | 'rejected';
+  /** Detail used when failureMode === 'rejected'. */
+  rejectionDetail = 'ICLERR_0045: codigoCliente ultrapassou o limite de caracteres';
 
   private seq = 0;
 
@@ -29,6 +34,7 @@ export class InMemoryIClassClient implements IClassPort {
 
   async createServiceOrder(input: CreateServiceOrderInput): Promise<{ orderCode: string }> {
     if (this.failureMode === 'unavailable') throw new IClassUnavailableError();
+    if (this.failureMode === 'rejected') throw new IClassRejectedError(this.rejectionDetail);
     const orderCode = this.nextOrderCode ?? `OS-${++this.seq}`;
     this.nextOrderCode = undefined;
     this.createdOrders.push({ input, orderCode });

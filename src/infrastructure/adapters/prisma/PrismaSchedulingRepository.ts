@@ -25,6 +25,11 @@ export function toTask(row: any): ScheduledTask {
   const customerCity: string | null = row.customer?.city ?? null;
   // phone from the customer JOIN — required field for IClass OS.
   const customerPhone: string | null = row.customer?.phone ?? null;
+  // Short, stable IClass customerCode. The UUID customerId exceeds IClass's char
+  // limit (ICLERR_0045), so we use grClienteId ?? splynxId ?? login instead.
+  const customerCode: string | null = row.customer
+    ? (row.customer.grClienteId ?? row.customer.splynxId ?? row.customer.login ?? null)
+    : null;
 
   // Derive assigneeName from JOIN only (no legacy fallback)
   const assigneeName: string | null = row.assignee?.name ?? null;
@@ -70,6 +75,7 @@ export function toTask(row: any): ScheduledTask {
     customerName,
     customerCity,
     customerPhone,
+    customerCode,
     serviceId: row.serviceId ?? null,
     partnerId: row.partnerId ?? null,
     reporterId: row.reporterId ?? null,
@@ -116,7 +122,7 @@ function toChecklistItem(row: any): TaskChecklistItem {
 const INCLUDE = {
   project: true,
   stage: true,
-  customer: { select: { id: true, name: true, city: true, phone: true } },
+  customer: { select: { id: true, name: true, city: true, phone: true, grClienteId: true, splynxId: true, login: true } },
   assignee: { select: { id: true, name: true } },
   reporter: { select: { id: true } },
   service: { select: { id: true } },

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { DomainError } from '@domain/errors';
 import { MissingRequiredFieldsError } from '@domain/errors/scheduling';
+import { IClassRejectedError } from '@domain/errors/iclass';
 
 /**
  * Maps domain error codes to HTTP status codes. This is the single source of truth
@@ -18,6 +19,7 @@ const statusMap: Record<string, number> = {
   FLAG_NOT_FOUND: 404,
   MISSING_REQUIRED_FIELDS: 422,
   ICLASS_NODE_NOT_FOUND: 422,
+  ICLASS_REJECTED: 422,
   ICLASS_UNAVAILABLE: 502,
   AUTHENTICATION_ERROR: 401,
   SPLYNX_UNAVAILABLE: 502,
@@ -41,6 +43,10 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     // Surface the missing field names so the front-end can drive its modal.
     if (err instanceof MissingRequiredFieldsError) {
       body['missingFields'] = err.missingFields;
+    }
+    // Surface the IClass rejection detail (e.g. ICLERR_0045 ...) for the front-end.
+    if (err instanceof IClassRejectedError) {
+      body['reason'] = err.detail;
     }
     res.status(status).json(body);
     return;

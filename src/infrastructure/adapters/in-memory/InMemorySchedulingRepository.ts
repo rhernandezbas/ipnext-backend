@@ -47,6 +47,7 @@ const NEW_FIELDS_DEFAULTS = {
   customerName: null,
   customerCity: null,
   customerPhone: null,
+  customerCode: null,
   iclassOrderCode: null,
   serviceId: null,
   partnerId: null,
@@ -249,6 +250,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       customerName: null, // In-memory: no JOIN, derived by Prisma adapter
       customerCity: null, // idem
       customerPhone: null, // idem
+      customerCode: null, // idem (derived from grClienteId ?? splynxId ?? login)
       iclassOrderCode: null,
       serviceId: data.serviceId ?? null,
       partnerId: data.partnerId ?? null,

@@ -31,6 +31,9 @@ export interface ScheduledTask {
   customerName: string | null;   // derived from Client.name via JOIN
   customerCity: string | null;   // derived from Client.city via JOIN — for Tasks 'Localidad' column
   customerPhone: string | null;  // derived from Client.phone via JOIN — required field for IClass OS
+  // Short, stable client code used as IClass customerCode. Derived: grClienteId ?? splynxId ?? login.
+  // The UUID customerId is NOT valid as an IClass code (exceeds its char limit → ICLERR_0045).
+  customerCode: string | null;
   serviceId: string | null;
   partnerId: string | null;
   reporterId: string | null;

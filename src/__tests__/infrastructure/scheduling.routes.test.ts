@@ -1029,6 +1029,7 @@ function buildIClassApp(opts: {
   flagEnabled: boolean;
   nodeCity?: string | null;       // node that IClass knows about (matches task city when equal)
   iclassFails?: boolean;
+  iclassRejects?: boolean;        // IClass explicitly rejects (e.g. ICLERR_0045) → 422
 }) {
   const stageRepo = new InMemoryStageRepository();
   makeDefaultStages(stageRepo);
@@ -1043,6 +1044,7 @@ function buildIClassApp(opts: {
   const iclass = new InMemoryIClassClient();
   if (opts.nodeCity) iclass.nodes = [{ code: opts.nodeCity, description: opts.nodeCity }];
   if (opts.iclassFails) iclass.failureMode = 'unavailable';
+  if (opts.iclassRejects) iclass.failureMode = 'rejected';
 
   const sendToIClass = new SendTaskToIClass(repo, flags, iclass);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo, sendToIClass);
@@ -1137,6 +1139,26 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
 
     expect(res.status).toBe(502);
     expect(res.body.code).toBe('ICLASS_UNAVAILABLE');
+    const after = await repo.getTask(task.id);
+    expect(after?.stageId).toBe(DEFAULT_STAGE_ID_PENDING);
+  });
+
+  it('flag ON + IClass rejects (ICLERR_0045) → 422 ICLASS_REJECTED with reason, task stays put', async () => {
+    const { app, repo } = buildIClassApp({ flagEnabled: true, nodeCity: 'Cordoba', iclassRejects: true });
+    const task = repo.seedTask({
+      id: 'iclass-rej', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
+      customerCode: 'GR-1', address: 'Calle 1', description: 'Instalar',
+    });
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/stage`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('ICLASS_REJECTED');
+    expect(res.body.reason).toContain('ICLERR_0045');
     const after = await repo.getTask(task.id);
     expect(after?.stageId).toBe(DEFAULT_STAGE_ID_PENDING);
   });

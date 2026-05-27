@@ -85,6 +85,33 @@ describe('PrismaSchedulingRepository.toTask — customerName/assigneeName from J
     expect(task.customerName).toBeNull();
   });
 
+  it('customerCode = grClienteId when present (short IClass code, not the UUID)', () => {
+    const task = toTask({
+      ...BASE_ROW,
+      customer: { id: 'c-1', name: 'Juan', city: 'Rosario', grClienteId: 'GR-100', splynxId: '55', login: 'juan' },
+    });
+    expect(task.customerCode).toBe('GR-100');
+  });
+
+  it('customerCode falls back to splynxId then login', () => {
+    const splynxOnly = toTask({
+      ...BASE_ROW,
+      customer: { id: 'c-1', name: 'Juan', grClienteId: null, splynxId: '55', login: 'juan' },
+    });
+    expect(splynxOnly.customerCode).toBe('55');
+
+    const loginOnly = toTask({
+      ...BASE_ROW,
+      customer: { id: 'c-1', name: 'Juan', grClienteId: null, splynxId: null, login: 'juan' },
+    });
+    expect(loginOnly.customerCode).toBe('juan');
+  });
+
+  it('customerCode is null when there is no customer JOIN', () => {
+    const task = toTask({ ...BASE_ROW, customer: null });
+    expect(task.customerCode).toBeNull();
+  });
+
   it('assigneeName comes from assignee JOIN, not legacy assignedTo', () => {
     const task = toTask({
       ...BASE_ROW,

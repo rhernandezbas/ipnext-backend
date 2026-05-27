@@ -1,6 +1,6 @@
 import { IClassClient } from '@infrastructure/adapters/iclass/IClassClient';
 import { CreateServiceOrderInput } from '@domain/ports/IClassPort';
-import { IClassUnavailableError } from '@domain/errors/iclass';
+import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/iclass';
 
 const baseInput: CreateServiceOrderInput = {
   customerCode: 'C1',
@@ -15,10 +15,10 @@ const baseInput: CreateServiceOrderInput = {
  * Minimal axios-instance stub. Records calls and replays a scripted queue of
  * responses/errors per method. An "axios error" carries a `response.status`.
  */
-function axiosError(status: number) {
-  const err = new Error(`HTTP ${status}`) as Error & { response?: { status: number }; isAxiosError: boolean };
+function axiosError(status: number, data?: unknown) {
+  const err = new Error(`HTTP ${status}`) as Error & { response?: { status: number; data?: unknown }; isAxiosError: boolean };
   err.isAxiosError = true;
-  err.response = { status };
+  err.response = { status, data };
   return err;
 }
 
@@ -156,14 +156,58 @@ describe('IClassClient', () => {
     await expect(client.listNodes()).rejects.toBeInstanceOf(IClassUnavailableError);
   });
 
-  it('throws IClassUnavailableError when IClass returns erros (not null)', async () => {
+  it('builds a SHORT soCode/addressCode (<=20 chars, NOT containing the customerCode)', async () => {
+    const longCustomer = '76e8b565-74e3-44c3-b57d-22f791d1d09e';
+    const { http, calls } = makeHttp({ post: [LOGIN_OK, CREATE_OK], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    await client.createServiceOrder({ ...baseInput, customerCode: longCustomer });
+
+    const create = calls.find(c => c.url === '/serviceorders')!;
+    const body = create.body as Record<string, Record<string, unknown>>;
+    const soCode = body.serviceOrder.soCode as string;
+    const addressCode = body.address.addressCode as string;
+    expect(soCode.length).toBeLessThanOrEqual(20);
+    expect(addressCode.length).toBeLessThanOrEqual(20);
+    expect(soCode).not.toContain(longCustomer);
+    expect(addressCode).not.toContain(longCustomer);
+    // soCode === addressCode (same short stamp) and customerCode is passed through unchanged.
+    expect(soCode).toBe(addressCode);
+    expect(body.serviceOrder.customerCode).toBe(longCustomer);
+  });
+
+  it('200 with erros → IClassRejectedError carrying the detail (NOT IClassUnavailableError)', async () => {
     const { http } = makeHttp({
-      post: [LOGIN_OK, { ok: { data: { codigoOS: null, erros: 'ICLERR_0014' } } }],
+      post: [
+        LOGIN_OK,
+        { ok: { data: { codigoOS: null, erros: [{ code: 'ICLERR_0045', description: 'codigoCliente ultrapassou o limite' }] } } },
+      ],
       get: [],
     });
     const client = new IClassClient({ ...opts, http: http as never });
 
-    await expect(client.createServiceOrder(baseInput)).rejects.toBeInstanceOf(IClassUnavailableError);
+    const err = await client.createServiceOrder(baseInput).catch(e => e);
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err).not.toBeInstanceOf(IClassUnavailableError);
+    expect(err.code).toBe('ICLASS_REJECTED');
+    expect(err.detail).toContain('ICLERR_0045');
+    expect(err.detail).toContain('codigoCliente ultrapassou o limite');
+  });
+
+  it('HTTP 400 with erros body → IClassRejectedError (NOT IClassUnavailableError)', async () => {
+    const { http } = makeHttp({
+      post: [
+        LOGIN_OK,
+        { err: axiosError(400, { erros: [{ code: 'ICLERR_0050', description: 'codigoOS ultrapassou o limite de caracteres' }] }) },
+      ],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.createServiceOrder(baseInput).catch(e => e);
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err).not.toBeInstanceOf(IClassUnavailableError);
+    expect(err.detail).toContain('ICLERR_0050');
   });
 
   it('caches listNodes within the TTL (single HTTP fetch)', async () => {

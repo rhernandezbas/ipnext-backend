@@ -44,6 +44,7 @@ function fullTask(tasks: InMemorySchedulingRepository, overrides: Partial<Parame
     id: 't1',
     stageId: ENVIAR_STAGE.id,
     customerId: 'c1',
+    customerCode: 'GR-12345',
     customerName: 'Juan Pérez',
     customerPhone: '341555000',
     customerCity: 'Rosario',
@@ -172,7 +173,7 @@ describe('SendTaskToIClass', () => {
 
     expect(iclass.createdOrders).toHaveLength(1);
     expect(iclass.createdOrders[0].input).toMatchObject({
-      customerCode: 'c1',
+      customerCode: 'GR-12345', // short code (grClienteId), NOT the customerId UUID
       customerName: 'Juan Pérez',
       phone: '341555000',
       address: 'Calle Falsa 123',
@@ -185,6 +186,28 @@ describe('SendTaskToIClass', () => {
     const persisted = await tasks.getTask('t1');
     expect(persisted!.iclassOrderCode).toBe('OS-999');
     expect(persisted!.stageId).toBe(REGISTRADO_STAGE.id);
+  });
+
+  it('sends the SHORT customerCode (grClienteId) to IClass, NOT the customerId UUID', async () => {
+    const { tasks, iclass, useCase } = setup();
+    const UUID = '76e8b565-74e3-44c3-b57d-22f791d1d09e';
+    fullTask(tasks, { customerId: UUID, customerCode: 'GR-9999' });
+
+    await useCase.execute('t1', ENVIAR_STAGE.id);
+
+    expect(iclass.createdOrders).toHaveLength(1);
+    expect(iclass.createdOrders[0].input.customerCode).toBe('GR-9999');
+    expect(iclass.createdOrders[0].input.customerCode).not.toBe(UUID);
+  });
+
+  it('falls back to login when grClienteId/splynxId are null (customerCode pre-resolved by repo)', async () => {
+    const { tasks, iclass, useCase } = setup();
+    // The repo resolves grClienteId ?? splynxId ?? login; here it resolved to the login.
+    fullTask(tasks, { customerCode: 'juan.perez' });
+
+    await useCase.execute('t1', ENVIAR_STAGE.id);
+
+    expect(iclass.createdOrders[0].input.customerCode).toBe('juan.perez');
   });
 
   it('IClass fails → IClassUnavailableError, no move, orderCode stays null', async () => {
