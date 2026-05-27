@@ -12,6 +12,7 @@ export class ListTickets {
       search: query.search,
       status: query.status,
       priority: query.priority,
+      customerId: query.customerId,
     });
   }
 }
