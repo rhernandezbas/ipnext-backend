@@ -34,7 +34,7 @@ export class ReorderStages {
       // In-memory: workflow object already holds the stages — reorder them directly
       order.forEach((id, idx) => {
         const s = wf.stages.find(s => s.id === id);
-        if (s) (s as any).order = idx;
+        if (s) s.order = idx;
       });
       // Sort after mutation
       wf.stages.sort((a, b) => a.order - b.order);
