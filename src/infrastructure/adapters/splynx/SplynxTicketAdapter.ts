@@ -1,16 +1,30 @@
-import { TicketRepository, ListTicketsQuery, CreateTicketData } from '@domain/ports/TicketRepository';
+/**
+ * SplynxTicketAdapter — DECABLED (not wired in app.ts).
+ * Preserved for rollback purposes (AD-2 in design.md tickets-model change).
+ * Updated to implement the new TicketRepository port shape.
+ * Splynx integration is non-functional (license expired) — stubs return sensible no-ops.
+ */
+import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
 import { Ticket, TicketPriority, TicketStatus, TicketStats } from '@domain/entities/ticket';
 import { PaginatedResult } from '@application/dto/pagination';
 import { SplynxClient } from './SplynxClient';
 
 function mapPriority(s: string | number): TicketPriority {
-  const map: Record<string, TicketPriority> = { '1': 'alta', 'high': 'alta', '2': 'media', 'medium': 'media', '3': 'baja', 'low': 'baja' };
-  return map[String(s)] ?? 'media';
+  const map: Record<string, TicketPriority> = {
+    '1': 'high', 'high': 'high',
+    '2': 'medium', 'medium': 'medium',
+    '3': 'low', 'low': 'low',
+  };
+  return map[String(s)] ?? 'medium';
 }
 
 function mapTicketStatus(s: string | number): TicketStatus {
-  const map: Record<string, TicketStatus> = { '1': 'abierto', 'open': 'abierto', '2': 'en_progreso', 'in_progress': 'en_progreso', '3': 'cerrado', 'closed': 'cerrado' };
-  return map[String(s)] ?? 'abierto';
+  const map: Record<string, TicketStatus> = {
+    '1': 'open', 'open': 'open',
+    '2': 'pending', 'in_progress': 'pending', 'pending': 'pending',
+    '3': 'closed', 'closed': 'closed',
+  };
+  return map[String(s)] ?? 'open';
 }
 
 export class SplynxTicketAdapter implements TicketRepository {
@@ -28,13 +42,16 @@ export class SplynxTicketAdapter implements TicketRepository {
       data: data.map((t) => ({
         id: String(t['id'] ?? ''),
         subject: String(t['subject'] ?? ''),
-        clientId: String(t['customer_id'] ?? ''),
-        clientName: String(t['customer_name'] ?? ''),
+        description: String(t['message'] ?? ''),
+        customerId: t['customer_id'] ? String(t['customer_id']) : null,
+        customerName: t['customer_name'] ? String(t['customer_name']) : null,
         priority: mapPriority(String(t['priority'] ?? '')),
         status: mapTicketStatus(String(t['status'] ?? '')),
-        assignedTo: t['admin_id'] ? String(t['admin_id']) : undefined,
-        description: String(t['message'] ?? ''),
-        createdAt: String(t['date_created'] ?? ''),
+        assigneeId: t['admin_id'] ? String(t['admin_id']) : null,
+        assigneeName: null,
+        grCasoId: null,
+        createdAt: String(t['date_created'] ?? new Date().toISOString()),
+        updatedAt: String(t['date_created'] ?? new Date().toISOString()),
       })),
       total: data.length,
       page: query.page ?? 1,
@@ -42,38 +59,57 @@ export class SplynxTicketAdapter implements TicketRepository {
     };
   }
 
+  async getById(_id: string): Promise<Ticket | null> {
+    // Stub — Splynx decabled
+    return null;
+  }
+
   async getStats(): Promise<TicketStats> {
     const raw = await this.client.get<Record<string, unknown>[]>('/api/2.0/admin/support/ticket', { status: 'open', itemsPerPage: 1000 });
     const tickets = Array.isArray(raw) ? raw : [];
     return {
       totalOpen: tickets.length,
+      totalPending: 0,
+      totalClosed: 0,
       byPriority: {
-        alta: tickets.filter((t) => mapPriority(String(t['priority'] ?? '')) === 'alta').length,
-        media: tickets.filter((t) => mapPriority(String(t['priority'] ?? '')) === 'media').length,
-        baja: tickets.filter((t) => mapPriority(String(t['priority'] ?? '')) === 'baja').length,
+        high: tickets.filter((t) => mapPriority(String(t['priority'] ?? '')) === 'high').length,
+        medium: tickets.filter((t) => mapPriority(String(t['priority'] ?? '')) === 'medium').length,
+        low: tickets.filter((t) => mapPriority(String(t['priority'] ?? '')) === 'low').length,
       },
-      assignedToCurrentUser: 0,
     };
   }
 
   async create(data: CreateTicketData): Promise<Ticket> {
     const raw = await this.client.post<Record<string, unknown>>('/api/2.0/admin/support/ticket', {
       subject: data.subject,
-      customer_id: data.clientId,
-      priority: data.priority === 'alta' ? 1 : data.priority === 'media' ? 2 : 3,
+      customer_id: data.customerId,
+      priority: data.priority === 'high' ? 1 : data.priority === 'medium' ? 2 : 3,
       message: data.description,
-      admin_id: data.assignedTo,
+      admin_id: data.assigneeId,
     });
     return {
       id: String(raw['id'] ?? ''),
       subject: data.subject,
-      clientId: data.clientId,
-      clientName: '',
-      priority: data.priority,
-      status: 'abierto',
-      assignedTo: data.assignedTo,
       description: data.description,
+      customerId: data.customerId ?? null,
+      customerName: null,
+      priority: data.priority ?? 'medium',
+      status: 'open',
+      assigneeId: data.assigneeId ?? null,
+      assigneeName: null,
+      grCasoId: null,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
+  }
+
+  async update(_id: string, _data: UpdateTicketData): Promise<Ticket | null> {
+    // Stub — Splynx decabled
+    return null;
+  }
+
+  async close(_id: string): Promise<Ticket | null> {
+    // Stub — Splynx decabled
+    return null;
   }
 }
