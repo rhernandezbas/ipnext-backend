@@ -316,11 +316,18 @@ import { MarkAllNotificationsRead } from '@application/use-cases/MarkAllNotifica
 import { DeleteNotification } from '@application/use-cases/DeleteNotification';
 import { profileRoutes } from './routes/profile.routes';
 
-/** Minimal FK lookup for scheduling use-case FK validation. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+/**
+ * Minimal FK lookup for scheduling use-case FK validation.
+ *
+ * Each branch calls findUnique on the correct Prisma delegate with its own
+ * concrete argument type — no `as any` needed, TypeScript can verify each call.
+ */
 function prismaClientLookup(model: 'Client' | 'Service' | 'Partner', id: string): Promise<{ id: string } | null> {
-  const table = (prisma as any)[model[0].toLowerCase() + model.slice(1)];
-  return table.findUnique({ where: { id }, select: { id: true } });
+  switch (model) {
+    case 'Client':  return prisma.client.findUnique({ where: { id }, select: { id: true } });
+    case 'Service': return prisma.service.findUnique({ where: { id }, select: { id: true } });
+    case 'Partner': return prisma.partner.findUnique({ where: { id }, select: { id: true } });
+  }
 }
 
 export function createApp() {
