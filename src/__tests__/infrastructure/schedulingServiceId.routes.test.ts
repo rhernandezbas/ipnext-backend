@@ -1,0 +1,125 @@
+/**
+ * TDD — Feature C: serviceId accepted and persisted on task create/update.
+ * Verifies that serviceId flows through route → use-case → repo → response.
+ */
+import request from 'supertest';
+import express, { Request, Response, NextFunction } from 'express';
+import cookieParser from 'cookie-parser';
+import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
+import { InMemoryStageRepository } from '../../infrastructure/adapters/in-memory/InMemoryStageRepository';
+import { ListTasks } from '../../application/use-cases/ListTasks';
+import { GetTask } from '../../application/use-cases/GetTask';
+import { CreateTask } from '../../application/use-cases/CreateTask';
+import { UpdateTask } from '../../application/use-cases/UpdateTask';
+import { DeleteTask } from '../../application/use-cases/DeleteTask';
+import { MoveTaskToStage } from '../../application/use-cases/MoveTaskToStage';
+import { createSchedulingRouter } from '../../infrastructure/http/routes/scheduling.routes';
+import { User } from '../../domain/entities/auth';
+import { AuthProvider } from '../../domain/ports/AuthProvider';
+import { EntityLookup } from '../../domain/ports/EntityLookup';
+
+class StubLookup implements EntityLookup {
+  async findById(id: string) { return { id }; }
+}
+const emptyLookup = new StubLookup();
+
+class FakeAuthProvider implements AuthProvider {
+  async login() {
+    return { user: { id: 'admin-1', username: 'test', email: 't@t.com', role: 'admin' as const }, cookieValue: 'fake', cookieOptions: { httpOnly: true, secure: false, sameSite: 'lax' as const, maxAge: 3600, path: '/' } };
+  }
+  logout() {
+    return { cookieOptions: { httpOnly: true, secure: false, sameSite: 'lax' as const, maxAge: 0, path: '/' } };
+  }
+  async getSession(_token: string): Promise<User> {
+    return { id: 'admin-1', username: 'test', email: 't@t.com', role: 'admin' };
+  }
+}
+
+const STAGE_1 = '10000000-0000-4000-a000-000000000001';
+const SERVICE_ID = 'service-1111-0000-0000-000000000001';
+
+function buildApp() {
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+
+  const repo = new InMemorySchedulingRepository();
+  const stageRepo = new InMemoryStageRepository();
+  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const listTasks = new ListTasks(repo);
+  const getTask = new GetTask(repo);
+  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const deleteTask = new DeleteTask(repo);
+  const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
+  const authProvider = new FakeAuthProvider();
+
+  app.use('/api/scheduling',
+    createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider));
+
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  });
+
+  return app;
+}
+
+function withAuth(req: request.Test) {
+  return req.set('Cookie', 'auth_token=fake');
+}
+
+describe('POST /api/scheduling — serviceId persistence (Feature C)', () => {
+  it('persists serviceId and returns it in the response', async () => {
+    const app = buildApp();
+    const res = await withAuth(request(app).post('/api/scheduling').send({
+      title: 'Task with service',
+      priority: 'normal',
+      estimatedHours: 1,
+      category: 'installation',
+      stageId: STAGE_1,
+      serviceId: SERVICE_ID,
+    }));
+
+    expect(res.status).toBe(201);
+    expect(res.body.serviceId).toBe(SERVICE_ID);
+  });
+
+  it('allows creating a task without serviceId (null)', async () => {
+    const app = buildApp();
+    const res = await withAuth(request(app).post('/api/scheduling').send({
+      title: 'Task without service',
+      priority: 'normal',
+      estimatedHours: 1,
+      category: 'installation',
+      stageId: STAGE_1,
+    }));
+
+    expect(res.status).toBe(201);
+    expect(res.body.serviceId).toBeNull();
+  });
+});
+
+describe('PUT /api/scheduling/:id — serviceId update persistence (Feature C)', () => {
+  it('updates serviceId and returns updated value', async () => {
+    const app = buildApp();
+
+    // Create task without serviceId
+    const createRes = await withAuth(request(app).post('/api/scheduling').send({
+      title: 'Task to update',
+      priority: 'normal',
+      estimatedHours: 1,
+      category: 'installation',
+      stageId: STAGE_1,
+    }));
+    expect(createRes.status).toBe(201);
+    const taskId = createRes.body.id as string;
+
+    // Update with serviceId
+    const updateRes = await withAuth(request(app).put(`/api/scheduling/${taskId}`).send({
+      serviceId: SERVICE_ID,
+    }));
+
+    expect(updateRes.status).toBe(200);
+    expect(updateRes.body.serviceId).toBe(SERVICE_ID);
+  });
+});
