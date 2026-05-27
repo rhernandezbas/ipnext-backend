@@ -97,6 +97,30 @@ function numOrNull(v: unknown): number | null {
   return isFinite(n) ? n : null;
 }
 
+/**
+ * Extract a phone from GR's `telefonos` object.
+ *
+ * GR keys this object by phone TYPE and the key VARIES across clients:
+ *   { "Telefono": "..." }  → standard (~95%)
+ *   { "Movil": "..." }     → mobile, different key
+ *   { "": "..." }          → empty key
+ *   { "0113...": "..." }   → dirty data, key is a number
+ *
+ * Strategy: prefer `Telefono` (preserves the 95% case), else the first
+ * non-empty value of any key. Returns null when none has content.
+ */
+function firstPhone(telefonos: unknown): string | null {
+  if (!telefonos || typeof telefonos !== 'object') return null;
+  const obj = telefonos as Record<string, unknown>;
+  const preferred = str(obj.Telefono);
+  if (preferred !== null) return preferred;
+  for (const v of Object.values(obj)) {
+    const s = str(v);
+    if (s !== null) return s;
+  }
+  return null;
+}
+
 function nested(obj: Record<string, unknown>, key: string, field: string): string | null {
   const node = obj[key];
   if (node && typeof node === 'object') return str((node as Record<string, unknown>)[field]);
@@ -117,7 +141,7 @@ export function parseClientsResponse(data: unknown): FetchClientsResult {
     name: str(c.nombre) ?? '',
     documento: str(c.documento),
     email: str(c.mail),
-    phone: nested(c, 'telefonos', 'Telefono'),
+    phone: firstPhone(c.telefonos),
     status: nested(c, 'estado', 'valor'),
     statusCode: nested(c, 'estado', 'codigo'),
     address: nested(c, 'domicilio', 'direccion'),

@@ -98,6 +98,57 @@ describe('GestionRealClient parsing', () => {
     expect(c.phone).toBe('23464114762346540252');
   });
 
+  // Phone parsing: GR keys `telefonos` by phone TYPE and the key varies.
+  // These cases mirror real shapes measured over 100 active clients (~5% lost).
+  const clientWithPhone = (telefonos: unknown) => ({
+    error: 0,
+    resultados: '1',
+    clientes: {
+      '100011': {
+        nombre: 'TEST',
+        estado: { codigo: '1', valor: 'Activo' },
+        telefonos,
+      },
+    },
+  });
+
+  const phoneOf = (telefonos: unknown): string | null =>
+    parseClientsResponse(clientWithPhone(telefonos)).clients[0].phone;
+
+  it('uses telefonos.Telefono when present (preserves the 95% case)', () => {
+    expect(phoneOf({ Telefono: '111' })).toBe('111');
+  });
+
+  it('falls back to the first non-empty value when key is "Movil"', () => {
+    expect(phoneOf({ Movil: '02324-15543200' })).toBe('02324-15543200');
+  });
+
+  it('falls back when the key is empty string', () => {
+    expect(phoneOf({ '': '2324645421' })).toBe('2324645421');
+  });
+
+  it('falls back when the key is a number (dirty data)', () => {
+    expect(phoneOf({ '01131667428': '02324-423380/02324-156917' })).toBe(
+      '02324-423380/02324-156917',
+    );
+  });
+
+  it('prioritizes Telefono over other keys', () => {
+    expect(phoneOf({ Telefono: '111', Movil: '222' })).toBe('111');
+  });
+
+  it('falls back to another key when Telefono is empty', () => {
+    expect(phoneOf({ Telefono: '', Movil: '222' })).toBe('222');
+  });
+
+  it('returns null when all phone values are empty', () => {
+    expect(phoneOf({ '': '' })).toBeNull();
+  });
+
+  it('returns null when telefonos is absent', () => {
+    expect(phoneOf(undefined)).toBeNull();
+  });
+
   it('handles an empty/malformed response without throwing', () => {
     expect(parseClientsResponse({}).clients).toEqual([]);
     expect(parseClientsResponse(null).total).toBe(0);
