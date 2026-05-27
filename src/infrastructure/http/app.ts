@@ -337,6 +337,11 @@ import { MarkNotificationRead } from '@application/use-cases/MarkNotificationRea
 import { MarkAllNotificationsRead } from '@application/use-cases/MarkAllNotificationsRead';
 import { DeleteNotification } from '@application/use-cases/DeleteNotification';
 import { profileRoutes } from './routes/profile.routes';
+import { createFeatureFlagsRouter } from './routes/featureFlags.routes';
+import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
+import { ListFeatureFlags } from '@application/use-cases/ListFeatureFlags';
+import { GetFeatureFlag } from '@application/use-cases/GetFeatureFlag';
+import { SetFeatureFlag } from '@application/use-cases/SetFeatureFlag';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -849,6 +854,15 @@ export function createApp() {
   app.use('/api/search', createSearchRouter(globalSearch));
   app.use('/api/notifications', createNotificationsRouter(listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification));
 
+  // Feature flags — runtime toggles persisted in DB (admin-only).
+  const featureFlagRepo = new PrismaFeatureFlagRepository();
+  app.use('/api/admin/feature-flags', createFeatureFlagsRouter(
+    authAdapter,
+    new ListFeatureFlags(featureFlagRepo),
+    new GetFeatureFlag(featureFlagRepo),
+    new SetFeatureFlag(featureFlagRepo),
+  ));
+
   // Profile routes (uses internal router directly)
   const profileRouter = Router();
   profileRoutes(profileRouter);
@@ -870,6 +884,7 @@ export function createApp() {
         WORKFLOW_NOT_FOUND: 404,
         PROJECT_CATEGORY_NOT_FOUND: 404,
         PROJECT_TYPE_NOT_FOUND: 404,
+        FLAG_NOT_FOUND: 404,
         AUTHENTICATION_ERROR: 401,
         SPLYNX_UNAVAILABLE: 502,
         WORKFLOW_NAME_CONFLICT: 409,

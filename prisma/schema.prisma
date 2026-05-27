@@ -88,6 +88,18 @@ model AdminRoleDefinition {
 }
 
 // =============================================
+// FEATURE FLAGS
+// =============================================
+
+// Runtime feature flags persisted in DB, toggleable via admin API.
+// First flag: `iclass-integration` (seeded OFF until validated in prod).
+model FeatureFlag {
+  key       String   @id
+  enabled   Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+}
+
+// =============================================
 // CRM DOMAIN
 // =============================================
 
@@ -605,6 +617,9 @@ model ScheduledTask {
 
   // RV — inventory team review flag
   reviewedByInventory Boolean       @default(false)
+
+  // IClass — service order code returned when the task is sent to IClass
+  iclassOrderCode String?
 
   @@index([stageId])
   @@index([projectId])
