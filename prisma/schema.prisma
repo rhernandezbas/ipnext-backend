@@ -22,12 +22,13 @@ model Admin {
   passwordHash    String?
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
-  activityLogs    AdminActivityLog[]
-  sessions        AdminSession[]
-  projectsLed     Project[]
-  tasksReported   ScheduledTask[]    @relation("TaskReporter")
-  tasksAssigned   ScheduledTask[]    @relation("TaskAssignee")
-  tasksWatching   TaskWatcher[]      @relation("TaskWatcher")
+  activityLogs     AdminActivityLog[]
+  sessions         AdminSession[]
+  projectsLed      Project[]
+  tasksReported    ScheduledTask[]    @relation("TaskReporter")
+  tasksAssigned    ScheduledTask[]    @relation("TaskAssignee")
+  tasksWatching    TaskWatcher[]      @relation("TaskWatcher")
+  assignedTickets  Ticket[]           @relation("TicketAssignee")
 }
 
 enum AdminRole {
@@ -196,6 +197,7 @@ model Client {
   logs             ClientLog[]
   invoices         Invoice[]
   tasks            ScheduledTask[]
+  tickets          Ticket[]
 
   @@index([status])
   @@index([email])
@@ -1097,4 +1099,47 @@ model SyncState {
   lastResult  String?
   itemsSynced Int      @default(0)
   updatedAt   DateTime @updatedAt
+}
+
+// =============================================
+// SUPPORT DOMAIN
+// =============================================
+
+enum TicketStatus {
+  open
+  pending
+  closed
+}
+
+enum TicketPriority {
+  low
+  medium
+  high
+}
+
+model Ticket {
+  id          String         @id @default(uuid())
+  subject     String
+  description String
+
+  status      TicketStatus   @default(open)
+  priority    TicketPriority @default(medium)
+
+  // FK al cliente — espejo de ScheduledTask.customerId
+  customerId  String?
+  customer    Client?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  // Asignación opcional a un Admin — espejo de ScheduledTask.assigneeId
+  assigneeId  String?
+  assignee    Admin?         @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  // Previsto para la futura integración de "casos" de Gestión Real (out-of-scope)
+  grCasoId    String?        @unique
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+  @@index([assigneeId])
 }
