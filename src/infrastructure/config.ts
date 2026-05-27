@@ -49,4 +49,19 @@ export const config = {
     /** Interval (ms) between batch debtor balance refresh runs (default: 1h). */
     balanceBatchIntervalMs: parseInt(process.env.GR_BALANCE_BATCH_INTERVAL_MS || '3600000', 10),
   },
+
+  /**
+   * IClass Field Service integration. Opt-in: credentials are NOT required at
+   * boot (no fail-fast). The on/off state lives in the FeatureFlag table
+   * ("iclass-integration"); these are just the upstream credentials/config the
+   * adapter needs when the flag is turned on.
+   */
+  iclass: {
+    baseUrl: process.env.ICLASS_BASE_URL ?? 'https://api-v2.iclass.com.br',
+    username: process.env.ICLASS_USERNAME ?? '',
+    password: process.env.ICLASS_PASSWORD ?? '',
+    thirdPartyId: process.env.ICLASS_THIRD_PARTY_ID ?? '',
+    /** Fixed typeSOSummary used for every OS created by the integration (AD-4). */
+    defaultSoType: process.env.ICLASS_DEFAULT_SO_TYPE ?? '',
+  },
 };

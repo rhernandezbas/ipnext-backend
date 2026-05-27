@@ -37,21 +37,21 @@ STRICT TDD: test rojo primero, luego implementación, luego verde. `npm test` y 
 ## Fase 2 — Puerto y adapter IClass
 
 ### 2.1 — Puerto + errores de dominio
-- [ ] 2.1 Crear `IClassPort` (+ `IClassNode`, `CreateServiceOrderInput`) en `src/domain/ports/IClassPort.ts` (REQ-PORT-1).
-- [ ] 2.2 Crear `IClassNodeNotFoundError` y `IClassUnavailableError` en `src/domain/errors/`.
+- [x] 2.1 Crear `IClassPort` (+ `IClassNode`, `CreateServiceOrderInput`) en `src/domain/ports/IClassPort.ts` (REQ-PORT-1).
+- [x] 2.2 Crear `IClassNodeNotFoundError` y `IClassUnavailableError` en `src/domain/errors/`.
 
 ### 2.2 — Config
-- [ ] 2.3 Agregar a `config.ts` (opt-in, NO fail-fast salvo que el flag se use): `ICLASS_BASE_URL`, `ICLASS_USERNAME`, `ICLASS_PASSWORD`, `ICLASS_THIRD_PARTY_ID`, `ICLASS_DEFAULT_SO_TYPE`. Documentar en `env.example`.
+- [x] 2.3 Agregar a `config.ts` (opt-in, NO fail-fast salvo que el flag se use): `ICLASS_BASE_URL`, `ICLASS_USERNAME`, `ICLASS_PASSWORD`, `ICLASS_THIRD_PARTY_ID`, `ICLASS_DEFAULT_SO_TYPE`. Documentar en `env.example`.
 
 ### 2.3 — InMemory IClass (TDD)
-- [ ] 2.4 (TEST ROJO) `src/__tests__/infrastructure/InMemoryIClassClient.test.ts`: listNodes configurable; createServiceOrder registra la OS y devuelve orderCode; modos de fallo (unavailable) activables.
-- [ ] 2.5 Implementar `InMemoryIClassClient` en `infrastructure/adapters/in-memory/`.
-- [ ] 2.6 (TEST VERDE) 2.4 pasa.
+- [x] 2.4 (TEST ROJO) `src/__tests__/infrastructure/InMemoryIClassClient.test.ts`: listNodes configurable; createServiceOrder registra la OS y devuelve orderCode; modos de fallo (unavailable) activables.
+- [x] 2.5 Implementar `InMemoryIClassClient` en `infrastructure/adapters/in-memory/`.
+- [x] 2.6 (TEST VERDE) 2.4 pasa.
 
 ### 2.4 — IClassClient real (TDD con mock de axios)
-- [ ] 2.7 (TEST ROJO) `src/__tests__/infrastructure/IClassClient.test.ts`: login Bearer; `createServiceOrder` arma `ServiceOrderV1In` con `address.nodeCode = city` y SIN `scheduledDate` (REQ-OS-1); `listNodes` mapea `codigo/descricao→code/description`; re-login UNA vez ante 401 (REQ-OS-3); 5xx → `IClassUnavailableError`; nunca devuelve JSON crudo (REQ-OS-4).
-- [ ] 2.8 Implementar `IClassClient` en `infrastructure/adapters/iclass/` (patrón `GestionRealClient`: axios + mapError). Cache de `listNodes()` con TTL (AD-2).
-- [ ] 2.9 (TEST VERDE) 2.7 pasa. `npm test` + `tsc --noEmit` verdes.
+- [x] 2.7 (TEST ROJO) `src/__tests__/infrastructure/IClassClient.test.ts`: login Bearer; `createServiceOrder` arma `ServiceOrderV1In` con `address.nodeCode = city` y SIN `scheduledDate` (REQ-OS-1); `listNodes` mapea `codigo/descricao→code/description`; re-login UNA vez ante 401 (REQ-OS-3); 5xx → `IClassUnavailableError`; nunca devuelve JSON crudo (REQ-OS-4).
+- [x] 2.8 Implementar `IClassClient` en `infrastructure/adapters/iclass/` (patrón `GestionRealClient`: axios + mapError). Cache de `listNodes()` con TTL (AD-2).
+- [x] 2.9 (TEST VERDE) 2.7 pasa. `npm test` + `tsc --noEmit` verdes.
 
 ---
 
