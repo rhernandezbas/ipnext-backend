@@ -76,6 +76,7 @@ export function toTask(row: any): ScheduledTask {
     travelTimeTo: row.travelTimeTo ?? null,
     travelTimeFrom: row.travelTimeFrom ?? null,
     isClosed: row.isClosed ?? false,
+    reviewedByInventory: row.reviewedByInventory ?? false,
     checklist: Array.isArray(row.checklist)
       ? row.checklist.map((ci: any) => ({
           id: ci.id,
@@ -447,6 +448,20 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     if (data.travelTimeTo !== undefined) update['travelTimeTo'] = data.travelTimeTo;
     if (data.travelTimeFrom !== undefined) update['travelTimeFrom'] = data.travelTimeFrom;
     if (data.isClosed !== undefined) update['isClosed'] = data.isClosed;
+    if (data.reviewedByInventory !== undefined) update['reviewedByInventory'] = data.reviewedByInventory;
     return update;
+  }
+
+  async setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null> {
+    try {
+      const row = await (prisma.scheduledTask as any).update({
+        where: { id: taskId },
+        include: INCLUDE,
+        data: { reviewedByInventory: reviewed },
+      });
+      return toTask(row);
+    } catch {
+      return null;
+    }
   }
 }

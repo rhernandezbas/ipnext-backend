@@ -55,6 +55,7 @@ const NEW_FIELDS_DEFAULTS = {
   travelTimeTo: null,
   travelTimeFrom: null,
   isClosed: false,
+  reviewedByInventory: false,
 };
 
 export class InMemorySchedulingRepository implements SchedulingRepository {
@@ -254,6 +255,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       travelTimeTo: data.travelTimeTo ?? null,
       travelTimeFrom: data.travelTimeFrom ?? null,
       isClosed: false,
+      reviewedByInventory: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -299,9 +301,17 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...(data.travelTimeTo !== undefined && { travelTimeTo: data.travelTimeTo }),
       ...(data.travelTimeFrom !== undefined && { travelTimeFrom: data.travelTimeFrom }),
       ...(data.isClosed !== undefined && { isClosed: data.isClosed }),
+      ...(data.reviewedByInventory !== undefined && { reviewedByInventory: data.reviewedByInventory }),
       watcherIds,
     };
     return { ...this.tasks[index] };
+  }
+
+  async setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null> {
+    const index = this.tasks.findIndex(t => t.id === taskId);
+    if (index === -1) return null;
+    this.tasks[index] = { ...this.tasks[index]!, reviewedByInventory: reviewed, updatedAt: new Date().toISOString() };
+    return { ...this.tasks[index]! };
   }
 
   async deleteTask(id: string): Promise<boolean> {

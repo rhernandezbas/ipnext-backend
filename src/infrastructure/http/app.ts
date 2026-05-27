@@ -103,6 +103,7 @@ import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
+import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
 import { ListWorkflows } from '@application/use-cases/ListWorkflows';
 import { GetWorkflow } from '@application/use-cases/GetWorkflow';
 import { CreateWorkflow } from '@application/use-cases/CreateWorkflow';
@@ -448,6 +449,7 @@ export function createApp() {
   );
   const deleteTask = new DeleteTask(schedulingRepo);
   const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo);
+  const setTaskInventoryReview = new SetTaskInventoryReview(schedulingRepo);
 
   const listWorkflows = new ListWorkflows(workflowRepo);
   const getWorkflow = new GetWorkflow(workflowRepo);
@@ -724,7 +726,7 @@ export function createApp() {
     reorderChecklistItems: reorderChecklistItemsUC,
     assignTemplateToTask: assignTemplateToTaskUC,
     clearTaskChecklist: clearTaskChecklistUC,
-  }));
+  }, setTaskInventoryReview));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);

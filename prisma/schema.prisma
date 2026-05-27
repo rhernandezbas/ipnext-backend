@@ -600,6 +600,9 @@ model ScheduledTask {
   // Flag: task is closed (soft-close, not deleted)
   isClosed       Boolean           @default(false)
 
+  // RV — inventory team review flag
+  reviewedByInventory Boolean       @default(false)
+
   @@index([stageId])
   @@index([projectId])
   @@index([startDate])
@@ -1110,6 +1113,7 @@ enum TicketStatus {
   pending
   closed
 }
+
 
 enum TicketPriority {
   low

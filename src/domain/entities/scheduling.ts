@@ -49,6 +49,9 @@ export interface ScheduledTask {
   // Flag: task is closed (soft-close, not deleted). Default false.
   isClosed: boolean;
 
+  // RV — Revisado por Inventario: inventory team review flag. Default false.
+  reviewedByInventory: boolean;
+
   // Timestamps — always present in API responses (ISO 8601 strings)
   createdAt: string;
   updatedAt: string;

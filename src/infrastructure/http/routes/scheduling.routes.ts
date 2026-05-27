@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { z } from 'zod';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { GetTask } from '@application/use-cases/GetTask';
 import { CreateTask } from '@application/use-cases/CreateTask';
@@ -12,6 +13,7 @@ import { RemoveChecklistItem } from '@application/use-cases/RemoveChecklistItem'
 import { ReorderChecklistItems } from '@application/use-cases/ReorderChecklistItems';
 import { AssignTemplateToTask } from '@application/use-cases/AssignTemplateToTask';
 import { ClearTaskChecklist } from '@application/use-cases/ClearTaskChecklist';
+import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -68,6 +70,7 @@ export function createSchedulingRouter(
   authProvider: AuthProvider,
   stageRepo?: StageRepository,
   checklist?: ChecklistUseCases,
+  setTaskInventoryReview?: SetTaskInventoryReview,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -214,6 +217,29 @@ export function createSchedulingRouter(
   }
 
   // ── End checklist sub-routes ────────────────────────────────────────────
+
+  // ── RV — Revisado por Inventario ─────────────────────────────────────────
+  // MUST be registered BEFORE /:id to avoid Express routing it as /:id with id='*'
+  if (setTaskInventoryReview) {
+    router.patch('/:id/inventory-review', auth, async (req: Request, res: Response): Promise<void> => {
+      const InventoryReviewSchema = z.object({ reviewed: z.boolean() });
+      const parsed = InventoryReviewSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const task = await setTaskInventoryReview.execute(req.params['id'] as string, parsed.data.reviewed);
+        res.json(task);
+      } catch (err) {
+        if (err instanceof TaskNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    });
+  }
 
   router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const task = await getTask.execute(req.params['id'] as string);

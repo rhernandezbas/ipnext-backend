@@ -3,13 +3,14 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory'
 > {
   watcherIds?: string[];
 }
 
 export interface UpdateTaskInput extends Partial<CreateTaskInput> {
   isClosed?: boolean;
+  reviewedByInventory?: boolean;
 }
 
 export interface SchedulingRepository {
@@ -19,6 +20,9 @@ export interface SchedulingRepository {
   updateTask(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null>;
   deleteTask(id: string): Promise<boolean>;
   moveTaskToStage(id: string, stageId: string): Promise<ScheduledTask | null>;
+
+  // RV — Revisado por Inventario (change 6)
+  setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null>;
 
   // Checklist methods (change 5)
   getTaskWithChecklist(id: string): Promise<(ScheduledTask & { checklist: TaskChecklistItem[] }) | null>;
