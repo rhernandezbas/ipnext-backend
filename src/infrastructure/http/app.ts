@@ -139,6 +139,13 @@ import { GetTaskPriority } from '@application/use-cases/GetTaskPriority';
 import { CreateTaskPriority } from '@application/use-cases/CreateTaskPriority';
 import { UpdateTaskPriority } from '@application/use-cases/UpdateTaskPriority';
 import { DeleteTaskPriority } from '@application/use-cases/DeleteTaskPriority';
+import { PrismaTicketStatusRepository } from '../adapters/prisma/PrismaTicketStatusRepository';
+import { createTicketStatusesRouter } from './routes/ticketStatuses.routes';
+import { ListTicketStatuses } from '@application/use-cases/ListTicketStatuses';
+import { GetTicketStatus } from '@application/use-cases/GetTicketStatus';
+import { CreateTicketStatus } from '@application/use-cases/CreateTicketStatus';
+import { UpdateTicketStatusCatalog } from '@application/use-cases/UpdateTicketStatusCatalog';
+import { DeleteTicketStatus } from '@application/use-cases/DeleteTicketStatus';
 import { ListProjectType } from '@application/use-cases/ListProjectType';
 import { GetProjectType } from '@application/use-cases/GetProjectType';
 import { CreateProjectType } from '@application/use-cases/CreateProjectType';
@@ -481,6 +488,13 @@ export function createApp() {
   const updateTaskPriority = new UpdateTaskPriority(taskPriorityRepo);
   const deleteTaskPriority = new DeleteTaskPriority(taskPriorityRepo);
 
+  const ticketStatusRepo = new PrismaTicketStatusRepository();
+  const listTicketStatuses = new ListTicketStatuses(ticketStatusRepo);
+  const getTicketStatus = new GetTicketStatus(ticketStatusRepo);
+  const createTicketStatus = new CreateTicketStatus(ticketStatusRepo);
+  const updateTicketStatusCatalog = new UpdateTicketStatusCatalog(ticketStatusRepo);
+  const deleteTicketStatus = new DeleteTicketStatus(ticketStatusRepo);
+
   const listProjectType = new ListProjectType(projectTypeRepo);
   const getProjectType = new GetProjectType(projectTypeRepo);
   const createProjectType = new CreateProjectType(projectTypeRepo);
@@ -676,6 +690,11 @@ export function createApp() {
   app.use('/api/auth', createAuthRouter(authAdapter));
   app.use('/api/clients', createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
+  // TicketStatus catalog — mounted BEFORE the tickets router to avoid /:id catch-all swallowing /statuses.
+  app.use('/api/tickets/statuses', createTicketStatusesRouter(
+    authAdapter,
+    listTicketStatuses, getTicketStatus, createTicketStatus, updateTicketStatusCatalog, deleteTicketStatus,
+  ));
   app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, authAdapter));
   app.use('/api/billing', createBillingRouter(getSummary, listInvoices, listPayments, listTransactions, authAdapter));
   app.use('/api/billing', createBillingMonthlyRouter(getMonthly));

@@ -287,6 +287,29 @@ async function seedSchedulingFoundation() {
     console.log('  Created ProjectType: Instalacion')
   }
 
+  // Feature flags — idempotent upsert by key. Default OFF until validated in prod.
+  await (prisma as any).featureFlag.upsert({
+    where: { key: 'iclass-integration' },
+    update: {},
+    create: { key: 'iclass-integration', enabled: false },
+  })
+  console.log('  Feature flag seeded: iclass-integration (enabled: false)')
+
+  // TicketStatus catalog — canonical values (idempotent by name).
+  const ticketStatuses = [
+    { name: 'open',    color: '#22c55e', weight: 1 },
+    { name: 'pending', color: '#f59e0b', weight: 2 },
+    { name: 'closed',  color: '#94a3b8', weight: 3 },
+  ]
+  for (const ts of ticketStatuses) {
+    await (prisma as any).ticketStatusCatalog.upsert({
+      where: { name: ts.name },
+      update: {},
+      create: ts,
+    })
+    console.log(`  TicketStatus seeded: ${ts.name}`)
+  }
+
   console.log('  Scheduling foundation seeded.')
 }
 

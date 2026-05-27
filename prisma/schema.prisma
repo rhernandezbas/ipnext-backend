@@ -1108,12 +1108,30 @@ model SyncState {
 // SUPPORT DOMAIN
 // =============================================
 
+// Phase 1: enum TicketStatus kept for backward compatibility while Ticket.status
+// is still an enum column. Phase 2 (requires live DB + multi-step migration — see
+// openspec/changes/tickets-status-catalog/design.md): convert Ticket.status to a
+// FK relation to TicketStatus table, then drop this enum.
 enum TicketStatus {
   open
   pending
   closed
 }
 
+// Editable catalog of ticket statuses, with a colour and a sort weight.
+// Named TicketStatusCatalog in Prisma to avoid collision with enum TicketStatus.
+// Coexists with enum TicketStatus during Phase 1 (see design.md migration strategy).
+// Phase 2: rename to TicketStatus once the enum is dropped.
+model TicketStatusCatalog {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  color     String
+  weight    Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("TicketStatusCatalog")
+}
 
 enum TicketPriority {
   low

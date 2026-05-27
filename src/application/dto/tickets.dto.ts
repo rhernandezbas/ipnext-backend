@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { TicketStatus, TicketPriority } from '@domain/entities/ticket';
 
 export interface ListTicketsQueryDto {
@@ -40,3 +41,13 @@ export interface TicketDto {
   createdAt: string;
   updatedAt: string;
 }
+
+// TicketStatus catalog DTOs (name + color + sort weight) — mirrors TaskPriority
+export const CreateTicketStatusSchema = z.object({
+  name: z.string().min(1),
+  color: z.string().min(1),
+  weight: z.number().int(),
+});
+export const UpdateTicketStatusSchema = CreateTicketStatusSchema.partial();
+export type CreateTicketStatusInput = z.infer<typeof CreateTicketStatusSchema>;
+export type UpdateTicketStatusInput = z.infer<typeof UpdateTicketStatusSchema>;
