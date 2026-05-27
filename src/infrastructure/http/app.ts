@@ -114,6 +114,9 @@ import { UpdateProjectCategory } from '@application/use-cases/UpdateProjectCateg
 import { DeleteProjectCategory } from '@application/use-cases/DeleteProjectCategory';
 import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
 import { createTaskCategoriesRouter } from './routes/taskCategories.routes';
+import { createGestionRealRouter } from './routes/gestionReal.routes';
+import { GetGestionRealSyncStatus } from '@application/use-cases/GetGestionRealSyncStatus';
+import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { ListTaskCategory } from '@application/use-cases/ListTaskCategory';
 import { GetTaskCategory } from '@application/use-cases/GetTaskCategory';
 import { CreateTaskCategory } from '@application/use-cases/CreateTaskCategory';
@@ -660,6 +663,11 @@ export function createApp() {
   app.use('/api/scheduling', createTaskPrioritiesRouter(
     authAdapter,
     listTaskPriority, getTaskPriority, createTaskPriority, updateTaskPriority, deleteTaskPriority,
+  ));
+  // Gestión Real mirror — read-only sync status endpoint.
+  app.use('/api/gestion-real', createGestionRealRouter(
+    authAdapter,
+    new GetGestionRealSyncStatus(new PrismaSyncStateRepository()),
   ));
   // Instantiate checklist use cases (change 5)
   const taskTemplateRepoForChecklist = new PrismaTaskTemplateRepository();
