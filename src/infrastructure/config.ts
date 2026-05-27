@@ -26,4 +26,17 @@ export const config = {
   splynxApiSecret: process.env.SPLYNX_API_SECRET as string,
   jwtSecret: process.env.JWT_SECRET as string,
   port: parseInt(process.env.PORT as string, 10),
+
+  /**
+   * Gestión Real read-only mirror sync. Opt-in: the whole feature stays dark
+   * unless GR_SYNC_ENABLED=true, so the rest of the app boots and runs exactly
+   * as before when it's off (no required vars, no scheduler started).
+   */
+  gestionReal: {
+    enabled: process.env.GR_SYNC_ENABLED === 'true',
+    baseUrl: process.env.GR_BASE_URL ?? 'https://api.gestionreal.com.ar/',
+    cuit: process.env.GR_CUIT ?? '',
+    secret: process.env.GR_SECRET ?? '',
+    intervalMs: parseInt(process.env.GR_SYNC_INTERVAL_MS ?? '180000', 10),
+  },
 };
