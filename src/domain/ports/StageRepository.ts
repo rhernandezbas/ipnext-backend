@@ -1,5 +1,4 @@
 import { Stage } from '../entities/workflow';
-import { TaskStatus } from '../entities/scheduling';
 
 export interface StageRepository {
   listByWorkflow(workflowId: string): Promise<Stage[]>;
@@ -10,5 +9,5 @@ export interface StageRepository {
   reorder(workflowId: string, orderedIds: string[]): Promise<Stage[]>;
   countTasksUsing(stageId: string): Promise<number>;
   countTasksUsingAny(stageIds: string[]): Promise<number>;
-  getDefaultWorkflowStageByLegacyStatus(status: TaskStatus): Promise<Stage | null>;
+  getDefaultWorkflowStageByLegacyStatus(status: string): Promise<Stage | null>;
 }

@@ -1,10 +1,9 @@
 import { randomUUID } from 'crypto';
 import { Stage } from '@domain/entities/workflow';
-import { TaskStatus } from '@domain/entities/scheduling';
 import { StageRepository } from '@domain/ports/StageRepository';
 
 // Legacy status → stage name mapping
-const LEGACY_STATUS_TO_STAGE_NAME: Record<TaskStatus, string> = {
+const LEGACY_STATUS_TO_STAGE_NAME: Record<string, string> = {
   pending: 'Nuevo',
   in_progress: 'En progreso',
   completed: 'Hecho',
@@ -81,7 +80,7 @@ export class InMemoryStageRepository implements StageRepository {
     return ids.filter(id => set.has(id)).length;
   }
 
-  async getDefaultWorkflowStageByLegacyStatus(status: TaskStatus): Promise<Stage | null> {
+  async getDefaultWorkflowStageByLegacyStatus(status: string): Promise<Stage | null> {
     const stageName = LEGACY_STATUS_TO_STAGE_NAME[status];
     // Find Default workflow's stage with this name — for in-memory, we look up by stage name
     // across all stages (the test is responsible for setting up the Default workflow stages)

@@ -8,7 +8,6 @@ import { GetTask } from '../../application/use-cases/GetTask';
 import { CreateTask } from '../../application/use-cases/CreateTask';
 import { UpdateTask } from '../../application/use-cases/UpdateTask';
 import { DeleteTask } from '../../application/use-cases/DeleteTask';
-import { UpdateTaskStatus } from '../../application/use-cases/UpdateTaskStatus';
 import { MoveTaskToStage } from '../../application/use-cases/MoveTaskToStage';
 import { createSchedulingRouter } from '../../infrastructure/http/routes/scheduling.routes';
 import { User } from '../../domain/entities/auth';
@@ -84,12 +83,11 @@ function buildApp() {
   const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
   const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
   const deleteTask = new DeleteTask(repo);
-  const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
   const authProvider = new FakeAuthProvider();
 
-  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, moveTaskToStage, authProvider));
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);
@@ -137,11 +135,10 @@ describe('Auth: routes reject missing cookie', () => {
     expect(res.body.code).toBe('UNAUTHORIZED');
   });
 
-  it('REQ-AUTH-6: PATCH /:id/status → 401 UNAUTHORIZED', async () => {
+  it('REQ-AUTH-6: PATCH /:id/status → 404 (route removed in phase 3)', async () => {
     const app = buildApp();
     const res = await request(app).patch('/api/scheduling/1/status').send({ status: 'completed' });
-    expect(res.status).toBe(401);
-    expect(res.body.code).toBe('UNAUTHORIZED');
+    expect(res.status).toBe(404);
   });
 
   it('REQ-AUTH-7: PATCH /:id/stage → 401 UNAUTHORIZED', async () => {
@@ -196,7 +193,6 @@ describe('POST /api/scheduling', () => {
     expect(res.body.title).toBe('Tarea de test');
     expect(res.body.stageId).toBeTruthy();
     expect(res.body.stageCategory).toBe('nuevo');
-    expect(res.body.status).toBe('pending');
   });
 });
 
@@ -222,29 +218,6 @@ describe('PUT /api/scheduling/:id', () => {
   });
 });
 
-describe('PATCH /api/scheduling/:id/status (deprecated)', () => {
-  it('REQ-STAGE-DEP-1: returns 200 with updated status (deprecated shim)', async () => {
-    const app = buildApp();
-    const res = await request(app)
-      .patch('/api/scheduling/1/status')
-      .set('Cookie', 'auth_token=fake')
-      .send({ status: 'completed' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.status).toBe('completed');
-    expect(res.body.stageId).toBeTruthy();
-    expect(res.body.stageCategory).toBe('hecho');
-  });
-
-  it('returns 404 for unknown id', async () => {
-    const app = buildApp();
-    const res = await request(app)
-      .patch('/api/scheduling/9999/status')
-      .set('Cookie', 'auth_token=fake')
-      .send({ status: 'completed' });
-    expect(res.status).toBe(404);
-  });
-});
 
 describe('PATCH /api/scheduling/:id/stage (new)', () => {
   it('REQ-STAGE-1: returns 200 with stageId and stageCategory', async () => {
@@ -257,7 +230,6 @@ describe('PATCH /api/scheduling/:id/stage (new)', () => {
     expect(res.status).toBe(200);
     expect(res.body.stageId).toBe(DEFAULT_STAGE_ID_COMPLETED);
     expect(res.body.stageCategory).toBe('hecho');
-    expect(res.body.status).toBe('completed');
   });
 
   it('REQ-STAGE-2: non-existent stageId → 404 STAGE_NOT_FOUND', async () => {
@@ -414,14 +386,14 @@ describe('POST /api/scheduling - validation', () => {
       .send({ ...validBody, scheduledDate: null, scheduledTime: null });
 
     expect(res.status).toBe(201);
-    expect(res.body.scheduledDate).toBeNull();
-    expect(res.body.scheduledTime).toBeNull();
+    expect(res.body).not.toHaveProperty('scheduledDate');
+    expect(res.body).not.toHaveProperty('scheduledTime');
   });
 });
 
 // ─── Phase 2: legacy fields in POST body are ignored (not persisted) ─────────
 
-describe('POST /api/scheduling — phase 2: legacy fields stripped', () => {
+describe('POST /api/scheduling — phase 2+3: legacy fields stripped from input and response', () => {
   const baseBody = {
     title: 'Task phase2 test',
     priority: 'normal',
@@ -429,35 +401,35 @@ describe('POST /api/scheduling — phase 2: legacy fields stripped', () => {
     category: 'other',
   };
 
-  it('sending assignedTo in body does not persist it (response has null)', async () => {
+  it('sending assignedTo in body succeeds and response does NOT have assignedTo', async () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
       .send({ ...baseBody, assignedTo: 'Carlos Técnico' });
     expect(res.status).toBe(201);
-    // assignedTo is still in the entity shape (phase 3 removes it) but must be null
-    expect(res.body.assignedTo).toBeNull();
+    // phase 3: field removed from entity — not present in response at all
+    expect(res.body).not.toHaveProperty('assignedTo');
   });
 
-  it('sending clientId in body does not persist it (response has null)', async () => {
+  it('sending clientId in body succeeds and response does NOT have clientId', async () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
       .send({ ...baseBody, clientId: 'cli-999' });
     expect(res.status).toBe(201);
-    expect(res.body.clientId).toBeNull();
+    expect(res.body).not.toHaveProperty('clientId');
   });
 
-  it('sending scheduledDate in body does not persist it (response has null)', async () => {
+  it('sending scheduledDate in body succeeds and response does NOT have scheduledDate', async () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
       .send({ ...baseBody, scheduledDate: '2026-05-10' });
     expect(res.status).toBe(201);
-    expect(res.body.scheduledDate).toBeNull();
+    expect(res.body).not.toHaveProperty('scheduledDate');
   });
 });
 
@@ -476,31 +448,6 @@ describe('PUT /api/scheduling/:id - validation', () => {
   });
 });
 
-// ─── REQ-STATUS: Validation tests ───────────────────────────────────────────
-
-describe('PATCH /api/scheduling/:id/status - validation', () => {
-  it('REQ-STATUS-2: status "done" → 400 VALIDATION_ERROR', async () => {
-    const app = buildApp();
-    const res = await request(app)
-      .patch('/api/scheduling/1/status')
-      .set('Cookie', 'auth_token=fake')
-      .send({ status: 'done' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-  });
-
-  it('REQ-STATUS-3: empty body → 400 VALIDATION_ERROR', async () => {
-    const app = buildApp();
-    const res = await request(app)
-      .patch('/api/scheduling/1/status')
-      .set('Cookie', 'auth_token=fake')
-      .send({});
-
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-  });
-});
 
 // ─── REQ-STATUS-7 / REQ-STAGE-PROJECTNAME-1: projectName returned ──────────
 
@@ -531,10 +478,10 @@ describe('PATCH /:id/stage - projectName', () => {
     app.use(express.json());
 
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
-    const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
+    
     app.use('/api/scheduling', createSchedulingRouter(
       new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo), updateTaskStatus,
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
       moveTaskToStage, new FakeAuthProvider(),
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -580,10 +527,10 @@ describe('PATCH /:id/stage - completedAt', () => {
     app.use(cookieParser());
     app.use(express.json());
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
-    const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
+    
     app.use('/api/scheduling', createSchedulingRouter(
       new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo), updateTaskStatus,
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
       moveTaskToStage, new FakeAuthProvider(),
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -625,10 +572,10 @@ describe('PATCH /:id/stage - completedAt', () => {
     app.use(cookieParser());
     app.use(express.json());
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
-    const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
+    
     app.use('/api/scheduling', createSchedulingRouter(
       new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo), updateTaskStatus,
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
       moveTaskToStage, new FakeAuthProvider(),
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -656,8 +603,8 @@ describe('PATCH /:id/stage - completedAt', () => {
 
 // ─── REQ-LIST-3 / REQ-SHAPE-2: response fields ───────────────────────────────
 
-describe('Response shape: stageId, stageCategory, status (deprecated)', () => {
-  it('GET /api/scheduling — every item has stageId, stageCategory, status', async () => {
+describe('Response shape: stageId and stageCategory (phase 3)', () => {
+  it('GET /api/scheduling — every item has stageId, stageCategory (no status)', async () => {
     const app = buildApp();
     const res = await request(app)
       .get('/api/scheduling')
@@ -668,12 +615,12 @@ describe('Response shape: stageId, stageCategory, status (deprecated)', () => {
     for (const task of res.body) {
       expect(task).toHaveProperty('stageId');
       expect(task).toHaveProperty('stageCategory');
-      expect(task).toHaveProperty('status');
+      expect(task).not.toHaveProperty('status');
       expect(task).toHaveProperty('projectName');
     }
   });
 
-  it('POST /api/scheduling — response has stageId, stageCategory, status', async () => {
+  it('POST /api/scheduling — response has stageId, stageCategory (no status)', async () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
@@ -688,7 +635,7 @@ describe('Response shape: stageId, stageCategory, status (deprecated)', () => {
     expect(res.status).toBe(201);
     expect(res.body).toHaveProperty('stageId');
     expect(res.body).toHaveProperty('stageCategory');
-    expect(res.body).toHaveProperty('status');
+    expect(res.body).not.toHaveProperty('status');
     expect(res.body).toHaveProperty('projectName');
   });
 });
@@ -710,7 +657,6 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
 
     expect(res.status).toBe(201);
     expect(res.body.stageCategory).toBe('nuevo');
-    expect(res.body.status).toBe('pending');
   });
 
   it('REQ-STAGE-DEFAULT-1 (production path): stageId in response is the real UUID, not the sentinel', async () => {
@@ -729,12 +675,12 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
     const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
     const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
     const deleteTask = new DeleteTask(repo);
-    const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
+    
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
     app.use('/api/scheduling', createSchedulingRouter(
       listTasks, getTask, createTask, updateTask, deleteTask,
-      updateTaskStatus, moveTaskToStage, new FakeAuthProvider(), stageRepo,
+      moveTaskToStage, new FakeAuthProvider(), stageRepo,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
       console.error(err);
@@ -754,7 +700,6 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
     expect(res.status).toBe(201);
     expect(res.body.stageId).toBe(DEFAULT_STAGE_ID_PENDING);
     expect(res.body.stageCategory).toBe('nuevo');
-    expect(res.body.status).toBe('pending');
   });
 
   it('REQ-STAGE-DEFAULT-1: returns 500 INTERNAL_ERROR when stageRepo returns null (unseeded env)', async () => {
@@ -766,12 +711,12 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
     app.use(cookieParser());
     app.use(express.json());
 
-    const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
+    
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
     app.use('/api/scheduling', createSchedulingRouter(
       new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo), updateTaskStatus,
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
       moveTaskToStage, new FakeAuthProvider(), stageRepo,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -793,6 +738,39 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
   });
 });
 
+// ─── Phase 3: legacy fields absent from response ────────────────────────────
+
+describe('Phase 3: response no longer contains legacy fields', () => {
+  it('GET /api/scheduling — no task has status, assignedTo, clientId, scheduledDate', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/scheduling')
+      .set('Cookie', 'auth_token=fake');
+    expect(res.status).toBe(200);
+    for (const task of res.body) {
+      expect(task).not.toHaveProperty('status');
+      expect(task).not.toHaveProperty('assignedTo');
+      expect(task).not.toHaveProperty('assignedToId');
+      expect(task).not.toHaveProperty('clientId');
+      expect(task).not.toHaveProperty('clientName');
+      expect(task).not.toHaveProperty('scheduledDate');
+      expect(task).not.toHaveProperty('scheduledTime');
+    }
+  });
+
+  it('GET /api/scheduling/:id — task has no status or legacy fields', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .get('/api/scheduling/1')
+      .set('Cookie', 'auth_token=fake');
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty('status');
+    expect(res.body).not.toHaveProperty('assignedTo');
+    expect(res.body).not.toHaveProperty('clientId');
+    expect(res.body).not.toHaveProperty('scheduledDate');
+  });
+});
+
 // ─── GET /:id shape ──────────────────────────────────────────────────────────
 
 describe('GET /api/scheduling/:id', () => {
@@ -806,7 +784,7 @@ describe('GET /api/scheduling/:id', () => {
     expect(res.body.id).toBe('1');
     expect(res.body).toHaveProperty('stageId');
     expect(res.body).toHaveProperty('stageCategory');
-    expect(res.body).toHaveProperty('status');
+    expect(res.body).not.toHaveProperty('status');
   });
 
   it('REQ-GET-2: returns 404 with TASK_NOT_FOUND when id does not exist', async () => {
@@ -844,12 +822,12 @@ function buildEnrichedApp(opts: {
   const createTask = new CreateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup);
   const updateTask = new UpdateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup);
   const deleteTask = new DeleteTask(repo);
-  const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
+  
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
   app.use('/api/scheduling', createSchedulingRouter(
     new ListTasks(repo), new GetTask(repo), createTask, updateTask, deleteTask,
-    updateTaskStatus, moveTaskToStage, new FakeAuthProvider(),
+    moveTaskToStage, new FakeAuthProvider(),
   ));
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);
@@ -1036,21 +1014,24 @@ describe('PUT /api/scheduling/:id — watcher replace-set (new fields)', () => {
   });
 });
 
-describe('GET /api/scheduling — response includes legacy fields (REQ-DEPRECATED-1)', () => {
-  it('GET response includes both new fields and legacy fields', async () => {
+describe('GET /api/scheduling — response shape (phase 3)', () => {
+  it('GET response has new fields and NO legacy fields', async () => {
     const app = buildApp();
     const res = await request(app)
       .get('/api/scheduling/1')
       .set('Cookie', 'auth_token=fake');
     expect(res.status).toBe(200);
-    // Legacy fields still present
-    expect(res.body).toHaveProperty('scheduledDate');
-    expect(res.body).toHaveProperty('clientId');
-    expect(res.body).toHaveProperty('assignedTo');
-    expect(res.body).toHaveProperty('status');
-    // New fields also present
+    // New fields present
     expect(res.body).toHaveProperty('startDate');
     expect(res.body).toHaveProperty('customerId');
     expect(res.body).toHaveProperty('watcherIds');
+    // Legacy fields absent
+    expect(res.body).not.toHaveProperty('scheduledDate');
+    expect(res.body).not.toHaveProperty('scheduledTime');
+    expect(res.body).not.toHaveProperty('clientId');
+    expect(res.body).not.toHaveProperty('clientName');
+    expect(res.body).not.toHaveProperty('assignedTo');
+    expect(res.body).not.toHaveProperty('assignedToId');
+    expect(res.body).not.toHaveProperty('status');
   });
 });

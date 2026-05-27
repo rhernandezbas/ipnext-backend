@@ -2,7 +2,6 @@ import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-m
 import { ListTasks } from '../../application/use-cases/ListTasks';
 import { GetTask } from '../../application/use-cases/GetTask';
 import { CreateTask } from '../../application/use-cases/CreateTask';
-import { UpdateTaskStatus } from '../../application/use-cases/UpdateTaskStatus';
 import { EntityLookup } from '../../domain/ports/EntityLookup';
 
 class StubLookup implements EntityLookup {
@@ -75,27 +74,5 @@ describe('CreateTask', () => {
     expect(result.title).toBe('Nueva tarea de prueba');
     expect(result.stageId).toBe(DEFAULT_STAGE_ID_PENDING);
     expect(result.stageCategory).toBe('nuevo');
-    expect(result.status).toBe('pending');
-  });
-});
-
-describe('UpdateTaskStatus', () => {
-  it('changes task status to in_progress via deprecated shim', async () => {
-    const repo = makeRepo();
-    const { InMemoryStageRepository } = require('../../infrastructure/adapters/in-memory/InMemoryStageRepository');
-    const stageRepo = new InMemoryStageRepository();
-    // Add default stages for legacy mapping
-    stageRepo.addDirect({ id: '10000000-0000-4000-a000-000000000001', workflowId: 'wf', name: 'Nuevo',            category: 'nuevo',      order: 0 });
-    stageRepo.addDirect({ id: '10000000-0000-4000-a000-000000000002', workflowId: 'wf', name: 'En progreso',       category: 'enProgreso', order: 7 });
-    stageRepo.addDirect({ id: '10000000-0000-4000-a000-000000000003', workflowId: 'wf', name: 'Hecho',             category: 'hecho',      order: 9 });
-    stageRepo.addDirect({ id: '10000000-0000-4000-a000-000000000004', workflowId: 'wf', name: 'Anulado-Cancelado', category: 'hecho',      order: 10 });
-    const uc = new UpdateTaskStatus(repo, stageRepo);
-
-    const result = await uc.execute('1', 'in_progress');
-
-    expect(result).not.toBeNull();
-    expect(result!.id).toBe('1');
-    expect(result!.status).toBe('in_progress');
-    expect(result!.stageCategory).toBe('enProgreso');
   });
 });

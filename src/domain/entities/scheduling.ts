@@ -1,8 +1,6 @@
 import { StageCategory } from './workflow';
 import { TaskChecklistItem } from './checklist';
 
-/** @deprecated use stageCategory; will be removed next change */
-export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
 export interface ScheduledTask {
@@ -11,25 +9,9 @@ export interface ScheduledTask {
   title: string;
   description: string | null;
 
-  /** @deprecated use assigneeId; will be removed in cleanup change */
-  assignedTo: string | null;
-  /** @deprecated use assigneeId; will be removed in cleanup change */
-  assignedToId: string | null;
-  /** @deprecated use customerId; will be removed in cleanup change */
-  clientId: string | null;
-  /** @deprecated use customerName (derived from JOIN); will be removed in cleanup change */
-  clientName: string | null;
-
   stageId: string;                      // primary
   stageCategory: StageCategory;         // read-only derived from Stage
-  /** @deprecated use stageCategory; will be removed next change */
-  status: TaskStatus;
   priority: string;   // free text backed by the TaskPriority catalog
-
-  /** @deprecated use startDate; will be removed in cleanup change */
-  scheduledDate: string | null;
-  /** @deprecated use startDate; will be removed in cleanup change */
-  scheduledTime: string | null;
 
   estimatedHours: number;
   address: string | null;

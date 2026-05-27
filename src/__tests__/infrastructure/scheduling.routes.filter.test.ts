@@ -12,7 +12,6 @@ import { GetTask } from '../../application/use-cases/GetTask';
 import { CreateTask } from '../../application/use-cases/CreateTask';
 import { UpdateTask } from '../../application/use-cases/UpdateTask';
 import { DeleteTask } from '../../application/use-cases/DeleteTask';
-import { UpdateTaskStatus } from '../../application/use-cases/UpdateTaskStatus';
 import { MoveTaskToStage } from '../../application/use-cases/MoveTaskToStage';
 import { createSchedulingRouter } from '../../infrastructure/http/routes/scheduling.routes';
 import { User } from '../../domain/entities/auth';
@@ -105,12 +104,11 @@ async function buildFilterApp() {
   const getTask = new GetTask(repo);
   const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
   const deleteTask = new DeleteTask(repo);
-  const updateTaskStatus = new UpdateTaskStatus(repo, stageRepo);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
   const authProvider = new FakeAuthProvider();
 
   app.use('/api/scheduling',
-    createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, moveTaskToStage, authProvider));
+    createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);

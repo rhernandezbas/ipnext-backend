@@ -70,14 +70,14 @@ describe('toTask — legacy-only row (new FKs all NULL)', () => {
     expect(task.watcherIds).toEqual([]);
   });
 
-  it('falls back to legacy clientName when customer JOIN is NULL', () => {
+  it('returns null customerName when customer JOIN is NULL (no legacy fallback — phase 3)', () => {
     const task = toTask(makeBaseRow({ clientName: 'Legacy Name', customer: null }));
-    expect(task.customerName).toBe('Legacy Name');
+    expect(task.customerName).toBeNull();
   });
 
-  it('falls back to legacy assignedTo when assignee JOIN is NULL', () => {
+  it('returns null assigneeName when assignee JOIN is NULL (no legacy fallback — phase 3)', () => {
     const task = toTask(makeBaseRow({ assignedTo: 'Legacy Assignee', assignee: null }));
-    expect(task.assigneeName).toBe('Legacy Assignee');
+    expect(task.assigneeName).toBeNull();
   });
 });
 

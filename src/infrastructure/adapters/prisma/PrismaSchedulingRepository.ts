@@ -7,7 +7,7 @@
  * is executed. The runtime behaviour IS correct — the new columns exist
  * after the migration runs.
  */
-import { ScheduledTask, TaskStatus } from '@domain/entities/scheduling';
+import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory } from '@domain/entities/workflow';
 import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
@@ -16,28 +16,16 @@ import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checkl
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 import { prisma } from '../../database/prisma';
 
-// Maps a Stage's category + name to the deprecated status string (REQ-STAGE-DEP-3)
-function deriveLegacyStatus(stageCategory: StageCategory, stageName: string): TaskStatus {
-  const lowerName = stageName.toLowerCase();
-  if (lowerName.includes('cancel') || lowerName.includes('anul')) return 'cancelled';
-  if (stageCategory === 'hecho') return 'completed';
-  if (stageCategory === 'enProgreso') return 'in_progress';
-  return 'pending';
-}
-
 export function toTask(row: any): ScheduledTask {
   const stageCategory: StageCategory = row.stage?.category ?? 'nuevo';
-  const stageName: string = row.stage?.name ?? '';
 
-  // Derive customerName: prefer JOIN, fallback to legacy clientName
-  const customerName: string | null =
-    row.customer?.name ?? row.clientName ?? null;
+  // Derive customerName from JOIN only (no legacy fallback)
+  const customerName: string | null = row.customer?.name ?? null;
   // city from the customer JOIN — populates the Tasks list 'Localidad' column.
   const customerCity: string | null = row.customer?.city ?? null;
 
-  // Derive assigneeName: prefer JOIN, fallback to legacy assignedTo
-  const assigneeName: string | null =
-    row.assignee?.name ?? row.assignedTo ?? null;
+  // Derive assigneeName from JOIN only (no legacy fallback)
+  const assigneeName: string | null = row.assignee?.name ?? null;
 
   // Map watchers array to watcherIds
   const watcherIds: string[] = Array.isArray(row.watchers)
@@ -58,16 +46,9 @@ export function toTask(row: any): ScheduledTask {
     sequenceNumber: row.sequenceNumber,
     title: row.title,
     description: row.description ?? null,
-    assignedTo: row.assignedTo ?? null,
-    assignedToId: row.assignedToId ?? null,
-    clientId: row.clientId ?? null,
-    clientName: row.clientName ?? null,
     stageId: row.stageId,
     stageCategory,
-    status: deriveLegacyStatus(stageCategory, stageName),
     priority: row.priority,
-    scheduledDate: row.scheduledDate ?? null,
-    scheduledTime: row.scheduledTime ?? null,
     estimatedHours: row.estimatedHours,
     address: row.address ?? null,
     coordinates: (row.lat != null && row.lng != null)
@@ -263,32 +244,6 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       });
       return toTask(row);
     } catch {
-      return null;
-    }
-  }
-
-  /** @deprecated use moveTaskToStage */
-  async updateTaskStatus(id: string, status: TaskStatus): Promise<ScheduledTask | null> {
-    console.warn('deprecated: PrismaSchedulingRepository.updateTaskStatus — use moveTaskToStage');
-    const stageName = {
-      pending: 'Nuevo',
-      in_progress: 'En progreso',
-      completed: 'Hecho',
-      cancelled: 'Anulado-Cancelado',
-    }[status];
-
-    try {
-      const defaultWorkflow = await prisma.workflow.findFirst({
-        where: { name: { equals: 'Default', mode: 'insensitive' } },
-        include: { stages: true },
-      });
-      const stage = defaultWorkflow?.stages.find(s => s.name === stageName);
-      if (!stage) {
-        throw new StageNotFoundError(`default-workflow-stage-for-status:${status}`);
-      }
-      return this.moveTaskToStage(id, stage.id);
-    } catch (err) {
-      if (err instanceof StageNotFoundError) throw err;
       return null;
     }
   }

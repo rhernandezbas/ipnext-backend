@@ -96,7 +96,6 @@ import { GetTask } from '@application/use-cases/GetTask';
 import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
-import { UpdateTaskStatus } from '@application/use-cases/UpdateTaskStatus';
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
 import { ListWorkflows } from '@application/use-cases/ListWorkflows';
 import { GetWorkflow } from '@application/use-cases/GetWorkflow';
@@ -419,7 +418,6 @@ export function createApp() {
   );
   const deleteTask = new DeleteTask(schedulingRepo);
   const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo);
-  const updateTaskStatus = new UpdateTaskStatus(schedulingRepo, stageRepo);
 
   const listWorkflows = new ListWorkflows(workflowRepo);
   const getWorkflow = new GetWorkflow(workflowRepo);
@@ -688,7 +686,7 @@ export function createApp() {
   const assignTemplateToTaskUC = new AssignTemplateToTask(schedulingRepo, taskTemplateRepoForChecklist);
   const clearTaskChecklistUC = new ClearTaskChecklist(schedulingRepo);
 
-  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, updateTaskStatus, moveTaskToStage, authAdapter, stageRepo, {
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authAdapter, stageRepo, {
     addChecklistItem: addChecklistItemUC,
     toggleChecklistItem: toggleChecklistItemUC,
     updateChecklistItem: updateChecklistItemUC,

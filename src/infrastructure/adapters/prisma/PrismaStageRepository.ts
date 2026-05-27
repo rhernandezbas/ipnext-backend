@@ -1,9 +1,8 @@
 import { Stage } from '@domain/entities/workflow';
-import { TaskStatus } from '@domain/entities/scheduling';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { prisma } from '../../database/prisma';
 
-const LEGACY_STATUS_TO_STAGE_NAME: Record<TaskStatus, string> = {
+const LEGACY_STATUS_TO_STAGE_NAME: Record<string, string> = {
   pending: 'Nuevo',
   in_progress: 'En progreso',
   completed: 'Hecho',
@@ -86,7 +85,7 @@ export class PrismaStageRepository implements StageRepository {
     return prisma.scheduledTask.count({ where: { stageId: { in: stageIds } } });
   }
 
-  async getDefaultWorkflowStageByLegacyStatus(status: TaskStatus): Promise<Stage | null> {
+  async getDefaultWorkflowStageByLegacyStatus(status: string): Promise<Stage | null> {
     const stageName = LEGACY_STATUS_TO_STAGE_NAME[status];
     const row = await prisma.stage.findFirst({
       where: {

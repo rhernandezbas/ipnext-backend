@@ -1,11 +1,9 @@
-import { ScheduledTask, TaskStatus } from '../entities/scheduling';
+import { ScheduledTask } from '../entities/scheduling';
 import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'status' | 'customerName' | 'customerCity' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt'
-  // Deprecated input fields — no longer written (phase 2)
-  | 'assignedTo' | 'assignedToId' | 'clientId' | 'clientName' | 'scheduledDate' | 'scheduledTime'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt'
 > {
   watcherIds?: string[];
 }
@@ -19,8 +17,6 @@ export interface SchedulingRepository {
   updateTask(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null>;
   deleteTask(id: string): Promise<boolean>;
   moveTaskToStage(id: string, stageId: string): Promise<ScheduledTask | null>;
-  /** @deprecated use moveTaskToStage */
-  updateTaskStatus(id: string, status: TaskStatus): Promise<ScheduledTask | null>;
 
   // Checklist methods (change 5)
   getTaskWithChecklist(id: string): Promise<(ScheduledTask & { checklist: TaskChecklistItem[] }) | null>;

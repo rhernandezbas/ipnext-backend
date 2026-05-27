@@ -14,7 +14,6 @@ import { GetTask } from '../../application/use-cases/GetTask';
 import { CreateTask } from '../../application/use-cases/CreateTask';
 import { UpdateTask } from '../../application/use-cases/UpdateTask';
 import { DeleteTask } from '../../application/use-cases/DeleteTask';
-import { UpdateTaskStatus } from '../../application/use-cases/UpdateTaskStatus';
 import { MoveTaskToStage } from '../../application/use-cases/MoveTaskToStage';
 import { AddChecklistItem } from '../../application/use-cases/AddChecklistItem';
 import { ToggleChecklistItem } from '../../application/use-cases/ToggleChecklistItem';
@@ -77,7 +76,6 @@ function buildApp() {
     new CreateTask(schedRepo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
     new UpdateTask(schedRepo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
     new DeleteTask(schedRepo),
-    new UpdateTaskStatus(schedRepo, stageRepo),
     new MoveTaskToStage(schedRepo, stageRepo),
     authProvider,
     stageRepo,

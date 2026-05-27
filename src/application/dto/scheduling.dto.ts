@@ -1,7 +1,5 @@
 import { z } from 'zod';
 
-/** @deprecated use MoveStageSchema; will be removed next change */
-export const TaskStatusSchema = z.enum(['pending', 'in_progress', 'completed', 'cancelled']);
 /** @deprecated priority is now a free-text value backed by the TaskPriority catalog. */
 export const TaskPrioritySchema = z.enum(['low', 'normal', 'high', 'urgent']);
 
@@ -80,13 +78,9 @@ export const UpdateTaskSchema = CreateTaskBaseSchema.partial().superRefine(dateR
 
 export const MoveStageSchema = z.object({ stageId: z.string().min(1) });
 
-/** @deprecated use MoveStageSchema */
-export const UpdateStatusSchema = z.object({ status: TaskStatusSchema });
-
 export type CreateTaskInput = z.infer<typeof CreateTaskSchema>;
 export type UpdateTaskInput = z.infer<typeof UpdateTaskSchema>;
 export type MoveStageInput = z.infer<typeof MoveStageSchema>;
-export type UpdateStatusInput = z.infer<typeof UpdateStatusSchema>;
 
 // ── Filter DTO ───────────────────────────────────────────────────────────────
 // Wire format decision (REQ-URL-SYNC-4 & tasks.md 1.6):
