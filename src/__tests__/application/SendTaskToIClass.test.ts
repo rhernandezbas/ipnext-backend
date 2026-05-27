@@ -118,6 +118,51 @@ describe('SendTaskToIClass', () => {
     expect(result.stageId).toBe(REGISTRADO_STAGE.id);
   });
 
+  it('node match is accent-insensitive: "Luján" matches node "Lujan"', async () => {
+    const { tasks, iclass, useCase } = setup({ nodes: ['Lujan'] });
+    fullTask(tasks, { customerCity: 'Luján' });
+
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    expect(iclass.createdOrders).toHaveLength(1);
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+  });
+
+  it('node match handles ñ: "Cañuelas" matches node "Cañuelas"', async () => {
+    const { tasks, iclass, useCase } = setup({ nodes: ['Cañuelas'] });
+    fullTask(tasks, { customerCity: 'Cañuelas' });
+
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    expect(iclass.createdOrders).toHaveLength(1);
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+  });
+
+  it('node match is case + accent insensitive combined: "LUJÁN" matches "Lujan"', async () => {
+    const { tasks, iclass, useCase } = setup({ nodes: ['Lujan'] });
+    fullTask(tasks, { customerCity: 'LUJÁN' });
+
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    expect(iclass.createdOrders).toHaveLength(1);
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+  });
+
+  it('still fails when no equivalent node exists (accent normalization guard)', async () => {
+    const { tasks, useCase } = setup({ nodes: ['Lujan', 'Rosario'] });
+    fullTask(tasks, { customerCity: 'Pergamino' });
+
+    await expect(useCase.execute('t1', ENVIAR_STAGE.id)).rejects.toBeInstanceOf(IClassNodeNotFoundError);
+    const task = await tasks.getTask('t1');
+    expect(task!.stageId).toBe(ENVIAR_STAGE.id);
+  });
+
+  it('exact match without accents still works: "Mercedes" matches "Mercedes"', async () => {
+    const { tasks, iclass, useCase } = setup({ nodes: ['Mercedes'] });
+    fullTask(tasks, { customerCity: 'Mercedes' });
+
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    expect(iclass.createdOrders).toHaveLength(1);
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+  });
+
   it('happy path → creates OS without date, stores orderCode, moves to "Registrado en IClass" (REQ-MOVE-OS-1)', async () => {
     const { tasks, iclass, useCase } = setup();
     iclass.nextOrderCode = 'OS-999';

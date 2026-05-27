@@ -16,6 +16,18 @@ function isBlank(v: string | null | undefined): boolean {
 }
 
 /**
+ * Normalizes a string for accent- and case-insensitive comparison:
+ * trims, lowercases, and strips diacritics via NFD decomposition.
+ */
+function norm(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '');
+}
+
+/**
  * Sends a task to IClass when it is moved to the "Enviar a IClass" stage.
  *
  * Behaviour (design Sequence):
@@ -66,10 +78,10 @@ export class SendTaskToIClass {
       throw new MissingRequiredFieldsError([...missingFields]);
     }
 
-    // 4. Resolve the node by city against IClass (case-insensitive, trimmed).
-    const city = task.customerCity!.trim().toLowerCase();
+    // 4. Resolve the node by city against IClass (case- and accent-insensitive, trimmed).
+    const target = norm(task.customerCity!);
     const nodes = await this.iclass.listNodes();
-    const node = nodes.find(n => n.code.trim().toLowerCase() === city);
+    const node = nodes.find(n => norm(n.code) === target);
     if (!node) throw new IClassNodeNotFoundError(task.customerCity!);
 
     // 5. Create the OS (no scheduledDate). Failure propagates IClassUnavailableError.
