@@ -547,23 +547,9 @@ model ScheduledTask {
   sequenceNumber Int       @unique @default(autoincrement())
   title          String
   description    String?
-  /// @deprecated use assigneeId; will be removed in cleanup change
-  assignedTo     String?
-  /// @deprecated use assigneeId; will be removed in cleanup change
-  assignedToId   String?
-  /// @deprecated use customerId; will be removed in cleanup change
-  clientId       String?
-  /// @deprecated use customerName (derived from JOIN); will be removed in cleanup change
-  clientName     String?
-  /// @deprecated use stageCategory; will be removed in cleanup change
-  status         String    @default("pending")
   stageId        String
   stage          Stage     @relation(fields: [stageId], references: [id], onDelete: Restrict)
   priority       String    @default("normal")
-  /// @deprecated use startDate; will be removed in cleanup change
-  scheduledDate  String?
-  /// @deprecated use startDate; will be removed in cleanup change
-  scheduledTime  String?
   estimatedHours Float     @default(1)
   address        String?
   lat            Float?
@@ -602,9 +588,7 @@ model ScheduledTask {
   // NEW — checklist back-relation
   checklist      TaskChecklistItem[]
 
-  @@index([status])
   @@index([stageId])
-  @@index([scheduledDate])
   @@index([projectId])
   @@index([startDate])
   @@index([endDate])
