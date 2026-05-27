@@ -176,6 +176,7 @@ model Message {
 model Client {
   id               String          @id @default(uuid())
   splynxId         String?         @unique
+  grClienteId      String?         @unique
   name             String
   email            String
   phone            String
@@ -206,6 +207,7 @@ enum ClientStatus {
 model Service {
   id        String          @id @default(uuid())
   clientId  String
+  grContratoId String?      @unique
   type      String
   plan      String
   ip        String?
@@ -1091,4 +1093,14 @@ model MonitoringAlert {
   createdAt      DateTime  @default(now())
 
   @@index([acknowledged])
+}
+
+/// Watermark/cursor store for incremental syncs (e.g. the Gestión Real mirror).
+model SyncState {
+  entity      String   @id
+  cursor      String?
+  lastRunAt   DateTime?
+  lastResult  String?
+  itemsSynced Int      @default(0)
+  updatedAt   DateTime @updatedAt
 }
