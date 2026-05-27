@@ -1,20 +1,24 @@
-export type TicketPriority = 'alta' | 'media' | 'baja';
-export type TicketStatus = 'abierto' | 'en_progreso' | 'cerrado';
+export type TicketPriority = 'low' | 'medium' | 'high';
+export type TicketStatus = 'open' | 'pending' | 'closed';
 
 export interface Ticket {
   id: string;
   subject: string;
-  clientId: string;
-  clientName: string;
-  priority: TicketPriority;
-  status: TicketStatus;
-  assignedTo?: string;
   description: string;
-  createdAt: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  customerId: string | null;
+  customerName: string | null;   // JOIN-derived (Client.name) — NOT free text
+  assigneeId: string | null;
+  assigneeName: string | null;   // JOIN-derived (Admin.name)
+  grCasoId: string | null;
+  createdAt: string;             // ISO 8601
+  updatedAt: string;             // ISO 8601
 }
 
 export interface TicketStats {
   totalOpen: number;
-  byPriority: { alta: number; media: number; baja: number };
-  assignedToCurrentUser: number;
+  totalPending: number;
+  totalClosed: number;
+  byPriority: { low: number; medium: number; high: number };
 }
