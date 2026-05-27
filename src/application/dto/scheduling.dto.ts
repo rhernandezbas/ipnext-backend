@@ -70,6 +70,10 @@ const CreateTaskBaseSchema = z.object({
   // NEW — travel time (minutes, non-negative integer)
   travelTimeTo:   z.number().int().nonnegative().nullable().optional(),
   travelTimeFrom: z.number().int().nonnegative().nullable().optional(),
+
+  // isClosed is only on the base schema as optional so UpdateTaskSchema inherits it.
+  // CreateTaskSchema does NOT expose it (DB default false covers create).
+  isClosed: z.boolean().optional(),
 });
 
 export const CreateTaskSchema = CreateTaskBaseSchema.superRefine(dateRangeRefine);
@@ -97,5 +101,6 @@ export const ListTasksFilterSchema = z.object({
   q:          z.string().optional(),
   from:       z.string().datetime({ offset: true }).optional(),
   to:         z.string().datetime({ offset: true }).optional(),
+  isClosed:   z.enum(['true', 'false']).transform(v => v === 'true').optional(),
 });
 export type TaskListFilter = z.infer<typeof ListTasksFilterSchema>;

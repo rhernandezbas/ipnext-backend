@@ -3,12 +3,14 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed'
 > {
   watcherIds?: string[];
 }
 
-export interface UpdateTaskInput extends Partial<CreateTaskInput> {}
+export interface UpdateTaskInput extends Partial<CreateTaskInput> {
+  isClosed?: boolean;
+}
 
 export interface SchedulingRepository {
   listTasks(filter?: TaskListFilter): Promise<ScheduledTask[]>;

@@ -94,6 +94,7 @@ export function createSchedulingRouter(
       q:          req.query['q'],
       from:       req.query['from'],
       to:         req.query['to'],
+      isClosed:   req.query['isClosed'],
     };
 
     const parsed = ListTasksFilterSchema.safeParse(rawQuery);

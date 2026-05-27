@@ -54,6 +54,7 @@ const NEW_FIELDS_DEFAULTS = {
   watcherIds: [] as string[],
   travelTimeTo: null,
   travelTimeFrom: null,
+  isClosed: false,
 };
 
 export class InMemorySchedulingRepository implements SchedulingRepository {
@@ -213,6 +214,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       const to = new Date(filter.to).getTime();
       tasks = tasks.filter(t => t.startDate != null && new Date(t.startDate).getTime() <= to);
     }
+    if (filter.isClosed !== undefined) tasks = tasks.filter(t => t.isClosed === filter.isClosed);
     return tasks;
   }
 
@@ -251,6 +253,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       watcherIds: data.watcherIds ? [...data.watcherIds] : [],
       travelTimeTo: data.travelTimeTo ?? null,
       travelTimeFrom: data.travelTimeFrom ?? null,
+      isClosed: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -295,6 +298,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...(data.assigneeId !== undefined && { assigneeId: data.assigneeId }),
       ...(data.travelTimeTo !== undefined && { travelTimeTo: data.travelTimeTo }),
       ...(data.travelTimeFrom !== undefined && { travelTimeFrom: data.travelTimeFrom }),
+      ...(data.isClosed !== undefined && { isClosed: data.isClosed }),
       watcherIds,
     };
     return { ...this.tasks[index] };

@@ -46,6 +46,9 @@ export interface ScheduledTask {
   // NEW — checklist (change 5)
   checklist?: TaskChecklistItem[];
 
+  // Flag: task is closed (soft-close, not deleted). Default false.
+  isClosed: boolean;
+
   // Timestamps — always present in API responses (ISO 8601 strings)
   createdAt: string;
   updatedAt: string;

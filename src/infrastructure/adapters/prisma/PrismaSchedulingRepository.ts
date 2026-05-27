@@ -75,6 +75,7 @@ export function toTask(row: any): ScheduledTask {
     watcherIds,
     travelTimeTo: row.travelTimeTo ?? null,
     travelTimeFrom: row.travelTimeFrom ?? null,
+    isClosed: row.isClosed ?? false,
     checklist: Array.isArray(row.checklist)
       ? row.checklist.map((ci: any) => ({
           id: ci.id,
@@ -135,6 +136,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       if (filter.to) startDateFilter['lte'] = new Date(filter.to);
       where['startDate'] = startDateFilter;
     }
+    if (filter?.isClosed !== undefined) where['isClosed'] = filter.isClosed;
 
     const rows = await (prisma.scheduledTask as any).findMany({
       where,
@@ -444,6 +446,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     if (data.assigneeId !== undefined) update['assigneeId'] = data.assigneeId;
     if (data.travelTimeTo !== undefined) update['travelTimeTo'] = data.travelTimeTo;
     if (data.travelTimeFrom !== undefined) update['travelTimeFrom'] = data.travelTimeFrom;
+    if (data.isClosed !== undefined) update['isClosed'] = data.isClosed;
     return update;
   }
 }
