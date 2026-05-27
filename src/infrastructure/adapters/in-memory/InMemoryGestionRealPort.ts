@@ -1,5 +1,5 @@
 import { GestionRealPort, FetchClientsParams, FetchClientsResult } from '@domain/ports/GestionRealPort';
-import { GrClient, GrContract } from '@domain/entities/gestionReal';
+import { GrClient, GrClientBalance, GrContract } from '@domain/entities/gestionReal';
 
 /**
  * Test double for the GR upstream. Holds an in-memory client/contract dataset
@@ -9,8 +9,14 @@ import { GrClient, GrContract } from '@domain/entities/gestionReal';
 export class InMemoryGestionRealPort implements GestionRealPort {
   clients: GrClient[] = [];
   contractsByClient: Record<string, GrContract[]> = {};
+  /** Preset balances by grClienteId for test doubles. */
+  balancesByClient: Record<string, GrClientBalance> = {};
   /** Records every fetchClients call for assertions. */
   calls: FetchClientsParams[] = [];
+  /** Records every fetchClientBalance call for assertions. */
+  balanceCalls: string[] = [];
+  /** When set, fetchClientBalance throws this error. */
+  balanceError?: Error;
 
   async fetchClients(params: FetchClientsParams): Promise<FetchClientsResult> {
     this.calls.push(params);
@@ -31,6 +37,19 @@ export class InMemoryGestionRealPort implements GestionRealPort {
 
   async fetchContractsByClient(grClienteId: string): Promise<GrContract[]> {
     return this.contractsByClient[grClienteId] ?? [];
+  }
+
+  async fetchClientBalance(grClienteId: string): Promise<GrClientBalance> {
+    this.balanceCalls.push(grClienteId);
+    if (this.balanceError) throw this.balanceError;
+    return this.balancesByClient[grClienteId] ?? {
+      grClienteId,
+      amount: 0,
+      currency: null,
+      invoicesQty: 0,
+      paymentUrls: {},
+      raw: {},
+    };
   }
 }
 

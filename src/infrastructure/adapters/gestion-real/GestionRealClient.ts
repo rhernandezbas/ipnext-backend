@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import crypto from 'crypto';
 import { GestionRealPort, FetchClientsParams, FetchClientsResult } from '@domain/ports/GestionRealPort';
-import { GrClient, GrContract } from '@domain/entities/gestionReal';
+import { GrClient, GrClientBalance, GrContract } from '@domain/entities/gestionReal';
 
 export interface GestionRealClientOptions {
   baseUrl: string;
@@ -64,6 +64,15 @@ export class GestionRealClient implements GestionRealPort {
       { auth: this.auth() },
     );
     return parseContractsResponse(data, grClienteId);
+  }
+
+  async fetchClientBalance(grClienteId: string): Promise<GrClientBalance> {
+    const { data } = await this.http.post(
+      '',
+      { action: 'cliente', cliente_id: Number(grClienteId) },
+      { auth: this.auth() },
+    );
+    return parseClientBalanceResponse(grClienteId, data);
   }
 }
 
@@ -142,6 +151,81 @@ export function parseContractsResponse(data: unknown, grClienteId: string): GrCo
     modificado: str(c.modificado),
     raw: c,
   }));
+}
+
+/**
+ * Parse the GR `cliente` action response into a normalized GrClientBalance.
+ *
+ * The real payload structure (captured in Phase 0):
+ *   { error:"0", clientes: [ { idcustomer, cuentas: { debt, invoices_qty, payments_url_saldos } } ] }
+ *
+ * Defensive: returns amount=0 on any missing/malformed data so callers never break.
+ * Handles both point-decimal ("65722.07") and AR-locale ("1.234,56") formats.
+ */
+export function parseClientBalanceResponse(grClienteId: string, data: unknown): GrClientBalance {
+  const zero: GrClientBalance = { grClienteId, amount: 0, currency: null, invoicesQty: 0, paymentUrls: {}, raw: {} };
+
+  try {
+    const root = (data ?? {}) as Record<string, unknown>;
+    const clientes = Array.isArray(root.clientes) ? root.clientes as Record<string, unknown>[] : [];
+    if (clientes.length === 0) return zero;
+
+    const cliente = clientes[0];
+    const raw = cliente as Record<string, unknown>;
+    const cuentas = cliente.cuentas as Record<string, unknown> | undefined;
+    if (!cuentas) return { ...zero, raw };
+
+    const debtRaw = str(cuentas.debt);
+    const amount = parseArNumber(debtRaw);
+    const invoicesQty = parseInt(String(cuentas.invoices_qty ?? '0'), 10) || 0;
+
+    // Extract payment URLs from payments_url_saldos
+    const paymentUrls: Record<string, string> = {};
+    const urlsObj = cuentas.payments_url_saldos;
+    if (urlsObj && typeof urlsObj === 'object') {
+      for (const [k, v] of Object.entries(urlsObj as Record<string, unknown>)) {
+        if (typeof v === 'string' && v) paymentUrls[k] = v;
+      }
+    }
+
+    return {
+      grClienteId,
+      amount,
+      currency: amount > 0 ? 'ARS' : null,
+      invoicesQty,
+      paymentUrls,
+      raw,
+    };
+  } catch {
+    return zero;
+  }
+}
+
+/**
+ * Parse an Argentine or plain-decimal number string to a JS number.
+ * Handles:
+ *   "65722.07"   → 65722.07  (plain decimal, GR's actual format from Phase 0)
+ *   "1.234,56"   → 1234.56   (AR locale: thousands dot, decimal comma)
+ *   ""  / null   → 0
+ *   0 (numeric)  → 0
+ */
+function parseArNumber(s: string | null): number {
+  if (s === null || s === '') return 0;
+  const trimmed = s.trim();
+  if (trimmed === '') return 0;
+
+  // AR locale: contains comma (decimal separator in es-AR)
+  // Pattern: "1.234,56" — thousands dot, comma decimal
+  if (trimmed.includes(',')) {
+    // Replace thousands separator (dot) and replace comma with dot
+    const normalized = trimmed.replace(/\./g, '').replace(',', '.');
+    const n = parseFloat(normalized);
+    return isFinite(n) ? n : 0;
+  }
+
+  // Plain decimal or integer: "65722.07", "0", "65722"
+  const n = parseFloat(trimmed);
+  return isFinite(n) ? n : 0;
 }
 
 /** Pull the first PPPoE username out of the GR "conexiones" object. */

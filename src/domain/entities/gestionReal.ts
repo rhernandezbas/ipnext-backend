@@ -26,6 +26,24 @@ export interface GrClient {
   raw: Record<string, unknown>;
 }
 
+/**
+ * Normalized balance from the GR `cliente` action.
+ * amount = 0 means no outstanding debt; null fields = unknown/not-yet-fetched.
+ */
+export interface GrClientBalance {
+  grClienteId: string;
+  /** Outstanding debt total in the local currency (ARS). 0 = no debt. */
+  amount: number;
+  /** Currency code, e.g. "ARS". Null when GR omits it. */
+  currency: string | null;
+  /** Number of outstanding invoices. */
+  invoicesQty: number;
+  /** Payment URLs by provider (e.g. MercadoPago). */
+  paymentUrls?: Record<string, string>;
+  /** Full raw `cliente` payload for debug/fidelity. */
+  raw: Record<string, unknown>;
+}
+
 export interface GrContract {
   /** GR contract id. */
   grContratoId: string;
