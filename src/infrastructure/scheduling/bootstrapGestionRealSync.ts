@@ -26,7 +26,7 @@ export function bootstrapGestionRealSync(): GestionRealSyncScheduler | null {
   const client = new GestionRealClient({ baseUrl: gr.baseUrl, cuit: gr.cuit, secret: gr.secret });
   const mirror = new PrismaClientMirrorRepository();
   const state = new PrismaSyncStateRepository();
-  const syncClients = new SyncGestionRealClients(client, mirror, state);
+  const syncClients = new SyncGestionRealClients(client, mirror, state, { estados: gr.estados });
   const syncContracts = new SyncGestionRealContracts(client, mirror);
 
   return new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: gr.intervalMs });

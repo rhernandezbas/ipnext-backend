@@ -38,5 +38,7 @@ export const config = {
     cuit: process.env.GR_CUIT ?? '',
     secret: process.env.GR_SECRET ?? '',
     intervalMs: parseInt(process.env.GR_SYNC_INTERVAL_MS ?? '180000', 10),
+    // estado codes to sync — default 1=Activo, 2=Deudor.
+    estados: (process.env.GR_SYNC_ESTADOS ?? '1,2').split(',').map(s => s.trim()).filter(Boolean),
   },
 };

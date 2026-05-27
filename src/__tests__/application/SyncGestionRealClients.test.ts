@@ -97,6 +97,27 @@ describe('SyncGestionRealClients', () => {
     expect(mirror.clients.size).toBe(1);
   });
 
+  it('only syncs the configured estados (e.g. activos + deudores)', async () => {
+    sync = new SyncGestionRealClients(gr, mirror, state, { now: () => now, pageSize: 100, estados: ['1', '2'] });
+    gr.clients = [
+      { ...makeClient('1'), statusCode: '1' }, // Activo   → included
+      { ...makeClient('2'), statusCode: '2' }, // Deudor   → included
+      { ...makeClient('3'), statusCode: '3' }, // Inactivo → excluded
+      { ...makeClient('4'), statusCode: '6' }, // Baja     → excluded
+    ];
+    const res = await sync.execute();
+
+    expect(res.fetched).toBe(2);
+    expect(mirror.clients.has('1')).toBe(true);
+    expect(mirror.clients.has('2')).toBe(true);
+    expect(mirror.clients.has('3')).toBe(false);
+    // queried each estado segment, never an unfiltered call
+    const estadosQueried = gr.calls.map(c => c.estado);
+    expect(estadosQueried).toContain('1');
+    expect(estadosQueried).toContain('2');
+    expect(estadosQueried.every(e => e === '1' || e === '2')).toBe(true);
+  });
+
   it('records an error result and rethrows when the upstream fails', async () => {
     jest.spyOn(gr, 'fetchClients').mockRejectedValueOnce(new Error('GR down'));
     await expect(sync.execute()).rejects.toThrow('GR down');

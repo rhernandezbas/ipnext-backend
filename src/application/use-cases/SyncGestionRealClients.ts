@@ -19,6 +19,11 @@ export interface SyncRunResult {
 export interface SyncOptions {
   now?: () => Date;
   pageSize?: number;
+  /**
+   * GR estado codes to sync (1=Activo, 2=Deudor, 3=Inactivo, 4=Incobrable, 6=Baja).
+   * Omit/empty → a single unfiltered scan (all estados).
+   */
+  estados?: string[];
 }
 
 /**
@@ -33,6 +38,7 @@ export interface SyncOptions {
 export class SyncGestionRealClients {
   private readonly now: () => Date;
   private readonly pageSize: number;
+  private readonly estados: (string | undefined)[];
 
   constructor(
     private readonly gr: GestionRealPort,
@@ -42,6 +48,8 @@ export class SyncGestionRealClients {
   ) {
     this.now = opts.now ?? (() => new Date());
     this.pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
+    // Each segment is queried independently; undefined means "no estado filter".
+    this.estados = opts.estados && opts.estados.length > 0 ? opts.estados : [undefined];
   }
 
   async execute(): Promise<SyncRunResult> {
@@ -55,26 +63,29 @@ export class SyncGestionRealClients {
     const touchedClientIds: string[] = [];
 
     try {
-      let offset = 0;
-      // Loop pages until we've consumed everything the server reports.
-      // total is read from the first response and used as the upper bound.
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const params: FetchClientsParams = { cantidad: this.pageSize, offset };
-        if (mode === 'delta' && prior?.cursor) {
-          params.fechaTipo = 'm';
-          params.fechaDesde = prior.cursor;
-          params.fechaHasta = runDate;
+      // Each estado segment is paginated independently from offset 0.
+      for (const estado of this.estados) {
+        let offset = 0;
+        // total is read from each response and used as the upper bound.
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const params: FetchClientsParams = { cantidad: this.pageSize, offset };
+          if (estado) params.estado = estado;
+          if (mode === 'delta' && prior?.cursor) {
+            params.fechaTipo = 'm';
+            params.fechaDesde = prior.cursor;
+            params.fechaHasta = runDate;
+          }
+          const { total, clients } = await this.gr.fetchClients(params);
+          for (const client of clients) {
+            const { created: wasCreated } = await this.mirror.upsertClient(client);
+            if (wasCreated) created++; else updated++;
+            touchedClientIds.push(client.grClienteId);
+            fetched++;
+          }
+          offset += this.pageSize;
+          if (clients.length === 0 || offset >= total) break;
         }
-        const { total, clients } = await this.gr.fetchClients(params);
-        for (const client of clients) {
-          const { created: wasCreated } = await this.mirror.upsertClient(client);
-          if (wasCreated) created++; else updated++;
-          touchedClientIds.push(client.grClienteId);
-          fetched++;
-        }
-        offset += this.pageSize;
-        if (clients.length === 0 || offset >= total) break;
       }
     } catch (err) {
       await this.state.save({
