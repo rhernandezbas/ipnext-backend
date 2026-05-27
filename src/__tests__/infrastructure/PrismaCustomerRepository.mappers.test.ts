@@ -24,6 +24,7 @@ describe('PrismaCustomerRepository mappers', () => {
       const c = toCustomer(row);
       expect(c).toEqual({
         id: 'c-1',
+        grClienteId: null,
         name: 'Juan García',
         email: 'juan@example.com',
         phone: '+54 911 5550-0001',
