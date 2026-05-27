@@ -38,6 +38,8 @@ export interface GrContract {
   /** inicio "DD-MM-YYYY". */
   startDate: string | null;
   address: string | null;
+  lat: number | null;
+  lng: number | null;
   pppoeUsername: string | null;
   /** Raw GR modification timestamp "DD-MM-YYYY HH:MM:SS". */
   modificado: string | null;

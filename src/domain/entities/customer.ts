@@ -24,6 +24,9 @@ export interface Service {
   status: string;
   startDate: string;
   endDate: string;
+  address: string | null;
+  lat: number | null;
+  lng: number | null;
 }
 
 export interface ClientLog {

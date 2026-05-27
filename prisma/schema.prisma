@@ -214,6 +214,9 @@ model Service {
   status    String          @default("active")
   startDate DateTime
   endDate   DateTime?
+  address   String?
+  lat       Float?
+  lng       Float?
   createdAt DateTime        @default(now())
   client    Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
   tasks     ScheduledTask[]
