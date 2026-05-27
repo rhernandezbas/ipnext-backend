@@ -8,6 +8,7 @@ import { prisma } from '../../database/prisma';
 export function toCustomer(row: any): Customer {
   return {
     id: row.id,
+    grClienteId: row.grClienteId ?? null,
     name: row.name,
     email: row.email,
     phone: row.phone,

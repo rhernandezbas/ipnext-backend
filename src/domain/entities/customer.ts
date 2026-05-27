@@ -2,6 +2,8 @@ export type CustomerStatus = 'active' | 'late' | 'blocked' | 'inactive';
 
 export interface Customer {
   id: string;
+  /** External Gestión Real client id, when this row came from the GR mirror. */
+  grClienteId?: string | null;
   name: string;
   email: string;
   phone: string;
