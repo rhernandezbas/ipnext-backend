@@ -5,19 +5,26 @@ import type { Ticket } from '../../domain/entities/ticket';
 const mockTicket: Ticket = {
   id: '1',
   subject: 'Internet caído',
-  clientId: '42',
-  clientName: 'Alice García',
-  priority: 'alta',
-  status: 'abierto',
   description: 'No hay señal.',
-  createdAt: '2024-01-01',
+  customerId: 'c42',
+  customerName: 'Alice García',
+  assigneeId: null,
+  assigneeName: null,
+  grCasoId: null,
+  priority: 'high',
+  status: 'open',
+  createdAt: '2024-01-01T00:00:00Z',
+  updatedAt: '2024-01-01T00:00:00Z',
 };
 
 function makeRepo(overrides?: Partial<TicketRepository>): TicketRepository {
   return {
     list: jest.fn(),
+    getById: jest.fn(),
     getStats: jest.fn(),
     create: jest.fn().mockResolvedValue(mockTicket),
+    update: jest.fn(),
+    close: jest.fn(),
     ...overrides,
   };
 }
@@ -28,9 +35,8 @@ describe('CreateTicket', () => {
     const uc = new CreateTicket(repo);
     const data: CreateTicketData = {
       subject: 'Internet caído',
-      clientId: '42',
-      priority: 'alta',
       description: 'No hay señal.',
+      customerId: 'c42',
     };
 
     const result = await uc.execute(data);
@@ -46,24 +52,37 @@ describe('CreateTicket', () => {
     const uc = new CreateTicket(repo);
 
     await expect(
-      uc.execute({ subject: 'x', clientId: '1', priority: 'baja', description: 'y' })
+      uc.execute({ subject: 'x', description: 'y' })
     ).rejects.toThrow('Upstream error');
   });
 
-  it('passes optional assignedTo field', async () => {
+  it('passes optional assigneeId field', async () => {
     const repo = makeRepo();
     const uc = new CreateTicket(repo);
 
     await uc.execute({
       subject: 'Test',
-      clientId: '1',
-      priority: 'media',
       description: 'Test',
-      assignedTo: 'agent-7',
+      assigneeId: 'admin-7',
     });
 
     expect(repo.create).toHaveBeenCalledWith(
-      expect.objectContaining({ assignedTo: 'agent-7' })
+      expect.objectContaining({ assigneeId: 'admin-7' })
+    );
+  });
+
+  it('passes optional customerId field', async () => {
+    const repo = makeRepo();
+    const uc = new CreateTicket(repo);
+
+    await uc.execute({
+      subject: 'Test',
+      description: 'Test',
+      customerId: 'client-5',
+    });
+
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ customerId: 'client-5' })
     );
   });
 });
