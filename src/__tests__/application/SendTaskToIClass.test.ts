@@ -167,4 +167,22 @@ describe('SendTaskToIClass', () => {
     const { useCase } = setup();
     await expect(useCase.execute('nope', ENVIAR_STAGE.id)).rejects.toBeInstanceOf(TaskNotFoundError);
   });
+
+  it('resolves "Registrado en IClass" within the SAME workflow as the target stage (homonym stages)', async () => {
+    // Another workflow has a homonymous "Registrado en IClass" stage that MUST NOT be picked.
+    const OTHER_WF = 'wf-2';
+    const { tasks, stages, iclass, useCase } = setup();
+    stages.addDirect({
+      id: 'stage-registrado-other', workflowId: OTHER_WF, name: 'Registrado en IClass',
+      category: 'enProgreso', order: 6, color: null,
+    });
+    fullTask(tasks);
+
+    // Pass the target stage's workflow so resolution is scoped to WF, not wf-2.
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
+
+    // Must resolve the one in WF (target stage's workflow), not the wf-2 homonym.
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+    expect(iclass.createdOrders).toHaveLength(1);
+  });
 });

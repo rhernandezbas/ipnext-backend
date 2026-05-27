@@ -320,12 +320,12 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
 
   // ── IClass integration ────────────────────────────────────────────────────
 
-  async getStageByName(name: string): Promise<Stage | null> {
+  async getStageByName(name: string, workflowId?: string): Promise<Stage | null> {
     if (!this.stageRepo) return null;
     // No listAll on the port — scan via the seeded Default workflow lookup is not enough,
     // so we rely on the injected stage repo's direct helper if present.
-    const anyRepo = this.stageRepo as unknown as { findByName?: (n: string) => Promise<Stage | null> };
-    if (typeof anyRepo.findByName === 'function') return anyRepo.findByName(name);
+    const anyRepo = this.stageRepo as unknown as { findByName?: (n: string, wf?: string) => Promise<Stage | null> };
+    if (typeof anyRepo.findByName === 'function') return anyRepo.findByName(name, workflowId);
     return null;
   }
 

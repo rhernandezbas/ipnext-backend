@@ -94,8 +94,9 @@ export class InMemoryStageRepository implements StageRepository {
   }
 
   // Helper: resolve a stage by name (used by InMemorySchedulingRepository.getStageByName)
-  async findByName(name: string): Promise<Stage | null> {
-    const s = this.stages.find(s => s.name === name);
+  // When workflowId is provided, the lookup is scoped to that workflow.
+  async findByName(name: string, workflowId?: string): Promise<Stage | null> {
+    const s = this.stages.find(s => s.name === name && (workflowId == null || s.workflowId === workflowId));
     return s ? { ...s } : null;
   }
 }

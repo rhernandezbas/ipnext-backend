@@ -26,8 +26,12 @@ export interface SchedulingRepository {
   setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null>;
 
   // IClass integration (task-send-to-iclass)
-  /** Resolve a Stage by its name (stages are identified by name, not hardcoded id). */
-  getStageByName(name: string): Promise<Stage | null>;
+  /**
+   * Resolve a Stage by its name (stages are identified by name, not hardcoded id).
+   * When `workflowId` is provided, the lookup is scoped to that workflow so that
+   * homonymous stages in different workflows do not collide.
+   */
+  getStageByName(name: string, workflowId?: string): Promise<Stage | null>;
   /** Persist the IClass service order code on a task after a successful OS creation. */
   setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null>;
 

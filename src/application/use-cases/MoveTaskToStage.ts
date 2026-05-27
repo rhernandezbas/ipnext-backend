@@ -22,7 +22,9 @@ export class MoveTaskToStage {
 
     // Hook: moving to "Enviar a IClass" delegates to the dedicated use case (AD-1).
     if (this.sendTaskToIClass && stage.name === ENVIAR_A_ICLASS_STAGE_NAME) {
-      return this.sendTaskToIClass.execute(taskId, stageId);
+      // Pass the target stage's workflow so "Registrado en IClass" is resolved
+      // within the SAME workflow (avoids homonym collisions across workflows).
+      return this.sendTaskToIClass.execute(taskId, stageId, stage.workflowId);
     }
 
     const updated = await this.tasks.moveTaskToStage(taskId, stageId);

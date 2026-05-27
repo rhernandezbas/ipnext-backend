@@ -3,14 +3,14 @@
  * Covers REQ-FF-READ-1, REQ-FF-TOGGLE-1, REQ-FF-AUTH-1.
  */
 import request from 'supertest';
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
 import cookieParser from 'cookie-parser';
 import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { ListFeatureFlags } from '../../application/use-cases/ListFeatureFlags';
 import { GetFeatureFlag } from '../../application/use-cases/GetFeatureFlag';
 import { SetFeatureFlag } from '../../application/use-cases/SetFeatureFlag';
 import { createFeatureFlagsRouter } from '../../infrastructure/http/routes/featureFlags.routes';
-import { DomainError } from '../../domain/errors';
+import { errorHandler } from '../../infrastructure/http/middleware/errorHandler';
 import type { AuthProvider } from '../../domain/ports/AuthProvider';
 
 function buildApp() {
@@ -31,15 +31,9 @@ function buildApp() {
 
   app.use('/api/admin/feature-flags', createFeatureFlagsRouter(authProvider, listUC, getUC, setUC));
 
-  // Mirror the global error handler mapping for DomainError.
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
-    if (err instanceof DomainError) {
-      const statusMap: Record<string, number> = { FLAG_NOT_FOUND: 404 };
-      res.status(statusMap[err.code] ?? 400).json({ error: err.message, code: err.code });
-      return;
-    }
-    res.status(500).json({ error: 'Internal server error' });
-  });
+  // Exercise the REAL production error handler so the FLAG_NOT_FOUND mapping
+  // cannot drift out from under this test.
+  app.use(errorHandler);
 
   return { app, repo };
 }

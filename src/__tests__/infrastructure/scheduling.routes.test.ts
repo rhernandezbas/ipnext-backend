@@ -12,9 +12,8 @@ import { MoveTaskToStage } from '../../application/use-cases/MoveTaskToStage';
 import { SendTaskToIClass } from '../../application/use-cases/SendTaskToIClass';
 import { InMemoryIClassClient } from '../../infrastructure/adapters/in-memory/InMemoryIClassClient';
 import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
-import { DomainError } from '../../domain/errors';
-import { MissingRequiredFieldsError } from '../../domain/errors/scheduling';
 import { createSchedulingRouter } from '../../infrastructure/http/routes/scheduling.routes';
+import { errorHandler } from '../../infrastructure/http/middleware/errorHandler';
 import { User } from '../../domain/entities/auth';
 import { AuthProvider } from '../../domain/ports/AuthProvider';
 import { Stage } from '../../domain/entities/workflow';
@@ -1024,28 +1023,8 @@ describe('PUT /api/scheduling/:id — watcher replace-set (new fields)', () => {
 const ICLASS_STAGE_SEND       = '20000000-0000-4000-a000-000000000001'; // "Enviar a IClass"
 const ICLASS_STAGE_REGISTERED = '20000000-0000-4000-a000-000000000002'; // "Registrado en IClass"
 
-// Error handler mirroring the production statusMap (app.ts) for the IClass codes,
-// including propagation of missingFields when the error carries them.
-function iclassErrorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
-  if (err instanceof DomainError) {
-    const statusMap: Record<string, number> = {
-      TASK_NOT_FOUND: 404,
-      STAGE_NOT_FOUND: 404,
-      MISSING_REQUIRED_FIELDS: 422,
-      ICLASS_NODE_NOT_FOUND: 422,
-      ICLASS_UNAVAILABLE: 502,
-    };
-    const status = statusMap[err.code] ?? 400;
-    const body: Record<string, unknown> = { error: err.message, code: err.code };
-    if (err instanceof MissingRequiredFieldsError) {
-      body['missingFields'] = err.missingFields;
-    }
-    res.status(status).json(body);
-    return;
-  }
-  res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
-}
-
+// Exercise the REAL production error handler (single source of truth) so the
+// route tests fail if the status mapping drifts in app.ts.
 function buildIClassApp(opts: {
   flagEnabled: boolean;
   nodeCity?: string | null;       // node that IClass knows about (matches task city when equal)
@@ -1076,7 +1055,7 @@ function buildIClassApp(opts: {
     new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
     moveTaskToStage, new FakeAuthProvider(),
   ));
-  app.use(iclassErrorHandler);
+  app.use(errorHandler);
 
   return { app, repo, iclass };
 }

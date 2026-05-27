@@ -471,8 +471,8 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
 
   // ── IClass integration ────────────────────────────────────────────────────
 
-  async getStageByName(name: string): Promise<Stage | null> {
-    const row = await (prisma.stage as any).findFirst({ where: { name } });
+  async getStageByName(name: string, workflowId?: string): Promise<Stage | null> {
+    const row = await (prisma.stage as any).findFirst({ where: { name, ...(workflowId ? { workflowId } : {}) } });
     if (!row) return null;
     return {
       id: row.id,

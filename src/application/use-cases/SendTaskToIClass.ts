@@ -34,7 +34,11 @@ export class SendTaskToIClass {
     private readonly iclass: IClassPort,
   ) {}
 
-  async execute(taskId: string, targetStageId: string): Promise<ScheduledTask> {
+  /**
+   * @param workflowId Workflow of the target ("Enviar a IClass") stage. Used to resolve the
+   *   "Registrado en IClass" stage within the SAME workflow, avoiding homonym collisions.
+   */
+  async execute(taskId: string, targetStageId: string, workflowId?: string): Promise<ScheduledTask> {
     const task = await this.tasks.getTask(taskId);
     if (!task) throw new TaskNotFoundError(taskId);
 
@@ -46,7 +50,7 @@ export class SendTaskToIClass {
 
     // 2. Idempotency: OS already created → just advance the stage.
     if (task.iclassOrderCode != null) {
-      return this.moveToRegistrado(taskId);
+      return this.moveToRegistrado(taskId, workflowId);
     }
 
     // 3. Validate the 5 required fields (in canonical order).
@@ -80,7 +84,7 @@ export class SendTaskToIClass {
 
     // 6. Persist the orderCode + advance the stage.
     await this.tasks.setIClassOrderCode(taskId, orderCode);
-    return this.moveToRegistrado(taskId);
+    return this.moveToRegistrado(taskId, workflowId);
   }
 
   private async move(taskId: string, stageId: string): Promise<ScheduledTask> {
@@ -89,8 +93,8 @@ export class SendTaskToIClass {
     return moved;
   }
 
-  private async moveToRegistrado(taskId: string): Promise<ScheduledTask> {
-    const stage = await this.tasks.getStageByName(REGISTRADO_STAGE_NAME);
+  private async moveToRegistrado(taskId: string, workflowId?: string): Promise<ScheduledTask> {
+    const stage = await this.tasks.getStageByName(REGISTRADO_STAGE_NAME, workflowId);
     if (!stage) throw new StageNotFoundError(REGISTRADO_STAGE_NAME);
     return this.move(taskId, stage.id);
   }
