@@ -116,3 +116,17 @@ STRICT TDD: test rojo primero, luego implementación, luego verde. `npm test` y 
 - [x] V.6 Flag ON, datos OK → OS creada SIN fecha, `iclassOrderCode` guardado, stage = "Registrado en IClass". (scheduling.routes.test.ts + SendTaskToIClass.test.ts)
 - [x] V.7 Idempotencia: reintentar sobre tarea con orderCode no duplica OS. (SendTaskToIClass.test.ts, Fase 3)
 - [x] V.8 `npm test` verde (993 passed, 9 skipped), `tsc --noEmit` verde.
+
+---
+
+## Fase 6 — Fixes post-deploy (en prod, verificados)
+
+> Bugs/ajustes descubiertos al validar la feature contra IClass producción. Runbook: `docs/iclass-integration.md`.
+
+- [x] 6.1 **Config de secrets**: `ICLASS_USERNAME/PASSWORD/THIRD_PARTY_ID/DEFAULT_SO_TYPE` como GitHub Secrets, inyectados en `deploy.yml`. Sin ellos el factory cae al cliente in-memory (node-not-found). (commit `a906edd3`)
+- [x] 6.2 **Fix `customerCode`**: usar `grClienteId ?? splynxId ?? login` (corto) en vez del UUID (`ICLERR_0045/0050`). + `IClassRejectedError` → 422 `ICLASS_REJECTED` con `reason` (en vez de enmascarar como 502). (commit `c57abbb5`)
+- [x] 6.3 **Match de nodo accent-insensitive** (`Luján` ≡ `Lujan`). (commit `c2f3a099`)
+- [x] 6.4 **`soCode` = `task.sequenceNumber`** (correlación OS↔tarea). (commit `9b492ad2`)
+- [x] 6.5 **Migración generada y aplicada** (`20260527130000_feature_flags_and_iclass_order_code`, + seed idempotente del flag). (commit `215acaae`)
+- [x] 6.6 **Frontend**: modal maneja `ICLASS_REJECTED` con `reason`. (repo ipnext-frontend, commit `fa1bafd`)
+- [x] 6.7 **Verificado end-to-end en prod**: tarea de ronald → OS `MPOPFE5W`, stage "Registrado en IClass", `customerCode` `204366`.
