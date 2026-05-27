@@ -186,6 +186,10 @@ model Client {
   country          String?
   login            String          @unique
   customAttributes Json?
+  // GR balance fields — null until first fetch; 0 = no debt
+  balanceDue       Decimal?        @db.Decimal(12, 2)
+  balanceCurrency  String?
+  lastBalanceAt    DateTime?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   services         Service[]
