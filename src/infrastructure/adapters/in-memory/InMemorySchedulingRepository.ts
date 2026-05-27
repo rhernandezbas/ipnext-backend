@@ -284,13 +284,13 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     const task: ScheduledTask = {
       id: String(nextId++),
       sequenceNumber: nextSequenceNumber++,
-      // Deprecated fields (accepted but not authoritative)
-      assignedTo: data.assignedTo ?? null,
-      assignedToId: data.assignedToId ?? null,
-      clientId: data.clientId ?? null,
-      clientName: data.clientName ?? null,
-      scheduledDate: data.scheduledDate ?? null,
-      scheduledTime: data.scheduledTime ?? null,
+      // Deprecated fields — no longer written (phase 2)
+      assignedTo: null,
+      assignedToId: null,
+      clientId: null,
+      clientName: null,
+      scheduledDate: null,
+      scheduledTime: null,
       // Core fields
       title: data.title,
       description: data.description ?? null,
@@ -343,13 +343,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
 
     this.tasks[index] = {
       ...current,
-      // Deprecated fields — update if present in data
-      ...(data.assignedTo !== undefined && { assignedTo: data.assignedTo }),
-      ...(data.assignedToId !== undefined && { assignedToId: data.assignedToId }),
-      ...(data.clientId !== undefined && { clientId: data.clientId }),
-      ...(data.clientName !== undefined && { clientName: data.clientName }),
-      ...(data.scheduledDate !== undefined && { scheduledDate: data.scheduledDate }),
-      ...(data.scheduledTime !== undefined && { scheduledTime: data.scheduledTime }),
+      // Deprecated fields — no longer written (phase 2)
       // Core fields
       ...(data.title !== undefined && { title: data.title }),
       ...(data.description !== undefined && { description: data.description }),

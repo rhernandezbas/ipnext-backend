@@ -419,6 +419,48 @@ describe('POST /api/scheduling - validation', () => {
   });
 });
 
+// ─── Phase 2: legacy fields in POST body are ignored (not persisted) ─────────
+
+describe('POST /api/scheduling — phase 2: legacy fields stripped', () => {
+  const baseBody = {
+    title: 'Task phase2 test',
+    priority: 'normal',
+    estimatedHours: 1,
+    category: 'other',
+  };
+
+  it('sending assignedTo in body does not persist it (response has null)', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...baseBody, assignedTo: 'Carlos Técnico' });
+    expect(res.status).toBe(201);
+    // assignedTo is still in the entity shape (phase 3 removes it) but must be null
+    expect(res.body.assignedTo).toBeNull();
+  });
+
+  it('sending clientId in body does not persist it (response has null)', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...baseBody, clientId: 'cli-999' });
+    expect(res.status).toBe(201);
+    expect(res.body.clientId).toBeNull();
+  });
+
+  it('sending scheduledDate in body does not persist it (response has null)', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...baseBody, scheduledDate: '2026-05-10' });
+    expect(res.status).toBe(201);
+    expect(res.body.scheduledDate).toBeNull();
+  });
+});
+
 // ─── REQ-UPDATE: Validation tests ───────────────────────────────────────────
 
 describe('PUT /api/scheduling/:id - validation', () => {
@@ -471,14 +513,8 @@ describe('PATCH /:id/stage - projectName', () => {
     const created = await repo.createTask({
       title: 'Task with project',
       description: null,
-      assignedTo: null,
-      assignedToId: null,
-      clientId: null,
-      clientName: null,
       stageId: DEFAULT_STAGE_ID_PENDING,
       priority: 'normal',
-      scheduledDate: '2026-05-10',
-      scheduledTime: '09:00',
       estimatedHours: 1,
       address: null,
       coordinates: null,
@@ -527,14 +563,8 @@ describe('PATCH /:id/stage - completedAt', () => {
     const created = await repo.createTask({
       title: 'completedAt test',
       description: null,
-      assignedTo: null,
-      assignedToId: null,
-      clientId: null,
-      clientName: null,
       stageId: DEFAULT_STAGE_ID_PENDING,
       priority: 'normal',
-      scheduledDate: '2026-05-10',
-      scheduledTime: '09:00',
       estimatedHours: 1,
       address: null,
       coordinates: null,
@@ -578,14 +608,8 @@ describe('PATCH /:id/stage - completedAt', () => {
     const created = await repo.createTask({
       title: 'preserve completedAt test',
       description: null,
-      assignedTo: null,
-      assignedToId: null,
-      clientId: null,
-      clientName: null,
       stageId: DEFAULT_STAGE_ID_PENDING,
       priority: 'normal',
-      scheduledDate: '2026-05-10',
-      scheduledTime: '09:00',
       estimatedHours: 1,
       address: null,
       coordinates: null,

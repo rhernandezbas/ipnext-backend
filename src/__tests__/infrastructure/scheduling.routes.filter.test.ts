@@ -45,12 +45,6 @@ const ASSIGNEE_Y = 'assignee-yyyy-000-0000-000000000001';
 
 const BASE_TASK = {
   description: null,
-  assignedTo: null,
-  assignedToId: null,
-  clientId: null,
-  clientName: null,
-  scheduledDate: null,
-  scheduledTime: null,
   priority: 'normal' as const,
   estimatedHours: 1,
   address: null,

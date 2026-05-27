@@ -433,14 +433,8 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     return {
       title: data.title,
       description: data.description ?? null,
-      assignedTo: data.assignedTo ?? null,
-      assignedToId: data.assignedToId ?? null,
-      clientId: data.clientId ?? null,
-      clientName: data.clientName ?? null,
       stageId: data.stageId!,
       priority: data.priority,
-      scheduledDate: data.scheduledDate ?? null,
-      scheduledTime: data.scheduledTime ?? null,
       estimatedHours: data.estimatedHours,
       address: data.address ?? null,
       lat: data.coordinates?.lat ?? null,
@@ -466,14 +460,8 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     const update: Record<string, unknown> = {};
     if (data.title !== undefined) update['title'] = data.title;
     if (data.description !== undefined) update['description'] = data.description;
-    if (data.assignedTo !== undefined) update['assignedTo'] = data.assignedTo;
-    if (data.assignedToId !== undefined) update['assignedToId'] = data.assignedToId;
-    if (data.clientId !== undefined) update['clientId'] = data.clientId;
-    if (data.clientName !== undefined) update['clientName'] = data.clientName;
     if (data.stageId !== undefined) update['stageId'] = data.stageId;
     if (data.priority !== undefined) update['priority'] = data.priority;
-    if (data.scheduledDate !== undefined) update['scheduledDate'] = data.scheduledDate;
-    if (data.scheduledTime !== undefined) update['scheduledTime'] = data.scheduledTime;
     if (data.estimatedHours !== undefined) update['estimatedHours'] = data.estimatedHours;
     if (data.address !== undefined) update['address'] = data.address;
     if (data.coordinates !== undefined) {

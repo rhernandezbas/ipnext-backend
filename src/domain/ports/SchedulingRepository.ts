@@ -4,6 +4,8 @@ import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
   'id' | 'sequenceNumber' | 'stageCategory' | 'status' | 'customerName' | 'customerCity' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt'
+  // Deprecated input fields — no longer written (phase 2)
+  | 'assignedTo' | 'assignedToId' | 'clientId' | 'clientName' | 'scheduledDate' | 'scheduledTime'
 > {
   watcherIds?: string[];
 }

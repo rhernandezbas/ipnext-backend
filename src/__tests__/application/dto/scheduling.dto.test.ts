@@ -128,17 +128,56 @@ describe('CreateTaskSchema — travel time fields', () => {
   });
 });
 
-describe('CreateTaskSchema — deprecated fields still optional (no breakage)', () => {
-  it('still accepts scheduledDate and scheduledTime', () => {
-    const r = CreateTaskSchema.safeParse({
-      ...BASE_VALID,
-      scheduledDate: '2026-05-10',
-      scheduledTime: '09:00',
-    });
+describe('CreateTaskSchema — phase 2: legacy fields stripped', () => {
+  it('legacy fields in body are not present in parsed output (assignedTo)', () => {
+    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, assignedTo: 'Carlos' });
     expect(r.success).toBe(true);
+    if (r.success) {
+      expect('assignedTo' in r.data).toBe(false);
+    }
   });
 
-  it('accepts body with only required fields (no deprecated fields)', () => {
+  it('legacy fields in body are not present in parsed output (assignedToId)', () => {
+    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, assignedToId: 'admin-1' });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect('assignedToId' in r.data).toBe(false);
+    }
+  });
+
+  it('legacy fields in body are not present in parsed output (clientId)', () => {
+    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, clientId: 'cli-1' });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect('clientId' in r.data).toBe(false);
+    }
+  });
+
+  it('legacy fields in body are not present in parsed output (clientName)', () => {
+    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, clientName: 'Juan' });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect('clientName' in r.data).toBe(false);
+    }
+  });
+
+  it('legacy fields in body are not present in parsed output (scheduledDate)', () => {
+    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, scheduledDate: '2026-05-10' });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect('scheduledDate' in r.data).toBe(false);
+    }
+  });
+
+  it('legacy fields in body are not present in parsed output (scheduledTime)', () => {
+    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, scheduledTime: '09:00' });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect('scheduledTime' in r.data).toBe(false);
+    }
+  });
+
+  it('accepts body with only required fields (no legacy fields)', () => {
     const r = CreateTaskSchema.safeParse(BASE_VALID);
     expect(r.success).toBe(true);
   });

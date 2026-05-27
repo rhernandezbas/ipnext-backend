@@ -1,0 +1,81 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Node.js + TypeScript 5.5 (ES2022, strict) + Express 4 + Prisma 7 + PostgreSQL
+  Architecture: Hexagonal/Clean — domain / application / infrastructure. Manual DI wiring in app.ts (617 lines).
+  Path aliases: @domain/*, @application/*, @infrastructure/*
+  Testing: Jest 30 + ts-jest + supertest. Command: npm test. No coverageThreshold.
+  Style: No ESLint, no Prettier. PascalCase classes, kebab-case routes, verb+noun use-cases.
+  Source of truth: PostgreSQL. Splynx API is temporary reference — do NOT add new Splynx dependencies.
+
+strict_tdd: true
+
+testing:
+  strict_tdd: true
+  detected: "2026-05-09"
+  runner:
+    command: "npm test"
+    framework: "jest"
+    config: "jest.config.js"
+  layers:
+    unit: { available: true, tool: "jest + ts-jest" }
+    integration: { available: true, tool: "jest + supertest" }
+    e2e: { available: false }
+  coverage:
+    available: true
+    command: "npm run test:coverage"
+    threshold_enforced: false
+  quality:
+    linter: { available: false }
+    type_checker: { available: true, command: "tsc --noEmit" }
+    formatter: { available: false }
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Identify affected modules/packages
+    - Flag if change touches src/infrastructure/http/app.ts (God Object risk)
+    - Flag if change adds Splynx dependencies (architectural constraint: Splynx is being removed)
+  specs:
+    - Use Given/When/Then format for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+    - Respect hexagonal boundaries: application MUST NOT import from infrastructure
+  tasks:
+    - Group tasks by phase (infrastructure, implementation, testing)
+    - Use hierarchical numbering (1.1, 1.2, etc.)
+    - Keep tasks small enough to complete in one session
+  apply:
+    - Follow existing code patterns and conventions
+    - STRICT TDD: write failing test first, then implementation
+    - Do NOT couple application use-cases to concrete infra types — use domain interfaces
+    tdd: true
+    test_command: "npm test"
+  verify:
+    test_command: "npm test"
+    build_command: "tsc --noEmit"
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas (large removals)
+
+known_debt:
+  - id: naming-mismatch
+    severity: HIGH
+    description: >
+      24/26 files in src/infrastructure/adapters/prisma/Prisma*.ts export classes named InMemory*Repository.
+      Only PrismaMonitoringRepository.ts and PrismaProjectRepository.ts are coherent.
+    files: "src/infrastructure/adapters/prisma/"
+  - id: di-violation
+    severity: HIGH
+    description: >
+      3 use-cases in application layer import concrete infra types directly, violating DIP.
+    files:
+      - "src/application/use-cases/ExportReport.ts"
+      - "src/application/use-cases/GenerateReport.ts"
+      - "src/application/use-cases/ListReportDefinitions.ts"
+  - id: god-object-app
+    severity: MEDIUM
+    description: "src/infrastructure/http/app.ts is 617 lines — all manual DI wiring in one file."
+    files: "src/infrastructure/http/app.ts"

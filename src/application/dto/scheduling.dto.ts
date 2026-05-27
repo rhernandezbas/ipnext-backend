@@ -44,14 +44,6 @@ const CreateTaskBaseSchema = z.object({
   title:          z.string().min(1),
   description:    z.string().nullable().optional(),
 
-  // DEPRECATED — still accepted for one release
-  assignedTo:     z.string().nullable().optional(),
-  assignedToId:   z.string().nullable().optional(),
-  clientId:       z.string().nullable().optional(),
-  clientName:     z.string().nullable().optional(),
-  scheduledDate:  z.string().nullable().optional(),
-  scheduledTime:  z.string().nullable().optional(),
-
   stageId:        z.string().min(1).optional(),
   priority:       z.string().min(1),   // free text backed by the TaskPriority catalog
   estimatedHours: z.number().nonnegative(),
