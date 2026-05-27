@@ -42,6 +42,11 @@ jobs:
             -e SPLYNX_API_URL="http://localhost" \
             -e SPLYNX_API_KEY="test" \
             -e SPLYNX_API_SECRET="test" \
+            -e GR_SYNC_ENABLED="${{ secrets.GR_SYNC_ENABLED }}" \
+            -e GR_CUIT="${{ secrets.GR_CUIT }}" \
+            -e GR_SECRET="${{ secrets.GR_SECRET }}" \
+            -e GR_SYNC_INTERVAL_MS="${{ secrets.GR_SYNC_INTERVAL_MS }}" \
+            -e GR_SYNC_ESTADOS="${{ secrets.GR_SYNC_ESTADOS }}" \
             ipnext-backend:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
