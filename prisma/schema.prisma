@@ -597,6 +597,9 @@ model ScheduledTask {
   // NEW — checklist back-relation
   checklist      TaskChecklistItem[]
 
+  // NEW — comments back-relation
+  comments       TaskComment[]
+
   // Flag: task is closed (soft-close, not deleted)
   isClosed       Boolean           @default(false)
 
@@ -660,6 +663,30 @@ model TaskChecklistItem {
   updatedAt          DateTime          @updatedAt
 
   @@index([taskId, order])
+}
+
+model TaskComment {
+  id          String                   @id @default(uuid())
+  taskId      String
+  task        ScheduledTask            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorName  String
+  body        String
+  createdAt   DateTime                 @default(now())
+  attachments TaskCommentAttachment[]
+
+  @@index([taskId])
+}
+
+model TaskCommentAttachment {
+  id         String      @id @default(uuid())
+  commentId  String
+  comment    TaskComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  url        String
+  filename   String
+  mimeType   String?
+  sizeBytes  Int?
+
+  @@index([commentId])
 }
 
 // =============================================

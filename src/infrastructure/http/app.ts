@@ -69,6 +69,7 @@ import { CreateBackup } from '@application/use-cases/CreateBackup';
 import { GetClientPortalSettings } from '@application/use-cases/GetClientPortalSettings';
 import { UpdateClientPortalSettings } from '@application/use-cases/UpdateClientPortalSettings';
 import { createSchedulingRouter } from './routes/scheduling.routes';
+import { createTaskCommentsRouter } from './routes/taskComments.routes';
 import { createWorkflowsRouter } from './routes/workflows.routes';
 import { ReplaceTaskTemplateItems } from '@application/use-cases/ReplaceTaskTemplateItems';
 import { AddChecklistItem } from '@application/use-cases/AddChecklistItem';
@@ -104,6 +105,10 @@ import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
 import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
+import { AddTaskComment } from '@application/use-cases/AddTaskComment';
+import { ListTaskComments } from '@application/use-cases/ListTaskComments';
+import { DeleteTaskComment } from '@application/use-cases/DeleteTaskComment';
+import { PrismaTaskCommentRepository } from '../adapters/prisma/PrismaTaskCommentRepository';
 import { ListWorkflows } from '@application/use-cases/ListWorkflows';
 import { GetWorkflow } from '@application/use-cases/GetWorkflow';
 import { CreateWorkflow } from '@application/use-cases/CreateWorkflow';
@@ -726,6 +731,13 @@ export function createApp() {
     authAdapter,
     new GetGestionRealSyncStatus(new PrismaSyncStateRepository(), new PrismaMirrorCountsRepository()),
   ));
+  // Task comments — mounted BEFORE the scheduling catch-all router to avoid /:id swallowing
+  const taskCommentRepo = new PrismaTaskCommentRepository();
+  const addTaskComment = new AddTaskComment(taskCommentRepo);
+  const listTaskComments = new ListTaskComments(taskCommentRepo);
+  const deleteTaskComment = new DeleteTaskComment(taskCommentRepo);
+  app.use('/api/scheduling', createTaskCommentsRouter(listTaskComments, addTaskComment, deleteTaskComment));
+
   // Instantiate checklist use cases (change 5)
   const taskTemplateRepoForChecklist = new PrismaTaskTemplateRepository();
   const replaceTemplateItemsUC = new ReplaceTaskTemplateItems(taskTemplateRepoForChecklist);
