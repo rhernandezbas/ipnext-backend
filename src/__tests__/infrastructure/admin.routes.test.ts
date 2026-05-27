@@ -61,17 +61,18 @@ describe('GET /api/admins', () => {
 });
 
 describe('POST /api/admins', () => {
-  it('returns 201 with new admin', async () => {
+  it('returns 201 with new admin when password is provided', async () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/admins')
-      .send({ name: 'Test Admin', email: 'test@ipnext.com.ar', role: 'viewer', status: 'active' });
+      .send({ name: 'Test Admin', email: 'test@ipnext.com.ar', role: 'viewer', status: 'active', password: 'secret123' });
 
     expect(res.status).toBe(201);
     expect(res.body.id).toBeTruthy();
     expect(res.body.name).toBe('Test Admin');
     expect(res.body.email).toBe('test@ipnext.com.ar');
     expect(res.body.role).toBe('viewer');
+    expect(res.body.passwordHash).toBeUndefined();
   });
 });
 

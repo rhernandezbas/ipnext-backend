@@ -1,47 +1,68 @@
 import { Admin, AdminActivityLog, ActivityCategory, Admin2FA } from '@domain/entities/admin';
-import { AdminRepository } from '@domain/ports/AdminRepository';
+import { AdminRepository, CreateAdminInput } from '@domain/ports/AdminRepository';
 
 let nextId = 4;
 
+interface AdminRecord {
+  admin: Admin;
+  passwordHash: string | null;
+}
+
 export class InMemoryAdminRepository implements AdminRepository {
-  private admins: Admin[] = [
-    {
-      id: '1',
-      name: 'Super Admin',
-      email: 'admin@ipnext.com.ar',
-      role: 'superadmin',
-      status: 'active',
-      createdAt: '2024-01-01T00:00:00Z',
-      lastLogin: '2026-04-28T07:00:00Z',
-    },
-    {
-      id: '2',
-      name: 'Carlos López',
-      email: 'carlos@ipnext.com.ar',
-      role: 'admin',
-      status: 'active',
-      createdAt: '2024-03-15T00:00:00Z',
-      lastLogin: '2026-04-27T15:30:00Z',
-    },
-    {
-      id: '3',
-      name: 'María Fernández',
-      email: 'maria@ipnext.com.ar',
-      role: 'viewer',
-      status: 'inactive',
-      createdAt: '2024-06-01T00:00:00Z',
-      lastLogin: null,
-    },
-    {
-      id: '4',
-      name: 'Carlos Técnico',
-      email: 'carlos@ipnext.com.ar',
-      role: 'technician',
-      status: 'active',
-      createdAt: '2025-01-15T00:00:00Z',
-      lastLogin: null,
-    },
-  ];
+  private records: AdminRecord[] = [];
+
+  // Expose passwordHash for testing purposes only
+  async findByEmailWithHash(email: string): Promise<{ admin: Admin; passwordHash: string | null } | null> {
+    const record = this.records.find(r => r.admin.email === email);
+    return record ? { admin: record.admin, passwordHash: record.passwordHash } : null;
+  }
+
+  private get admins(): Admin[] {
+    return this.records.map(r => r.admin);
+  }
+
+  constructor() {
+    // Seed initial admins (no passwordHash for legacy seeded admins)
+    const seeded: Admin[] = [
+      {
+        id: '1',
+        name: 'Super Admin',
+        email: 'admin@ipnext.com.ar',
+        role: 'superadmin',
+        status: 'active',
+        createdAt: '2024-01-01T00:00:00Z',
+        lastLogin: '2026-04-28T07:00:00Z',
+      },
+      {
+        id: '2',
+        name: 'Carlos López',
+        email: 'carlos@ipnext.com.ar',
+        role: 'admin',
+        status: 'active',
+        createdAt: '2024-03-15T00:00:00Z',
+        lastLogin: '2026-04-27T15:30:00Z',
+      },
+      {
+        id: '3',
+        name: 'María Fernández',
+        email: 'maria@ipnext.com.ar',
+        role: 'viewer',
+        status: 'inactive',
+        createdAt: '2024-06-01T00:00:00Z',
+        lastLogin: null,
+      },
+      {
+        id: '4',
+        name: 'Carlos Técnico',
+        email: 'carlos@ipnext.com.ar',
+        role: 'technician',
+        status: 'active',
+        createdAt: '2025-01-15T00:00:00Z',
+        lastLogin: null,
+      },
+    ];
+    this.records = seeded.map(admin => ({ admin, passwordHash: null }));
+  }
 
   private activityLog: AdminActivityLog[] = [
     {
@@ -167,35 +188,37 @@ export class InMemoryAdminRepository implements AdminRepository {
   ];
 
   async findAll(role?: string): Promise<Admin[]> {
-    return role ? this.admins.filter(a => a.role === role) : [...this.admins];
+    const all = this.admins;
+    return role ? all.filter(a => a.role === role) : [...all];
   }
 
   async findById(id: string): Promise<Admin | null> {
     return this.admins.find(a => a.id === id) ?? null;
   }
 
-  async create(data: Omit<Admin, 'id' | 'createdAt' | 'lastLogin'>): Promise<Admin> {
+  async create(data: CreateAdminInput): Promise<Admin> {
+    const { passwordHash, ...rest } = data;
     const admin: Admin = {
-      ...data,
+      ...rest,
       id: String(nextId++),
       createdAt: new Date().toISOString(),
       lastLogin: null,
     };
-    this.admins.push(admin);
+    this.records.push({ admin, passwordHash });
     return admin;
   }
 
   async update(id: string, data: Partial<Admin>): Promise<Admin | null> {
-    const index = this.admins.findIndex(a => a.id === id);
+    const index = this.records.findIndex(r => r.admin.id === id);
     if (index === -1) return null;
-    this.admins[index] = { ...this.admins[index], ...data };
-    return this.admins[index];
+    this.records[index] = { ...this.records[index], admin: { ...this.records[index].admin, ...data } };
+    return this.records[index].admin;
   }
 
   async delete(id: string): Promise<boolean> {
-    const index = this.admins.findIndex(a => a.id === id);
+    const index = this.records.findIndex(r => r.admin.id === id);
     if (index === -1) return false;
-    this.admins.splice(index, 1);
+    this.records.splice(index, 1);
     return true;
   }
 

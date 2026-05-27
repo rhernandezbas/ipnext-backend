@@ -45,13 +45,23 @@ export function createAdminRouter(
   });
 
   router.post('/', async (req: Request, res: Response): Promise<void> => {
-    const { name, email, role, status } = req.body as {
-      name: string;
-      email: string;
-      role: string;
-      status: 'active' | 'inactive';
+    const { name, email, role, status, password } = req.body as {
+      name?: string;
+      email?: string;
+      role?: string;
+      status?: 'active' | 'inactive';
+      password?: string;
     };
-    const admin = await createAdmin.execute({ name, email, role, status });
+
+    if (!name || !email || !role || !status || !password) {
+      res.status(400).json({
+        error: 'Missing required fields: name, email, role, status, password',
+        code: 'VALIDATION_ERROR',
+      });
+      return;
+    }
+
+    const admin = await createAdmin.execute({ name, email, role, status, password });
     res.status(201).json(admin);
   });
 

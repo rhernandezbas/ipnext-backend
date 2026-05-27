@@ -58,6 +58,7 @@ describe('CreateAdmin', () => {
       email: 'nuevo@ipnext.com.ar',
       role: 'admin',
       status: 'active',
+      password: 'pass1234',
     });
 
     expect(result.id).toBeTruthy();

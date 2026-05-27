@@ -1,5 +1,5 @@
 import { Admin, AdminActivityLog, ActivityCategory, Admin2FA } from '@domain/entities/admin';
-import { AdminRepository } from '@domain/ports/AdminRepository';
+import { AdminRepository, CreateAdminInput } from '@domain/ports/AdminRepository';
 import { prisma } from '../../database/prisma';
 import crypto from 'crypto';
 
@@ -46,13 +46,14 @@ export class PrismaAdminRepository implements AdminRepository {
     return row ? toAdmin(row) : null;
   }
 
-  async create(data: Omit<Admin, 'id' | 'createdAt' | 'lastLogin'>): Promise<Admin> {
+  async create(data: CreateAdminInput): Promise<Admin> {
     const row = await prisma.admin.create({
       data: {
         name: data.name,
         email: data.email,
         role: data.role as any,
         status: data.status as any,
+        ...(data.passwordHash !== null && { passwordHash: data.passwordHash }),
       },
     });
     return toAdmin(row);
