@@ -3,7 +3,7 @@ import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memo
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
 import { GrContract } from '@domain/entities/gestionReal';
 
-function makeContract(id: string, cli: string): GrContract {
+function makeContract(id: string, cli: string, overrides: Partial<GrContract> = {}): GrContract {
   return {
     grContratoId: id,
     grClienteId: cli,
@@ -11,9 +11,12 @@ function makeContract(id: string, cli: string): GrContract {
     status: 'Vigente',
     startDate: '01-05-2023',
     address: 'Calle 29',
+    lat: null,
+    lng: null,
     pppoeUsername: `user${id}`,
     modificado: '27-04-2026 11:01:27',
     raw: { id },
+    ...overrides,
   };
 }
 
@@ -53,5 +56,27 @@ describe('SyncGestionRealContracts', () => {
     const res = await sync.execute(['999']);
     expect(res.fetched).toBe(0);
     expect(res.created).toBe(0);
+  });
+
+  it('stores address, lat, lng when the contract has them', async () => {
+    gr.contractsByClient = {
+      '300': [makeContract('c10', '300', { address: 'CALLE 29 N?1284', lat: -35.040958, lng: -59.910656 })],
+    };
+    await sync.execute(['300']);
+    const stored = mirror.contracts.get('c10');
+    expect(stored?.address).toBe('CALLE 29 N?1284');
+    expect(stored?.lat).toBeCloseTo(-35.040958);
+    expect(stored?.lng).toBeCloseTo(-59.910656);
+  });
+
+  it('stores null address/lat/lng when the contract has none', async () => {
+    gr.contractsByClient = {
+      '301': [makeContract('c11', '301', { address: null, lat: null, lng: null })],
+    };
+    await sync.execute(['301']);
+    const stored = mirror.contracts.get('c11');
+    expect(stored?.address).toBeNull();
+    expect(stored?.lat).toBeNull();
+    expect(stored?.lng).toBeNull();
   });
 });

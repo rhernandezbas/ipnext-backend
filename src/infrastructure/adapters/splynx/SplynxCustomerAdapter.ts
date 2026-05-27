@@ -107,6 +107,9 @@ export class SplynxCustomerAdapter implements CustomerRepository {
       status: s.status ?? '',
       startDate: s.start_date ?? '',
       endDate: s.end_date ?? '',
+      address: null,
+      lat: null,
+      lng: null,
     }));
   }
 

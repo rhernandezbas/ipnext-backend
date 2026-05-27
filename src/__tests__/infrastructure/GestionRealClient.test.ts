@@ -1,5 +1,41 @@
 import { parseClientsResponse, parseContractsResponse, isoDate } from '@infrastructure/adapters/gestion-real/GestionRealClient';
 
+// Contract fixture with lat/lng populated.
+const CONTRACTS_RESPONSE_WITH_LOCATION = {
+  error: '0',
+  contratos: [
+    {
+      id: '42',
+      nombre: 'Plan 100MB',
+      inicio: '01-01-2024',
+      estado: 'Vigente',
+      domicilio: 'CALLE 29 N?1284',
+      lat: '-35.040958',
+      lng: '-59.910656',
+      conexiones: {},
+      modificado: '27-05-2026 10:00:00',
+    },
+  ],
+};
+
+// Contract fixture with empty lat/lng strings and empty domicilio.
+const CONTRACTS_RESPONSE_EMPTY_LOCATION = {
+  error: '0',
+  contratos: [
+    {
+      id: '43',
+      nombre: 'Plan 50MB',
+      inicio: '01-03-2024',
+      estado: 'Vigente',
+      domicilio: '',
+      lat: '',
+      lng: '',
+      conexiones: {},
+      modificado: '27-05-2026 11:00:00',
+    },
+  ],
+};
+
 // Real shapes captured from api.gestionreal.com.ar on 2026-05-27.
 const CLIENTS_RESPONSE = {
   error: 0,
@@ -78,6 +114,24 @@ describe('GestionRealClient parsing', () => {
     expect(k.startDate).toBe('01-05-2023');
     expect(k.pppoeUsername).toBe('RaulAranMercFibra');
     expect(k.modificado).toBe('27-04-2026 11:01:27');
+  });
+
+  it('captures lat/lng as numbers when GR provides non-empty strings', () => {
+    const contracts = parseContractsResponse(CONTRACTS_RESPONSE_WITH_LOCATION, '200');
+    expect(contracts).toHaveLength(1);
+    const k = contracts[0];
+    expect(k.address).toBe('CALLE 29 N?1284');
+    expect(k.lat).toBeCloseTo(-35.040958);
+    expect(k.lng).toBeCloseTo(-59.910656);
+  });
+
+  it('returns null for lat/lng when GR provides empty strings, and null for empty domicilio', () => {
+    const contracts = parseContractsResponse(CONTRACTS_RESPONSE_EMPTY_LOCATION, '201');
+    expect(contracts).toHaveLength(1);
+    const k = contracts[0];
+    expect(k.address).toBeNull();
+    expect(k.lat).toBeNull();
+    expect(k.lng).toBeNull();
   });
 
   it('builds the daily password date in YYYY-MM-DD', () => {

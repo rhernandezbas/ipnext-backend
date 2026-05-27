@@ -81,6 +81,9 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       plan: k.plan ?? 'Sin plan',
       status: k.status ?? 'active',
       startDate: parseGrDate(k.startDate) ?? new Date(),
+      address: k.address ?? null,
+      lat: k.lat ?? null,
+      lng: k.lng ?? null,
     };
 
     if (existing) {

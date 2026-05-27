@@ -275,6 +275,95 @@ describe('POST /api/clients/:id/documents', () => {
   });
 });
 
+describe('GET /api/clients/:id/services', () => {
+  it('returns address, lat, lng on each service item', async () => {
+    const serviceWithLocation = {
+      id: 'svc-1',
+      type: 'internet',
+      plan: '100MB',
+      ip: '10.0.0.1',
+      status: 'active',
+      startDate: '2024-01-01T00:00:00.000Z',
+      endDate: '',
+      address: 'CALLE 29 N?1284',
+      lat: -35.040958,
+      lng: -59.910656,
+    };
+
+    const app = (() => {
+      const a = express();
+      a.use(express.json());
+      a.use(cookieParser());
+
+      const listClients = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as ListClients;
+      const getDetail = { execute: jest.fn().mockResolvedValue({ id: '1', name: 'Alice', email: 'a@b.com', phone: '1', status: 'active', address: '', city: '', country: '', login: 'a', createdAt: '' }) } as unknown as GetClientDetail;
+      const getServices = { execute: jest.fn().mockResolvedValue([serviceWithLocation]) } as unknown as GetClientServices;
+      const getInvoices = { execute: jest.fn().mockResolvedValue([]) } as unknown as GetClientInvoices;
+      const getLogs = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as GetClientLogs;
+      const authProvider = { getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }) } as unknown as JwtAuthAdapter;
+      const createCustomer = { execute: jest.fn() };
+
+      a.use('/api/clients', createClientsRouter(
+        listClients, getDetail, getServices, getInvoices, getLogs, authProvider,
+        createCustomer as never,
+        { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
+        { execute: jest.fn().mockResolvedValue(true) } as never,
+      ));
+      return a;
+    })();
+
+    const res = await withAuth(request(app).get('/api/clients/1/services'));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body[0].address).toBe('CALLE 29 N?1284');
+    expect(res.body[0].lat).toBeCloseTo(-35.040958);
+    expect(res.body[0].lng).toBeCloseTo(-59.910656);
+  });
+
+  it('includes null address/lat/lng when service has no location', async () => {
+    const serviceNoLocation = {
+      id: 'svc-2',
+      type: 'internet',
+      plan: '50MB',
+      ip: '',
+      status: 'active',
+      startDate: '2024-01-01T00:00:00.000Z',
+      endDate: '',
+      address: null,
+      lat: null,
+      lng: null,
+    };
+
+    const app2 = (() => {
+      const a = express();
+      a.use(express.json());
+      a.use(cookieParser());
+
+      const listClients = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as ListClients;
+      const getDetail = { execute: jest.fn().mockResolvedValue({ id: '2', name: 'Bob', email: 'b@b.com', phone: '2', status: 'active', address: '', city: '', country: '', login: 'b', createdAt: '' }) } as unknown as GetClientDetail;
+      const getServices = { execute: jest.fn().mockResolvedValue([serviceNoLocation]) } as unknown as GetClientServices;
+      const getInvoices = { execute: jest.fn().mockResolvedValue([]) } as unknown as GetClientInvoices;
+      const getLogs = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as GetClientLogs;
+      const authProvider = { getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }) } as unknown as JwtAuthAdapter;
+      const createCustomer = { execute: jest.fn() };
+
+      a.use('/api/clients', createClientsRouter(
+        listClients, getDetail, getServices, getInvoices, getLogs, authProvider,
+        createCustomer as never,
+        { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
+        { execute: jest.fn().mockResolvedValue(true) } as never,
+      ));
+      return a;
+    })();
+
+    const res = await withAuth(request(app2).get('/api/clients/2/services'));
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toHaveProperty('address', null);
+    expect(res.body[0]).toHaveProperty('lat', null);
+    expect(res.body[0]).toHaveProperty('lng', null);
+  });
+});
+
 describe('POST /api/clients/:id/services', () => {
   it('returns 201 with created service', async () => {
     const app = buildApp();

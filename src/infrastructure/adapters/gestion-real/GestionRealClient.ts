@@ -81,6 +81,13 @@ function str(v: unknown): string | null {
   return s === '' ? null : s;
 }
 
+function numOrNull(v: unknown): number | null {
+  const s = str(v);
+  if (s === null) return null;
+  const n = parseFloat(s);
+  return isFinite(n) ? n : null;
+}
+
 function nested(obj: Record<string, unknown>, key: string, field: string): string | null {
   const node = obj[key];
   if (node && typeof node === 'object') return str((node as Record<string, unknown>)[field]);
@@ -128,7 +135,9 @@ export function parseContractsResponse(data: unknown, grClienteId: string): GrCo
     plan: str(c.nombre),
     status: str(c.estado),
     startDate: str(c.inicio),
-    address: str(c.domicilio),
+    address: str(c.domicilio) || null,
+    lat: numOrNull(c.lat),
+    lng: numOrNull(c.lng),
     pppoeUsername: firstPppoeUser(c.conexiones),
     modificado: str(c.modificado),
     raw: c,

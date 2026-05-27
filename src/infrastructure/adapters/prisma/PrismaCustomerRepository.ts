@@ -33,6 +33,9 @@ export function toService(row: any): Service {
     endDate: row.endDate
       ? (row.endDate instanceof Date ? row.endDate.toISOString() : row.endDate)
       : '',
+    address: row.address ?? null,
+    lat: row.lat ?? null,
+    lng: row.lng ?? null,
   };
 }
 
