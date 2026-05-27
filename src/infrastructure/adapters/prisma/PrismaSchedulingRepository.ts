@@ -124,6 +124,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     const where: Record<string, unknown> = {};
     if (filter?.projectId) where['projectId'] = filter.projectId;
     if (filter?.stageIds?.length) where['stageId'] = { in: filter.stageIds };
+    if (filter?.customerId) where['customerId'] = filter.customerId;
     if (filter?.partnerId) where['partnerId'] = filter.partnerId;
     if (filter?.assigneeId) where['assigneeId'] = filter.assigneeId;
     if (filter?.priority) where['priority'] = filter.priority;

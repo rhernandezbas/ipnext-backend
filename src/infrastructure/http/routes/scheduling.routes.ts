@@ -87,6 +87,7 @@ export function createSchedulingRouter(
     const rawQuery = {
       projectId:  req.query['projectId'],
       stageIds,
+      customerId: req.query['customerId'],
       partnerId:  req.query['partnerId'],
       assigneeId: req.query['assigneeId'],
       priority:   req.query['priority'],

@@ -90,6 +90,7 @@ export type MoveStageInput = z.infer<typeof MoveStageSchema>;
 export const ListTasksFilterSchema = z.object({
   projectId:  z.string().min(1).optional(),
   stageIds:   z.array(z.string().min(1)).optional(),
+  customerId: z.string().min(1).optional(),
   partnerId:  z.string().min(1).optional(),
   assigneeId: z.string().min(1).optional(),
   priority:   z.string().min(1).optional(),   // free text backed by the TaskPriority catalog
