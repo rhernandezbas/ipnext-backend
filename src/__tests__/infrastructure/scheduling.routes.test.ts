@@ -9,6 +9,11 @@ import { CreateTask } from '../../application/use-cases/CreateTask';
 import { UpdateTask } from '../../application/use-cases/UpdateTask';
 import { DeleteTask } from '../../application/use-cases/DeleteTask';
 import { MoveTaskToStage } from '../../application/use-cases/MoveTaskToStage';
+import { SendTaskToIClass } from '../../application/use-cases/SendTaskToIClass';
+import { InMemoryIClassClient } from '../../infrastructure/adapters/in-memory/InMemoryIClassClient';
+import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
+import { DomainError } from '../../domain/errors';
+import { MissingRequiredFieldsError } from '../../domain/errors/scheduling';
 import { createSchedulingRouter } from '../../infrastructure/http/routes/scheduling.routes';
 import { User } from '../../domain/entities/auth';
 import { AuthProvider } from '../../domain/ports/AuthProvider';
@@ -1011,6 +1016,168 @@ describe('PUT /api/scheduling/:id — watcher replace-set (new fields)', () => {
     // Verify watchers not changed (still ['valid-watcher'])
     const taskAfter = await repo.getTask(task.id);
     expect(taskAfter?.watcherIds).toEqual(['valid-watcher']);
+  });
+});
+
+// ─── Fase 4: PATCH /:id/stage → "Enviar a IClass" (IClass integration) ───────
+
+const ICLASS_STAGE_SEND       = '20000000-0000-4000-a000-000000000001'; // "Enviar a IClass"
+const ICLASS_STAGE_REGISTERED = '20000000-0000-4000-a000-000000000002'; // "Registrado en IClass"
+
+// Error handler mirroring the production statusMap (app.ts) for the IClass codes,
+// including propagation of missingFields when the error carries them.
+function iclassErrorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
+  if (err instanceof DomainError) {
+    const statusMap: Record<string, number> = {
+      TASK_NOT_FOUND: 404,
+      STAGE_NOT_FOUND: 404,
+      MISSING_REQUIRED_FIELDS: 422,
+      ICLASS_NODE_NOT_FOUND: 422,
+      ICLASS_UNAVAILABLE: 502,
+    };
+    const status = statusMap[err.code] ?? 400;
+    const body: Record<string, unknown> = { error: err.message, code: err.code };
+    if (err instanceof MissingRequiredFieldsError) {
+      body['missingFields'] = err.missingFields;
+    }
+    res.status(status).json(body);
+    return;
+  }
+  res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+}
+
+function buildIClassApp(opts: {
+  flagEnabled: boolean;
+  nodeCity?: string | null;       // node that IClass knows about (matches task city when equal)
+  iclassFails?: boolean;
+}) {
+  const stageRepo = new InMemoryStageRepository();
+  makeDefaultStages(stageRepo);
+  stageRepo.addDirect({ id: ICLASS_STAGE_SEND,       workflowId: 'wf-default', name: 'Enviar a IClass',       category: 'enProgreso', order: 5, color: null });
+  stageRepo.addDirect({ id: ICLASS_STAGE_REGISTERED, workflowId: 'wf-default', name: 'Registrado en IClass',  category: 'enProgreso', order: 6, color: null });
+
+  const repo = new InMemorySchedulingRepository(stageRepo);
+
+  const flags = new InMemoryFeatureFlagRepository();
+  flags.seed('iclass-integration', opts.flagEnabled);
+
+  const iclass = new InMemoryIClassClient();
+  if (opts.nodeCity) iclass.nodes = [{ code: opts.nodeCity, description: opts.nodeCity }];
+  if (opts.iclassFails) iclass.failureMode = 'unavailable';
+
+  const sendToIClass = new SendTaskToIClass(repo, flags, iclass);
+  const moveTaskToStage = new MoveTaskToStage(repo, stageRepo, sendToIClass);
+
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+  app.use('/api/scheduling', createSchedulingRouter(
+    new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+    new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
+    moveTaskToStage, new FakeAuthProvider(),
+  ));
+  app.use(iclassErrorHandler);
+
+  return { app, repo, iclass };
+}
+
+describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
+  it('flag ON + missing required fields → 422 MISSING_REQUIRED_FIELDS, task stays put', async () => {
+    const { app, repo } = buildIClassApp({ flagEnabled: true });
+    // Seed a task with a customer but missing phone + description.
+    const task = repo.seedTask({
+      id: 'iclass-1', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: null,
+      address: 'Calle 1', description: null,
+    });
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/stage`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('MISSING_REQUIRED_FIELDS');
+    expect(res.body.missingFields).toEqual(expect.arrayContaining(['phone', 'description']));
+
+    const after = await repo.getTask(task.id);
+    expect(after?.stageId).toBe(DEFAULT_STAGE_ID_PENDING);
+  });
+
+  it('flag ON + city without node → 422 ICLASS_NODE_NOT_FOUND, task stays put', async () => {
+    const { app, repo } = buildIClassApp({ flagEnabled: true, nodeCity: 'Rosario' });
+    const task = repo.seedTask({
+      id: 'iclass-2', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
+      address: 'Calle 1', description: 'Instalar',
+    });
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/stage`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('ICLASS_NODE_NOT_FOUND');
+    const after = await repo.getTask(task.id);
+    expect(after?.stageId).toBe(DEFAULT_STAGE_ID_PENDING);
+  });
+
+  it('flag ON + valid data → 200 with iclassOrderCode, task in "Registrado en IClass"', async () => {
+    const { app, repo, iclass } = buildIClassApp({ flagEnabled: true, nodeCity: 'Cordoba' });
+    iclass.nextOrderCode = 'OS-777';
+    const task = repo.seedTask({
+      id: 'iclass-3', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
+      address: 'Calle 1', description: 'Instalar',
+    });
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/stage`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(200);
+    expect(res.body.iclassOrderCode).toBe('OS-777');
+    expect(res.body.stageId).toBe(ICLASS_STAGE_REGISTERED);
+    expect(iclass.createdOrders).toHaveLength(1);
+  });
+
+  it('flag ON + IClass fails → 502 ICLASS_UNAVAILABLE, task stays put', async () => {
+    const { app, repo } = buildIClassApp({ flagEnabled: true, nodeCity: 'Cordoba', iclassFails: true });
+    const task = repo.seedTask({
+      id: 'iclass-4', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
+      address: 'Calle 1', description: 'Instalar',
+    });
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/stage`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('ICLASS_UNAVAILABLE');
+    const after = await repo.getTask(task.id);
+    expect(after?.stageId).toBe(DEFAULT_STAGE_ID_PENDING);
+  });
+
+  it('flag OFF → 200, task stays in "Enviar a IClass", IClass not called', async () => {
+    const { app, repo, iclass } = buildIClassApp({ flagEnabled: false, nodeCity: 'Cordoba' });
+    const task = repo.seedTask({
+      id: 'iclass-5', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: null, customerName: null, customerCity: null, customerPhone: null,
+      address: null, description: null,
+    });
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/stage`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(200);
+    expect(res.body.stageId).toBe(ICLASS_STAGE_SEND);
+    expect(iclass.createdOrders).toHaveLength(0);
   });
 });
 

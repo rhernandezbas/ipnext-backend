@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { GetTask } from '@application/use-cases/GetTask';
@@ -339,7 +339,7 @@ export function createSchedulingRouter(
   });
 
   // NEW: move to stage
-  router.patch('/:id/stage', auth, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/:id/stage', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = MoveStageSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -357,7 +357,9 @@ export function createSchedulingRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // IClass integration errors (MISSING_REQUIRED_FIELDS, ICLASS_NODE_NOT_FOUND,
+      // ICLASS_UNAVAILABLE) bubble up to the global error handler.
+      next(err);
     }
   });
 

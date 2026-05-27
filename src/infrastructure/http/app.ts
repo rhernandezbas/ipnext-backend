@@ -104,6 +104,8 @@ import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
+import { SendTaskToIClass } from '@application/use-cases/SendTaskToIClass';
+import { buildIClassClient } from './iclass.factory';
 import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
 import { AddTaskComment } from '@application/use-cases/AddTaskComment';
 import { ListTaskComments } from '@application/use-cases/ListTaskComments';
@@ -286,6 +288,7 @@ import { CreateHardwareAsset } from '@application/use-cases/CreateHardwareAsset'
 import { UpdateHardwareAsset } from '@application/use-cases/UpdateHardwareAsset';
 import { DeleteHardwareAsset } from '@application/use-cases/DeleteHardwareAsset';
 import { DomainError } from '@domain/errors';
+import { MissingRequiredFieldsError } from '@domain/errors/scheduling';
 import { prisma } from '../database/prisma';
 import { config } from '../config';
 import { createGponRouter } from './routes/gpon.routes';
@@ -465,7 +468,11 @@ export function createApp() {
     adminRepoForScheduling,
   );
   const deleteTask = new DeleteTask(schedulingRepo);
-  const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo);
+  // IClass integration: moving a task to "Enviar a IClass" delegates the OS
+  // creation. The on/off decision lives in the feature flag (default OFF).
+  const featureFlagRepo = new PrismaFeatureFlagRepository();
+  const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient());
+  const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo, sendTaskToIClass);
   const setTaskInventoryReview = new SetTaskInventoryReview(schedulingRepo);
 
   const listWorkflows = new ListWorkflows(workflowRepo);
@@ -855,7 +862,7 @@ export function createApp() {
   app.use('/api/notifications', createNotificationsRouter(listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification));
 
   // Feature flags — runtime toggles persisted in DB (admin-only).
-  const featureFlagRepo = new PrismaFeatureFlagRepository();
+  // featureFlagRepo is created earlier (wired into SendTaskToIClass).
   app.use('/api/admin/feature-flags', createFeatureFlagsRouter(
     authAdapter,
     new ListFeatureFlags(featureFlagRepo),
@@ -885,6 +892,9 @@ export function createApp() {
         PROJECT_CATEGORY_NOT_FOUND: 404,
         PROJECT_TYPE_NOT_FOUND: 404,
         FLAG_NOT_FOUND: 404,
+        MISSING_REQUIRED_FIELDS: 422,
+        ICLASS_NODE_NOT_FOUND: 422,
+        ICLASS_UNAVAILABLE: 502,
         AUTHENTICATION_ERROR: 401,
         SPLYNX_UNAVAILABLE: 502,
         WORKFLOW_NAME_CONFLICT: 409,
@@ -899,7 +909,12 @@ export function createApp() {
         REORDER_SET_MISMATCH: 400,
       };
       const status = statusMap[err.code] ?? 400;
-      res.status(status).json({ error: err.message, code: err.code });
+      const body: Record<string, unknown> = { error: err.message, code: err.code };
+      // Surface the missing field names so the front-end can drive its modal.
+      if (err instanceof MissingRequiredFieldsError) {
+        body['missingFields'] = err.missingFields;
+      }
+      res.status(status).json(body);
       return;
     }
     console.error('[UNHANDLED ERROR]', err);

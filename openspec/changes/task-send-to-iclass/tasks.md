@@ -83,15 +83,15 @@ STRICT TDD: test rojo primero, luego implementación, luego verde. `npm test` y 
 
 ## Fase 4 — Capa HTTP (rutas + error mapping)
 
-- [ ] 4.1 (TEST ROJO) En `src/__tests__/scheduling.routes.test.ts`: `PATCH /api/scheduling/:id/stage` →
+- [x] 4.1 (TEST ROJO) En `src/__tests__/infrastructure/scheduling.routes.test.ts`: `PATCH /api/scheduling/:id/stage` →
   - 422 `MISSING_REQUIRED_FIELDS` con `missingFields` (flag ON)
   - 422 `ICLASS_NODE_NOT_FOUND`
   - 200 con `iclassOrderCode` y stage "Registrado en IClass" (happy path)
   - 502 `ICLASS_UNAVAILABLE`
   - 200 sin tocar IClass (flag OFF)
-- [ ] 4.2 Mapear los nuevos errores de dominio en el error-handler HTTP (tabla design): 422/502/404.
-- [ ] 4.3 Wiring en `app.ts`: instanciar `IClassClient` (o InMemory según env), `SendTaskToIClass`, inyectar en `MoveTaskToStage`. Factory aparte si supera ~15 líneas (AD: God Object).
-- [ ] 4.4 (TEST VERDE) 4.1 pasa. `npm test` + `tsc --noEmit` verdes.
+- [x] 4.2 Mapear los nuevos errores de dominio en el error-handler HTTP (tabla design): 422/422/502 + propagar `missingFields`.
+- [x] 4.3 Wiring en `app.ts`: instanciar `IClassClient` (o InMemory según env) vía factory `iclass.factory.ts`, `SendTaskToIClass`, inyectar en `MoveTaskToStage`. Ruta `/stage` ahora propaga con `next(err)` al handler global.
+- [x] 4.4 (TEST VERDE) 4.1 pasa. `npm test` (993 passed, 9 skipped) + `tsc --noEmit` verdes.
   ✅ **DEPLOY GATE: feature completa, flag OFF en prod.**
 
 ---
@@ -108,11 +108,11 @@ STRICT TDD: test rojo primero, luego implementación, luego verde. `npm test` y 
 
 ## Verification Checklist
 
-- [ ] V.1 Migración aplicada: tabla `FeatureFlag` + `ScheduledTask.iclassOrderCode`. Seed crea flag OFF.
-- [ ] V.2 `PATCH /api/admin/feature-flags/iclass-integration {enabled:true|false}` persiste y sobrevive reinicio.
-- [ ] V.3 Flag OFF → mover a "Enviar a IClass" no llama IClass (200).
-- [ ] V.4 Flag ON, faltan campos → 422 con `missingFields` exactos; sin OS creada.
-- [ ] V.5 Flag ON, ciudad inválida → 422 `ICLASS_NODE_NOT_FOUND`.
-- [ ] V.6 Flag ON, datos OK → OS creada SIN fecha, `iclassOrderCode` guardado, stage = "Registrado en IClass".
-- [ ] V.7 Idempotencia: reintentar sobre tarea con orderCode no duplica OS.
-- [ ] V.8 `npm test` verde, `tsc --noEmit` verde.
+- [~] V.1 Migración aplicada: tabla `FeatureFlag` + `ScheduledTask.iclassOrderCode`. Seed crea flag OFF. PENDIENTE en deploy (P1000 contra DB local en Fase 1).
+- [~] V.2 `PATCH /api/admin/feature-flags/iclass-integration {enabled:true|false}` persiste y sobrevive reinicio. Cubierto por tests de routes (Fase 1); persistencia real depende de la migración (deploy).
+- [x] V.3 Flag OFF → mover a "Enviar a IClass" no llama IClass (200). (scheduling.routes.test.ts)
+- [x] V.4 Flag ON, faltan campos → 422 con `missingFields` exactos; sin OS creada. (scheduling.routes.test.ts)
+- [x] V.5 Flag ON, ciudad inválida → 422 `ICLASS_NODE_NOT_FOUND`. (scheduling.routes.test.ts)
+- [x] V.6 Flag ON, datos OK → OS creada SIN fecha, `iclassOrderCode` guardado, stage = "Registrado en IClass". (scheduling.routes.test.ts + SendTaskToIClass.test.ts)
+- [x] V.7 Idempotencia: reintentar sobre tarea con orderCode no duplica OS. (SendTaskToIClass.test.ts, Fase 3)
+- [x] V.8 `npm test` verde (993 passed, 9 skipped), `tsc --noEmit` verde.
