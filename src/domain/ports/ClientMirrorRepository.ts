@@ -15,4 +15,10 @@ export interface ClientMirrorRepository {
   upsertClient(client: GrClient): Promise<UpsertResult>;
   /** Upsert a Service row keyed by grContratoId, resolving its parent by grClienteId. */
   upsertContract(contract: GrContract): Promise<UpsertResult>;
+  /**
+   * Update ONLY the balance fields on a Client (by grClienteId).
+   * MUST NOT touch customAttributes, status, or any other catalog field.
+   * No-op when grClienteId is not found.
+   */
+  updateClientBalance(grClienteId: string, amount: number, currency: string | null, at: Date): Promise<void>;
 }

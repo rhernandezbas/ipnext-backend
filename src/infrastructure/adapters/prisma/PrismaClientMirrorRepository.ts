@@ -63,6 +63,18 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
     return { created: true };
   }
 
+  async updateClientBalance(grClienteId: string, amount: number, currency: string | null, at: Date): Promise<void> {
+    // Touch ONLY the three balance columns — never customAttributes, status, or catalog data.
+    await prisma.client.updateMany({
+      where: { grClienteId },
+      data: {
+        balanceDue: amount,
+        balanceCurrency: currency,
+        lastBalanceAt: at,
+      },
+    });
+  }
+
   async upsertContract(k: GrContract): Promise<UpsertResult> {
     const parent = await prisma.client.findUnique({
       where: { grClienteId: k.grClienteId },
