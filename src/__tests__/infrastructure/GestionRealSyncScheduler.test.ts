@@ -1,6 +1,7 @@
 import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
+import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
 import { GestionRealSyncScheduler } from '@infrastructure/scheduling/GestionRealSyncScheduler';
@@ -20,19 +21,30 @@ function contract(id: string, cli: string): GrContract {
   };
 }
 
+function makeScheduler(
+  gr: InMemoryGestionRealPort,
+  mirror: InMemoryClientMirrorRepository,
+  state: InMemorySyncStateRepository,
+  lock: InMemoryDistributedLock,
+): GestionRealSyncScheduler {
+  const syncClients = new SyncGestionRealClients(gr, mirror, state);
+  const syncContracts = new SyncGestionRealContracts(gr, mirror);
+  return new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: 1000, silent: true }, lock);
+}
+
 describe('GestionRealSyncScheduler', () => {
   let gr: InMemoryGestionRealPort;
   let mirror: InMemoryClientMirrorRepository;
   let state: InMemorySyncStateRepository;
+  let lock: InMemoryDistributedLock;
   let scheduler: GestionRealSyncScheduler;
 
   beforeEach(() => {
     gr = new InMemoryGestionRealPort();
     mirror = new InMemoryClientMirrorRepository();
     state = new InMemorySyncStateRepository();
-    const syncClients = new SyncGestionRealClients(gr, mirror, state);
-    const syncContracts = new SyncGestionRealContracts(gr, mirror);
-    scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: 1000, silent: true });
+    lock = new InMemoryDistributedLock();
+    scheduler = makeScheduler(gr, mirror, state, lock);
   });
 
   it('runOnce syncs clients and then their contracts', async () => {
@@ -62,12 +74,44 @@ describe('GestionRealSyncScheduler', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('does not start a second run while one is in flight (lock)', async () => {
+  it('does not start a second run while one is in flight (intra-process lock)', async () => {
     gr.clients = [client('1')];
-    // Two concurrent runs — the second must be skipped.
+    // Two concurrent runs — the second must be skipped (intra-process inFlight guard).
     const [a, b] = await Promise.all([scheduler.runOnce(), scheduler.runOnce()]);
     const skipped = [a, b].filter(r => r.skipped).length;
     expect(skipped).toBe(1);
+  });
+
+  it('skips sync when distributed lock cannot be acquired (another instance holds it)', async () => {
+    gr.clients = [client('42')];
+    lock.forceAcquireFails = true;
+
+    const summary = await scheduler.runOnce();
+
+    expect(summary.skipped).toBe(true);
+    // syncClients must NOT have been called.
+    expect(mirror.clients.size).toBe(0);
+  });
+
+  it('releases the distributed lock after a successful run', async () => {
+    gr.clients = [client('7')];
+    const releaseSpy = jest.spyOn(lock, 'release');
+
+    await scheduler.runOnce();
+
+    expect(releaseSpy).toHaveBeenCalledWith('gr-sync');
+    expect(lock.heldKeys.has('gr-sync')).toBe(false);
+  });
+
+  it('releases the distributed lock even when the sync throws', async () => {
+    jest.spyOn(gr, 'fetchClients').mockRejectedValueOnce(new Error('upstream down'));
+    const releaseSpy = jest.spyOn(lock, 'release');
+
+    const summary = await scheduler.runOnce();
+
+    expect(summary.error).toContain('upstream down');
+    expect(releaseSpy).toHaveBeenCalledWith('gr-sync');
+    expect(lock.heldKeys.has('gr-sync')).toBe(false);
   });
 
   it('swallows upstream errors so the interval keeps ticking', async () => {

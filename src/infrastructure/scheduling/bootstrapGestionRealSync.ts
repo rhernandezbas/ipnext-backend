@@ -5,6 +5,7 @@ import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRep
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
 import { GestionRealSyncScheduler } from './GestionRealSyncScheduler';
+import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 
 /**
  * Composition root for the GR mirror sync. Returns a ready-to-start scheduler,
@@ -28,6 +29,9 @@ export function bootstrapGestionRealSync(): GestionRealSyncScheduler | null {
   const state = new PrismaSyncStateRepository();
   const syncClients = new SyncGestionRealClients(client, mirror, state, { estados: gr.estados });
   const syncContracts = new SyncGestionRealContracts(client, mirror);
+  // PgAdvisoryLock uses a dedicated pg.Client (not the pool) so that session
+  // advisory locks are tied to one stable connection across acquire/release.
+  const lock = new PgAdvisoryLock();
 
-  return new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: gr.intervalMs });
+  return new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: gr.intervalMs }, lock);
 }
