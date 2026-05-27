@@ -1,10 +1,12 @@
 import { toTicket } from '../../infrastructure/adapters/prisma/PrismaTicketRepository';
 
+// Phase 2: status is now a relation object { name: string } from the DB.
 const baseRow = {
   id: 'ticket-1',
   subject: 'Sin señal',
   description: 'No hay Internet',
-  status: 'open',
+  status: { name: 'open' },   // Phase 2: relation, not a bare string
+  statusId: 'catalog-id-1',
   priority: 'high',
   customerId: 'client-1',
   customer: { id: 'client-1', name: 'Alice García' },
@@ -23,6 +25,22 @@ describe('toTicket mapper', () => {
     expect(ticket.description).toBe('No hay Internet');
     expect(ticket.status).toBe('open');
     expect(ticket.priority).toBe('high');
+  });
+
+  it('Phase 2 contract: exposes status as the catalog NAME string (not the statusId)', () => {
+    const ticket = toTicket(baseRow);
+    // The API contract requires status to be the human-readable name
+    expect(ticket.status).toBe('open');
+    // statusId must NOT leak into the domain object
+    expect((ticket as any).statusId).toBeUndefined();
+  });
+
+  it('Phase 2: maps any catalog status name correctly', () => {
+    const pendingRow = { ...baseRow, status: { name: 'pending' } };
+    expect(toTicket(pendingRow).status).toBe('pending');
+
+    const closedRow = { ...baseRow, status: { name: 'closed' } };
+    expect(toTicket(closedRow).status).toBe('closed');
   });
 
   it('derives customerName from JOIN only (not from free text)', () => {

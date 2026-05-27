@@ -1,5 +1,11 @@
 export type TicketPriority = 'low' | 'medium' | 'high';
-export type TicketStatus = 'open' | 'pending' | 'closed';
+
+// Phase 2: statuses are now dynamic (driven by TicketStatusCatalog table).
+// The type is widened from the old 'open' | 'pending' | 'closed' union to string
+// so new catalog entries work without code changes.
+// The well-known canonical values are still 'open', 'pending', 'closed'.
+// The API always exposes status as the catalog name string, never as a DB id.
+export type TicketStatus = string;
 
 export interface Ticket {
   id: string;

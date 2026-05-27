@@ -1,4 +1,4 @@
-import { Ticket, TicketStats, TicketStatus, TicketPriority } from '@domain/entities/ticket';
+import { Ticket, TicketStats, TicketPriority } from '@domain/entities/ticket';
 import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
 import { PaginatedResult } from '@application/dto/pagination';
 
@@ -137,6 +137,6 @@ export class InMemoryTicketRepository implements TicketRepository {
   }
 
   async close(id: string): Promise<Ticket | null> {
-    return this.update(id, { status: 'closed' as TicketStatus });
+    return this.update(id, { status: 'closed' });
   }
 }

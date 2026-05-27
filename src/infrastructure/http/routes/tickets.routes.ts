@@ -6,11 +6,14 @@ import { GetTicket } from '@application/use-cases/GetTicket';
 import { UpdateTicketStatus } from '@application/use-cases/UpdateTicketStatus';
 import { UpdateTicket } from '@application/use-cases/UpdateTicket';
 import { CloseTicket } from '@application/use-cases/CloseTicket';
-import { TicketStatus, TicketPriority } from '@domain/entities/ticket';
+import { TicketPriority } from '@domain/entities/ticket';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 
-const VALID_STATUSES: TicketStatus[] = ['open', 'pending', 'closed'];
+// Phase 2: TicketStatus is now a dynamic string from the catalog.
+// This whitelist preserves the frontend contract (status filter accepts exactly these three names).
+// If the catalog grows, update this list or replace with a catalog lookup.
+const VALID_STATUSES: string[] = ['open', 'pending', 'closed'];
 const VALID_PRIORITIES: TicketPriority[] = ['low', 'medium', 'high'];
 
 // In-memory store for ticket replies (out-of-scope for Prisma this iteration — AD-6)
@@ -60,7 +63,7 @@ export function createTicketsRouter(
         page: page ? +page : 1,
         limit: limit ? +limit : 25,
         search,
-        status: VALID_STATUSES.includes(status as TicketStatus) ? (status as TicketStatus) : undefined,
+        status: VALID_STATUSES.includes(status) ? status : undefined,
         priority: VALID_PRIORITIES.includes(priority as TicketPriority) ? (priority as TicketPriority) : undefined,
         customerId,
       });
@@ -92,7 +95,7 @@ export function createTicketsRouter(
     const id = req.params['id'] as string;
     const { status } = req.body as { status?: string };
 
-    if (!status || !VALID_STATUSES.includes(status as TicketStatus)) {
+    if (!status || !VALID_STATUSES.includes(status)) {
       res.status(400).json({
         error: `Invalid or missing status. Must be one of: ${VALID_STATUSES.join(', ')}`,
         code: 'VALIDATION_ERROR',
@@ -101,7 +104,7 @@ export function createTicketsRouter(
     }
 
     try {
-      const ticket = await updateStatus.execute(id, status as TicketStatus);
+      const ticket = await updateStatus.execute(id, status);
       if (!ticket) {
         res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
         return;

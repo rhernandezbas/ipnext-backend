@@ -1135,20 +1135,8 @@ model SyncState {
 // SUPPORT DOMAIN
 // =============================================
 
-// Phase 1: enum TicketStatus kept for backward compatibility while Ticket.status
-// is still an enum column. Phase 2 (requires live DB + multi-step migration — see
-// openspec/changes/tickets-status-catalog/design.md): convert Ticket.status to a
-// FK relation to TicketStatus table, then drop this enum.
-enum TicketStatus {
-  open
-  pending
-  closed
-}
-
-// Editable catalog of ticket statuses, with a colour and a sort weight.
-// Named TicketStatusCatalog in Prisma to avoid collision with enum TicketStatus.
-// Coexists with enum TicketStatus during Phase 1 (see design.md migration strategy).
-// Phase 2: rename to TicketStatus once the enum is dropped.
+// Phase 2 complete: TicketStatus enum dropped; Ticket.status is now a FK → TicketStatusCatalog.
+// The API still exposes status as a string (the catalog name) — see PrismaTicketRepository.
 model TicketStatusCatalog {
   id        String   @id @default(uuid())
   name      String   @unique
@@ -1156,6 +1144,7 @@ model TicketStatusCatalog {
   weight    Int
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  tickets   Ticket[]
 
   @@map("TicketStatusCatalog")
 }
@@ -1167,28 +1156,32 @@ enum TicketPriority {
 }
 
 model Ticket {
-  id          String         @id @default(uuid())
+  id          String                @id @default(uuid())
   subject     String
   description String
 
-  status      TicketStatus   @default(open)
-  priority    TicketPriority @default(medium)
+  // Phase 2: status is now a FK to TicketStatusCatalog.
+  // The API still exposes `status` as the catalog name string (not the id).
+  statusId    String
+  status      TicketStatusCatalog   @relation(fields: [statusId], references: [id], onUpdate: Cascade, onDelete: Restrict)
+
+  priority    TicketPriority        @default(medium)
 
   // FK al cliente — espejo de ScheduledTask.customerId
   customerId  String?
-  customer    Client?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customer    Client?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
-  // Asignación opcional a un Admin — espejo de ScheduledTask.assigneeId
+  // Asignacion opcional a un Admin — espejo de ScheduledTask.assigneeId
   assigneeId  String?
-  assignee    Admin?         @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assignee    Admin?                @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
-  // Previsto para la futura integración de "casos" de Gestión Real (out-of-scope)
-  grCasoId    String?        @unique
+  // Previsto para la futura integracion de "casos" de Gestion Real (out-of-scope)
+  grCasoId    String?               @unique
 
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
 
   @@index([customerId])
-  @@index([status])
+  @@index([statusId])
   @@index([assigneeId])
 }

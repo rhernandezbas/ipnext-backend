@@ -3,6 +3,7 @@ import { PaginatedResult, PaginatedQuery } from '../../application/dto/paginatio
 
 export interface ListTicketsQuery extends PaginatedQuery {
   search?: string;
+  // Phase 2: TicketStatus = string (dynamic catalog), so any name is valid here.
   status?: TicketStatus;
   priority?: TicketPriority;
   customerId?: string;            // habilita "Tickets (N)" por cliente
@@ -19,6 +20,8 @@ export interface CreateTicketData {
 export interface UpdateTicketData {
   subject?: string;
   description?: string;
+  // Phase 2: status is the catalog name string (not a DB id).
+  // The repository resolves name→id at the persistence boundary.
   status?: TicketStatus;
   priority?: TicketPriority;
   assigneeId?: string | null;

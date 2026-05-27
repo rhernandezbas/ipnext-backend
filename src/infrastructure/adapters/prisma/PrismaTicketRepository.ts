@@ -3,13 +3,21 @@
  * NOTE: This file uses `as any` casts on the Prisma client calls because
  * `prisma generate` must be run after the migration is applied.
  * The casts are safe — the schema and columns are correct.
+ *
+ * Phase 2 contract:
+ *  - DB stores statusId (FK to TicketStatusCatalog).
+ *  - The domain Ticket carries `status` as the catalog NAME string.
+ *  - This repository is the translation boundary: name↔id is resolved HERE.
+ *    Use cases and DTOs never see statusId.
  */
 import { Ticket, TicketStats } from '@domain/entities/ticket';
 import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
 import { PaginatedResult } from '@application/dto/pagination';
+import { TicketStatusUnknownError } from '@domain/errors/tickets';
 import { prisma } from '../../database/prisma';
 
 const INCLUDE = {
+  status: true,                                          // Phase 2: resolve name from relation
   customer: { select: { id: true, name: true } },
   assignee: { select: { id: true, name: true } },
 } as const;
@@ -19,16 +27,33 @@ export function toTicket(row: any): Ticket {
     id: row.id,
     subject: row.subject,
     description: row.description,
-    status: row.status,
+    // Phase 2: status is a relation; expose name (the API contract string).
+    // If the relation is already a string (e.g. test fixtures), use it directly.
+    status: typeof row.status === 'object' && row.status !== null
+      ? row.status.name
+      : row.status,
     priority: row.priority,
     customerId: row.customerId ?? null,
-    customerName: row.customer?.name ?? null,    // JOIN-derived only
+    customerName: row.customer?.name ?? null,
     assigneeId: row.assigneeId ?? null,
-    assigneeName: row.assignee?.name ?? null,    // JOIN-derived only
+    assigneeName: row.assignee?.name ?? null,
     grCasoId: row.grCasoId ?? null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
   };
+}
+
+/**
+ * Resolve a status NAME to the matching TicketStatusCatalog id.
+ * Throws TicketStatusUnknownError if no catalog entry matches.
+ */
+async function resolveStatusId(name: string): Promise<string> {
+  const row = await (prisma as any).ticketStatusCatalog.findFirst({
+    where: { name },
+    select: { id: true },
+  });
+  if (!row) throw new TicketStatusUnknownError(name);
+  return row.id;
 }
 
 export class PrismaTicketRepository implements TicketRepository {
@@ -36,8 +61,11 @@ export class PrismaTicketRepository implements TicketRepository {
     const where: Record<string, unknown> = {};
 
     if (query.customerId) where['customerId'] = query.customerId;
-    if (query.status) where['status'] = query.status;
     if (query.priority) where['priority'] = query.priority;
+    // Phase 2: filter by status name via the relation
+    if (query.status) {
+      where['status'] = { name: query.status };
+    }
     if (query.search) {
       where['OR'] = [
         { subject: { contains: query.search, mode: 'insensitive' } },
@@ -80,9 +108,9 @@ export class PrismaTicketRepository implements TicketRepository {
     const [totalOpen, totalPending, totalClosed, byLow, byMedium, byHigh] = await (
       prisma as any
     ).$transaction([
-      (prisma as any).ticket.count({ where: { status: 'open' } }),
-      (prisma as any).ticket.count({ where: { status: 'pending' } }),
-      (prisma as any).ticket.count({ where: { status: 'closed' } }),
+      (prisma as any).ticket.count({ where: { status: { name: 'open' } } }),
+      (prisma as any).ticket.count({ where: { status: { name: 'pending' } } }),
+      (prisma as any).ticket.count({ where: { status: { name: 'closed' } } }),
       (prisma as any).ticket.count({ where: { priority: 'low' } }),
       (prisma as any).ticket.count({ where: { priority: 'medium' } }),
       (prisma as any).ticket.count({ where: { priority: 'high' } }),
@@ -97,11 +125,16 @@ export class PrismaTicketRepository implements TicketRepository {
   }
 
   async create(data: CreateTicketData): Promise<Ticket> {
+    // Default status is 'open'; resolve to catalog id.
+    const statusName = 'open';
+    const statusId = await resolveStatusId(statusName);
+
     const row = await (prisma as any).ticket.create({
       data: {
         subject: data.subject,
         description: data.description,
         priority: data.priority ?? 'medium',
+        statusId,
         ...(data.customerId != null && { customerId: data.customerId }),
         ...(data.assigneeId != null && { assigneeId: data.assigneeId }),
       },
@@ -115,9 +148,12 @@ export class PrismaTicketRepository implements TicketRepository {
       const updateData: Record<string, unknown> = {};
       if (data.subject !== undefined) updateData['subject'] = data.subject;
       if (data.description !== undefined) updateData['description'] = data.description;
-      if (data.status !== undefined) updateData['status'] = data.status;
       if (data.priority !== undefined) updateData['priority'] = data.priority;
       if (data.assigneeId !== undefined) updateData['assigneeId'] = data.assigneeId;
+      // Phase 2: resolve status name → id at the repo boundary.
+      if (data.status !== undefined) {
+        updateData['statusId'] = await resolveStatusId(data.status);
+      }
 
       const row = await (prisma as any).ticket.update({
         where: { id },
@@ -125,8 +161,10 @@ export class PrismaTicketRepository implements TicketRepository {
         include: INCLUDE,
       });
       return toTicket(row);
-    } catch {
-      return null;
+    } catch (err: any) {
+      // Prisma P2025 = record not found
+      if (err?.code === 'P2025') return null;
+      throw err;
     }
   }
 

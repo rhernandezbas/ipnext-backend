@@ -47,8 +47,7 @@ export class PrismaTicketStatusRepository implements TicketStatusRepository {
   }
 
   async countTicketsUsing(statusName: string): Promise<number> {
-    // Phase 1: Ticket.status is still an enum string column.
-    // Phase 2 (after FK migration): use statusId FK count instead.
-    return (prisma as any).ticket.count({ where: { status: statusName } });
+    // Phase 2: Ticket.status is a FK relation; count by catalog name via the relation.
+    return (prisma as any).ticket.count({ where: { status: { name: statusName } } });
   }
 }

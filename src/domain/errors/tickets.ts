@@ -1,5 +1,12 @@
 import { DomainError } from './index';
 
+export class TicketStatusUnknownError extends DomainError {
+  constructor(name: string) {
+    super(`Unknown ticket status: "${name}"`, 'TICKET_STATUS_UNKNOWN');
+    this.name = 'TicketStatusUnknownError';
+  }
+}
+
 export class TicketStatusNotFoundError extends DomainError {
   constructor(id: string) {
     super(`TicketStatus with id ${id} not found`, 'TICKET_STATUS_NOT_FOUND');
