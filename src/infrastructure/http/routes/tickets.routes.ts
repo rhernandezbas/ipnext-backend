@@ -2,34 +2,22 @@ import { Router, Request, Response } from 'express';
 import { ListTickets } from '@application/use-cases/ListTickets';
 import { GetTicketStats } from '@application/use-cases/GetTicketStats';
 import { CreateTicket } from '@application/use-cases/CreateTicket';
+import { GetTicket } from '@application/use-cases/GetTicket';
+import { UpdateTicketStatus } from '@application/use-cases/UpdateTicketStatus';
+import { UpdateTicket } from '@application/use-cases/UpdateTicket';
+import { CloseTicket } from '@application/use-cases/CloseTicket';
+import { TicketStatus, TicketPriority } from '@domain/entities/ticket';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
-import { incrementTickets, decrementTickets } from '../../adapters/in-memory/shared-stores';
-import { SplynxUnavailableError } from '@domain/errors';
 
-/**
- * Wrap an async handler so a Splynx outage (or any error) returns a clean HTTP
- * response instead of bubbling into an unhandled rejection that crashes the
- * process. Splynx down → 503; anything else → 500.
- */
-function splynxSafe(fn: (req: Request, res: Response) => Promise<void>) {
-  return async (req: Request, res: Response): Promise<void> => {
-    try {
-      await fn(req, res);
-    } catch (err) {
-      if (err instanceof SplynxUnavailableError) {
-        res.status(503).json({ error: 'El servicio Splynx no está disponible temporalmente', code: 'SPLYNX_UNAVAILABLE' });
-        return;
-      }
-      console.error('[tickets] unexpected error', err);
-      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
-    }
-  };
-}
+const VALID_STATUSES: TicketStatus[] = ['open', 'pending', 'closed'];
+const VALID_PRIORITIES: TicketPriority[] = ['low', 'medium', 'high'];
 
+// In-memory store for ticket replies (out-of-scope for Prisma this iteration — AD-6)
+// TicketReply stays in-memory until the TicketReply model is implemented in a future change.
 export interface TicketReply {
   id: number;
-  ticketId: number;
+  ticketId: string;
   message: string;
   authorId: number;
   authorName: string;
@@ -37,146 +25,160 @@ export interface TicketReply {
   isInternal: boolean;
 }
 
-// In-memory store for ticket replies (keyed by ticketId)
-const ticketRepliesStore = new Map<number, TicketReply[]>([
-  [1, [
-    { id: 1, ticketId: 1, message: 'Recibimos tu reporte, estamos investigando el problema.', authorId: 1, authorName: 'Soporte Técnico', createdAt: '2024-01-01T10:00:00Z', isInternal: false },
-    { id: 2, ticketId: 1, message: 'El equipo de campo ya fue enviado a revisar la infraestructura.', authorId: 2, authorName: 'Admin', createdAt: '2024-01-01T11:30:00Z', isInternal: false },
-    { id: 3, ticketId: 1, message: 'NOTA INTERNA: Parece un corte de fibra en la zona norte.', authorId: 2, authorName: 'Admin', createdAt: '2024-01-01T11:35:00Z', isInternal: true },
-  ]],
-  [2, [
-    { id: 4, ticketId: 2, message: 'Por favor verificá tu factura en el portal de clientes.', authorId: 1, authorName: 'Soporte Técnico', createdAt: '2024-01-02T09:00:00Z', isInternal: false },
-    { id: 5, ticketId: 2, message: 'Si el error persiste, envianos una captura de pantalla.', authorId: 1, authorName: 'Soporte Técnico', createdAt: '2024-01-02T09:15:00Z', isInternal: false },
-  ]],
-]);
-
-let nextReplyId = 100;
-
-// In-memory store for ticket status overrides (ticketId -> status)
-const ticketStatusStore = new Map<number, string>();
-
-// In-memory store for ticket assignment overrides
-interface TicketAssignment {
-  assignedTo: number | null;
-  assignedToName: string | null;
-}
-const ticketAssignmentStore = new Map<number, TicketAssignment>();
-
-// In-memory store for ticket field edits
-const ticketEditsStore: Record<number, Partial<{ subject: string; message: string; priority: string }>> = {};
-
-// In-memory store for deleted ticket ids
-const deletedTicketsStore = new Set<number>();
+const ticketRepliesStore = new Map<string, TicketReply[]>();
+let nextReplyId = 1;
 
 export function createTicketsRouter(
   listTickets: ListTickets,
   getStats: GetTicketStats,
   createTicket: CreateTicket,
+  getTicket: GetTicket,
+  updateStatus: UpdateTicketStatus,
+  updateTicket: UpdateTicket,
+  closeTicket: CloseTicket,
   authProvider: JwtAuthAdapter,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
 
-  router.get('/stats', auth, splynxSafe(async (_req: Request, res: Response): Promise<void> => {
-    const stats = await getStats.execute();
-    res.json(stats);
-  }));
-
-  router.get('/', auth, splynxSafe(async (req: Request, res: Response): Promise<void> => {
-    const { page, limit, search, status, priority } = req.query as Record<string, string>;
-    const result = await listTickets.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, search, status, priority });
-    const filtered = { ...result, data: result.data.filter((t) => !deletedTicketsStore.has(Number(t.id))) };
-    res.json(filtered);
-  }));
-
-  router.get('/:id', auth, splynxSafe(async (req: Request, res: Response): Promise<void> => {
-    const id = req.params['id'] as string;
-    if (deletedTicketsStore.has(Number(id))) {
-      res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
-      return;
+  // GET /stats — must come before /:id to avoid capture
+  router.get('/stats', auth, async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const stats = await getStats.execute();
+      res.json(stats);
+    } catch (err) {
+      console.error('[tickets] getStats error', err);
+      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }
-    const result = await listTickets.execute({ page: 1, limit: 1000 });
-    const ticket = result.data.find((t) => String(t.id) === id);
-    if (!ticket) {
-      res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
-      return;
-    }
-    // Apply any status override and field edits from in-memory store
-    const statusOverride = ticketStatusStore.get(Number(id));
-    const edits = ticketEditsStore[Number(id)] ?? {};
-    res.json({ ...ticket, ...(statusOverride ? { status: statusOverride } : {}), ...edits });
-  }));
+  });
 
+  // GET / — list tickets, optional ?customerId filter
+  router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { page, limit, search, status, priority, customerId } = req.query as Record<string, string>;
+      const result = await listTickets.execute({
+        page: page ? +page : 1,
+        limit: limit ? +limit : 25,
+        search,
+        status: VALID_STATUSES.includes(status as TicketStatus) ? (status as TicketStatus) : undefined,
+        priority: VALID_PRIORITIES.includes(priority as TicketPriority) ? (priority as TicketPriority) : undefined,
+        customerId,
+      });
+      res.json(result);
+    } catch (err) {
+      console.error('[tickets] list error', err);
+      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  // GET /:id — get a single ticket by id
+  router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const id = req.params['id'] as string;
+      const ticket = await getTicket.execute(id);
+      if (!ticket) {
+        res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
+        return;
+      }
+      res.json(ticket);
+    } catch (err) {
+      console.error('[tickets] getById error', err);
+      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  // PATCH /:id/status — change status
   router.patch('/:id/status', auth, async (req: Request, res: Response): Promise<void> => {
     const id = req.params['id'] as string;
     const { status } = req.body as { status?: string };
-    const validStatuses = ['open', 'pending', 'resolved', 'closed'];
-    if (!status || !validStatuses.includes(status)) {
-      res.status(400).json({ error: 'Invalid or missing status. Must be one of: open, pending, resolved, closed', code: 'VALIDATION_ERROR' });
+
+    if (!status || !VALID_STATUSES.includes(status as TicketStatus)) {
+      res.status(400).json({
+        error: `Invalid or missing status. Must be one of: ${VALID_STATUSES.join(', ')}`,
+        code: 'VALIDATION_ERROR',
+      });
       return;
     }
-    const result = await listTickets.execute({ page: 1, limit: 1000 });
-    const ticket = result.data.find((t) => String(t.id) === id);
-    if (!ticket) {
-      res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
-      return;
+
+    try {
+      const ticket = await updateStatus.execute(id, status as TicketStatus);
+      if (!ticket) {
+        res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
+        return;
+      }
+      res.json(ticket);
+    } catch (err) {
+      console.error('[tickets] updateStatus error', err);
+      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }
-    ticketStatusStore.set(Number(id), status);
-    res.json({ ...ticket, status });
   });
 
+  // PATCH /:id — update ticket fields (subject, description, priority, assigneeId)
   router.patch('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const id = req.params['id'] as string;
-    const { subject, message, priority } = req.body as { subject?: string; message?: string; priority?: string };
-    if (deletedTicketsStore.has(Number(id))) {
-      res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
-      return;
+    const { subject, description, priority, assigneeId } = req.body as {
+      subject?: string;
+      description?: string;
+      priority?: string;
+      assigneeId?: string | null;
+    };
+
+    try {
+      const ticket = await updateTicket.execute(id, {
+        ...(subject !== undefined && { subject }),
+        ...(description !== undefined && { description }),
+        ...(priority !== undefined &&
+          VALID_PRIORITIES.includes(priority as TicketPriority) && { priority: priority as TicketPriority }),
+        ...(assigneeId !== undefined && { assigneeId: assigneeId ?? null }),
+      });
+      if (!ticket) {
+        res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
+        return;
+      }
+      res.json(ticket);
+    } catch (err) {
+      console.error('[tickets] update error', err);
+      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }
-    const result = await listTickets.execute({ page: 1, limit: 1000 });
-    const ticket = result.data.find((t) => String(t.id) === id);
-    if (!ticket) {
-      res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
-      return;
-    }
-    const existing = ticketEditsStore[Number(id)] ?? {};
-    if (subject !== undefined) existing.subject = subject;
-    if (message !== undefined) existing.message = message;
-    if (priority !== undefined) existing.priority = priority;
-    ticketEditsStore[Number(id)] = existing;
-    const statusOverride = ticketStatusStore.get(Number(id));
-    res.json({ ...ticket, ...(statusOverride ? { status: statusOverride } : {}), ...existing });
   });
 
+  // DELETE /:id — closes the ticket (soft delete via status=closed, preserves history)
   router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
-    const id = req.params['id'] as string;
-    if (deletedTicketsStore.has(Number(id))) {
-      res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
-      return;
+    try {
+      const id = req.params['id'] as string;
+      const ticket = await closeTicket.execute(id);
+      if (!ticket) {
+        res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
+        return;
+      }
+      res.json(ticket);
+    } catch (err) {
+      console.error('[tickets] close error', err);
+      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }
-    const result = await listTickets.execute({ page: 1, limit: 1000 });
-    const ticket = result.data.find((t) => String(t.id) === id);
-    if (!ticket) {
-      res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
-      return;
-    }
-    deletedTicketsStore.add(Number(id));
-    decrementTickets('open');
-    res.status(204).send();
   });
 
+  // GET /:id/replies — in-memory (AD-6: replies out of scope for Prisma this iteration)
   router.get('/:id/replies', auth, async (req: Request, res: Response): Promise<void> => {
-    const id = Number(req.params['id']);
+    const id = req.params['id'] as string;
     const replies = ticketRepliesStore.get(id) ?? [];
     res.json(replies);
   });
 
+  // POST /:id/replies — in-memory (AD-6)
   router.post('/:id/replies', auth, async (req: Request, res: Response): Promise<void> => {
-    const ticketId = Number(req.params['id']);
-    const { message, authorId, authorName } = req.body as { message?: string; authorId?: number; authorName?: string };
+    const ticketId = req.params['id'] as string;
+    const { message, authorId, authorName } = req.body as {
+      message?: string;
+      authorId?: number;
+      authorName?: string;
+    };
+
     if (!message) {
       res.status(400).json({ error: 'message is required', code: 'VALIDATION_ERROR' });
       return;
     }
+
     const reply: TicketReply = {
       id: nextReplyId++,
       ticketId,
@@ -186,41 +188,46 @@ export function createTicketsRouter(
       createdAt: new Date().toISOString(),
       isInternal: false,
     };
+
     const existing = ticketRepliesStore.get(ticketId) ?? [];
     existing.push(reply);
     ticketRepliesStore.set(ticketId, existing);
     res.status(201).json(reply);
   });
 
-  router.patch('/:id/assign', auth, async (req: Request, res: Response): Promise<void> => {
-    const id = req.params['id'] as string;
-    const { assignedTo, assignedToName } = req.body as { assignedTo?: number | null; assignedToName?: string | null };
-    const result = await listTickets.execute({ page: 1, limit: 1000 });
-    const ticket = result.data.find((t) => String(t.id) === id);
-    if (!ticket) {
-      res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
-      return;
-    }
-    const assignment: TicketAssignment = {
-      assignedTo: assignedTo ?? null,
-      assignedToName: assignedToName ?? null,
-    };
-    ticketAssignmentStore.set(Number(id), assignment);
-    const statusOverride = ticketStatusStore.get(Number(id));
-    res.json({ ...ticket, ...(statusOverride ? { status: statusOverride } : {}), ...assignment });
-  });
-
+  // POST / — create ticket
   router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
-    const { subject, clientId, priority, description, assignedTo } = req.body as {
-      subject?: string; clientId?: string; priority?: 'alta' | 'media' | 'baja'; description?: string; assignedTo?: string;
+    const { subject, description, customerId, priority, assigneeId } = req.body as {
+      subject?: string;
+      description?: string;
+      customerId?: string | null;
+      priority?: string;
+      assigneeId?: string | null;
     };
-    if (!subject || !clientId || !priority || !description) {
-      res.status(400).json({ error: 'Missing required fields: subject, clientId, priority, description', code: 'VALIDATION_ERROR' });
+
+    if (!subject || !description) {
+      res.status(400).json({
+        error: 'Missing required fields: subject, description',
+        code: 'VALIDATION_ERROR',
+      });
       return;
     }
-    const ticket = await createTicket.execute({ subject, clientId, priority, description, assignedTo });
-    incrementTickets('open');
-    res.status(201).json(ticket);
+
+    try {
+      const ticket = await createTicket.execute({
+        subject,
+        description,
+        customerId: customerId ?? null,
+        priority: VALID_PRIORITIES.includes(priority as TicketPriority)
+          ? (priority as TicketPriority)
+          : 'medium',
+        assigneeId: assigneeId ?? null,
+      });
+      res.status(201).json(ticket);
+    } catch (err) {
+      console.error('[tickets] create error', err);
+      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
+    }
   });
 
   return router;

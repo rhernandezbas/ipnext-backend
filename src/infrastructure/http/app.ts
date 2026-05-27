@@ -3,7 +3,8 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { SplynxClient } from '../adapters/splynx/SplynxClient';
 import { PrismaCustomerRepository } from '../adapters/prisma/PrismaCustomerRepository';
-import { SplynxTicketAdapter } from '../adapters/splynx/SplynxTicketAdapter';
+// SplynxTicketAdapter preserved but decabled — see AD-2 in design.md
+// import { SplynxTicketAdapter } from '../adapters/splynx/SplynxTicketAdapter';
 import { SplynxBillingAdapter } from '../adapters/splynx/SplynxBillingAdapter';
 import { JwtAuthAdapter } from '../adapters/jwt/JwtAuthAdapter';
 import { ListClients } from '@application/use-cases/ListClients';
@@ -17,6 +18,11 @@ import { GetClientLogs } from '@application/use-cases/GetClientLogs';
 import { ListTickets } from '@application/use-cases/ListTickets';
 import { GetTicketStats } from '@application/use-cases/GetTicketStats';
 import { CreateTicket } from '@application/use-cases/CreateTicket';
+import { GetTicket } from '@application/use-cases/GetTicket';
+import { UpdateTicketStatus } from '@application/use-cases/UpdateTicketStatus';
+import { UpdateTicket } from '@application/use-cases/UpdateTicket';
+import { CloseTicket } from '@application/use-cases/CloseTicket';
+import { PrismaTicketRepository } from '../adapters/prisma/PrismaTicketRepository';
 import { GetBillingSummary } from '@application/use-cases/GetBillingSummary';
 import { ListInvoices } from '@application/use-cases/ListInvoices';
 import { ListPayments } from '@application/use-cases/ListPayments';
@@ -343,7 +349,7 @@ export function createApp() {
   // Wire up adapters
   const splynxClient = new SplynxClient();
   const customerAdapter = new PrismaCustomerRepository(config.gestionReal.balanceStaleTtlMinutes);
-  const ticketAdapter = new SplynxTicketAdapter(splynxClient);
+  const ticketAdapter = new PrismaTicketRepository();   // replaces SplynxTicketAdapter (AD-2)
   const billingAdapter = new SplynxBillingAdapter(splynxClient);
   const authAdapter = new JwtAuthAdapter();
 
@@ -375,6 +381,10 @@ export function createApp() {
   const listTickets = new ListTickets(ticketAdapter);
   const getStats = new GetTicketStats(ticketAdapter);
   const createTicket = new CreateTicket(ticketAdapter);
+  const getTicket = new GetTicket(ticketAdapter);
+  const updateTicketStatus = new UpdateTicketStatus(ticketAdapter);
+  const updateTicket = new UpdateTicket(ticketAdapter);
+  const closeTicket = new CloseTicket(ticketAdapter);
   const getSummary = new GetBillingSummary(billingAdapter);
   const listInvoices = new ListInvoices(billingAdapter);
   const listPayments = new ListPayments(billingAdapter);
@@ -664,7 +674,7 @@ export function createApp() {
   app.use('/api/auth', createAuthRouter(authAdapter));
   app.use('/api/clients', createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
-  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, authAdapter));
+  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, authAdapter));
   app.use('/api/billing', createBillingRouter(getSummary, listInvoices, listPayments, listTransactions, authAdapter));
   app.use('/api/billing', createBillingMonthlyRouter(getMonthly));
   app.use('/api/billing', createCreditNotesRouter(listCreditNotes, getCreditNote, createCreditNote, applyCreditNote, voidCreditNote));
