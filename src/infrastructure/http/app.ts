@@ -128,6 +128,8 @@ import { DeleteProjectCategory } from '@application/use-cases/DeleteProjectCateg
 import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
 import { createTaskCategoriesRouter } from './routes/taskCategories.routes';
 import { createGestionRealRouter } from './routes/gestionReal.routes';
+import { createGrSyncRouter } from './routes/gr-sync.routes';
+import { ResetGrClientsCursor } from '@application/use-cases/ResetGrClientsCursor';
 import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { PrismaClientMirrorRepository } from '../adapters/prisma/PrismaClientMirrorRepository';
 import { GestionRealClient } from '../adapters/gestion-real/GestionRealClient';
@@ -741,6 +743,11 @@ export function createApp() {
   app.use('/api/gestion-real', createGestionRealRouter(
     authAdapter,
     new GetGestionRealSyncStatus(new PrismaSyncStateRepository(), new PrismaMirrorCountsRepository()),
+  ));
+  // GR sync admin — reset the gr-clients cursor to force a full backfill next tick.
+  app.use('/api/admin/gr-sync', createGrSyncRouter(
+    authAdapter,
+    new ResetGrClientsCursor(new PrismaSyncStateRepository()),
   ));
   // Task comments — mounted BEFORE the scheduling catch-all router to avoid /:id swallowing
   const taskCommentRepo = new PrismaTaskCommentRepository();
