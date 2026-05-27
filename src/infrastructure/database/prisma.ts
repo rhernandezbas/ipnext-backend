@@ -11,9 +11,10 @@ function createPrismaClient(): PrismaClient {
     process.env.DATABASE_URL ?? 'postgresql://ipnext:ipnext_secret@localhost:5432/ipnext'
   const pool = new pg.Pool({ connectionString })
   const adapter = new PrismaPg(pool)
+  const logQueryLevel = process.env.PRISMA_LOG_QUERIES === 'true';
   return new PrismaClient({
     adapter,
-    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+    log: logQueryLevel ? ['query', 'warn', 'error'] : ['warn', 'error'],
   })
 }
 
