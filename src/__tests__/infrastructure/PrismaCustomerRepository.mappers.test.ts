@@ -35,6 +35,11 @@ describe('PrismaCustomerRepository mappers', () => {
         login: 'jgarcia',
         createdAt: '2026-01-01T10:00:00.000Z',
         customAttributes: undefined,
+        // Balance fields — active client: 0 balance, not stale
+        balanceDue: 0,
+        balanceCurrency: null,
+        lastBalanceAt: null,
+        balanceStale: false,
       });
     });
 

@@ -4,6 +4,7 @@ import { PrismaClientMirrorRepository } from '../adapters/prisma/PrismaClientMir
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
+import { RefreshDebtorBalances } from '@application/use-cases/RefreshDebtorBalances';
 import { GestionRealSyncScheduler } from './GestionRealSyncScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 
@@ -29,9 +30,38 @@ export function bootstrapGestionRealSync(): GestionRealSyncScheduler | null {
   const state = new PrismaSyncStateRepository();
   const syncClients = new SyncGestionRealClients(client, mirror, state, { estados: gr.estados });
   const syncContracts = new SyncGestionRealContracts(client, mirror);
+  const refreshDebtorBalances = new RefreshDebtorBalances(client, mirror, state);
   // PgAdvisoryLock uses a dedicated pg.Client (not the pool) so that session
   // advisory locks are tied to one stable connection across acquire/release.
   const lock = new PgAdvisoryLock();
 
-  return new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: gr.intervalMs }, lock);
+  const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: gr.intervalMs }, lock);
+
+  // Batch debtor balance refresh — runs on its own interval (default 1h), independently.
+  startBalanceBatchJob(refreshDebtorBalances, gr.balanceBatchIntervalMs);
+
+  return scheduler;
+}
+
+/** Start an independent interval job for refreshing debtor balances. */
+function startBalanceBatchJob(uc: RefreshDebtorBalances, intervalMs: number): void {
+  let inFlight = false;
+
+  const run = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const result = await uc.execute();
+      console.log(`[gr-balance] batch done: refreshed=${result.refreshed}, errors=${result.errors}`);
+    } catch (err) {
+      console.error('[gr-balance] batch error:', (err as Error).message);
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Run immediately on startup, then on interval
+  void run();
+  const timer = setInterval(() => void run(), intervalMs);
+  if (timer.unref) timer.unref();
 }

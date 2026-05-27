@@ -41,5 +41,12 @@ export const config = {
     intervalMs: parseInt(process.env.GR_SYNC_INTERVAL_MS || '180000', 10),
     // estado codes to sync — default 1=Activo, 2=Deudor.
     estados: (process.env.GR_SYNC_ESTADOS || '1,2').split(',').map(s => s.trim()).filter(Boolean),
+    // Balance refresh settings
+    /** Minutes before a debtor's balance is considered stale and triggers on-demand refresh. */
+    balanceStaleTtlMinutes: parseInt(process.env.BALANCE_STALE_TTL_MINUTES || '60', 10),
+    /** Max ms for on-demand GR balance request before falling back to stored value. */
+    balanceRefreshTimeoutMs: parseInt(process.env.BALANCE_REFRESH_TIMEOUT_MS || '4000', 10),
+    /** Interval (ms) between batch debtor balance refresh runs (default: 1h). */
+    balanceBatchIntervalMs: parseInt(process.env.GR_BALANCE_BATCH_INTERVAL_MS || '3600000', 10),
   },
 };

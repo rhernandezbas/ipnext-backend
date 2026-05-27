@@ -5,20 +5,52 @@ import { PaginatedResult } from '@application/dto/pagination';
 import { ClientNotFoundError } from '@domain/errors';
 import { prisma } from '../../database/prisma';
 
-export function toCustomer(row: any): Customer {
+const DEFAULT_BALANCE_TTL_MINUTES = 60;
+
+/**
+ * Derive balanceStale: true when the client is a debtor (status=late) AND
+ * either lastBalanceAt is null (never fetched) or older than the TTL.
+ */
+function isBalanceStale(status: string, lastBalanceAt: Date | null, ttlMinutes: number): boolean {
+  if (status !== 'late') return false; // non-debtors are never stale
+  if (!lastBalanceAt) return true; // never fetched
+  const ageMs = Date.now() - lastBalanceAt.getTime();
+  return ageMs > ttlMinutes * 60 * 1000;
+}
+
+export function toCustomer(row: any, balanceTtlMinutes = DEFAULT_BALANCE_TTL_MINUTES): Customer {
+  const status = row.status as CustomerStatus;
+  const isDebtor = status === 'late';
+
+  // Map Decimal to number (same pattern as toInvoice)
+  const balanceDue: number | null = (() => {
+    if (!isDebtor) return 0;
+    if (row.balanceDue === null || row.balanceDue === undefined) return null;
+    if (typeof row.balanceDue === 'object' && 'toNumber' in row.balanceDue) {
+      return (row.balanceDue as { toNumber(): number }).toNumber();
+    }
+    return Number(row.balanceDue);
+  })();
+
+  const lastBalanceAt = row.lastBalanceAt instanceof Date ? row.lastBalanceAt : null;
+
   return {
     id: row.id,
     grClienteId: row.grClienteId ?? null,
     name: row.name,
     email: row.email,
     phone: row.phone,
-    status: row.status as CustomerStatus,
+    status,
     address: row.address ?? '',
     city: row.city ?? '',
     country: row.country ?? '',
     login: row.login,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     customAttributes: row.customAttributes ?? undefined,
+    balanceDue,
+    balanceCurrency: isDebtor ? (row.balanceCurrency ?? null) : null,
+    lastBalanceAt: lastBalanceAt ? lastBalanceAt.toISOString() : null,
+    balanceStale: isBalanceStale(status, lastBalanceAt, balanceTtlMinutes),
   };
 }
 
@@ -66,6 +98,14 @@ export function toInvoice(row: any): Invoice {
 }
 
 export class PrismaCustomerRepository implements CustomerRepository {
+  /**
+   * @param balanceTtlMinutes - TTL for balance staleness in minutes. Defaults to 60.
+   *   Pass `config.gestionReal.balanceStaleTtlMinutes` from app.ts.
+   */
+  constructor(private readonly balanceTtlMinutes = 60) {}
+
+  private get ttl() { return this.balanceTtlMinutes; }
+
   async list(query: ListClientsQuery): Promise<PaginatedResult<Customer>> {
     const page = query.page && query.page > 0 ? query.page : 1;
     const limit = query.limit && query.limit > 0 ? query.limit : 25;
@@ -87,13 +127,13 @@ export class PrismaCustomerRepository implements CustomerRepository {
       }),
       prisma.client.count({ where }),
     ]);
-    return { data: rows.map(toCustomer), total, page, limit };
+    return { data: rows.map(r => toCustomer(r, this.ttl)), total, page, limit };
   }
 
   async findById(id: string): Promise<Customer> {
     const row = await prisma.client.findUnique({ where: { id } });
     if (!row) throw new ClientNotFoundError(id);
-    return toCustomer(row);
+    return toCustomer(row, this.ttl);
   }
 
   async stats(): Promise<ClientStats> {
@@ -138,7 +178,7 @@ export class PrismaCustomerRepository implements CustomerRepository {
         customAttributes: (data.customAttributes as never) ?? undefined,
       },
     });
-    return toCustomer(row);
+    return toCustomer(row, this.ttl);
   }
 
   async listServices(clientId: string): Promise<Service[]> {

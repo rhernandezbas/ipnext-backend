@@ -14,6 +14,15 @@ export interface Customer {
   login: string;
   createdAt: string;
   customAttributes?: Record<string, string>;
+  // GR balance fields
+  /** Outstanding debt amount (ARS). 0 = no debt, null = never fetched. */
+  balanceDue?: number | null;
+  /** Currency code, e.g. "ARS". Null until first fetch. */
+  balanceCurrency?: string | null;
+  /** ISO timestamp of the last balance refresh. */
+  lastBalanceAt?: string | null;
+  /** True when the balance is older than the TTL or has never been fetched (and client is a debtor). */
+  balanceStale?: boolean;
 }
 
 export interface Service {

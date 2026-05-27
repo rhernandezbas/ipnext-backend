@@ -114,6 +114,9 @@ import { DeleteProjectCategory } from '@application/use-cases/DeleteProjectCateg
 import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
 import { createTaskCategoriesRouter } from './routes/taskCategories.routes';
 import { createGestionRealRouter } from './routes/gestionReal.routes';
+import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
+import { PrismaClientMirrorRepository } from '../adapters/prisma/PrismaClientMirrorRepository';
+import { GestionRealClient } from '../adapters/gestion-real/GestionRealClient';
 import { GetGestionRealSyncStatus } from '@application/use-cases/GetGestionRealSyncStatus';
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { PrismaMirrorCountsRepository } from '../adapters/prisma/PrismaMirrorCountsRepository';
@@ -265,6 +268,7 @@ import { UpdateHardwareAsset } from '@application/use-cases/UpdateHardwareAsset'
 import { DeleteHardwareAsset } from '@application/use-cases/DeleteHardwareAsset';
 import { DomainError } from '@domain/errors';
 import { prisma } from '../database/prisma';
+import { config } from '../config';
 import { createGponRouter } from './routes/gpon.routes';
 import { PrismaGponRepository } from '../adapters/prisma/PrismaGponRepository';
 import { ListOlts } from '@application/use-cases/ListOlts';
@@ -338,14 +342,30 @@ export function createApp() {
 
   // Wire up adapters
   const splynxClient = new SplynxClient();
-  const customerAdapter = new PrismaCustomerRepository();
+  const customerAdapter = new PrismaCustomerRepository(config.gestionReal.balanceStaleTtlMinutes);
   const ticketAdapter = new SplynxTicketAdapter(splynxClient);
   const billingAdapter = new SplynxBillingAdapter(splynxClient);
   const authAdapter = new JwtAuthAdapter();
 
+  // On-demand balance refresh collaborator — only wired when GR is configured
+  let balanceRefresh: RefreshClientBalanceIfStale | undefined;
+  if (config.gestionReal.enabled && config.gestionReal.cuit && config.gestionReal.secret) {
+    const grClient = new GestionRealClient({
+      baseUrl: config.gestionReal.baseUrl,
+      cuit: config.gestionReal.cuit,
+      secret: config.gestionReal.secret,
+      timeoutMs: config.gestionReal.balanceRefreshTimeoutMs,
+    });
+    const mirrorRepo = new PrismaClientMirrorRepository();
+    balanceRefresh = new RefreshClientBalanceIfStale(grClient, mirrorRepo, {
+      ttlMinutes: config.gestionReal.balanceStaleTtlMinutes,
+      timeoutMs: config.gestionReal.balanceRefreshTimeoutMs,
+    });
+  }
+
   // Wire up use cases
   const listClients = new ListClients(customerAdapter);
-  const getDetail = new GetClientDetail(customerAdapter);
+  const getDetail = new GetClientDetail(customerAdapter, balanceRefresh);
   const getServices = new GetClientServices(customerAdapter);
   const getInvoices = new GetClientInvoices(customerAdapter);
   const getLogs = new GetClientLogs(customerAdapter);
