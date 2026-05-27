@@ -9,7 +9,7 @@
  */
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskChecklistItem } from '@domain/entities/checklist';
-import { StageCategory } from '@domain/entities/workflow';
+import { StageCategory, Stage } from '@domain/entities/workflow';
 import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
 import { StageNotFoundError } from '@domain/errors/scheduling';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
@@ -23,6 +23,8 @@ export function toTask(row: any): ScheduledTask {
   const customerName: string | null = row.customer?.name ?? null;
   // city from the customer JOIN — populates the Tasks list 'Localidad' column.
   const customerCity: string | null = row.customer?.city ?? null;
+  // phone from the customer JOIN — required field for IClass OS.
+  const customerPhone: string | null = row.customer?.phone ?? null;
 
   // Derive assigneeName from JOIN only (no legacy fallback)
   const assigneeName: string | null = row.assignee?.name ?? null;
@@ -67,6 +69,7 @@ export function toTask(row: any): ScheduledTask {
     customerId: row.customerId ?? null,
     customerName,
     customerCity,
+    customerPhone,
     serviceId: row.serviceId ?? null,
     partnerId: row.partnerId ?? null,
     reporterId: row.reporterId ?? null,
@@ -77,6 +80,7 @@ export function toTask(row: any): ScheduledTask {
     travelTimeFrom: row.travelTimeFrom ?? null,
     isClosed: row.isClosed ?? false,
     reviewedByInventory: row.reviewedByInventory ?? false,
+    iclassOrderCode: row.iclassOrderCode ?? null,
     checklist: Array.isArray(row.checklist)
       ? row.checklist.map((ci: any) => ({
           id: ci.id,
@@ -112,7 +116,7 @@ function toChecklistItem(row: any): TaskChecklistItem {
 const INCLUDE = {
   project: true,
   stage: true,
-  customer: { select: { id: true, name: true, city: true } },
+  customer: { select: { id: true, name: true, city: true, phone: true } },
   assignee: { select: { id: true, name: true } },
   reporter: { select: { id: true } },
   service: { select: { id: true } },
@@ -458,6 +462,34 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
         where: { id: taskId },
         include: INCLUDE,
         data: { reviewedByInventory: reviewed },
+      });
+      return toTask(row);
+    } catch {
+      return null;
+    }
+  }
+
+  // ── IClass integration ────────────────────────────────────────────────────
+
+  async getStageByName(name: string): Promise<Stage | null> {
+    const row = await (prisma.stage as any).findFirst({ where: { name } });
+    if (!row) return null;
+    return {
+      id: row.id,
+      workflowId: row.workflowId,
+      name: row.name,
+      category: row.category,
+      order: row.order,
+      color: row.color ?? null,
+    };
+  }
+
+  async setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null> {
+    try {
+      const row = await (prisma.scheduledTask as any).update({
+        where: { id: taskId },
+        include: INCLUDE,
+        data: { iclassOrderCode: code },
       });
       return toTask(row);
     } catch {

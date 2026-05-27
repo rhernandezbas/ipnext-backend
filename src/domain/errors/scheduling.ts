@@ -16,6 +16,14 @@ export class TaskNotFoundError extends DomainError {
   }
 }
 
+/** Raised when required fields are missing before sending a task to IClass. Carries the missing field names for the front-end modal. */
+export class MissingRequiredFieldsError extends DomainError {
+  constructor(public readonly missingFields: string[]) {
+    super(`Missing required fields: ${missingFields.join(', ')}`, 'MISSING_REQUIRED_FIELDS');
+    this.name = 'MissingRequiredFieldsError';
+  }
+}
+
 export class StageNotFoundError extends DomainError {
   constructor(id: string) {
     super(`Stage with id ${id} not found`, 'STAGE_NOT_FOUND');

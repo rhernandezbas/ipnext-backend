@@ -1,6 +1,6 @@
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskChecklistItem } from '@domain/entities/checklist';
-import { StageCategory } from '@domain/entities/workflow';
+import { StageCategory, Stage } from '@domain/entities/workflow';
 import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
@@ -46,6 +46,8 @@ const NEW_FIELDS_DEFAULTS = {
   customerId: null,
   customerName: null,
   customerCity: null,
+  customerPhone: null,
+  iclassOrderCode: null,
   serviceId: null,
   partnerId: null,
   reporterId: null,
@@ -246,6 +248,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       customerId: data.customerId ?? null,
       customerName: null, // In-memory: no JOIN, derived by Prisma adapter
       customerCity: null, // idem
+      customerPhone: null, // idem
+      iclassOrderCode: null,
       serviceId: data.serviceId ?? null,
       partnerId: data.partnerId ?? null,
       reporterId: data.reporterId ?? null,
@@ -312,6 +316,47 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (index === -1) return null;
     this.tasks[index] = { ...this.tasks[index]!, reviewedByInventory: reviewed, updatedAt: new Date().toISOString() };
     return { ...this.tasks[index]! };
+  }
+
+  // ── IClass integration ────────────────────────────────────────────────────
+
+  async getStageByName(name: string): Promise<Stage | null> {
+    if (!this.stageRepo) return null;
+    // No listAll on the port — scan via the seeded Default workflow lookup is not enough,
+    // so we rely on the injected stage repo's direct helper if present.
+    const anyRepo = this.stageRepo as unknown as { findByName?: (n: string) => Promise<Stage | null> };
+    if (typeof anyRepo.findByName === 'function') return anyRepo.findByName(name);
+    return null;
+  }
+
+  async setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null> {
+    const index = this.tasks.findIndex(t => t.id === taskId);
+    if (index === -1) return null;
+    this.tasks[index] = { ...this.tasks[index]!, iclassOrderCode: code, updatedAt: new Date().toISOString() };
+    return { ...this.tasks[index]! };
+  }
+
+  /** Test helper: seed a fully-formed task (lets tests set derived JOIN fields). */
+  seedTask(overrides: Partial<ScheduledTask> & Pick<ScheduledTask, 'id'>): ScheduledTask {
+    const task = makeTask({
+      sequenceNumber: nextSequenceNumber++,
+      title: overrides.title ?? 'Seeded task',
+      description: overrides.description ?? null,
+      stageId: overrides.stageId ?? DEFAULT_STAGE_ID_PENDING,
+      priority: overrides.priority ?? 'normal',
+      estimatedHours: overrides.estimatedHours ?? 1,
+      address: overrides.address ?? null,
+      coordinates: overrides.coordinates ?? null,
+      category: overrides.category ?? 'other',
+      projectId: overrides.projectId ?? null,
+      projectName: overrides.projectName ?? null,
+      completedAt: overrides.completedAt ?? null,
+      notes: overrides.notes ?? null,
+      ...NEW_FIELDS_DEFAULTS,
+      ...overrides,
+    } as Omit<ScheduledTask, 'stageCategory' | 'createdAt' | 'updatedAt'> & { stageId: string });
+    this.tasks.push(task);
+    return { ...task };
   }
 
   async deleteTask(id: string): Promise<boolean> {

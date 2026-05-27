@@ -58,11 +58,11 @@ STRICT TDD: test rojo primero, luego implementación, luego verde. `npm test` y 
 ## Fase 3 — Use-case SendTaskToIClass + integración con MoveTaskToStage
 
 ### 3.1 — Soporte en SchedulingRepository
-- [ ] 3.1 Agregar `getStageByName(name): Promise<Stage | null>` y `setIClassOrderCode(taskId, code)` al port `SchedulingRepository` (design: Stage lookup, AD-7).
-- [ ] 3.2 Extender el JOIN de Client en `PrismaSchedulingRepository` para incluir `phone` (y exponer `iclassOrderCode` en `toTask`). Implementar los métodos nuevos en Prisma + InMemory.
+- [x] 3.1 Agregar `getStageByName(name): Promise<Stage | null>` y `setIClassOrderCode(taskId, code)` al port `SchedulingRepository` (design: Stage lookup, AD-7).
+- [x] 3.2 Extender el JOIN de Client en `PrismaSchedulingRepository` para incluir `phone` (y exponer `iclassOrderCode` en `toTask`). Implementar los métodos nuevos en Prisma + InMemory.
 
 ### 3.2 — Use-case (TDD)
-- [ ] 3.3 (TEST ROJO) `src/__tests__/application/SendTaskToIClass.test.ts` cubriendo TODOS los escenarios del spec scheduling:
+- [x] 3.3 (TEST ROJO) `src/__tests__/application/SendTaskToIClass.test.ts` cubriendo TODOS los escenarios del spec scheduling:
   - flag OFF → mueve sin llamar IClass (REQ-MOVE-FLAG-OFF-1)
   - faltan requeridos → `MissingRequiredFieldsError` con `missingFields` exactos (REQ-MOVE-VAL-1)
   - `customerId` null → faltan customerName/phone/city
@@ -70,14 +70,14 @@ STRICT TDD: test rojo primero, luego implementación, luego verde. `npm test` y 
   - happy path → crea OS sin fecha, guarda orderCode, mueve a "Registrado en IClass" (REQ-MOVE-OS-1)
   - IClass falla → `IClassUnavailableError`, no mueve, orderCode null
   - idempotencia: task con orderCode ya seteado → no recrea (AD-7)
-- [ ] 3.4 Crear `MissingRequiredFieldsError` (con `missingFields: string[]`) en `domain/errors/`.
-- [ ] 3.5 Implementar `SendTaskToIClass` en `application/use-cases/` (depende de `IClassPort`, `FeatureFlagRepository`, `SchedulingRepository` — DIP, sin tipos de infra).
-- [ ] 3.6 (TEST VERDE) 3.3 pasa.
+- [x] 3.4 Crear `MissingRequiredFieldsError` (con `missingFields: string[]`) en `domain/errors/`.
+- [x] 3.5 Implementar `SendTaskToIClass` en `application/use-cases/` (depende de `IClassPort`, `FeatureFlagRepository`, `SchedulingRepository` — DIP, sin tipos de infra).
+- [x] 3.6 (TEST VERDE) 3.3 pasa.
 
 ### 3.3 — Hook en MoveTaskToStage (TDD)
-- [ ] 3.7 (TEST ROJO) Extender `src/__tests__/application/MoveTaskToStage.test.ts` (o crear): mover a stage "Enviar a IClass" delega en `SendTaskToIClass`; mover a otro stage → comportamiento intacto.
-- [ ] 3.8 Modificar `MoveTaskToStage`: si el stage destino se llama "Enviar a IClass" → delegar en `SendTaskToIClass`; si no → flujo actual.
-- [ ] 3.9 (TEST VERDE) 3.7 pasa.
+- [x] 3.7 (TEST ROJO) Extender `src/__tests__/application/MoveTaskToStage.test.ts` (o crear): mover a stage "Enviar a IClass" delega en `SendTaskToIClass`; mover a otro stage → comportamiento intacto.
+- [x] 3.8 Modificar `MoveTaskToStage`: si el stage destino se llama "Enviar a IClass" → delegar en `SendTaskToIClass`; si no → flujo actual.
+- [x] 3.9 (TEST VERDE) 3.7 pasa.
 
 ---
 

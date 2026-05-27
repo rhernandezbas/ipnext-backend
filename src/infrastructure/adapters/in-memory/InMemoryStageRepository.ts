@@ -92,4 +92,10 @@ export class InMemoryStageRepository implements StageRepository {
   addDirect(stage: Stage): void {
     this.stages.push({ ...stage });
   }
+
+  // Helper: resolve a stage by name (used by InMemorySchedulingRepository.getStageByName)
+  async findByName(name: string): Promise<Stage | null> {
+    const s = this.stages.find(s => s.name === name);
+    return s ? { ...s } : null;
+  }
 }

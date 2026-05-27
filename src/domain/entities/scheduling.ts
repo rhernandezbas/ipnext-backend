@@ -30,6 +30,7 @@ export interface ScheduledTask {
   customerId: string | null;
   customerName: string | null;   // derived from Client.name via JOIN
   customerCity: string | null;   // derived from Client.city via JOIN — for Tasks 'Localidad' column
+  customerPhone: string | null;  // derived from Client.phone via JOIN — required field for IClass OS
   serviceId: string | null;
   partnerId: string | null;
   reporterId: string | null;
@@ -51,6 +52,9 @@ export interface ScheduledTask {
 
   // RV — Revisado por Inventario: inventory team review flag. Default false.
   reviewedByInventory: boolean;
+
+  // IClass — service order code returned by IClass after a successful "Enviar a IClass". Null otherwise.
+  iclassOrderCode: string | null;
 
   // Timestamps — always present in API responses (ISO 8601 strings)
   createdAt: string;

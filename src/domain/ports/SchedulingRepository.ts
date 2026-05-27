@@ -1,9 +1,10 @@
 import { ScheduledTask } from '../entities/scheduling';
+import { Stage } from '../entities/workflow';
 import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory' | 'iclassOrderCode'
 > {
   watcherIds?: string[];
 }
@@ -23,6 +24,12 @@ export interface SchedulingRepository {
 
   // RV — Revisado por Inventario (change 6)
   setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null>;
+
+  // IClass integration (task-send-to-iclass)
+  /** Resolve a Stage by its name (stages are identified by name, not hardcoded id). */
+  getStageByName(name: string): Promise<Stage | null>;
+  /** Persist the IClass service order code on a task after a successful OS creation. */
+  setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null>;
 
   // Checklist methods (change 5)
   getTaskWithChecklist(id: string): Promise<(ScheduledTask & { checklist: TaskChecklistItem[] }) | null>;
