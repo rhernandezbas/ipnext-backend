@@ -47,6 +47,21 @@ describe('GestionRealSyncScheduler', () => {
     expect(summary.contracts?.created).toBe(1);
   });
 
+  it('in backfill, only fetches contracts for newly-created clients (not re-fetched on re-backfill)', async () => {
+    gr.clients = [client('100')];
+    gr.contractsByClient = { '100': [contract('k1', '100')] };
+    const spy = jest.spyOn(gr, 'fetchContractsByClient');
+
+    await scheduler.runOnce();           // 1st backfill: 100 is created → contracts fetched
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Force another backfill (clear watermark). 100 already mirrored → created=0 → no contract fetch.
+    state.states.clear();
+    spy.mockClear();
+    await scheduler.runOnce();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('does not start a second run while one is in flight (lock)', async () => {
     gr.clients = [client('1')];
     // Two concurrent runs — the second must be skipped.

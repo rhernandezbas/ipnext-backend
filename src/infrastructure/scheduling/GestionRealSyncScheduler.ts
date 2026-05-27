@@ -55,7 +55,11 @@ export class GestionRealSyncScheduler {
     this.inFlight = true;
     try {
       const clients = await this.syncClients.execute();
-      const contracts = await this.syncContracts.execute(clients.touchedClientIds);
+      // In backfill, fetching contracts for every client = one GR call each (thousands).
+      // Only the newly-created clients need it; a re-backfill of existing rows skips them.
+      // In delta, the touched set is already small (only modified clients).
+      const contractIds = clients.mode === 'backfill' ? clients.createdClientIds : clients.touchedClientIds;
+      const contracts = await this.syncContracts.execute(contractIds);
       this.log(
         `[gr-sync] ${clients.mode}: clients +${clients.created}/~${clients.updated}, ` +
         `contracts +${contracts.created}/~${contracts.updated}`,

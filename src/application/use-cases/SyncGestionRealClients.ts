@@ -12,8 +12,10 @@ export interface SyncRunResult {
   updated: number;
   /** Watermark persisted after this run (DD-MM-AAAA). */
   cursor: string;
-  /** GR client ids touched this run — fed to the contracts sync. */
+  /** GR client ids touched this run (created or updated). */
   touchedClientIds: string[];
+  /** GR client ids newly created this run — used to limit contract fetches in backfill. */
+  createdClientIds: string[];
 }
 
 export interface SyncOptions {
@@ -61,6 +63,7 @@ export class SyncGestionRealClients {
     let created = 0;
     let updated = 0;
     const touchedClientIds: string[] = [];
+    const createdClientIds: string[] = [];
 
     try {
       // Each estado segment is paginated independently from offset 0.
@@ -79,7 +82,7 @@ export class SyncGestionRealClients {
           const { total, clients } = await this.gr.fetchClients(params);
           for (const client of clients) {
             const { created: wasCreated } = await this.mirror.upsertClient(client);
-            if (wasCreated) created++; else updated++;
+            if (wasCreated) { created++; createdClientIds.push(client.grClienteId); } else updated++;
             touchedClientIds.push(client.grClienteId);
             fetched++;
           }
@@ -106,7 +109,7 @@ export class SyncGestionRealClients {
       itemsSynced: fetched,
     });
 
-    return { mode, fetched, created, updated, cursor: runDate, touchedClientIds };
+    return { mode, fetched, created, updated, cursor: runDate, touchedClientIds, createdClientIds };
   }
 }
 
