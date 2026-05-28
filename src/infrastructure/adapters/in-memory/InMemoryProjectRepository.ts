@@ -42,6 +42,8 @@ export class InMemoryProjectRepository implements ProjectRepository {
       partnerIds,
       partners,
       taskCounts: { nuevo: 0, enProgreso: 0, hecho: 0, total: 0 },
+      iclassSoTypeId: null as string | null,
+      iclassSoType: null as { id: string; code: string; description: string; active: boolean } | null,
       createdAt: now,
       updatedAt: now,
     };
@@ -126,6 +128,8 @@ export class InMemoryProjectRepository implements ProjectRepository {
       visible: p.visible,
       partners: [...p.partners],
       taskCounts: p.taskCounts ? { ...p.taskCounts } : { nuevo: 0, enProgreso: 0, hecho: 0, total: 0 },
+      iclassSoTypeId: p.iclassSoTypeId ?? null,
+      iclassSoType: p.iclassSoType ? { ...p.iclassSoType } : null,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
     };

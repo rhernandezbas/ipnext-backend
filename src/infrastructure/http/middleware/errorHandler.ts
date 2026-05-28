@@ -20,6 +20,10 @@ const statusMap: Record<string, number> = {
   ICLASS_NODE_NOT_FOUND: 422,
   ICLASS_REJECTED: 422,
   ICLASS_UNAVAILABLE: 502,
+  MISSING_PROJECT_FOR_ICLASS: 422,
+  MISSING_ICLASS_MAPPING: 422,
+  ICLASS_SO_TYPE_INACTIVE: 422,
+  ICLASS_SO_TYPE_NOT_FOUND: 404,
   AUTHENTICATION_ERROR: 401,
   SPLYNX_UNAVAILABLE: 502,
   WORKFLOW_NAME_CONFLICT: 409,
@@ -47,6 +51,14 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     // Surface the IClass rejection detail (e.g. ICLERR_0045 ...) for the front-end.
     if (mapped?.reason !== undefined) {
       body['reason'] = mapped.reason;
+    }
+    // Surface projectTitle so the FE can render "Project «title» has no mapping".
+    if (mapped?.projectTitle !== undefined) {
+      body['projectTitle'] = mapped.projectTitle;
+    }
+    // Surface iclassSoTypeCode so the FE can render "Type «code» was deactivated".
+    if (mapped?.iclassSoTypeCode !== undefined) {
+      body['iclassSoTypeCode'] = mapped.iclassSoTypeCode;
     }
     res.status(status).json(body);
     return;

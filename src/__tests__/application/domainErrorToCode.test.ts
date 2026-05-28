@@ -5,7 +5,15 @@
  */
 import { domainErrorToCode } from '../../application/util/domainErrorToCode';
 import { MissingRequiredFieldsError, TaskNotFoundError, StageNotFoundError } from '../../domain/errors/scheduling';
-import { IClassNodeNotFoundError, IClassRejectedError, IClassUnavailableError } from '../../domain/errors/iclass';
+import {
+  IClassNodeNotFoundError,
+  IClassRejectedError,
+  IClassUnavailableError,
+  MissingProjectForIClassError,
+  MissingIClassMappingError,
+  IClassSoTypeInactiveError,
+  IClassSoTypeNotFoundError,
+} from '../../domain/errors/iclass';
 
 describe('domainErrorToCode', () => {
   it('maps MissingRequiredFieldsError with missingFields', () => {
@@ -48,5 +56,33 @@ describe('domainErrorToCode', () => {
 
   it('returns null for a non-domain (unknown) error', () => {
     expect(domainErrorToCode(new Error('boom'))).toBeNull();
+  });
+
+  // New IClass SO type mapping errors (iclass-so-type-mapping)
+
+  it('maps MissingProjectForIClassError', () => {
+    expect(domainErrorToCode(new MissingProjectForIClassError('t-1'))).toEqual({
+      errorCode: 'MISSING_PROJECT_FOR_ICLASS',
+    });
+  });
+
+  it('maps MissingIClassMappingError with projectTitle', () => {
+    expect(domainErrorToCode(new MissingIClassMappingError('Instalaciones FTTH'))).toEqual({
+      errorCode: 'MISSING_ICLASS_MAPPING',
+      projectTitle: 'Instalaciones FTTH',
+    });
+  });
+
+  it('maps IClassSoTypeInactiveError with iclassSoTypeCode', () => {
+    expect(domainErrorToCode(new IClassSoTypeInactiveError('VISITA TECNICA'))).toEqual({
+      errorCode: 'ICLASS_SO_TYPE_INACTIVE',
+      iclassSoTypeCode: 'VISITA TECNICA',
+    });
+  });
+
+  it('maps IClassSoTypeNotFoundError', () => {
+    expect(domainErrorToCode(new IClassSoTypeNotFoundError('some-uuid'))).toEqual({
+      errorCode: 'ICLASS_SO_TYPE_NOT_FOUND',
+    });
   });
 });

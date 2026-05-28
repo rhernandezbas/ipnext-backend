@@ -527,23 +527,38 @@ model ProjectType {
   projects    Project[]
 }
 
+model IClassSoType {
+  id           String    @id @default(uuid())
+  code         String    @unique
+  description  String
+  active       Boolean   @default(true)
+  lastSyncedAt DateTime
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  projects     Project[]
+
+  @@index([active])
+}
+
 model Project {
-  id            String           @id @default(uuid())
-  title         String
-  description   String?
-  typeId        String?
-  type          ProjectType?     @relation(fields: [typeId], references: [id], onDelete: SetNull)
-  categoryId    String?
-  category      ProjectCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  workflowId    String?
-  workflow      Workflow?        @relation(fields: [workflowId], references: [id], onDelete: SetNull)
-  projectLeadId String?
-  projectLead   Admin?           @relation(fields: [projectLeadId], references: [id], onDelete: SetNull)
-  visible       Boolean          @default(true)
-  partners      ProjectPartner[]
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  tasks         ScheduledTask[]
+  id              String           @id @default(uuid())
+  title           String
+  description     String?
+  typeId          String?
+  type            ProjectType?     @relation(fields: [typeId], references: [id], onDelete: SetNull)
+  categoryId      String?
+  category        ProjectCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  workflowId      String?
+  workflow        Workflow?        @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  projectLeadId   String?
+  projectLead     Admin?           @relation(fields: [projectLeadId], references: [id], onDelete: SetNull)
+  visible         Boolean          @default(true)
+  partners        ProjectPartner[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  tasks           ScheduledTask[]
+  iclassSoTypeId  String?
+  iclassSoType    IClassSoType?    @relation(fields: [iclassSoTypeId], references: [id], onDelete: SetNull)
 
   @@index([title])
   @@index([categoryId])
@@ -551,6 +566,7 @@ model Project {
   @@index([workflowId])
   @@index([projectLeadId])
   @@index([visible])
+  @@index([iclassSoTypeId])
 }
 
 model ProjectPartner {

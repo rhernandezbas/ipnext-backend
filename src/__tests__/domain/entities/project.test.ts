@@ -18,6 +18,8 @@ describe('Project entity — enriched shape', () => {
       visible: true,
       partners: [],
       taskCounts: { nuevo: 0, enProgreso: 0, hecho: 0, total: 0 },
+      iclassSoTypeId: null,
+      iclassSoType: null,
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
     };
@@ -27,6 +29,8 @@ describe('Project entity — enriched shape', () => {
     expect(p.projectLeadId).toBeNull();
     expect(p.visible).toBe(true);
     expect(p.partners).toEqual([]);
+    expect(p.iclassSoTypeId).toBeNull();
+    expect(p.iclassSoType).toBeNull();
   });
 
   it('partners can hold id/name objects', () => {
@@ -40,6 +44,8 @@ describe('Project entity — enriched shape', () => {
       projectLeadId: 'admin-1',
       visible: false,
       partners: [{ id: 'partner-1', name: 'IPNEXT BA' }],
+      iclassSoTypeId: null,
+      iclassSoType: null,
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
     };

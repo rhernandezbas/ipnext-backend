@@ -27,6 +27,8 @@ type EnrichedProjectRow = {
   visible: boolean;
   partners: Array<{ partner: { id: string; name: string } }>;
   tasks: Array<{ stage: { category: 'nuevo' | 'enProgreso' | 'hecho' } | null }>;
+  iclassSoTypeId: string | null;
+  iclassSoType: { id: string; code: string; description: string; active: boolean } | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -55,6 +57,10 @@ function mapProject(p: EnrichedProjectRow): Project {
     visible: p.visible,
     partners: p.partners.map(pp => ({ id: pp.partner.id, name: pp.partner.name })),
     taskCounts,
+    iclassSoTypeId: p.iclassSoTypeId ?? null,
+    iclassSoType: p.iclassSoType
+      ? { id: p.iclassSoType.id, code: p.iclassSoType.code, description: p.iclassSoType.description, active: p.iclassSoType.active }
+      : null,
     createdAt: p.createdAt.toISOString(),
     updatedAt: p.updatedAt.toISOString(),
   };
@@ -63,6 +69,7 @@ function mapProject(p: EnrichedProjectRow): Project {
 const INCLUDE = {
   partners: { include: { partner: { select: { id: true, name: true } } } },
   tasks: { select: { stage: { select: { category: true } } } },
+  iclassSoType: { select: { id: true, code: true, description: true, active: true } },
 } as const;
 
 export class PrismaProjectRepository implements ProjectRepository {
