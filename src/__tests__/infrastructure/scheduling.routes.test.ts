@@ -92,8 +92,8 @@ function buildApp() {
 
   const listTasks = new ListTasks(repo);
   const getTask = new GetTask(repo);
-  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup);
-  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup);
+  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
+  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
   const deleteTask = new DeleteTask(repo);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
@@ -492,8 +492,8 @@ describe('PATCH /:id/stage - projectName', () => {
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
     
     app.use('/api/scheduling', createSchedulingRouter(
-      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
+      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
       moveTaskToStage, new FakeAuthProvider(),
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -541,8 +541,8 @@ describe('PATCH /:id/stage - completedAt', () => {
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
     
     app.use('/api/scheduling', createSchedulingRouter(
-      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
+      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
       moveTaskToStage, new FakeAuthProvider(),
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -586,8 +586,8 @@ describe('PATCH /:id/stage - completedAt', () => {
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
     
     app.use('/api/scheduling', createSchedulingRouter(
-      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
+      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
       moveTaskToStage, new FakeAuthProvider(),
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -684,8 +684,8 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
 
     const listTasks = new ListTasks(repo);
     const getTask = new GetTask(repo);
-    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup);
-    const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup);
+    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
+    const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
     const deleteTask = new DeleteTask(repo);
 
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
@@ -727,8 +727,8 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
     app.use('/api/scheduling', createSchedulingRouter(
-      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
+      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
       moveTaskToStage, new FakeAuthProvider(), stageRepo,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -813,16 +813,18 @@ describe('GET /api/scheduling/:id', () => {
 // ─── FK validation (new fields) ─────────────────────────────────────────────
 
 function buildEnrichedApp(opts: {
+  repo?: InMemorySchedulingRepository;
   customerLookup?: StubLookup;
   serviceLookup?: StubLookup;
   partnerLookup?: StubLookup;
   adminLookup?: StubLookup;
+  projectLookup?: EntityLookup;
 } = {}) {
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
 
-  const repo = new InMemorySchedulingRepository();
+  const repo = opts.repo ?? new InMemorySchedulingRepository();
   const stageRepo = new InMemoryStageRepository();
   makeDefaultStages(stageRepo);
 
@@ -830,9 +832,10 @@ function buildEnrichedApp(opts: {
   const serviceLookup  = opts.serviceLookup  ?? emptyLookup;
   const partnerLookup  = opts.partnerLookup  ?? emptyLookup;
   const adminLookup    = opts.adminLookup    ?? sessionAdminLookup;
+  const projectLookup  = opts.projectLookup  ?? emptyLookup;
 
-  const createTask = new CreateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup);
-  const updateTask = new UpdateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup);
+  const createTask = new CreateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup, projectLookup);
+  const updateTask = new UpdateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup, projectLookup);
   const deleteTask = new DeleteTask(repo);
   
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
@@ -1080,6 +1083,68 @@ describe('PUT /api/scheduling/:id — watcher replace-set (new fields)', () => {
   });
 });
 
+// ─── REQ-CREATE-12/UPDATE-5: projectId validation at route level ─────────────
+
+describe('REQ-CREATE-12/UPDATE-5: projectId validation at route level', () => {
+  it('POST /api/scheduling con projectId inválido → 404 PROJECT_NOT_FOUND', async () => {
+    const { app } = buildEnrichedApp({ projectLookup: new StubLookup() }); // empty — rejects any project
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, projectId: 'ghost-project' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PROJECT_NOT_FOUND');
+  });
+
+  it('PUT /api/scheduling/:id con projectId inválido → 404 PROJECT_NOT_FOUND', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const task = await repo.createTask({ ...validBase as any, stageId: DEFAULT_STAGE_ID_PENDING, ...NEW_TASK_FIELDS });
+    const { app } = buildEnrichedApp({ repo, projectLookup: new StubLookup() });
+    const res = await request(app)
+      .put(`/api/scheduling/${task.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ projectId: 'ghost-project' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PROJECT_NOT_FOUND');
+  });
+
+  it('REQ-CREATE-14: POST con projectId vacío ("") → 201 con projectId null', async () => {
+    const { app } = buildEnrichedApp({ projectLookup: new StubLookup() });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, projectId: '' });
+    expect(res.status).toBe(201);
+    expect(res.body.projectId).toBeNull();
+  });
+
+  it('PUT con projectId vacío ("") → 404 PROJECT_NOT_FOUND (schema accepts "", FK validation rejects)', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const task = await repo.createTask({ ...validBase as any, stageId: DEFAULT_STAGE_ID_PENDING, ...NEW_TASK_FIELDS, projectId: 'proj-abc' });
+    const { app } = buildEnrichedApp({ repo, projectLookup: new StubLookup() });
+    const res = await request(app)
+      .put(`/api/scheduling/${task.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ projectId: '' });
+    // UpdateTaskSchema inherits nullable().optional() from base — accepts ""
+    // FK validation rejects "" since it's not null/undefined → 404 PROJECT_NOT_FOUND
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PROJECT_NOT_FOUND');
+  });
+
+  it('PUT reasignando a proyecto válido → 200 con nuevo projectId', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const task = await repo.createTask({ ...validBase as any, stageId: DEFAULT_STAGE_ID_PENDING, ...NEW_TASK_FIELDS, projectId: 'proj-old' });
+    const { app } = buildEnrichedApp({ repo, projectLookup: new StubLookup('proj-new') });
+    const res = await request(app)
+      .put(`/api/scheduling/${task.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ projectId: 'proj-new' });
+    expect(res.status).toBe(200);
+    expect(res.body.projectId).toBe('proj-new');
+  });
+});
+
 // ─── Fase 4: PATCH /:id/stage → "Enviar a IClass" (IClass integration) ───────
 
 const ICLASS_STAGE_SEND       = '20000000-0000-4000-a000-000000000001'; // "Enviar a IClass"
@@ -1124,8 +1189,8 @@ function buildIClassApp(opts: {
   app.use(cookieParser());
   app.use(express.json());
   app.use('/api/scheduling', createSchedulingRouter(
-    new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-    new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
+    new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+    new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
     moveTaskToStage, new FakeAuthProvider(),
   ));
   app.use(errorHandler);
@@ -1286,8 +1351,8 @@ function buildBulkApp() {
   app.use(cookieParser());
   app.use(express.json());
   app.use('/api/scheduling', createSchedulingRouter(
-    new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-    new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
+    new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+    new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
     moveTaskToStage, new FakeAuthProvider(), stageRepo, undefined, undefined, bulkMoveTasksToStage,
   ));
   app.use(errorHandler);

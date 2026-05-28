@@ -359,11 +359,14 @@ import { createIClassAdminRouter } from './routes/iclass-admin.routes';
  * Each branch calls findUnique on the correct Prisma delegate with its own
  * concrete argument type — no `as any` needed, TypeScript can verify each call.
  */
-function prismaClientLookup(model: 'Client' | 'Service' | 'Partner', id: string): Promise<{ id: string } | null> {
+// Covers four entity kinds (Client, Service, Partner, Project) despite the name
+// — renaming is out of scope per design AD-2.
+function prismaClientLookup(model: 'Client' | 'Service' | 'Partner' | 'Project', id: string): Promise<{ id: string } | null> {
   switch (model) {
     case 'Client':  return prisma.client.findUnique({ where: { id }, select: { id: true } });
     case 'Service': return prisma.service.findUnique({ where: { id }, select: { id: true } });
     case 'Partner': return prisma.partner.findUnique({ where: { id }, select: { id: true } });
+    case 'Project': return prisma.project.findUnique({ where: { id }, select: { id: true } });
   }
 }
 
@@ -466,6 +469,7 @@ export function createApp() {
     { findById: (id: string) => prismaClientLookup('Service', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
     adminRepoForScheduling, // AdminRepository.findById returns Admin | null — satisfies EntityLookup
+    { findById: (id: string) => prismaClientLookup('Project', id) },
   );
   const updateTask = new UpdateTask(
     schedulingRepo,
@@ -473,6 +477,7 @@ export function createApp() {
     { findById: (id: string) => prismaClientLookup('Service', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
     adminRepoForScheduling,
+    { findById: (id: string) => prismaClientLookup('Project', id) },
   );
   const deleteTask = new DeleteTask(schedulingRepo);
   // IClass integration: moving a task to "Enviar a IClass" delegates the OS

@@ -46,6 +46,7 @@ const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
   customer: 'CUSTOMER_NOT_FOUND',
   service:  'SERVICE_NOT_FOUND',
   partner:  'PARTNER_NOT_FOUND',
+  project:  'PROJECT_NOT_FOUND',
   reporter: 'REPORTER_NOT_FOUND',
   assignee: 'ASSIGNEE_NOT_FOUND',
   watcher:  'WATCHER_NOT_FOUND',
@@ -305,7 +306,7 @@ export function createSchedulingRouter(
       address: data.address ?? null,
       coordinates: data.coordinates ?? null,
       category: data.category,
-      projectId: data.projectId ?? null,
+      projectId: (data.projectId === '' ? null : data.projectId) ?? null, // REQ-CREATE-14: coerce empty-string to null
       projectName: data.projectName ?? null,
       completedAt: data.completedAt ?? null,
       notes: data.notes ?? null,
