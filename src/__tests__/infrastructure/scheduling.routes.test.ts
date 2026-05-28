@@ -29,6 +29,13 @@ class StubLookup implements EntityLookup {
 
 const emptyLookup = new StubLookup();
 
+// Admin lookup that recognises the session user 'admin-1' returned by
+// FakeAuthProvider.getSession. Used as the default admin lookup in test apps so
+// the route's `reporterId ?? req.user.id` default (REQ-CREATE-9) passes FK
+// validation. Tests that want to simulate "session user not in admin table"
+// (REQ-CREATE-11) override with an empty StubLookup explicitly.
+const sessionAdminLookup = new StubLookup('admin-1');
+
 // Default new fields for repo.createTask calls (backward-compat with pre-enrich tests)
 const NEW_TASK_FIELDS = {
   startDate: null as null,
@@ -85,8 +92,8 @@ function buildApp() {
 
   const listTasks = new ListTasks(repo);
   const getTask = new GetTask(repo);
-  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
-  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup);
+  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup);
   const deleteTask = new DeleteTask(repo);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
@@ -677,10 +684,10 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
 
     const listTasks = new ListTasks(repo);
     const getTask = new GetTask(repo);
-    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
-    const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup);
+    const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup);
     const deleteTask = new DeleteTask(repo);
-    
+
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
     app.use('/api/scheduling', createSchedulingRouter(
@@ -822,7 +829,7 @@ function buildEnrichedApp(opts: {
   const customerLookup = opts.customerLookup ?? emptyLookup;
   const serviceLookup  = opts.serviceLookup  ?? emptyLookup;
   const partnerLookup  = opts.partnerLookup  ?? emptyLookup;
-  const adminLookup    = opts.adminLookup    ?? emptyLookup;
+  const adminLookup    = opts.adminLookup    ?? sessionAdminLookup;
 
   const createTask = new CreateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup);
   const updateTask = new UpdateTask(repo, customerLookup, serviceLookup, partnerLookup, adminLookup);
@@ -891,7 +898,9 @@ describe('POST /api/scheduling — FK errors (new fields)', () => {
   });
 
   it('POST with assigneeId: "ghost" → 404 ASSIGNEE_NOT_FOUND', async () => {
-    const { app } = buildEnrichedApp({ adminLookup: new StubLookup() });
+    // adminLookup knows 'admin-1' (session user) so the reporter default
+    // passes validation; 'ghost' assignee still fails FK.
+    const { app } = buildEnrichedApp({ adminLookup: new StubLookup('admin-1') });
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
@@ -901,7 +910,9 @@ describe('POST /api/scheduling — FK errors (new fields)', () => {
   });
 
   it('POST with ghost watcherIds[0] → 404 WATCHER_NOT_FOUND', async () => {
-    const { app } = buildEnrichedApp({ adminLookup: new StubLookup() });
+    // adminLookup knows 'admin-1' (session user) so the reporter default
+    // passes validation; 'ghost-watcher' still fails FK.
+    const { app } = buildEnrichedApp({ adminLookup: new StubLookup('admin-1') });
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
@@ -957,6 +968,56 @@ describe('POST /api/scheduling — FK errors (new fields)', () => {
     expect(res.status).toBe(201);
     expect(typeof res.body.startDate).toBe('string');
     expect(typeof res.body.endDate).toBe('string');
+  });
+});
+
+describe('POST /api/scheduling — reporter defaulting (REQ-CREATE-9/10/11)', () => {
+  it('REQ-CREATE-9: POST without reporterId → 201 with reporterId = session user (admin-1)', async () => {
+    // Default adminLookup knows 'admin-1' (the FakeAuthProvider session user).
+    const { app } = buildEnrichedApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase });
+    expect(res.status).toBe(201);
+    expect(res.body.reporterId).toBe('admin-1');
+  });
+
+  it('REQ-CREATE-9b: POST with reporterId explicitly null → 201 with reporterId = session user', async () => {
+    // ?? operator treats null and undefined identically — the default kicks in
+    // when the client sends explicit null, not just when the field is omitted.
+    const { app } = buildEnrichedApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, reporterId: null });
+    expect(res.status).toBe(201);
+    expect(res.body.reporterId).toBe('admin-1');
+  });
+
+  it('REQ-CREATE-10: POST with explicit reporterId wins over the session default', async () => {
+    // adminLookup knows both 'admin-1' (session) and 'admin-2' (the body value).
+    const { app } = buildEnrichedApp({ adminLookup: new StubLookup('admin-1', 'admin-2') });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase, reporterId: 'admin-2' });
+    expect(res.status).toBe(201);
+    expect(res.body.reporterId).toBe('admin-2');
+  });
+
+  it('REQ-CREATE-11: defaulted reporterId is still validated → 404 when session user not in admin lookup', async () => {
+    // Session user is 'admin-1' but adminLookup is empty — anomalous state that
+    // never happens in prod (the JWT is issued from the admin record at login).
+    // The contract: the defaulted value goes through the same FK validation as
+    // an explicit one, no special-casing.
+    const { app } = buildEnrichedApp({ adminLookup: new StubLookup() });
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...validBase });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REPORTER_NOT_FOUND');
   });
 });
 

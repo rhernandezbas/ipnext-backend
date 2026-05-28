@@ -315,7 +315,11 @@ export function createSchedulingRouter(
       customerId: data.customerId ?? null,
       serviceId: data.serviceId ?? null,
       partnerId: data.partnerId ?? null,
-      reporterId: data.reporterId ?? null,
+      // Default reporterId to the authenticated user when the body omits it
+      // (REQ-CREATE-9/10/11). User.id == admin.id by construction in
+      // JwtAuthAdapter, so the defaulted value passes CreateTask's FK validation
+      // against adminLookup. An explicit body value still wins.
+      reporterId: data.reporterId ?? req.user?.id ?? null,
       assigneeId: data.assigneeId ?? null,
       watcherIds: data.watcherIds ?? [],
       travelTimeTo: data.travelTimeTo ?? null,
