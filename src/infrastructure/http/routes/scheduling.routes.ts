@@ -6,6 +6,7 @@ import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
+import { BulkMoveTasksToStage } from '@application/use-cases/BulkMoveTasksToStage';
 import { AddChecklistItem } from '@application/use-cases/AddChecklistItem';
 import { ToggleChecklistItem } from '@application/use-cases/ToggleChecklistItem';
 import { UpdateChecklistItem } from '@application/use-cases/UpdateChecklistItem';
@@ -71,6 +72,7 @@ export function createSchedulingRouter(
   stageRepo?: StageRepository,
   checklist?: ChecklistUseCases,
   setTaskInventoryReview?: SetTaskInventoryReview,
+  bulkMoveTasksToStage?: BulkMoveTasksToStage,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -238,6 +240,27 @@ export function createSchedulingRouter(
         }
         throw err;
       }
+    });
+  }
+
+  // ── Bulk move N tasks to a stage ─────────────────────────────────────────
+  // MUST be registered BEFORE /:id so the catch-all does not shadow it (AD-6).
+  // Always responds 200 with a per-task result envelope (partial failures live
+  // inside results[i], never as an HTTP error) — AD-3. Only invalid body → 400.
+  if (bulkMoveTasksToStage) {
+    const BulkMoveSchema = z.object({
+      ids: z.array(z.string().min(1)).min(1),
+      stageId: z.string().min(1),
+    });
+
+    router.post('/bulk/stage', auth, async (req: Request, res: Response): Promise<void> => {
+      const parsed = BulkMoveSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      const result = await bulkMoveTasksToStage.execute(parsed.data.ids, parsed.data.stageId);
+      res.json(result);
     });
   }
 

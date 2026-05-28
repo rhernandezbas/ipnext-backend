@@ -104,6 +104,7 @@ import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
+import { BulkMoveTasksToStage } from '@application/use-cases/BulkMoveTasksToStage';
 import { SendTaskToIClass } from '@application/use-cases/SendTaskToIClass';
 import { buildIClassClient } from './iclass.factory';
 import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
@@ -474,6 +475,7 @@ export function createApp() {
   const featureFlagRepo = new PrismaFeatureFlagRepository();
   const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient());
   const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo, sendTaskToIClass);
+  const bulkMoveTasksToStage = new BulkMoveTasksToStage(moveTaskToStage);
   const setTaskInventoryReview = new SetTaskInventoryReview(schedulingRepo);
 
   const listWorkflows = new ListWorkflows(workflowRepo);
@@ -775,7 +777,7 @@ export function createApp() {
     reorderChecklistItems: reorderChecklistItemsUC,
     assignTemplateToTask: assignTemplateToTaskUC,
     clearTaskChecklist: clearTaskChecklistUC,
-  }, setTaskInventoryReview));
+  }, setTaskInventoryReview, bulkMoveTasksToStage));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);

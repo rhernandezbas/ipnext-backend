@@ -9,6 +9,7 @@ import { CreateTask } from '../../application/use-cases/CreateTask';
 import { UpdateTask } from '../../application/use-cases/UpdateTask';
 import { DeleteTask } from '../../application/use-cases/DeleteTask';
 import { MoveTaskToStage } from '../../application/use-cases/MoveTaskToStage';
+import { BulkMoveTasksToStage } from '../../application/use-cases/BulkMoveTasksToStage';
 import { SendTaskToIClass } from '../../application/use-cases/SendTaskToIClass';
 import { InMemoryIClassClient } from '../../infrastructure/adapters/in-memory/InMemoryIClassClient';
 import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
@@ -1179,6 +1180,128 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
     expect(res.status).toBe(200);
     expect(res.body.stageId).toBe(ICLASS_STAGE_SEND);
     expect(iclass.createdOrders).toHaveLength(0);
+  });
+});
+
+// ─── Fase 2: POST /api/scheduling/bulk/stage (bulk move) ─────────────────────
+
+// Builds an app whose bulk endpoint exercises the REAL BulkMoveTasksToStage +
+// MoveTaskToStage + SendTaskToIClass with IClass integration, so partial
+// failures (one task OK, one missing fields) are produced by the real domain.
+function buildBulkApp() {
+  const stageRepo = new InMemoryStageRepository();
+  makeDefaultStages(stageRepo);
+  stageRepo.addDirect({ id: ICLASS_STAGE_SEND,       workflowId: 'wf-default', name: 'Enviar a IClass',       category: 'enProgreso', order: 5, color: null });
+  stageRepo.addDirect({ id: ICLASS_STAGE_REGISTERED, workflowId: 'wf-default', name: 'Registrado en IClass',  category: 'enProgreso', order: 6, color: null });
+
+  const repo = new InMemorySchedulingRepository(stageRepo);
+
+  const flags = new InMemoryFeatureFlagRepository();
+  flags.seed('iclass-integration', true);
+
+  const iclass = new InMemoryIClassClient();
+  iclass.nodes = [{ code: 'Cordoba', description: 'Cordoba' }];
+
+  const sendToIClass = new SendTaskToIClass(repo, flags, iclass);
+  const moveTaskToStage = new MoveTaskToStage(repo, stageRepo, sendToIClass);
+  const bulkMoveTasksToStage = new BulkMoveTasksToStage(moveTaskToStage);
+
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+  app.use('/api/scheduling', createSchedulingRouter(
+    new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+    new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
+    moveTaskToStage, new FakeAuthProvider(), stageRepo, undefined, undefined, bulkMoveTasksToStage,
+  ));
+  app.use(errorHandler);
+
+  return { app, repo };
+}
+
+describe('POST /api/scheduling/bulk/stage (Fase 2)', () => {
+  it('REQ-BULK-1: valid body with partial failure → 200 with summary + per-task results in id order', async () => {
+    const { app, repo } = buildBulkApp();
+    // t1: valid data → moves to IClass OK.
+    repo.seedTask({
+      id: 't1', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
+      address: 'Calle 1', description: 'Instalar',
+    });
+    // t2: missing phone + description → MISSING_REQUIRED_FIELDS.
+    repo.seedTask({
+      id: 't2', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-2', customerName: 'Pedro', customerCity: 'Cordoba', customerPhone: null,
+      address: 'Calle 2', description: null,
+    });
+
+    const res = await request(app)
+      .post('/api/scheduling/bulk/stage')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ids: ['t1', 't2'], stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(200);
+    expect(res.body.summary).toEqual({ total: 2, ok: 1, failed: 1 });
+    expect(res.body.results).toHaveLength(2);
+    // order preserved
+    expect(res.body.results[0].taskId).toBe('t1');
+    expect(res.body.results[0].ok).toBe(true);
+    expect(res.body.results[1].taskId).toBe('t2');
+    expect(res.body.results[1].ok).toBe(false);
+    expect(res.body.results[1].errorCode).toBe('MISSING_REQUIRED_FIELDS');
+    expect(res.body.results[1].missingFields).toEqual(expect.arrayContaining(['phone', 'description']));
+  });
+
+  it('REQ-BULK-1: ids empty → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildBulkApp();
+    const res = await request(app)
+      .post('/api/scheduling/bulk/stage')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ids: [], stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('REQ-BULK-1: missing stageId → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildBulkApp();
+    const res = await request(app)
+      .post('/api/scheduling/bulk/stage')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ids: ['t1'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('REQ-BULK-1: no auth → 401 UNAUTHORIZED', async () => {
+    const { app } = buildBulkApp();
+    const res = await request(app)
+      .post('/api/scheduling/bulk/stage')
+      .send({ ids: ['t1'], stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('UNAUTHORIZED');
+  });
+
+  it('AD-6: /bulk/stage resolves to the bulk handler, NOT the /:id catch-all', async () => {
+    const { app, repo } = buildBulkApp();
+    repo.seedTask({
+      id: 'tb', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
+      address: 'Calle 1', description: 'Instalar',
+    });
+
+    const res = await request(app)
+      .post('/api/scheduling/bulk/stage')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ids: ['tb'], stageId: DEFAULT_STAGE_ID_COMPLETED });
+
+    // bulk handler returns the {summary, results} envelope, never a single task / 404
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('summary');
+    expect(res.body).toHaveProperty('results');
+    expect(res.body.summary.total).toBe(1);
   });
 });
 

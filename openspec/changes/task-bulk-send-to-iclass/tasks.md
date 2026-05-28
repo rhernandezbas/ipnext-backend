@@ -31,14 +31,14 @@ STRICT TDD: test rojo → implementación → verde. `npm test` y `tsc --noEmit`
 
 ## Fase 2 — HTTP (backend, TDD)
 
-- [ ] 2.1 (TEST ROJO) en `scheduling.routes.test.ts`: `POST /api/scheduling/bulk/stage`:
+- [x] 2.1 (TEST ROJO) en `scheduling.routes.test.ts`: `POST /api/scheduling/bulk/stage`:
   - body válido → 200 con `{summary, results}` (mezcla ok/fail).
   - body inválido (ids vacío / sin stageId) → 400 VALIDATION_ERROR, sin procesar.
   - sin auth → 401.
   - la ruta `/bulk/stage` resuelve al handler bulk (NO la traga `/:id`).
-- [ ] 2.2 Agregar `POST /bulk/stage` en `scheduling.routes.ts` con zod `{ ids: string[].min(1), stageId: string.min(1) }`, auth. **Montar ANTES de `/:id`** (AD-6).
-- [ ] 2.3 Wiring en `app.ts` (mínimo): instanciar `BulkMoveTasksToStage(moveTaskToStage)`, pasar al router.
-- [ ] 2.4 (TEST VERDE) 2.1 pasa. `npm test` + `tsc --noEmit` verdes.
+- [x] 2.2 Agregar `POST /bulk/stage` en `scheduling.routes.ts` con zod `{ ids: string[].min(1), stageId: string.min(1) }`, auth. **Montar ANTES de `/:id`** (AD-6).
+- [x] 2.3 Wiring en `app.ts` (mínimo): instanciar `BulkMoveTasksToStage(moveTaskToStage)`, pasar al router.
+- [x] 2.4 (TEST VERDE) 2.1 pasa. `npm test` + `tsc --noEmit` verdes.
   ✅ **DEPLOY GATE: endpoint bulk funcionando; front aún usa el loop viejo (sin romper).**
 
 ---
