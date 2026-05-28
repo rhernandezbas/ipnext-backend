@@ -194,3 +194,43 @@ describe('UpdateTaskSchema — partial shape', () => {
     expect(r.success).toBe(true);
   });
 });
+
+// Regression guard: UpdateTaskSchema MUST keep accepting `null` for the
+// optional FK fields (mirrors CreateTaskSchema via .partial() on the shared
+// base). Empty strings are still rejected by `min(1)` — clients must
+// normalise "no value" to null at the boundary. If this contract drifts
+// (e.g. someone redefines the field as `z.string().min(1).optional()` without
+// `.nullable()`), the FE "Sin asignar / Sin partner / Sin servicio" flow
+// breaks silently with 400 VALIDATION_ERROR.
+describe('UpdateTaskSchema — FK nullability contract', () => {
+  it.each([
+    ['assigneeId'],
+    ['partnerId'],
+    ['serviceId'],
+    ['reporterId'],
+    ['customerId'],
+    ['projectId'],
+  ])('accepts %s: null (clears the FK)', (field) => {
+    const r = UpdateTaskSchema.safeParse({ [field]: null });
+    expect(r.success).toBe(true);
+  });
+
+  // Note: projectId is NOT in this set because its schema is just
+  // `z.string().nullable().optional()` (no `.min(1)`) — it tolerates empty
+  // string today. The strict-FK fields below all carry `.min(1)`, so the
+  // empty string MUST be rejected and the client MUST normalise to null.
+  it.each([
+    ['assigneeId'],
+    ['partnerId'],
+    ['serviceId'],
+    ['reporterId'],
+    ['customerId'],
+  ])('rejects %s: "" (clients must normalise empty string to null)', (field) => {
+    const r = UpdateTaskSchema.safeParse({ [field]: '' });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const paths = r.error.issues.map(i => i.path[0]);
+      expect(paths).toContain(field);
+    }
+  });
+});
