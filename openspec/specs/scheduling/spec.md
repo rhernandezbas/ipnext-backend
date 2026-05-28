@@ -215,6 +215,101 @@ Rationale: documents the contract that the defaulted value goes through the same
 
 ---
 
+### REQ-CREATE-12: `CreateTask` rejects a non-existent `projectId` with 404 PROJECT_NOT_FOUND
+
+**Given** an authenticated `POST /api/scheduling` request
+**And** the body contains a `projectId` that does NOT correspond to any existing Project
+**When** the request is processed
+**Then** the server MUST respond with HTTP 404
+**And** the body MUST contain `{ "error": "<message>", "code": "PROJECT_NOT_FOUND" }`
+**And** NO task MUST be persisted
+
+#### Scenario
+
+```
+Given no Project with id 'fake-project-id' exists in the project lookup
+When POST /api/scheduling with body { title: "T", priority: "normal", estimatedHours: 1,
+     category: "repair", projectId: "fake-project-id", ... (all other required fields) }
+Then response status is 404
+And response body.code === 'PROJECT_NOT_FOUND'
+And the task repository remains empty
+```
+
+---
+
+### REQ-CREATE-13: `CreateTask` accepts a missing or null `projectId` without any project lookup
+
+**Given** an authenticated `POST /api/scheduling` request
+**And** the body omits `projectId` entirely OR sets it to `null`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 201
+**And** the created task's `projectId` MUST be `null`
+**And** NO `EntityLookup<Project>` call MUST be made
+
+#### Scenario A — omitted
+
+```
+Given a valid POST /api/scheduling body with no `projectId` key
+When processed
+Then response status is 201
+And response body.projectId === null
+```
+
+#### Scenario B — explicit null
+
+```
+Given a valid POST /api/scheduling body with projectId: null
+When processed
+Then response status is 201
+And response body.projectId === null
+```
+
+---
+
+### REQ-CREATE-14: Empty-string `projectId` is coerced to `null` at the route level
+
+**Rationale**: `CreateTaskBaseSchema.projectId` is `z.string().nullable().optional()` — it deliberately omits `.min(1)` (intentional asymmetry documented in the archive for `task-detail-reporter-and-unified-save`). An empty string `""` therefore passes Zod validation as a non-null, non-undefined string. Without coercion it would reach the project lookup with `id = ""`, trigger `ReferenceNotFoundError('project', '')`, and respond HTTP 404 — a spurious error that misleads the caller. The correct contract is that empty-string means "no project", identical to `null`. Coercion at the route level (before calling the use case) is the right seam, consistent with how other nullable fields are normalized in the POST handler (`data.projectId ?? null` already converts `undefined`; extend it to also coerce `""`).
+
+**Given** an authenticated `POST /api/scheduling` request
+**And** the body contains `projectId: ""`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 201
+**And** the created task's `projectId` MUST be `null`
+**And** NO project lookup call MUST be made
+
+**Given** an authenticated `PUT /api/scheduling/:id` request
+**And** the body contains `projectId: ""`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 200
+**And** the updated task's `projectId` MUST be `null`
+
+Coercion formula (route level, applied before passing data to the use case):
+```ts
+projectId: (data.projectId === '' ? null : data.projectId) ?? null
+```
+
+This applies identically to both the POST and PUT route handlers.
+
+#### Scenario (POST)
+
+```
+Given valid POST body with projectId: ""
+When processed
+Then response status is 201
+And response body.projectId === null
+```
+
+#### Scenario (PUT)
+
+```
+Given task 'task-1' exists
+When PUT /api/scheduling/task-1 with body { projectId: "" }
+Then response status is 200
+And response body.projectId === null
+```
+
+---
+
 ## 5. Update Task
 
 ### REQ-UPDATE-1: Valid partial body updates task and returns 200
@@ -249,6 +344,76 @@ Rationale: documents the contract that the defaulted value goes through the same
 **When** the request is processed  
 **Then** the server MUST respond with HTTP 400  
 **And** the body MUST contain `{ "code": "VALIDATION_ERROR" }`
+
+---
+
+### REQ-UPDATE-5: `UpdateTask` rejects a non-existent `projectId` with 404 PROJECT_NOT_FOUND
+
+**Given** an authenticated `PUT /api/scheduling/:id` request
+**And** the task with the given `id` exists
+**And** the body contains a `projectId` that does NOT correspond to any existing Project
+**When** the request is processed
+**Then** the server MUST respond with HTTP 404
+**And** the body MUST contain `{ "error": "<message>", "code": "PROJECT_NOT_FOUND" }`
+**And** the task MUST NOT be modified
+
+#### Scenario
+
+```
+Given a task with id 'task-1' exists
+And no Project exists with id 'fake-project'
+When PUT /api/scheduling/task-1 with body { projectId: 'fake-project' }
+Then response status is 404
+And response body.code === 'PROJECT_NOT_FOUND'
+And task-1's projectId is unchanged
+```
+
+---
+
+### REQ-UPDATE-6: `UpdateTask` accepts `projectId: null` (clears project assignment) without any lookup
+
+**Given** an authenticated `PUT /api/scheduling/:id` request
+**And** the task with the given `id` exists
+**And** the body contains `projectId: null`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 200
+**And** the updated task's `projectId` MUST be `null`
+**And** NO `EntityLookup<Project>` call MUST be made
+
+#### Scenario
+
+```
+Given a task 'task-1' with projectId: 'project-abc'
+When PUT /api/scheduling/task-1 with body { projectId: null }
+Then response status is 200
+And response body.projectId === null
+```
+
+---
+
+### REQ-UPDATE-7: FK validation for `projectId` happens BEFORE Prisma persistence
+
+**Given** an authenticated `PUT /api/scheduling/:id` request
+**And** the body contains an invalid `projectId`
+**When** `UpdateTask.execute` processes the data
+**Then** `projectLookup.findById` MUST be called BEFORE `repo.updateTask` is called
+**And** if the lookup fails, `repo.updateTask` MUST NOT be called
+**And** the response MUST be HTTP 404 (never HTTP 500 from a Prisma FK violation)
+
+This requirement formalises validation ordering: the canonical order is
+`customer → service → partner → project → reporter → assignee → watchers`.
+
+#### Scenario
+
+```
+Given a task 'task-1' exists
+And no Project exists with id 'bad-id'
+And a spy on repo.updateTask
+When PUT /api/scheduling/task-1 with body { projectId: 'bad-id' }
+Then projectLookup.findById('bad-id') is called
+And repo.updateTask is NOT called
+And response status is 404
+```
 
 ---
 
@@ -453,6 +618,21 @@ This constraint is verified by `tsc --noEmit` and enforced by path alias configu
 
 The router factory function MUST accept `authProvider: JwtAuthAdapter` as an additional parameter (after the existing use-case parameters).  
 It MUST NOT construct or import a concrete `JwtAuthAdapter` internally.
+
+---
+
+## 12. Reference Infrastructure
+
+### REQ-REF-1: `ReferenceKind` includes `'project'` and `REFERENCE_TO_CODE` maps it to `'PROJECT_NOT_FOUND'`
+
+**Given** the domain type `ReferenceKind` (in `src/domain/errors/scheduling.ts`)
+**And** the route-level map `REFERENCE_TO_CODE` (in `src/infrastructure/http/routes/scheduling.routes.ts`)
+**Then** `ReferenceKind` MUST include the literal `'project'`
+**And** `REFERENCE_TO_CODE['project']` MUST equal `'PROJECT_NOT_FOUND'`
+**And** the global `errorHandler` already maps `PROJECT_NOT_FOUND` → HTTP 404 (no change needed there)
+
+This requirement ensures the error chain is fully wired:
+`ReferenceNotFoundError('project', id)` → caught in route → `REFERENCE_TO_CODE['project']` → `'PROJECT_NOT_FOUND'` → HTTP 404.
 
 ---
 
