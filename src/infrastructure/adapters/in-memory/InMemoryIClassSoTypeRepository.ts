@@ -30,53 +30,42 @@ export class InMemoryIClassSoTypeRepository implements IClassSoTypeRepository {
     return entry ? { ...entry } : null;
   }
 
-  async upsertMany(
-    items: UpsertSoTypeInput[],
-    now: Date,
-  ): Promise<{ created: number; updated: number; reactivated: number }> {
-    let created = 0;
-    let updated = 0;
-    let reactivated = 0;
+  async upsertByCode(
+    entry: UpsertSoTypeInput,
+  ): Promise<{ status: 'created' | 'updated' | 'reactivated' }> {
+    const now = new Date();
+    const existingId = this.codeIndex.get(entry.code);
 
-    for (const item of items) {
-      const existingId = this.codeIndex.get(item.code);
-      if (existingId) {
-        const existing = this.byId.get(existingId)!;
-        const wasInactive = !existing.active;
-        const updated_entry: IClassSoType = {
-          ...existing,
-          description: item.description,
-          active: true,
-          lastSyncedAt: now,
-          updatedAt: now,
-        };
-        this.byId.set(existingId, updated_entry);
-        if (wasInactive) {
-          reactivated++;
-        } else {
-          updated++;
-        }
-      } else {
-        const id = randomUUID();
-        const entry: IClassSoType = {
-          id,
-          code: item.code,
-          description: item.description,
-          active: true,
-          lastSyncedAt: now,
-          createdAt: now,
-          updatedAt: now,
-        };
-        this.byId.set(id, entry);
-        this.codeIndex.set(item.code, id);
-        created++;
-      }
+    if (existingId) {
+      const existing = this.byId.get(existingId)!;
+      const wasInactive = !existing.active;
+      const updated_entry: IClassSoType = {
+        ...existing,
+        description: entry.description,
+        active: true,
+        lastSyncedAt: now,
+        updatedAt: now,
+      };
+      this.byId.set(existingId, updated_entry);
+      return { status: wasInactive ? 'reactivated' : 'updated' };
     }
 
-    return { created, updated, reactivated };
+    const id = randomUUID();
+    const newEntry: IClassSoType = {
+      id,
+      code: entry.code,
+      description: entry.description,
+      active: true,
+      lastSyncedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.byId.set(id, newEntry);
+    this.codeIndex.set(entry.code, id);
+    return { status: 'created' };
   }
 
-  async deactivateMissing(presentCodes: string[]): Promise<number> {
+  async markInactiveExcept(presentCodes: string[]): Promise<number> {
     const presentSet = new Set(presentCodes);
     let count = 0;
     for (const entry of this.byId.values()) {
