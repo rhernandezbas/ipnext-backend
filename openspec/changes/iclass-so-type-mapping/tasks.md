@@ -179,55 +179,55 @@ src/__tests__/application/SendTaskToIClass.test.ts
 
 ### 4.1 — `IClassClient` real (modificar)
 
-- [ ] 4.1 **(TEST ROJO)** Extender `src/__tests__/infrastructure/IClassClient.test.ts`:
+- [x] 4.1 **(TEST ROJO)** Extender `src/__tests__/infrastructure/IClassClient.test.ts`:
   - `listServiceOrderTypes`: stub `GET /thirdparties/{id}/serviceorders/types`, verifica que `codigo` y `descricao` se trimean, que se mapean a `code`/`description`, y que re-login on 401 funciona (REQ-PORT-3).
   - `createServiceOrder`: assert que `payload.serviceOrder.typeSOSummary === input.soType` (dinámico, no el viejo `defaultSoType`) (REQ-PORT-2, design § IClassClient).
-- [ ] 4.2 Modificar `src/infrastructure/adapters/iclass/IClassClient.ts`:
+- [x] 4.2 Modificar `src/infrastructure/adapters/iclass/IClassClient.ts`:
   - Implementar `listServiceOrderTypes(thirdPartyId: string)`: `authedGet` a `/thirdparties/${thirdPartyId}/serviceorders/types?pagesize=200`, mapea `objects[]` a `{ code: trim(o.codigo), description: trim(o.descricao) }` (REQ-PORT-3, design § IClassClient).
   - Cambiar `buildServiceOrderPayload` para usar `input.soType` en `typeSOSummary` en lugar de `this.defaultSoType` (REQ-PORT-2).
-- [ ] 4.3 **(TEST VERDE)** 4.1 pasa.
+- [x] 4.3 **(TEST VERDE)** 4.1 pasa.
 
 ### 4.2 — `PrismaIClassSoTypeRepository`
 
-- [ ] 4.4 **(TEST ROJO)** `src/__tests__/infrastructure/PrismaIClassSoTypeRepository.test.ts` — con Prisma mockeado o en modo integración; verificar: upsert crea si no existe, actualiza si existe, reactiva si estaba inactivo; `markInactiveExcept` hace un solo `updateMany` (AD-6); `list({ active: true })` filtra; `getByCode` retorna null si no existe.
-- [ ] 4.5 Implementar `src/infrastructure/adapters/prisma/PrismaIClassSoTypeRepository.ts` implementando el port `IClassSoTypeRepository`:
+- [x] 4.4 **(TEST ROJO)** `src/__tests__/infrastructure/PrismaIClassSoTypeRepository.test.ts` — con Prisma mockeado o en modo integración; verificar: upsert crea si no existe, actualiza si existe, reactiva si estaba inactivo; `markInactiveExcept` hace un solo `updateMany` (AD-6); `list({ active: true })` filtra; `getByCode` retorna null si no existe.
+- [x] 4.5 Implementar `src/infrastructure/adapters/prisma/PrismaIClassSoTypeRepository.ts` implementando el port `IClassSoTypeRepository`:
   - `upsertByCode`: pre-query por `code`, calcula diff, escribe con `upsert`; reactiva si existía con `active=false` (design § PrismaIClassSoTypeRepository).
-  - `markInactiveExcept`: `prisma.iClassSoType.updateMany({ where: { active: true, code: { notIn: codes }, thirdPartyId }, data: { active: false } })` (AD-6).
+  - `markInactiveExcept`: `prisma.iClassSoType.updateMany({ where: { active: true, code: { notIn: codes } }, data: { active: false } })` (AD-6).
   - `list`, `getById`, `getByCode`: queries simples con include/where.
-- [ ] 4.6 **(TEST VERDE)** 4.4 pasa.
+- [x] 4.6 **(TEST VERDE)** 4.4 pasa.
 
 ### 4.3 — `PrismaSchedulingRepository.getTaskProjectMapping`
 
-- [ ] 4.7 **(TEST ROJO)** Extender `src/__tests__/infrastructure/PrismaSchedulingRepository.test.ts` (o el equivalente): `getTaskProjectMapping` devuelve el mapping con iclassSoType; devuelve null si task no tiene project; ejecuta UNA sola query (AD-4, single JOIN).
-- [ ] 4.8 Implementar `getTaskProjectMapping(taskId)` en `src/infrastructure/adapters/prisma/PrismaSchedulingRepository.ts`: query `findUnique` con `include: { project: { include: { iclassSoType: true } } }`, devuelve DTO chato `{ projectId, projectTitle, iclassSoType }` o null (AD-4).
-- [ ] 4.9 **(TEST VERDE)** 4.7 pasa.
+- [x] 4.7 **(TEST ROJO)** Extender `src/__tests__/infrastructure/PrismaSchedulingRepository.test.ts` (o el equivalente): `getTaskProjectMapping` devuelve el mapping con iclassSoType; devuelve null si task no tiene project; ejecuta UNA sola query (AD-4, single JOIN). [DONE IN FASE 3 — `getTaskProjectMapping` was already implemented in PrismaSchedulingRepository]
+- [x] 4.8 Implementar `getTaskProjectMapping(taskId)` en `src/infrastructure/adapters/prisma/PrismaSchedulingRepository.ts`: query `findUnique` con `include: { project: { include: { iclassSoType: true } } }`, devuelve DTO chato `{ projectId, projectTitle, iclassSoType }` o null (AD-4). [DONE IN FASE 3]
+- [x] 4.9 **(TEST VERDE)** 4.7 pasa. [DONE IN FASE 3]
 
 ### 4.4 — `PrismaProjectRepository.updateIClassSoType`
 
-- [ ] 4.10 Implementar `updateIClassSoType(projectId, iclassSoTypeId)` en `src/infrastructure/adapters/prisma/PrismaProjectRepository.ts`: `update` con `include: { iclassSoType: true }` para devolver el Project con el tipo inline; retornar `null` si el project no existe (REQ-PROJ-1).
+- [x] 4.10 Implementar `updateIClassSoType(projectId, iclassSoTypeId)` en `src/infrastructure/adapters/prisma/PrismaProjectRepository.ts`: `update` con `include: { iclassSoType: true }` para devolver el Project con el tipo inline; retornar `null` si el project no existe (REQ-PROJ-1). [DONE IN FASE 3]
 
 ### 4.5 — HTTP routes (TDD)
 
-- [ ] 4.11 **(TEST ROJO)** `src/__tests__/infrastructure/iclass-admin.routes.test.ts` con supertest + in-memory repos:
+- [x] 4.11 **(TEST ROJO)** `src/__tests__/infrastructure/iclass-admin.routes.test.ts` con supertest + in-memory repos:
   - `POST /api/admin/iclass/so-types/sync`: 200 con `{ synced, deactivated }`; 502 si `IClassUnavailableError`; 401 sin admin auth (REQ-HTTP-SYNC-1, REQ-HTTP-SYNC-2).
   - `GET /api/admin/iclass/so-types?active=true`: 200 solo activos; `GET /api/admin/iclass/so-types` devuelve todos; 401 sin auth (REQ-HTTP-LIST-1, REQ-HTTP-LIST-2).
-  - Forma del objeto en respuesta: campos `{ id, code, description, active, thirdPartyId, syncedAt, createdAt, updatedAt }` (REQ-SHAPE-CAT-1).
-- [ ] 4.12 Crear `src/infrastructure/http/routes/iclass-admin.routes.ts` con las dos rutas, `requireAdmin` middleware, zod validación, wiring a `SyncIClassSoTypes` y `ListIClassSoTypes` (design § Routes).
-- [ ] 4.13 **(TEST ROJO)** Extender `src/__tests__/infrastructure/projects.routes.test.ts`:
+  - Forma del objeto en respuesta: campos `{ id, code, description, active, lastSyncedAt, createdAt, updatedAt }` (REQ-SHAPE-CAT-1).
+- [x] 4.12 Crear `src/infrastructure/http/routes/iclass-admin.routes.ts` con las dos rutas, `requireAdmin` middleware, zod validación, wiring a `SyncIClassSoTypes` y `ListIClassSoTypes` (design § Routes).
+- [x] 4.13 **(TEST ROJO)** Extender `src/__tests__/infrastructure/projects.routes.test.ts`:
   - `PATCH /api/projects/:id { iclassSoTypeId: "t-2" }` activo → 200 con `iclassSoType.code` en respuesta (REQ-PROJ-6, REQ-PROJ-8).
   - `PATCH /api/projects/:id { iclassSoTypeId: null }` → 200 con `iclassSoType: null` (REQ-PROJ-5).
   - `PATCH /api/projects/:id { iclassSoTypeId: "t-999" }` inexistente → 404 `ICLASS_SO_TYPE_NOT_FOUND` (REQ-PROJ-4).
   - `PATCH /api/projects/:id { iclassSoTypeId: "t-1" }` inactivo → 422 `ICLASS_SO_TYPE_INACTIVE` (REQ-PROJ-3).
   - `PATCH /api/projects/:id { iclassSoTypeId: 123 }` tipo inválido → 400 `VALIDATION_ERROR` (REQ-PROJ-7).
   - Todos los endpoints GET de Project incluyen `iclassSoTypeId` e `iclassSoType` en la respuesta (REQ-PROJ-8).
-- [ ] 4.14 Extender el schema Zod `UpdateProjectSchema` en `src/application/dto/projects.dto.ts` con `iclassSoTypeId: z.string().uuid().nullable().optional()` (REQ-PROJ-7).
-- [ ] 4.15 Integrar `AssignIClassSoTypeToProject` dentro del use case `UpdateProject` (o en la route handler) cuando `dto.iclassSoTypeId !== undefined`; inyectar `IClassSoTypeRepository` en el punto de wiring correspondiente (design § Modified PATCH /api/projects/:id).
-- [ ] 4.16 Extender `src/__tests__/infrastructure/scheduling.routes.test.ts` con los tres nuevos errores en el endpoint de move-to-stage (flag ON):
+- [x] 4.14 Extender el schema Zod `UpdateProjectSchema` en `src/application/dto/projects.dto.ts` con `iclassSoTypeId: z.string().uuid().nullable().optional()` (REQ-PROJ-7).
+- [x] 4.15 Integrar `AssignIClassSoTypeToProject` dentro del use case `UpdateProject` (o en la route handler) cuando `dto.iclassSoTypeId !== undefined`; inyectar `IClassSoTypeRepository` en el punto de wiring correspondiente (design § Modified PATCH /api/projects/:id).
+- [x] 4.16 Extender `src/__tests__/infrastructure/scheduling.routes.test.ts` con los tres nuevos errores en el endpoint de move-to-stage (flag ON):
   - 422 `MISSING_PROJECT_FOR_ICLASS` — task sin project.
   - 422 `MISSING_ICLASS_MAPPING` con `projectTitle` en body — project sin mapeo.
   - Verificar que el existing happy path sigue funcionando (task tiene project + tipo activo).
-- [ ] 4.17 Wirear todo en `src/infrastructure/http/app.ts`: instanciar `PrismaIClassSoTypeRepository`, pasarlo al router de iclass-admin y al wiring de `UpdateProject`/`AssignIClassSoTypeToProject`; montar `iclass-admin.routes.ts` en `/api/admin/iclass`.
-- [ ] 4.18 **(TEST VERDE)** Todos los tests de las tareas 4.11–4.16 pasan. `npm test` verde completo.
+- [x] 4.17 Wirear todo en `src/infrastructure/http/app.ts`: instanciar `PrismaIClassSoTypeRepository`, pasarlo al router de iclass-admin y al wiring de `UpdateProject`/`AssignIClassSoTypeToProject`; montar `iclass-admin.routes.ts` en `/api/admin/iclass`.
+- [x] 4.18 **(TEST VERDE)** Todos los tests de las tareas 4.11–4.16 pasan. `npm test` verde completo.
 
 ### Gate Fase 4
 

@@ -1404,3 +1404,72 @@ describe('GET /api/scheduling — response shape (phase 3)', () => {
     expect(res.body).not.toHaveProperty('status');
   });
 });
+
+// ─── FASE 4 route tests: new IClass mapping errors ────────────────────────────
+// These tests exercise the error codes added in FASE 1+3 via the route layer.
+
+describe('PATCH /:id/stage — FASE 4: IClass mapping errors (flag ON)', () => {
+  it('REQ-SCHED-1 via route: task with no projectId → 422 MISSING_PROJECT_FOR_ICLASS', async () => {
+    const { app, repo } = buildIClassApp({ flagEnabled: true, nodeCity: 'Cordoba' });
+    // Seed a task WITHOUT a projectId — the IClass check must fail first
+    const task = repo.seedTask({
+      id: 'no-proj', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
+      address: 'Calle 1', description: 'Instalar',
+      projectId: null,  // no project
+    });
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/stage`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('MISSING_PROJECT_FOR_ICLASS');
+    const after = await repo.getTask(task.id);
+    expect(after?.stageId).toBe(DEFAULT_STAGE_ID_PENDING);
+  });
+
+  it('REQ-SCHED-2 via route: project without iclassSoType → 422 MISSING_ICLASS_MAPPING with projectTitle', async () => {
+    const { app, repo } = buildIClassApp({ flagEnabled: true, nodeCity: 'Cordoba' });
+    // Seed a project WITHOUT an iclassSoType mapping
+    repo.seedProject({ id: 'unmapped-proj', title: 'Proyecto Sin Mapeo', iclassSoType: null });
+
+    const task = repo.seedTask({
+      id: 'no-mapping', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
+      address: 'Calle 1', description: 'Instalar',
+      projectId: 'unmapped-proj',
+    });
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/stage`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('MISSING_ICLASS_MAPPING');
+    expect(res.body.projectTitle).toBe('Proyecto Sin Mapeo');
+    const after = await repo.getTask(task.id);
+    expect(after?.stageId).toBe(DEFAULT_STAGE_ID_PENDING);
+  });
+
+  it('existing happy path still works: task with project + active type → 200 OK', async () => {
+    const { app, repo, iclass } = buildIClassApp({ flagEnabled: true, nodeCity: 'Cordoba' });
+    iclass.nextOrderCode = 'OS-FASE4';
+    const task = repo.seedTask({
+      id: 'fase4-happy', stageId: DEFAULT_STAGE_ID_PENDING,
+      customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
+      address: 'Calle 1', description: 'Instalar',
+      projectId: ICLASS_DEFAULT_PROJECT.id,
+    });
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/stage`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ stageId: ICLASS_STAGE_SEND });
+
+    expect(res.status).toBe(200);
+    expect(res.body.iclassOrderCode).toBe('OS-FASE4');
+  });
+});

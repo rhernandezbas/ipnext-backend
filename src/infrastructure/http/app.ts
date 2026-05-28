@@ -347,6 +347,11 @@ import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFla
 import { ListFeatureFlags } from '@application/use-cases/ListFeatureFlags';
 import { GetFeatureFlag } from '@application/use-cases/GetFeatureFlag';
 import { SetFeatureFlag } from '@application/use-cases/SetFeatureFlag';
+import { PrismaIClassSoTypeRepository } from '../adapters/prisma/PrismaIClassSoTypeRepository';
+import { SyncIClassSoTypes } from '@application/use-cases/SyncIClassSoTypes';
+import { ListIClassSoTypes } from '@application/use-cases/ListIClassSoTypes';
+import { AssignIClassSoTypeToProject } from '@application/use-cases/AssignIClassSoTypeToProject';
+import { createIClassAdminRouter } from './routes/iclass-admin.routes';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -475,6 +480,7 @@ export function createApp() {
   const featureFlagRepo = new PrismaFeatureFlagRepository();
   const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient());
   const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo, sendTaskToIClass);
+
   const bulkMoveTasksToStage = new BulkMoveTasksToStage(moveTaskToStage);
   const setTaskInventoryReview = new SetTaskInventoryReview(schedulingRepo);
 
@@ -784,7 +790,14 @@ export function createApp() {
   const createProjectUC  = new CreateProject(projectRepo, projectCategoryRepo, projectTypeRepo, workflowRepo, adminRepo, partnerRepo);
   const updateProjectUC  = new UpdateProject(projectRepo, projectCategoryRepo, projectTypeRepo, workflowRepo, adminRepo, partnerRepo);
   const deleteProjectUC  = new DeleteProject(projectRepo);
-  app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter));
+
+  // IClass SO type catalog — must come after projectRepo is defined
+  const iclassSoTypeRepo = new PrismaIClassSoTypeRepository();
+  const syncIClassSoTypes = new SyncIClassSoTypes(buildIClassClient(), iclassSoTypeRepo);
+  const listIClassSoTypes = new ListIClassSoTypes(iclassSoTypeRepo);
+  const assignIClassSoType = new AssignIClassSoTypeToProject(projectRepo, iclassSoTypeRepo);
+
+  app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter, assignIClassSoType));
   const taskTemplateRepo = new PrismaTaskTemplateRepository();
   app.use(
     '/api/task-templates',
@@ -868,6 +881,9 @@ export function createApp() {
   app.use('/api/monitoring', createMonitoringRouter(getMonitoringStats, listMonitoringDevices, listMonitoringAlerts, acknowledgeAlert));
   app.use('/api/search', createSearchRouter(globalSearch));
   app.use('/api/notifications', createNotificationsRouter(listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification));
+
+  // IClass admin — SO type catalog sync + list (admin-only).
+  app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter));
 
   // Feature flags — runtime toggles persisted in DB (admin-only).
   // featureFlagRepo is created earlier (wired into SendTaskToIClass).

@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { ReferenceNotFoundError, ReferenceKind, ProjectHasActiveTasksError } from '@domain/errors/projects';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -8,6 +8,7 @@ import { GetProject } from '@application/use-cases/GetProject';
 import { CreateProject } from '@application/use-cases/CreateProject';
 import { UpdateProject } from '@application/use-cases/UpdateProject';
 import { DeleteProject } from '@application/use-cases/DeleteProject';
+import { AssignIClassSoTypeToProject } from '@application/use-cases/AssignIClassSoTypeToProject';
 
 const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
   category: 'CATEGORY_NOT_FOUND',
@@ -24,6 +25,7 @@ export function createProjectsRouter(
   updateProject: UpdateProject,
   deleteProject: DeleteProject,
   authProvider: AuthProvider,
+  assignIClassSoType?: AssignIClassSoTypeToProject,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -76,14 +78,26 @@ export function createProjectsRouter(
     }
   });
 
-  router.put('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.put('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateProjectSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
     }
     try {
-      const project = await updateProject.execute(req.params['id'] as string, parsed.data);
+      const { iclassSoTypeId, ...rest } = parsed.data;
+
+      // If iclassSoTypeId is explicitly present (including null), handle the assignment first.
+      if ('iclassSoTypeId' in parsed.data && assignIClassSoType !== undefined) {
+        const updated = await assignIClassSoType.execute(req.params['id'] as string, iclassSoTypeId ?? null);
+        // If only iclassSoTypeId was sent, we're done
+        if (Object.keys(rest).length === 0) {
+          res.json(updated);
+          return;
+        }
+      }
+
+      const project = await updateProject.execute(req.params['id'] as string, rest);
       if (!project) {
         res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
         return;
@@ -94,7 +108,41 @@ export function createProjectsRouter(
         res.status(404).json({ error: err.message, code: REFERENCE_TO_CODE[err.reference] });
         return;
       }
-      throw err;
+      next(err);
+    }
+  });
+
+  router.patch('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const parsed = UpdateProjectSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+      return;
+    }
+    try {
+      const { iclassSoTypeId, ...rest } = parsed.data;
+
+      // If iclassSoTypeId is explicitly present (including null), handle the assignment first.
+      if ('iclassSoTypeId' in parsed.data && assignIClassSoType !== undefined) {
+        const updated = await assignIClassSoType.execute(req.params['id'] as string, iclassSoTypeId ?? null);
+        // If only iclassSoTypeId was sent, we're done
+        if (Object.keys(rest).length === 0) {
+          res.json(updated);
+          return;
+        }
+      }
+
+      const project = await updateProject.execute(req.params['id'] as string, rest);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+        return;
+      }
+      res.json(project);
+    } catch (err) {
+      if (err instanceof ReferenceNotFoundError) {
+        res.status(404).json({ error: err.message, code: REFERENCE_TO_CODE[err.reference] });
+        return;
+      }
+      next(err);
     }
   });
 

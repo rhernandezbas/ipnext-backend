@@ -100,14 +100,21 @@ export class IClassClient implements IClassPort {
   }
 
   /**
-   * TODO (FASE 4): implement full IClass API call.
-   * Stub added here to satisfy the IClassPort interface after the port was extended
-   * in FASE 2. The full implementation (GET /thirdparties/{id}/serviceorders/types)
-   * is done in FASE 4 along with the IClassClient.test.ts update.
+   * Fetches the SO type catalog for the configured thirdParty.
+   * GET /thirdparties/{thirdPartyId}/serviceorders/types?pagesize=200
+   * Maps IClass `objects[]` → [{ code: trim(codigo), description: trim(descricao) }].
+   * Filters out entries with an empty code after trimming (defensive).
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async listServiceOrderTypes(): Promise<IClassSoTypeDescriptor[]> {
-    throw new Error('listServiceOrderTypes not yet implemented — see FASE 4');
+    const data = await this.authedGet<{ objects?: Array<{ codigo?: unknown; descricao?: unknown }> }>(
+      `/thirdparties/${this.thirdPartyId}/serviceorders/types?pagesize=200`,
+    );
+    return (data.objects ?? [])
+      .map(o => ({
+        code: String(o.codigo ?? '').trim(),
+        description: String(o.descricao ?? '').trim(),
+      }))
+      .filter(t => t.code.length > 0);
   }
 
   async createServiceOrder(input: CreateServiceOrderInput): Promise<{ orderCode: string }> {

@@ -15,7 +15,15 @@ export const CreateProjectSchema = z.object({
   partnerIds: z.array(z.string().min(1)).optional(),
 });
 
-export const UpdateProjectSchema = CreateProjectSchema.partial();
+export const UpdateProjectSchema = CreateProjectSchema.extend({
+  /**
+   * Assigns or clears the IClass SO type mapping on a project (REQ-PROJ-7).
+   * - string: must be a valid UUID (FK to IClassSoType).
+   * - null: clears the mapping.
+   * - omitted: leaves the existing mapping unchanged.
+   */
+  iclassSoTypeId: z.string().uuid().nullable().optional(),
+}).partial();
 
 export const ListProjectsQuerySchema = z.object({
   visible: z.enum(['true', 'false', 'all']).optional(),

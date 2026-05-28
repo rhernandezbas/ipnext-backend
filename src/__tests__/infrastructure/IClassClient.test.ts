@@ -240,4 +240,82 @@ describe('IClassClient', () => {
       expect(Object.keys(n).sort()).toEqual(['code', 'description']);
     }
   });
+
+  // ── listServiceOrderTypes (FASE 4) ──────────────────────────────────────────
+
+  it('listServiceOrderTypes: maps codigo/descricao to code/description', async () => {
+    const SO_TYPES_OK = {
+      ok: {
+        data: {
+          objects: [
+            { codigo: 'INSTALL', descricao: 'Instalación' },
+            { codigo: 'REPAIR ', descricao: ' Reparación ' }, // intentional trailing spaces
+          ],
+        },
+      },
+    };
+    const { http, calls } = makeHttp({ post: [LOGIN_OK], get: [SO_TYPES_OK] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const types = await client.listServiceOrderTypes();
+
+    expect(types).toHaveLength(2);
+    expect(types[0]).toEqual({ code: 'INSTALL', description: 'Instalación' });
+    // Trailing spaces trimmed on both sides
+    expect(types[1]).toEqual({ code: 'REPAIR', description: 'Reparación' });
+
+    const getCall = calls.find(c => c.method === 'GET' && String(c.url).includes('serviceorders/types'));
+    expect(getCall).toBeTruthy();
+    expect(getCall!.url).toContain(`/thirdparties/${opts.thirdPartyId}/serviceorders/types`);
+    expect(getCall!.url).toContain('pagesize=200');
+  });
+
+  it('listServiceOrderTypes: re-logs in once on 401 and retries', async () => {
+    const SO_TYPES_OK = {
+      ok: {
+        data: { objects: [{ codigo: 'INSTALL', descricao: 'Instalación' }] },
+      },
+    };
+    const { http, calls } = makeHttp({
+      post: [LOGIN_OK, LOGIN_OK],
+      get: [{ err: axiosError(401) }, SO_TYPES_OK],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+    // Pre-warm the token so withAuthRetry skips the first login
+    // (the 401 on GET triggers a re-login + retry)
+    (client as unknown as { token: string }).token = 'OLD';
+    const types = await client.listServiceOrderTypes();
+    expect(types).toHaveLength(1);
+    const logins = calls.filter(c => c.url === '/auth/login');
+    expect(logins).toHaveLength(1); // one re-login
+  });
+
+  it('listServiceOrderTypes: filters out entries with empty code (defensive)', async () => {
+    const SO_TYPES_WITH_EMPTY = {
+      ok: {
+        data: {
+          objects: [
+            { codigo: 'INSTALL', descricao: 'Instalación' },
+            { codigo: '   ', descricao: 'Empty code after trim' }, // becomes empty after trim
+            { codigo: 'REPAIR', descricao: 'Reparación' },
+          ],
+        },
+      },
+    };
+    const { http } = makeHttp({ post: [LOGIN_OK], get: [SO_TYPES_WITH_EMPTY] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const types = await client.listServiceOrderTypes();
+
+    // Entry with empty code after trimming is filtered out
+    expect(types).toHaveLength(2);
+    expect(types.every(t => t.code.length > 0)).toBe(true);
+  });
+
+  it('listServiceOrderTypes: connection failure → IClassUnavailableError', async () => {
+    const { http } = makeHttp({ post: [LOGIN_OK], get: [{ err: connError() }] });
+    const client = new IClassClient({ ...opts, http: http as never });
+    (client as unknown as { token: string }).token = 'OLD'; // skip initial login
+    await expect(client.listServiceOrderTypes()).rejects.toBeInstanceOf(IClassUnavailableError);
+  });
 });
