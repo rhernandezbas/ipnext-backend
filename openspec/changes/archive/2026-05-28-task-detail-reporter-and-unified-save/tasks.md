@@ -26,14 +26,14 @@
 - [x] 3.3 GREEN — `SchedulingTasksPage/index.tsx`: `admins={technicians}` agregado al render de `TasksTableView`. (DEFAULT_VISIBLE_COLUMNS ya espeja `ALL_TASK_COLUMNS.map(c => c.key)` — la columna nueva entra al default automáticamente.)
 - [x] 3.4 VERIFY — Suite FE 1145/1145 verde (+4 vs P2 1141). Sin regresiones.
 
-## Phase 4: Commit, Deploy, Verify
+## Phase 4: Commit, Deploy, Verify ✅
 
-- [ ] 4.1 BE — `git add` por path explícito (route + test). Conventional commit `feat(scheduling): default reporter to authenticated user on task create`.
-- [ ] 4.2 BE — Push con gate explícito del usuario. Esperar deploy (~2.5min). Verificar creando una tarea nueva → reporter visible en detalle.
-- [ ] 4.3 FE — `git add` por path explícito (5 archivos + tests). Conventional commit `feat(scheduling): unified save in task detail + Reporter column in list`.
-- [ ] 4.4 FE — Push con gate. Verificar con Playwright en prod: (a) detalle un solo botón guarda todo, (b) lista muestra columna Reporter, (c) tareas nuevas creadas en 4.2 muestran al creador.
+- [x] 4.1 BE — Commit `bb0d1cbe feat(scheduling): default reporter to authenticated user on task create` (route + test + carpeta SDD).
+- [x] 4.2 BE — Push con gate del usuario. Deploy verificado. Tarea #4501 creada en prod con reporterId populado por el BE.
+- [x] 4.3 FE — Commit `a1e35cc feat(scheduling): unified save in task detail + Reporter column in tasks list`. Más 4 follow-up fixes (`7bd1ed5` backfill localStorage, `fdcafbd` error toast, `12a6589` "" → null, `a4cce51` useAdmins para columna Reporter).
+- [x] 4.4 FE — Push con gate. Playwright verificó: (a) detalle un solo botón guarda descripción + Datos en una llamada, (b) lista muestra columna Reporter populada para tareas nuevas, (c) tareas viejas con "—" como esperado.
 
-## Phase 5: SDD Close
+## Phase 5: SDD Close ✅
 
-- [ ] 5.1 Ejecutar `sdd-verify` con el spec contra implementación.
-- [ ] 5.2 Ejecutar `sdd-archive` para sincronizar deltas al spec principal y archivar el change.
+- [x] 5.1 `sdd-verify` ejecutado — Verdict PASS (0 CRITICAL / 0 WARNING / 2 SUGGESTION no-bloqueantes).
+- [x] 5.2 `sdd-archive` ejecutado (este paso) — REQ-CREATE-9/10/11 sincronizados al main spec; carpeta movida a `openspec/changes/archive/2026-05-28-task-detail-reporter-and-unified-save/`.
