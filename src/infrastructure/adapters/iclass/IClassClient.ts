@@ -7,8 +7,6 @@ export interface IClassClientOptions {
   username: string;
   password: string;
   thirdPartyId: string;
-  /** Fixed typeSOSummary applied to every OS (AD-4). */
-  defaultSoType: string;
   timeoutMs?: number;
   /** TTL for the in-memory listNodes() cache (AD-2). Default 5 min. */
   nodesCacheTtlMs?: number;
@@ -60,7 +58,6 @@ export class IClassClient implements IClassPort {
   private readonly username: string;
   private readonly password: string;
   private readonly thirdPartyId: string;
-  private readonly defaultSoType: string;
   private readonly now: () => Date;
   private readonly nodesCacheTtlMs: number;
 
@@ -71,7 +68,6 @@ export class IClassClient implements IClassPort {
     this.username = opts.username;
     this.password = opts.password;
     this.thirdPartyId = opts.thirdPartyId;
-    this.defaultSoType = opts.defaultSoType;
     this.now = opts.now ?? (() => new Date());
     this.nodesCacheTtlMs = opts.nodesCacheTtlMs ?? 5 * 60 * 1000;
     this.http =
@@ -118,6 +114,11 @@ export class IClassClient implements IClassPort {
   }
 
   async createServiceOrder(input: CreateServiceOrderInput): Promise<{ orderCode: string }> {
+    // REQ-PORT-2: adapter has no default SO type. callers MUST resolve soType from
+    // the Project mapping before calling. Empty/whitespace is a programmer error.
+    if (!input.soType || !input.soType.trim()) {
+      throw new Error('soType is required');
+    }
     const payload = this.buildServiceOrderPayload(input);
     const data = await this.authedPost<{ codigoOS?: string | null; erros?: unknown }>(
       '/serviceorders',
@@ -144,7 +145,7 @@ export class IClassClient implements IClassPort {
         soCode,
         customerCode: input.customerCode,
         addressCode: soCode,
-        typeSOSummary: this.defaultSoType,
+        typeSOSummary: input.soType,
         openedDate: formatOpenedDate(this.now()),
         observation: input.description,
       },

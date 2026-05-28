@@ -257,14 +257,14 @@ src/__tests__/infrastructure/scheduling.routes.test.ts
 
 ## FASE 5 — Cleanup: eliminar `ICLASS_DEFAULT_SO_TYPE`
 
-- [ ] 5.1 En `src/infrastructure/adapters/iclass/IClassClient.ts`: eliminar campo `defaultSoType: string` de `IClassClientOptions` y del cuerpo de la clase; eliminar la asignación `this.defaultSoType = opts.defaultSoType` en el constructor (REQ-CONFIG-2, design § Removal of ICLASS_DEFAULT_SO_TYPE).
-- [ ] 5.2 En `src/infrastructure/http/iclass.factory.ts:16`: eliminar `defaultSoType` del destructuring de `config.iclass` y del argumento del constructor de `IClassClient` (design § Factory).
-- [ ] 5.3 En `src/infrastructure/config.ts:65`: eliminar la línea `defaultSoType: process.env.ICLASS_DEFAULT_SO_TYPE ?? ''` del objeto `config.iclass` (REQ-CONFIG-2).
-- [ ] 5.4 En `env.example:44`: eliminar la línea `ICLASS_DEFAULT_SO_TYPE=` (REQ-CONFIG-2).
-- [ ] 5.5 En `.github/workflows/deploy.yml:53`: eliminar la línea `-e ICLASS_DEFAULT_SO_TYPE="${{ secrets.ICLASS_DEFAULT_SO_TYPE }}" \` (REQ-CONFIG-2, AD-7).
-- [ ] 5.6 En `docs/iclass-integration.md:23`: eliminar la fila `ICLASS_DEFAULT_SO_TYPE` de la tabla de variables y actualizar la descripción del flujo para reflejar la resolución desde Project (design § Removal).
-- [ ] 5.7 En `src/__tests__/infrastructure/IClassClient.test.ts`: remover `defaultSoType: 'INSTALL'` (o el valor que se esté usando) de los argumentos de construcción del cliente en los tests; verificar que los tests siguen pasando (design § Removal table).
-- [ ] 5.8 `tsc --noEmit` — DEBE fallar en compile si algún lugar todavía pasa `defaultSoType` al constructor (REQ-CONFIG-2, escenario TypeScript compilation rejects). Corregir cualquier referencia que quede.
+- [x] 5.1 En `src/infrastructure/adapters/iclass/IClassClient.ts`: eliminar campo `defaultSoType: string` de `IClassClientOptions` y del cuerpo de la clase; eliminar la asignación `this.defaultSoType = opts.defaultSoType` en el constructor (REQ-CONFIG-2, design § Removal of ICLASS_DEFAULT_SO_TYPE).
+- [x] 5.2 En `src/infrastructure/http/iclass.factory.ts:16`: eliminar `defaultSoType` del destructuring de `config.iclass` y del argumento del constructor de `IClassClient` (design § Factory).
+- [x] 5.3 En `src/infrastructure/config.ts:65`: eliminar la línea `defaultSoType: process.env.ICLASS_DEFAULT_SO_TYPE ?? ''` del objeto `config.iclass` (REQ-CONFIG-2).
+- [x] 5.4 En `env.example:44`: eliminar la línea `ICLASS_DEFAULT_SO_TYPE=` (REQ-CONFIG-2).
+- [x] 5.5 En `.github/workflows/deploy.yml:53`: eliminar la línea `-e ICLASS_DEFAULT_SO_TYPE="${{ secrets.ICLASS_DEFAULT_SO_TYPE }}" \` (REQ-CONFIG-2, AD-7).
+- [x] 5.6 En `docs/iclass-integration.md:23`: eliminar la fila `ICLASS_DEFAULT_SO_TYPE` de la tabla de variables y actualizar la descripción del flujo para reflejar la resolución desde Project (design § Removal).
+- [x] 5.7 En `src/__tests__/infrastructure/IClassClient.test.ts`: remover `defaultSoType: 'INSTALL'` (o el valor que se esté usando) de los argumentos de construcción del cliente en los tests; verificar que los tests siguen pasando (design § Removal table).
+- [x] 5.8 `tsc --noEmit` — DEBE fallar en compile si algún lugar todavía pasa `defaultSoType` al constructor (REQ-CONFIG-2, escenario TypeScript compilation rejects). Corregir cualquier referencia que quede.
 
 ### Gate Fase 5
 
@@ -289,14 +289,14 @@ src/__tests__/infrastructure/IClassClient.test.ts
 
 ## FASE 6 — Pre-deploy hand-off
 
-- [ ] 6.1 Documentar el procedimiento de operator en `docs/iclass-integration.md` (nueva sección "Rollout procedure"):
+- [x] 6.1 Documentar el procedimiento de operator en `docs/iclass-integration.md` (nueva sección "Procedimiento de rollout"):
   1. Asegurarse de que la migración se aplicó (CI lo hace antes del start).
   2. Con el flag `iclass-integration` todavía OFF, ejecutar `POST /api/admin/iclass/so-types/sync` — verificar que devuelve 26 tipos activos.
   3. Para cada Project activo que vaya a usar "Enviar a IClass", ejecutar `PATCH /api/projects/:id { iclassSoTypeId: "<id>" }` con el tipo correspondiente (usar `GET /api/admin/iclass/so-types?active=true` para el listado).
   4. Verificar en la lista de Projects que todos los activos tienen `iclassSoType != null`.
   5. Activar el flag: `PATCH /api/admin/feature-flags/iclass-integration { "enabled": true }`.
   6. Probar un envío de tarea a IClass desde el front con un Project mapeado.
-- [ ] 6.2 (Opcional / fuera de scope de código) Smoke test contra IClass staging si disponible; en caso de IPNX prod-only, omitir.
+- [x] 6.2 (Opcional / fuera de scope de código) Smoke test contra IClass staging si disponible; en caso de IPNX prod-only, omitir.
 
 **Commit:**
 ```

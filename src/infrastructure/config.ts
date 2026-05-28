@@ -61,7 +61,5 @@ export const config = {
     username: process.env.ICLASS_USERNAME ?? '',
     password: process.env.ICLASS_PASSWORD ?? '',
     thirdPartyId: process.env.ICLASS_THIRD_PARTY_ID ?? '',
-    /** Fixed typeSOSummary used for every OS created by the integration (AD-4). */
-    defaultSoType: process.env.ICLASS_DEFAULT_SO_TYPE ?? '',
   },
 };

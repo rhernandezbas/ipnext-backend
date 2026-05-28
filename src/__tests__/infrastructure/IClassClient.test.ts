@@ -10,11 +10,8 @@ const baseInput: CreateServiceOrderInput = {
   address: 'Calle Falsa 123',
   city: 'Mercedes',
   description: 'Instalación',
-  // soType added in FASE 2 (IClassPort.CreateServiceOrderInput now requires it).
-  // The real IClassClient still uses this.defaultSoType in buildServiceOrderPayload
-  // until FASE 4 switches it to input.soType — so the typeSOSummary assertion below
-  // keeps passing as-is until that change.
-  soType: 'INSTALL',
+  // soType is now passed per-call — the adapter no longer has a defaultSoType (FASE 5).
+  soType: 'INSTALACION FIBRA',
 };
 
 /**
@@ -80,7 +77,6 @@ const opts = {
   username: 'user',
   password: 'pass',
   thirdPartyId: '6808841',
-  defaultSoType: 'INSTALL',
 };
 
 describe('IClassClient', () => {
@@ -107,7 +103,8 @@ describe('IClassClient', () => {
     const body = create.body as Record<string, Record<string, unknown>>;
     expect(body.address.nodeCode).toBe('Mercedes');
     expect(body.serviceOrder).not.toHaveProperty('scheduledDate');
-    expect(body.serviceOrder.typeSOSummary).toBe('INSTALL');
+    // typeSOSummary must come from input.soType — NOT from a hardcoded default (FASE 5, REQ-PORT-2).
+    expect(body.serviceOrder.typeSOSummary).toBe('INSTALACION FIBRA');
     expect(body.serviceOrder.customerCode).toBe('C1');
     expect(body.customer.name).toBe('Juan Perez');
     // soCode/addressCode all carry input.soCode (the task sequenceNumber).
@@ -317,5 +314,29 @@ describe('IClassClient', () => {
     const client = new IClassClient({ ...opts, http: http as never });
     (client as unknown as { token: string }).token = 'OLD'; // skip initial login
     await expect(client.listServiceOrderTypes()).rejects.toBeInstanceOf(IClassUnavailableError);
+  });
+
+  // ── soType guard (FASE 5 — REQ-PORT-2) ────────────────────────────────────────
+
+  it('createServiceOrder: empty soType → throws (programmer error; adapter MUST NOT default)', async () => {
+    // The adapter has no defaultSoType. Passing an empty soType is a programmer
+    // error — callers are responsible for resolving the type from the Project mapping.
+    // Option A chosen: throw immediately at adapter boundary rather than letting
+    // IClass return a 400 (faster feedback, clearer error message).
+    const { http } = makeHttp({ post: [LOGIN_OK], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    await expect(
+      client.createServiceOrder({ ...baseInput, soType: '' }),
+    ).rejects.toThrow('soType is required');
+  });
+
+  it('createServiceOrder: whitespace-only soType → throws', async () => {
+    const { http } = makeHttp({ post: [LOGIN_OK], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    await expect(
+      client.createServiceOrder({ ...baseInput, soType: '   ' }),
+    ).rejects.toThrow('soType is required');
   });
 });

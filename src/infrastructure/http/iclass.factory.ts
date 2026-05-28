@@ -13,9 +13,9 @@ import { config } from '../config';
  * default OFF, prevents it from ever being called in that case).
  */
 export function buildIClassClient(): IClassPort {
-  const { baseUrl, username, password, thirdPartyId, defaultSoType } = config.iclass;
+  const { baseUrl, username, password, thirdPartyId } = config.iclass;
   if (username && password && thirdPartyId) {
-    return new IClassClient({ baseUrl, username, password, thirdPartyId, defaultSoType });
+    return new IClassClient({ baseUrl, username, password, thirdPartyId });
   }
   return new InMemoryIClassClient();
 }

@@ -50,7 +50,6 @@ jobs:
             -e ICLASS_USERNAME="${{ secrets.ICLASS_USERNAME }}" \
             -e ICLASS_PASSWORD="${{ secrets.ICLASS_PASSWORD }}" \
             -e ICLASS_THIRD_PARTY_ID="${{ secrets.ICLASS_THIRD_PARTY_ID }}" \
-            -e ICLASS_DEFAULT_SO_TYPE="${{ secrets.ICLASS_DEFAULT_SO_TYPE }}" \
             ipnext-backend:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
