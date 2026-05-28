@@ -10,6 +10,11 @@ const baseInput: CreateServiceOrderInput = {
   address: 'Calle Falsa 123',
   city: 'Mercedes',
   description: 'Instalación',
+  // soType added in FASE 2 (IClassPort.CreateServiceOrderInput now requires it).
+  // The real IClassClient still uses this.defaultSoType in buildServiceOrderPayload
+  // until FASE 4 switches it to input.soType — so the typeSOSummary assertion below
+  // keeps passing as-is until that change.
+  soType: 'INSTALL',
 };
 
 /**

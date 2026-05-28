@@ -1,11 +1,18 @@
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory, Stage } from '@domain/entities/workflow';
-import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
+import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskTemplateRepository } from '@domain/ports/TaskTemplateRepository';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
+
+/** Minimal project shape needed for getTaskProjectMapping. */
+interface InMemoryProject {
+  id: string;
+  title: string;
+  iclassSoType: { id: string; code: string; active: boolean } | null;
+}
 
 // Default stage IDs used in the in-memory repo for seeded tasks — valid UUID format
 const DEFAULT_STAGE_ID_PENDING     = '10000000-0000-4000-a000-000000000001';
@@ -70,6 +77,9 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
 
   // Checklist storage keyed by taskId
   private checklist: Map<string, TaskChecklistItem[]> = new Map();
+
+  // Project store for getTaskProjectMapping — seeded by tests via seedProject()
+  private projects: Map<string, InMemoryProject> = new Map();
 
   constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository) {
     this.stageRepo = stageRepo;
@@ -318,6 +328,30 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (index === -1) return null;
     this.tasks[index] = { ...this.tasks[index]!, reviewedByInventory: reviewed, updatedAt: new Date().toISOString() };
     return { ...this.tasks[index]! };
+  }
+
+  // ── IClass SO type mapping ────────────────────────────────────────────────
+
+  /**
+   * Test helper: seed a minimal project for getTaskProjectMapping lookups.
+   * Production code uses PrismaSchedulingRepository (which JOINs via Prisma).
+   */
+  seedProject(project: InMemoryProject): void {
+    this.projects.set(project.id, { ...project });
+  }
+
+  async getTaskProjectMapping(taskId: string): Promise<TaskProjectMapping | null> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (!task || !task.projectId) return null;
+
+    const project = this.projects.get(task.projectId);
+    if (!project) return null;
+
+    return {
+      projectId: project.id,
+      projectTitle: project.title,
+      iclassSoType: project.iclassSoType ? { ...project.iclassSoType } : null,
+    };
   }
 
   // ── IClass integration ────────────────────────────────────────────────────

@@ -85,6 +85,8 @@ export class SendTaskToIClass {
     if (!node) throw new IClassNodeNotFoundError(task.customerCity!);
 
     // 5. Create the OS (no scheduledDate). Failure propagates IClassUnavailableError.
+    // TODO (FASE 3): replace soType with mapping.iclassSoType.code after inserting
+    // the project-mapping resolution block above this step.
     const { orderCode } = await this.iclass.createServiceOrder({
       soCode: String(task.sequenceNumber),
       customerCode: task.customerCode!,
@@ -93,6 +95,7 @@ export class SendTaskToIClass {
       address: task.address!,
       city: task.customerCity!,
       description: task.description!,
+      soType: '', // placeholder — resolved from project mapping in FASE 3
     });
 
     // 6. Persist the orderCode + advance the stage.

@@ -1,5 +1,5 @@
 import { InMemoryIClassClient } from '../../infrastructure/adapters/in-memory/InMemoryIClassClient';
-import { CreateServiceOrderInput } from '@domain/ports/IClassPort';
+import { CreateServiceOrderInput, IClassSoTypeDescriptor } from '@domain/ports/IClassPort';
 import { IClassUnavailableError } from '@domain/errors/iclass';
 
 const baseInput: CreateServiceOrderInput = {
@@ -10,6 +10,7 @@ const baseInput: CreateServiceOrderInput = {
   address: 'Calle Falsa 123',
   city: 'Mercedes',
   description: 'Instalación',
+  soType: 'VISITA TECNICA WIRELESS',
 };
 
 describe('InMemoryIClassClient', () => {
@@ -63,5 +64,39 @@ describe('InMemoryIClassClient', () => {
 
     await expect(client.createServiceOrder(baseInput)).rejects.toBeInstanceOf(IClassUnavailableError);
     expect(client.createdOrders).toHaveLength(0);
+  });
+
+  // listServiceOrderTypes (FASE 2)
+
+  it('listServiceOrderTypes() returns empty list by default', async () => {
+    const client = new InMemoryIClassClient();
+    expect(await client.listServiceOrderTypes()).toEqual([]);
+  });
+
+  it('listServiceOrderTypes() returns the configured serviceOrderTypes', async () => {
+    const client = new InMemoryIClassClient();
+    const types: IClassSoTypeDescriptor[] = [
+      { code: 'VISITA TECNICA', description: 'Visita Técnica' },
+      { code: 'INSTALACION', description: 'Instalación' },
+    ];
+    client.serviceOrderTypes = types;
+
+    const result = await client.listServiceOrderTypes();
+    expect(result).toEqual(types);
+    // Returns a copy — mutating the result does not affect the stored types
+    result.push({ code: 'EXTRA', description: 'Extra' });
+    expect(client.serviceOrderTypes).toHaveLength(2);
+  });
+
+  it('listServiceOrderTypes() throws IClassUnavailableError when failureMode is "unavailable"', async () => {
+    const client = new InMemoryIClassClient();
+    client.failureMode = 'unavailable';
+    await expect(client.listServiceOrderTypes()).rejects.toBeInstanceOf(IClassUnavailableError);
+  });
+
+  it('createServiceOrder() records input.soType in createdOrders', async () => {
+    const client = new InMemoryIClassClient();
+    await client.createServiceOrder({ ...baseInput, soType: 'INSTALACION FTTH' });
+    expect(client.createdOrders[0].input.soType).toBe('INSTALACION FTTH');
   });
 });

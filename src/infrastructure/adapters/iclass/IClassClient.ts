@@ -1,5 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
-import { IClassPort, IClassNode, CreateServiceOrderInput } from '@domain/ports/IClassPort';
+import { IClassPort, IClassNode, IClassSoTypeDescriptor, CreateServiceOrderInput } from '@domain/ports/IClassPort';
 import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/iclass';
 
 export interface IClassClientOptions {
@@ -97,6 +97,17 @@ export class IClassClient implements IClassPort {
     }));
     this.nodesCache = { nodes, expiresAt: now + this.nodesCacheTtlMs };
     return nodes;
+  }
+
+  /**
+   * TODO (FASE 4): implement full IClass API call.
+   * Stub added here to satisfy the IClassPort interface after the port was extended
+   * in FASE 2. The full implementation (GET /thirdparties/{id}/serviceorders/types)
+   * is done in FASE 4 along with the IClassClient.test.ts update.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async listServiceOrderTypes(): Promise<IClassSoTypeDescriptor[]> {
+    throw new Error('listServiceOrderTypes not yet implemented — see FASE 4');
   }
 
   async createServiceOrder(input: CreateServiceOrderInput): Promise<{ orderCode: string }> {

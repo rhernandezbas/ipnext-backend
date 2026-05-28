@@ -10,7 +10,7 @@
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory, Stage } from '@domain/entities/workflow';
-import { SchedulingRepository, CreateTaskInput, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
+import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping } from '@domain/ports/SchedulingRepository';
 import { StageNotFoundError } from '@domain/errors/scheduling';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
@@ -396,6 +396,39 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
 
   async clearChecklist(taskId: string): Promise<void> {
     await (prisma as any).taskChecklistItem.deleteMany({ where: { taskId } });
+  }
+
+  // ── IClass SO type mapping ────────────────────────────────────────────────
+
+  /**
+   * Returns the flat project mapping for a task — a single JOIN from
+   * ScheduledTask → Project → IClassSoType. Returns null if the task doesn't
+   * exist or has no projectId (AD-4, single query).
+   */
+  async getTaskProjectMapping(taskId: string): Promise<TaskProjectMapping | null> {
+    const row = await (prisma.scheduledTask as any).findUnique({
+      where: { id: taskId },
+      select: {
+        projectId: true,
+        project: {
+          select: {
+            id: true,
+            title: true,
+            iclassSoType: {
+              select: { id: true, code: true, active: true },
+            },
+          },
+        },
+      },
+    });
+    if (!row || !row.projectId || !row.project) return null;
+    return {
+      projectId: row.project.id,
+      projectTitle: row.project.title,
+      iclassSoType: row.project.iclassSoType
+        ? { id: row.project.iclassSoType.id, code: row.project.iclassSoType.code, active: row.project.iclassSoType.active }
+        : null,
+    };
   }
 
   private _buildCreateData(data: CreateTaskInput): Record<string, unknown> {

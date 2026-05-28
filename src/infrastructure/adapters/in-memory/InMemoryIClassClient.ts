@@ -1,4 +1,4 @@
-import { IClassPort, IClassNode, CreateServiceOrderInput } from '@domain/ports/IClassPort';
+import { IClassPort, IClassNode, IClassSoTypeDescriptor, CreateServiceOrderInput } from '@domain/ports/IClassPort';
 import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/iclass';
 
 interface CreatedOrder {
@@ -13,12 +13,14 @@ interface CreatedOrder {
 export class InMemoryIClassClient implements IClassPort {
   /** Nodes returned by listNodes(). */
   nodes: IClassNode[] = [];
+  /** SO type descriptors returned by listServiceOrderTypes(). Settable for tests. */
+  serviceOrderTypes: IClassSoTypeDescriptor[] = [];
   /** Every OS created, for assertions. */
   createdOrders: CreatedOrder[] = [];
   /** When set, the next createServiceOrder returns this code instead of an auto one. */
   nextOrderCode?: string;
   /**
-   * 'unavailable' → both methods throw IClassUnavailableError.
+   * 'unavailable' → all methods throw IClassUnavailableError.
    * 'rejected'    → createServiceOrder throws IClassRejectedError (listNodes still works).
    */
   failureMode?: 'unavailable' | 'rejected';
@@ -30,6 +32,11 @@ export class InMemoryIClassClient implements IClassPort {
   async listNodes(): Promise<IClassNode[]> {
     if (this.failureMode === 'unavailable') throw new IClassUnavailableError();
     return this.nodes;
+  }
+
+  async listServiceOrderTypes(): Promise<IClassSoTypeDescriptor[]> {
+    if (this.failureMode === 'unavailable') throw new IClassUnavailableError();
+    return [...this.serviceOrderTypes];
   }
 
   async createServiceOrder(input: CreateServiceOrderInput): Promise<{ orderCode: string }> {

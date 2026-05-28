@@ -14,6 +14,16 @@ export interface UpdateTaskInput extends Partial<CreateTaskInput> {
   reviewedByInventory?: boolean;
 }
 
+/**
+ * Flat projection used by SendTaskToIClass to resolve the task's project
+ * and its assigned IClass SO type in a single query (AD-4).
+ */
+export interface TaskProjectMapping {
+  projectId: string;
+  projectTitle: string;
+  iclassSoType: { id: string; code: string; active: boolean } | null;
+}
+
 export interface SchedulingRepository {
   listTasks(filter?: TaskListFilter): Promise<ScheduledTask[]>;
   getTask(id: string): Promise<ScheduledTask | null>;
@@ -34,6 +44,13 @@ export interface SchedulingRepository {
   getStageByName(name: string, workflowId?: string): Promise<Stage | null>;
   /** Persist the IClass service order code on a task after a successful OS creation. */
   setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null>;
+
+  // IClass SO type mapping (iclass-so-type-mapping)
+  /**
+   * Returns a flat projection of the task's project + its assigned IClass SO type.
+   * Returns null if the task does not exist OR if the task has no projectId (AD-4).
+   */
+  getTaskProjectMapping(taskId: string): Promise<TaskProjectMapping | null>;
 
   // Checklist methods (change 5)
   getTaskWithChecklist(id: string): Promise<(ScheduledTask & { checklist: TaskChecklistItem[] }) | null>;
