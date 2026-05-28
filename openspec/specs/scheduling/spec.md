@@ -184,6 +184,35 @@ All 6 scheduling routes MUST enforce authentication via the `auth_token` cookie 
 **Then** the server MUST respond with HTTP 201  
 **And** the returned task MUST carry those fields as non-null strings
 
+### REQ-CREATE-9: Reporter defaults to the authenticated user when omitted
+
+**Given** an authenticated `POST /api/scheduling` request  
+**And** the body omits `reporterId` (absent or explicit `null`)  
+**When** the request is processed  
+**Then** the server MUST respond with HTTP 201  
+**And** the created `ScheduledTask`'s `reporterId` MUST equal `req.user.id` (the authenticated admin)
+
+Rationale: `User.id == admin.id` by construction in `JwtAuthAdapter` (the JWT is issued from the admin record at login). The default value passes the existing FK validation against `adminLookup`.
+
+### REQ-CREATE-10: Explicit reporterId in body wins over the default
+
+**Given** an authenticated `POST /api/scheduling` request  
+**And** the body provides a `reporterId` belonging to an existing admin  
+**When** the request is processed  
+**Then** the server MUST respond with HTTP 201  
+**And** the created `ScheduledTask`'s `reporterId` MUST equal the value from the body (NOT `req.user.id`)
+
+### REQ-CREATE-11: Defaulted reporter is still validated against the admin lookup
+
+**Given** an authenticated `POST /api/scheduling` request  
+**And** the body omits `reporterId`  
+**And** the authenticated user's `id` does NOT correspond to a known admin (anomalous state — never happens for real sessions)  
+**When** the request is processed  
+**Then** the server MUST respond with HTTP 404  
+**And** the body MUST contain a `code` mapped from `ReferenceNotFoundError('reporter', ...)` (same code used for an invalid explicit `reporterId`)
+
+Rationale: documents the contract that the defaulted value goes through the same FK validation path as an explicit one. No special-casing.
+
 ---
 
 ## 5. Update Task
@@ -537,10 +566,120 @@ Origen: `customerName`/`phone`/`city` desde el `Client` referenciado por `custom
 
 ---
 
+---
+
+## SO Type Resolution from Project Mapping (iclass-so-type-mapping change)
+
+As of the `iclass-so-type-mapping` change, `SendTaskToIClass` resolves `soType` deterministically from the task's project. Two new domain errors cover missing mappings.
+
+### REQ-SCHED-ERR-1: `MissingProjectForIClassError`
+
+A new domain error MUST exist in `src/domain/errors/`:
+
+```ts
+class MissingProjectForIClassError extends Error {
+  readonly code = 'MISSING_PROJECT_FOR_ICLASS';
+  constructor(taskId: string) { ... }
+}
+```
+
+The HTTP handler MUST map this to HTTP 422 with `{ code: "MISSING_PROJECT_FOR_ICLASS" }`.
+
+#### Scenario: Task without project is rejected
+
+**Given** a task `t-1` with `projectId: null`
+**And** the `iclass-integration` flag is ON
+**When** the stage-move endpoint is called for stage "Enviar a IClass"
+**Then** the server MUST respond HTTP 422 with `{ code: "MISSING_PROJECT_FOR_ICLASS" }`
+**And** the task MUST remain in its current stage
+
+### REQ-SCHED-ERR-2: `MissingIClassMappingError`
+
+A new domain error MUST exist:
+
+```ts
+class MissingIClassMappingError extends Error {
+  readonly code = 'MISSING_ICLASS_MAPPING';
+  readonly projectTitle: string;
+  constructor(projectTitle: string) { ... }
+}
+```
+
+The HTTP handler MUST map this to HTTP 422 with `{ code: "MISSING_ICLASS_MAPPING", projectTitle: "<title>" }`.
+
+**Design decision — single error for inactive mapping**: An inactive `iclassSoTypeId` on the project at send-time is treated as a missing mapping and MUST throw `MissingIClassMappingError` (not a separate error). Rationale: from the operator's perspective both cases require the same corrective action — go to the Project and set/fix the IClass mapping.
+
+#### Scenario: Project without mapping is rejected
+
+**Given** a task `t-1` linked to project `p-1` (title: "Cableado Norte")
+**And** `p-1.iclassSoTypeId: null`
+**And** the `iclass-integration` flag is ON
+**When** the stage-move endpoint is called for "Enviar a IClass"
+**Then** the server MUST respond HTTP 422 with `{ code: "MISSING_ICLASS_MAPPING", projectTitle: "Cableado Norte" }`
+**And** the task MUST remain in its current stage
+
+### REQ-SCHED-1: Task must have a project for IClass send
+
+**Given** a task with `projectId: null`
+**And** the `iclass-integration` flag is ON
+**When** `SendTaskToIClass.execute` is called
+**Then** the use case MUST throw `MissingProjectForIClassError`
+**And** NO call to `IClassPort` MUST be made
+**And** the task stage MUST NOT change
+
+### REQ-SCHED-2: Project must have an `iclassSoTypeId` set to an ACTIVE type
+
+**Given** a task linked to project `p-1`
+**And** `p-1.iclassSoTypeId` is `null` OR `p-1.iclassSoType.active` is `false`
+**And** the flag is ON
+**When** `SendTaskToIClass.execute` is called
+**Then** the use case MUST throw `MissingIClassMappingError` with `projectTitle` equal to `p-1.title`
+**And** NO call to `IClassPort` MUST be made
+
+#### Scenario: Project with inactive type is rejected
+
+**Given** a task `t-1` linked to project `p-1` (title: "Mantenimiento Sur")
+**And** `p-1.iclassSoType: { code: "OLD_TYPE", active: false }`
+**And** the flag is ON
+**When** the stage-move endpoint is called for "Enviar a IClass"
+**Then** the server MUST respond HTTP 422 with `{ code: "MISSING_ICLASS_MAPPING", projectTitle: "Mantenimiento Sur" }`
+
+### REQ-SCHED-3: Valid mapping passes `soType` to `IClassPort.createServiceOrder`
+
+**Given** a task `t-1` linked to project `p-1`
+**And** `p-1.iclassSoType: { code: "INSTALACION FIBRA", active: true }`
+**And** all 5 required fields (customerName, phone, address, city, description) are present
+**And** the flag is ON
+**When** `SendTaskToIClass.execute` is called
+**Then** `IClassPort.createServiceOrder` MUST be called with `soType: "INSTALACION FIBRA"` in the input
+**And** the task MUST advance to "Registrado en IClass" upon success
+
+### REQ-SCHED-4: soType resolution is skipped when flag is OFF
+
+**Given** the `iclass-integration` flag is OFF
+**And** a task has `projectId: null`
+**When** `SendTaskToIClass.execute` is called
+**Then** the task MUST move to the target stage normally (no soType check, no IClass call)
+**And** MUST NOT throw `MissingProjectForIClassError`
+
+### REQ-SCHED-5: `SchedulingRepository.getTask` MUST include project with iclassSoType
+
+**Given** a task with a linked project
+**When** `SchedulingRepository.getTask(taskId)` is called
+**Then** the returned `ScheduledTask` MUST include:
+  - `projectId: string | null`
+  - `project: { id, title, iclassSoTypeId, iclassSoType: { id, code, description, active } | null } | null`
+
+The repository MUST eager-load the project and its `iclassSoType` relation in the same call. The use case MUST NOT issue a separate lookup for the project.
+
+---
+
 ## Appendix: New Error Codes
 
-| Scenario | HTTP | `code` |
-|----------|------|--------|
-| Faltan requeridos | 422 | `MISSING_REQUIRED_FIELDS` (+ `missingFields[]`) |
-| Ciudad sin nodo IClass | 422 | `ICLASS_NODE_NOT_FOUND` |
-| IClass no disponible | 502 | `ICLASS_UNAVAILABLE` |
+| Scenario | HTTP | `code` | Extra Fields |
+|----------|------|--------|--------------|
+| Faltan requeridos | 422 | `MISSING_REQUIRED_FIELDS` (+ `missingFields[]`) | — |
+| Ciudad sin nodo IClass | 422 | `ICLASS_NODE_NOT_FOUND` | — |
+| Task sin Project | 422 | `MISSING_PROJECT_FOR_ICLASS` | — |
+| Project sin mapping o tipo inactivo | 422 | `MISSING_ICLASS_MAPPING` | `projectTitle` |
+| IClass no disponible | 502 | `ICLASS_UNAVAILABLE` | — |
