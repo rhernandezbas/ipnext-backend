@@ -152,6 +152,7 @@ export class IClassClient implements IClassPort {
       customer: {
         customerCode: input.customerCode,
         name: input.customerName,
+        mobile: input.phone,
       },
       address: {
         addressCode: soCode,

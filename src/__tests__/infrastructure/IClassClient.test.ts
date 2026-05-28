@@ -107,6 +107,8 @@ describe('IClassClient', () => {
     expect(body.serviceOrder.typeSOSummary).toBe('INSTALACION FIBRA');
     expect(body.serviceOrder.customerCode).toBe('C1');
     expect(body.customer.name).toBe('Juan Perez');
+    // Customer phone is forwarded to IClass as customer.mobile (CustomerIn schema).
+    expect(body.customer.mobile).toBe('099111222');
     // soCode/addressCode all carry input.soCode (the task sequenceNumber).
     expect(body.serviceOrder.soCode).toBe('4274');
     expect(body.serviceOrder.addressCode).toBe('4274');
