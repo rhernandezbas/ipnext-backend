@@ -10,6 +10,7 @@ export class CreateTask {
     private readonly serviceLookup: EntityLookup,
     private readonly partnerLookup: EntityLookup,
     private readonly adminLookup: EntityLookup,
+    private readonly projectLookup: EntityLookup,
   ) {}
 
   async execute(data: CreateTaskInput): Promise<ScheduledTask> {
@@ -26,6 +27,10 @@ export class CreateTask {
     if (data.partnerId != null) {
       const found = await this.partnerLookup.findById(data.partnerId);
       if (!found) throw new ReferenceNotFoundError('partner', data.partnerId);
+    }
+    if (data.projectId != null) {
+      const found = await this.projectLookup.findById(data.projectId);
+      if (!found) throw new ReferenceNotFoundError('project', data.projectId);
     }
     if (data.reporterId != null) {
       const found = await this.adminLookup.findById(data.reporterId);

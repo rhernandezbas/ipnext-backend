@@ -45,7 +45,7 @@ describe('GetTask', () => {
 describe('CreateTask', () => {
   it('creates task with stageId and stageCategory', async () => {
     const repo = makeRepo();
-    const uc = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+    const uc = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
 
     const result = await uc.execute({
       title: 'Nueva tarea de prueba',

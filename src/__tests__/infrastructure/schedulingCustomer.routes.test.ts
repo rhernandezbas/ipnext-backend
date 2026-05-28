@@ -69,7 +69,7 @@ async function buildApp() {
 
   const repo = new InMemorySchedulingRepository();
   const stageRepo = new InMemoryStageRepository();
-  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
 
   // Task for CUSTOMER_A
   await createTask.execute({ ...BASE_TASK, title: 'Task for Customer A (1)', stageId: STAGE_1, customerId: CUSTOMER_A });
@@ -81,7 +81,7 @@ async function buildApp() {
 
   const listTasks = new ListTasks(repo);
   const getTask = new GetTask(repo);
-  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
   const deleteTask = new DeleteTask(repo);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
   const authProvider = new FakeAuthProvider();

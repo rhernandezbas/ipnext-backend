@@ -74,7 +74,7 @@ async function buildFilterApp() {
 
   // Seed a fresh repo with only 3 test tasks (clear the seeded ones by re-seeding)
   // We create tasks via the use case so filter tests use known data
-  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
 
   // Task in stage 1, project A, partner X
   await createTask.execute({
@@ -102,7 +102,7 @@ async function buildFilterApp() {
 
   const listTasks = new ListTasks(repo);
   const getTask = new GetTask(repo);
-  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
   const deleteTask = new DeleteTask(repo);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
   const authProvider = new FakeAuthProvider();

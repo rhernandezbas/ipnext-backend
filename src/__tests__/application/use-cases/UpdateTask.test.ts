@@ -57,8 +57,9 @@ async function createTaskInRepo(repo: InMemorySchedulingRepository, extraInput: 
     ...(customerId ? [customerId] : []),
     ...(assigneeId ? [assigneeId] : []),
   ];
-  const seedLookup = new StubLookup(...knownIds);
-  const createUC = new CreateTask(repo, seedLookup, emptyLookup, emptyLookup, seedLookup);
+  const projectId = extraInput['projectId'] as string | undefined;
+  const seedLookup = new StubLookup(...knownIds, ...(projectId ? [projectId] : []));
+  const createUC = new CreateTask(repo, seedLookup, emptyLookup, emptyLookup, seedLookup, seedLookup);
   return createUC.execute({ ...makeBaseInput(), ...extraInput } as Parameters<typeof createUC.execute>[0]);
 }
 
@@ -68,6 +69,7 @@ function makeUpdateUC(
     customerLookup?: EntityLookup;
     serviceLookup?: EntityLookup;
     partnerLookup?: EntityLookup;
+    projectLookup?: EntityLookup;
     adminLookup?: EntityLookup;
   } = {},
 ) {
@@ -77,6 +79,7 @@ function makeUpdateUC(
     overrides.serviceLookup ?? emptyLookup,
     overrides.partnerLookup ?? emptyLookup,
     overrides.adminLookup ?? emptyLookup,
+    overrides.projectLookup ?? emptyLookup,
   );
 }
 
@@ -105,6 +108,40 @@ describe('UpdateTask — FK validation', () => {
     // null means "clear assignee" — no FK check needed
     const result = await uc.execute(task.id, { assigneeId: null });
     expect(result?.assigneeId).toBeNull();
+  });
+
+  it('REQ-UPDATE-5: throws ReferenceNotFoundError(project) when projectId in body is not found', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const task = await createTaskInRepo(repo);
+    const uc = makeUpdateUC(repo, { projectLookup: new StubLookup() });
+    await expect(uc.execute(task.id, { projectId: 'ghost-project' }))
+      .rejects.toMatchObject({ kind: 'project', id: 'ghost-project' });
+  });
+
+  it('REQ-UPDATE-6: null projectId clears assignment without any lookup', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const task = await createTaskInRepo(repo, { projectId: 'proj-abc' });
+    const uc = makeUpdateUC(repo, { projectLookup: new StubLookup() }); // empty — would reject any id
+    const result = await uc.execute(task.id, { projectId: null });
+    expect(result?.projectId).toBeNull();
+  });
+
+  it('REQ-UPDATE-7: projectLookup NOT called when projectId is absent (undefined)', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const task = await createTaskInRepo(repo);
+    const spyLookup: EntityLookup = { findById: jest.fn().mockResolvedValue(null) };
+    const uc = makeUpdateUC(repo, { projectLookup: spyLookup });
+    await uc.execute(task.id, { title: 'Only title changed' });
+    expect(spyLookup.findById).not.toHaveBeenCalled();
+  });
+
+  it('REQ-UPDATE-7: repo.updateTask NOT called when projectId lookup fails', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const task = await createTaskInRepo(repo);
+    const updateTaskSpy = jest.spyOn(repo, 'updateTask');
+    const uc = makeUpdateUC(repo, { projectLookup: new StubLookup() });
+    await expect(uc.execute(task.id, { projectId: 'ghost' })).rejects.toBeInstanceOf(ReferenceNotFoundError);
+    expect(updateTaskSpy).not.toHaveBeenCalled();
   });
 
   it('throws ReferenceNotFoundError(watcher) when a watcherId is not found', async () => {

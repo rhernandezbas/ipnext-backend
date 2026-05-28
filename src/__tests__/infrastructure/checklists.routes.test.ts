@@ -73,8 +73,8 @@ function buildApp() {
   app.use('/api/scheduling', createSchedulingRouter(
     new ListTasks(schedRepo),
     new GetTask(schedRepo),
-    new CreateTask(schedRepo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-    new UpdateTask(schedRepo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+    new CreateTask(schedRepo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+    new UpdateTask(schedRepo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
     new DeleteTask(schedRepo),
     new MoveTaskToStage(schedRepo, stageRepo),
     authProvider,

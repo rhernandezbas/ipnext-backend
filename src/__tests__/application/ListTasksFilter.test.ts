@@ -49,7 +49,7 @@ const BASE = {
 
 async function buildRepo() {
   const repo = new InMemorySchedulingRepository();
-  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
 
   // task 1: s1, p1, partner, assignee, title contains "repair"
   await createTask.execute({ ...BASE, title: 'Repair job alpha', stageId: STAGE_S1, projectId: PROJECT_P1, partnerId: PARTNER_P, assigneeId: ASSIGNEE_A });

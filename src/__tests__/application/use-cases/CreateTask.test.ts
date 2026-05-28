@@ -49,6 +49,7 @@ function makeUseCase(overrides?: {
   customerLookup?: EntityLookup;
   serviceLookup?: EntityLookup;
   partnerLookup?: EntityLookup;
+  projectLookup?: EntityLookup;
   adminLookup?: EntityLookup;
 }) {
   const repo = new InMemorySchedulingRepository();
@@ -60,6 +61,7 @@ function makeUseCase(overrides?: {
       overrides?.serviceLookup ?? emptyLookup,
       overrides?.partnerLookup ?? emptyLookup,
       overrides?.adminLookup ?? emptyLookup,
+      overrides?.projectLookup ?? emptyLookup,
     ),
     repo,
   };
@@ -150,6 +152,42 @@ describe('CreateTask — FK validation', () => {
     await expect(
       uc.execute({ ...makeBase(), customerId: 'cust-1', serviceId: 'svc-1', partnerId: 'part-1', assigneeId: 'a-ghost', watcherIds: ['w-ghost'] })
     ).rejects.toMatchObject({ kind: 'assignee' });
+  });
+
+  it('REQ-CREATE-12: throws ReferenceNotFoundError(project) when projectId is not found', async () => {
+    const { uc } = makeUseCase({ projectLookup: new StubLookup() }); // empty — project unknown
+    await expect(uc.execute({ ...makeBase(), projectId: 'ghost-project' }))
+      .rejects.toMatchObject({ kind: 'project', id: 'ghost-project' });
+    await expect(uc.execute({ ...makeBase(), projectId: 'ghost-project' }))
+      .rejects.toBeInstanceOf(ReferenceNotFoundError);
+  });
+
+  it('REQ-CREATE-13a: null projectId skips project lookup', async () => {
+    const { uc } = makeUseCase({ projectLookup: new StubLookup() }); // would reject any id
+    const result = await uc.execute({ ...makeBase(), projectId: null });
+    expect(result.id).toBeTruthy();
+    expect(result.projectId).toBeNull();
+  });
+
+  it('REQ-CREATE-13b: absent projectId skips project lookup', async () => {
+    const { uc } = makeUseCase({ projectLookup: new StubLookup() });
+    const base = makeBase();
+    // omit projectId entirely — not in the payload
+    const { projectId: _omitted, ...withoutProject } = base;
+    const result = await uc.execute({ ...withoutProject } as typeof base);
+    expect(result.id).toBeTruthy();
+  });
+
+  it('REQ-FK-ORDER: project check comes after partner and before reporter', async () => {
+    const { uc } = makeUseCase({
+      customerLookup: new StubLookup('cust-1'),
+      serviceLookup: new StubLookup('svc-1'),
+      partnerLookup: new StubLookup('part-1'),
+      projectLookup: new StubLookup(), // empty — ghost project
+    });
+    await expect(
+      uc.execute({ ...makeBase(), customerId: 'cust-1', serviceId: 'svc-1', partnerId: 'part-1', projectId: 'proj-ghost', reporterId: 'r-ghost' })
+    ).rejects.toMatchObject({ kind: 'project' }); // project fails before reporter
   });
 
   it('happy path: all FKs valid → creates task, preserves watcherIds', async () => {

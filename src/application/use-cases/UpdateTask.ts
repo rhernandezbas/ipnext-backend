@@ -10,6 +10,7 @@ export class UpdateTask {
     private readonly serviceLookup: EntityLookup,
     private readonly partnerLookup: EntityLookup,
     private readonly adminLookup: EntityLookup,
+    private readonly projectLookup: EntityLookup,
   ) {}
 
   async execute(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null> {
@@ -26,6 +27,10 @@ export class UpdateTask {
     if (data.partnerId !== undefined && data.partnerId !== null) {
       const found = await this.partnerLookup.findById(data.partnerId);
       if (!found) throw new ReferenceNotFoundError('partner', data.partnerId);
+    }
+    if (data.projectId !== undefined && data.projectId !== null) {
+      const found = await this.projectLookup.findById(data.projectId);
+      if (!found) throw new ReferenceNotFoundError('project', data.projectId);
     }
     if (data.reporterId !== undefined && data.reporterId !== null) {
       const found = await this.adminLookup.findById(data.reporterId);

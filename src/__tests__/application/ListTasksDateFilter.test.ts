@@ -48,7 +48,7 @@ const BASE_TASK = {
 
 async function buildRepo() {
   const repo = new InMemorySchedulingRepository();
-  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
 
   // Task A: startDate 2026-05-19
   await createTask.execute({ ...BASE_TASK, title: 'Task A - May 19', startDate: '2026-05-19T12:00:00Z' });

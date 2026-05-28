@@ -67,8 +67,8 @@ function buildApp() {
   const router = createSchedulingRouter(
     new ListTasks(repo),
     new GetTask(repo),
-    new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-    new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+    new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
+    new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
     new DeleteTask(repo),
     new MoveTaskToStage(repo, stageRepo),
     authProvider,
