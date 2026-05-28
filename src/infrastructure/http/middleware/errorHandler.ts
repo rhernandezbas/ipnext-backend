@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { DomainError } from '@domain/errors';
-import { MissingRequiredFieldsError } from '@domain/errors/scheduling';
-import { IClassRejectedError } from '@domain/errors/iclass';
+import { domainErrorToCode } from '@application/util/domainErrorToCode';
 
 /**
  * Maps domain error codes to HTTP status codes. This is the single source of truth
@@ -39,14 +38,15 @@ const statusMap: Record<string, number> = {
 export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
   if (err instanceof DomainError) {
     const status = statusMap[err.code] ?? 400;
+    const mapped = domainErrorToCode(err);
     const body: Record<string, unknown> = { error: err.message, code: err.code };
     // Surface the missing field names so the front-end can drive its modal.
-    if (err instanceof MissingRequiredFieldsError) {
-      body['missingFields'] = err.missingFields;
+    if (mapped?.missingFields !== undefined) {
+      body['missingFields'] = mapped.missingFields;
     }
     // Surface the IClass rejection detail (e.g. ICLERR_0045 ...) for the front-end.
-    if (err instanceof IClassRejectedError) {
-      body['reason'] = err.detail;
+    if (mapped?.reason !== undefined) {
+      body['reason'] = mapped.reason;
     }
     res.status(status).json(body);
     return;
