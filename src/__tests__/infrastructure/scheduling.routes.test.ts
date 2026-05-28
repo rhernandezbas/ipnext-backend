@@ -1085,6 +1085,13 @@ describe('PUT /api/scheduling/:id — watcher replace-set (new fields)', () => {
 const ICLASS_STAGE_SEND       = '20000000-0000-4000-a000-000000000001'; // "Enviar a IClass"
 const ICLASS_STAGE_REGISTERED = '20000000-0000-4000-a000-000000000002'; // "Registrado en IClass"
 
+/** Default project used in IClass tests. All seeded tasks that need IClass must use this projectId. */
+const ICLASS_DEFAULT_PROJECT = {
+  id: 'iclass-proj-1',
+  title: 'Instalaciones FTTH',
+  iclassSoType: { id: 'so-type-1', code: 'INSTALL', active: true },
+};
+
 // Exercise the REAL production error handler (single source of truth) so the
 // route tests fail if the status mapping drifts in app.ts.
 function buildIClassApp(opts: {
@@ -1099,6 +1106,8 @@ function buildIClassApp(opts: {
   stageRepo.addDirect({ id: ICLASS_STAGE_REGISTERED, workflowId: 'wf-default', name: 'Registrado en IClass',  category: 'enProgreso', order: 6, color: null });
 
   const repo = new InMemorySchedulingRepository(stageRepo);
+  // Seed the default project so getTaskProjectMapping resolves for all flag-ON tests.
+  repo.seedProject(ICLASS_DEFAULT_PROJECT);
 
   const flags = new InMemoryFeatureFlagRepository();
   flags.seed('iclass-integration', opts.flagEnabled);
@@ -1132,6 +1141,7 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
       id: 'iclass-1', stageId: DEFAULT_STAGE_ID_PENDING,
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: null,
       address: 'Calle 1', description: null,
+      projectId: ICLASS_DEFAULT_PROJECT.id, // project mapping guard
     });
 
     const res = await request(app)
@@ -1153,6 +1163,7 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
       id: 'iclass-2', stageId: DEFAULT_STAGE_ID_PENDING,
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
       address: 'Calle 1', description: 'Instalar',
+      projectId: ICLASS_DEFAULT_PROJECT.id,
     });
 
     const res = await request(app)
@@ -1173,6 +1184,7 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
       id: 'iclass-3', stageId: DEFAULT_STAGE_ID_PENDING,
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
       address: 'Calle 1', description: 'Instalar',
+      projectId: ICLASS_DEFAULT_PROJECT.id,
     });
 
     const res = await request(app)
@@ -1192,6 +1204,7 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
       id: 'iclass-4', stageId: DEFAULT_STAGE_ID_PENDING,
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
       address: 'Calle 1', description: 'Instalar',
+      projectId: ICLASS_DEFAULT_PROJECT.id,
     });
 
     const res = await request(app)
@@ -1211,6 +1224,7 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
       id: 'iclass-rej', stageId: DEFAULT_STAGE_ID_PENDING,
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
       customerCode: 'GR-1', address: 'Calle 1', description: 'Instalar',
+      projectId: ICLASS_DEFAULT_PROJECT.id,
     });
 
     const res = await request(app)
@@ -1256,6 +1270,7 @@ function buildBulkApp() {
   stageRepo.addDirect({ id: ICLASS_STAGE_REGISTERED, workflowId: 'wf-default', name: 'Registrado en IClass',  category: 'enProgreso', order: 6, color: null });
 
   const repo = new InMemorySchedulingRepository(stageRepo);
+  repo.seedProject(ICLASS_DEFAULT_PROJECT);
 
   const flags = new InMemoryFeatureFlagRepository();
   flags.seed('iclass-integration', true);
@@ -1288,12 +1303,14 @@ describe('POST /api/scheduling/bulk/stage (Fase 2)', () => {
       id: 't1', stageId: DEFAULT_STAGE_ID_PENDING,
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
       address: 'Calle 1', description: 'Instalar',
+      projectId: ICLASS_DEFAULT_PROJECT.id,
     });
     // t2: missing phone + description → MISSING_REQUIRED_FIELDS.
     repo.seedTask({
       id: 't2', stageId: DEFAULT_STAGE_ID_PENDING,
       customerId: 'cust-2', customerName: 'Pedro', customerCity: 'Cordoba', customerPhone: null,
       address: 'Calle 2', description: null,
+      projectId: ICLASS_DEFAULT_PROJECT.id,
     });
 
     const res = await request(app)

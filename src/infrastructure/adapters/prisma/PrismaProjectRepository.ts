@@ -162,6 +162,20 @@ export class PrismaProjectRepository implements ProjectRepository {
     }
   }
 
+  async updateIClassSoType(projectId: string, iclassSoTypeId: string | null): Promise<Project | null> {
+    try {
+      const p = await (prisma.project as any).update({
+        where: { id: projectId },
+        data: { iclassSoTypeId },
+        include: INCLUDE,
+      }) as EnrichedProjectRow;
+      return mapProject(p);
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
   private _buildScalarUpdate(data: Omit<UpdateProjectInput, 'partnerIds'>): Record<string, unknown> {
     const update: Record<string, unknown> = {};
     if ('title' in data && data.title !== undefined) update['title'] = data.title;

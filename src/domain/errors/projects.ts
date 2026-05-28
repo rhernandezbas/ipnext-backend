@@ -9,6 +9,14 @@ export class ReferenceNotFoundError extends Error {
   }
 }
 
+/** Raised when a project is not found by id. */
+export class ProjectNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`Project with id "${id}" not found`, 'PROJECT_NOT_FOUND');
+    this.name = 'ProjectNotFoundError';
+  }
+}
+
 /**
  * Raised when an operation cannot proceed because the project still has tasks
  * in active stage categories ("nuevo" or "enProgreso"). Used by the soft-delete

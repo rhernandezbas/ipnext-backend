@@ -106,37 +106,37 @@ src/__tests__/infrastructure/InMemoryIClassSoTypeRepository.test.ts
 
 ### 3.1 — `SyncIClassSoTypes`
 
-- [ ] 3.1 **(TEST ROJO)** `src/__tests__/application/SyncIClassSoTypes.test.ts` — cubrir todos los escenarios de REQ-SYNC-1:
+- [x] 3.1 **(TEST ROJO)** `src/__tests__/application/SyncIClassSoTypes.test.ts` — cubrir todos los escenarios de REQ-SYNC-1:
   - Catálogo vacío + 3 tipos → 3 entries activas, `{ synced: 3, deactivated: 0 }`.
   - Re-sync idempotente → `{ synced: 3, deactivated: 0 }`, `syncedAt` actualizado.
   - Un código desaparece → entry con `active: false`, `{ synced: 2, deactivated: 1 }`.
   - Código previamente desactivado reaparece → `active: true`.
   - IClass falla → propaga `IClassUnavailableError`.
   - `thirdPartyId` viene del config inyectado, no hardcodeado (REQ-SYNC-2).
-- [ ] 3.2 Implementar `src/application/use-cases/SyncIClassSoTypes.ts`: inyecta `IClassPort`, `IClassSoTypeRepository` y `thirdPartyId: string`; llama `listServiceOrderTypes(thirdPartyId)` → `upsertByCode` por cada entry → `markInactiveExcept` → retorna `{ synced, deactivated }` (REQ-SYNC-1).
-- [ ] 3.3 **(TEST VERDE)** 3.1 pasa.
+- [x] 3.2 Implementar `src/application/use-cases/SyncIClassSoTypes.ts`: inyecta `IClassPort`, `IClassSoTypeRepository` y `thirdPartyId: string`; llama `listServiceOrderTypes(thirdPartyId)` → `upsertByCode` por cada entry → `markInactiveExcept` → retorna `{ synced, deactivated }` (REQ-SYNC-1).
+- [x] 3.3 **(TEST VERDE)** 3.1 pasa.
 
 ### 3.2 — `ListIClassSoTypes`
 
-- [ ] 3.4 **(TEST ROJO)** `src/__tests__/application/ListIClassSoTypes.test.ts`: sin filtro → todos; `{ active: true }` → solo activos (REQ-LIST-CAT-1).
-- [ ] 3.5 Implementar `src/application/use-cases/ListIClassSoTypes.ts` (REQ-LIST-CAT-1).
-- [ ] 3.6 **(TEST VERDE)** 3.4 pasa.
+- [x] 3.4 **(TEST ROJO)** `src/__tests__/application/ListIClassSoTypes.test.ts`: sin filtro → todos; `{ active: true }` → solo activos (REQ-LIST-CAT-1).
+- [x] 3.5 Implementar `src/application/use-cases/ListIClassSoTypes.ts` (REQ-LIST-CAT-1).
+- [x] 3.6 **(TEST VERDE)** 3.4 pasa.
 
 ### 3.3 — `AssignIClassSoTypeToProject`
 
-- [ ] 3.7 **(TEST ROJO)** `src/__tests__/application/AssignIClassSoTypeToProject.test.ts`:
+- [x] 3.7 **(TEST ROJO)** `src/__tests__/application/AssignIClassSoTypeToProject.test.ts`:
   - id válido y `active: true` → asigna y devuelve Project actualizado (REQ-PROJ-6).
   - id `null` → limpia el mapeo (REQ-PROJ-5).
   - id inexistente → `IClassSoTypeNotFoundError` (REQ-PROJ-4).
   - id de tipo `active: false` → `IClassSoTypeInactiveError` (REQ-PROJ-3).
   - `projectId` inexistente → `ProjectNotFoundError`.
-- [ ] 3.8 Implementar `src/application/use-cases/AssignIClassSoTypeToProject.ts`: inyecta `ProjectRepository` + `IClassSoTypeRepository`; valida tipo si no es null; llama `projects.updateIClassSoType(projectId, iclassSoTypeId)` (AD-3 guard en asignación).
-- [ ] 3.9 Agregar método `updateIClassSoType(projectId: string, iclassSoTypeId: string | null): Promise<Project | null>` al port `ProjectRepository` (si no existe); extender `InMemoryProjectRepository` y `PrismaProjectRepository` con este método.
-- [ ] 3.10 **(TEST VERDE)** 3.7 pasa.
+- [x] 3.8 Implementar `src/application/use-cases/AssignIClassSoTypeToProject.ts`: inyecta `ProjectRepository` + `IClassSoTypeRepository`; valida tipo si no es null; llama `projects.updateIClassSoType(projectId, iclassSoTypeId)` (AD-3 guard en asignación).
+- [x] 3.9 Agregar método `updateIClassSoType(projectId: string, iclassSoTypeId: string | null): Promise<Project | null>` al port `ProjectRepository` (si no existe); extender `InMemoryProjectRepository` y `PrismaProjectRepository` con este método.
+- [x] 3.10 **(TEST VERDE)** 3.7 pasa.
 
 ### 3.4 — `SendTaskToIClass` (modificar)
 
-- [ ] 3.11 **(TEST ROJO)** Extender `src/__tests__/application/SendTaskToIClass.test.ts` con los nuevos escenarios (spec scheduling):
+- [x] 3.11 **(TEST ROJO)** Extender `src/__tests__/application/SendTaskToIClass.test.ts` con los nuevos escenarios (spec scheduling):
   - Task con `projectId: null` → `MissingProjectForIClassError`, sin llamada a IClass (REQ-SCHED-1).
   - Task con Project pero `iclassSoTypeId: null` → `MissingIClassMappingError` con `projectTitle` (REQ-SCHED-2).
   - Task con Project con tipo `active: false` → `MissingIClassMappingError` (no `IClassSoTypeInactiveError`) (REQ-SCHED-3).
@@ -144,12 +144,12 @@ src/__tests__/infrastructure/InMemoryIClassSoTypeRepository.test.ts
   - Task ya tiene `iclassOrderCode` y Project perdió mapeo → idempotente, mueve a "Registrado en IClass" sin error (design § SendTaskToIClass, nota idempotency).
   - Flag OFF → mueve sin validar project/soType (REQ-SCHED-5).
   - Ajustar fixtures existentes: en los tests ya existentes que pasan, asegurarse de que el task tenga `projectId` y el project tenga `iclassSoType.active: true` con un `code`, o que el flag sea OFF.
-- [ ] 3.12 Modificar `src/application/use-cases/SendTaskToIClass.ts` — insertar la resolución del mapping DESPUÉS del guard de idempotencia y ANTES de la validación de campos requeridos:
+- [x] 3.12 Modificar `src/application/use-cases/SendTaskToIClass.ts` — insertar la resolución del mapping DESPUÉS del guard de idempotencia y ANTES de la validación de campos requeridos:
   1. Si `task.projectId == null` → throw `MissingProjectForIClassError(task.id)`.
   2. Llamar `tasks.getTaskProjectMapping(taskId)` (nuevo método del repo).
   3. Si `mapping.iclassSoType == null || !mapping.iclassSoType.active` → throw `MissingIClassMappingError(mapping.projectTitle)`.
   4. Pasar `soType: mapping.iclassSoType.code` a `iclass.createServiceOrder` (AD-2, REQ-SCHED-4).
-- [ ] 3.13 **(TEST VERDE)** 3.11 pasa. `npm test` verde completo.
+- [x] 3.13 **(TEST VERDE)** 3.11 pasa. `npm test` verde completo.
 
 ### Gate Fase 3
 

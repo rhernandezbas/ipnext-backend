@@ -23,4 +23,9 @@ export interface ProjectRepository {
   create(data: CreateProjectInput): Promise<Project>;
   update(id: string, data: UpdateProjectInput): Promise<Project | null>;
   delete(id: string): Promise<boolean>;
+  /**
+   * Assigns or clears the IClass SO type mapping on a project.
+   * Returns the updated Project (with iclassSoType populated), or null if the project is not found.
+   */
+  updateIClassSoType(projectId: string, iclassSoTypeId: string | null): Promise<Project | null>;
 }

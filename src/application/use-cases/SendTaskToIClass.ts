@@ -3,7 +3,11 @@ import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { IClassPort } from '@domain/ports/IClassPort';
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { MissingRequiredFieldsError, TaskNotFoundError, StageNotFoundError } from '@domain/errors/scheduling';
-import { IClassNodeNotFoundError } from '@domain/errors/iclass';
+import {
+  IClassNodeNotFoundError,
+  MissingProjectForIClassError,
+  MissingIClassMappingError,
+} from '@domain/errors/iclass';
 
 const FLAG_KEY = 'iclass-integration';
 const REGISTRADO_STAGE_NAME = 'Registrado en IClass';
@@ -33,9 +37,11 @@ function norm(s: string): string {
  * Behaviour (design Sequence):
  *  - flag OFF → move to the target stage unchanged, no IClass call.
  *  - already has iclassOrderCode → idempotent: move to "Registrado en IClass", no recreate.
+ *  - task.projectId == null → MissingProjectForIClassError.
+ *  - project.iclassSoType == null OR inactive → MissingIClassMappingError.
  *  - validates the 5 required fields → MissingRequiredFieldsError.
  *  - validates city against IClass nodes → IClassNodeNotFoundError.
- *  - creates the OS (no date), persists the orderCode, moves to "Registrado en IClass".
+ *  - creates the OS (no date) with soType from project mapping, persists orderCode, moves to "Registrado".
  *
  * Depends only on domain ports (DIP) — no infrastructure types.
  */
@@ -65,7 +71,18 @@ export class SendTaskToIClass {
       return this.moveToRegistrado(taskId, workflowId);
     }
 
-    // 3. Validate the 5 required fields (in canonical order).
+    // 3. Resolve project + IClass SO type mapping (REQ-SCHED-1, REQ-SCHED-2, REQ-SCHED-3).
+    if (task.projectId == null) {
+      throw new MissingProjectForIClassError(taskId);
+    }
+
+    const mapping = await this.tasks.getTaskProjectMapping(taskId);
+    if (!mapping || mapping.iclassSoType == null || !mapping.iclassSoType.active) {
+      const projectTitle = mapping?.projectTitle ?? task.projectId;
+      throw new MissingIClassMappingError(projectTitle);
+    }
+
+    // 4. Validate the 5 required fields (in canonical order).
     const values: Record<(typeof REQUIRED_ORDER)[number], string | null> = {
       customerName: task.customerName,
       phone: task.customerPhone,
@@ -78,15 +95,13 @@ export class SendTaskToIClass {
       throw new MissingRequiredFieldsError([...missingFields]);
     }
 
-    // 4. Resolve the node by city against IClass (case- and accent-insensitive, trimmed).
+    // 5. Resolve the node by city against IClass (case- and accent-insensitive, trimmed).
     const target = norm(task.customerCity!);
     const nodes = await this.iclass.listNodes();
     const node = nodes.find(n => norm(n.code) === target);
     if (!node) throw new IClassNodeNotFoundError(task.customerCity!);
 
-    // 5. Create the OS (no scheduledDate). Failure propagates IClassUnavailableError.
-    // TODO (FASE 3): replace soType with mapping.iclassSoType.code after inserting
-    // the project-mapping resolution block above this step.
+    // 6. Create the OS (no scheduledDate). Failure propagates IClassUnavailableError.
     const { orderCode } = await this.iclass.createServiceOrder({
       soCode: String(task.sequenceNumber),
       customerCode: task.customerCode!,
@@ -95,10 +110,10 @@ export class SendTaskToIClass {
       address: task.address!,
       city: task.customerCity!,
       description: task.description!,
-      soType: '', // placeholder — resolved from project mapping in FASE 3
+      soType: mapping.iclassSoType.code, // resolved from project mapping (REQ-SCHED-4)
     });
 
-    // 6. Persist the orderCode + advance the stage.
+    // 7. Persist the orderCode + advance the stage.
     await this.tasks.setIClassOrderCode(taskId, orderCode);
     return this.moveToRegistrado(taskId, workflowId);
   }

@@ -9,6 +9,8 @@ import {
 
 export class InMemoryProjectRepository implements ProjectRepository {
   private projects: Map<string, Project & { partnerIds: string[] }> = new Map();
+  /** Secondary cache: iclassSoTypeId → resolved soType object (set by seedIClassSoType). */
+  private soTypeCache: Map<string, { id: string; code: string; description: string; active: boolean }> = new Map();
 
   async list(filter?: ListProjectsFilter): Promise<Project[]> {
     let items = Array.from(this.projects.values());
@@ -88,6 +90,33 @@ export class InMemoryProjectRepository implements ProjectRepository {
 
   async delete(id: string): Promise<boolean> {
     return this.projects.delete(id);
+  }
+
+  async updateIClassSoType(projectId: string, iclassSoTypeId: string | null): Promise<Project | null> {
+    const existing = this.projects.get(projectId);
+    if (!existing) return null;
+
+    const soType = iclassSoTypeId !== null
+      ? (this.soTypeCache.get(iclassSoTypeId) ?? null)
+      : null;
+
+    const updated = {
+      ...existing,
+      iclassSoTypeId,
+      iclassSoType: soType,
+      updatedAt: new Date().toISOString(),
+    };
+    this.projects.set(projectId, updated);
+    return this._toProject(updated);
+  }
+
+  /**
+   * Test helper: register an IClass SO type so that updateIClassSoType can
+   * populate the inline iclassSoType field on the returned Project (mimics the
+   * Prisma include in production).
+   */
+  seedIClassSoType(soType: { id: string; code: string; description: string; active: boolean }): void {
+    this.soTypeCache.set(soType.id, { ...soType });
   }
 
   /**

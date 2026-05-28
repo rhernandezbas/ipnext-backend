@@ -16,6 +16,8 @@ const ENVIAR_STAGE: Stage = { id: 'stage-enviar', workflowId: WF, name: 'Enviar 
 const REGISTRADO_STAGE: Stage = { id: 'stage-registrado', workflowId: WF, name: 'Registrado en IClass', category: 'enProgreso', order: 6, color: null };
 const OTHER_STAGE: Stage = { id: 'stage-other', workflowId: WF, name: 'En progreso', category: 'enProgreso', order: 2, color: null };
 
+const DEFAULT_PROJECT = { id: 'proj-1', title: 'Instalaciones FTTH', iclassSoType: { id: 'so-1', code: 'INSTALL', active: true } };
+
 function setup(flagEnabled = true) {
   const stages = new InMemoryStageRepository();
   stages.addDirect(ENVIAR_STAGE);
@@ -23,6 +25,9 @@ function setup(flagEnabled = true) {
   stages.addDirect(OTHER_STAGE);
 
   const tasks = new InMemorySchedulingRepository(stages);
+  // Seed the project so getTaskProjectMapping resolves for IClass-bound tasks.
+  tasks.seedProject(DEFAULT_PROJECT);
+
   const flags = new InMemoryFeatureFlagRepository();
   flags.seed('iclass-integration', flagEnabled);
   const iclass = new InMemoryIClassClient();
@@ -40,6 +45,7 @@ describe('MoveTaskToStage — IClass hook', () => {
       id: 't1', stageId: OTHER_STAGE.id, customerId: 'c1',
       customerName: 'Juan', customerPhone: '341', customerCity: 'Rosario',
       address: 'Calle 1', description: 'desc',
+      projectId: DEFAULT_PROJECT.id, // required: project mapping guard
     });
 
     const result = await useCase.execute('t1', ENVIAR_STAGE.id);

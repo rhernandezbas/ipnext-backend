@@ -8,7 +8,12 @@ import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-
 import { InMemoryIClassClient } from '../../infrastructure/adapters/in-memory/InMemoryIClassClient';
 import { SendTaskToIClass } from '../../application/use-cases/SendTaskToIClass';
 import { MissingRequiredFieldsError, TaskNotFoundError } from '../../domain/errors/scheduling';
-import { IClassNodeNotFoundError, IClassUnavailableError } from '../../domain/errors/iclass';
+import {
+  IClassNodeNotFoundError,
+  IClassUnavailableError,
+  MissingProjectForIClassError,
+  MissingIClassMappingError,
+} from '../../domain/errors/iclass';
 import { Stage } from '../../domain/entities/workflow';
 
 const FLAG_KEY = 'iclass-integration';
@@ -21,12 +26,24 @@ const REGISTRADO_STAGE: Stage = {
   id: 'stage-registrado', workflowId: WF, name: 'Registrado en IClass', category: 'enProgreso', order: 6, color: null,
 };
 
+/** The default mapped SO type used in happy-path fixtures. */
+const DEFAULT_SO_TYPE = { id: 'so-type-1', code: 'INSTALL', active: true };
+/** The default project with an active SO type. */
+const DEFAULT_PROJECT_ID = 'proj-1';
+
 function setup(opts?: { flagEnabled?: boolean; nodes?: string[]; unavailable?: boolean }) {
   const stages = new InMemoryStageRepository();
   stages.addDirect(ENVIAR_STAGE);
   stages.addDirect(REGISTRADO_STAGE);
 
   const tasks = new InMemorySchedulingRepository(stages);
+
+  // Seed the default project so getTaskProjectMapping resolves successfully.
+  tasks.seedProject({
+    id: DEFAULT_PROJECT_ID,
+    title: 'Instalaciones FTTH',
+    iclassSoType: DEFAULT_SO_TYPE,
+  });
 
   const flags = new InMemoryFeatureFlagRepository();
   flags.seed(FLAG_KEY, opts?.flagEnabled ?? true);
@@ -39,6 +56,11 @@ function setup(opts?: { flagEnabled?: boolean; nodes?: string[]; unavailable?: b
   return { tasks, stages, flags, iclass, useCase };
 }
 
+/**
+ * Seeds a full task with all required fields.
+ * By default includes projectId → DEFAULT_PROJECT_ID so the project-mapping guard passes.
+ * Pass projectId: null to test missing-project scenarios.
+ */
 function fullTask(tasks: InMemorySchedulingRepository, overrides: Partial<Parameters<typeof tasks.seedTask>[0]> = {}) {
   return tasks.seedTask({
     id: 't1',
@@ -50,6 +72,7 @@ function fullTask(tasks: InMemorySchedulingRepository, overrides: Partial<Parame
     customerCity: 'Rosario',
     address: 'Calle Falsa 123',
     description: 'Instalar fibra',
+    projectId: DEFAULT_PROJECT_ID,
     ...overrides,
   });
 }
@@ -94,6 +117,7 @@ describe('SendTaskToIClass', () => {
       id: 't1', stageId: ENVIAR_STAGE.id, customerId: null,
       customerName: null, customerPhone: null, customerCity: null,
       address: 'Calle Falsa 123', description: 'Instalar fibra',
+      projectId: DEFAULT_PROJECT_ID, // project guard must pass to reach field validation
     });
 
     const err = await useCase.execute('t1', ENVIAR_STAGE.id).catch(e => e);
@@ -263,5 +287,79 @@ describe('SendTaskToIClass', () => {
     // Must resolve the one in WF (target stage's workflow), not the wf-2 homonym.
     expect(result.stageId).toBe(REGISTRADO_STAGE.id);
     expect(iclass.createdOrders).toHaveLength(1);
+  });
+
+  // ── Project mapping guard tests (REQ-SCHED-1, REQ-SCHED-2, REQ-SCHED-3, REQ-SCHED-4) ──
+
+  it('task with projectId=null → MissingProjectForIClassError, no IClass call (REQ-SCHED-1)', async () => {
+    const { tasks, iclass, useCase } = setup();
+    fullTask(tasks, { projectId: null });
+
+    await expect(useCase.execute('t1', ENVIAR_STAGE.id)).rejects.toBeInstanceOf(MissingProjectForIClassError);
+    expect(iclass.createdOrders).toHaveLength(0);
+  });
+
+  it('task with project but iclassSoType=null → MissingIClassMappingError with projectTitle (REQ-SCHED-2)', async () => {
+    const { tasks, iclass, useCase } = setup();
+    tasks.seedProject({ id: 'proj-no-type', title: 'Sin Mapeo', iclassSoType: null });
+    fullTask(tasks, { projectId: 'proj-no-type' });
+
+    const err = await useCase.execute('t1', ENVIAR_STAGE.id).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MissingIClassMappingError);
+    expect((err as MissingIClassMappingError).projectTitle).toBe('Sin Mapeo');
+    expect(iclass.createdOrders).toHaveLength(0);
+  });
+
+  it('task with project having inactive iclassSoType → MissingIClassMappingError (NOT IClassSoTypeInactiveError) (REQ-SCHED-3)', async () => {
+    const { tasks, iclass, useCase } = setup();
+    tasks.seedProject({
+      id: 'proj-inactive-type',
+      title: 'Proyecto Tipo Inactivo',
+      iclassSoType: { id: 'so-type-old', code: 'OLD_INSTALL', active: false },
+    });
+    fullTask(tasks, { projectId: 'proj-inactive-type' });
+
+    const err = await useCase.execute('t1', ENVIAR_STAGE.id).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MissingIClassMappingError);
+    expect((err as MissingIClassMappingError).projectTitle).toBe('Proyecto Tipo Inactivo');
+    expect(iclass.createdOrders).toHaveLength(0);
+  });
+
+  it('happy path passes the correct soType from project mapping to IClass (REQ-SCHED-4)', async () => {
+    const { tasks, iclass, useCase } = setup();
+    fullTask(tasks, { sequenceNumber: 4274 });
+
+    await useCase.execute('t1', ENVIAR_STAGE.id);
+
+    expect(iclass.createdOrders).toHaveLength(1);
+    expect(iclass.createdOrders[0].input.soType).toBe(DEFAULT_SO_TYPE.code);
+  });
+
+  it('idempotency: task already has orderCode + project lost mapping → still moves to Registrado without error', async () => {
+    const { tasks, iclass, useCase } = setup();
+    // Task already sent (has orderCode) but its project now has no soType
+    tasks.seedProject({ id: 'proj-no-type-now', title: 'Sin Mapeo Ahora', iclassSoType: null });
+    fullTask(tasks, {
+      iclassOrderCode: 'OS-ALREADY-SENT',
+      projectId: 'proj-no-type-now',
+    });
+
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+
+    // Idempotency guard fires BEFORE project-mapping check → no error
+    expect(iclass.createdOrders).toHaveLength(0);
+    expect(result.iclassOrderCode).toBe('OS-ALREADY-SENT');
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+  });
+
+  it('flag OFF → moves without validating project/soType (REQ-SCHED-5)', async () => {
+    const { tasks, iclass, useCase } = setup({ flagEnabled: false });
+    // Task with no project — would fail if flag were ON
+    fullTask(tasks, { projectId: null, customerPhone: null });
+
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+
+    expect(result.stageId).toBe(ENVIAR_STAGE.id);
+    expect(iclass.createdOrders).toHaveLength(0);
   });
 });
