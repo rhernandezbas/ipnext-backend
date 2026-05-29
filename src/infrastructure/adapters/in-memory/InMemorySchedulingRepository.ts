@@ -56,6 +56,7 @@ const NEW_FIELDS_DEFAULTS = {
   customerPhone: null,
   customerCode: null,
   iclassOrderCode: null,
+  grOrdenId: null,
   serviceId: null,
   partnerId: null,
   reporterId: null,
@@ -263,6 +264,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       customerPhone: null, // idem
       customerCode: null, // idem (derived from grClienteId ?? splynxId ?? login)
       iclassOrderCode: null,
+      grOrdenId: data.grOrdenId ?? null,
       serviceId: data.serviceId ?? null,
       partnerId: data.partnerId ?? null,
       reporterId: data.reporterId ?? null,
@@ -330,6 +332,20 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (index === -1) return null;
     this.tasks[index] = { ...this.tasks[index]!, reviewedByInventory: reviewed, updatedAt: new Date().toISOString() };
     return { ...this.tasks[index]! };
+  }
+
+  // ── Gestión Real installation-order ingest ───────────────────────────────
+
+  async findTaskByGrOrdenId(grOrdenId: string): Promise<ScheduledTask | null> {
+    const task = this.tasks.find(t => t.grOrdenId === grOrdenId);
+    return task ? { ...task } : null;
+  }
+
+  async listNeedsReview(): Promise<ScheduledTask[]> {
+    // Needs-review = ingested from GR (grOrdenId set) but left unclassified (no project).
+    return this.tasks
+      .filter(t => t.grOrdenId !== null && t.projectId == null)
+      .map(t => ({ ...t }));
   }
 
   // ── IClass SO type mapping ────────────────────────────────────────────────

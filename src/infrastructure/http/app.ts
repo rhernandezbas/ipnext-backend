@@ -139,6 +139,13 @@ import { GestionRealClient } from '../adapters/gestion-real/GestionRealClient';
 import { GetGestionRealSyncStatus } from '@application/use-cases/GetGestionRealSyncStatus';
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { PrismaMirrorCountsRepository } from '../adapters/prisma/PrismaMirrorCountsRepository';
+// GR installation-order ingest (gestion-real-installation-ingest)
+import { createGestionRealIngestRouter } from './routes/gestionRealIngest.routes';
+import { GetIngestConfig } from '@application/use-cases/GetIngestConfig';
+import { UpdateIngestConfig } from '@application/use-cases/UpdateIngestConfig';
+import { GetIngestStatus } from '@application/use-cases/GetIngestStatus';
+import { ListNeedsReviewTasks } from '@application/use-cases/ListNeedsReviewTasks';
+import { PrismaGestionRealIngestConfigRepository } from '../adapters/prisma/PrismaGestionRealIngestConfigRepository';
 import { ListTaskCategory } from '@application/use-cases/ListTaskCategory';
 import { GetTaskCategory } from '@application/use-cases/GetTaskCategory';
 import { CreateTaskCategory } from '@application/use-cases/CreateTaskCategory';
@@ -880,6 +887,15 @@ export function createApp() {
   const assignIClassSoType = new AssignIClassSoTypeToProject(projectRepo, iclassSoTypeRepo);
 
   app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter, assignIClassSoType));
+  // GR installation-order ingest admin — config/status/needs-review (projectRepo + schedulingRepo already built above).
+  const grIngestConfigRepo = new PrismaGestionRealIngestConfigRepository();
+  app.use('/api/gestion-real-ingest', createGestionRealIngestRouter(
+    authAdapter,
+    new GetIngestConfig(grIngestConfigRepo),
+    new UpdateIngestConfig(grIngestConfigRepo, projectRepo),
+    new GetIngestStatus(new PrismaSyncStateRepository()),
+    new ListNeedsReviewTasks(schedulingRepo),
+  ));
   const taskTemplateRepo = new PrismaTaskTemplateRepository();
   app.use(
     '/api/task-templates',

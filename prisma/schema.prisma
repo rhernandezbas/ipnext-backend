@@ -718,6 +718,10 @@ model Project {
   iclassSoTypeId String?
   iclassSoType   IClassSoType?    @relation(fields: [iclassSoTypeId], references: [id], onDelete: SetNull)
 
+  // GR ingest config back-relations (fiber / wireless target project mappings)
+  grIngestFiber    GestionRealIngestConfig[] @relation("GrIngestFiber")
+  grIngestWireless GestionRealIngestConfig[] @relation("GrIngestWireless")
+
   @@index([title])
   @@index([categoryId])
   @@index([typeId])
@@ -794,6 +798,10 @@ model ScheduledTask {
 
   // IClass — service order code returned when the task is sent to IClass
   iclassOrderCode String?
+
+  // Gestión Real — upstream service order id this task was ingested from.
+  // Null for manually-created tasks. NULL-distinct unique = idempotency backstop.
+  grOrdenId String? @unique
 
   // IClass closure loop — mirror of the closed SO, linked back by codigo↔sequenceNumber
   iclassClosedOrder IClassServiceOrder?
@@ -1321,6 +1329,22 @@ model SyncState {
   lastResult  String?
   itemsSynced Int       @default(0)
   updatedAt   DateTime  @updatedAt
+}
+
+/// Editable, single-row config for the Gestión Real installation-order ingest.
+/// Single row enforced via a constant id ("singleton").
+model GestionRealIngestConfig {
+  id                String   @id @default("singleton")
+  intervalMs        Int      @default(180000)
+  windowMonths      Int      @default(12)
+  fiberProjectId    String?
+  fiberProject      Project? @relation("GrIngestFiber", fields: [fiberProjectId], references: [id], onDelete: SetNull)
+  wirelessProjectId String?
+  wirelessProject   Project? @relation("GrIngestWireless", fields: [wirelessProjectId], references: [id], onDelete: SetNull)
+  updatedAt         DateTime @updatedAt
+
+  @@index([fiberProjectId])
+  @@index([wirelessProjectId])
 }
 
 // =============================================

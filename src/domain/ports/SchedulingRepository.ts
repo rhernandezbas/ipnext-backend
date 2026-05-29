@@ -4,9 +4,11 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory' | 'iclassOrderCode'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory' | 'iclassOrderCode' | 'grOrdenId'
 > {
   watcherIds?: string[];
+  /** GR ingest sets this; manual task creation omits it (defaults to null). */
+  grOrdenId?: string | null;
 }
 
 export interface UpdateTaskInput extends Partial<CreateTaskInput> {
@@ -34,6 +36,12 @@ export interface SchedulingRepository {
 
   // RV — Revisado por Inventario (change 6)
   setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null>;
+
+  // Gestión Real installation-order ingest (gestion-real-installation-ingest)
+  /** Find a task previously ingested from the given GR order id. Null when none. */
+  findTaskByGrOrdenId(grOrdenId: string): Promise<ScheduledTask | null>;
+  /** Tasks awaiting manual review: ingested but unclassified (projectId = null). */
+  listNeedsReview(): Promise<ScheduledTask[]>;
 
   // IClass integration (task-send-to-iclass)
   /**

@@ -2,6 +2,7 @@ import './infrastructure/config'; // fail-fast env validation runs on import
 import { createApp } from './infrastructure/http/app';
 import { config } from './infrastructure/config';
 import { bootstrapGestionRealSync } from './infrastructure/scheduling/bootstrapGestionRealSync';
+import { bootstrapGestionRealIngest } from './infrastructure/scheduling/bootstrapGestionRealIngest';
 import { bootstrapIClassClosure } from './infrastructure/scheduling/bootstrapIClassClosure';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
@@ -23,6 +24,12 @@ app.listen(config.port, () => {
 // Gestión Real read-only mirror sync — opt-in, no-op when disabled.
 const grSync = bootstrapGestionRealSync();
 grSync?.start();
+
+// Gestión Real installation-order ingest — opt-in, no-op when disabled.
+// Async because the composition root resolves the fallback "Pendiente" stage.
+void bootstrapGestionRealIngest()
+  .then((grIngest) => grIngest?.start())
+  .catch((err) => console.error('[gr-ingest] bootstrap failed (server kept alive):', (err as Error).message));
 
 // IClass closure loop — starts dormant; gated by the `iclass-closure-loop`
 // feature flag (default OFF). Returns null only when IClass credentials are missing.

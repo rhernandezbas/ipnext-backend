@@ -60,6 +60,10 @@ export interface ScheduledTask {
   // IClass — service order code returned by IClass after a successful "Enviar a IClass". Null otherwise.
   iclassOrderCode: string | null;
 
+  // Gestión Real — upstream service order id this task was ingested from.
+  // Null for manually-created tasks. Used as the idempotency key on ingest.
+  grOrdenId: string | null;
+
   // Timestamps — always present in API responses (ISO 8601 strings)
   createdAt: string;
   updatedAt: string;

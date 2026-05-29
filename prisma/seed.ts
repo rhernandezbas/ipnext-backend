@@ -295,6 +295,15 @@ async function seedSchedulingFoundation() {
   })
   console.log('  Feature flag seeded: iclass-integration (enabled: false)')
 
+  // Master switch for the Gestión Real installation-order ingest. Default OFF
+  // until validated in prod; flip via /feature-flags (effective next tick).
+  await (prisma as any).featureFlag.upsert({
+    where: { key: 'gestion-real-ingest' },
+    update: {},
+    create: { key: 'gestion-real-ingest', enabled: false },
+  })
+  console.log('  Feature flag seeded: gestion-real-ingest (enabled: false)')
+
   // TicketStatus catalog — canonical values (idempotent by name).
   const ticketStatuses = [
     { name: 'open',    color: '#22c55e', weight: 1 },
