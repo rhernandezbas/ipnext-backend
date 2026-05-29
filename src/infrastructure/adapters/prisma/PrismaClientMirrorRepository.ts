@@ -2,17 +2,17 @@ import { ClientMirrorRepository, UpsertResult } from '@domain/ports/ClientMirror
 import { GrClient, GrContract } from '@domain/entities/gestionReal';
 import { prisma } from '../../database/prisma';
 
-type ClientStatus = 'active' | 'late' | 'blocked' | 'inactive';
+type ClientStatus = 'active' | 'late' | 'blocked' | 'inactive' | 'baja';
 
 /** GR estado.codigo → local ClientStatus enum. */
-function mapStatus(code: string | null): ClientStatus {
+export function mapStatus(code: string | null): ClientStatus {
   switch (code) {
     case '1': return 'active';     // Activo
     case '2': return 'late';       // Deudor
     case '4': return 'blocked';    // Incobrable
+    case '6': return 'baja';       // Baja
     case '3':                      // Inactivo
-    case '6':                      // Baja
-    default:  return 'inactive';
+    default:  return 'inactive';   // fallback (null / '5' / unknown)
   }
 }
 

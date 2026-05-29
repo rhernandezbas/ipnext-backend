@@ -29,6 +29,7 @@ export interface ClientStats {
   inactive: number;
   blocked: number;
   late: number;
+  baja: number;
 }
 
 export interface CustomerRepository {

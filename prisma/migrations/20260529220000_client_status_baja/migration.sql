@@ -1,0 +1,17 @@
+-- Add 'baja' (GR estado.codigo 6) to ClientStatus so churned-out clients are
+-- distinguishable from merely-inactive ones.
+--
+-- Forward-only: Postgres cannot cleanly DROP an enum value (it requires a full
+-- type rebuild). This migration only ADDs the value; no row is written to 'baja'
+-- in the same transaction, so the Postgres "new enum value not usable in the same
+-- tx" caveat does NOT apply here. The restamp inactive->baja happens later,
+-- asynchronously, on the next SyncGestionRealClients run (a separate transaction).
+--
+-- Rollback (forward-only): there is no destructive DDL to revert. To undo the
+-- behavior, restamp Client rows from 'baja' back to 'inactive' and revert
+-- GR_SYNC_ESTADOS to '1,2' (so estado 6 stops being pulled); leave the unused
+-- 'baja' enum value in place (harmless).
+--
+-- Mirrors the proven bare precedent 20260514070000_add_technician_role: no
+-- BEGIN/COMMIT wrap.
+ALTER TYPE "ClientStatus" ADD VALUE 'baja';
