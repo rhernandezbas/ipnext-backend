@@ -537,4 +537,23 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       return null;
     }
   }
+
+  // ── IClass closure loop ───────────────────────────────────────────────────
+
+  async findTaskBySequenceNumber(sequenceNumber: number): Promise<ScheduledTask | null> {
+    const row = await (prisma.scheduledTask as any).findUnique({
+      where: { sequenceNumber },
+      include: INCLUDE,
+    });
+    return row ? toTask(row) : null;
+  }
+
+  async listTasksInIClassStage(stageName: string): Promise<ScheduledTask[]> {
+    const rows = await (prisma.scheduledTask as any).findMany({
+      where: { stage: { is: { name: stageName } } },
+      include: INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map(toTask);
+  }
 }

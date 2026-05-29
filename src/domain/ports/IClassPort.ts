@@ -1,3 +1,11 @@
+import {
+  ClosedServiceOrderSummary,
+  SoStatusHistoryEntry,
+  SoChecklist,
+  SoMaterial,
+  SoEquipmentEvent,
+} from '@domain/entities/iclass-closed-order';
+
 /** A node (microárea) in IClass. The node code is used as the service order's nodeCode. */
 export interface IClassNode {
   code: string;
@@ -8,6 +16,26 @@ export interface IClassNode {
 export interface IClassSoTypeDescriptor {
   code: string;
   description: string;
+}
+
+/** A result-code descriptor from IClass (`/serviceordertypes/{id}/resultcodes`). */
+export interface IClassResultCodeDescriptor {
+  /** Owning SO type id (string-encoded BigInt). */
+  soTypeId: string | null;
+  /** Result-code name — equals motivoFechamento on a closed SO. */
+  code: string;
+  /** Sucesso | Falha | ... */
+  type: string;
+}
+
+/** Parameters for the closed-SO list query (cluster + date window). */
+export interface ListServiceOrdersParams {
+  /** Lower bound of the updatedDate window. */
+  updatedDateBegin: Date;
+  /** Upper bound of the updatedDate window. */
+  updatedDateEnd: Date;
+  /** Optional exact `serviceOrderCode` filter — used by the per-task backfill reconcile. */
+  serviceOrderCode?: string;
 }
 
 /**
@@ -47,4 +75,23 @@ export interface IClassPort {
    */
   listServiceOrderTypes(): Promise<IClassSoTypeDescriptor[]>;
   createServiceOrder(input: CreateServiceOrderInput): Promise<{ orderCode: string }>;
+
+  // ── Closure loop (read path) ──────────────────────────────────────────────
+
+  /**
+   * List service orders for the configured cluster within the updatedDate window
+   * (and optional serviceOrderCode). Returns normalized summaries; the caller
+   * filters to terminal status ('7'). The adapter paginates internally.
+   */
+  listServiceOrders(params: ListServiceOrdersParams): Promise<ClosedServiceOrderSummary[]>;
+  /** Status timeline for one SO (`/serviceorders/{id}/history`). Empty when 204. */
+  getServiceOrderHistory(iclassId: string): Promise<SoStatusHistoryEntry[]>;
+  /** Checklists for one SO (`/serviceorders/{id}/checklist`). Empty when 204. */
+  getServiceOrderChecklists(iclassId: string): Promise<SoChecklist[]>;
+  /** Materials for one SO (`/serviceorders/{id}/materials`). Empty when 204. */
+  getServiceOrderMaterials(iclassId: string): Promise<SoMaterial[]>;
+  /** Equipment events for one SO (`/serviceorders/{id}/equipments/history`). Empty when 204. */
+  getServiceOrderEquipmentEvents(iclassId: string): Promise<SoEquipmentEvent[]>;
+  /** All result codes across SO types — for the result-code catalog sync. */
+  listResultCodes(): Promise<IClassResultCodeDescriptor[]>;
 }

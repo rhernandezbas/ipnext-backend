@@ -39,6 +39,14 @@ export class IClassSoTypeNotFoundError extends DomainError {
   }
 }
 
+/** Raised when an IClass result-code id is not found in the catalog (closure mapping). */
+export class IClassResultCodeNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`IClass result code with id "${id}" not found`, 'ICLASS_RESULT_CODE_NOT_FOUND');
+    this.name = 'IClassResultCodeNotFoundError';
+  }
+}
+
 /** Raised when the customer city does not match any IClass node (microárea). */
 export class IClassNodeNotFoundError extends DomainError {
   constructor(city: string) {

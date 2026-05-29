@@ -45,6 +45,19 @@ export interface SchedulingRepository {
   /** Persist the IClass service order code on a task after a successful OS creation. */
   setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null>;
 
+  // IClass closure loop (iclass-closure-loop)
+  /**
+   * Find a task by its sequenceNumber — the join key for the closure loop, since
+   * we send soCode = sequenceNumber and IClass preserves it as the SO `codigo`.
+   * Null when no task has that number.
+   */
+  findTaskBySequenceNumber(sequenceNumber: number): Promise<ScheduledTask | null>;
+  /**
+   * List tasks already sent to IClass and awaiting closure (in the configured
+   * "Registrado en IClass" stage), used by the scoped backfill reconcile.
+   */
+  listTasksInIClassStage(stageName: string): Promise<ScheduledTask[]>;
+
   // IClass SO type mapping (iclass-so-type-mapping)
   /**
    * Returns a flat projection of the task's project + its assigned IClass SO type.

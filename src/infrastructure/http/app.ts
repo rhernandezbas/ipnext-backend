@@ -352,6 +352,12 @@ import { SyncIClassSoTypes } from '@application/use-cases/SyncIClassSoTypes';
 import { ListIClassSoTypes } from '@application/use-cases/ListIClassSoTypes';
 import { AssignIClassSoTypeToProject } from '@application/use-cases/AssignIClassSoTypeToProject';
 import { createIClassAdminRouter } from './routes/iclass-admin.routes';
+import { createIClassClosureRouter } from './routes/iclass-closure.routes';
+import { PrismaIClassResultCodeRepository } from '../adapters/prisma/PrismaIClassResultCodeRepository';
+import { SyncIClassResultCodes } from '@application/use-cases/SyncIClassResultCodes';
+import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCodes';
+import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
+import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
 import { PrismaRbacRoleRepository } from '../adapters/prisma/PrismaRbacRoleRepository';
 import { PrismaRbacPermissionRepository } from '../adapters/prisma/PrismaRbacPermissionRepository';
@@ -951,6 +957,16 @@ export function createApp() {
 
   // IClass admin — SO type catalog sync + list (admin-only).
   app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter));
+
+  // IClass closure loop — result-code catalog + configurable result→stage mapping + status.
+  const iclassResultCodeRepo = new PrismaIClassResultCodeRepository();
+  app.use('/api/admin/iclass', createIClassClosureRouter(
+    new SyncIClassResultCodes(buildIClassClient(), iclassResultCodeRepo),
+    new ListIClassResultCodes(iclassResultCodeRepo),
+    new AssignResultCodeStage(iclassResultCodeRepo, stageRepo),
+    new GetClosureStatus(new PrismaSyncStateRepository()),
+    authAdapter,
+  ));
 
   // Feature flags — runtime toggles persisted in DB (admin-only).
   // featureFlagRepo is created earlier (wired into SendTaskToIClass).

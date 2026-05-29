@@ -374,6 +374,23 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return { ...this.tasks[index]! };
   }
 
+  // ── IClass closure loop ───────────────────────────────────────────────────
+
+  async findTaskBySequenceNumber(sequenceNumber: number): Promise<ScheduledTask | null> {
+    const task = this.tasks.find(t => t.sequenceNumber === sequenceNumber);
+    return task ? { ...task } : null;
+  }
+
+  async listTasksInIClassStage(stageName: string): Promise<ScheduledTask[]> {
+    // Resolve the stage id(s) for the given name via the injected stage repo,
+    // then return tasks sitting in that stage.
+    const anyRepo = this.stageRepo as unknown as { findByName?: (n: string) => Promise<Stage | null> } | undefined;
+    if (!anyRepo?.findByName) return [];
+    const stage = await anyRepo.findByName(stageName);
+    if (!stage) return [];
+    return this.tasks.filter(t => t.stageId === stage.id).map(t => ({ ...t }));
+  }
+
   /** Test helper: seed a fully-formed task (lets tests set derived JOIN fields). */
   seedTask(overrides: Partial<ScheduledTask> & Pick<ScheduledTask, 'id'>): ScheduledTask {
     const task = makeTask({
