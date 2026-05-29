@@ -174,8 +174,28 @@ The order MUST NEVER be dropped.
 - WHEN the ingest runs
 - THEN a `ScheduledTask` is created with `projectId = null`
 - AND the title starts with `[REVISAR - Logística] Instalación`
-- AND the description contains the manual-assignment reason
+- AND the description contains the manual-assignment reason (`"Plan no reconocido — ..."`)
 - AND it is counted as `unclassified`
+
+### REQ-CREATE-4: Classified order with no configured target project → needs-review
+
+For a CI order that IS classified (`FIBER` or `WIRELESS`) but whose resolved target `projectId`
+is `null` (because `fiberProjectId` / `wirelessProjectId` is not configured), the use-case MUST
+create a needs-review `ScheduledTask` — NOT a silent normal task. The task MUST have `projectId =
+null`, a title prefixed `[REVISAR - Logística] Instalación <clientName>`, and a description stating
+the project is not configured (distinct from the unparseable-plan reason), e.g. `"Proyecto de
+FIBRA no configurado — mapear en Configuración o asignar manualmente"` (FIBRA/WIRELESS per tech).
+The order MUST be counted as `unclassified` (the needs-review bucket), NOT as `created`.
+
+#### Scenario: Fiber order with no fiberProjectId becomes needs-review
+
+- GIVEN a CI order classified FIBER (plan `"300MB"`) and config `fiberProjectId = null`
+- WHEN the ingest runs
+- THEN a `ScheduledTask` is created with `projectId = null`
+- AND the title starts with `[REVISAR - Logística] Instalación`
+- AND the description states the FIBRA project is not configured
+- AND it is counted as `unclassified`, NOT `created`
+- AND it appears in the needs-review list
 
 ---
 

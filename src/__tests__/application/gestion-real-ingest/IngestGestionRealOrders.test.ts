@@ -230,4 +230,144 @@ describe('IngestGestionRealOrders', () => {
     expect(call.fechaHasta).toBe('29-05-2026');
     expect(call.fechaDesde).toBe('29-11-2025');
   });
+
+  // ── FIX 1 (C1): classified but target project not configured → needs-review ──
+
+  it('FIBER order with no fiberProjectId becomes a needs-review task (C1)', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const resolver = new InMemoryGrLinkResolver();
+    const scheduling = new InMemorySchedulingRepository();
+    const config = new InMemoryGestionRealIngestConfigRepository();
+    const state = new InMemorySyncStateRepository();
+    const projects = new InMemoryProjectRepository();
+    await config.update({ enabled: true, fiberProjectId: null, wirelessProjectId: 'p-wifi' });
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, {
+      defaultStageId: DEFAULT_STAGE_ID,
+      now: () => new Date('2026-05-29T12:00:00Z'),
+    });
+    resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    gr.serviceOrders = [order({ grOrdenId: 'f1' })];
+
+    const result = await useCase.execute();
+
+    expect(result.unclassified).toBe(1);
+    expect(result.created).toBe(0);
+    const task = await scheduling.findTaskByGrOrdenId('f1');
+    expect(task).not.toBeNull();
+    expect(task!.projectId).toBeNull();
+    expect(task!.title.startsWith('[REVISAR - Logística] Instalación')).toBe(true);
+    expect(task!.description).toContain('FIBRA');
+    expect(task!.description).toContain('no configurado');
+    // distinct from the unparseable-plan reason
+    expect(task!.description).not.toContain('Plan no reconocido');
+    const needsReview = await scheduling.listNeedsReview();
+    expect(needsReview.some(t => t.grOrdenId === 'f1')).toBe(true);
+  });
+
+  it('WIRELESS order with no wirelessProjectId becomes a needs-review task (C1)', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const resolver = new InMemoryGrLinkResolver();
+    const scheduling = new InMemorySchedulingRepository();
+    const config = new InMemoryGestionRealIngestConfigRepository();
+    const state = new InMemorySyncStateRepository();
+    const projects = new InMemoryProjectRepository();
+    await config.update({ enabled: true, fiberProjectId: 'p-fiber', wirelessProjectId: null });
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, {
+      defaultStageId: DEFAULT_STAGE_ID,
+      now: () => new Date('2026-05-29T12:00:00Z'),
+    });
+    resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Bob' });
+    resolver.seedService('gr-con-1', { id: 'svc-1', plan: '30/10 MB' });
+    gr.serviceOrders = [order({ grOrdenId: 'w1' })];
+
+    const result = await useCase.execute();
+
+    expect(result.unclassified).toBe(1);
+    expect(result.created).toBe(0);
+    const task = await scheduling.findTaskByGrOrdenId('w1');
+    expect(task!.projectId).toBeNull();
+    expect(task!.title.startsWith('[REVISAR - Logística] Instalación')).toBe(true);
+    expect(task!.description).toContain('WIRELESS');
+    expect(task!.description).toContain('no configurado');
+    expect(task!.description).not.toContain('Plan no reconocido');
+  });
+
+  // ── FIX 2: unique-violation on createTask must not abort the batch ──
+
+  it('unique-violation on createTask counts as skippedDuplicate, batch continues (FIX2)', async () => {
+    const h = await makeHarness();
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [
+      order({ grOrdenId: 'dup-1' }),
+      order({ grOrdenId: 'ok-2' }),
+    ];
+
+    // Make createTask throw a unique-violation-shaped error for the first order only.
+    const realCreate = h.scheduling.createTask.bind(h.scheduling);
+    h.scheduling.createTask = async (data: Parameters<typeof realCreate>[0]) => {
+      if (data.grOrdenId === 'dup-1') {
+        const err: Error & { code?: string } = new Error(
+          'Unique constraint failed on the fields: (`grOrdenId`)',
+        );
+        err.code = 'P2002';
+        throw err;
+      }
+      return realCreate(data);
+    };
+
+    const result = await h.useCase.execute();
+
+    expect(result.skippedDuplicate).toBe(1);
+    expect(result.created).toBe(1);
+    // the non-conflicting order still got created
+    expect(await h.scheduling.findTaskByGrOrdenId('ok-2')).not.toBeNull();
+    // run still persisted status (batch did not abort)
+    const saved = await h.state.get('gr-ingest');
+    expect(saved).not.toBeNull();
+  });
+
+  // ── FIX 3: re-filter estado app-side ──
+
+  it('skips a CI order whose estado is not PEND (FIX3)', async () => {
+    const h = await makeHarness();
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [
+      order({ grOrdenId: 'closed', estado: 'FIN' }),
+      order({ grOrdenId: 'pend', estado: 'PEND' }),
+    ];
+
+    const result = await h.useCase.execute();
+
+    expect(result.created).toBe(1);
+    expect(await h.scheduling.findTaskByGrOrdenId('closed')).toBeNull();
+    expect(await h.scheduling.findTaskByGrOrdenId('pend')).not.toBeNull();
+  });
+
+  // ── FIX 4: month-window overflow on long→short month transition ──
+
+  it('window start does not overflow when run on the 31st (FIX4)', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const resolver = new InMemoryGrLinkResolver();
+    const scheduling = new InMemorySchedulingRepository();
+    const config = new InMemoryGestionRealIngestConfigRepository();
+    const state = new InMemorySyncStateRepository();
+    const projects = new InMemoryProjectRepository();
+    await config.update({ enabled: true, windowMonths: 1 });
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, {
+      defaultStageId: DEFAULT_STAGE_ID,
+      // 2026-03-31 local time (avoid TZ rollover): construct via local Date.
+      now: () => new Date(2026, 2, 31, 12, 0, 0),
+    });
+    gr.serviceOrders = [];
+
+    await useCase.execute();
+
+    const call = gr.serviceOrderCalls[0];
+    expect(call.fechaHasta).toBe('31-03-2026');
+    // 1 month back must land in February, not roll forward into March.
+    expect(call.fechaDesde).toBe('28-02-2026');
+  });
 });

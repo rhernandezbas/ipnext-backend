@@ -11,6 +11,20 @@ const SYNC_ENTITY = 'gr-ingest';
 
 const REVISAR_TITLE_PREFIX = '[REVISAR - Logística] Instalación';
 const REVISAR_DESCRIPTION = 'Plan no reconocido — asignar tecnología y proyecto manualmente';
+/** Needs-review reason when the tech IS classified but its target project is unmapped. */
+function projectNotConfiguredDescription(tech: 'FIBER' | 'WIRELESS'): string {
+  const label = tech === 'FIBER' ? 'FIBRA' : 'WIRELESS';
+  return `Proyecto de ${label} no configurado — mapear en Configuración o asignar manualmente`;
+}
+
+/** Detect a unique-constraint violation (Prisma P2002) so a concurrent create is a no-op backstop. */
+function isUniqueViolation(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const code = (err as { code?: unknown }).code;
+  if (code === 'P2002') return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === 'string' && /unique constraint/i.test(message);
+}
 const PENDING_STAGE_NAME = 'Pendiente';
 const TASK_CATEGORY = 'installation';
 
@@ -84,7 +98,8 @@ export class IngestGestionRealOrders {
       fechaHasta,
     });
 
-    for (const order of orders.filter(o => o.tipo === 'CI')) {
+    // App-side guard: trust GR's server-side estado=PEND but re-filter defensively.
+    for (const order of orders.filter(o => o.tipo === 'CI' && o.estado === 'PEND')) {
       await this.ingestOne(order, config.fiberProjectId, config.wirelessProjectId, counts);
     }
 
@@ -131,43 +146,70 @@ export class IngestGestionRealOrders {
     const projectId =
       tech === 'FIBER' ? fiberProjectId : tech === 'WIRELESS' ? wirelessProjectId : null;
 
-    // 6. Title / description: unclassified → REVISAR needs-review task.
+    // 6. Needs-review reasons (two distinct cases, both land a REVISAR task):
+    //   (a) UNCLASSIFIED      → plan not recognized.
+    //   (b) classified but the target project is not configured (projectId null).
+    // Both must be a proper needs-review task (REVISAR title + reason), NOT a
+    // silent normal task with a null project, and counted in the review bucket.
     const isUnclassified = tech === 'UNCLASSIFIED';
-    const title = isUnclassified
+    const isProjectNotConfigured =
+      (tech === 'FIBER' || tech === 'WIRELESS') && projectId === null;
+    const needsReview = isUnclassified || isProjectNotConfigured;
+
+    const title = needsReview
       ? `${REVISAR_TITLE_PREFIX} ${client.name}`
       : `Instalación ${client.name}`;
-    const description = isUnclassified ? REVISAR_DESCRIPTION : null;
+    const description = isUnclassified
+      ? REVISAR_DESCRIPTION
+      : isProjectNotConfigured
+        ? projectNotConfiguredDescription(tech as 'FIBER' | 'WIRELESS')
+        : null;
 
     // 7. Resolve initial stage from the project's workflow; fall back to default.
     const stageId = await this.resolveStageId(projectId);
 
-    // 8. Create the task.
-    await this.scheduling.createTask({
-      title,
-      description,
-      stageId,
-      priority: 'normal',
-      estimatedHours: 1,
-      address: order.domicilio?.direccion ?? null,
-      coordinates: null,
-      category: TASK_CATEGORY,
-      projectId,
-      projectName: null,
-      completedAt: null,
-      notes: null,
-      startDate: null,
-      endDate: null,
-      customerId: client.id,
-      serviceId: service.id,
-      partnerId: null,
-      reporterId: null,
-      assigneeId: null,
-      travelTimeTo: null,
-      travelTimeFrom: null,
-      grOrdenId: order.grOrdenId,
-    });
+    // 8. Create the task. The check-then-create idempotency is not atomic; a
+    // concurrent run under a degraded advisory lock can make createTask throw a
+    // unique-constraint violation on grOrdenId. The constraint is the backstop:
+    // treat that as a duplicate and continue; never let one order sink the batch.
+    try {
+      await this.scheduling.createTask({
+        title,
+        description,
+        stageId,
+        priority: 'normal',
+        estimatedHours: 1,
+        address: order.domicilio?.direccion ?? null,
+        coordinates: null,
+        category: TASK_CATEGORY,
+        projectId,
+        projectName: null,
+        completedAt: null,
+        notes: null,
+        startDate: null,
+        endDate: null,
+        customerId: client.id,
+        serviceId: service.id,
+        partnerId: null,
+        reporterId: null,
+        assigneeId: null,
+        travelTimeTo: null,
+        travelTimeFrom: null,
+        grOrdenId: order.grOrdenId,
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        counts.skippedDuplicate++;
+        return;
+      }
+      // Other errors: log and continue so one bad order can't abort the run and
+      // status is still persisted. (No logger port wired here; use console.)
+      // eslint-disable-next-line no-console
+      console.error(`[gr-ingest] createTask failed for order ${order.grOrdenId}:`, err);
+      return;
+    }
 
-    if (isUnclassified) counts.unclassified++;
+    if (needsReview) counts.unclassified++;
     else counts.created++;
   }
 
@@ -195,9 +237,21 @@ function formatGrDate(d: Date): string {
   return `${dd}-${mm}-${d.getFullYear()}`;
 }
 
-/** Subtract whole months from a date (clock-safe copy). */
+/**
+ * Subtract whole months from a date without day-overflow.
+ *
+ * `setMonth` alone overflows on long→short transitions: from the 31st of March,
+ * `setMonth(month-1)` targets Feb 31 which JS rolls forward to March 3, shrinking
+ * the window. We clamp the day to the last valid day of the target month so the
+ * window is always ≥ the intended months back.
+ */
 function monthsBack(d: Date, months: number): Date {
+  const year = d.getFullYear();
+  const targetMonth = d.getMonth() - months;
+  // Last day of the target month (day 0 of the next month).
+  const lastDayOfTarget = new Date(year, targetMonth + 1, 0).getDate();
+  const day = Math.min(d.getDate(), lastDayOfTarget);
   const copy = new Date(d.getTime());
-  copy.setMonth(copy.getMonth() - months);
+  copy.setFullYear(year, targetMonth, day);
   return copy;
 }
