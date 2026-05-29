@@ -34,5 +34,7 @@ maybeSkip('PrismaRbacUserRoleRepository [requires DATABASE_URL_TEST]', () => {
     await prisma.$disconnect();
   });
 
-  runRbacUserRoleContractTests(() => new PrismaRbacUserRoleRepository());
+  // Prisma tests: no seeder available (DB would need pre-seeded rows).
+  // listRolesForUser seeder-dependent tests are skipped gracefully when seeder is absent.
+  runRbacUserRoleContractTests(() => ({ repo: new PrismaRbacUserRoleRepository() }));
 });

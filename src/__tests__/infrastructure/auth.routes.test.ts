@@ -10,16 +10,26 @@ import cookieParser from 'cookie-parser';
 import { createAuthRouter } from '@infrastructure/http/routes/auth.routes';
 import { JwtAuthAdapter } from '@infrastructure/adapters/jwt/JwtAuthAdapter';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
+import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
+import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
+import { InMemoryRbacRolePermissionRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRolePermissionRepository';
+import { InMemoryRbacPermissionRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacPermissionRepository';
 import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMemoryPasswordHasher';
 import { LoginRbacUser } from '@application/use-cases/rbac/LoginRbacUser';
+import { ResolveUserPermissions } from '@application/use-cases/rbac/ResolveUserPermissions';
 
 const TEST_SECRET = 'test-secret-for-auth-routes-32!!';
 
 async function buildApp() {
-  const repo = new InMemoryRbacUserRepository();
-  const hasher = new InMemoryPasswordHasher();
+  const roleRepo     = new InMemoryRbacRoleRepository();
+  const userRoleRepo = new InMemoryRbacUserRoleRepository(roleRepo);
+  const rolePermRepo = new InMemoryRbacRolePermissionRepository();
+  const permRepo     = new InMemoryRbacPermissionRepository();
+  const repo         = new InMemoryRbacUserRepository(userRoleRepo, roleRepo);
+  const hasher       = new InMemoryPasswordHasher();
   const loginUseCase = new LoginRbacUser(repo, hasher);
-  const authAdapter = new JwtAuthAdapter(loginUseCase, TEST_SECRET);
+  const authAdapter  = new JwtAuthAdapter(loginUseCase, TEST_SECRET);
+  const resolveUserPermissions = new ResolveUserPermissions(userRoleRepo, rolePermRepo, permRepo);
 
   const hash = await hasher.hash('password123');
   const user = await repo.create({
@@ -42,7 +52,7 @@ async function buildApp() {
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
-  app.use('/auth', createAuthRouter(authAdapter));
+  app.use('/auth', createAuthRouter(authAdapter, repo, userRoleRepo, resolveUserPermissions));
 
   return { app, userId: user.id };
 }
@@ -158,7 +168,7 @@ describe('GET /auth/me', () => {
       .set('Cookie', cookie);
 
     expect(meRes.status).toBe(200);
-    expect(meRes.body.id).toBe(userId);
+    expect(meRes.body.user.id).toBe(userId);
   });
 
   it('no cookie → 401', async () => {

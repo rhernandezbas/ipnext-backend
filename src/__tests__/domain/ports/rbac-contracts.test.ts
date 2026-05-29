@@ -192,11 +192,13 @@ describe('RbacUserRoleRepository — interface contract', () => {
       assign: async (_userId: string, _roleId: string) => { /* void */ },
       revoke: async (_userId: string, _roleId: string) => { /* void */ },
       listForUser: async (_userId: string) => ['r-1'],
+      listRolesForUser: async (_userId: string) => [],
     };
     expect(stub).toBeDefined();
     expect(typeof stub.assign).toBe('function');
     expect(typeof stub.revoke).toBe('function');
     expect(typeof stub.listForUser).toBe('function');
+    expect(typeof stub.listRolesForUser).toBe('function');
   });
 
   it('listForUser returns empty array for user with no roles', async () => {
@@ -204,6 +206,7 @@ describe('RbacUserRoleRepository — interface contract', () => {
       assign: async () => { /* void */ },
       revoke: async () => { /* void */ },
       listForUser: async (userId: string) => (userId === 'u-with-role' ? ['r-1'] : []),
+      listRolesForUser: async () => [],
     };
     const roles = await stub.listForUser('u-no-roles');
     const withRoles = await stub.listForUser('u-with-role');
@@ -222,11 +225,13 @@ describe('RbacRolePermissionRepository — interface contract', () => {
       grant: async (_roleId: string, _permissionId: string) => { /* void */ },
       revoke: async (_roleId: string, _permissionId: string) => { /* void */ },
       listForRole: async (_roleId: string) => ['p-1'],
+      replaceForRole: async (_roleId: string, _permissionIds: string[]) => { /* void */ },
     };
     expect(stub).toBeDefined();
     expect(typeof stub.grant).toBe('function');
     expect(typeof stub.revoke).toBe('function');
     expect(typeof stub.listForRole).toBe('function');
+    expect(typeof stub.replaceForRole).toBe('function');
   });
 
   it('listForRole returns empty array for role with no permissions', async () => {
@@ -234,6 +239,7 @@ describe('RbacRolePermissionRepository — interface contract', () => {
       grant: async () => { /* void */ },
       revoke: async () => { /* void */ },
       listForRole: async (roleId: string) => (roleId === 'r-with-perms' ? ['p-1'] : []),
+      replaceForRole: async () => { /* void */ },
     };
     const empty = await stub.listForRole('r-no-perms');
     const withPerms = await stub.listForRole('r-with-perms');

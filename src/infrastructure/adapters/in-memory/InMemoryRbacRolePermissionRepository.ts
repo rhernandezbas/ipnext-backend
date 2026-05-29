@@ -32,4 +32,18 @@ export class InMemoryRbacRolePermissionRepository implements RbacRolePermissionR
     }
     return permissionIds;
   }
+
+  async replaceForRole(roleId: string, permissionIds: string[]): Promise<void> {
+    // Drop all current grants for this role
+    const prefix = `${roleId}::`;
+    for (const key of [...this.grants]) {
+      if (key.startsWith(prefix)) {
+        this.grants.delete(key);
+      }
+    }
+    // Insert the new set
+    for (const permissionId of permissionIds) {
+      this.grants.add(this.key(roleId, permissionId));
+    }
+  }
 }

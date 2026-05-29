@@ -1,9 +1,17 @@
 import { Router, Request, Response } from 'express';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
-import { AuthenticationError } from '@domain/errors';
+import { AuthenticationError } from '@domain/errors/index';
+import type { RbacUserRepository } from '@domain/ports/RbacUserRepository';
+import type { RbacUserRoleRepository } from '@domain/ports/RbacUserRoleRepository';
+import type { ResolveUserPermissions } from '@application/use-cases/rbac/ResolveUserPermissions';
 
-export function createAuthRouter(authProvider: JwtAuthAdapter): Router {
+export function createAuthRouter(
+  authProvider: JwtAuthAdapter,
+  rbacUserRepo: RbacUserRepository,
+  rbacUserRoleRepo: RbacUserRoleRepository,
+  resolveUserPermissions: ResolveUserPermissions,
+): Router {
   const router = Router();
   const authMiddleware = createAuthMiddleware(authProvider);
 
@@ -32,8 +40,39 @@ export function createAuthRouter(authProvider: JwtAuthAdapter): Router {
     res.status(200).json({ ok: true });
   });
 
-  router.get('/me', authMiddleware, (req: Request, res: Response): void => {
-    res.status(200).json(req.user);
+  router.get('/me', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = (req as Request & { user?: { id: string } }).user?.id;
+      if (!userId) {
+        res.status(401).json({ error: 'NO_USER_CONTEXT', code: 'NO_USER_CONTEXT' });
+        return;
+      }
+
+      const [user, roles, permissions] = await Promise.all([
+        rbacUserRepo.findById(userId),
+        rbacUserRoleRepo.listRolesForUser(userId),
+        resolveUserPermissions.execute(userId),
+      ]);
+
+      if (!user) {
+        res.status(401).json({ error: 'NO_USER_CONTEXT', code: 'NO_USER_CONTEXT' });
+        return;
+      }
+
+      res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+      res.status(200).json({
+        user: {
+          id: user.id,
+          login: user.login,
+          email: user.email,
+          name: user.name,
+        },
+        roles: roles.map((r) => ({ id: r.id, code: r.code, label: r.label })),
+        permissions,
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+    }
   });
 
   return router;

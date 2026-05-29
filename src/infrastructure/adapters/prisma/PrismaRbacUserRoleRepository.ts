@@ -6,6 +6,7 @@
  * `npm run prisma:generate` is executed. Runtime behavior IS correct.
  */
 import { prisma } from '@infrastructure/database/prisma';
+import type { RbacRole } from '@domain/entities/rbac';
 import type { RbacUserRoleRepository } from '@domain/ports/RbacUserRoleRepository';
 
 export class PrismaRbacUserRoleRepository implements RbacUserRoleRepository {
@@ -41,5 +42,18 @@ export class PrismaRbacUserRoleRepository implements RbacUserRoleRepository {
       select: { roleId: true },
     }) as Array<{ roleId: string }>;
     return rows.map(r => r.roleId);
+  }
+
+  async listRolesForUser(userId: string): Promise<RbacRole[]> {
+    const rows = await (this.db as any).rbacUserRole.findMany({
+      where: { userId },
+      include: { role: true },
+    }) as Array<{ role: { id: string; code: string; label: string; isSystem: boolean } }>;
+    return rows.map(r => ({
+      id: r.role.id,
+      code: r.role.code,
+      label: r.role.label,
+      isSystem: r.role.isSystem,
+    }));
   }
 }

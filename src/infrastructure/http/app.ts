@@ -375,6 +375,8 @@ import { AssignRoleToUser } from '@application/use-cases/rbac/AssignRoleToUser';
 import { RemoveRoleFromUser } from '@application/use-cases/rbac/RemoveRoleFromUser';
 import { createRbacUserRouter } from './routes/rbacUser.routes';
 import { toRbacRoleDto } from '@application/dto/rbacUser.dto';
+// SDD #3 Phase 1a — ResolveUserPermissions use case
+import { ResolveUserPermissions } from '@application/use-cases/rbac/ResolveUserPermissions';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -403,6 +405,9 @@ const rbacRolePermissionRepo = new PrismaRbacRolePermissionRepository();
 // PasswordHasher + LoginRbacUser — module-level singletons (SDD #2 Phase 5)
 const passwordHasher = new BcryptPasswordHasher();
 const loginRbacUser  = new LoginRbacUser(rbacUserRepo, passwordHasher);
+
+// SDD #3 Phase 1a — ResolveUserPermissions resolves flat permission code list for a user
+const resolveUserPermissions = new ResolveUserPermissions(rbacUserRoleRepo, rbacRolePermissionRepo, rbacPermissionRepo);
 
 // Convenience factory — routes in future SDDs import this instead of wiring the repo manually
 export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
@@ -766,7 +771,7 @@ export function createApp() {
   // Routes
   app.use('/api/dashboard', createDashboardRouter(getDashboardStats, getDashboardShortcuts, getRecentActivity));
   app.use('/api/messages', createMessagesRouter(listMessages, getMessage, createMessage, markMessageAsRead, deleteMessage));
-  app.use('/api/auth', createAuthRouter(authAdapter));
+  app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions));
   app.use('/api/clients', createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
   // TicketStatus catalog — mounted BEFORE the tickets router to avoid /:id catch-all swallowing /statuses.

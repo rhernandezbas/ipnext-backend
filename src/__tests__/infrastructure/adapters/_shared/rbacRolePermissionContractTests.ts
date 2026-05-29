@@ -90,4 +90,43 @@ export function runRbacRolePermissionContractTests(
       expect(permIds).toEqual([]);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // replaceForRole — atomic replace of all grants for a role
+  // ---------------------------------------------------------------------------
+
+  describe('replaceForRole', () => {
+    it('(a) idempotent re-apply: calling replaceForRole([A,B]) twice results in [A,B]', async () => {
+      const repo = makeRepo();
+      await repo.replaceForRole('role-1', ['perm-a', 'perm-b']);
+      await repo.replaceForRole('role-1', ['perm-a', 'perm-b']);
+      const permIds = await repo.listForRole('role-1');
+      expect(permIds.sort()).toEqual(['perm-a', 'perm-b'].sort());
+    });
+
+    it('(b) replaces [A,B,C] with [B,D] → final state is exactly [B,D]', async () => {
+      const repo = makeRepo();
+      await repo.replaceForRole('role-1', ['perm-a', 'perm-b', 'perm-c']);
+      await repo.replaceForRole('role-1', ['perm-b', 'perm-d']);
+      const permIds = await repo.listForRole('role-1');
+      expect(permIds.sort()).toEqual(['perm-b', 'perm-d'].sort());
+    });
+
+    it('(c) replaceForRole([], roleId) clears all grants → listForRole returns []', async () => {
+      const repo = makeRepo();
+      await repo.replaceForRole('role-1', ['perm-a', 'perm-b']);
+      await repo.replaceForRole('role-1', []);
+      const permIds = await repo.listForRole('role-1');
+      expect(permIds).toEqual([]);
+    });
+
+    it('does not affect other roles when replacing one role', async () => {
+      const repo = makeRepo();
+      await repo.grant('role-other', 'perm-x');
+      await repo.replaceForRole('role-1', ['perm-a']);
+      // role-other should be unchanged
+      const otherPerms = await repo.listForRole('role-other');
+      expect(otherPerms).toEqual(['perm-x']);
+    });
+  });
 }
