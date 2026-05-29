@@ -92,7 +92,7 @@ export async function bootstrapRbac(
 
 async function main(): Promise<void> {
   // Dynamic imports here to avoid loading Prisma in tests (which use InMemory)
-  const { PrismaClient } = await import('@prisma/client');
+  const { prisma } = await import('@infrastructure/database/prisma');
   const { PrismaRbacUserRepository } = await import(
     '@infrastructure/adapters/prisma/PrismaRbacUserRepository'
   );
@@ -103,7 +103,6 @@ async function main(): Promise<void> {
     '@infrastructure/adapters/prisma/PrismaRbacUserRoleRepository'
   );
 
-  const prisma = new PrismaClient();
   const userRepo = new PrismaRbacUserRepository(prisma);
   const roleRepo = new PrismaRbacRoleRepository(prisma);
   const userRoleRepo = new PrismaRbacUserRoleRepository(prisma);
