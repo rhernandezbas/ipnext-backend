@@ -1456,6 +1456,7 @@ model RbacUser {
   tasksAssigned   ScheduledTask[] @relation("TaskAssignee")
   tasksWatching   TaskWatcher[]   @relation("TaskWatcher")
   assignedTickets Ticket[]        @relation("TicketAssignee")
+  auditEvents     AuditEvent[]
 
   @@index([login])
 }
@@ -1480,4 +1481,30 @@ model RbacRolePermission {
 
   @@id([roleId, permissionId])
   @@index([permissionId])
+}
+
+// SDD #4 audit-log-mutations: immutable record of every mutation. Replaces the
+// hand-curated AdminActivityLog (dropped in Phase 3). actorId is SET NULL on
+// user delete, but actorLogin is a snapshot so the trail survives.
+model AuditEvent {
+  id           String    @id @default(uuid())
+  actorId      String?
+  actor        RbacUser? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorLogin   String
+  method       String
+  path         String
+  action       String?
+  entityType   String?
+  entityId     String?
+  beforeJson   Json?
+  afterJson    Json?
+  statusCode   Int
+  errorMessage String?
+  ip           String?
+  createdAt    DateTime  @default(now())
+
+  @@index([actorId])
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@index([method])
 }
