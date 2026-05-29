@@ -97,6 +97,24 @@ export function toInvoice(row: any): Invoice {
   };
 }
 
+/**
+ * Folds Prisma `groupBy(status)` results into a ClientStats breakdown.
+ * `total` is the sum of every group; recognized statuses land in their own
+ * bucket (active/inactive/blocked/late/baja). Pure + exported for testing.
+ */
+export function foldClientStats(
+  groups: ReadonlyArray<{ status: string; _count: { _all: number } }>,
+): ClientStats {
+  const out: ClientStats = { total: 0, active: 0, inactive: 0, blocked: 0, late: 0, baja: 0 };
+  for (const g of groups) {
+    const count = g._count._all;
+    out.total += count;
+    const key = g.status as keyof Omit<ClientStats, 'total'>;
+    if (key in out) out[key] = count;
+  }
+  return out;
+}
+
 export class PrismaCustomerRepository implements CustomerRepository {
   /**
    * @param balanceTtlMinutes - TTL for balance staleness in minutes. Defaults to 60.
@@ -141,14 +159,7 @@ export class PrismaCustomerRepository implements CustomerRepository {
       by: ['status'],
       _count: { _all: true },
     });
-    const out: ClientStats = { total: 0, active: 0, inactive: 0, blocked: 0, late: 0 };
-    for (const g of groups) {
-      const count = g._count._all;
-      out.total += count;
-      const key = g.status as keyof Omit<ClientStats, 'total'>;
-      if (key in out) out[key] = count;
-    }
-    return out;
+    return foldClientStats(groups);
   }
 
   async delete(id: string): Promise<boolean> {

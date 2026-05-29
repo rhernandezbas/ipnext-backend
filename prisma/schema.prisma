@@ -216,6 +216,7 @@ enum ClientStatus {
   late
   blocked
   inactive
+  baja
 }
 
 model Service {

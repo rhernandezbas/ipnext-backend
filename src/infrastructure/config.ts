@@ -39,8 +39,9 @@ export const config = {
     secret: process.env.GR_SECRET ?? '',
     // || (not ??) so an empty env string from an unset CI secret falls back to the default.
     intervalMs: parseInt(process.env.GR_SYNC_INTERVAL_MS || '180000', 10),
-    // estado codes to sync — default 1=Activo, 2=Deudor.
-    estados: (process.env.GR_SYNC_ESTADOS || '1,2').split(',').map(s => s.trim()).filter(Boolean),
+    // estado codes to sync — full universe by default:
+    // 1=Activo, 2=Deudor, 3=Inactivo, 4=Incobrable, 6=Baja.
+    estados: (process.env.GR_SYNC_ESTADOS || '1,2,3,4,6').split(',').map(s => s.trim()).filter(Boolean),
     // Balance refresh settings
     /** Minutes before a debtor's balance is considered stale and triggers on-demand refresh. */
     balanceStaleTtlMinutes: parseInt(process.env.BALANCE_STALE_TTL_MINUTES || '60', 10),

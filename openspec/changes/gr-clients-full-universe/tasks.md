@@ -34,31 +34,38 @@ Three independent, additive seams: (1) a read-only reconcile use case + endpoint
 
 ## Phase 4 — `baja` enum migration + schema (AD-5) — independent of Phase 1–3
 
-- [ ] 4.1 Edit `prisma/schema.prisma:214-219`: add `baja` to `enum ClientStatus` (after `inactive`).
-- [ ] 4.2 Create the migration `prisma/migrations/<ts>_client_status_baja/migration.sql` by hand — bare, NO `BEGIN`/`COMMIT` wrap, mirroring the precedent `20260514070000_add_technician_role/migration.sql`:
+- [x] 4.1 Edit `prisma/schema.prisma:214-219`: add `baja` to `enum ClientStatus` (after `inactive`).
+- [x] 4.2 Create the migration `prisma/migrations/<ts>_client_status_baja/migration.sql` by hand — bare, NO `BEGIN`/`COMMIT` wrap, mirroring the precedent `20260514070000_add_technician_role/migration.sql`:
   ```sql
   ALTER TYPE "ClientStatus" ADD VALUE 'baja';
   ```
   Header comment MUST state: forward-only (Postgres cannot cleanly DROP an enum value); rollback = restamp `baja`→`inactive` + revert `GR_SYNC_ESTADOS` to `1,2`, leaving the unused value in place; this migration only ADDs the value (no row uses it in the same tx, so the same-tx caveat does not apply). ⚠ Do NOT run `prisma migrate` — the deploy pipeline applies it.
-- [ ] 4.3 Regenerate the Prisma client locally so `@prisma/client` gains `baja` (so `tsc --noEmit` sees the widened enum). `tsc --noEmit` clean.
+- [x] 4.3 Regenerate the Prisma client locally so `@prisma/client` gains `baja` (so `tsc --noEmit` sees the widened enum). `tsc --noEmit` clean.
 
 ## Phase 5 — `mapStatus` 6→baja + local string-union (AD-6) — depends on Phase 4
 
-- [ ] 5.1 (TEST, red) `src/__tests__/infrastructure/PrismaClientMirrorRepository.mapStatus.test.ts` (check first whether a mapper test already exists and extend it instead): `mapStatus('6') === 'baja'`; `mapStatus('3') === 'inactive'`; `mapStatus('4') === 'blocked'`; `mapStatus('1') === 'active'`; `mapStatus('2') === 'late'`; `mapStatus('5')` and `mapStatus(null)` → `'inactive'`. If `mapStatus` is not exported, exercise via an `upsertClient` round-trip on the in-memory mirror asserting the stored `status` string (never mock Prisma).
-- [ ] 5.2 Modify `PrismaClientMirrorRepository.ts:5` — widen union to `type ClientStatus = 'active' | 'late' | 'blocked' | 'inactive' | 'baja';`.
-- [ ] 5.3 Modify `PrismaClientMirrorRepository.ts:8-16` — pull `'6'` out of the `inactive` fall-through into `case '6': return 'baja';`; keep `'3'`→`'inactive'`, `'4'`→`'blocked'`, null/unknown→`'inactive'`. → makes 5.1 green.
-- [ ] 5.4 `tsc --noEmit` clean; `npm test` green.
+- [x] 5.1 (TEST, red) `src/__tests__/infrastructure/PrismaClientMirrorRepository.mapStatus.test.ts` (check first whether a mapper test already exists and extend it instead): `mapStatus('6') === 'baja'`; `mapStatus('3') === 'inactive'`; `mapStatus('4') === 'blocked'`; `mapStatus('1') === 'active'`; `mapStatus('2') === 'late'`; `mapStatus('5')` and `mapStatus(null)` → `'inactive'`. If `mapStatus` is not exported, exercise via an `upsertClient` round-trip on the in-memory mirror asserting the stored `status` string (never mock Prisma).
+- [x] 5.2 Modify `PrismaClientMirrorRepository.ts:5` — widen union to `type ClientStatus = 'active' | 'late' | 'blocked' | 'inactive' | 'baja';`.
+- [x] 5.3 Modify `PrismaClientMirrorRepository.ts:8-16` — pull `'6'` out of the `inactive` fall-through into `case '6': return 'baja';`; keep `'3'`→`'inactive'`, `'4'`→`'blocked'`, null/unknown→`'inactive'`. → makes 5.1 green.
+- [x] 5.4 `tsc --noEmit` clean; `npm test` green.
 
 ## Phase 6 — Config scope widening (AD-7) — independent
 
-- [ ] 6.1 (TEST, red, optional) If a config unit test exists, add: `GR_SYNC_ESTADOS` unset → `['1','2','3','4','6']`; `GR_SYNC_ESTADOS=1,2` → `['1','2']`. If none exists, a small focused test suffices; otherwise note this is covered by the spec scenarios and skip.
-- [ ] 6.2 Modify `src/infrastructure/config.ts:42-43`: change the default segment `'1,2'` → `'1,2,3,4,6'` (keep `||`, NOT `??`, per the existing comment); update the inline comment to list Activo/Deudor/Inactivo/Incobrable/Baja. → makes 6.1 green.
-- [ ] 6.3 Update `env.example` where `GR_SYNC_ESTADOS` is documented — note new default `1,2,3,4,6` and the full-universe meaning.
-- [ ] 6.4 `tsc --noEmit` clean; `npm test` green.
+- [x] 6.1 (TEST, red, optional) If a config unit test exists, add: `GR_SYNC_ESTADOS` unset → `['1','2','3','4','6']`; `GR_SYNC_ESTADOS=1,2` → `['1','2']`. If none exists, a small focused test suffices; otherwise note this is covered by the spec scenarios and skip.
+- [x] 6.2 Modify `src/infrastructure/config.ts:42-43`: change the default segment `'1,2'` → `'1,2,3,4,6'` (keep `||`, NOT `??`, per the existing comment); update the inline comment to list Activo/Deudor/Inactivo/Incobrable/Baja. → makes 6.1 green.
+- [x] 6.3 Update `env.example` where `GR_SYNC_ESTADOS` is documented — note new default `1,2,3,4,6` and the full-universe meaning.
+- [x] 6.4 `tsc --noEmit` clean; `npm test` green.
 
 ## Phase 7 — `'inactive'` consumer audit (Risk 4 / AD-6) — depends on Phase 5
 
-- [ ] 7.1 Grep the backend (`src/`) for `'inactive'` usages (queries, filters, reports) that special-case inactive and might now also need to handle `baja`. ⚠ **FLAG findings as a separate follow-up — do NOT silently change any query in this change.** Record the list in the verify report / engram. (Frontend filter update is coordinated separately, out of scope.)
+- [x] 7.1 Grep the backend (`src/`) for `'inactive'` usages (queries, filters, reports) that special-case inactive and might now also need to handle `baja`. ⚠ **FLAG findings as a separate follow-up — do NOT silently change any query in this change.** Record the list in the verify report / engram. (Frontend filter update is coordinated separately, out of scope.)
+
+  **Audit findings (FLAGGED, NOT changed — follow-up):**
+  - `src/domain/entities/customer.ts:1` — `CustomerStatus` union is `'active' | 'late' | 'blocked' | 'inactive'` and does NOT include `'baja'`. Clients restamped to `baja` will carry a `status` string that the read-side union does not declare. `status` is still serialized as a plain string on the wire (REQ-DTO-STRING-1 holds), but this union should be widened to include `'baja'` for type-honesty on the read path. **Follow-up.**
+  - `src/infrastructure/adapters/prisma/PrismaCustomerRepository.ts:144` (`stats()`) — `ClientStats` buckets are `{ total, active, inactive, blocked, late }`. The `groupBy(['status'])` will now return a `baja` group; its count is added to `total` (correct) but silently dropped from the per-status buckets (no `baja` key, `if (key in out)` skips it). The headline `total` stays right, but `baja` clients are invisible in the per-status breakdown. **Follow-up: add a `baja` bucket to `ClientStats`.**
+  - `src/domain/ports/CustomerRepository.ts:18,29` — `CustomerFilters.status` union and the `ClientStats` interface (`inactive: number`) — same family as above; widening for `baja` would let operators filter/report on bajas. **Follow-up.**
+  - `src/infrastructure/http/routes/clients.routes.ts:81,211,310,314` & `admin.routes.ts:52` — client status query/body types are `'active' | 'inactive' | 'blocked' | ...`; do not yet accept `baja` as a filter/update value. **Follow-up (coordinated with FE filter update).**
+  - NOT relevant (other domains, out of scope): admin/empresa/nas/network/networkSite/partner/settings/tr069/ubicacion/voz entity `status` unions, IClass SO-type "inactive" error wording, JWT "inactive user" comment, Splynx `SplynxCustomerAdapter` map (Splynx-sourced, separate from GR mirror), `GlobalSearch` mock fixture.
 
 ## Verification Checklist
 
@@ -67,8 +74,8 @@ Three independent, additive seams: (1) a read-only reconcile use case + endpoint
 - [x] V.3 `ReconcileGrClients` imports nothing from `@infrastructure/*` or Prisma; receives no write port (DIP + REQ-REC-READONLY-1 by construction).
 - [x] V.4 Reconcile fetches with NO `estado` filter (asserted via `gr.calls`); `grTotal` covers the full universe regardless of `GR_SYNC_ESTADOS`.
 - [x] V.5 `POST /api/admin/gr-sync/reconcile-report`: 200 + correct shape with auth; 401 without; 503 when GR disabled.
-- [ ] V.6 Migration is bare `ALTER TYPE ... ADD VALUE 'baja'` (no tx wrap), matches `add_technician_role` precedent, header documents forward-only rollback. NOT applied locally.
-- [ ] V.7 `mapStatus('6') === 'baja'`; `'3'`/`'4'`/null/unknown unchanged; local `ClientStatus` union includes `'baja'`.
-- [ ] V.8 `GR_SYNC_ESTADOS` default is `['1','2','3','4','6']`; env override still wins; `env.example` updated.
-- [ ] V.9 `'inactive'` consumer audit completed and any hits flagged (not changed).
-- [ ] V.10 No deletions, no destructive DDL, no `npm run build`, no `prisma migrate` against a DB executed.
+- [x] V.6 Migration is bare `ALTER TYPE ... ADD VALUE 'baja'` (no tx wrap), matches `add_technician_role` precedent, header documents forward-only rollback. NOT applied locally. (`prisma/migrations/20260529220000_client_status_baja/migration.sql`)
+- [x] V.7 `mapStatus('6') === 'baja'`; `'3'`/`'4'`/null/unknown unchanged; local `ClientStatus` union includes `'baja'`.
+- [x] V.8 `GR_SYNC_ESTADOS` default is `['1','2','3','4','6']`; env override still wins; `env.example` updated.
+- [x] V.9 `'inactive'` consumer audit completed and any hits flagged (not changed). (See 7.1 findings.)
+- [x] V.10 No deletions, no destructive DDL, no `npm run build`, no `prisma migrate` against a DB executed.
