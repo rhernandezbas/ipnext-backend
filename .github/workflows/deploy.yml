@@ -23,6 +23,18 @@ jobs:
             ipnext-backend:latest \
             npx prisma migrate deploy
 
+      - name: Bootstrap RBAC super_admin (idempotent)
+        run: |
+          docker run --rm \
+            --network easypanel-bd_owners \
+            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            -e BOOTSTRAP_RBAC_LOGIN="${{ secrets.BOOTSTRAP_RBAC_LOGIN }}" \
+            -e BOOTSTRAP_RBAC_EMAIL="${{ secrets.BOOTSTRAP_RBAC_EMAIL }}" \
+            -e BOOTSTRAP_RBAC_NAME="${{ secrets.BOOTSTRAP_RBAC_NAME }}" \
+            -e BOOTSTRAP_RBAC_PASSWORD_HASH="${{ secrets.BOOTSTRAP_RBAC_PASSWORD_HASH }}" \
+            ipnext-backend:latest \
+            npm run bootstrap-rbac
+
       - name: Deploy container
         run: |
           set -e

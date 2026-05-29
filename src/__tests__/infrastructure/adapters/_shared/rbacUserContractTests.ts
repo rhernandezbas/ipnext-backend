@@ -1,14 +1,17 @@
 /**
  * Shared contract tests for RbacUserRepository.
  *
- * Call `runRbacUserContractTests(() => new YourRepo())` from both the
- * InMemory and Prisma test files to ensure both adapters satisfy the same
- * port contract.
+ * Call `runRbacUserContractTests(makeRepo)` from both the InMemory and Prisma
+ * test files to ensure both adapters satisfy the same port contract.
  *
  * The Prisma test calls this inside `describe.skip` when DATABASE_URL_TEST
  * is absent — the InMemory test always runs and provides continuous coverage.
+ *
+ * For `countUsersWithRoleCode` tests, pass a `SeedContext` that wires the
+ * sibling user-role repository so the in-memory adapter can resolve roles.
  */
 import type { RbacUserRepository, CreateRbacUserInput } from '@domain/ports/RbacUserRepository';
+import type { RbacUserRoleRepository } from '@domain/ports/RbacUserRoleRepository';
 
 const makeInput = (overrides?: Partial<CreateRbacUserInput>): CreateRbacUserInput => ({
   name: 'Ana García',
@@ -19,7 +22,22 @@ const makeInput = (overrides?: Partial<CreateRbacUserInput>): CreateRbacUserInpu
   ...overrides,
 });
 
-export function runRbacUserContractTests(makeRepo: () => RbacUserRepository): void {
+/**
+ * Seed context required for countUsersWithRoleCode contract tests.
+ * All repos must share the same underlying state so that assignments in
+ * `userRoleRepo` are visible when `userRepo.countUsersWithRoleCode` runs.
+ */
+export interface RbacUserRepoSeedContext {
+  userRepo: RbacUserRepository;
+  userRoleRepo: RbacUserRoleRepository;
+  /** Seeds a role with the given code and returns its id. */
+  seedRole: (code: string) => Promise<string>;
+}
+
+export function runRbacUserContractTests(
+  makeRepo: () => RbacUserRepository,
+  makeSeedContext?: () => RbacUserRepoSeedContext,
+): void {
   describe('create + findById roundtrip', () => {
     it('returns the created user when searched by id', async () => {
       const repo = makeRepo();
@@ -154,5 +172,110 @@ export function runRbacUserContractTests(makeRepo: () => RbacUserRepository): vo
       const result = await repo.findById('nonexistent-id');
       expect(result).toBeNull();
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // New methods: list, update, delete, countUsersWithRoleCode
+  // ---------------------------------------------------------------------------
+
+  describe('list', () => {
+    it('returns empty array when no users exist', async () => {
+      const repo = makeRepo();
+      const result = await repo.list();
+      expect(result).toEqual([]);
+    });
+
+    it('returns all users after creating two', async () => {
+      const repo = makeRepo();
+      await repo.create(makeInput({ login: 'alice', email: 'alice@test.com' }));
+      await repo.create(makeInput({ login: 'bob', email: 'bob@test.com' }));
+      const result = await repo.list();
+      expect(result).toHaveLength(2);
+      const logins = result.map(u => u.login).sort();
+      expect(logins).toEqual(['alice', 'bob']);
+    });
+
+    it('returned users do NOT contain passwordHash', async () => {
+      const repo = makeRepo();
+      await repo.create(makeInput());
+      const result = await repo.list();
+      expect(result.length).toBe(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((result[0] as any).passwordHash).toBeUndefined();
+    });
+  });
+
+  describe('update', () => {
+    it('updates only the provided field (name)', async () => {
+      const repo = makeRepo();
+      const user = await repo.create(makeInput());
+      const updated = await repo.update(user.id, { name: 'Updated Name' });
+      expect(updated.name).toBe('Updated Name');
+      expect(updated.email).toBe(user.email);
+      expect(updated.login).toBe(user.login);
+      expect(updated.status).toBe(user.status);
+    });
+
+    it('stores new passwordHash when provided (verify via findByLogin)', async () => {
+      const repo = makeRepo();
+      const user = await repo.create(makeInput({ login: 'testlogin', passwordHash: 'oldhash' }));
+      await repo.update(user.id, { passwordHash: 'newhash' });
+      const found = await repo.findByLogin('testlogin');
+      expect(found).not.toBeNull();
+      expect(found!.passwordHash).toBe('newhash');
+    });
+
+    it('rejects with an error for a non-existent id', async () => {
+      const repo = makeRepo();
+      await expect(repo.update('nonexistent-id', { name: 'X' })).rejects.toBeTruthy();
+    });
+  });
+
+  describe('delete', () => {
+    it('causes subsequent findById to return null', async () => {
+      const repo = makeRepo();
+      const user = await repo.create(makeInput());
+      await repo.delete(user.id);
+      const found = await repo.findById(user.id);
+      expect(found).toBeNull();
+    });
+
+    it('returns void on success', async () => {
+      const repo = makeRepo();
+      const user = await repo.create(makeInput());
+      await expect(repo.delete(user.id)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('countUsersWithRoleCode', () => {
+    it('returns 0 when no users have the given role code', async () => {
+      const repo = makeRepo();
+      await repo.create(makeInput());
+      const count = await repo.countUsersWithRoleCode('super_admin');
+      expect(count).toBe(0);
+    });
+
+    if (makeSeedContext) {
+      it('returns correct count after seeding 2 users with super_admin role', async () => {
+        const { userRepo, userRoleRepo, seedRole } = makeSeedContext!();
+        const superAdminRoleId = await seedRole('super_admin');
+        const user1 = await userRepo.create(makeInput({ login: 'u1', email: 'u1@test.com' }));
+        const user2 = await userRepo.create(makeInput({ login: 'u2', email: 'u2@test.com' }));
+        await userRoleRepo.assign(user1.id, superAdminRoleId);
+        await userRoleRepo.assign(user2.id, superAdminRoleId);
+        const count = await userRepo.countUsersWithRoleCode('super_admin');
+        expect(count).toBe(2);
+      });
+
+      it('returns 1 when only one of two users has super_admin', async () => {
+        const { userRepo, userRoleRepo, seedRole } = makeSeedContext!();
+        const superAdminRoleId = await seedRole('super_admin');
+        const user1 = await userRepo.create(makeInput({ login: 'sa', email: 'sa@test.com' }));
+        await userRepo.create(makeInput({ login: 'regular', email: 'reg@test.com' }));
+        await userRoleRepo.assign(user1.id, superAdminRoleId);
+        const count = await userRepo.countUsersWithRoleCode('super_admin');
+        expect(count).toBe(1);
+      });
+    }
   });
 }

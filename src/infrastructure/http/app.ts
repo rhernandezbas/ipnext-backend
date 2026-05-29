@@ -358,7 +358,23 @@ import { PrismaRbacPermissionRepository } from '../adapters/prisma/PrismaRbacPer
 import { PrismaRbacUserRoleRepository } from '../adapters/prisma/PrismaRbacUserRoleRepository';
 import { PrismaRbacRolePermissionRepository } from '../adapters/prisma/PrismaRbacRolePermissionRepository';
 import { requirePermission } from './middleware/requirePermission';
+import { createAuthMiddleware } from './middleware/authMiddleware';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+import { BcryptPasswordHasher } from '../adapters/bcrypt/BcryptPasswordHasher';
+import { LoginRbacUser } from '@application/use-cases/rbac/LoginRbacUser';
+// SDD #2 Phase 6 — RBAC user management use cases
+import { ListRbacUsers } from '@application/use-cases/rbac/ListRbacUsers';
+import { GetRbacUser } from '@application/use-cases/rbac/GetRbacUser';
+import { CreateRbacUser } from '@application/use-cases/rbac/CreateRbacUser';
+import { UpdateRbacUser } from '@application/use-cases/rbac/UpdateRbacUser';
+import { DeleteRbacUser } from '@application/use-cases/rbac/DeleteRbacUser';
+import { ChangeRbacUserPassword } from '@application/use-cases/rbac/ChangeRbacUserPassword';
+import { ListRolesForUser } from '@application/use-cases/rbac/ListRolesForUser';
+import { SetRolesForUser } from '@application/use-cases/rbac/SetRolesForUser';
+import { AssignRoleToUser } from '@application/use-cases/rbac/AssignRoleToUser';
+import { RemoveRoleFromUser } from '@application/use-cases/rbac/RemoveRoleFromUser';
+import { createRbacUserRouter } from './routes/rbacUser.routes';
+import { toRbacRoleDto } from '@application/dto/rbacUser.dto';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -384,6 +400,10 @@ const rbacPermissionRepo     = new PrismaRbacPermissionRepository();
 const rbacUserRoleRepo       = new PrismaRbacUserRoleRepository();
 const rbacRolePermissionRepo = new PrismaRbacRolePermissionRepository();
 
+// PasswordHasher + LoginRbacUser — module-level singletons (SDD #2 Phase 5)
+const passwordHasher = new BcryptPasswordHasher();
+const loginRbacUser  = new LoginRbacUser(rbacUserRepo, passwordHasher);
+
 // Convenience factory — routes in future SDDs import this instead of wiring the repo manually
 export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
   requirePermission(rbacUserRepo, m, a);
@@ -400,7 +420,9 @@ export function createApp() {
   const customerAdapter = new PrismaCustomerRepository(config.gestionReal.balanceStaleTtlMinutes);
   const ticketAdapter = new PrismaTicketRepository();   // replaces SplynxTicketAdapter (AD-2)
   const billingAdapter = new SplynxBillingAdapter(splynxClient);
-  const authAdapter = new JwtAuthAdapter();
+  // SDD #2 Phase 5: JwtAuthAdapter now delegates login to LoginRbacUser use case.
+  // No more direct Prisma.admin access in the adapter.
+  const authAdapter = new JwtAuthAdapter(loginRbacUser);
 
   // On-demand balance refresh collaborator — only wired when GR is configured
   let balanceRefresh: RefreshClientBalanceIfStale | undefined;
@@ -916,6 +938,53 @@ export function createApp() {
     new GetFeatureFlag(featureFlagRepo),
     new SetFeatureFlag(featureFlagRepo),
   ));
+
+  // SDD #2 Phase 6 — RBAC user management CRUD + role assignment endpoints
+  // Use cases instantiated here (inside createApp) so they can access the module-level repos.
+  const listRbacUsersUC   = new ListRbacUsers(rbacUserRepo, rbacUserRoleRepo, rbacRoleRepo);
+  const getRbacUserUC     = new GetRbacUser(rbacUserRepo, rbacUserRoleRepo, rbacRoleRepo);
+  const createRbacUserUC  = new CreateRbacUser(rbacUserRepo, rbacRoleRepo, rbacUserRoleRepo, passwordHasher);
+  const updateRbacUserUC  = new UpdateRbacUser(rbacUserRepo, passwordHasher);
+  const deleteRbacUserUC  = new DeleteRbacUser(rbacUserRepo, rbacUserRoleRepo, rbacRoleRepo);
+  const changePasswordUC  = new ChangeRbacUserPassword(rbacUserRepo, passwordHasher);
+  const listRolesForUserUC = new ListRolesForUser(rbacUserRepo, rbacUserRoleRepo, rbacRoleRepo);
+  const setRolesForUserUC  = new SetRolesForUser(rbacUserRepo, rbacRoleRepo, rbacUserRoleRepo);
+  const assignRoleToUserUC = new AssignRoleToUser(rbacUserRepo, rbacRoleRepo, rbacUserRoleRepo);
+  const removeRoleFromUserUC = new RemoveRoleFromUser(rbacUserRepo, rbacRoleRepo, rbacUserRoleRepo);
+
+  const authMiddlewareForRbac = createAuthMiddleware(authAdapter);
+
+  app.use(
+    '/api/admin/rbac/users',
+    authMiddlewareForRbac,
+    requirePerm('admin', 'manage'),
+    createRbacUserRouter({
+      listUsers: listRbacUsersUC,
+      getUser: getRbacUserUC,
+      createUser: createRbacUserUC,
+      updateUser: updateRbacUserUC,
+      deleteUser: deleteRbacUserUC,
+      changePassword: changePasswordUC,
+      listRolesForUser: listRolesForUserUC,
+      setRolesForUser: setRolesForUserUC,
+      assignRoleToUser: assignRoleToUserUC,
+      removeRoleFromUser: removeRoleFromUserUC,
+    }),
+  );
+
+  // GET /api/admin/rbac/roles — read-only endpoint for the FE role multi-select
+  const rbacRolesRouter = Router();
+  rbacRolesRouter.use(authMiddlewareForRbac);
+  rbacRolesRouter.use(requirePerm('admin', 'manage'));
+  rbacRolesRouter.get('/', async (_req, res, next) => {
+    try {
+      const roles = await rbacRoleRepo.listAll();
+      res.json({ roles: roles.map(toRbacRoleDto) });
+    } catch (err) {
+      next(err);
+    }
+  });
+  app.use('/api/admin/rbac/roles', rbacRolesRouter);
 
   // Profile routes (uses internal router directly)
   const profileRouter = Router();

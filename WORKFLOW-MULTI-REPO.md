@@ -49,7 +49,9 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 
 ## Verificación
 
-Tras cada deploy, se verifica con **Playwright** contra la app real (`http://190.7.234.37:7778`, login admin). Para backend sin UI todavía, se confirma el deploy verde + el log del step de migraciones. Para features con UI, se recorre el flujo real (crear/editar/borrar) y se limpian los datos de prueba.
+- **El estado de cada deploy se revisa con `gh`** — fuente de verdad del pipeline. Tras pushear, se sigue el run con `gh run list` / `gh run watch` / `gh run view <id> --log` para confirmar que el job quedo verde (incluido el step `Run DB migrations`). No se asume "deployo bien" sin mirar el run en `gh`.
+- Para backend sin UI todavia, basta el run verde en `gh` + el log del step de migraciones.
+- Para features con UI, ademas se verifica con **Playwright** contra la app real (`http://190.7.234.37:7778`, login admin): se recorre el flujo real (crear/editar/borrar) y se limpian los datos de prueba.
 
 ## Reglas para agentes / asistentes de IA
 
@@ -70,4 +72,5 @@ Tras cada deploy, se verifica con **Playwright** contra la app real (`http://190
 ## Seguridad
 
 - **Nunca** pegar credenciales (tokens, passwords) en commits, código o chats. Si pasa, **rotar de inmediato**.
+- **Los secrets del pipeline se setean SIEMPRE con `gh`** (ej. `gh secret set DATABASE_URL`), nunca a mano en la UI ni hardcodeados. El deploy consume `secrets.DATABASE_URL` y companhia desde GitHub Actions, asi que `gh secret set` / `gh secret list` es la via canonica para crearlos, rotarlos y auditarlos. El valor del secret se pasa por stdin o archivo, jamas inline en el comando que queda en el historial.
 - Hay deuda de seguridad abierta en [`DEUDAS-PENDIENTES.md`](./DEUDAS-PENDIENTES.md) (PAT de GitHub, password de DB, credenciales en skills, enforcement de roles).

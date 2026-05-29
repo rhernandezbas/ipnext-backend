@@ -12,6 +12,7 @@
 import {
   RbacUserRepository,
   CreateRbacUserInput,
+  UpdateRbacUserInput,
 } from '../../../domain/ports/RbacUserRepository';
 import { RbacRoleRepository } from '../../../domain/ports/RbacRoleRepository';
 import { RbacPermissionRepository } from '../../../domain/ports/RbacPermissionRepository';
@@ -61,6 +62,11 @@ describe('RbacUserRepository — interface contract', () => {
       updateLastLogin: async (_id: string, _at: Date) => { /* void */ },
       listRolesForUser: async (_userId: string) => [makeRole()],
       listPermissionsForUser: async (_userId: string) => [makePermission()],
+      // SDD #2 additions
+      list: async () => [makeUser()],
+      update: async (_id: string, _patch: UpdateRbacUserInput) => makeUser(),
+      delete: async (_id: string) => { /* void */ },
+      countUsersWithRoleCode: async (_roleCode: string) => 0,
     };
 
     // Verify the stub is a defined object (exercises the assignment above).
@@ -72,6 +78,10 @@ describe('RbacUserRepository — interface contract', () => {
     expect(typeof stub.updateLastLogin).toBe('function');
     expect(typeof stub.listRolesForUser).toBe('function');
     expect(typeof stub.listPermissionsForUser).toBe('function');
+    expect(typeof stub.list).toBe('function');
+    expect(typeof stub.update).toBe('function');
+    expect(typeof stub.delete).toBe('function');
+    expect(typeof stub.countUsersWithRoleCode).toBe('function');
   });
 
   it('findById stub returns a user or null', async () => {
@@ -83,6 +93,10 @@ describe('RbacUserRepository — interface contract', () => {
       updateLastLogin: async () => { /* void */ },
       listRolesForUser: async () => [],
       listPermissionsForUser: async () => [],
+      list: async () => [],
+      update: async () => makeUser(),
+      delete: async () => { /* void */ },
+      countUsersWithRoleCode: async () => 0,
     };
     const found = await stub.findById('u-1');
     const missing = await stub.findById('ghost');
@@ -100,6 +114,10 @@ describe('RbacUserRepository — interface contract', () => {
       updateLastLogin: async () => { /* void */ },
       listRolesForUser: async () => [],
       listPermissionsForUser: async () => [],
+      list: async () => [],
+      update: async () => makeUser(),
+      delete: async () => { /* void */ },
+      countUsersWithRoleCode: async () => 0,
     };
     const found = await stub.findByLogin('jdoe');
     const missing = await stub.findByLogin('ghost');

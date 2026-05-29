@@ -1,6 +1,12 @@
 import { randomUUID } from 'crypto';
 import type { RbacUser, RbacRole, RbacPermission } from '@domain/entities/rbac';
-import type { CreateRbacUserInput, RbacUserRepository } from '@domain/ports/RbacUserRepository';
+import type {
+  CreateRbacUserInput,
+  UpdateRbacUserInput,
+  RbacUserRepository,
+} from '@domain/ports/RbacUserRepository';
+import type { RbacUserRoleRepository } from '@domain/ports/RbacUserRoleRepository';
+import type { RbacRoleRepository } from '@domain/ports/RbacRoleRepository';
 
 interface StoredUser {
   user: RbacUser;
@@ -12,13 +18,24 @@ interface StoredUser {
  * InMemoryRbacUserRepository — test seam for RbacUserRepository.
  *
  * Stores users in a plain Map. No external dependencies.
- * listRolesForUser and listPermissionsForUser return empty arrays — they are
- * resolved by the middleware through separate pivot repos in production,
- * but the base adapter can be extended via seedRole/seedPermission helpers
- * in tests that need full role/permission resolution.
+ *
+ * For SDD #2 extensions:
+ * - `userRoleRepo` (optional): required for `countUsersWithRoleCode` —
+ *   used to look up which role IDs are assigned to each user.
+ * - `roleRepo` (optional): required for `countUsersWithRoleCode` —
+ *   used to resolve role code from role ID.
+ *
+ * listRolesForUser and listPermissionsForUser return empty arrays when no
+ * repos are injected — they are resolved by the middleware through separate
+ * pivot repos in production.
  */
 export class InMemoryRbacUserRepository implements RbacUserRepository {
   private readonly store = new Map<string, StoredUser>();
+
+  constructor(
+    private readonly userRoleRepo?: RbacUserRoleRepository,
+    private readonly roleRepo?: RbacRoleRepository,
+  ) {}
 
   async findById(id: string): Promise<RbacUser | null> {
     const entry = this.store.get(id);
@@ -82,5 +99,71 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
 
   async listPermissionsForUser(_userId: string): Promise<RbacPermission[]> {
     return [];
+  }
+
+  // ---------------------------------------------------------------------------
+  // SDD #2 additions
+  // ---------------------------------------------------------------------------
+
+  async list(): Promise<RbacUser[]> {
+    return Array.from(this.store.values()).map(entry => ({
+      ...entry.user,
+      lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
+    }));
+  }
+
+  async update(id: string, patch: UpdateRbacUserInput): Promise<RbacUser> {
+    const entry = this.store.get(id);
+    if (!entry) {
+      throw new Error(`RbacUser not found: ${id}`);
+    }
+    const now = new Date().toISOString();
+    // Apply scalar field patches
+    if (patch.name !== undefined) entry.user.name = patch.name;
+    if (patch.email !== undefined) entry.user.email = patch.email;
+    if (patch.login !== undefined) entry.user.login = patch.login;
+    if (patch.status !== undefined) entry.user.status = patch.status;
+    entry.user.updatedAt = now;
+    // Apply passwordHash patch (stored separately from the user entity)
+    if (patch.passwordHash !== undefined) {
+      entry.passwordHash = patch.passwordHash;
+    }
+    return {
+      ...entry.user,
+      lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
+    };
+  }
+
+  async delete(id: string): Promise<void> {
+    this.store.delete(id);
+    // Pivot rows are managed by the userRoleRepo — the InMemory adapter does
+    // not cascade because the pivot repo is injected separately. In production
+    // (Prisma), ON DELETE CASCADE handles this at the DB level.
+  }
+
+  /**
+   * Counts distinct users who have at least one role with the given code.
+   *
+   * Requires both `userRoleRepo` and `roleRepo` to be injected. If they are
+   * not present (legacy construction without these deps), returns 0 — this
+   * ensures backwards compatibility with existing test setups that don't need
+   * this method.
+   */
+  async countUsersWithRoleCode(roleCode: string): Promise<number> {
+    if (!this.userRoleRepo || !this.roleRepo) {
+      return 0;
+    }
+    let count = 0;
+    for (const entry of this.store.values()) {
+      const roleIds = await this.userRoleRepo.listForUser(entry.user.id);
+      for (const roleId of roleIds) {
+        const role = await this.roleRepo.findById(roleId);
+        if (role && role.code === roleCode) {
+          count++;
+          break; // count this user once even if they have multiple matching roles
+        }
+      }
+    }
+    return count;
   }
 }

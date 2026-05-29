@@ -7,7 +7,11 @@
  */
 import { prisma } from '@infrastructure/database/prisma';
 import type { RbacUser, RbacRole, RbacPermission } from '@domain/entities/rbac';
-import type { CreateRbacUserInput, RbacUserRepository } from '@domain/ports/RbacUserRepository';
+import type {
+  CreateRbacUserInput,
+  UpdateRbacUserInput,
+  RbacUserRepository,
+} from '@domain/ports/RbacUserRepository';
 
 type RbacUserRow = {
   id: string;
@@ -161,5 +165,78 @@ export class PrismaRbacUserRepository implements RbacUserRepository {
       }
     }
     return perms;
+  }
+
+  // ---------------------------------------------------------------------------
+  // SDD #2 additions
+  // ---------------------------------------------------------------------------
+
+  async list(): Promise<RbacUser[]> {
+    const rows = await (this.db as any).rbacUser.findMany({
+      orderBy: { createdAt: 'asc' },
+    }) as RbacUserRow[];
+    return rows.map(mapUser);
+  }
+
+  async update(id: string, patch: UpdateRbacUserInput): Promise<RbacUser> {
+    try {
+      const data: Record<string, unknown> = {};
+      if (patch.name !== undefined) data['name'] = patch.name;
+      if (patch.email !== undefined) data['email'] = patch.email;
+      if (patch.login !== undefined) data['login'] = patch.login;
+      if (patch.status !== undefined) data['status'] = patch.status;
+      if (patch.passwordHash !== undefined) data['passwordHash'] = patch.passwordHash;
+
+      const row = await (this.db as any).rbacUser.update({
+        where: { id },
+        data,
+      }) as RbacUserRow;
+      return mapUser(row);
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'P2025') {
+        throw new Error(`RbacUser not found: ${id}`);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Deletes the user.
+   * The SDD #1 migration has ON DELETE CASCADE on RbacUserRole.userId so a
+   * single prisma.rbacUser.delete cascades pivot rows automatically.
+   * If the cascade is absent, wrap in $transaction([deleteMany pivot, delete user]).
+   */
+  async delete(id: string): Promise<void> {
+    try {
+      await (this.db as any).rbacUser.delete({ where: { id } });
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'P2025') {
+        return; // already gone — treat as no-op
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Counts distinct users with at least one role matching roleCode.
+   * Uses a Prisma nested count via the RbacUserRole → RbacRole join.
+   *
+   * Equivalent SQL (simplified):
+   *   SELECT COUNT(DISTINCT u.id)
+   *   FROM rbac_users u
+   *   JOIN rbac_user_roles ur ON ur.user_id = u.id
+   *   JOIN rbac_roles r ON r.id = ur.role_id
+   *   WHERE r.code = $1
+   */
+  async countUsersWithRoleCode(roleCode: string): Promise<number> {
+    return (this.db as any).rbacUser.count({
+      where: {
+        roles: {
+          some: {
+            role: { code: roleCode },
+          },
+        },
+      },
+    }) as Promise<number>;
   }
 }
