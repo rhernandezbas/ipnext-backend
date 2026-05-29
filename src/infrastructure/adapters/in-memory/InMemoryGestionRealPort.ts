@@ -1,5 +1,15 @@
-import { GestionRealPort, FetchClientsParams, FetchClientsResult } from '@domain/ports/GestionRealPort';
-import { GrClient, GrClientBalance, GrContract } from '@domain/entities/gestionReal';
+import {
+  GestionRealPort,
+  FetchClientsParams,
+  FetchClientsResult,
+  GetServiceOrdersParams,
+} from '@domain/ports/GestionRealPort';
+import {
+  GrClient,
+  GrClientBalance,
+  GrContract,
+  GrServiceOrder,
+} from '@domain/entities/gestionReal';
 
 /**
  * Test double for the GR upstream. Holds an in-memory client/contract dataset
@@ -17,6 +27,10 @@ export class InMemoryGestionRealPort implements GestionRealPort {
   balanceCalls: string[] = [];
   /** When set, fetchClientBalance throws this error. */
   balanceError?: Error;
+  /** Settable fixture batch returned by getServiceOrders. */
+  serviceOrders: GrServiceOrder[] = [];
+  /** Records every getServiceOrders call for assertions. */
+  serviceOrderCalls: GetServiceOrdersParams[] = [];
 
   async fetchClients(params: FetchClientsParams): Promise<FetchClientsResult> {
     this.calls.push(params);
@@ -50,6 +64,11 @@ export class InMemoryGestionRealPort implements GestionRealPort {
       paymentUrls: {},
       raw: {},
     };
+  }
+
+  async getServiceOrders(params: GetServiceOrdersParams): Promise<GrServiceOrder[]> {
+    this.serviceOrderCalls.push(params);
+    return this.serviceOrders;
   }
 }
 

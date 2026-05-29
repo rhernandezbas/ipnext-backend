@@ -1,7 +1,17 @@
 import axios, { AxiosInstance } from 'axios';
 import crypto from 'crypto';
-import { GestionRealPort, FetchClientsParams, FetchClientsResult } from '@domain/ports/GestionRealPort';
-import { GrClient, GrClientBalance, GrContract } from '@domain/entities/gestionReal';
+import {
+  GestionRealPort,
+  FetchClientsParams,
+  FetchClientsResult,
+  GetServiceOrdersParams,
+} from '@domain/ports/GestionRealPort';
+import {
+  GrClient,
+  GrClientBalance,
+  GrContract,
+  GrServiceOrder,
+} from '@domain/entities/gestionReal';
 
 export interface GestionRealClientOptions {
   baseUrl: string;
@@ -73,6 +83,26 @@ export class GestionRealClient implements GestionRealPort {
       { auth: this.auth() },
     );
     return parseClientBalanceResponse(grClienteId, data);
+  }
+
+  /**
+   * Fetch service orders via the GR `ordenesdeservicio` action.
+   *
+   * Sends `estado` (default 'PEND'), `fecha_tipo` (default 'c') and the
+   * `fecha_desde`/`fecha_hasta` window (DD-MM-AAAA). The response is an object
+   * keyed by order id; `parseServiceOrdersResponse` flattens it into an array.
+   */
+  async getServiceOrders(params: GetServiceOrdersParams): Promise<GrServiceOrder[]> {
+    const payload: Record<string, unknown> = {
+      action: 'ordenesdeservicio',
+      estado: params.estado ?? 'PEND',
+      fecha_tipo: params.fechaTipo ?? 'c',
+    };
+    if (params.fechaDesde) payload.fecha_desde = params.fechaDesde;
+    if (params.fechaHasta) payload.fecha_hasta = params.fechaHasta;
+
+    const { data } = await this.http.post('', payload, { auth: this.auth() });
+    return parseServiceOrdersResponse(data);
   }
 }
 
@@ -250,6 +280,59 @@ function parseArNumber(s: string | null): number {
   // Plain decimal or integer: "65722.07", "0", "65722"
   const n = parseFloat(trimmed);
   return isFinite(n) ? n : 0;
+}
+
+/**
+ * GR returns service orders as an OBJECT keyed by order id (not an array):
+ *   { error:0, "551": {...}, "552": {...} }
+ *
+ * Each value is an order object. The street address lives at `domicilio.domicilio`,
+ * locality at `domicilio.localidad.valor` (fallback `.codigo`), province at
+ * `domicilio.provincia.valor`. `cliente`/`contrato` may be empty/null (e.g. IN-type
+ * orders). The top-level `error`/`status`/`resultados` metadata fields are skipped.
+ */
+export function parseServiceOrdersResponse(data: unknown): GrServiceOrder[] {
+  if (!data || typeof data !== 'object') return [];
+  const root = data as Record<string, unknown>;
+
+  // Top-level metadata keys that are NOT orders.
+  const META_KEYS = new Set(['error', 'status', 'resultados', 'offset', 'cantidad']);
+
+  const orders: GrServiceOrder[] = [];
+  for (const [id, value] of Object.entries(root)) {
+    if (META_KEYS.has(id)) continue;
+    if (!value || typeof value !== 'object') continue;
+    const o = value as Record<string, unknown>;
+
+    orders.push({
+      grOrdenId: id,
+      tipo: str(o.tipo),
+      estado: str(o.estado),
+      cliente: str(o.cliente),
+      contrato: str(o.contrato),
+      domicilio: parseOrderDomicilio(o.domicilio),
+      fechaCreacion: str(o.creado),
+      raw: o,
+    });
+  }
+  return orders;
+}
+
+/**
+ * Normalize the GR order `domicilio` block. Street is `domicilio` (string),
+ * locality/province are nested `{ codigo, valor }` objects (valor preferred).
+ * Returns null when the block is absent or not an object.
+ */
+function parseOrderDomicilio(
+  domicilio: unknown,
+): { direccion: string | null; localidad: string | null; provincia: string | null } | null {
+  if (!domicilio || typeof domicilio !== 'object') return null;
+  const d = domicilio as Record<string, unknown>;
+  return {
+    direccion: str(d.domicilio),
+    localidad: nested(d, 'localidad', 'valor') ?? nested(d, 'localidad', 'codigo'),
+    provincia: nested(d, 'provincia', 'valor') ?? nested(d, 'provincia', 'codigo'),
+  };
 }
 
 /** Pull the first PPPoE username out of the GR "conexiones" object. */

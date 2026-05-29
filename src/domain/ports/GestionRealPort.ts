@@ -1,4 +1,4 @@
-import { GrClient, GrClientBalance, GrContract } from '../entities/gestionReal';
+import { GrClient, GrClientBalance, GrContract, GrServiceOrder } from '../entities/gestionReal';
 
 export interface FetchClientsParams {
   /** 'c' = creación, 'm' = modificación. Omit for a full unfiltered scan. */
@@ -20,6 +20,18 @@ export interface FetchClientsResult {
   clients: GrClient[];
 }
 
+/** Params for the `ordenesdeservicio` (service orders) GR action. */
+export interface GetServiceOrdersParams {
+  /** State filter; default 'PEND'. */
+  estado?: string;
+  /** Date axis: 'c' = creación, 'm' = modificación, 'co' = cierre. Default 'c'. */
+  fechaTipo?: 'c' | 'm' | 'co';
+  /** Lower bound, format "DD-MM-AAAA" (now − windowMonths). */
+  fechaDesde?: string;
+  /** Upper bound, format "DD-MM-AAAA" (today). */
+  fechaHasta?: string;
+}
+
 /**
  * Upstream port for the Gestión Real external API. The adapter owns auth,
  * transport and payload normalization; the application layer only sees this.
@@ -29,4 +41,6 @@ export interface GestionRealPort {
   fetchContractsByClient(grClienteId: string): Promise<GrContract[]>;
   /** Fetch the balance/debt for a single client via the `cliente` action. */
   fetchClientBalance(grClienteId: string): Promise<GrClientBalance>;
+  /** Fetch service orders via the `ordenesdeservicio` action, normalized to a flat array. */
+  getServiceOrders(params: GetServiceOrdersParams): Promise<GrServiceOrder[]>;
 }

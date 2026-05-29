@@ -87,6 +87,7 @@ export function toTask(row: any): ScheduledTask {
     isClosed: row.isClosed ?? false,
     reviewedByInventory: row.reviewedByInventory ?? false,
     iclassOrderCode: row.iclassOrderCode ?? null,
+    grOrdenId: row.grOrdenId ?? null,
     checklist: Array.isArray(row.checklist)
       ? row.checklist.map((ci: any) => ({
           id: ci.id,
@@ -455,6 +456,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       assigneeId: data.assigneeId ?? null,
       travelTimeTo: data.travelTimeTo ?? null,
       travelTimeFrom: data.travelTimeFrom ?? null,
+      grOrdenId: data.grOrdenId ?? null,
     };
   }
 
@@ -506,6 +508,26 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     } catch {
       return null;
     }
+  }
+
+  // ── Gestión Real installation-order ingest ───────────────────────────────
+
+  async findTaskByGrOrdenId(grOrdenId: string): Promise<ScheduledTask | null> {
+    const row = await (prisma.scheduledTask as any).findUnique({
+      where: { grOrdenId },
+      include: INCLUDE,
+    });
+    return row ? toTask(row) : null;
+  }
+
+  async listNeedsReview(): Promise<ScheduledTask[]> {
+    // Needs-review = ingested from GR (grOrdenId set) but unclassified (no project).
+    const rows = await (prisma.scheduledTask as any).findMany({
+      where: { grOrdenId: { not: null }, projectId: null },
+      orderBy: { createdAt: 'desc' },
+      include: INCLUDE,
+    });
+    return rows.map(toTask);
   }
 
   // ── IClass integration ────────────────────────────────────────────────────

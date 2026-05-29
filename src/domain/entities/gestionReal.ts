@@ -63,3 +63,32 @@ export interface GrContract {
   modificado: string | null;
   raw: Record<string, unknown>;
 }
+
+/**
+ * Normalized service order ("orden de servicio") from the GR `ordenesdeservicio`
+ * action. GR returns these as an object keyed by order id; the adapter flattens
+ * each into this shape. Optional fields are `null` (never `undefined`) so the
+ * application layer can rely on explicit presence checks.
+ */
+export interface GrServiceOrder {
+  /** GR order id — the object key in the response (e.g. "551"). */
+  grOrdenId: string;
+  /** Order type — "CI" (instalación) | "CO" | "BA" | "IN" | ... */
+  tipo: string | null;
+  /** Order state — e.g. "PEND". */
+  estado: string | null;
+  /** GR client id this order belongs to. */
+  cliente: string | null;
+  /** GR contract id this order belongs to. */
+  contrato: string | null;
+  /** Installation address; null when GR omits the domicilio block. */
+  domicilio: {
+    direccion: string | null;
+    localidad: string | null;
+    provincia: string | null;
+  } | null;
+  /** Creation date "DD-MM-YYYY" (or as GR provides it). */
+  fechaCreacion: string | null;
+  /** Full raw GR payload for the order, for debug/fidelity. */
+  raw: Record<string, unknown>;
+}

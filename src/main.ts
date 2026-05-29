@@ -2,6 +2,7 @@ import './infrastructure/config'; // fail-fast env validation runs on import
 import { createApp } from './infrastructure/http/app';
 import { config } from './infrastructure/config';
 import { bootstrapGestionRealSync } from './infrastructure/scheduling/bootstrapGestionRealSync';
+import { bootstrapGestionRealIngest } from './infrastructure/scheduling/bootstrapGestionRealIngest';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
 // Splynx being unavailable inside an async route) must NOT take the whole
@@ -22,3 +23,9 @@ app.listen(config.port, () => {
 // Gestión Real read-only mirror sync — opt-in, no-op when disabled.
 const grSync = bootstrapGestionRealSync();
 grSync?.start();
+
+// Gestión Real installation-order ingest — opt-in, no-op when disabled.
+// Async because the composition root resolves the fallback "Pendiente" stage.
+void bootstrapGestionRealIngest()
+  .then((grIngest) => grIngest?.start())
+  .catch((err) => console.error('[gr-ingest] bootstrap failed (server kept alive):', (err as Error).message));
