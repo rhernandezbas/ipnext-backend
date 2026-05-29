@@ -373,6 +373,8 @@ import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClo
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
 import { PrismaRbacRoleRepository } from '../adapters/prisma/PrismaRbacRoleRepository';
 import { PrismaRbacPermissionRepository } from '../adapters/prisma/PrismaRbacPermissionRepository';
+import { PrismaAuditEventRepository } from '../adapters/prisma/PrismaAuditEventRepository';
+import { auditMutationsMiddleware } from './middleware/auditMutationsMiddleware';
 import { PrismaRbacUserRoleRepository } from '../adapters/prisma/PrismaRbacUserRoleRepository';
 import { PrismaRbacRolePermissionRepository } from '../adapters/prisma/PrismaRbacRolePermissionRepository';
 import { requirePermission } from './middleware/requirePermission';
@@ -446,6 +448,10 @@ export function createApp() {
   app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
+
+  // SDD #4: audit every mutation (POST/PUT/PATCH/DELETE under /api). Reads
+  // req.user at res.on('finish'), so it sits before the per-router auth MW.
+  app.use(auditMutationsMiddleware(new PrismaAuditEventRepository()));
 
   // Wire up adapters
   const splynxClient = new SplynxClient();
