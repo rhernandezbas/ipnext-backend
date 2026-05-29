@@ -358,6 +358,9 @@ import { SyncIClassResultCodes } from '@application/use-cases/SyncIClassResultCo
 import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCodes';
 import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
+import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
+import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
+import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
 import { PrismaRbacRoleRepository } from '../adapters/prisma/PrismaRbacRoleRepository';
 import { PrismaRbacPermissionRepository } from '../adapters/prisma/PrismaRbacPermissionRepository';
@@ -958,13 +961,21 @@ export function createApp() {
   // IClass admin — SO type catalog sync + list (admin-only).
   app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter));
 
-  // IClass closure loop — result-code catalog + configurable result→stage mapping + status.
+  // IClass closure loop — result-code catalog + configurable result→stage mapping + status + backfill.
   const iclassResultCodeRepo = new PrismaIClassResultCodeRepository();
+  const closureIngest = new IngestClosedServiceOrders(
+    buildIClassClient(),
+    new PrismaClosedServiceOrderRepository(),
+    iclassResultCodeRepo,
+    schedulingRepo,
+    new PrismaSyncStateRepository(),
+  );
   app.use('/api/admin/iclass', createIClassClosureRouter(
     new SyncIClassResultCodes(buildIClassClient(), iclassResultCodeRepo),
     new ListIClassResultCodes(iclassResultCodeRepo),
     new AssignResultCodeStage(iclassResultCodeRepo, stageRepo),
     new GetClosureStatus(new PrismaSyncStateRepository()),
+    new BackfillClosedServiceOrders(buildIClassClient(), schedulingRepo, closureIngest),
     authAdapter,
   ));
 

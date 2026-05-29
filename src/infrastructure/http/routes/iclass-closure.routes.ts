@@ -6,6 +6,7 @@ import { SyncIClassResultCodes } from '@application/use-cases/SyncIClassResultCo
 import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCodes';
 import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
+import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { toResultCodeDTO } from '@application/dto/iclassClosure.dto';
 
 const ListQuerySchema = z.object({
@@ -23,12 +24,14 @@ const AssignSchema = z.object({
  *   GET   /result-codes        — list the catalog (?mapped=true|false)
  *   PATCH /result-codes/:id     — configure the closure mapping { stageId } (null clears)
  *   GET   /closure/status       — last closure-ingest run + counts
+ *   POST  /closure/backfill     — reconcile in-flight tasks against IClass now
  */
 export function createIClassClosureRouter(
   syncResultCodes: SyncIClassResultCodes,
   listResultCodes: ListIClassResultCodes,
   assignResultCodeStage: AssignResultCodeStage,
   getClosureStatus: GetClosureStatus,
+  backfillClosedOrders: BackfillClosedServiceOrders,
   authProvider: AuthProvider,
 ): Router {
   const router = Router();
@@ -70,6 +73,16 @@ export function createIClassClosureRouter(
   router.get('/closure/status', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       res.status(200).json(await getClosureStatus.execute());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // On-demand reconcile of in-flight tasks (sent to IClass, awaiting closure).
+  // Idempotent — safe to run repeatedly. Returns the run counts.
+  router.post('/closure/backfill', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json(await backfillClosedOrders.execute());
     } catch (err) {
       next(err);
     }

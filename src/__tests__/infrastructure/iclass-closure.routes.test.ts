@@ -46,11 +46,13 @@ function buildApp() {
     { soTypeId: '1', code: 'Instalacion Completa Fibra', type: 'Sucesso' },
     { soTypeId: '1', code: 'Cliente Ausente', type: 'Pendente' },
   ]);
+  const backfill = { execute: async () => ({ mirrored: 2, transitioned: 2, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0 }) };
   const router = createIClassClosureRouter(
     new SyncIClassResultCodes(iclass, repo),
     new ListIClassResultCodes(repo),
     new AssignResultCodeStage(repo, fakeStages({ [STAGE.id]: STAGE })),
     new GetClosureStatus(state),
+    backfill as never,
     new FakeAuthProvider(),
   );
   const app = express();
@@ -125,5 +127,18 @@ describe('IClass closure routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.lastRunAt).toBeNull();
     expect(res.body.counts.mirrored).toBe(0);
+  });
+
+  it('POST /closure/backfill runs the reconcile and returns counts', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/api/admin/iclass/closure/backfill').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body.mirrored).toBe(2);
+    expect(res.body.transitioned).toBe(2);
+  });
+
+  it('POST /closure/backfill is 401 without auth', async () => {
+    const { app } = buildApp();
+    expect((await request(app).post('/api/admin/iclass/closure/backfill')).status).toBe(401);
   });
 });
