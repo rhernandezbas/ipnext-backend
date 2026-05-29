@@ -9,5 +9,5 @@ export type {
   RbacUserRole,
   RbacRolePermission,
 } from './rbac';
-export { RBAC_MODULES, SYSTEM_ROLES } from './rbac';
+export { RBAC_MODULES, SYSTEM_ROLES, KNOWN_ACTIONS } from './rbac';
 

@@ -25,6 +25,7 @@ const statusMap: Record<string, number> = {
   MISSING_ICLASS_MAPPING: 422,
   ICLASS_SO_TYPE_INACTIVE: 422,
   ICLASS_SO_TYPE_NOT_FOUND: 404,
+  ICLASS_RESULT_CODE_NOT_FOUND: 404,
   AUTHENTICATION_ERROR: 401,
   SPLYNX_UNAVAILABLE: 502,
   WORKFLOW_NAME_CONFLICT: 409,
@@ -47,6 +48,13 @@ const statusMap: Record<string, number> = {
   CANNOT_DELETE_SELF: 403,
   CANNOT_REMOVE_LAST_SUPER_ADMIN: 403,
   INVALID_OLD_PASSWORD: 403,
+  // SDD #3 Phase 4a — role-permissions routes error codes
+  SUPER_ADMIN_IMMUTABLE: 400,
+  INVALID_PERMISSION_IDS: 400,
+  // SDD #3 Phase 4b — role catalog mutation routes error codes
+  ROLE_CODE_TAKEN: 409,
+  ROLE_IS_SYSTEM: 403,
+  VALIDATION_ERROR: 400,
 };
 
 /** Express global error-handling middleware. */

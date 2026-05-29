@@ -4,7 +4,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory' | 'iclassOrderCode' | 'grOrdenId'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory' | 'iclassOrderCode' | 'grOrdenId'
 > {
   watcherIds?: string[];
   /** GR ingest sets this; manual task creation omits it (defaults to null). */
@@ -52,6 +52,19 @@ export interface SchedulingRepository {
   getStageByName(name: string, workflowId?: string): Promise<Stage | null>;
   /** Persist the IClass service order code on a task after a successful OS creation. */
   setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null>;
+
+  // IClass closure loop (iclass-closure-loop)
+  /**
+   * Find a task by its sequenceNumber — the join key for the closure loop, since
+   * we send soCode = sequenceNumber and IClass preserves it as the SO `codigo`.
+   * Null when no task has that number.
+   */
+  findTaskBySequenceNumber(sequenceNumber: number): Promise<ScheduledTask | null>;
+  /**
+   * List tasks already sent to IClass and awaiting closure (in the configured
+   * "Registrado en IClass" stage), used by the scoped backfill reconcile.
+   */
+  listTasksInIClassStage(stageName: string): Promise<ScheduledTask[]>;
 
   // IClass SO type mapping (iclass-so-type-mapping)
   /**

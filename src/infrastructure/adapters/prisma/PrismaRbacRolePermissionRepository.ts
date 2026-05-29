@@ -42,4 +42,13 @@ export class PrismaRbacRolePermissionRepository implements RbacRolePermissionRep
     }) as Array<{ permissionId: string }>;
     return rows.map(r => r.permissionId);
   }
+
+  async replaceForRole(roleId: string, permissionIds: string[]): Promise<void> {
+    await (this.db as any).$transaction([
+      (this.db as any).rbacRolePermission.deleteMany({ where: { roleId } }),
+      (this.db as any).rbacRolePermission.createMany({
+        data: permissionIds.map((permissionId: string) => ({ roleId, permissionId })),
+      }),
+    ]);
+  }
 }

@@ -1,18 +1,12 @@
 import { randomUUID } from 'crypto';
 import type { RbacRole } from '@domain/entities/rbac';
-import type { RbacRoleRepository } from '@domain/ports/RbacRoleRepository';
-
-interface CreateRoleInput {
-  code: string;
-  label: string;
-  isSystem: boolean;
-}
+import type { RbacRoleRepository, CreateRoleInput } from '@domain/ports/RbacRoleRepository';
+import { RoleCodeTakenError } from '@domain/errors/rbacUser.errors';
 
 /**
  * InMemoryRbacRoleRepository — test seam for RbacRoleRepository.
  *
- * `create` is an extra helper method for seeding test data — it is NOT part
- * of the RbacRoleRepository port. Prisma seeds roles via migration SQL.
+ * Implements the full RbacRoleRepository port including create + delete.
  */
 export class InMemoryRbacRoleRepository implements RbacRoleRepository {
   private readonly store = new Map<string, RbacRole>();
@@ -33,8 +27,13 @@ export class InMemoryRbacRoleRepository implements RbacRoleRepository {
     return Array.from(this.store.values()).map(r => ({ ...r }));
   }
 
-  /** Test helper — seeds a role. NOT part of RbacRoleRepository port. */
   async create(input: CreateRoleInput): Promise<RbacRole> {
+    // Check code uniqueness
+    for (const role of this.store.values()) {
+      if (role.code === input.code) {
+        throw new RoleCodeTakenError(input.code);
+      }
+    }
     const role: RbacRole = {
       id: randomUUID(),
       code: input.code,
@@ -43,5 +42,11 @@ export class InMemoryRbacRoleRepository implements RbacRoleRepository {
     };
     this.store.set(role.id, role);
     return { ...role };
+  }
+
+  async delete(id: string): Promise<boolean> {
+    if (!this.store.has(id)) return false;
+    this.store.delete(id);
+    return true;
   }
 }

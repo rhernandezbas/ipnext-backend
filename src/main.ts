@@ -3,6 +3,7 @@ import { createApp } from './infrastructure/http/app';
 import { config } from './infrastructure/config';
 import { bootstrapGestionRealSync } from './infrastructure/scheduling/bootstrapGestionRealSync';
 import { bootstrapGestionRealIngest } from './infrastructure/scheduling/bootstrapGestionRealIngest';
+import { bootstrapIClassClosure } from './infrastructure/scheduling/bootstrapIClassClosure';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
 // Splynx being unavailable inside an async route) must NOT take the whole
@@ -29,3 +30,8 @@ grSync?.start();
 void bootstrapGestionRealIngest()
   .then((grIngest) => grIngest?.start())
   .catch((err) => console.error('[gr-ingest] bootstrap failed (server kept alive):', (err as Error).message));
+
+// IClass closure loop — starts dormant; gated by the `iclass-closure-loop`
+// feature flag (default OFF). Returns null only when IClass credentials are missing.
+const iclassClosure = bootstrapIClassClosure();
+iclassClosure?.start();

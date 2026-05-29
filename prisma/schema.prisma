@@ -11,24 +11,20 @@ generator client {
 // =============================================
 
 model Admin {
-  id              String             @id @default(uuid())
-  name            String
-  email           String             @unique
-  role            String // role-definition name (editable, backed by AdminRoleDefinition)
-  status          AdminStatus        @default(active)
-  twoFaEnabled    Boolean            @default(false)
-  twoFaSecret     String?
-  lastLogin       DateTime?
-  passwordHash    String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  activityLogs    AdminActivityLog[]
-  sessions        AdminSession[]
-  projectsLed     Project[]
-  tasksReported   ScheduledTask[]    @relation("TaskReporter")
-  tasksAssigned   ScheduledTask[]    @relation("TaskAssignee")
-  tasksWatching   TaskWatcher[]      @relation("TaskWatcher")
-  assignedTickets Ticket[]           @relation("TicketAssignee")
+  id           String             @id @default(uuid())
+  name         String
+  email        String             @unique
+  role         String // role-definition name (editable, backed by AdminRoleDefinition)
+  status       AdminStatus        @default(active)
+  twoFaEnabled Boolean            @default(false)
+  twoFaSecret  String?
+  lastLogin    DateTime?
+  passwordHash String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  activityLogs AdminActivityLog[]
+  sessions     AdminSession[]
+  projectsLed  Project[]
 }
 
 enum AdminRole {
@@ -485,6 +481,9 @@ model Stage {
   color      String?
   tasks      ScheduledTask[]
 
+  // IClass closure loop — result codes that move a task to THIS stage on closure
+  iclassResultCodes IClassResultCode[] @relation("ResultCodeMappedStage")
+
   @@index([workflowId, order])
 }
 
@@ -538,6 +537,165 @@ model IClassSoType {
   projects     Project[]
 
   @@index([active])
+}
+
+// ============================================================================
+// IClass closure loop — mirror of CLOSED service orders pulled back from IClass.
+// Join to local work: SO.codigo (iclass) == ScheduledTask.sequenceNumber (we send
+// soCode=sequenceNumber on create; iclass preserves it as `codigo`).
+// ============================================================================
+
+// Catalog of result codes per SO type. `motivoFechamento` on a closed SO equals
+// the result-code name (`code`); `type` (Sucesso/Falha) drives the stage transition.
+model IClassResultCode {
+  id           String   @id @default(uuid())
+  soTypeId     BigInt?
+  code         String   // motivoFechamento value (the result-code name)
+  type         String   // Sucesso | Falha | ...
+  // Configurable closure mapping (mirrors Project.iclassSoTypeId): when an SO closes
+  // with this result code, the linked task is moved to mappedStage. Null = unmapped
+  // (task is NOT moved; left for manual review). Assigned via the admin API/UX.
+  mappedStageId String?
+  mappedStage   Stage?   @relation("ResultCodeMappedStage", fields: [mappedStageId], references: [id], onDelete: SetNull)
+  lastSyncedAt DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([soTypeId, code])
+  @@index([code])
+  @@index([mappedStageId])
+}
+
+model IClassServiceOrder {
+  id                String  @id @default(cuid())
+  iclassId          BigInt  @unique // numeric SO id from IClass
+  iclassCodigo      String  @unique // SO `codigo`; equals our ScheduledTask.sequenceNumber for our SOs
+  clusterName       String
+  thirdPartyCode    String?
+  nodeCode          String?
+  soTypeDescription String?
+
+  customerCode String?
+  customerName String?
+  addressCode  String?
+  addressLine  String?
+  addressCity  String?
+  addressLat   Float?
+  addressLng   Float?
+
+  statusCode        String // '7' for terminal Concluida
+  statusDescription String
+
+  requestedAt      DateTime?
+  scheduledFor     DateTime?
+  availableAt      DateTime?
+  serviceStartedAt DateTime?
+  serviceEndedAt   DateTime?
+  firstClosedAt    DateTime? // status 4 transition (technician close)
+  approvedAt       DateTime? // status 50 transition
+  closedAt         DateTime? // status 7 transition (final) — derived from history
+
+  resultCodeName String? // motivoFechamento
+  resultCodeType String? // joined from IClassResultCode (Sucesso/Falha)
+  closedByLogin  String?
+  closedByName   String?
+  closeLatitude  Float?
+  closeLongitude Float?
+  closeGpsAt     DateTime?
+  billingAmount  Decimal?  @db.Decimal(12, 2)
+
+  technicianNote String? @db.Text // obsEquipe
+  internalNote   String? @db.Text // obs
+  commentaryLog  String? @db.Text // raw comentario blob
+
+  teamLogin          String?
+  teamTechnicianName String?
+  teamPhone          String?
+  teamEmail          String?
+
+  // Link back to our task (matched by codigo↔sequenceNumber). Nullable: an SO with
+  // no local match is skipped, but the FK stays optional for resilience.
+  scheduledTaskId String?        @unique
+  scheduledTask   ScheduledTask? @relation(fields: [scheduledTaskId], references: [id], onDelete: SetNull)
+
+  iclassCreatedAt DateTime?
+  iclassUpdatedAt DateTime? // alteradoPor.data — idempotency key
+  ingestedAt      DateTime  @default(now())
+  rawDetail       Json // full SO snapshot for forensics
+
+  history          IClassSoStatusHistory[]
+  checklists       IClassSoChecklist[]
+  materials        IClassSoMaterial[]
+  equipmentEvents  IClassSoEquipmentEvent[]
+
+  @@index([clusterName, closedAt])
+  @@index([customerCode])
+  @@index([iclassUpdatedAt])
+  @@index([scheduledTaskId])
+}
+
+model IClassSoStatusHistory {
+  id               String             @id @default(cuid())
+  serviceOrderId   String
+  serviceOrder     IClassServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  iclassOsStatusId BigInt             @unique
+  occurredAt       DateTime
+  statusCode       String
+  statusDescription String
+  durationMinutes  Int?
+  teamLogin        String?
+  commentary       String?            @db.Text
+
+  @@index([serviceOrderId, occurredAt])
+}
+
+model IClassSoChecklist {
+  id             String                    @id @default(cuid())
+  serviceOrderId String
+  serviceOrder   IClassServiceOrder        @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  iclassSurveyId BigInt                    @unique
+  surveyAt       DateTime?
+  answers        IClassSoChecklistAnswer[]
+}
+
+model IClassSoChecklistAnswer {
+  id           String            @id @default(cuid())
+  checklistId  String
+  checklist    IClassSoChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  questionId   BigInt?
+  questionText String            @db.Text
+  questionType String // 'Texto' | 'Foto' | ...
+  answerOrder  Int
+  answerText   String?           @db.Text
+  photoMissing Boolean           @default(false) // true for questionType=Foto (v2 returns no URL)
+
+  @@index([checklistId, answerOrder])
+}
+
+model IClassSoMaterial {
+  id                  String             @id @default(cuid())
+  serviceOrderId      String
+  serviceOrder        IClassServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  iclassOsMaterialId  BigInt             @unique
+  materialCode        String?
+  materialDescription String?
+  qty                 Decimal            @db.Decimal(12, 4)
+  unitValue           Decimal?           @db.Decimal(12, 2)
+  totalValue          Decimal?           @db.Decimal(12, 2)
+}
+
+model IClassSoEquipmentEvent {
+  id               String             @id @default(cuid())
+  serviceOrderId   String
+  serviceOrder     IClassServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  occurredAt       DateTime?
+  type             String? // install | remove | move
+  serialNumber     String?
+  mac              String?
+  patrimonialNo    String?
+  modelDescription String?
+
+  @@index([serviceOrderId])
 }
 
 model Project {
@@ -609,15 +767,15 @@ model ScheduledTask {
 
   // NEW — FK relations
   customerId String?
-  customer   Client?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customer   Client?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
   serviceId  String?
-  service    Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  service    Service?  @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   partnerId  String?
-  partnerRef Partner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  partnerRef Partner?  @relation(fields: [partnerId], references: [id], onDelete: SetNull)
   reporterId String?
-  reporter   Admin?   @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
+  reporter   RbacUser? @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
   assigneeId String?
-  assignee   Admin?   @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assignee   RbacUser? @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
   // NEW — travel time (minutes)
   travelTimeTo   Int?
@@ -645,6 +803,9 @@ model ScheduledTask {
   // Null for manually-created tasks. NULL-distinct unique = idempotency backstop.
   grOrdenId String? @unique
 
+  // IClass closure loop — mirror of the closed SO, linked back by codigo↔sequenceNumber
+  iclassClosedOrder IClassServiceOrder?
+
   @@index([stageId])
   @@index([projectId])
   @@index([startDate])
@@ -660,7 +821,7 @@ model TaskWatcher {
   taskId  String
   adminId String
   task    ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  admin   Admin         @relation("TaskWatcher", fields: [adminId], references: [id], onDelete: Cascade)
+  user    RbacUser      @relation("TaskWatcher", fields: [adminId], references: [id], onDelete: Cascade)
 
   @@id([taskId, adminId])
   @@index([adminId])
@@ -1226,9 +1387,9 @@ model Ticket {
   customerId String?
   customer   Client? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
-  // Asignacion opcional a un Admin — espejo de ScheduledTask.assigneeId
+  // Asignacion opcional a un RbacUser — espejo de ScheduledTask.assigneeId
   assigneeId String?
-  assignee   Admin?  @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assignee   RbacUser? @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
   // Previsto para la futura integracion de "casos" de Gestion Real (out-of-scope)
   grCasoId String? @unique
@@ -1245,12 +1406,8 @@ model Ticket {
 // RBAC DOMAIN
 // =============================================
 
-enum RbacAction {
-  read
-  write
-  delete
-  manage
-}
+// RbacAction enum removed — action is now VARCHAR(64) to allow sub-actions without migrations.
+// TS source-of-truth: KNOWN_ACTIONS in src/domain/entities/rbac.ts
 
 model RbacModule {
   id          String           @id @default(uuid())
@@ -1263,7 +1420,7 @@ model RbacModule {
 model RbacPermission {
   id       String               @id @default(uuid())
   moduleId String
-  action   RbacAction
+  action   String               @db.VarChar(64)
   module   RbacModule           @relation(fields: [moduleId], references: [id], onDelete: Restrict)
   grants   RbacRolePermission[]
 
@@ -1284,16 +1441,20 @@ model RbacRole {
 }
 
 model RbacUser {
-  id           String         @id @default(uuid())
-  name         String
-  email        String         @unique
-  login        String         @unique
-  passwordHash String
-  status       String         @default("active")
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-  lastLoginAt  DateTime?
-  roles        RbacUserRole[]
+  id              String          @id @default(uuid())
+  name            String
+  email           String          @unique
+  login           String          @unique
+  passwordHash    String
+  status          String          @default("active")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  lastLoginAt     DateTime?
+  roles           RbacUserRole[]
+  tasksReported   ScheduledTask[] @relation("TaskReporter")
+  tasksAssigned   ScheduledTask[] @relation("TaskAssignee")
+  tasksWatching   TaskWatcher[]   @relation("TaskWatcher")
+  assignedTickets Ticket[]        @relation("TicketAssignee")
 
   @@index([login])
 }

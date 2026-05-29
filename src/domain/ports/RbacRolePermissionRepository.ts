@@ -13,4 +13,11 @@ export interface RbacRolePermissionRepository {
 
   /** Returns the permission IDs granted to the role. */
   listForRole(roleId: string): Promise<string[]>;
+
+  /**
+   * Atomically replaces the full grant set for a role.
+   * Drops all existing grants for roleId, then inserts permissionIds.
+   * Idempotent: calling twice with the same set produces the same final state.
+   */
+  replaceForRole(roleId: string, permissionIds: string[]): Promise<void>;
 }

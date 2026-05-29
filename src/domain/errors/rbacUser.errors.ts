@@ -65,3 +65,38 @@ export class InvalidOldPasswordError extends DomainError {
     this.name = 'InvalidOldPasswordError';
   }
 }
+
+export class SuperAdminImmutableError extends DomainError {
+  constructor() {
+    super('super_admin permissions are managed by the system', 'SUPER_ADMIN_IMMUTABLE');
+    this.name = 'SuperAdminImmutableError';
+  }
+}
+
+export class InvalidPermissionIdsError extends DomainError {
+  constructor(unknownIds: string[]) {
+    super(`Unknown permission IDs: ${unknownIds.join(', ')}`, 'INVALID_PERMISSION_IDS');
+    this.name = 'InvalidPermissionIdsError';
+  }
+}
+
+export class RoleCodeTakenError extends DomainError {
+  constructor(code: string) {
+    super(`Role code "${code}" is already taken`, 'ROLE_CODE_TAKEN');
+    this.name = 'RoleCodeTakenError';
+  }
+}
+
+export class RoleIsSystemError extends DomainError {
+  constructor(id: string) {
+    super(`Role with id ${id} is a system role and cannot be deleted`, 'ROLE_IS_SYSTEM');
+    this.name = 'RoleIsSystemError';
+  }
+}
+
+export class RoleValidationError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'RoleValidationError';
+  }
+}

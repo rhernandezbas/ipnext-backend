@@ -1,4 +1,18 @@
-import { IClassPort, IClassNode, IClassSoTypeDescriptor, CreateServiceOrderInput } from '@domain/ports/IClassPort';
+import {
+  IClassPort,
+  IClassNode,
+  IClassSoTypeDescriptor,
+  IClassResultCodeDescriptor,
+  CreateServiceOrderInput,
+  ListServiceOrdersParams,
+} from '@domain/ports/IClassPort';
+import {
+  ClosedServiceOrderSummary,
+  SoStatusHistoryEntry,
+  SoChecklist,
+  SoMaterial,
+  SoEquipmentEvent,
+} from '@domain/entities/iclass-closed-order';
 import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/iclass';
 
 interface CreatedOrder {
@@ -46,5 +60,47 @@ export class InMemoryIClassClient implements IClassPort {
     this.nextOrderCode = undefined;
     this.createdOrders.push({ input, orderCode });
     return { orderCode };
+  }
+
+  // ── Closure loop (read path) — settable test data ─────────────────────────
+
+  /** Returned by listServiceOrders (filtered by serviceOrderCode when provided). */
+  serviceOrders: ClosedServiceOrderSummary[] = [];
+  historyByOrder: Record<string, SoStatusHistoryEntry[]> = {};
+  checklistsByOrder: Record<string, SoChecklist[]> = {};
+  materialsByOrder: Record<string, SoMaterial[]> = {};
+  equipmentEventsByOrder: Record<string, SoEquipmentEvent[]> = {};
+  resultCodes: IClassResultCodeDescriptor[] = [];
+  /** Records each listServiceOrders call for assertions (e.g. backfill by code). */
+  listCalls: ListServiceOrdersParams[] = [];
+
+  async listServiceOrders(params: ListServiceOrdersParams): Promise<ClosedServiceOrderSummary[]> {
+    if (this.failureMode === 'unavailable') throw new IClassUnavailableError();
+    this.listCalls.push(params);
+    const all = this.serviceOrders.map(o => ({ ...o }));
+    return params.serviceOrderCode
+      ? all.filter(o => o.iclassCodigo === params.serviceOrderCode)
+      : all;
+  }
+
+  async getServiceOrderHistory(iclassId: string): Promise<SoStatusHistoryEntry[]> {
+    return (this.historyByOrder[iclassId] ?? []).map(e => ({ ...e }));
+  }
+
+  async getServiceOrderChecklists(iclassId: string): Promise<SoChecklist[]> {
+    return (this.checklistsByOrder[iclassId] ?? []).map(c => ({ ...c, answers: c.answers.map(a => ({ ...a })) }));
+  }
+
+  async getServiceOrderMaterials(iclassId: string): Promise<SoMaterial[]> {
+    return (this.materialsByOrder[iclassId] ?? []).map(m => ({ ...m }));
+  }
+
+  async getServiceOrderEquipmentEvents(iclassId: string): Promise<SoEquipmentEvent[]> {
+    return (this.equipmentEventsByOrder[iclassId] ?? []).map(e => ({ ...e }));
+  }
+
+  async listResultCodes(): Promise<IClassResultCodeDescriptor[]> {
+    if (this.failureMode === 'unavailable') throw new IClassUnavailableError();
+    return this.resultCodes.map(r => ({ ...r }));
   }
 }

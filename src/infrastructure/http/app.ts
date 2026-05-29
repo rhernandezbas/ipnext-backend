@@ -359,6 +359,15 @@ import { SyncIClassSoTypes } from '@application/use-cases/SyncIClassSoTypes';
 import { ListIClassSoTypes } from '@application/use-cases/ListIClassSoTypes';
 import { AssignIClassSoTypeToProject } from '@application/use-cases/AssignIClassSoTypeToProject';
 import { createIClassAdminRouter } from './routes/iclass-admin.routes';
+import { createIClassClosureRouter } from './routes/iclass-closure.routes';
+import { PrismaIClassResultCodeRepository } from '../adapters/prisma/PrismaIClassResultCodeRepository';
+import { SyncIClassResultCodes } from '@application/use-cases/SyncIClassResultCodes';
+import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCodes';
+import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
+import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
+import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
+import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
+import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
 import { PrismaRbacRoleRepository } from '../adapters/prisma/PrismaRbacRoleRepository';
 import { PrismaRbacPermissionRepository } from '../adapters/prisma/PrismaRbacPermissionRepository';
@@ -382,6 +391,17 @@ import { AssignRoleToUser } from '@application/use-cases/rbac/AssignRoleToUser';
 import { RemoveRoleFromUser } from '@application/use-cases/rbac/RemoveRoleFromUser';
 import { createRbacUserRouter } from './routes/rbacUser.routes';
 import { toRbacRoleDto } from '@application/dto/rbacUser.dto';
+// SDD #3 Phase 1a — ResolveUserPermissions use case
+import { ResolveUserPermissions } from '@application/use-cases/rbac/ResolveUserPermissions';
+// SDD #3 Phase 4a — role-permissions use cases + routes
+import { ListAllPermissionsWithModule } from '@application/use-cases/rbac/ListAllPermissionsWithModule';
+import { ListPermissionIdsForRole } from '@application/use-cases/rbac/ListPermissionIdsForRole';
+import { SetRolePermissions } from '@application/use-cases/rbac/SetRolePermissions';
+import { createRolePermissionsRouter } from './routes/rolePermissions.routes';
+import { createPermissionsRouter } from './routes/permissions.routes';
+// SDD #3 Phase 4b — role catalog mutation use cases
+import { CreateRbacRole } from '@application/use-cases/rbac/CreateRbacRole';
+import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -410,6 +430,9 @@ const rbacRolePermissionRepo = new PrismaRbacRolePermissionRepository();
 // PasswordHasher + LoginRbacUser — module-level singletons (SDD #2 Phase 5)
 const passwordHasher = new BcryptPasswordHasher();
 const loginRbacUser  = new LoginRbacUser(rbacUserRepo, passwordHasher);
+
+// SDD #3 Phase 1a — ResolveUserPermissions resolves flat permission code list for a user
+const resolveUserPermissions = new ResolveUserPermissions(rbacUserRoleRepo, rbacRolePermissionRepo, rbacPermissionRepo);
 
 // Convenience factory — routes in future SDDs import this instead of wiring the repo manually
 export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
@@ -508,14 +531,22 @@ export function createApp() {
 
   const listTasks = new ListTasks(schedulingRepo);
   const getTask = new GetTask(schedulingRepo);
-  const adminRepoForScheduling = new PrismaAdminRepository();
+  // Scheduling reporter/assignee/watcher ids are validated against RbacUser
+  // (post SDD #2 — Admin table is being phased out, no fallback). The lookup
+  // returns { id } on hit, null on miss — satisfies the EntityLookup port.
+  const userLookupForScheduling = {
+    findById: async (id: string): Promise<{ id: string } | null> => {
+      const rbacUser = await rbacUserRepo.findById(id);
+      return rbacUser ? { id: rbacUser.id } : null;
+    },
+  };
   const createTask = new CreateTask(
     schedulingRepo,
     // EntityLookup wrappers for FK validation (return { id } | null)
     { findById: (id: string) => prismaClientLookup('Client', id) },
     { findById: (id: string) => prismaClientLookup('Service', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
-    adminRepoForScheduling, // AdminRepository.findById returns Admin | null — satisfies EntityLookup
+    userLookupForScheduling,
     { findById: (id: string) => prismaClientLookup('Project', id) },
   );
   const updateTask = new UpdateTask(
@@ -523,7 +554,7 @@ export function createApp() {
     { findById: (id: string) => prismaClientLookup('Client', id) },
     { findById: (id: string) => prismaClientLookup('Service', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
-    adminRepoForScheduling,
+    userLookupForScheduling,
     { findById: (id: string) => prismaClientLookup('Project', id) },
   );
   const deleteTask = new DeleteTask(schedulingRepo);
@@ -765,7 +796,7 @@ export function createApp() {
   // Routes
   app.use('/api/dashboard', createDashboardRouter(getDashboardStats, getDashboardShortcuts, getRecentActivity));
   app.use('/api/messages', createMessagesRouter(listMessages, getMessage, createMessage, markMessageAsRead, deleteMessage));
-  app.use('/api/auth', createAuthRouter(authAdapter));
+  app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions));
   app.use('/api/clients', createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
   // TicketStatus catalog — mounted BEFORE the tickets router to avoid /:id catch-all swallowing /statuses.
@@ -946,6 +977,24 @@ export function createApp() {
   // IClass admin — SO type catalog sync + list (admin-only).
   app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter));
 
+  // IClass closure loop — result-code catalog + configurable result→stage mapping + status + backfill.
+  const iclassResultCodeRepo = new PrismaIClassResultCodeRepository();
+  const closureIngest = new IngestClosedServiceOrders(
+    buildIClassClient(),
+    new PrismaClosedServiceOrderRepository(),
+    iclassResultCodeRepo,
+    schedulingRepo,
+    new PrismaSyncStateRepository(),
+  );
+  app.use('/api/admin/iclass', createIClassClosureRouter(
+    new SyncIClassResultCodes(buildIClassClient(), iclassResultCodeRepo),
+    new ListIClassResultCodes(iclassResultCodeRepo),
+    new AssignResultCodeStage(iclassResultCodeRepo, stageRepo),
+    new GetClosureStatus(new PrismaSyncStateRepository()),
+    new BackfillClosedServiceOrders(buildIClassClient(), schedulingRepo, closureIngest),
+    authAdapter,
+  ));
+
   // Feature flags — runtime toggles persisted in DB (admin-only).
   // featureFlagRepo is created earlier (wired into SendTaskToIClass).
   app.use('/api/admin/feature-flags', createFeatureFlagsRouter(
@@ -988,11 +1037,14 @@ export function createApp() {
     }),
   );
 
-  // GET /api/admin/rbac/roles — read-only endpoint for the FE role multi-select
+  // /api/admin/rbac/roles — role catalog CRUD (SDD #3 Phase 4b)
+  const createRbacRoleUC = new CreateRbacRole(rbacRoleRepo);
+  const deleteRbacRoleUC = new DeleteRbacRole(rbacRoleRepo);
+
   const rbacRolesRouter = Router();
   rbacRolesRouter.use(authMiddlewareForRbac);
-  rbacRolesRouter.use(requirePerm('admin', 'manage'));
-  rbacRolesRouter.get('/', async (_req, res, next) => {
+
+  rbacRolesRouter.get('/', requirePerm('rbac', 'read'), async (_req, res, next) => {
     try {
       const roles = await rbacRoleRepo.listAll();
       res.json({ roles: roles.map(toRbacRoleDto) });
@@ -1000,7 +1052,52 @@ export function createApp() {
       next(err);
     }
   });
+
+  rbacRolesRouter.post('/', requirePerm('rbac', 'manage_roles'), async (req, res, next) => {
+    try {
+      const role = await createRbacRoleUC.execute(req.body);
+      res.status(201).json(toRbacRoleDto(role));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  rbacRolesRouter.delete('/:id', requirePerm('rbac', 'manage_roles'), async (req, res, next) => {
+    try {
+      await deleteRbacRoleUC.execute(req.params.id);
+      res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.use('/api/admin/rbac/roles', rbacRolesRouter);
+
+  // SDD #3 Phase 4a — role-permissions sub-resource + permissions catalog
+  // IMPORTANT: these are mounted AFTER the inline rbacRolesRouter (GET /api/admin/rbac/roles)
+  // because Express matches routes in registration order and /:id/permissions needs the
+  // roles router to have registered first so GET / (list) doesn't shadow GET /:id/permissions.
+  const listAllPermissionsUC  = new ListAllPermissionsWithModule(rbacPermissionRepo);
+  const listPermIdsForRoleUC  = new ListPermissionIdsForRole(rbacRoleRepo, rbacRolePermissionRepo);
+  const setRolePermissionsUC  = new SetRolePermissions(rbacRoleRepo, rbacRolePermissionRepo, rbacPermissionRepo);
+
+  app.use(
+    '/api/admin/rbac/roles',
+    authMiddlewareForRbac,
+    createRolePermissionsRouter(
+      listPermIdsForRoleUC,
+      setRolePermissionsUC,
+      requirePerm('rbac', 'read'),
+      requirePerm('rbac', 'manage_roles'),
+    ),
+  );
+
+  app.use(
+    '/api/admin/rbac/permissions',
+    authMiddlewareForRbac,
+    requirePerm('rbac', 'read'),
+    createPermissionsRouter(listAllPermissionsUC),
+  );
 
   // Profile routes (uses internal router directly)
   const profileRouter = Router();

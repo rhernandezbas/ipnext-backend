@@ -62,6 +62,7 @@ const NEW_FIELDS_DEFAULTS = {
   reporterId: null,
   assigneeId: null,
   assigneeName: null,
+  reporterName: null,
   watcherIds: [] as string[],
   travelTimeTo: null,
   travelTimeFrom: null,
@@ -269,6 +270,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       reporterId: data.reporterId ?? null,
       assigneeId: data.assigneeId ?? null,
       assigneeName: null, // In-memory: no JOIN
+      reporterName: null,
       watcherIds: data.watcherIds ? [...data.watcherIds] : [],
       travelTimeTo: data.travelTimeTo ?? null,
       travelTimeFrom: data.travelTimeFrom ?? null,
@@ -386,6 +388,23 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (index === -1) return null;
     this.tasks[index] = { ...this.tasks[index]!, iclassOrderCode: code, updatedAt: new Date().toISOString() };
     return { ...this.tasks[index]! };
+  }
+
+  // ── IClass closure loop ───────────────────────────────────────────────────
+
+  async findTaskBySequenceNumber(sequenceNumber: number): Promise<ScheduledTask | null> {
+    const task = this.tasks.find(t => t.sequenceNumber === sequenceNumber);
+    return task ? { ...task } : null;
+  }
+
+  async listTasksInIClassStage(stageName: string): Promise<ScheduledTask[]> {
+    // Resolve the stage id(s) for the given name via the injected stage repo,
+    // then return tasks sitting in that stage.
+    const anyRepo = this.stageRepo as unknown as { findByName?: (n: string) => Promise<Stage | null> } | undefined;
+    if (!anyRepo?.findByName) return [];
+    const stage = await anyRepo.findByName(stageName);
+    if (!stage) return [];
+    return this.tasks.filter(t => t.stageId === stage.id).map(t => ({ ...t }));
   }
 
   /** Test helper: seed a fully-formed task (lets tests set derived JOIN fields). */

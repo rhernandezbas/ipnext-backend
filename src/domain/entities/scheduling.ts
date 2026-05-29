@@ -37,8 +37,9 @@ export interface ScheduledTask {
   serviceId: string | null;
   partnerId: string | null;
   reporterId: string | null;
+  reporterName: string | null;   // derived from RbacUser.name via JOIN
   assigneeId: string | null;
-  assigneeName: string | null;   // derived from Admin.name via JOIN
+  assigneeName: string | null;   // derived from RbacUser.name via JOIN
 
   // NEW — watchers
   watcherIds: string[];          // empty array when none

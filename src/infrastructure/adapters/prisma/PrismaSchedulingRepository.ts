@@ -31,8 +31,9 @@ export function toTask(row: any): ScheduledTask {
     ? (row.customer.grClienteId ?? row.customer.splynxId ?? row.customer.login ?? null)
     : null;
 
-  // Derive assigneeName from JOIN only (no legacy fallback)
+  // Derive assigneeName / reporterName from JOIN only (no legacy fallback)
   const assigneeName: string | null = row.assignee?.name ?? null;
+  const reporterName: string | null = row.reporter?.name ?? null;
 
   // Map watchers array to watcherIds
   const watcherIds: string[] = Array.isArray(row.watchers)
@@ -79,6 +80,7 @@ export function toTask(row: any): ScheduledTask {
     serviceId: row.serviceId ?? null,
     partnerId: row.partnerId ?? null,
     reporterId: row.reporterId ?? null,
+    reporterName,
     assigneeId: row.assigneeId ?? null,
     assigneeName,
     watcherIds,
@@ -125,7 +127,7 @@ const INCLUDE = {
   stage: true,
   customer: { select: { id: true, name: true, city: true, phone: true, grClienteId: true, splynxId: true, login: true } },
   assignee: { select: { id: true, name: true } },
-  reporter: { select: { id: true } },
+  reporter: { select: { id: true, name: true } },
   service: { select: { id: true } },
   partnerRef: { select: { id: true } },
   watchers: true,
@@ -556,5 +558,24 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     } catch {
       return null;
     }
+  }
+
+  // ── IClass closure loop ───────────────────────────────────────────────────
+
+  async findTaskBySequenceNumber(sequenceNumber: number): Promise<ScheduledTask | null> {
+    const row = await (prisma.scheduledTask as any).findUnique({
+      where: { sequenceNumber },
+      include: INCLUDE,
+    });
+    return row ? toTask(row) : null;
+  }
+
+  async listTasksInIClassStage(stageName: string): Promise<ScheduledTask[]> {
+    const rows = await (prisma.scheduledTask as any).findMany({
+      where: { stage: { is: { name: stageName } } },
+      include: INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map(toTask);
   }
 }
