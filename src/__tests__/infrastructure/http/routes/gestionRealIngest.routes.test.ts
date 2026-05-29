@@ -112,7 +112,6 @@ describe('gestionRealIngest.routes', () => {
     const res = await request(app).get('/api/gestion-real-ingest/config').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      enabled: false,
       intervalMs: 180000,
       windowMonths: 12,
       fiberProjectId: null,
@@ -135,9 +134,8 @@ describe('gestionRealIngest.routes', () => {
     const res = await request(app)
       .put('/api/gestion-real-ingest/config')
       .set('Cookie', AUTH_COOKIE)
-      .send({ enabled: true, intervalMs: 60000, fiberProjectId: fiber.id });
+      .send({ intervalMs: 60000, fiberProjectId: fiber.id });
     expect(res.status).toBe(200);
-    expect(res.body.enabled).toBe(true);
     expect(res.body.intervalMs).toBe(60000);
     expect(res.body.fiberProjectId).toBe(fiber.id);
   });

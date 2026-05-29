@@ -1,5 +1,4 @@
 import { IngestGestionRealOrders, IngestRunResult } from '@application/use-cases/IngestGestionRealOrders';
-import { GestionRealIngestConfigRepository } from '@domain/ports/GestionRealIngestConfigRepository';
 import { DistributedLock } from '@domain/ports/DistributedLock';
 
 export interface IngestSchedulerOptions {
@@ -30,10 +29,10 @@ const LOCK_KEY = 'gr-ingest';
  *  2. `DistributedLock` — cross-process/replica guard (Postgres advisory lock in
  *     production, in-memory fake in tests).
  *
- * The feature is toggled at runtime via the persisted config's `enabled` flag —
- * checked per tick so it can be flipped via `PUT /config` without a redeploy.
- * When disabled the tick is a no-op (the use-case itself also no-ops, but we
- * short-circuit here to avoid acquiring the lock needlessly).
+ * The feature is toggled at runtime via the `gestion-real-ingest` feature flag,
+ * which is the single on/off gate and is checked inside the use-case per run.
+ * The scheduler simply ticks and delegates; when the flag is OFF the use-case
+ * no-ops (zero counts, no GR call).
  *
  * Errors are swallowed so one bad cycle never kills the timer.
  */
@@ -43,7 +42,6 @@ export class GestionRealIngestScheduler {
 
   constructor(
     private readonly ingest: IngestGestionRealOrders,
-    private readonly config: GestionRealIngestConfigRepository,
     private readonly opts: IngestSchedulerOptions,
     private readonly lock: DistributedLock,
   ) {}
@@ -63,13 +61,9 @@ export class GestionRealIngestScheduler {
   }
 
   async runOnce(): Promise<IngestRunSummary> {
-    // Runtime toggle: skip entirely when disabled (REQ-SCHED-2). Avoids touching
-    // the lock or GR when the operator has not turned the feature on.
-    const cfg = await this.config.get();
-    if (!cfg.enabled) {
-      this.log('[gr-ingest] skipped — disabled');
-      return { skipped: true };
-    }
+    // The runtime on/off gate is the `gestion-real-ingest` feature flag, checked
+    // inside the use-case. The scheduler always ticks; a flag-OFF run is a cheap
+    // no-op in the use-case (zero counts, no GR call).
 
     // Layer 1: intra-process guard (no I/O, cheap).
     if (this.inFlight) {

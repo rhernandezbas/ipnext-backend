@@ -7,7 +7,6 @@ describe('InMemoryGestionRealIngestConfigRepository', () => {
     const config = await repo.get();
 
     expect(config).toEqual({
-      enabled: false,
       intervalMs: 180000,
       windowMonths: 12,
       fiberProjectId: null,
@@ -19,13 +18,11 @@ describe('InMemoryGestionRealIngestConfigRepository', () => {
     const repo = new InMemoryGestionRealIngestConfigRepository();
 
     const updated = await repo.update({
-      enabled: true,
       intervalMs: 60000,
       fiberProjectId: 'p-fiber',
     });
 
     expect(updated).toEqual({
-      enabled: true,
       intervalMs: 60000,
       windowMonths: 12,
       fiberProjectId: 'p-fiber',
@@ -47,11 +44,11 @@ describe('InMemoryGestionRealIngestConfigRepository', () => {
 
   it('update() merges partial patches without resetting untouched fields', async () => {
     const repo = new InMemoryGestionRealIngestConfigRepository();
-    await repo.update({ enabled: true, fiberProjectId: 'p-fiber' });
+    await repo.update({ windowMonths: 6, fiberProjectId: 'p-fiber' });
 
     const after = await repo.update({ intervalMs: 90000 });
 
-    expect(after.enabled).toBe(true);
+    expect(after.windowMonths).toBe(6);
     expect(after.fiberProjectId).toBe('p-fiber');
     expect(after.intervalMs).toBe(90000);
   });

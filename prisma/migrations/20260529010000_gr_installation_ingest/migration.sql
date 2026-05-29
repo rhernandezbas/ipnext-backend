@@ -4,7 +4,6 @@ ALTER TABLE "ScheduledTask" ADD COLUMN     "grOrdenId" TEXT;
 -- CreateTable
 CREATE TABLE "GestionRealIngestConfig" (
     "id" TEXT NOT NULL DEFAULT 'singleton',
-    "enabled" BOOLEAN NOT NULL DEFAULT false,
     "intervalMs" INTEGER NOT NULL DEFAULT 180000,
     "windowMonths" INTEGER NOT NULL DEFAULT 12,
     "fiberProjectId" TEXT,

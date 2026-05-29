@@ -17,11 +17,11 @@ const PENDING_STAGE_NAME = 'Pendiente';
  * scheduler, or null when GR credentials are missing — callers just no-op on null,
  * exactly like `bootstrapGestionRealSync`.
  *
- * The on/off decision lives in the persisted `GestionRealIngestConfig.enabled`
- * flag (checked per tick at runtime, not at bootstrap), so an operator can flip
- * it via `PUT /api/gestion-real-ingest/config` without a redeploy. We still gate
- * the bootstrap on GR credentials being present — without them the upstream
- * `getServiceOrders` call cannot authenticate.
+ * The runtime on/off decision lives in the `gestion-real-ingest` feature flag
+ * (checked per run inside the use-case), so an operator can flip it via
+ * `/feature-flags` without a redeploy. We still gate the bootstrap on the
+ * `GR_SYNC_ENABLED` env and GR credentials being present — without them the
+ * upstream `getServiceOrders` call cannot authenticate.
  */
 export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestScheduler | null> {
   const gr = config.gestionReal;
@@ -71,5 +71,5 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
   // Read the persisted interval; defaults apply when the row is absent.
   const persisted = await ingestConfig.get();
 
-  return new GestionRealIngestScheduler(ingest, ingestConfig, { intervalMs: persisted.intervalMs }, lock);
+  return new GestionRealIngestScheduler(ingest, { intervalMs: persisted.intervalMs }, lock);
 }

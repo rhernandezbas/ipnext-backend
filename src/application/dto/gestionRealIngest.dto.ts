@@ -11,7 +11,6 @@ import { SyncState } from '@domain/ports/SyncStateRepository';
  * wire contract can evolve independently of the storage model.
  */
 export interface IngestConfigDTO {
-  enabled: boolean;
   intervalMs: number;
   windowMonths: number;
   fiberProjectId: string | null;
@@ -20,7 +19,6 @@ export interface IngestConfigDTO {
 
 export function toIngestConfigDTO(config: IngestConfig): IngestConfigDTO {
   return {
-    enabled: config.enabled,
     intervalMs: config.intervalMs,
     windowMonths: config.windowMonths,
     fiberProjectId: config.fiberProjectId,
@@ -38,7 +36,6 @@ export function toIngestConfigDTO(config: IngestConfig): IngestConfigDTO {
  */
 export const UpdateIngestConfigSchema = z
   .object({
-    enabled: z.boolean(),
     intervalMs: z.number().int().positive(),
     windowMonths: z.number().int().positive(),
     fiberProjectId: z.string().min(1).nullable(),

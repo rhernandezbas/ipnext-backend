@@ -9,7 +9,6 @@ const SINGLETON_ID = 'singleton';
 
 /** Hardcoded defaults returned before the singleton row exists (REQ-CFG-1). */
 const DEFAULTS: IngestConfig = {
-  enabled: false,
   intervalMs: 180000,
   windowMonths: 12,
   fiberProjectId: null,
@@ -17,7 +16,6 @@ const DEFAULTS: IngestConfig = {
 };
 
 interface ConfigRow {
-  enabled: boolean;
   intervalMs: number;
   windowMonths: number;
   fiberProjectId: string | null;
@@ -26,7 +24,6 @@ interface ConfigRow {
 
 function toConfig(row: ConfigRow): IngestConfig {
   return {
-    enabled: row.enabled,
     intervalMs: row.intervalMs,
     windowMonths: row.windowMonths,
     fiberProjectId: row.fiberProjectId,
@@ -55,7 +52,6 @@ export class PrismaGestionRealIngestConfigRepository implements GestionRealInges
   async update(patch: Partial<IngestConfig>): Promise<IngestConfig> {
     // Build only the fields explicitly present so omitted keys are untouched.
     const data: Partial<IngestConfig> = {};
-    if (patch.enabled !== undefined) data.enabled = patch.enabled;
     if (patch.intervalMs !== undefined) data.intervalMs = patch.intervalMs;
     if (patch.windowMonths !== undefined) data.windowMonths = patch.windowMonths;
     if ('fiberProjectId' in patch) data.fiberProjectId = patch.fiberProjectId ?? null;

@@ -5,7 +5,6 @@ describe('GetIngestConfig', () => {
   it('returns the current config as a DTO (REQ-GETCFG-1)', async () => {
     const repo = new InMemoryGestionRealIngestConfigRepository();
     await repo.update({
-      enabled: true,
       intervalMs: 180000,
       fiberProjectId: 'p-fiber',
       wirelessProjectId: 'p-wifi',
@@ -16,7 +15,6 @@ describe('GetIngestConfig', () => {
     const dto = await useCase.execute();
 
     expect(dto).toEqual({
-      enabled: true,
       intervalMs: 180000,
       windowMonths: 12,
       fiberProjectId: 'p-fiber',
@@ -31,7 +29,6 @@ describe('GetIngestConfig', () => {
     const dto = await useCase.execute();
 
     expect(dto).toEqual({
-      enabled: false,
       intervalMs: 180000,
       windowMonths: 12,
       fiberProjectId: null,

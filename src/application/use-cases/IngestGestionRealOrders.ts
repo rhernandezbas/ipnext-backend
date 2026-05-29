@@ -11,10 +11,9 @@ import { classifyTech } from './classifyTech';
 const SYNC_ENTITY = 'gr-ingest';
 
 /**
- * Master switch for the whole ingest. Release control, distinct from the
- * operator's runtime control (`GestionRealIngestConfig.enabled`). Both must be
- * true for a run to proceed. Checked PER execution so flipping it via
- * /feature-flags takes effect on the next scheduler tick — no redeploy.
+ * Master switch for the whole ingest and the SINGLE runtime on/off gate.
+ * Checked PER execution so flipping it via /feature-flags takes effect on the
+ * next scheduler tick — no redeploy. OFF → no-op (no GR call, no SyncState).
  */
 const INGEST_FLAG_KEY = 'gestion-real-ingest';
 
@@ -59,7 +58,7 @@ export interface IngestOptions {
 /**
  * Ingest pending installation orders from Gestión Real into local ScheduledTasks.
  *
- * Flow (per design): read config → if disabled, no-op → fetch CI-eligible orders
+ * Flow (per design): check feature flag → if OFF, no-op → fetch CI-eligible orders
  * (estado=PEND, fecha_tipo=c, window from windowMonths) → filter tipo==="CI" →
  * resolve client+service FKs locally (miss → skip+count unmirrored) → idempotency
  * check by grOrdenId (exists → skip+count duplicate) → classify tech → pick target
@@ -100,8 +99,6 @@ export class IngestGestionRealOrders {
     if (!flag?.enabled) return counts;
 
     const config = await this.config.get();
-    // Operator runtime control. Disabled → no-op (REQ-SCHED-2).
-    if (!config.enabled) return counts;
 
     const today = this.now();
     const fechaHasta = formatGrDate(today);

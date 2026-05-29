@@ -27,7 +27,7 @@ config/status/needs-review, wired thinly in `app.ts`.
 
 ## Data Flow
 
-    Scheduler tick (enabled?) ─▶ IngestGestionRealOrders
+    Scheduler tick ─▶ IngestGestionRealOrders (flag OFF → no-op)
         │  getServiceOrders(estado=PEND, fecha_tipo=c, window)
         ▼
     GestionRealClient ──▶ GrServiceOrder[]  ──filter tipo=="CI"──▶
@@ -98,8 +98,9 @@ export interface GrLinkResolverPort {
 }
 
 // domain/ports/GestionRealIngestConfigRepository.ts
+// Runtime on/off is the `gestion-real-ingest` feature flag, NOT a config field.
 export interface IngestConfig {
-  enabled: boolean; intervalMs: number; windowMonths: number;
+  intervalMs: number; windowMonths: number;
   fiberProjectId: string | null; wirelessProjectId: string | null;
 }
 export interface GestionRealIngestConfigRepository {
@@ -131,7 +132,8 @@ export interface IngestRunResult {
 
 Status endpoint reads `gr-ingest` SyncState; `lastRunAt=null` + zero counts when absent. Advisory
 lock key = `gr-ingest` (distinct from `gr-sync`). Scheduler: `inFlight` guard, `tryAcquire`,
-runs only when `config.get().enabled`, swallows errors so one bad cycle never kills the timer.
+always delegates to the use-case (the `gestion-real-ingest` feature flag is the sole runtime gate,
+checked inside the use-case → flag OFF is a no-op), swallows errors so one bad cycle never kills the timer.
 
 ## Data Model (Prisma delta — one additive migration)
 
@@ -144,7 +146,6 @@ model ScheduledTask {
 
 model GestionRealIngestConfig {
   id                String   @id @default("singleton")   // enforce single row
-  enabled           Boolean  @default(false)
   intervalMs        Int      @default(180000)
   windowMonths      Int      @default(12)
   fiberProjectId    String?
@@ -165,15 +166,16 @@ nullable → safe rollback (leave columns in place). Generate via `npm run prism
 - `bootstrapGestionRealIngest.ts`: builds `GestionRealClient`, `PrismaGrLinkResolver`,
   `PrismaGestionRealIngestConfigRepository`, `PrismaSchedulingRepository`,
   `PrismaSyncStateRepository`, `PgAdvisoryLock`, `IngestGestionRealOrders`,
-  `GestionRealIngestScheduler`. Returns `null` when GR creds missing (config `enabled` is checked
-  per-tick at runtime, not at bootstrap, so it can be toggled without redeploy).
+  `GestionRealIngestScheduler`. Returns `null` when `GR_SYNC_ENABLED` is off or GR creds are missing.
+  The runtime on/off is the `gestion-real-ingest` feature flag, checked per-run inside the use-case,
+  so it can be toggled without redeploy.
 - `main.ts`: `const grIngest = bootstrapGestionRealIngest(); grIngest?.start();` (mirrors `grSync`).
 - `app.ts`: single `app.use('/api/gestion-real-ingest', createGestionRealIngestRouter(authProvider, getIngestConfig, updateIngestConfig, getIngestStatus, listNeedsReviewTasks))`. `UpdateIngestConfig` takes the `ProjectRepository`/`EntityLookup` to validate FK existence (404 PROJECT_NOT_FOUND; null clears without lookup — REQ-PUTCFG-2).
 
 ## Defaults (settled)
 
-`enabled=false`, `intervalMs=180000` (~3 min), `windowMonths=12`, `estado='PEND'`,
-`fechaTipo='c'`. REVISAR title `[REVISAR - Logística] Instalación <clientName>`; description
+`intervalMs=180000` (~3 min), `windowMonths=12`, `estado='PEND'`, `fechaTipo='c'`. Runtime on/off
+is the `gestion-real-ingest` feature flag (ships OFF). REVISAR title `[REVISAR - Logística] Instalación <clientName>`; description
 `Plan no reconocido — asignar tecnología y proyecto manualmente`.
 
 ## Testing Strategy
@@ -183,14 +185,14 @@ nullable → safe rollback (leave columns in place). Generate via `npm run prism
 | Unit | `classifyTech` boundaries (`"300MB"`→FIBER, `"50/25MB"`→WIRELESS, `"20/5MB GRAL"`→20/WIRELESS, `100`→FIBER, `null`/`"FIBRA"`→UNCLASSIFIED) | Pure fn, table-driven |
 | Unit | `parseServiceOrdersResponse` dict→array, null domicilio | Pure parser, fixture payload |
 | Unit | `IngestGestionRealOrders` (CI filter, unmirrored skip, idempotent re-run, FIBER/WIRELESS/UNCLASSIFIED paths, counts) | In-memory `GestionRealPort` fake + `InMemoryGrLinkResolver` + `InMemorySchedulingRepository` + `InMemoryGestionRealIngestConfigRepository` + `InMemorySyncStateRepository`. NO Prisma mocks. |
-| Unit | Scheduler enabled-gate + lock-held skip | `InMemoryDistributedLock` + fake config |
+| Unit | Scheduler delegates to use-case (flag-OFF no-op) + lock-held skip | `InMemoryDistributedLock` + `InMemoryFeatureFlagRepository` |
 | Integration | routes GET/PUT config (400 bad body, 404 ghost project, null clear), GET status, GET needs-review | supertest + in-memory adapters |
 
 ## Migration / Rollout
 
-One additive migration. Feature ships `enabled=false` → no ingest until an operator sets projects
-and flips it via `PUT /config`. Rollback = flip `enabled=false` (instant) or revert branch; columns
-are nullable/additive, harmless to leave.
+One additive migration. Feature ships with the `gestion-real-ingest` feature flag OFF → no ingest
+until an operator sets projects and flips the flag via `/feature-flags`. Rollback = flip the flag OFF
+(instant) or revert branch; columns are nullable/additive, harmless to leave.
 
 ## Open Questions
 

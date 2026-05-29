@@ -26,9 +26,11 @@ The system MUST persist a single config record with the fields below. Project ma
 real FKs to `Project` (NOT free-text names) because destination projects live in prod and may be
 renamed. Both project FKs are nullable.
 
+The runtime on/off control is NOT stored here — it is the `gestion-real-ingest` feature flag (the
+single runtime gate, checked inside the ingest use-case). This config holds only operational tuning.
+
 | Field | Type | Nullable | Meaning |
 |-------|------|----------|---------|
-| `enabled` | `boolean` | No | Master on/off for the ingest |
 | `intervalMs` | `number` (int) | No | Scheduler tick interval |
 | `fiberProjectId` | `string` (FK→Project) | Yes | Target project for FIBER tasks |
 | `wirelessProjectId` | `string` (FK→Project) | Yes | Target project for WIRELESS tasks |
@@ -38,7 +40,7 @@ renamed. Both project FKs are nullable.
 
 - GIVEN no config record has been persisted yet
 - WHEN the config is read
-- THEN a default record is returned (`enabled = false`, sensible default `intervalMs`/`windowMonths`, project FKs `null`)
+- THEN a default record is returned (sensible default `intervalMs`/`windowMonths`, project FKs `null`)
 
 ---
 
@@ -47,12 +49,12 @@ renamed. Both project FKs are nullable.
 ### REQ-GETCFG-1: Returns the current config as a DTO
 
 `GET /api/gestion-real-ingest/config` MUST respond HTTP 200 with a config DTO containing
-`enabled`, `intervalMs`, `fiberProjectId`, `wirelessProjectId`, and `windowMonths`. It MUST NOT
+`intervalMs`, `fiberProjectId`, `wirelessProjectId`, and `windowMonths`. It MUST NOT
 return a raw Prisma entity.
 
 #### Scenario: Read current config
 
-- GIVEN a persisted config `{ enabled: true, intervalMs: 180000, fiberProjectId: "p-fiber", wirelessProjectId: "p-wifi", windowMonths: 12 }`
+- GIVEN a persisted config `{ intervalMs: 180000, fiberProjectId: "p-fiber", wirelessProjectId: "p-wifi", windowMonths: 12 }`
 - WHEN `GET /api/gestion-real-ingest/config` is called
 - THEN the response is HTTP 200 with those fields as a DTO
 
@@ -60,11 +62,12 @@ return a raw Prisma entity.
 
 ## 3. Update Config
 
-### REQ-PUTCFG-1: Updates enabled / interval / project mapping
+### REQ-PUTCFG-1: Updates interval / project mapping
 
 `PUT /api/gestion-real-ingest/config` MUST accept a validated body and update the persisted config,
-responding HTTP 200 with the updated config DTO. It MUST allow changing `enabled`, `intervalMs`,
-`fiberProjectId`, `wirelessProjectId`, and `windowMonths`.
+responding HTTP 200 with the updated config DTO. It MUST allow changing `intervalMs`,
+`fiberProjectId`, `wirelessProjectId`, and `windowMonths`. (The runtime on/off control is the
+`gestion-real-ingest` feature flag, not this config.)
 
 #### Scenario: Update changes the target project
 

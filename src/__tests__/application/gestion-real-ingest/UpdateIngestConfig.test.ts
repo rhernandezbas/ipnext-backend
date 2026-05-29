@@ -16,12 +16,11 @@ describe('UpdateIngestConfig', () => {
     return { config, projects, useCase };
   }
 
-  it('updates enabled / interval / windowMonths (REQ-PUTCFG-1)', async () => {
+  it('updates interval / windowMonths (REQ-PUTCFG-1)', async () => {
     const { useCase } = build();
 
-    const dto = await useCase.execute({ enabled: true, intervalMs: 60000, windowMonths: 6 });
+    const dto = await useCase.execute({ intervalMs: 60000, windowMonths: 6 });
 
-    expect(dto.enabled).toBe(true);
     expect(dto.intervalMs).toBe(60000);
     expect(dto.windowMonths).toBe(6);
   });

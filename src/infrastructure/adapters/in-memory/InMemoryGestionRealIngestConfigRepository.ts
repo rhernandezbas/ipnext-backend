@@ -5,7 +5,6 @@ import {
 
 /** Hardcoded defaults returned before any row is persisted (REQ-CFG-1). */
 const DEFAULTS: IngestConfig = {
-  enabled: false,
   intervalMs: 180000,
   windowMonths: 12,
   fiberProjectId: null,
@@ -27,7 +26,6 @@ export class InMemoryGestionRealIngestConfigRepository implements GestionRealIng
   async update(patch: Partial<IngestConfig>): Promise<IngestConfig> {
     const current = this.config ?? DEFAULTS;
     this.config = {
-      enabled: patch.enabled ?? current.enabled,
       intervalMs: patch.intervalMs ?? current.intervalMs,
       windowMonths: patch.windowMonths ?? current.windowMonths,
       // Nullable FKs: distinguish "omitted" (keep) from "null" (clear).

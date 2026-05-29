@@ -1174,7 +1174,6 @@ model SyncState {
 /// Single row enforced via a constant id ("singleton").
 model GestionRealIngestConfig {
   id                String   @id @default("singleton")
-  enabled           Boolean  @default(false)
   intervalMs        Int      @default(180000)
   windowMonths      Int      @default(12)
   fiberProjectId    String?

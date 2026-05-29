@@ -3,8 +3,6 @@
  * single-row table; `get()` returns hardcoded defaults when no row exists yet.
  */
 export interface IngestConfig {
-  /** Master on/off switch. Ships disabled. */
-  enabled: boolean;
   /** Scheduler tick interval in ms. */
   intervalMs: number;
   /** How far back (in months) to query GR orders. */

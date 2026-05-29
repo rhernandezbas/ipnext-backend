@@ -11,8 +11,10 @@ import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMe
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
 
+const INGEST_FLAG_KEY = 'gestion-real-ingest';
+
 interface Harness {
-  config: InMemoryGestionRealIngestConfigRepository;
+  featureFlags: InMemoryFeatureFlagRepository;
   lock: InMemoryDistributedLock;
   ingest: IngestGestionRealOrders;
   scheduler: GestionRealIngestScheduler;
@@ -26,31 +28,37 @@ function makeHarness(): Harness {
   const state = new InMemorySyncStateRepository();
   const projects = new InMemoryProjectRepository();
   const featureFlags = new InMemoryFeatureFlagRepository();
-  featureFlags.seed('gestion-real-ingest', true);
+  featureFlags.seed(INGEST_FLAG_KEY, true);
   const lock = new InMemoryDistributedLock();
   const ingest = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
     defaultStageId: DEFAULT_STAGE_ID,
     now: () => new Date('2026-05-29T12:00:00Z'),
   });
-  const scheduler = new GestionRealIngestScheduler(ingest, config, { intervalMs: 1000, silent: true }, lock);
-  return { config, lock, ingest, scheduler };
+  const scheduler = new GestionRealIngestScheduler(ingest, { intervalMs: 1000, silent: true }, lock);
+  return { featureFlags, lock, ingest, scheduler };
 }
 
 describe('GestionRealIngestScheduler', () => {
-  it('does NOT invoke the ingest when config is disabled (REQ-SCHED-2)', async () => {
+  it('delegates to the ingest use-case, which no-ops when the master flag is OFF (REQ-SCHED-2)', async () => {
     const h = makeHarness();
-    await h.config.update({ enabled: false });
+    // The single on/off gate is the feature flag, checked inside the use-case.
+    h.featureFlags.seed(INGEST_FLAG_KEY, false);
     const spy = jest.spyOn(h.ingest, 'execute');
 
     const summary = await h.scheduler.runOnce();
 
-    expect(spy).not.toHaveBeenCalled();
-    expect(summary.skipped).toBe(true);
+    // Scheduler still ticks and delegates; the use-case returns zero counts.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(summary.result).toEqual({
+      created: 0,
+      skippedDuplicate: 0,
+      skippedUnmirrored: 0,
+      unclassified: 0,
+    });
   });
 
-  it('runs the ingest once when enabled and the lock is free', async () => {
+  it('runs the ingest once when the lock is free', async () => {
     const h = makeHarness();
-    await h.config.update({ enabled: true });
     const spy = jest.spyOn(h.ingest, 'execute');
 
     const summary = await h.scheduler.runOnce();
@@ -61,7 +69,6 @@ describe('GestionRealIngestScheduler', () => {
 
   it('skips the run when the distributed lock is held by another instance (REQ-SCHED-1)', async () => {
     const h = makeHarness();
-    await h.config.update({ enabled: true });
     h.lock.forceAcquireFails = true;
     const spy = jest.spyOn(h.ingest, 'execute');
 
@@ -73,7 +80,6 @@ describe('GestionRealIngestScheduler', () => {
 
   it('does not start a second run while one is in flight (intra-process guard)', async () => {
     const h = makeHarness();
-    await h.config.update({ enabled: true });
 
     const [a, b] = await Promise.all([h.scheduler.runOnce(), h.scheduler.runOnce()]);
 
@@ -83,7 +89,6 @@ describe('GestionRealIngestScheduler', () => {
 
   it('releases the distributed lock after a run (key gr-ingest)', async () => {
     const h = makeHarness();
-    await h.config.update({ enabled: true });
     const releaseSpy = jest.spyOn(h.lock, 'release');
 
     await h.scheduler.runOnce();
@@ -94,7 +99,6 @@ describe('GestionRealIngestScheduler', () => {
 
   it('swallows ingest errors so the interval keeps ticking', async () => {
     const h = makeHarness();
-    await h.config.update({ enabled: true });
     jest.spyOn(h.ingest, 'execute').mockRejectedValueOnce(new Error('boom'));
 
     const summary = await h.scheduler.runOnce();

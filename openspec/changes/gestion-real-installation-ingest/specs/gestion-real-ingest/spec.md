@@ -232,14 +232,16 @@ replicas never run the ingest concurrently.
 - WHEN the scheduler tick fires
 - THEN this replica MUST NOT run the ingest for that tick
 
-### REQ-SCHED-2: Ingest runs only when enabled in config
+### REQ-SCHED-2: Ingest runs only when the `gestion-real-ingest` feature flag is ON
 
-The scheduler MUST run the ingest only when config `enabled = true`. When `enabled = false` the
-scheduler MUST NOT call the ingest use-case and MUST create no tasks.
+The `gestion-real-ingest` feature flag is the SINGLE runtime on/off gate, checked inside the ingest
+use-case per run. The scheduler always ticks and delegates to the use-case; when the flag is OFF the
+use-case MUST be a no-op (no GR call, no SyncState write, zero counts, no tasks created). The flag is
+flippable at runtime via `/feature-flags` without a redeploy.
 
-#### Scenario: Config disabled → no ingest
+#### Scenario: Feature flag OFF → no ingest
 
-- GIVEN config `enabled = false`
-- WHEN the scheduler tick fires
-- THEN the ingest use-case is NOT invoked
+- GIVEN the `gestion-real-ingest` feature flag is OFF (or its row is absent)
+- WHEN the scheduler tick fires and delegates to the ingest use-case
+- THEN the use-case returns zero counts and makes no GR call
 - AND no `ScheduledTask` is created
