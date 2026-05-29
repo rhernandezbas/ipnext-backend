@@ -1,1 +1,2 @@
-export {};
+export { requirePermission } from './requirePermission';
+

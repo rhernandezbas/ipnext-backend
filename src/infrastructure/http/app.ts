@@ -352,6 +352,13 @@ import { SyncIClassSoTypes } from '@application/use-cases/SyncIClassSoTypes';
 import { ListIClassSoTypes } from '@application/use-cases/ListIClassSoTypes';
 import { AssignIClassSoTypeToProject } from '@application/use-cases/AssignIClassSoTypeToProject';
 import { createIClassAdminRouter } from './routes/iclass-admin.routes';
+import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
+import { PrismaRbacRoleRepository } from '../adapters/prisma/PrismaRbacRoleRepository';
+import { PrismaRbacPermissionRepository } from '../adapters/prisma/PrismaRbacPermissionRepository';
+import { PrismaRbacUserRoleRepository } from '../adapters/prisma/PrismaRbacUserRoleRepository';
+import { PrismaRbacRolePermissionRepository } from '../adapters/prisma/PrismaRbacRolePermissionRepository';
+import { requirePermission } from './middleware/requirePermission';
+import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -369,6 +376,17 @@ function prismaClientLookup(model: 'Client' | 'Service' | 'Partner' | 'Project',
     case 'Project': return prisma.project.findUnique({ where: { id }, select: { id: true } });
   }
 }
+
+// RBAC repositories — module-level singletons so requirePerm can be a named export
+const rbacUserRepo           = new PrismaRbacUserRepository();
+const rbacRoleRepo           = new PrismaRbacRoleRepository();
+const rbacPermissionRepo     = new PrismaRbacPermissionRepository();
+const rbacUserRoleRepo       = new PrismaRbacUserRoleRepository();
+const rbacRolePermissionRepo = new PrismaRbacRolePermissionRepository();
+
+// Convenience factory — routes in future SDDs import this instead of wiring the repo manually
+export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
+  requirePermission(rbacUserRepo, m, a);
 
 export function createApp() {
   const app = express();

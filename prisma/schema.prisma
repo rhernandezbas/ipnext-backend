@@ -14,7 +14,7 @@ model Admin {
   id              String             @id @default(uuid())
   name            String
   email           String             @unique
-  role            String             // role-definition name (editable, backed by AdminRoleDefinition)
+  role            String // role-definition name (editable, backed by AdminRoleDefinition)
   status          AdminStatus        @default(active)
   twoFaEnabled    Boolean            @default(false)
   twoFaSecret     String?
@@ -22,13 +22,13 @@ model Admin {
   passwordHash    String?
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
-  activityLogs     AdminActivityLog[]
-  sessions         AdminSession[]
-  projectsLed      Project[]
-  tasksReported    ScheduledTask[]    @relation("TaskReporter")
-  tasksAssigned    ScheduledTask[]    @relation("TaskAssignee")
-  tasksWatching    TaskWatcher[]      @relation("TaskWatcher")
-  assignedTickets  Ticket[]           @relation("TicketAssignee")
+  activityLogs    AdminActivityLog[]
+  sessions        AdminSession[]
+  projectsLed     Project[]
+  tasksReported   ScheduledTask[]    @relation("TaskReporter")
+  tasksAssigned   ScheduledTask[]    @relation("TaskAssignee")
+  tasksWatching   TaskWatcher[]      @relation("TaskWatcher")
+  assignedTickets Ticket[]           @relation("TicketAssignee")
 }
 
 enum AdminRole {
@@ -223,21 +223,21 @@ enum ClientStatus {
 }
 
 model Service {
-  id        String          @id @default(uuid())
-  clientId  String
-  grContratoId String?      @unique
-  type      String
-  plan      String
-  ip        String?
-  status    String          @default("active")
-  startDate DateTime
-  endDate   DateTime?
-  address   String?
-  lat       Float?
-  lng       Float?
-  createdAt DateTime        @default(now())
-  client    Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  tasks     ScheduledTask[]
+  id           String          @id @default(uuid())
+  clientId     String
+  grContratoId String?         @unique
+  type         String
+  plan         String
+  ip           String?
+  status       String          @default("active")
+  startDate    DateTime
+  endDate      DateTime?
+  address      String?
+  lat          Float?
+  lng          Float?
+  createdAt    DateTime        @default(now())
+  client       Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tasks        ScheduledTask[]
 
   @@index([clientId])
   @@index([status])
@@ -541,24 +541,24 @@ model IClassSoType {
 }
 
 model Project {
-  id              String           @id @default(uuid())
-  title           String
-  description     String?
-  typeId          String?
-  type            ProjectType?     @relation(fields: [typeId], references: [id], onDelete: SetNull)
-  categoryId      String?
-  category        ProjectCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  workflowId      String?
-  workflow        Workflow?        @relation(fields: [workflowId], references: [id], onDelete: SetNull)
-  projectLeadId   String?
-  projectLead     Admin?           @relation(fields: [projectLeadId], references: [id], onDelete: SetNull)
-  visible         Boolean          @default(true)
-  partners        ProjectPartner[]
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  tasks           ScheduledTask[]
-  iclassSoTypeId  String?
-  iclassSoType    IClassSoType?    @relation(fields: [iclassSoTypeId], references: [id], onDelete: SetNull)
+  id             String           @id @default(uuid())
+  title          String
+  description    String?
+  typeId         String?
+  type           ProjectType?     @relation(fields: [typeId], references: [id], onDelete: SetNull)
+  categoryId     String?
+  category       ProjectCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  workflowId     String?
+  workflow       Workflow?        @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  projectLeadId  String?
+  projectLead    Admin?           @relation(fields: [projectLeadId], references: [id], onDelete: SetNull)
+  visible        Boolean          @default(true)
+  partners       ProjectPartner[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  tasks          ScheduledTask[]
+  iclassSoTypeId String?
+  iclassSoType   IClassSoType?    @relation(fields: [iclassSoTypeId], references: [id], onDelete: SetNull)
 
   @@index([title])
   @@index([categoryId])
@@ -600,39 +600,39 @@ model ScheduledTask {
   project        Project?  @relation(fields: [projectId], references: [id])
 
   // NEW — datetime envelope
-  startDate      DateTime?
-  endDate        DateTime?
+  startDate DateTime?
+  endDate   DateTime?
 
   // NEW — FK relations
-  customerId     String?
-  customer       Client?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  serviceId      String?
-  service        Service?  @relation(fields: [serviceId], references: [id], onDelete: SetNull)
-  partnerId      String?
-  partnerRef     Partner?  @relation(fields: [partnerId], references: [id], onDelete: SetNull)
-  reporterId     String?
-  reporter       Admin?    @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
-  assigneeId     String?
-  assignee       Admin?    @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  customerId String?
+  customer   Client?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  serviceId  String?
+  service    Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  partnerId  String?
+  partnerRef Partner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  reporterId String?
+  reporter   Admin?   @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
+  assigneeId String?
+  assignee   Admin?   @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
   // NEW — travel time (minutes)
   travelTimeTo   Int?
   travelTimeFrom Int?
 
   // NEW — watchers pivot back-relation
-  watchers       TaskWatcher[]
+  watchers TaskWatcher[]
 
   // NEW — checklist back-relation
-  checklist      TaskChecklistItem[]
+  checklist TaskChecklistItem[]
 
   // NEW — comments back-relation
-  comments       TaskComment[]
+  comments TaskComment[]
 
   // Flag: task is closed (soft-close, not deleted)
-  isClosed       Boolean           @default(false)
+  isClosed Boolean @default(false)
 
   // RV — inventory team review flag
-  reviewedByInventory Boolean       @default(false)
+  reviewedByInventory Boolean @default(false)
 
   // IClass — service order code returned when the task is sent to IClass
   iclassOrderCode String?
@@ -649,10 +649,10 @@ model ScheduledTask {
 }
 
 model TaskWatcher {
-  taskId   String
-  adminId  String
-  task     ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  admin    Admin         @relation("TaskWatcher", fields: [adminId], references: [id], onDelete: Cascade)
+  taskId  String
+  adminId String
+  task    ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  admin   Admin         @relation("TaskWatcher", fields: [adminId], references: [id], onDelete: Cascade)
 
   @@id([taskId, adminId])
   @@index([adminId])
@@ -669,13 +669,13 @@ model TaskTemplate {
 }
 
 model TaskTemplateItem {
-  id         String            @id @default(uuid())
-  templateId String
-  template   TaskTemplate      @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  text       String
-  order      Int
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
+  id              String              @id @default(uuid())
+  templateId      String
+  template        TaskTemplate        @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  text            String
+  order           Int
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
   checklistCopies TaskChecklistItem[]
 
   @@index([templateId, order])
@@ -697,25 +697,25 @@ model TaskChecklistItem {
 }
 
 model TaskComment {
-  id          String                   @id @default(uuid())
+  id          String                  @id @default(uuid())
   taskId      String
-  task        ScheduledTask            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task        ScheduledTask           @relation(fields: [taskId], references: [id], onDelete: Cascade)
   authorName  String
   body        String
-  createdAt   DateTime                 @default(now())
+  createdAt   DateTime                @default(now())
   attachments TaskCommentAttachment[]
 
   @@index([taskId])
 }
 
 model TaskCommentAttachment {
-  id         String      @id @default(uuid())
-  commentId  String
-  comment    TaskComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
-  url        String
-  filename   String
-  mimeType   String?
-  sizeBytes  Int?
+  id        String      @id @default(uuid())
+  commentId String
+  comment   TaskComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  url       String
+  filename  String
+  mimeType  String?
+  sizeBytes Int?
 
   @@index([commentId])
 }
@@ -1154,12 +1154,12 @@ model MonitoringAlert {
 
 /// Watermark/cursor store for incremental syncs (e.g. the Gestión Real mirror).
 model SyncState {
-  entity      String   @id
+  entity      String    @id
   cursor      String?
   lastRunAt   DateTime?
   lastResult  String?
-  itemsSynced Int      @default(0)
-  updatedAt   DateTime @updatedAt
+  itemsSynced Int       @default(0)
+  updatedAt   DateTime  @updatedAt
 }
 
 // =============================================
@@ -1187,32 +1187,111 @@ enum TicketPriority {
 }
 
 model Ticket {
-  id          String                @id @default(uuid())
+  id          String @id @default(uuid())
   subject     String
   description String
 
   // Phase 2: status is now a FK to TicketStatusCatalog.
   // The API still exposes `status` as the catalog name string (not the id).
-  statusId    String
-  status      TicketStatusCatalog   @relation(fields: [statusId], references: [id], onUpdate: Cascade, onDelete: Restrict)
+  statusId String
+  status   TicketStatusCatalog @relation(fields: [statusId], references: [id], onUpdate: Cascade, onDelete: Restrict)
 
-  priority    TicketPriority        @default(medium)
+  priority TicketPriority @default(medium)
 
   // FK al cliente — espejo de ScheduledTask.customerId
-  customerId  String?
-  customer    Client?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerId String?
+  customer   Client? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
   // Asignacion opcional a un Admin — espejo de ScheduledTask.assigneeId
-  assigneeId  String?
-  assignee    Admin?                @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assigneeId String?
+  assignee   Admin?  @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
   // Previsto para la futura integracion de "casos" de Gestion Real (out-of-scope)
-  grCasoId    String?               @unique
+  grCasoId String? @unique
 
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([customerId])
   @@index([statusId])
   @@index([assigneeId])
+}
+
+// =============================================
+// RBAC DOMAIN
+// =============================================
+
+enum RbacAction {
+  read
+  write
+  delete
+  manage
+}
+
+model RbacModule {
+  id          String           @id @default(uuid())
+  code        String           @unique
+  label       String
+  createdAt   DateTime         @default(now())
+  permissions RbacPermission[]
+}
+
+model RbacPermission {
+  id       String               @id @default(uuid())
+  moduleId String
+  action   RbacAction
+  module   RbacModule           @relation(fields: [moduleId], references: [id], onDelete: Restrict)
+  grants   RbacRolePermission[]
+
+  @@unique([moduleId, action])
+  @@index([moduleId])
+}
+
+model RbacRole {
+  id          String               @id @default(uuid())
+  code        String               @unique
+  label       String
+  description String?
+  isSystem    Boolean              @default(false)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  users       RbacUserRole[]
+  permissions RbacRolePermission[]
+}
+
+model RbacUser {
+  id           String         @id @default(uuid())
+  name         String
+  email        String         @unique
+  login        String         @unique
+  passwordHash String
+  status       String         @default("active")
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  lastLoginAt  DateTime?
+  roles        RbacUserRole[]
+
+  @@index([login])
+}
+
+model RbacUserRole {
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+  user      RbacUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      RbacRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+}
+
+model RbacRolePermission {
+  roleId       String
+  permissionId String
+  createdAt    DateTime       @default(now())
+  role         RbacRole       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   RbacPermission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
 }
