@@ -60,8 +60,9 @@ export interface BootstrapEnv {
 }
 
 export type BootstrapResult =
-  | { outcome: 'skipped'; reason: 'envs-missing' | 'user-already-exists' | 'super_admin-already-assigned' }
+  | { outcome: 'skipped'; reason: 'envs-missing' | 'super_admin-already-assigned' }
   | { outcome: 'created'; login: string }
+  | { outcome: 'updated'; login: string }
 ```
 
 A thin `main()` function at the bottom reads `process.env` and calls the exported function, then
@@ -76,15 +77,21 @@ logs the result and exits. The entry point is NOT `bootstrapRbac.ts` itself — 
 1. IF any of [login, email, name, passwordHash] is undefined or empty string:
      log "skipped: envs missing" → return { outcome: 'skipped', reason: 'envs-missing' }
 
-2. IF a user with login === env.login already exists (userRepo.findByLogin):
-     log "skipped: user already exists (login: <login>)" → return { outcome: 'skipped', reason: 'user-already-exists' }
-
-3. IF any user is already assigned to the super_admin role:
-     → query: list all users with super_admin assignment
-     → if count > 0: log "skipped: super_admin already assigned" → return { outcome: 'skipped', reason: 'super_admin-already-assigned' }
-
-4. Find the super_admin role: roleRepo.findByCode('super_admin')
+2. Find the super_admin role: roleRepo.findByCode('super_admin')
    (role MUST exist — seeded in SDD #1 migration. If not found, throw Error('super_admin role not found in DB — run prisma migrate deploy first'))
+
+3. IF a user with login === env.login already exists (userRepo.findByLogin):
+     → UPDATE the user: set passwordHash = env.passwordHash, name = env.name, email = env.email
+     → ensure super_admin is assigned: userRoleRepo.assign(user.id, superAdminRole.id) [idempotent]
+     → log "updated: super_admin <login>" → return { outcome: 'updated', login }
+
+   Rationale: prevents operator lockout when secrets are rotated. The operator who can change
+   GitHub/EasyPanel secrets already has full infrastructure access — updating the bootstrap
+   user's credentials is an intentional, safe self-heal.
+
+4. IF any OTHER user (login !== env.login) is already assigned to the super_admin role:
+     → query: count users with super_admin assignment (excluding the bootstrap login)
+     → if count > 0: log "skipped: super_admin already assigned" → return { outcome: 'skipped', reason: 'super_admin-already-assigned' }
 
 5. Create user: userRepo.create({ name, email, login, passwordHash, status: 'active' })
 
@@ -93,8 +100,9 @@ logs the result and exits. The entry point is NOT `bootstrapRbac.ts` itself — 
 7. log "created: super_admin <login>" → return { outcome: 'created', login }
 ```
 
-**Idempotency**: Steps 2 and 3 are the idempotency guards. Running the script twice on a system
-that already has a super_admin user will exit at step 2 or step 3 with `skipped`.
+**Idempotency**: Steps 3 and 4 are the idempotency guards. Running the script twice is safe:
+- If the bootstrap login already exists → credentials are refreshed (self-heal) and super_admin role is re-assured.
+- If another user already holds super_admin (and the bootstrap login does not exist) → no new user created.
 
 ---
 
@@ -104,7 +112,7 @@ All output to `console.log` (not `console.error`). Format:
 
 ```
 [bootstrap-rbac] skipped: envs missing
-[bootstrap-rbac] skipped: user already exists (login: admin)
+[bootstrap-rbac] updated: super_admin admin (credentials refreshed)
 [bootstrap-rbac] skipped: super_admin already assigned
 [bootstrap-rbac] created: super_admin admin
 [bootstrap-rbac] ERROR: super_admin role not found in DB — run prisma migrate deploy first
@@ -115,8 +123,8 @@ All output to `console.log` (not `console.error`). Format:
 ## Requirements
 
 - R-BOOT-1 When any env var is missing → outcome is `skipped / envs-missing`, NO write to DB.
-- R-BOOT-2 When login already exists in DB → outcome is `skipped / user-already-exists`, NO write to DB.
-- R-BOOT-3 When at least one user already has super_admin role → outcome is `skipped / super_admin-already-assigned`, NO write to DB.
+- R-BOOT-2 When login already exists in DB → UPDATE passwordHash, name, email to current env values AND ensure super_admin role is assigned → outcome is `updated`. Rationale: secret rotation must not lock out the operator.
+- R-BOOT-3 When no user with bootstrap login exists AND at least one OTHER user already has super_admin role → outcome is `skipped / super_admin-already-assigned`, NO write to DB.
 - R-BOOT-4 When all 4 envs present, no existing login, and no existing super_admin → user is created and super_admin is assigned, outcome is `created`.
 - R-BOOT-5 The stored value for `passwordHash` equals `env.passwordHash` verbatim (NOT re-hashed — env already contains a hash).
 - R-BOOT-6 Function is pure (no `process.env` reads inside) — env values injected as parameter for testability.
@@ -137,10 +145,12 @@ THEN no DB writes
 AND result is `{ outcome: 'skipped', reason: 'envs-missing' }`
 
 WHEN a user with `login === env.login` already exists  
-THEN no DB writes  
-AND result is `{ outcome: 'skipped', reason: 'user-already-exists' }`
+THEN user's passwordHash, name, and email are updated to current env values  
+AND super_admin role is ensured (assigned if not already present)  
+AND result is `{ outcome: 'updated', login: env.login }`
 
-WHEN another user already has super_admin role assigned  
+GIVEN no user with bootstrap login AND another user has super_admin role assigned  
+WHEN bootstrap runs  
 THEN no DB writes  
 AND result is `{ outcome: 'skipped', reason: 'super_admin-already-assigned' }`
 
@@ -184,9 +194,9 @@ If the env secrets are not set (e.g. staging environment), the script exits with
 |-------|------|---------|
 | Unit — 3 main paths | `src/__tests__/infrastructure/bootstrap/bootstrapRbac.test.ts` | InMemory |
 
-**Three required test cases**:
+**Required test cases**:
 1. Missing envs → `skipped / envs-missing`
-2. Login already exists → `skipped / user-already-exists`
+2. Login already exists → `updated`: passwordHash, name, email updated; super_admin role ensured; outcome `updated`
 3. No existing super_admin + all envs → `created`, user in repo with correct passwordHash
-
-A 4th optional test: one user already has super_admin → `skipped / super_admin-already-assigned`.
+4. Another user (different login) already has super_admin → `skipped / super_admin-already-assigned`
+5. Login exists AND another user also has super_admin → `updated` (self-heal wins; the other super_admin check is bypassed once we find the bootstrap login)

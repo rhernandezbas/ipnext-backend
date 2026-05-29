@@ -1188,7 +1188,16 @@ Documented in B.4. Reuses existing semantic tokens (danger/info/success/warning/
 
 ### AD-FE-11 — Password section collapsed by default in edit mode
 
-The "changePassword" checkbox keeps the form cognitively lighter for the common "edit name/email/roles" path. Aligns with the BE shape (`UpdateRbacUser` doesn't touch password; `ChangeRbacUserPassword` is a separate endpoint).
+The "changePassword" checkbox keeps the form cognitively lighter for the common "edit name/email/roles" path.
+
+**Two supported paths for password change (both work in production)**:
+
+| Path | Endpoint | When used |
+|------|----------|-----------|
+| **Primary — admin-managed edit** | `PATCH /:id` with optional `password` field in `UpdateRbacUserDto` | FE uses this path when an admin edits a user and ticks "Cambiar contraseña". One round-trip saves all changes including the new password. |
+| **Dedicated — password-only** | `POST /:id/password` | Kept for "Change password only" flows (e.g. future self-change, password expiry prompts). Also supports the `isAdminManaged` flag distinction for old-password verification. SDD #5 / SDD #6 may route self-change through this endpoint. |
+
+**Current FE behavior**: the modal submit handler uses `PATCH /:id` when `changePassword = true` — it sends `{ name, email, status, password }` in a single request. The `POST /:id/password` endpoint exists and is wired but is NOT called by the current FE. Both endpoints are spec-compliant and tested. This is intentional: PATCH is the simpler path for admin-driven edits; POST /password is reserved for flows that need the old-password check or a standalone password-change UX.
 
 ### AD-FE-12 — Login field is immutable in edit
 
