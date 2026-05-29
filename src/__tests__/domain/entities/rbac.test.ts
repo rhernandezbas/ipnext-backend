@@ -1,6 +1,6 @@
 /**
- * Phase 1.1 — RED: Entity shape tests for RBAC domain types.
- * These tests fail until rbac.ts is created (Task 1.2).
+ * Phase 1.1 / Phase 2.4 — Entity shape tests for RBAC domain types.
+ * Phase 2: updated to assert 25 modules and 28 known actions.
  */
 import {
   PermissionAction,
@@ -8,6 +8,7 @@ import {
   SystemRoleCode,
   RBAC_MODULES,
   SYSTEM_ROLES,
+  KNOWN_ACTIONS,
   RbacUser,
   RbacRole,
   RbacModule,
@@ -17,21 +18,33 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 14 module codes', () => {
-    expect(RBAC_MODULES).toHaveLength(14);
+  it('contains exactly 25 module codes (14 original + 11 new from Phase 2)', () => {
+    expect(RBAC_MODULES).toHaveLength(25);
   });
 
-  it('includes all expected module codes', () => {
-    const expected = [
+  it('includes all 14 original module codes', () => {
+    const original = [
       'clients', 'billing', 'scheduling', 'network', 'admin', 'monitoring',
       'iclass', 'gestionReal', 'reports', 'tickets', 'settings', 'crm',
       'inventory', 'vehicles',
     ];
-    expect([...RBAC_MODULES]).toEqual(expected);
+    for (const code of original) {
+      expect(RBAC_MODULES).toContain(code);
+    }
+  });
+
+  it('includes all 11 new Phase 2 module codes', () => {
+    const newModules = [
+      'voices', 'partners', 'rbac', 'profile', 'notifications',
+      'dashboard', 'portal', 'search', 'support', 'sla', 'tariffs',
+    ];
+    for (const code of newModules) {
+      expect(RBAC_MODULES).toContain(code);
+    }
   });
 
   it('is readonly (as const)', () => {
-    // Type-level check: RbacModuleCode is a union of the 14 values
+    // Type-level check: RbacModuleCode is a union of the 25 values
     const code: RbacModuleCode = 'clients';
     expect(code).toBe('clients');
   });
@@ -56,13 +69,63 @@ describe('SYSTEM_ROLES constant', () => {
 });
 
 describe('PermissionAction type', () => {
-  it('accepts all 4 valid action strings', () => {
+  it('accepts all 4 base action strings', () => {
     const actions: PermissionAction[] = ['read', 'write', 'delete', 'manage'];
     expect(actions).toHaveLength(4);
     expect(actions).toContain('read');
     expect(actions).toContain('write');
     expect(actions).toContain('delete');
     expect(actions).toContain('manage');
+  });
+});
+
+describe('KNOWN_ACTIONS constant', () => {
+  it('contains exactly 28 valid action codes (4 base + 24 sub-actions)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(28);
+  });
+
+  it('includes all 4 base actions', () => {
+    expect(KNOWN_ACTIONS).toContain('read');
+    expect(KNOWN_ACTIONS).toContain('write');
+    expect(KNOWN_ACTIONS).toContain('delete');
+    expect(KNOWN_ACTIONS).toContain('manage');
+  });
+
+  it('includes all 24 sub-action codes from spec', () => {
+    const subActions = [
+      // tickets
+      'close', 'reopen',
+      // billing
+      'void', 'send_email',
+      // scheduling
+      'send_to_iclass', 'bulk_delete', 'move_stage', 'manage_checklist',
+      // monitoring
+      'acknowledge_alert',
+      // network
+      'manage_gpon', 'manage_sites',
+      // iclass
+      'sync', 'assign_to_project',
+      // clients
+      'manage_documents', 'manage_online_sessions',
+      // admin
+      'view_activity_log', 'manage_2fa',
+      // rbac
+      'manage_users', 'manage_user_roles', 'change_user_password', 'manage_roles',
+      // profile
+      'change_own_password',
+      // settings
+      'manage_api_tokens', 'manage_backups',
+    ];
+    expect(subActions).toHaveLength(24);
+    for (const action of subActions) {
+      expect(KNOWN_ACTIONS).toContain(action);
+    }
+  });
+
+  it('is exported as KNOWN_ACTIONS (source-of-truth for valid action codes)', () => {
+    // TS-level: KNOWN_ACTIONS[number] = PermissionAction
+    const action: PermissionAction = 'close';
+    expect(action).toBe('close');
   });
 });
 

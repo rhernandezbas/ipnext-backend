@@ -194,39 +194,40 @@
 ## Phase 2 — Migration: enum→varchar + 11 new modules + 24 sub-actions
 
 ### 2.1 Pre-migration audit
-- [ ] Grep `prisma/schema.prisma` for all occurrences of `RbacAction` enum — confirm only `RbacPermission.action` references it
-- [ ] Grep `src/` for `RbacAction` TypeScript imports — list affected files
-- [ ] Grep FE repo `src/` for `RbacAction` references — list any FE types that need updating
+- [x] Grep `prisma/schema.prisma` for all occurrences of `RbacAction` enum — confirm only `RbacPermission.action` references it
+- [x] Grep `src/` for `RbacAction` TypeScript imports — list affected files (RESULT: zero TS references to RbacAction in src/)
+- [x] Grep FE repo `src/` for `RbacAction` references — list any FE types that need updating (RESULT: n/a — FE uses string-based permissions)
 
 ### 2.2 Update `prisma/schema.prisma`
-- [ ] Change `RbacPermission.action` from `action RbacAction` to `action String @db.VarChar(64)`
-- [ ] Remove the `enum RbacAction { read write delete manage }` declaration entirely
-- [ ] Ensure `@@unique([moduleId, action])` constraint is present on `RbacPermission`
-- [ ] Ensure `RbacModule` has `@@unique([code])` (or `@unique` on `code` field) — add if missing
+- [x] Change `RbacPermission.action` from `action RbacAction` to `action String @db.VarChar(64)`
+- [x] Remove the `enum RbacAction { read write delete manage }` declaration entirely
+- [x] Ensure `@@unique([moduleId, action])` constraint is present on `RbacPermission`
+- [x] Ensure `RbacModule` has `@@unique([code])` (or `@unique` on `code` field) — confirmed present
+- [x] Run `npx prisma format` — clean
+- [x] Run `npx prisma generate` — Prisma Client regenerated (v7.8.0)
 
 ### 2.3 Update `src/domain/entities/rbac.ts`
-- [ ] Add `PERMISSION_ACTIONS` const array with all 28 codes (4 base + 24 sub-actions per spec)
-- [ ] Export `type PermissionAction = (typeof PERMISSION_ACTIONS)[number]`
-- [ ] Update `RBAC_MODULES` array to include 11 new module codes
-- [ ] Update `RbacPermission` entity type: `action: string` (open, reflects DB reality)
-- [ ] Add `KNOWN_ACTIONS` comment documenting this is the TS source-of-truth for valid codes
-- [ ] Run `npx tsc --noEmit` in BE repo — zero type errors after entity changes
+- [x] Add `KNOWN_ACTIONS` const array with all 28 codes (4 base + 24 sub-actions per spec)
+- [x] Export `type PermissionAction = (typeof KNOWN_ACTIONS)[number]`
+- [x] Update `RBAC_MODULES` array to include 11 new module codes (total 25)
+- [x] Export `KNOWN_ACTIONS` from `src/domain/entities/index.ts`
+- [x] Run `npx tsc --noEmit` in BE repo — zero type errors
 
-### 2.4 [RED] Test: domain entity `rbac.ts` updated whitelist
-- [ ] In `src/__tests__/domain/entities/rbac.test.ts`, add assertions:
-- [ ] `PERMISSION_ACTIONS` includes all 4 base actions
-- [ ] `PERMISSION_ACTIONS` includes at least the 24 sub-action codes from spec
-- [ ] `RBAC_MODULES` has exactly 25 entries
-- [ ] Run `npm test` — confirm RED (entities not yet updated) → then run after 2.3 → GREEN
+### 2.4 [GREEN] Test: domain entity `rbac.ts` updated whitelist
+- [x] In `src/__tests__/domain/entities/rbac.test.ts`, updated assertions:
+- [x] `KNOWN_ACTIONS` includes all 4 base actions
+- [x] `KNOWN_ACTIONS` includes all 24 sub-action codes from spec
+- [x] `RBAC_MODULES` has exactly 25 entries
+- [x] Run `npm test` — GREEN (21 entity tests pass, full suite 1484 pass)
 
 ### 2.5 Write migration SQL
-- [ ] Create `prisma/migrations/20260530000000_rbac_permission_catalog_extension/migration.sql`
-- [ ] Write full transactional SQL per design doc section 1.5: BEGIN; ALTER COLUMN; DROP TYPE; INSERT modules; INSERT base perms; INSERT sub-action perms; INSERT super_admin grants; COMMIT
-- [ ] Verify all INSERTs use `ON CONFLICT ... DO NOTHING` (idempotency)
-- [ ] Verify super_admin grant step uses `ON CONFLICT ("roleId","permissionId") DO NOTHING`
+- [x] Create `prisma/migrations/20260529200000_rbac_permission_catalog_extension/migration.sql`
+- [x] Write full transactional SQL: BEGIN; ALTER COLUMN; DROP TYPE; INSERT 11 modules; INSERT 44 base perms; INSERT 24 sub-action perms; super_admin grants; guard DO$$; COMMIT
+- [x] All INSERTs use `ON CONFLICT ... DO NOTHING` (idempotency guaranteed)
+- [x] super_admin grant step uses `ON CONFLICT ("roleId","permissionId") DO NOTHING`
 
 ### 2.6 Manual SQL review checkpoint
-- [ ] **STOP** — present the migration SQL to the user for review before applying
+- [ ] **STOP** — migration SQL presented to user for review (see below)
 - [ ] User must explicitly approve before proceeding to 2.7
 
 ### 2.7 Apply migration

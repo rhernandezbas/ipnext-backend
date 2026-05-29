@@ -1217,12 +1217,8 @@ model Ticket {
 // RBAC DOMAIN
 // =============================================
 
-enum RbacAction {
-  read
-  write
-  delete
-  manage
-}
+// RbacAction enum removed — action is now VARCHAR(64) to allow sub-actions without migrations.
+// TS source-of-truth: KNOWN_ACTIONS in src/domain/entities/rbac.ts
 
 model RbacModule {
   id          String           @id @default(uuid())
@@ -1235,7 +1231,7 @@ model RbacModule {
 model RbacPermission {
   id       String               @id @default(uuid())
   moduleId String
-  action   RbacAction
+  action   String               @db.VarChar(64)
   module   RbacModule           @relation(fields: [moduleId], references: [id], onDelete: Restrict)
   grants   RbacRolePermission[]
 
