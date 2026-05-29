@@ -61,6 +61,7 @@ const NEW_FIELDS_DEFAULTS = {
   reporterId: null,
   assigneeId: null,
   assigneeName: null,
+  reporterName: null,
   watcherIds: [] as string[],
   travelTimeTo: null,
   travelTimeFrom: null,
@@ -267,6 +268,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       reporterId: data.reporterId ?? null,
       assigneeId: data.assigneeId ?? null,
       assigneeName: null, // In-memory: no JOIN
+      reporterName: null,
       watcherIds: data.watcherIds ? [...data.watcherIds] : [],
       travelTimeTo: data.travelTimeTo ?? null,
       travelTimeFrom: data.travelTimeFrom ?? null,
