@@ -11,24 +11,20 @@ generator client {
 // =============================================
 
 model Admin {
-  id              String             @id @default(uuid())
-  name            String
-  email           String             @unique
-  role            String // role-definition name (editable, backed by AdminRoleDefinition)
-  status          AdminStatus        @default(active)
-  twoFaEnabled    Boolean            @default(false)
-  twoFaSecret     String?
-  lastLogin       DateTime?
-  passwordHash    String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  activityLogs    AdminActivityLog[]
-  sessions        AdminSession[]
-  projectsLed     Project[]
-  tasksReported   ScheduledTask[]    @relation("TaskReporter")
-  tasksAssigned   ScheduledTask[]    @relation("TaskAssignee")
-  tasksWatching   TaskWatcher[]      @relation("TaskWatcher")
-  assignedTickets Ticket[]           @relation("TicketAssignee")
+  id           String             @id @default(uuid())
+  name         String
+  email        String             @unique
+  role         String // role-definition name (editable, backed by AdminRoleDefinition)
+  status       AdminStatus        @default(active)
+  twoFaEnabled Boolean            @default(false)
+  twoFaSecret  String?
+  lastLogin    DateTime?
+  passwordHash String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  activityLogs AdminActivityLog[]
+  sessions     AdminSession[]
+  projectsLed  Project[]
 }
 
 enum AdminRole {
@@ -605,15 +601,15 @@ model ScheduledTask {
 
   // NEW — FK relations
   customerId String?
-  customer   Client?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customer   Client?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
   serviceId  String?
-  service    Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  service    Service?  @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   partnerId  String?
-  partnerRef Partner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  partnerRef Partner?  @relation(fields: [partnerId], references: [id], onDelete: SetNull)
   reporterId String?
-  reporter   Admin?   @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
+  reporter   RbacUser? @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
   assigneeId String?
-  assignee   Admin?   @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assignee   RbacUser? @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
   // NEW — travel time (minutes)
   travelTimeTo   Int?
@@ -652,7 +648,7 @@ model TaskWatcher {
   taskId  String
   adminId String
   task    ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  admin   Admin         @relation("TaskWatcher", fields: [adminId], references: [id], onDelete: Cascade)
+  user    RbacUser      @relation("TaskWatcher", fields: [adminId], references: [id], onDelete: Cascade)
 
   @@id([taskId, adminId])
   @@index([adminId])
@@ -1202,9 +1198,9 @@ model Ticket {
   customerId String?
   customer   Client? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
-  // Asignacion opcional a un Admin — espejo de ScheduledTask.assigneeId
+  // Asignacion opcional a un RbacUser — espejo de ScheduledTask.assigneeId
   assigneeId String?
-  assignee   Admin?  @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assignee   RbacUser? @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
   // Previsto para la futura integracion de "casos" de Gestion Real (out-of-scope)
   grCasoId String? @unique
@@ -1260,16 +1256,20 @@ model RbacRole {
 }
 
 model RbacUser {
-  id           String         @id @default(uuid())
-  name         String
-  email        String         @unique
-  login        String         @unique
-  passwordHash String
-  status       String         @default("active")
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-  lastLoginAt  DateTime?
-  roles        RbacUserRole[]
+  id              String          @id @default(uuid())
+  name            String
+  email           String          @unique
+  login           String          @unique
+  passwordHash    String
+  status          String          @default("active")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  lastLoginAt     DateTime?
+  roles           RbacUserRole[]
+  tasksReported   ScheduledTask[] @relation("TaskReporter")
+  tasksAssigned   ScheduledTask[] @relation("TaskAssignee")
+  tasksWatching   TaskWatcher[]   @relation("TaskWatcher")
+  assignedTickets Ticket[]        @relation("TicketAssignee")
 
   @@index([login])
 }

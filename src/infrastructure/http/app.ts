@@ -501,14 +501,22 @@ export function createApp() {
 
   const listTasks = new ListTasks(schedulingRepo);
   const getTask = new GetTask(schedulingRepo);
-  const adminRepoForScheduling = new PrismaAdminRepository();
+  // Scheduling reporter/assignee/watcher ids are validated against RbacUser
+  // (post SDD #2 — Admin table is being phased out, no fallback). The lookup
+  // returns { id } on hit, null on miss — satisfies the EntityLookup port.
+  const userLookupForScheduling = {
+    findById: async (id: string): Promise<{ id: string } | null> => {
+      const rbacUser = await rbacUserRepo.findById(id);
+      return rbacUser ? { id: rbacUser.id } : null;
+    },
+  };
   const createTask = new CreateTask(
     schedulingRepo,
     // EntityLookup wrappers for FK validation (return { id } | null)
     { findById: (id: string) => prismaClientLookup('Client', id) },
     { findById: (id: string) => prismaClientLookup('Service', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
-    adminRepoForScheduling, // AdminRepository.findById returns Admin | null — satisfies EntityLookup
+    userLookupForScheduling,
     { findById: (id: string) => prismaClientLookup('Project', id) },
   );
   const updateTask = new UpdateTask(
@@ -516,7 +524,7 @@ export function createApp() {
     { findById: (id: string) => prismaClientLookup('Client', id) },
     { findById: (id: string) => prismaClientLookup('Service', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
-    adminRepoForScheduling,
+    userLookupForScheduling,
     { findById: (id: string) => prismaClientLookup('Project', id) },
   );
   const deleteTask = new DeleteTask(schedulingRepo);
