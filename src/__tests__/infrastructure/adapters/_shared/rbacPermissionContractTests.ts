@@ -34,6 +34,24 @@ export function runRbacPermissionContractTests(
     });
   });
 
+  describe('listCatalog', () => {
+    it('returns entries enriched with moduleId and moduleLabel', async () => {
+      const repo = await makeSeededRepo();
+      const catalog = await repo.listCatalog();
+      expect(Array.isArray(catalog)).toBe(true);
+      expect(catalog.length).toBeGreaterThan(0);
+      for (const entry of catalog) {
+        expect(typeof entry.id).toBe('string');
+        expect(typeof entry.moduleId).toBe('string');
+        expect(entry.moduleId.length).toBeGreaterThan(0);
+        expect(typeof entry.moduleCode).toBe('string');
+        expect(typeof entry.moduleLabel).toBe('string');
+        expect(entry.moduleLabel.length).toBeGreaterThan(0);
+        expect(typeof entry.action).toBe('string');
+      }
+    });
+  });
+
   describe('findByModuleAndAction', () => {
     it('returns null for an unknown module+action pair', async () => {
       const repo = await makeSeededRepo();

@@ -40,4 +40,34 @@ describe('ListAllPermissionsWithModule', () => {
       action: 'manage_roles',
     });
   });
+
+  it('enriches each entry with the module id and label', async () => {
+    const permRepo = new InMemoryRbacPermissionRepository();
+    await permRepo.seed({
+      moduleCode: 'rbac',
+      action: 'manage_roles',
+      moduleId: 'mod-rbac',
+      moduleLabel: 'Roles y Permisos',
+    });
+    const useCase = new ListAllPermissionsWithModule(permRepo);
+    const result = await useCase.execute();
+
+    expect(result[0]).toMatchObject({
+      moduleId: 'mod-rbac',
+      moduleCode: 'rbac',
+      moduleLabel: 'Roles y Permisos',
+      action: 'manage_roles',
+    });
+  });
+
+  it('falls back moduleLabel to the moduleCode when no label was seeded', async () => {
+    const permRepo = new InMemoryRbacPermissionRepository();
+    await permRepo.seed({ moduleCode: 'billing', action: 'read' });
+    const useCase = new ListAllPermissionsWithModule(permRepo);
+    const result = await useCase.execute();
+
+    expect(result[0].moduleLabel).toBe('billing');
+    expect(typeof result[0].moduleId).toBe('string');
+    expect(result[0].moduleId.length).toBeGreaterThan(0);
+  });
 });

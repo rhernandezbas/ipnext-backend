@@ -160,6 +160,21 @@ export interface RbacPermission {
   action: PermissionAction;
 }
 
+/**
+ * RbacPermissionCatalogEntry — read model for the permission catalog endpoint.
+ *
+ * Enriches a permission with its module's id + display label (joined from
+ * RbacModule). A query projection, NOT a persisted entity — kept separate from
+ * RbacPermission so the core entity stays free of FK/display concerns.
+ */
+export interface RbacPermissionCatalogEntry {
+  id: string;
+  moduleId: string;
+  moduleCode: RbacModuleCode;
+  moduleLabel: string;
+  action: PermissionAction;
+}
+
 // ---------------------------------------------------------------------------
 // Pivot entity shapes (used as type witnesses in port contract tests)
 // ---------------------------------------------------------------------------

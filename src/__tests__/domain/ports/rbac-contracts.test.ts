@@ -170,16 +170,19 @@ describe('RbacPermissionRepository — interface contract', () => {
   it('stub satisfies the full interface shape', () => {
     const stub: RbacPermissionRepository = {
       listAll: async () => [makePermission()],
+      listCatalog: async () => [],
       findByModuleAndAction: async (_mod: string, _action: string) => makePermission(),
     };
     expect(stub).toBeDefined();
     expect(typeof stub.listAll).toBe('function');
+    expect(typeof stub.listCatalog).toBe('function');
     expect(typeof stub.findByModuleAndAction).toBe('function');
   });
 
   it('listAll returns array of permissions', async () => {
     const stub: RbacPermissionRepository = {
       listAll: async () => [makePermission()],
+      listCatalog: async () => [],
       findByModuleAndAction: async () => null,
     };
     const all = await stub.listAll();
