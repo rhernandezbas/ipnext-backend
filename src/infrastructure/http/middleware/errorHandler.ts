@@ -47,6 +47,9 @@ const statusMap: Record<string, number> = {
   CANNOT_DELETE_SELF: 403,
   CANNOT_REMOVE_LAST_SUPER_ADMIN: 403,
   INVALID_OLD_PASSWORD: 403,
+  // SDD #3 Phase 4a — role-permissions routes error codes
+  SUPER_ADMIN_IMMUTABLE: 400,
+  INVALID_PERMISSION_IDS: 400,
 };
 
 /** Express global error-handling middleware. */

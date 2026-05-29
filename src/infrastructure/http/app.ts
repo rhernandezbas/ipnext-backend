@@ -377,6 +377,12 @@ import { createRbacUserRouter } from './routes/rbacUser.routes';
 import { toRbacRoleDto } from '@application/dto/rbacUser.dto';
 // SDD #3 Phase 1a — ResolveUserPermissions use case
 import { ResolveUserPermissions } from '@application/use-cases/rbac/ResolveUserPermissions';
+// SDD #3 Phase 4a — role-permissions use cases + routes
+import { ListAllPermissionsWithModule } from '@application/use-cases/rbac/ListAllPermissionsWithModule';
+import { ListPermissionIdsForRole } from '@application/use-cases/rbac/ListPermissionIdsForRole';
+import { SetRolePermissions } from '@application/use-cases/rbac/SetRolePermissions';
+import { createRolePermissionsRouter } from './routes/rolePermissions.routes';
+import { createPermissionsRouter } from './routes/permissions.routes';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -998,6 +1004,32 @@ export function createApp() {
     }
   });
   app.use('/api/admin/rbac/roles', rbacRolesRouter);
+
+  // SDD #3 Phase 4a — role-permissions sub-resource + permissions catalog
+  // IMPORTANT: these are mounted AFTER the inline rbacRolesRouter (GET /api/admin/rbac/roles)
+  // because Express matches routes in registration order and /:id/permissions needs the
+  // roles router to have registered first so GET / (list) doesn't shadow GET /:id/permissions.
+  const listAllPermissionsUC  = new ListAllPermissionsWithModule(rbacPermissionRepo);
+  const listPermIdsForRoleUC  = new ListPermissionIdsForRole(rbacRoleRepo, rbacRolePermissionRepo);
+  const setRolePermissionsUC  = new SetRolePermissions(rbacRoleRepo, rbacRolePermissionRepo, rbacPermissionRepo);
+
+  app.use(
+    '/api/admin/rbac/roles',
+    authMiddlewareForRbac,
+    createRolePermissionsRouter(
+      listPermIdsForRoleUC,
+      setRolePermissionsUC,
+      requirePerm('rbac', 'read'),
+      requirePerm('rbac', 'manage_roles'),
+    ),
+  );
+
+  app.use(
+    '/api/admin/rbac/permissions',
+    authMiddlewareForRbac,
+    requirePerm('rbac', 'read'),
+    createPermissionsRouter(listAllPermissionsUC),
+  );
 
   // Profile routes (uses internal router directly)
   const profileRouter = Router();

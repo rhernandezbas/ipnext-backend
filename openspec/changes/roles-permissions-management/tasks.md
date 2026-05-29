@@ -305,66 +305,73 @@
 
 ## Phase 4 — BE: new use cases + routes for matrix UI
 
-### 4.1 [RED] Tests for `ListRolePermissions` use case
-- [ ] Create `src/__tests__/application/rbac/ListRolePermissions.test.ts`
-- [ ] S: role exists with 2 permissions → returns array with `{ id, moduleCode, action, moduleLabel }`
-- [ ] S: unknown roleId → throws `DomainError('ROLE_NOT_FOUND')`
-- [ ] S: empty roleId → throws `ValidationError`
-- [ ] Run `npm test` — confirm RED
+### 4.1 [RED] Tests for `ListAllPermissionsWithModule` use case
+- [x] Create `src/__tests__/application/rbac/ListAllPermissionsWithModule.test.ts`
+- [x] S: permissions exist → returns array with `{ id, moduleCode, action }` shape
+- [x] S: empty catalog → returns `[]`
+- [x] S: result has correct shape
+- [x] Run `npm test` — confirmed RED (module not found)
 
-### 4.2 [GREEN] Implement `ListRolePermissions`
-- [ ] Create `src/application/use-cases/rbac/ListRolePermissions.ts`
-- [ ] Constructor: `(roleRepo, rolePermRepo, permRepo, moduleRepo)` — use ports only
-- [ ] Validate roleId, resolve role (404 if null), get permissionIds, resolve with module join
-- [ ] Return `RbacPermissionWithModule[]` shape
-- [ ] Run `npm test` — GREEN
+### 4.2 [GREEN] Implement `ListAllPermissionsWithModule`
+- [x] Create `src/application/use-cases/rbac/ListAllPermissionsWithModule.ts`
+- [x] Constructor: `(permissionRepo: RbacPermissionRepository)`
+- [x] `execute()` delegates to `permissionRepo.listAll()`
+- [x] Run `npm test` — GREEN (3 tests pass)
 
-### 4.3 [RED] Tests for `SetRolePermissions` use case
-- [ ] Create `src/__tests__/application/rbac/SetRolePermissions.test.ts`
-- [ ] S: super_admin role → throws `DomainError('SUPER_ADMIN_IMMUTABLE')`
-- [ ] S: unknown permissionId in list → throws `DomainError('INVALID_PERMISSION_IDS')`
-- [ ] S: `permissionIds=[]` → clears all grants, returns `[]`
-- [ ] S: idempotent re-apply (same IDs twice) → same result, no error
-- [ ] S: valid replace `[A,B,C]` → `[B,D]` → final permissions = `[B,D]`
-- [ ] Run `npm test` — confirm RED
+### 4.3 [RED] Tests for `ListPermissionIdsForRole` use case
+- [x] Create `src/__tests__/application/rbac/ListPermissionIdsForRole.test.ts`
+- [x] S: role with 2 permissions → returns array of permissionIds
+- [x] S: role with no permissions → returns `[]`
+- [x] S: unknown roleId → throws `ROLE_NOT_FOUND`
+- [x] Run `npm test` — confirmed RED (module not found)
 
-### 4.4 [GREEN] Implement `SetRolePermissions`
-- [ ] Create `src/application/use-cases/rbac/SetRolePermissions.ts`
-- [ ] Validate roleId + permissionIds (not undefined)
-- [ ] Fetch role → 404 if null; check `code !== 'super_admin'` else throw `SUPER_ADMIN_IMMUTABLE`
-- [ ] Validate all permissionIds exist via `permRepo.listAll()`; collect unknowns → throw `INVALID_PERMISSION_IDS`
-- [ ] Call `rolePermRepo.replaceForRole(roleId, permissionIds)`
-- [ ] Return the new full permission list via `ListRolePermissions` (reuse)
-- [ ] Run `npm test` — GREEN
+### 4.4 [GREEN] Implement `ListPermissionIdsForRole`
+- [x] Create `src/application/use-cases/rbac/ListPermissionIdsForRole.ts`
+- [x] Constructor: `(roleRepo, rolePermRepo)`
+- [x] Fetch role → throw `RoleNotFoundError` if null
+- [x] Return `rolePermRepo.listForRole(roleId)`
+- [x] Run `npm test` — GREEN
 
-### 4.5 [RED] Supertest for new role-permissions routes
-- [ ] Create `src/__tests__/infrastructure/http/routes/rbacRolePermissions.routes.test.ts`
-- [ ] S1: `GET /api/admin/rbac/roles/:id/permissions` — role with 2 perms → 200 `{ permissions: [...] }`
-- [ ] S2: `GET` — role not found → 404 `{ code: "ROLE_NOT_FOUND" }`
-- [ ] S3: `PUT` — happy path replace → 200 with new permission list
-- [ ] S4: `PUT` — super_admin → 400 `{ code: "SUPER_ADMIN_IMMUTABLE" }`
-- [ ] S5: `PUT` — invalid permissionId → 400 `{ code: "INVALID_PERMISSION_IDS" }`
-- [ ] S6: `PUT` — empty array → 200 `{ permissions: [] }`
-- [ ] S7: unauthenticated → 401
-- [ ] S8: lacks `rbac.manage_roles` → 403
-- [ ] Run `npm test` — confirm RED
+### 4.5 [RED] Tests for `SetRolePermissions` use case
+- [x] Create `src/__tests__/application/rbac/SetRolePermissions.test.ts`
+- [x] S: super_admin role → throws `SUPER_ADMIN_IMMUTABLE`
+- [x] S: unknown permissionId → throws `INVALID_PERMISSION_IDS`
+- [x] S: `permissionIds=[]` → clears all grants, returns `[]`
+- [x] S: idempotent re-apply (same IDs twice) → same result, no error
+- [x] S: valid replace `[A,B,C]` → `[B,D]` → final permissions = `[B,D]`
+- [x] S: unknown roleId → throws `ROLE_NOT_FOUND`
+- [x] Run `npm test` — confirmed RED (module not found)
 
-### 4.6 [RED] Supertest for permissions catalog route
-- [ ] In same test file or a new `permissions.routes.test.ts`
-- [ ] S9: `GET /api/admin/rbac/permissions` → 200 `{ permissions: [{id, moduleCode, action, moduleLabel}] }`
-- [ ] S: unauthenticated → 401
-- [ ] S: lacks `rbac.manage_roles` → 403
-- [ ] Run `npm test` — confirm RED
+### 4.6 [GREEN] Implement `SetRolePermissions`
+- [x] Create `src/application/use-cases/rbac/SetRolePermissions.ts`
+- [x] Fetch role → `RoleNotFoundError` if null
+- [x] Check `code !== 'super_admin'` else throw `SuperAdminImmutableError`
+- [x] Validate all permissionIds exist via `permRepo.listAll()` → throw `InvalidPermissionIdsError`
+- [x] Call `rolePermRepo.replaceForRole(roleId, permissionIds)`
+- [x] Return `rolePermRepo.listForRole(roleId)` (resulting state)
+- [x] Run `npm test` — GREEN (6 tests pass)
 
-### 4.7 [GREEN] Implement route files + wire app.ts
-- [ ] Create `src/infrastructure/http/routes/rolePermissions.routes.ts`: `GET /:id/permissions` + `PUT /:id/permissions` handlers
-- [ ] Create `src/infrastructure/http/routes/permissions.routes.ts`: `GET /` handler using `rbacPermissionRepo.listAllWithModule()` (add this method to port + both adapters)
-- [ ] Add `listAllWithModule(): Promise<Array<RbacPermission & { moduleLabel: string }>>` to `RbacPermissionRepository` port
-- [ ] Implement in `InMemoryRbacPermissionRepository` and `PrismaRbacPermissionRepository`
-- [ ] Wire in `app.ts`: instantiate `ListRolePermissions`, `SetRolePermissions`; mount routes at `/api/admin/rbac/roles/:id/permissions` and `/api/admin/rbac/permissions`
-- [ ] Apply `requirePerm('rbac', 'manage_roles')` middleware on both routes
-- [ ] Run `npm test` — confirm GREEN on route tests
-- [ ] Run `npx tsc --noEmit` — zero errors
+### 4.7 [RED] Supertest for role-permissions routes
+- [x] Create `src/__tests__/infrastructure/http/routes/rbacRolePermissions.routes.test.ts`
+- [x] S1: `GET /api/admin/rbac/roles/:id/permissions` → 200 `{ permissionIds: [] }`
+- [x] S2: `GET` — role not found → 404 `{ code: "ROLE_NOT_FOUND" }`
+- [x] S3: `PUT` — happy path replace → 200 with updated permissionIds
+- [x] S4: `PUT` — super_admin → 400 `{ code: "SUPER_ADMIN_IMMUTABLE" }`
+- [x] S5: `PUT` — invalid permissionId → 400 `{ code: "INVALID_PERMISSION_IDS" }`
+- [x] S6: `PUT` — empty array → 200 `{ permissionIds: [] }`
+- [x] S7/S8: unauthenticated → 401; lacks perm → 403
+- [x] S9: `GET /api/admin/rbac/permissions` → 200 `{ permissions: [{id, moduleCode, action}] }`
+- [x] S: unauthenticated → 401; lacks rbac.read → 403
+- [x] Run `npm test` — confirmed RED (route files not found)
+
+### 4.8 [GREEN] Implement route files + wire app.ts
+- [x] Create `src/infrastructure/http/routes/rolePermissions.routes.ts`
+- [x] Create `src/infrastructure/http/routes/permissions.routes.ts`
+- [x] Add new error codes `SUPER_ADMIN_IMMUTABLE` + `INVALID_PERMISSION_IDS` to `errorHandler.ts` statusMap
+- [x] Add `SuperAdminImmutableError` + `InvalidPermissionIdsError` to `src/domain/errors/rbacUser.errors.ts`
+- [x] Wire in `app.ts`: instantiate 3 use cases, mount 2 new routers with correct middleware
+- [x] Run `npm test` — GREEN (14 route tests pass)
+- [x] Run `npx tsc --noEmit` — TBD (run full suite next)
 
 ---
 

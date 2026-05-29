@@ -65,3 +65,17 @@ export class InvalidOldPasswordError extends DomainError {
     this.name = 'InvalidOldPasswordError';
   }
 }
+
+export class SuperAdminImmutableError extends DomainError {
+  constructor() {
+    super('super_admin permissions are managed by the system', 'SUPER_ADMIN_IMMUTABLE');
+    this.name = 'SuperAdminImmutableError';
+  }
+}
+
+export class InvalidPermissionIdsError extends DomainError {
+  constructor(unknownIds: string[]) {
+    super(`Unknown permission IDs: ${unknownIds.join(', ')}`, 'INVALID_PERMISSION_IDS');
+    this.name = 'InvalidPermissionIdsError';
+  }
+}
