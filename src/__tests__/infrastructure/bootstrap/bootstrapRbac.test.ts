@@ -47,27 +47,35 @@ describe('bootstrapRbac', () => {
     expect(users).toHaveLength(0);
   });
 
-  it('Path B — login already exists: skips without writing to DB', async () => {
+  it('Self-heal — login already exists: updates hash/email/name and ensures super_admin role', async () => {
     const { userRepo, roleRepo, userRoleRepo } = makeRepos();
-    await roleRepo.create({ code: 'super_admin', label: 'Super Admin', isSystem: true });
+    const superAdminRole = await roleRepo.create({ code: 'super_admin', label: 'Super Admin', isSystem: true });
 
-    // Pre-seed a user with the same login
-    await userRepo.create({
+    // Pre-seed a user with the same login but stale credentials (e.g. corrupted hash)
+    const existing = await userRepo.create({
       name: 'Existing User',
       email: 'existing@test.com',
       login: validEnv.login!,
-      passwordHash: 'existinghash',
+      passwordHash: 'stalehash',
       status: 'active',
     });
 
     const result = await bootstrapRbac(userRepo, roleRepo, userRoleRepo, validEnv);
-    expect(result).toEqual({ outcome: 'skipped', reason: 'user-already-exists' });
+    expect(result).toEqual({ outcome: 'updated', login: validEnv.login });
 
-    // Only 1 user (the pre-seeded one) — no new user created
+    // Same row updated — not a new user
     const users = await userRepo.list();
     expect(users).toHaveLength(1);
-    expect(users[0].login).toBe(validEnv.login);
-    expect(users[0].email).toBe('existing@test.com');
+    const refreshed = await userRepo.findByLogin(validEnv.login!);
+    expect(refreshed).not.toBeNull();
+    expect(refreshed!.id).toBe(existing.id);
+    expect(refreshed!.passwordHash).toBe(validEnv.passwordHash);
+    expect(refreshed!.email).toBe(validEnv.email);
+    expect(refreshed!.name).toBe(validEnv.name);
+
+    // super_admin role assigned (idempotent assign for case where it wasn't)
+    const assigned = await userRoleRepo.listForUser(existing.id);
+    expect(assigned).toContain(superAdminRole.id);
   });
 
   it('Path B — super_admin already assigned to a different user: skips without writing', async () => {

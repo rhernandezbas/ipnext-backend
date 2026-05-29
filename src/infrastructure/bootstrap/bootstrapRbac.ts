@@ -34,8 +34,9 @@ export interface BootstrapEnv {
 }
 
 export type BootstrapResult =
-  | { outcome: 'skipped'; reason: 'envs-missing' | 'user-already-exists' | 'super_admin-already-assigned' }
-  | { outcome: 'created'; login: string };
+  | { outcome: 'skipped'; reason: 'envs-missing' | 'super_admin-already-assigned' }
+  | { outcome: 'created'; login: string }
+  | { outcome: 'updated'; login: string };
 
 /**
  * Pure bootstrap function — no process.env reads inside. Injected for testability.
@@ -51,24 +52,36 @@ export async function bootstrapRbac(
     return { outcome: 'skipped', reason: 'envs-missing' };
   }
 
-  // Step 2 — login uniqueness check
-  const existingByLogin = await userRepo.findByLogin(env.login);
-  if (existingByLogin) {
-    return { outcome: 'skipped', reason: 'user-already-exists' };
-  }
-
-  // Step 3 — super_admin assignment check
-  const superAdminCount = await userRepo.countUsersWithRoleCode('super_admin');
-  if (superAdminCount > 0) {
-    return { outcome: 'skipped', reason: 'super_admin-already-assigned' };
-  }
-
-  // Step 4 — find super_admin role (must exist from SDD #1 migration)
+  // Step 2 — find super_admin role (must exist from SDD #1 migration)
   const superAdminRole = await roleRepo.findByCode('super_admin');
   if (!superAdminRole) {
     throw new Error(
       'super_admin role not found in DB — run prisma migrate deploy first',
     );
+  }
+
+  // Step 3 — if a user with this login already exists, SELF-HEAL:
+  // overwrite passwordHash, email and name from current envs, and ensure
+  // the super_admin role is assigned. This makes the bootstrap step a safe
+  // password-recovery channel for the bootstrap account when secrets are
+  // rotated. Anyone able to change the GH secrets already has full power.
+  const existingByLogin = await userRepo.findByLogin(env.login);
+  if (existingByLogin) {
+    await userRepo.update(existingByLogin.id, {
+      name: env.name,
+      email: env.email,
+      passwordHash: env.passwordHash,
+      status: 'active',
+    });
+    await userRoleRepo.assign(existingByLogin.id, superAdminRole.id);
+    return { outcome: 'updated', login: env.login };
+  }
+
+  // Step 4 — no user with this login. If ANY super_admin already exists in
+  // the system, do not create a second one silently (avoid surprise grants).
+  const superAdminCount = await userRepo.countUsersWithRoleCode('super_admin');
+  if (superAdminCount > 0) {
+    return { outcome: 'skipped', reason: 'super_admin-already-assigned' };
   }
 
   // Step 5 — create user (passwordHash stored verbatim — NOT re-hashed)
@@ -122,13 +135,12 @@ async function main(): Promise<void> {
         case 'envs-missing':
           console.log('[bootstrap-rbac] skipped: envs missing');
           break;
-        case 'user-already-exists':
-          console.log(`[bootstrap-rbac] skipped: user already exists (login: ${env.login})`);
-          break;
         case 'super_admin-already-assigned':
           console.log('[bootstrap-rbac] skipped: super_admin already assigned');
           break;
       }
+    } else if (result.outcome === 'updated') {
+      console.log(`[bootstrap-rbac] updated: super_admin ${result.login} (passwordHash + name + email refreshed)`);
     } else {
       console.log(`[bootstrap-rbac] created: super_admin ${result.login}`);
     }
