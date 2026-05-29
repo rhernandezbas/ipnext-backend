@@ -136,11 +136,15 @@ describe('RbacRoleRepository — interface contract', () => {
       findById: async (_id: string) => makeRole(),
       findByCode: async (_code: string) => makeRole(),
       listAll: async () => [makeRole()],
+      create: async () => makeRole(),
+      delete: async () => true,
     };
     expect(stub).toBeDefined();
     expect(typeof stub.findById).toBe('function');
     expect(typeof stub.findByCode).toBe('function');
     expect(typeof stub.listAll).toBe('function');
+    expect(typeof stub.create).toBe('function');
+    expect(typeof stub.delete).toBe('function');
   });
 
   it('findByCode returns null for unknown code', async () => {
@@ -148,6 +152,8 @@ describe('RbacRoleRepository — interface contract', () => {
       findById: async () => null,
       findByCode: async (code: string) => (code === 'noc' ? makeRole() : null),
       listAll: async () => [],
+      create: async () => makeRole(),
+      delete: async () => false,
     };
     const found = await stub.findByCode('noc');
     const missing = await stub.findByCode('ghost');

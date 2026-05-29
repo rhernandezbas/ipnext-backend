@@ -8,6 +8,7 @@
  * migration seed data (and wraps the Prisma adapter in a skip guard).
  */
 import type { RbacRoleRepository } from '@domain/ports/RbacRoleRepository';
+import { RoleCodeTakenError } from '@domain/errors/rbacUser.errors';
 
 /**
  * `makeSeededRepo` must return a repo that already contains:
@@ -72,6 +73,71 @@ export function runRbacRoleContractTests(makeSeededRepo: () => Promise<RbacRoleR
       const result = await repo.findByCode('noc');
       expect(result).not.toBeNull();
       expect(result!.isSystem).toBe(true);
+    });
+  });
+
+  describe('create', () => {
+    it('returns the created role with a new id and correct fields', async () => {
+      const repo = await makeSeededRepo();
+      const role = await repo.create({
+        code: 'custom_role',
+        label: 'Custom Role',
+        description: 'A custom role for testing',
+        isSystem: false,
+      });
+      expect(typeof role.id).toBe('string');
+      expect(role.id.length).toBeGreaterThan(0);
+      expect(role.code).toBe('custom_role');
+      expect(role.label).toBe('Custom Role');
+      expect(role.isSystem).toBe(false);
+    });
+
+    it('created role is findable by id', async () => {
+      const repo = await makeSeededRepo();
+      const created = await repo.create({
+        code: 'findable_role',
+        label: 'Findable Role',
+        isSystem: false,
+      });
+      const found = await repo.findById(created.id);
+      expect(found).not.toBeNull();
+      expect(found!.code).toBe('findable_role');
+    });
+
+    it('throws RoleCodeTakenError on duplicate code', async () => {
+      const repo = await makeSeededRepo();
+      await repo.create({ code: 'dup_code', label: 'Dup Role', isSystem: false });
+      await expect(
+        repo.create({ code: 'dup_code', label: 'Another Role', isSystem: false }),
+      ).rejects.toThrow(RoleCodeTakenError);
+    });
+
+    it('duplicate code error has code ROLE_CODE_TAKEN', async () => {
+      const repo = await makeSeededRepo();
+      await repo.create({ code: 'dup_code2', label: 'Dup Role 2', isSystem: false });
+      try {
+        await repo.create({ code: 'dup_code2', label: 'Another Role', isSystem: false });
+        fail('Should have thrown');
+      } catch (err: unknown) {
+        expect((err as { code: string }).code).toBe('ROLE_CODE_TAKEN');
+      }
+    });
+  });
+
+  describe('delete', () => {
+    it('returns true when role exists and removes it', async () => {
+      const repo = await makeSeededRepo();
+      const role = await repo.create({ code: 'deletable_role', label: 'Deletable', isSystem: false });
+      const result = await repo.delete(role.id);
+      expect(result).toBe(true);
+      const found = await repo.findById(role.id);
+      expect(found).toBeNull();
+    });
+
+    it('returns false when role does not exist', async () => {
+      const repo = await makeSeededRepo();
+      const result = await repo.delete('non-existent-id-xyz');
+      expect(result).toBe(false);
     });
   });
 }

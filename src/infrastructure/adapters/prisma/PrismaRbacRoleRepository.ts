@@ -7,7 +7,8 @@
  */
 import { prisma } from '@infrastructure/database/prisma';
 import type { RbacRole } from '@domain/entities/rbac';
-import type { RbacRoleRepository } from '@domain/ports/RbacRoleRepository';
+import type { RbacRoleRepository, CreateRoleInput } from '@domain/ports/RbacRoleRepository';
+import { RoleCodeTakenError } from '@domain/errors/rbacUser.errors';
 
 type RbacRoleRow = {
   id: string;
@@ -47,5 +48,48 @@ export class PrismaRbacRoleRepository implements RbacRoleRepository {
       orderBy: { code: 'asc' },
     }) as RbacRoleRow[];
     return rows.map(mapRole);
+  }
+
+  async create(input: CreateRoleInput): Promise<RbacRole> {
+    try {
+      const row = await (this.db as any).rbacRole.create({
+        data: {
+          code: input.code,
+          label: input.label,
+          description: input.description ?? null,
+          isSystem: input.isSystem,
+        },
+      }) as RbacRoleRow;
+      return mapRole(row);
+    } catch (err: unknown) {
+      // P2002 = unique constraint violation
+      if (
+        err !== null &&
+        typeof err === 'object' &&
+        'code' in err &&
+        (err as { code: string }).code === 'P2002'
+      ) {
+        throw new RoleCodeTakenError(input.code);
+      }
+      throw err;
+    }
+  }
+
+  async delete(id: string): Promise<boolean> {
+    try {
+      await (this.db as any).rbacRole.delete({ where: { id } });
+      return true;
+    } catch (err: unknown) {
+      // P2025 = record not found
+      if (
+        err !== null &&
+        typeof err === 'object' &&
+        'code' in err &&
+        (err as { code: string }).code === 'P2025'
+      ) {
+        return false;
+      }
+      throw err;
+    }
   }
 }

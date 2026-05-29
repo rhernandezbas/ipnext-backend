@@ -383,6 +383,9 @@ import { ListPermissionIdsForRole } from '@application/use-cases/rbac/ListPermis
 import { SetRolePermissions } from '@application/use-cases/rbac/SetRolePermissions';
 import { createRolePermissionsRouter } from './routes/rolePermissions.routes';
 import { createPermissionsRouter } from './routes/permissions.routes';
+// SDD #3 Phase 4b — role catalog mutation use cases
+import { CreateRbacRole } from '@application/use-cases/rbac/CreateRbacRole';
+import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -991,11 +994,14 @@ export function createApp() {
     }),
   );
 
-  // GET /api/admin/rbac/roles — read-only endpoint for the FE role multi-select
+  // /api/admin/rbac/roles — role catalog CRUD (SDD #3 Phase 4b)
+  const createRbacRoleUC = new CreateRbacRole(rbacRoleRepo);
+  const deleteRbacRoleUC = new DeleteRbacRole(rbacRoleRepo);
+
   const rbacRolesRouter = Router();
   rbacRolesRouter.use(authMiddlewareForRbac);
-  rbacRolesRouter.use(requirePerm('admin', 'manage'));
-  rbacRolesRouter.get('/', async (_req, res, next) => {
+
+  rbacRolesRouter.get('/', requirePerm('rbac', 'read'), async (_req, res, next) => {
     try {
       const roles = await rbacRoleRepo.listAll();
       res.json({ roles: roles.map(toRbacRoleDto) });
@@ -1003,6 +1009,25 @@ export function createApp() {
       next(err);
     }
   });
+
+  rbacRolesRouter.post('/', requirePerm('rbac', 'manage_roles'), async (req, res, next) => {
+    try {
+      const role = await createRbacRoleUC.execute(req.body);
+      res.status(201).json(toRbacRoleDto(role));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  rbacRolesRouter.delete('/:id', requirePerm('rbac', 'manage_roles'), async (req, res, next) => {
+    try {
+      await deleteRbacRoleUC.execute(req.params.id);
+      res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.use('/api/admin/rbac/roles', rbacRolesRouter);
 
   // SDD #3 Phase 4a — role-permissions sub-resource + permissions catalog

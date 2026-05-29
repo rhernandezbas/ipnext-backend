@@ -50,6 +50,10 @@ const statusMap: Record<string, number> = {
   // SDD #3 Phase 4a — role-permissions routes error codes
   SUPER_ADMIN_IMMUTABLE: 400,
   INVALID_PERMISSION_IDS: 400,
+  // SDD #3 Phase 4b — role catalog mutation routes error codes
+  ROLE_CODE_TAKEN: 409,
+  ROLE_IS_SYSTEM: 403,
+  VALIDATION_ERROR: 400,
 };
 
 /** Express global error-handling middleware. */

@@ -20,9 +20,8 @@ describe('InMemoryRbacRoleRepository', () => {
     return repo;
   });
 
-  // Extra tests that cover the create() helper, which is InMemory-specific
-  // and not part of the port (Prisma seeds roles via migration SQL)
-  describe('create helper (InMemory-only)', () => {
+  // Extra tests that cover InMemory-specific behavior (generate unique ids, etc.)
+  describe('create (InMemory extra checks)', () => {
     it('generates unique ids for distinct roles', async () => {
       const repo = new InMemoryRbacRoleRepository();
       const r1 = await repo.create({ code: 'r1', label: 'Role 1', isSystem: false });
