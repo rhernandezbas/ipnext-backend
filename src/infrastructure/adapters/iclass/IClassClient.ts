@@ -20,6 +20,9 @@ import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/icla
 const DEFAULT_CLUSTER = 'IPNEXT INTERNET';
 /** Backoff between sub-resource calls to dodge the "Espere um pouco" rate limit. */
 const SUBRESOURCE_BACKOFF_MS = 400;
+/** Window (days) scanned over recent SOs to discover active soType ids for the
+ * result-code catalog sync. Under the IClass 30-day list cap. */
+const RESULT_CODE_DISCOVERY_DAYS = 28;
 
 export interface IClassClientOptions {
   baseUrl: string;
@@ -196,22 +199,46 @@ export class IClassClient implements IClassPort {
   }
 
   async listResultCodes(): Promise<IClassResultCodeDescriptor[]> {
-    // Enumerate SO type ids for the configured third party, then fan out to each
-    // type's result codes. Backoff between calls to respect the rate limit.
-    const typesRaw = await this.fetchAllPages(
-      `/thirdparties/${this.thirdPartyId}/serviceorders/types`,
-      new URLSearchParams({ pagesize: '200' }),
+    // The SO-type list endpoints expose NO numeric id (verified live): neither
+    // /thirdparties/{tp}/serviceorders/types nor /serviceordertypes?thirdPartyId
+    // return it, and their `motivosFechamento` is empty in list view. The numeric
+    // soType id only appears as `tipoOs.id` on the SO list. So we discover the
+    // active soType ids from recent SOs, then fan out to each type's result codes
+    // (/serviceordertypes/{id}/resultcodes), which IS populated.
+    const now = this.now();
+    const begin = new Date(now.getTime() - RESULT_CODE_DISCOVERY_DAYS * 24 * 60 * 60 * 1000);
+    const sos = await this.fetchAllPages(
+      '/serviceorders',
+      new URLSearchParams({
+        clusterName: this.clusterName,
+        updatedDate_begin: formatListDate(begin),
+        updatedDate_end: formatListDate(now),
+        pagesize: '60',
+      }),
     );
+
+    const soTypeIds = new Set<string>();
+    for (const o of sos) {
+      const tipoOs = (o as { tipoOs?: { id?: unknown } }).tipoOs;
+      if (tipoOs?.id != null) soTypeIds.add(String(tipoOs.id));
+    }
+
     const out: IClassResultCodeDescriptor[] = [];
-    for (const t of typesRaw) {
-      const soTypeId = (t as { id?: unknown }).id;
-      if (soTypeId == null) continue;
+    const seen = new Set<string>();
+    for (const id of soTypeIds) {
       await sleep(this.subresourceBackoffMs);
       const codes = await this.fetchAllPages(
-        `/serviceordertypes/${String(soTypeId)}/resultcodes`,
+        `/serviceordertypes/${id}/resultcodes`,
         new URLSearchParams({ pagesize: '100' }),
       );
-      for (const c of codes) out.push(parseResultCode(c, String(soTypeId)));
+      for (const c of codes) {
+        const desc = parseResultCode(c, id);
+        const key = `${id}::${desc.code}`;
+        if (desc.code && !seen.has(key)) {
+          seen.add(key);
+          out.push(desc);
+        }
+      }
     }
     return out;
   }
