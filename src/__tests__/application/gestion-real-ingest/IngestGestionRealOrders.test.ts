@@ -5,9 +5,11 @@ import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory
 import { InMemoryGestionRealIngestConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryGestionRealIngestConfigRepository';
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { InMemoryProjectRepository } from '@infrastructure/adapters/in-memory/InMemoryProjectRepository';
+import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
+const INGEST_FLAG_KEY = 'gestion-real-ingest';
 
 function order(overrides: Partial<GrServiceOrder> & Pick<GrServiceOrder, 'grOrdenId'>): GrServiceOrder {
   return {
@@ -32,6 +34,7 @@ interface Harness {
   config: InMemoryGestionRealIngestConfigRepository;
   state: InMemorySyncStateRepository;
   projects: InMemoryProjectRepository;
+  featureFlags: InMemoryFeatureFlagRepository;
   useCase: IngestGestionRealOrders;
 }
 
@@ -42,16 +45,19 @@ async function makeHarness(): Promise<Harness> {
   const config = new InMemoryGestionRealIngestConfigRepository();
   const state = new InMemorySyncStateRepository();
   const projects = new InMemoryProjectRepository();
+  const featureFlags = new InMemoryFeatureFlagRepository();
+  // Master switch ON by default; per-test we flip it to assert gating.
+  featureFlags.seed(INGEST_FLAG_KEY, true);
   await config.update({
     enabled: true,
     fiberProjectId: 'p-fiber',
     wirelessProjectId: 'p-wifi',
   });
-  const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, {
+  const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
     defaultStageId: DEFAULT_STAGE_ID,
     now: () => new Date('2026-05-29T12:00:00Z'),
   });
-  return { gr, resolver, scheduling, config, state, projects, useCase };
+  return { gr, resolver, scheduling, config, state, projects, featureFlags, useCase };
 }
 
 describe('IngestGestionRealOrders', () => {
@@ -194,6 +200,81 @@ describe('IngestGestionRealOrders', () => {
     expect(await h.scheduling.findTaskByGrOrdenId('1000')).toBeNull();
   });
 
+  // ── Feature flag master switch: gestion-real-ingest ──
+
+  it('is a no-op (no GR call, zero counts) when the master flag is OFF even if config.enabled (REQ-FLAG-1)', async () => {
+    const h = await makeHarness();
+    h.featureFlags.seed(INGEST_FLAG_KEY, false); // master switch OFF
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Ivan' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: '2000' })];
+
+    const result = await h.useCase.execute();
+
+    expect(result).toEqual({
+      created: 0,
+      skippedDuplicate: 0,
+      skippedUnmirrored: 0,
+      unclassified: 0,
+    });
+    expect(h.gr.serviceOrderCalls).toHaveLength(0);
+    expect(await h.scheduling.findTaskByGrOrdenId('2000')).toBeNull();
+  });
+
+  it('is a no-op when the master flag row is absent entirely (default OFF) (REQ-FLAG-1)', async () => {
+    const h = await makeHarness();
+    await h.featureFlags.setEnabled(INGEST_FLAG_KEY, false); // ensure present...
+    // ...then simulate a never-seeded flag by using a fresh repo on a new use case.
+    const featureFlags = new InMemoryFeatureFlagRepository(); // no seed → get() returns null
+    const useCase = new IngestGestionRealOrders(
+      h.gr,
+      h.resolver,
+      h.scheduling,
+      h.config,
+      h.state,
+      h.projects,
+      featureFlags,
+      { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
+    );
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Judy' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: '2100' })];
+
+    const result = await useCase.execute();
+
+    expect(result.created).toBe(0);
+    expect(h.gr.serviceOrderCalls).toHaveLength(0);
+    expect(await h.scheduling.findTaskByGrOrdenId('2100')).toBeNull();
+  });
+
+  it('runs the ingest when the master flag is ON and config.enabled is true (REQ-FLAG-2)', async () => {
+    const h = await makeHarness(); // flag seeded ON, config enabled
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Karl' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: '2200' })];
+
+    const result = await h.useCase.execute();
+
+    expect(result.created).toBe(1);
+    expect(h.gr.serviceOrderCalls).toHaveLength(1);
+    expect(await h.scheduling.findTaskByGrOrdenId('2200')).not.toBeNull();
+  });
+
+  it('is a no-op when the master flag is ON but config.enabled is false (REQ-FLAG-3)', async () => {
+    const h = await makeHarness();
+    h.featureFlags.seed(INGEST_FLAG_KEY, true);
+    await h.config.update({ enabled: false });
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Liam' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: '2300' })];
+
+    const result = await h.useCase.execute();
+
+    expect(result.created).toBe(0);
+    expect(h.gr.serviceOrderCalls).toHaveLength(0);
+    expect(await h.scheduling.findTaskByGrOrdenId('2300')).toBeNull();
+  });
+
   it('persists run status + counts to SyncState under entity "gr-ingest"', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Heidi' });
@@ -240,8 +321,10 @@ describe('IngestGestionRealOrders', () => {
     const config = new InMemoryGestionRealIngestConfigRepository();
     const state = new InMemorySyncStateRepository();
     const projects = new InMemoryProjectRepository();
+    const featureFlags = new InMemoryFeatureFlagRepository();
+    featureFlags.seed(INGEST_FLAG_KEY, true);
     await config.update({ enabled: true, fiberProjectId: null, wirelessProjectId: 'p-wifi' });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
       defaultStageId: DEFAULT_STAGE_ID,
       now: () => new Date('2026-05-29T12:00:00Z'),
     });
@@ -272,8 +355,10 @@ describe('IngestGestionRealOrders', () => {
     const config = new InMemoryGestionRealIngestConfigRepository();
     const state = new InMemorySyncStateRepository();
     const projects = new InMemoryProjectRepository();
+    const featureFlags = new InMemoryFeatureFlagRepository();
+    featureFlags.seed(INGEST_FLAG_KEY, true);
     await config.update({ enabled: true, fiberProjectId: 'p-fiber', wirelessProjectId: null });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
       defaultStageId: DEFAULT_STAGE_ID,
       now: () => new Date('2026-05-29T12:00:00Z'),
     });
@@ -355,8 +440,10 @@ describe('IngestGestionRealOrders', () => {
     const config = new InMemoryGestionRealIngestConfigRepository();
     const state = new InMemorySyncStateRepository();
     const projects = new InMemoryProjectRepository();
+    const featureFlags = new InMemoryFeatureFlagRepository();
+    featureFlags.seed(INGEST_FLAG_KEY, true);
     await config.update({ enabled: true, windowMonths: 1 });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
       defaultStageId: DEFAULT_STAGE_ID,
       // 2026-03-31 local time (avoid TZ rollover): construct via local Date.
       now: () => new Date(2026, 2, 31, 12, 0, 0),

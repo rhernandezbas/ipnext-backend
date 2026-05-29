@@ -4,10 +4,19 @@ import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { GestionRealIngestConfigRepository } from '@domain/ports/GestionRealIngestConfigRepository';
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 import { ProjectRepository } from '@domain/ports/ProjectRepository';
+import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
 import { classifyTech } from './classifyTech';
 
 const SYNC_ENTITY = 'gr-ingest';
+
+/**
+ * Master switch for the whole ingest. Release control, distinct from the
+ * operator's runtime control (`GestionRealIngestConfig.enabled`). Both must be
+ * true for a run to proceed. Checked PER execution so flipping it via
+ * /feature-flags takes effect on the next scheduler tick — no redeploy.
+ */
+const INGEST_FLAG_KEY = 'gestion-real-ingest';
 
 const REVISAR_TITLE_PREFIX = '[REVISAR - Logística] Instalación';
 const REVISAR_DESCRIPTION = 'Plan no reconocido — asignar tecnología y proyecto manualmente';
@@ -69,6 +78,7 @@ export class IngestGestionRealOrders {
     private readonly config: GestionRealIngestConfigRepository,
     private readonly state: SyncStateRepository,
     private readonly projects: ProjectRepository,
+    private readonly featureFlags: FeatureFlagRepository,
     opts: IngestOptions,
   ) {
     this.now = opts.now ?? (() => new Date());
@@ -83,8 +93,14 @@ export class IngestGestionRealOrders {
       unclassified: 0,
     };
 
+    // Master switch (release flag). OFF → no-op. Checked per run so it can be
+    // flipped via /feature-flags without a redeploy. Do NOT call GR or touch
+    // SyncState (mirrors the disabled-config path).
+    const flag = await this.featureFlags.get(INGEST_FLAG_KEY);
+    if (!flag?.enabled) return counts;
+
     const config = await this.config.get();
-    // Disabled → no-op. Do NOT call GR or touch SyncState (REQ-SCHED-2).
+    // Operator runtime control. Disabled → no-op (REQ-SCHED-2).
     if (!config.enabled) return counts;
 
     const today = this.now();

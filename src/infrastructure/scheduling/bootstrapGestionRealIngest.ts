@@ -5,6 +5,7 @@ import { PrismaGestionRealIngestConfigRepository } from '../adapters/prisma/Pris
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { PrismaProjectRepository } from '../adapters/prisma/PrismaProjectRepository';
+import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 import { IngestGestionRealOrders } from '@application/use-cases/IngestGestionRealOrders';
 import { GestionRealIngestScheduler } from './GestionRealIngestScheduler';
@@ -40,6 +41,8 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
   const scheduling = new PrismaSchedulingRepository();
   const state = new PrismaSyncStateRepository();
   const projects = new PrismaProjectRepository();
+  // Master switch (release flag), checked per run inside the use case.
+  const featureFlags = new PrismaFeatureFlagRepository();
 
   // Resolve a last-resort default stage. The use-case resolves the real
   // "Pendiente" stage per project workflow at runtime; this is only the fallback
@@ -57,6 +60,7 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
     ingestConfig,
     state,
     projects,
+    featureFlags,
     { defaultStageId },
   );
 

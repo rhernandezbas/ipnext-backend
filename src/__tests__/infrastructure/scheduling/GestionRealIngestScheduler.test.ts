@@ -6,6 +6,7 @@ import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory
 import { InMemoryGestionRealIngestConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryGestionRealIngestConfigRepository';
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { InMemoryProjectRepository } from '@infrastructure/adapters/in-memory/InMemoryProjectRepository';
+import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
@@ -24,8 +25,10 @@ function makeHarness(): Harness {
   const config = new InMemoryGestionRealIngestConfigRepository();
   const state = new InMemorySyncStateRepository();
   const projects = new InMemoryProjectRepository();
+  const featureFlags = new InMemoryFeatureFlagRepository();
+  featureFlags.seed('gestion-real-ingest', true);
   const lock = new InMemoryDistributedLock();
-  const ingest = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, {
+  const ingest = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
     defaultStageId: DEFAULT_STAGE_ID,
     now: () => new Date('2026-05-29T12:00:00Z'),
   });
