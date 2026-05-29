@@ -131,6 +131,8 @@ import { createTaskCategoriesRouter } from './routes/taskCategories.routes';
 import { createGestionRealRouter } from './routes/gestionReal.routes';
 import { createGrSyncRouter } from './routes/gr-sync.routes';
 import { ResetGrClientsCursor } from '@application/use-cases/ResetGrClientsCursor';
+import { ReconcileGrClients } from '@application/use-cases/ReconcileGrClients';
+import { PrismaClientMirrorReadRepository } from '../adapters/prisma/PrismaClientMirrorReadRepository';
 import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { PrismaClientMirrorRepository } from '../adapters/prisma/PrismaClientMirrorRepository';
 import { GestionRealClient } from '../adapters/gestion-real/GestionRealClient';
@@ -456,6 +458,8 @@ export function createApp() {
 
   // On-demand balance refresh collaborator — only wired when GR is configured
   let balanceRefresh: RefreshClientBalanceIfStale | undefined;
+  // Read-only reconcile diagnostic — only wired when GR is configured (else route 503s).
+  let reconcileGrClients: ReconcileGrClients | undefined;
   if (config.gestionReal.enabled && config.gestionReal.cuit && config.gestionReal.secret) {
     const grClient = new GestionRealClient({
       baseUrl: config.gestionReal.baseUrl,
@@ -468,6 +472,7 @@ export function createApp() {
       ttlMinutes: config.gestionReal.balanceStaleTtlMinutes,
       timeoutMs: config.gestionReal.balanceRefreshTimeoutMs,
     });
+    reconcileGrClients = new ReconcileGrClients(grClient, new PrismaClientMirrorReadRepository());
   }
 
   // Wire up use cases
@@ -839,6 +844,7 @@ export function createApp() {
   app.use('/api/admin/gr-sync', createGrSyncRouter(
     authAdapter,
     new ResetGrClientsCursor(new PrismaSyncStateRepository()),
+    reconcileGrClients,
   ));
   // Task comments — mounted BEFORE the scheduling catch-all router to avoid /:id swallowing
   const taskCommentRepo = new PrismaTaskCommentRepository();
