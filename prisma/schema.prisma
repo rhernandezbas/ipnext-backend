@@ -1452,8 +1452,29 @@ model RbacUser {
   tasksWatching   TaskWatcher[]   @relation("TaskWatcher")
   assignedTickets Ticket[]        @relation("TicketAssignee")
   auditEvents     AuditEvent[]
+  sessions        Session[]
 
   @@index([login])
+}
+
+// SDD #5 sessions-management: real login sessions tied to RbacUser. tokenHash =
+// sha256(jwt) (raw token never stored). revokedAt = null => active. Each request
+// validates the session exists + is not revoked (stateful auth).
+model Session {
+  id         String    @id @default(uuid())
+  rbacUserId String
+  user       RbacUser  @relation(fields: [rbacUserId], references: [id], onDelete: Cascade)
+  actorLogin String
+  tokenHash  String    @unique
+  ip         String?
+  userAgent  String?
+  loginAt    DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([rbacUserId])
+  @@index([revokedAt])
 }
 
 model RbacUserRole {

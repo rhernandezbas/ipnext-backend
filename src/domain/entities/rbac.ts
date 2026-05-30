@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 // Known actions — source of truth for valid action codes (TS + runtime).
 // DB stores action as VARCHAR(64); this list is the whitelist.
-// 4 base + 24 sub-actions = 28 total.
+// 4 base + 26 sub-actions = 30 total.
 // ---------------------------------------------------------------------------
 
 /**
@@ -47,6 +47,8 @@ export const KNOWN_ACTIONS = [
   // admin sub-actions
   'view_activity_log',
   'manage_2fa',
+  'view_sessions',
+  'revoke_sessions',
   // rbac sub-actions
   'manage_users',
   'manage_user_roles',

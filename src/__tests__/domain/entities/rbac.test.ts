@@ -80,8 +80,8 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 28 valid action codes (4 base + 24 sub-actions)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(28);
+  it('contains exactly 30 valid action codes (4 base + 26 sub-actions)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(30);
   });
 
   it('includes all 4 base actions', () => {
