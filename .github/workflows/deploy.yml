@@ -61,6 +61,8 @@ jobs:
             -e PORT=3000 \
             -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            -e COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}" \
+            -e CORS_ORIGIN="${{ secrets.CORS_ORIGIN }}" \
             -e SPLYNX_API_URL="http://localhost" \
             -e SPLYNX_API_KEY="test" \
             -e SPLYNX_API_SECRET="test" \

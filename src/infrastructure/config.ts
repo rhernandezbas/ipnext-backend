@@ -34,7 +34,8 @@ export const config = {
    * localhost origin.
    */
   cookieSecure: process.env.COOKIE_SECURE === 'true',
-  corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+  // || (not ??) so an empty env string from an unset CI secret falls back to the default.
+  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
 
   /**
    * Gestión Real read-only mirror sync. Opt-in: the whole feature stays dark
