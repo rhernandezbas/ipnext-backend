@@ -539,6 +539,7 @@ Every `ScheduledTask` response object MUST contain at minimum the following fiel
 | `projectName` | `string \| null` | Yes |
 | `completedAt` | `string \| null` | Yes |
 | `notes` | `string \| null` | Yes |
+| `grOrdenId` | `string \| null` | Yes |
 
 ---
 
@@ -869,3 +870,51 @@ The repository MUST eager-load the project and its `iclassSoType` relation in th
 ## Closure loop integration (iclass-closure-loop)
 
 ADDED: `ScheduledTask` gana la relación inversa `iclassClosedOrder` (one-to-one nullable) hacia `IClassServiceOrder`. `SchedulingRepository` gana `findTaskBySequenceNumber` (join codigo↔sequenceNumber del cierre) y `listTasksInIClassStage` (backfill). Una tarea PUEDE moverse de stage por el closure loop al estado mapeado en `IClassResultCode.mappedStageId`, vía el `moveTaskToStage` existente. Ver capability `iclass-closure-loop`.
+
+---
+
+## GR installation ingest integration (gestion-real-installation-ingest)
+
+The Gestión Real installation ingest creates `ScheduledTask`s programmatically (one per pending CI
+order). This adds an idempotency key (`grOrdenId`) and formalizes that an ingest-created task MAY
+exist with no project (needs-review state). No existing route behavior changes. See capabilities
+`gestion-real-ingest` and `gestion-real-ingest-config`.
+
+### Requirement: `ScheduledTask` carries a unique `grOrdenId` idempotency key
+
+`ScheduledTask` MUST have a `grOrdenId: string | null` field, persisted as a UNIQUE, NULLABLE
+column via an ADDITIVE Prisma migration. It holds the Gestión Real order id for tasks created by
+the ingest engine; manually created tasks leave it `null`. The uniqueness constraint MUST allow
+multiple `null` rows (standard SQL NULL-distinct behavior) so that hand-made tasks are unaffected.
+(See REQ-SHAPE-2 — the `grOrdenId: string | null` row is part of the task object structure.)
+
+#### Scenario: Ingest-created task stores the GR order id
+
+- GIVEN the ingest creates a task for GR order `551`
+- WHEN the task is persisted
+- THEN `grOrdenId` equals `"551"`
+
+#### Scenario: Manually created task has null grOrdenId
+
+- GIVEN a `POST /api/scheduling` request that does not set `grOrdenId`
+- WHEN the task is created
+- THEN the persisted task's `grOrdenId` is `null`
+
+#### Scenario: Duplicate grOrdenId is rejected at the DB level
+
+- GIVEN a task already exists with `grOrdenId = "551"`
+- WHEN a second task with `grOrdenId = "551"` is attempted
+- THEN the unique constraint prevents a duplicate (the ingest checks first and skips — see REQ-IDEMP-1 in gestion-real-ingest)
+
+### Requirement: A `ScheduledTask` MAY be created with no project (needs-review state)
+
+The ingest engine MAY create a `ScheduledTask` with `projectId = null` (the UNCLASSIFIED /
+needs-review case). Such a task MUST be valid and persistable. Its `projectName` MUST serialize as
+`null` (consistent with the existing nullable-project contract, REQ-NULL-8 / REQ-SHAPE-1).
+
+#### Scenario: Needs-review task persists with null project
+
+- GIVEN the ingest classifies an order as UNCLASSIFIED
+- WHEN the task is created
+- THEN the task persists with `projectId = null` and `projectName = null`
+- AND no `PROJECT_NOT_FOUND` error is raised (no project lookup for a null id)
