@@ -23,6 +23,8 @@ type RbacUserRow = {
   createdAt: Date;
   updatedAt: Date;
   lastLoginAt: Date | null;
+  failedLoginCount: number;
+  lockedUntil: Date | null;
 };
 
 type RoleRow = {
@@ -82,12 +84,17 @@ export class PrismaRbacUserRepository implements RbacUserRepository {
     return row ? mapUser(row) : null;
   }
 
-  async findByLogin(login: string): Promise<(RbacUser & { passwordHash: string }) | null> {
+  async findByLogin(login: string): Promise<(RbacUser & { passwordHash: string; failedLoginCount: number; lockedUntil: string | null }) | null> {
     const row = await (this.db as any).rbacUser.findUnique({
       where: { login },
     }) as RbacUserRow | null;
     if (!row) return null;
-    return { ...mapUser(row), passwordHash: row.passwordHash };
+    return {
+      ...mapUser(row),
+      passwordHash: row.passwordHash,
+      failedLoginCount: row.failedLoginCount ?? 0,
+      lockedUntil: row.lockedUntil ? row.lockedUntil.toISOString() : null,
+    };
   }
 
   async findByEmail(email: string): Promise<RbacUser | null> {
@@ -186,6 +193,8 @@ export class PrismaRbacUserRepository implements RbacUserRepository {
       if (patch.login !== undefined) data['login'] = patch.login;
       if (patch.status !== undefined) data['status'] = patch.status;
       if (patch.passwordHash !== undefined) data['passwordHash'] = patch.passwordHash;
+      if (patch.failedLoginCount !== undefined) data['failedLoginCount'] = patch.failedLoginCount;
+      if (patch.lockedUntil !== undefined) data['lockedUntil'] = patch.lockedUntil;
 
       const row = await (this.db as any).rbacUser.update({
         where: { id },

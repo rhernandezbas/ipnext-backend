@@ -12,6 +12,8 @@ interface StoredUser {
   user: RbacUser;
   passwordHash: string;
   lastLoginAt: Date | null;
+  failedLoginCount: number;
+  lockedUntil: Date | null;
 }
 
 /**
@@ -46,13 +48,15 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
     };
   }
 
-  async findByLogin(login: string): Promise<(RbacUser & { passwordHash: string }) | null> {
+  async findByLogin(login: string): Promise<(RbacUser & { passwordHash: string; failedLoginCount: number; lockedUntil: string | null }) | null> {
     for (const entry of this.store.values()) {
       if (entry.user.login === login) {
         return {
           ...entry.user,
           lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
           passwordHash: entry.passwordHash,
+          failedLoginCount: entry.failedLoginCount,
+          lockedUntil: entry.lockedUntil ? entry.lockedUntil.toISOString() : null,
         };
       }
     }
@@ -83,7 +87,7 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
       updatedAt: now,
       lastLoginAt: null,
     };
-    this.store.set(user.id, { user, passwordHash: input.passwordHash, lastLoginAt: null });
+    this.store.set(user.id, { user, passwordHash: input.passwordHash, lastLoginAt: null, failedLoginCount: 0, lockedUntil: null });
     return { ...user };
   }
 
@@ -127,6 +131,13 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
     // Apply passwordHash patch (stored separately from the user entity)
     if (patch.passwordHash !== undefined) {
       entry.passwordHash = patch.passwordHash;
+    }
+    // SDD #6a — lockout fields (auth-internal)
+    if (patch.failedLoginCount !== undefined) {
+      entry.failedLoginCount = patch.failedLoginCount;
+    }
+    if (patch.lockedUntil !== undefined) {
+      entry.lockedUntil = patch.lockedUntil;
     }
     return {
       ...entry.user,

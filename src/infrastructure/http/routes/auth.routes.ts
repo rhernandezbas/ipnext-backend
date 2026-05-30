@@ -1,7 +1,7 @@
 import { Router, Request, Response, RequestHandler } from 'express';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
-import { AuthenticationError } from '@domain/errors/index';
+import { AuthenticationError, AccountLockedError } from '@domain/errors/index';
 import type { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import type { RbacUserRoleRepository } from '@domain/ports/RbacUserRoleRepository';
 import type { ResolveUserPermissions } from '@application/use-cases/rbac/ResolveUserPermissions';
@@ -43,7 +43,9 @@ export function createAuthRouter(
       res.cookie('auth_token', cookieValue, cookieOptions);
       res.status(200).json({ user });
     } catch (err) {
-      if (err instanceof AuthenticationError) {
+      if (err instanceof AccountLockedError) {
+        res.status(423).json({ error: 'Cuenta bloqueada temporalmente por intentos fallidos', code: 'ACCOUNT_LOCKED' });
+      } else if (err instanceof AuthenticationError) {
         res.status(401).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
       } else {
         res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });

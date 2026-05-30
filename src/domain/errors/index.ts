@@ -29,6 +29,13 @@ export class AuthenticationError extends DomainError {
   }
 }
 
+export class AccountLockedError extends DomainError {
+  constructor(message = 'Account temporarily locked due to failed login attempts') {
+    super(message, 'ACCOUNT_LOCKED');
+    this.name = 'AccountLockedError';
+  }
+}
+
 export class SplynxUnavailableError extends DomainError {
   constructor(message = 'Splynx API is unavailable') {
     super(message, 'SPLYNX_UNAVAILABLE');

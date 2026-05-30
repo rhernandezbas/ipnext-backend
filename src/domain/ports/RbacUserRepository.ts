@@ -26,13 +26,23 @@ export interface UpdateRbacUserInput {
   login?: string;
   status?: 'active' | 'disabled';
   passwordHash?: string;
+  // SDD #6a — account lockout (auth-internal, not exposed on RbacUser)
+  failedLoginCount?: number;
+  lockedUntil?: Date | null;
+}
+
+/** Auth-internal fields returned only by findByLogin (like passwordHash). */
+export interface RbacUserAuthFields {
+  passwordHash: string;
+  failedLoginCount: number;
+  lockedUntil: string | null;
 }
 
 export interface RbacUserRepository {
   findById(id: string): Promise<RbacUser | null>;
 
-  /** Returns the user record including passwordHash for authentication flows. */
-  findByLogin(login: string): Promise<(RbacUser & { passwordHash: string }) | null>;
+  /** Returns the user record including passwordHash + lockout fields for auth flows. */
+  findByLogin(login: string): Promise<(RbacUser & RbacUserAuthFields) | null>;
 
   findByEmail(email: string): Promise<RbacUser | null>;
 
