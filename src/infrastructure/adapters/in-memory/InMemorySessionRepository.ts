@@ -96,6 +96,26 @@ export class InMemorySessionRepository implements SessionRepository {
     if (row) row.lastSeenAt = new Date().toISOString();
   }
 
+  async findRevoked(page: number, pageSize: number): Promise<SessionPage> {
+    const rows = this.store
+      .filter(s => s.revokedAt !== null)
+      .sort((a, b) => {
+        const ra = a.revokedAt as string;
+        const rb = b.revokedAt as string;
+        if (ra !== rb) return ra < rb ? 1 : -1;
+        return b.__seq - a.__seq;
+      });
+
+    const total = rows.length;
+    const start = (page - 1) * pageSize;
+    return {
+      items: rows.slice(start, start + pageSize).map(s => this.clean(s)),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
   private insert(s: Session): Session {
     const stored: Stored = { ...s, __seq: this.seq++ };
     this.store.push(stored);

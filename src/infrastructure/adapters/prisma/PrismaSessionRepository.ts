@@ -109,4 +109,20 @@ export class PrismaSessionRepository implements SessionRepository {
       data: { lastSeenAt: new Date() },
     });
   }
+
+  async findRevoked(page: number, pageSize: number): Promise<SessionPage> {
+    const where = { revokedAt: { not: null } };
+
+    const [rows, total] = await Promise.all([
+      (this.db as any).session.findMany({
+        where,
+        orderBy: { revokedAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }) as Promise<SessionRow[]>,
+      (this.db as any).session.count({ where }) as Promise<number>,
+    ]);
+
+    return { items: rows.map(mapRow), total, page, pageSize };
+  }
 }
