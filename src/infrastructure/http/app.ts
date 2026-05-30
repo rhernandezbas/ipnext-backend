@@ -403,6 +403,8 @@ import { ListPermissionIdsForRole } from '@application/use-cases/rbac/ListPermis
 import { SetRolePermissions } from '@application/use-cases/rbac/SetRolePermissions';
 import { createRolePermissionsRouter } from './routes/rolePermissions.routes';
 import { createPermissionsRouter } from './routes/permissions.routes';
+import { createAuditEventsRouter } from './routes/auditEvents.routes';
+import { ListAuditEvents } from '@application/use-cases/audit/ListAuditEvents';
 // SDD #3 Phase 4b — role catalog mutation use cases
 import { CreateRbacRole } from '@application/use-cases/rbac/CreateRbacRole';
 import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
@@ -430,6 +432,8 @@ const rbacRoleRepo           = new PrismaRbacRoleRepository();
 const rbacPermissionRepo     = new PrismaRbacPermissionRepository();
 const rbacUserRoleRepo       = new PrismaRbacUserRoleRepository();
 const rbacRolePermissionRepo = new PrismaRbacRolePermissionRepository();
+// SDD #4 — single audit repo instance shared by the middleware + emit + query endpoint
+const auditEventRepo         = new PrismaAuditEventRepository();
 
 // PasswordHasher + LoginRbacUser — module-level singletons (SDD #2 Phase 5)
 const passwordHasher = new BcryptPasswordHasher();
@@ -451,7 +455,7 @@ export function createApp() {
 
   // SDD #4: audit every mutation (POST/PUT/PATCH/DELETE under /api). Reads
   // req.user at res.on('finish'), so it sits before the per-router auth MW.
-  app.use(auditMutationsMiddleware(new PrismaAuditEventRepository()));
+  app.use(auditMutationsMiddleware(auditEventRepo));
 
   // Wire up adapters
   const splynxClient = new SplynxClient();
@@ -1101,6 +1105,7 @@ export function createApp() {
       setRolePermissionsUC,
       requirePerm('rbac', 'read'),
       requirePerm('rbac', 'manage_roles'),
+      auditEventRepo,
     ),
   );
 
@@ -1109,6 +1114,14 @@ export function createApp() {
     authMiddlewareForRbac,
     requirePerm('rbac', 'read'),
     createPermissionsRouter(listAllPermissionsUC),
+  );
+
+  // SDD #4 — audit log query endpoint
+  app.use(
+    '/api/admin/audit-events',
+    authMiddlewareForRbac,
+    requirePerm('admin', 'view_activity_log'),
+    createAuditEventsRouter(new ListAuditEvents(auditEventRepo)),
   );
 
   // Profile routes (uses internal router directly)

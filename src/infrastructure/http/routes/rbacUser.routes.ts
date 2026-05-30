@@ -68,8 +68,6 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
         roleIds: string[];
       };
       const user = await deps.createUser.execute({ name, email, login, password, status, roleIds });
-      // TODO(SDD#4): replace with AuditService.emit(...)
-      console.log('[AUDIT]', { action: 'CREATE_RBAC_USER', actorId: (req as any).user?.id, targetId: user.id, timestamp: new Date() });
       res.status(201).json({ user });
     } catch (err) {
       next(err);
@@ -95,8 +93,6 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
     try {
       const { roleIds } = req.body as { roleIds: string[] };
       const roles = await deps.setRolesForUser.execute(req.params['id'] as string, roleIds);
-      // TODO(SDD#4): replace with AuditService.emit(...)
-      console.log('[AUDIT]', { action: 'SET_ROLES_FOR_USER', actorId: (req as any).user?.id, targetId: req.params['id'], timestamp: new Date() });
       res.json({ roles });
     } catch (err) {
       next(err);
@@ -111,8 +107,6 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
       // Fetch the assigned role to return it
       const roles = await deps.listRolesForUser.execute(req.params['id'] as string);
       const assignedRole = roles.find(r => r.id === roleId);
-      // TODO(SDD#4): replace with AuditService.emit(...)
-      console.log('[AUDIT]', { action: 'ASSIGN_ROLE_TO_USER', actorId: (req as any).user?.id, targetId: req.params['id'], roleId, timestamp: new Date() });
       res.json({ role: assignedRole });
     } catch (err) {
       next(err);
@@ -123,8 +117,6 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
   router.delete('/:id/roles/:roleId', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await deps.removeRoleFromUser.execute(req.params['id'] as string, req.params['roleId'] as string);
-      // TODO(SDD#4): replace with AuditService.emit(...)
-      console.log('[AUDIT]', { action: 'REMOVE_ROLE_FROM_USER', actorId: (req as any).user?.id, targetId: req.params['id'], roleId: req.params['roleId'], timestamp: new Date() });
       res.status(204).send();
     } catch (err) {
       next(err);
@@ -139,8 +131,6 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
       const isAdminManaged = targetId !== requestingUserId;
       const { newPassword, oldPassword } = req.body as { newPassword: string; oldPassword?: string };
       await deps.changePassword.execute(targetId, { newPassword, oldPassword }, isAdminManaged);
-      // TODO(SDD#4): replace with AuditService.emit(...)
-      console.log('[AUDIT]', { action: 'CHANGE_RBAC_USER_PASSWORD', actorId: requestingUserId, targetId, isAdminManaged, timestamp: new Date() });
       res.status(204).send();
     } catch (err) {
       next(err);
@@ -172,8 +162,6 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
         password?: string;
       };
       const user = await deps.updateUser.execute(req.params['id'] as string, { name, email, login, status, password });
-      // TODO(SDD#4): replace with AuditService.emit(...)
-      console.log('[AUDIT]', { action: 'UPDATE_RBAC_USER', actorId: (req as any).user?.id, targetId: req.params['id'], timestamp: new Date() });
       res.json({ user });
     } catch (err) {
       next(err);
@@ -185,8 +173,6 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
     try {
       const requestingUserId = (req as any).user!.id as string;
       await deps.deleteUser.execute(req.params['id'] as string, requestingUserId);
-      // TODO(SDD#4): replace with AuditService.emit(...)
-      console.log('[AUDIT]', { action: 'DELETE_RBAC_USER', actorId: requestingUserId, targetId: req.params['id'], timestamp: new Date() });
       res.status(204).send();
     } catch (err) {
       next(err);

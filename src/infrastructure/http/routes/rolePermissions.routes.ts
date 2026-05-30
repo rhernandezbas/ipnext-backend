@@ -17,12 +17,15 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import type { ListPermissionIdsForRole } from '@application/use-cases/rbac/ListPermissionIdsForRole';
 import type { SetRolePermissions } from '@application/use-cases/rbac/SetRolePermissions';
+import type { AuditEventRepository } from '@domain/ports/AuditEventRepository';
+import { createRequestAuditService } from '../audit/requestAudit';
 
 export function createRolePermissionsRouter(
   listPermIds: ListPermissionIdsForRole,
   setRolePerms: SetRolePermissions,
   requireRbacRead: RequestHandler,
   requireRbacManageRoles: RequestHandler,
+  auditRepo?: AuditEventRepository,
 ): Router {
   const router = Router();
 
@@ -48,16 +51,20 @@ export function createRolePermissionsRouter(
     requireRbacManageRoles,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
+        const roleId = req.params['id'] as string;
         const { permissionIds } = req.body as { permissionIds: string[] };
-        const updated = await setRolePerms.execute(req.params['id'] as string, permissionIds ?? []);
-        // TODO(SDD#4): replace with AuditService.emit(...)
-        console.log('[AUDIT]', {
-          action: 'SET_ROLE_PERMISSIONS',
-          actorId: (req as any).user?.id,
-          targetRoleId: req.params['id'],
-          permissionCount: updated.length,
-          timestamp: new Date(),
-        });
+        // Capture the prior grant set for a faithful before/after audit.
+        const before = auditRepo ? await listPermIds.execute(roleId) : null;
+        const updated = await setRolePerms.execute(roleId, permissionIds ?? []);
+        if (auditRepo) {
+          await createRequestAuditService(auditRepo, req, res).emit({
+            action: 'SET_ROLE_PERMISSIONS',
+            entityType: 'RbacRole',
+            entityId: roleId,
+            before: { permissionIds: before ?? [] },
+            after: { permissionIds: updated },
+          });
+        }
         res.json({ permissionIds: updated });
       } catch (err) {
         next(err);
