@@ -1,9 +1,17 @@
 import { GestionRealPort, FetchClientsParams } from '@domain/ports/GestionRealPort';
 import { ClientMirrorRepository } from '@domain/ports/ClientMirrorRepository';
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
+import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 
 const SYNC_ENTITY = 'gr-clients';
 const DEFAULT_PAGE_SIZE = 100;
+
+/**
+ * Master switch for the whole client sync and the SINGLE runtime on/off gate.
+ * Checked PER execution so flipping it via /feature-flags takes effect on the
+ * next scheduler tick — no redeploy. OFF/missing → no-op (no GR call, no SyncState).
+ */
+const SYNC_FLAG_KEY = 'gestion-real-sync';
 
 export interface SyncRunResult {
   mode: 'backfill' | 'delta';
@@ -16,6 +24,8 @@ export interface SyncRunResult {
   touchedClientIds: string[];
   /** GR client ids newly created this run — used to limit contract fetches in backfill. */
   createdClientIds: string[];
+  /** True when the run was a no-op because the feature flag was off/missing. */
+  skipped?: true;
 }
 
 export interface SyncOptions {
@@ -46,6 +56,7 @@ export class SyncGestionRealClients {
     private readonly gr: GestionRealPort,
     private readonly mirror: ClientMirrorRepository,
     private readonly state: SyncStateRepository,
+    private readonly featureFlags: FeatureFlagRepository,
     opts: SyncOptions = {},
   ) {
     this.now = opts.now ?? (() => new Date());
@@ -55,6 +66,23 @@ export class SyncGestionRealClients {
   }
 
   async execute(): Promise<SyncRunResult> {
+    // Master switch (release flag). OFF/missing → no-op. Checked per run so it
+    // can be flipped via /feature-flags without a redeploy. Do NOT call GR or
+    // touch SyncState (mirrors IngestGestionRealOrders' disabled path).
+    const flag = await this.featureFlags.get(SYNC_FLAG_KEY);
+    if (!flag?.enabled) {
+      return {
+        mode: 'delta',
+        fetched: 0,
+        created: 0,
+        updated: 0,
+        cursor: '',
+        touchedClientIds: [],
+        createdClientIds: [],
+        skipped: true,
+      };
+    }
+
     const prior = await this.state.get(SYNC_ENTITY);
     const mode: 'backfill' | 'delta' = prior?.cursor ? 'delta' : 'backfill';
     const runDate = formatGrDate(this.now());

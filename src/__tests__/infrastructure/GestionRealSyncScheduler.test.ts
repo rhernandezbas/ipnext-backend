@@ -2,6 +2,7 @@ import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMe
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
+import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
 import { GestionRealSyncScheduler } from '@infrastructure/scheduling/GestionRealSyncScheduler';
@@ -27,7 +28,10 @@ function makeScheduler(
   state: InMemorySyncStateRepository,
   lock: InMemoryDistributedLock,
 ): GestionRealSyncScheduler {
-  const syncClients = new SyncGestionRealClients(gr, mirror, state);
+  // Flag ON so the scheduler exercises the real sync path.
+  const flags = new InMemoryFeatureFlagRepository();
+  flags.seed('gestion-real-sync', true);
+  const syncClients = new SyncGestionRealClients(gr, mirror, state, flags);
   const syncContracts = new SyncGestionRealContracts(gr, mirror);
   return new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: 1000, silent: true }, lock);
 }
