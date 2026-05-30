@@ -64,7 +64,7 @@ export const KNOWN_ACTIONS = [
 export type PermissionAction = (typeof KNOWN_ACTIONS)[number];
 
 // ---------------------------------------------------------------------------
-// Module catalog (25 modules: 14 original + 11 new)
+// Module catalog (26 modules: 14 original + 11 new + 1 contracts)
 // ---------------------------------------------------------------------------
 
 export const RBAC_MODULES = [
@@ -95,6 +95,8 @@ export const RBAC_MODULES = [
   'support',
   'sla',
   'tariffs',
+  // contracts-page (service-technology change) — own permission module for contract/service views
+  'contracts',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

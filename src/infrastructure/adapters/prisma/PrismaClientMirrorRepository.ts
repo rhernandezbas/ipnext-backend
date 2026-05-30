@@ -88,6 +88,10 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       select: { id: true },
     });
 
+    // GUARD: `technology` is intentionally EXCLUDED from this data object.
+    // Service.technology is a user-managed field (backed by the ServiceTechnology catalog).
+    // The GR sync must never overwrite it — adding `technology` here would silently reset it to
+    // null on every sync cycle. If you add new GR fields, double-check they are not user-owned.
     const data = {
       type: 'internet',
       plan: k.plan ?? 'Sin plan',
