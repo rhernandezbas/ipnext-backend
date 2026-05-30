@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, RequestHandler } from 'express';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { AuthenticationError } from '@domain/errors/index';
@@ -14,11 +14,14 @@ export function createAuthRouter(
   rbacUserRoleRepo: RbacUserRoleRepository,
   resolveUserPermissions: ResolveUserPermissions,
   sessionRepo?: SessionRepository,
+  loginRateLimiter?: RequestHandler,
 ): Router {
   const router = Router();
   const authMiddleware = createAuthMiddleware(authProvider, sessionRepo);
+  // SDD #6a: rate-limit only the login endpoint (no-op passthrough if not injected).
+  const loginLimiter: RequestHandler = loginRateLimiter ?? ((_req, _res, next) => next());
 
-  router.post('/login', async (req: Request, res: Response): Promise<void> => {
+  router.post('/login', loginLimiter, async (req: Request, res: Response): Promise<void> => {
     const { username, password } = req.body as { username?: string; password?: string };
     if (!username || !password) {
       res.status(400).json({ error: 'Username and password are required', code: 'VALIDATION_ERROR' });
