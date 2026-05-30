@@ -863,3 +863,9 @@ The repository MUST eager-load the project and its `iclassSoType` relation in th
 | Task sin Project | 422 | `MISSING_PROJECT_FOR_ICLASS` | — |
 | Project sin mapping o tipo inactivo | 422 | `MISSING_ICLASS_MAPPING` | `projectTitle` |
 | IClass no disponible | 502 | `ICLASS_UNAVAILABLE` | — |
+
+---
+
+## Closure loop integration (iclass-closure-loop)
+
+ADDED: `ScheduledTask` gana la relación inversa `iclassClosedOrder` (one-to-one nullable) hacia `IClassServiceOrder`. `SchedulingRepository` gana `findTaskBySequenceNumber` (join codigo↔sequenceNumber del cierre) y `listTasksInIClassStage` (backfill). Una tarea PUEDE moverse de stage por el closure loop al estado mapeado en `IClassResultCode.mappedStageId`, vía el `moveTaskToStage` existente. Ver capability `iclass-closure-loop`.
