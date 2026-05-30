@@ -1,6 +1,7 @@
 import express, { Router, Request, Response } from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
+import helmet from 'helmet';
 import { SplynxClient } from '../adapters/splynx/SplynxClient';
 import { PrismaCustomerRepository } from '../adapters/prisma/PrismaCustomerRepository';
 // SplynxTicketAdapter preserved but decabled — see AD-2 in design.md
@@ -460,7 +461,9 @@ export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
 export function createApp() {
   const app = express();
 
-  app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+  // SDD #6a — security headers (helmet) + CORS origin from env.
+  app.use(helmet());
+  app.use(cors({ origin: config.corsOrigin, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
 

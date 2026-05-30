@@ -111,4 +111,32 @@ describe('JwtAuthAdapter', () => {
       expect(cookieOptions.maxAge).toBe(0);
     });
   });
+
+  describe('cookie secure (COOKIE_SECURE, SDD #6a)', () => {
+    function makeAdapterWithSecure(secure: boolean) {
+      const repo = new InMemoryRbacUserRepository();
+      const hasher = new InMemoryPasswordHasher();
+      const loginUseCase = new LoginRbacUser(repo, hasher);
+      return { adapter: new JwtAuthAdapter(loginUseCase, TEST_SECRET, secure), repo, hasher };
+    }
+
+    it('login cookie has secure=true when cookieSecure=true (independent of NODE_ENV)', async () => {
+      const { adapter, repo, hasher } = makeAdapterWithSecure(true);
+      await repo.create({ name: 'E', email: 'e@x', login: 'e', passwordHash: await hasher.hash('pass1234'), status: 'active' });
+      const { cookieOptions } = await adapter.login({ username: 'e', password: 'pass1234' });
+      expect(cookieOptions.secure).toBe(true);
+    });
+
+    it('login cookie has secure=false when cookieSecure=false', async () => {
+      const { adapter, repo, hasher } = makeAdapterWithSecure(false);
+      await repo.create({ name: 'F', email: 'f@x', login: 'f', passwordHash: await hasher.hash('pass1234'), status: 'active' });
+      const { cookieOptions } = await adapter.login({ username: 'f', password: 'pass1234' });
+      expect(cookieOptions.secure).toBe(false);
+    });
+
+    it('logout cookie reflects cookieSecure', () => {
+      const { adapter } = makeAdapterWithSecure(true);
+      expect(adapter.logout().cookieOptions.secure).toBe(true);
+    });
+  });
 });
