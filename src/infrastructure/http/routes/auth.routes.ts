@@ -5,15 +5,18 @@ import { AuthenticationError } from '@domain/errors/index';
 import type { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import type { RbacUserRoleRepository } from '@domain/ports/RbacUserRoleRepository';
 import type { ResolveUserPermissions } from '@application/use-cases/rbac/ResolveUserPermissions';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
+import { hashToken } from '../../auth/sessionToken';
 
 export function createAuthRouter(
   authProvider: JwtAuthAdapter,
   rbacUserRepo: RbacUserRepository,
   rbacUserRoleRepo: RbacUserRoleRepository,
   resolveUserPermissions: ResolveUserPermissions,
+  sessionRepo?: SessionRepository,
 ): Router {
   const router = Router();
-  const authMiddleware = createAuthMiddleware(authProvider);
+  const authMiddleware = createAuthMiddleware(authProvider, sessionRepo);
 
   router.post('/login', async (req: Request, res: Response): Promise<void> => {
     const { username, password } = req.body as { username?: string; password?: string };
@@ -23,6 +26,17 @@ export function createAuthRouter(
     }
     try {
       const { user, cookieValue, cookieOptions } = await authProvider.login({ username, password });
+      // SDD #5: record the session BEFORE issuing the cookie (fail-safe: if this
+      // throws we fall to the 500 branch and never set the token).
+      if (sessionRepo) {
+        await sessionRepo.create({
+          rbacUserId: user.id,
+          actorLogin: user.username,
+          tokenHash: hashToken(cookieValue),
+          ip: req.ip ?? null,
+          userAgent: req.get('user-agent') ?? null,
+        });
+      }
       res.cookie('auth_token', cookieValue, cookieOptions);
       res.status(200).json({ user });
     } catch (err) {
@@ -34,7 +48,17 @@ export function createAuthRouter(
     }
   });
 
-  router.post('/logout', (_req: Request, res: Response): void => {
+  router.post('/logout', async (req: Request, res: Response): Promise<void> => {
+    // SDD #5: revoke the current session (best-effort — always clear the cookie).
+    if (sessionRepo) {
+      try {
+        const token = req.cookies?.['auth_token'] as string | undefined;
+        if (token) {
+          const session = await sessionRepo.findByTokenHash(hashToken(token));
+          if (session) await sessionRepo.revoke(session.id);
+        }
+      } catch { /* best-effort revoke; never block logout */ }
+    }
     const { cookieOptions } = authProvider.logout();
     res.cookie('auth_token', '', cookieOptions);
     res.status(200).json({ ok: true });

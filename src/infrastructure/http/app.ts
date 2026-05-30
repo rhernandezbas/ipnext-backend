@@ -378,6 +378,7 @@ import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepos
 import { PrismaRbacRoleRepository } from '../adapters/prisma/PrismaRbacRoleRepository';
 import { PrismaRbacPermissionRepository } from '../adapters/prisma/PrismaRbacPermissionRepository';
 import { PrismaAuditEventRepository } from '../adapters/prisma/PrismaAuditEventRepository';
+import { PrismaSessionRepository } from '../adapters/prisma/PrismaSessionRepository';
 import { auditMutationsMiddleware } from './middleware/auditMutationsMiddleware';
 import { PrismaRbacUserRoleRepository } from '../adapters/prisma/PrismaRbacUserRoleRepository';
 import { PrismaRbacRolePermissionRepository } from '../adapters/prisma/PrismaRbacRolePermissionRepository';
@@ -438,6 +439,8 @@ const rbacUserRoleRepo       = new PrismaRbacUserRoleRepository();
 const rbacRolePermissionRepo = new PrismaRbacRolePermissionRepository();
 // SDD #4 — single audit repo instance shared by the middleware + emit + query endpoint
 const auditEventRepo         = new PrismaAuditEventRepository();
+// SDD #5 — single session repo shared by auth middleware + login/logout + endpoints
+const sessionRepo            = new PrismaSessionRepository();
 
 // PasswordHasher + LoginRbacUser — module-level singletons (SDD #2 Phase 5)
 const passwordHasher = new BcryptPasswordHasher();
@@ -814,7 +817,7 @@ export function createApp() {
   // Routes
   app.use('/api/dashboard', createDashboardRouter(getDashboardStats, getDashboardShortcuts, getRecentActivity));
   app.use('/api/messages', createMessagesRouter(listMessages, getMessage, createMessage, markMessageAsRead, deleteMessage));
-  app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions));
+  app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions, sessionRepo));
   app.use('/api/clients', createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
   // TicketStatus catalog — mounted BEFORE the tickets router to avoid /:id catch-all swallowing /statuses.
@@ -1048,7 +1051,7 @@ export function createApp() {
   const assignRoleToUserUC = new AssignRoleToUser(rbacUserRepo, rbacRoleRepo, rbacUserRoleRepo);
   const removeRoleFromUserUC = new RemoveRoleFromUser(rbacUserRepo, rbacRoleRepo, rbacUserRoleRepo);
 
-  const authMiddlewareForRbac = createAuthMiddleware(authAdapter);
+  const authMiddlewareForRbac = createAuthMiddleware(authAdapter, sessionRepo);
 
   app.use(
     '/api/admin/rbac/users',
