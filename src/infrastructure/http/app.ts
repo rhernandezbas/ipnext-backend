@@ -133,6 +133,8 @@ import { createTaskCategoriesRouter } from './routes/taskCategories.routes';
 import { createGestionRealRouter } from './routes/gestionReal.routes';
 import { createGrSyncRouter } from './routes/gr-sync.routes';
 import { ResetGrClientsCursor } from '@application/use-cases/ResetGrClientsCursor';
+import { ArmGrContractsBackfill } from '@application/use-cases/ArmGrContractsBackfill';
+import { ResyncAllGr } from '@application/use-cases/ResyncAllGr';
 import { ReconcileGrClients } from '@application/use-cases/ReconcileGrClients';
 import { PrismaClientMirrorReadRepository } from '../adapters/prisma/PrismaClientMirrorReadRepository';
 import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
@@ -868,12 +870,20 @@ export function createApp() {
   // /api/gestion-real read-only mount below, so its RBAC-guarded GET /status takes
   // precedence over the legacy auth-only /sync/status (Express matches in order).
   const grSyncConfigRepo = new PrismaGestionRealSyncConfigRepository();
+  // Shared SyncState repo + reset/arm/resync-all use cases — wired into both the
+  // RBAC sync router (/resync-all, /reset) and the auth-only admin router.
+  const grSyncState = new PrismaSyncStateRepository();
+  const resetGrClientsCursor = new ResetGrClientsCursor(grSyncState);
+  const armGrContractsBackfill = new ArmGrContractsBackfill(grSyncState);
+  const resyncAllGr = new ResyncAllGr(resetGrClientsCursor, armGrContractsBackfill);
   app.use('/api/gestion-real/sync', createGestionRealSyncRouter(
     authAdapter,
     requirePerm,
     new GetSyncConfig(grSyncConfigRepo),
     new UpdateSyncConfig(grSyncConfigRepo),
-    new GetGestionRealSyncStatus(new PrismaSyncStateRepository(), new PrismaMirrorCountsRepository()),
+    new GetGestionRealSyncStatus(grSyncState, new PrismaMirrorCountsRepository()),
+    resetGrClientsCursor,
+    resyncAllGr,
   ));
   // Gestión Real mirror — read-only sync status endpoint (legacy, auth-only).
   app.use('/api/gestion-real', createGestionRealRouter(
@@ -883,7 +893,7 @@ export function createApp() {
   // GR sync admin — reset the gr-clients cursor to force a full backfill next tick.
   app.use('/api/admin/gr-sync', createGrSyncRouter(
     authAdapter,
-    new ResetGrClientsCursor(new PrismaSyncStateRepository()),
+    resetGrClientsCursor,
     reconcileGrClients,
   ));
   // Task comments — mounted BEFORE the scheduling catch-all router to avoid /:id swallowing

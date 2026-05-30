@@ -33,6 +33,9 @@ import { createGestionRealSyncRouter } from '@infrastructure/http/routes/gestion
 import { GetSyncConfig } from '@application/use-cases/GetSyncConfig';
 import { UpdateSyncConfig } from '@application/use-cases/UpdateSyncConfig';
 import { GetGestionRealSyncStatus } from '@application/use-cases/GetGestionRealSyncStatus';
+import { ResetGrClientsCursor } from '@application/use-cases/ResetGrClientsCursor';
+import { ArmGrContractsBackfill } from '@application/use-cases/ArmGrContractsBackfill';
+import { ResyncAllGr } from '@application/use-cases/ResyncAllGr';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -58,6 +61,7 @@ class EchoAuthProvider implements AuthProvider {
 interface Fixture {
   app: express.Express;
   config: InMemoryGestionRealSyncConfigRepository;
+  state: InMemorySyncStateRepository;
   readUserId: string;     // gestionReal:read only
   writeUserId: string;    // gestionReal:read + write
   superAdminUserId: string;
@@ -125,6 +129,9 @@ async function buildApp(): Promise<Fixture> {
   const getSyncConfig = new GetSyncConfig(config);
   const updateSyncConfig = new UpdateSyncConfig(config);
   const getSyncStatus = new GetGestionRealSyncStatus(state, counts);
+  const reset = new ResetGrClientsCursor(state);
+  const arm = new ArmGrContractsBackfill(state);
+  const resyncAll = new ResyncAllGr(reset, arm);
 
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
@@ -133,13 +140,16 @@ async function buildApp(): Promise<Fixture> {
   app.use(express.json());
   app.use(
     '/api/gestion-real/sync',
-    createGestionRealSyncRouter(new EchoAuthProvider(), requirePerm, getSyncConfig, updateSyncConfig, getSyncStatus),
+    createGestionRealSyncRouter(
+      new EchoAuthProvider(), requirePerm, getSyncConfig, updateSyncConfig, getSyncStatus, reset, resyncAll,
+    ),
   );
   app.use(errorHandler);
 
   return {
     app,
     config,
+    state,
     readUserId: readUser.id,
     writeUserId: writeUser.id,
     superAdminUserId: superAdminUser.id,
@@ -246,5 +256,88 @@ describe('gestionRealSync.routes', () => {
     );
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  // ── POST /sync/resync-all ────────────────────────────────────────────────────
+
+  async function seedClientsCursor(): Promise<void> {
+    await fx.state.save({
+      entity: 'gr-clients', cursor: '25-05-2026', lastRunAt: new Date(), lastResult: 'ok', itemsSynced: 100,
+    });
+  }
+
+  it('POST /resync-all with gestionReal:write → 200, resets clients + arms backfill (REQ-RESYNCALL-1)', async () => {
+    await seedClientsCursor();
+    const res = await asUser(request(fx.app).post('/api/gestion-real/sync/resync-all'), fx.writeUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('clients');
+    expect(res.body).toHaveProperty('contractsBackfill');
+    expect(res.body).toHaveProperty('message');
+    expect(res.body.clients).toEqual({ entity: 'gr-clients', cursor: null });
+    expect(res.body.contractsBackfill).toEqual({ armed: true, offset: 0 });
+    expect((await fx.state.get('gr-clients'))?.cursor).toBeNull();
+    expect((await fx.state.get('gr-contracts-backfill'))?.cursor).toBe('0');
+  });
+
+  it('POST /resync-all with only gestionReal:read → 403; watermarks unchanged (REQ-RESYNCALL-RBAC-1)', async () => {
+    await seedClientsCursor();
+    const res = await asUser(request(fx.app).post('/api/gestion-real/sync/resync-all'), fx.readUserId);
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'PERMISSION_DENIED', module: 'gestionReal', action: 'write' });
+    expect((await fx.state.get('gr-clients'))?.cursor).toBe('25-05-2026');
+    expect(await fx.state.get('gr-contracts-backfill')).toBeNull();
+  });
+
+  it('POST /resync-all with no gestionReal permission → 403 (REQ-RESYNCALL-RBAC-1)', async () => {
+    const res = await asUser(request(fx.app).post('/api/gestion-real/sync/resync-all'), fx.noPermUserId);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('PERMISSION_DENIED');
+  });
+
+  it('POST /resync-all as super_admin → 200 (short-circuit) (REQ-RESYNCALL-RBAC-1)', async () => {
+    await seedClientsCursor();
+    const res = await asUser(request(fx.app).post('/api/gestion-real/sync/resync-all'), fx.superAdminUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('contractsBackfill');
+  });
+
+  it('POST /resync-all with no auth cookie → 401; watermarks unchanged (REQ-RESYNCALL-AUTH-1)', async () => {
+    await seedClientsCursor();
+    const res = await request(fx.app).post('/api/gestion-real/sync/resync-all');
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('UNAUTHORIZED');
+    expect((await fx.state.get('gr-clients'))?.cursor).toBe('25-05-2026');
+    expect(await fx.state.get('gr-contracts-backfill')).toBeNull();
+  });
+
+  // ── POST /sync/reset (kept — clients only) ───────────────────────────────────
+
+  it('POST /reset with gestionReal:write → 200, clears only the client cursor (REQ-RESET-1)', async () => {
+    await seedClientsCursor();
+    // Pre-armed backfill must remain UNTOUCHED by reset.
+    await fx.state.save({
+      entity: 'gr-contracts-backfill', cursor: '3', lastRunAt: new Date(), lastResult: 'batch ok @3', itemsSynced: 3,
+    });
+
+    const res = await asUser(request(fx.app).post('/api/gestion-real/sync/reset'), fx.writeUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ entity: 'gr-clients', cursor: null });
+    expect(res.body).toHaveProperty('message');
+    expect((await fx.state.get('gr-clients'))?.cursor).toBeNull();
+    // Reset does NOT arm/touch the contract backfill.
+    expect((await fx.state.get('gr-contracts-backfill'))?.cursor).toBe('3');
+  });
+
+  it('POST /reset with only gestionReal:read → 403 { action:write }, cursor unchanged (REQ-RESET-1)', async () => {
+    await seedClientsCursor();
+    const res = await asUser(request(fx.app).post('/api/gestion-real/sync/reset'), fx.readUserId);
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'PERMISSION_DENIED', action: 'write' });
+    expect((await fx.state.get('gr-clients'))?.cursor).toBe('25-05-2026');
   });
 });

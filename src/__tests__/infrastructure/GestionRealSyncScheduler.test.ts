@@ -1,10 +1,12 @@
 import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
+import { InMemoryClientMirrorReadRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorReadRepository';
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
+import { BackfillGrContractsBatch } from '@application/use-cases/BackfillGrContractsBatch';
 import { GestionRealSyncScheduler } from '@infrastructure/scheduling/GestionRealSyncScheduler';
 import { GrClient, GrContract } from '@domain/entities/gestionReal';
 
@@ -27,13 +29,20 @@ function makeScheduler(
   mirror: InMemoryClientMirrorRepository,
   state: InMemorySyncStateRepository,
   lock: InMemoryDistributedLock,
+  mirrorRead?: InMemoryClientMirrorReadRepository,
 ): GestionRealSyncScheduler {
   // Flag ON so the scheduler exercises the real sync path.
   const flags = new InMemoryFeatureFlagRepository();
   flags.seed('gestion-real-sync', true);
   const syncClients = new SyncGestionRealClients(gr, mirror, state, flags);
   const syncContracts = new SyncGestionRealContracts(gr, mirror);
-  return new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: 1000, silent: true }, lock);
+  const backfill = new BackfillGrContractsBatch(
+    mirrorRead ?? new InMemoryClientMirrorReadRepository(),
+    syncContracts,
+    state,
+    2,
+  );
+  return new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: 1000, silent: true }, lock, backfill);
 }
 
 describe('GestionRealSyncScheduler', () => {
@@ -122,5 +131,44 @@ describe('GestionRealSyncScheduler', () => {
     jest.spyOn(gr, 'fetchClients').mockRejectedValueOnce(new Error('boom'));
     const summary = await scheduler.runOnce();
     expect(summary.error).toContain('boom');
+  });
+
+  // ── Contract backfill: one bounded batch per tick (REQ-BACKFILL-SCHED-1) ──
+
+  it('runs exactly one bounded backfill batch per tick when armed (REQ-BACKFILL-SCHED-1)', async () => {
+    // Universe of 5 local clients, larger than batchSize (2). No clients in the
+    // GR feed → the touched-contracts sync makes no calls; only the backfill does.
+    const mirrorRead = new InMemoryClientMirrorReadRepository(['c1', 'c2', 'c3', 'c4', 'c5']);
+    gr.contractsByClient = {
+      c1: [contract('k1', 'c1')], c2: [contract('k2', 'c2')], c3: [contract('k3', 'c3')],
+      c4: [contract('k4', 'c4')], c5: [contract('k5', 'c5')],
+    };
+    state = new InMemorySyncStateRepository();
+    await state.save({ entity: 'gr-contracts-backfill', cursor: '0', lastRunAt: null, lastResult: 'armed', itemsSynced: 0 });
+    scheduler = makeScheduler(gr, mirror, state, lock, mirrorRead);
+    const spy = jest.spyOn(gr, 'fetchContractsByClient');
+
+    const summary = await scheduler.runOnce();
+
+    // At most batchSize (2) contract calls — NOT the whole 5-client universe.
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(summary.backfill?.processed).toBe(2);
+    expect(summary.backfill?.done).toBe(false);
+    // Lock released — runOnce returned, did not loop to done.
+    expect(lock.heldKeys.has('gr-sync')).toBe(false);
+  });
+
+  it('runs no backfill batch when disarmed; lock still released (REQ-BACKFILL-SCHED-1)', async () => {
+    const mirrorRead = new InMemoryClientMirrorReadRepository(['c1', 'c2', 'c3']);
+    gr.contractsByClient = { c1: [contract('k1', 'c1')] };
+    // No gr-contracts-backfill row → disarmed.
+    scheduler = makeScheduler(gr, mirror, state, lock, mirrorRead);
+    const spy = jest.spyOn(gr, 'fetchContractsByClient');
+
+    const summary = await scheduler.runOnce();
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(summary.backfill?.processed ?? 0).toBe(0);
+    expect(lock.heldKeys.has('gr-sync')).toBe(false);
   });
 });
