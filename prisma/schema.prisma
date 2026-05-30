@@ -1333,6 +1333,16 @@ model GestionRealIngestConfig {
   @@index([wirelessProjectId])
 }
 
+// Single-row config for the Gestión Real client sync (intervalMs + estado codes).
+// `estados` is stored comma-joined (mirrors the GR_SYNC_ESTADOS env convention);
+// the string⇄string[] mapping lives in the adapters. No FKs, no indexes.
+model GestionRealSyncConfig {
+  id         String   @id @default("singleton")
+  intervalMs Int      @default(180000)
+  estados    String   @default("1,2,3,4,6")
+  updatedAt  DateTime @updatedAt
+}
+
 // =============================================
 // SUPPORT DOMAIN
 // =============================================

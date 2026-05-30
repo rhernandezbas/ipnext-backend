@@ -146,6 +146,11 @@ import { UpdateIngestConfig } from '@application/use-cases/UpdateIngestConfig';
 import { GetIngestStatus } from '@application/use-cases/GetIngestStatus';
 import { ListNeedsReviewTasks } from '@application/use-cases/ListNeedsReviewTasks';
 import { PrismaGestionRealIngestConfigRepository } from '../adapters/prisma/PrismaGestionRealIngestConfigRepository';
+// GR client-sync config (gr-clients-sync-config-page) — RBAC-guarded settings endpoints
+import { createGestionRealSyncRouter } from './routes/gestionRealSync.routes';
+import { GetSyncConfig } from '@application/use-cases/GetSyncConfig';
+import { UpdateSyncConfig } from '@application/use-cases/UpdateSyncConfig';
+import { PrismaGestionRealSyncConfigRepository } from '../adapters/prisma/PrismaGestionRealSyncConfigRepository';
 import { ListTaskCategory } from '@application/use-cases/ListTaskCategory';
 import { GetTaskCategory } from '@application/use-cases/GetTaskCategory';
 import { CreateTaskCategory } from '@application/use-cases/CreateTaskCategory';
@@ -843,7 +848,19 @@ export function createApp() {
     authAdapter,
     listTaskPriority, getTaskPriority, createTaskPriority, updateTaskPriority, deleteTaskPriority,
   ));
-  // Gestión Real mirror — read-only sync status endpoint.
+  // GR client-sync config — RBAC-guarded settings (config GET/PUT + status).
+  // Mounted at the more-specific /api/gestion-real/sync path BEFORE the broader
+  // /api/gestion-real read-only mount below, so its RBAC-guarded GET /status takes
+  // precedence over the legacy auth-only /sync/status (Express matches in order).
+  const grSyncConfigRepo = new PrismaGestionRealSyncConfigRepository();
+  app.use('/api/gestion-real/sync', createGestionRealSyncRouter(
+    authAdapter,
+    requirePerm,
+    new GetSyncConfig(grSyncConfigRepo),
+    new UpdateSyncConfig(grSyncConfigRepo),
+    new GetGestionRealSyncStatus(new PrismaSyncStateRepository(), new PrismaMirrorCountsRepository()),
+  ));
+  // Gestión Real mirror — read-only sync status endpoint (legacy, auth-only).
   app.use('/api/gestion-real', createGestionRealRouter(
     authAdapter,
     new GetGestionRealSyncStatus(new PrismaSyncStateRepository(), new PrismaMirrorCountsRepository()),

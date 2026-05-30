@@ -22,8 +22,10 @@ app.listen(config.port, () => {
 });
 
 // Gestión Real read-only mirror sync — opt-in, no-op when disabled.
-const grSync = bootstrapGestionRealSync();
-grSync?.start();
+// Async because the composition root reads the persisted interval/estados config.
+void bootstrapGestionRealSync()
+  .then((grSync) => grSync?.start())
+  .catch((err) => console.error('[gr-sync] bootstrap failed (server kept alive):', (err as Error).message));
 
 // Gestión Real installation-order ingest — opt-in, no-op when disabled.
 // Async because the composition root resolves the fallback "Pendiente" stage.

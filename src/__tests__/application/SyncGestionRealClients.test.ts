@@ -1,10 +1,12 @@
 import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
+import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { GrClient } from '@domain/entities/gestionReal';
 
 const SYNC_ENTITY = 'gr-clients';
+const SYNC_FLAG_KEY = 'gestion-real-sync';
 
 function makeClient(id: string, mod = '01-01-2026 10:00:00'): GrClient {
   return {
@@ -27,6 +29,7 @@ describe('SyncGestionRealClients', () => {
   let gr: InMemoryGestionRealPort;
   let mirror: InMemoryClientMirrorRepository;
   let state: InMemorySyncStateRepository;
+  let flags: InMemoryFeatureFlagRepository;
   let sync: SyncGestionRealClients;
   const now = new Date(2026, 4, 27, 12, 0, 0); // 27-05-2026
 
@@ -34,7 +37,10 @@ describe('SyncGestionRealClients', () => {
     gr = new InMemoryGestionRealPort();
     mirror = new InMemoryClientMirrorRepository();
     state = new InMemorySyncStateRepository();
-    sync = new SyncGestionRealClients(gr, mirror, state, { now: () => now, pageSize: 100 });
+    flags = new InMemoryFeatureFlagRepository();
+    // Flag ON by default so the existing happy-path tests run the sync.
+    flags.seed(SYNC_FLAG_KEY, true);
+    sync = new SyncGestionRealClients(gr, mirror, state, flags, { now: () => now, pageSize: 100 });
   });
 
   it('does a full backfill on the first run (no prior cursor)', async () => {
@@ -98,7 +104,7 @@ describe('SyncGestionRealClients', () => {
   });
 
   it('only syncs the configured estados (e.g. activos + deudores)', async () => {
-    sync = new SyncGestionRealClients(gr, mirror, state, { now: () => now, pageSize: 100, estados: ['1', '2'] });
+    sync = new SyncGestionRealClients(gr, mirror, state, flags, { now: () => now, pageSize: 100, estados: ['1', '2'] });
     gr.clients = [
       { ...makeClient('1'), statusCode: '1' }, // Activo   → included
       { ...makeClient('2'), statusCode: '2' }, // Deudor   → included
@@ -124,5 +130,49 @@ describe('SyncGestionRealClients', () => {
 
     const saved = await state.get(SYNC_ENTITY);
     expect(saved?.lastResult).toContain('error');
+  });
+
+  // ── Feature-flag gate (REQ-FLAG-1) ─────────────────────────────────────────
+
+  describe('gestion-real-sync feature flag gate', () => {
+    it('flag OFF → no GR call, no SyncState write, zeroed result', async () => {
+      flags.seed(SYNC_FLAG_KEY, false);
+      gr.clients = [makeClient('1'), makeClient('2')];
+      const fetchSpy = jest.spyOn(gr, 'fetchClients');
+
+      const res = await sync.execute();
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(await state.get(SYNC_ENTITY)).toBeNull();
+      expect(mirror.clients.size).toBe(0);
+      expect(res.fetched).toBe(0);
+      expect(res.created).toBe(0);
+      expect(res.updated).toBe(0);
+      expect(res.skipped).toBe(true);
+    });
+
+    it('flag MISSING → treated as off (no GR call, no state write)', async () => {
+      // fresh repo without the flag seeded
+      const noFlag = new InMemoryFeatureFlagRepository();
+      sync = new SyncGestionRealClients(gr, mirror, state, noFlag, { now: () => now, pageSize: 100 });
+      gr.clients = [makeClient('1')];
+      const fetchSpy = jest.spyOn(gr, 'fetchClients');
+
+      const res = await sync.execute();
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(await state.get(SYNC_ENTITY)).toBeNull();
+      expect(res.skipped).toBe(true);
+    });
+
+    it('flag ON → runs the existing happy path', async () => {
+      gr.clients = [makeClient('1')];
+      const res = await sync.execute();
+
+      expect(res.fetched).toBe(1);
+      expect(res.created).toBe(1);
+      expect(mirror.clients.has('1')).toBe(true);
+      expect(await state.get(SYNC_ENTITY)).not.toBeNull();
+    });
   });
 });

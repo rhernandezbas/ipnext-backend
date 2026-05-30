@@ -2,6 +2,8 @@ import { config } from '../config';
 import { GestionRealClient } from '../adapters/gestion-real/GestionRealClient';
 import { PrismaClientMirrorRepository } from '../adapters/prisma/PrismaClientMirrorRepository';
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
+import { PrismaGestionRealSyncConfigRepository } from '../adapters/prisma/PrismaGestionRealSyncConfigRepository';
+import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
 import { RefreshDebtorBalances } from '@application/use-cases/RefreshDebtorBalances';
@@ -12,8 +14,13 @@ import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
  * Composition root for the GR mirror sync. Returns a ready-to-start scheduler,
  * or null when the feature is off or misconfigured — callers just no-op on null,
  * so flipping GR_SYNC_ENABLED=false leaves the server behaving exactly as before.
+ *
+ * `intervalMs` and `estados` are read ONCE from the DB-backed config repo (env as
+ * the ultimate fallback via the repo's default record); the runtime on/off gate
+ * is the `gestion-real-sync` feature flag, re-read per tick inside the use-case.
+ * Async because resolving the persisted config is an I/O call.
  */
-export function bootstrapGestionRealSync(): GestionRealSyncScheduler | null {
+export async function bootstrapGestionRealSync(): Promise<GestionRealSyncScheduler | null> {
   const gr = config.gestionReal;
 
   if (!gr.enabled) {
@@ -28,14 +35,22 @@ export function bootstrapGestionRealSync(): GestionRealSyncScheduler | null {
   const client = new GestionRealClient({ baseUrl: gr.baseUrl, cuit: gr.cuit, secret: gr.secret });
   const mirror = new PrismaClientMirrorRepository();
   const state = new PrismaSyncStateRepository();
-  const syncClients = new SyncGestionRealClients(client, mirror, state, { estados: gr.estados });
+  const syncConfig = new PrismaGestionRealSyncConfigRepository();
+  // Master switch (release flag), checked per run inside the use case.
+  const featureFlags = new PrismaFeatureFlagRepository();
+
+  // Read the persisted config ONCE; the repo's defaults converge with the env
+  // fallback (config.gestionReal.intervalMs/.estados) when no row exists.
+  const persisted = await syncConfig.get();
+
+  const syncClients = new SyncGestionRealClients(client, mirror, state, featureFlags, { estados: persisted.estados });
   const syncContracts = new SyncGestionRealContracts(client, mirror);
   const refreshDebtorBalances = new RefreshDebtorBalances(client, mirror, state);
   // PgAdvisoryLock uses a dedicated pg.Client (not the pool) so that session
   // advisory locks are tied to one stable connection across acquire/release.
   const lock = new PgAdvisoryLock();
 
-  const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: gr.intervalMs }, lock);
+  const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: persisted.intervalMs }, lock);
 
   // Batch debtor balance refresh — runs on its own interval (default 1h), independently.
   startBalanceBatchJob(refreshDebtorBalances, gr.balanceBatchIntervalMs);
