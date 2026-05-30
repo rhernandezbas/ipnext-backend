@@ -9,6 +9,15 @@ class StubLookup implements EntityLookup {
 }
 const emptyLookup = new StubLookup();
 
+// Accepts any ID — used for required FKs where identity is not under test
+class AnyLookup implements EntityLookup {
+  async findById(id: string) { return { id }; }
+}
+const anyLookup = new AnyLookup();
+
+const DEFAULT_CUSTOMER_ID = 'customer-default-0000-000000000001';
+const DEFAULT_SERVICE_ID  = 'service-default-00000-000000000001';
+
 // Default stage IDs used by InMemorySchedulingRepository — valid UUID format
 const DEFAULT_STAGE_ID_PENDING = '10000000-0000-4000-a000-000000000001';
 
@@ -45,7 +54,8 @@ describe('GetTask', () => {
 describe('CreateTask', () => {
   it('creates task with stageId and stageCategory', async () => {
     const repo = makeRepo();
-    const uc = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+    // REQ-REQUIRED-1/2: customer and service lookups must accept the provided IDs
+    const uc = new CreateTask(repo, anyLookup, anyLookup, emptyLookup, emptyLookup, emptyLookup);
 
     const result = await uc.execute({
       title: 'Nueva tarea de prueba',
@@ -60,8 +70,9 @@ describe('CreateTask', () => {
       notes: '',
       startDate: null,
       endDate: null,
-      customerId: null,
-      serviceId: null,
+      // REQ-REQUIRED-1/2: required on create
+      customerId: DEFAULT_CUSTOMER_ID,
+      serviceId: DEFAULT_SERVICE_ID,
       partnerId: null,
       reporterId: null,
       assigneeId: null,

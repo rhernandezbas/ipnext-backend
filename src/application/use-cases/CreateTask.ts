@@ -16,13 +16,17 @@ export class CreateTask {
   async execute(data: CreateTaskInput): Promise<ScheduledTask> {
     // FK validation in deterministic order (REQ-FK-ORDER-1):
     // customer → service → partner → reporter → assignee → watchers[*]
-    if (data.customerId != null) {
-      const found = await this.customerLookup.findById(data.customerId);
-      if (!found) throw new ReferenceNotFoundError('customer', data.customerId);
+    // REQ-REQUIRED-1/2: customerId and serviceId are always required on create.
+    // The DTO schema guarantees they are non-null strings; the ! asserts that contract.
+    {
+      const cid = data.customerId!;
+      const found = await this.customerLookup.findById(cid);
+      if (!found) throw new ReferenceNotFoundError('customer', cid);
     }
-    if (data.serviceId != null) {
-      const found = await this.serviceLookup.findById(data.serviceId);
-      if (!found) throw new ReferenceNotFoundError('service', data.serviceId);
+    {
+      const sid = data.serviceId!;
+      const found = await this.serviceLookup.findById(sid);
+      if (!found) throw new ReferenceNotFoundError('service', sid);
     }
     if (data.partnerId != null) {
       const found = await this.partnerLookup.findById(data.partnerId);

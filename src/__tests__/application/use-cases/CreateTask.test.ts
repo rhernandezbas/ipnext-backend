@@ -4,6 +4,8 @@ import { ReferenceNotFoundError } from '../../../domain/errors/scheduling';
 import { EntityLookup } from '../../../domain/ports/EntityLookup';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
+const DEFAULT_CUSTOMER_ID = 'customer-default-0000-000000000001';
+const DEFAULT_SERVICE_ID  = 'service-default-00000-000000000001';
 
 // Simple in-memory lookup that can be pre-populated with known IDs
 class StubLookup implements EntityLookup {
@@ -34,8 +36,9 @@ function makeBase() {
     notes: null,
     startDate: null,
     endDate: null,
-    customerId: null,
-    serviceId: null,
+    // REQ-REQUIRED-1: customerId and serviceId are required on create
+    customerId: DEFAULT_CUSTOMER_ID,
+    serviceId: DEFAULT_SERVICE_ID,
     partnerId: null,
     reporterId: null,
     assigneeId: null,
@@ -54,14 +57,17 @@ function makeUseCase(overrides?: {
 }) {
   const repo = new InMemorySchedulingRepository();
   const emptyLookup = new StubLookup();
+  // Default lookups recognise the default IDs used in makeBase()
+  const defaultCustomerLookup = new StubLookup(DEFAULT_CUSTOMER_ID);
+  const defaultServiceLookup  = new StubLookup(DEFAULT_SERVICE_ID);
   return {
     uc: new CreateTask(
       repo,
-      overrides?.customerLookup ?? emptyLookup,
-      overrides?.serviceLookup ?? emptyLookup,
-      overrides?.partnerLookup ?? emptyLookup,
-      overrides?.adminLookup ?? emptyLookup,
-      overrides?.projectLookup ?? emptyLookup,
+      overrides?.customerLookup ?? defaultCustomerLookup,
+      overrides?.serviceLookup  ?? defaultServiceLookup,
+      overrides?.partnerLookup  ?? emptyLookup,
+      overrides?.adminLookup    ?? emptyLookup,
+      overrides?.projectLookup  ?? emptyLookup,
     ),
     repo,
   };
@@ -205,20 +211,23 @@ describe('CreateTask — FK validation', () => {
     expect(result.watcherIds).toEqual(['watcher-1', 'watcher-2']);
   });
 
-  it('happy path: no FKs provided → creates task without lookup', async () => {
+  it('happy path: customerId + serviceId both valid → creates task', async () => {
     const { uc } = makeUseCase();
     const result = await uc.execute(makeBase());
     expect(result.id).toBeTruthy();
   });
 
-  it('null FKs skip validation', async () => {
-    const { uc } = makeUseCase(); // empty lookups
-    const result = await uc.execute({
-      ...makeBase(),
-      customerId: null,
-      serviceId: null,
-      assigneeId: null,
-    });
-    expect(result.id).toBeTruthy();
+  it('REQ-REQUIRED-1: null customerId throws ReferenceNotFoundError (no longer bypassed)', async () => {
+    // customerId is required — the use case must NOT skip validation for null
+    const { uc } = makeUseCase({ customerLookup: new StubLookup(DEFAULT_SERVICE_ID) }); // customer empty
+    await expect(uc.execute({ ...makeBase(), customerId: null as unknown as string }))
+      .rejects.toBeInstanceOf(ReferenceNotFoundError);
+  });
+
+  it('REQ-REQUIRED-2: null serviceId throws ReferenceNotFoundError (no longer bypassed)', async () => {
+    // serviceId is required — the use case must NOT skip validation for null
+    const { uc } = makeUseCase({ serviceLookup: new StubLookup(DEFAULT_CUSTOMER_ID) }); // service empty
+    await expect(uc.execute({ ...makeBase(), serviceId: null as unknown as string }))
+      .rejects.toBeInstanceOf(ReferenceNotFoundError);
   });
 });
