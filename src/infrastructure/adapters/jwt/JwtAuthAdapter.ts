@@ -27,20 +27,25 @@ interface JwtPayload {
 
 export class JwtAuthAdapter implements AuthProvider {
   private readonly secret: string;
+  private readonly cookieSecure: boolean;
 
   constructor(
     private readonly loginUseCase: LoginRbacUser,
     secret?: string,
+    cookieSecure?: boolean,
   ) {
-    // Accept an injected secret (for tests) or fall back to config (production).
+    // Accept injected values (for tests) or fall back to config (production).
     // config is imported lazily to avoid process.exit in test environments that
     // don't have all env vars set.
     if (secret !== undefined) {
+      // Test path — never touch config (config.ts runs fail-fast validateEnv).
       this.secret = secret;
+      this.cookieSecure = cookieSecure ?? false;
     } else {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { config } = require('../../config') as { config: { jwtSecret: string } };
+      const { config } = require('../../config') as { config: { jwtSecret: string; cookieSecure: boolean } };
       this.secret = config.jwtSecret;
+      this.cookieSecure = cookieSecure ?? config.cookieSecure;
     }
   }
 
@@ -67,7 +72,7 @@ export class JwtAuthAdapter implements AuthProvider {
 
     const cookieOptions: CookieConfig = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: this.cookieSecure,
       sameSite: 'lax',
       maxAge: MAX_AGE_SECONDS * 1000,
       path: '/',
@@ -80,7 +85,7 @@ export class JwtAuthAdapter implements AuthProvider {
     return {
       cookieOptions: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: this.cookieSecure,
         sameSite: 'lax',
         maxAge: 0,
         path: '/',

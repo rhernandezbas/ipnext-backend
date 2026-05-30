@@ -1443,6 +1443,8 @@ model RbacUser {
   login           String          @unique
   passwordHash    String
   status          String          @default("active")
+  failedLoginCount Int            @default(0)
+  lockedUntil     DateTime?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   lastLoginAt     DateTime?

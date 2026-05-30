@@ -208,12 +208,12 @@ describe('POST /admin/rbac/users', () => {
     expect(JSON.stringify(res.body)).not.toContain('passwordHash');
   });
 
-  it('400 + PASSWORD_TOO_SHORT when password < 8 chars', async () => {
+  it('400 + PASSWORD_POLICY when password is weak', async () => {
     const { app, superAdminUser: sa, roleId } = await buildTestApp();
     const res = await authed(request(app).post('/admin/rbac/users'), sa.id)
       .send({ name: 'X', email: 'x@example.com', login: 'xuser', password: 'short', roleIds: [roleId] });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('PASSWORD_TOO_SHORT');
+    expect(res.body.code).toBe('PASSWORD_POLICY');
   });
 
   it('400 + AT_LEAST_ONE_ROLE_REQUIRED when roleIds is empty', async () => {

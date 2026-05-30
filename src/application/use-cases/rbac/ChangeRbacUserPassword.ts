@@ -2,9 +2,9 @@ import type { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import type { PasswordHasher } from '@domain/ports/PasswordHasher';
 import {
   UserNotFoundError,
-  PasswordTooShortError,
   InvalidOldPasswordError,
 } from '@domain/errors/rbacUser.errors';
+import { validatePassword } from '@domain/services/passwordPolicy';
 import type { ChangeRbacUserPasswordDto } from '@application/dto/rbacUser.dto';
 
 export class ChangeRbacUserPassword {
@@ -18,8 +18,8 @@ export class ChangeRbacUserPassword {
     dto: ChangeRbacUserPasswordDto,
     isAdminManaged: boolean,
   ): Promise<void> {
-    // 1. Validate new password length
-    if (dto.newPassword.length < 8) throw new PasswordTooShortError();
+    // 1. Validate new password policy (SDD #6a)
+    validatePassword(dto.newPassword);
 
     // 2. Find user (including passwordHash for self-change verification)
     // We need findByLogin or a way to get passwordHash.

@@ -56,7 +56,7 @@ describe('RbacUserRepository — interface contract', () => {
     // TypeScript will error at compile time if the interface shape changes.
     const stub: RbacUserRepository = {
       findById: async (_id: string) => makeUser(),
-      findByLogin: async (_login: string) => ({ ...makeUser(), passwordHash: 'hash' }),
+      findByLogin: async (_login: string) => ({ ...makeUser(), passwordHash: 'hash', failedLoginCount: 0, lockedUntil: null }),
       findByEmail: async (_email: string) => makeUser(),
       create: async (_input: CreateRbacUserInput) => makeUser(),
       updateLastLogin: async (_id: string, _at: Date) => { /* void */ },
@@ -108,7 +108,7 @@ describe('RbacUserRepository — interface contract', () => {
     const stub: RbacUserRepository = {
       findById: async () => null,
       findByLogin: async (login: string) =>
-        login === 'jdoe' ? { ...makeUser(), login: 'jdoe', passwordHash: 'hashed' } : null,
+        login === 'jdoe' ? { ...makeUser(), login: 'jdoe', passwordHash: 'hashed', failedLoginCount: 0, lockedUntil: null } : null,
       findByEmail: async () => null,
       create: async (_input: CreateRbacUserInput) => makeUser(),
       updateLastLogin: async () => { /* void */ },

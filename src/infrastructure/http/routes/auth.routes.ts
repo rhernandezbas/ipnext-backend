@@ -1,7 +1,7 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, RequestHandler } from 'express';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
-import { AuthenticationError } from '@domain/errors/index';
+import { AuthenticationError, AccountLockedError } from '@domain/errors/index';
 import type { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import type { RbacUserRoleRepository } from '@domain/ports/RbacUserRoleRepository';
 import type { ResolveUserPermissions } from '@application/use-cases/rbac/ResolveUserPermissions';
@@ -14,11 +14,14 @@ export function createAuthRouter(
   rbacUserRoleRepo: RbacUserRoleRepository,
   resolveUserPermissions: ResolveUserPermissions,
   sessionRepo?: SessionRepository,
+  loginRateLimiter?: RequestHandler,
 ): Router {
   const router = Router();
   const authMiddleware = createAuthMiddleware(authProvider, sessionRepo);
+  // SDD #6a: rate-limit only the login endpoint (no-op passthrough if not injected).
+  const loginLimiter: RequestHandler = loginRateLimiter ?? ((_req, _res, next) => next());
 
-  router.post('/login', async (req: Request, res: Response): Promise<void> => {
+  router.post('/login', loginLimiter, async (req: Request, res: Response): Promise<void> => {
     const { username, password } = req.body as { username?: string; password?: string };
     if (!username || !password) {
       res.status(400).json({ error: 'Username and password are required', code: 'VALIDATION_ERROR' });
@@ -40,7 +43,9 @@ export function createAuthRouter(
       res.cookie('auth_token', cookieValue, cookieOptions);
       res.status(200).json({ user });
     } catch (err) {
-      if (err instanceof AuthenticationError) {
+      if (err instanceof AccountLockedError) {
+        res.status(423).json({ error: 'Cuenta bloqueada temporalmente por intentos fallidos', code: 'ACCOUNT_LOCKED' });
+      } else if (err instanceof AuthenticationError) {
         res.status(401).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
       } else {
         res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });

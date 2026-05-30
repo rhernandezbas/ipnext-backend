@@ -57,6 +57,10 @@ const statusMap: Record<string, number> = {
   VALIDATION_ERROR: 400,
   // SDD #5 — sessions
   SESSION_NOT_FOUND: 404,
+  // SDD #6a — auth hardening
+  ACCOUNT_LOCKED: 423,
+  RATE_LIMITED: 429,
+  PASSWORD_POLICY: 400,
 };
 
 /** Express global error-handling middleware. */

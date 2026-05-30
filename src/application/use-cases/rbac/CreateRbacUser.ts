@@ -3,12 +3,12 @@ import type { RbacRoleRepository } from '@domain/ports/RbacRoleRepository';
 import type { RbacUserRoleRepository } from '@domain/ports/RbacUserRoleRepository';
 import type { PasswordHasher } from '@domain/ports/PasswordHasher';
 import {
-  PasswordTooShortError,
   AtLeastOneRoleRequiredError,
   RoleNotFoundError,
   LoginAlreadyTakenError,
   EmailAlreadyTakenError,
 } from '@domain/errors/rbacUser.errors';
+import { validatePassword } from '@domain/services/passwordPolicy';
 import type { CreateRbacUserDto, RbacUserWithRolesDto } from '@application/dto/rbacUser.dto';
 import { toRbacUserWithRolesDto } from '@application/dto/rbacUser.dto';
 
@@ -21,8 +21,8 @@ export class CreateRbacUser {
   ) {}
 
   async execute(dto: CreateRbacUserDto): Promise<RbacUserWithRolesDto> {
-    // 1. Validate password length
-    if (dto.password.length < 8) throw new PasswordTooShortError();
+    // 1. Validate password policy (SDD #6a)
+    validatePassword(dto.password);
 
     // 2. Validate roleIds non-empty
     if (!dto.roleIds || dto.roleIds.length === 0) throw new AtLeastOneRoleRequiredError();

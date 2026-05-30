@@ -1,6 +1,8 @@
 import express, { Router, Request, Response } from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
+import helmet from 'helmet';
+import { createLoginRateLimiter } from './middleware/rateLimiters';
 import { SplynxClient } from '../adapters/splynx/SplynxClient';
 import { PrismaCustomerRepository } from '../adapters/prisma/PrismaCustomerRepository';
 // SplynxTicketAdapter preserved but decabled — see AD-2 in design.md
@@ -462,7 +464,13 @@ export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
 export function createApp() {
   const app = express();
 
-  app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+  // SDD #6a — behind EasyPanel's proxy; trust the first hop so the rate limiter
+  // and req.ip see the real client IP (not the proxy's).
+  app.set('trust proxy', 1);
+
+  // SDD #6a — security headers (helmet) + CORS origin from env.
+  app.use(helmet());
+  app.use(cors({ origin: config.corsOrigin, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
 
@@ -823,7 +831,7 @@ export function createApp() {
   // Routes
   app.use('/api/dashboard', createDashboardRouter(getDashboardStats, getDashboardShortcuts, getRecentActivity));
   app.use('/api/messages', createMessagesRouter(listMessages, getMessage, createMessage, markMessageAsRead, deleteMessage));
-  app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions, sessionRepo));
+  app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions, sessionRepo, createLoginRateLimiter()));
   app.use('/api/clients', createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
   // TicketStatus catalog — mounted BEFORE the tickets router to avoid /:id catch-all swallowing /statuses.

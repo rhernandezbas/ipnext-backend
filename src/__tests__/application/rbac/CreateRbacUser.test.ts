@@ -1,6 +1,6 @@
 import { CreateRbacUser } from '@application/use-cases/rbac/CreateRbacUser';
 import {
-  PasswordTooShortError,
+  PasswordPolicyError,
   AtLeastOneRoleRequiredError,
   RoleNotFoundError,
   LoginAlreadyTakenError,
@@ -29,7 +29,7 @@ describe('CreateRbacUser', () => {
       name: 'Alice',
       email: 'alice@test.com',
       login: 'alice',
-      password: 'securepass',
+      password: 'securepass1',
       roleIds: [role.id],
     });
 
@@ -40,7 +40,7 @@ describe('CreateRbacUser', () => {
     expect(result.roles[0].code).toBe('admin');
   });
 
-  it('should throw PasswordTooShortError when password < 8 chars', async () => {
+  it('should throw PasswordPolicyError for a weak password', async () => {
     const { userRepo, userRoleRepo, roleRepo, hasher } = makeRepos();
     const role = await roleRepo.create({ code: 'admin', label: 'Admin', isSystem: true });
     const uc = new CreateRbacUser(userRepo, roleRepo, userRoleRepo, hasher);
@@ -51,7 +51,7 @@ describe('CreateRbacUser', () => {
       login: 'alice',
       password: 'short',
       roleIds: [role.id],
-    })).rejects.toThrow(PasswordTooShortError);
+    })).rejects.toThrow(PasswordPolicyError);
   });
 
   it('should throw AtLeastOneRoleRequiredError when roleIds is empty', async () => {
@@ -62,7 +62,7 @@ describe('CreateRbacUser', () => {
       name: 'Alice',
       email: 'alice@test.com',
       login: 'alice',
-      password: 'securepass',
+      password: 'securepass1',
       roleIds: [],
     })).rejects.toThrow(AtLeastOneRoleRequiredError);
   });
@@ -75,7 +75,7 @@ describe('CreateRbacUser', () => {
       name: 'Alice',
       email: 'alice@test.com',
       login: 'alice',
-      password: 'securepass',
+      password: 'securepass1',
       roleIds: ['non-existent-role-id'],
     })).rejects.toThrow(RoleNotFoundError);
   });
@@ -90,7 +90,7 @@ describe('CreateRbacUser', () => {
       name: 'Alice2',
       email: 'alice2@test.com',
       login: 'alice',
-      password: 'securepass',
+      password: 'securepass1',
       roleIds: [role.id],
     })).rejects.toThrow(LoginAlreadyTakenError);
   });
@@ -105,7 +105,7 @@ describe('CreateRbacUser', () => {
       name: 'Alice2',
       email: 'alice@test.com',
       login: 'alice2',
-      password: 'securepass',
+      password: 'securepass1',
       roleIds: [role.id],
     })).rejects.toThrow(EmailAlreadyTakenError);
   });
@@ -119,14 +119,14 @@ describe('CreateRbacUser', () => {
       name: 'Alice',
       email: 'alice@test.com',
       login: 'alice',
-      password: 'mypassword',
+      password: 'mypassword1',
       roleIds: [role.id],
     });
 
     const stored = await userRepo.findByLogin('alice');
     expect(stored).not.toBeNull();
     // InMemoryPasswordHasher prefixes "hashed::"
-    expect(stored!.passwordHash).toBe('hashed::mypassword');
+    expect(stored!.passwordHash).toBe('hashed::mypassword1');
   });
 
   it('should not include passwordHash in returned DTO', async () => {
@@ -138,7 +138,7 @@ describe('CreateRbacUser', () => {
       name: 'Alice',
       email: 'alice@test.com',
       login: 'alice',
-      password: 'mypassword',
+      password: 'mypassword1',
       roleIds: [role.id],
     });
 

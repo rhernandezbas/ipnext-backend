@@ -28,6 +28,16 @@ export const config = {
   port: parseInt(process.env.PORT as string, 10),
 
   /**
+   * Auth-hardening (SDD #6a). cookieSecure is decoupled from NODE_ENV (prod runs
+   * NODE_ENV=development, so the old `secure: NODE_ENV==='production'` was always
+   * false). PROD MUST set COOKIE_SECURE=true. corsOrigin replaces the hardcoded
+   * localhost origin.
+   */
+  cookieSecure: process.env.COOKIE_SECURE === 'true',
+  // || (not ??) so an empty env string from an unset CI secret falls back to the default.
+  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+
+  /**
    * Gestión Real read-only mirror sync. Opt-in: the whole feature stays dark
    * unless GR_SYNC_ENABLED=true, so the rest of the app boots and runs exactly
    * as before when it's off (no required vars, no scheduler started).

@@ -42,6 +42,13 @@ export class PasswordTooShortError extends DomainError {
   }
 }
 
+export class PasswordPolicyError extends DomainError {
+  constructor(reasons: string[]) {
+    super(`La contraseña debe tener ${reasons.join(', ')}`, 'PASSWORD_POLICY');
+    this.name = 'PasswordPolicyError';
+  }
+}
+
 export class CannotDeleteSelfError extends DomainError {
   constructor() {
     super('You cannot delete your own account', 'CANNOT_DELETE_SELF');

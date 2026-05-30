@@ -1,6 +1,6 @@
 import { ChangeRbacUserPassword } from '@application/use-cases/rbac/ChangeRbacUserPassword';
 import {
-  PasswordTooShortError,
+  PasswordPolicyError,
   UserNotFoundError,
   InvalidOldPasswordError,
 } from '@domain/errors/rbacUser.errors';
@@ -56,14 +56,14 @@ describe('ChangeRbacUserPassword', () => {
     ).rejects.toThrow(InvalidOldPasswordError);
   });
 
-  it('newPassword < 8 chars throws PasswordTooShortError', async () => {
+  it('weak newPassword throws PasswordPolicyError', async () => {
     const { userRepo, hasher } = makeRepos();
     const user = await userRepo.create({ name: 'Alice', email: 'alice@test.com', login: 'alice', passwordHash: 'h' });
 
     const uc = new ChangeRbacUserPassword(userRepo, hasher);
     await expect(
       uc.execute(user.id, { newPassword: 'short' }, true)
-    ).rejects.toThrow(PasswordTooShortError);
+    ).rejects.toThrow(PasswordPolicyError);
   });
 
   it('non-existent user throws UserNotFoundError', async () => {
