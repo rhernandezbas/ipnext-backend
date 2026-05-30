@@ -1,5 +1,6 @@
 import { SyncGestionRealClients, SyncRunResult } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts, ContractSyncResult } from '@application/use-cases/SyncGestionRealContracts';
+import { BackfillGrContractsBatch, BackfillBatchResult } from '@application/use-cases/BackfillGrContractsBatch';
 import { DistributedLock } from '@domain/ports/DistributedLock';
 
 export interface SchedulerOptions {
@@ -13,6 +14,8 @@ export interface RunSummary {
   error?: string;
   clients?: SyncRunResult;
   contracts?: ContractSyncResult;
+  /** Result of the one bounded contract-backfill batch run this tick (when armed). */
+  backfill?: BackfillBatchResult;
 }
 
 /** Key used for the distributed lock — all replicas must agree on this string. */
@@ -40,6 +43,12 @@ export class GestionRealSyncScheduler {
     private readonly syncContracts: SyncGestionRealContracts,
     private readonly opts: SchedulerOptions,
     private readonly lock: DistributedLock,
+    /**
+     * Optional resumable contract backfill. When provided, runOnce() drains
+     * exactly ONE bounded batch per tick (no-op when disarmed). Omitted in
+     * tests/contexts that don't exercise the backfill.
+     */
+    private readonly backfill?: BackfillGrContractsBatch,
   ) {}
 
   start(): void {
@@ -78,11 +87,21 @@ export class GestionRealSyncScheduler {
       // In delta, the touched set is already small (only modified clients).
       const contractIds = clients.mode === 'backfill' ? clients.createdClientIds : clients.touchedClientIds;
       const contracts = await this.syncContracts.execute(contractIds);
+
+      // Drain ONE bounded contract-backfill batch if armed. Bounded ⇒ the
+      // gr-sync lock is held seconds, not hours; a restart resumes from the
+      // persisted offset. No-op when disarmed.
+      let backfill: BackfillBatchResult | undefined;
+      if (this.backfill) backfill = await this.backfill.execute();
+
       this.log(
         `[gr-sync] ${clients.mode}: clients +${clients.created}/~${clients.updated}, ` +
-        `contracts +${contracts.created}/~${contracts.updated}`,
+        `contracts +${contracts.created}/~${contracts.updated}` +
+        (backfill && backfill.processed
+          ? `, backfill ${backfill.processed} (@${backfill.nextOffset}${backfill.done ? ' done' : ''})`
+          : ''),
       );
-      return { clients, contracts };
+      return { clients, contracts, backfill };
     } catch (err) {
       const message = (err as Error).message;
       this.log(`[gr-sync] ERROR: ${message}`);
