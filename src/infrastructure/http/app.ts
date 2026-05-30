@@ -410,6 +410,10 @@ import { createRolePermissionsRouter } from './routes/rolePermissions.routes';
 import { createPermissionsRouter } from './routes/permissions.routes';
 import { createAuditEventsRouter } from './routes/auditEvents.routes';
 import { ListAuditEvents } from '@application/use-cases/audit/ListAuditEvents';
+import { createSessionsRouter } from './routes/sessions.routes';
+import { ListActiveSessions } from '@application/use-cases/sessions/ListActiveSessions';
+import { RevokeSession } from '@application/use-cases/sessions/RevokeSession';
+import { RevokeAllSessionsForUser } from '@application/use-cases/sessions/RevokeAllSessionsForUser';
 // SDD #3 Phase 4b — role catalog mutation use cases
 import { CreateRbacRole } from '@application/use-cases/rbac/CreateRbacRole';
 import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
@@ -1140,6 +1144,19 @@ export function createApp() {
     authMiddlewareForRbac,
     requirePerm('admin', 'view_activity_log'),
     createAuditEventsRouter(new ListAuditEvents(auditEventRepo)),
+  );
+
+  // SDD #5 — session management endpoints
+  app.use(
+    '/api/admin/sessions',
+    authMiddlewareForRbac,
+    createSessionsRouter(
+      new ListActiveSessions(sessionRepo),
+      new RevokeSession(sessionRepo),
+      new RevokeAllSessionsForUser(sessionRepo),
+      requirePerm('admin', 'view_sessions'),
+      requirePerm('admin', 'revoke_sessions'),
+    ),
   );
 
   // Profile routes (uses internal router directly)

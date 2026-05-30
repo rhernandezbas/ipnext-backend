@@ -55,6 +55,8 @@ const statusMap: Record<string, number> = {
   ROLE_CODE_TAKEN: 409,
   ROLE_IS_SYSTEM: 403,
   VALIDATION_ERROR: 400,
+  // SDD #5 — sessions
+  SESSION_NOT_FOUND: 404,
 };
 
 /** Express global error-handling middleware. */
