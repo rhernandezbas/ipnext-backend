@@ -16,16 +16,3 @@ export interface Admin2FA {
   enabledAt: string | null;
   lastUsedAt: string | null;
 }
-
-export type ActivityCategory = 'auth' | 'clients' | 'billing' | 'network' | 'scheduling' | 'settings' | 'admins' | 'api' | 'system';
-
-export interface AdminActivityLog {
-  id: string;
-  adminId: string;
-  adminName: string;
-  category: ActivityCategory;
-  action: string;
-  details: string;
-  ip: string;
-  timestamp: string;
-}

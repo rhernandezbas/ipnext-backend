@@ -22,7 +22,6 @@ model Admin {
   passwordHash String?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
-  activityLogs AdminActivityLog[]
   sessions     AdminSession[]
   projectsLed  Project[]
 }
@@ -40,20 +39,6 @@ enum AdminRole {
 enum AdminStatus {
   active
   inactive
-}
-
-model AdminActivityLog {
-  id        String   @id @default(uuid())
-  adminId   String
-  admin     Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
-  category  String
-  action    String
-  details   String?
-  ip        String?
-  createdAt DateTime @default(now())
-
-  @@index([adminId])
-  @@index([createdAt])
 }
 
 model AdminSession {

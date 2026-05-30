@@ -4,7 +4,6 @@ import { GetAdmin } from '@application/use-cases/GetAdmin';
 import { CreateAdmin } from '@application/use-cases/CreateAdmin';
 import { UpdateAdmin } from '@application/use-cases/UpdateAdmin';
 import { DeleteAdmin } from '@application/use-cases/DeleteAdmin';
-import { GetAdminActivityLog } from '@application/use-cases/GetAdminActivityLog';
 import { Get2FAStatus } from '@application/use-cases/Get2FAStatus';
 import { Enable2FA } from '@application/use-cases/Enable2FA';
 import { Disable2FA } from '@application/use-cases/Disable2FA';
@@ -15,19 +14,11 @@ export function createAdminRouter(
   createAdmin: CreateAdmin,
   updateAdmin: UpdateAdmin,
   deleteAdmin: DeleteAdmin,
-  getActivityLog: GetAdminActivityLog,
   get2FAStatus?: Get2FAStatus,
   enable2FA?: Enable2FA,
   disable2FA?: Disable2FA,
 ): Router {
   const router = Router();
-
-  // NOTE: /activity-log MUST be registered before /:id to avoid route conflict
-  router.get('/activity-log', async (req: Request, res: Response): Promise<void> => {
-    const { category } = req.query as { category?: import('@domain/entities/admin').ActivityCategory };
-    const log = await getActivityLog.execute(category);
-    res.json(log);
-  });
 
   router.get('/', async (req: Request, res: Response): Promise<void> => {
     const role = typeof req.query['role'] === 'string' ? req.query['role'] : undefined;

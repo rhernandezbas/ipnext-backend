@@ -6,7 +6,6 @@ import { GetAdmin } from '../../application/use-cases/GetAdmin';
 import { CreateAdmin } from '../../application/use-cases/CreateAdmin';
 import { UpdateAdmin } from '../../application/use-cases/UpdateAdmin';
 import { DeleteAdmin } from '../../application/use-cases/DeleteAdmin';
-import { GetAdminActivityLog } from '../../application/use-cases/GetAdminActivityLog';
 import { Get2FAStatus } from '../../application/use-cases/Get2FAStatus';
 import { Enable2FA } from '../../application/use-cases/Enable2FA';
 import { Disable2FA } from '../../application/use-cases/Disable2FA';
@@ -22,7 +21,6 @@ function buildApp() {
   const createAdmin = new CreateAdmin(repo);
   const updateAdmin = new UpdateAdmin(repo);
   const deleteAdmin = new DeleteAdmin(repo);
-  const getActivityLog = new GetAdminActivityLog(repo);
   const get2FAStatus = new Get2FAStatus(repo);
   const enable2FA = new Enable2FA(repo);
   const disable2FA = new Disable2FA(repo);
@@ -30,7 +28,7 @@ function buildApp() {
   app.use(
     '/api/admins',
     createAdminRouter(
-      listAdmins, getAdmin, createAdmin, updateAdmin, deleteAdmin, getActivityLog,
+      listAdmins, getAdmin, createAdmin, updateAdmin, deleteAdmin,
       get2FAStatus, enable2FA, disable2FA,
     ),
   );

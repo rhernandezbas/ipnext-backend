@@ -11,7 +11,6 @@ import { GetAdmin } from '../../application/use-cases/GetAdmin';
 import { CreateAdmin } from '../../application/use-cases/CreateAdmin';
 import { UpdateAdmin } from '../../application/use-cases/UpdateAdmin';
 import { DeleteAdmin } from '../../application/use-cases/DeleteAdmin';
-import { GetAdminActivityLog } from '../../application/use-cases/GetAdminActivityLog';
 import { createAdminRouter } from '../../infrastructure/http/routes/admin.routes';
 
 function buildApp() {
@@ -24,9 +23,8 @@ function buildApp() {
   const createAdmin = new CreateAdmin(repo);
   const updateAdmin = new UpdateAdmin(repo);
   const deleteAdmin = new DeleteAdmin(repo);
-  const getActivityLog = new GetAdminActivityLog(repo);
 
-  app.use('/api/admins', createAdminRouter(listAdmins, getAdmin, createAdmin, updateAdmin, deleteAdmin, getActivityLog));
+  app.use('/api/admins', createAdminRouter(listAdmins, getAdmin, createAdmin, updateAdmin, deleteAdmin));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);

@@ -4,7 +4,6 @@ import { GetAdmin } from '../../application/use-cases/GetAdmin';
 import { CreateAdmin } from '../../application/use-cases/CreateAdmin';
 import { UpdateAdmin } from '../../application/use-cases/UpdateAdmin';
 import { DeleteAdmin } from '../../application/use-cases/DeleteAdmin';
-import { GetAdminActivityLog } from '../../application/use-cases/GetAdminActivityLog';
 
 function makeRepo() {
   return new InMemoryAdminRepository();
@@ -98,32 +97,5 @@ describe('DeleteAdmin', () => {
     const remaining = await listUc.execute();
     expect(remaining).toHaveLength(3);
     expect(remaining.find(a => a.id === '3')).toBeUndefined();
-  });
-});
-
-describe('GetAdminActivityLog', () => {
-  it('returns 12 activity log entries', async () => {
-    const repo = makeRepo();
-    const uc = new GetAdminActivityLog(repo);
-
-    const result = await uc.execute();
-
-    expect(result).toHaveLength(12);
-    expect(result[0].id).toBeTruthy();
-    expect(result[0].adminId).toBeTruthy();
-    expect(result[0].category).toBeTruthy();
-    expect(result[0].action).toBeTruthy();
-    expect(result[0].ip).toBeTruthy();
-    expect(result[0].timestamp).toBeTruthy();
-  });
-
-  it('filters by category', async () => {
-    const repo = makeRepo();
-    const uc = new GetAdminActivityLog(repo);
-
-    const result = await uc.execute('auth');
-
-    expect(result.length).toBeGreaterThan(0);
-    expect(result.every(l => l.category === 'auth')).toBe(true);
   });
 });

@@ -182,7 +182,6 @@ import { GetAdmin } from '@application/use-cases/GetAdmin';
 import { CreateAdmin } from '@application/use-cases/CreateAdmin';
 import { UpdateAdmin } from '@application/use-cases/UpdateAdmin';
 import { DeleteAdmin } from '@application/use-cases/DeleteAdmin';
-import { GetAdminActivityLog } from '@application/use-cases/GetAdminActivityLog';
 import { Get2FAStatus } from '@application/use-cases/Get2FAStatus';
 import { Enable2FA } from '@application/use-cases/Enable2FA';
 import { Disable2FA } from '@application/use-cases/Disable2FA';
@@ -676,7 +675,6 @@ export function createApp() {
   const createAdmin = new CreateAdmin(adminRepo);
   const updateAdmin = new UpdateAdmin(adminRepo);
   const deleteAdmin = new DeleteAdmin(adminRepo);
-  const getActivityLog = new GetAdminActivityLog(adminRepo);
   const get2FAStatus = new Get2FAStatus(adminRepo);
   const enable2FA = new Enable2FA(adminRepo);
   const disable2FA = new Disable2FA(adminRepo);
@@ -924,7 +922,7 @@ export function createApp() {
   app.use('/api/locations', createUbicacionesRouter(listUbicaciones, getUbicacion, createUbicacion, updateUbicacion, deleteUbicacion));
   app.use('/api/partners', createPartnerRouter(listPartners, getPartner, createPartner, updatePartner, deletePartner));
   app.use('/api/roles', createRoleRouter(listRoles, getRole, createRole, updateRole, deleteRole));
-  app.use('/api/admins', createAdminRouter(listAdmins, getAdmin, createAdmin, updateAdmin, deleteAdmin, getActivityLog, get2FAStatus, enable2FA, disable2FA));
+  app.use('/api/admins', createAdminRouter(listAdmins, getAdmin, createAdmin, updateAdmin, deleteAdmin, get2FAStatus, enable2FA, disable2FA));
   app.use('/api', createEmpresaRouter(
     listServicePlans, getServicePlan, createServicePlan, updateServicePlan, deleteServicePlan,
     listNetworkDevices, getNetworkDevice, createNetworkDevice, updateNetworkDevice, deleteNetworkDevice,

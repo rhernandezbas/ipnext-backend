@@ -6,7 +6,6 @@ import { GetAdmin } from '../../application/use-cases/GetAdmin';
 import { CreateAdmin } from '../../application/use-cases/CreateAdmin';
 import { UpdateAdmin } from '../../application/use-cases/UpdateAdmin';
 import { DeleteAdmin } from '../../application/use-cases/DeleteAdmin';
-import { GetAdminActivityLog } from '../../application/use-cases/GetAdminActivityLog';
 import { createAdminRouter } from '../../infrastructure/http/routes/admin.routes';
 
 function buildApp() {
@@ -19,9 +18,8 @@ function buildApp() {
   const createAdmin = new CreateAdmin(repo);
   const updateAdmin = new UpdateAdmin(repo);
   const deleteAdmin = new DeleteAdmin(repo);
-  const getActivityLog = new GetAdminActivityLog(repo);
 
-  app.use('/api/admins', createAdminRouter(listAdmins, getAdmin, createAdmin, updateAdmin, deleteAdmin, getActivityLog));
+  app.use('/api/admins', createAdminRouter(listAdmins, getAdmin, createAdmin, updateAdmin, deleteAdmin));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);
@@ -95,25 +93,5 @@ describe('DELETE /api/admins/:id', () => {
     const res = await request(app).delete('/api/admins/3');
 
     expect(res.status).toBe(204);
-  });
-});
-
-describe('GET /api/admins/activity-log', () => {
-  it('returns 200 with activity log array of 12 entries', async () => {
-    const app = buildApp();
-    const res = await request(app).get('/api/admins/activity-log');
-
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(12);
-  });
-
-  it('filters by category query param', async () => {
-    const app = buildApp();
-    const res = await request(app).get('/api/admins/activity-log?category=auth');
-
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body.every((l: { category: string }) => l.category === 'auth')).toBe(true);
   });
 });

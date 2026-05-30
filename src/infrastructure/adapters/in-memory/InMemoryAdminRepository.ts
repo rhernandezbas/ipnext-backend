@@ -1,4 +1,4 @@
-import { Admin, AdminActivityLog, ActivityCategory, Admin2FA } from '@domain/entities/admin';
+import { Admin, Admin2FA } from '@domain/entities/admin';
 import { AdminRepository, CreateAdminInput } from '@domain/ports/AdminRepository';
 
 let nextId = 4;
@@ -64,129 +64,6 @@ export class InMemoryAdminRepository implements AdminRepository {
     this.records = seeded.map(admin => ({ admin, passwordHash: null }));
   }
 
-  private activityLog: AdminActivityLog[] = [
-    {
-      id: 'log-1',
-      adminId: '1',
-      adminName: 'Super Admin',
-      category: 'auth',
-      action: 'Inicio de sesión',
-      details: 'Sesión iniciada desde IP 192.168.1.1',
-      ip: '192.168.1.1',
-      timestamp: '2026-04-28T07:00:00Z',
-    },
-    {
-      id: 'log-2',
-      adminId: '2',
-      adminName: 'Carlos López',
-      category: 'clients',
-      action: 'Creó cliente',
-      details: 'Creó cliente ID 1001 - Juan Pérez',
-      ip: '192.168.1.20',
-      timestamp: '2026-04-27T16:00:00Z',
-    },
-    {
-      id: 'log-3',
-      adminId: '2',
-      adminName: 'Carlos López',
-      category: 'settings',
-      action: 'Modificó tarifa',
-      details: 'Modificó tarifa ID 5 - Plan Fibra 100MB',
-      ip: '192.168.1.20',
-      timestamp: '2026-04-27T15:45:00Z',
-    },
-    {
-      id: 'log-4',
-      adminId: '1',
-      adminName: 'Super Admin',
-      category: 'billing',
-      action: 'Eliminó factura',
-      details: 'Eliminó factura ID 203 - Factura vencida',
-      ip: '192.168.1.1',
-      timestamp: '2026-04-26T10:30:00Z',
-    },
-    {
-      id: 'log-5',
-      adminId: '1',
-      adminName: 'Super Admin',
-      category: 'admins',
-      action: 'Creó administrador',
-      details: 'Creó administrador Carlos López con rol admin',
-      ip: '192.168.1.1',
-      timestamp: '2024-03-15T00:05:00Z',
-    },
-    {
-      id: 'log-6',
-      adminId: '1',
-      adminName: 'Super Admin',
-      category: 'auth',
-      action: 'Cerró sesión',
-      details: 'Sesión cerrada correctamente',
-      ip: '192.168.1.1',
-      timestamp: '2026-04-27T18:00:00Z',
-    },
-    {
-      id: 'log-7',
-      adminId: '2',
-      adminName: 'Carlos López',
-      category: 'clients',
-      action: 'Modificó cliente',
-      details: 'Modificó dirección del cliente ID 1001',
-      ip: '192.168.1.20',
-      timestamp: '2026-04-27T14:00:00Z',
-    },
-    {
-      id: 'log-8',
-      adminId: '2',
-      adminName: 'Carlos López',
-      category: 'clients',
-      action: 'Suspendió cliente',
-      details: 'Suspendió cliente ID 1002 por mora',
-      ip: '192.168.1.20',
-      timestamp: '2026-04-26T09:00:00Z',
-    },
-    {
-      id: 'log-9',
-      adminId: '1',
-      adminName: 'Super Admin',
-      category: 'billing',
-      action: 'Generó facturas',
-      details: 'Generó 45 facturas del mes de abril',
-      ip: '192.168.1.1',
-      timestamp: '2026-04-01T06:00:00Z',
-    },
-    {
-      id: 'log-10',
-      adminId: '1',
-      adminName: 'Super Admin',
-      category: 'network',
-      action: 'Reinició dispositivo',
-      details: 'Reinició OLT Central por mantenimiento',
-      ip: '192.168.1.1',
-      timestamp: '2026-04-25T03:00:00Z',
-    },
-    {
-      id: 'log-11',
-      adminId: '1',
-      adminName: 'Super Admin',
-      category: 'settings',
-      action: 'Modificó configuración SMTP',
-      details: 'Actualizó servidor SMTP a smtp2.ipnext.com.ar',
-      ip: '192.168.1.1',
-      timestamp: '2026-04-20T11:00:00Z',
-    },
-    {
-      id: 'log-12',
-      adminId: '1',
-      adminName: 'Super Admin',
-      category: 'admins',
-      action: 'Desactivó administrador',
-      details: 'Desactivó administrador María Fernández',
-      ip: '192.168.1.1',
-      timestamp: '2026-04-15T10:00:00Z',
-    },
-  ];
-
   async findAll(role?: string): Promise<Admin[]> {
     const all = this.admins;
     return role ? all.filter(a => a.role === role) : [...all];
@@ -220,13 +97,6 @@ export class InMemoryAdminRepository implements AdminRepository {
     if (index === -1) return false;
     this.records.splice(index, 1);
     return true;
-  }
-
-  async getActivityLog(category?: ActivityCategory): Promise<AdminActivityLog[]> {
-    if (category) {
-      return this.activityLog.filter(l => l.category === category);
-    }
-    return [...this.activityLog];
   }
 
   private twoFAStatuses: Map<string, Admin2FA> = new Map();

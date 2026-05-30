@@ -1,4 +1,4 @@
-import { Admin, AdminActivityLog, ActivityCategory, Admin2FA } from '@domain/entities/admin';
+import { Admin, Admin2FA } from '@domain/entities/admin';
 import { AdminRepository, CreateAdminInput } from '@domain/ports/AdminRepository';
 import { prisma } from '../../database/prisma';
 import crypto from 'crypto';
@@ -14,19 +14,6 @@ function toAdmin(row: any): Admin {
     lastLogin: row.lastLogin
       ? row.lastLogin instanceof Date ? row.lastLogin.toISOString() : row.lastLogin
       : null,
-  };
-}
-
-function toActivityLog(row: any): AdminActivityLog {
-  return {
-    id: row.id,
-    adminId: row.adminId,
-    adminName: '',  // not stored in Prisma model, resolved at read time if needed
-    category: row.category as ActivityCategory,
-    action: row.action,
-    details: row.details ?? undefined,
-    ip: row.ip ?? undefined,
-    timestamp: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
   };
 }
 
@@ -86,24 +73,6 @@ export class PrismaAdminRepository implements AdminRepository {
     } catch {
       return false;
     }
-  }
-
-  async getActivityLog(category?: ActivityCategory): Promise<AdminActivityLog[]> {
-    const rows = await prisma.adminActivityLog.findMany({
-      where: category ? { category } : undefined,
-      orderBy: { createdAt: 'desc' },
-      include: { admin: { select: { name: true } } },
-    });
-    return rows.map(row => ({
-      id: row.id,
-      adminId: row.adminId,
-      adminName: (row as any).admin?.name ?? '',
-      category: row.category as ActivityCategory,
-      action: row.action,
-      details: row.details ?? '',
-      ip: row.ip ?? '',
-      timestamp: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
-    }));
   }
 
   async get2FAStatus(adminId: string): Promise<Admin2FA> {
