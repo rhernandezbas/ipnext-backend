@@ -4,6 +4,7 @@ import {
   toClientLog,
   toInvoice,
 } from '../../infrastructure/adapters/prisma/PrismaCustomerRepository';
+import { CustomerStatus } from '../../domain/entities/customer';
 
 describe('PrismaCustomerRepository mappers', () => {
   describe('toCustomer', () => {
@@ -41,6 +42,28 @@ describe('PrismaCustomerRepository mappers', () => {
         lastBalanceAt: null,
         balanceStale: false,
       });
+    });
+
+    it('surfaces a stored "baja" status as status: "baja"', () => {
+      const c = toCustomer({
+        id: 'c-baja',
+        name: 'Cliente Baja',
+        email: 'baja@example.com',
+        phone: '0',
+        status: 'baja',
+        login: 'cbaja',
+        address: null,
+        city: null,
+        country: null,
+        createdAt: '2026-03-01T00:00:00.000Z',
+      });
+      // Runtime: the mapper passes the GR mirror status through verbatim.
+      expect(c.status).toBe('baja');
+      // Type honesty: 'baja' must be assignable to CustomerStatus. With the
+      // narrow union (no 'baja') this assignment fails to compile.
+      const status: CustomerStatus = c.status;
+      const baja: CustomerStatus = 'baja';
+      expect(status).toBe(baja);
     });
 
     it('defaults missing nullable strings to empty', () => {
