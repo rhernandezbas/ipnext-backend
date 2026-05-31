@@ -8,7 +8,10 @@ export class InMemoryServiceTechnologyRepository implements ServiceTechnologyRep
   public serviceCounts: Record<string, number> = {};
 
   async list(): Promise<ServiceTechnology[]> {
-    return this.items.map(i => ({ ...i }));
+    // Order by name ascending to mirror the Prisma adapter (orderBy: { name: 'asc' }).
+    return this.items
+      .map(i => ({ ...i }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async getById(id: string): Promise<ServiceTechnology | null> {

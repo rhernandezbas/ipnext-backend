@@ -151,6 +151,69 @@ An editable catalog of service technology types (e.g., Fiber, DOCSIS, Wireless) 
 - When `PrismaClientMirrorRepository.upsertContract` runs (GR sync)
 - Then the `technology` column MUST remain unchanged (not overwritten to NULL or any other value)
 
+## ADDED Requirements (services-listing)
+
+### Requirement SV-1: Global paginated services (contracts) listing
+
+**Priority**: MUST
+
+The contracts page in the frontend consumes `GET /api/services` to render a global, paginated list of all services across all clients, with optional filters. The response envelope and item shape MUST match the frontend `PaginatedResponse<ContractSummary>` contract exactly.
+
+#### Scenario SV-1.1: List returns paginated envelope
+
+- Given one or more `Service` rows exist
+- When `GET /api/services` is called with a valid auth token
+- Then the response MUST be HTTP 200 with `{ data: ContractSummary[], total: number, page: number, pageSize: number, totalPages: number }`
+- And each `ContractSummary` MUST have exactly `{ id: string, clientName: string, plan: string, status: string, technology: string | null, startDate: string }`
+
+#### Scenario SV-1.2: Empty result returns empty envelope
+
+- Given no `Service` rows match the query
+- When `GET /api/services` is called with a valid auth token
+- Then the response MUST be HTTP 200 with `{ data: [], total: 0, page: 1, pageSize: 25, totalPages: 1 }`
+
+#### Scenario SV-1.3: Filter by status (exact match)
+
+- Given services with different `status` values exist
+- When `GET /api/services?status=blocked` is called
+- Then only services with `status = "blocked"` MUST be returned
+
+#### Scenario SV-1.4: Filter by technology (exact match)
+
+- Given services with different `technology` values exist
+- When `GET /api/services?technology=Wireless` is called
+- Then only services with `technology = "Wireless"` MUST be returned
+
+#### Scenario SV-1.5: Search by plan or client name (case-insensitive)
+
+- Given services with varied plans and client names exist
+- When `GET /api/services?search=juan` is called
+- Then only services whose `plan` OR owning client `name` contains the term (case-insensitive) MUST be returned
+
+#### Scenario SV-1.6: Pagination via page and limit
+
+- Given 5 services exist
+- When `GET /api/services?page=2&limit=2` is called
+- Then the response MUST have `page = 2`, `pageSize = 2`, `total = 5`, `totalPages = 3`, and `data` of length 2
+
+#### Scenario SV-1.7: Unauthenticated request is rejected
+
+- Given no auth token is provided
+- When `GET /api/services` is called
+- Then the response MUST be HTTP 401
+
+---
+
+### Requirement W1: InMemoryServiceTechnologyRepository ordering parity
+
+**Priority**: MUST
+
+#### Scenario W1.1: In-memory list is ordered by name ascending
+
+- Given multiple `ServiceTechnology` records seeded in arbitrary insertion order
+- When `InMemoryServiceTechnologyRepository.list()` is called
+- Then the returned array MUST be ordered by `name` ascending, matching the Prisma adapter's `orderBy: { name: 'asc' }`
+
 ## Constraints
 
 - `name` MUST be unique; case-insensitive comparison is enforced at the use-case layer (normalize to lowercase before comparison), but stored as provided
@@ -160,3 +223,5 @@ An editable catalog of service technology types (e.g., Fiber, DOCSIS, Wireless) 
 - Use cases MUST depend only on the `ServiceTechnologyRepository` port — no direct Prisma imports
 - DTOs MUST be returned from use cases; Prisma entities MUST NOT be returned from routes
 - `InMemoryServiceTechnologyRepository` MUST implement the full port for use-case tests
+- `GET /api/services` MUST be backed by a dedicated `ServiceRepository` port (global listing), not by `CustomerRepository.listServices` (per-client, no clientName/technology)
+- The `GET /api/services` envelope MUST use `pageSize` (not `limit`) to match the frontend `PaginatedResponse<T>` contract

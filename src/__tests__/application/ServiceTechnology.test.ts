@@ -90,4 +90,13 @@ describe('ServiceTechnology use cases', () => {
     repo.serviceCounts['Radio'] = 5;
     await expect(del.execute(created.id)).rejects.toBeInstanceOf(ServiceTechnologyInUseError);
   });
+
+  // W1: InMemory adapter must order by name ascending, matching the Prisma adapter (orderBy name asc).
+  it('lists technologies ordered by name ascending', async () => {
+    await create.execute({ name: 'Wireless' });
+    await create.execute({ name: 'DOCSIS' });
+    await create.execute({ name: 'Fiber' });
+    const names = (await list.execute()).map((t) => t.name);
+    expect(names).toEqual(['DOCSIS', 'Fiber', 'Wireless']);
+  });
 });
