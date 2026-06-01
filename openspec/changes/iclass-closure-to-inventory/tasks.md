@@ -4,14 +4,14 @@
 > Migraciones: generar SQL sin DB local (`prisma migrate diff --from-schema HEAD:schema --to-schema schema --script`), aditivas → push directo. `git add` por path explícito. El push lo decide el usuario.
 
 ## Phase 0 — Baseline
-- [ ] 0.1 Capturar baseline: `npm test` (anotar suites/tests) y `npx tsc --noEmit` → 0 errors. (El usuario corre; no lo corro solo.)
+- [x] 0.1 Baseline (2026-06-01): `npm test` → 225 passed / 6 skipped suites · 1694 passed / 86 skipped tests ✅. `npx tsc --noEmit` → 0 errors ✅.
 
 ---
 
 ## Phase 1 — Schema (aditivo)
-- [ ] 1.1 `IClassSoChecklistAnswer` → `+ photoUrl String?`.
-- [ ] 1.2 Nuevos modelos: `OcrExtraction`, `TaskInventorySuggestion`, `ServiceInstalledItem` (ver design.md). Back-relation `Service.installedItems`.
-- [ ] 1.3 Generar migración aditiva (diff sin DB local). Revisar SQL.
+- [x] 1.1 `IClassSoChecklistAnswer` → `+ photoUrl String? @db.Text`.
+- [x] 1.2 Nuevos modelos: `OcrExtraction`, `TaskInventorySuggestion`, `ServiceInstalledItem`. Back-relations `Service.installedItems`, `ScheduledTask.inventorySuggestions`. `prisma validate` ✅.
+- [x] 1.3 Migración aditiva generada (diff sin DB local): `prisma/migrations/20260601120000_iclass_closure_to_inventory/migration.sql` (ADD COLUMN + 3 CREATE TABLE + índices + 2 FK CASCADE). `prisma generate` ✅.
 - [ ] 1.4 Commit: `feat(schema): photoUrl + OcrExtraction, TaskInventorySuggestion, ServiceInstalledItem`
 
 ---
