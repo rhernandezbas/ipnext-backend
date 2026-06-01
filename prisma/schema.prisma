@@ -869,6 +869,10 @@ model ScheduledTask {
   // Null for manually-created tasks. NULL-distinct unique = idempotency backstop.
   grOrdenId String? @unique
 
+  // Ticket FK (tickets-actions-be) — optional link to a support ticket.
+  ticketId String?
+  ticket   Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
   // IClass closure loop — mirror of the closed SO, linked back by codigo↔sequenceNumber
   iclassClosedOrder IClassServiceOrder?
 
@@ -881,6 +885,7 @@ model ScheduledTask {
   @@index([partnerId])
   @@index([assigneeId])
   @@index([reporterId])
+  @@index([ticketId])
 }
 
 model TaskWatcher {
@@ -1470,6 +1475,9 @@ model Ticket {
 
   // Previsto para la futura integracion de "casos" de Gestion Real (out-of-scope)
   grCasoId String? @unique
+
+  // Back-relation: tasks created from this ticket (tickets-actions-be)
+  tasks ScheduledTask[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

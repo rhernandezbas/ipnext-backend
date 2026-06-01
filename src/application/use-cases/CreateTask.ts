@@ -11,11 +11,12 @@ export class CreateTask {
     private readonly partnerLookup: EntityLookup,
     private readonly adminLookup: EntityLookup,
     private readonly projectLookup: EntityLookup,
+    private readonly ticketLookup?: EntityLookup,
   ) {}
 
   async execute(data: CreateTaskInput): Promise<ScheduledTask> {
     // FK validation in deterministic order (REQ-FK-ORDER-1):
-    // customer → contract → partner → reporter → assignee → watchers[*]
+    // customer → contract → partner → project → reporter → assignee → watchers[*] → ticket
     // REQ-REQUIRED-1/2: customerId and contractId are always required on create.
     // The DTO schema guarantees they are non-null strings; the ! asserts that contract.
     {
@@ -49,6 +50,11 @@ export class CreateTask {
         const found = await this.adminLookup.findById(watcherId);
         if (!found) throw new ReferenceNotFoundError('watcher', watcherId);
       }
+    }
+    // AD-3: optional ticket FK validation — only when ticketLookup injected AND ticketId is set.
+    if (this.ticketLookup != null && data.ticketId != null) {
+      const found = await this.ticketLookup.findById(data.ticketId);
+      if (!found) throw new ReferenceNotFoundError('ticket', data.ticketId);
     }
 
     return this.repo.createTask(data);

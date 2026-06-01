@@ -68,6 +68,8 @@ const NEW_FIELDS_DEFAULTS = {
   travelTimeFrom: null,
   isClosed: false,
   reviewedByInventory: false,
+  ticketId: null,
+  ticketSubject: null,
 };
 
 export class InMemorySchedulingRepository implements SchedulingRepository {
@@ -83,9 +85,20 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
   // Project store for getTaskProjectMapping — seeded by tests via seedProject()
   private projects: Map<string, InMemoryProject> = new Map();
 
+  // Ticket subject lookup — seeded by tests via seedTicketSubject()
+  private ticketSubjects: Map<string, string> = new Map();
+
   constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository) {
     this.stageRepo = stageRepo;
     this.templateRepo = templateRepo;
+  }
+
+  /**
+   * Test helper: seed a ticket subject so createTask can resolve ticketSubject
+   * (same pattern as projectNames — no real DB join in-memory).
+   */
+  seedTicketSubject(ticketId: string, subject: string): void {
+    this.ticketSubjects.set(ticketId, subject);
   }
   private tasks: ScheduledTask[] = [
     makeTask({
@@ -276,6 +289,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       travelTimeFrom: data.travelTimeFrom ?? null,
       isClosed: false,
       reviewedByInventory: false,
+      ticketId: data.ticketId ?? null,
+      ticketSubject: (data.ticketId != null ? (this.ticketSubjects.get(data.ticketId) ?? null) : null),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

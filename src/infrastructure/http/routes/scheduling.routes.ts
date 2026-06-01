@@ -50,6 +50,7 @@ const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
   reporter: 'REPORTER_NOT_FOUND',
   assignee: 'ASSIGNEE_NOT_FOUND',
   watcher:  'WATCHER_NOT_FOUND',
+  ticket:   'TICKET_NOT_FOUND',
 };
 
 export interface ChecklistUseCases {

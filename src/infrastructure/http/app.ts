@@ -105,6 +105,7 @@ import { GetTask } from '@application/use-cases/GetTask';
 import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
+import { CreateTaskFromTicket } from '@application/use-cases/CreateTaskFromTicket';
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
 import { BulkMoveTasksToStage } from '@application/use-cases/BulkMoveTasksToStage';
 import { SendTaskToIClass } from '@application/use-cases/SendTaskToIClass';
@@ -452,14 +453,14 @@ import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
  * Each branch calls findUnique on the correct Prisma delegate with its own
  * concrete argument type — no `as any` needed, TypeScript can verify each call.
  */
-// Covers four entity kinds (Client, Contract, Partner, Project) despite the name
-// — renaming is out of scope per design AD-2.
-function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project', id: string): Promise<{ id: string } | null> {
+// Covers entity kinds used for FK validation in scheduling use cases.
+function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project' | 'Ticket', id: string): Promise<{ id: string } | null> {
   switch (model) {
     case 'Client':   return prisma.client.findUnique({ where: { id }, select: { id: true } });
     case 'Contract': return prisma.contract.findUnique({ where: { id }, select: { id: true } });
     case 'Partner':  return prisma.partner.findUnique({ where: { id }, select: { id: true } });
     case 'Project':  return prisma.project.findUnique({ where: { id }, select: { id: true } });
+    case 'Ticket':   return (prisma as any).ticket.findUnique({ where: { id }, select: { id: true } });
   }
 }
 
@@ -608,7 +609,9 @@ export function createApp() {
     { findById: (id: string) => prismaClientLookup('Partner', id) },
     userLookupForScheduling,
     { findById: (id: string) => prismaClientLookup('Project', id) },
+    { findById: (id: string) => prismaClientLookup('Ticket', id) },
   );
+  const createTaskFromTicket = new CreateTaskFromTicket(createTask, schedulingRepo);
   const updateTask = new UpdateTask(
     schedulingRepo,
     { findById: (id: string) => prismaClientLookup('Client', id) },
@@ -875,7 +878,7 @@ export function createApp() {
     authAdapter,
     listTicketStatuses, getTicketStatus, createTicketStatus, updateTicketStatusCatalog, deleteTicketStatus,
   ));
-  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, authAdapter));
+  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, authAdapter, createTaskFromTicket, schedulingRepo, stageRepo));
   app.use('/api/billing', createBillingRouter(getSummary, listInvoices, listPayments, listTransactions, authAdapter));
   app.use('/api/billing', createBillingMonthlyRouter(getMonthly));
   app.use('/api/billing', createCreditNotesRouter(listCreditNotes, getCreditNote, createCreditNote, applyCreditNote, voidCreditNote));

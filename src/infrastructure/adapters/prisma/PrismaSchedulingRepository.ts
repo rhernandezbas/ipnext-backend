@@ -90,6 +90,8 @@ export function toTask(row: any): ScheduledTask {
     reviewedByInventory: row.reviewedByInventory ?? false,
     iclassOrderCode: row.iclassOrderCode ?? null,
     grOrdenId: row.grOrdenId ?? null,
+    ticketId: row.ticketId ?? null,
+    ticketSubject: row.ticket?.subject ?? null,
     checklist: Array.isArray(row.checklist)
       ? row.checklist.map((ci: any) => ({
           id: ci.id,
@@ -132,6 +134,7 @@ const INCLUDE = {
   partnerRef: { select: { id: true } },
   watchers: true,
   checklist: { orderBy: { order: 'asc' } },
+  ticket: { select: { id: true, subject: true } },
 } as const;
 
 export class PrismaSchedulingRepository implements SchedulingRepository {
@@ -459,6 +462,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       travelTimeTo: data.travelTimeTo ?? null,
       travelTimeFrom: data.travelTimeFrom ?? null,
       grOrdenId: data.grOrdenId ?? null,
+      ticketId: data.ticketId ?? null,
     };
   }
 
@@ -496,6 +500,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     if (data.travelTimeFrom !== undefined) update['travelTimeFrom'] = data.travelTimeFrom;
     if (data.isClosed !== undefined) update['isClosed'] = data.isClosed;
     if (data.reviewedByInventory !== undefined) update['reviewedByInventory'] = data.reviewedByInventory;
+    if (data.ticketId !== undefined) update['ticketId'] = data.ticketId;
     return update;
   }
 

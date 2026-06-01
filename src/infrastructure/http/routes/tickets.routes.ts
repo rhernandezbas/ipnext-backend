@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { z } from 'zod';
 import { ListTickets } from '@application/use-cases/ListTickets';
 import { GetTicketStats } from '@application/use-cases/GetTicketStats';
 import { CreateTicket } from '@application/use-cases/CreateTicket';
@@ -6,9 +7,51 @@ import { GetTicket } from '@application/use-cases/GetTicket';
 import { UpdateTicketStatus } from '@application/use-cases/UpdateTicketStatus';
 import { UpdateTicket } from '@application/use-cases/UpdateTicket';
 import { CloseTicket } from '@application/use-cases/CloseTicket';
+import { CreateTaskFromTicket } from '@application/use-cases/CreateTaskFromTicket';
 import { TicketPriority } from '@domain/entities/ticket';
+import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
+import { StageRepository } from '@domain/ports/StageRepository';
+import { ReferenceNotFoundError } from '@domain/errors/scheduling';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
+
+// Zod schema for POST /api/tickets/:id/tasks body
+// contractId is REQUIRED (AD-2: ticket has no contractId — FE picks from client contracts)
+const CreateTaskFromTicketSchema = z.object({
+  contractId:     z.string().min(1),
+  customerId:     z.string().min(1).optional(),
+  title:          z.string().min(1).optional(),
+  description:    z.string().nullable().optional(),
+  priority:       z.string().min(1).optional(),
+  estimatedHours: z.number().nonnegative().optional(),
+  category:       z.string().min(1).optional(),
+  stageId:        z.string().min(1).optional(),
+  assigneeId:     z.string().min(1).nullable().optional(),
+  reporterId:     z.string().min(1).nullable().optional(),
+  partnerId:      z.string().min(1).nullable().optional(),
+  projectId:      z.string().min(1).nullable().optional(),
+  projectName:    z.string().nullable().optional(),
+  address:        z.string().nullable().optional(),
+  coordinates:    z.object({ lat: z.number(), lng: z.number() }).nullable().optional(),
+  notes:          z.string().nullable().optional(),
+  completedAt:    z.string().nullable().optional(),
+  startDate:      z.string().datetime({ offset: true }).nullable().optional(),
+  endDate:        z.string().datetime({ offset: true }).nullable().optional(),
+  travelTimeTo:   z.number().int().nonnegative().nullable().optional(),
+  travelTimeFrom: z.number().int().nonnegative().nullable().optional(),
+});
+
+// Error code mapping for ReferenceNotFoundError kinds (mirrors scheduling.routes.ts)
+const REFERENCE_TO_CODE: Record<string, string> = {
+  customer: 'CUSTOMER_NOT_FOUND',
+  contract: 'CONTRACT_NOT_FOUND',
+  partner:  'PARTNER_NOT_FOUND',
+  project:  'PROJECT_NOT_FOUND',
+  reporter: 'REPORTER_NOT_FOUND',
+  assignee: 'ASSIGNEE_NOT_FOUND',
+  watcher:  'WATCHER_NOT_FOUND',
+  ticket:   'TICKET_NOT_FOUND',
+};
 
 // Phase 2: TicketStatus is now a dynamic string from the catalog.
 // This whitelist preserves the frontend contract (status filter accepts exactly these three names).
@@ -40,6 +83,9 @@ export function createTicketsRouter(
   updateTicket: UpdateTicket,
   closeTicket: CloseTicket,
   authProvider: JwtAuthAdapter,
+  createTaskFromTicket?: CreateTaskFromTicket,
+  taskRepo?: SchedulingRepository,
+  stageRepo?: StageRepository,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -157,6 +203,78 @@ export function createTicketsRouter(
       res.json(ticket);
     } catch (err) {
       console.error('[tickets] close error', err);
+      res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  // POST /:id/tasks — create a task from a ticket (AD-7: mounted BEFORE /:id to avoid capture)
+  // contractId is REQUIRED in the body (AD-2: ticket has no contractId).
+  // ticketId comes from the path — NOT body-overridable.
+  router.post('/:id/tasks', auth, async (req: Request, res: Response): Promise<void> => {
+    if (!createTaskFromTicket) {
+      res.status(501).json({ error: 'Not implemented', code: 'NOT_IMPLEMENTED' });
+      return;
+    }
+
+    const ticketId = req.params['id'] as string;
+    const parsed = CreateTaskFromTicketSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+      return;
+    }
+
+    const data = parsed.data;
+
+    // Resolve default stageId (AD-8: mirrors scheduling.routes.ts pattern)
+    let stageId = data.stageId;
+    if (!stageId) {
+      if (stageRepo) {
+        const defaultStage = await stageRepo.getDefaultWorkflowStageByLegacyStatus('pending');
+        if (!defaultStage) {
+          res.status(500).json({ error: 'Default workflow not seeded', code: 'INTERNAL_ERROR' });
+          return;
+        }
+        stageId = defaultStage.id;
+      } else {
+        stageId = '10000000-0000-4000-a000-000000000001';
+      }
+    }
+
+    try {
+      const task = await createTaskFromTicket.execute({
+        ticketId,                                            // from path — NOT body
+        ticketSubject: data.title ?? `Ticket #${ticketId}`, // prefill from title or fallback
+        title: data.title ?? `Ticket #${ticketId}`,
+        description: data.description ?? null,
+        stageId,
+        priority: data.priority ?? 'normal',
+        estimatedHours: data.estimatedHours ?? 1,
+        category: data.category ?? 'support',
+        contractId: data.contractId,
+        customerId: data.customerId ?? null,
+        assigneeId: data.assigneeId ?? null,
+        reporterId: data.reporterId ?? req.user?.id ?? null,
+        partnerId: data.partnerId ?? null,
+        projectId: data.projectId ?? null,
+        projectName: data.projectName ?? null,
+        address: data.address ?? null,
+        coordinates: data.coordinates ?? null,
+        notes: data.notes ?? null,
+        completedAt: data.completedAt ?? null,
+        startDate: data.startDate ?? null,
+        endDate: data.endDate ?? null,
+        travelTimeTo: data.travelTimeTo ?? null,
+        travelTimeFrom: data.travelTimeFrom ?? null,
+      });
+      res.status(201).json(task);
+    } catch (err) {
+      if (err instanceof ReferenceNotFoundError) {
+        const code = REFERENCE_TO_CODE[err.kind] ?? 'REFERENCE_NOT_FOUND';
+        const status = err.kind === 'ticket' ? 404 : 422;
+        res.status(status).json({ error: err.message, code });
+        return;
+      }
+      console.error('[tickets] createTaskFromTicket error', err);
       res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }
   });

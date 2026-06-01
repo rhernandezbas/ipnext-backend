@@ -4,11 +4,13 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory' | 'iclassOrderCode' | 'grOrdenId'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId'
 > {
   watcherIds?: string[];
   /** GR ingest sets this; manual task creation omits it (defaults to null). */
   grOrdenId?: string | null;
+  /** Optional ticket FK — validated against ticketLookup when non-null. */
+  ticketId?: string | null;
 }
 
 export interface UpdateTaskInput extends Partial<CreateTaskInput> {

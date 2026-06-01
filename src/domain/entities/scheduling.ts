@@ -64,6 +64,10 @@ export interface ScheduledTask {
   // Null for manually-created tasks. Used as the idempotency key on ingest.
   grOrdenId: string | null;
 
+  // Ticket FK (tickets-actions-be) — optional link to a support ticket.
+  ticketId: string | null;
+  ticketSubject: string | null;   // JOIN-derived from Ticket.subject — no N+1
+
   // Timestamps — always present in API responses (ISO 8601 strings)
   createdAt: string;
   updatedAt: string;
