@@ -219,8 +219,9 @@ model Service {
   lng          Float?
   technology   String?         // Phase 1: free-text name from ServiceTechnology catalog. NOT a FK.
   createdAt    DateTime        @default(now())
-  client       Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  tasks        ScheduledTask[]
+  client        Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tasks         ScheduledTask[]
+  installedItems ServiceInstalledItem[]
 
   @@index([clientId])
   @@index([status])
@@ -667,6 +668,7 @@ model IClassSoChecklistAnswer {
   answerOrder  Int
   answerText   String?           @db.Text
   photoMissing Boolean           @default(false) // true for questionType=Foto (v2 returns no URL)
+  photoUrl     String?           @db.Text // S3 URL scraped from SEAM portal, correlated by answerOrder
 
   @@index([checklistId, answerOrder])
 }
@@ -695,6 +697,68 @@ model IClassSoEquipmentEvent {
   modelDescription String?
 
   @@index([serviceOrderId])
+}
+
+// IClass closure → inventory: raw OCR output per scraped photo (audit + reprocess).
+model OcrExtraction {
+  id             String   @id @default(uuid())
+  photoUrl       String   @db.Text
+  serviceOrderId String?
+  sourceTaskId   String?
+  deviceType     String? // ROUTER | ANTENA | ONU | REPETIDOR | OTROS
+  sn             String?
+  mac            String?
+  confidence     Float?
+  rawOutput      String?  @db.Text
+  provider       String   @default("ollama:gemma3:12b")
+  createdAt      DateTime @default(now())
+
+  @@index([sourceTaskId])
+}
+
+// Staging per task: what we scraped/OCR'd, shown as checkboxes. NEVER touches the
+// contract on its own — the operator confirms each into a ServiceInstalledItem.
+model TaskInventorySuggestion {
+  id              String        @id @default(uuid())
+  taskId          String
+  task            ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  kind            String // DEVICE | MATERIAL
+  deviceType      String? // if DEVICE: ONU | ROUTER | ANTENA | REPETIDOR | OTROS
+  serialNumber    String?
+  mac             String?
+  materialDesc    String?
+  quantity        Float?
+  unit            String?
+  source          String // OCR | ICLASS_MATERIAL
+  photoUrl        String?       @db.Text
+  status          String        @default("pending") // pending | confirmed | discarded
+  confirmedItemId String?
+  createdAt       DateTime      @default(now())
+
+  @@index([taskId, status])
+}
+
+// Confirmed inventory on the client's contract. ONE row = ONE physical device.
+// 2 routers = 2 rows. serialNumber/mac are SINGULAR by design.
+model ServiceInstalledItem {
+  id            String    @id @default(uuid())
+  serviceId     String
+  service       Service   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  type          String // ONU | ROUTER | ANTENA | REPETIDOR | OTROS
+  serialNumber  String?
+  mac           String?
+  model         String?
+  source        String // OCR | MANUAL | ICLASS
+  sourceTaskId  String?
+  addedByUserId String?
+  confirmedAt   DateTime?
+  status        String    @default("active") // active | removed | replaced
+  notes         String?   @db.Text
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([serviceId])
+  @@index([serialNumber])
 }
 
 model Project {
@@ -788,6 +852,9 @@ model ScheduledTask {
 
   // NEW — comments back-relation
   comments TaskComment[]
+
+  // IClass closure → inventory: staged suggestions for this task
+  inventorySuggestions TaskInventorySuggestion[]
 
   // Flag: task is closed (soft-close, not deleted)
   isClosed Boolean @default(false)

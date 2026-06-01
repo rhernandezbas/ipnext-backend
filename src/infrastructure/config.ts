@@ -73,4 +73,27 @@ export const config = {
     password: process.env.ICLASS_PASSWORD ?? '',
     thirdPartyId: process.env.ICLASS_THIRD_PARTY_ID ?? '',
   },
+
+  /**
+   * IClass SEAM portal (fs2.iclass.com.br) — closure-loop photo scraper. The API
+   * v2 is photo-blind; the portal HTML is the only source for checklist photo
+   * URLs and the signature. Opt-in like `iclass` (no fail-fast at boot).
+   */
+  iclassPortal: {
+    baseUrl: process.env.ICLASS_PORTAL_BASE_URL ?? 'https://fs2.iclass.com.br',
+    user: process.env.ICLASS_PORTAL_USER ?? '',
+    password: process.env.ICLASS_PORTAL_PASSWORD ?? '',
+  },
+
+  /**
+   * Device-photo OCR (closure loop F4). Local Ollama vision model by default
+   * (zero per-image cost, photos stay in infra). Opt-in via ICLASS_OCR_ENABLED.
+   */
+  ocr: {
+    enabled: process.env.ICLASS_OCR_ENABLED === 'true',
+    ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434',
+    model: process.env.OCR_MODEL ?? 'gemma3:12b',
+    /** Per-image inference timeout (ms). Abort → soft-fail to manual review. */
+    timeoutMs: parseInt(process.env.OCR_TIMEOUT_MS || '120000', 10),
+  },
 };

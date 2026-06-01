@@ -1,4 +1,12 @@
 import { IClassPort } from '@domain/ports/IClassPort';
+import { IClassPortalPort } from '@domain/ports/IClassPortalPort';
+import { correlateChecklistPhotos } from '@application/services/correlateChecklistPhotos';
+import { classifyDeviceType, isSnMacDevicePhoto } from '@application/services/classifyDeviceType';
+import { PostClosureComment } from '@application/use-cases/PostClosureComment';
+import { ExtractDeviceInfoFromPhoto } from '@application/use-cases/ExtractDeviceInfoFromPhoto';
+import { BuildInventorySuggestions } from '@application/use-cases/BuildInventorySuggestions';
+import { ScrapedOSDetail } from '@domain/entities/iclass-portal';
+import { OcrExtraction } from '@domain/entities/ocr-extraction';
 import { ClosedServiceOrderRepository } from '@domain/ports/ClosedServiceOrderRepository';
 import { IClassResultCodeRepository } from '@domain/ports/IClassResultCodeRepository';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
@@ -35,6 +43,16 @@ export interface IngestClosedCounts {
 export interface IngestClosedOptions {
   now?: () => Date;
   overlapMinutes?: number;
+  /**
+   * Optional SEAM portal scraper. When present, each mirrored SO's checklist
+   * photos are correlated by ordem from the portal HTML (API v2 is photo-blind).
+   * Absent → photoUrl stays null (no behavior change). Opt-in, like the config.
+   */
+  portal?: IClassPortalPort;
+  /** Optional closure-loop side effects (all opt-in, all non-fatal). */
+  postComment?: PostClosureComment;
+  extractOcr?: ExtractDeviceInfoFromPhoto;
+  buildSuggestions?: BuildInventorySuggestions;
 }
 
 /**
@@ -45,6 +63,10 @@ export interface IngestClosedOptions {
 export class IngestClosedServiceOrders {
   private readonly now: () => Date;
   private readonly overlapMinutes: number;
+  private readonly portal?: IClassPortalPort;
+  private readonly postComment?: PostClosureComment;
+  private readonly extractOcr?: ExtractDeviceInfoFromPhoto;
+  private readonly buildSuggestions?: BuildInventorySuggestions;
 
   constructor(
     private readonly iclass: IClassPort,
@@ -56,6 +78,10 @@ export class IngestClosedServiceOrders {
   ) {
     this.now = opts.now ?? (() => new Date());
     this.overlapMinutes = opts.overlapMinutes ?? DEFAULT_OVERLAP_MINUTES;
+    this.portal = opts.portal;
+    this.postComment = opts.postComment;
+    this.extractOcr = opts.extractOcr;
+    this.buildSuggestions = opts.buildSuggestions;
   }
 
   async execute(): Promise<IngestClosedCounts> {
@@ -125,9 +151,22 @@ export class IngestClosedServiceOrders {
 
     // Fan out to sub-resources (the adapter applies backoff between calls).
     const history = await this.iclass.getServiceOrderHistory(s.iclassId);
-    const checklists = await this.iclass.getServiceOrderChecklists(s.iclassId);
+    let checklists = await this.iclass.getServiceOrderChecklists(s.iclassId);
     const materials = await this.iclass.getServiceOrderMaterials(s.iclassId);
     const equipmentEvents = await this.iclass.getServiceOrderEquipmentEvents(s.iclassId);
+
+    // Correlate checklist photos from the SEAM portal (opt-in). The API is
+    // photo-blind; a portal failure (down / rate-limited) must NOT break the
+    // mirror — photoUrl stays null and is retried on the next cycle (SCEN-CO-3).
+    let scraped: ScrapedOSDetail | null = null;
+    if (this.portal) {
+      try {
+        scraped = await this.portal.getOSDetail(String(s.iclassId));
+        checklists = correlateChecklistPhotos(checklists, scraped);
+      } catch {
+        scraped = null; // keep the mirror; photos retried next run
+      }
+    }
 
     // Resolve the configured closure mapping by result-code name.
     const rc = s.resultCodeName ? await this.resultCodes.findByCode(s.resultCodeName) : null;
@@ -151,6 +190,58 @@ export class IngestClosedServiceOrders {
     if (rc?.mappedStageId) {
       await this.scheduling.moveTaskToStage(task.id, rc.mappedStageId);
       counts.transitioned++;
+    }
+
+    await this.orchestrateClosure(order, task.id, scraped);
+  }
+
+  /**
+   * Closure side effects (all opt-in, all non-fatal — a failure here never
+   * affects the mirror/transition already committed): OCR the SN/MAC device
+   * photos, build inventory suggestions (staging), and post the readable comment.
+   */
+  private async orchestrateClosure(
+    order: ClosedServiceOrder,
+    taskId: string,
+    scraped: ScrapedOSDetail | null,
+  ): Promise<void> {
+    const extractions: OcrExtraction[] = [];
+    if (this.extractOcr) {
+      for (const checklist of order.checklists) {
+        for (const a of checklist.answers) {
+          if (a.questionType === 'Foto' && a.photoUrl && isSnMacDevicePhoto(a.questionText)) {
+            try {
+              extractions.push(
+                await this.extractOcr.execute({
+                  photoUrl: a.photoUrl,
+                  deviceType: classifyDeviceType(a.questionText),
+                  serviceOrderId: order.iclassId,
+                  sourceTaskId: taskId,
+                }),
+              );
+            } catch {
+              /* skip this photo */
+            }
+          }
+        }
+      }
+    }
+
+    if (this.buildSuggestions) {
+      try {
+        await this.buildSuggestions.execute({ taskId, extractions, materials: order.materials });
+      } catch {
+        /* non-fatal */
+      }
+    }
+
+    if (this.postComment) {
+      try {
+        const attachmentUrls = (scraped?.attachments ?? []).map(a => a.url);
+        await this.postComment.execute({ taskId, order, attachmentUrls });
+      } catch {
+        /* non-fatal */
+      }
     }
   }
 
