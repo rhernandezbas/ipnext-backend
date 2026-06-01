@@ -77,8 +77,8 @@
 ---
 
 ## Phase 9 — Orquestación
-- [ ] 9.1 [RED] Test de integración: `IngestClosedServiceOrders` dispara comment + suggestions tras `upsert` (con stubs de scraper/OCR).
-- [ ] 9.2 [GREEN] Hook posterior a `closed.upsert` en `processSummary` (o un orquestador dedicado) que encadena [A]→[D]→[B]→[C]. Tolerante a fallos del SEAM/OCR (no rompe el mirror).
+- [x] 9.1 [RED→GREEN] Test de integración (10/10): `IngestClosedServiceOrders` con `extractOcr`/`buildSuggestions`/`postComment` inyectados encadena OCR → suggestions + auto-comment tras `upsert`.
+- [x] 9.2 [GREEN] `orchestrateClosure(order, taskId, scraped)` privado, llamado tras transition. OCR solo sobre fotos `isSnMacDevicePhoto` (deviceType vía classifyDeviceType) → BuildInventorySuggestions(extractions+materials) → PostClosureComment(attachments=fotos+firma). Cada paso try/catch (non-fatal, no rompe mirror). Todo opt-in vía opts.
 - [ ] 9.3 Commit: `feat(iclass): orquestar comment + OCR + suggestions en el closure loop`
 
 ---

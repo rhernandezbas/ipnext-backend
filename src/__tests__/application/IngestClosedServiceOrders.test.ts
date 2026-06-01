@@ -6,6 +6,13 @@ import { InMemoryClosedServiceOrderRepository } from '@infrastructure/adapters/i
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { InMemoryIClassPortal } from '@infrastructure/adapters/in-memory/InMemoryIClassPortal';
 import { IClassPortalPort } from '@domain/ports/IClassPortalPort';
+import { PostClosureComment } from '@application/use-cases/PostClosureComment';
+import { ExtractDeviceInfoFromPhoto } from '@application/use-cases/ExtractDeviceInfoFromPhoto';
+import { BuildInventorySuggestions } from '@application/use-cases/BuildInventorySuggestions';
+import { InMemoryDevicePhotoOcr } from '@infrastructure/adapters/in-memory/InMemoryDevicePhotoOcr';
+import { InMemoryOcrExtractionRepository } from '@infrastructure/adapters/in-memory/InMemoryOcrExtractionRepository';
+import { InMemoryInventorySuggestionRepository } from '@infrastructure/adapters/in-memory/InMemoryInventorySuggestionRepository';
+import { InMemoryTaskCommentRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskCommentRepository';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
 import { ClosedServiceOrderSummary, SoStatusHistoryEntry } from '@domain/entities/iclass-closed-order';
 import { Stage } from '@domain/entities/workflow';
@@ -184,5 +191,49 @@ describe('IngestClosedServiceOrders', () => {
 
     expect(counts.mirrored).toBe(1);
     expect(closed.orders.get('900')!.order.checklists[0].answers[0].photoUrl).toBeNull();
+  });
+
+  it('orchestrates closure side effects: OCR → suggestions + auto-comment (all opt-in, non-fatal)', async () => {
+    const { scheduling, iclass, resultCodes, closed, state } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id, serviceId: 'svc1' });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    iclass.checklistsByOrder['900'] = [{
+      iclassSurveyId: 's1', surveyAt: null,
+      answers: [{ questionId: null, questionText: 'SAQUE FOTO DE LA MAC Y SN DEL ROUTER', questionType: 'Foto', answerOrder: 3, answerText: null, photoMissing: true, photoUrl: null }],
+    }];
+
+    const portal = new InMemoryIClassPortal();
+    portal.set('900', {
+      questions: [{ ordem: 3, kind: 'photo', label: 'FOTO ROUTER', answerText: null, photoUrl: 'https://x/router.jpg', fileName: 'r.jpg', photoMissing: false }],
+      attachments: [{ url: 'https://x/firma.jpg', label: 'firma' }],
+    });
+
+    const ocrStub = new InMemoryDevicePhotoOcr();
+    ocrStub.set('https://x/router.jpg', { sn: 'SN1', mac: 'MAC1', confidence: 0.9, rawOutput: '' });
+    const ocrRepo = new InMemoryOcrExtractionRepository();
+    const suggestionsRepo = new InMemoryInventorySuggestionRepository();
+    const commentRepo = new InMemoryTaskCommentRepository();
+
+    const useCase = new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, {
+      now: () => new Date('2026-05-29T12:00:00Z'),
+      portal,
+      extractOcr: new ExtractDeviceInfoFromPhoto(ocrStub, ocrRepo),
+      buildSuggestions: new BuildInventorySuggestions(suggestionsRepo),
+      postComment: new PostClosureComment(commentRepo),
+    });
+
+    await useCase.execute();
+
+    // OCR ran on the device photo
+    expect(await ocrRepo.findByPhotoUrl('https://x/router.jpg')).not.toBeNull();
+    // suggestion built from OCR
+    const sugs = await suggestionsRepo.listByTask('t1');
+    expect(sugs.some(s => s.kind === 'DEVICE' && s.deviceType === 'ROUTER' && s.serialNumber === 'SN1')).toBe(true);
+    // readable comment posted with checklist photo + signature attachments
+    const comments = await commentRepo.listByTask('t1');
+    expect(comments).toHaveLength(1);
+    expect(comments[0].body).toContain('OS 4013');
+    expect(comments[0].attachments.map(a => a.url)).toEqual(expect.arrayContaining(['https://x/router.jpg', 'https://x/firma.jpg']));
   });
 });
