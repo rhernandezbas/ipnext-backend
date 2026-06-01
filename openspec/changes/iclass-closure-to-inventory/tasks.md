@@ -18,13 +18,13 @@
 
 ## Phase 2 — SEAM scraper (TDD parser sobre fixtures HTML)
 > Verificado (24 OS / 10 tipos): el GET inicial trae TODO el HTML (NO AJAX) → scraper = GET + parser (cheerio/jsdom), sin browser headless. Tres kinds: text/choice/photo. `div.prop` se usa en todo el form → **scopear al panel Encuesta**.
-- [ ] 2.0 Sanitizar los 3 HTML capturados (raíz: seam-3532-wireless, seam-2980-fibra, seam-4646-empty) → redactar PII (técnico, "CLIENTE", datos del cliente) y reemplazar URLs S3 reales por fakes de igual forma. Mover a `src/__tests__/infrastructure/fixtures/iclass-seam/`. Agregar 2 más por variedad: un VISITA TECNICA (choice-heavy) y un Red (photo-missing×7).
-- [ ] 2.1 Port `IClassPortalPort` en `domain/ports/`.
-- [ ] 2.2 [RED] Test de `parseOSDetail` sobre los fixtures → SCEN-SC-1/2/3/4/5, SCEN-CO-2 (scope Encuesta, choice, photo-missing, labels repetidos).
-- [ ] 2.3 [GREEN] `IClassPortalClient` (adapter): login + cookie + GET + `parseOSDetail` (cheerio). Backoff/re-login.
-- [ ] 2.4 `InMemoryIClassPortal` para tests de use case.
-- [ ] 2.5 Config: `ICLASS_PORTAL_USER` / `ICLASS_PORTAL_PASSWORD` en `config.ts` + `env.example`. Secrets vía `gh secret set` para prod.
-- [ ] 2.6 Commit: `feat(iclass): SEAM portal scraper (parseOSDetail) + port`
+- [x] 2.0 4 fixtures sanitizados (PII-free, URLs S3 fakeadas, JSON-decodificados) en `src/__tests__/infrastructure/fixtures/iclass-seam/`: 3532-wireless (text+4 fotos), 2980-fibra/Red (photo-missing×N), vt-choice (choice), 4646-empty (sin encuesta).
+- [x] 2.1 Port `IClassPortalPort` + entity `iclass-portal.ts` (ScrapedOSDetail/Question/Attachment).
+- [x] 2.2 [RED→GREEN] `parseSeamOSDetail` + test (9 casos) → SCEN-SC-1..5. Scope por `perguntaDecoration{ordem}` (= ordem de la API). 3 kinds: text/choice/photo + photoMissing. cheerio. **9/9 verde, suite 1703 passed, tsc 0.**
+- [x] 2.4 `InMemoryIClassPortal` para tests de use case.
+- [x] 2.5 Config: `ICLASS_PORTAL_BASE_URL/USER/PASSWORD` en `config.ts` + `env.example` (opt-in, sin fail-fast). Secrets prod vía `gh secret set`.
+- [ ] 2.3 [PENDIENTE] `IClassPortalClient` (adapter de red): login JSF/cookie + GET read-only + `parseSeamOSDetail`. Backoff/re-login. Requiere confirmar nombres de campos del form de login contra el portal real (integración).
+- [ ] 2.6 Commit parser core hecho; commit del client de red al cerrar 2.3.
 
 ---
 

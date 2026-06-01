@@ -73,4 +73,15 @@ export const config = {
     password: process.env.ICLASS_PASSWORD ?? '',
     thirdPartyId: process.env.ICLASS_THIRD_PARTY_ID ?? '',
   },
+
+  /**
+   * IClass SEAM portal (fs2.iclass.com.br) — closure-loop photo scraper. The API
+   * v2 is photo-blind; the portal HTML is the only source for checklist photo
+   * URLs and the signature. Opt-in like `iclass` (no fail-fast at boot).
+   */
+  iclassPortal: {
+    baseUrl: process.env.ICLASS_PORTAL_BASE_URL ?? 'https://fs2.iclass.com.br',
+    user: process.env.ICLASS_PORTAL_USER ?? '',
+    password: process.env.ICLASS_PORTAL_PASSWORD ?? '',
+  },
 };
