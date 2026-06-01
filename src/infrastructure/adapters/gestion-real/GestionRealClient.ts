@@ -106,12 +106,23 @@ export class GestionRealClient implements GestionRealPort {
   }
 }
 
-/** Date → "YYYY-MM-DD" for the daily password. */
+/**
+ * Date → "YYYY-MM-DD" for the GR daily password, in Argentina time (UTC-3).
+ *
+ * GR validates MD5(CUIT+SECRET+fecha) against the Buenos Aires calendar date.
+ * The prod container runs in UTC, so deriving the date from the process TZ
+ * fails in the late-night-ARG window (when UTC already rolled to the next day)
+ * with `error 90 "No tiene Acceso"` — silently breaking ALL GR sync. We pin the
+ * timezone via Intl (uses node's bundled ICU, so it works on alpine without OS tzdata).
+ */
 export function isoDate(d: Date): string {
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
 }
 
 function str(v: unknown): string | null {
