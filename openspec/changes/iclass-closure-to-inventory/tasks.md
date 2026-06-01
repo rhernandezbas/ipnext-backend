@@ -44,10 +44,10 @@
 ---
 
 ## Phase 5 — OCR pipeline (TDD)
-- [ ] 5.1 Port `DevicePhotoOcr` + `OcrExtractionRepository`.
-- [ ] 5.2 [RED] Test `ExtractDeviceInfoFromPhoto` con `InMemoryDevicePhotoOcr` (stub) → SCEN-OCR-1/2; persiste `OcrExtraction`.
-- [ ] 5.3 [GREEN] Use case + `OllamaDevicePhotoOcr` (preprocess Pillow/sharp-equivalente + gemma3:12b, prompt JSON estricto). Preprocesamiento aislado y testeable.
-- [ ] 5.4 Commit: `feat(iclass): OCR de SN/MAC (Ollama gemma3) con preprocesamiento`
+- [x] 5.1 Ports `DevicePhotoOcr` (con `provider`) + `OcrExtractionRepository`. Entity `ocr-extraction.ts`.
+- [x] 5.2 [RED→GREEN] `ExtractDeviceInfoFromPhoto` + `InMemoryDevicePhotoOcr`/`InMemoryOcrExtractionRepository` → SCEN-OCR-1/2 + idempotencia por photoUrl (6/6 verde). Clasificador puro `classifyDeviceType`/`isSnMacDevicePhoto` (Capa 2, soft-fail OTROS) + test.
+- [ ] 5.3 [PENDIENTE/integración] `OllamaDevicePhotoOcr` (adapter real): preprocess (download + rotar + recortar etiqueta + upscale) + gemma3:12b prompt JSON estricto. Requiere decisión de lib de imagen (sharp/jimp) + Ollama corriendo. El use case ya es provider-agnostic vía el port.
+- [ ] 5.4 Commit core hecho; commit del adapter Ollama al cerrar 5.3.
 
 ---
 
