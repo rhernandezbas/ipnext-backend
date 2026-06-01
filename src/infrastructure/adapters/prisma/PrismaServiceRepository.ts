@@ -3,6 +3,7 @@ import {
   ServiceRepository,
   ListServicesQuery,
   ServiceListItem,
+  ServiceStats,
 } from '@domain/ports/ServiceRepository';
 import { prisma } from '../../database/prisma';
 
@@ -44,5 +45,19 @@ export class PrismaServiceRepository implements ServiceRepository {
     ]);
 
     return { data: rows.map(toServiceListItem), total, page, limit };
+  }
+
+  async stats(): Promise<ServiceStats> {
+    const groups: Array<{ status: string; _count: { _all: number } }> = await (prisma as any).service.groupBy({
+      by: ['status'],
+      _count: { _all: true },
+    });
+    const byStatus: Record<string, number> = {};
+    let total = 0;
+    for (const g of groups) {
+      byStatus[g.status] = g._count._all;
+      total += g._count._all;
+    }
+    return { total, byStatus };
   }
 }

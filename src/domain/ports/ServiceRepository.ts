@@ -22,7 +22,14 @@ export interface ListServicesQuery extends PaginatedQuery {
   technology?: string;
 }
 
+export interface ServiceStats {
+  total: number;
+  byStatus: Record<string, number>;
+}
+
 export interface ServiceRepository {
   /** Global paginated listing across all clients, with optional filters. */
   list(query: ListServicesQuery): Promise<PaginatedResult<ServiceListItem>>;
+  /** Returns total count + per-status breakdown. Status values are dynamic (from Gestión Real). */
+  stats(): Promise<ServiceStats>;
 }

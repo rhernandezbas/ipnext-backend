@@ -4,6 +4,7 @@ import {
   ServiceRepository,
   ListServicesQuery,
   ServiceListItem,
+  ServiceStats,
 } from '@domain/ports/ServiceRepository';
 
 /**
@@ -56,5 +57,13 @@ export class InMemoryServiceRepository implements ServiceRepository {
     const data = filtered.slice((page - 1) * limit, (page - 1) * limit + limit).map((s) => ({ ...s }));
 
     return { data, total, page, limit };
+  }
+
+  async stats(): Promise<ServiceStats> {
+    const byStatus: Record<string, number> = {};
+    for (const item of this.items) {
+      byStatus[item.status] = (byStatus[item.status] ?? 0) + 1;
+    }
+    return { total: this.items.length, byStatus };
   }
 }
