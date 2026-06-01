@@ -6,11 +6,14 @@
 
 - Login persistente al portal (`ICLASS_PORTAL_USER` / `ICLASS_PORTAL_PASSWORD`), cookie cacheada, re-login transparente al expirar.
 - GET a `restrict/baixa_os_validada.seam?osId={iclassId}&transicaoId=47&...` (read-only de hecho; **nunca** se hace submit de "Terminar OS").
-- Devuelve por cada pregunta de la "Encuesta": `{ ordem, kind: 'text'|'photo', photoUrl?, fileName?, photoMissing }`.
+- **Scope obligatorio**: las preguntas se extraen SOLO del panel "Encuesta". El form tiene `div.prop` fuera de la encuesta (5 vacíos + cabecera de Cierre: Motivo/Responsable/Relación) que NO deben contarse, o se desalinea el `ordem`.
+- Devuelve por cada pregunta de la "Encuesta": `{ ordem, kind: 'text'|'choice'|'photo', photoUrl?, fileName?, photoMissing }`.
 - Devuelve los adjuntos de "Adjuntos": `{ url, label }` (incluye la firma).
 - **SCEN-SC-1**: pregunta con link "Imagen" → `kind:'photo'`, `photoUrl` = URL S3.
 - **SCEN-SC-2**: pregunta foto con "No Disponible" → `kind:'photo'`, `photoMissing:true`, `photoUrl:null`.
 - **SCEN-SC-3**: el parser sobre un HTML sin la sección "Encuesta" → devuelve lista vacía, **no lanza**.
+- **SCEN-SC-4**: pregunta con `<select>` → `kind:'choice'`. NO se confunde con texto ni foto.
+- **SCEN-SC-5**: los `div.prop` de la cabecera (Motivo/Responsable/Relación) y los vacíos quedan EXCLUIDOS del conteo de preguntas de la encuesta (verificado: el `ordem` de la API arranca en la 1ª pregunta de la encuesta, no en Motivo).
 
 ## Capability: correlate-photos-by-ordem
 

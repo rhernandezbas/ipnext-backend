@@ -17,11 +17,13 @@
 ---
 
 ## Phase 2 — SEAM scraper (TDD parser sobre fixtures HTML)
+> Verificado (24 OS / 10 tipos): el GET inicial trae TODO el HTML (NO AJAX) → scraper = GET + parser (cheerio/jsdom), sin browser headless. Tres kinds: text/choice/photo. `div.prop` se usa en todo el form → **scopear al panel Encuesta**.
+- [ ] 2.0 Sanitizar los 3 HTML capturados (raíz: seam-3532-wireless, seam-2980-fibra, seam-4646-empty) → redactar PII (técnico, "CLIENTE", datos del cliente) y reemplazar URLs S3 reales por fakes de igual forma. Mover a `src/__tests__/infrastructure/fixtures/iclass-seam/`. Agregar 2 más por variedad: un VISITA TECNICA (choice-heavy) y un Red (photo-missing×7).
 - [ ] 2.1 Port `IClassPortalPort` en `domain/ports/`.
-- [ ] 2.2 [RED] Test de `parseOSDetail` con 3 fixtures HTML reales (wireless con 4 fotos, fibra con labels repetidos, OS sin Encuesta) → SCEN-SC-1/2/3, SCEN-CO-2.
-- [ ] 2.3 [GREEN] `IClassPortalClient` (adapter): login + cookie + GET + `parseOSDetail`. Backoff/re-login.
+- [ ] 2.2 [RED] Test de `parseOSDetail` sobre los fixtures → SCEN-SC-1/2/3/4/5, SCEN-CO-2 (scope Encuesta, choice, photo-missing, labels repetidos).
+- [ ] 2.3 [GREEN] `IClassPortalClient` (adapter): login + cookie + GET + `parseOSDetail` (cheerio). Backoff/re-login.
 - [ ] 2.4 `InMemoryIClassPortal` para tests de use case.
-- [ ] 2.5 Config: `ICLASS_PORTAL_USER` / `ICLASS_PORTAL_PASSWORD` en `config.ts` + `env.example`.
+- [ ] 2.5 Config: `ICLASS_PORTAL_USER` / `ICLASS_PORTAL_PASSWORD` en `config.ts` + `env.example`. Secrets vía `gh secret set` para prod.
 - [ ] 2.6 Commit: `feat(iclass): SEAM portal scraper (parseOSDetail) + port`
 
 ---

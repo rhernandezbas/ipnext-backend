@@ -42,6 +42,17 @@ Verificado: el modelo NO es el cuello de botella, el **preprocesamiento** lo es.
 
 `OcrExtraction` guarda el raw output para auditoría. Provider abstraído tras un port `DevicePhotoOcr` (hoy Ollama; mañana Textract/Vision sin tocar el use case).
 
+## Patrones de checklist (verificado sobre 24 OS / 10 tipos)
+
+Muestreo real del portal confirmó:
+
+- **Tres tipos de respuesta, no dos**: `text` (textarea), `photo` (link S3 o "No Disponible"), y **`choice`** (`<select>` — ej. "¿ATENCIÓN INICIADA? Sí/No", "MIEMBRO: NADIE"). El diseño original solo contemplaba text/photo. → `questionType` ∈ {`Texto`, `Foto`, `Choice`}.
+- **`photo-missing` es frecuente**: muchas preguntas-foto sin upload ("No Disponible"). `photoMissing` es de primera clase.
+- **Variabilidad alta dentro del mismo tipo de OS** (INSTALACION WIRELESS: 15/11/13 preguntas). El template no es estable → parser estructural/genérico obligatorio.
+- **`div.prop` se usa en TODO el form**: ~5 `div.prop` vacíos (estructura) + 3 de la cabecera de Cierre (`Motivo`, `Responsable`, `Relación`) + N preguntas de la Encuesta. **El parser de fotos DEBE scopear al panel "Encuesta"**, NUNCA barrer `div.prop` global, o desalinea el `ordem`.
+- Markup por pregunta: `div.prop > label > span[bold]` (texto) + `span.value` con `textarea` (text) | `select` (choice) | `span[id*=":name"]` + `a[href*=iclassfs]` (photo). Foto-missing: sin `a`, texto "No Disponible".
+- Fotos 0–5 por OS; firma 0/1. OS sin media (no factible, retiros) → 0 fotos, 0 firma.
+
 ## Correlation key — `ordem`
 
 La API v2 numera las preguntas con `resposta.ordem` (0-based). El HTML del SEAM las renderiza en ese mismo orden. Por cada pregunta `tipoPergunta=5` (Foto) en la API, se toma la foto del SEAM en la misma posición `ordem`. Resuelve la ambigüedad de labels repetidos (ej. fibra con 7 "ADJUNTAR FOTO…" idénticas).
