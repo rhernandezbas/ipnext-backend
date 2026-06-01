@@ -4,6 +4,8 @@ import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMe
 import { InMemoryIClassResultCodeRepository } from '@infrastructure/adapters/in-memory/InMemoryIClassResultCodeRepository';
 import { InMemoryClosedServiceOrderRepository } from '@infrastructure/adapters/in-memory/InMemoryClosedServiceOrderRepository';
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
+import { InMemoryIClassPortal } from '@infrastructure/adapters/in-memory/InMemoryIClassPortal';
+import { IClassPortalPort } from '@domain/ports/IClassPortalPort';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
 import { ClosedServiceOrderSummary, SoStatusHistoryEntry } from '@domain/entities/iclass-closed-order';
 import { Stage } from '@domain/entities/workflow';
@@ -143,5 +145,44 @@ describe('IngestClosedServiceOrders', () => {
     const saved = await state.get('iclass-closed');
     expect(saved).not.toBeNull();
     expect(JSON.parse(saved!.lastResult!).mirrored).toBe(1);
+  });
+
+  it('correlates checklist photos from the portal by ordem (when a portal is provided)', async () => {
+    const { scheduling, iclass, resultCodes, closed, state } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    iclass.checklistsByOrder['900'] = [{
+      iclassSurveyId: 's1', surveyAt: null,
+      answers: [{ questionId: null, questionText: 'FOTO ROUTER', questionType: 'Foto', answerOrder: 3, answerText: null, photoMissing: true, photoUrl: null }],
+    }];
+    const portal = new InMemoryIClassPortal();
+    portal.set('900', {
+      questions: [{ ordem: 3, kind: 'photo', label: 'FOTO ROUTER', answerText: null, photoUrl: 'https://x/router.jpg', fileName: 'r.jpg', photoMissing: false }],
+      attachments: [],
+    });
+    const useCase = new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, { now: () => new Date('2026-05-29T12:00:00Z'), portal });
+
+    await useCase.execute();
+
+    expect(closed.orders.get('900')!.order.checklists[0].answers[0].photoUrl).toBe('https://x/router.jpg');
+  });
+
+  it('SCEN-CO-3: still mirrors when the portal throws (photoUrl stays null, retried next run)', async () => {
+    const { scheduling, iclass, resultCodes, closed, state } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    iclass.checklistsByOrder['900'] = [{
+      iclassSurveyId: 's1', surveyAt: null,
+      answers: [{ questionId: null, questionText: 'FOTO ROUTER', questionType: 'Foto', answerOrder: 3, answerText: null, photoMissing: true, photoUrl: null }],
+    }];
+    const portal: IClassPortalPort = { getOSDetail: async () => { throw new Error('SEAM down'); } };
+    const useCase = new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, { now: () => new Date('2026-05-29T12:00:00Z'), portal });
+
+    const counts = await useCase.execute();
+
+    expect(counts.mirrored).toBe(1);
+    expect(closed.orders.get('900')!.order.checklists[0].answers[0].photoUrl).toBeNull();
   });
 });

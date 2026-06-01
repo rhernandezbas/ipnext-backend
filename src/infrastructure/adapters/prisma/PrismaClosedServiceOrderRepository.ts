@@ -113,6 +113,7 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
                 answerOrder: a.answerOrder,
                 answerText: a.answerText,
                 photoMissing: a.photoMissing,
+                photoUrl: a.photoUrl ?? null,
               })),
             },
           },

@@ -29,9 +29,9 @@
 ---
 
 ## Phase 3 — Correlación foto↔ordem
-- [ ] 3.1 [RED] Test: dado checklist API (con `ordem`) + `ScrapedOSDetail`, setea `photoUrl` por `ordem` → SCEN-CO-1/3.
-- [ ] 3.2 [GREEN] Implementar correlación en el ensamblado del agregado (extender el paso de checklists de `IngestClosedServiceOrders`).
-- [ ] 3.3 `ClosedServiceOrderRepository.upsert` persiste `photoUrl` en las answers.
+- [x] 3.1 [RED→GREEN] `correlateChecklistPhotos` (función pura) + test → SCEN-CO-1/2/3. `photoUrl` agregado a entity `SoChecklistAnswer`.
+- [x] 3.2 [GREEN] Integrado en `IngestClosedServiceOrders` vía `opts.portal` opcional (try/catch: portal caído NO rompe el mirror). 2 tests de integración (set photoUrl + SCEN-CO-3). Mapper `IClassClient.parseChecklist` setea `photoUrl: null`.
+- [x] 3.3 `PrismaClosedServiceOrderRepository` persiste `photoUrl`.
 - [ ] 3.4 Commit: `feat(iclass): correlate checklist photos by ordem`
 
 ---

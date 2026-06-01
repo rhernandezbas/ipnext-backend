@@ -1,4 +1,6 @@
 import { IClassPort } from '@domain/ports/IClassPort';
+import { IClassPortalPort } from '@domain/ports/IClassPortalPort';
+import { correlateChecklistPhotos } from '@application/services/correlateChecklistPhotos';
 import { ClosedServiceOrderRepository } from '@domain/ports/ClosedServiceOrderRepository';
 import { IClassResultCodeRepository } from '@domain/ports/IClassResultCodeRepository';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
@@ -35,6 +37,12 @@ export interface IngestClosedCounts {
 export interface IngestClosedOptions {
   now?: () => Date;
   overlapMinutes?: number;
+  /**
+   * Optional SEAM portal scraper. When present, each mirrored SO's checklist
+   * photos are correlated by ordem from the portal HTML (API v2 is photo-blind).
+   * Absent → photoUrl stays null (no behavior change). Opt-in, like the config.
+   */
+  portal?: IClassPortalPort;
 }
 
 /**
@@ -45,6 +53,7 @@ export interface IngestClosedOptions {
 export class IngestClosedServiceOrders {
   private readonly now: () => Date;
   private readonly overlapMinutes: number;
+  private readonly portal?: IClassPortalPort;
 
   constructor(
     private readonly iclass: IClassPort,
@@ -56,6 +65,7 @@ export class IngestClosedServiceOrders {
   ) {
     this.now = opts.now ?? (() => new Date());
     this.overlapMinutes = opts.overlapMinutes ?? DEFAULT_OVERLAP_MINUTES;
+    this.portal = opts.portal;
   }
 
   async execute(): Promise<IngestClosedCounts> {
@@ -125,9 +135,21 @@ export class IngestClosedServiceOrders {
 
     // Fan out to sub-resources (the adapter applies backoff between calls).
     const history = await this.iclass.getServiceOrderHistory(s.iclassId);
-    const checklists = await this.iclass.getServiceOrderChecklists(s.iclassId);
+    let checklists = await this.iclass.getServiceOrderChecklists(s.iclassId);
     const materials = await this.iclass.getServiceOrderMaterials(s.iclassId);
     const equipmentEvents = await this.iclass.getServiceOrderEquipmentEvents(s.iclassId);
+
+    // Correlate checklist photos from the SEAM portal (opt-in). The API is
+    // photo-blind; a portal failure (down / rate-limited) must NOT break the
+    // mirror — photoUrl stays null and is retried on the next cycle (SCEN-CO-3).
+    if (this.portal) {
+      try {
+        const scraped = await this.portal.getOSDetail(String(s.iclassId));
+        checklists = correlateChecklistPhotos(checklists, scraped);
+      } catch {
+        /* keep the mirror; photos retried next run */
+      }
+    }
 
     // Resolve the configured closure mapping by result-code name.
     const rc = s.resultCodeName ? await this.resultCodes.findByCode(s.resultCodeName) : null;

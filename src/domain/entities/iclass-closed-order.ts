@@ -28,6 +28,8 @@ export interface SoChecklistAnswer {
   answerText: string | null;
   /** true when questionType === 'Foto' — IClass v2 returns no photo URL. */
   photoMissing: boolean;
+  /** S3 URL from the SEAM portal scrape, correlated by answerOrder ↔ ordem. Null until correlated. */
+  photoUrl: string | null;
 }
 
 export interface SoChecklist {

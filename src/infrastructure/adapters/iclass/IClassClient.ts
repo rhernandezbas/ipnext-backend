@@ -508,6 +508,7 @@ export function parseChecklist(raw: Record<string, unknown>): SoChecklist {
         answerOrder: numOrNull(r.ordem) ?? i,
         answerText: strOrNull(r.resposta),
         photoMissing: questionType === 'Foto',
+        photoUrl: null, // API v2 is photo-blind; set later by the SEAM correlation
       };
     }),
   };
