@@ -75,7 +75,7 @@
 - [x] 8.4 Commit hecho (router+statusMap, Prisma repos, wire).
 
 ## Pendiente final (integración / coordinación)
-- [ ] P2.3 `IClassPortalClient` (login JSF + GET read-only) — confirmar form de login real contra el portal. Sin esto NO hay photoUrl → OCR dormido.
+- [x] P2.3 `IClassPortalClient` (login JSF + GET read-only) — **validado en vivo** (smoke test Node: login handshake GET→POST→autologin→panel; getOSDetail OS 3532 → 7 preguntas, 1 firma, 4 fotos con URLs S3 reales). Cookie jar manual + seguimiento de redirects, sin deps. Re-login transparente.
 - [ ] Wire orquestación en el CRON (`bootstrapIClassClosure`) + `app.ts` closureIngest: pasar `portal`/`extractOcr`/`buildSuggestions`/`postComment` (opt-in por config). Diferido a propósito hasta 2.3 (sin portal el auto-OCR no aporta).
 - [ ] OCR accuracy tuning: localización/deskew de etiqueta (VLM 2 pasos) para llegar al nivel verificado con crop manual. Mientras, soft-fail a revisión manual.
 - [ ] Perms granulares en las rutas de inventario (coordinar clave `modulo.accion` con el FE).
