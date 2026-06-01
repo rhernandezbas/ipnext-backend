@@ -52,9 +52,9 @@
 ---
 
 ## Phase 6 — Build suggestions (TDD)
-- [ ] 6.1 Port `InventorySuggestionRepository` + in-memory.
-- [ ] 6.2 [RED] Test `BuildInventorySuggestions` → SCEN-BS-1/2/3 (DEVICE de OCR, MATERIAL de IClassSoMaterial, idempotencia, no toca contrato).
-- [ ] 6.3 [GREEN] Use case + Capa 2 (keyword matching deviceType, soft-fail OTROS).
+- [x] 6.1 Port `InventorySuggestionRepository` + `InMemoryInventorySuggestionRepository` (dedup por natural key taskId+kind+sn|mac|materialDesc). Entity `task-inventory-suggestion.ts`.
+- [x] 6.2 [RED→GREEN] `BuildInventorySuggestions` + test → SCEN-BS-1/2/3 (DEVICE de OCR, MATERIAL de IClassSoMaterial, idempotencia, NO toca contrato). 3/3 verde.
+- [x] 6.3 [GREEN] Capa 2 `classifyDeviceType` ya provista (Phase 5); el deviceType viene del OcrExtraction.
 - [ ] 6.4 Commit: `feat(inventory): build task inventory suggestions (staging)`
 
 ---
