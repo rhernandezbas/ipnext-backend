@@ -71,8 +71,16 @@
 - [x] 8.1 [RED→GREEN] `createServiceInventoryRouter` + supertest (9/9): confirm 201, 409 SUGGESTION_ALREADY_CONFIRMED, 409 TASK_HAS_NO_SERVICE, 404 SUGGESTION_NOT_FOUND, GET suggestions, discard, manual add 201/422, PATCH 200/404. Use cases thin `ListTaskInventorySuggestions`/`UpdateInstalledItem`.
 - [x] 8.1b statusMap (errorHandler): +SUGGESTION_NOT_FOUND:404, SUGGESTION_ALREADY_CONFIRMED:409, TASK_HAS_NO_SERVICE:409.
 - [x] 8.2 Prisma repos: `PrismaOcrExtractionRepository` (save/findByPhotoUrl), `PrismaInventorySuggestionRepository` (upsert por natural-key vía findFirst), `PrismaServiceInventoryRepository` (listByService/create/update). tsc 0 contra el client generado. (No unit-test: requieren DB.)
-- [ ] 8.3 [PENDIENTE — coordinación] Wire en `app.ts` (DI + montar router ANTES del catch-all `/:id` de scheduling). Proteger con permisos `modulo.accion` que el front recibe (verificar en `/me`/`useMyPermissions`). Coordinar si hay agente tocando `app.ts`.
-- [ ] 8.4 Commit router+statusMap hecho; commit del wire+Prisma al cerrar 8.2/8.3.
+- [x] 8.3 Wire en `app.ts`: router de inventario montado en `/api` ANTES del catch-all `/:id` de scheduling (Prisma repos + use cases + `createAuthMiddleware`). tsc 0, suite 1742 sin regresión. NOTA(perms): por ahora solo autenticado; perms granulares `modulo.accion` pendientes de coordinación con el catálogo del FE.
+- [x] 8.4 Commit hecho (router+statusMap, Prisma repos, wire).
+
+## Pendiente final (integración / coordinación)
+- [ ] P2.3 `IClassPortalClient` (login JSF + GET read-only) — confirmar form de login real contra el portal. Sin esto NO hay photoUrl → OCR dormido.
+- [ ] Wire orquestación en el CRON (`bootstrapIClassClosure`) + `app.ts` closureIngest: pasar `portal`/`extractOcr`/`buildSuggestions`/`postComment` (opt-in por config). Diferido a propósito hasta 2.3 (sin portal el auto-OCR no aporta).
+- [ ] OCR accuracy tuning: localización/deskew de etiqueta (VLM 2 pasos) para llegar al nivel verificado con crop manual. Mientras, soft-fail a revisión manual.
+- [ ] Perms granulares en las rutas de inventario (coordinar clave `modulo.accion` con el FE).
+- [ ] Rotar password portal IPNXAUGUSTOH (expuesta en chat).
+- [ ] Frontend (repo aparte): sección "Inventario" en task detail (checkboxes de sugerencias) + "Equipos instalados" en contrato/cliente (impeccable).
 
 ---
 

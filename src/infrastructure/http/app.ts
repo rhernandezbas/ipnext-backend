@@ -374,6 +374,15 @@ import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCo
 import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
+import { createServiceInventoryRouter } from './routes/serviceInventory.routes';
+import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
+import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
+import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
+import { ListServiceInstalledItems } from '@application/use-cases/ListServiceInstalledItems';
+import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
+import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
+import { PrismaInventorySuggestionRepository } from '../adapters/prisma/PrismaInventorySuggestionRepository';
+import { PrismaServiceInventoryRepository } from '../adapters/prisma/PrismaServiceInventoryRepository';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
@@ -892,6 +901,21 @@ export function createApp() {
   const listTaskComments = new ListTaskComments(taskCommentRepo);
   const deleteTaskComment = new DeleteTaskComment(taskCommentRepo);
   app.use('/api/scheduling', createTaskCommentsRouter(listTaskComments, addTaskComment, deleteTaskComment));
+
+  // IClass closure → inventory: task-scoped suggestion staging + contract installed items.
+  // Mounted at /api BEFORE the scheduling /:id catch-all so /scheduling/:taskId/inventory/* survives.
+  // NOTE(perms): authenticated; granular `modulo.accion` perms pending FE catalog coordination.
+  const inventorySuggestionRepo = new PrismaInventorySuggestionRepository();
+  const serviceInventoryRepo = new PrismaServiceInventoryRepository();
+  app.use('/api', createServiceInventoryRouter(
+    new ListTaskInventorySuggestions(inventorySuggestionRepo),
+    new ConfirmInventorySuggestion(inventorySuggestionRepo, serviceInventoryRepo, schedulingRepo),
+    new DiscardInventorySuggestion(inventorySuggestionRepo),
+    new ListServiceInstalledItems(serviceInventoryRepo),
+    new AddInstalledItemManually(serviceInventoryRepo),
+    new UpdateInstalledItem(serviceInventoryRepo),
+    createAuthMiddleware(authAdapter, sessionRepo),
+  ));
 
   // Instantiate checklist use cases (change 5)
   const taskTemplateRepoForChecklist = new PrismaTaskTemplateRepository();
