@@ -93,5 +93,7 @@ export const config = {
     enabled: process.env.ICLASS_OCR_ENABLED === 'true',
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434',
     model: process.env.OCR_MODEL ?? 'gemma3:12b',
+    /** Per-image inference timeout (ms). Abort → soft-fail to manual review. */
+    timeoutMs: parseInt(process.env.OCR_TIMEOUT_MS || '120000', 10),
   },
 };

@@ -31,7 +31,11 @@ export function buildClosureSideEffects(): SideEffects {
 
   if (config.ocr.enabled) {
     eff.extractOcr = new ExtractDeviceInfoFromPhoto(
-      new OllamaDevicePhotoOcr({ baseUrl: config.ocr.ollamaBaseUrl, model: config.ocr.model }),
+      new OllamaDevicePhotoOcr({
+        baseUrl: config.ocr.ollamaBaseUrl,
+        model: config.ocr.model,
+        timeoutMs: config.ocr.timeoutMs,
+      }),
       new PrismaOcrExtractionRepository(),
     );
   }

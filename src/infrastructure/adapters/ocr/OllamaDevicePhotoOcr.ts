@@ -11,7 +11,14 @@ const PROMPT =
 export interface OllamaOcrConfig {
   baseUrl: string;
   model: string;
+  /** Max wait for the model inference (ms). Default 120s. Abort → soft-fail. */
+  timeoutMs?: number;
+  /** Max wait to download the photo (ms). Default 30s. */
+  downloadTimeoutMs?: number;
 }
+
+const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 /**
  * Local OCR via an Ollama vision model (gemma3). Verified: the model reads
@@ -23,25 +30,30 @@ export interface OllamaOcrConfig {
  */
 export class OllamaDevicePhotoOcr implements DevicePhotoOcr {
   readonly provider: string;
+  private readonly timeoutMs: number;
+  private readonly downloadTimeoutMs: number;
 
   constructor(private readonly cfg: OllamaOcrConfig) {
     this.provider = `ollama:${cfg.model}`;
+    this.timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.downloadTimeoutMs = cfg.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
   }
 
   async extract(photoUrl: string): Promise<DeviceOcrResult> {
-    let imageB64: string;
+    // Any failure (download, model timeout/abort, Ollama down) soft-fails to a
+    // null read persisted for audit — never throws, never blocks the cron.
     try {
-      imageB64 = await this.preprocess(photoUrl);
+      const imageB64 = await this.preprocess(photoUrl);
+      const raw = await this.ask(imageB64);
+      const { sn, mac } = parseOcrResponse(raw);
+      return { sn, mac, confidence: sn || mac ? 0.8 : 0, rawOutput: raw };
     } catch (e) {
-      return { sn: null, mac: null, confidence: 0, rawOutput: `preprocess-error: ${(e as Error).message}` };
+      return { sn: null, mac: null, confidence: 0, rawOutput: `ocr-error: ${(e as Error).message}` };
     }
-    const raw = await this.ask(imageB64);
-    const { sn, mac } = parseOcrResponse(raw);
-    return { sn, mac, confidence: sn || mac ? 0.8 : 0, rawOutput: raw };
   }
 
   private async preprocess(url: string): Promise<string> {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(this.downloadTimeoutMs) });
     if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
     const buf = Buffer.from(await res.arrayBuffer());
     const image = await Jimp.read(buf);
@@ -63,6 +75,7 @@ export class OllamaDevicePhotoOcr implements DevicePhotoOcr {
         stream: false,
         options: { temperature: 0 },
       }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
     const json = (await res.json()) as { response?: string };
     return json.response ?? '';
