@@ -22,7 +22,7 @@ function makeRepo(overrides?: Partial<CustomerRepository>): CustomerRepository {
     create: jest.fn(),
     delete: jest.fn(),
     stats: jest.fn(),
-    listServices: jest.fn(),
+    listContracts: jest.fn(),
     listInvoices: jest.fn(),
     listLogs: jest.fn(),
     ...overrides,

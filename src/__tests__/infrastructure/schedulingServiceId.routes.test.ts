@@ -1,6 +1,6 @@
 /**
- * TDD — Feature C: serviceId accepted and persisted on task create/update.
- * Verifies that serviceId flows through route → use-case → repo → response.
+ * TDD — Feature C: contractId accepted and persisted on task create/update.
+ * Verifies that contractId flows through route → use-case → repo → response.
  */
 import request from 'supertest';
 import express, { Request, Response, NextFunction } from 'express';
@@ -36,7 +36,7 @@ class FakeAuthProvider implements AuthProvider {
 }
 
 const STAGE_1 = '10000000-0000-4000-a000-000000000001';
-const SERVICE_ID  = 'service-1111-0000-0000-000000000001';
+const CONTRACT_ID  = 'service-1111-0000-0000-000000000001';
 const CUSTOMER_ID = 'customer-1111-0000-0000-000000000001';
 
 function buildApp() {
@@ -69,8 +69,8 @@ function withAuth(req: request.Test) {
   return req.set('Cookie', 'auth_token=fake');
 }
 
-describe('POST /api/scheduling — serviceId persistence (Feature C)', () => {
-  it('persists serviceId and returns it in the response', async () => {
+describe('POST /api/scheduling — contractId persistence (Feature C)', () => {
+  it('persists contractId and returns it in the response', async () => {
     const app = buildApp();
     const res = await withAuth(request(app).post('/api/scheduling').send({
       title: 'Task with service',
@@ -78,16 +78,16 @@ describe('POST /api/scheduling — serviceId persistence (Feature C)', () => {
       estimatedHours: 1,
       category: 'installation',
       stageId: STAGE_1,
-      serviceId: SERVICE_ID,
+      contractId: CONTRACT_ID,
       customerId: CUSTOMER_ID,
     }));
 
     expect(res.status).toBe(201);
-    expect(res.body.serviceId).toBe(SERVICE_ID);
+    expect(res.body.contractId).toBe(CONTRACT_ID);
   });
 
-  it('REQ-REQUIRED-2: creating a task without serviceId → 400 VALIDATION_ERROR', async () => {
-    // serviceId is now required on create — omitting it must be rejected at the DTO layer
+  it('REQ-REQUIRED-2: creating a task without contractId → 400 VALIDATION_ERROR', async () => {
+    // contractId is now required on create — omitting it must be rejected at the DTO layer
     const app = buildApp();
     const res = await withAuth(request(app).post('/api/scheduling').send({
       title: 'Task without service',
@@ -96,7 +96,7 @@ describe('POST /api/scheduling — serviceId persistence (Feature C)', () => {
       category: 'installation',
       stageId: STAGE_1,
       customerId: CUSTOMER_ID,
-      // serviceId intentionally omitted
+      // contractId intentionally omitted
     }));
 
     expect(res.status).toBe(400);
@@ -112,7 +112,7 @@ describe('POST /api/scheduling — serviceId persistence (Feature C)', () => {
       estimatedHours: 1,
       category: 'installation',
       stageId: STAGE_1,
-      serviceId: SERVICE_ID,
+      contractId: CONTRACT_ID,
       // customerId intentionally omitted
     }));
 
@@ -121,8 +121,8 @@ describe('POST /api/scheduling — serviceId persistence (Feature C)', () => {
   });
 });
 
-describe('PUT /api/scheduling/:id — serviceId update persistence (Feature C)', () => {
-  it('updates serviceId and returns updated value', async () => {
+describe('PUT /api/scheduling/:id — contractId update persistence (Feature C)', () => {
+  it('updates contractId and returns updated value', async () => {
     const app = buildApp();
 
     // Create task with required fields
@@ -133,17 +133,17 @@ describe('PUT /api/scheduling/:id — serviceId update persistence (Feature C)',
       category: 'installation',
       stageId: STAGE_1,
       customerId: CUSTOMER_ID,
-      serviceId: SERVICE_ID,
+      contractId: CONTRACT_ID,
     }));
     expect(createRes.status).toBe(201);
     const taskId = createRes.body.id as string;
 
-    // Update with serviceId
+    // Update with contractId
     const updateRes = await withAuth(request(app).put(`/api/scheduling/${taskId}`).send({
-      serviceId: SERVICE_ID,
+      contractId: CONTRACT_ID,
     }));
 
     expect(updateRes.status).toBe(200);
-    expect(updateRes.body.serviceId).toBe(SERVICE_ID);
+    expect(updateRes.body.contractId).toBe(CONTRACT_ID);
   });
 });

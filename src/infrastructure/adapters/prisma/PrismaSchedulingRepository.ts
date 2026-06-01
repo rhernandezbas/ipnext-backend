@@ -77,7 +77,7 @@ export function toTask(row: any): ScheduledTask {
     customerCity,
     customerPhone,
     customerCode,
-    serviceId: row.serviceId ?? null,
+    contractId: row.contractId ?? null,
     partnerId: row.partnerId ?? null,
     reporterId: row.reporterId ?? null,
     reporterName,
@@ -128,7 +128,7 @@ const INCLUDE = {
   customer: { select: { id: true, name: true, city: true, phone: true, grClienteId: true, splynxId: true, login: true } },
   assignee: { select: { id: true, name: true } },
   reporter: { select: { id: true, name: true } },
-  service: { select: { id: true } },
+  contract: { select: { id: true } },
   partnerRef: { select: { id: true } },
   watchers: true,
   checklist: { orderBy: { order: 'asc' } },
@@ -452,7 +452,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       startDate: data.startDate ? new Date(data.startDate) : null,
       endDate: data.endDate ? new Date(data.endDate) : null,
       customerId: data.customerId ?? null,
-      serviceId: data.serviceId ?? null,
+      contractId: data.contractId ?? null,
       partnerId: data.partnerId ?? null,
       reporterId: data.reporterId ?? null,
       assigneeId: data.assigneeId ?? null,
@@ -488,7 +488,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       update['endDate'] = data.endDate ? new Date(data.endDate) : null;
     }
     if (data.customerId !== undefined) update['customerId'] = data.customerId;
-    if (data.serviceId !== undefined) update['serviceId'] = data.serviceId;
+    if (data.contractId !== undefined) update['contractId'] = data.contractId;
     if (data.partnerId !== undefined) update['partnerId'] = data.partnerId;
     if (data.reporterId !== undefined) update['reporterId'] = data.reporterId;
     if (data.assigneeId !== undefined) update['assigneeId'] = data.assigneeId;

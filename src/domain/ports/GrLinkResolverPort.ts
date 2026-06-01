@@ -10,6 +10,6 @@
 export interface GrLinkResolverPort {
   /** Resolve a local Client by its GR client id. Null when not mirrored. */
   findClientByGrId(grClienteId: string): Promise<{ id: string; name: string } | null>;
-  /** Resolve a local Service by its GR contract id. Null when not mirrored. */
-  findServiceByGrContratoId(grContratoId: string): Promise<{ id: string; plan: string | null } | null>;
+  /** Resolve a local Contract by its GR contract id. Null when not mirrored. */
+  findContractByGrContratoId(grContratoId: string): Promise<{ id: string; plan: string | null } | null>;
 }

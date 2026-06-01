@@ -1,8 +1,8 @@
-import { ServiceInventoryRepository } from '@domain/ports/ServiceInventoryRepository';
-import { ServiceInstalledItem } from '@domain/entities/service-installed-item';
+import { ContractInventoryRepository } from '@domain/ports/ContractInventoryRepository';
+import { ContractInstalledItem } from '@domain/entities/contract-installed-item';
 
 export interface UpdateInstalledItemInput {
-  status?: ServiceInstalledItem['status'];
+  status?: ContractInstalledItem['status'];
   notes?: string | null;
   model?: string | null;
   serialNumber?: string | null;
@@ -11,9 +11,9 @@ export interface UpdateInstalledItemInput {
 
 /** Edits an installed item (status active/removed/replaced, notes, etc.). */
 export class UpdateInstalledItem {
-  constructor(private readonly inventory: ServiceInventoryRepository) {}
+  constructor(private readonly inventory: ContractInventoryRepository) {}
 
-  execute(itemId: string, patch: UpdateInstalledItemInput): Promise<ServiceInstalledItem | null> {
+  execute(itemId: string, patch: UpdateInstalledItemInput): Promise<ContractInstalledItem | null> {
     return this.inventory.update(itemId, patch);
   }
 }

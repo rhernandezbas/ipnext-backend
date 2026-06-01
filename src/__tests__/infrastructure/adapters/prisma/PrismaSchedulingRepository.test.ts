@@ -34,7 +34,7 @@ function makeBaseRow(overrides: Record<string, unknown> = {}) {
     endDate: null,
     customerId: null,
     customer: null,
-    serviceId: null,
+    contractId: null,
     service: null,
     partnerId: null,
     partnerRef: null,
@@ -56,7 +56,7 @@ describe('toTask — legacy-only row (new FKs all NULL)', () => {
     expect(task.endDate).toBeNull();
     expect(task.customerId).toBeNull();
     expect(task.customerName).toBeNull();
-    expect(task.serviceId).toBeNull();
+    expect(task.contractId).toBeNull();
     expect(task.partnerId).toBeNull();
     expect(task.reporterId).toBeNull();
     expect(task.assigneeId).toBeNull();
@@ -101,16 +101,16 @@ describe('toTask — FK-resolved row (JOINs populated)', () => {
     expect(task.assigneeName).toBe('Carlos Técnico');
   });
 
-  it('maps serviceId, partnerId, reporterId when present', () => {
+  it('maps contractId, partnerId, reporterId when present', () => {
     const task = toTask(makeBaseRow({
-      serviceId: 'svc-1',
+      contractId: 'svc-1',
       service: { id: 'svc-1' },
       partnerId: 'part-1',
       partnerRef: { id: 'part-1' },
       reporterId: 'rep-1',
       reporter: { id: 'rep-1' },
     }));
-    expect(task.serviceId).toBe('svc-1');
+    expect(task.contractId).toBe('svc-1');
     expect(task.partnerId).toBe('part-1');
     expect(task.reporterId).toBe('rep-1');
   });

@@ -2,14 +2,14 @@ import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInvent
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { InMemoryInventorySuggestionRepository } from '@infrastructure/adapters/in-memory/InMemoryInventorySuggestionRepository';
-import { InMemoryServiceInventoryRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceInventoryRepository';
+import { InMemoryContractInventoryRepository } from '@infrastructure/adapters/in-memory/InMemoryContractInventoryRepository';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 
 function setup() {
   const suggestions = new InMemoryInventorySuggestionRepository();
-  const inventory = new InMemoryServiceInventoryRepository();
+  const inventory = new InMemoryContractInventoryRepository();
   const scheduling = new InMemorySchedulingRepository(new InMemoryStageRepository());
   const confirm = new ConfirmInventorySuggestion(suggestions, inventory, scheduling);
   const addManual = new AddInstalledItemManually(inventory);
@@ -24,14 +24,14 @@ const sug = (over: Partial<TaskInventorySuggestion>): TaskInventorySuggestion =>
 });
 
 describe('ConfirmInventorySuggestion', () => {
-  it('SCEN-CF-1: confirms a DEVICE suggestion → one ServiceInstalledItem on the contract', async () => {
+  it('SCEN-CF-1: confirms a DEVICE suggestion → one ContractInstalledItem on the contract', async () => {
     const { suggestions, inventory, scheduling, confirm } = setup();
-    scheduling.seedTask({ id: 't1', serviceId: 'svc1' });
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R1', mac: 'MR' }));
 
     const item = await confirm.execute({ suggestionId: 's1', addedByUserId: 'u9' });
 
-    expect(item.serviceId).toBe('svc1');
+    expect(item.contractId).toBe('svc1');
     expect(item.type).toBe('ROUTER');
     expect(item.serialNumber).toBe('R1');
     expect(item.mac).toBe('MR');
@@ -39,34 +39,34 @@ describe('ConfirmInventorySuggestion', () => {
     const stored = await suggestions.get('s1');
     expect(stored!.status).toBe('confirmed');
     expect(stored!.confirmedItemId).toBe(item.id);
-    expect(await inventory.listByService('svc1')).toHaveLength(1);
+    expect(await inventory.listByContract('svc1')).toHaveLength(1);
   });
 
   it('SCEN-CF-2: two routers confirmed → two rows (one per physical device)', async () => {
     const { suggestions, inventory, scheduling, confirm } = setup();
-    scheduling.seedTask({ id: 't1', serviceId: 'svc1' });
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1', serialNumber: 'R1' }));
     await suggestions.upsert(sug({ id: 's2', serialNumber: 'R2' }));
 
     await confirm.execute({ suggestionId: 's1' });
     await confirm.execute({ suggestionId: 's2' });
 
-    const items = await inventory.listByService('svc1');
+    const items = await inventory.listByContract('svc1');
     expect(items).toHaveLength(2);
     expect(items.map(i => i.serialNumber).sort()).toEqual(['R1', 'R2']);
   });
 
-  it('SCEN-CF-3: task without service → TASK_HAS_NO_SERVICE', async () => {
+  it('SCEN-CF-3: task without contract → TASK_HAS_NO_CONTRACT', async () => {
     const { suggestions, scheduling, confirm } = setup();
-    scheduling.seedTask({ id: 't1', serviceId: null });
+    scheduling.seedTask({ id: 't1', contractId: null });
     await suggestions.upsert(sug({ id: 's1' }));
 
-    await expect(confirm.execute({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'TASK_HAS_NO_SERVICE' });
+    await expect(confirm.execute({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'TASK_HAS_NO_CONTRACT' });
   });
 
   it('SCEN-CF-4: confirming an already-confirmed suggestion → SUGGESTION_ALREADY_CONFIRMED', async () => {
     const { suggestions, scheduling, confirm } = setup();
-    scheduling.seedTask({ id: 't1', serviceId: 'svc1' });
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1' }));
     await confirm.execute({ suggestionId: 's1' });
 
@@ -82,15 +82,15 @@ describe('ConfirmInventorySuggestion', () => {
 describe('AddInstalledItemManually', () => {
   it('SCEN-MI-1: a manual 2nd router coexists with confirmed items', async () => {
     const { inventory, scheduling, confirm, suggestions, addManual } = setup();
-    scheduling.seedTask({ id: 't1', serviceId: 'svc1' });
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1', serialNumber: 'R1' }));
     await confirm.execute({ suggestionId: 's1' });
 
-    const manual = await addManual.execute({ serviceId: 'svc1', type: 'ROUTER', serialNumber: 'R2', addedByUserId: 'u9' });
+    const manual = await addManual.execute({ contractId: 'svc1', type: 'ROUTER', serialNumber: 'R2', addedByUserId: 'u9' });
 
     expect(manual.source).toBe('MANUAL');
     expect(manual.sourceTaskId).toBeNull();
-    const items = await inventory.listByService('svc1');
+    const items = await inventory.listByContract('svc1');
     expect(items).toHaveLength(2);
     expect(items.map(i => i.serialNumber).sort()).toEqual(['R1', 'R2']);
   });

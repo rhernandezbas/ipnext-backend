@@ -173,10 +173,10 @@ export class IngestGestionRealOrders {
       counts.skippedUnmirrored++;
       return;
     }
-    const service = order.contrato
-      ? await this.resolver.findServiceByGrContratoId(order.contrato)
+    const contract = order.contrato
+      ? await this.resolver.findContractByGrContratoId(order.contrato)
       : null;
-    if (!service) {
+    if (!contract) {
       counts.skippedUnmirrored++;
       return;
     }
@@ -189,7 +189,7 @@ export class IngestGestionRealOrders {
     }
 
     // 4-5. Classify and pick the target project.
-    const tech = classifyTech(service.plan);
+    const tech = classifyTech(contract.plan);
     const projectId =
       tech === 'FIBER' ? fiberProjectId : tech === 'WIRELESS' ? wirelessProjectId : null;
 
@@ -236,7 +236,7 @@ export class IngestGestionRealOrders {
         startDate: null,
         endDate: null,
         customerId: client.id,
-        serviceId: service.id,
+        contractId: contract.id,
         partnerId: null,
         reporterId: null,
         assigneeId: null,

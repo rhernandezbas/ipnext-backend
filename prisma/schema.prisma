@@ -186,7 +186,7 @@ model Client {
   lastBalanceAt    DateTime?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
-  services         Service[]
+  contracts        Contract[]
   logs             ClientLog[]
   invoices         Invoice[]
   tasks            ScheduledTask[]
@@ -204,7 +204,7 @@ enum ClientStatus {
   baja
 }
 
-model Service {
+model Contract {
   id           String          @id @default(uuid())
   clientId     String
   grContratoId String?         @unique
@@ -217,11 +217,11 @@ model Service {
   address      String?
   lat          Float?
   lng          Float?
-  technology   String?         // Phase 1: free-text name from ServiceTechnology catalog. NOT a FK.
+  technology   String?         // Phase 1: free-text name from ContractTechnology catalog. NOT a FK.
   createdAt    DateTime        @default(now())
-  client        Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  tasks         ScheduledTask[]
-  installedItems ServiceInstalledItem[]
+  client         Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tasks          ScheduledTask[]
+  installedItems ContractInstalledItem[]
 
   @@index([clientId])
   @@index([status])
@@ -494,16 +494,16 @@ model TaskCategory {
   @@map("TaskCategory")
 }
 
-// Editable catalog of service technologies (Fiber, DOCSIS, Wireless, ...).
-// Service.technology stores the name (free text) — no FK relation in Phase 1.
-model ServiceTechnology {
+// Editable catalog of contract technologies (Fiber, DOCSIS, Wireless, ...).
+// Contract.technology stores the name (free text) — no FK relation in Phase 1.
+model ContractTechnology {
   id          String   @id @default(uuid())
   name        String   @unique
   description String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@map("ServiceTechnology")
+  @@map("ContractTechnology")
 }
 
 // Editable catalog of task priorities, with a colour and a sort weight.
@@ -740,10 +740,10 @@ model TaskInventorySuggestion {
 
 // Confirmed inventory on the client's contract. ONE row = ONE physical device.
 // 2 routers = 2 rows. serialNumber/mac are SINGULAR by design.
-model ServiceInstalledItem {
+model ContractInstalledItem {
   id            String    @id @default(uuid())
-  serviceId     String
-  service       Service   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  contractId    String
+  contract      Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
   type          String // ONU | ROUTER | ANTENA | REPETIDOR | OTROS
   serialNumber  String?
   mac           String?
@@ -757,7 +757,7 @@ model ServiceInstalledItem {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  @@index([serviceId])
+  @@index([contractId])
   @@index([serialNumber])
 }
 
@@ -829,10 +829,10 @@ model ScheduledTask {
   endDate   DateTime?
 
   // NEW — FK relations
-  customerId String?
-  customer   Client?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  serviceId  String?
-  service    Service?  @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  customerId  String?
+  customer    Client?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  contractId  String?
+  contract    Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
   partnerId  String?
   partnerRef Partner?  @relation(fields: [partnerId], references: [id], onDelete: SetNull)
   reporterId String?
@@ -877,7 +877,7 @@ model ScheduledTask {
   @@index([startDate])
   @@index([endDate])
   @@index([customerId])
-  @@index([serviceId])
+  @@index([contractId])
   @@index([partnerId])
   @@index([assigneeId])
   @@index([reporterId])

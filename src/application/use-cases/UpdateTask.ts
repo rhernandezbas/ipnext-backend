@@ -7,7 +7,7 @@ export class UpdateTask {
   constructor(
     private readonly repo: SchedulingRepository,
     private readonly customerLookup: EntityLookup,
-    private readonly serviceLookup: EntityLookup,
+    private readonly contractLookup: EntityLookup,
     private readonly partnerLookup: EntityLookup,
     private readonly adminLookup: EntityLookup,
     private readonly projectLookup: EntityLookup,
@@ -15,14 +15,14 @@ export class UpdateTask {
 
   async execute(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null> {
     // FK validation — only for FKs PRESENT in the partial body (not undefined)
-    // canonical order: customer → service → partner → reporter → assignee → watchers
+    // canonical order: customer → contract → partner → reporter → assignee → watchers
     if (data.customerId !== undefined && data.customerId !== null) {
       const found = await this.customerLookup.findById(data.customerId);
       if (!found) throw new ReferenceNotFoundError('customer', data.customerId);
     }
-    if (data.serviceId !== undefined && data.serviceId !== null) {
-      const found = await this.serviceLookup.findById(data.serviceId);
-      if (!found) throw new ReferenceNotFoundError('service', data.serviceId);
+    if (data.contractId !== undefined && data.contractId !== null) {
+      const found = await this.contractLookup.findById(data.contractId);
+      if (!found) throw new ReferenceNotFoundError('contract', data.contractId);
     }
     if (data.partnerId !== undefined && data.partnerId !== null) {
       const found = await this.partnerLookup.findById(data.partnerId);

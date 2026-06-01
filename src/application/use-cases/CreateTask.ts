@@ -7,7 +7,7 @@ export class CreateTask {
   constructor(
     private readonly repo: SchedulingRepository,
     private readonly customerLookup: EntityLookup,
-    private readonly serviceLookup: EntityLookup,
+    private readonly contractLookup: EntityLookup,
     private readonly partnerLookup: EntityLookup,
     private readonly adminLookup: EntityLookup,
     private readonly projectLookup: EntityLookup,
@@ -15,8 +15,8 @@ export class CreateTask {
 
   async execute(data: CreateTaskInput): Promise<ScheduledTask> {
     // FK validation in deterministic order (REQ-FK-ORDER-1):
-    // customer → service → partner → reporter → assignee → watchers[*]
-    // REQ-REQUIRED-1/2: customerId and serviceId are always required on create.
+    // customer → contract → partner → reporter → assignee → watchers[*]
+    // REQ-REQUIRED-1/2: customerId and contractId are always required on create.
     // The DTO schema guarantees they are non-null strings; the ! asserts that contract.
     {
       const cid = data.customerId!;
@@ -24,9 +24,9 @@ export class CreateTask {
       if (!found) throw new ReferenceNotFoundError('customer', cid);
     }
     {
-      const sid = data.serviceId!;
-      const found = await this.serviceLookup.findById(sid);
-      if (!found) throw new ReferenceNotFoundError('service', sid);
+      const cid = data.contractId!;
+      const found = await this.contractLookup.findById(cid);
+      if (!found) throw new ReferenceNotFoundError('contract', cid);
     }
     if (data.partnerId != null) {
       const found = await this.partnerLookup.findById(data.partnerId);

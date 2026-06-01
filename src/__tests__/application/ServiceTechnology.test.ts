@@ -1,30 +1,30 @@
-import { InMemoryServiceTechnologyRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceTechnologyRepository';
-import { ListServiceTechnology } from '@application/use-cases/ListServiceTechnology';
-import { GetServiceTechnology } from '@application/use-cases/GetServiceTechnology';
-import { CreateServiceTechnology } from '@application/use-cases/CreateServiceTechnology';
-import { UpdateServiceTechnology } from '@application/use-cases/UpdateServiceTechnology';
-import { DeleteServiceTechnology } from '@application/use-cases/DeleteServiceTechnology';
+import { InMemoryContractTechnologyRepository } from '@infrastructure/adapters/in-memory/InMemoryContractTechnologyRepository';
+import { ListContractTechnology } from '@application/use-cases/ListContractTechnology';
+import { GetContractTechnology } from '@application/use-cases/GetContractTechnology';
+import { CreateContractTechnology } from '@application/use-cases/CreateContractTechnology';
+import { UpdateContractTechnology } from '@application/use-cases/UpdateContractTechnology';
+import { DeleteContractTechnology } from '@application/use-cases/DeleteContractTechnology';
 import {
-  ServiceTechnologyNotFoundError,
-  ServiceTechnologyNameConflictError,
-  ServiceTechnologyInUseError,
-} from '@domain/errors/serviceTechnology';
+  ContractTechnologyNotFoundError,
+  ContractTechnologyNameConflictError,
+  ContractTechnologyInUseError,
+} from '@domain/errors/contractTechnology';
 
-describe('ServiceTechnology use cases', () => {
-  let repo: InMemoryServiceTechnologyRepository;
-  let list: ListServiceTechnology;
-  let get: GetServiceTechnology;
-  let create: CreateServiceTechnology;
-  let update: UpdateServiceTechnology;
-  let del: DeleteServiceTechnology;
+describe('ContractTechnology use cases', () => {
+  let repo: InMemoryContractTechnologyRepository;
+  let list: ListContractTechnology;
+  let get: GetContractTechnology;
+  let create: CreateContractTechnology;
+  let update: UpdateContractTechnology;
+  let del: DeleteContractTechnology;
 
   beforeEach(() => {
-    repo = new InMemoryServiceTechnologyRepository();
-    list = new ListServiceTechnology(repo);
-    get = new GetServiceTechnology(repo);
-    create = new CreateServiceTechnology(repo);
-    update = new UpdateServiceTechnology(repo);
-    del = new DeleteServiceTechnology(repo);
+    repo = new InMemoryContractTechnologyRepository();
+    list = new ListContractTechnology(repo);
+    get = new GetContractTechnology(repo);
+    create = new CreateContractTechnology(repo);
+    update = new UpdateContractTechnology(repo);
+    del = new DeleteContractTechnology(repo);
   });
 
   it('lists empty initially', async () => {
@@ -45,11 +45,11 @@ describe('ServiceTechnology use cases', () => {
 
   it('rejects duplicate name (case-insensitive)', async () => {
     await create.execute({ name: 'Fiber' });
-    await expect(create.execute({ name: 'fiber' })).rejects.toBeInstanceOf(ServiceTechnologyNameConflictError);
+    await expect(create.execute({ name: 'fiber' })).rejects.toBeInstanceOf(ContractTechnologyNameConflictError);
   });
 
   it('throws when getting an unknown id', async () => {
-    await expect(get.execute('nope')).rejects.toBeInstanceOf(ServiceTechnologyNotFoundError);
+    await expect(get.execute('nope')).rejects.toBeInstanceOf(ContractTechnologyNotFoundError);
   });
 
   it('updates the name', async () => {
@@ -68,11 +68,11 @@ describe('ServiceTechnology use cases', () => {
   it('update rejects a name that collides with another technology', async () => {
     await create.execute({ name: 'Fiber' });
     const b = await create.execute({ name: 'DOCSIS' });
-    await expect(update.execute(b.id, { name: 'Fiber' })).rejects.toBeInstanceOf(ServiceTechnologyNameConflictError);
+    await expect(update.execute(b.id, { name: 'Fiber' })).rejects.toBeInstanceOf(ContractTechnologyNameConflictError);
   });
 
   it('update throws NotFound for unknown id', async () => {
-    await expect(update.execute('ghost', { name: 'X' })).rejects.toBeInstanceOf(ServiceTechnologyNotFoundError);
+    await expect(update.execute('ghost', { name: 'X' })).rejects.toBeInstanceOf(ContractTechnologyNotFoundError);
   });
 
   it('deletes a technology', async () => {
@@ -82,13 +82,13 @@ describe('ServiceTechnology use cases', () => {
   });
 
   it('delete throws NotFound for unknown id', async () => {
-    await expect(del.execute('ghost')).rejects.toBeInstanceOf(ServiceTechnologyNotFoundError);
+    await expect(del.execute('ghost')).rejects.toBeInstanceOf(ContractTechnologyNotFoundError);
   });
 
-  it('refuses to delete a technology in use by services', async () => {
+  it('refuses to delete a technology in use by contracts', async () => {
     const created = await create.execute({ name: 'Radio' });
-    repo.serviceCounts['Radio'] = 5;
-    await expect(del.execute(created.id)).rejects.toBeInstanceOf(ServiceTechnologyInUseError);
+    repo.contractCounts['Radio'] = 5;
+    await expect(del.execute(created.id)).rejects.toBeInstanceOf(ContractTechnologyInUseError);
   });
 
   // W1: InMemory adapter must order by name ascending, matching the Prisma adapter (orderBy name asc).

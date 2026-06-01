@@ -37,7 +37,7 @@ const BASE_TASK = {
   startDate: null as null,
   endDate: null as null,
   customerId: null as null,
-  serviceId: null as null,
+  contractId: null as null,
   partnerId: null as null,
   reporterId: null as null,
   assigneeId: null as null,

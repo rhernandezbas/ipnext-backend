@@ -21,7 +21,7 @@ function taskInput(overrides: Partial<CreateTaskInput>): CreateTaskInput {
     startDate: null,
     endDate: null,
     customerId: null,
-    serviceId: null,
+    contractId: null,
     partnerId: null,
     reporterId: null,
     assigneeId: null,

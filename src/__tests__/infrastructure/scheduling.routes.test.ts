@@ -37,7 +37,7 @@ const anyLookup   = new AnyLookup();
 
 // Default IDs used in buildApp() and simplePost fixtures (REQ-REQUIRED-1/2).
 const DEFAULT_CUSTOMER_ID = 'customer-default-0000-000000000001';
-const DEFAULT_SERVICE_ID  = 'service-default-00000-000000000001';
+const DEFAULT_CONTRACT_ID = 'contract-default-00000-000000000001';
 
 // Admin lookup that recognises the session user 'admin-1' returned by
 // FakeAuthProvider.getSession. Used as the default admin lookup in test apps so
@@ -51,7 +51,7 @@ const NEW_TASK_FIELDS = {
   startDate: null as null,
   endDate: null as null,
   customerId: null as null,
-  serviceId: null as null,
+  contractId: null as null,
   partnerId: null as null,
   reporterId: null as null,
   assigneeId: null as null,
@@ -211,7 +211,7 @@ describe('POST /api/scheduling', () => {
         completedAt: null,
         notes: '',
         customerId: DEFAULT_CUSTOMER_ID,
-        serviceId: DEFAULT_SERVICE_ID,
+        contractId: DEFAULT_CONTRACT_ID,
       });
 
     expect(res.status).toBe(201);
@@ -333,7 +333,7 @@ describe('POST /api/scheduling - validation', () => {
     category: 'other',
     // REQ-REQUIRED-1/2: always required on create
     customerId: DEFAULT_CUSTOMER_ID,
-    serviceId: DEFAULT_SERVICE_ID,
+    contractId: DEFAULT_CONTRACT_ID,
   };
 
   it('REQ-CREATE-2: missing title → 400 VALIDATION_ERROR', async () => {
@@ -430,7 +430,7 @@ describe('POST /api/scheduling — phase 2+3: legacy fields stripped from input 
     category: 'other',
     // REQ-REQUIRED-1/2: always required on create
     customerId: DEFAULT_CUSTOMER_ID,
-    serviceId: DEFAULT_SERVICE_ID,
+    contractId: DEFAULT_CONTRACT_ID,
   };
 
   it('sending assignedTo in body succeeds and response does NOT have assignedTo', async () => {
@@ -663,7 +663,7 @@ describe('Response shape: stageId and stageCategory (phase 3)', () => {
         estimatedHours: 1,
         category: 'other',
         customerId: DEFAULT_CUSTOMER_ID,
-        serviceId: DEFAULT_SERVICE_ID,
+        contractId: DEFAULT_CONTRACT_ID,
       });
 
     expect(res.status).toBe(201);
@@ -688,7 +688,7 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
         estimatedHours: 1,
         category: 'installation',
         customerId: DEFAULT_CUSTOMER_ID,
-        serviceId: DEFAULT_SERVICE_ID,
+        contractId: DEFAULT_CONTRACT_ID,
       });
 
     expect(res.status).toBe(201);
@@ -732,7 +732,7 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
         estimatedHours: 1,
         category: 'installation',
         customerId: DEFAULT_CUSTOMER_ID,
-        serviceId: DEFAULT_SERVICE_ID,
+        contractId: DEFAULT_CONTRACT_ID,
       });
 
     expect(res.status).toBe(201);
@@ -770,7 +770,7 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
         estimatedHours: 1,
         category: 'installation',
         customerId: DEFAULT_CUSTOMER_ID,
-        serviceId: DEFAULT_SERVICE_ID,
+        contractId: DEFAULT_CONTRACT_ID,
       });
 
     expect(res.status).toBe(500);
@@ -842,7 +842,7 @@ describe('GET /api/scheduling/:id', () => {
 
 // Default customer/service lookups for buildEnrichedApp — recognise the IDs in validBase.
 const defaultCustomerLookup = new StubLookup(DEFAULT_CUSTOMER_ID, 'cust-1');
-const defaultServiceLookup  = new StubLookup(DEFAULT_SERVICE_ID,  'svc-1');
+const defaultServiceLookup  = new StubLookup(DEFAULT_CONTRACT_ID,  'svc-1');
 
 function buildEnrichedApp(opts: {
   repo?: InMemorySchedulingRepository;
@@ -893,7 +893,7 @@ const validBase = {
   category: 'installation',
   // REQ-REQUIRED-1/2: required on create; known by defaultCustomerLookup/defaultServiceLookup
   customerId: DEFAULT_CUSTOMER_ID,
-  serviceId:  DEFAULT_SERVICE_ID,
+  contractId:  DEFAULT_CONTRACT_ID,
 };
 
 describe('POST /api/scheduling — FK errors (new fields)', () => {
@@ -907,14 +907,14 @@ describe('POST /api/scheduling — FK errors (new fields)', () => {
     expect(res.body.code).toBe('CUSTOMER_NOT_FOUND');
   });
 
-  it('POST with serviceId: "ghost" → 404 SERVICE_NOT_FOUND', async () => {
+  it('POST with contractId: "ghost" → 404 CONTRACT_NOT_FOUND', async () => {
     const { app } = buildEnrichedApp({ serviceLookup: new StubLookup() });
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
-      .send({ ...validBase, serviceId: 'ghost' });
+      .send({ ...validBase, contractId: 'ghost' });
     expect(res.status).toBe(404);
-    expect(res.body.code).toBe('SERVICE_NOT_FOUND');
+    expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
   });
 
   it('POST with partnerId: "ghost" → 404 PARTNER_NOT_FOUND', async () => {

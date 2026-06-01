@@ -1,5 +1,5 @@
 /**
- * serviceTechnologies.routes.test.ts — supertest for /api/service-technologies CRUD.
+ * serviceTechnologies.routes.test.ts — supertest for /api/contract-technologies CRUD.
  * Uses FakeAuthProvider (auth-only, no RBAC permission check on these routes).
  * Covers ST-1…ST-5: list, get, create, update, delete; 200/201/204/400/401/404/409.
  */
@@ -68,10 +68,10 @@ function buildApp(authFail = false): Harness {
 
 // ─── ST-1: List ──────────────────────────────────────────────────────────────
 
-describe('GET /api/service-technologies', () => {
+describe('GET /api/contract-technologies', () => {
   it('ST-1.1 returns 200 with empty array when no technologies exist', async () => {
     const { app } = buildApp();
-    const res = await request(app).get('/api/service-technologies').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contract-technologies').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
   });
@@ -80,55 +80,55 @@ describe('GET /api/service-technologies', () => {
     const { app, repo } = buildApp();
     await repo.create({ name: 'Fiber', description: null });
     await repo.create({ name: 'DOCSIS', description: 'Cable HFC' });
-    const res = await request(app).get('/api/service-technologies').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contract-technologies').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
   });
 
   it('ST-1.3 returns 401 when unauthenticated', async () => {
     const { app } = buildApp();
-    const res = await request(app).get('/api/service-technologies');
+    const res = await request(app).get('/api/contract-technologies');
     expect(res.status).toBe(401);
   });
 });
 
 // ─── ST-2: Get by ID ─────────────────────────────────────────────────────────
 
-describe('GET /api/service-technologies/:id', () => {
+describe('GET /api/contract-technologies/:id', () => {
   it('ST-2.1 returns 200 with the technology', async () => {
     const { app, repo } = buildApp();
     const item = await repo.create({ name: 'FTTH', description: null });
     const res = await request(app)
-      .get(`/api/service-technologies/${item.id}`)
+      .get(`/api/contract-technologies/${item.id}`)
       .set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body.name).toBe('FTTH');
     expect(res.body.id).toBe(item.id);
   });
 
-  it('ST-2.2 returns 404 with SERVICE_TECHNOLOGY_NOT_FOUND for unknown id', async () => {
+  it('ST-2.2 returns 404 with CONTRACT_TECHNOLOGY_NOT_FOUND for unknown id', async () => {
     const { app } = buildApp();
     const res = await request(app)
-      .get('/api/service-technologies/unknown-id')
+      .get('/api/contract-technologies/unknown-id')
       .set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(404);
-    expect(res.body.code).toBe('SERVICE_TECHNOLOGY_NOT_FOUND');
+    expect(res.body.code).toBe('CONTRACT_TECHNOLOGY_NOT_FOUND');
   });
 
   it('ST-2.3 returns 401 when unauthenticated', async () => {
     const { app } = buildApp();
-    const res = await request(app).get('/api/service-technologies/some-id');
+    const res = await request(app).get('/api/contract-technologies/some-id');
     expect(res.status).toBe(401);
   });
 });
 
 // ─── ST-3: Create ────────────────────────────────────────────────────────────
 
-describe('POST /api/service-technologies', () => {
+describe('POST /api/contract-technologies', () => {
   it('ST-3.1 returns 201 with created technology', async () => {
     const { app } = buildApp();
     const res = await request(app)
-      .post('/api/service-technologies')
+      .post('/api/contract-technologies')
       .set('Cookie', AUTH_COOKIE)
       .send({ name: 'Wireless', description: 'Enlace inalámbrico' });
     expect(res.status).toBe(201);
@@ -137,21 +137,21 @@ describe('POST /api/service-technologies', () => {
     expect(res.body.id).toBeTruthy();
   });
 
-  it('ST-3.2 returns 409 with SERVICE_TECHNOLOGY_NAME_CONFLICT on duplicate name', async () => {
+  it('ST-3.2 returns 409 with CONTRACT_TECHNOLOGY_NAME_CONFLICT on duplicate name', async () => {
     const { app, repo } = buildApp();
     await repo.create({ name: 'Fiber', description: null });
     const res = await request(app)
-      .post('/api/service-technologies')
+      .post('/api/contract-technologies')
       .set('Cookie', AUTH_COOKIE)
       .send({ name: 'fiber' }); // case-insensitive
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe('SERVICE_TECHNOLOGY_NAME_CONFLICT');
+    expect(res.body.code).toBe('CONTRACT_TECHNOLOGY_NAME_CONFLICT');
   });
 
   it('ST-3.3 returns 400 on missing required field name', async () => {
     const { app } = buildApp();
     const res = await request(app)
-      .post('/api/service-technologies')
+      .post('/api/contract-technologies')
       .set('Cookie', AUTH_COOKIE)
       .send({ description: 'no name' });
     expect(res.status).toBe(400);
@@ -161,7 +161,7 @@ describe('POST /api/service-technologies', () => {
   it('ST-3.4 returns 401 when unauthenticated', async () => {
     const { app } = buildApp();
     const res = await request(app)
-      .post('/api/service-technologies')
+      .post('/api/contract-technologies')
       .send({ name: 'HFC' });
     expect(res.status).toBe(401);
   });
@@ -169,12 +169,12 @@ describe('POST /api/service-technologies', () => {
 
 // ─── ST-4: Update ────────────────────────────────────────────────────────────
 
-describe('PUT /api/service-technologies/:id', () => {
+describe('PUT /api/contract-technologies/:id', () => {
   it('ST-4.1 returns 200 with updated technology', async () => {
     const { app, repo } = buildApp();
     const item = await repo.create({ name: 'Radio', description: null });
     const res = await request(app)
-      .put(`/api/service-technologies/${item.id}`)
+      .put(`/api/contract-technologies/${item.id}`)
       .set('Cookie', AUTH_COOKIE)
       .send({ name: 'Radio 5GHz', description: 'Radioenlace 5GHz' });
     expect(res.status).toBe(200);
@@ -185,11 +185,11 @@ describe('PUT /api/service-technologies/:id', () => {
   it('ST-4.2 returns 404 for unknown id', async () => {
     const { app } = buildApp();
     const res = await request(app)
-      .put('/api/service-technologies/ghost')
+      .put('/api/contract-technologies/ghost')
       .set('Cookie', AUTH_COOKIE)
       .send({ name: 'X' });
     expect(res.status).toBe(404);
-    expect(res.body.code).toBe('SERVICE_TECHNOLOGY_NOT_FOUND');
+    expect(res.body.code).toBe('CONTRACT_TECHNOLOGY_NOT_FOUND');
   });
 
   it('ST-4.3 returns 409 on name collision', async () => {
@@ -197,18 +197,18 @@ describe('PUT /api/service-technologies/:id', () => {
     await repo.create({ name: 'Fiber', description: null });
     const b = await repo.create({ name: 'DOCSIS', description: null });
     const res = await request(app)
-      .put(`/api/service-technologies/${b.id}`)
+      .put(`/api/contract-technologies/${b.id}`)
       .set('Cookie', AUTH_COOKIE)
       .send({ name: 'Fiber' });
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe('SERVICE_TECHNOLOGY_NAME_CONFLICT');
+    expect(res.body.code).toBe('CONTRACT_TECHNOLOGY_NAME_CONFLICT');
   });
 
   it('ST-4.4 returns 401 when unauthenticated', async () => {
     const { app, repo } = buildApp();
     const item = await repo.create({ name: 'Fiber', description: null });
     const res = await request(app)
-      .put(`/api/service-technologies/${item.id}`)
+      .put(`/api/contract-technologies/${item.id}`)
       .send({ name: 'Fiber2' });
     expect(res.status).toBe(401);
   });
@@ -216,12 +216,12 @@ describe('PUT /api/service-technologies/:id', () => {
 
 // ─── ST-5: Delete ────────────────────────────────────────────────────────────
 
-describe('DELETE /api/service-technologies/:id', () => {
+describe('DELETE /api/contract-technologies/:id', () => {
   it('ST-5.1 returns 204 on successful delete', async () => {
     const { app, repo } = buildApp();
     const item = await repo.create({ name: 'HFC', description: null });
     const res = await request(app)
-      .delete(`/api/service-technologies/${item.id}`)
+      .delete(`/api/contract-technologies/${item.id}`)
       .set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(204);
   });
@@ -229,28 +229,28 @@ describe('DELETE /api/service-technologies/:id', () => {
   it('ST-5.2 returns 404 for unknown id', async () => {
     const { app } = buildApp();
     const res = await request(app)
-      .delete('/api/service-technologies/ghost')
+      .delete('/api/contract-technologies/ghost')
       .set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(404);
-    expect(res.body.code).toBe('SERVICE_TECHNOLOGY_NOT_FOUND');
+    expect(res.body.code).toBe('CONTRACT_TECHNOLOGY_NOT_FOUND');
   });
 
-  it('ST-5.3 returns 409 with SERVICE_TECHNOLOGY_IN_USE when services use it', async () => {
+  it('ST-5.3 returns 409 with CONTRACT_TECHNOLOGY_IN_USE when contracts use it', async () => {
     const { app, repo } = buildApp();
     const item = await repo.create({ name: 'Fiber', description: null });
-    repo.serviceCounts['Fiber'] = 3;
+    repo.contractCounts['Fiber'] = 3;
     const res = await request(app)
-      .delete(`/api/service-technologies/${item.id}`)
+      .delete(`/api/contract-technologies/${item.id}`)
       .set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe('SERVICE_TECHNOLOGY_IN_USE');
+    expect(res.body.code).toBe('CONTRACT_TECHNOLOGY_IN_USE');
   });
 
   it('ST-5.4 returns 401 when unauthenticated', async () => {
     const { app, repo } = buildApp();
     const item = await repo.create({ name: 'Fiber', description: null });
     const res = await request(app)
-      .delete(`/api/service-technologies/${item.id}`);
+      .delete(`/api/contract-technologies/${item.id}`);
     expect(res.status).toBe(401);
   });
 });

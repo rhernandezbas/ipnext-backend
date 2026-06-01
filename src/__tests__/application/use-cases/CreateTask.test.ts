@@ -4,8 +4,8 @@ import { ReferenceNotFoundError } from '../../../domain/errors/scheduling';
 import { EntityLookup } from '../../../domain/ports/EntityLookup';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
-const DEFAULT_CUSTOMER_ID = 'customer-default-0000-000000000001';
-const DEFAULT_SERVICE_ID  = 'service-default-00000-000000000001';
+const DEFAULT_CUSTOMER_ID  = 'customer-default-0000-000000000001';
+const DEFAULT_CONTRACT_ID  = 'contract-default-00000-000000000001';
 
 // Simple in-memory lookup that can be pre-populated with known IDs
 class StubLookup implements EntityLookup {
@@ -36,9 +36,9 @@ function makeBase() {
     notes: null,
     startDate: null,
     endDate: null,
-    // REQ-REQUIRED-1: customerId and serviceId are required on create
+    // REQ-REQUIRED-1: customerId and contractId are required on create
     customerId: DEFAULT_CUSTOMER_ID,
-    serviceId: DEFAULT_SERVICE_ID,
+    contractId: DEFAULT_CONTRACT_ID,
     partnerId: null,
     reporterId: null,
     assigneeId: null,
@@ -50,7 +50,7 @@ function makeBase() {
 
 function makeUseCase(overrides?: {
   customerLookup?: EntityLookup;
-  serviceLookup?: EntityLookup;
+  contractLookup?: EntityLookup;
   partnerLookup?: EntityLookup;
   projectLookup?: EntityLookup;
   adminLookup?: EntityLookup;
@@ -58,13 +58,13 @@ function makeUseCase(overrides?: {
   const repo = new InMemorySchedulingRepository();
   const emptyLookup = new StubLookup();
   // Default lookups recognise the default IDs used in makeBase()
-  const defaultCustomerLookup = new StubLookup(DEFAULT_CUSTOMER_ID);
-  const defaultServiceLookup  = new StubLookup(DEFAULT_SERVICE_ID);
+  const defaultCustomerLookup  = new StubLookup(DEFAULT_CUSTOMER_ID);
+  const defaultContractLookup  = new StubLookup(DEFAULT_CONTRACT_ID);
   return {
     uc: new CreateTask(
       repo,
-      overrides?.customerLookup ?? defaultCustomerLookup,
-      overrides?.serviceLookup  ?? defaultServiceLookup,
+      overrides?.customerLookup  ?? defaultCustomerLookup,
+      overrides?.contractLookup  ?? defaultContractLookup,
       overrides?.partnerLookup  ?? emptyLookup,
       overrides?.adminLookup    ?? emptyLookup,
       overrides?.projectLookup  ?? emptyLookup,
@@ -82,10 +82,10 @@ describe('CreateTask — FK validation', () => {
       .rejects.toBeInstanceOf(ReferenceNotFoundError);
   });
 
-  it('throws ReferenceNotFoundError(service) when serviceId is not found', async () => {
-    const { uc } = makeUseCase({ serviceLookup: new StubLookup() });
-    await expect(uc.execute({ ...makeBase(), serviceId: 'ghost' }))
-      .rejects.toMatchObject({ kind: 'service', id: 'ghost' });
+  it('throws ReferenceNotFoundError(contract) when contractId is not found', async () => {
+    const { uc } = makeUseCase({ contractLookup: new StubLookup() });
+    await expect(uc.execute({ ...makeBase(), contractId: 'ghost' }))
+      .rejects.toMatchObject({ kind: 'contract', id: 'ghost' });
   });
 
   it('throws ReferenceNotFoundError(partner) when partnerId is not found', async () => {
@@ -115,48 +115,48 @@ describe('CreateTask — FK validation', () => {
   it('REQ-FK-ORDER-1: customer check comes before service when both are missing', async () => {
     const { uc } = makeUseCase();
     await expect(
-      uc.execute({ ...makeBase(), customerId: 'c-ghost', serviceId: 's-ghost' })
+      uc.execute({ ...makeBase(), customerId: 'c-ghost', contractId: 's-ghost' })
     ).rejects.toMatchObject({ kind: 'customer' });
   });
 
   it('REQ-FK-ORDER-1: service check comes before partner', async () => {
     const { uc } = makeUseCase({ customerLookup: new StubLookup('cust-1') });
     await expect(
-      uc.execute({ ...makeBase(), customerId: 'cust-1', serviceId: 's-ghost', partnerId: 'p-ghost' })
-    ).rejects.toMatchObject({ kind: 'service' });
+      uc.execute({ ...makeBase(), customerId: 'cust-1', contractId: 's-ghost', partnerId: 'p-ghost' })
+    ).rejects.toMatchObject({ kind: 'contract' });
   });
 
   it('REQ-FK-ORDER-1: partner check comes before reporter', async () => {
     const { uc } = makeUseCase({
       customerLookup: new StubLookup('cust-1'),
-      serviceLookup: new StubLookup('svc-1'),
+      contractLookup: new StubLookup('svc-1'),
     });
     await expect(
-      uc.execute({ ...makeBase(), customerId: 'cust-1', serviceId: 'svc-1', partnerId: 'p-ghost', reporterId: 'r-ghost' })
+      uc.execute({ ...makeBase(), customerId: 'cust-1', contractId: 'svc-1', partnerId: 'p-ghost', reporterId: 'r-ghost' })
     ).rejects.toMatchObject({ kind: 'partner' });
   });
 
   it('REQ-FK-ORDER-1: reporter check comes before assignee', async () => {
     const { uc } = makeUseCase({
       customerLookup: new StubLookup('cust-1'),
-      serviceLookup: new StubLookup('svc-1'),
+      contractLookup: new StubLookup('svc-1'),
       partnerLookup: new StubLookup('part-1'),
       adminLookup: new StubLookup(), // empty — both reporter and assignee are missing
     });
     await expect(
-      uc.execute({ ...makeBase(), customerId: 'cust-1', serviceId: 'svc-1', partnerId: 'part-1', reporterId: 'r-ghost', assigneeId: 'a-ghost' })
+      uc.execute({ ...makeBase(), customerId: 'cust-1', contractId: 'svc-1', partnerId: 'part-1', reporterId: 'r-ghost', assigneeId: 'a-ghost' })
     ).rejects.toMatchObject({ kind: 'reporter' });
   });
 
   it('REQ-FK-ORDER-1: assignee check comes before watchers', async () => {
     const { uc } = makeUseCase({
       customerLookup: new StubLookup('cust-1'),
-      serviceLookup: new StubLookup('svc-1'),
+      contractLookup: new StubLookup('svc-1'),
       partnerLookup: new StubLookup('part-1'),
       adminLookup: new StubLookup(), // empty — assignee and watcher missing
     });
     await expect(
-      uc.execute({ ...makeBase(), customerId: 'cust-1', serviceId: 'svc-1', partnerId: 'part-1', assigneeId: 'a-ghost', watcherIds: ['w-ghost'] })
+      uc.execute({ ...makeBase(), customerId: 'cust-1', contractId: 'svc-1', partnerId: 'part-1', assigneeId: 'a-ghost', watcherIds: ['w-ghost'] })
     ).rejects.toMatchObject({ kind: 'assignee' });
   });
 
@@ -187,12 +187,12 @@ describe('CreateTask — FK validation', () => {
   it('REQ-FK-ORDER: project check comes after partner and before reporter', async () => {
     const { uc } = makeUseCase({
       customerLookup: new StubLookup('cust-1'),
-      serviceLookup: new StubLookup('svc-1'),
+      contractLookup: new StubLookup('svc-1'),
       partnerLookup: new StubLookup('part-1'),
       projectLookup: new StubLookup(), // empty — ghost project
     });
     await expect(
-      uc.execute({ ...makeBase(), customerId: 'cust-1', serviceId: 'svc-1', partnerId: 'part-1', projectId: 'proj-ghost', reporterId: 'r-ghost' })
+      uc.execute({ ...makeBase(), customerId: 'cust-1', contractId: 'svc-1', partnerId: 'part-1', projectId: 'proj-ghost', reporterId: 'r-ghost' })
     ).rejects.toMatchObject({ kind: 'project' }); // project fails before reporter
   });
 
@@ -219,15 +219,15 @@ describe('CreateTask — FK validation', () => {
 
   it('REQ-REQUIRED-1: null customerId throws ReferenceNotFoundError (no longer bypassed)', async () => {
     // customerId is required — the use case must NOT skip validation for null
-    const { uc } = makeUseCase({ customerLookup: new StubLookup(DEFAULT_SERVICE_ID) }); // customer empty
+    const { uc } = makeUseCase({ customerLookup: new StubLookup(DEFAULT_CONTRACT_ID) }); // customer empty
     await expect(uc.execute({ ...makeBase(), customerId: null as unknown as string }))
       .rejects.toBeInstanceOf(ReferenceNotFoundError);
   });
 
-  it('REQ-REQUIRED-2: null serviceId throws ReferenceNotFoundError (no longer bypassed)', async () => {
-    // serviceId is required — the use case must NOT skip validation for null
-    const { uc } = makeUseCase({ serviceLookup: new StubLookup(DEFAULT_CUSTOMER_ID) }); // service empty
-    await expect(uc.execute({ ...makeBase(), serviceId: null as unknown as string }))
+  it('REQ-REQUIRED-2: null contractId throws ReferenceNotFoundError (no longer bypassed)', async () => {
+    // contractId is required — the use case must NOT skip validation for null
+    const { uc } = makeUseCase({ contractLookup: new StubLookup(DEFAULT_CUSTOMER_ID) }); // contract empty
+    await expect(uc.execute({ ...makeBase(), contractId: null as unknown as string }))
       .rejects.toBeInstanceOf(ReferenceNotFoundError);
   });
 });

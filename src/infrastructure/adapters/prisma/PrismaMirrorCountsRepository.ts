@@ -7,6 +7,6 @@ export class PrismaMirrorCountsRepository implements MirrorCountsRepository {
   }
 
   async contractCount(): Promise<number> {
-    return prisma.service.count({ where: { grContratoId: { not: null } } });
+    return prisma.contract.count({ where: { grContratoId: { not: null } } });
   }
 }

@@ -1,5 +1,5 @@
 /**
- * serviceStats.routes.test.ts — supertest for GET /api/services/stats.
+ * serviceStats.routes.test.ts — supertest for GET /api/contracts/stats.
  * Verifies that the endpoint returns { total, byStatus } correctly,
  * requires auth, and is mounted BEFORE the /:id catch-all.
  */
@@ -58,16 +58,16 @@ function buildApp(authFail = false): Harness {
   return { app, repo };
 }
 
-describe('GET /api/services/stats', () => {
+describe('GET /api/contracts/stats', () => {
   it('returns 401 when unauthenticated', async () => {
     const { app } = buildApp();
-    const res = await request(app).get('/api/services/stats');
+    const res = await request(app).get('/api/contracts/stats');
     expect(res.status).toBe(401);
   });
 
   it('returns 200 with empty stats when no services exist', async () => {
     const { app } = buildApp();
-    const res = await request(app).get('/api/services/stats').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts/stats').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ total: 0, byStatus: {} });
   });
@@ -77,7 +77,7 @@ describe('GET /api/services/stats', () => {
     repo.seed({ clientName: 'A', plan: 'P1', status: 'Vigente' });
     repo.seed({ clientName: 'B', plan: 'P2', status: 'Vigente' });
     repo.seed({ clientName: 'C', plan: 'P3', status: 'Baja' });
-    const res = await request(app).get('/api/services/stats').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts/stats').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(3);
     expect(res.body.byStatus).toEqual({ Vigente: 2, Baja: 1 });
@@ -86,7 +86,7 @@ describe('GET /api/services/stats', () => {
   it('response shape matches { total: number, byStatus: object }', async () => {
     const { app, repo } = buildApp();
     repo.seed({ clientName: 'X', plan: 'P', status: 'Vigente' });
-    const res = await request(app).get('/api/services/stats').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts/stats').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(Object.keys(res.body).sort()).toEqual(['byStatus', 'total']);
     expect(typeof res.body.total).toBe('number');
@@ -97,7 +97,7 @@ describe('GET /api/services/stats', () => {
     // This test guarantees /stats is matched before any /:id catch-all.
     // If this returns 404 or the listing shape, /stats is mounted in the wrong order.
     const { app } = buildApp();
-    const res = await request(app).get('/api/services/stats').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts/stats').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('byStatus');
   });

@@ -83,13 +83,13 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
     // Parent must exist — the client sync always runs before contracts.
     if (!parent) return { created: false };
 
-    const existing = await prisma.service.findUnique({
+    const existing = await prisma.contract.findUnique({
       where: { grContratoId: k.grContratoId },
       select: { id: true },
     });
 
     // GUARD: `technology` is intentionally EXCLUDED from this data object.
-    // Service.technology is a user-managed field (backed by the ServiceTechnology catalog).
+    // Contract.technology is a user-managed field (backed by the ContractTechnology catalog).
     // The GR sync must never overwrite it — adding `technology` here would silently reset it to
     // null on every sync cycle. If you add new GR fields, double-check they are not user-owned.
     const data = {
@@ -103,11 +103,11 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
     };
 
     if (existing) {
-      await prisma.service.update({ where: { grContratoId: k.grContratoId }, data });
+      await prisma.contract.update({ where: { grContratoId: k.grContratoId }, data });
       return { created: false };
     }
 
-    await prisma.service.create({
+    await prisma.contract.create({
       data: { ...data, grContratoId: k.grContratoId, clientId: parent.id },
     });
     return { created: true };

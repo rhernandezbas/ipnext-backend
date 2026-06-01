@@ -34,7 +34,7 @@ export interface ScheduledTask {
   // Short, stable client code used as IClass customerCode. Derived: grClienteId ?? splynxId ?? login.
   // The UUID customerId is NOT valid as an IClass code (exceeds its char limit → ICLERR_0045).
   customerCode: string | null;
-  serviceId: string | null;
+  contractId: string | null;
   partnerId: string | null;
   reporterId: string | null;
   reporterName: string | null;   // derived from RbacUser.name via JOIN

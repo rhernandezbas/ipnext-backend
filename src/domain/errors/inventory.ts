@@ -14,9 +14,9 @@ export class SuggestionAlreadyConfirmedError extends DomainError {
   }
 }
 
-export class TaskHasNoServiceError extends DomainError {
+export class TaskHasNoContractError extends DomainError {
   constructor(taskId: string) {
-    super(`Task ${taskId} has no service (contract) to attach inventory to`, 'TASK_HAS_NO_SERVICE');
-    this.name = 'TaskHasNoServiceError';
+    super(`Task ${taskId} has no contract to attach inventory to`, 'TASK_HAS_NO_CONTRACT');
+    this.name = 'TaskHasNoContractError';
   }
 }

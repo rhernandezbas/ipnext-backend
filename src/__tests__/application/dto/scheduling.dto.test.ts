@@ -1,13 +1,13 @@
 import { CreateTaskSchema, UpdateTaskSchema } from '../../../application/dto/scheduling.dto';
 
-// REQ-REQUIRED-1/2: customerId and serviceId are required on create
+// REQ-REQUIRED-1/2: customerId and contractId are required on create
 const BASE_VALID = {
   title: 'Test task',
   priority: 'normal' as const,
   estimatedHours: 1,
   category: 'installation' as const,
   customerId: 'customer-default-test-001',
-  serviceId:  'service-default-test-001',
+  contractId: 'contract-default-test-001',
 };
 
 describe('CreateTaskSchema — new datetime fields', () => {
@@ -65,10 +65,10 @@ describe('CreateTaskSchema — new FK fields', () => {
     expect(r.success).toBe(true);
   });
 
-  it('accepts serviceId, partnerId, reporterId, assigneeId as min(1) strings', () => {
+  it('accepts contractId, partnerId, reporterId, assigneeId as min(1) strings', () => {
     const r = CreateTaskSchema.safeParse({
       ...BASE_VALID,
-      serviceId: 'svc-1',
+      contractId: 'svc-1',
       partnerId: 'part-1',
       reporterId: 'rep-1',
       assigneeId: 'ass-1',
@@ -91,8 +91,8 @@ describe('CreateTaskSchema — new FK fields', () => {
     expect(r.success).toBe(false);
   });
 
-  it('REQ-REQUIRED-2: rejects serviceId: null (required on create)', () => {
-    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, serviceId: null });
+  it('REQ-REQUIRED-2: rejects contractId: null (required on create)', () => {
+    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, contractId: null });
     expect(r.success).toBe(false);
   });
 
@@ -102,9 +102,9 @@ describe('CreateTaskSchema — new FK fields', () => {
     expect(r.success).toBe(false);
   });
 
-  it('REQ-REQUIRED-2: rejects missing serviceId (required on create)', () => {
-    const { serviceId: _s, ...withoutService } = BASE_VALID;
-    const r = CreateTaskSchema.safeParse(withoutService);
+  it('REQ-REQUIRED-2: rejects missing contractId (required on create)', () => {
+    const { contractId: _s, ...withoutContract } = BASE_VALID;
+    const r = CreateTaskSchema.safeParse(withoutContract);
     expect(r.success).toBe(false);
   });
 
@@ -229,7 +229,7 @@ describe('UpdateTaskSchema — FK nullability contract', () => {
   it.each([
     ['assigneeId'],
     ['partnerId'],
-    ['serviceId'],
+    ['contractId'],
     ['reporterId'],
     ['customerId'],
     ['projectId'],
@@ -245,7 +245,7 @@ describe('UpdateTaskSchema — FK nullability contract', () => {
   it.each([
     ['assigneeId'],
     ['partnerId'],
-    ['serviceId'],
+    ['contractId'],
     ['reporterId'],
     ['customerId'],
   ])('rejects %s: "" (clients must normalise empty string to null)', (field) => {

@@ -4,7 +4,7 @@ import cookieParser from 'cookie-parser';
 import { createClientsRouter } from '../infrastructure/http/routes/clients.routes';
 import type { ListClients } from '../application/use-cases/ListClients';
 import type { GetClientDetail } from '../application/use-cases/GetClientDetail';
-import type { GetClientServices } from '../application/use-cases/GetClientServices';
+import type { GetClientContracts } from '../application/use-cases/GetClientContracts';
 import type { GetClientInvoices } from '../application/use-cases/GetClientInvoices';
 import type { GetClientLogs } from '../application/use-cases/GetClientLogs';
 import type { JwtAuthAdapter } from '../infrastructure/adapters/jwt/JwtAuthAdapter';
@@ -22,9 +22,9 @@ function buildApp() {
     execute: jest.fn().mockResolvedValue({ id: '1', name: 'Alice García', email: 'alice@test.com', phone: '111-1111', status: 'active', address: 'Calle 1', city: 'BA', country: 'AR', login: 'alice', createdAt: '2024-01-01' }),
   } as unknown as GetClientDetail;
 
-  const getServices = {
+  const getContracts = {
     execute: jest.fn().mockResolvedValue([]),
-  } as unknown as GetClientServices;
+  } as unknown as GetClientContracts;
 
   const getInvoices = {
     execute: jest.fn().mockResolvedValue([]),
@@ -58,7 +58,7 @@ function buildApp() {
 
   app.use(
     '/api/clients',
-    createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authProvider, createCustomer as never, { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never, { execute: jest.fn().mockResolvedValue(true) } as never),
+    createClientsRouter(listClients, getDetail, getContracts, getInvoices, getLogs, authProvider, createCustomer as never, { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never, { execute: jest.fn().mockResolvedValue(true) } as never),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -275,7 +275,7 @@ describe('POST /api/clients/:id/documents', () => {
   });
 });
 
-describe('GET /api/clients/:id/services', () => {
+describe('GET /api/clients/:id/contracts', () => {
   it('returns address, lat, lng on each service item', async () => {
     const serviceWithLocation = {
       id: 'svc-1',
@@ -297,14 +297,14 @@ describe('GET /api/clients/:id/services', () => {
 
       const listClients = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as ListClients;
       const getDetail = { execute: jest.fn().mockResolvedValue({ id: '1', name: 'Alice', email: 'a@b.com', phone: '1', status: 'active', address: '', city: '', country: '', login: 'a', createdAt: '' }) } as unknown as GetClientDetail;
-      const getServices = { execute: jest.fn().mockResolvedValue([serviceWithLocation]) } as unknown as GetClientServices;
+      const getContracts = { execute: jest.fn().mockResolvedValue([serviceWithLocation]) } as unknown as GetClientContracts;
       const getInvoices = { execute: jest.fn().mockResolvedValue([]) } as unknown as GetClientInvoices;
       const getLogs = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as GetClientLogs;
       const authProvider = { getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }) } as unknown as JwtAuthAdapter;
       const createCustomer = { execute: jest.fn() };
 
       a.use('/api/clients', createClientsRouter(
-        listClients, getDetail, getServices, getInvoices, getLogs, authProvider,
+        listClients, getDetail, getContracts, getInvoices, getLogs, authProvider,
         createCustomer as never,
         { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
         { execute: jest.fn().mockResolvedValue(true) } as never,
@@ -312,7 +312,7 @@ describe('GET /api/clients/:id/services', () => {
       return a;
     })();
 
-    const res = await withAuth(request(app).get('/api/clients/1/services'));
+    const res = await withAuth(request(app).get('/api/clients/1/contracts'));
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body[0].address).toBe('CALLE 29 N?1284');
@@ -341,14 +341,14 @@ describe('GET /api/clients/:id/services', () => {
 
       const listClients = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as ListClients;
       const getDetail = { execute: jest.fn().mockResolvedValue({ id: '2', name: 'Bob', email: 'b@b.com', phone: '2', status: 'active', address: '', city: '', country: '', login: 'b', createdAt: '' }) } as unknown as GetClientDetail;
-      const getServices = { execute: jest.fn().mockResolvedValue([serviceNoLocation]) } as unknown as GetClientServices;
+      const getContracts = { execute: jest.fn().mockResolvedValue([serviceNoLocation]) } as unknown as GetClientContracts;
       const getInvoices = { execute: jest.fn().mockResolvedValue([]) } as unknown as GetClientInvoices;
       const getLogs = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as GetClientLogs;
       const authProvider = { getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }) } as unknown as JwtAuthAdapter;
       const createCustomer = { execute: jest.fn() };
 
       a.use('/api/clients', createClientsRouter(
-        listClients, getDetail, getServices, getInvoices, getLogs, authProvider,
+        listClients, getDetail, getContracts, getInvoices, getLogs, authProvider,
         createCustomer as never,
         { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
         { execute: jest.fn().mockResolvedValue(true) } as never,
@@ -356,7 +356,7 @@ describe('GET /api/clients/:id/services', () => {
       return a;
     })();
 
-    const res = await withAuth(request(app2).get('/api/clients/2/services'));
+    const res = await withAuth(request(app2).get('/api/clients/2/contracts'));
     expect(res.status).toBe(200);
     expect(res.body[0]).toHaveProperty('address', null);
     expect(res.body[0]).toHaveProperty('lat', null);
@@ -364,11 +364,11 @@ describe('GET /api/clients/:id/services', () => {
   });
 });
 
-describe('POST /api/clients/:id/services', () => {
+describe('POST /api/clients/:id/contracts', () => {
   it('returns 201 with created service', async () => {
     const app = buildApp();
     const res = await withAuth(
-      request(app).post('/api/clients/1/services').send({ type: 'internet', plan: 'Plan 50Mbps', ipAddress: '10.0.0.1', status: 'active' })
+      request(app).post('/api/clients/1/contracts').send({ type: 'internet', plan: 'Plan 50Mbps', ipAddress: '10.0.0.1', status: 'active' })
     );
 
     expect(res.status).toBe(201);
@@ -381,7 +381,7 @@ describe('POST /api/clients/:id/services', () => {
   it('returns 400 when type is missing', async () => {
     const app = buildApp();
     const res = await withAuth(
-      request(app).post('/api/clients/1/services').send({ plan: 'Plan 50Mbps' })
+      request(app).post('/api/clients/1/contracts').send({ plan: 'Plan 50Mbps' })
     );
 
     expect(res.status).toBe(400);
@@ -391,7 +391,7 @@ describe('POST /api/clients/:id/services', () => {
   it('returns 400 when plan is missing', async () => {
     const app = buildApp();
     const res = await withAuth(
-      request(app).post('/api/clients/1/services').send({ type: 'internet' })
+      request(app).post('/api/clients/1/contracts').send({ type: 'internet' })
     );
 
     expect(res.status).toBe(400);
@@ -400,24 +400,24 @@ describe('POST /api/clients/:id/services', () => {
 
   it('returns 401 without auth cookie', async () => {
     const app = buildApp();
-    const res = await request(app).post('/api/clients/1/services').send({ type: 'internet', plan: 'Plan A' });
+    const res = await request(app).post('/api/clients/1/contracts').send({ type: 'internet', plan: 'Plan A' });
     expect(res.status).toBe(401);
   });
 });
 
-describe('PATCH /api/clients/:id/services/:serviceId', () => {
+describe('PATCH /api/clients/:id/contracts/:contractId', () => {
   it('updates a service and returns updated data', async () => {
     const app = buildApp();
 
     // Create service first
     const createRes = await withAuth(
-      request(app).post('/api/clients/1/services').send({ type: 'voz', plan: 'Plan Voz Básico' })
+      request(app).post('/api/clients/1/contracts').send({ type: 'voz', plan: 'Plan Voz Básico' })
     );
     expect(createRes.status).toBe(201);
-    const serviceId = createRes.body.id;
+    const contractId = createRes.body.id;
 
     const patchRes = await withAuth(
-      request(app).patch(`/api/clients/1/services/${serviceId}`).send({ plan: 'Plan Voz Premium', status: 'suspended' })
+      request(app).patch(`/api/clients/1/contracts/${contractId}`).send({ plan: 'Plan Voz Premium', status: 'suspended' })
     );
 
     expect(patchRes.status).toBe(200);
@@ -428,33 +428,33 @@ describe('PATCH /api/clients/:id/services/:serviceId', () => {
   it('returns 404 for non-existent service', async () => {
     const app = buildApp();
     const res = await withAuth(
-      request(app).patch('/api/clients/1/services/99999').send({ plan: 'Updated' })
+      request(app).patch('/api/clients/1/contracts/99999').send({ plan: 'Updated' })
     );
 
     expect(res.status).toBe(404);
-    expect(res.body.code).toBe('SERVICE_NOT_FOUND');
+    expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
   });
 
   it('returns 401 without auth cookie', async () => {
     const app = buildApp();
-    const res = await request(app).patch('/api/clients/1/services/1').send({ plan: 'Updated' });
+    const res = await request(app).patch('/api/clients/1/contracts/1').send({ plan: 'Updated' });
     expect(res.status).toBe(401);
   });
 });
 
-describe('DELETE /api/clients/:id/services/:serviceId', () => {
+describe('DELETE /api/clients/:id/contracts/:contractId', () => {
   it('deletes a service and returns 204', async () => {
     const app = buildApp();
 
     // Create service first
     const createRes = await withAuth(
-      request(app).post('/api/clients/2/services').send({ type: 'tv', plan: 'Plan TV HD' })
+      request(app).post('/api/clients/2/contracts').send({ type: 'tv', plan: 'Plan TV HD' })
     );
     expect(createRes.status).toBe(201);
-    const serviceId = createRes.body.id;
+    const contractId = createRes.body.id;
 
     const deleteRes = await withAuth(
-      request(app).delete(`/api/clients/2/services/${serviceId}`)
+      request(app).delete(`/api/clients/2/contracts/${contractId}`)
     );
 
     expect(deleteRes.status).toBe(204);
@@ -463,16 +463,16 @@ describe('DELETE /api/clients/:id/services/:serviceId', () => {
   it('returns 404 for non-existent service', async () => {
     const app = buildApp();
     const res = await withAuth(
-      request(app).delete('/api/clients/1/services/99999')
+      request(app).delete('/api/clients/1/contracts/99999')
     );
 
     expect(res.status).toBe(404);
-    expect(res.body.code).toBe('SERVICE_NOT_FOUND');
+    expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
   });
 
   it('returns 401 without auth cookie', async () => {
     const app = buildApp();
-    const res = await request(app).delete('/api/clients/1/services/1');
+    const res = await request(app).delete('/api/clients/1/contracts/1');
     expect(res.status).toBe(401);
   });
 });

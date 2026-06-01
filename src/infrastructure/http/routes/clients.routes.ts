@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ListClients } from '@application/use-cases/ListClients';
 import { GetClientDetail } from '@application/use-cases/GetClientDetail';
-import { GetClientServices } from '@application/use-cases/GetClientServices';
+import { GetClientContracts } from '@application/use-cases/GetClientContracts';
 import { GetClientInvoices } from '@application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '@application/use-cases/GetClientLogs';
 import { CreateCustomer } from '@application/use-cases/CreateCustomer';
@@ -44,8 +44,8 @@ interface ClientDoc {
   url: string;
 }
 
-// In-memory store for service mutations
-interface Service {
+// In-memory store for contract mutations
+interface Contract {
   id: number;
   type: string;
   plan: string;
@@ -55,8 +55,8 @@ interface Service {
   endDate: string | null;
 }
 
-const servicesOverrideStore: Record<number, Service[]> = {};
-let nextServiceId = 500;
+const contractsOverrideStore: Record<number, Contract[]> = {};
+let nextContractId = 500;
 
 const documentsStore: Record<number, ClientDoc[]> = {
   1: [
@@ -88,7 +88,7 @@ let nextClientId = 10000;
 export function createClientsRouter(
   listClients: ListClients,
   getDetail: GetClientDetail,
-  getServices: GetClientServices,
+  getContracts: GetClientContracts,
   getInvoices: GetClientInvoices,
   getLogs: GetClientLogs,
   authProvider: JwtAuthAdapter,
@@ -170,10 +170,10 @@ export function createClientsRouter(
       res.status(204).send();
     } catch (err: unknown) {
       const code = (err as { code?: string })?.code;
-      // Prisma P2003 -> FK constraint (the client is referenced by tasks/services/etc.)
+      // Prisma P2003 -> FK constraint (the client is referenced by tasks/contracts/etc.)
       if (code === 'P2003') {
         res.status(409).json({
-          error: 'Cannot delete: client is referenced by other records (tasks, services, invoices). Detach those first.',
+          error: 'Cannot delete: client is referenced by other records (tasks, contracts, invoices). Detach those first.',
           code: 'CLIENT_HAS_REFERENCES',
         });
         return;
@@ -183,9 +183,9 @@ export function createClientsRouter(
     }
   });
 
-  router.get('/:id/services', auth, async (req: Request, res: Response): Promise<void> => {
-    const services = await getServices.execute(req.params['id'] as string);
-    res.json(services);
+  router.get('/:id/contracts', auth, async (req: Request, res: Response): Promise<void> => {
+    const contracts = await getContracts.execute(req.params['id'] as string);
+    res.json(contracts);
   });
 
   router.get('/:id/invoices', auth, async (req: Request, res: Response): Promise<void> => {
@@ -319,8 +319,8 @@ export function createClientsRouter(
     res.status(404).json({ error: 'Client not found', code: 'CLIENT_NOT_FOUND' });
   });
 
-  // Services CRUD
-  router.post('/:id/services', auth, async (req: Request, res: Response): Promise<void> => {
+  // Contracts CRUD
+  router.post('/:id/contracts', auth, async (req: Request, res: Response): Promise<void> => {
     const clientId = parseInt(req.params['id'] as string);
     const { type, plan, ipAddress, status, startDate } = req.body as {
       type?: string; plan?: string; ipAddress?: string; status?: string; startDate?: string;
@@ -331,8 +331,8 @@ export function createClientsRouter(
       return;
     }
 
-    const service: Service = {
-      id: nextServiceId++,
+    const contract: Contract = {
+      id: nextContractId++,
       type,
       plan,
       ipAddress: ipAddress ?? null,
@@ -341,44 +341,44 @@ export function createClientsRouter(
       endDate: null,
     };
 
-    if (!servicesOverrideStore[clientId]) servicesOverrideStore[clientId] = [];
-    servicesOverrideStore[clientId].push(service);
-    res.status(201).json(service);
+    if (!contractsOverrideStore[clientId]) contractsOverrideStore[clientId] = [];
+    contractsOverrideStore[clientId].push(contract);
+    res.status(201).json(contract);
   });
 
-  router.patch('/:id/services/:serviceId', auth, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/:id/contracts/:contractId', auth, async (req: Request, res: Response): Promise<void> => {
     const clientId = parseInt(req.params['id'] as string);
-    const serviceId = parseInt(req.params['serviceId'] as string);
-    const updates = req.body as Partial<Service>;
+    const contractId = parseInt(req.params['contractId'] as string);
+    const updates = req.body as Partial<Contract>;
 
-    const services = servicesOverrideStore[clientId] ?? [];
-    const service = services.find((s) => s.id === serviceId);
-    if (!service) {
-      res.status(404).json({ error: 'Service not found', code: 'SERVICE_NOT_FOUND' });
+    const contracts = contractsOverrideStore[clientId] ?? [];
+    const contract = contracts.find((s) => s.id === contractId);
+    if (!contract) {
+      res.status(404).json({ error: 'Contract not found', code: 'CONTRACT_NOT_FOUND' });
       return;
     }
 
-    if (updates.type !== undefined) service.type = updates.type;
-    if (updates.plan !== undefined) service.plan = updates.plan;
-    if (updates.ipAddress !== undefined) service.ipAddress = updates.ipAddress;
-    if (updates.status !== undefined) service.status = updates.status;
-    if (updates.endDate !== undefined) service.endDate = updates.endDate;
+    if (updates.type !== undefined) contract.type = updates.type;
+    if (updates.plan !== undefined) contract.plan = updates.plan;
+    if (updates.ipAddress !== undefined) contract.ipAddress = updates.ipAddress;
+    if (updates.status !== undefined) contract.status = updates.status;
+    if (updates.endDate !== undefined) contract.endDate = updates.endDate;
 
-    res.json(service);
+    res.json(contract);
   });
 
-  router.delete('/:id/services/:serviceId', auth, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/:id/contracts/:contractId', auth, async (req: Request, res: Response): Promise<void> => {
     const clientId = parseInt(req.params['id'] as string);
-    const serviceId = parseInt(req.params['serviceId'] as string);
+    const contractId = parseInt(req.params['contractId'] as string);
 
-    const services = servicesOverrideStore[clientId] ?? [];
-    const index = services.findIndex((s) => s.id === serviceId);
+    const contracts = contractsOverrideStore[clientId] ?? [];
+    const index = contracts.findIndex((s) => s.id === contractId);
     if (index === -1) {
-      res.status(404).json({ error: 'Service not found', code: 'SERVICE_NOT_FOUND' });
+      res.status(404).json({ error: 'Contract not found', code: 'CONTRACT_NOT_FOUND' });
       return;
     }
 
-    services.splice(index, 1);
+    contracts.splice(index, 1);
     res.status(204).send();
   });
 

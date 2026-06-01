@@ -1,5 +1,5 @@
 import { CustomerRepository, ListClientsQuery, ListLogsQuery } from '@domain/ports/CustomerRepository';
-import { Customer, CustomerStatus, Service, ClientLog } from '@domain/entities/customer';
+import { Customer, CustomerStatus, Contract, ClientLog } from '@domain/entities/customer';
 import { Invoice } from '@domain/entities/billing';
 import { PaginatedResult } from '@application/dto/pagination';
 import { ClientNotFoundError } from '@domain/errors';
@@ -93,7 +93,7 @@ export class SplynxCustomerAdapter implements CustomerRepository {
     throw new Error('SplynxCustomerAdapter.stats is not implemented — stats come from PrismaCustomerRepository');
   }
 
-  async listServices(clientId: string): Promise<Service[]> {
+  async listContracts(clientId: string): Promise<Contract[]> {
     const raw = await this.client.get<SplynxService[]>(
       `/api/2.0/admin/customers/internet-service`,
       { customer_id: clientId }

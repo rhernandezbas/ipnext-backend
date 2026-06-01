@@ -58,11 +58,11 @@ const CreateTaskBaseSchema = z.object({
   endDate:        z.string().datetime({ offset: true }).nullable().optional(),
 
   // NEW — FK references (min(1) NOT uuid — project uses mixed ID formats)
-  // NOTE: customerId and serviceId are left nullable().optional() here so that
+  // NOTE: customerId and contractId are left nullable().optional() here so that
   // UpdateTaskSchema (which inherits via .partial()) continues to accept partial
   // payloads. CreateTaskSchema re-declares them as required (see below).
   customerId:     z.string().min(1).nullable().optional(),
-  serviceId:      z.string().min(1).nullable().optional(),
+  contractId:     z.string().min(1).nullable().optional(),
   partnerId:      z.string().min(1).nullable().optional(),
   reporterId:     z.string().min(1).nullable().optional(),
   assigneeId:     z.string().min(1).nullable().optional(),
@@ -79,12 +79,12 @@ const CreateTaskBaseSchema = z.object({
   isClosed: z.boolean().optional(),
 });
 
-// REQ-REQUIRED-1/2: customerId and serviceId are required on create.
+// REQ-REQUIRED-1/2: customerId and contractId are required on create.
 // We extend the base schema to override the nullable/optional definitions.
 export const CreateTaskSchema = CreateTaskBaseSchema
   .extend({
     customerId: z.string().min(1),
-    serviceId:  z.string().min(1),
+    contractId: z.string().min(1),
   })
   .superRefine(dateRangeRefine);
 

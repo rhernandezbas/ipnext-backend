@@ -7,7 +7,7 @@ import express from 'express';
 import { createClientsRouter } from '@infrastructure/http/routes/clients.routes';
 import { ListClients } from '@application/use-cases/ListClients';
 import { GetClientDetail } from '@application/use-cases/GetClientDetail';
-import { GetClientServices } from '@application/use-cases/GetClientServices';
+import { GetClientContracts } from '@application/use-cases/GetClientContracts';
 import { GetClientInvoices } from '@application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '@application/use-cases/GetClientLogs';
 import { CreateCustomer } from '@application/use-cases/CreateCustomer';
@@ -65,7 +65,7 @@ function makeCustomerRepo(debtor: Customer, fresh?: Customer): CustomerRepositor
     create: jest.fn(),
     delete: jest.fn(),
     stats: jest.fn().mockResolvedValue({ total: 1, active: 0, inactive: 0, blocked: 0, late: 1 }),
-    listServices: jest.fn().mockResolvedValue([]),
+    listContracts: jest.fn().mockResolvedValue([]),
     listInvoices: jest.fn().mockResolvedValue([]),
     listLogs: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }),
   };
@@ -83,7 +83,7 @@ function buildApp(customerRepo: CustomerRepository, gr?: InMemoryGestionRealPort
 
   const getDetail = new GetClientDetail(customerRepo, balanceRefresh);
   const listClients = new ListClients(customerRepo);
-  const getServices = new GetClientServices(customerRepo);
+  const getContracts = new GetClientContracts(customerRepo);
   const getInvoices = new GetClientInvoices(customerRepo);
   const getLogs = new GetClientLogs(customerRepo);
   const createCustomer = new CreateCustomer(customerRepo);
@@ -91,7 +91,7 @@ function buildApp(customerRepo: CustomerRepository, gr?: InMemoryGestionRealPort
   const deleteCustomer = new DeleteCustomer(customerRepo);
 
   app.use('/api/clients', createClientsRouter(
-    listClients, getDetail, getServices, getInvoices, getLogs,
+    listClients, getDetail, getContracts, getInvoices, getLogs,
     authStub, createCustomer, getStats, deleteCustomer,
   ));
 

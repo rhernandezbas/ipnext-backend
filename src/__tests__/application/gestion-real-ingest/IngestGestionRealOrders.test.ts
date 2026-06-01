@@ -86,7 +86,7 @@ describe('IngestGestionRealOrders', () => {
   it('processes only tipo=="CI" orders (REQ-FILTER-1)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [
       order({ grOrdenId: '1', tipo: 'CI' }),
       order({ grOrdenId: '2', tipo: 'CO' }),
@@ -104,7 +104,7 @@ describe('IngestGestionRealOrders', () => {
   it('creates a fiber task targeting fiberProjectId (REQ-CREATE-1)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [order({ grOrdenId: '551' })];
 
     const result = await h.useCase.execute();
@@ -113,7 +113,7 @@ describe('IngestGestionRealOrders', () => {
     const task = await h.scheduling.findTaskByGrOrdenId('551');
     expect(task).not.toBeNull();
     expect(task!.customerId).toBe('cust-1');
-    expect(task!.serviceId).toBe('svc-1');
+    expect(task!.contractId).toBe('svc-1');
     expect(task!.projectId).toBe('p-fiber');
     expect(task!.grOrdenId).toBe('551');
     expect(task!.address).toBe('Calle Falsa 123');
@@ -127,7 +127,7 @@ describe('IngestGestionRealOrders', () => {
   it('creates a wireless task targeting wirelessProjectId (REQ-CREATE-2)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Bob' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '50/25MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '50/25MB' });
     h.gr.serviceOrders = [order({ grOrdenId: '600' })];
 
     const result = await h.useCase.execute();
@@ -140,7 +140,7 @@ describe('IngestGestionRealOrders', () => {
   it('creates an unclassified needs-review task with no project (REQ-CREATE-3)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Carol' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: 'FIBRA SIN NUMERO' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: 'FIBRA SIN NUMERO' });
     h.gr.serviceOrders = [order({ grOrdenId: '700' })];
 
     const result = await h.useCase.execute();
@@ -161,7 +161,7 @@ describe('IngestGestionRealOrders', () => {
     const h = await makeHarness();
     // order 1: client missing; order 2: fully resolvable
     h.resolver.seedClient('gr-cli-2', { id: 'cust-2', name: 'Dave' });
-    h.resolver.seedService('gr-con-2', { id: 'svc-2', plan: '300MB' });
+    h.resolver.seedContract('gr-con-2', { id: 'svc-2', plan: '300MB' });
     h.gr.serviceOrders = [
       order({ grOrdenId: '10', cliente: 'gr-cli-MISSING', contrato: 'gr-con-2' }),
       order({ grOrdenId: '11', cliente: 'gr-cli-2', contrato: 'gr-con-2' }),
@@ -175,10 +175,10 @@ describe('IngestGestionRealOrders', () => {
     expect(await h.scheduling.findTaskByGrOrdenId('11')).not.toBeNull();
   });
 
-  it('skips an order whose service is not mirrored (REQ-FK-2)', async () => {
+  it('skips an order whose contract is not mirrored (REQ-FK-2)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Eve' });
-    // no service seeded for gr-con-1
+    // no contract seeded for gr-con-1
     h.gr.serviceOrders = [order({ grOrdenId: '20' })];
 
     const result = await h.useCase.execute();
@@ -191,7 +191,7 @@ describe('IngestGestionRealOrders', () => {
   it('is idempotent: re-running over the same order creates no duplicate (REQ-IDEMP-1)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Frank' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [order({ grOrdenId: '900' })];
 
     const first = await h.useCase.execute();
@@ -212,7 +212,7 @@ describe('IngestGestionRealOrders', () => {
     const h = await makeHarness();
     h.featureFlags.seed(INGEST_FLAG_KEY, false); // master switch OFF
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Ivan' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [order({ grOrdenId: '2000' })];
 
     const result = await h.useCase.execute();
@@ -245,7 +245,7 @@ describe('IngestGestionRealOrders', () => {
       { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
     );
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Judy' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [order({ grOrdenId: '2100' })];
 
     const result = await useCase.execute();
@@ -258,7 +258,7 @@ describe('IngestGestionRealOrders', () => {
   it('runs the ingest when the master flag is ON (REQ-FLAG-2)', async () => {
     const h = await makeHarness(); // flag seeded ON
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Karl' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [order({ grOrdenId: '2200' })];
 
     const result = await h.useCase.execute();
@@ -271,7 +271,7 @@ describe('IngestGestionRealOrders', () => {
   it('persists run status + counts to SyncState under entity "gr-ingest"', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Heidi' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [order({ grOrdenId: '1100' })];
 
     await h.useCase.execute();
@@ -325,7 +325,7 @@ describe('IngestGestionRealOrders', () => {
       now: () => new Date('2026-05-29T12:00:00Z'),
     });
     resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     gr.serviceOrders = [order({ grOrdenId: 'f1' })];
 
     const result = await useCase.execute();
@@ -362,7 +362,7 @@ describe('IngestGestionRealOrders', () => {
       now: () => new Date('2026-05-29T12:00:00Z'),
     });
     resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Bob' });
-    resolver.seedService('gr-con-1', { id: 'svc-1', plan: '30/10 MB' });
+    resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '30/10 MB' });
     gr.serviceOrders = [order({ grOrdenId: 'w1' })];
 
     const result = await useCase.execute();
@@ -382,7 +382,7 @@ describe('IngestGestionRealOrders', () => {
   it('unique-violation on createTask counts as skippedDuplicate, batch continues (FIX2)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [
       order({ grOrdenId: 'dup-1' }),
       order({ grOrdenId: 'ok-2' }),
@@ -417,7 +417,7 @@ describe('IngestGestionRealOrders', () => {
   it('skips a CI order whose estado != config.sourceEstado (default CONF) (FIX3)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [
       // CI but estado != CONF → must be skipped even though it's an installation.
       order({ grOrdenId: 'pend', estado: 'PEND' }),
@@ -435,7 +435,7 @@ describe('IngestGestionRealOrders', () => {
     const h = await makeHarness();
     await h.config.update({ sourceEstado: 'PEND' });
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [
       order({ grOrdenId: 'pend', estado: 'PEND' }),
       order({ grOrdenId: 'conf', estado: 'CONF' }),
@@ -481,7 +481,7 @@ describe('IngestGestionRealOrders', () => {
       now: () => new Date('2026-05-29T12:00:00Z'),
     });
     resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     gr.serviceOrders = [order({ grOrdenId: 'ws-1' })];
 
     const result = await useCase.execute();
@@ -530,7 +530,7 @@ describe('IngestGestionRealOrders', () => {
   it('created task uses the catalog NAMES "Normal"/"Instalación", not phantom values', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [order({ grOrdenId: 'cat-1' })];
 
     const result = await h.useCase.execute();
@@ -547,7 +547,7 @@ describe('IngestGestionRealOrders', () => {
   it('needs-review task ALSO uses the catalog NAMES (priority/category resolved)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Carol' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: 'FIBRA SIN NUMERO' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: 'FIBRA SIN NUMERO' });
     h.gr.serviceOrders = [order({ grOrdenId: 'cat-rev' })];
 
     await h.useCase.execute();
@@ -568,7 +568,7 @@ describe('IngestGestionRealOrders', () => {
       { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
     );
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [order({ grOrdenId: 'blk-1' }), order({ grOrdenId: 'blk-2' })];
 
     await expect(useCase.execute()).rejects.toBeInstanceOf(IngestCatalogEntryMissingError);
@@ -591,7 +591,7 @@ describe('IngestGestionRealOrders', () => {
       { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
     );
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
-    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [order({ grOrdenId: 'blk-3' })];
 
     await expect(useCase.execute()).rejects.toBeInstanceOf(IngestCatalogEntryMissingError);

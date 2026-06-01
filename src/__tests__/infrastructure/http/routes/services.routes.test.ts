@@ -1,5 +1,5 @@
 /**
- * services.routes.test.ts — supertest for GET /api/services (contracts page).
+ * services.routes.test.ts — supertest for GET /api/contracts (contracts page).
  * Verifies the response envelope and item shape match the frontend contract
  * exactly: PaginatedResponse<ContractSummary> = { data, total, page, pageSize, totalPages }.
  */
@@ -58,10 +58,10 @@ function buildApp(authFail = false): Harness {
   return { app, repo };
 }
 
-describe('GET /api/services', () => {
+describe('GET /api/contracts', () => {
   it('returns 200 with an empty paginated envelope', async () => {
     const { app } = buildApp();
-    const res = await request(app).get('/api/services').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ data: [], total: 0, page: 1, pageSize: 25, totalPages: 1 });
   });
@@ -69,7 +69,7 @@ describe('GET /api/services', () => {
   it('returns 200 with ContractSummary items matching the FE shape', async () => {
     const { app, repo } = buildApp();
     repo.seed({ clientName: 'Acme Corp', plan: 'Fiber 100', status: 'active', technology: 'Fiber', startDate: '2024-01-10T00:00:00.000Z' });
-    const res = await request(app).get('/api/services').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.data[0]).toEqual({
@@ -87,7 +87,7 @@ describe('GET /api/services', () => {
     const { app, repo } = buildApp();
     repo.seed({ clientName: 'A', plan: 'P1', status: 'active' });
     repo.seed({ clientName: 'B', plan: 'P2', status: 'blocked' });
-    const res = await request(app).get('/api/services?status=blocked').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts?status=blocked').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.data[0].status).toBe('blocked');
@@ -97,7 +97,7 @@ describe('GET /api/services', () => {
     const { app, repo } = buildApp();
     repo.seed({ clientName: 'A', plan: 'P1', technology: 'Fiber' });
     repo.seed({ clientName: 'B', plan: 'P2', technology: 'Wireless' });
-    const res = await request(app).get('/api/services?technology=Wireless').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts?technology=Wireless').set('Cookie', AUTH_COOKIE);
     expect(res.body.total).toBe(1);
     expect(res.body.data[0].technology).toBe('Wireless');
   });
@@ -106,7 +106,7 @@ describe('GET /api/services', () => {
     const { app, repo } = buildApp();
     repo.seed({ clientName: 'Juan Pérez', plan: 'Fiber 100' });
     repo.seed({ clientName: 'Other', plan: 'Wireless 50' });
-    const res = await request(app).get('/api/services?search=juan').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts?search=juan').set('Cookie', AUTH_COOKIE);
     expect(res.body.total).toBe(1);
     expect(res.body.data[0].clientName).toBe('Juan Pérez');
   });
@@ -114,7 +114,7 @@ describe('GET /api/services', () => {
   it('paginates via page and limit query params', async () => {
     const { app, repo } = buildApp();
     for (let i = 0; i < 5; i++) repo.seed({ clientName: `C${i}`, plan: `P${i}` });
-    const res = await request(app).get('/api/services?page=2&limit=2').set('Cookie', AUTH_COOKIE);
+    const res = await request(app).get('/api/contracts?page=2&limit=2').set('Cookie', AUTH_COOKIE);
     expect(res.body.total).toBe(5);
     expect(res.body.page).toBe(2);
     expect(res.body.pageSize).toBe(2);
@@ -124,7 +124,7 @@ describe('GET /api/services', () => {
 
   it('returns 401 when unauthenticated', async () => {
     const { app } = buildApp();
-    const res = await request(app).get('/api/services');
+    const res = await request(app).get('/api/contracts');
     expect(res.status).toBe(401);
   });
 });

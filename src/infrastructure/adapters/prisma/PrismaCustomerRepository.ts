@@ -1,5 +1,5 @@
 import { CustomerRepository, ListClientsQuery, ListLogsQuery, CreateCustomerInput, ClientStats } from '@domain/ports/CustomerRepository';
-import { Customer, CustomerStatus, Service, ClientLog } from '@domain/entities/customer';
+import { Customer, CustomerStatus, Contract, ClientLog } from '@domain/entities/customer';
 import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
 import { PaginatedResult } from '@application/dto/pagination';
 import { ClientNotFoundError } from '@domain/errors';
@@ -54,7 +54,7 @@ export function toCustomer(row: any, balanceTtlMinutes = DEFAULT_BALANCE_TTL_MIN
   };
 }
 
-export function toService(row: any): Service {
+export function toService(row: any): Contract {
   return {
     id: row.id,
     type: row.type,
@@ -192,8 +192,8 @@ export class PrismaCustomerRepository implements CustomerRepository {
     return toCustomer(row, this.ttl);
   }
 
-  async listServices(clientId: string): Promise<Service[]> {
-    const rows = await prisma.service.findMany({
+  async listContracts(clientId: string): Promise<Contract[]> {
+    const rows = await prisma.contract.findMany({
       where: { clientId },
       orderBy: { startDate: 'desc' },
     });

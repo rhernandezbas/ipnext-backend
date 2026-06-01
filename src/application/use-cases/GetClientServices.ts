@@ -1,10 +1,3 @@
-import { CustomerRepository } from '@domain/ports/CustomerRepository';
-import { Service } from '@domain/entities/customer';
-
-export class GetClientServices {
-  constructor(private readonly repo: CustomerRepository) {}
-
-  execute(clientId: string): Promise<Service[]> {
-    return this.repo.listServices(clientId);
-  }
-}
+// RENAMED: this file is kept to avoid breaking existing imports during transition.
+// Use GetClientContracts instead.
+export { GetClientContracts as GetClientServices } from './GetClientContracts';

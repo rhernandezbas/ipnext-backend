@@ -16,7 +16,7 @@ class AnyLookup implements EntityLookup {
 const anyLookup = new AnyLookup();
 
 const DEFAULT_CUSTOMER_ID = 'customer-default-0000-000000000001';
-const DEFAULT_SERVICE_ID  = 'service-default-00000-000000000001';
+const DEFAULT_CONTRACT_ID = 'contract-default-00000-000000000001';
 
 // Default stage IDs used by InMemorySchedulingRepository — valid UUID format
 const DEFAULT_STAGE_ID_PENDING = '10000000-0000-4000-a000-000000000001';
@@ -72,7 +72,7 @@ describe('CreateTask', () => {
       endDate: null,
       // REQ-REQUIRED-1/2: required on create
       customerId: DEFAULT_CUSTOMER_ID,
-      serviceId: DEFAULT_SERVICE_ID,
+      contractId: DEFAULT_CONTRACT_ID,
       partnerId: null,
       reporterId: null,
       assigneeId: null,

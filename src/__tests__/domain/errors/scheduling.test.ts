@@ -8,8 +8,8 @@ describe('ReferenceNotFoundError', () => {
   });
 
   it('formats message as "kind not found: id"', () => {
-    const err = new ReferenceNotFoundError('service', 'svc-99');
-    expect(err.message).toBe('service not found: svc-99');
+    const err = new ReferenceNotFoundError('contract', 'svc-99');
+    expect(err.message).toBe('contract not found: svc-99');
   });
 
   it('sets name to ReferenceNotFoundError', () => {
@@ -22,7 +22,7 @@ describe('ReferenceNotFoundError', () => {
   });
 
   it.each([
-    'customer', 'service', 'partner', 'reporter', 'assignee', 'watcher',
+    'customer', 'contract', 'partner', 'reporter', 'assignee', 'watcher',
   ] as const)('accepts kind "%s"', (kind) => {
     const err = new ReferenceNotFoundError(kind, 'id-1');
     expect(err.kind).toBe(kind);

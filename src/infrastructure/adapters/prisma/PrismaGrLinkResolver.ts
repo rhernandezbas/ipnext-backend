@@ -3,7 +3,7 @@ import { prisma } from '../../database/prisma';
 
 /**
  * Prisma read side of GR FK resolution. Looks up the already-mirrored local
- * Client by `grClienteId` and Service by `grContratoId` (both unique columns
+ * Client by `grClienteId` and Contract by `grContratoId` (both unique columns
  * populated by the GR mirror write side). Returns `null` when the upstream
  * entity was never mirrored, so the ingest skips+counts it rather than throwing.
  */
@@ -16,13 +16,13 @@ export class PrismaGrLinkResolver implements GrLinkResolverPort {
     return client ? { id: client.id, name: client.name } : null;
   }
 
-  async findServiceByGrContratoId(
+  async findContractByGrContratoId(
     grContratoId: string,
   ): Promise<{ id: string; plan: string | null } | null> {
-    const service = await prisma.service.findUnique({
+    const contract = await prisma.contract.findUnique({
       where: { grContratoId },
       select: { id: true, plan: true },
     });
-    return service ? { id: service.id, plan: service.plan } : null;
+    return contract ? { id: contract.id, plan: contract.plan } : null;
   }
 }

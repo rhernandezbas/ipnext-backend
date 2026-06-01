@@ -1,14 +1,8 @@
-import { z } from 'zod';
-import { ServiceTechnology } from '@domain/entities/serviceTechnology';
-
-export const CreateServiceTechnologySchema = z.object({
-  name: z.string().min(1),
-  description: z.string().nullable().optional(),
-});
-
-export const UpdateServiceTechnologySchema = CreateServiceTechnologySchema.partial();
-
-export type CreateServiceTechnologyInput = z.infer<typeof CreateServiceTechnologySchema>;
-export type UpdateServiceTechnologyInput = z.infer<typeof UpdateServiceTechnologySchema>;
-
-export type ServiceTechnologyDTO = ServiceTechnology;
+// RENAMED: Use contractTechnology.dto.ts instead.
+export {
+  CreateContractTechnologySchema as CreateServiceTechnologySchema,
+  UpdateContractTechnologySchema as UpdateServiceTechnologySchema,
+} from './contractTechnology.dto';
+export type { CreateContractTechnologyInput as CreateServiceTechnologyInput } from './contractTechnology.dto';
+export type { UpdateContractTechnologyInput as UpdateServiceTechnologyInput } from './contractTechnology.dto';
+export type { ContractTechnologyDTO as ServiceTechnologyDTO } from './contractTechnology.dto';

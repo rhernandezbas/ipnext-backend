@@ -125,7 +125,7 @@ export interface NeedsReviewTaskDTO {
   grOrdenId: string | null;
   projectId: string | null;
   customerId: string | null;
-  serviceId: string | null;
+  contractId: string | null;
   address: string | null;
   category: string;
   priority: string;
@@ -141,7 +141,7 @@ export function toNeedsReviewTaskDTO(task: ScheduledTask): NeedsReviewTaskDTO {
     grOrdenId: task.grOrdenId,
     projectId: task.projectId ?? null,
     customerId: task.customerId,
-    serviceId: task.serviceId,
+    contractId: task.contractId,
     address: task.address,
     category: task.category,
     priority: task.priority,

@@ -44,7 +44,7 @@ import {
 
 const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
   customer: 'CUSTOMER_NOT_FOUND',
-  service:  'SERVICE_NOT_FOUND',
+  contract: 'CONTRACT_NOT_FOUND',
   partner:  'PARTNER_NOT_FOUND',
   project:  'PROJECT_NOT_FOUND',
   reporter: 'REPORTER_NOT_FOUND',
@@ -314,7 +314,7 @@ export function createSchedulingRouter(
       startDate: data.startDate ?? null,
       endDate: data.endDate ?? null,
       customerId: data.customerId ?? null,
-      serviceId: data.serviceId ?? null,
+      contractId: data.contractId ?? null,
       partnerId: data.partnerId ?? null,
       // Default reporterId to the authenticated user when the body omits it
       // (REQ-CREATE-9/10/11). User.id == admin.id by construction in

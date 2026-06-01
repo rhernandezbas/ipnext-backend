@@ -14,7 +14,7 @@ import { GetClientDetail } from '@application/use-cases/GetClientDetail';
 import { CreateCustomer } from '@application/use-cases/CreateCustomer';
 import { GetClientStats } from '@application/use-cases/GetClientStats';
 import { DeleteCustomer } from '@application/use-cases/DeleteCustomer';
-import { GetClientServices } from '@application/use-cases/GetClientServices';
+import { GetClientContracts } from '@application/use-cases/GetClientContracts';
 import { GetClientInvoices } from '@application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '@application/use-cases/GetClientLogs';
 import { ListTickets } from '@application/use-cases/ListTickets';
@@ -130,19 +130,19 @@ import { UpdateProjectCategory } from '@application/use-cases/UpdateProjectCateg
 import { DeleteProjectCategory } from '@application/use-cases/DeleteProjectCategory';
 import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
 import { createTaskCategoriesRouter } from './routes/taskCategories.routes';
-// ServiceTechnology catalog (service-technology change)
-import { PrismaServiceTechnologyRepository } from '../adapters/prisma/PrismaServiceTechnologyRepository';
-import { createServiceTechnologiesRouter } from './routes/serviceTechnologies.routes';
-import { ListServiceTechnology } from '@application/use-cases/ListServiceTechnology';
-import { GetServiceTechnology } from '@application/use-cases/GetServiceTechnology';
-import { CreateServiceTechnology } from '@application/use-cases/CreateServiceTechnology';
-import { UpdateServiceTechnology } from '@application/use-cases/UpdateServiceTechnology';
-import { DeleteServiceTechnology } from '@application/use-cases/DeleteServiceTechnology';
-// Global services (contracts) listing — feeds the frontend contracts page.
-import { PrismaServiceRepository } from '../adapters/prisma/PrismaServiceRepository';
-import { createServicesRouter } from './routes/services.routes';
-import { ListServices } from '@application/use-cases/ListServices';
-import { GetServiceStats } from '@application/use-cases/GetServiceStats';
+// ContractTechnology catalog
+import { PrismaContractTechnologyRepository } from '../adapters/prisma/PrismaContractTechnologyRepository';
+import { createContractTechnologiesRouter } from './routes/contractTechnologies.routes';
+import { ListContractTechnology } from '@application/use-cases/ListContractTechnology';
+import { GetContractTechnology } from '@application/use-cases/GetContractTechnology';
+import { CreateContractTechnology } from '@application/use-cases/CreateContractTechnology';
+import { UpdateContractTechnology } from '@application/use-cases/UpdateContractTechnology';
+import { DeleteContractTechnology } from '@application/use-cases/DeleteContractTechnology';
+// Global contracts listing — feeds the frontend contracts page.
+import { PrismaContractRepository } from '../adapters/prisma/PrismaContractRepository';
+import { createContractsRouter } from './routes/contracts.routes';
+import { ListContracts } from '@application/use-cases/ListContracts';
+import { GetContractStats } from '@application/use-cases/GetContractStats';
 import { createGestionRealRouter } from './routes/gestionReal.routes';
 import { createGrSyncRouter } from './routes/gr-sync.routes';
 import { ResetGrClientsCursor } from '@application/use-cases/ResetGrClientsCursor';
@@ -389,15 +389,15 @@ import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCo
 import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
-import { createServiceInventoryRouter } from './routes/serviceInventory.routes';
+import { createContractInventoryRouter } from './routes/contractInventory.routes';
 import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
-import { ListServiceInstalledItems } from '@application/use-cases/ListServiceInstalledItems';
+import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { PrismaInventorySuggestionRepository } from '../adapters/prisma/PrismaInventorySuggestionRepository';
-import { PrismaServiceInventoryRepository } from '../adapters/prisma/PrismaServiceInventoryRepository';
+import { PrismaContractInventoryRepository } from '../adapters/prisma/PrismaContractInventoryRepository';
 import { buildClosureSideEffects } from '../scheduling/closureSideEffects';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
@@ -452,14 +452,14 @@ import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
  * Each branch calls findUnique on the correct Prisma delegate with its own
  * concrete argument type — no `as any` needed, TypeScript can verify each call.
  */
-// Covers four entity kinds (Client, Service, Partner, Project) despite the name
+// Covers four entity kinds (Client, Contract, Partner, Project) despite the name
 // — renaming is out of scope per design AD-2.
-function prismaClientLookup(model: 'Client' | 'Service' | 'Partner' | 'Project', id: string): Promise<{ id: string } | null> {
+function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project', id: string): Promise<{ id: string } | null> {
   switch (model) {
-    case 'Client':  return prisma.client.findUnique({ where: { id }, select: { id: true } });
-    case 'Service': return prisma.service.findUnique({ where: { id }, select: { id: true } });
-    case 'Partner': return prisma.partner.findUnique({ where: { id }, select: { id: true } });
-    case 'Project': return prisma.project.findUnique({ where: { id }, select: { id: true } });
+    case 'Client':   return prisma.client.findUnique({ where: { id }, select: { id: true } });
+    case 'Contract': return prisma.contract.findUnique({ where: { id }, select: { id: true } });
+    case 'Partner':  return prisma.partner.findUnique({ where: { id }, select: { id: true } });
+    case 'Project':  return prisma.project.findUnique({ where: { id }, select: { id: true } });
   }
 }
 
@@ -533,7 +533,7 @@ export function createApp() {
   // Wire up use cases
   const listClients = new ListClients(customerAdapter);
   const getDetail = new GetClientDetail(customerAdapter, balanceRefresh);
-  const getServices = new GetClientServices(customerAdapter);
+  const getContracts = new GetClientContracts(customerAdapter);
   const getInvoices = new GetClientInvoices(customerAdapter);
   const getLogs = new GetClientLogs(customerAdapter);
   const createCustomer = new CreateCustomer(customerAdapter);
@@ -604,7 +604,7 @@ export function createApp() {
     schedulingRepo,
     // EntityLookup wrappers for FK validation (return { id } | null)
     { findById: (id: string) => prismaClientLookup('Client', id) },
-    { findById: (id: string) => prismaClientLookup('Service', id) },
+    { findById: (id: string) => prismaClientLookup('Contract', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
     userLookupForScheduling,
     { findById: (id: string) => prismaClientLookup('Project', id) },
@@ -612,7 +612,7 @@ export function createApp() {
   const updateTask = new UpdateTask(
     schedulingRepo,
     { findById: (id: string) => prismaClientLookup('Client', id) },
-    { findById: (id: string) => prismaClientLookup('Service', id) },
+    { findById: (id: string) => prismaClientLookup('Contract', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
     userLookupForScheduling,
     { findById: (id: string) => prismaClientLookup('Project', id) },
@@ -650,17 +650,17 @@ export function createApp() {
   const updateTaskCategory = new UpdateTaskCategory(taskCategoryRepo);
   const deleteTaskCategory = new DeleteTaskCategory(taskCategoryRepo);
 
-  const serviceTechnologyRepo = new PrismaServiceTechnologyRepository();
-  const listServiceTechnology = new ListServiceTechnology(serviceTechnologyRepo);
-  const getServiceTechnology = new GetServiceTechnology(serviceTechnologyRepo);
-  const createServiceTechnology = new CreateServiceTechnology(serviceTechnologyRepo);
-  const updateServiceTechnology = new UpdateServiceTechnology(serviceTechnologyRepo);
-  const deleteServiceTechnology = new DeleteServiceTechnology(serviceTechnologyRepo);
+  const contractTechnologyRepo = new PrismaContractTechnologyRepository();
+  const listContractTechnology = new ListContractTechnology(contractTechnologyRepo);
+  const getContractTechnology = new GetContractTechnology(contractTechnologyRepo);
+  const createContractTechnology = new CreateContractTechnology(contractTechnologyRepo);
+  const updateContractTechnology = new UpdateContractTechnology(contractTechnologyRepo);
+  const deleteContractTechnology = new DeleteContractTechnology(contractTechnologyRepo);
 
-  // Global services (contracts) listing.
-  const serviceRepo = new PrismaServiceRepository();
-  const listServices = new ListServices(serviceRepo);
-  const getServiceStats = new GetServiceStats(serviceRepo);
+  // Global contracts listing.
+  const contractRepo = new PrismaContractRepository();
+  const listContracts = new ListContracts(contractRepo);
+  const getContractStats = new GetContractStats(contractRepo);
 
   const taskPriorityRepo = new PrismaTaskPriorityRepository();
   const listTaskPriority = new ListTaskPriority(taskPriorityRepo);
@@ -868,7 +868,7 @@ export function createApp() {
   app.use('/api/dashboard', createDashboardRouter(getDashboardStats, getDashboardShortcuts, getRecentActivity));
   app.use('/api/messages', createMessagesRouter(listMessages, getMessage, createMessage, markMessageAsRead, deleteMessage));
   app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions, sessionRepo, createLoginRateLimiter()));
-  app.use('/api/clients', createClientsRouter(listClients, getDetail, getServices, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer));
+  app.use('/api/clients', createClientsRouter(listClients, getDetail, getContracts, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
   // TicketStatus catalog — mounted BEFORE the tickets router to avoid /:id catch-all swallowing /statuses.
   app.use('/api/tickets/statuses', createTicketStatusesRouter(
@@ -896,14 +896,14 @@ export function createApp() {
     authAdapter,
     listTaskCategory, getTaskCategory, createTaskCategory, updateTaskCategory, deleteTaskCategory,
   ));
-  // ServiceTechnology catalog — mounted at /api root (no catch-all conflict).
-  app.use('/api', createServiceTechnologiesRouter(
+  // ContractTechnology catalog — mounted at /api root (no catch-all conflict).
+  app.use('/api', createContractTechnologiesRouter(
     authAdapter,
-    listServiceTechnology, getServiceTechnology, createServiceTechnology,
-    updateServiceTechnology, deleteServiceTechnology,
+    listContractTechnology, getContractTechnology, createContractTechnology,
+    updateContractTechnology, deleteContractTechnology,
   ));
-  // Global services (contracts) listing — mounted at /api root, before the catch-all.
-  app.use('/api', createServicesRouter(authAdapter, listServices, getServiceStats));
+  // Global contracts listing — mounted at /api root, before the catch-all.
+  app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats));
   // TaskPriority catalog — also before the scheduling catch-all router.
   app.use('/api/scheduling', createTaskPrioritiesRouter(
     authAdapter,
@@ -951,20 +951,20 @@ export function createApp() {
   // Mounted at /api BEFORE the scheduling /:id catch-all so /scheduling/:taskId/inventory/* survives.
   // Permisos granulares (módulos scheduling/clients, igual que el FE): read en GET, write en mutaciones.
   const inventorySuggestionRepo = new PrismaInventorySuggestionRepository();
-  const serviceInventoryRepo = new PrismaServiceInventoryRepository();
-  app.use('/api', createServiceInventoryRouter(
+  const contractInventoryRepo = new PrismaContractInventoryRepository();
+  app.use('/api', createContractInventoryRouter(
     new ListTaskInventorySuggestions(inventorySuggestionRepo),
-    new ConfirmInventorySuggestion(inventorySuggestionRepo, serviceInventoryRepo, schedulingRepo),
+    new ConfirmInventorySuggestion(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo),
     new DiscardInventorySuggestion(inventorySuggestionRepo),
-    new ListServiceInstalledItems(serviceInventoryRepo),
-    new AddInstalledItemManually(serviceInventoryRepo),
-    new UpdateInstalledItem(serviceInventoryRepo),
+    new ListContractInstalledItems(contractInventoryRepo),
+    new AddInstalledItemManually(contractInventoryRepo),
+    new UpdateInstalledItem(contractInventoryRepo),
     createAuthMiddleware(authAdapter, sessionRepo),
     {
       taskRead: requirePerm('scheduling', 'read'),
       taskWrite: requirePerm('scheduling', 'write'),
-      serviceRead: requirePerm('clients', 'read'),
-      serviceWrite: requirePerm('clients', 'write'),
+      contractRead: requirePerm('clients', 'read'),
+      contractWrite: requirePerm('clients', 'write'),
     },
   ));
 

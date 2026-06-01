@@ -1,9 +1,9 @@
-import { ServiceInventoryRepository } from '@domain/ports/ServiceInventoryRepository';
-import { ServiceInstalledItem, InstalledItemType } from '@domain/entities/service-installed-item';
+import { ContractInventoryRepository } from '@domain/ports/ContractInventoryRepository';
+import { ContractInstalledItem, InstalledItemType } from '@domain/entities/contract-installed-item';
 import { randomUUID } from 'crypto';
 
 export interface AddInstalledItemInput {
-  serviceId: string;
+  contractId: string;
   type: InstalledItemType;
   serialNumber?: string | null;
   mac?: string | null;
@@ -14,17 +14,17 @@ export interface AddInstalledItemInput {
 
 /**
  * Manually attach an installed device to a contract — the "agregar SN al
- * servicio" shortcut. Covers devices the OCR did not capture (e.g. a 2nd router).
+ * contrato" shortcut. Covers devices the OCR did not capture (e.g. a 2nd router).
  * source = MANUAL, no sourceTaskId.
  */
 export class AddInstalledItemManually {
-  constructor(private readonly inventory: ServiceInventoryRepository) {}
+  constructor(private readonly inventory: ContractInventoryRepository) {}
 
-  async execute(input: AddInstalledItemInput): Promise<ServiceInstalledItem> {
+  async execute(input: AddInstalledItemInput): Promise<ContractInstalledItem> {
     const now = new Date().toISOString();
     return this.inventory.create({
       id: randomUUID(),
-      serviceId: input.serviceId,
+      contractId: input.contractId,
       type: input.type,
       serialNumber: input.serialNumber ?? null,
       mac: input.mac ?? null,

@@ -1,4 +1,4 @@
-import { Customer, Service, ClientLog } from '../entities/customer';
+import { Customer, Contract, ClientLog } from '../entities/customer';
 import { PaginatedResult, PaginatedQuery } from '../../application/dto/pagination';
 
 export interface ListClientsQuery extends PaginatedQuery {
@@ -39,7 +39,7 @@ export interface CustomerRepository {
   /** Returns true when a row was deleted, false when the id did not exist. */
   delete(id: string): Promise<boolean>;
   stats(): Promise<ClientStats>;
-  listServices(clientId: string): Promise<Service[]>;
+  listContracts(clientId: string): Promise<Contract[]>;
   listInvoices(clientId: string): Promise<import('../entities/billing').Invoice[]>;
   listLogs(query: ListLogsQuery): Promise<PaginatedResult<ClientLog>>;
 }

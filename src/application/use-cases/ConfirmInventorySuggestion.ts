@@ -1,11 +1,11 @@
 import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestionRepository';
-import { ServiceInventoryRepository } from '@domain/ports/ServiceInventoryRepository';
+import { ContractInventoryRepository } from '@domain/ports/ContractInventoryRepository';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
-import { ServiceInstalledItem, InstalledItemType } from '@domain/entities/service-installed-item';
+import { ContractInstalledItem, InstalledItemType } from '@domain/entities/contract-installed-item';
 import {
   SuggestionNotFoundError,
   SuggestionAlreadyConfirmedError,
-  TaskHasNoServiceError,
+  TaskHasNoContractError,
 } from '@domain/errors/inventory';
 import { randomUUID } from 'crypto';
 
@@ -19,31 +19,31 @@ export interface ConfirmInventorySuggestionInput {
 }
 
 /**
- * Promotes a staged suggestion to a real ServiceInstalledItem on the task's
- * contract (Service). This is the ONLY path scraped/OCR data reaches the
- * contract, and it is operator-driven. ONE suggestion → ONE item (2 routers
+ * Promotes a staged suggestion to a real ContractInstalledItem on the task's
+ * contract. This is the ONLY path scraped/OCR data reaches the contract,
+ * and it is operator-driven. ONE suggestion → ONE item (2 routers
  * confirmed = 2 rows). Re-confirming is rejected.
  */
 export class ConfirmInventorySuggestion {
   constructor(
     private readonly suggestions: InventorySuggestionRepository,
-    private readonly inventory: ServiceInventoryRepository,
+    private readonly inventory: ContractInventoryRepository,
     private readonly scheduling: SchedulingRepository,
   ) {}
 
-  async execute(input: ConfirmInventorySuggestionInput): Promise<ServiceInstalledItem> {
+  async execute(input: ConfirmInventorySuggestionInput): Promise<ContractInstalledItem> {
     const suggestion = await this.suggestions.get(input.suggestionId);
     if (!suggestion) throw new SuggestionNotFoundError(input.suggestionId);
     if (suggestion.status === 'confirmed') throw new SuggestionAlreadyConfirmedError(input.suggestionId);
 
     const task = await this.scheduling.getTask(suggestion.taskId);
-    const serviceId = task?.serviceId ?? null;
-    if (!serviceId) throw new TaskHasNoServiceError(suggestion.taskId);
+    const contractId = task?.contractId ?? null;
+    if (!contractId) throw new TaskHasNoContractError(suggestion.taskId);
 
     const now = new Date().toISOString();
     const item = await this.inventory.create({
       id: randomUUID(),
-      serviceId,
+      contractId,
       type: toType(suggestion.deviceType),
       serialNumber: suggestion.serialNumber,
       mac: suggestion.mac,

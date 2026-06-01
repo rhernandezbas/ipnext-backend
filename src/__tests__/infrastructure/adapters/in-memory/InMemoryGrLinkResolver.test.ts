@@ -18,11 +18,11 @@ describe('InMemoryGrLinkResolver', () => {
     expect(found).toBeNull();
   });
 
-  it('resolves a local Service by GR contract id when mirrored', async () => {
+  it('resolves a local Contract by GR contract id when mirrored', async () => {
     const resolver = new InMemoryGrLinkResolver();
-    resolver.seedService('gr-c-200', { id: 's-1', plan: '300MB' });
+    resolver.seedContract('gr-c-200', { id: 's-1', plan: '300MB' });
 
-    const found = await resolver.findServiceByGrContratoId('gr-c-200');
+    const found = await resolver.findContractByGrContratoId('gr-c-200');
 
     expect(found).toEqual({ id: 's-1', plan: '300MB' });
   });
@@ -30,16 +30,16 @@ describe('InMemoryGrLinkResolver', () => {
   it('returns null when the GR contract id is not mirrored', async () => {
     const resolver = new InMemoryGrLinkResolver();
 
-    const found = await resolver.findServiceByGrContratoId('gr-c-unknown');
+    const found = await resolver.findContractByGrContratoId('gr-c-unknown');
 
     expect(found).toBeNull();
   });
 
-  it('resolves a Service with a null plan', async () => {
+  it('resolves a Contract with a null plan', async () => {
     const resolver = new InMemoryGrLinkResolver();
-    resolver.seedService('gr-c-300', { id: 's-2', plan: null });
+    resolver.seedContract('gr-c-300', { id: 's-2', plan: null });
 
-    const found = await resolver.findServiceByGrContratoId('gr-c-300');
+    const found = await resolver.findContractByGrContratoId('gr-c-300');
 
     expect(found).toEqual({ id: 's-2', plan: null });
   });

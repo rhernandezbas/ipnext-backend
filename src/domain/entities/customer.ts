@@ -25,7 +25,7 @@ export interface Customer {
   balanceStale?: boolean;
 }
 
-export interface Service {
+export interface Contract {
   id: string;
   type: string;
   plan: string;

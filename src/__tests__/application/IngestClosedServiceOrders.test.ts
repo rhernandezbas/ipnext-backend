@@ -195,7 +195,7 @@ describe('IngestClosedServiceOrders', () => {
 
   it('orchestrates closure side effects: OCR → suggestions + auto-comment (all opt-in, non-fatal)', async () => {
     const { scheduling, iclass, resultCodes, closed, state } = setup();
-    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id, serviceId: 'svc1' });
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id, contractId: 'svc1' });
     iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
     iclass.historyByOrder['900'] = HISTORY_CLOSED;
     iclass.checklistsByOrder['900'] = [{

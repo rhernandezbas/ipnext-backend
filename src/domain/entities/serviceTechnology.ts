@@ -1,5 +1,2 @@
-export interface ServiceTechnology {
-  id: string;
-  name: string;
-  description: string | null;
-}
+// RENAMED: Use contractTechnology.ts instead.
+export type { ContractTechnology as ServiceTechnology } from './contractTechnology';
