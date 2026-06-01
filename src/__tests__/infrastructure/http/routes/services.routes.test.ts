@@ -12,6 +12,7 @@ import { createServicesRouter } from '@infrastructure/http/routes/services.route
 import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
 import { InMemoryServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceRepository';
 import { ListServices } from '@application/use-cases/ListServices';
+import { GetServiceStats } from '@application/use-cases/GetServiceStats';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -46,11 +47,12 @@ function buildApp(authFail = false): Harness {
   const repo = new InMemoryServiceRepository();
   const authProvider = new FakeAuthProvider(authFail);
   const listServices = new ListServices(repo);
+  const getServiceStats = new GetServiceStats(repo);
 
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
-  app.use('/api', createServicesRouter(authProvider, listServices));
+  app.use('/api', createServicesRouter(authProvider, listServices, getServiceStats));
   app.use(errorHandler);
 
   return { app, repo };

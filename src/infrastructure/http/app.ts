@@ -142,6 +142,7 @@ import { DeleteServiceTechnology } from '@application/use-cases/DeleteServiceTec
 import { PrismaServiceRepository } from '../adapters/prisma/PrismaServiceRepository';
 import { createServicesRouter } from './routes/services.routes';
 import { ListServices } from '@application/use-cases/ListServices';
+import { GetServiceStats } from '@application/use-cases/GetServiceStats';
 import { createGestionRealRouter } from './routes/gestionReal.routes';
 import { createGrSyncRouter } from './routes/gr-sync.routes';
 import { ResetGrClientsCursor } from '@application/use-cases/ResetGrClientsCursor';
@@ -649,6 +650,7 @@ export function createApp() {
   // Global services (contracts) listing.
   const serviceRepo = new PrismaServiceRepository();
   const listServices = new ListServices(serviceRepo);
+  const getServiceStats = new GetServiceStats(serviceRepo);
 
   const taskPriorityRepo = new PrismaTaskPriorityRepository();
   const listTaskPriority = new ListTaskPriority(taskPriorityRepo);
@@ -891,7 +893,7 @@ export function createApp() {
     updateServiceTechnology, deleteServiceTechnology,
   ));
   // Global services (contracts) listing — mounted at /api root, before the catch-all.
-  app.use('/api', createServicesRouter(authAdapter, listServices));
+  app.use('/api', createServicesRouter(authAdapter, listServices, getServiceStats));
   // TaskPriority catalog — also before the scheduling catch-all router.
   app.use('/api/scheduling', createTaskPrioritiesRouter(
     authAdapter,
