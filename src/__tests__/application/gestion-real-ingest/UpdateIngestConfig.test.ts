@@ -45,6 +45,14 @@ describe('UpdateIngestConfig', () => {
     expect(after.wirelessProjectId).toBeNull();
   });
 
+  it('updates sourceEstado and round-trips it (REQ-PUTCFG-1)', async () => {
+    const { useCase } = build();
+
+    const dto = await useCase.execute({ sourceEstado: 'PEND' });
+
+    expect(dto.sourceEstado).toBe('PEND');
+  });
+
   it('clears a mapping with null without performing a project lookup', async () => {
     const { useCase, projects } = build();
     const wifiId = await seedProject(projects, 'Wifi');

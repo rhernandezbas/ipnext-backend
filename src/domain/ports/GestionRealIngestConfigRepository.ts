@@ -11,6 +11,12 @@ export interface IngestConfig {
   fiberProjectId: string | null;
   /** Target project for WIRELESS-classified orders. Null = unset. */
   wirelessProjectId: string | null;
+  /**
+   * Which GR order state to ingest (server-side `estado` filter + app-side
+   * re-filter). One of GR's valid states: PEND | CONF | CERR | ANUL.
+   * Defaults to 'CONF' (confirmed orders).
+   */
+  sourceEstado: string;
 }
 
 /**

@@ -71,7 +71,7 @@ export interface IngestOptions {
  * Ingest pending installation orders from Gestión Real into local ScheduledTasks.
  *
  * Flow (per design): check feature flag → if OFF, no-op → fetch CI-eligible orders
- * (estado=PEND, fecha_tipo=c, window from windowMonths) → filter tipo==="CI" →
+ * (estado=config.sourceEstado [default CONF], fecha_tipo=c, window from windowMonths) → filter tipo==="CI" →
  * resolve client+service FKs locally (miss → skip+count unmirrored) → idempotency
  * check by grOrdenId (exists → skip+count duplicate) → classify tech → pick target
  * project → create task → persist run counts to SyncState ('gr-ingest').
@@ -128,16 +128,16 @@ export class IngestGestionRealOrders {
     const fechaDesde = formatGrDate(monthsBack(today, config.windowMonths));
 
     const orders = await this.gr.getServiceOrders({
-      estado: 'PEND',
+      estado: config.sourceEstado,
       fechaTipo: 'c',
       fechaDesde,
       fechaHasta,
     });
 
-    // App-side guard: trust GR's server-side estado=PEND but re-filter defensively.
-    // Use the resolved catalog NAMES (not the constants directly) so the stored
-    // value is exactly what the catalog row holds.
-    for (const order of orders.filter(o => o.tipo === 'CI' && o.estado === 'PEND')) {
+    // App-side guard: trust GR's server-side estado filter but re-filter defensively
+    // against the SAME configured source estado. The tipo==="CI" (installation)
+    // filter is fixed.
+    for (const order of orders.filter(o => o.tipo === 'CI' && o.estado === config.sourceEstado)) {
       await this.ingestOne(
         order,
         config.fiberProjectId,

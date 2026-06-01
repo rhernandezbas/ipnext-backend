@@ -15,6 +15,8 @@ export interface IngestConfigDTO {
   windowMonths: number;
   fiberProjectId: string | null;
   wirelessProjectId: string | null;
+  /** Configured GR source order state (PEND | CONF | CERR | ANUL). */
+  sourceEstado: string;
 }
 
 export function toIngestConfigDTO(config: IngestConfig): IngestConfigDTO {
@@ -23,8 +25,12 @@ export function toIngestConfigDTO(config: IngestConfig): IngestConfigDTO {
     windowMonths: config.windowMonths,
     fiberProjectId: config.fiberProjectId,
     wirelessProjectId: config.wirelessProjectId,
+    sourceEstado: config.sourceEstado,
   };
 }
+
+/** GR's valid service-order states. The ingest can target any one of these. */
+export const GR_SOURCE_ESTADOS = ['PEND', 'CONF', 'CERR', 'ANUL'] as const;
 
 // ── Update Config input validation (REQ-PUTCFG-1) ───────────────────────────
 
@@ -40,6 +46,7 @@ export const UpdateIngestConfigSchema = z
     windowMonths: z.number().int().positive(),
     fiberProjectId: z.string().min(1).nullable(),
     wirelessProjectId: z.string().min(1).nullable(),
+    sourceEstado: z.enum(GR_SOURCE_ESTADOS),
   })
   .partial();
 

@@ -1340,6 +1340,7 @@ model GestionRealIngestConfig {
   fiberProject      Project? @relation("GrIngestFiber", fields: [fiberProjectId], references: [id], onDelete: SetNull)
   wirelessProjectId String?
   wirelessProject   Project? @relation("GrIngestWireless", fields: [wirelessProjectId], references: [id], onDelete: SetNull)
+  sourceEstado      String   @default("CONF")
   updatedAt         DateTime @updatedAt
 
   @@index([fiberProjectId])

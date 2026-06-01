@@ -33,7 +33,7 @@ function order(overrides: Partial<GrServiceOrder> & Pick<GrServiceOrder, 'grOrde
   return {
     grOrdenId: overrides.grOrdenId,
     tipo: overrides.tipo ?? 'CI',
-    estado: overrides.estado ?? 'PEND',
+    estado: overrides.estado ?? 'CONF',
     cliente: overrides.cliente ?? 'gr-cli-1',
     contrato: overrides.contrato ?? 'gr-con-1',
     domicilio:
@@ -289,7 +289,7 @@ describe('IngestGestionRealOrders', () => {
     });
   });
 
-  it('queries GR with estado PEND, fecha_tipo c and a window derived from windowMonths', async () => {
+  it('queries GR with the configured source estado (default CONF), fecha_tipo c and a window derived from windowMonths', async () => {
     const h = await makeHarness();
     await h.config.update({ windowMonths: 6 });
     h.gr.serviceOrders = [];
@@ -298,7 +298,7 @@ describe('IngestGestionRealOrders', () => {
 
     expect(h.gr.serviceOrderCalls).toHaveLength(1);
     const call = h.gr.serviceOrderCalls[0];
-    expect(call.estado).toBe('PEND');
+    expect(call.estado).toBe('CONF');
     expect(call.fechaTipo).toBe('c');
     // window: now=2026-05-29, 6 months back → 29-11-2025 .. 29-05-2026
     expect(call.fechaHasta).toBe('29-05-2026');
@@ -412,22 +412,41 @@ describe('IngestGestionRealOrders', () => {
     expect(saved).not.toBeNull();
   });
 
-  // ── FIX 3: re-filter estado app-side ──
+  // ── FIX 3: re-filter estado app-side against the configured source estado ──
 
-  it('skips a CI order whose estado is not PEND (FIX3)', async () => {
+  it('skips a CI order whose estado != config.sourceEstado (default CONF) (FIX3)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
     h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [
-      order({ grOrdenId: 'closed', estado: 'FIN' }),
+      // CI but estado != CONF → must be skipped even though it's an installation.
       order({ grOrdenId: 'pend', estado: 'PEND' }),
+      order({ grOrdenId: 'conf', estado: 'CONF' }),
     ];
 
     const result = await h.useCase.execute();
 
     expect(result.created).toBe(1);
-    expect(await h.scheduling.findTaskByGrOrdenId('closed')).toBeNull();
+    expect(await h.scheduling.findTaskByGrOrdenId('pend')).toBeNull();
+    expect(await h.scheduling.findTaskByGrOrdenId('conf')).not.toBeNull();
+  });
+
+  it('honors a non-default config.sourceEstado (PEND): queries GR with PEND and ingests only PEND CI orders', async () => {
+    const h = await makeHarness();
+    await h.config.update({ sourceEstado: 'PEND' });
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [
+      order({ grOrdenId: 'pend', estado: 'PEND' }),
+      order({ grOrdenId: 'conf', estado: 'CONF' }),
+    ];
+
+    const result = await h.useCase.execute();
+
+    expect(h.gr.serviceOrderCalls[0].estado).toBe('PEND');
+    expect(result.created).toBe(1);
     expect(await h.scheduling.findTaskByGrOrdenId('pend')).not.toBeNull();
+    expect(await h.scheduling.findTaskByGrOrdenId('conf')).toBeNull();
   });
 
   // ── PROD FIX: resolve the workflow's INITIAL stage, not a magic "Pendiente" ──

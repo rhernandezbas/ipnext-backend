@@ -19,6 +19,7 @@ describe('GetIngestConfig', () => {
       windowMonths: 12,
       fiberProjectId: 'p-fiber',
       wirelessProjectId: 'p-wifi',
+      sourceEstado: 'CONF',
     });
   });
 
@@ -33,6 +34,7 @@ describe('GetIngestConfig', () => {
       windowMonths: 12,
       fiberProjectId: null,
       wirelessProjectId: null,
+      sourceEstado: 'CONF',
     });
   });
 });
