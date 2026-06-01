@@ -8,6 +8,7 @@ import { InMemorySessionRepository } from '@infrastructure/adapters/in-memory/In
 import { ListActiveSessions } from '@application/use-cases/sessions/ListActiveSessions';
 import { RevokeSession } from '@application/use-cases/sessions/RevokeSession';
 import { RevokeAllSessionsForUser } from '@application/use-cases/sessions/RevokeAllSessionsForUser';
+import { ListSessionHistory } from '@application/use-cases/sessions/ListSessionHistory';
 import { createSessionsRouter } from '@infrastructure/http/routes/sessions.routes';
 import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
 
@@ -32,6 +33,7 @@ function buildApp(opts: { view?: boolean; revoke?: boolean } = {}) {
       new ListActiveSessions(repo),
       new RevokeSession(repo),
       new RevokeAllSessionsForUser(repo),
+      new ListSessionHistory(repo),
       guard(view),
       guard(revoke),
     ),

@@ -430,6 +430,7 @@ import { createSessionsRouter } from './routes/sessions.routes';
 import { ListActiveSessions } from '@application/use-cases/sessions/ListActiveSessions';
 import { RevokeSession } from '@application/use-cases/sessions/RevokeSession';
 import { RevokeAllSessionsForUser } from '@application/use-cases/sessions/RevokeAllSessionsForUser';
+import { ListSessionHistory } from '@application/use-cases/sessions/ListSessionHistory';
 // SDD #3 Phase 4b — role catalog mutation use cases
 import { CreateRbacRole } from '@application/use-cases/rbac/CreateRbacRole';
 import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
@@ -1195,7 +1196,7 @@ export function createApp() {
     createAuditEventsRouter(new ListAuditEvents(auditEventRepo)),
   );
 
-  // SDD #5 — session management endpoints
+  // SDD #5 — session management endpoints (+ sessions-history: history endpoint)
   app.use(
     '/api/admin/sessions',
     authMiddlewareForRbac,
@@ -1203,6 +1204,7 @@ export function createApp() {
       new ListActiveSessions(sessionRepo),
       new RevokeSession(sessionRepo),
       new RevokeAllSessionsForUser(sessionRepo),
+      new ListSessionHistory(sessionRepo),
       requirePerm('admin', 'view_sessions'),
       requirePerm('admin', 'revoke_sessions'),
     ),
