@@ -74,6 +74,11 @@ jobs:
             -e ICLASS_USERNAME="${{ secrets.ICLASS_USERNAME }}" \
             -e ICLASS_PASSWORD="${{ secrets.ICLASS_PASSWORD }}" \
             -e ICLASS_THIRD_PARTY_ID="${{ secrets.ICLASS_THIRD_PARTY_ID }}" \
+            -e ICLASS_PORTAL_USER="${{ secrets.ICLASS_PORTAL_USER }}" \
+            -e ICLASS_PORTAL_PASSWORD="${{ secrets.ICLASS_PORTAL_PASSWORD }}" \
+            -e ICLASS_OCR_ENABLED="true" \
+            -e OLLAMA_BASE_URL="http://190.7.234.37:11434" \
+            -e OCR_MODEL="gemma3:12b" \
             ipnext-backend:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
