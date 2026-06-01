@@ -84,4 +84,14 @@ export const config = {
     user: process.env.ICLASS_PORTAL_USER ?? '',
     password: process.env.ICLASS_PORTAL_PASSWORD ?? '',
   },
+
+  /**
+   * Device-photo OCR (closure loop F4). Local Ollama vision model by default
+   * (zero per-image cost, photos stay in infra). Opt-in via ICLASS_OCR_ENABLED.
+   */
+  ocr: {
+    enabled: process.env.ICLASS_OCR_ENABLED === 'true',
+    ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434',
+    model: process.env.OCR_MODEL ?? 'gemma3:12b',
+  },
 };
