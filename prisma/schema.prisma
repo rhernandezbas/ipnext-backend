@@ -1486,6 +1486,10 @@ model Session {
   loginAt    DateTime  @default(now())
   lastSeenAt DateTime  @default(now())
   revokedAt  DateTime?
+  // session-expiration: absolute cap = loginAt + 8h (== JWT MAX_AGE). Nullable
+  // only for legacy rows; the migration backfills them. revokedAt=null AND
+  // expiresAt>now AND lastSeenAt>now-1h => the session is "alive".
+  expiresAt  DateTime?
   createdAt  DateTime  @default(now())
 
   @@index([rbacUserId])

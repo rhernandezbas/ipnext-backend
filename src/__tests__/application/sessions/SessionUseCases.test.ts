@@ -8,12 +8,20 @@ import { RevokeAllSessionsForUser } from '@application/use-cases/sessions/Revoke
 import { SessionNotFoundError } from '@domain/errors/session.errors';
 import { InMemorySessionRepository } from '@infrastructure/adapters/in-memory/InMemorySessionRepository';
 
+// session-expiration: fixtures must be "alive" (recent login + recent activity)
+// to appear in listActive. Relative-to-now timestamps keep the suite stable as
+// the clock moves; only their RELATIVE order matters for the assertions.
+const MIN = 60 * 1000;
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+
 function makeRepo() {
   const repo = new InMemorySessionRepository();
-  repo.seed({ id: 's1', rbacUserId: 'u1', actorLogin: 'ana',  tokenHash: 'h1', loginAt: '2026-05-01T10:00:00.000Z' });
-  repo.seed({ id: 's2', rbacUserId: 'u1', actorLogin: 'ana',  tokenHash: 'h2', loginAt: '2026-05-10T10:00:00.000Z' });
-  repo.seed({ id: 's3', rbacUserId: 'u2', actorLogin: 'beto', tokenHash: 'h3', loginAt: '2026-05-20T10:00:00.000Z' });
-  repo.seed({ id: 's4', rbacUserId: 'u2', actorLogin: 'beto', tokenHash: 'h4', loginAt: '2026-05-25T10:00:00.000Z', revokedAt: '2026-05-26T10:00:00.000Z' });
+  // Distinct, recent loginAt values (newest = s3) — all within the 8h cap and
+  // seen within the last hour, so s1..s3 are alive; s4 is revoked.
+  repo.seed({ id: 's1', rbacUserId: 'u1', actorLogin: 'ana',  tokenHash: 'h1', loginAt: ago(40 * MIN), lastSeenAt: ago(2 * MIN) });
+  repo.seed({ id: 's2', rbacUserId: 'u1', actorLogin: 'ana',  tokenHash: 'h2', loginAt: ago(30 * MIN), lastSeenAt: ago(2 * MIN) });
+  repo.seed({ id: 's3', rbacUserId: 'u2', actorLogin: 'beto', tokenHash: 'h3', loginAt: ago(20 * MIN), lastSeenAt: ago(2 * MIN) });
+  repo.seed({ id: 's4', rbacUserId: 'u2', actorLogin: 'beto', tokenHash: 'h4', loginAt: ago(10 * MIN), lastSeenAt: ago(2 * MIN), revokedAt: ago(MIN) });
   return repo;
 }
 
@@ -36,7 +44,7 @@ describe('ListActiveSessions', () => {
     expect(res.items).toHaveLength(3);
     expect(res.items[0]).not.toHaveProperty('tokenHash');
     expect(res.items[0]).toMatchObject({ actorLogin: expect.any(String) });
-    expect(res.items[0].loginAt).toBe('2026-05-20T10:00:00.000Z'); // newest active = s3
+    expect(res.items[0].id).toBe('s3'); // newest active by loginAt = s3
   });
 
   it('filters by rbacUserId', async () => {
