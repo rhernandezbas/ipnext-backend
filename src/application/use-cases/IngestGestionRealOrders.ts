@@ -5,10 +5,24 @@ import { GestionRealIngestConfigRepository } from '@domain/ports/GestionRealInge
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 import { ProjectRepository } from '@domain/ports/ProjectRepository';
 import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+import { TaskPriorityRepository } from '@domain/ports/TaskPriorityRepository';
+import { TaskCategoryRepository } from '@domain/ports/TaskCategoryRepository';
+import { IngestCatalogEntryMissingError } from '@domain/errors/scheduling';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
 import { classifyTech } from './classifyTech';
 
 const SYNC_ENTITY = 'gr-ingest';
+
+/**
+ * Catalog NAMES every ingested task must be stamped with. `ScheduledTask.priority`
+ * and `.category` are strings holding the catalog NAME, so these MUST exist as
+ * rows in the TaskPriority / TaskCategory catalogs (prod uses "Normal" — capital N —
+ * and "Instalación" — capital + accent). The previous hardcoded 'normal'/'installation'
+ * matched NO catalog row, producing phantom values. Resolution is BLOCKING: if either
+ * name is absent the run aborts and creates zero tasks (see IngestCatalogEntryMissingError).
+ */
+const INGEST_PRIORITY_NAME = 'Normal';
+const INGEST_CATEGORY_NAME = 'Instalación';
 
 /**
  * Master switch for the whole ingest and the SINGLE runtime on/off gate.
@@ -33,7 +47,6 @@ function isUniqueViolation(err: unknown): boolean {
   const message = (err as { message?: unknown }).message;
   return typeof message === 'string' && /unique constraint/i.test(message);
 }
-const TASK_CATEGORY = 'installation';
 
 /** Outcome counts for one ingest run. */
 export interface IngestRunResult {
@@ -77,6 +90,8 @@ export class IngestGestionRealOrders {
     private readonly state: SyncStateRepository,
     private readonly projects: ProjectRepository,
     private readonly featureFlags: FeatureFlagRepository,
+    private readonly priorities: TaskPriorityRepository,
+    private readonly categories: TaskCategoryRepository,
     opts: IngestOptions,
   ) {
     this.now = opts.now ?? (() => new Date());
@@ -97,6 +112,15 @@ export class IngestGestionRealOrders {
     const flag = await this.featureFlags.get(INGEST_FLAG_KEY);
     if (!flag?.enabled) return counts;
 
+    // BLOCKING: resolve the catalog entries every task must carry BEFORE touching
+    // GR or creating anything. ScheduledTask.priority/.category hold the catalog
+    // NAME, so they must match a real row. A miss aborts the whole run with ZERO
+    // tasks created — never write a phantom value outside the catalog.
+    const priority = await this.priorities.getByName(INGEST_PRIORITY_NAME);
+    if (!priority) throw new IngestCatalogEntryMissingError('priority', INGEST_PRIORITY_NAME);
+    const category = await this.categories.getByName(INGEST_CATEGORY_NAME);
+    if (!category) throw new IngestCatalogEntryMissingError('category', INGEST_CATEGORY_NAME);
+
     const config = await this.config.get();
 
     const today = this.now();
@@ -111,8 +135,17 @@ export class IngestGestionRealOrders {
     });
 
     // App-side guard: trust GR's server-side estado=PEND but re-filter defensively.
+    // Use the resolved catalog NAMES (not the constants directly) so the stored
+    // value is exactly what the catalog row holds.
     for (const order of orders.filter(o => o.tipo === 'CI' && o.estado === 'PEND')) {
-      await this.ingestOne(order, config.fiberProjectId, config.wirelessProjectId, counts);
+      await this.ingestOne(
+        order,
+        config.fiberProjectId,
+        config.wirelessProjectId,
+        priority.name,
+        category.name,
+        counts,
+      );
     }
 
     await this.state.save({
@@ -130,6 +163,8 @@ export class IngestGestionRealOrders {
     order: GrServiceOrder,
     fiberProjectId: string | null,
     wirelessProjectId: string | null,
+    priorityName: string,
+    categoryName: string,
     counts: IngestRunResult,
   ): Promise<void> {
     // 1-2. Resolve local FKs. A miss is expected until the mirror catches up; skip + count.
@@ -189,11 +224,11 @@ export class IngestGestionRealOrders {
         title,
         description,
         stageId,
-        priority: 'normal',
+        priority: priorityName,
         estimatedHours: 1,
         address: order.domicilio?.direccion ?? null,
         coordinates: null,
-        category: TASK_CATEGORY,
+        category: categoryName,
         projectId,
         projectName: null,
         completedAt: null,

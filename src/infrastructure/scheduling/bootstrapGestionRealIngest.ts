@@ -6,6 +6,8 @@ import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingR
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { PrismaProjectRepository } from '../adapters/prisma/PrismaProjectRepository';
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
+import { PrismaTaskPriorityRepository } from '../adapters/prisma/PrismaTaskPriorityRepository';
+import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 import { IngestGestionRealOrders } from '@application/use-cases/IngestGestionRealOrders';
 import { GestionRealIngestScheduler } from './GestionRealIngestScheduler';
@@ -43,6 +45,10 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
   const projects = new PrismaProjectRepository();
   // Master switch (release flag), checked per run inside the use case.
   const featureFlags = new PrismaFeatureFlagRepository();
+  // Catalog repos: the ingest resolves "Normal"/"Instalación" from these at the
+  // start of each run and BLOCKS (zero tasks) if either is missing.
+  const priorities = new PrismaTaskPriorityRepository();
+  const categories = new PrismaTaskCategoryRepository();
 
   // Resolve a last-resort default stage for the NEEDS-REVIEW (null-project) path.
   //
@@ -89,6 +95,8 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
     state,
     projects,
     featureFlags,
+    priorities,
+    categories,
     { defaultStageId },
   );
 
