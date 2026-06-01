@@ -949,7 +949,7 @@ export function createApp() {
 
   // IClass closure → inventory: task-scoped suggestion staging + contract installed items.
   // Mounted at /api BEFORE the scheduling /:id catch-all so /scheduling/:taskId/inventory/* survives.
-  // NOTE(perms): authenticated; granular `modulo.accion` perms pending FE catalog coordination.
+  // Permisos granulares (módulos scheduling/clients, igual que el FE): read en GET, write en mutaciones.
   const inventorySuggestionRepo = new PrismaInventorySuggestionRepository();
   const serviceInventoryRepo = new PrismaServiceInventoryRepository();
   app.use('/api', createServiceInventoryRouter(
@@ -960,6 +960,12 @@ export function createApp() {
     new AddInstalledItemManually(serviceInventoryRepo),
     new UpdateInstalledItem(serviceInventoryRepo),
     createAuthMiddleware(authAdapter, sessionRepo),
+    {
+      taskRead: requirePerm('scheduling', 'read'),
+      taskWrite: requirePerm('scheduling', 'write'),
+      serviceRead: requirePerm('clients', 'read'),
+      serviceWrite: requirePerm('clients', 'write'),
+    },
   ));
 
   // Instantiate checklist use cases (change 5)

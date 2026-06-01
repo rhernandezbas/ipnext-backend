@@ -30,6 +30,7 @@ function buildApp() {
     (req as { user?: { id: string } }).user = { id: 'u1' };
     next();
   };
+  const pass = (_req: Request, _res: Response, next: NextFunction) => next();
 
   const router = createServiceInventoryRouter(
     new ListTaskInventorySuggestions(suggestions),
@@ -39,6 +40,7 @@ function buildApp() {
     new AddInstalledItemManually(inventory),
     new UpdateInstalledItem(inventory),
     auth,
+    { taskRead: pass, taskWrite: pass, serviceRead: pass, serviceWrite: pass },
   );
 
   const app = express();
