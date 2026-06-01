@@ -70,7 +70,7 @@
 ## Phase 8 — Routes + wire (TDD supertest)
 - [x] 8.1 [RED→GREEN] `createServiceInventoryRouter` + supertest (9/9): confirm 201, 409 SUGGESTION_ALREADY_CONFIRMED, 409 TASK_HAS_NO_SERVICE, 404 SUGGESTION_NOT_FOUND, GET suggestions, discard, manual add 201/422, PATCH 200/404. Use cases thin `ListTaskInventorySuggestions`/`UpdateInstalledItem`.
 - [x] 8.1b statusMap (errorHandler): +SUGGESTION_NOT_FOUND:404, SUGGESTION_ALREADY_CONFIRMED:409, TASK_HAS_NO_SERVICE:409.
-- [ ] 8.2 [PENDIENTE] Prisma repos: `PrismaInventorySuggestionRepository`, `PrismaServiceInventoryRepository`, `PrismaOcrExtractionRepository` (+ persistir, BigInt/mapeo).
+- [x] 8.2 Prisma repos: `PrismaOcrExtractionRepository` (save/findByPhotoUrl), `PrismaInventorySuggestionRepository` (upsert por natural-key vía findFirst), `PrismaServiceInventoryRepository` (listByService/create/update). tsc 0 contra el client generado. (No unit-test: requieren DB.)
 - [ ] 8.3 [PENDIENTE — coordinación] Wire en `app.ts` (DI + montar router ANTES del catch-all `/:id` de scheduling). Proteger con permisos `modulo.accion` que el front recibe (verificar en `/me`/`useMyPermissions`). Coordinar si hay agente tocando `app.ts`.
 - [ ] 8.4 Commit router+statusMap hecho; commit del wire+Prisma al cerrar 8.2/8.3.
 
