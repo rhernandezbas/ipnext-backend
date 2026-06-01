@@ -60,9 +60,9 @@
 ---
 
 ## Phase 7 — Service inventory + confirmación (TDD)
-- [ ] 7.1 Port `ServiceInventoryRepository` + in-memory + Prisma.
-- [ ] 7.2 [RED] Tests `ConfirmInventorySuggestion`, `AddInstalledItemManually`, `DiscardInventorySuggestion`, `ListServiceInstalledItems` → SCEN-CF-1/2/3/4, SCEN-MI-1.
-- [ ] 7.3 [GREEN] Use cases. Confirmar → crea `ServiceInstalledItem` (una fila por equipo) vía `task.serviceId`.
+- [x] 7.1 Port `ServiceInventoryRepository` + `InMemoryServiceInventoryRepository`. Entity `service-installed-item.ts`. Errores `domain/errors/inventory.ts` (SUGGESTION_NOT_FOUND, SUGGESTION_ALREADY_CONFIRMED, TASK_HAS_NO_SERVICE). (Prisma repo → con Phase 8 wiring.)
+- [x] 7.2 [RED→GREEN] Tests (8/8): `ConfirmInventorySuggestion` (SCEN-CF-1/2/3/4 + not-found), `AddInstalledItemManually` (SCEN-MI-1), `DiscardInventorySuggestion`. `ListServiceInstalledItems` thin.
+- [x] 7.3 [GREEN] Confirmar → `ServiceInstalledItem` (UNA fila por equipo, type desde deviceType soft-fail OTROS) vía `task.serviceId`; marca sugerencia confirmed+confirmedItemId. Manual add source=MANUAL.
 - [ ] 7.4 Commit: `feat(inventory): confirm suggestion → ServiceInstalledItem + manual add`
 
 ---
