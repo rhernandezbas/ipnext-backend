@@ -383,6 +383,7 @@ import { AddInstalledItemManually } from '@application/use-cases/AddInstalledIte
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { PrismaInventorySuggestionRepository } from '../adapters/prisma/PrismaInventorySuggestionRepository';
 import { PrismaServiceInventoryRepository } from '../adapters/prisma/PrismaServiceInventoryRepository';
+import { buildClosureSideEffects } from '../scheduling/closureSideEffects';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
@@ -1055,6 +1056,7 @@ export function createApp() {
     iclassResultCodeRepo,
     schedulingRepo,
     new PrismaSyncStateRepository(),
+    buildClosureSideEffects(),
   );
   app.use('/api/admin/iclass', createIClassClosureRouter(
     new SyncIClassResultCodes(buildIClassClient(), iclassResultCodeRepo),

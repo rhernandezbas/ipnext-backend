@@ -76,7 +76,7 @@
 
 ## Pendiente final (integración / coordinación)
 - [x] P2.3 `IClassPortalClient` (login JSF + GET read-only) — **validado en vivo** (smoke test Node: login handshake GET→POST→autologin→panel; getOSDetail OS 3532 → 7 preguntas, 1 firma, 4 fotos con URLs S3 reales). Cookie jar manual + seguimiento de redirects, sin deps. Re-login transparente.
-- [ ] Wire orquestación en el CRON (`bootstrapIClassClosure`) + `app.ts` closureIngest: pasar `portal`/`extractOcr`/`buildSuggestions`/`postComment` (opt-in por config). Diferido a propósito hasta 2.3 (sin portal el auto-OCR no aporta).
+- [x] Wire orquestación en el CRON (`bootstrapIClassClosure`) + `app.ts` closureIngest vía factory compartido `buildClosureSideEffects()` (opt-in por config: postComment+buildSuggestions siempre; portal si ICLASS_PORTAL_* seteado; extractOcr si ICLASS_OCR_ENABLED). tsc 0, suite 1742.
 - [ ] OCR accuracy tuning: localización/deskew de etiqueta (VLM 2 pasos) para llegar al nivel verificado con crop manual. Mientras, soft-fail a revisión manual.
 - [ ] Perms granulares en las rutas de inventario (coordinar clave `modulo.accion` con el FE).
 - [ ] Rotar password portal IPNXAUGUSTOH (expuesta en chat).

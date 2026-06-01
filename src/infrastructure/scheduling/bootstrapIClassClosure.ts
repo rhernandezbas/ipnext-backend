@@ -8,6 +8,7 @@ import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFla
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
 import { IClassClosureScheduler } from './IClassClosureScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
+import { buildClosureSideEffects } from './closureSideEffects';
 
 /** Default poll cadence for the closure loop (10 min). */
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000;
@@ -34,6 +35,7 @@ export function bootstrapIClassClosure(): IClassClosureScheduler | null {
     new PrismaIClassResultCodeRepository(),
     new PrismaSchedulingRepository(),
     new PrismaSyncStateRepository(),
+    buildClosureSideEffects(),
   );
   const flags = new PrismaFeatureFlagRepository();
   const lock = new PgAdvisoryLock();
