@@ -6,6 +6,7 @@ import { InMemoryGestionRealIngestConfigRepository } from '@infrastructure/adapt
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { InMemoryProjectRepository } from '@infrastructure/adapters/in-memory/InMemoryProjectRepository';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
+import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
@@ -394,6 +395,49 @@ describe('IngestGestionRealOrders', () => {
     expect(result.created).toBe(1);
     expect(await h.scheduling.findTaskByGrOrdenId('closed')).toBeNull();
     expect(await h.scheduling.findTaskByGrOrdenId('pend')).not.toBeNull();
+  });
+
+  // ── PROD FIX: resolve the workflow's INITIAL stage, not a magic "Pendiente" ──
+
+  it('classified order lands in the target workflow\'s initial stage (lowest order), not the blank default', async () => {
+    // The real installation workflow has NO "Pendiente" stage — its entry stage
+    // is "Nuevo" (order 0). The task must land there, NOT in the empty default.
+    const gr = new InMemoryGestionRealPort();
+    const resolver = new InMemoryGrLinkResolver();
+    const stageRepo = new InMemoryStageRepository();
+    const scheduling = new InMemorySchedulingRepository(stageRepo);
+    const config = new InMemoryGestionRealIngestConfigRepository();
+    const state = new InMemorySyncStateRepository();
+    const projects = new InMemoryProjectRepository();
+    const featureFlags = new InMemoryFeatureFlagRepository();
+    featureFlags.seed(INGEST_FLAG_KEY, true);
+
+    // Build the fiber project with an installation workflow whose stages mirror prod.
+    const wfId = 'wf-fiber-install';
+    const nuevo = await stageRepo.add(wfId, { name: 'Nuevo', category: 'nuevo', order: 0 });
+    await stageRepo.add(wfId, { name: 'Confirmado', category: 'enProgreso', order: 1 });
+    await stageRepo.add(wfId, { name: 'Enviar a IClass', category: 'enProgreso', order: 5 });
+    const fiberProject = await projects.create({ title: 'INSTALACION FIBRA', workflowId: wfId });
+
+    await config.update({ fiberProjectId: fiberProject.id, wirelessProjectId: null });
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
+      // Intentionally BLANK default — the workflow's initial stage must be used.
+      defaultStageId: '',
+      now: () => new Date('2026-05-29T12:00:00Z'),
+    });
+    resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    gr.serviceOrders = [order({ grOrdenId: 'ws-1' })];
+
+    const result = await useCase.execute();
+
+    expect(result.created).toBe(1);
+    const task = await scheduling.findTaskByGrOrdenId('ws-1');
+    expect(task).not.toBeNull();
+    expect(task!.projectId).toBe(fiberProject.id);
+    // The fix: stage resolved via getInitialStage → "Nuevo" (order 0), NOT blank.
+    expect(task!.stageId).toBe(nuevo.id);
+    expect(task!.stageId).not.toBe('');
   });
 
   // ── FIX 4: month-window overflow on long→short month transition ──

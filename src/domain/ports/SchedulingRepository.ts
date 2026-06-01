@@ -50,6 +50,13 @@ export interface SchedulingRepository {
    * homonymous stages in different workflows do not collide.
    */
   getStageByName(name: string, workflowId?: string): Promise<Stage | null>;
+  /**
+   * Returns the workflow's first stage — the one with the lowest `order` — i.e.
+   * the entry state a newly-created task should land in. Null when the workflow
+   * has no stages (or does not exist). Used by the GR ingest to resolve the
+   * initial stage from the project's workflow instead of a hardcoded stage name.
+   */
+  getInitialStage(workflowId: string): Promise<Stage | null>;
   /** Persist the IClass service order code on a task after a successful OS creation. */
   setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null>;
 

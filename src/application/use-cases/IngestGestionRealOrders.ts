@@ -33,7 +33,6 @@ function isUniqueViolation(err: unknown): boolean {
   const message = (err as { message?: unknown }).message;
   return typeof message === 'string' && /unique constraint/i.test(message);
 }
-const PENDING_STAGE_NAME = 'Pendiente';
 const TASK_CATEGORY = 'installation';
 
 /** Outcome counts for one ingest run. */
@@ -227,19 +226,29 @@ export class IngestGestionRealOrders {
   }
 
   /**
-   * Resolve the "Pendiente" stage of the target project's workflow. Falls back
-   * to the configured default-pending stage when the project has no workflow
-   * scope or no matching stage (and always for needs-review / null project).
+   * Resolve the INITIAL stage of the target project's workflow — the stage with
+   * the lowest `order`, i.e. the entry state a new task should land in.
+   *
+   * The real installation workflow has NO stage literally named "Pendiente"
+   * (its entry stage is "Nuevo"), so resolving by a magic name returned null and
+   * the task fell back to a blank default stage, violating the stageId FK and
+   * making every order fail (created=0). Resolving the workflow's first stage by
+   * `order` is name-agnostic and works for any workflow.
+   *
+   * Falls back to `defaultStageId` only when there is no project, no workflow on
+   * the project, or the workflow has no stages — and always for needs-review /
+   * null-project tasks.
    */
   private async resolveStageId(projectId: string | null): Promise<string> {
     if (projectId) {
       const project = await this.projects.get(projectId);
-      const workflowId = project?.workflowId ?? undefined;
-      const stage = await this.scheduling.getStageByName(PENDING_STAGE_NAME, workflowId);
-      if (stage) return stage.id;
+      const workflowId = project?.workflowId ?? null;
+      if (workflowId) {
+        const stage = await this.scheduling.getInitialStage(workflowId);
+        if (stage) return stage.id;
+      }
     }
-    const global = await this.scheduling.getStageByName(PENDING_STAGE_NAME);
-    return global?.id ?? this.defaultStageId;
+    return this.defaultStageId;
   }
 }
 

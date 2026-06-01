@@ -547,6 +547,23 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     };
   }
 
+  async getInitialStage(workflowId: string): Promise<Stage | null> {
+    // The workflow's entry stage is the one with the lowest `order`.
+    const row = await (prisma.stage as any).findFirst({
+      where: { workflowId },
+      orderBy: { order: 'asc' },
+    });
+    if (!row) return null;
+    return {
+      id: row.id,
+      workflowId: row.workflowId,
+      name: row.name,
+      category: row.category,
+      order: row.order,
+      color: row.color ?? null,
+    };
+  }
+
   async setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null> {
     try {
       const row = await (prisma.scheduledTask as any).update({
