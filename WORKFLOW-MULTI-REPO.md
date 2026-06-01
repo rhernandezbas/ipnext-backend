@@ -62,6 +62,11 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 - TDD estricto (BE: Jest + adapters in-memory; FE: Vitest). Test primero.
 - No romper el **contrato del API** que el FE ya consume en prod (ej.: tras pasar `Ticket.status` a FK, el DTO sigue exponiendo `status` como string — la traducción name↔id vive en el repositorio, no se filtra al DTO).
 - **El front maneja permisos GRANULARES** en formato `modulo.accion` con punto (ej. `clients.read`, `scheduling.read`), chequeados con `RequirePermission` / `useMyPermissions().can()` contra el `string[]` que devuelve `/me` (`*` = super_admin). **Cada page/ruta/ítem de sidebar nuevo DEBE protegerse con un permiso que el front realmente recibe** — verificarlo en `useMyPermissions`/el catálogo del `/me` antes de usarlo. Inventar un permiso que el front no tiene (p. ej. usar la clave RBAC del backend `modulo:accion` con colon, como `gestionReal:read`) deja la página **invisible para todos**. El catálogo RBAC del backend (`gestionReal:read`, colon) NO es el mismo namespace que los permisos del front — no asumir equivalencia.
+- **Regla de permisos granulares (INNEGOCIABLE):** TODA feature, page, ruta o acción nueva DEBE tener su permiso granular `modulo.accion` cuando amerite control de acceso, y protegerse en **las dos capas**, no en una sola:
+  - **Frontend** — `RequirePermission` (pages/rutas) o `Can` (botones, secciones, acciones) con la clave que el front realmente recibe del `/me`.
+  - **Backend** — el guard de la ruta con el permiso correspondiente (NO alcanza con "solo autenticado"; una ruta protegida solo en el front es un agujero).
+  - Si el permiso todavía no existe: agregarlo al **catálogo RBAC del backend** Y exponerlo para que el front lo reciba — **cambio coordinado en ambos repos**. Nunca dejar una page/ruta nueva sin permiso por default ni inventar una clave; **documentar en el PR la clave usada**.
+  - Deuda conocida a saldar: las rutas de inventario por servicio (`/api/services/:serviceId/inventory`, `/api/scheduling/:taskId/inventory/...`) hoy están solo autenticadas — falta el guard granular en el backend.
 
 ## Gotchas conocidos
 
