@@ -3,6 +3,7 @@ import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import { AuthenticationError } from '@domain/errors';
 import type { SessionRepository } from '@domain/ports/SessionRepository';
+import { isSessionAlive } from '@domain/entities/session.policy';
 import { hashToken } from '../../auth/sessionToken';
 
 declare global {
@@ -43,7 +44,9 @@ export function createAuthMiddleware(authProvider: AuthProvider, sessionRepo?: S
     if (sessionRepo) {
       try {
         const session = await sessionRepo.findByTokenHash(hashToken(token));
-        if (!session) {
+        // findByTokenHash already excludes revoked/expired/idle sessions; the
+        // explicit isSessionAlive check is defence in depth (same 401 either way).
+        if (!session || !isSessionAlive(session)) {
           res.status(401).json({ error: 'Session revoked or expired', code: 'UNAUTHORIZED' });
           return;
         }

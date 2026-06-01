@@ -23,9 +23,14 @@ function buildApp(opts: { view?: boolean; revoke?: boolean } = {}) {
   const app = express();
   app.use(express.json());
   const repo = new InMemorySessionRepository();
-  repo.seed({ id: 's1', rbacUserId: 'u1', actorLogin: 'ana', tokenHash: 'h1', loginAt: '2026-05-10T10:00:00.000Z' });
-  repo.seed({ id: 's2', rbacUserId: 'u1', actorLogin: 'ana', tokenHash: 'h2', loginAt: '2026-05-20T10:00:00.000Z' });
-  repo.seed({ id: 's3', rbacUserId: 'u2', actorLogin: 'beto', tokenHash: 'h3', loginAt: '2026-05-25T10:00:00.000Z' });
+  // session-expiration: seed "alive" sessions (recent login + recent activity)
+  // so they appear in listActive. Relative-to-now timestamps stay valid as the
+  // clock advances.
+  const min = 60 * 1000;
+  const ago = (n: number) => new Date(Date.now() - n * min).toISOString();
+  repo.seed({ id: 's1', rbacUserId: 'u1', actorLogin: 'ana', tokenHash: 'h1', loginAt: ago(30), lastSeenAt: ago(2) });
+  repo.seed({ id: 's2', rbacUserId: 'u1', actorLogin: 'ana', tokenHash: 'h2', loginAt: ago(20), lastSeenAt: ago(2) });
+  repo.seed({ id: 's3', rbacUserId: 'u2', actorLogin: 'beto', tokenHash: 'h3', loginAt: ago(10), lastSeenAt: ago(2) });
 
   app.use(
     '/api/admin/sessions',
