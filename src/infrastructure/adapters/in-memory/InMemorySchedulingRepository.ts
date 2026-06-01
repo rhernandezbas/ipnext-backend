@@ -383,6 +383,13 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return null;
   }
 
+  async getInitialStage(workflowId: string): Promise<Stage | null> {
+    if (!this.stageRepo) return null;
+    // listByWorkflow returns stages sorted by `order` asc → first is the entry stage.
+    const stages = await this.stageRepo.listByWorkflow(workflowId);
+    return stages.length > 0 ? { ...stages[0] } : null;
+  }
+
   async setIClassOrderCode(taskId: string, code: string): Promise<ScheduledTask | null> {
     const index = this.tasks.findIndex(t => t.id === taskId);
     if (index === -1) return null;

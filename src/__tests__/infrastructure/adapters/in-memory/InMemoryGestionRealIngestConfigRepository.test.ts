@@ -11,6 +11,7 @@ describe('InMemoryGestionRealIngestConfigRepository', () => {
       windowMonths: 12,
       fiberProjectId: null,
       wirelessProjectId: null,
+      sourceEstado: 'CONF',
     });
   });
 
@@ -27,6 +28,7 @@ describe('InMemoryGestionRealIngestConfigRepository', () => {
       windowMonths: 12,
       fiberProjectId: 'p-fiber',
       wirelessProjectId: null,
+      sourceEstado: 'CONF',
     });
 
     const reread = await repo.get();
@@ -51,5 +53,15 @@ describe('InMemoryGestionRealIngestConfigRepository', () => {
     expect(after.windowMonths).toBe(6);
     expect(after.fiberProjectId).toBe('p-fiber');
     expect(after.intervalMs).toBe(90000);
+  });
+
+  it('default sourceEstado is CONF; update() persists a new value', async () => {
+    const repo = new InMemoryGestionRealIngestConfigRepository();
+
+    expect((await repo.get()).sourceEstado).toBe('CONF');
+
+    const updated = await repo.update({ sourceEstado: 'PEND' });
+    expect(updated.sourceEstado).toBe('PEND');
+    expect((await repo.get()).sourceEstado).toBe('PEND');
   });
 });

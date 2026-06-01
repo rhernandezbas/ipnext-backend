@@ -185,8 +185,12 @@ describe('GestionRealClient parsing', () => {
     expect(k.lng).toBeNull();
   });
 
-  it('builds the daily password date in YYYY-MM-DD', () => {
-    expect(isoDate(new Date(2026, 4, 27))).toBe('2026-05-27');
-    expect(isoDate(new Date(2026, 0, 3))).toBe('2026-01-03');
+  it('builds the daily GR password date in Argentina time (UTC-3), not the container UTC date', () => {
+    // Madrugada UTC: el dia UTC ya avanzo respecto a Argentina. GR valida el
+    // password en hora argentina, asi que debe dar el dia argentino (el anterior).
+    expect(isoDate(new Date('2026-06-01T01:00:00Z'))).toBe('2026-05-31');
+    // Horario diurno: UTC y Argentina caen en el mismo dia.
+    expect(isoDate(new Date('2026-05-27T12:00:00Z'))).toBe('2026-05-27');
+    expect(isoDate(new Date('2026-01-03T15:00:00Z'))).toBe('2026-01-03');
   });
 });

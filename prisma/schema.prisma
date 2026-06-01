@@ -217,6 +217,7 @@ model Service {
   address      String?
   lat          Float?
   lng          Float?
+  technology   String?         // Phase 1: free-text name from ServiceTechnology catalog. NOT a FK.
   createdAt    DateTime        @default(now())
   client        Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
   tasks         ScheduledTask[]
@@ -491,6 +492,18 @@ model TaskCategory {
   updatedAt   DateTime @updatedAt
 
   @@map("TaskCategory")
+}
+
+// Editable catalog of service technologies (Fiber, DOCSIS, Wireless, ...).
+// Service.technology stores the name (free text) — no FK relation in Phase 1.
+model ServiceTechnology {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("ServiceTechnology")
 }
 
 // Editable catalog of task priorities, with a colour and a sort weight.
@@ -1394,6 +1407,7 @@ model GestionRealIngestConfig {
   fiberProject      Project? @relation("GrIngestFiber", fields: [fiberProjectId], references: [id], onDelete: SetNull)
   wirelessProjectId String?
   wirelessProject   Project? @relation("GrIngestWireless", fields: [wirelessProjectId], references: [id], onDelete: SetNull)
+  sourceEstado      String   @default("CONF")
   updatedAt         DateTime @updatedAt
 
   @@index([fiberProjectId])
@@ -1540,6 +1554,10 @@ model Session {
   loginAt    DateTime  @default(now())
   lastSeenAt DateTime  @default(now())
   revokedAt  DateTime?
+  // session-expiration: absolute cap = loginAt + 8h (== JWT MAX_AGE). Nullable
+  // only for legacy rows; the migration backfills them. revokedAt=null AND
+  // expiresAt>now AND lastSeenAt>now-1h => the session is "alive".
+  expiresAt  DateTime?
   createdAt  DateTime  @default(now())
 
   @@index([rbacUserId])

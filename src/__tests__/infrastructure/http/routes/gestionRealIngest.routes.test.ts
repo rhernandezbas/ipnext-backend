@@ -116,6 +116,7 @@ describe('gestionRealIngest.routes', () => {
       windowMonths: 12,
       fiberProjectId: null,
       wirelessProjectId: null,
+      sourceEstado: 'CONF',
     });
   });
 

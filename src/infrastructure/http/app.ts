@@ -130,9 +130,24 @@ import { UpdateProjectCategory } from '@application/use-cases/UpdateProjectCateg
 import { DeleteProjectCategory } from '@application/use-cases/DeleteProjectCategory';
 import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
 import { createTaskCategoriesRouter } from './routes/taskCategories.routes';
+// ServiceTechnology catalog (service-technology change)
+import { PrismaServiceTechnologyRepository } from '../adapters/prisma/PrismaServiceTechnologyRepository';
+import { createServiceTechnologiesRouter } from './routes/serviceTechnologies.routes';
+import { ListServiceTechnology } from '@application/use-cases/ListServiceTechnology';
+import { GetServiceTechnology } from '@application/use-cases/GetServiceTechnology';
+import { CreateServiceTechnology } from '@application/use-cases/CreateServiceTechnology';
+import { UpdateServiceTechnology } from '@application/use-cases/UpdateServiceTechnology';
+import { DeleteServiceTechnology } from '@application/use-cases/DeleteServiceTechnology';
+// Global services (contracts) listing — feeds the frontend contracts page.
+import { PrismaServiceRepository } from '../adapters/prisma/PrismaServiceRepository';
+import { createServicesRouter } from './routes/services.routes';
+import { ListServices } from '@application/use-cases/ListServices';
+import { GetServiceStats } from '@application/use-cases/GetServiceStats';
 import { createGestionRealRouter } from './routes/gestionReal.routes';
 import { createGrSyncRouter } from './routes/gr-sync.routes';
 import { ResetGrClientsCursor } from '@application/use-cases/ResetGrClientsCursor';
+import { ArmGrContractsBackfill } from '@application/use-cases/ArmGrContractsBackfill';
+import { ResyncAllGr } from '@application/use-cases/ResyncAllGr';
 import { ReconcileGrClients } from '@application/use-cases/ReconcileGrClients';
 import { PrismaClientMirrorReadRepository } from '../adapters/prisma/PrismaClientMirrorReadRepository';
 import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
@@ -426,6 +441,7 @@ import { createSessionsRouter } from './routes/sessions.routes';
 import { ListActiveSessions } from '@application/use-cases/sessions/ListActiveSessions';
 import { RevokeSession } from '@application/use-cases/sessions/RevokeSession';
 import { RevokeAllSessionsForUser } from '@application/use-cases/sessions/RevokeAllSessionsForUser';
+import { ListSessionHistory } from '@application/use-cases/sessions/ListSessionHistory';
 // SDD #3 Phase 4b — role catalog mutation use cases
 import { CreateRbacRole } from '@application/use-cases/rbac/CreateRbacRole';
 import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
@@ -633,6 +649,18 @@ export function createApp() {
   const createTaskCategory = new CreateTaskCategory(taskCategoryRepo);
   const updateTaskCategory = new UpdateTaskCategory(taskCategoryRepo);
   const deleteTaskCategory = new DeleteTaskCategory(taskCategoryRepo);
+
+  const serviceTechnologyRepo = new PrismaServiceTechnologyRepository();
+  const listServiceTechnology = new ListServiceTechnology(serviceTechnologyRepo);
+  const getServiceTechnology = new GetServiceTechnology(serviceTechnologyRepo);
+  const createServiceTechnology = new CreateServiceTechnology(serviceTechnologyRepo);
+  const updateServiceTechnology = new UpdateServiceTechnology(serviceTechnologyRepo);
+  const deleteServiceTechnology = new DeleteServiceTechnology(serviceTechnologyRepo);
+
+  // Global services (contracts) listing.
+  const serviceRepo = new PrismaServiceRepository();
+  const listServices = new ListServices(serviceRepo);
+  const getServiceStats = new GetServiceStats(serviceRepo);
 
   const taskPriorityRepo = new PrismaTaskPriorityRepository();
   const listTaskPriority = new ListTaskPriority(taskPriorityRepo);
@@ -868,6 +896,14 @@ export function createApp() {
     authAdapter,
     listTaskCategory, getTaskCategory, createTaskCategory, updateTaskCategory, deleteTaskCategory,
   ));
+  // ServiceTechnology catalog — mounted at /api root (no catch-all conflict).
+  app.use('/api', createServiceTechnologiesRouter(
+    authAdapter,
+    listServiceTechnology, getServiceTechnology, createServiceTechnology,
+    updateServiceTechnology, deleteServiceTechnology,
+  ));
+  // Global services (contracts) listing — mounted at /api root, before the catch-all.
+  app.use('/api', createServicesRouter(authAdapter, listServices, getServiceStats));
   // TaskPriority catalog — also before the scheduling catch-all router.
   app.use('/api/scheduling', createTaskPrioritiesRouter(
     authAdapter,
@@ -878,12 +914,20 @@ export function createApp() {
   // /api/gestion-real read-only mount below, so its RBAC-guarded GET /status takes
   // precedence over the legacy auth-only /sync/status (Express matches in order).
   const grSyncConfigRepo = new PrismaGestionRealSyncConfigRepository();
+  // Shared SyncState repo + reset/arm/resync-all use cases — wired into both the
+  // RBAC sync router (/resync-all, /reset) and the auth-only admin router.
+  const grSyncState = new PrismaSyncStateRepository();
+  const resetGrClientsCursor = new ResetGrClientsCursor(grSyncState);
+  const armGrContractsBackfill = new ArmGrContractsBackfill(grSyncState);
+  const resyncAllGr = new ResyncAllGr(resetGrClientsCursor, armGrContractsBackfill);
   app.use('/api/gestion-real/sync', createGestionRealSyncRouter(
     authAdapter,
     requirePerm,
     new GetSyncConfig(grSyncConfigRepo),
     new UpdateSyncConfig(grSyncConfigRepo),
-    new GetGestionRealSyncStatus(new PrismaSyncStateRepository(), new PrismaMirrorCountsRepository()),
+    new GetGestionRealSyncStatus(grSyncState, new PrismaMirrorCountsRepository()),
+    resetGrClientsCursor,
+    resyncAllGr,
   ));
   // Gestión Real mirror — read-only sync status endpoint (legacy, auth-only).
   app.use('/api/gestion-real', createGestionRealRouter(
@@ -893,7 +937,7 @@ export function createApp() {
   // GR sync admin — reset the gr-clients cursor to force a full backfill next tick.
   app.use('/api/admin/gr-sync', createGrSyncRouter(
     authAdapter,
-    new ResetGrClientsCursor(new PrismaSyncStateRepository()),
+    resetGrClientsCursor,
     reconcileGrClients,
   ));
   // Task comments — mounted BEFORE the scheduling catch-all router to avoid /:id swallowing
@@ -1180,7 +1224,7 @@ export function createApp() {
     createAuditEventsRouter(new ListAuditEvents(auditEventRepo)),
   );
 
-  // SDD #5 — session management endpoints
+  // SDD #5 — session management endpoints (+ sessions-history: history endpoint)
   app.use(
     '/api/admin/sessions',
     authMiddlewareForRbac,
@@ -1188,6 +1232,7 @@ export function createApp() {
       new ListActiveSessions(sessionRepo),
       new RevokeSession(sessionRepo),
       new RevokeAllSessionsForUser(sessionRepo),
+      new ListSessionHistory(sessionRepo),
       requirePerm('admin', 'view_sessions'),
       requirePerm('admin', 'revoke_sessions'),
     ),

@@ -9,6 +9,7 @@ const DEFAULTS: IngestConfig = {
   windowMonths: 12,
   fiberProjectId: null,
   wirelessProjectId: null,
+  sourceEstado: 'CONF',
 };
 
 /**
@@ -33,6 +34,7 @@ export class InMemoryGestionRealIngestConfigRepository implements GestionRealIng
         'fiberProjectId' in patch ? patch.fiberProjectId! ?? null : current.fiberProjectId,
       wirelessProjectId:
         'wirelessProjectId' in patch ? patch.wirelessProjectId! ?? null : current.wirelessProjectId,
+      sourceEstado: patch.sourceEstado ?? current.sourceEstado,
     };
     return { ...this.config };
   }

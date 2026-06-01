@@ -13,6 +13,7 @@ const DEFAULTS: IngestConfig = {
   windowMonths: 12,
   fiberProjectId: null,
   wirelessProjectId: null,
+  sourceEstado: 'CONF',
 };
 
 interface ConfigRow {
@@ -20,6 +21,7 @@ interface ConfigRow {
   windowMonths: number;
   fiberProjectId: string | null;
   wirelessProjectId: string | null;
+  sourceEstado: string;
 }
 
 function toConfig(row: ConfigRow): IngestConfig {
@@ -28,6 +30,7 @@ function toConfig(row: ConfigRow): IngestConfig {
     windowMonths: row.windowMonths,
     fiberProjectId: row.fiberProjectId,
     wirelessProjectId: row.wirelessProjectId,
+    sourceEstado: row.sourceEstado,
   };
 }
 
@@ -56,6 +59,7 @@ export class PrismaGestionRealIngestConfigRepository implements GestionRealInges
     if (patch.windowMonths !== undefined) data.windowMonths = patch.windowMonths;
     if ('fiberProjectId' in patch) data.fiberProjectId = patch.fiberProjectId ?? null;
     if ('wirelessProjectId' in patch) data.wirelessProjectId = patch.wirelessProjectId ?? null;
+    if (patch.sourceEstado !== undefined) data.sourceEstado = patch.sourceEstado;
 
     const row: ConfigRow = await this.table.upsert({
       where: { id: SINGLETON_ID },

@@ -10,6 +10,7 @@ export interface SessionDto {
   loginAt: string;
   lastSeenAt: string;
   revokedAt: string | null;
+  expiresAt: string | null;
   createdAt: string;
 }
 
@@ -31,6 +32,7 @@ export function toSessionDto(s: Session): SessionDto {
     loginAt: s.loginAt,
     lastSeenAt: s.lastSeenAt,
     revokedAt: s.revokedAt,
+    expiresAt: s.expiresAt,
     createdAt: s.createdAt,
   };
 }

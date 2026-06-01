@@ -146,6 +146,29 @@ export class TaskPriorityInUseError extends DomainError {
   }
 }
 
+/**
+ * Raised when the GR ingest cannot resolve a required catalog entry (the task
+ * priority or category NAME it must stamp on every created task does not exist
+ * as a row in the corresponding catalog).
+ *
+ * This is BLOCKING by design: rather than write a phantom priority/category that
+ * exists in no catalog (the prod bug), the ingest aborts the whole run and
+ * creates ZERO tasks until the catalog is fixed.
+ */
+export class IngestCatalogEntryMissingError extends DomainError {
+  constructor(
+    public readonly catalog: 'priority' | 'category',
+    public readonly name: string,
+  ) {
+    super(
+      `GR ingest aborted: required ${catalog} "${name}" not found in its catalog. ` +
+        'No tasks were created. Add the entry to the catalog and re-run.',
+      'INGEST_CATALOG_ENTRY_MISSING',
+    );
+    this.name = 'IngestCatalogEntryMissingError';
+  }
+}
+
 export class ProjectTypeNotFoundError extends DomainError {
   constructor(id: string) {
     super(`ProjectType with id ${id} not found`, 'PROJECT_TYPE_NOT_FOUND');

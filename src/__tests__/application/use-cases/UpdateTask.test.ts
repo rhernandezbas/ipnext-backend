@@ -5,6 +5,9 @@ import { ReferenceNotFoundError } from '../../../domain/errors/scheduling';
 import { EntityLookup } from '../../../domain/ports/EntityLookup';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
+// REQ-REQUIRED-1/2: default IDs for the required FKs in makeBaseInput
+const DEFAULT_CUSTOMER_ID = 'customer-default-0000-000000000001';
+const DEFAULT_SERVICE_ID  = 'service-default-00000-000000000001';
 
 class StubLookup implements EntityLookup {
   private ids: Set<string>;
@@ -36,8 +39,9 @@ function makeBaseInput() {
     notes: null,
     startDate: null,
     endDate: null,
-    customerId: null,
-    serviceId: null,
+    // REQ-REQUIRED-1/2: required on create
+    customerId: DEFAULT_CUSTOMER_ID,
+    serviceId: DEFAULT_SERVICE_ID,
     partnerId: null,
     reporterId: null,
     assigneeId: null,
@@ -48,18 +52,22 @@ function makeBaseInput() {
 }
 
 async function createTaskInRepo(repo: InMemorySchedulingRepository, extraInput: Record<string, unknown> = {}) {
-  // Build a lookup that recognizes any IDs in extraInput to avoid FK errors during seed
+  // Build a lookup that recognizes any IDs in extraInput + the defaults to avoid FK errors during seed
   const watcherIds = (extraInput['watcherIds'] as string[] | undefined) ?? [];
-  const customerId = extraInput['customerId'] as string | undefined;
+  const customerId = (extraInput['customerId'] as string | undefined) ?? DEFAULT_CUSTOMER_ID;
+  const serviceId  = (extraInput['serviceId']  as string | undefined) ?? DEFAULT_SERVICE_ID;
   const assigneeId = extraInput['assigneeId'] as string | undefined;
   const knownIds = [
     ...watcherIds,
-    ...(customerId ? [customerId] : []),
+    customerId,
+    serviceId,
     ...(assigneeId ? [assigneeId] : []),
   ];
   const projectId = extraInput['projectId'] as string | undefined;
+  const seedCustomerLookup = new StubLookup(customerId);
+  const seedServiceLookup  = new StubLookup(serviceId);
   const seedLookup = new StubLookup(...knownIds, ...(projectId ? [projectId] : []));
-  const createUC = new CreateTask(repo, seedLookup, emptyLookup, emptyLookup, seedLookup, seedLookup);
+  const createUC = new CreateTask(repo, seedCustomerLookup, seedServiceLookup, emptyLookup, seedLookup, seedLookup);
   return createUC.execute({ ...makeBaseInput(), ...extraInput } as Parameters<typeof createUC.execute>[0]);
 }
 

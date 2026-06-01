@@ -6,16 +6,34 @@ import { InMemoryGestionRealIngestConfigRepository } from '@infrastructure/adapt
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { InMemoryProjectRepository } from '@infrastructure/adapters/in-memory/InMemoryProjectRepository';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
+import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
+import { InMemoryTaskPriorityRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskPriorityRepository';
+import { InMemoryTaskCategoryRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskCategoryRepository';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
+import { IngestCatalogEntryMissingError } from '@domain/errors/scheduling';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
 const INGEST_FLAG_KEY = 'gestion-real-ingest';
+
+// The catalog NAMES the ingest must resolve. These MUST exist as rows in the
+// TaskPriority / TaskCategory catalogs (see prod catalog: "Normal", "Instalación").
+const INGEST_PRIORITY_NAME = 'Normal';
+const INGEST_CATEGORY_NAME = 'Instalación';
+
+/** Seed the two catalogs with the canonical entries the ingest depends on. */
+async function seedCatalogs(
+  priorities: InMemoryTaskPriorityRepository,
+  categories: InMemoryTaskCategoryRepository,
+): Promise<void> {
+  await priorities.create({ name: INGEST_PRIORITY_NAME, color: '#888', weight: 2 });
+  await categories.create({ name: INGEST_CATEGORY_NAME, description: null });
+}
 
 function order(overrides: Partial<GrServiceOrder> & Pick<GrServiceOrder, 'grOrdenId'>): GrServiceOrder {
   return {
     grOrdenId: overrides.grOrdenId,
     tipo: overrides.tipo ?? 'CI',
-    estado: overrides.estado ?? 'PEND',
+    estado: overrides.estado ?? 'CONF',
     cliente: overrides.cliente ?? 'gr-cli-1',
     contrato: overrides.contrato ?? 'gr-con-1',
     domicilio:
@@ -35,6 +53,8 @@ interface Harness {
   state: InMemorySyncStateRepository;
   projects: InMemoryProjectRepository;
   featureFlags: InMemoryFeatureFlagRepository;
+  priorities: InMemoryTaskPriorityRepository;
+  categories: InMemoryTaskCategoryRepository;
   useCase: IngestGestionRealOrders;
 }
 
@@ -46,17 +66,20 @@ async function makeHarness(): Promise<Harness> {
   const state = new InMemorySyncStateRepository();
   const projects = new InMemoryProjectRepository();
   const featureFlags = new InMemoryFeatureFlagRepository();
+  const priorities = new InMemoryTaskPriorityRepository();
+  const categories = new InMemoryTaskCategoryRepository();
   // Master switch ON by default; per-test we flip it to assert gating.
   featureFlags.seed(INGEST_FLAG_KEY, true);
+  await seedCatalogs(priorities, categories);
   await config.update({
     fiberProjectId: 'p-fiber',
     wirelessProjectId: 'p-wifi',
   });
-  const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
+  const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
     defaultStageId: DEFAULT_STAGE_ID,
     now: () => new Date('2026-05-29T12:00:00Z'),
   });
-  return { gr, resolver, scheduling, config, state, projects, featureFlags, useCase };
+  return { gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, useCase };
 }
 
 describe('IngestGestionRealOrders', () => {
@@ -96,6 +119,9 @@ describe('IngestGestionRealOrders', () => {
     expect(task!.address).toBe('Calle Falsa 123');
     expect(task!.title).toContain('Acme');
     expect(task!.title).not.toContain('REVISAR');
+    // Priority/category MUST be the catalog NAMES, never the phantom 'normal'/'installation'.
+    expect(task!.priority).toBe(INGEST_PRIORITY_NAME);
+    expect(task!.category).toBe(INGEST_CATEGORY_NAME);
   });
 
   it('creates a wireless task targeting wirelessProjectId (REQ-CREATE-2)', async () => {
@@ -214,6 +240,8 @@ describe('IngestGestionRealOrders', () => {
       h.state,
       h.projects,
       featureFlags,
+      h.priorities,
+      h.categories,
       { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
     );
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Judy' });
@@ -261,7 +289,7 @@ describe('IngestGestionRealOrders', () => {
     });
   });
 
-  it('queries GR with estado PEND, fecha_tipo c and a window derived from windowMonths', async () => {
+  it('queries GR with the configured source estado (default CONF), fecha_tipo c and a window derived from windowMonths', async () => {
     const h = await makeHarness();
     await h.config.update({ windowMonths: 6 });
     h.gr.serviceOrders = [];
@@ -270,7 +298,7 @@ describe('IngestGestionRealOrders', () => {
 
     expect(h.gr.serviceOrderCalls).toHaveLength(1);
     const call = h.gr.serviceOrderCalls[0];
-    expect(call.estado).toBe('PEND');
+    expect(call.estado).toBe('CONF');
     expect(call.fechaTipo).toBe('c');
     // window: now=2026-05-29, 6 months back → 29-11-2025 .. 29-05-2026
     expect(call.fechaHasta).toBe('29-05-2026');
@@ -288,8 +316,11 @@ describe('IngestGestionRealOrders', () => {
     const projects = new InMemoryProjectRepository();
     const featureFlags = new InMemoryFeatureFlagRepository();
     featureFlags.seed(INGEST_FLAG_KEY, true);
+    const priorities = new InMemoryTaskPriorityRepository();
+    const categories = new InMemoryTaskCategoryRepository();
+    await seedCatalogs(priorities, categories);
     await config.update({ fiberProjectId: null, wirelessProjectId: 'p-wifi' });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
       defaultStageId: DEFAULT_STAGE_ID,
       now: () => new Date('2026-05-29T12:00:00Z'),
     });
@@ -322,8 +353,11 @@ describe('IngestGestionRealOrders', () => {
     const projects = new InMemoryProjectRepository();
     const featureFlags = new InMemoryFeatureFlagRepository();
     featureFlags.seed(INGEST_FLAG_KEY, true);
+    const priorities = new InMemoryTaskPriorityRepository();
+    const categories = new InMemoryTaskCategoryRepository();
+    await seedCatalogs(priorities, categories);
     await config.update({ fiberProjectId: 'p-fiber', wirelessProjectId: null });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
       defaultStageId: DEFAULT_STAGE_ID,
       now: () => new Date('2026-05-29T12:00:00Z'),
     });
@@ -378,22 +412,87 @@ describe('IngestGestionRealOrders', () => {
     expect(saved).not.toBeNull();
   });
 
-  // ── FIX 3: re-filter estado app-side ──
+  // ── FIX 3: re-filter estado app-side against the configured source estado ──
 
-  it('skips a CI order whose estado is not PEND (FIX3)', async () => {
+  it('skips a CI order whose estado != config.sourceEstado (default CONF) (FIX3)', async () => {
     const h = await makeHarness();
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
     h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
     h.gr.serviceOrders = [
-      order({ grOrdenId: 'closed', estado: 'FIN' }),
+      // CI but estado != CONF → must be skipped even though it's an installation.
       order({ grOrdenId: 'pend', estado: 'PEND' }),
+      order({ grOrdenId: 'conf', estado: 'CONF' }),
     ];
 
     const result = await h.useCase.execute();
 
     expect(result.created).toBe(1);
-    expect(await h.scheduling.findTaskByGrOrdenId('closed')).toBeNull();
+    expect(await h.scheduling.findTaskByGrOrdenId('pend')).toBeNull();
+    expect(await h.scheduling.findTaskByGrOrdenId('conf')).not.toBeNull();
+  });
+
+  it('honors a non-default config.sourceEstado (PEND): queries GR with PEND and ingests only PEND CI orders', async () => {
+    const h = await makeHarness();
+    await h.config.update({ sourceEstado: 'PEND' });
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [
+      order({ grOrdenId: 'pend', estado: 'PEND' }),
+      order({ grOrdenId: 'conf', estado: 'CONF' }),
+    ];
+
+    const result = await h.useCase.execute();
+
+    expect(h.gr.serviceOrderCalls[0].estado).toBe('PEND');
+    expect(result.created).toBe(1);
     expect(await h.scheduling.findTaskByGrOrdenId('pend')).not.toBeNull();
+    expect(await h.scheduling.findTaskByGrOrdenId('conf')).toBeNull();
+  });
+
+  // ── PROD FIX: resolve the workflow's INITIAL stage, not a magic "Pendiente" ──
+
+  it('classified order lands in the target workflow\'s initial stage (lowest order), not the blank default', async () => {
+    // The real installation workflow has NO "Pendiente" stage — its entry stage
+    // is "Nuevo" (order 0). The task must land there, NOT in the empty default.
+    const gr = new InMemoryGestionRealPort();
+    const resolver = new InMemoryGrLinkResolver();
+    const stageRepo = new InMemoryStageRepository();
+    const scheduling = new InMemorySchedulingRepository(stageRepo);
+    const config = new InMemoryGestionRealIngestConfigRepository();
+    const state = new InMemorySyncStateRepository();
+    const projects = new InMemoryProjectRepository();
+    const featureFlags = new InMemoryFeatureFlagRepository();
+    featureFlags.seed(INGEST_FLAG_KEY, true);
+
+    // Build the fiber project with an installation workflow whose stages mirror prod.
+    const wfId = 'wf-fiber-install';
+    const nuevo = await stageRepo.add(wfId, { name: 'Nuevo', category: 'nuevo', order: 0 });
+    await stageRepo.add(wfId, { name: 'Confirmado', category: 'enProgreso', order: 1 });
+    await stageRepo.add(wfId, { name: 'Enviar a IClass', category: 'enProgreso', order: 5 });
+    const fiberProject = await projects.create({ title: 'INSTALACION FIBRA', workflowId: wfId });
+
+    const priorities = new InMemoryTaskPriorityRepository();
+    const categories = new InMemoryTaskCategoryRepository();
+    await seedCatalogs(priorities, categories);
+    await config.update({ fiberProjectId: fiberProject.id, wirelessProjectId: null });
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
+      // Intentionally BLANK default — the workflow's initial stage must be used.
+      defaultStageId: '',
+      now: () => new Date('2026-05-29T12:00:00Z'),
+    });
+    resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    gr.serviceOrders = [order({ grOrdenId: 'ws-1' })];
+
+    const result = await useCase.execute();
+
+    expect(result.created).toBe(1);
+    const task = await scheduling.findTaskByGrOrdenId('ws-1');
+    expect(task).not.toBeNull();
+    expect(task!.projectId).toBe(fiberProject.id);
+    // The fix: stage resolved via getInitialStage → "Nuevo" (order 0), NOT blank.
+    expect(task!.stageId).toBe(nuevo.id);
+    expect(task!.stageId).not.toBe('');
   });
 
   // ── FIX 4: month-window overflow on long→short month transition ──
@@ -407,8 +506,11 @@ describe('IngestGestionRealOrders', () => {
     const projects = new InMemoryProjectRepository();
     const featureFlags = new InMemoryFeatureFlagRepository();
     featureFlags.seed(INGEST_FLAG_KEY, true);
+    const priorities = new InMemoryTaskPriorityRepository();
+    const categories = new InMemoryTaskCategoryRepository();
+    await seedCatalogs(priorities, categories);
     await config.update({ windowMonths: 1 });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
       defaultStageId: DEFAULT_STAGE_ID,
       // 2026-03-31 local time (avoid TZ rollover): construct via local Date.
       now: () => new Date(2026, 2, 31, 12, 0, 0),
@@ -421,5 +523,81 @@ describe('IngestGestionRealOrders', () => {
     expect(call.fechaHasta).toBe('31-03-2026');
     // 1 month back must land in February, not roll forward into March.
     expect(call.fechaDesde).toBe('28-02-2026');
+  });
+
+  // ── CATALOG FIX: priority/category must come from the real catalogs ──
+
+  it('created task uses the catalog NAMES "Normal"/"Instalación", not phantom values', async () => {
+    const h = await makeHarness();
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: 'cat-1' })];
+
+    const result = await h.useCase.execute();
+
+    expect(result.created).toBe(1);
+    const task = await h.scheduling.findTaskByGrOrdenId('cat-1');
+    expect(task!.priority).toBe('Normal');
+    expect(task!.category).toBe('Instalación');
+    // The old hardcoded phantom values must be gone.
+    expect(task!.priority).not.toBe('normal');
+    expect(task!.category).not.toBe('installation');
+  });
+
+  it('needs-review task ALSO uses the catalog NAMES (priority/category resolved)', async () => {
+    const h = await makeHarness();
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Carol' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: 'FIBRA SIN NUMERO' });
+    h.gr.serviceOrders = [order({ grOrdenId: 'cat-rev' })];
+
+    await h.useCase.execute();
+
+    const task = await h.scheduling.findTaskByGrOrdenId('cat-rev');
+    expect(task!.priority).toBe('Normal');
+    expect(task!.category).toBe('Instalación');
+  });
+
+  it('BLOCKS the run and creates ZERO tasks when the priority catalog lacks "Normal"', async () => {
+    const h = await makeHarness();
+    // Wipe the priority catalog so "Normal" cannot be resolved (only a foreign entry).
+    const fresh = new InMemoryTaskPriorityRepository();
+    await fresh.create({ name: 'Baja', color: '#aaa', weight: 1 });
+    const useCase = new IngestGestionRealOrders(
+      h.gr, h.resolver, h.scheduling, h.config, h.state, h.projects, h.featureFlags,
+      fresh, h.categories,
+      { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
+    );
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: 'blk-1' }), order({ grOrdenId: 'blk-2' })];
+
+    await expect(useCase.execute()).rejects.toBeInstanceOf(IngestCatalogEntryMissingError);
+
+    // ZERO ingested tasks created — blocking is absolute (pre-seeded demo tasks
+    // have no grOrdenId, so filtering by grOrdenId isolates the ingest output).
+    expect(await h.scheduling.findTaskByGrOrdenId('blk-1')).toBeNull();
+    expect(await h.scheduling.findTaskByGrOrdenId('blk-2')).toBeNull();
+    const all = await h.scheduling.listTasks();
+    expect(all.filter(t => t.grOrdenId != null)).toHaveLength(0);
+  });
+
+  it('BLOCKS the run and creates ZERO tasks when the category catalog lacks "Instalación"', async () => {
+    const h = await makeHarness();
+    const fresh = new InMemoryTaskCategoryRepository();
+    await fresh.create({ name: 'Otro', description: null });
+    const useCase = new IngestGestionRealOrders(
+      h.gr, h.resolver, h.scheduling, h.config, h.state, h.projects, h.featureFlags,
+      h.priorities, fresh,
+      { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
+    );
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedService('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: 'blk-3' })];
+
+    await expect(useCase.execute()).rejects.toBeInstanceOf(IngestCatalogEntryMissingError);
+
+    expect(await h.scheduling.findTaskByGrOrdenId('blk-3')).toBeNull();
+    const all = await h.scheduling.listTasks();
+    expect(all.filter(t => t.grOrdenId != null)).toHaveLength(0);
   });
 });

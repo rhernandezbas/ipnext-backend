@@ -1,4 +1,5 @@
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
+import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
 
 /**
  * Formal coverage for the Gestión Real installation-ingest extensions
@@ -81,6 +82,45 @@ describe('InMemorySchedulingRepository — GR ingest extensions', () => {
       const result = await repo.listNeedsReview();
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('getInitialStage', () => {
+    it('returns the lowest-order stage of the workflow', async () => {
+      const stageRepo = new InMemoryStageRepository();
+      const repo = new InMemorySchedulingRepository(stageRepo);
+      // Seed an installation workflow whose stages are NOT named "Pendiente".
+      const wfId = 'wf-install';
+      const confirmado = await stageRepo.add(wfId, { name: 'Confirmado', category: 'enProgreso', order: 1 });
+      const nuevo = await stageRepo.add(wfId, { name: 'Nuevo', category: 'nuevo', order: 0 });
+      await stageRepo.add(wfId, { name: 'Enviar a IClass', category: 'enProgreso', order: 5 });
+
+      const initial = await repo.getInitialStage(wfId);
+
+      expect(initial).not.toBeNull();
+      expect(initial!.id).toBe(nuevo.id);
+      expect(initial!.name).toBe('Nuevo');
+      expect(initial!.order).toBe(0);
+      // Not the higher-order one.
+      expect(initial!.id).not.toBe(confirmado.id);
+    });
+
+    it('returns null for an unknown workflow', async () => {
+      const stageRepo = new InMemoryStageRepository();
+      const repo = new InMemorySchedulingRepository(stageRepo);
+      await stageRepo.add('wf-other', { name: 'Nuevo', category: 'nuevo', order: 0 });
+
+      const initial = await repo.getInitialStage('wf-does-not-exist');
+
+      expect(initial).toBeNull();
+    });
+
+    it('returns null when no stage repo is injected', async () => {
+      const repo = new InMemorySchedulingRepository();
+
+      const initial = await repo.getInitialStage('wf-any');
+
+      expect(initial).toBeNull();
     });
   });
 });

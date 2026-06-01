@@ -5,10 +5,24 @@ import { GestionRealIngestConfigRepository } from '@domain/ports/GestionRealInge
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 import { ProjectRepository } from '@domain/ports/ProjectRepository';
 import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+import { TaskPriorityRepository } from '@domain/ports/TaskPriorityRepository';
+import { TaskCategoryRepository } from '@domain/ports/TaskCategoryRepository';
+import { IngestCatalogEntryMissingError } from '@domain/errors/scheduling';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
 import { classifyTech } from './classifyTech';
 
 const SYNC_ENTITY = 'gr-ingest';
+
+/**
+ * Catalog NAMES every ingested task must be stamped with. `ScheduledTask.priority`
+ * and `.category` are strings holding the catalog NAME, so these MUST exist as
+ * rows in the TaskPriority / TaskCategory catalogs (prod uses "Normal" — capital N —
+ * and "Instalación" — capital + accent). The previous hardcoded 'normal'/'installation'
+ * matched NO catalog row, producing phantom values. Resolution is BLOCKING: if either
+ * name is absent the run aborts and creates zero tasks (see IngestCatalogEntryMissingError).
+ */
+const INGEST_PRIORITY_NAME = 'Normal';
+const INGEST_CATEGORY_NAME = 'Instalación';
 
 /**
  * Master switch for the whole ingest and the SINGLE runtime on/off gate.
@@ -33,8 +47,6 @@ function isUniqueViolation(err: unknown): boolean {
   const message = (err as { message?: unknown }).message;
   return typeof message === 'string' && /unique constraint/i.test(message);
 }
-const PENDING_STAGE_NAME = 'Pendiente';
-const TASK_CATEGORY = 'installation';
 
 /** Outcome counts for one ingest run. */
 export interface IngestRunResult {
@@ -59,7 +71,7 @@ export interface IngestOptions {
  * Ingest pending installation orders from Gestión Real into local ScheduledTasks.
  *
  * Flow (per design): check feature flag → if OFF, no-op → fetch CI-eligible orders
- * (estado=PEND, fecha_tipo=c, window from windowMonths) → filter tipo==="CI" →
+ * (estado=config.sourceEstado [default CONF], fecha_tipo=c, window from windowMonths) → filter tipo==="CI" →
  * resolve client+service FKs locally (miss → skip+count unmirrored) → idempotency
  * check by grOrdenId (exists → skip+count duplicate) → classify tech → pick target
  * project → create task → persist run counts to SyncState ('gr-ingest').
@@ -78,6 +90,8 @@ export class IngestGestionRealOrders {
     private readonly state: SyncStateRepository,
     private readonly projects: ProjectRepository,
     private readonly featureFlags: FeatureFlagRepository,
+    private readonly priorities: TaskPriorityRepository,
+    private readonly categories: TaskCategoryRepository,
     opts: IngestOptions,
   ) {
     this.now = opts.now ?? (() => new Date());
@@ -98,6 +112,15 @@ export class IngestGestionRealOrders {
     const flag = await this.featureFlags.get(INGEST_FLAG_KEY);
     if (!flag?.enabled) return counts;
 
+    // BLOCKING: resolve the catalog entries every task must carry BEFORE touching
+    // GR or creating anything. ScheduledTask.priority/.category hold the catalog
+    // NAME, so they must match a real row. A miss aborts the whole run with ZERO
+    // tasks created — never write a phantom value outside the catalog.
+    const priority = await this.priorities.getByName(INGEST_PRIORITY_NAME);
+    if (!priority) throw new IngestCatalogEntryMissingError('priority', INGEST_PRIORITY_NAME);
+    const category = await this.categories.getByName(INGEST_CATEGORY_NAME);
+    if (!category) throw new IngestCatalogEntryMissingError('category', INGEST_CATEGORY_NAME);
+
     const config = await this.config.get();
 
     const today = this.now();
@@ -105,15 +128,24 @@ export class IngestGestionRealOrders {
     const fechaDesde = formatGrDate(monthsBack(today, config.windowMonths));
 
     const orders = await this.gr.getServiceOrders({
-      estado: 'PEND',
+      estado: config.sourceEstado,
       fechaTipo: 'c',
       fechaDesde,
       fechaHasta,
     });
 
-    // App-side guard: trust GR's server-side estado=PEND but re-filter defensively.
-    for (const order of orders.filter(o => o.tipo === 'CI' && o.estado === 'PEND')) {
-      await this.ingestOne(order, config.fiberProjectId, config.wirelessProjectId, counts);
+    // App-side guard: trust GR's server-side estado filter but re-filter defensively
+    // against the SAME configured source estado. The tipo==="CI" (installation)
+    // filter is fixed.
+    for (const order of orders.filter(o => o.tipo === 'CI' && o.estado === config.sourceEstado)) {
+      await this.ingestOne(
+        order,
+        config.fiberProjectId,
+        config.wirelessProjectId,
+        priority.name,
+        category.name,
+        counts,
+      );
     }
 
     await this.state.save({
@@ -131,6 +163,8 @@ export class IngestGestionRealOrders {
     order: GrServiceOrder,
     fiberProjectId: string | null,
     wirelessProjectId: string | null,
+    priorityName: string,
+    categoryName: string,
     counts: IngestRunResult,
   ): Promise<void> {
     // 1-2. Resolve local FKs. A miss is expected until the mirror catches up; skip + count.
@@ -190,11 +224,11 @@ export class IngestGestionRealOrders {
         title,
         description,
         stageId,
-        priority: 'normal',
+        priority: priorityName,
         estimatedHours: 1,
         address: order.domicilio?.direccion ?? null,
         coordinates: null,
-        category: TASK_CATEGORY,
+        category: categoryName,
         projectId,
         projectName: null,
         completedAt: null,
@@ -227,19 +261,29 @@ export class IngestGestionRealOrders {
   }
 
   /**
-   * Resolve the "Pendiente" stage of the target project's workflow. Falls back
-   * to the configured default-pending stage when the project has no workflow
-   * scope or no matching stage (and always for needs-review / null project).
+   * Resolve the INITIAL stage of the target project's workflow — the stage with
+   * the lowest `order`, i.e. the entry state a new task should land in.
+   *
+   * The real installation workflow has NO stage literally named "Pendiente"
+   * (its entry stage is "Nuevo"), so resolving by a magic name returned null and
+   * the task fell back to a blank default stage, violating the stageId FK and
+   * making every order fail (created=0). Resolving the workflow's first stage by
+   * `order` is name-agnostic and works for any workflow.
+   *
+   * Falls back to `defaultStageId` only when there is no project, no workflow on
+   * the project, or the workflow has no stages — and always for needs-review /
+   * null-project tasks.
    */
   private async resolveStageId(projectId: string | null): Promise<string> {
     if (projectId) {
       const project = await this.projects.get(projectId);
-      const workflowId = project?.workflowId ?? undefined;
-      const stage = await this.scheduling.getStageByName(PENDING_STAGE_NAME, workflowId);
-      if (stage) return stage.id;
+      const workflowId = project?.workflowId ?? null;
+      if (workflowId) {
+        const stage = await this.scheduling.getInitialStage(workflowId);
+        if (stage) return stage.id;
+      }
     }
-    const global = await this.scheduling.getStageByName(PENDING_STAGE_NAME);
-    return global?.id ?? this.defaultStageId;
+    return this.defaultStageId;
   }
 }
 
