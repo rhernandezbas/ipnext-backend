@@ -38,4 +38,6 @@ export interface SessionRepository {
   revokeAllForUser(rbacUserId: string): Promise<number>;
   /** Updates lastSeenAt (callers apply throttling). */
   touch(id: string): Promise<void>;
+  /** Revoked sessions only (revokedAt != null), paginated, ordered revokedAt DESC. */
+  findRevoked(page: number, pageSize: number): Promise<SessionPage>;
 }

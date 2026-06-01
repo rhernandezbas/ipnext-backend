@@ -586,6 +586,7 @@ Every `ScheduledTask` response object MUST contain at minimum the following fiel
 | `projectName` | `string \| null` | Yes |
 | `completedAt` | `string \| null` | Yes |
 | `notes` | `string \| null` | Yes |
+| `grOrdenId` | `string \| null` | Yes |
 
 ---
 
@@ -963,3 +964,261 @@ The repository MUST eager-load the project and its `iclassSoType` relation in th
 - `GET`, `DELETE`, `PATCH /:id/status` — unchanged.
 - DB schema migration — column stays nullable.
 - Backfilling existing tasks with a `serviceId`.
+
+---
+
+## Closure loop integration (iclass-closure-loop)
+
+ADDED: `ScheduledTask` gana la relación inversa `iclassClosedOrder` (one-to-one nullable) hacia `IClassServiceOrder`. `SchedulingRepository` gana `findTaskBySequenceNumber` (join codigo↔sequenceNumber del cierre) y `listTasksInIClassStage` (backfill). Una tarea PUEDE moverse de stage por el closure loop al estado mapeado en `IClassResultCode.mappedStageId`, vía el `moveTaskToStage` existente. Ver capability `iclass-closure-loop`.
+
+---
+
+## GR installation ingest integration (gestion-real-installation-ingest)
+
+The Gestión Real installation ingest creates `ScheduledTask`s programmatically (one per pending CI
+order). This adds an idempotency key (`grOrdenId`) and formalizes that an ingest-created task MAY
+exist with no project (needs-review state). No existing route behavior changes. See capabilities
+`gestion-real-ingest` and `gestion-real-ingest-config`.
+
+### Requirement: `ScheduledTask` carries a unique `grOrdenId` idempotency key
+
+`ScheduledTask` MUST have a `grOrdenId: string | null` field, persisted as a UNIQUE, NULLABLE
+column via an ADDITIVE Prisma migration. It holds the Gestión Real order id for tasks created by
+the ingest engine; manually created tasks leave it `null`. The uniqueness constraint MUST allow
+multiple `null` rows (standard SQL NULL-distinct behavior) so that hand-made tasks are unaffected.
+(See REQ-SHAPE-2 — the `grOrdenId: string | null` row is part of the task object structure.)
+
+#### Scenario: Ingest-created task stores the GR order id
+
+- GIVEN the ingest creates a task for GR order `551`
+- WHEN the task is persisted
+- THEN `grOrdenId` equals `"551"`
+
+#### Scenario: Manually created task has null grOrdenId
+
+- GIVEN a `POST /api/scheduling` request that does not set `grOrdenId`
+- WHEN the task is created
+- THEN the persisted task's `grOrdenId` is `null`
+
+#### Scenario: Duplicate grOrdenId is rejected at the DB level
+
+- GIVEN a task already exists with `grOrdenId = "551"`
+- WHEN a second task with `grOrdenId = "551"` is attempted
+- THEN the unique constraint prevents a duplicate (the ingest checks first and skips — see REQ-IDEMP-1 in gestion-real-ingest)
+
+### Requirement: A `ScheduledTask` MAY be created with no project (needs-review state)
+
+The ingest engine MAY create a `ScheduledTask` with `projectId = null` (the UNCLASSIFIED /
+needs-review case). Such a task MUST be valid and persistable. Its `projectName` MUST serialize as
+`null` (consistent with the existing nullable-project contract, REQ-NULL-8 / REQ-SHAPE-1).
+
+#### Scenario: Needs-review task persists with null project
+
+- GIVEN the ingest classifies an order as UNCLASSIFIED
+- WHEN the task is created
+- THEN the task persists with `projectId = null` and `projectName = null`
+- AND no `PROJECT_NOT_FOUND` error is raised (no project lookup for a null id)
+
+---
+
+# Delta absorbido: scheduling-foundation-stage-model (2026-05-30)
+
+Moves `scheduling` from a hardcoded 4-value `status` enum to a configurable `Workflow + Stage`
+model. The new `Workflow`/`Stage` admin surface lives in the `scheduling-workflows` capability.
+The legacy `status` field/route is retained as a DEPRECATED shim for one release.
+
+## Removed Requirements
+
+- **REQ-STATUS-1/2/3** — Replaced by REQ-STAGE-1/2/3 (move to stage). The `/status` PATCH endpoint
+  persists only as a deprecated alias (REQ-STAGE-DEP-1..3).
+- **REQ-VAL-3 (`UpdateStatusSchema`)** — Marked `@deprecated`; constraint applies to the deprecated
+  route only.
+- **REQ-VAL-1 / REQ-VAL-2 — `status` as a writable field** — Removed. `status` is no longer writable
+  on Create/Update; it appears in responses only as a derived deprecated alias.
+- **REQ-SHAPE-2 `status` row** as a non-nullable writable enum — Superseded by `stageId` +
+  `stageCategory` (derived) + deprecated `status`.
+
+## Modified Requirements
+
+### REQ-CREATE-1 (modified): `status` not required; `stageId` optional
+`status` MUST NOT be required on `POST /api/scheduling`. The body MAY include `stageId: string`.
+When omitted, the task defaults to the first `nuevo`-category Stage of the Default workflow.
+
+### REQ-CREATE-4 (modified): Invalid stageId returns 404 / malformed returns 400
+Non-existent well-formed `stageId` → 404 `STAGE_NOT_FOUND`. Non-string `stageId` → 400
+`VALIDATION_ERROR`.
+
+### REQ-UPDATE-4 (modified): Invalid stageId in PUT body returns 400/404
+Malformed `stageId` → 400 `VALIDATION_ERROR`; well-formed non-existent → 404 `STAGE_NOT_FOUND`.
+
+### REQ-SHAPE-2 (modified): Task object adds `stageId` + `stageCategory`
+Every `ScheduledTask` response MUST carry `stageId: string` (non-null) and
+`stageCategory: 'nuevo' | 'enProgreso' | 'hecho'` (non-null, derived). The legacy
+`status: 'pending' | 'in_progress' | 'completed' | 'cancelled'` row is RETAINED as DEPRECATED
+(derived) for one release.
+
+### REQ-VAL-1 (modified): `CreateTaskSchema` drops `status`, adds `stageId`
+Required: `title`, `priority`, `scheduledDate`, `scheduledTime`, `estimatedHours`, `category`.
+`stageId` MUST be `z.string().uuid().optional()`. `status` MUST NOT appear.
+
+### REQ-VAL-2 (modified): `UpdateTaskSchema` partial; `status` removed
+All fields optional; `stageId` validated as in create; `status` MUST NOT appear.
+
+## Added Requirements
+
+### REQ-STAGE-1: Move task to stage returns 200
+`PATCH /api/scheduling/:id/stage` with `{ stageId }` referencing an existing Stage → 200 with the
+updated task; `stageId` echoed, `stageCategory` equals the referenced Stage's `category`.
+
+### REQ-STAGE-2: Non-existent stageId returns 404 `STAGE_NOT_FOUND`.
+
+### REQ-STAGE-3: Missing/malformed stageId returns 400 `VALIDATION_ERROR`.
+
+### REQ-STAGE-4: Task not found returns 404 `TASK_NOT_FOUND`.
+
+### REQ-STAGE-CATEGORY-1: `stageCategory` is derived from the Stage and is NOT writable.
+
+### REQ-STAGE-COMPLETED-1: Moving to a `hecho`-category stage auto-sets `completedAt` (ISO 8601 ~now)
+when it was `null`.
+
+### REQ-STAGE-COMPLETED-2: Moving to a non-`hecho` stage does NOT overwrite an existing `completedAt`.
+
+### REQ-STAGE-PROJECTNAME-1: Stage-move response includes `projectName` for a linked-project task.
+
+### REQ-STAGE-DEFAULT-1: Create without `stageId` defaults to the Default workflow's lowest-`order`
+`nuevo` Stage; `stageCategory` MUST be `'nuevo'`.
+
+### Deprecation Aliases (one release only)
+
+- **REQ-STAGE-DEP-1**: `PATCH /:id/status` keeps working, translating legacy `status` to the Default
+  workflow Stage: `pending→"Nuevo"`, `in_progress→"En progreso"`, `completed→"Hecho"`,
+  `cancelled→"Anulado-Cancelado"`. Same `completedAt` semantics as `/stage`.
+- **REQ-STAGE-DEP-2**: The deprecated route MUST emit a `console.warn`/structured log containing
+  `"deprecated"` and the route name (no HTTP change).
+- **REQ-STAGE-DEP-3**: Responses include a derived `status` (reverse mapping). For Stages outside the
+  Default workflow, `status` is the closest match by `stageCategory`:
+  `nuevo→'pending'`, `enProgreso→'in_progress'`, `hecho→'completed'` (or `'cancelled'` if the Stage
+  name contains `"cancel"`/`"anul"`, case-insensitive).
+
+## Appendix updates
+
+| Type | Values | Status |
+|------|--------|--------|
+| `TaskStatus` | `pending`, `in_progress`, `completed`, `cancelled` | **Deprecated** — legacy response field only, not writable |
+| `StageCategory` | `nuevo`, `enProgreso`, `hecho` | New — read-only derived response field |
+
+| Scenario | HTTP | `code` |
+|----------|------|--------|
+| Stage ID not found | 404 | `STAGE_NOT_FOUND` |
+
+---
+
+# Delta absorbido: scheduling-tasks-enrich (2026-05-30)
+
+Enriches `ScheduledTask` with date-range, customer/service/partner/reporter/assignee FKs, watchers,
+and travel times. Legacy fields (`scheduledDate`, `scheduledTime`, `clientId`, `clientName`,
+`assignedTo`, `assignedToId`, `status`) stay as DEPRECATED read-only for one release. No new routes.
+
+## Modified Requirements
+
+### REQ-SHAPE-2 (modified): Task object adds enrichment fields
+Added (all nullable unless noted): `startDate`, `endDate` (ISO 8601 with offset), `customerId`,
+`customerName` (JOIN-derived), `serviceId`, `partnerId`, `reporterId`, `assigneeId`, `assigneeName`
+(JOIN-derived), `watcherIds: string[]` (non-null, `[]` when none), `travelTimeTo`, `travelTimeFrom`
+(integer minutes). Legacy fields listed above stay present, typed as before, marked DEPRECATED.
+
+### REQ-NULL-7 (modified): `clientId`/`clientName`/`customerId`/`customerName` all `string | null`
+When `customerId` is set, the adapter MUST populate `customerName` from `Client.name`. Legacy
+`clientName` MAY come from the deprecated column or the same JOIN.
+
+### REQ-VAL-1 (modified): `CreateTaskSchema` required set narrows; enrichment fields added
+Required: `title`, `priority`, `estimatedHours`, `category` (`scheduledDate`/`scheduledTime`/`status`
+no longer required). Adds optional/nullable: `startDate`/`endDate`
+(`z.string().datetime({ offset: true }).nullable().optional()`),
+`customerId`/`serviceId`/`partnerId`/`reporterId`/`assigneeId`
+(`z.string().min(1).nullable().optional()` — NOT `.uuid()`),
+`watcherIds` (`z.array(z.string().min(1)).optional()`),
+`travelTimeTo`/`travelTimeFrom` (`z.number().int().nonnegative().nullable().optional()`).
+A `superRefine` MUST reject `endDate < startDate` with `VALIDATION_ERROR` and a `details` entry on
+`endDate`.
+
+### REQ-CREATE-1 / REQ-UPDATE-1 (modified): FK validation + JOIN-resolved names
+FK references in the body MUST be validated in the use case (REQ-CUSTOMER-1, REQ-WATCHER-1).
+Responses echo the new fields and resolve `customerName`/`assigneeName` via JOIN. On PUT, when
+`watcherIds` is present the set is replaced atomically; when omitted it is untouched.
+
+## Added Requirements
+
+### REQ-DATETIME-1: `startDate`/`endDate` contract
+Valid ISO 8601 round-trips (offset normalization OK); `endDate < startDate` → 400; either MAY be
+`null`; malformed strings → 400 `VALIDATION_ERROR`.
+
+### REQ-CUSTOMER-1: FK validation for `customerId` (and `serviceId`/`partnerId`/`reporterId`/`assigneeId`)
+Non-existent reference → 404 with `CUSTOMER_NOT_FOUND` / `SERVICE_NOT_FOUND` / `PARTNER_NOT_FOUND` /
+`REPORTER_NOT_FOUND` / `ASSIGNEE_NOT_FOUND`. Existing `customerId` resolves `customerName` via JOIN.
+
+### REQ-WATCHER-1: Watchers replace-set semantics
+`watcherIds` authoritative when present; `[]` clears; omitted preserves; any non-existent id rejects
+the whole update with 404 `WATCHER_NOT_FOUND` (atomic — no partial update).
+
+### REQ-TRAVEL-1: Travel-time bounds
+Non-negative integers accepted; negative or non-integer → 400 `VALIDATION_ERROR`; `null` accepted.
+
+### REQ-RICH-DESC-1: Rich-text `description` stored/returned as-is
+HTML and plain text round-trip unchanged. **Non-goal**: server-side XSS sanitization — consumers
+render through DOMPurify.
+
+### REQ-FK-ORDER-1: FK validation is deterministic
+Canonical order: `customerId → serviceId → partnerId → reporterId → assigneeId → watcherIds[*]`. The
+first missing reference determines the error code.
+
+### REQ-DEPRECATED-1: Legacy fields still returned alongside new fields
+During the deprecation window both sets are present; the new fields are authoritative, legacy fields
+are best-effort fallbacks.
+
+## Appendix: New Error Codes
+
+| Scenario | HTTP | `code` |
+|----------|------|--------|
+| Non-existent `customerId` | 404 | `CUSTOMER_NOT_FOUND` |
+| Non-existent `serviceId` | 404 | `SERVICE_NOT_FOUND` |
+| Non-existent `partnerId` | 404 | `PARTNER_NOT_FOUND` |
+| Non-existent `reporterId` | 404 | `REPORTER_NOT_FOUND` |
+| Non-existent `assigneeId` | 404 | `ASSIGNEE_NOT_FOUND` |
+| Non-existent `watcherIds[i]` | 404 | `WATCHER_NOT_FOUND` |
+| `endDate < startDate` / bad travel time / malformed date | 400 | `VALIDATION_ERROR` |
+
+---
+
+# Delta absorbido: task-rv-inventory (2026-05-30)
+
+Adds a boolean `reviewedByInventory` flag to `ScheduledTask`, driving the "RV" (Revisado por
+Inventario) column in the task list UI.
+
+## Added Requirements
+
+### REQ-RV-1: Schema field
+`ScheduledTask` DB row MUST have `reviewedByInventory Boolean @default(false)`. New rows default to
+`false`; existing rows backfilled to `false` via migration default.
+
+### REQ-RV-2: Domain entity field
+`ScheduledTask` interface MUST expose `reviewedByInventory: boolean`, present on every task returned
+from the API.
+
+### REQ-RV-3: Port method
+`SchedulingRepository.setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null>`
+(returns `null` when the task is not found).
+
+### REQ-RV-4: Use case
+`SetTaskInventoryReview` accepts `(taskId, reviewed)`, delegates to `repo.setInventoryReview`,
+returns the updated task, and throws `TaskNotFoundError` when the task does not exist.
+
+### REQ-RV-5: HTTP endpoint
+`PATCH /api/scheduling/:id/inventory-review` with `{ "reviewed": boolean }` (cookie auth):
+- 200 + updated task DTO on success.
+- 400 `VALIDATION_ERROR` for an invalid body.
+- 404 `TASK_NOT_FOUND` when the task does not exist.
+
+### REQ-RV-6: Existing responses carry the flag
+All endpoints returning `ScheduledTask` (GET list/single, POST, PUT, PATCH stage) MUST include
+`reviewedByInventory`. New tasks default to `false`; the flag persists through unrelated updates.

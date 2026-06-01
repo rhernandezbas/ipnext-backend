@@ -1,11 +1,13 @@
 import { config } from '../config';
 import { GestionRealClient } from '../adapters/gestion-real/GestionRealClient';
 import { PrismaClientMirrorRepository } from '../adapters/prisma/PrismaClientMirrorRepository';
+import { PrismaClientMirrorReadRepository } from '../adapters/prisma/PrismaClientMirrorReadRepository';
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { PrismaGestionRealSyncConfigRepository } from '../adapters/prisma/PrismaGestionRealSyncConfigRepository';
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
+import { BackfillGrContractsBatch } from '@application/use-cases/BackfillGrContractsBatch';
 import { RefreshDebtorBalances } from '@application/use-cases/RefreshDebtorBalances';
 import { GestionRealSyncScheduler } from './GestionRealSyncScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
@@ -46,11 +48,16 @@ export async function bootstrapGestionRealSync(): Promise<GestionRealSyncSchedul
   const syncClients = new SyncGestionRealClients(client, mirror, state, featureFlags, { estados: persisted.estados });
   const syncContracts = new SyncGestionRealContracts(client, mirror);
   const refreshDebtorBalances = new RefreshDebtorBalances(client, mirror, state);
+  // Resumable, bounded contract backfill driven one batch per scheduler tick
+  // (default batchSize 150). Enumerates the local client universe via the
+  // read-only mirror port; reuses the contract fetch+upsert path.
+  const mirrorRead = new PrismaClientMirrorReadRepository();
+  const backfill = new BackfillGrContractsBatch(mirrorRead, syncContracts, state);
   // PgAdvisoryLock uses a dedicated pg.Client (not the pool) so that session
   // advisory locks are tied to one stable connection across acquire/release.
   const lock = new PgAdvisoryLock();
 
-  const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: persisted.intervalMs }, lock);
+  const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: persisted.intervalMs }, lock, backfill);
 
   // Batch debtor balance refresh — runs on its own interval (default 1h), independently.
   startBalanceBatchJob(refreshDebtorBalances, gr.balanceBatchIntervalMs);
