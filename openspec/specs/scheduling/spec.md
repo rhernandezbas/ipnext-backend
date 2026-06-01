@@ -168,6 +168,52 @@ All 6 scheduling routes MUST enforce authentication via the `auth_token` cookie 
 **Then** the server MUST respond with HTTP 400  
 **And** the body MUST contain `{ "code": "VALIDATION_ERROR" }`
 
+### REQ-CREATE-SERVICE-1: `serviceId` is required in create body
+
+**Given** an authenticated `POST /api/scheduling` request  
+**And** the body omits `serviceId` entirely  
+**When** the request is processed  
+**Then** the server MUST respond with HTTP 400  
+**And** the body MUST contain `{ "code": "VALIDATION_ERROR" }`  
+**And** the `details` field SHOULD name `serviceId` as the failing field
+
+### REQ-CREATE-SERVICE-2: `serviceId: null` is rejected
+
+**Given** an authenticated `POST /api/scheduling` request  
+**And** the body contains `serviceId: null`  
+**When** the request is processed  
+**Then** the server MUST respond with HTTP 400  
+**And** the body MUST contain `{ "code": "VALIDATION_ERROR" }`
+
+*Note: This inverts the previous behavior where `serviceId: null` was accepted.*
+
+### REQ-CREATE-SERVICE-3: Empty string `serviceId` is rejected
+
+**Given** an authenticated `POST /api/scheduling` request  
+**And** the body contains `serviceId: ""`  
+**When** the request is processed  
+**Then** the server MUST respond with HTTP 400  
+**And** the body MUST contain `{ "code": "VALIDATION_ERROR" }`
+
+### REQ-CREATE-SERVICE-4: Non-existent `serviceId` is rejected
+
+**Given** an authenticated `POST /api/scheduling` request  
+**And** the body contains a valid non-empty `serviceId`  
+**And** no service with that ID exists in the system  
+**When** the request is processed  
+**Then** the server MUST respond with HTTP 422 or 404 (as mapped by the route handler from `ReferenceNotFoundError`)  
+**And** the body MUST contain `{ "code": "REFERENCE_NOT_FOUND" }` or equivalent domain error code
+
+### REQ-CREATE-SERVICE-5: Valid `serviceId` creates task successfully
+
+**Given** an authenticated `POST /api/scheduling` request  
+**And** the body contains a `serviceId` pointing to an existing service  
+**And** all other required fields are valid  
+**When** the request is processed  
+**Then** the server MUST respond with HTTP 201  
+**And** the body MUST be the newly created `ScheduledTask` with `serviceId` populated  
+**And** the FK validation order MUST remain: customer → service → partner → reporter → assignee → watchers (REQ-FK-ORDER-1 preserved)
+
 ### REQ-CREATE-7: Nullable fields MAY be null
 
 **Given** an authenticated `POST /api/scheduling` request  
@@ -527,6 +573,7 @@ Every `ScheduledTask` response object MUST contain at minimum the following fiel
 | `assignedToId` | `string \| null` | Yes |
 | `clientId` | `string \| null` | Yes |
 | `clientName` | `string \| null` | Yes |
+| `serviceId` | `string` | No |
 | `status` | `'pending' \| 'in_progress' \| 'completed' \| 'cancelled'` | No |
 | `priority` | `'low' \| 'normal' \| 'high' \| 'urgent'` | No |
 | `scheduledDate` | `string` | No |
@@ -590,7 +637,8 @@ The API MUST accept and return `projectId` and `projectName` as `string | null` 
 
 ### REQ-VAL-1: `CreateTaskSchema` covers all required fields
 
-The schema MUST require: `title`, `status`, `priority`, `scheduledDate`, `scheduledTime`, `estimatedHours`, `category`.  
+The schema MUST require: `title`, `status`, `priority`, `scheduledDate`, `scheduledTime`, `estimatedHours`, `category`, `serviceId`.  
+`serviceId` MUST be `z.string().min(1)` — NOT `.nullable().optional()`.  
 The schema MUST allow (nullable/optional): `description`, `assignedTo`, `assignedToId`, `address`, `notes`, `clientId`, `clientName`, `coordinates`, `projectId`, `completedAt`.  
 The `status` field MUST be restricted to `z.enum(['pending', 'in_progress', 'completed', 'cancelled'])`.  
 The `priority` field MUST be restricted to `z.enum(['low', 'normal', 'high', 'urgent'])`.  
@@ -598,7 +646,8 @@ The `category` field MUST be restricted to `z.enum(['installation', 'repair', 'm
 
 ### REQ-VAL-2: `UpdateTaskSchema` is a partial of `CreateTaskSchema`
 
-All fields MUST be optional. Enum restrictions on `status`, `priority`, and `category` MUST still apply when those fields are present.
+All fields MUST be optional. Enum restrictions on `status`, `priority`, and `category` MUST still apply when those fields are present.  
+`serviceId` MUST remain optional in `UpdateTaskSchema` (patch semantics — no change to update behavior).
 
 ### REQ-VAL-3: `UpdateStatusSchema` only accepts the 4 valid status values
 
@@ -607,7 +656,21 @@ Any value outside this enum MUST cause a 400 response with `code: 'VALIDATION_ER
 
 ---
 
-## 11. Dependency Inversion Preservation
+## 11. CreateTask Use Case — serviceId Constraint
+
+### REQ-UC-SERVICE-1: `serviceId` validation is unconditional
+
+**Given** `CreateTask.execute` is called with a `CreateTaskInput`  
+**And** `serviceId` is always present (required field, never null)  
+**When** executing the FK validation block  
+**Then** `serviceLookup.findById(data.serviceId)` MUST be called without a null guard  
+**And** if not found, MUST throw `ReferenceNotFoundError('service', data.serviceId)`
+
+*Note: The previous `if (data.serviceId != null)` guard MUST be removed.*
+
+---
+
+## 13. Dependency Inversion Preservation
 
 ### REQ-DIP-1: No `@infrastructure/*` imports in application layer
 
@@ -622,7 +685,7 @@ It MUST NOT construct or import a concrete `JwtAuthAdapter` internally.
 
 ---
 
-## 12. Reference Infrastructure
+## 14. Reference Infrastructure
 
 ### REQ-REF-1: `ReferenceKind` includes `'project'` and `REFERENCE_TO_CODE` maps it to `'PROJECT_NOT_FOUND'`
 
@@ -634,6 +697,18 @@ It MUST NOT construct or import a concrete `JwtAuthAdapter` internally.
 
 This requirement ensures the error chain is fully wired:
 `ReferenceNotFoundError('project', id)` → caught in route → `REFERENCE_TO_CODE['project']` → `'PROJECT_NOT_FOUND'` → HTTP 404.
+
+---
+
+## 15. Reference Infrastructure — `service` kind
+
+### REQ-REF-SERVICE-1: `ReferenceKind` includes `'service'` and `REFERENCE_TO_CODE` maps it
+
+**Given** the domain type `ReferenceKind` (in `src/domain/errors/scheduling.ts`)  
+**And** the route-level map `REFERENCE_TO_CODE` (in `src/infrastructure/http/routes/scheduling.routes.ts`)  
+**Then** `ReferenceKind` MUST include the literal `'service'`  
+**And** `REFERENCE_TO_CODE['service']` MUST map to an appropriate error code (e.g. `'REFERENCE_NOT_FOUND'` or `'SERVICE_NOT_FOUND'`)  
+**And** the route handler MUST respond HTTP 422 or 404 accordingly
 
 ---
 
@@ -864,6 +939,31 @@ The repository MUST eager-load the project and its `iclassSoType` relation in th
 | Task sin Project | 422 | `MISSING_PROJECT_FOR_ICLASS` | — |
 | Project sin mapping o tipo inactivo | 422 | `MISSING_ICLASS_MAPPING` | `projectTitle` |
 | IClass no disponible | 502 | `ICLASS_UNAVAILABLE` | — |
+
+---
+
+# Delta absorbido: task-requires-service (2026-05-30)
+
+**Change**: `task-requires-service`  
+**Routes affected**: `POST /api/scheduling` (create task only)
+
+## Summary
+
+`serviceId` transitions from optional-nullable to **required** in the create path. The DB column `ScheduledTask.serviceId` stays `String?` (nullable, `onDelete: SetNull`) — the constraint is enforced at the application layer only.
+
+## Modified
+
+- **REQ-VAL-1**: `serviceId` added to required fields in `CreateTaskSchema` as `z.string().min(1)`.
+- **REQ-VAL-2**: `serviceId` remains optional in `UpdateTaskSchema` (patch semantics unchanged).
+- **REQ-SHAPE-2**: `serviceId` added as non-nullable field in task response shape.
+- **Sections 11, 14, 15**: Added REQ-CREATE-SERVICE-1–5 (HTTP-level), REQ-UC-SERVICE-1 (use case), REQ-REF-SERVICE-1 (ReferenceKind).
+
+## Non-Goals (explicitly excluded from this delta)
+
+- `PUT /api/scheduling/:id` update path — `serviceId` remains optional for edits.
+- `GET`, `DELETE`, `PATCH /:id/status` — unchanged.
+- DB schema migration — column stays nullable.
+- Backfilling existing tasks with a `serviceId`.
 
 ---
 

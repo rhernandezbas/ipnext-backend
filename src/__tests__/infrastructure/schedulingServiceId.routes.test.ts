@@ -36,7 +36,8 @@ class FakeAuthProvider implements AuthProvider {
 }
 
 const STAGE_1 = '10000000-0000-4000-a000-000000000001';
-const SERVICE_ID = 'service-1111-0000-0000-000000000001';
+const SERVICE_ID  = 'service-1111-0000-0000-000000000001';
+const CUSTOMER_ID = 'customer-1111-0000-0000-000000000001';
 
 function buildApp() {
   const app = express();
@@ -78,13 +79,15 @@ describe('POST /api/scheduling — serviceId persistence (Feature C)', () => {
       category: 'installation',
       stageId: STAGE_1,
       serviceId: SERVICE_ID,
+      customerId: CUSTOMER_ID,
     }));
 
     expect(res.status).toBe(201);
     expect(res.body.serviceId).toBe(SERVICE_ID);
   });
 
-  it('allows creating a task without serviceId (null)', async () => {
+  it('REQ-REQUIRED-2: creating a task without serviceId → 400 VALIDATION_ERROR', async () => {
+    // serviceId is now required on create — omitting it must be rejected at the DTO layer
     const app = buildApp();
     const res = await withAuth(request(app).post('/api/scheduling').send({
       title: 'Task without service',
@@ -92,10 +95,29 @@ describe('POST /api/scheduling — serviceId persistence (Feature C)', () => {
       estimatedHours: 1,
       category: 'installation',
       stageId: STAGE_1,
+      customerId: CUSTOMER_ID,
+      // serviceId intentionally omitted
     }));
 
-    expect(res.status).toBe(201);
-    expect(res.body.serviceId).toBeNull();
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('REQ-REQUIRED-1: creating a task without customerId → 400 VALIDATION_ERROR', async () => {
+    // customerId is now required on create — omitting it must be rejected at the DTO layer
+    const app = buildApp();
+    const res = await withAuth(request(app).post('/api/scheduling').send({
+      title: 'Task without customer',
+      priority: 'normal',
+      estimatedHours: 1,
+      category: 'installation',
+      stageId: STAGE_1,
+      serviceId: SERVICE_ID,
+      // customerId intentionally omitted
+    }));
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
   });
 });
 
@@ -103,13 +125,15 @@ describe('PUT /api/scheduling/:id — serviceId update persistence (Feature C)',
   it('updates serviceId and returns updated value', async () => {
     const app = buildApp();
 
-    // Create task without serviceId
+    // Create task with required fields
     const createRes = await withAuth(request(app).post('/api/scheduling').send({
       title: 'Task to update',
       priority: 'normal',
       estimatedHours: 1,
       category: 'installation',
       stageId: STAGE_1,
+      customerId: CUSTOMER_ID,
+      serviceId: SERVICE_ID,
     }));
     expect(createRes.status).toBe(201);
     const taskId = createRes.body.id as string;

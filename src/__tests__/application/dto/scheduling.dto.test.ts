@@ -1,10 +1,13 @@
 import { CreateTaskSchema, UpdateTaskSchema } from '../../../application/dto/scheduling.dto';
 
+// REQ-REQUIRED-1/2: customerId and serviceId are required on create
 const BASE_VALID = {
   title: 'Test task',
   priority: 'normal' as const,
   estimatedHours: 1,
   category: 'installation' as const,
+  customerId: 'customer-default-test-001',
+  serviceId:  'service-default-test-001',
 };
 
 describe('CreateTaskSchema — new datetime fields', () => {
@@ -83,11 +86,31 @@ describe('CreateTaskSchema — new FK fields', () => {
     expect(r.success).toBe(true);
   });
 
-  it('accepts all FK fields as null', () => {
+  it('REQ-REQUIRED-1: rejects customerId: null (required on create)', () => {
+    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, customerId: null });
+    expect(r.success).toBe(false);
+  });
+
+  it('REQ-REQUIRED-2: rejects serviceId: null (required on create)', () => {
+    const r = CreateTaskSchema.safeParse({ ...BASE_VALID, serviceId: null });
+    expect(r.success).toBe(false);
+  });
+
+  it('REQ-REQUIRED-1: rejects missing customerId (required on create)', () => {
+    const { customerId: _c, ...withoutCustomer } = BASE_VALID;
+    const r = CreateTaskSchema.safeParse(withoutCustomer);
+    expect(r.success).toBe(false);
+  });
+
+  it('REQ-REQUIRED-2: rejects missing serviceId (required on create)', () => {
+    const { serviceId: _s, ...withoutService } = BASE_VALID;
+    const r = CreateTaskSchema.safeParse(withoutService);
+    expect(r.success).toBe(false);
+  });
+
+  it('optional FK fields (partner/reporter/assignee) still accept null', () => {
     const r = CreateTaskSchema.safeParse({
       ...BASE_VALID,
-      customerId: null,
-      serviceId: null,
       partnerId: null,
       reporterId: null,
       assigneeId: null,

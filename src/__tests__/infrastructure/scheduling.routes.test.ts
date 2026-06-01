@@ -27,7 +27,17 @@ class StubLookup implements EntityLookup {
   async findById(id: string) { return this.ids.has(id) ? { id } : null; }
 }
 
+// Accepts any non-null ID — used where FK identity is not under test.
+class AnyLookup implements EntityLookup {
+  async findById(id: string) { return { id }; }
+}
+
 const emptyLookup = new StubLookup();
+const anyLookup   = new AnyLookup();
+
+// Default IDs used in buildApp() and simplePost fixtures (REQ-REQUIRED-1/2).
+const DEFAULT_CUSTOMER_ID = 'customer-default-0000-000000000001';
+const DEFAULT_SERVICE_ID  = 'service-default-00000-000000000001';
 
 // Admin lookup that recognises the session user 'admin-1' returned by
 // FakeAuthProvider.getSession. Used as the default admin lookup in test apps so
@@ -92,8 +102,10 @@ function buildApp() {
 
   const listTasks = new ListTasks(repo);
   const getTask = new GetTask(repo);
-  const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
-  const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
+  // REQ-REQUIRED-1/2: customer and service lookups accept any ID in buildApp()
+  // since FK identity is not under test here — only route structure is.
+  const createTask = new CreateTask(repo, anyLookup, anyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
+  const updateTask = new UpdateTask(repo, anyLookup, anyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
   const deleteTask = new DeleteTask(repo);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
@@ -198,6 +210,8 @@ describe('POST /api/scheduling', () => {
         category: 'other',
         completedAt: null,
         notes: '',
+        customerId: DEFAULT_CUSTOMER_ID,
+        serviceId: DEFAULT_SERVICE_ID,
       });
 
     expect(res.status).toBe(201);
@@ -317,6 +331,9 @@ describe('POST /api/scheduling - validation', () => {
     scheduledTime: '09:00',
     estimatedHours: 1,
     category: 'other',
+    // REQ-REQUIRED-1/2: always required on create
+    customerId: DEFAULT_CUSTOMER_ID,
+    serviceId: DEFAULT_SERVICE_ID,
   };
 
   it('REQ-CREATE-2: missing title → 400 VALIDATION_ERROR', async () => {
@@ -411,6 +428,9 @@ describe('POST /api/scheduling — phase 2+3: legacy fields stripped from input 
     priority: 'normal',
     estimatedHours: 1,
     category: 'other',
+    // REQ-REQUIRED-1/2: always required on create
+    customerId: DEFAULT_CUSTOMER_ID,
+    serviceId: DEFAULT_SERVICE_ID,
   };
 
   it('sending assignedTo in body succeeds and response does NOT have assignedTo', async () => {
@@ -642,6 +662,8 @@ describe('Response shape: stageId and stageCategory (phase 3)', () => {
         priority: 'normal',
         estimatedHours: 1,
         category: 'other',
+        customerId: DEFAULT_CUSTOMER_ID,
+        serviceId: DEFAULT_SERVICE_ID,
       });
 
     expect(res.status).toBe(201);
@@ -665,6 +687,8 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
         priority: 'normal',
         estimatedHours: 1,
         category: 'installation',
+        customerId: DEFAULT_CUSTOMER_ID,
+        serviceId: DEFAULT_SERVICE_ID,
       });
 
     expect(res.status).toBe(201);
@@ -684,8 +708,8 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
 
     const listTasks = new ListTasks(repo);
     const getTask = new GetTask(repo);
-    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
-    const updateTask = new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
+    const createTask = new CreateTask(repo, anyLookup, anyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
+    const updateTask = new UpdateTask(repo, anyLookup, anyLookup, emptyLookup, sessionAdminLookup, emptyLookup);
     const deleteTask = new DeleteTask(repo);
 
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
@@ -707,6 +731,8 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
         priority: 'normal',
         estimatedHours: 1,
         category: 'installation',
+        customerId: DEFAULT_CUSTOMER_ID,
+        serviceId: DEFAULT_SERVICE_ID,
       });
 
     expect(res.status).toBe(201);
@@ -727,8 +753,8 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
     const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
 
     app.use('/api/scheduling', createSchedulingRouter(
-      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
-      new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
+      new ListTasks(repo), new GetTask(repo), new CreateTask(repo, anyLookup, anyLookup, emptyLookup, anyLookup, emptyLookup),
+      new UpdateTask(repo, anyLookup, anyLookup, emptyLookup, anyLookup, emptyLookup), new DeleteTask(repo),
       moveTaskToStage, new FakeAuthProvider(), stageRepo,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -743,6 +769,8 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
         priority: 'normal',
         estimatedHours: 1,
         category: 'installation',
+        customerId: DEFAULT_CUSTOMER_ID,
+        serviceId: DEFAULT_SERVICE_ID,
       });
 
     expect(res.status).toBe(500);
@@ -812,12 +840,16 @@ describe('GET /api/scheduling/:id', () => {
 
 // ─── FK validation (new fields) ─────────────────────────────────────────────
 
+// Default customer/service lookups for buildEnrichedApp — recognise the IDs in validBase.
+const defaultCustomerLookup = new StubLookup(DEFAULT_CUSTOMER_ID, 'cust-1');
+const defaultServiceLookup  = new StubLookup(DEFAULT_SERVICE_ID,  'svc-1');
+
 function buildEnrichedApp(opts: {
   repo?: InMemorySchedulingRepository;
-  customerLookup?: StubLookup;
-  serviceLookup?: StubLookup;
-  partnerLookup?: StubLookup;
-  adminLookup?: StubLookup;
+  customerLookup?: EntityLookup;
+  serviceLookup?: EntityLookup;
+  partnerLookup?: EntityLookup;
+  adminLookup?: EntityLookup;
   projectLookup?: EntityLookup;
 } = {}) {
   const app = express();
@@ -828,8 +860,10 @@ function buildEnrichedApp(opts: {
   const stageRepo = new InMemoryStageRepository();
   makeDefaultStages(stageRepo);
 
-  const customerLookup = opts.customerLookup ?? emptyLookup;
-  const serviceLookup  = opts.serviceLookup  ?? emptyLookup;
+  // REQ-REQUIRED-1/2: defaults know the IDs used in validBase so tests that
+  // don't explicitly override lookups still pass FK validation.
+  const customerLookup = opts.customerLookup ?? defaultCustomerLookup;
+  const serviceLookup  = opts.serviceLookup  ?? defaultServiceLookup;
   const partnerLookup  = opts.partnerLookup  ?? emptyLookup;
   const adminLookup    = opts.adminLookup    ?? sessionAdminLookup;
   const projectLookup  = opts.projectLookup  ?? emptyLookup;
@@ -857,6 +891,9 @@ const validBase = {
   priority: 'normal',
   estimatedHours: 1,
   category: 'installation',
+  // REQ-REQUIRED-1/2: required on create; known by defaultCustomerLookup/defaultServiceLookup
+  customerId: DEFAULT_CUSTOMER_ID,
+  serviceId:  DEFAULT_SERVICE_ID,
 };
 
 describe('POST /api/scheduling — FK errors (new fields)', () => {
