@@ -49,6 +49,32 @@ describe('stateful auth middleware', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects (401) a token whose session expired by the absolute 8h cap', async () => {
+    const repo = new InMemorySessionRepository();
+    const now = Date.now();
+    repo.seed({
+      rbacUserId: 'u1', actorLogin: 'ana', tokenHash: hashToken('tok-expired'),
+      loginAt: new Date(now - 9 * 60 * 60 * 1000).toISOString(),
+      lastSeenAt: new Date(now - 60 * 1000).toISOString(), // recently seen, but absolute cap hit
+      expiresAt: new Date(now - 60 * 60 * 1000).toISOString(),
+    });
+    const res = await withToken(buildApp(repo), 'tok-expired');
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects (401) a token whose session is idle past the 1h inactivity window', async () => {
+    const repo = new InMemorySessionRepository();
+    const now = Date.now();
+    repo.seed({
+      rbacUserId: 'u1', actorLogin: 'ana', tokenHash: hashToken('tok-idle'),
+      loginAt: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+      lastSeenAt: new Date(now - 61 * 60 * 1000).toISOString(), // 61 min idle
+      expiresAt: new Date(now + 6 * 60 * 60 * 1000).toISOString(),
+    });
+    const res = await withToken(buildApp(repo), 'tok-idle');
+    expect(res.status).toBe(401);
+  });
+
   it('rejects (401) a valid JWT with no session record', async () => {
     const repo = new InMemorySessionRepository();
     const res = await withToken(buildApp(repo), 'tok-orphan');
@@ -74,7 +100,9 @@ describe('stateful auth middleware', () => {
     const repo = new InMemorySessionRepository();
     repo.seed({
       rbacUserId: 'u1', actorLogin: 'ana', tokenHash: hashToken('tok-stale'),
-      lastSeenAt: '2026-01-01T00:00:00.000Z', // long ago
+      // older than the 5-min touch throttle but within the 1h inactivity window
+      // (still alive) so the request passes and lastSeenAt gets touched.
+      lastSeenAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
     });
     const touch = jest.spyOn(repo, 'touch');
     await withToken(buildApp(repo), 'tok-stale');

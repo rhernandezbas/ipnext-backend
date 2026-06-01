@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { Session } from '@domain/entities/session';
+import { isSessionAlive, ABSOLUTE_TTL_MS } from '@domain/entities/session.policy';
 import type {
   SessionRepository,
   CreateSessionInput,
@@ -8,6 +9,11 @@ import type {
 } from '@domain/ports/SessionRepository';
 
 type Stored = Session & { __seq: number };
+
+/** Effective "ended" instant for history ordering: revocation if revoked, else expiry. */
+function endedAt(s: Session): string {
+  return s.revokedAt ?? s.expiresAt ?? s.lastSeenAt;
+}
 
 /**
  * InMemorySessionRepository — test seam. `seed` is a test helper (lets a test
@@ -30,6 +36,8 @@ export class InMemorySessionRepository implements SessionRepository {
       loginAt: now,
       lastSeenAt: now,
       revokedAt: null,
+      // session-expiration: absolute 8h cap from login.
+      expiresAt: new Date(Date.parse(now) + ABSOLUTE_TTL_MS).toISOString(),
       createdAt: now,
     });
   }
@@ -37,6 +45,7 @@ export class InMemorySessionRepository implements SessionRepository {
   /** Test helper — NOT part of the port. */
   seed(partial: Partial<Session> & { tokenHash: string }): Session {
     const now = new Date().toISOString();
+    const loginAt = partial.loginAt ?? now;
     return this.insert({
       id: partial.id ?? randomUUID(),
       rbacUserId: partial.rbacUserId ?? 'u1',
@@ -44,15 +53,19 @@ export class InMemorySessionRepository implements SessionRepository {
       tokenHash: partial.tokenHash,
       ip: partial.ip ?? null,
       userAgent: partial.userAgent ?? null,
-      loginAt: partial.loginAt ?? now,
-      lastSeenAt: partial.lastSeenAt ?? now,
+      loginAt,
+      lastSeenAt: partial.lastSeenAt ?? loginAt,
       revokedAt: partial.revokedAt ?? null,
+      expiresAt:
+        partial.expiresAt !== undefined
+          ? partial.expiresAt
+          : new Date(Date.parse(loginAt) + ABSOLUTE_TTL_MS).toISOString(),
       createdAt: partial.createdAt ?? now,
     });
   }
 
   async findByTokenHash(tokenHash: string): Promise<Session | null> {
-    const row = this.store.find(s => s.tokenHash === tokenHash && s.revokedAt === null);
+    const row = this.store.find(s => s.tokenHash === tokenHash && isSessionAlive(s));
     return row ? this.clean(row) : null;
   }
 
@@ -64,7 +77,7 @@ export class InMemorySessionRepository implements SessionRepository {
   async listActive(query: ListActiveSessionsQuery): Promise<SessionPage> {
     const { rbacUserId } = query;
     const rows = this.store
-      .filter(s => s.revokedAt === null && (rbacUserId === undefined || s.rbacUserId === rbacUserId))
+      .filter(s => isSessionAlive(s) && (rbacUserId === undefined || s.rbacUserId === rbacUserId))
       .sort((a, b) => (a.loginAt === b.loginAt ? b.__seq - a.__seq : a.loginAt < b.loginAt ? 1 : -1));
 
     const total = rows.length;
@@ -97,11 +110,13 @@ export class InMemorySessionRepository implements SessionRepository {
   }
 
   async findRevoked(page: number, pageSize: number): Promise<SessionPage> {
+    // session-expiration: "history" = every session that is no longer alive
+    // (explicitly revoked OR expired by absolute cap OR idle past inactivity).
     const rows = this.store
-      .filter(s => s.revokedAt !== null)
+      .filter(s => !isSessionAlive(s))
       .sort((a, b) => {
-        const ra = a.revokedAt as string;
-        const rb = b.revokedAt as string;
+        const ra = endedAt(a);
+        const rb = endedAt(b);
         if (ra !== rb) return ra < rb ? 1 : -1;
         return b.__seq - a.__seq;
       });
