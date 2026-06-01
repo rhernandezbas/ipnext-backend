@@ -37,8 +37,8 @@
 ---
 
 ## Phase 4 — Auto-comment legible (TDD)
-- [ ] 4.1 [RED] Test `PostClosureComment` (in-memory `TaskCommentRepository`) → SCEN-PC-1/2/3 (incl. idempotencia).
-- [ ] 4.2 [GREEN] Use case: arma body legible (Q&A texto + motivo + técnico) + attachments por URL. Guard idempotente por OS + autor "Sistema IClass".
+- [x] 4.1 [RED→GREEN] Test `PostClosureComment` (in-memory `TaskCommentRepository`) → SCEN-PC-1/2/3 (3/3 verde).
+- [x] 4.2 [GREEN] `PostClosureComment`: body legible (Q&A texto/choice + motivo + técnico + observaciones), attachments = fotos del checklist (post-correlación) + firma (por URL). Autor `ICLASS_SYSTEM_AUTHOR = "Sistema IClass"`. Idempotente: 1 comment de sistema por task. Reusa `TaskCommentRepository`. (Orquestación en el ingest → Phase 9.)
 - [ ] 4.3 Commit: `feat(iclass): auto-comment legible en la task al cerrar OS`
 
 ---
