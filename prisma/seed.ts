@@ -304,6 +304,20 @@ async function seedSchedulingFoundation() {
   })
   console.log('  Feature flag seeded: gestion-real-ingest (enabled: false)')
 
+  // ServiceTechnology catalog — canonical values (idempotent via skipDuplicates on unique name).
+  await (prisma as any).serviceTechnology.createMany({
+    data: [
+      { name: 'Fiber',    description: 'Fibra óptica' },
+      { name: 'DOCSIS',   description: 'Cable / HFC DOCSIS' },
+      { name: 'Wireless', description: 'Enlace inalámbrico' },
+      { name: 'FTTH',     description: 'Fiber to the home' },
+      { name: 'HFC',      description: 'Híbrido fibra-coaxial' },
+      { name: 'Radio',    description: 'Radioenlace' },
+    ],
+    skipDuplicates: true,
+  })
+  console.log('  ServiceTechnology catalog seeded (6 entries).')
+
   // TicketStatus catalog — canonical values (idempotent by name).
   const ticketStatuses = [
     { name: 'open',    color: '#22c55e', weight: 1 },

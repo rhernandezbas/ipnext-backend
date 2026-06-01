@@ -130,6 +130,18 @@ import { UpdateProjectCategory } from '@application/use-cases/UpdateProjectCateg
 import { DeleteProjectCategory } from '@application/use-cases/DeleteProjectCategory';
 import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
 import { createTaskCategoriesRouter } from './routes/taskCategories.routes';
+// ServiceTechnology catalog (service-technology change)
+import { PrismaServiceTechnologyRepository } from '../adapters/prisma/PrismaServiceTechnologyRepository';
+import { createServiceTechnologiesRouter } from './routes/serviceTechnologies.routes';
+import { ListServiceTechnology } from '@application/use-cases/ListServiceTechnology';
+import { GetServiceTechnology } from '@application/use-cases/GetServiceTechnology';
+import { CreateServiceTechnology } from '@application/use-cases/CreateServiceTechnology';
+import { UpdateServiceTechnology } from '@application/use-cases/UpdateServiceTechnology';
+import { DeleteServiceTechnology } from '@application/use-cases/DeleteServiceTechnology';
+// Global services (contracts) listing — feeds the frontend contracts page.
+import { PrismaServiceRepository } from '../adapters/prisma/PrismaServiceRepository';
+import { createServicesRouter } from './routes/services.routes';
+import { ListServices } from '@application/use-cases/ListServices';
 import { createGestionRealRouter } from './routes/gestionReal.routes';
 import { createGrSyncRouter } from './routes/gr-sync.routes';
 import { ResetGrClientsCursor } from '@application/use-cases/ResetGrClientsCursor';
@@ -626,6 +638,17 @@ export function createApp() {
   const updateTaskCategory = new UpdateTaskCategory(taskCategoryRepo);
   const deleteTaskCategory = new DeleteTaskCategory(taskCategoryRepo);
 
+  const serviceTechnologyRepo = new PrismaServiceTechnologyRepository();
+  const listServiceTechnology = new ListServiceTechnology(serviceTechnologyRepo);
+  const getServiceTechnology = new GetServiceTechnology(serviceTechnologyRepo);
+  const createServiceTechnology = new CreateServiceTechnology(serviceTechnologyRepo);
+  const updateServiceTechnology = new UpdateServiceTechnology(serviceTechnologyRepo);
+  const deleteServiceTechnology = new DeleteServiceTechnology(serviceTechnologyRepo);
+
+  // Global services (contracts) listing.
+  const serviceRepo = new PrismaServiceRepository();
+  const listServices = new ListServices(serviceRepo);
+
   const taskPriorityRepo = new PrismaTaskPriorityRepository();
   const listTaskPriority = new ListTaskPriority(taskPriorityRepo);
   const getTaskPriority = new GetTaskPriority(taskPriorityRepo);
@@ -860,6 +883,14 @@ export function createApp() {
     authAdapter,
     listTaskCategory, getTaskCategory, createTaskCategory, updateTaskCategory, deleteTaskCategory,
   ));
+  // ServiceTechnology catalog — mounted at /api root (no catch-all conflict).
+  app.use('/api', createServiceTechnologiesRouter(
+    authAdapter,
+    listServiceTechnology, getServiceTechnology, createServiceTechnology,
+    updateServiceTechnology, deleteServiceTechnology,
+  ));
+  // Global services (contracts) listing — mounted at /api root, before the catch-all.
+  app.use('/api', createServicesRouter(authAdapter, listServices));
   // TaskPriority catalog — also before the scheduling catch-all router.
   app.use('/api/scheduling', createTaskPrioritiesRouter(
     authAdapter,
