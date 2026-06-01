@@ -68,10 +68,11 @@
 ---
 
 ## Phase 8 — Routes + wire (TDD supertest)
-- [ ] 8.1 [RED] Supertest de los endpoints (ver spec service-inventory) con repos in-memory.
-- [ ] 8.2 [GREEN] Montar routers (sub-recursos ANTES del catch-all `/:id`). Proteger con permisos que el front realmente recibe (formato `modulo.accion`, ej. `scheduling.read`/`inventory.write`) — verificar en `useMyPermissions`/catálogo `/me` antes de usar.
-- [ ] 8.3 Wire en `app.ts` (DI). Coordinar si hay agente tocando `app.ts`.
-- [ ] 8.4 Commit: `feat(http): rutas de inventario por servicio + sugerencias`
+- [x] 8.1 [RED→GREEN] `createServiceInventoryRouter` + supertest (9/9): confirm 201, 409 SUGGESTION_ALREADY_CONFIRMED, 409 TASK_HAS_NO_SERVICE, 404 SUGGESTION_NOT_FOUND, GET suggestions, discard, manual add 201/422, PATCH 200/404. Use cases thin `ListTaskInventorySuggestions`/`UpdateInstalledItem`.
+- [x] 8.1b statusMap (errorHandler): +SUGGESTION_NOT_FOUND:404, SUGGESTION_ALREADY_CONFIRMED:409, TASK_HAS_NO_SERVICE:409.
+- [ ] 8.2 [PENDIENTE] Prisma repos: `PrismaInventorySuggestionRepository`, `PrismaServiceInventoryRepository`, `PrismaOcrExtractionRepository` (+ persistir, BigInt/mapeo).
+- [ ] 8.3 [PENDIENTE — coordinación] Wire en `app.ts` (DI + montar router ANTES del catch-all `/:id` de scheduling). Proteger con permisos `modulo.accion` que el front recibe (verificar en `/me`/`useMyPermissions`). Coordinar si hay agente tocando `app.ts`.
+- [ ] 8.4 Commit router+statusMap hecho; commit del wire+Prisma al cerrar 8.2/8.3.
 
 ---
 
