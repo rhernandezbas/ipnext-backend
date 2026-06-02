@@ -142,7 +142,7 @@ Trazabilidad de requisitos:
 
 ### Tests en ROJO primero
 
-- [ ] **T-12** [RED] Actualizar fixtures/asertos en SendTaskToIClass.test.ts
+- [x] **T-12** [RED] Actualizar fixtures/asertos en SendTaskToIClass.test.ts
   - Archivo: `src/__tests__/application/SendTaskToIClass.test.ts`.
   - Cambiar fixture de stage: agregar `code: "registered_in_iclass"` al objeto Stage usado
     en el test; el mock de `getStageByCode` debe retornar ese stage.
@@ -151,7 +151,7 @@ Trazabilidad de requisitos:
   - Correr el test: debe FALLAR (el use case aun llama `getStageByName`).
   - Traza: REQ-LOGIC-1, REQ-MOVE-OS-1.
 
-- [ ] **T-13** [RED] Actualizar fixtures/asertos en MoveTaskToStage.test.ts
+- [x] **T-13** [RED] Actualizar fixtures/asertos en MoveTaskToStage.test.ts
   - Archivo: `src/__tests__/application/MoveTaskToStage.test.ts`.
   - Agregar `code: "send_to_iclass"` al stage fixture de "Enviar a IClass".
   - Verificar que la deteccion IClass compara `stage.code === "send_to_iclass"` (no `name`).
@@ -160,7 +160,7 @@ Trazabilidad de requisitos:
   - Correr: debe FALLAR.
   - Traza: REQ-MOVE-STAGE-1, REQ-LOGIC-1.
 
-- [ ] **T-14** [RED] Actualizar fixtures/asertos en BackfillClosedServiceOrders.test.ts
+- [x] **T-14** [RED] Actualizar fixtures/asertos en BackfillClosedServiceOrders.test.ts
   - Archivo: `src/__tests__/application/BackfillClosedServiceOrders.test.ts`.
   - Agregar `code: "registered_in_iclass"` a los stages fixtures del in-flight.
   - Verificar que `listTasksInIClassStage` se llama con `"registered_in_iclass"` (stageCode).
@@ -168,13 +168,13 @@ Trazabilidad de requisitos:
   - Correr: debe FALLAR.
   - Traza: REQ-BACKFILL-STAGE-1, REQ-LIST-ICLASS-1.
 
-- [ ] **T-15** [RED] Actualizar fixtures en IClassClosureScheduler.test.ts
+- [x] **T-15** [RED] Actualizar fixtures en IClassClosureScheduler.test.ts
   - Archivo: `src/__tests__/infrastructure/IClassClosureScheduler.test.ts`.
   - Agregar `code` a los stages en los fixtures del scheduler.
   - Correr: debe FALLAR si el test usa stages sin `code` y el type lo exige.
   - Traza: REQ-LIST-ICLASS-1.
 
-- [ ] **T-16** [RED] Renombrar / ampliar getStageByName.workflow.test.ts -> getStageByCode
+- [x] **T-16** [RED] Renombrar / ampliar getStageByName.workflow.test.ts -> getStageByCode
   - Archivo origen: `src/__tests__/infrastructure/getStageByName.workflow.test.ts`.
   - Renombrar a `getStageByCode.workflow.test.ts`.
   - Agregar scenarios que usan `getStageByCode(code, workflowId)` contra el InMemory adapter.
@@ -183,7 +183,7 @@ Trazabilidad de requisitos:
     verde del commit 2, pero si el test usa algo que falta, fallara).
   - Traza: REQ-CODE-4, REQ-CODE-5.
 
-- [ ] **T-17** [RED] Actualizar IngestClosedServiceOrders.test.ts
+- [x] **T-17** [RED] Actualizar IngestClosedServiceOrders.test.ts
   - Archivo: `src/__tests__/application/IngestClosedServiceOrders.test.ts`.
   - Agregar `code` al stage fixture; verificar que el ingest usa `getStageByCode`.
   - Correr: debe FALLAR.
@@ -191,7 +191,7 @@ Trazabilidad de requisitos:
 
 ### Codigo que pone en VERDE
 
-- [ ] **T-18** [GREEN] Refactorizar SendTaskToIClass.ts
+- [x] **T-18** [GREEN] Refactorizar SendTaskToIClass.ts
   - Archivo: `src/application/use-cases/SendTaskToIClass.ts`.
   - Reemplazar `REGISTRADO_STAGE_NAME = "Registrado en IClass"` por
     `REGISTERED_IN_ICLASS_CODE = "registered_in_iclass"`.
@@ -202,7 +202,7 @@ Trazabilidad de requisitos:
   - Aceptacion: test T-12 pasa (verde).
   - Traza: REQ-LOGIC-1, REQ-DIP-1.
 
-- [ ] **T-19** [GREEN] Refactorizar MoveTaskToStage.ts
+- [x] **T-19** [GREEN] Refactorizar MoveTaskToStage.ts
   - Archivo: `src/application/use-cases/MoveTaskToStage.ts`.
   - Reemplazar `ENVIAR_A_ICLASS_STAGE_NAME = "Enviar a IClass"` por
     `SEND_TO_ICLASS_CODE = "send_to_iclass"`.
@@ -213,7 +213,7 @@ Trazabilidad de requisitos:
   - Aceptacion: test T-13 pasa (verde).
   - Traza: REQ-MOVE-STAGE-1, REQ-DIP-1.
 
-- [ ] **T-20** [GREEN] Refactorizar BackfillClosedServiceOrders.ts
+- [x] **T-20** [GREEN] Refactorizar BackfillClosedServiceOrders.ts
   - Archivo: `src/application/use-cases/BackfillClosedServiceOrders.ts`.
   - Reemplazar `DEFAULT_IN_FLIGHT_STAGE = "Registrado en IClass"` por
     `DEFAULT_IN_FLIGHT_STAGE_CODE = "registered_in_iclass"`.
@@ -223,7 +223,7 @@ Trazabilidad de requisitos:
   - Aceptacion: tests T-14 y T-15 pasan (verde).
   - Traza: REQ-BACKFILL-STAGE-1, REQ-LIST-ICLASS-1.
 
-- [ ] **T-21** [GREEN / BUG FIX] Refactorizar bootstrapGestionRealIngest.ts
+- [x] **T-21** [GREEN / BUG FIX] Refactorizar bootstrapGestionRealIngest.ts
   - Archivo: `src/infrastructure/scheduling/bootstrapGestionRealIngest.ts`.
   - BUG ACTUAL: el modulo busca el stage `"Pendiente"` por nombre; ese stage NO existe en el
     seed canonico -> `defaultStageId` queda `""` en silencio.
@@ -237,7 +237,7 @@ Trazabilidad de requisitos:
   - Aceptacion: test T-17 pasa (verde); el archivo NO contiene el literal `"Pendiente"`.
   - Traza: REQ-INGEST-STAGE-1, REQ-LOGIC-1.
 
-- [ ] **T-22** Gate de calidad del commit 3
+- [x] **T-22** Gate de calidad del commit 3
   - `rg '"Registrado en IClass"\|"Enviar a IClass"\|"Pendiente"' src/application src/infrastructure/scheduling`
     debe retornar 0 matches (no quedan literales de nombre de stage en logica de negocio).
   - `tsc --noEmit` con 0 errores.
@@ -249,7 +249,7 @@ Trazabilidad de requisitos:
 
 ### Tests en ROJO primero
 
-- [ ] **T-23** [RED] Ampliar WorkflowUseCases.test.ts -- code autogenerado al crear stage
+- [x] **T-23** [RED] Ampliar WorkflowUseCases.test.ts -- code autogenerado al crear stage
   - Archivo: `src/__tests__/application/WorkflowUseCases.test.ts`.
   - Scenario: `AddStageToWorkflow.execute` con `name: "En Revision"` -> el stage retornado
     tiene `code: "en_revision"`.
@@ -261,7 +261,7 @@ Trazabilidad de requisitos:
   - Correr: debe FALLAR.
   - Traza: REQ-CODE-1, REQ-CODE-2.
 
-- [ ] **T-24** [RED] Test de integracion de ruta -- DTO incluye code
+- [x] **T-24** [RED] Test de integracion de ruta -- DTO incluye code
   - Archivo: `src/__tests__/infrastructure/scheduling.routes.test.ts` (o el test de
     workflows.routes si existe separado).
   - Scenario: `POST /api/workflows/:id/stages` con body valido retorna 201 con `code` en el
@@ -274,7 +274,7 @@ Trazabilidad de requisitos:
 
 ### Codigo que pone en VERDE
 
-- [ ] **T-25** [GREEN] Agregar helper `slugifyStageCode` y logica de autogeneracion en AddStageToWorkflow.ts
+- [x] **T-25** [GREEN] Agregar helper `slugifyStageCode` y logica de autogeneracion en AddStageToWorkflow.ts
   - Archivo: `src/application/use-cases/AddStageToWorkflow.ts`.
   - Agregar funcion pura `slugifyStageCode(name: string): string` (ver algoritmo en
     `design.md` seccion "Creacion de stage: autogeneracion del code").
@@ -288,7 +288,7 @@ Trazabilidad de requisitos:
   - Aceptacion: test T-23 pasa (verde).
   - Traza: REQ-CODE-1, REQ-CODE-2, REQ-DIP-1.
 
-- [ ] **T-26** [GREEN] Agregar `code` al mapper `toStage` del adapter Prisma y al PrismaWorkflowRepository
+- [x] **T-26** [GREEN] Agregar `code` al mapper `toStage` del adapter Prisma y al PrismaWorkflowRepository
   - Archivo: `src/infrastructure/adapters/prisma/PrismaWorkflowRepository.ts`.
   - En la funcion `toStage` (o equivalente), agregar `code: row.code`.
   - Archivo: `src/infrastructure/adapters/prisma/PrismaStageRepository.ts`.
@@ -302,7 +302,7 @@ Trazabilidad de requisitos:
   - Aceptacion: `tsc --noEmit` con 0 errores; test T-24 pasa (verde).
   - Traza: REQ-DTO-1, REQ-CODE-4.
 
-- [ ] **T-27** Gate de calidad del commit 4
+- [x] **T-27** Gate de calidad del commit 4
   - `tsc --noEmit` 0 errores.
   - Tests T-23 y T-24 en verde; suite completa sin regresiones.
   - Verificar manualmente que el DTO retornado por `GET /api/workflows` contiene `code` en
@@ -314,7 +314,7 @@ Trazabilidad de requisitos:
 
 > No hay test Jest automatizado. El gate es: seed idempotente y codes presentes en DB.
 
-- [ ] **T-28** Actualizar `prisma/seed.ts` con el mapa name -> code
+- [x] **T-28** Actualizar `prisma/seed.ts` con el mapa name -> code
   - Archivo: `prisma/seed.ts`.
   - Para cada uno de los 11 stages canonicos, agregar `code: "<code>"` segun el mapa del
     design (ver tabla en `design.md` seccion "Mapa canonico name -> code (los 11 del seed)"):
@@ -336,7 +336,7 @@ Trazabilidad de requisitos:
     lanza error de unicidad.
   - Traza: REQ-BACKFILL-1.
 
-- [ ] **T-29** Asignar permiso `scheduling.manage` al rol `admin` en el seed RBAC
+- [x] **T-29** Asignar permiso `scheduling.manage` al rol `admin` en el seed RBAC
   - Archivo: `prisma/seed.ts` (seccion de seed de permisos / roles).
   - El rol `admin` debe recibir la accion `manage` en el modulo `scheduling`.
   - `super_admin` ya tiene `*` -> no necesita cambio.
@@ -344,7 +344,7 @@ Trazabilidad de requisitos:
     workflows/stages (validado en el commit 6).
   - Traza: REQ-RBAC-1 (prerequisito de coordinacion).
 
-- [ ] **T-30** Gate de calidad del commit 5
+- [x] **T-30** Gate de calidad del commit 5
   - `tsc --noEmit` 0 errores.
   - Suite completa sin regresiones (el seed no tiene tests automaticos propios; los tests de
     integracion existentes no usan el seed real).
@@ -355,7 +355,7 @@ Trazabilidad de requisitos:
 
 ### Tests en ROJO primero
 
-- [ ] **T-31** [RED] Escribir tests de integracion RBAC para workflows.routes
+- [x] **T-31** [RED] Escribir tests de integracion RBAC para workflows.routes
   - Archivo: `src/__tests__/infrastructure/workflows.routes.rbac.test.ts` (crear nuevo).
   - Usar supertest + `InMemorySchedulingRepository` + `FakeAuthProvider` + `InMemoryRbacRepository`
     (o el helper de permisos ya usado en otros tests del repo).
@@ -374,7 +374,7 @@ Trazabilidad de requisitos:
 
 ### Codigo que pone en VERDE
 
-- [ ] **T-32** [GREEN] Agregar parametro `requirePerm` a `createWorkflowsRouter`
+- [x] **T-32** [GREEN] Agregar parametro `requirePerm` a `createWorkflowsRouter`
   - Archivo: `src/infrastructure/http/routes/workflows.routes.ts`.
   - Seguir el patron de `createGestionRealSyncRouter`: la funcion factory recibe
     `requirePerm: (module: RbacModuleCode, action: PermissionAction) => RequestHandler`
@@ -392,7 +392,7 @@ Trazabilidad de requisitos:
   - Aceptacion: `tsc --noEmit` pasa; las firmas de las rutas son correctas.
   - Traza: REQ-RBAC-1, REQ-RBAC-2.
 
-- [ ] **T-33** [GREEN] Actualizar el wiring de `createWorkflowsRouter` en app.ts
+- [x] **T-33** [GREEN] Actualizar el wiring de `createWorkflowsRouter` en app.ts
   - Archivo: `src/infrastructure/http/app.ts`.
   - Pasar `requirePerm` como argumento a `createWorkflowsRouter` (linea donde se instancia
     el router; ver referencia en `design.md` seccion "RBAC en workflows.routes.ts" -> wiring
@@ -402,7 +402,7 @@ Trazabilidad de requisitos:
   - Aceptacion: `tsc --noEmit` 0 errores; `npm run dev` levanta sin errores.
   - Traza: REQ-RBAC-1.
 
-- [ ] **T-34** Gate de calidad final del commit 6 (cierre del change)
+- [x] **T-34** Gate de calidad final del commit 6 (cierre del change)
   - Tests T-31 en verde; ningun test previo roto.
   - `tsc --noEmit` 0 errores.
   - Suite COMPLETA `npm test`: cero fallos; sin regresiones.
