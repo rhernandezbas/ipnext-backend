@@ -1,6 +1,6 @@
 import { Jimp, JimpMime } from 'jimp';
 import { DevicePhotoOcr, DeviceOcrResult } from '@domain/ports/DevicePhotoOcr';
-import { parseOcrResponse } from './parseOcrResponse';
+import { finalizeOcrResult } from './finalizeOcrResult';
 
 const PROMPT =
   'This is a photo of a network device (router / ONU / antenna) label. ' +
@@ -45,8 +45,7 @@ export class OllamaDevicePhotoOcr implements DevicePhotoOcr {
     try {
       const imageB64 = await this.preprocess(photoUrl);
       const raw = await this.ask(imageB64);
-      const { sn, mac } = parseOcrResponse(raw);
-      return { sn, mac, confidence: sn || mac ? 0.8 : 0, rawOutput: raw };
+      return finalizeOcrResult(raw);
     } catch (e) {
       return { sn: null, mac: null, confidence: 0, rawOutput: `ocr-error: ${(e as Error).message}` };
     }
