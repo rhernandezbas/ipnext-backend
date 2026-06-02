@@ -109,7 +109,10 @@ import { CreateTaskFromTicket } from '@application/use-cases/CreateTaskFromTicke
 import { MoveTaskToStage } from '@application/use-cases/MoveTaskToStage';
 import { BulkMoveTasksToStage } from '@application/use-cases/BulkMoveTasksToStage';
 import { SendTaskToIClass } from '@application/use-cases/SendTaskToIClass';
+import { ListIClassNodes } from '@application/use-cases/ListIClassNodes';
+import { ResendTaskToIClassWithNode } from '@application/use-cases/ResendTaskToIClassWithNode';
 import { buildIClassClient } from './iclass.factory';
+import { PrismaIClassDispatchAttemptRepository } from '../adapters/prisma/PrismaIClassDispatchAttemptRepository';
 import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
 import { AddTaskComment } from '@application/use-cases/AddTaskComment';
 import { ListTaskComments } from '@application/use-cases/ListTaskComments';
@@ -624,7 +627,9 @@ export function createApp() {
   // IClass integration: moving a task to "Enviar a IClass" delegates the OS
   // creation. The on/off decision lives in the feature flag (default OFF).
   const featureFlagRepo = new PrismaFeatureFlagRepository();
-  const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient());
+  // Audit repo for IClass dispatch attempts — injected as 4th arg (AD-6: optional on SendTaskToIClass).
+  const iclassDispatchAttemptRepo = new PrismaIClassDispatchAttemptRepository();
+  const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient(), iclassDispatchAttemptRepo);
   const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo, sendTaskToIClass);
 
   const bulkMoveTasksToStage = new BulkMoveTasksToStage(moveTaskToStage);
@@ -983,6 +988,16 @@ export function createApp() {
   const assignTemplateToTaskUC = new AssignTemplateToTask(schedulingRepo, taskTemplateRepoForChecklist);
   const clearTaskChecklistUC = new ClearTaskChecklist(schedulingRepo);
 
+  // IClass manual resend use cases
+  const listIClassNodes = new ListIClassNodes(buildIClassClient());
+  const resendTaskToIClassWithNode = new ResendTaskToIClassWithNode(
+    schedulingRepo,
+    featureFlagRepo,
+    buildIClassClient(),
+    iclassDispatchAttemptRepo,
+    stageRepo,
+  );
+
   app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authAdapter, stageRepo, {
     addChecklistItem: addChecklistItemUC,
     toggleChecklistItem: toggleChecklistItemUC,
@@ -991,7 +1006,11 @@ export function createApp() {
     reorderChecklistItems: reorderChecklistItemsUC,
     assignTemplateToTask: assignTemplateToTaskUC,
     clearTaskChecklist: clearTaskChecklistUC,
-  }, setTaskInventoryReview, bulkMoveTasksToStage));
+  }, setTaskInventoryReview, bulkMoveTasksToStage, {
+    listIClassNodes,
+    resendTaskToIClassWithNode,
+    requirePerm,
+  }));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);
