@@ -61,6 +61,12 @@ export interface CreateServiceOrderInput {
    * Required — the adapter is a "dumb transport" and does NOT resolve this itself (AD-2).
    */
   soType: string;
+  /**
+   * Override del nodeCode (microárea). Cuando viene, el adapter usa este valor
+   * como address.nodeCode en vez de derivarlo de `city` (default).
+   * Lo setea el reenvio manual (ResendTaskToIClassWithNode). Aditivo y backward-compatible.
+   */
+  nodeCode?: string;
 }
 
 /**

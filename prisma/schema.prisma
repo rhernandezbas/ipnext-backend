@@ -878,6 +878,9 @@ model ScheduledTask {
   // IClass closure loop — mirror of the closed SO, linked back by codigo↔sequenceNumber
   iclassClosedOrder IClassServiceOrder?
 
+  // IClass dispatch audit — intentos de envio a IClass (exito/fallo)
+  iclassDispatchAttempts IClassDispatchAttempt[]
+
   @@index([stageId])
   @@index([projectId])
   @@index([startDate])
@@ -1620,4 +1623,30 @@ model AuditEvent {
   @@index([createdAt])
   @@index([entityType, entityId])
   @@index([method])
+}
+
+// =============================================
+// ICLASS DISPATCH AUDIT
+// =============================================
+
+model IClassDispatchAttempt {
+  id     String        @id @default(uuid())
+  taskId String
+  task   ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  /// success | node_not_found | rejected | unavailable | error
+  outcome           String
+  /// Domain error code (ICLASS_NODE_NOT_FOUND, ICLASS_REJECTED, ...) when outcome != success.
+  errorCode         String?
+  /// Human-readable error detail. Truncado en el caller si hace falta.
+  errorMessage      String?
+  /// Node code que se INTENTO. En fallo automatico por city = city normalizada; null si no aplica.
+  attemptedNodeCode String?
+  /// Node code que efectivamente RESOLVIO/uso (elegido en reenvio, o matcheado por city en exito).
+  resolvedNodeCode  String?
+  /// Actor que disparo el intento. Null para automaticos sin usuario; FK suelta (sin @relation a RbacUser).
+  actorId           String?
+  createdAt         DateTime @default(now())
+
+  @@index([taskId, createdAt])
 }

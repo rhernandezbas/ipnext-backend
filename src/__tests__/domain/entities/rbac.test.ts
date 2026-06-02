@@ -85,8 +85,8 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 30 valid action codes (4 base + 26 sub-actions)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(30);
+  it('contains exactly 31 valid action codes (4 base + 27 sub-actions)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(31);
   });
 
   it('includes all 4 base actions', () => {
@@ -96,7 +96,7 @@ describe('KNOWN_ACTIONS constant', () => {
     expect(KNOWN_ACTIONS).toContain('manage');
   });
 
-  it('includes all 24 sub-action codes from spec', () => {
+  it('includes all 25 sub-action codes from spec (24 original + iclass_manual_resend)', () => {
     const subActions = [
       // tickets
       'close', 'reopen',
@@ -104,6 +104,7 @@ describe('KNOWN_ACTIONS constant', () => {
       'void', 'send_email',
       // scheduling
       'send_to_iclass', 'bulk_delete', 'move_stage', 'manage_checklist',
+      'iclass_manual_resend', // T-26: reenvio manual a IClass
       // monitoring
       'acknowledge_alert',
       // network
@@ -121,7 +122,7 @@ describe('KNOWN_ACTIONS constant', () => {
       // settings
       'manage_api_tokens', 'manage_backups',
     ];
-    expect(subActions).toHaveLength(24);
+    expect(subActions).toHaveLength(25);
     for (const action of subActions) {
       expect(KNOWN_ACTIONS).toContain(action);
     }

@@ -341,4 +341,30 @@ describe('IClassClient', () => {
       client.createServiceOrder({ ...baseInput, soType: '   ' }),
     ).rejects.toThrow('soType is required');
   });
+
+  // ── nodeCode override (T-10) ────────────────────────────────────────────────
+
+  it('nodeCode override: address.nodeCode = input.nodeCode when provided (not city)', async () => {
+    const { http, calls } = makeHttp({ post: [LOGIN_OK, CREATE_OK], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    await client.createServiceOrder({ ...baseInput, city: 'Mercedes', nodeCode: 'Lujan' });
+
+    const create = calls.find(c => c.url === '/serviceorders')!;
+    const body = create.body as Record<string, Record<string, unknown>>;
+    // With override, nodeCode must come from input.nodeCode
+    expect(body.address.nodeCode).toBe('Lujan');
+  });
+
+  it('nodeCode regression: address.nodeCode = city when nodeCode is not provided (default unchanged)', async () => {
+    const { http, calls } = makeHttp({ post: [LOGIN_OK, CREATE_OK], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    await client.createServiceOrder({ ...baseInput, city: 'Mercedes' }); // no nodeCode
+
+    const create = calls.find(c => c.url === '/serviceorders')!;
+    const body = create.body as Record<string, Record<string, unknown>>;
+    // Without override, nodeCode falls back to city
+    expect(body.address.nodeCode).toBe('Mercedes');
+  });
 });

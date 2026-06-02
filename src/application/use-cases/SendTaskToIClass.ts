@@ -1,13 +1,17 @@
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { IClassPort } from '@domain/ports/IClassPort';
+import { IClassDispatchAttemptRepository } from '@domain/ports/IClassDispatchAttemptRepository';
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { MissingRequiredFieldsError, TaskNotFoundError, StageNotFoundError } from '@domain/errors/scheduling';
 import {
   IClassNodeNotFoundError,
+  IClassRejectedError,
+  IClassUnavailableError,
   MissingProjectForIClassError,
   MissingIClassMappingError,
 } from '@domain/errors/iclass';
+import { dispatchToIClass, recordAttempt } from './dispatchTaskToIClass';
 
 const FLAG_KEY = 'iclass-integration';
 /** Immutable business code for the "Registrado en IClass" stage. */
@@ -51,23 +55,31 @@ export class SendTaskToIClass {
     private readonly tasks: SchedulingRepository,
     private readonly featureFlags: FeatureFlagRepository,
     private readonly iclass: IClassPort,
+    /** Optional audit repo (AD-6). Best-effort: failures are logged, not rethrown. */
+    private readonly attempts?: IClassDispatchAttemptRepository,
   ) {}
 
   /**
    * @param workflowId Workflow of the target ("Enviar a IClass") stage. Used to resolve the
    *   "Registrado en IClass" stage within the SAME workflow, avoiding homonym collisions.
+   * @param actorId Optional — used for audit attempts on failure (AD-6). Null for automated flows.
    */
-  async execute(taskId: string, targetStageId: string, workflowId?: string): Promise<ScheduledTask> {
+  async execute(
+    taskId: string,
+    targetStageId: string,
+    workflowId?: string,
+    actorId?: string | null,
+  ): Promise<ScheduledTask> {
     const task = await this.tasks.getTask(taskId);
     if (!task) throw new TaskNotFoundError(taskId);
 
-    // 1. Feature flag OFF → plain move, no IClass.
+    // 1. Feature flag OFF → plain move, no IClass. No attempt recorded (no dispatch).
     const flag = await this.featureFlags.get(FLAG_KEY);
     if (!flag?.enabled) {
       return this.move(taskId, targetStageId);
     }
 
-    // 2. Idempotency: OS already created → just advance the stage.
+    // 2. Idempotency: OS already created → just advance the stage. No attempt recorded.
     if (task.iclassOrderCode != null) {
       return this.moveToRegistrado(taskId, workflowId);
     }
@@ -100,23 +112,56 @@ export class SendTaskToIClass {
     const target = norm(task.customerCity!);
     const nodes = await this.iclass.listNodes();
     const node = nodes.find(n => norm(n.code) === target);
-    if (!node) throw new IClassNodeNotFoundError(task.customerCity!);
+    if (!node) {
+      // Audit: record node_not_found (best-effort, non-fatal — AD-7, AD-6)
+      await recordAttempt(this.attempts, {
+        taskId,
+        outcome: 'node_not_found',
+        errorCode: 'ICLASS_NODE_NOT_FOUND',
+        errorMessage: `No IClass node matches city "${task.customerCity}"`,
+        attemptedNodeCode: null,
+        resolvedNodeCode: null,
+        actorId: actorId ?? null,
+      });
+      throw new IClassNodeNotFoundError(task.customerCity!);
+    }
 
-    // 6. Create the OS (no scheduledDate). Failure propagates IClassUnavailableError.
-    const { orderCode } = await this.iclass.createServiceOrder({
-      soCode: String(task.sequenceNumber),
-      customerCode: task.customerCode!,
-      customerName: task.customerName!,
-      phone: task.customerPhone!,
-      address: task.address!,
-      city: task.customerCity!,
-      description: task.description!,
-      soType: mapping.iclassSoType.code, // resolved from project mapping (REQ-SCHED-4)
-    });
-
-    // 7. Persist the orderCode + advance the stage.
-    await this.tasks.setIClassOrderCode(taskId, orderCode);
-    return this.moveToRegistrado(taskId, workflowId);
+    // 6+7. Create OS, persist orderCode, advance to registered_in_iclass via shared helper.
+    //      Pass attempts=undefined so the helper records nothing on failure — we audit below.
+    //      SUCCESS is NOT audited (AD-7).
+    try {
+      return await dispatchToIClass(
+        { tasks: this.tasks, iclass: this.iclass, attempts: undefined },
+        task,
+        mapping.iclassSoType.code, // resolved from project mapping (REQ-SCHED-4)
+        node.code,
+        { actorId, workflowId: workflowId! },
+      );
+    } catch (err) {
+      // Audit failure (best-effort — AD-6). Re-throw the original domain error.
+      if (err instanceof IClassRejectedError) {
+        await recordAttempt(this.attempts, {
+          taskId,
+          outcome: 'rejected',
+          errorCode: 'ICLASS_REJECTED',
+          errorMessage: err.message,
+          attemptedNodeCode: node.code,
+          resolvedNodeCode: null,
+          actorId: actorId ?? null,
+        });
+      } else if (err instanceof IClassUnavailableError) {
+        await recordAttempt(this.attempts, {
+          taskId,
+          outcome: 'unavailable',
+          errorCode: 'ICLASS_UNAVAILABLE',
+          errorMessage: err.message,
+          attemptedNodeCode: node.code,
+          resolvedNodeCode: null,
+          actorId: actorId ?? null,
+        });
+      }
+      throw err;
+    }
   }
 
   private async move(taskId: string, stageId: string): Promise<ScheduledTask> {

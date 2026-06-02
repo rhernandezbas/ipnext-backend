@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 // Known actions — source of truth for valid action codes (TS + runtime).
 // DB stores action as VARCHAR(64); this list is the whitelist.
-// 4 base + 26 sub-actions = 30 total.
+// 4 base + 27 sub-actions = 31 total.
 // ---------------------------------------------------------------------------
 
 /**
@@ -33,6 +33,7 @@ export const KNOWN_ACTIONS = [
   'bulk_delete',
   'move_stage',
   'manage_checklist',
+  'iclass_manual_resend', // T-26: reenvio manual a IClass con override de nodo
   // monitoring sub-actions
   'acknowledge_alert',
   // network sub-actions

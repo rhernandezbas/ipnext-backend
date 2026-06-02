@@ -6,11 +6,13 @@ import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-m
 import { InMemoryStageRepository } from '../../infrastructure/adapters/in-memory/InMemoryStageRepository';
 import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryIClassClient } from '../../infrastructure/adapters/in-memory/InMemoryIClassClient';
+import { InMemoryIClassDispatchAttemptRepository } from '../../infrastructure/adapters/in-memory/InMemoryIClassDispatchAttemptRepository';
 import { SendTaskToIClass } from '../../application/use-cases/SendTaskToIClass';
 import { MissingRequiredFieldsError, TaskNotFoundError } from '../../domain/errors/scheduling';
 import {
   IClassNodeNotFoundError,
   IClassUnavailableError,
+  IClassRejectedError,
   MissingProjectForIClassError,
   MissingIClassMappingError,
 } from '../../domain/errors/iclass';
@@ -388,5 +390,178 @@ describe('SendTaskToIClass', () => {
 
     expect(result.stageId).toBe(ENVIAR_STAGE.id);
     expect(iclass.createdOrders).toHaveLength(0);
+  });
+
+  // ── Audit de fallos (T-15 — REQ-AUDIT-4) ─────────────────────────────────────
+
+  it('FALLO POR NODO: registers attempt node_not_found when city has no matching node (REQ-AUDIT-4)', async () => {
+    const { tasks, flags } = setup({ nodes: ['Córdoba'] });
+    const stages = new InMemoryStageRepository();
+    stages.addDirect(ENVIAR_STAGE);
+    stages.addDirect(REGISTRADO_STAGE);
+    const taskRepo = new InMemorySchedulingRepository(stages);
+    taskRepo.seedProject({ id: DEFAULT_PROJECT_ID, title: 'P', iclassSoType: { id: 'st1', code: 'INSTALL', active: true } });
+    const iclass2 = new InMemoryIClassClient();
+    iclass2.nodes = [{ code: 'Córdoba', description: 'Córdoba' }];
+    const attemptRepo = new InMemoryIClassDispatchAttemptRepository();
+    const useCaseWithAudit = new SendTaskToIClass(taskRepo, flags, iclass2, attemptRepo);
+
+    taskRepo.seedTask({
+      id: 't-audit-1',
+      stageId: ENVIAR_STAGE.id,
+      customerId: 'c1',
+      customerCode: 'GR-1',
+      customerName: 'Juan',
+      customerPhone: '123',
+      customerCity: 'Rosario',
+      address: 'Dir 1',
+      description: 'Desc',
+      projectId: DEFAULT_PROJECT_ID,
+    });
+
+    await expect(useCaseWithAudit.execute('t-audit-1', ENVIAR_STAGE.id, WF)).rejects.toBeInstanceOf(IClassNodeNotFoundError);
+
+    const history = await attemptRepo.listByTask('t-audit-1');
+    expect(history).toHaveLength(1);
+    expect(history[0].outcome).toBe('node_not_found');
+    expect(history[0].attemptedNodeCode).toBeNull();
+    expect(history[0].errorCode).toBe('ICLASS_NODE_NOT_FOUND');
+  });
+
+  it('FALLO POR REJECTED: registers attempt rejected with attemptedNodeCode = resolved node (REQ-AUDIT-4)', async () => {
+    const stages2 = new InMemoryStageRepository();
+    stages2.addDirect(ENVIAR_STAGE);
+    stages2.addDirect(REGISTRADO_STAGE);
+    const taskRepo2 = new InMemorySchedulingRepository(stages2);
+    taskRepo2.seedProject({ id: DEFAULT_PROJECT_ID, title: 'P', iclassSoType: { id: 'st1', code: 'INSTALL', active: true } });
+    const flags2 = new InMemoryFeatureFlagRepository();
+    flags2.seed(FLAG_KEY, true);
+    const iclass3 = new InMemoryIClassClient();
+    iclass3.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+    iclass3.failureMode = 'rejected';
+    const attemptRepo2 = new InMemoryIClassDispatchAttemptRepository();
+    const useCaseWithAudit2 = new SendTaskToIClass(taskRepo2, flags2, iclass3, attemptRepo2);
+
+    taskRepo2.seedTask({
+      id: 't-audit-2',
+      stageId: ENVIAR_STAGE.id,
+      customerId: 'c1',
+      customerCode: 'GR-1',
+      customerName: 'Juan',
+      customerPhone: '123',
+      customerCity: 'Rosario',
+      address: 'Dir 1',
+      description: 'Desc',
+      projectId: DEFAULT_PROJECT_ID,
+    });
+
+    await expect(useCaseWithAudit2.execute('t-audit-2', ENVIAR_STAGE.id, WF)).rejects.toBeInstanceOf(IClassRejectedError);
+
+    const history2 = await attemptRepo2.listByTask('t-audit-2');
+    expect(history2).toHaveLength(1);
+    expect(history2[0].outcome).toBe('rejected');
+    expect(history2[0].attemptedNodeCode).toBe('Rosario');
+  });
+
+  it('FALLO POR UNAVAILABLE: registers attempt unavailable (REQ-AUDIT-4)', async () => {
+    const stages3 = new InMemoryStageRepository();
+    stages3.addDirect(ENVIAR_STAGE);
+    stages3.addDirect(REGISTRADO_STAGE);
+    const taskRepo3 = new InMemorySchedulingRepository(stages3);
+    taskRepo3.seedProject({ id: DEFAULT_PROJECT_ID, title: 'P', iclassSoType: { id: 'st1', code: 'INSTALL', active: true } });
+    const flags3 = new InMemoryFeatureFlagRepository();
+    flags3.seed(FLAG_KEY, true);
+    const iclass4 = new InMemoryIClassClient();
+    iclass4.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+    // Only createServiceOrder fails with unavailable, listNodes works
+    iclass4.createServiceOrder = async () => { throw new IClassUnavailableError(); };
+    const attemptRepo3 = new InMemoryIClassDispatchAttemptRepository();
+    const useCaseWithAudit3 = new SendTaskToIClass(taskRepo3, flags3, iclass4, attemptRepo3);
+
+    taskRepo3.seedTask({
+      id: 't-audit-3',
+      stageId: ENVIAR_STAGE.id,
+      customerId: 'c1',
+      customerCode: 'GR-1',
+      customerName: 'Juan',
+      customerPhone: '123',
+      customerCity: 'Rosario',
+      address: 'Dir 1',
+      description: 'Desc',
+      projectId: DEFAULT_PROJECT_ID,
+    });
+
+    await expect(useCaseWithAudit3.execute('t-audit-3', ENVIAR_STAGE.id, WF)).rejects.toBeInstanceOf(IClassUnavailableError);
+
+    const history3 = await attemptRepo3.listByTask('t-audit-3');
+    expect(history3).toHaveLength(1);
+    expect(history3[0].outcome).toBe('unavailable');
+  });
+
+  it('EXITO SIN ATTEMPT: successful send does NOT record any attempt (REQ-AUDIT-4, AD-7)', async () => {
+    const stages4 = new InMemoryStageRepository();
+    stages4.addDirect(ENVIAR_STAGE);
+    stages4.addDirect(REGISTRADO_STAGE);
+    const taskRepo4 = new InMemorySchedulingRepository(stages4);
+    taskRepo4.seedProject({ id: DEFAULT_PROJECT_ID, title: 'P', iclassSoType: { id: 'st1', code: 'INSTALL', active: true } });
+    const flags4 = new InMemoryFeatureFlagRepository();
+    flags4.seed(FLAG_KEY, true);
+    const iclass5 = new InMemoryIClassClient();
+    iclass5.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+    const attemptRepo4 = new InMemoryIClassDispatchAttemptRepository();
+    const useCaseSuccess = new SendTaskToIClass(taskRepo4, flags4, iclass5, attemptRepo4);
+
+    taskRepo4.seedTask({
+      id: 't-audit-4',
+      stageId: ENVIAR_STAGE.id,
+      customerId: 'c1',
+      customerCode: 'GR-1',
+      customerName: 'Juan',
+      customerPhone: '123',
+      customerCity: 'Rosario',
+      address: 'Dir 1',
+      description: 'Desc',
+      projectId: DEFAULT_PROJECT_ID,
+    });
+
+    await useCaseSuccess.execute('t-audit-4', ENVIAR_STAGE.id, WF);
+
+    // No attempt should be recorded on success
+    const history4 = await attemptRepo4.listByTask('t-audit-4');
+    expect(history4).toHaveLength(0);
+  });
+
+  it('AUDIT NO FATAL: audit repo that throws does NOT suppress the domain error (AD-6)', async () => {
+    const stages5 = new InMemoryStageRepository();
+    stages5.addDirect(ENVIAR_STAGE);
+    stages5.addDirect(REGISTRADO_STAGE);
+    const taskRepo5 = new InMemorySchedulingRepository(stages5);
+    taskRepo5.seedProject({ id: DEFAULT_PROJECT_ID, title: 'P', iclassSoType: { id: 'st1', code: 'INSTALL', active: true } });
+    const flags5 = new InMemoryFeatureFlagRepository();
+    flags5.seed(FLAG_KEY, true);
+    const iclass6 = new InMemoryIClassClient();
+    iclass6.nodes = [{ code: 'Córdoba', description: 'Córdoba' }]; // Rosario won't match
+
+    // Audit repo that always throws
+    const faultyAttemptRepo = new InMemoryIClassDispatchAttemptRepository();
+    faultyAttemptRepo.record = async () => { throw new Error('db down'); };
+
+    const useCaseWithFaultyAudit = new SendTaskToIClass(taskRepo5, flags5, iclass6, faultyAttemptRepo);
+
+    taskRepo5.seedTask({
+      id: 't-audit-5',
+      stageId: ENVIAR_STAGE.id,
+      customerId: 'c1',
+      customerCode: 'GR-1',
+      customerName: 'Juan',
+      customerPhone: '123',
+      customerCity: 'Rosario', // will fail node match → IClassNodeNotFoundError
+      address: 'Dir 1',
+      description: 'Desc',
+      projectId: DEFAULT_PROJECT_ID,
+    });
+
+    // The IClassNodeNotFoundError (domain error) must propagate, NOT the audit 'db down' error
+    await expect(useCaseWithFaultyAudit.execute('t-audit-5', ENVIAR_STAGE.id, WF)).rejects.toBeInstanceOf(IClassNodeNotFoundError);
   });
 });

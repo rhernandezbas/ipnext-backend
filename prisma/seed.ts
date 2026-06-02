@@ -356,11 +356,25 @@ async function seedSchedulingFoundation() {
   // T-29: RBAC seed — assign scheduling.manage + scheduling.read to 'administrador' role.
   // super_admin already has all permissions via migration (ON CONFLICT DO NOTHING).
   // 'administrador' is the RBAC-system equivalent of "admin" (roles: administrador, noc, tecnico, etc.)
+  //
+  // T-28 (iclass_manual_resend): ensure the permission exists in the catalog so
+  // the migration grant to super_admin can resolve it. Per REQ-RBAC-RESEND-5,
+  // ONLY super_admin receives this permission — it is NOT granted to administrador here.
   try {
     const adminRole = await (prisma as any).rbacRole.findUnique({ where: { code: 'administrador' } })
     if (adminRole) {
       const schedulingModule = await (prisma as any).rbacModule.findUnique({ where: { code: 'scheduling' } })
       if (schedulingModule) {
+        // Ensure iclass_manual_resend permission exists in catalog (no grant to administrador).
+        const existingResendPerm = await (prisma as any).rbacPermission.findFirst({
+          where: { moduleId: schedulingModule.id, action: 'iclass_manual_resend' },
+        })
+        if (!existingResendPerm) {
+          await (prisma as any).rbacPermission.create({
+            data: { moduleId: schedulingModule.id, action: 'iclass_manual_resend' },
+          })
+          console.log('  Created RBAC permission: scheduling.iclass_manual_resend (no role grant — super_admin only via migration)')
+        }
         for (const action of ['manage', 'read']) {
           let perm = await (prisma as any).rbacPermission.findFirst({
             where: { moduleId: schedulingModule.id, action },

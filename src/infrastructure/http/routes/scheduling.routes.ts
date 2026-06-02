@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { z } from 'zod';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { GetTask } from '@application/use-cases/GetTask';
@@ -15,8 +15,11 @@ import { ReorderChecklistItems } from '@application/use-cases/ReorderChecklistIt
 import { AssignTemplateToTask } from '@application/use-cases/AssignTemplateToTask';
 import { ClearTaskChecklist } from '@application/use-cases/ClearTaskChecklist';
 import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
+import { ListIClassNodes } from '@application/use-cases/ListIClassNodes';
+import { ResendTaskToIClassWithNode } from '@application/use-cases/ResendTaskToIClassWithNode';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { StageRepository } from '@domain/ports/StageRepository';
+import { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import {
   CreateTaskSchema,
@@ -63,6 +66,12 @@ export interface ChecklistUseCases {
   clearTaskChecklist: ClearTaskChecklist;
 }
 
+export interface ResendDeps {
+  listIClassNodes: ListIClassNodes;
+  resendTaskToIClassWithNode: ResendTaskToIClassWithNode;
+  requirePerm: (m: RbacModuleCode, a: PermissionAction) => RequestHandler;
+}
+
 export function createSchedulingRouter(
   listTasks: ListTasks,
   getTask: GetTask,
@@ -75,6 +84,7 @@ export function createSchedulingRouter(
   checklist?: ChecklistUseCases,
   setTaskInventoryReview?: SetTaskInventoryReview,
   bulkMoveTasksToStage?: BulkMoveTasksToStage,
+  resendDeps?: ResendDeps,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -265,6 +275,53 @@ export function createSchedulingRouter(
       res.json(result);
     });
   }
+
+  // ── IClass manual resend routes ───────────────────────────────────────────
+  // MUST be registered BEFORE /:id so Express does not shadow them with the
+  // catch-all. Same gotcha as checklist/bulkMoveTasksToStage/inventory-review.
+  if (resendDeps) {
+    const { listIClassNodes, resendTaskToIClassWithNode, requirePerm } = resendDeps;
+    const resendPerm = requirePerm('scheduling', 'iclass_manual_resend');
+
+    // GET /api/scheduling/iclass/nodes  (REQ-NODES-1..4)
+    router.get('/iclass/nodes', auth, resendPerm, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const result = await listIClassNodes.execute();
+        res.status(200).json(result);
+      } catch (err) {
+        // ICLASS_UNAVAILABLE bubbles to errorHandler (502)
+        next(err);
+      }
+    });
+
+    // POST /api/scheduling/:id/iclass/resend  (REQ-RESEND-1, REQ-RESEND-9)
+    router.post('/:id/iclass/resend', auth, resendPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const ResendSchema = z.object({ nodeCode: z.string().min(1) });
+      const parsed = ResendSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const task = await resendTaskToIClassWithNode.execute(
+          req.params['id'] as string,
+          parsed.data.nodeCode,
+          (req as any).user?.id ?? null,
+        );
+        res.status(200).json(task);
+      } catch (err) {
+        if (err instanceof TaskNotFoundError) {
+          res.status(404).json({ error: (err as TaskNotFoundError).message, code: (err as TaskNotFoundError).code });
+          return;
+        }
+        // IClassNodeNotFoundError (422), IClassRejectedError (422),
+        // IClassUnavailableError (502) → bubble to errorHandler
+        next(err);
+      }
+    });
+  }
+
+  // ── End iclass resend routes ──────────────────────────────────────────────
 
   router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const task = await getTask.execute(req.params['id'] as string);
