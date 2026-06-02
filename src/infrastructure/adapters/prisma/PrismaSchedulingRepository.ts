@@ -539,6 +539,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
 
   // ── IClass integration ────────────────────────────────────────────────────
 
+  /** @deprecated Use getStageByCode. */
   async getStageByName(name: string, workflowId?: string): Promise<Stage | null> {
     const row = await (prisma.stage as any).findFirst({ where: { name, ...(workflowId ? { workflowId } : {}) } });
     if (!row) return null;
@@ -546,6 +547,21 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       id: row.id,
       workflowId: row.workflowId,
       name: row.name,
+      code: row.code,
+      category: row.category,
+      order: row.order,
+      color: row.color ?? null,
+    };
+  }
+
+  async getStageByCode(code: string, workflowId: string): Promise<Stage | null> {
+    const row = await (prisma.stage as any).findFirst({ where: { code, workflowId } });
+    if (!row) return null;
+    return {
+      id: row.id,
+      workflowId: row.workflowId,
+      name: row.name,
+      code: row.code,
       category: row.category,
       order: row.order,
       color: row.color ?? null,
@@ -563,6 +579,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       id: row.id,
       workflowId: row.workflowId,
       name: row.name,
+      code: row.code,
       category: row.category,
       order: row.order,
       color: row.color ?? null,
@@ -592,9 +609,10 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     return row ? toTask(row) : null;
   }
 
-  async listTasksInIClassStage(stageName: string): Promise<ScheduledTask[]> {
+  async listTasksInIClassStage(stageCode: string): Promise<ScheduledTask[]> {
+    // Resolve by stage code (rename-safe) — filter tasks whose stage has this code.
     const rows = await (prisma.scheduledTask as any).findMany({
-      where: { stage: { is: { name: stageName } } },
+      where: { stage: { is: { code: stageCode } } },
       include: INCLUDE,
       orderBy: { createdAt: 'desc' },
     });

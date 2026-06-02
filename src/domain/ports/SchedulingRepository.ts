@@ -47,11 +47,15 @@ export interface SchedulingRepository {
 
   // IClass integration (task-send-to-iclass)
   /**
-   * Resolve a Stage by its name (stages are identified by name, not hardcoded id).
-   * When `workflowId` is provided, the lookup is scoped to that workflow so that
-   * homonymous stages in different workflows do not collide.
+   * @deprecated Use getStageByCode. Stages are identified by `code` (immutable),
+   * not by `name` (editable by the user). Kept for one cycle for compat.
    */
   getStageByName(name: string, workflowId?: string): Promise<Stage | null>;
+  /**
+   * Resolve a Stage by its immutable business `code`, scoped to the workflow.
+   * The (workflowId, code) pair is unique per @@unique([workflowId, code]).
+   */
+  getStageByCode(code: string, workflowId: string): Promise<Stage | null>;
   /**
    * Returns the workflow's first stage — the one with the lowest `order` — i.e.
    * the entry state a newly-created task should land in. Null when the workflow
@@ -70,10 +74,10 @@ export interface SchedulingRepository {
    */
   findTaskBySequenceNumber(sequenceNumber: number): Promise<ScheduledTask | null>;
   /**
-   * List tasks already sent to IClass and awaiting closure (in the configured
-   * "Registrado en IClass" stage), used by the scoped backfill reconcile.
+   * List tasks already sent to IClass and awaiting closure (in the in-flight stage),
+   * resolved by stage `code` (rename-safe).
    */
-  listTasksInIClassStage(stageName: string): Promise<ScheduledTask[]>;
+  listTasksInIClassStage(stageCode: string): Promise<ScheduledTask[]>;
 
   // IClass SO type mapping (iclass-so-type-mapping)
   /**

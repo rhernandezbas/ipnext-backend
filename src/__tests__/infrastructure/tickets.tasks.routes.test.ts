@@ -52,6 +52,7 @@ function buildApp() {
     id: DEFAULT_STAGE_ID,
     workflowId: 'wf-default',
     name: 'Nuevo',
+    code: 'nuevo',
     category: 'nuevo',
     order: 0,
     color: null,

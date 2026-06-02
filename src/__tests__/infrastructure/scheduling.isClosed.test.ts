@@ -57,10 +57,10 @@ class FakeAuthProvider implements AuthProvider {
 
 function makeDefaultStages(stageRepo: InMemoryStageRepository): void {
   const stages: Stage[] = [
-    { id: DEFAULT_STAGE_ID_PENDING,     workflowId: 'wf-default', name: 'Nuevo',            category: 'nuevo',      order: 0,  color: null },
-    { id: DEFAULT_STAGE_ID_IN_PROGRESS, workflowId: 'wf-default', name: 'En progreso',       category: 'enProgreso', order: 7,  color: null },
-    { id: DEFAULT_STAGE_ID_COMPLETED,   workflowId: 'wf-default', name: 'Hecho',             category: 'hecho',      order: 9,  color: null },
-    { id: DEFAULT_STAGE_ID_CANCELLED,   workflowId: 'wf-default', name: 'Anulado-Cancelado', category: 'hecho',      order: 10, color: null },
+    { id: DEFAULT_STAGE_ID_PENDING,     workflowId: 'wf-default', name: 'Nuevo',            code: 'nuevo',            category: 'nuevo',      order: 0,  color: null },
+    { id: DEFAULT_STAGE_ID_IN_PROGRESS, workflowId: 'wf-default', name: 'En progreso',       code: 'en_progreso',      category: 'enProgreso', order: 7,  color: null },
+    { id: DEFAULT_STAGE_ID_COMPLETED,   workflowId: 'wf-default', name: 'Hecho',             code: 'hecho',            category: 'hecho',      order: 9,  color: null },
+    { id: DEFAULT_STAGE_ID_CANCELLED,   workflowId: 'wf-default', name: 'Anulado-Cancelado', code: 'anulado_cancelado', category: 'hecho',      order: 10, color: null },
   ];
   stages.forEach(s => stageRepo.addDirect(s));
 }

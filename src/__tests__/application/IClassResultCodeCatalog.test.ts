@@ -16,7 +16,7 @@ function fakeStages(known: Record<string, Stage>): StageRepository {
   return { getById: async (id: string) => known[id] ?? null } as unknown as StageRepository;
 }
 
-const STAGE: Stage = { id: 'stage-instalado', workflowId: 'wf', name: 'Instalado', category: 'hecho', order: 8, color: null };
+const STAGE: Stage = { id: 'stage-instalado', workflowId: 'wf', name: 'Instalado', code: 'instalado', category: 'hecho', order: 8, color: null };
 
 describe('IClass result-code catalog', () => {
   describe('SyncIClassResultCodes', () => {

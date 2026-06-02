@@ -12,9 +12,9 @@ import { StageNotFoundError } from '../../domain/errors/scheduling';
 import { Stage } from '../../domain/entities/workflow';
 
 const WF = 'wf-1';
-const ENVIAR_STAGE: Stage = { id: 'stage-enviar', workflowId: WF, name: 'Enviar a IClass', category: 'enProgreso', order: 5, color: null };
-const REGISTRADO_STAGE: Stage = { id: 'stage-registrado', workflowId: WF, name: 'Registrado en IClass', category: 'enProgreso', order: 6, color: null };
-const OTHER_STAGE: Stage = { id: 'stage-other', workflowId: WF, name: 'En progreso', category: 'enProgreso', order: 2, color: null };
+const ENVIAR_STAGE: Stage = { id: 'stage-enviar', workflowId: WF, name: 'Enviar a IClass', code: 'send_to_iclass', category: 'enProgreso', order: 5, color: null };
+const REGISTRADO_STAGE: Stage = { id: 'stage-registrado', workflowId: WF, name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'enProgreso', order: 6, color: null };
+const OTHER_STAGE: Stage = { id: 'stage-other', workflowId: WF, name: 'En progreso', code: 'en_progreso', category: 'enProgreso', order: 2, color: null };
 
 const DEFAULT_PROJECT = { id: 'proj-1', title: 'Instalaciones FTTH', iclassSoType: { id: 'so-1', code: 'INSTALL', active: true } };
 

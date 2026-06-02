@@ -82,10 +82,10 @@ const DEFAULT_STAGE_ID_CANCELLED   = '10000000-0000-4000-a000-000000000004';
 // Default stages for InMemoryStageRepository — IDs must match those in InMemorySchedulingRepository
 function makeDefaultStages(stageRepo: InMemoryStageRepository): void {
   const stages: Stage[] = [
-    { id: DEFAULT_STAGE_ID_PENDING,     workflowId: 'wf-default', name: 'Nuevo',            category: 'nuevo',      order: 0,  color: null },
-    { id: DEFAULT_STAGE_ID_IN_PROGRESS, workflowId: 'wf-default', name: 'En progreso',       category: 'enProgreso', order: 7,  color: null },
-    { id: DEFAULT_STAGE_ID_COMPLETED,   workflowId: 'wf-default', name: 'Hecho',             category: 'hecho',      order: 9,  color: null },
-    { id: DEFAULT_STAGE_ID_CANCELLED,   workflowId: 'wf-default', name: 'Anulado-Cancelado', category: 'hecho',      order: 10, color: null },
+    { id: DEFAULT_STAGE_ID_PENDING,     workflowId: 'wf-default', name: 'Nuevo',            code: 'nuevo',            category: 'nuevo',      order: 0,  color: null },
+    { id: DEFAULT_STAGE_ID_IN_PROGRESS, workflowId: 'wf-default', name: 'En progreso',       code: 'en_progreso',      category: 'enProgreso', order: 7,  color: null },
+    { id: DEFAULT_STAGE_ID_COMPLETED,   workflowId: 'wf-default', name: 'Hecho',             code: 'hecho',            category: 'hecho',      order: 9,  color: null },
+    { id: DEFAULT_STAGE_ID_CANCELLED,   workflowId: 'wf-default', name: 'Anulado-Cancelado', code: 'anulado_cancelado', category: 'hecho',      order: 10, color: null },
   ];
   stages.forEach(s => stageRepo.addDirect(s));
 }
@@ -1204,8 +1204,8 @@ function buildIClassApp(opts: {
 }) {
   const stageRepo = new InMemoryStageRepository();
   makeDefaultStages(stageRepo);
-  stageRepo.addDirect({ id: ICLASS_STAGE_SEND,       workflowId: 'wf-default', name: 'Enviar a IClass',       category: 'enProgreso', order: 5, color: null });
-  stageRepo.addDirect({ id: ICLASS_STAGE_REGISTERED, workflowId: 'wf-default', name: 'Registrado en IClass',  category: 'enProgreso', order: 6, color: null });
+  stageRepo.addDirect({ id: ICLASS_STAGE_SEND,       workflowId: 'wf-default', name: 'Enviar a IClass',       code: 'send_to_iclass',       category: 'enProgreso', order: 5, color: null });
+  stageRepo.addDirect({ id: ICLASS_STAGE_REGISTERED, workflowId: 'wf-default', name: 'Registrado en IClass',  code: 'registered_in_iclass', category: 'enProgreso', order: 6, color: null });
 
   const repo = new InMemorySchedulingRepository(stageRepo);
   // Seed the default project so getTaskProjectMapping resolves for all flag-ON tests.
@@ -1368,8 +1368,8 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
 function buildBulkApp() {
   const stageRepo = new InMemoryStageRepository();
   makeDefaultStages(stageRepo);
-  stageRepo.addDirect({ id: ICLASS_STAGE_SEND,       workflowId: 'wf-default', name: 'Enviar a IClass',       category: 'enProgreso', order: 5, color: null });
-  stageRepo.addDirect({ id: ICLASS_STAGE_REGISTERED, workflowId: 'wf-default', name: 'Registrado en IClass',  category: 'enProgreso', order: 6, color: null });
+  stageRepo.addDirect({ id: ICLASS_STAGE_SEND,       workflowId: 'wf-default', name: 'Enviar a IClass',       code: 'send_to_iclass',       category: 'enProgreso', order: 5, color: null });
+  stageRepo.addDirect({ id: ICLASS_STAGE_REGISTERED, workflowId: 'wf-default', name: 'Registrado en IClass',  code: 'registered_in_iclass', category: 'enProgreso', order: 6, color: null });
 
   const repo = new InMemorySchedulingRepository(stageRepo);
   repo.seedProject(ICLASS_DEFAULT_PROJECT);

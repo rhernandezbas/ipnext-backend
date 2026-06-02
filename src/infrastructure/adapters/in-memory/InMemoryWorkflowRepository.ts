@@ -22,7 +22,7 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
   async create(data: {
     name: string;
     description: string | null;
-    stages: Array<Pick<Stage, 'name' | 'category' | 'order'>>;
+    stages: Array<Pick<Stage, 'name' | 'code' | 'category' | 'order'>>;
   }): Promise<Workflow> {
     const now = new Date().toISOString();
     const wfId = randomUUID();
@@ -30,6 +30,7 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
       id: randomUUID(),
       workflowId: wfId,
       name: s.name,
+      code: s.code,
       category: s.category,
       order: s.order,
       color: null,

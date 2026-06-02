@@ -13,6 +13,7 @@ describe('workflow domain types', () => {
       id: 'stage-1',
       workflowId: 'wf-1',
       name: 'Nuevo',
+      code: 'nuevo',
       category: 'nuevo',
       order: 0,
       color: null,

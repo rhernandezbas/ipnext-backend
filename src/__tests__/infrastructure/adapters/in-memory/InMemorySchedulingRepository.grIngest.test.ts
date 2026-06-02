@@ -91,9 +91,9 @@ describe('InMemorySchedulingRepository — GR ingest extensions', () => {
       const repo = new InMemorySchedulingRepository(stageRepo);
       // Seed an installation workflow whose stages are NOT named "Pendiente".
       const wfId = 'wf-install';
-      const confirmado = await stageRepo.add(wfId, { name: 'Confirmado', category: 'enProgreso', order: 1 });
-      const nuevo = await stageRepo.add(wfId, { name: 'Nuevo', category: 'nuevo', order: 0 });
-      await stageRepo.add(wfId, { name: 'Enviar a IClass', category: 'enProgreso', order: 5 });
+      const confirmado = await stageRepo.add(wfId, { name: 'Confirmado', code: 'confirmado', category: 'enProgreso', order: 1 });
+      const nuevo = await stageRepo.add(wfId, { name: 'Nuevo', code: 'nuevo', category: 'nuevo', order: 0 });
+      await stageRepo.add(wfId, { name: 'Enviar a IClass', code: 'send_to_iclass', category: 'enProgreso', order: 5 });
 
       const initial = await repo.getInitialStage(wfId);
 
@@ -108,7 +108,7 @@ describe('InMemorySchedulingRepository — GR ingest extensions', () => {
     it('returns null for an unknown workflow', async () => {
       const stageRepo = new InMemoryStageRepository();
       const repo = new InMemorySchedulingRepository(stageRepo);
-      await stageRepo.add('wf-other', { name: 'Nuevo', category: 'nuevo', order: 0 });
+      await stageRepo.add('wf-other', { name: 'Nuevo', code: 'nuevo', category: 'nuevo', order: 0 });
 
       const initial = await repo.getInitialStage('wf-does-not-exist');
 

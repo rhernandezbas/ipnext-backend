@@ -20,10 +20,10 @@ const FLAG_KEY = 'iclass-integration';
 const WF = 'wf-1';
 
 const ENVIAR_STAGE: Stage = {
-  id: 'stage-enviar', workflowId: WF, name: 'Enviar a IClass', category: 'enProgreso', order: 5, color: null,
+  id: 'stage-enviar', workflowId: WF, name: 'Enviar a IClass', code: 'send_to_iclass', category: 'enProgreso', order: 5, color: null,
 };
 const REGISTRADO_STAGE: Stage = {
-  id: 'stage-registrado', workflowId: WF, name: 'Registrado en IClass', category: 'enProgreso', order: 6, color: null,
+  id: 'stage-registrado', workflowId: WF, name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'enProgreso', order: 6, color: null,
 };
 
 /** The default mapped SO type used in happy-path fixtures. */
@@ -277,7 +277,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, stages, iclass, useCase } = setup();
     stages.addDirect({
       id: 'stage-registrado-other', workflowId: OTHER_WF, name: 'Registrado en IClass',
-      category: 'enProgreso', order: 6, color: null,
+      code: 'registered_in_iclass', category: 'enProgreso', order: 6, color: null,
     });
     fullTask(tasks);
 

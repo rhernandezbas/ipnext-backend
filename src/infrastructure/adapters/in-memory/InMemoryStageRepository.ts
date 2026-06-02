@@ -31,17 +31,23 @@ export class InMemoryStageRepository implements StageRepository {
     return s ? { ...s } : null;
   }
 
-  async add(workflowId: string, data: Pick<Stage, 'name' | 'category' | 'order'>): Promise<Stage> {
+  async add(workflowId: string, data: Pick<Stage, 'name' | 'code' | 'category' | 'order'>): Promise<Stage> {
     const stage: Stage = {
       id: randomUUID(),
       workflowId,
       name: data.name,
+      code: data.code,
       category: data.category,
       order: data.order,
       color: null,
     };
     this.stages.push(stage);
     return { ...stage };
+  }
+
+  async findByCode(code: string, workflowId: string): Promise<Stage | null> {
+    const s = this.stages.find(s => s.code === code && s.workflowId === workflowId);
+    return s ? { ...s } : null;
   }
 
   async updateColor(stageId: string, color: string): Promise<Stage | null> {
