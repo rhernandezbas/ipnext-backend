@@ -131,7 +131,7 @@ describe('DeleteWorkflow', () => {
     const createdWf = await wf2Repo.create({
       name: 'InUse2',
       description: null,
-      stages: [{ name: 'S1', category: 'nuevo', order: 0 }],
+      stages: [{ name: 'S1', code: 's1', category: 'nuevo', order: 0 }],
     });
     const stageId = createdWf.stages[0].id;
 
@@ -164,9 +164,40 @@ describe('AddStageToWorkflow', () => {
 
   it('throws StageNameConflictError for duplicate stage name in workflow', async () => {
     const { wfRepo, stageRepo } = makeRepos();
-    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [{ name: 'Nuevo', category: 'nuevo', order: 0 }] });
+    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [{ name: 'Nuevo', code: 'nuevo', category: 'nuevo', order: 0 }] });
     const uc = new AddStageToWorkflow(wfRepo, stageRepo);
     await expect(uc.execute(wf.id, { name: 'Nuevo', category: 'nuevo', order: 1 })).rejects.toThrow(StageNameConflictError);
+  });
+
+  // T-23: code autogeneration (REQ-CODE-1, REQ-CODE-2)
+  it('T-23: autogenerates code slug from name', async () => {
+    const { wfRepo, stageRepo } = makeRepos();
+    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [] });
+    const uc = new AddStageToWorkflow(wfRepo, stageRepo);
+    const stage = await uc.execute(wf.id, { name: 'En Revision', category: 'nuevo', order: 0 });
+    expect(stage.code).toBe('en_revision');
+  });
+
+  it('T-23: disambiguates code with suffix when slug collision within workflow', async () => {
+    // Scenario: existing stage has code 'en_revision' (from name 'En Revision')
+    // A new stage named 'En-Revision' also slugifies to 'en_revision' → gets 'en_revision_2'
+    const { wfRepo, stageRepo } = makeRepos();
+    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [{ name: 'En Revision', code: 'en_revision', category: 'nuevo', order: 0 }] });
+    wf.stages.forEach(s => stageRepo.addDirect(s));
+    const uc = new AddStageToWorkflow(wfRepo, stageRepo);
+    // 'En-Revision' slugifies to 'en_revision' which collides → should get 'en_revision_2'
+    const stage = await uc.execute(wf.id, { name: 'En-Revision', category: 'nuevo', order: 1 });
+    expect(stage.code).toBe('en_revision_2');
+  });
+
+  it('T-23: ignores any code in input — autogenerates its own (REQ-CODE-1 immutability)', async () => {
+    const { wfRepo, stageRepo } = makeRepos();
+    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [] });
+    const uc = new AddStageToWorkflow(wfRepo, stageRepo);
+    // even if execute() signature doesn't accept code, any code field in the input object is ignored
+    const stage = await uc.execute(wf.id, { name: 'Mi Stage', category: 'nuevo', order: 0 });
+    // code must be the slug of the name, NOT any externally provided value
+    expect(stage.code).toBe('mi_stage');
   });
 });
 
@@ -176,7 +207,7 @@ describe('RemoveStageFromWorkflow', () => {
   it('removes an unused stage', async () => {
     const { wfRepo, stageRepo } = makeRepos();
     const wf = await wfRepo.create({ name: 'WF', description: null, stages: [] });
-    const stage = await stageRepo.add(wf.id, { name: 'S', category: 'nuevo', order: 0 });
+    const stage = await stageRepo.add(wf.id, { name: 'S', code: 's', category: 'nuevo', order: 0 });
     const uc = new RemoveStageFromWorkflow(stageRepo);
     await expect(uc.execute(wf.id, stage.id)).resolves.toBeUndefined();
   });
@@ -191,7 +222,7 @@ describe('RemoveStageFromWorkflow', () => {
   it('throws StageInUseError when stage has tasks', async () => {
     const { wfRepo, stageRepo: origStageRepo } = makeRepos();
     const wf = await wfRepo.create({ name: 'WF', description: null, stages: [] });
-    const stage = await origStageRepo.add(wf.id, { name: 'S', category: 'nuevo', order: 0 });
+    const stage = await origStageRepo.add(wf.id, { name: 'S', code: 's', category: 'nuevo', order: 0 });
 
     const inUseStageRepo = new InMemoryStageRepository(() => [stage.id]);
     inUseStageRepo.addDirect(stage);
@@ -210,9 +241,9 @@ describe('ReorderStages', () => {
       name: 'WF',
       description: null,
       stages: [
-        { name: 'A', category: 'nuevo', order: 0 },
-        { name: 'B', category: 'nuevo', order: 1 },
-        { name: 'C', category: 'hecho', order: 2 },
+        { name: 'A', code: 'a', category: 'nuevo', order: 0 },
+        { name: 'B', code: 'b', category: 'nuevo', order: 1 },
+        { name: 'C', code: 'c', category: 'hecho', order: 2 },
       ],
     });
     // Sync stage repo from wf stages
@@ -239,8 +270,8 @@ describe('ReorderStages', () => {
       name: 'WF',
       description: null,
       stages: [
-        { name: 'A', category: 'nuevo', order: 0 },
-        { name: 'B', category: 'nuevo', order: 1 },
+        { name: 'A', code: 'a', category: 'nuevo', order: 0 },
+        { name: 'B', code: 'b', category: 'nuevo', order: 1 },
       ],
     });
     wf.stages.forEach(s => stageRepo.addDirect(s));
@@ -251,7 +282,7 @@ describe('ReorderStages', () => {
 
   it('throws ReorderSetMismatchError for extra id', async () => {
     const { wfRepo, stageRepo } = makeRepos();
-    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [{ name: 'A', category: 'nuevo', order: 0 }] });
+    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [{ name: 'A', code: 'a', category: 'nuevo', order: 0 }] });
     wf.stages.forEach(s => stageRepo.addDirect(s));
     const uc = new ReorderStages(wfRepo, stageRepo);
     await expect(uc.execute(wf.id, [wf.stages[0].id, 'extra-id'])).rejects.toThrow(ReorderSetMismatchError);
@@ -263,8 +294,8 @@ describe('ReorderStages', () => {
       name: 'WF',
       description: null,
       stages: [
-        { name: 'A', category: 'nuevo', order: 0 },
-        { name: 'B', category: 'nuevo', order: 1 },
+        { name: 'A', code: 'a', category: 'nuevo', order: 0 },
+        { name: 'B', code: 'b', category: 'nuevo', order: 1 },
       ],
     });
     wf.stages.forEach(s => stageRepo.addDirect(s));
@@ -279,7 +310,7 @@ describe('ReorderStages', () => {
 describe('MoveTaskToStage', () => {
   it('moves task to a new stage', async () => {
     const { taskRepo, stageRepo } = makeRepos();
-    const stage = await stageRepo.add('wf-1', { name: 'En progreso', category: 'enProgreso', order: 0 });
+    const stage = await stageRepo.add('wf-1', { name: 'En progreso', code: 'en_progreso', category: 'enProgreso', order: 0 });
     const uc = new MoveTaskToStage(taskRepo, stageRepo);
     const result = await uc.execute('1', stage.id);
     expect(result.stageId).toBe(stage.id);
@@ -293,14 +324,14 @@ describe('MoveTaskToStage', () => {
 
   it('throws TaskNotFoundError for unknown task', async () => {
     const { taskRepo, stageRepo } = makeRepos();
-    const stage = await stageRepo.add('wf-1', { name: 'S', category: 'nuevo', order: 0 });
+    const stage = await stageRepo.add('wf-1', { name: 'S', code: 's', category: 'nuevo', order: 0 });
     const uc = new MoveTaskToStage(taskRepo, stageRepo);
     await expect(uc.execute('nonexistent-task', stage.id)).rejects.toThrow(TaskNotFoundError);
   });
 
   it('auto-sets completedAt when moving to hecho stage with completedAt=null', async () => {
     const { taskRepo, stageRepo } = makeRepos();
-    const stage = await stageRepo.add('wf-1', { name: 'Hecho', category: 'hecho', order: 0 });
+    const stage = await stageRepo.add('wf-1', { name: 'Hecho', code: 'hecho', category: 'hecho', order: 0 });
     const uc = new MoveTaskToStage(taskRepo, stageRepo);
     // Task 1 has completedAt: null
     const result = await uc.execute('1', stage.id);
@@ -309,8 +340,8 @@ describe('MoveTaskToStage', () => {
 
   it('does not overwrite completedAt when moving to non-hecho stage', async () => {
     const { taskRepo, stageRepo } = makeRepos();
-    const hechodStage = await stageRepo.add('wf-1', { name: 'Hecho', category: 'hecho', order: 0 });
-    const nuevoStage = await stageRepo.add('wf-1', { name: 'Nuevo', category: 'nuevo', order: 1 });
+    const hechodStage = await stageRepo.add('wf-1', { name: 'Hecho', code: 'hecho', category: 'hecho', order: 0 });
+    const nuevoStage = await stageRepo.add('wf-1', { name: 'Nuevo', code: 'nuevo', category: 'nuevo', order: 1 });
     const uc = new MoveTaskToStage(taskRepo, stageRepo);
 
     // First move to hecho → sets completedAt

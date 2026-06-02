@@ -9,8 +9,8 @@ import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClos
 import { ClosedServiceOrderSummary, SoStatusHistoryEntry } from '@domain/entities/iclass-closed-order';
 import { Stage } from '@domain/entities/workflow';
 
-const REGISTRADO: Stage = { id: 'st-reg', workflowId: 'wf', name: 'Registrado en IClass', category: 'nuevo', order: 5, color: null };
-const INSTALADO: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', category: 'hecho', order: 8, color: null };
+const REGISTRADO: Stage = { id: 'st-reg', workflowId: 'wf', name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'nuevo', order: 5, color: null };
+const INSTALADO: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', code: 'instalado', category: 'hecho', order: 8, color: null };
 
 const HISTORY: SoStatusHistoryEntry[] = [
   { iclassOsStatusId: '2', occurredAt: '2026-05-21T17:49:11.000Z', statusCode: '7', statusDescription: 'ENCERRADO', durationMinutes: 0, teamLogin: 'x', commentary: null },
@@ -30,7 +30,7 @@ function summary(iclassId: string, codigo: string, statusCode = '7'): ClosedServ
   };
 }
 
-function setup() {
+function setup(opts?: { inFlightStageCode?: string }) {
   const stages = new InMemoryStageRepository();
   stages.addDirect(REGISTRADO);
   stages.addDirect(INSTALADO);
@@ -40,7 +40,10 @@ function setup() {
   const closed = new InMemoryClosedServiceOrderRepository();
   const state = new InMemorySyncStateRepository();
   const ingest = new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, { now: () => new Date('2026-05-29T12:00:00Z') });
-  const backfill = new BackfillClosedServiceOrders(iclass, scheduling, ingest, { now: () => new Date('2026-05-29T12:00:00Z') });
+  const backfill = new BackfillClosedServiceOrders(iclass, scheduling, ingest, {
+    now: () => new Date('2026-05-29T12:00:00Z'),
+    ...(opts?.inFlightStageCode !== undefined && { inFlightStageCode: opts.inFlightStageCode }),
+  });
   return { stages, scheduling, iclass, resultCodes, closed, ingest, backfill };
 }
 
@@ -96,5 +99,25 @@ describe('BackfillClosedServiceOrders', () => {
     expect(counts.mirrored).toBe(0);
     expect(closed.orders.size).toBe(0);
     expect((await scheduling.getTask('t1'))!.stageId).toBe(REGISTRADO.id);
+  });
+
+  it('accepts inFlightStageCode option (rename-safe, REQ-BACKFILL-STAGE-1)', async () => {
+    // When the stage has a different name but same code, passing inFlightStageCode
+    // must still find the tasks.
+    const { scheduling, iclass, resultCodes, closed, backfill } = setup({ inFlightStageCode: 'registered_in_iclass' });
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary('900', '4013')];
+    iclass.historyByOrder['900'] = [
+      { iclassOsStatusId: '2', occurredAt: '2026-05-21T17:49:11.000Z', statusCode: '7', statusDescription: 'ENCERRADO', durationMinutes: 0, teamLogin: 'x', commentary: null },
+    ];
+    await resultCodes.upsert({ soTypeId: '1', code: 'Instalacion Completa Fibra', type: 'Sucesso' });
+    const rc = await resultCodes.findByCode('Instalacion Completa Fibra');
+    await resultCodes.assignStage(rc!.id, INSTALADO.id);
+
+    const counts = await backfill.execute();
+
+    expect(counts.mirrored).toBe(1);
+    expect(counts.transitioned).toBe(1);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id);
   });
 });

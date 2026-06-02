@@ -4,8 +4,8 @@ import { ScheduledTask } from '@domain/entities/scheduling';
 import { StageNotFoundError, TaskNotFoundError } from '@domain/errors/scheduling';
 import { SendTaskToIClass } from './SendTaskToIClass';
 
-/** Stage name that triggers the IClass service-order flow. */
-const ENVIAR_A_ICLASS_STAGE_NAME = 'Enviar a IClass';
+/** Immutable business code for the stage that triggers the IClass service-order flow. */
+const SEND_TO_ICLASS_CODE = 'send_to_iclass';
 
 export class MoveTaskToStage {
   constructor(
@@ -20,8 +20,9 @@ export class MoveTaskToStage {
     const stage = await this.stages.getById(stageId);
     if (!stage) throw new StageNotFoundError(stageId);
 
-    // Hook: moving to "Enviar a IClass" delegates to the dedicated use case (AD-1).
-    if (this.sendTaskToIClass && stage.name === ENVIAR_A_ICLASS_STAGE_NAME) {
+    // Hook: moving to the "send_to_iclass" stage delegates to the dedicated use case (AD-1).
+    // Uses stage.code (immutable) so the trigger is rename-safe (REQ-MOVE-STAGE-1).
+    if (this.sendTaskToIClass && stage.code === SEND_TO_ICLASS_CODE) {
       // Pass the target stage's workflow so "Registrado en IClass" is resolved
       // within the SAME workflow (avoids homonym collisions across workflows).
       return this.sendTaskToIClass.execute(taskId, stageId, stage.workflowId);

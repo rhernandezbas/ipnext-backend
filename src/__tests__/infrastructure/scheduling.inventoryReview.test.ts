@@ -55,7 +55,7 @@ function buildApp() {
   const repo = new InMemorySchedulingRepository();
   const stageRepo = new InMemoryStageRepository();
   const stages: Stage[] = [
-    { id: DEFAULT_STAGE_ID_PENDING, workflowId: 'wf-default', name: 'Nuevo', category: 'nuevo', order: 0, color: null },
+    { id: DEFAULT_STAGE_ID_PENDING, workflowId: 'wf-default', name: 'Nuevo', code: 'nuevo', category: 'nuevo', order: 0, color: null },
   ];
   stages.forEach(s => stageRepo.addDirect(s));
 

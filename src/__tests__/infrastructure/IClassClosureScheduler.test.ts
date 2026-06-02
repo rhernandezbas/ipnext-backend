@@ -12,8 +12,8 @@ import { ClosedServiceOrderSummary, SoStatusHistoryEntry } from '@domain/entitie
 import { Stage } from '@domain/entities/workflow';
 
 const FLAG = 'iclass-closure-loop';
-const REG: Stage = { id: 'st-reg', workflowId: 'wf', name: 'Registrado en IClass', category: 'nuevo', order: 5, color: null };
-const INST: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', category: 'hecho', order: 8, color: null };
+const REG: Stage = { id: 'st-reg', workflowId: 'wf', name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'nuevo', order: 5, color: null };
+const INST: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', code: 'instalado', category: 'hecho', order: 8, color: null };
 const HISTORY: SoStatusHistoryEntry[] = [{ iclassOsStatusId: '2', occurredAt: '2026-05-21T17:49:11.000Z', statusCode: '7', statusDescription: 'ENCERRADO', durationMinutes: 0, teamLogin: null, commentary: null }];
 
 function so(): ClosedServiceOrderSummary {

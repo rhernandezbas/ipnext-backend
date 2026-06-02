@@ -15,9 +15,9 @@ describe('ListWorkflows', () => {
       name: 'Test WF',
       description: null,
       stages: [
-        { name: 'Hecho', category: 'hecho', order: 2 },
-        { name: 'Nuevo', category: 'nuevo', order: 0 },
-        { name: 'En progreso', category: 'enProgreso', order: 1 },
+        { name: 'Hecho', code: 'hecho', category: 'hecho', order: 2 },
+        { name: 'Nuevo', code: 'nuevo', category: 'nuevo', order: 0 },
+        { name: 'En progreso', code: 'en_progreso', category: 'enProgreso', order: 1 },
       ],
     });
     const uc = new ListWorkflows(repo);

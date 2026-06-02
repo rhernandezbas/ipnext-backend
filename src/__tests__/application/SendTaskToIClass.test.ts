@@ -20,10 +20,10 @@ const FLAG_KEY = 'iclass-integration';
 const WF = 'wf-1';
 
 const ENVIAR_STAGE: Stage = {
-  id: 'stage-enviar', workflowId: WF, name: 'Enviar a IClass', category: 'enProgreso', order: 5, color: null,
+  id: 'stage-enviar', workflowId: WF, name: 'Enviar a IClass', code: 'send_to_iclass', category: 'enProgreso', order: 5, color: null,
 };
 const REGISTRADO_STAGE: Stage = {
-  id: 'stage-registrado', workflowId: WF, name: 'Registrado en IClass', category: 'enProgreso', order: 6, color: null,
+  id: 'stage-registrado', workflowId: WF, name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'enProgreso', order: 6, color: null,
 };
 
 /** The default mapped SO type used in happy-path fixtures. */
@@ -138,7 +138,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, iclass, useCase } = setup({ nodes: ['  rosario '] });
     fullTask(tasks, { customerCity: 'ROSARIO' });
 
-    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
     expect(iclass.createdOrders).toHaveLength(1);
     expect(result.stageId).toBe(REGISTRADO_STAGE.id);
   });
@@ -147,7 +147,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, iclass, useCase } = setup({ nodes: ['Lujan'] });
     fullTask(tasks, { customerCity: 'Luján' });
 
-    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
     expect(iclass.createdOrders).toHaveLength(1);
     expect(result.stageId).toBe(REGISTRADO_STAGE.id);
   });
@@ -156,7 +156,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, iclass, useCase } = setup({ nodes: ['Cañuelas'] });
     fullTask(tasks, { customerCity: 'Cañuelas' });
 
-    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
     expect(iclass.createdOrders).toHaveLength(1);
     expect(result.stageId).toBe(REGISTRADO_STAGE.id);
   });
@@ -165,7 +165,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, iclass, useCase } = setup({ nodes: ['Lujan'] });
     fullTask(tasks, { customerCity: 'LUJÁN' });
 
-    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
     expect(iclass.createdOrders).toHaveLength(1);
     expect(result.stageId).toBe(REGISTRADO_STAGE.id);
   });
@@ -183,7 +183,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, iclass, useCase } = setup({ nodes: ['Mercedes'] });
     fullTask(tasks, { customerCity: 'Mercedes' });
 
-    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
     expect(iclass.createdOrders).toHaveLength(1);
     expect(result.stageId).toBe(REGISTRADO_STAGE.id);
   });
@@ -193,7 +193,7 @@ describe('SendTaskToIClass', () => {
     iclass.nextOrderCode = 'OS-999';
     fullTask(tasks, { sequenceNumber: 4274 });
 
-    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
 
     expect(iclass.createdOrders).toHaveLength(1);
     expect(iclass.createdOrders[0].input).toMatchObject({
@@ -217,7 +217,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, iclass, useCase } = setup();
     fullTask(tasks, { sequenceNumber: 4274 });
 
-    await useCase.execute('t1', ENVIAR_STAGE.id);
+    await useCase.execute('t1', ENVIAR_STAGE.id, WF);
 
     expect(iclass.createdOrders).toHaveLength(1);
     expect(iclass.createdOrders[0].input.soCode).toBe('4274');
@@ -228,7 +228,7 @@ describe('SendTaskToIClass', () => {
     const UUID = '76e8b565-74e3-44c3-b57d-22f791d1d09e';
     fullTask(tasks, { customerId: UUID, customerCode: 'GR-9999' });
 
-    await useCase.execute('t1', ENVIAR_STAGE.id);
+    await useCase.execute('t1', ENVIAR_STAGE.id, WF);
 
     expect(iclass.createdOrders).toHaveLength(1);
     expect(iclass.createdOrders[0].input.customerCode).toBe('GR-9999');
@@ -240,7 +240,7 @@ describe('SendTaskToIClass', () => {
     // The repo resolves grClienteId ?? splynxId ?? login; here it resolved to the login.
     fullTask(tasks, { customerCode: 'juan.perez' });
 
-    await useCase.execute('t1', ENVIAR_STAGE.id);
+    await useCase.execute('t1', ENVIAR_STAGE.id, WF);
 
     expect(iclass.createdOrders[0].input.customerCode).toBe('juan.perez');
   });
@@ -259,7 +259,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, iclass, useCase } = setup();
     fullTask(tasks, { iclassOrderCode: 'OS-EXISTING' });
 
-    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
 
     expect(iclass.createdOrders).toHaveLength(0);
     expect(result.iclassOrderCode).toBe('OS-EXISTING');
@@ -277,7 +277,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, stages, iclass, useCase } = setup();
     stages.addDirect({
       id: 'stage-registrado-other', workflowId: OTHER_WF, name: 'Registrado en IClass',
-      category: 'enProgreso', order: 6, color: null,
+      code: 'registered_in_iclass', category: 'enProgreso', order: 6, color: null,
     });
     fullTask(tasks);
 
@@ -286,6 +286,33 @@ describe('SendTaskToIClass', () => {
 
     // Must resolve the one in WF (target stage's workflow), not the wf-2 homonym.
     expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+    expect(iclass.createdOrders).toHaveLength(1);
+  });
+
+  it('resolves stage by CODE not NAME — rename-safe (REQ-MOVE-OS-1, REQ-LOGIC-1)', async () => {
+    // Stage has been renamed but code is unchanged — resolution must still work.
+    const stages = new InMemoryStageRepository();
+    stages.addDirect({ ...ENVIAR_STAGE });
+    // Stage has a different name, but same code → must still be resolved by code
+    stages.addDirect({
+      id: 'stage-registrado-renamed', workflowId: WF,
+      name: 'En IClass (renombrado)', // name changed by operator
+      code: 'registered_in_iclass',  // code is immutable
+      category: 'enProgreso', order: 6, color: null,
+    });
+    const tasks = new InMemorySchedulingRepository(stages);
+    tasks.seedProject({ id: DEFAULT_PROJECT_ID, title: 'Instalaciones FTTH', iclassSoType: DEFAULT_SO_TYPE });
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed(FLAG_KEY, true);
+    const iclass = new InMemoryIClassClient();
+    iclass.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+    const useCase = new SendTaskToIClass(tasks, flags, iclass);
+    fullTask(tasks);
+
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
+
+    // Must resolve by code even though the name changed
+    expect(result.stageId).toBe('stage-registrado-renamed');
     expect(iclass.createdOrders).toHaveLength(1);
   });
 
@@ -329,7 +356,7 @@ describe('SendTaskToIClass', () => {
     const { tasks, iclass, useCase } = setup();
     fullTask(tasks, { sequenceNumber: 4274 });
 
-    await useCase.execute('t1', ENVIAR_STAGE.id);
+    await useCase.execute('t1', ENVIAR_STAGE.id, WF);
 
     expect(iclass.createdOrders).toHaveLength(1);
     expect(iclass.createdOrders[0].input.soType).toBe(DEFAULT_SO_TYPE.code);
@@ -344,7 +371,7 @@ describe('SendTaskToIClass', () => {
       projectId: 'proj-no-type-now',
     });
 
-    const result = await useCase.execute('t1', ENVIAR_STAGE.id);
+    const result = await useCase.execute('t1', ENVIAR_STAGE.id, WF);
 
     // Idempotency guard fires BEFORE project-mapping check → no error
     expect(iclass.createdOrders).toHaveLength(0);

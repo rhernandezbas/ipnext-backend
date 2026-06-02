@@ -389,6 +389,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
 
   // ── IClass integration ────────────────────────────────────────────────────
 
+  /** @deprecated Use getStageByCode. */
   async getStageByName(name: string, workflowId?: string): Promise<Stage | null> {
     if (!this.stageRepo) return null;
     // No listAll on the port — scan via the seeded Default workflow lookup is not enough,
@@ -396,6 +397,11 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     const anyRepo = this.stageRepo as unknown as { findByName?: (n: string, wf?: string) => Promise<Stage | null> };
     if (typeof anyRepo.findByName === 'function') return anyRepo.findByName(name, workflowId);
     return null;
+  }
+
+  async getStageByCode(code: string, workflowId: string): Promise<Stage | null> {
+    if (!this.stageRepo) return null;
+    return this.stageRepo.findByCode(code, workflowId);
   }
 
   async getInitialStage(workflowId: string): Promise<Stage | null> {
@@ -419,14 +425,17 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return task ? { ...task } : null;
   }
 
-  async listTasksInIClassStage(stageName: string): Promise<ScheduledTask[]> {
-    // Resolve the stage id(s) for the given name via the injected stage repo,
-    // then return tasks sitting in that stage.
-    const anyRepo = this.stageRepo as unknown as { findByName?: (n: string) => Promise<Stage | null> } | undefined;
-    if (!anyRepo?.findByName) return [];
-    const stage = await anyRepo.findByName(stageName);
-    if (!stage) return [];
-    return this.tasks.filter(t => t.stageId === stage.id).map(t => ({ ...t }));
+  async listTasksInIClassStage(stageCode: string): Promise<ScheduledTask[]> {
+    // Resolve by stage code across all workflows (no workflowId available in caller).
+    // Resolution is by code ONLY (rename-safe) — all callers pass a code, not a name.
+    if (!this.stageRepo) return [];
+    const stageRepoAny = this.stageRepo as unknown as { stages?: Stage[] };
+    if (stageRepoAny.stages) {
+      const stage = stageRepoAny.stages.find((s: Stage) => s.code === stageCode);
+      if (!stage) return [];
+      return this.tasks.filter(t => t.stageId === stage!.id).map(t => ({ ...t }));
+    }
+    return [];
   }
 
   /** Test helper: seed a fully-formed task (lets tests set derived JOIN fields). */

@@ -5,7 +5,7 @@ import { StageNotFoundError } from '@domain/errors/scheduling';
 describe('UpdateStageColor', () => {
   it('updates the colour of an existing stage', async () => {
     const repo = new InMemoryStageRepository();
-    const stage = await repo.add('wf-1', { name: 'Nuevo', category: 'nuevo', order: 0 });
+    const stage = await repo.add('wf-1', { name: 'Nuevo', code: 'nuevo', category: 'nuevo', order: 0 });
     const uc = new UpdateStageColor(repo);
 
     const updated = await uc.execute(stage.id, '#ff8800');

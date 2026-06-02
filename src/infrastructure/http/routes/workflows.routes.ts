@@ -1,5 +1,6 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
+import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import {
   CreateWorkflowSchema,
@@ -47,8 +48,12 @@ import {
   ProjectTypeInUseError,
 } from '@domain/errors/scheduling';
 
+/** Factory matching `requirePerm` exported from app.ts (DIP-clean injection). */
+type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
+
 export function createWorkflowsRouter(
   authProvider: AuthProvider,
+  requirePerm: RequirePerm,
   listWorkflows: ListWorkflows,
   getWorkflow: GetWorkflow,
   createWorkflow: CreateWorkflow,
@@ -71,15 +76,17 @@ export function createWorkflowsRouter(
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
+  const canRead   = requirePerm('scheduling', 'read');
+  const canManage = requirePerm('scheduling', 'manage');
 
   // ─── Workflows ────────────────────────────────────────────────────────────
 
-  router.get('/workflows', auth, async (_req: Request, res: Response): Promise<void> => {
+  router.get('/workflows', auth, canRead, async (_req: Request, res: Response): Promise<void> => {
     const workflows = await listWorkflows.execute();
     res.json(workflows);
   });
 
-  router.get('/workflows/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.get('/workflows/:id', auth, canRead, async (req: Request, res: Response): Promise<void> => {
     try {
       const wf = await getWorkflow.execute(req.params['id'] as string);
       res.json(wf);
@@ -92,7 +99,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.post('/workflows', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/workflows', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const parsed = CreateWorkflowSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -110,7 +117,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.put('/workflows/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.put('/workflows/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const parsed = UpdateWorkflowSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -132,7 +139,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.delete('/workflows/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/workflows/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     try {
       await deleteWorkflow.execute(req.params['id'] as string);
       res.status(204).send();
@@ -155,7 +162,7 @@ export function createWorkflowsRouter(
 
   // ─── Stages ───────────────────────────────────────────────────────────────
 
-  router.post('/workflows/:id/stages', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/workflows/:id/stages', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const parsed = CreateStageSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -177,7 +184,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.put('/workflows/:id/stages/reorder', auth, async (req: Request, res: Response): Promise<void> => {
+  router.put('/workflows/:id/stages/reorder', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const parsed = ReorderStagesSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -199,7 +206,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.delete('/workflows/:id/stages/:stageId', auth, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/workflows/:id/stages/:stageId', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     try {
       await removeStageFromWorkflow.execute(req.params['id'] as string, req.params['stageId'] as string);
       res.status(204).send();
@@ -216,7 +223,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.patch('/workflows/:id/stages/:stageId/color', auth, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/workflows/:id/stages/:stageId/color', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const { color } = req.body as { color?: string };
     if (!color || typeof color !== 'string') {
       res.status(400).json({ error: 'color is required', code: 'VALIDATION_ERROR' });
@@ -236,12 +243,12 @@ export function createWorkflowsRouter(
 
   // ─── ProjectCategory ──────────────────────────────────────────────────────
 
-  router.get('/project-categories', auth, async (_req: Request, res: Response): Promise<void> => {
+  router.get('/project-categories', auth, canRead, async (_req: Request, res: Response): Promise<void> => {
     const items = await listProjectCategory.execute();
     res.json(items);
   });
 
-  router.get('/project-categories/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.get('/project-categories/:id', auth, canRead, async (req: Request, res: Response): Promise<void> => {
     try {
       const item = await getProjectCategory.execute(req.params['id'] as string);
       res.json(item);
@@ -254,7 +261,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.post('/project-categories', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/project-categories', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const parsed = CreateProjectCategorySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -272,7 +279,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.put('/project-categories/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.put('/project-categories/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const parsed = UpdateProjectCategorySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -294,7 +301,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.delete('/project-categories/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/project-categories/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     try {
       await deleteProjectCategory.execute(req.params['id'] as string);
       res.status(204).send();
@@ -313,12 +320,12 @@ export function createWorkflowsRouter(
 
   // ─── ProjectType ──────────────────────────────────────────────────────────
 
-  router.get('/project-types', auth, async (_req: Request, res: Response): Promise<void> => {
+  router.get('/project-types', auth, canRead, async (_req: Request, res: Response): Promise<void> => {
     const items = await listProjectType.execute();
     res.json(items);
   });
 
-  router.get('/project-types/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.get('/project-types/:id', auth, canRead, async (req: Request, res: Response): Promise<void> => {
     try {
       const item = await getProjectType.execute(req.params['id'] as string);
       res.json(item);
@@ -331,7 +338,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.post('/project-types', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/project-types', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const parsed = CreateProjectTypeSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -349,7 +356,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.put('/project-types/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.put('/project-types/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const parsed = UpdateProjectTypeSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -371,7 +378,7 @@ export function createWorkflowsRouter(
     }
   });
 
-  router.delete('/project-types/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/project-types/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     try {
       await deleteProjectType.execute(req.params['id'] as string);
       res.status(204).send();

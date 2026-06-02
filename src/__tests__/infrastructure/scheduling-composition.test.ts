@@ -52,6 +52,11 @@ import { DeleteProjectType } from '../../application/use-cases/DeleteProjectType
 import { User } from '../../domain/entities/auth';
 import { AuthProvider } from '../../domain/ports/AuthProvider';
 import { EntityLookup } from '../../domain/ports/EntityLookup';
+import type { RbacModuleCode, PermissionAction } from '../../domain/entities/rbac';
+
+// Permissive requirePerm — always calls next() (RBAC not under test here)
+const allowAll = (_m: RbacModuleCode, _a: PermissionAction) =>
+  (_req: Request, _res: Response, next: NextFunction) => next();
 
 class StubLookup implements EntityLookup {
   async findById(_id: string) { return null; }
@@ -87,6 +92,7 @@ function buildApp() {
   // workflows MUST be mounted BEFORE scheduling.
   app.use('/api/scheduling', createWorkflowsRouter(
     authProvider,
+    allowAll,
     new ListWorkflows(wfRepo),
     new GetWorkflow(wfRepo),
     new CreateWorkflow(wfRepo),

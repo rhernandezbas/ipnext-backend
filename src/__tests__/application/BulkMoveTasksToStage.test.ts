@@ -23,7 +23,7 @@ import {
 import { Stage } from '../../domain/entities/workflow';
 
 const WF = 'wf-1';
-const OTHER_STAGE: Stage = { id: 'stage-other', workflowId: WF, name: 'En progreso', category: 'enProgreso', order: 2, color: null };
+const OTHER_STAGE: Stage = { id: 'stage-other', workflowId: WF, name: 'En progreso', code: 'en_progreso', category: 'enProgreso', order: 2, color: null };
 
 function setupReal() {
   const stages = new InMemoryStageRepository();

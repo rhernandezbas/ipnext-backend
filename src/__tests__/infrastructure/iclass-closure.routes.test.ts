@@ -31,7 +31,7 @@ class FakeAuthProvider implements AuthProvider {
   }
 }
 
-const STAGE: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', category: 'hecho', order: 8, color: null };
+const STAGE: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', code: 'instalado', category: 'hecho', order: 8, color: null };
 function fakeStages(known: Record<string, Stage>): StageRepository {
   return { getById: async (id: string) => known[id] ?? null } as unknown as StageRepository;
 }

@@ -889,6 +889,7 @@ export function createApp() {
   // that would otherwise swallow /workflows, /project-categories, /project-types.
   app.use('/api/scheduling', createWorkflowsRouter(
     authAdapter,
+    requirePerm,
     listWorkflows, getWorkflow, createWorkflowUC, updateWorkflowUC, deleteWorkflowUC,
     addStageToWorkflow, removeStageFromWorkflow, reorderStages, updateStageColor,
     listProjectCategory, getProjectCategory, createProjectCategory, updateProjectCategory, deleteProjectCategory,

@@ -4,6 +4,8 @@ export interface Stage {
   id: string;
   workflowId: string;
   name: string;
+  /** Immutable business identity slug. Set on creation, never editable. */
+  code: string;
   category: StageCategory;
   order: number;
   /** Editable hex colour for the stage badge. Null → UI falls back to category colour. */

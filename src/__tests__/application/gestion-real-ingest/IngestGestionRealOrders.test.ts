@@ -466,9 +466,9 @@ describe('IngestGestionRealOrders', () => {
 
     // Build the fiber project with an installation workflow whose stages mirror prod.
     const wfId = 'wf-fiber-install';
-    const nuevo = await stageRepo.add(wfId, { name: 'Nuevo', category: 'nuevo', order: 0 });
-    await stageRepo.add(wfId, { name: 'Confirmado', category: 'enProgreso', order: 1 });
-    await stageRepo.add(wfId, { name: 'Enviar a IClass', category: 'enProgreso', order: 5 });
+    const nuevo = await stageRepo.add(wfId, { name: 'Nuevo', code: 'nuevo', category: 'nuevo', order: 0 });
+    await stageRepo.add(wfId, { name: 'Confirmado', code: 'confirmado', category: 'enProgreso', order: 1 });
+    await stageRepo.add(wfId, { name: 'Enviar a IClass', code: 'send_to_iclass', category: 'enProgreso', order: 5 });
     const fiberProject = await projects.create({ title: 'INSTALACION FIBRA', workflowId: wfId });
 
     const priorities = new InMemoryTaskPriorityRepository();

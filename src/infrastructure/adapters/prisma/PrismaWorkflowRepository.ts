@@ -7,6 +7,7 @@ function toStage(row: any): Stage {
     id: row.id,
     workflowId: row.workflowId,
     name: row.name,
+    code: row.code,
     category: row.category,
     order: row.order,
     color: row.color ?? null,
@@ -50,7 +51,7 @@ export class PrismaWorkflowRepository implements WorkflowRepository {
   async create(data: {
     name: string;
     description: string | null;
-    stages: Array<Pick<Stage, 'name' | 'category' | 'order'>>;
+    stages: Array<Pick<Stage, 'name' | 'code' | 'category' | 'order'>>;
   }): Promise<Workflow> {
     const row = await prisma.workflow.create({
       include: INCLUDE_STAGES,
@@ -60,6 +61,7 @@ export class PrismaWorkflowRepository implements WorkflowRepository {
         stages: {
           create: data.stages.map(s => ({
             name: s.name,
+            code: s.code,
             category: s.category as any,
             order: s.order,
           })),

@@ -7,8 +7,8 @@ import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-m
 import { InMemoryStageRepository } from '../../infrastructure/adapters/in-memory/InMemoryStageRepository';
 import { Stage } from '../../domain/entities/workflow';
 
-const STAGE_A: Stage = { id: 'stage-a', workflowId: 'wf-1', name: 'Registrado en IClass', category: 'enProgreso', order: 6, color: null };
-const STAGE_B: Stage = { id: 'stage-b', workflowId: 'wf-2', name: 'Registrado en IClass', category: 'enProgreso', order: 6, color: null };
+const STAGE_A: Stage = { id: 'stage-a', workflowId: 'wf-1', name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'enProgreso', order: 6, color: null };
+const STAGE_B: Stage = { id: 'stage-b', workflowId: 'wf-2', name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'enProgreso', order: 6, color: null };
 
 function setup() {
   const stages = new InMemoryStageRepository();
