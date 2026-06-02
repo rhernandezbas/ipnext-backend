@@ -168,6 +168,37 @@ describe('AddStageToWorkflow', () => {
     const uc = new AddStageToWorkflow(wfRepo, stageRepo);
     await expect(uc.execute(wf.id, { name: 'Nuevo', category: 'nuevo', order: 1 })).rejects.toThrow(StageNameConflictError);
   });
+
+  // T-23: code autogeneration (REQ-CODE-1, REQ-CODE-2)
+  it('T-23: autogenerates code slug from name', async () => {
+    const { wfRepo, stageRepo } = makeRepos();
+    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [] });
+    const uc = new AddStageToWorkflow(wfRepo, stageRepo);
+    const stage = await uc.execute(wf.id, { name: 'En Revision', category: 'nuevo', order: 0 });
+    expect(stage.code).toBe('en_revision');
+  });
+
+  it('T-23: disambiguates code with suffix when slug collision within workflow', async () => {
+    // Scenario: existing stage has code 'en_revision' (from name 'En Revision')
+    // A new stage named 'En-Revision' also slugifies to 'en_revision' → gets 'en_revision_2'
+    const { wfRepo, stageRepo } = makeRepos();
+    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [{ name: 'En Revision', code: 'en_revision', category: 'nuevo', order: 0 }] });
+    wf.stages.forEach(s => stageRepo.addDirect(s));
+    const uc = new AddStageToWorkflow(wfRepo, stageRepo);
+    // 'En-Revision' slugifies to 'en_revision' which collides → should get 'en_revision_2'
+    const stage = await uc.execute(wf.id, { name: 'En-Revision', category: 'nuevo', order: 1 });
+    expect(stage.code).toBe('en_revision_2');
+  });
+
+  it('T-23: ignores any code in input — autogenerates its own (REQ-CODE-1 immutability)', async () => {
+    const { wfRepo, stageRepo } = makeRepos();
+    const wf = await wfRepo.create({ name: 'WF', description: null, stages: [] });
+    const uc = new AddStageToWorkflow(wfRepo, stageRepo);
+    // even if execute() signature doesn't accept code, any code field in the input object is ignored
+    const stage = await uc.execute(wf.id, { name: 'Mi Stage', category: 'nuevo', order: 0 });
+    // code must be the slug of the name, NOT any externally provided value
+    expect(stage.code).toBe('mi_stage');
+  });
 });
 
 // ─── RemoveStageFromWorkflow ──────────────────────────────────────────────────

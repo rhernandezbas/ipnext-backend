@@ -239,38 +239,58 @@ async function seedSchedulingFoundation() {
     },
   })
 
+  // T-28: canonical name→code map (mapa canónico, design.md)
   const stages = [
-    { name: 'Nuevo',                category: 'nuevo',      order: 0 },
-    { name: 'Confirmado',           category: 'nuevo',      order: 1 },
-    { name: 'Pospuesta',            category: 'nuevo',      order: 2 },
-    { name: 'No Factible',          category: 'nuevo',      order: 3 },
-    { name: 'Enviar a IClass',      category: 'nuevo',      order: 4 },
-    { name: 'Registrado en IClass', category: 'nuevo',      order: 5 },
-    { name: 'Notificado',           category: 'nuevo',      order: 6 },
-    { name: 'En progreso',          category: 'enProgreso', order: 7 },
-    { name: 'Instalado',            category: 'hecho',      order: 8 },
-    { name: 'Hecho',                category: 'hecho',      order: 9 },
-    { name: 'Anulado-Cancelado',    category: 'hecho',      order: 10 },
+    { name: 'Nuevo',                code: 'nuevo',                category: 'nuevo',      order: 0 },
+    { name: 'Confirmado',           code: 'confirmado',           category: 'nuevo',      order: 1 },
+    { name: 'Pospuesta',            code: 'pospuesta',            category: 'nuevo',      order: 2 },
+    { name: 'No Factible',          code: 'no_factible',          category: 'nuevo',      order: 3 },
+    { name: 'Enviar a IClass',      code: 'send_to_iclass',       category: 'nuevo',      order: 4 },
+    { name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'nuevo',      order: 5 },
+    { name: 'Notificado',           code: 'notificado',           category: 'nuevo',      order: 6 },
+    { name: 'En progreso',          code: 'en_progreso',          category: 'enProgreso', order: 7 },
+    { name: 'Instalado',            code: 'instalado',            category: 'hecho',      order: 8 },
+    { name: 'Hecho',                code: 'hecho',                category: 'hecho',      order: 9 },
+    { name: 'Anulado-Cancelado',    code: 'anulado_cancelado',    category: 'hecho',      order: 10 },
   ]
 
   for (const stage of stages) {
-    // Upsert by workflowId + name (case-insensitive via findFirst)
-    const existing = await (prisma as any).stage.findFirst({
-      where: {
-        workflowId: defaultWf.id,
-        name: { equals: stage.name, mode: 'insensitive' },
-      },
+    // Upsert by workflowId + code (unique constraint @@unique([workflowId, code]))
+    const existingByCode = await (prisma as any).stage.findFirst({
+      where: { workflowId: defaultWf.id, code: stage.code },
     })
-    if (!existing) {
-      await (prisma as any).stage.create({
-        data: {
+    if (existingByCode) {
+      // Idempotent: update name/category/order in case they drifted
+      await (prisma as any).stage.update({
+        where: { id: existingByCode.id },
+        data: { name: stage.name, category: stage.category, order: stage.order },
+      })
+    } else {
+      // Also check by name in case stage exists without code (pre-migration row)
+      const existingByName = await (prisma as any).stage.findFirst({
+        where: {
           workflowId: defaultWf.id,
-          name: stage.name,
-          category: stage.category,
-          order: stage.order,
+          name: { equals: stage.name, mode: 'insensitive' },
         },
       })
-      console.log(`  Created stage: ${stage.name}`)
+      if (existingByName) {
+        await (prisma as any).stage.update({
+          where: { id: existingByName.id },
+          data: { code: stage.code, category: stage.category, order: stage.order },
+        })
+        console.log(`  Updated stage code: ${stage.name} → ${stage.code}`)
+      } else {
+        await (prisma as any).stage.create({
+          data: {
+            workflowId: defaultWf.id,
+            name: stage.name,
+            code: stage.code,
+            category: stage.category,
+            order: stage.order,
+          },
+        })
+        console.log(`  Created stage: ${stage.name} (${stage.code})`)
+      }
     }
   }
 
@@ -331,6 +351,41 @@ async function seedSchedulingFoundation() {
       create: ts,
     })
     console.log(`  TicketStatus seeded: ${ts.name}`)
+  }
+
+  // T-29: RBAC seed — assign scheduling.manage + scheduling.read to 'administrador' role.
+  // super_admin already has all permissions via migration (ON CONFLICT DO NOTHING).
+  // 'administrador' is the RBAC-system equivalent of "admin" (roles: administrador, noc, tecnico, etc.)
+  try {
+    const adminRole = await (prisma as any).rbacRole.findUnique({ where: { code: 'administrador' } })
+    if (adminRole) {
+      const schedulingModule = await (prisma as any).rbacModule.findUnique({ where: { code: 'scheduling' } })
+      if (schedulingModule) {
+        for (const action of ['manage', 'read']) {
+          let perm = await (prisma as any).rbacPermission.findFirst({
+            where: { moduleId: schedulingModule.id, action },
+          })
+          if (!perm) {
+            perm = await (prisma as any).rbacPermission.create({
+              data: { moduleId: schedulingModule.id, action },
+            })
+            console.log(`  Created RBAC permission: scheduling.${action}`)
+          }
+          await (prisma as any).rbacRolePermission.upsert({
+            where: { roleId_permissionId: { roleId: adminRole.id, permissionId: perm.id } },
+            update: {},
+            create: { roleId: adminRole.id, permissionId: perm.id },
+          })
+          console.log(`  RBAC: administrador → scheduling.${action} (upserted)`)
+        }
+      } else {
+        console.warn('  RBAC seed: scheduling module not found — skipping scheduling.manage assignment')
+      }
+    } else {
+      console.warn('  RBAC seed: administrador role not found — skipping scheduling.manage assignment')
+    }
+  } catch (err) {
+    console.warn('  RBAC seed: scheduling.manage assignment skipped (RBAC tables may not exist yet):', (err as any).message)
   }
 
   console.log('  Scheduling foundation seeded.')
