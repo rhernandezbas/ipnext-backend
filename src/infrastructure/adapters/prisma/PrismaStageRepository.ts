@@ -1,5 +1,5 @@
 import { Stage } from '@domain/entities/workflow';
-import { StageRepository } from '@domain/ports/StageRepository';
+import { StageRepository, UpdateStageData } from '@domain/ports/StageRepository';
 import { prisma } from '../../database/prisma';
 
 const LEGACY_STATUS_TO_STAGE_NAME: Record<string, string> = {
@@ -56,6 +56,19 @@ export class PrismaStageRepository implements StageRepository {
   async updateColor(stageId: string, color: string): Promise<Stage | null> {
     try {
       const row = await (prisma.stage as any).update({ where: { id: stageId }, data: { color } });
+      return toStage(row);
+    } catch {
+      return null;
+    }
+  }
+
+  async updateStage(stageId: string, data: UpdateStageData): Promise<Stage | null> {
+    try {
+      // Only name and category can change — code, order, color untouched
+      const updateData: Record<string, unknown> = {};
+      if (data.name !== undefined) updateData['name'] = data.name;
+      if (data.category !== undefined) updateData['category'] = data.category;
+      const row = await (prisma.stage as any).update({ where: { id: stageId }, data: updateData });
       return toStage(row);
     } catch {
       return null;
