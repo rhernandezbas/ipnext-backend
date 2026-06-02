@@ -1,5 +1,13 @@
 # Proposal: clients-foundation
 
+> **STATUS: BLOQUEADO / EN PAUSA (2026-06-02).** Este change NO se construye hasta que se corte el sync de Gestion Real (GR).
+>
+> **Por que:** mientras el sync de GR este activo, GR es la unica fuente de verdad de los datos del cliente. Construir CRUD manual (UpdateClient/ChangeClientStatus) ahora es trabajo muerto: `ReconcileGrClients` pisaria cualquier edicion local en la proxima corrida -> doble fuente de verdad -> se percibe como bug ("edite y no se guardo").
+>
+> **El proposal de abajo esta OBSOLETO:** gran parte ya se implemento via los changes de GR (gr-clients-full-universe, gr-client-balance-sync). YA EXISTEN: `model Client` (con grClienteId + balance), enum `ClientStatus` nativo (active/late/blocked/inactive/baja), `PrismaCustomerRepository` (read+write a Postgres), use-cases ListClients/GetClientDetail/CreateCustomer/DeleteCustomer, y el sync GR. Pendiente genuino: catalogos ClientType/Segment, UpdateClient/ChangeClientStatus, y GET /api/clients/catalogs.
+>
+> **Cuando desbloquear:** el dia que se decida cortar GR, este change se REPLANTEA como migracion de *ownership* (flag por cliente / freeze global del sync / last-write-wins) — NO es un simple "agregar use-cases". Es un proyecto con estrategia de transicion (patron Strangler Fig).
+
 ## Intent
 
 Construir el módulo de Clientes con CRUD completo, persistencia en Postgres, validación con zod y catálogos editables — cimientos para reemplazar Splynx como sistema operacional. NO incluye importación de datos legacy (eso vive en `clients-data-migration`). Hoy POST/PATCH/DELETE/status escriben a stores in-memory volátiles; el dashboard lee contadores manuales; no hay modelo `Client` en Prisma. Este cambio establece la base de datos real, los puertos de escritura del dominio, los use cases CRUD y el wiring HTTP para que toda operación de cliente persista en Postgres.
