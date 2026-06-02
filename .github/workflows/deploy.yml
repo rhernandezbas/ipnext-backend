@@ -1,4 +1,4 @@
-name: Deploy ipnext-backend
+name: Deploy Prominense BE
 
 on:
   push:
@@ -13,14 +13,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build image
-        run: docker build -t ipnext-backend:latest .
+        run: docker build -t prominense-be:latest .
 
       - name: Run DB migrations
         run: |
           docker run --rm \
             --network easypanel-bd_owners \
             -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            ipnext-backend:latest \
+            prominense-be:latest \
             npx prisma migrate deploy
 
       - name: Bootstrap RBAC super_admin (idempotent)
@@ -42,7 +42,7 @@ jobs:
             -e BOOTSTRAP_RBAC_EMAIL \
             -e BOOTSTRAP_RBAC_NAME \
             -e BOOTSTRAP_RBAC_PASSWORD_HASH \
-            ipnext-backend:latest \
+            prominense-be:latest \
             npm run bootstrap-rbac
 
       - name: Deploy container
@@ -79,7 +79,7 @@ jobs:
             -e ICLASS_OCR_ENABLED="false" \
             -e OLLAMA_BASE_URL="http://190.7.234.37:11434" \
             -e OCR_MODEL="gemma3:12b" \
-            ipnext-backend:latest
+            prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
       - name: Verify
@@ -91,7 +91,7 @@ jobs:
           # Catches the case where stop/rm silently failed and an old container
           # (with the previous image) keeps running.
           CONTAINER_IMG=$(docker inspect ipnext-new-backend --format '{{.Image}}')
-          LATEST_IMG=$(docker inspect ipnext-backend:latest --format '{{.Id}}')
+          LATEST_IMG=$(docker inspect prominense-be:latest --format '{{.Id}}')
           if [ "$CONTAINER_IMG" != "$LATEST_IMG" ]; then
             echo "ERROR: container is running stale image"
             echo "  container: $CONTAINER_IMG"
