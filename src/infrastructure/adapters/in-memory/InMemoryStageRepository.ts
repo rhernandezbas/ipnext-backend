@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { Stage } from '@domain/entities/workflow';
-import { StageRepository } from '@domain/ports/StageRepository';
+import { StageRepository, UpdateStageData } from '@domain/ports/StageRepository';
 
 // Legacy status → stage name mapping
 const LEGACY_STATUS_TO_STAGE_NAME: Record<string, string> = {
@@ -54,6 +54,15 @@ export class InMemoryStageRepository implements StageRepository {
     const s = this.stages.find(s => s.id === stageId);
     if (!s) return null;
     s.color = color;
+    return { ...s };
+  }
+
+  async updateStage(stageId: string, data: UpdateStageData): Promise<Stage | null> {
+    const s = this.stages.find(s => s.id === stageId);
+    if (!s) return null;
+    if (data.name !== undefined) s.name = data.name;
+    if (data.category !== undefined) s.category = data.category;
+    // code, order, color are intentionally NOT touched here
     return { ...s };
   }
 

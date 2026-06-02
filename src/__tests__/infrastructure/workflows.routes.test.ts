@@ -15,6 +15,7 @@ import { AddStageToWorkflow } from '../../application/use-cases/AddStageToWorkfl
 import { RemoveStageFromWorkflow } from '../../application/use-cases/RemoveStageFromWorkflow';
 import { ReorderStages } from '../../application/use-cases/ReorderStages';
 import { UpdateStageColor } from '../../application/use-cases/UpdateStageColor';
+import { UpdateStage } from '../../application/use-cases/UpdateStage';
 import { ListProjectCategory } from '../../application/use-cases/ListProjectCategory';
 import { GetProjectCategory } from '../../application/use-cases/GetProjectCategory';
 import { CreateProjectCategory } from '../../application/use-cases/CreateProjectCategory';
@@ -68,6 +69,7 @@ function buildApp() {
     new RemoveStageFromWorkflow(stageRepo),
     new ReorderStages(wfRepo, stageRepo),
     new UpdateStageColor(stageRepo),
+    new UpdateStage(stageRepo),
     new ListProjectCategory(catRepo),
     new GetProjectCategory(catRepo),
     new CreateProjectCategory(catRepo),
@@ -149,6 +151,7 @@ describe('GET /api/scheduling/workflows/:id', () => {
       new RemoveStageFromWorkflow(stageRepo),
       new ReorderStages(wfRepo, stageRepo),
       new UpdateStageColor(stageRepo),
+      new UpdateStage(stageRepo),
       new ListProjectCategory(catRepo), new GetProjectCategory(catRepo),
       new CreateProjectCategory(catRepo), new UpdateProjectCategory(catRepo),
       new DeleteProjectCategory(catRepo),

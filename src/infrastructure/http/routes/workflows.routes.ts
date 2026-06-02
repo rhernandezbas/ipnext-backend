@@ -19,6 +19,7 @@ import { UpdateWorkflow } from '@application/use-cases/UpdateWorkflow';
 import { DeleteWorkflow } from '@application/use-cases/DeleteWorkflow';
 import { AddStageToWorkflow } from '@application/use-cases/AddStageToWorkflow';
 import { UpdateStageColor } from '@application/use-cases/UpdateStageColor';
+import { UpdateStage } from '@application/use-cases/UpdateStage';
 import { RemoveStageFromWorkflow } from '@application/use-cases/RemoveStageFromWorkflow';
 import { ReorderStages } from '@application/use-cases/ReorderStages';
 import { ListProjectCategory } from '@application/use-cases/ListProjectCategory';
@@ -47,6 +48,7 @@ import {
   ProjectTypeNameConflictError,
   ProjectTypeInUseError,
 } from '@domain/errors/scheduling';
+import type { StageCategory } from '@domain/entities/workflow';
 
 /** Factory matching `requirePerm` exported from app.ts (DIP-clean injection). */
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
@@ -63,6 +65,7 @@ export function createWorkflowsRouter(
   removeStageFromWorkflow: RemoveStageFromWorkflow,
   reorderStages: ReorderStages,
   updateStageColor: UpdateStageColor,
+  updateStage: UpdateStage,
   listProjectCategory: ListProjectCategory,
   getProjectCategory: GetProjectCategory,
   createProjectCategory: CreateProjectCategory,
@@ -235,6 +238,47 @@ export function createWorkflowsRouter(
     } catch (err) {
       if (err instanceof StageNotFoundError) {
         res.status(404).json({ error: err.message, code: err.code });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  router.patch('/workflows/:id/stages/:stageId', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+    const VALID_CATEGORIES: StageCategory[] = ['nuevo', 'enProgreso', 'hecho'];
+    const body = req.body as { name?: unknown; category?: unknown };
+    const hasName     = body.name !== undefined;
+    const hasCategory = body.category !== undefined;
+
+    // Must send at least one of name or category
+    if (!hasName && !hasCategory) {
+      res.status(400).json({ error: 'At least one of name or category is required', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    // Validate name
+    if (hasName && (typeof body.name !== 'string' || body.name.trim() === '')) {
+      res.status(400).json({ error: 'name must be a non-empty string', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    // Validate category
+    if (hasCategory && !VALID_CATEGORIES.includes(body.category as StageCategory)) {
+      res.status(400).json({ error: `category must be one of: ${VALID_CATEGORIES.join(', ')}`, code: 'VALIDATION_ERROR' });
+      return;
+    }
+
+    try {
+      const stage = await updateStage.execute(req.params['stageId'] as string, {
+        name:     hasName     ? (body.name as string) : undefined,
+        category: hasCategory ? (body.category as StageCategory) : undefined,
+      });
+      res.json(stage);
+    } catch (err) {
+      if (err instanceof StageNotFoundError) {
+        res.status(404).json({ error: err.message, code: err.code });
+        return;
+      }
+      if (err instanceof StageNameConflictError) {
+        res.status(409).json({ error: err.message, code: err.code });
         return;
       }
       throw err;
