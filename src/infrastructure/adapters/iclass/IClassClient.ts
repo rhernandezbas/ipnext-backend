@@ -298,7 +298,7 @@ export class IClassClient implements IClassPort {
         state: '',
         country: '',
         zipCode: '',
-        nodeCode: input.city,
+        nodeCode: input.nodeCode ?? input.city,
         neighborhood: '',
       },
     };
