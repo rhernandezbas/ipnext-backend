@@ -83,3 +83,21 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 - **Las env vars de runtime del contenedor de prod tambien son secrets de GitHub.** No se setean en EasyPanel a mano: el step `Deploy container` de `deploy.yml` las forwardea al contenedor via `-e VAR="${{ secrets.VAR }}"`. Para agregar una nueva env de runtime: (1) agregar la linea `-e VAR=...` en el step `Deploy container`, (2) `gh secret set VAR`. El agente lo hace (no requiere accion manual del operador en EasyPanel).
 - **`COOKIE_SECURE`**: controla el flag `Secure` de la cookie de sesion (SDD #6a), desacoplado de `NODE_ENV`. **Prod corre por HTTP plano (sin TLS)** → `COOKIE_SECURE=false` (si se setea `true` sin HTTPS, el browser descarta la cookie y se rompe el login). Pasa a `true` recién cuando haya HTTPS adelante.
 - Hay deuda de seguridad abierta en [`DEUDAS-PENDIENTES.md`](./DEUDAS-PENDIENTES.md) (PAT de GitHub, password de DB, credenciales en skills, enforcement de roles).
+
+## Servidor y runners self-hosted (infra)
+
+- **Host de prod + runners**: `190.7.234.37`, SSH por **puerto 2222**, usuario `ronald`. La **password NO se guarda en este archivo** (es un archivo commiteado = leak permanente). Usar **SSH key** y rotar la password. El `sudo` del host se pasa por **stdin**, jamas inline.
+- **Imagenes Docker** (renombradas a la marca Prominense; Docker exige minusculas): `prominense-fe:latest` (front) y `prominense-be:latest` (back). Los **containers** siguen llamandose `ipnext-new-frontend` (puerto 7778) e `ipnext-new-backend` (8291) - cambiar el nombre del container requiere parar el viejo en el mismo deploy o choca el puerto.
+- **Runners GitHub Actions self-hosted** (uno por repo, en el MISMO host que los containers):
+  - `prominense-fe` -> repo `ipnext-frontend`, en `/opt/actions-runner-prominense-fe`
+  - `prominense-be` -> repo `ipnext-backend`, en `/opt/actions-runner-prominense-be`
+  - Servicios systemd: `actions.runner.rhernandezbas-ipnext-{frontend,backend}.prominense-{fe,be}.service`. Corren como `ronald`.
+- **OJO - gotcha critico**: una limpieza de disco agresiva puede **BORRAR las carpetas de los runners** (paso el 2026-06-02: el disco se lleno de imagenes Docker viejas, la limpieza borro `/opt/actions-runner-ipnext-*`, los dos runners quedaron offline y TODOS los deploys quedaron en cola sin correr). Para liberar disco con seguridad: `docker image prune -a` y `docker builder prune` SI; revisar bien que borra cualquier `rm -rf` manual o `prune --volumes`.
+- **Re-instalar un runner borrado (receta verificada 2026-06-02)**:
+  1. Token: `gh api -X POST repos/rhernandezbas/<repo>/actions/runners/registration-token --jq .token`.
+  2. Copiar binarios de un runner existente del host (tar excluyendo `_work _diag .runner* .credentials* .env .path *.service` y las versiones de `bin.`/`externals.` que no se usen).
+  3. **Re-apuntar los symlinks `bin` y `externals` a las copias PROPIAS del dir nuevo** (si quedan apuntando al runner fuente, el binario corre desde alli y lee la config del fuente -> "already configured").
+  4. `rm -f .runner .runner_migrated .credentials* .env .path .service` (borra la config copiada; **NUNCA** `config.sh remove`, eso desregistra al runner fuente).
+  5. `RUNNER_ALLOW_RUNASROOT=1 ./config.sh --url https://github.com/rhernandezbas/<repo> --token <TOKEN> --name prominense-{fe,be} --unattended --replace`.
+  6. `./svc.sh install && chown -R ronald:ronald <dir> && ./svc.sh start` (el `chown` evita "Permission denied" al escribir `_diag`, porque config.sh corrio como root).
+  7. Verificar `gh api repos/rhernandezbas/<repo>/actions/runners` -> `online`; borrar el registro viejo offline con `gh api -X DELETE .../runners/<id>`.
