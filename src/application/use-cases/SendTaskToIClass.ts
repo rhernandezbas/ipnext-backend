@@ -10,7 +10,8 @@ import {
 } from '@domain/errors/iclass';
 
 const FLAG_KEY = 'iclass-integration';
-const REGISTRADO_STAGE_NAME = 'Registrado en IClass';
+/** Immutable business code for the "Registrado en IClass" stage. */
+const REGISTERED_IN_ICLASS_CODE = 'registered_in_iclass';
 
 /** Canonical order of the required fields surfaced to the front-end modal. */
 const REQUIRED_ORDER = ['customerName', 'phone', 'address', 'city', 'description'] as const;
@@ -125,8 +126,8 @@ export class SendTaskToIClass {
   }
 
   private async moveToRegistrado(taskId: string, workflowId?: string): Promise<ScheduledTask> {
-    const stage = await this.tasks.getStageByName(REGISTRADO_STAGE_NAME, workflowId);
-    if (!stage) throw new StageNotFoundError(REGISTRADO_STAGE_NAME);
+    const stage = await this.tasks.getStageByCode(REGISTERED_IN_ICLASS_CODE, workflowId!);
+    if (!stage) throw new StageNotFoundError(REGISTERED_IN_ICLASS_CODE);
     return this.move(taskId, stage.id);
   }
 }

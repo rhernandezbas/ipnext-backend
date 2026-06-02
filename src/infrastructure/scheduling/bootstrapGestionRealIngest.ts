@@ -12,7 +12,13 @@ import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 import { IngestGestionRealOrders } from '@application/use-cases/IngestGestionRealOrders';
 import { GestionRealIngestScheduler } from './GestionRealIngestScheduler';
 
-const PENDING_STAGE_NAME = 'Pendiente';
+/**
+ * Business code for the "needs-review" default stage.
+ * NOTE: This stage does NOT exist in the canonical seed (the canonical entry stage
+ * for the installation workflow is "nuevo"). If a "pendiente" stage exists in a
+ * custom workflow it will be picked; otherwise `getInitialStage` is the real fallback.
+ */
+const PENDING_STAGE_CODE = 'pendiente';
 
 /**
  * Composition root for the GR installation-order ingest. Returns a ready-to-start
@@ -52,38 +58,40 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
 
   // Resolve a last-resort default stage for the NEEDS-REVIEW (null-project) path.
   //
-  // All CLASSIFIED orders now resolve their stage at runtime via
-  // `getInitialStage(workflowId)` on the target project's workflow (the real
-  // installation workflow has no "Pendiente" stage — its entry stage is "Nuevo"),
-  // so they never depend on this default. This fallback only matters for
-  // needs-review tasks, which have NO project and therefore no workflow to derive
-  // an initial stage from.
+  // All CLASSIFIED orders resolve their stage at runtime via
+  // `getInitialStage(workflowId)` on the target project's workflow (the installation
+  // workflow entry stage is "nuevo", code `nuevo`), so they never depend on this default.
+  // This fallback only matters for needs-review tasks (no project, no workflow).
   //
-  // Decision: without a dedicated needs-review workflow/stage in config there is
-  // no clean, name-agnostic way to resolve a real stage here without adding more
-  // ports. We try a "Pendiente" stage by name (works if such a stage exists in
-  // any workflow), then fall back to the initial stage of the configured fiber or
-  // wireless project's workflow when present — so unclassified tasks can still be
-  // created instead of failing the stageId FK. As a last resort we keep the
-  // warning. This keeps classified orders fully covered while best-effort
-  // resolving a real stage for needs-review.
-  let defaultStageId =
-    (await scheduling.getStageByName(PENDING_STAGE_NAME))?.id ?? '';
-  if (!defaultStageId) {
-    const persistedConfig = await ingestConfig.get();
-    const fallbackProjectId =
-      persistedConfig.fiberProjectId ?? persistedConfig.wirelessProjectId ?? null;
-    if (fallbackProjectId) {
-      const fallbackProject = await projects.get(fallbackProjectId);
-      if (fallbackProject?.workflowId) {
+  // Resolution strategy (code-first, rename-safe):
+  //   1. Get the configured fallback project's workflowId.
+  //   2. Try getStageByCode(PENDING_STAGE_CODE, workflowId) — resolves if the workflow
+  //      has a stage with code 'pendiente' (not in the canonical seed, but may exist
+  //      in custom workflows).
+  //   3. Fall back to getInitialStage(workflowId) — always returns the first stage by
+  //      order (the real entry point for classified tasks too).
+  //   4. Log a warning if neither resolves (no configured project).
+  let defaultStageId = '';
+  const persistedConfig = await ingestConfig.get();
+  const fallbackProjectId =
+    persistedConfig.fiberProjectId ?? persistedConfig.wirelessProjectId ?? null;
+  if (fallbackProjectId) {
+    const fallbackProject = await projects.get(fallbackProjectId);
+    if (fallbackProject?.workflowId) {
+      const wfId = fallbackProject.workflowId;
+      // Try the dedicated pending stage by code first (rename-safe).
+      defaultStageId =
+        (await scheduling.getStageByCode(PENDING_STAGE_CODE, wfId))?.id ?? '';
+      // Fall back to the initial stage of the workflow (always available).
+      if (!defaultStageId) {
         defaultStageId =
-          (await scheduling.getInitialStage(fallbackProject.workflowId))?.id ?? '';
+          (await scheduling.getInitialStage(wfId))?.id ?? '';
       }
     }
   }
   if (!defaultStageId) {
     console.warn(
-      '[gr-ingest] no "Pendiente" stage and no resolvable initial stage from configured projects — needs-review (null-project) tasks may fail to create until a default stage exists',
+      `[gr-ingest] no stage with code '${PENDING_STAGE_CODE}' and no resolvable initial stage from configured projects — needs-review (null-project) tasks may fail to create until a default stage exists`,
     );
   }
 

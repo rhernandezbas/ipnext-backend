@@ -6,8 +6,8 @@ import {
   emptyClosedCounts,
 } from './IngestClosedServiceOrders';
 
-/** Stage that holds tasks already sent to IClass and awaiting closure. */
-const DEFAULT_IN_FLIGHT_STAGE = 'Registrado en IClass';
+/** Immutable business code for the stage holding tasks sent to IClass and awaiting closure. */
+const DEFAULT_IN_FLIGHT_STAGE_CODE = 'registered_in_iclass';
 /** Single-window lookback per task. IClass caps the window at 30 days; in-flight
  * tasks are recent so this covers the realistic case. Closures older than ~30
  * days on a still-in-flight task are rare (a stuck task) and need a manual reconcile. */
@@ -16,8 +16,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface BackfillOptions {
   now?: () => Date;
-  /** Stage name holding in-flight (sent, awaiting closure) tasks. */
-  inFlightStageName?: string;
+  /** Immutable business code of the stage holding in-flight (sent, awaiting closure) tasks. */
+  inFlightStageCode?: string;
   /** How far back to look for each task's closure (clamped to 29 by the IClass cap). */
   lookbackDays?: number;
 }
@@ -30,7 +30,7 @@ export interface BackfillOptions {
  */
 export class BackfillClosedServiceOrders {
   private readonly now: () => Date;
-  private readonly inFlightStageName: string;
+  private readonly inFlightStageCode: string;
   private readonly lookbackDays: number;
 
   constructor(
@@ -40,7 +40,7 @@ export class BackfillClosedServiceOrders {
     opts: BackfillOptions = {},
   ) {
     this.now = opts.now ?? (() => new Date());
-    this.inFlightStageName = opts.inFlightStageName ?? DEFAULT_IN_FLIGHT_STAGE;
+    this.inFlightStageCode = opts.inFlightStageCode ?? DEFAULT_IN_FLIGHT_STAGE_CODE;
     this.lookbackDays = Math.min(opts.lookbackDays ?? DEFAULT_LOOKBACK_DAYS, 29);
   }
 
@@ -49,7 +49,7 @@ export class BackfillClosedServiceOrders {
     const now = this.now();
     const begin = new Date(now.getTime() - this.lookbackDays * DAY_MS);
 
-    const tasks = await this.scheduling.listTasksInIClassStage(this.inFlightStageName);
+    const tasks = await this.scheduling.listTasksInIClassStage(this.inFlightStageCode);
     for (const task of tasks) {
       const summaries = await this.iclass.listServiceOrders({
         updatedDateBegin: begin,

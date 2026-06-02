@@ -427,15 +427,11 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
 
   async listTasksInIClassStage(stageCode: string): Promise<ScheduledTask[]> {
     // Resolve by stage code across all workflows (no workflowId available in caller).
-    // Uses internal stages array to find by code first, then falls back to name for
-    // backward compat until all callers are migrated to code (commit 3).
+    // Resolution is by code ONLY (rename-safe) — all callers pass a code, not a name.
     if (!this.stageRepo) return [];
     const stageRepoAny = this.stageRepo as unknown as { stages?: Stage[] };
     if (stageRepoAny.stages) {
-      // Prefer code match (rename-safe)
-      let stage = stageRepoAny.stages.find((s: Stage) => s.code === stageCode);
-      // Fallback: name match (deprecated, callers migrated in commit 3)
-      if (!stage) stage = stageRepoAny.stages.find((s: Stage) => s.name === stageCode);
+      const stage = stageRepoAny.stages.find((s: Stage) => s.code === stageCode);
       if (!stage) return [];
       return this.tasks.filter(t => t.stageId === stage!.id).map(t => ({ ...t }));
     }
