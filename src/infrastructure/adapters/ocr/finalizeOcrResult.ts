@@ -12,5 +12,5 @@ export function finalizeOcrResult(rawOutput: string): DeviceOcrResult {
   const parsed = parseOcrResponse(rawOutput);
   const sn = normalizeSn(parsed.sn);
   const mac = normalizeMac(parsed.mac);
-  return { sn, mac, confidence: sn || mac ? 0.8 : 0, rawOutput };
+  return { sn, mac, confidence: sn || mac ? 0.8 : 0, rawOutput, deviceType: parsed.deviceType ?? undefined };
 }

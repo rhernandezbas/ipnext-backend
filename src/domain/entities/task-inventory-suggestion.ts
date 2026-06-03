@@ -10,8 +10,10 @@ export interface TaskInventorySuggestion {
   id: string;
   taskId: string;
   kind: SuggestionKind;
-  /** DEVICE: ONU | ROUTER | ANTENA | REPETIDOR | OTROS. */
+  /** DEVICE: ONU | ROUTER | ANTENA | REPETIDOR | OTROS (del label de la pregunta). */
   deviceType: string | null;
+  /** DEVICE: tipo que el modelo de visión infirió de la foto (badge "qwen sugiere"), o null. */
+  qwenDeviceType: string | null;
   serialNumber: string | null;
   mac: string | null;
   /** MATERIAL: free-text description. */

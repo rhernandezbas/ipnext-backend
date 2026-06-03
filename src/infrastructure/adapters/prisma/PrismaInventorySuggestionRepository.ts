@@ -3,7 +3,7 @@ import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggest
 import { prisma } from '../../database/prisma';
 
 type Row = {
-  id: string; taskId: string; kind: string; deviceType: string | null;
+  id: string; taskId: string; kind: string; deviceType: string | null; qwenDeviceType: string | null;
   serialNumber: string | null; mac: string | null; materialDesc: string | null;
   quantity: number | null; unit: string | null; source: string; photoUrl: string | null;
   status: string; confirmedItemId: string | null; createdAt: Date;
@@ -12,7 +12,7 @@ type Row = {
 function toEntity(r: Row): TaskInventorySuggestion {
   return {
     id: r.id, taskId: r.taskId, kind: r.kind as TaskInventorySuggestion['kind'],
-    deviceType: r.deviceType, serialNumber: r.serialNumber, mac: r.mac, materialDesc: r.materialDesc,
+    deviceType: r.deviceType, qwenDeviceType: r.qwenDeviceType, serialNumber: r.serialNumber, mac: r.mac, materialDesc: r.materialDesc,
     quantity: r.quantity, unit: r.unit, source: r.source, photoUrl: r.photoUrl,
     status: r.status as TaskInventorySuggestion['status'], confirmedItemId: r.confirmedItemId,
     createdAt: r.createdAt.toISOString(),
@@ -37,7 +37,7 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
       const row = await prisma.taskInventorySuggestion.update({
         where: { id: existing.id },
         data: {
-          deviceType: s.deviceType, serialNumber: s.serialNumber, mac: s.mac,
+          deviceType: s.deviceType, qwenDeviceType: s.qwenDeviceType, serialNumber: s.serialNumber, mac: s.mac,
           materialDesc: s.materialDesc, quantity: s.quantity, unit: s.unit, photoUrl: s.photoUrl,
         },
       });
@@ -45,7 +45,7 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
     }
     const row = await prisma.taskInventorySuggestion.create({
       data: {
-        id: s.id, taskId: s.taskId, kind: s.kind, deviceType: s.deviceType,
+        id: s.id, taskId: s.taskId, kind: s.kind, deviceType: s.deviceType, qwenDeviceType: s.qwenDeviceType,
         serialNumber: s.serialNumber, mac: s.mac, materialDesc: s.materialDesc,
         quantity: s.quantity, unit: s.unit, source: s.source, photoUrl: s.photoUrl,
         status: s.status, confirmedItemId: s.confirmedItemId, createdAt: new Date(s.createdAt),

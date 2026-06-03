@@ -5,7 +5,7 @@ import { SoMaterial } from '@domain/entities/iclass-closed-order';
 
 const extraction = (over: Partial<OcrExtraction>): OcrExtraction => ({
   id: 'e', photoUrl: 'https://x/p.jpg', serviceOrderId: null, sourceTaskId: 't1',
-  deviceType: 'ROUTER', sn: 'SN', mac: 'MAC', confidence: 0.9, rawOutput: '',
+  deviceType: 'ROUTER', qwenDeviceType: null, sn: 'SN', mac: 'MAC', confidence: 0.9, rawOutput: '',
   provider: 'in-memory', createdAt: '2026-06-01T00:00:00Z', ...over,
 });
 

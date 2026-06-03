@@ -707,7 +707,8 @@ model OcrExtraction {
   photoUrl       String   @db.Text
   serviceOrderId String?
   sourceTaskId   String?
-  deviceType     String? // ROUTER | ANTENA | ONU | REPETIDOR | OTROS
+  deviceType     String? // ROUTER | ANTENA | ONU | REPETIDOR | OTROS (del label de la pregunta)
+  qwenDeviceType String? // clasificación del modelo de visión desde la foto (badge), o null
   sn             String?
   mac            String?
   confidence     Float?
@@ -725,7 +726,8 @@ model TaskInventorySuggestion {
   taskId          String
   task            ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
   kind            String // DEVICE | MATERIAL
-  deviceType      String? // if DEVICE: ONU | ROUTER | ANTENA | REPETIDOR | OTROS
+  deviceType      String? // if DEVICE: ONU | ROUTER | ANTENA | REPETIDOR | OTROS (del label)
+  qwenDeviceType  String? // clasificación del modelo de visión desde la foto (badge), o null
   serialNumber    String?
   mac             String?
   materialDesc    String?
