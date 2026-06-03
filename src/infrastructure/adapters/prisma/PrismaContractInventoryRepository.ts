@@ -25,6 +25,11 @@ export class PrismaContractInventoryRepository implements ContractInventoryRepos
     return rows.map(toEntity);
   }
 
+  async getById(id: string): Promise<ContractInstalledItem | null> {
+    const row = await prisma.contractInstalledItem.findUnique({ where: { id } });
+    return row ? toEntity(row) : null;
+  }
+
   async create(item: ContractInstalledItem): Promise<ContractInstalledItem> {
     const row = await prisma.contractInstalledItem.create({
       data: {
@@ -50,6 +55,16 @@ export class PrismaContractInventoryRepository implements ContractInventoryRepos
         ...(patch.serialNumber !== undefined && { serialNumber: patch.serialNumber }),
         ...(patch.mac !== undefined && { mac: patch.mac }),
       },
+    });
+    return toEntity(row);
+  }
+
+  async remove(id: string): Promise<ContractInstalledItem | null> {
+    const existing = await prisma.contractInstalledItem.findUnique({ where: { id } });
+    if (!existing) return null;
+    const row = await prisma.contractInstalledItem.update({
+      where: { id },
+      data: { status: 'removed' },
     });
     return toEntity(row);
   }

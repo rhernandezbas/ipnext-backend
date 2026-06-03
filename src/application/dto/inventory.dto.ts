@@ -20,3 +20,25 @@ export interface DeviceTypeCatalogDto {
   createdAt: string;   // ISO 8601
   updatedAt: string;   // ISO 8601
 }
+
+export const CreateMaterialSchema = z.object({
+  name:      z.string().min(1),
+  label:     z.string().nullish(),
+  unit:      z.string().nullish(),
+  active:    z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
+export const UpdateMaterialSchema = CreateMaterialSchema.partial();
+export type CreateMaterialInput = z.infer<typeof CreateMaterialSchema>;
+export type UpdateMaterialInput = z.infer<typeof UpdateMaterialSchema>;
+
+export interface MaterialCatalogDto {
+  id:        string;
+  name:      string;
+  label:     string | null;
+  unit:      string | null;
+  active:    boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
