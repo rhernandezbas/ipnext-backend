@@ -95,23 +95,27 @@
 - **Tamaño**: mediano-grande (integraciones/flags).
 
 ### #15 — GR ingesta: reporter = "Api"  *(agregado 2026-06-03)*
-- **Qué**: en la ingesta de OS de Gestión Real, cuando se crea la `ScheduledTask`, el `reporter` debe ser **"Api"** (usuario/sistema API), no `null` ni el usuario del cron.
-- **Dónde**: BE flujo GR sync/ingest — el use-case que crea tareas desde OS de GR (`GestionRealClient` + el ingest de OS). Probablemente requiere un usuario "Api" en `RbacUser`/`Admin` y setear `reporterId` a ese.
+- **Qué**: en la ingesta de OS de Gestión Real, cuando se crea la `ScheduledTask`, el `reporter` debe ser **"Api"** (usuario/sistema API), no `null`.
+- **Landing spot exacto** (explorado 2026-06-03, NO implementado): `src/application/use-cases/IngestGestionRealOrders.ts:241` — hoy `reporterId: null` en el `createTask`. Hay que: (1) asegurar un usuario "Api" en `RbacUser` (seed idempotente, como el bootstrap-rbac), (2) resolver su id (inyectar un lookup/port o pasarlo por `IngestOptions`), (3) pasarlo como `reporterId`. TDD con `InMemorySchedulingRepository` (assert el reporterId del task creado).
 - **Tamaño**: chico.
-- **Hermano de #16** — mismo flujo, conviene hacerlos juntos.
+- **Hermano de #16** — mismo flujo (`IngestGestionRealOrders`), una sola pasada.
 
 ### #16 — GR ingesta: traer comentario de la OS al crear la tarea  *(agregado 2026-06-03)*
-- **Qué**: al crear la tarea desde GR, traer el **comentario de la OS** para pegarlo (probablemente en la descripción de la tarea o como comentario inicial).
-- **Dónde**: BE flujo GR sync/ingest — mapear el campo comentario de la OS de GR al crear la `ScheduledTask`.
-- **Tamaño**: chico.
-- **Hermano de #15** — mismo flujo, una sola pasada.
+- **Qué**: al crear la tarea desde GR, traer el **comentario de la OS** y pegarlo en la `description` de la tarea (hoy `description` es `null` para las tareas normales — solo se llena en las REVISAR).
+- **Landing spot exacto** (explorado 2026-06-03, NO implementado): `GrServiceOrder` (`src/domain/entities/gestionReal.ts:73`) **NO tiene campo de comentario mapeado** — solo `raw: Record<string,unknown>` (payload crudo de GR, línea 93). Pasos: (1) **encontrar el nombre del campo del comentario en el `raw`** de GR (inspeccionar una respuesta real o el adapter que arma `GrServiceOrder` desde GR — `GestionRealClient`), (2) agregar un campo `comentario`/`observaciones: string | null` a `GrServiceOrder` mapeado en el adapter, (3) en `IngestGestionRealOrders.ingestOne` (`:209-213`) setear `description` desde ese campo para las tareas normales (cuidado de no pisar la `REVISAR_DESCRIPTION` de las needs-review).
+- **Tamaño**: chico (lo más incierto es ubicar el nombre del campo en el `raw`).
+- **Hermano de #15** — mismo archivo (`IngestGestionRealOrders.ts`), una sola pasada.
 
 ---
 
+## Refinamientos del #8 (ya en prod, NO son ítems numerados)
+
+Dos follow-ups del inventario shippeados el 2026-06-03 (archivados en `openspec/changes/archive/`):
+- **inventory-edit-and-match**: editar el tipo de un equipo confirmado (admin) sincronizando sugerencia + contrato + sidebar (fix tarea 4691); match de sugerencias contra el inventario actual (badge SN/MAC → "ya instalado" / tipo → "posible reemplazo").
+- **inventory-confirm-dedup-replace**: el match pasa de aviso a acción — frena el duplicado del mismo equipo; ofrece "Agregar" o "Reemplazar la actual" (la vieja → `status='replaced'` + `replacesItemId`).
+
 ## Notas de priorización (lectura del equipo)
 
-- **#15 + #16**: hermanos (mismo flujo de ingesta GR). Hacerlos juntos en una pasada.
-- **#1**: quick win independiente (un form).
-- **#8**: ya tiene el modelo de datos confirmado → listo para SDD + agent team.
-- **#10**: ya tiene el plano SDD completo → listo para `/sdd-apply`.
+- **#15 + #16**: hermanos (mismo flujo, `IngestGestionRealOrders.ts`). EXPLORADOS — ver landing spots exactos arriba. Hacerlos juntos.
+- **#10**: ya tiene el plano SDD completo (`openspec/changes/task-activity-log/`) → listo para `/sdd-apply` en automático.
 - **Epic Tickets** (#9 + #11) y **Epic Integraciones/flags** (#7 + #14): conviene agruparlos por epic.
