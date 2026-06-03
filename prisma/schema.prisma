@@ -521,6 +521,22 @@ model TaskPriority {
   @@map("TaskPriority")
 }
 
+// Editable catalog of inventory device types (ONU, ROUTER, ANTENA, ...).
+// ContractInstalledItem.type + TaskInventorySuggestion.deviceType store the NAME
+// (free-text String). Validation (OCR normalize, confirm guard, route guard) reads
+// the active names from this table instead of a hardcoded enum.
+model DeviceTypeCatalog {
+  id        String   @id @default(uuid())
+  name      String   @unique          // canonical, UPPERCASE (ONU, ROUTER, ...)
+  label     String?                   // optional human label for the UI
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("DeviceTypeCatalog")
+}
+
 model ProjectType {
   id          String    @id @default(uuid())
   name        String
