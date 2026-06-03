@@ -409,6 +409,7 @@ import { ListTaskAuditFindings } from '@application/use-cases/ListTaskAuditFindi
 import { PrismaTaskAuditRepository } from '../adapters/prisma/PrismaTaskAuditRepository';
 import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
+import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
@@ -1027,13 +1028,15 @@ export function createApp() {
   // Permisos granulares: suggestions usan scheduling.*, contract inventory usa inventory.* (migrado de clients.*).
   const inventorySuggestionRepo = new PrismaInventorySuggestionRepository();
   const contractInventoryRepo = new PrismaContractInventoryRepository();
+  const correctConfirmedDeviceType = new CorrectConfirmedDeviceType(inventorySuggestionRepo, contractInventoryRepo);
   app.use('/api', createContractInventoryRouter(
-    new ListTaskInventorySuggestions(inventorySuggestionRepo),
+    new ListTaskInventorySuggestions(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo),
     new ConfirmInventorySuggestion(
       inventorySuggestionRepo, contractInventoryRepo, schedulingRepo, rbacUserRepo,
       deviceTypeCatalogRepo, materialCatalogRepo, taskMaterialConsumptionRepo,
     ),
     new DiscardInventorySuggestion(inventorySuggestionRepo),
+    correctConfirmedDeviceType,
     new ListContractInstalledItems(contractInventoryRepo, rbacUserRepo),
     new AddInstalledItemManually(contractInventoryRepo),
     new UpdateInstalledItem(contractInventoryRepo),
@@ -1047,7 +1050,8 @@ export function createApp() {
       taskWrite:     requirePerm('scheduling', 'write'),  // suggestions — unchanged
       contractRead:  requirePerm('inventory', 'read'),    // ← was 'clients','read'
       contractWrite: requirePerm('inventory', 'write'),   // ← was 'clients','write'
-      materialWrite: requirePerm('inventory', 'write'),   // NEW
+      materialWrite: requirePerm('inventory', 'write'),   // material consumption mutations
+      manage:        requirePerm('inventory', 'manage'),  // admin — correct confirmed device type
     },
     deviceTypeCatalogService,
   ));

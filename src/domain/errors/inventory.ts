@@ -104,3 +104,24 @@ export class InvalidQuantityError extends DomainError {
     this.name = 'InvalidQuantityError';
   }
 }
+
+export class SuggestionNotConfirmedError extends DomainError {
+  constructor(id: string) {
+    super(`Inventory suggestion ${id} is not confirmed`, 'SUGGESTION_NOT_CONFIRMED');
+    this.name = 'SuggestionNotConfirmedError';
+  }
+}
+
+export class NotADeviceError extends DomainError {
+  constructor(id: string) {
+    super(`Inventory suggestion ${id} is not a DEVICE`, 'SUGGESTION_NOT_A_DEVICE');
+    this.name = 'NotADeviceError';
+  }
+}
+
+export class SuggestionNotLinkedError extends DomainError {
+  constructor(id: string) {
+    super(`Inventory suggestion ${id} has no linked contract item`, 'SUGGESTION_NOT_LINKED');
+    this.name = 'SuggestionNotLinkedError';
+  }
+}
