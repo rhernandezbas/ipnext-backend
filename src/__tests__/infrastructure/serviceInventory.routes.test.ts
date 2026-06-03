@@ -38,7 +38,7 @@ const sug = (over: Partial<TaskInventorySuggestion>): TaskInventorySuggestion =>
 const makeItem = (over: Partial<ContractInstalledItem> = {}): ContractInstalledItem => ({
   id: 'i1', contractId: 'svc1', type: 'ROUTER', serialNumber: 'R1', mac: null, model: null,
   source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
-  status: 'active', notes: null, createdAt: 'x', updatedAt: 'x', ...over,
+  status: 'active', notes: null, replacesItemId: null, createdAt: 'x', updatedAt: 'x', ...over,
 });
 
 const makeConsumption = (over: Partial<TaskMaterialConsumption> = {}): TaskMaterialConsumption => ({
@@ -413,6 +413,105 @@ describe('Permission guard migration (clients.* → inventory.*)', () => {
     const { app } = await buildAppWithPerms({ taskWrite: false });
     const res = await request(app).post('/api/scheduling/t1/inventory/suggestions/s1/confirm').send();
     expect(res.status).toBe(403);
+  });
+});
+
+describe('confirm resolution + replace route (B4)', () => {
+  it('R1: POST confirm with resolution=add + no conflict → 201, item created', async () => {
+    const { app, suggestions, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', serialNumber: 'R1' }));
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions/s1/confirm')
+      .send({ resolution: 'add' });
+    expect(res.status).toBe(201);
+    expect(res.body.kind).toBe('DEVICE');
+    expect(res.body.item.serialNumber).toBe('R1');
+  });
+
+  it('R2: POST confirm with resolution=link_existing + same_device seed → 201, existing item returned, no new item', async () => {
+    const { app, suggestions, inventory, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeItem({ id: 'i_existing', serialNumber: 'R1', status: 'active' }));
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R1' }));
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions/s1/confirm')
+      .send({ resolution: 'link_existing' });
+    expect(res.status).toBe(201);
+    expect(res.body.kind).toBe('DEVICE');
+    expect(res.body.item.id).toBe('i_existing');
+    // No new item created
+    expect(await inventory.listByContract('svc1')).toHaveLength(1);
+  });
+
+  it('R3: POST confirm no resolution + same_device seed → 409 DUPLICATE_INSTALLED_ITEM', async () => {
+    const { app, suggestions, inventory, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeItem({ id: 'i_existing', serialNumber: 'R1', status: 'active' }));
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R1' }));
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions/s1/confirm')
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('DUPLICATE_INSTALLED_ITEM');
+  });
+
+  it('R4: POST confirm with resolution=replace → 400 VALIDATION_ERROR (zod rejects)', async () => {
+    const { app, suggestions, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1' }));
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions/s1/confirm')
+      .send({ resolution: 'replace' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('R5: POST replace with contractWrite=deny → 403', async () => {
+    const { app, suggestions, scheduling } = await buildAppWithPerms({ taskWrite: true, contractWrite: false });
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1' }));
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions/s1/replace')
+      .send({});
+    expect(res.status).toBe(403);
+  });
+
+  it('R6: POST replace with same_type seed → 201, old replaced, new with replacesItemId', async () => {
+    const { app, suggestions, inventory, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    // Active ROUTER with SN=R1 (same type as suggestion, different SN)
+    await inventory.create(makeItem({ id: 'i_old', serialNumber: 'R1', type: 'ROUTER', status: 'active' }));
+    // Suggestion is same type ROUTER but different SN=R2
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R2' }));
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions/s1/replace')
+      .send({});
+    expect(res.status).toBe(201);
+    expect(res.body.kind).toBe('DEVICE');
+    expect(res.body.item.replacesItemId).toBe('i_old');
+    expect(res.body.item.status).toBe('active');
+    // Old item is now replaced
+    const oldItem = await inventory.getById('i_old');
+    expect(oldItem!.status).toBe('replaced');
+  });
+
+  it('R7: POST replace with no active same_type → 409 NO_REPLACE_TARGET', async () => {
+    const { app, suggestions, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R1' }));
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions/s1/replace')
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_REPLACE_TARGET');
   });
 });
 

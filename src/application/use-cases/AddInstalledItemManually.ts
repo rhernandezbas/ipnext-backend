@@ -35,6 +35,7 @@ export class AddInstalledItemManually {
       confirmedAt: now,
       status: 'active',
       notes: input.notes ?? null,
+      replacesItemId: null,
       createdAt: now,
       updatedAt: now,
     });

@@ -16,7 +16,7 @@ const sug = (over: Partial<TaskInventorySuggestion>): TaskInventorySuggestion =>
 const makeItem = (over: Partial<ContractInstalledItem> = {}): ContractInstalledItem => ({
   id: 'i1', contractId: 'svc1', type: 'ROUTER', serialNumber: null, mac: null, model: null,
   source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
-  status: 'active', notes: null, createdAt: 'x', updatedAt: 'x', ...over,
+  status: 'active', notes: null, replacesItemId: null, createdAt: 'x', updatedAt: 'x', ...over,
 });
 
 async function setup() {
@@ -135,6 +135,35 @@ describe('ListTaskInventorySuggestions — computeMatch', () => {
     const result = await useCase.execute('t1');
 
     expect(result[0].match!.status).toBe('same_device');
+  });
+
+  it('replaced item is excluded — active-only filter (status=replaced → not matched even by type)', async () => {
+    const { suggestions, inventory, scheduling, useCase } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    // Replaced item of same type as suggestion (should NOT match — it's replaced)
+    await inventory.create(makeItem({ id: 'i_replaced', type: 'ONU', serialNumber: 'SN_ONU', status: 'replaced' }));
+    // Suggestion matching the replaced item by type (ONU)
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ONU', serialNumber: 'SN_DIFFERENT' }));
+
+    const result = await useCase.execute('t1');
+
+    // Replaced item must NOT match — active-only filter excludes it
+    expect(result[0].match).toBeNull();
+  });
+
+  it('active item still matches after active-only filter with same SN as another replaced item', async () => {
+    const { suggestions, inventory, scheduling, useCase } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeItem({ id: 'i_active', type: 'ROUTER', serialNumber: 'SN_ACTIVE', status: 'active' }));
+    await inventory.create(makeItem({ id: 'i_replaced', type: 'ANTENA', serialNumber: 'SN_ANTENA', status: 'replaced' }));
+    // Suggestion matches active item by SN
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'SN_ACTIVE' }));
+
+    const result = await useCase.execute('t1');
+
+    expect(result[0].match).not.toBeNull();
+    expect(result[0].match!.status).toBe('same_device');
+    expect(result[0].match!.itemId).toBe('i_active');
   });
 
   it('SN empty string after trim → treated as null (no match)', async () => {

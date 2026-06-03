@@ -21,6 +21,8 @@ export interface ContractInstalledItem {
   confirmedAt: string | null;
   status: InstalledItemStatus;
   notes: string | null;
+  /** Id of the item this one replaced (self-relation). null for items that didn't replace anything. */
+  replacesItemId: string | null;
   createdAt: string;
   updatedAt: string;
 }

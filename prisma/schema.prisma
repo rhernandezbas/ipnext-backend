@@ -806,12 +806,19 @@ model ContractInstalledItem {
   addedByUserId String?
   confirmedAt   DateTime?
   status        String    @default("active") // active | removed | replaced
+
+  // Link to the item this one replaced (self-relation). null = not a replacement.
+  replacesItemId String?
+  replaces       ContractInstalledItem?  @relation("ItemReplacement", fields: [replacesItemId], references: [id], onDelete: SetNull)
+  replacedBy     ContractInstalledItem[] @relation("ItemReplacement")
+
   notes         String?   @db.Text
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   @@index([contractId])
   @@index([serialNumber])
+  @@index([replacesItemId])
 }
 
 model Project {

@@ -15,6 +15,7 @@ function makeItem(overrides: Partial<ContractInstalledItem> = {}): ContractInsta
     confirmedAt: null,
     status: 'active',
     notes: null,
+    replacesItemId: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

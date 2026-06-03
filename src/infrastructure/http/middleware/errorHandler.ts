@@ -66,6 +66,9 @@ const statusMap: Record<string, number> = {
   ACCOUNT_LOCKED: 423,
   RATE_LIMITED: 429,
   PASSWORD_POLICY: 400,
+  // inventory-confirm-dedup-replace
+  DUPLICATE_INSTALLED_ITEM: 409,
+  NO_REPLACE_TARGET: 409,
 };
 
 /** Express global error-handling middleware. */
