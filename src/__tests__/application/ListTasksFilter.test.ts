@@ -124,6 +124,51 @@ describe('InMemorySchedulingRepository.listTasks — filter predicates', () => {
   });
 });
 
+describe('InMemorySchedulingRepository.listTasks — search (q) across multiple fields', () => {
+  it('matches by address, not just title (case-insensitive)', async () => {
+    // Seeded task 1 lives at 'Av. Corrientes 1234, CABA' but its title says nothing
+    // about Corrientes. Before the fix, q only hit title → zero results.
+    const repo = await buildRepo();
+    const tasks = await repo.listTasks({ q: 'corrientes' });
+    expect(tasks.some(t => (t.address ?? '').toLowerCase().includes('corrientes'))).toBe(true);
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('matches by customer name when the title does NOT contain it', async () => {
+    // The real bug: "buscar por un nombre" = the customer's name, which lives on
+    // the JOIN, never in the task title.
+    const repo = new InMemorySchedulingRepository();
+    repo.seedCustomerName('cust-perez', 'Juan Pérez');
+    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+    await createTask.execute({ ...BASE, title: 'Instalación residencial', stageId: STAGE_S1, customerId: 'cust-perez' });
+
+    const tasks = await repo.listTasks({ q: 'pérez' });
+    expect(tasks.some(t => (t.customerName ?? '').toLowerCase().includes('pérez'))).toBe(true);
+    expect(tasks.length).toBe(1);
+  });
+
+  it('matches by exact sequenceNumber digits', async () => {
+    const repo = await buildRepo();
+    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+    const created = await createTask.execute({ ...BASE, title: 'tarea-seq-distinta', stageId: STAGE_S1 });
+
+    const tasks = await repo.listTasks({ q: String(created.sequenceNumber) });
+    expect(tasks.some(t => t.id === created.id)).toBe(true);
+  });
+
+  it('search is AND-combined with other filters (project scope respected)', async () => {
+    const repo = new InMemorySchedulingRepository();
+    repo.seedCustomerName('cust-z', 'Zulema Ramos');
+    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+    await createTask.execute({ ...BASE, title: 'A', stageId: STAGE_S1, projectId: PROJECT_P1, customerId: 'cust-z' });
+    await createTask.execute({ ...BASE, title: 'B', stageId: STAGE_S1, projectId: PROJECT_P2, customerId: 'cust-z' });
+
+    const tasks = await repo.listTasks({ q: 'zulema', projectId: PROJECT_P1 });
+    expect(tasks.length).toBe(1);
+    expect(tasks[0].projectId).toBe(PROJECT_P1);
+  });
+});
+
 describe('ListTasks use case — filter passthrough', () => {
   it('returns filtered subset when filter is passed', async () => {
     const repo = await buildRepo();

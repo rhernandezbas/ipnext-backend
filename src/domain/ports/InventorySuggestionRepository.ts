@@ -12,5 +12,8 @@ export interface InventorySuggestionRepository {
     id: string,
     status: TaskInventorySuggestion['status'],
     confirmedItemId?: string,
+    /** When provided, persists the operator's chosen device type onto the
+     * suggestion so the resolved view reflects what was confirmed, not the scan. */
+    deviceType?: string,
   ): Promise<TaskInventorySuggestion | null>;
 }

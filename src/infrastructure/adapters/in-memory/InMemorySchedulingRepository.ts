@@ -88,6 +88,10 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
   // Ticket subject lookup — seeded by tests via seedTicketSubject()
   private ticketSubjects: Map<string, string> = new Map();
 
+  // Customer name lookup — seeded by tests via seedCustomerName(). Mirrors the
+  // Prisma adapter's customer JOIN so the multi-field search (q) is testable.
+  private customerNames: Map<string, string> = new Map();
+
   constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository) {
     this.stageRepo = stageRepo;
     this.templateRepo = templateRepo;
@@ -99,6 +103,15 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
    */
   seedTicketSubject(ticketId: string, subject: string): void {
     this.ticketSubjects.set(ticketId, subject);
+  }
+
+  /**
+   * Test helper: seed a customer name so createTask can resolve customerName
+   * (same pattern as seedTicketSubject — no real DB join in-memory). Lets the
+   * multi-field search (q over title/customerName/address/seq) be unit-tested.
+   */
+  seedCustomerName(customerId: string, name: string): void {
+    this.customerNames.set(customerId, name);
   }
   private tasks: ScheduledTask[] = [
     makeTask({
@@ -233,7 +246,14 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (filter.priority) tasks = tasks.filter(t => t.priority === filter.priority);
     if (filter.q) {
       const q = filter.q.toLowerCase();
-      tasks = tasks.filter(t => t.title.toLowerCase().includes(q));
+      // Search spans title + customer name + address + sequence number, so
+      // "buscar por nombre" (the customer's, which lives on the JOIN) works.
+      tasks = tasks.filter(t =>
+        t.title.toLowerCase().includes(q) ||
+        (t.customerName ?? '').toLowerCase().includes(q) ||
+        (t.address ?? '').toLowerCase().includes(q) ||
+        String(t.sequenceNumber).includes(q),
+      );
     }
     if (filter.from) {
       const from = new Date(filter.from).getTime();
@@ -272,7 +292,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       startDate: data.startDate ?? null,
       endDate: data.endDate ?? null,
       customerId: data.customerId ?? null,
-      customerName: null, // In-memory: no JOIN, derived by Prisma adapter
+      customerName: (data.customerId != null ? (this.customerNames.get(data.customerId) ?? null) : null),
       customerCity: null, // idem
       customerPhone: null, // idem
       customerCode: null, // idem (derived from grClienteId ?? splynxId ?? login)

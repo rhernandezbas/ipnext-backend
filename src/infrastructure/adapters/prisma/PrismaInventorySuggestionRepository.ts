@@ -63,12 +63,17 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
     id: string,
     status: TaskInventorySuggestion['status'],
     confirmedItemId?: string,
+    deviceType?: string,
   ): Promise<TaskInventorySuggestion | null> {
     const existing = await prisma.taskInventorySuggestion.findUnique({ where: { id } });
     if (!existing) return null;
     const row = await prisma.taskInventorySuggestion.update({
       where: { id },
-      data: { status, confirmedItemId: confirmedItemId ?? existing.confirmedItemId },
+      data: {
+        status,
+        confirmedItemId: confirmedItemId ?? existing.confirmedItemId,
+        deviceType: deviceType ?? existing.deviceType,
+      },
     });
     return toEntity(row);
   }

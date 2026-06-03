@@ -146,7 +146,19 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     if (filter?.partnerId) where['partnerId'] = filter.partnerId;
     if (filter?.assigneeId) where['assigneeId'] = filter.assigneeId;
     if (filter?.priority) where['priority'] = filter.priority;
-    if (filter?.q) where['title'] = { contains: filter.q, mode: 'insensitive' };
+    if (filter?.q) {
+      // Search spans title + customer name (the JOIN) + address, so "buscar por
+      // nombre" finds the client even though their name never lives in the title.
+      // Numeric queries also match the task's sequenceNumber exactly.
+      const q = filter.q;
+      const or: Record<string, unknown>[] = [
+        { title: { contains: q, mode: 'insensitive' } },
+        { customer: { is: { name: { contains: q, mode: 'insensitive' } } } },
+        { address: { contains: q, mode: 'insensitive' } },
+      ];
+      if (/^\d+$/.test(q)) or.push({ sequenceNumber: Number(q) });
+      where['OR'] = or;
+    }
     if (filter?.from || filter?.to) {
       const startDateFilter: Record<string, Date> = {};
       if (filter.from) startDateFilter['gte'] = new Date(filter.from);

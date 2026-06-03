@@ -114,6 +114,29 @@ describe('Trazabilidad del aprobador (F4)', () => {
     expect(item.type).toBe('ROUTER');
   });
 
+  it('#4: al confirmar con typeOverride, la sugerencia guardada refleja el tipo elegido (ANTENA, no el ONU original)', async () => {
+    const { suggestions, scheduling, confirm } = setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ONU' }));
+
+    await confirm.execute({ suggestionId: 's1', typeOverride: 'ANTENA' });
+
+    const stored = await suggestions.get('s1');
+    expect(stored!.status).toBe('confirmed');
+    expect(stored!.deviceType).toBe('ANTENA');
+  });
+
+  it('#4: sin typeOverride, la sugerencia conserva su deviceType original', async () => {
+    const { suggestions, scheduling, confirm } = setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER' }));
+
+    await confirm.execute({ suggestionId: 's1' });
+
+    const stored = await suggestions.get('s1');
+    expect(stored!.deviceType).toBe('ROUTER');
+  });
+
   it('ListContractInstalledItems resuelve el nombre del aprobador por item', async () => {
     const { suggestions, scheduling, users, confirm, listItems } = setup();
     const u = await users.create({ name: 'Carlos Sánchez', email: 'c@x.com', login: 'carlos', passwordHash: 'h' });

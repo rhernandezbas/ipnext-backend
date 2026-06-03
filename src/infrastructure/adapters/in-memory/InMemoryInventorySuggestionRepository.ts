@@ -46,10 +46,16 @@ export class InMemoryInventorySuggestionRepository implements InventorySuggestio
     id: string,
     status: TaskInventorySuggestion['status'],
     confirmedItemId?: string,
+    deviceType?: string,
   ): Promise<TaskInventorySuggestion | null> {
     const s = this.store.get(id);
     if (!s) return null;
-    const updated = { ...s, status, confirmedItemId: confirmedItemId ?? s.confirmedItemId };
+    const updated = {
+      ...s,
+      status,
+      confirmedItemId: confirmedItemId ?? s.confirmedItemId,
+      deviceType: deviceType ?? s.deviceType,
+    };
     this.store.set(id, updated);
     return updated;
   }
