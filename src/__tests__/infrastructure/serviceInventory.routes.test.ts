@@ -7,6 +7,7 @@ import { InMemoryInventorySuggestionRepository } from '@infrastructure/adapters/
 import { InMemoryContractInventoryRepository } from '@infrastructure/adapters/in-memory/InMemoryContractInventoryRepository';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
+import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
@@ -25,6 +26,7 @@ function buildApp() {
   const suggestions = new InMemoryInventorySuggestionRepository();
   const inventory = new InMemoryContractInventoryRepository();
   const scheduling = new InMemorySchedulingRepository(new InMemoryStageRepository());
+  const users = new InMemoryRbacUserRepository();
 
   const auth = (req: Request, _res: Response, next: NextFunction) => {
     (req as { user?: { id: string } }).user = { id: 'u1' };
@@ -34,9 +36,9 @@ function buildApp() {
 
   const router = createContractInventoryRouter(
     new ListTaskInventorySuggestions(suggestions),
-    new ConfirmInventorySuggestion(suggestions, inventory, scheduling),
+    new ConfirmInventorySuggestion(suggestions, inventory, scheduling, users),
     new DiscardInventorySuggestion(suggestions),
-    new ListContractInstalledItems(inventory),
+    new ListContractInstalledItems(inventory, users),
     new AddInstalledItemManually(inventory),
     new UpdateInstalledItem(inventory),
     auth,

@@ -1,7 +1,9 @@
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
+import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { InMemoryInventorySuggestionRepository } from '@infrastructure/adapters/in-memory/InMemoryInventorySuggestionRepository';
+import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryContractInventoryRepository } from '@infrastructure/adapters/in-memory/InMemoryContractInventoryRepository';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
@@ -11,10 +13,12 @@ function setup() {
   const suggestions = new InMemoryInventorySuggestionRepository();
   const inventory = new InMemoryContractInventoryRepository();
   const scheduling = new InMemorySchedulingRepository(new InMemoryStageRepository());
-  const confirm = new ConfirmInventorySuggestion(suggestions, inventory, scheduling);
+  const users = new InMemoryRbacUserRepository();
+  const confirm = new ConfirmInventorySuggestion(suggestions, inventory, scheduling, users);
+  const listItems = new ListContractInstalledItems(inventory, users);
   const addManual = new AddInstalledItemManually(inventory);
   const discard = new DiscardInventorySuggestion(suggestions);
-  return { suggestions, inventory, scheduling, confirm, addManual, discard };
+  return { suggestions, inventory, scheduling, users, confirm, listItems, addManual, discard };
 }
 
 const sug = (over: Partial<TaskInventorySuggestion>): TaskInventorySuggestion => ({
@@ -76,6 +80,41 @@ describe('ConfirmInventorySuggestion', () => {
   it('unknown suggestion → SUGGESTION_NOT_FOUND', async () => {
     const { confirm } = setup();
     await expect(confirm.execute({ suggestionId: 'nope' })).rejects.toMatchObject({ code: 'SUGGESTION_NOT_FOUND' });
+  });
+});
+
+describe('Trazabilidad del aprobador (F4)', () => {
+  it('confirm resuelve addedByUserName desde el RbacUserRepository', async () => {
+    const { suggestions, scheduling, users, confirm } = setup();
+    const u = await users.create({ name: 'María López', email: 'm@x.com', login: 'maria', passwordHash: 'h' });
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1' }));
+
+    const item = await confirm.execute({ suggestionId: 's1', addedByUserId: u.id });
+
+    expect(item.addedByUserId).toBe(u.id);
+    expect(item.addedByUserName).toBe('María López');
+  });
+
+  it('addedByUserName es null cuando no hay addedByUserId', async () => {
+    const { suggestions, scheduling, confirm } = setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1' }));
+
+    const item = await confirm.execute({ suggestionId: 's1' });
+    expect(item.addedByUserName).toBeNull();
+  });
+
+  it('ListContractInstalledItems resuelve el nombre del aprobador por item', async () => {
+    const { suggestions, scheduling, users, confirm, listItems } = setup();
+    const u = await users.create({ name: 'Carlos Sánchez', email: 'c@x.com', login: 'carlos', passwordHash: 'h' });
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1' }));
+    await confirm.execute({ suggestionId: 's1', addedByUserId: u.id });
+
+    const items = await listItems.execute('svc1');
+    expect(items).toHaveLength(1);
+    expect(items[0].addedByUserName).toBe('Carlos Sánchez');
   });
 });
 
