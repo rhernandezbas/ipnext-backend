@@ -2,12 +2,17 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 agregados el mismo día (#15, #16) → **16 totales**.
-> **7 hechos (en prod) · 9 pendientes.**
+> **8 hechos (en prod) · 8 pendientes.**
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (7, desplegados en producción)
+## ✅ Hechos (8, desplegados en producción)
+
+### #1 — Crear tarea: proyecto + descripción obligatorios
+- **Qué se pidió**: el select de proyecto al crear tarea venía pre-seleccionado ("Fibra los…"); se quería que arrancara sin proyecto, obligatorio elegir uno, y descripción obligatoria.
+- **Cómo se resolvió**: `CreateTaskModal` arranca con placeholder "— Seleccionar proyecto —" (sin auto-default); `canSave` exige proyecto + descripción no vacía; descripción marcada con `*`.
+- **Dónde**: FE `CreateTaskModal.tsx`. **PR**: #28 (frontend). Directo con TDD (sin SDD).
 
 ### #2 — Refresh de tarea perdía Asignado + Proyecto
 - **Síntoma**: al hacer F5 en la página de detalle de una tarea, los `<select>` de Asignado y Proyecto quedaban vacíos; había que salir y volver a entrar.
@@ -54,13 +59,7 @@
 
 ---
 
-## ⏳ Pendientes (9)
-
-### #1 — CreateTaskModal: proyecto obligatorio + descripción obligatoria
-- **Qué**: hoy el `<select>` de proyecto al crear una tarea viene pre-seleccionado en un proyecto (uno que empieza con "Fibra los…"). Se quiere: (a) que arranque **sin proyecto** (placeholder), (b) que **seleccionar uno sea obligatorio**, (c) que el campo **descripción también sea obligatorio**.
-- **Aclaración**: NO es un "seccionador" ni el catálogo — es puntualmente el form `CreateTaskModal`.
-- **Dónde**: FE `src/pages/scheduling/SchedulingTasksPage/components/CreateTaskModal.tsx` (validación react-hook-form + default del select). Posible toque BE en el schema Zod de create si se valida server-side.
-- **Tamaño**: chico (quick win, ~media hora con TDD/vitest).
+## ⏳ Pendientes (8)
 
 ### #7 — Unificar sub-page "cierre de OS" + feature flag del auditor IA
 - **Qué**: en Scheduling → Configuraciones → integración IClass, unificar la sub-page de "cierre de OS" (manteniendo el diseño) y crear la **feature flag del auditor de IA**.
