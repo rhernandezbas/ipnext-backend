@@ -34,7 +34,7 @@ describe('PostClosureComment', () => {
     const uc = new PostClosureComment(repo);
     const o = order({
       iclassCodigo: '4013',
-      closedByName: 'TEC DEMO',
+      teamTechnicianName: 'TEC DEMO',
       resultCodeName: 'Instalacion Completa Wireless',
       checklists: [checklist([
         { questionId: null, questionText: 'MATERIALES', questionType: 'Texto', answerOrder: 0, answerText: 'utp 30', photoMissing: false, photoUrl: null },
@@ -77,5 +77,43 @@ describe('PostClosureComment', () => {
     expect(comment).not.toBeNull();
     expect(comment!.body).toContain('Motivo: Tarea No Factible');
     expect(comment!.attachments).toEqual([]);
+  });
+});
+
+describe('PostClosureComment — técnico (F1)', () => {
+  const run = async (over: Partial<ClosedServiceOrder>): Promise<string> => {
+    const repo = new InMemoryTaskCommentRepository();
+    const c = await new PostClosureComment(repo).execute({ taskId: 't1', order: order(over) });
+    return c!.body;
+  };
+
+  it('muestra al técnico de campo (teamTechnicianName) y "Cerró" cuando difieren', async () => {
+    const b = await run({ teamTechnicianName: 'Rodrigo', closedByName: 'luis Sarcos' });
+    expect(b).toContain('Técnico: Rodrigo');
+    expect(b).toContain('Cerró: luis Sarcos');
+  });
+
+  it('solo técnico de campo → muestra Técnico sin "Cerró"', async () => {
+    const b = await run({ teamTechnicianName: 'Rodrigo' });
+    expect(b).toContain('Técnico: Rodrigo');
+    expect(b).not.toContain('Cerró:');
+  });
+
+  it('misma persona cerró y ejecutó → omite "Cerró"', async () => {
+    const b = await run({ teamTechnicianName: 'Rodrigo', closedByName: 'Rodrigo' });
+    expect(b).toContain('Técnico: Rodrigo');
+    expect(b).not.toContain('Cerró:');
+  });
+
+  it('sin técnico de campo → cae a "Cerró" con el que cerró', async () => {
+    const b = await run({ closedByName: 'luis Sarcos' });
+    expect(b).toContain('Cerró: luis Sarcos');
+    expect(b).not.toContain('Técnico:');
+  });
+
+  it('sin ninguno → no emite línea de técnico', async () => {
+    const b = await run({});
+    expect(b).not.toContain('Técnico:');
+    expect(b).not.toContain('Cerró:');
   });
 });
