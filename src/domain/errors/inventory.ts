@@ -20,3 +20,31 @@ export class TaskHasNoContractError extends DomainError {
     this.name = 'TaskHasNoContractError';
   }
 }
+
+export class DeviceTypeNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`DeviceType with id ${id} not found`, 'DEVICE_TYPE_NOT_FOUND');
+    this.name = 'DeviceTypeNotFoundError';
+  }
+}
+
+export class DeviceTypeNameConflictError extends DomainError {
+  constructor(name: string) {
+    super(`A device type named "${name}" already exists`, 'DEVICE_TYPE_NAME_CONFLICT');
+    this.name = 'DeviceTypeNameConflictError';
+  }
+}
+
+export class DeviceTypeInUseError extends DomainError {
+  constructor(public readonly itemCount: number) {
+    super(`Device type is in use by ${itemCount} installed item(s)`, 'DEVICE_TYPE_IN_USE');
+    this.name = 'DeviceTypeInUseError';
+  }
+}
+
+export class DeviceTypeProtectedError extends DomainError {
+  constructor() {
+    super('The OTROS device type cannot be deleted', 'DEVICE_TYPE_PROTECTED');
+    this.name = 'DeviceTypeProtectedError';
+  }
+}

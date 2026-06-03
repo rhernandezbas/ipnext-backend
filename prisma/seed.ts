@@ -403,6 +403,36 @@ async function seedSchedulingFoundation() {
   }
 
   console.log('  Scheduling foundation seeded.')
+
+  // equipment-catalog: ensure inventory.manage + inventory.read granted to 'administrador' role.
+  // super_admin already has all permissions via migration (ON CONFLICT DO NOTHING).
+  try {
+    const adminRole = await (prisma as any).rbacRole.findUnique({ where: { code: 'administrador' } })
+    const inventoryModule = await (prisma as any).rbacModule.findUnique({ where: { code: 'inventory' } })
+    if (adminRole && inventoryModule) {
+      for (const action of ['manage', 'read']) {
+        let perm = await (prisma as any).rbacPermission.findFirst({
+          where: { moduleId: inventoryModule.id, action },
+        })
+        if (!perm) {
+          perm = await (prisma as any).rbacPermission.create({
+            data: { moduleId: inventoryModule.id, action },
+          })
+          console.log(`  Created RBAC permission: inventory.${action}`)
+        }
+        await (prisma as any).rbacRolePermission.upsert({
+          where: { roleId_permissionId: { roleId: adminRole.id, permissionId: perm.id } },
+          update: {},
+          create: { roleId: adminRole.id, permissionId: perm.id },
+        })
+        console.log(`  RBAC: administrador → inventory.${action} (upserted)`)
+      }
+    } else {
+      console.warn('  RBAC seed: administrador role or inventory module not found — skipping inventory.manage assignment')
+    }
+  } catch (err) {
+    console.warn('  RBAC seed: inventory.manage assignment skipped (RBAC tables may not exist yet):', (err as any).message)
+  }
 }
 
 async function main() {

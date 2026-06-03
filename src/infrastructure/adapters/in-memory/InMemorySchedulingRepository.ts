@@ -68,6 +68,8 @@ const NEW_FIELDS_DEFAULTS = {
   travelTimeFrom: null,
   isClosed: false,
   reviewedByInventory: false,
+  reviewedByInventoryAt: null,
+  reviewedByInventoryUserName: null,
   ticketId: null,
   ticketSubject: null,
 };
@@ -92,6 +94,10 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
   // Prisma adapter's customer JOIN so the multi-field search (q) is testable.
   private customerNames: Map<string, string> = new Map();
 
+  // RbacUser name lookup — seeded by tests via seedRbacUserName(). Used to resolve
+  // reviewedByInventoryUserName from an actorId (in-memory cannot JOIN).
+  private rbacUserNames: Map<string, string> = new Map();
+
   constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository) {
     this.stageRepo = stageRepo;
     this.templateRepo = templateRepo;
@@ -113,6 +119,15 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
   seedCustomerName(customerId: string, name: string): void {
     this.customerNames.set(customerId, name);
   }
+
+  /**
+   * Test helper: seed an RbacUser name so setInventoryReview can resolve
+   * reviewedByInventoryUserName from an actorId (no real JOIN in-memory).
+   */
+  seedRbacUserName(userId: string, name: string): void {
+    this.rbacUserNames.set(userId, name);
+  }
+
   private tasks: ScheduledTask[] = [
     makeTask({
       id: '1',
@@ -309,6 +324,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       travelTimeFrom: data.travelTimeFrom ?? null,
       isClosed: false,
       reviewedByInventory: false,
+      reviewedByInventoryAt: null,
+      reviewedByInventoryUserName: null,
       ticketId: data.ticketId ?? null,
       ticketSubject: (data.ticketId != null ? (this.ticketSubjects.get(data.ticketId) ?? null) : null),
       createdAt: new Date().toISOString(),
@@ -362,10 +379,29 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return { ...this.tasks[index] };
   }
 
-  async setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null> {
+  async setInventoryReview(taskId: string, reviewed: boolean, actorId: string | null): Promise<ScheduledTask | null> {
     const index = this.tasks.findIndex(t => t.id === taskId);
     if (index === -1) return null;
-    this.tasks[index] = { ...this.tasks[index]!, reviewedByInventory: reviewed, updatedAt: new Date().toISOString() };
+    if (reviewed) {
+      const reviewedByInventoryUserName = actorId != null
+        ? (this.rbacUserNames.get(actorId) ?? actorId)
+        : null;
+      this.tasks[index] = {
+        ...this.tasks[index]!,
+        reviewedByInventory: true,
+        reviewedByInventoryAt: new Date().toISOString(),
+        reviewedByInventoryUserName,
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      this.tasks[index] = {
+        ...this.tasks[index]!,
+        reviewedByInventory: false,
+        reviewedByInventoryAt: null,
+        reviewedByInventoryUserName: null,
+        updatedAt: new Date().toISOString(),
+      };
+    }
     return { ...this.tasks[index]! };
   }
 

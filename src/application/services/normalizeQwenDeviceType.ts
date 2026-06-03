@@ -1,14 +1,13 @@
-import { DeviceType, VALID_DEVICE_TYPES } from '@domain/entities/device-type';
-
-const VALID = new Set<string>(VALID_DEVICE_TYPES);
-
 /**
- * Valida la clasificación de equipo que devuelve el modelo de visión contra el
- * enum conocido. Desconocido / vacío / null → null (NO 'OTROS': el null distingue
- * "el modelo no matcheó un tipo concreto" de "es genuinamente otro"). Puro, no throw.
+ * Validates the device-type classification returned by a vision model against
+ * a caller-supplied set of active names. Unknown / empty / null → null
+ * (NOT 'OTROS': null distinguishes "no match" from "genuinely other"). Pure, no throw.
+ *
+ * @param raw    Raw string from the model response.
+ * @param valid  Set of active type names (UPPERCASE) from the catalog.
  */
-export function normalizeQwenDeviceType(raw: string | null | undefined): DeviceType | null {
+export function normalizeQwenDeviceType(raw: string | null | undefined, valid: Set<string>): string | null {
   if (!raw || typeof raw !== 'string') return null;
   const u = raw.trim().toUpperCase();
-  return VALID.has(u) ? (u as DeviceType) : null;
+  return valid.has(u) ? u : null;
 }

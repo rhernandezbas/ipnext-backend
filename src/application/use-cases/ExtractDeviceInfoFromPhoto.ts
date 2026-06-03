@@ -1,5 +1,6 @@
 import { DevicePhotoOcr } from '@domain/ports/DevicePhotoOcr';
 import { OcrExtractionRepository } from '@domain/ports/OcrExtractionRepository';
+import { DeviceTypeCatalogRepository } from '@domain/ports/DeviceTypeCatalogRepository';
 import { OcrExtraction } from '@domain/entities/ocr-extraction';
 import { normalizeQwenDeviceType } from '@application/services/normalizeQwenDeviceType';
 import { randomUUID } from 'crypto';
@@ -22,6 +23,7 @@ export class ExtractDeviceInfoFromPhoto {
   constructor(
     private readonly ocr: DevicePhotoOcr,
     private readonly repo: OcrExtractionRepository,
+    private readonly catalog: DeviceTypeCatalogRepository,
   ) {}
 
   async execute(input: ExtractDeviceInfoInput): Promise<OcrExtraction> {
@@ -30,13 +32,15 @@ export class ExtractDeviceInfoFromPhoto {
 
     const result = await this.ocr.extract(input.photoUrl, input.deviceType ?? undefined);
 
+    const validNames = new Set(await this.catalog.listActiveNames());
+
     const extraction: OcrExtraction = {
       id: randomUUID(),
       photoUrl: input.photoUrl,
       serviceOrderId: input.serviceOrderId ?? null,
       sourceTaskId: input.sourceTaskId ?? null,
       deviceType: input.deviceType ?? null,
-      qwenDeviceType: normalizeQwenDeviceType(result.deviceType ?? null),
+      qwenDeviceType: normalizeQwenDeviceType(result.deviceType ?? null, validNames),
       sn: result.sn,
       mac: result.mac,
       confidence: result.confidence,

@@ -1,23 +1,33 @@
 import { normalizeQwenDeviceType } from '@application/services/normalizeQwenDeviceType';
 
-describe('normalizeQwenDeviceType', () => {
-  it('acepta los valores del enum (case-insensitive, con trim)', () => {
-    expect(normalizeQwenDeviceType('ONU')).toBe('ONU');
-    expect(normalizeQwenDeviceType('onu')).toBe('ONU');
-    expect(normalizeQwenDeviceType('  Antena ')).toBe('ANTENA');
-    expect(normalizeQwenDeviceType('ROUTER')).toBe('ROUTER');
-    expect(normalizeQwenDeviceType('REPETIDOR')).toBe('REPETIDOR');
-    expect(normalizeQwenDeviceType('OTROS')).toBe('OTROS');
+const BASE = new Set(['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS']);
+
+describe('normalizeQwenDeviceType (Set-based)', () => {
+  it('acepta los valores del set (case-insensitive, con trim)', () => {
+    expect(normalizeQwenDeviceType('ONU', BASE)).toBe('ONU');
+    expect(normalizeQwenDeviceType('onu', BASE)).toBe('ONU');
+    expect(normalizeQwenDeviceType('  Antena ', BASE)).toBe('ANTENA');
+    expect(normalizeQwenDeviceType('ROUTER', BASE)).toBe('ROUTER');
+    expect(normalizeQwenDeviceType('REPETIDOR', BASE)).toBe('REPETIDOR');
+    expect(normalizeQwenDeviceType('OTROS', BASE)).toBe('OTROS');
   });
 
-  it('valor desconocido → null (NO OTROS, para distinguir un match concreto del modelo)', () => {
-    expect(normalizeQwenDeviceType('switch')).toBeNull();
-    expect(normalizeQwenDeviceType('router-wifi')).toBeNull();
+  it('valor desconocido → null (NO OTROS)', () => {
+    expect(normalizeQwenDeviceType('switch', BASE)).toBeNull();
+    expect(normalizeQwenDeviceType('router-wifi', BASE)).toBeNull();
   });
 
   it('empty/null/undefined → null', () => {
-    expect(normalizeQwenDeviceType('')).toBeNull();
-    expect(normalizeQwenDeviceType(null)).toBeNull();
-    expect(normalizeQwenDeviceType(undefined)).toBeNull();
+    expect(normalizeQwenDeviceType('', BASE)).toBeNull();
+    expect(normalizeQwenDeviceType(null, BASE)).toBeNull();
+    expect(normalizeQwenDeviceType(undefined, BASE)).toBeNull();
+  });
+
+  it('acepta tipos dinámicos del catálogo (set extendido)', () => {
+    const extended = new Set(['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS', 'CPE']);
+    expect(normalizeQwenDeviceType('CPE', extended)).toBe('CPE');
+    expect(normalizeQwenDeviceType('cpe', extended)).toBe('CPE');
+    // tipo no en set extendido → null
+    expect(normalizeQwenDeviceType('SWITCH', extended)).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
-export type InstalledItemType = 'ONU' | 'ROUTER' | 'ANTENA' | 'REPETIDOR' | 'OTROS';
+/** Dynamic — validated against the DeviceType catalog at runtime (not a closed union). */
+export type InstalledItemType = string;
 export type InstalledItemStatus = 'active' | 'removed' | 'replaced';
 
 /**
