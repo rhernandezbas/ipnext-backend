@@ -105,6 +105,15 @@ describe('Trazabilidad del aprobador (F4)', () => {
     expect(item.addedByUserName).toBeNull();
   });
 
+  it('F5: aplica el typeOverride del operador en lugar del deviceType de la sugerencia', async () => {
+    const { suggestions, scheduling, confirm } = setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ONU' }));
+
+    const item = await confirm.execute({ suggestionId: 's1', typeOverride: 'ROUTER' });
+    expect(item.type).toBe('ROUTER');
+  });
+
   it('ListContractInstalledItems resuelve el nombre del aprobador por item', async () => {
     const { suggestions, scheduling, users, confirm, listItems } = setup();
     const u = await users.create({ name: 'Carlos Sánchez', email: 'c@x.com', login: 'carlos', passwordHash: 'h' });

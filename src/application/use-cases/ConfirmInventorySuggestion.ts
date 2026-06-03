@@ -18,6 +18,8 @@ const toType = (t: string | null): InstalledItemType =>
 export interface ConfirmInventorySuggestionInput {
   suggestionId: string;
   addedByUserId?: string | null;
+  /** Operator's chosen device type (from the dropdown). Overrides the suggestion's deviceType. */
+  typeOverride?: string | null;
 }
 
 /**
@@ -47,7 +49,7 @@ export class ConfirmInventorySuggestion {
     const item = await this.inventory.create({
       id: randomUUID(),
       contractId,
-      type: toType(suggestion.deviceType),
+      type: toType(input.typeOverride ?? suggestion.deviceType),
       serialNumber: suggestion.serialNumber,
       mac: suggestion.mac,
       model: null,

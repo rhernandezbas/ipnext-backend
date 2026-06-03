@@ -50,7 +50,16 @@ export function createContractInventoryRouter(
 
   router.post('/scheduling/:taskId/inventory/suggestions/:suggestionId/confirm', auth, perms.taskWrite, async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const item = await confirm.execute({ suggestionId: req.params.suggestionId, addedByUserId: userId(req) });
+      const rawType = (req.body as { type?: unknown } | undefined)?.type;
+      if (rawType !== undefined && !VALID_TYPES.includes(rawType as InstalledItemType)) {
+        res.status(422).json({ error: 'Invalid item type override', code: 'INVALID_ITEM_TYPE' });
+        return;
+      }
+      const item = await confirm.execute({
+        suggestionId: req.params.suggestionId,
+        addedByUserId: userId(req),
+        typeOverride: (rawType as string | undefined) ?? null,
+      });
       res.status(201).json(item);
     } catch (e) { next(e); }
   });
