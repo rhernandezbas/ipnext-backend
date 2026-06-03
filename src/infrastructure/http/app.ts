@@ -975,9 +975,9 @@ export function createApp() {
   const contractInventoryRepo = new PrismaContractInventoryRepository();
   app.use('/api', createContractInventoryRouter(
     new ListTaskInventorySuggestions(inventorySuggestionRepo),
-    new ConfirmInventorySuggestion(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo),
+    new ConfirmInventorySuggestion(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo, rbacUserRepo),
     new DiscardInventorySuggestion(inventorySuggestionRepo),
-    new ListContractInstalledItems(contractInventoryRepo),
+    new ListContractInstalledItems(contractInventoryRepo, rbacUserRepo),
     new AddInstalledItemManually(contractInventoryRepo),
     new UpdateInstalledItem(contractInventoryRepo),
     createAuthMiddleware(authAdapter, sessionRepo),

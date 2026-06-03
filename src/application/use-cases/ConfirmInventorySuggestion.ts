@@ -1,13 +1,15 @@
 import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestionRepository';
 import { ContractInventoryRepository } from '@domain/ports/ContractInventoryRepository';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
-import { ContractInstalledItem, InstalledItemType } from '@domain/entities/contract-installed-item';
+import { InstalledItemType } from '@domain/entities/contract-installed-item';
 import {
   SuggestionNotFoundError,
   SuggestionAlreadyConfirmedError,
   TaskHasNoContractError,
 } from '@domain/errors/inventory';
 import { randomUUID } from 'crypto';
+import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
+import { InstalledItemDto, toInstalledItemDto } from '@application/dto/InstalledItemDto';
 
 const VALID_TYPES: InstalledItemType[] = ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS'];
 const toType = (t: string | null): InstalledItemType =>
@@ -29,9 +31,10 @@ export class ConfirmInventorySuggestion {
     private readonly suggestions: InventorySuggestionRepository,
     private readonly inventory: ContractInventoryRepository,
     private readonly scheduling: SchedulingRepository,
+    private readonly users: RbacUserRepository,
   ) {}
 
-  async execute(input: ConfirmInventorySuggestionInput): Promise<ContractInstalledItem> {
+  async execute(input: ConfirmInventorySuggestionInput): Promise<InstalledItemDto> {
     const suggestion = await this.suggestions.get(input.suggestionId);
     if (!suggestion) throw new SuggestionNotFoundError(input.suggestionId);
     if (suggestion.status === 'confirmed') throw new SuggestionAlreadyConfirmedError(input.suggestionId);
@@ -59,6 +62,7 @@ export class ConfirmInventorySuggestion {
     });
 
     await this.suggestions.setStatus(suggestion.id, 'confirmed', item.id);
-    return item;
+    const user = input.addedByUserId ? await this.users.findById(input.addedByUserId) : null;
+    return toInstalledItemDto(item, user?.name ?? null);
   }
 }
