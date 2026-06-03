@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
+import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
@@ -15,7 +16,12 @@ import {
   MaterialConsumptionNotFoundError,
   MaterialNotFoundError,
   InvalidQuantityError,
+  SuggestionNotFoundError,
+  SuggestionNotConfirmedError,
+  NotADeviceError,
+  SuggestionNotLinkedError,
 } from '@domain/errors/inventory';
+import { DomainError } from '@domain/errors/index';
 import { z } from 'zod';
 
 /**
@@ -30,6 +36,7 @@ export interface InventoryRoutePerms {
   contractRead: RequestHandler;   // inventory.read   (was clients.read)
   contractWrite: RequestHandler;  // inventory.write  (was clients.write)
   materialWrite: RequestHandler;  // inventory.write  (NEW — material consumption mutations)
+  manage: RequestHandler;         // inventory.manage (admin — correct confirmed device type)
 }
 
 const RecordConsumptionSchema = z.object({
@@ -52,6 +59,7 @@ export function createContractInventoryRouter(
   listSuggestions: ListTaskInventorySuggestions,
   confirm: ConfirmInventorySuggestion,
   discard: DiscardInventorySuggestion,
+  correctType: CorrectConfirmedDeviceType,
   listInstalled: ListContractInstalledItems,
   addManual: AddInstalledItemManually,
   updateItem: UpdateInstalledItem,
@@ -93,6 +101,31 @@ export function createContractInventoryRouter(
     try {
       res.json(await discard.execute(req.params.suggestionId));
     } catch (e) { next(e); }
+  });
+
+  router.patch('/scheduling/:taskId/inventory/suggestions/:suggestionId/type', auth, perms.manage, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const rawType = (req.body as { type?: unknown } | undefined)?.type;
+      if (!(await deviceTypes.isValid(rawType as string))) {
+        res.status(422).json({ error: 'Invalid item type', code: 'INVALID_ITEM_TYPE' });
+        return;
+      }
+      const item = await correctType.execute({
+        suggestionId: req.params.suggestionId,
+        newType: (rawType as string).toUpperCase(),
+      });
+      res.json(item);
+    } catch (e) {
+      if (e instanceof SuggestionNotConfirmedError || e instanceof NotADeviceError || e instanceof SuggestionNotLinkedError) {
+        res.status(409).json({ error: (e as DomainError).message, code: (e as DomainError).code });
+        return;
+      }
+      if (e instanceof SuggestionNotFoundError || e instanceof InstalledItemNotFoundError) {
+        res.status(404).json({ error: (e as DomainError).message, code: (e as DomainError).code });
+        return;
+      }
+      next(e);
+    }
   });
 
   // ── Task-scoped material consumption ──────────────────────────────────────

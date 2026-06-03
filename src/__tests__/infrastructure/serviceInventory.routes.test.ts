@@ -14,6 +14,7 @@ import { InMemoryTaskMaterialConsumptionRepository } from '@infrastructure/adapt
 import { DeviceTypeCatalogService } from '@application/services/DeviceTypeCatalogService';
 import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
+import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
@@ -67,9 +68,10 @@ async function buildApp() {
   const deny = (_req: Request, res: Response) => res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
 
   const router = createContractInventoryRouter(
-    new ListTaskInventorySuggestions(suggestions),
+    new ListTaskInventorySuggestions(suggestions, inventory, scheduling),
     new ConfirmInventorySuggestion(suggestions, inventory, scheduling, users, catalogRepo, materialRepo, consumptionRepo),
     new DiscardInventorySuggestion(suggestions),
+    new CorrectConfirmedDeviceType(suggestions, inventory),
     new ListContractInstalledItems(inventory, users),
     new AddInstalledItemManually(inventory),
     new UpdateInstalledItem(inventory),
@@ -78,7 +80,7 @@ async function buildApp() {
     new ListTaskMaterialConsumptions(consumptionRepo, users),
     new DeleteMaterialConsumption(consumptionRepo),
     auth,
-    { taskRead: pass, taskWrite: pass, contractRead: pass, contractWrite: pass, materialWrite: pass },
+    { taskRead: pass, taskWrite: pass, contractRead: pass, contractWrite: pass, materialWrite: pass, manage: pass },
     deviceTypeCatalogService,
   );
 
@@ -91,7 +93,7 @@ async function buildApp() {
 
 // App with deny middleware to test permission guards
 async function buildAppWithPerms(perms: {
-  taskRead?: boolean; taskWrite?: boolean; contractRead?: boolean; contractWrite?: boolean; materialWrite?: boolean;
+  taskRead?: boolean; taskWrite?: boolean; contractRead?: boolean; contractWrite?: boolean; materialWrite?: boolean; manage?: boolean;
 }) {
   const suggestions = new InMemoryInventorySuggestionRepository();
   const inventory = new InMemoryContractInventoryRepository();
@@ -112,9 +114,10 @@ async function buildAppWithPerms(perms: {
   const deny = (_req: Request, res: Response) => res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
 
   const router = createContractInventoryRouter(
-    new ListTaskInventorySuggestions(suggestions),
+    new ListTaskInventorySuggestions(suggestions, inventory, scheduling),
     new ConfirmInventorySuggestion(suggestions, inventory, scheduling, users, catalogRepo, materialRepo, consumptionRepo),
     new DiscardInventorySuggestion(suggestions),
+    new CorrectConfirmedDeviceType(suggestions, inventory),
     new ListContractInstalledItems(inventory, users),
     new AddInstalledItemManually(inventory),
     new UpdateInstalledItem(inventory),
@@ -129,6 +132,7 @@ async function buildAppWithPerms(perms: {
       contractRead:  perms.contractRead  ? pass : deny,
       contractWrite: perms.contractWrite ? pass : deny,
       materialWrite: perms.materialWrite ? pass : deny,
+      manage:        perms.manage        ? pass : deny,
     },
     deviceTypeCatalogService,
   );
@@ -409,5 +413,114 @@ describe('Permission guard migration (clients.* → inventory.*)', () => {
     const { app } = await buildAppWithPerms({ taskWrite: false });
     const res = await request(app).post('/api/scheduling/t1/inventory/suggestions/s1/confirm').send();
     expect(res.status).toBe(403);
+  });
+});
+
+describe('PATCH .../type — CorrectConfirmedDeviceType route', () => {
+  it('PATCH with valid UPPERCASE type → 200 + InstalledItemDto (both repos updated)', async () => {
+    const { app, suggestions, inventory, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeItem({ id: 'i1', type: 'ONU' }));
+    await suggestions.upsert(sug({ id: 's1', kind: 'DEVICE', status: 'confirmed', confirmedItemId: 'i1', deviceType: 'ONU' }));
+
+    const res = await request(app)
+      .patch('/api/scheduling/t1/inventory/suggestions/s1/type')
+      .send({ type: 'ANTENA' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.type).toBe('ANTENA');
+    expect(res.body.addedByUserName).toBeNull();
+    // Both repos must be updated
+    const storedItem = await inventory.getById('i1');
+    expect(storedItem!.type).toBe('ANTENA');
+    const storedSuggestion = await suggestions.get('s1');
+    expect(storedSuggestion!.deviceType).toBe('ANTENA');
+  });
+
+  it('PATCH with valid lowercase type → 200 + persists ANTENA (route normalises)', async () => {
+    const { app, suggestions, inventory, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeItem({ id: 'i1', type: 'ONU' }));
+    await suggestions.upsert(sug({ id: 's1', kind: 'DEVICE', status: 'confirmed', confirmedItemId: 'i1', deviceType: 'ONU' }));
+
+    const res = await request(app)
+      .patch('/api/scheduling/t1/inventory/suggestions/s1/type')
+      .send({ type: 'antena' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.type).toBe('ANTENA');
+  });
+
+  it('PATCH with invalid type (SUBMARINO) → 422 INVALID_ITEM_TYPE', async () => {
+    const { app } = await buildApp();
+    const res = await request(app)
+      .patch('/api/scheduling/t1/inventory/suggestions/s1/type')
+      .send({ type: 'SUBMARINO' });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('INVALID_ITEM_TYPE');
+  });
+
+  it('PATCH suggestion is pending → 409 SUGGESTION_NOT_CONFIRMED', async () => {
+    const { app, suggestions } = await buildApp();
+    await suggestions.upsert(sug({ id: 's1', kind: 'DEVICE', status: 'pending', confirmedItemId: null }));
+
+    const res = await request(app)
+      .patch('/api/scheduling/t1/inventory/suggestions/s1/type')
+      .send({ type: 'ANTENA' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SUGGESTION_NOT_CONFIRMED');
+  });
+
+  it('PATCH suggestion is MATERIAL confirmed → 409 SUGGESTION_NOT_A_DEVICE', async () => {
+    const { app, suggestions, inventory } = await buildApp();
+    await inventory.create(makeItem({ id: 'i1' }));
+    await suggestions.upsert(sug({
+      id: 's1', kind: 'MATERIAL', status: 'confirmed', confirmedItemId: 'i1', deviceType: null,
+    }));
+
+    const res = await request(app)
+      .patch('/api/scheduling/t1/inventory/suggestions/s1/type')
+      .send({ type: 'ANTENA' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SUGGESTION_NOT_A_DEVICE');
+  });
+
+  it('PATCH confirmedItemId null → 409 SUGGESTION_NOT_LINKED', async () => {
+    const { app, suggestions } = await buildApp();
+    await suggestions.upsert(sug({ id: 's1', kind: 'DEVICE', status: 'confirmed', confirmedItemId: null }));
+
+    const res = await request(app)
+      .patch('/api/scheduling/t1/inventory/suggestions/s1/type')
+      .send({ type: 'ANTENA' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SUGGESTION_NOT_LINKED');
+  });
+
+  it('PATCH no inventory.manage permission → 403', async () => {
+    const { app } = await buildAppWithPerms({ manage: false });
+    const res = await request(app)
+      .patch('/api/scheduling/t1/inventory/suggestions/s1/type')
+      .send({ type: 'ANTENA' });
+    expect(res.status).toBe(403);
+  });
+
+  it('GET suggestions → response includes match field on each item (same_device case)', async () => {
+    const { app, suggestions, inventory, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    // Contract has a ROUTER with SN=R1
+    await inventory.create(makeItem({ id: 'i1', type: 'ROUTER', serialNumber: 'R1' }));
+    // Suggestion for task t1 with same SN
+    await suggestions.upsert(sug({ id: 's1', kind: 'DEVICE', deviceType: 'ROUTER', serialNumber: 'R1' }));
+
+    const res = await request(app).get('/api/scheduling/t1/inventory/suggestions');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toHaveProperty('match');
+    expect(res.body[0].match).not.toBeNull();
+    expect(res.body[0].match.status).toBe('same_device');
   });
 });
