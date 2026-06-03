@@ -5,9 +5,7 @@ import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInvent
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
-import { InstalledItemType } from '@domain/entities/contract-installed-item';
-
-const VALID_TYPES: InstalledItemType[] = ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS'];
+import { DeviceTypeCatalogService } from '@application/services/DeviceTypeCatalogService';
 
 /**
  * Granular permission guards (one per route group). Built in app.ts from
@@ -27,6 +25,9 @@ export interface InventoryRoutePerms {
  * suggestion endpoints under `/scheduling/:taskId/...`, contract inventory under
  * `/contracts/:contractId/...`. Mounted BEFORE the `/api/scheduling` `/:id` catch-all.
  * Every route is `auth` (authenticated) + a granular `requirePerm` guard.
+ *
+ * Type validation uses the DeviceTypeCatalogService (dynamic catalog) — unknown
+ * types from non-catalog sources → 422 INVALID_ITEM_TYPE.
  */
 export function createContractInventoryRouter(
   listSuggestions: ListTaskInventorySuggestions,
@@ -37,6 +38,7 @@ export function createContractInventoryRouter(
   updateItem: UpdateInstalledItem,
   auth: RequestHandler,
   perms: InventoryRoutePerms,
+  deviceTypes: DeviceTypeCatalogService,
 ): Router {
   const router = Router();
   const userId = (req: Request): string | null => (req as { user?: { id?: string } }).user?.id ?? null;
@@ -51,7 +53,7 @@ export function createContractInventoryRouter(
   router.post('/scheduling/:taskId/inventory/suggestions/:suggestionId/confirm', auth, perms.taskWrite, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const rawType = (req.body as { type?: unknown } | undefined)?.type;
-      if (rawType !== undefined && !VALID_TYPES.includes(rawType as InstalledItemType)) {
+      if (rawType !== undefined && !(await deviceTypes.isValid(rawType as string))) {
         res.status(422).json({ error: 'Invalid item type override', code: 'INVALID_ITEM_TYPE' });
         return;
       }
@@ -80,14 +82,14 @@ export function createContractInventoryRouter(
   router.post('/contracts/:contractId/inventory', auth, perms.contractWrite, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const body = (req.body ?? {}) as Record<string, unknown>;
-      const type = body.type as InstalledItemType;
-      if (!VALID_TYPES.includes(type)) {
+      const rawType = body.type as string | undefined;
+      if (!(await deviceTypes.isValid(rawType))) {
         res.status(422).json({ error: 'Invalid or missing item type', code: 'INVALID_ITEM_TYPE' });
         return;
       }
       const item = await addManual.execute({
         contractId: req.params.contractId,
-        type,
+        type: rawType!,
         serialNumber: (body.serialNumber as string) ?? null,
         mac: (body.mac as string) ?? null,
         model: (body.model as string) ?? null,

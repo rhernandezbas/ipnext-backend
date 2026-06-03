@@ -1,12 +1,13 @@
-import type { DeviceType } from '@domain/entities/device-type';
-export type { DeviceType };
-
 /**
  * Capa 2 — infer the device class from a checklist question label by keyword.
  * Soft-fail: anything unrecognized → 'OTROS' (never throws). Used to tag OCR
  * extractions and to decide which photos carry SN/MAC worth extracting.
+ *
+ * Return type is `string` (not a closed union) because the valid set is
+ * now dynamic (DeviceTypeCatalog). The returned values happen to match the
+ * 5 base catalog names by convention.
  */
-export function classifyDeviceType(label: string): DeviceType {
+export function classifyDeviceType(label: string): string {
   const s = (label || '').toUpperCase();
   if (/\bONU\b|GPON/.test(s)) return 'ONU';
   if (/ROUTER/.test(s)) return 'ROUTER';

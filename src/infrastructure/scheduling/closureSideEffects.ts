@@ -6,6 +6,8 @@ import { ExtractDeviceInfoFromPhoto } from '@application/use-cases/ExtractDevice
 import { PrismaTaskCommentRepository } from '../adapters/prisma/PrismaTaskCommentRepository';
 import { PrismaInventorySuggestionRepository } from '../adapters/prisma/PrismaInventorySuggestionRepository';
 import { PrismaOcrExtractionRepository } from '../adapters/prisma/PrismaOcrExtractionRepository';
+import { PrismaDeviceTypeCatalogRepository } from '../adapters/prisma/PrismaDeviceTypeCatalogRepository';
+import { DeviceTypeCatalogService } from '@application/services/DeviceTypeCatalogService';
 import { IClassPortalClient } from '../adapters/iclass-portal/IClassPortalClient';
 import { OllamaDevicePhotoOcr } from '../adapters/ocr/OllamaDevicePhotoOcr';
 import { AuditInstallationQuality } from '@application/use-cases/AuditInstallationQuality';
@@ -34,13 +36,17 @@ export function buildClosureSideEffects(): SideEffects {
   }
 
   if (config.ocr.enabled) {
+    const deviceTypeCatalogRepo = new PrismaDeviceTypeCatalogRepository();
+    const deviceTypeCatalogService = new DeviceTypeCatalogService(deviceTypeCatalogRepo);
     eff.extractOcr = new ExtractDeviceInfoFromPhoto(
       new OllamaDevicePhotoOcr({
         baseUrl: config.ocr.ollamaBaseUrl,
         model: config.ocr.model,
         timeoutMs: config.ocr.timeoutMs,
+        deviceTypeNames: () => deviceTypeCatalogService.ensure().then(s => [...s]),
       }),
       new PrismaOcrExtractionRepository(),
+      deviceTypeCatalogRepo,
     );
   }
 

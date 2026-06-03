@@ -1,7 +1,7 @@
 import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestionRepository';
 import { ContractInventoryRepository } from '@domain/ports/ContractInventoryRepository';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
-import { InstalledItemType } from '@domain/entities/contract-installed-item';
+import { DeviceTypeCatalogRepository } from '@domain/ports/DeviceTypeCatalogRepository';
 import {
   SuggestionNotFoundError,
   SuggestionAlreadyConfirmedError,
@@ -10,10 +10,6 @@ import {
 import { randomUUID } from 'crypto';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { InstalledItemDto, toInstalledItemDto } from '@application/dto/InstalledItemDto';
-
-const VALID_TYPES: InstalledItemType[] = ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS'];
-const toType = (t: string | null): InstalledItemType =>
-  t && (VALID_TYPES as string[]).includes(t) ? (t as InstalledItemType) : 'OTROS';
 
 export interface ConfirmInventorySuggestionInput {
   suggestionId: string;
@@ -34,6 +30,7 @@ export class ConfirmInventorySuggestion {
     private readonly inventory: ContractInventoryRepository,
     private readonly scheduling: SchedulingRepository,
     private readonly users: RbacUserRepository,
+    private readonly catalog: DeviceTypeCatalogRepository,
   ) {}
 
   async execute(input: ConfirmInventorySuggestionInput): Promise<InstalledItemDto> {
@@ -44,6 +41,10 @@ export class ConfirmInventorySuggestion {
     const task = await this.scheduling.getTask(suggestion.taskId);
     const contractId = task?.contractId ?? null;
     if (!contractId) throw new TaskHasNoContractError(suggestion.taskId);
+
+    const valid = new Set(await this.catalog.listActiveNames());
+    const toType = (t: string | null): string =>
+      t && valid.has(t.toUpperCase()) ? t.toUpperCase() : 'OTROS';
 
     const now = new Date().toISOString();
     const effectiveType = toType(input.typeOverride ?? suggestion.deviceType);

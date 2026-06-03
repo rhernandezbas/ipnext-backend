@@ -1001,7 +1001,7 @@ export function createApp() {
   const contractInventoryRepo = new PrismaContractInventoryRepository();
   app.use('/api', createContractInventoryRouter(
     new ListTaskInventorySuggestions(inventorySuggestionRepo),
-    new ConfirmInventorySuggestion(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo, rbacUserRepo),
+    new ConfirmInventorySuggestion(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo, rbacUserRepo, deviceTypeCatalogRepo),
     new DiscardInventorySuggestion(inventorySuggestionRepo),
     new ListContractInstalledItems(contractInventoryRepo, rbacUserRepo),
     new AddInstalledItemManually(contractInventoryRepo),
@@ -1013,6 +1013,7 @@ export function createApp() {
       contractRead: requirePerm('clients', 'read'),
       contractWrite: requirePerm('clients', 'write'),
     },
+    deviceTypeCatalogService,
   ));
 
   // F6 — AI installation audit read surface (before the scheduling /:id catch-all).

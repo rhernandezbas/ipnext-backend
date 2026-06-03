@@ -7,14 +7,25 @@ import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/I
 import { InMemoryContractInventoryRepository } from '@infrastructure/adapters/in-memory/InMemoryContractInventoryRepository';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
+import { InMemoryDeviceTypeCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryDeviceTypeCatalogRepository';
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 
-function setup() {
+const BASE_TYPES = ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS'];
+
+async function seedCatalog(repo: InMemoryDeviceTypeCatalogRepository) {
+  for (const name of BASE_TYPES) {
+    await repo.create({ name, active: true, sortOrder: 0 });
+  }
+}
+
+async function setup() {
   const suggestions = new InMemoryInventorySuggestionRepository();
   const inventory = new InMemoryContractInventoryRepository();
   const scheduling = new InMemorySchedulingRepository(new InMemoryStageRepository());
   const users = new InMemoryRbacUserRepository();
-  const confirm = new ConfirmInventorySuggestion(suggestions, inventory, scheduling, users);
+  const catalogRepo = new InMemoryDeviceTypeCatalogRepository();
+  await seedCatalog(catalogRepo);
+  const confirm = new ConfirmInventorySuggestion(suggestions, inventory, scheduling, users, catalogRepo);
   const listItems = new ListContractInstalledItems(inventory, users);
   const addManual = new AddInstalledItemManually(inventory);
   const discard = new DiscardInventorySuggestion(suggestions);
@@ -29,7 +40,7 @@ const sug = (over: Partial<TaskInventorySuggestion>): TaskInventorySuggestion =>
 
 describe('ConfirmInventorySuggestion', () => {
   it('SCEN-CF-1: confirms a DEVICE suggestion → one ContractInstalledItem on the contract', async () => {
-    const { suggestions, inventory, scheduling, confirm } = setup();
+    const { suggestions, inventory, scheduling, confirm } = await setup();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R1', mac: 'MR' }));
 
@@ -47,7 +58,7 @@ describe('ConfirmInventorySuggestion', () => {
   });
 
   it('SCEN-CF-2: two routers confirmed → two rows (one per physical device)', async () => {
-    const { suggestions, inventory, scheduling, confirm } = setup();
+    const { suggestions, inventory, scheduling, confirm } = await setup();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1', serialNumber: 'R1' }));
     await suggestions.upsert(sug({ id: 's2', serialNumber: 'R2' }));
@@ -61,7 +72,7 @@ describe('ConfirmInventorySuggestion', () => {
   });
 
   it('SCEN-CF-3: task without contract → TASK_HAS_NO_CONTRACT', async () => {
-    const { suggestions, scheduling, confirm } = setup();
+    const { suggestions, scheduling, confirm } = await setup();
     scheduling.seedTask({ id: 't1', contractId: null });
     await suggestions.upsert(sug({ id: 's1' }));
 
@@ -69,7 +80,7 @@ describe('ConfirmInventorySuggestion', () => {
   });
 
   it('SCEN-CF-4: confirming an already-confirmed suggestion → SUGGESTION_ALREADY_CONFIRMED', async () => {
-    const { suggestions, scheduling, confirm } = setup();
+    const { suggestions, scheduling, confirm } = await setup();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1' }));
     await confirm.execute({ suggestionId: 's1' });
@@ -78,14 +89,23 @@ describe('ConfirmInventorySuggestion', () => {
   });
 
   it('unknown suggestion → SUGGESTION_NOT_FOUND', async () => {
-    const { confirm } = setup();
+    const { confirm } = await setup();
     await expect(confirm.execute({ suggestionId: 'nope' })).rejects.toMatchObject({ code: 'SUGGESTION_NOT_FOUND' });
+  });
+
+  it('D.7: override desconocido → OTROS (no throw)', async () => {
+    const { suggestions, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ONU' }));
+
+    const item = await confirm.execute({ suggestionId: 's1', typeOverride: 'SUBMARINO' });
+    expect(item.type).toBe('OTROS');
   });
 });
 
 describe('Trazabilidad del aprobador (F4)', () => {
   it('confirm resuelve addedByUserName desde el RbacUserRepository', async () => {
-    const { suggestions, scheduling, users, confirm } = setup();
+    const { suggestions, scheduling, users, confirm } = await setup();
     const u = await users.create({ name: 'María López', email: 'm@x.com', login: 'maria', passwordHash: 'h' });
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1' }));
@@ -97,7 +117,7 @@ describe('Trazabilidad del aprobador (F4)', () => {
   });
 
   it('addedByUserName es null cuando no hay addedByUserId', async () => {
-    const { suggestions, scheduling, confirm } = setup();
+    const { suggestions, scheduling, confirm } = await setup();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1' }));
 
@@ -106,7 +126,7 @@ describe('Trazabilidad del aprobador (F4)', () => {
   });
 
   it('F5: aplica el typeOverride del operador en lugar del deviceType de la sugerencia', async () => {
-    const { suggestions, scheduling, confirm } = setup();
+    const { suggestions, scheduling, confirm } = await setup();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1', deviceType: 'ONU' }));
 
@@ -115,7 +135,7 @@ describe('Trazabilidad del aprobador (F4)', () => {
   });
 
   it('#4: al confirmar con typeOverride, la sugerencia guardada refleja el tipo elegido (ANTENA, no el ONU original)', async () => {
-    const { suggestions, scheduling, confirm } = setup();
+    const { suggestions, scheduling, confirm } = await setup();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1', deviceType: 'ONU' }));
 
@@ -127,7 +147,7 @@ describe('Trazabilidad del aprobador (F4)', () => {
   });
 
   it('#4: sin typeOverride, la sugerencia conserva su deviceType original', async () => {
-    const { suggestions, scheduling, confirm } = setup();
+    const { suggestions, scheduling, confirm } = await setup();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER' }));
 
@@ -138,7 +158,7 @@ describe('Trazabilidad del aprobador (F4)', () => {
   });
 
   it('ListContractInstalledItems resuelve el nombre del aprobador por item', async () => {
-    const { suggestions, scheduling, users, confirm, listItems } = setup();
+    const { suggestions, scheduling, users, confirm, listItems } = await setup();
     const u = await users.create({ name: 'Carlos Sánchez', email: 'c@x.com', login: 'carlos', passwordHash: 'h' });
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1' }));
@@ -152,7 +172,7 @@ describe('Trazabilidad del aprobador (F4)', () => {
 
 describe('AddInstalledItemManually', () => {
   it('SCEN-MI-1: a manual 2nd router coexists with confirmed items', async () => {
-    const { inventory, scheduling, confirm, suggestions, addManual } = setup();
+    const { inventory, scheduling, confirm, suggestions, addManual } = await setup();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({ id: 's1', serialNumber: 'R1' }));
     await confirm.execute({ suggestionId: 's1' });
@@ -169,14 +189,14 @@ describe('AddInstalledItemManually', () => {
 
 describe('DiscardInventorySuggestion', () => {
   it('marks the suggestion discarded', async () => {
-    const { suggestions, discard } = setup();
+    const { suggestions, discard } = await setup();
     await suggestions.upsert(sug({ id: 's1' }));
     const out = await discard.execute('s1');
     expect(out.status).toBe('discarded');
   });
 
   it('unknown suggestion → SUGGESTION_NOT_FOUND', async () => {
-    const { discard } = setup();
+    const { discard } = await setup();
     await expect(discard.execute('nope')).rejects.toMatchObject({ code: 'SUGGESTION_NOT_FOUND' });
   });
 });

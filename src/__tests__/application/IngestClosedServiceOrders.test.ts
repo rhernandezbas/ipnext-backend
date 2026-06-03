@@ -13,6 +13,7 @@ import { InMemoryDevicePhotoOcr } from '@infrastructure/adapters/in-memory/InMem
 import { InMemoryOcrExtractionRepository } from '@infrastructure/adapters/in-memory/InMemoryOcrExtractionRepository';
 import { InMemoryInventorySuggestionRepository } from '@infrastructure/adapters/in-memory/InMemoryInventorySuggestionRepository';
 import { InMemoryTaskCommentRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskCommentRepository';
+import { InMemoryDeviceTypeCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryDeviceTypeCatalogRepository';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
 import { ClosedServiceOrderSummary, SoStatusHistoryEntry } from '@domain/entities/iclass-closed-order';
 import { Stage } from '@domain/entities/workflow';
@@ -248,11 +249,15 @@ describe('IngestClosedServiceOrders', () => {
     const ocrRepo = new InMemoryOcrExtractionRepository();
     const suggestionsRepo = new InMemoryInventorySuggestionRepository();
     const commentRepo = new InMemoryTaskCommentRepository();
+    const catalogRepo = new InMemoryDeviceTypeCatalogRepository();
+    for (const name of ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS']) {
+      await catalogRepo.create({ name, active: true, sortOrder: 0 });
+    }
 
     const useCase = new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, {
       now: () => new Date('2026-05-29T12:00:00Z'),
       portal,
-      extractOcr: new ExtractDeviceInfoFromPhoto(ocrStub, ocrRepo),
+      extractOcr: new ExtractDeviceInfoFromPhoto(ocrStub, ocrRepo, catalogRepo),
       buildSuggestions: new BuildInventorySuggestions(suggestionsRepo),
       postComment: new PostClosureComment(commentRepo),
     });
