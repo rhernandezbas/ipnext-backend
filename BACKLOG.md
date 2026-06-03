@@ -2,12 +2,12 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 agregados el mismo día (#15, #16) → **16 totales**.
-> **8 hechos (en prod) · 8 pendientes.**
+> **10 hechos (en prod) · 6 pendientes.**
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (8, desplegados en producción)
+## ✅ Hechos (10, desplegados en producción)
 
 ### #1 — Crear tarea: proyecto + descripción obligatorios
 - **Qué se pidió**: el select de proyecto al crear tarea venía pre-seleccionado ("Fibra los…"); se quería que arrancara sin proyecto, obligatorio elegir uno, y descripción obligatoria.
@@ -57,9 +57,21 @@
 - **Fuera de scope (futuro)**: `stockQuantity` (la base que sube/baja), reportes de costo de material, reemplazo de equipo (`status='replaced'`).
 - **Dónde**: BE PR #31 / FE PR #26. Archivado en `openspec/changes/archive/2026-06-03-service-inventory-management/`. 3 migraciones aditivas.
 
+### #15 — GR ingesta: reporter = "Api"
+- **Qué se pidió**: en la ingesta de OS de Gestión Real, la `ScheduledTask` debía reportarse con un usuario "Api" (sistema/API), no `null`.
+- **Cómo se resolvió**: `bootstrapApiUser` idempotente siembra un `RbacUser` de sistema (`login=api`, `name=Api`, passwordHash inutilizable → no puede loguear), asegurado en el arranque del ingest. El use-case resuelve su id **por run** (`findByLogin`) y lo estampa como `reporterId`; usuario ausente → `null` (degradado, no aborta el batch).
+- **Dónde**: BE `bootstrapApiUser.ts` (nuevo), `IngestGestionRealOrders` (inyecta `RbacUserRepository`), `bootstrapGestionRealIngest`. **PR**: #39. Sin migración (el usuario es data en `RbacUser`).
+- **Verificado en prod**: tarea OS 17741 recreada con `reporterId` = usuario Api.
+
+### #16 — GR ingesta: traer comentario de la OS a la tarea
+- **Qué se pidió**: al crear la tarea desde GR, traer el comentario de la OS y pegarlo en la `description`.
+- **Cómo se resolvió**: el campo de GR es **`observaciones`** (confirmado contra la API real). Se agregó a `GrServiceOrder`, se mapea en `parseServiceOrdersResponse` decodificando HTML entities con `he`, y el use-case lo usa como `description` de las tareas normales. Las needs-review conservan su motivo REVISAR (no se pisan).
+- **Dónde**: BE `gestionReal.ts`, `GestionRealClient.ts`, `IngestGestionRealOrders.ts`. **PR**: #39. Nueva dep `he`. Sin migración (aterriza en la columna `description` existente).
+- **Verificado en prod**: tarea OS 17741 con `description` = comentario de GR, entities decodificadas ("instalación", no "instalaci&oacute;n").
+
 ---
 
-## ⏳ Pendientes (8)
+## ⏳ Pendientes (6)
 
 ### #7 — Unificar sub-page "cierre de OS" + feature flag del auditor IA
 - **Qué**: en Scheduling → Configuraciones → integración IClass, unificar la sub-page de "cierre de OS" (manteniendo el diseño) y crear la **feature flag del auditor de IA**.
@@ -94,18 +106,6 @@
 - **Dónde**: BE `ScheduledTask` (columnas/estado) + un job/use-case de auto-completado + `FeatureFlag` + UI de integraciones.
 - **Tamaño**: mediano-grande (integraciones/flags).
 
-### #15 — GR ingesta: reporter = "Api"  *(agregado 2026-06-03)*
-- **Qué**: en la ingesta de OS de Gestión Real, cuando se crea la `ScheduledTask`, el `reporter` debe ser **"Api"** (usuario/sistema API), no `null`.
-- **Landing spot exacto** (explorado 2026-06-03, NO implementado): `src/application/use-cases/IngestGestionRealOrders.ts:241` — hoy `reporterId: null` en el `createTask`. Hay que: (1) asegurar un usuario "Api" en `RbacUser` (seed idempotente, como el bootstrap-rbac), (2) resolver su id (inyectar un lookup/port o pasarlo por `IngestOptions`), (3) pasarlo como `reporterId`. TDD con `InMemorySchedulingRepository` (assert el reporterId del task creado).
-- **Tamaño**: chico.
-- **Hermano de #16** — mismo flujo (`IngestGestionRealOrders`), una sola pasada.
-
-### #16 — GR ingesta: traer comentario de la OS al crear la tarea  *(agregado 2026-06-03)*
-- **Qué**: al crear la tarea desde GR, traer el **comentario de la OS** y pegarlo en la `description` de la tarea (hoy `description` es `null` para las tareas normales — solo se llena en las REVISAR).
-- **Landing spot exacto** (explorado 2026-06-03, NO implementado): `GrServiceOrder` (`src/domain/entities/gestionReal.ts:73`) **NO tiene campo de comentario mapeado** — solo `raw: Record<string,unknown>` (payload crudo de GR, línea 93). Pasos: (1) **encontrar el nombre del campo del comentario en el `raw`** de GR (inspeccionar una respuesta real o el adapter que arma `GrServiceOrder` desde GR — `GestionRealClient`), (2) agregar un campo `comentario`/`observaciones: string | null` a `GrServiceOrder` mapeado en el adapter, (3) en `IngestGestionRealOrders.ingestOne` (`:209-213`) setear `description` desde ese campo para las tareas normales (cuidado de no pisar la `REVISAR_DESCRIPTION` de las needs-review).
-- **Tamaño**: chico (lo más incierto es ubicar el nombre del campo en el `raw`).
-- **Hermano de #15** — mismo archivo (`IngestGestionRealOrders.ts`), una sola pasada.
-
 ---
 
 ## Refinamientos del #8 (ya en prod, NO son ítems numerados)
@@ -116,6 +116,5 @@ Dos follow-ups del inventario shippeados el 2026-06-03 (archivados en `openspec/
 
 ## Notas de priorización (lectura del equipo)
 
-- **#15 + #16**: hermanos (mismo flujo, `IngestGestionRealOrders.ts`). EXPLORADOS — ver landing spots exactos arriba. Hacerlos juntos.
 - **#10**: ya tiene el plano SDD completo (`openspec/changes/task-activity-log/`) → listo para `/sdd-apply` en automático.
 - **Epic Tickets** (#9 + #11) y **Epic Integraciones/flags** (#7 + #14): conviene agruparlos por epic.
