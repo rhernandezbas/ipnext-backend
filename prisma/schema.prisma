@@ -537,6 +537,39 @@ model DeviceTypeCatalog {
   @@map("DeviceTypeCatalog")
 }
 
+model MaterialCatalog {
+  id        String   @id @default(uuid())
+  name      String   @unique          // canonical, UPPERCASE (CABLE_UTP, CONECTOR_RJ45, ...)
+  label     String?                   // optional human label for the UI
+  unit      String?                   // "m" | "unidad" | "rollo" — default applied in use-case
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  consumptions TaskMaterialConsumption[]
+
+  @@map("MaterialCatalog")
+}
+
+model TaskMaterialConsumption {
+  id                String          @id @default(uuid())
+  taskId            String
+  task              ScheduledTask   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  materialCatalogId String
+  material          MaterialCatalog @relation(fields: [materialCatalogId], references: [id], onDelete: Restrict)
+  materialName      String          // snapshot del nombre al momento del consumo
+  quantity          Float
+  unit              String?
+  notes             String?         @db.Text
+  recordedByUserId  String?
+  recordedByUser    RbacUser?       @relation("TaskMaterialRecorder", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([taskId])
+}
+
 model ProjectType {
   id          String    @id @default(uuid())
   name        String
@@ -872,6 +905,9 @@ model ScheduledTask {
 
   // NEW — comments back-relation
   comments TaskComment[]
+
+  // Material consumption ledger per task
+  materialConsumptions TaskMaterialConsumption[]
 
   // IClass closure → inventory: staged suggestions for this task
   inventorySuggestions TaskInventorySuggestion[]
@@ -1596,6 +1632,7 @@ model RbacUser {
   tasksReported          ScheduledTask[] @relation("TaskReporter")
   tasksAssigned          ScheduledTask[] @relation("TaskAssignee")
   tasksInventoryReviewed ScheduledTask[] @relation("TaskInventoryReviewer")
+  materialsRecorded TaskMaterialConsumption[] @relation("TaskMaterialRecorder")
   tasksWatching   TaskWatcher[]   @relation("TaskWatcher")
   assignedTickets Ticket[]        @relation("TicketAssignee")
   auditEvents     AuditEvent[]

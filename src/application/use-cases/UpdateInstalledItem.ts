@@ -2,6 +2,7 @@ import { ContractInventoryRepository } from '@domain/ports/ContractInventoryRepo
 import { ContractInstalledItem } from '@domain/entities/contract-installed-item';
 
 export interface UpdateInstalledItemInput {
+  type?: string;
   status?: ContractInstalledItem['status'];
   notes?: string | null;
   model?: string | null;

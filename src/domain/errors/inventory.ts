@@ -48,3 +48,59 @@ export class DeviceTypeProtectedError extends DomainError {
     this.name = 'DeviceTypeProtectedError';
   }
 }
+
+export class MaterialNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`Material with id ${id} not found`, 'MATERIAL_NOT_FOUND');
+    this.name = 'MaterialNotFoundError';
+  }
+}
+
+export class MaterialNameConflictError extends DomainError {
+  constructor(name: string) {
+    super(`A material named "${name}" already exists`, 'MATERIAL_NAME_CONFLICT');
+    this.name = 'MaterialNameConflictError';
+  }
+}
+
+export class MaterialInUseError extends DomainError {
+  constructor(public readonly usageCount: number) {
+    super(`Material is in use by ${usageCount} consumption record(s)`, 'MATERIAL_IN_USE');
+    this.name = 'MaterialInUseError';
+  }
+}
+
+export class MaterialProtectedError extends DomainError {
+  constructor() {
+    super('The OTRO material cannot be deleted', 'MATERIAL_PROTECTED');
+    this.name = 'MaterialProtectedError';
+  }
+}
+
+export class InstalledItemNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`Installed item ${id} not found`, 'INSTALLED_ITEM_NOT_FOUND');
+    this.name = 'InstalledItemNotFoundError';
+  }
+}
+
+export class InstalledItemAlreadyRemovedError extends DomainError {
+  constructor(id: string) {
+    super(`Installed item ${id} is already removed/replaced`, 'INSTALLED_ITEM_ALREADY_REMOVED');
+    this.name = 'InstalledItemAlreadyRemovedError';
+  }
+}
+
+export class MaterialConsumptionNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`Material consumption ${id} not found`, 'MATERIAL_CONSUMPTION_NOT_FOUND');
+    this.name = 'MaterialConsumptionNotFoundError';
+  }
+}
+
+export class InvalidQuantityError extends DomainError {
+  constructor() {
+    super('Quantity must be greater than zero', 'INVALID_QUANTITY');
+    this.name = 'InvalidQuantityError';
+  }
+}

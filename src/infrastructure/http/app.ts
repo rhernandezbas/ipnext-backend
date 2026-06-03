@@ -403,6 +403,7 @@ import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeSt
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
 import { createContractInventoryRouter } from './routes/contractInventory.routes';
+import { createMaterialTypeCatalogRouter } from './routes/materialTypeCatalog.routes';
 import { createTaskAuditFindingsRouter } from './routes/taskAuditFindings.routes';
 import { ListTaskAuditFindings } from '@application/use-cases/ListTaskAuditFindings';
 import { PrismaTaskAuditRepository } from '../adapters/prisma/PrismaTaskAuditRepository';
@@ -412,8 +413,20 @@ import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInvent
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
+import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
+import { RecordMaterialConsumption } from '@application/use-cases/RecordMaterialConsumption';
+import { ListTaskMaterialConsumptions } from '@application/use-cases/ListTaskMaterialConsumptions';
+import { DeleteMaterialConsumption } from '@application/use-cases/DeleteMaterialConsumption';
 import { PrismaInventorySuggestionRepository } from '../adapters/prisma/PrismaInventorySuggestionRepository';
 import { PrismaContractInventoryRepository } from '../adapters/prisma/PrismaContractInventoryRepository';
+import { PrismaMaterialCatalogRepository } from '../adapters/prisma/PrismaMaterialCatalogRepository';
+import { PrismaTaskMaterialConsumptionRepository } from '../adapters/prisma/PrismaTaskMaterialConsumptionRepository';
+import { MaterialCatalogService } from '@application/services/MaterialCatalogService';
+import { ListMaterial } from '@application/use-cases/ListMaterial';
+import { GetMaterial } from '@application/use-cases/GetMaterial';
+import { CreateMaterial } from '@application/use-cases/CreateMaterial';
+import { UpdateMaterial } from '@application/use-cases/UpdateMaterial';
+import { DeleteMaterial } from '@application/use-cases/DeleteMaterial';
 import { buildClosureSideEffects } from '../scheduling/closureSideEffects';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
@@ -946,6 +959,21 @@ export function createApp() {
     listDeviceType, getDeviceType, createDeviceType, updateDeviceType, deleteDeviceType,
     deviceTypeCatalogService,
   ));
+  // MaterialCatalog — mirrors DeviceTypeCatalog, mounted at /api/inventory.
+  const materialCatalogRepo = new PrismaMaterialCatalogRepository();
+  const taskMaterialConsumptionRepo = new PrismaTaskMaterialConsumptionRepository();
+  const materialCatalogService = new MaterialCatalogService(materialCatalogRepo);
+  const listMaterial = new ListMaterial(materialCatalogRepo);
+  const getMaterial = new GetMaterial(materialCatalogRepo);
+  const createMaterial = new CreateMaterial(materialCatalogRepo);
+  const updateMaterial = new UpdateMaterial(materialCatalogRepo);
+  const deleteMaterial = new DeleteMaterial(materialCatalogRepo);
+  app.use('/api/inventory', createMaterialTypeCatalogRouter(
+    authAdapter,
+    requirePerm,
+    listMaterial, getMaterial, createMaterial, updateMaterial, deleteMaterial,
+    materialCatalogService,
+  ));
   // GR client-sync config — RBAC-guarded settings (config GET/PUT + status).
   // Mounted at the more-specific /api/gestion-real/sync path BEFORE the broader
   // /api/gestion-real read-only mount below, so its RBAC-guarded GET /status takes
@@ -996,22 +1024,30 @@ export function createApp() {
 
   // IClass closure → inventory: task-scoped suggestion staging + contract installed items.
   // Mounted at /api BEFORE the scheduling /:id catch-all so /scheduling/:taskId/inventory/* survives.
-  // Permisos granulares (módulos scheduling/clients, igual que el FE): read en GET, write en mutaciones.
+  // Permisos granulares: suggestions usan scheduling.*, contract inventory usa inventory.* (migrado de clients.*).
   const inventorySuggestionRepo = new PrismaInventorySuggestionRepository();
   const contractInventoryRepo = new PrismaContractInventoryRepository();
   app.use('/api', createContractInventoryRouter(
     new ListTaskInventorySuggestions(inventorySuggestionRepo),
-    new ConfirmInventorySuggestion(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo, rbacUserRepo, deviceTypeCatalogRepo),
+    new ConfirmInventorySuggestion(
+      inventorySuggestionRepo, contractInventoryRepo, schedulingRepo, rbacUserRepo,
+      deviceTypeCatalogRepo, materialCatalogRepo, taskMaterialConsumptionRepo,
+    ),
     new DiscardInventorySuggestion(inventorySuggestionRepo),
     new ListContractInstalledItems(contractInventoryRepo, rbacUserRepo),
     new AddInstalledItemManually(contractInventoryRepo),
     new UpdateInstalledItem(contractInventoryRepo),
+    new RemoveInstalledItem(contractInventoryRepo),
+    new RecordMaterialConsumption(taskMaterialConsumptionRepo, materialCatalogRepo),
+    new ListTaskMaterialConsumptions(taskMaterialConsumptionRepo, rbacUserRepo),
+    new DeleteMaterialConsumption(taskMaterialConsumptionRepo),
     createAuthMiddleware(authAdapter, sessionRepo),
     {
-      taskRead: requirePerm('scheduling', 'read'),
-      taskWrite: requirePerm('scheduling', 'write'),
-      contractRead: requirePerm('clients', 'read'),
-      contractWrite: requirePerm('clients', 'write'),
+      taskRead:      requirePerm('scheduling', 'read'),   // suggestions — unchanged
+      taskWrite:     requirePerm('scheduling', 'write'),  // suggestions — unchanged
+      contractRead:  requirePerm('inventory', 'read'),    // ← was 'clients','read'
+      contractWrite: requirePerm('inventory', 'write'),   // ← was 'clients','write'
+      materialWrite: requirePerm('inventory', 'write'),   // NEW
     },
     deviceTypeCatalogService,
   ));

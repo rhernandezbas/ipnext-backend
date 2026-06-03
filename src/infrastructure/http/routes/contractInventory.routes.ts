@@ -5,20 +5,39 @@ import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInvent
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
+import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
+import { RecordMaterialConsumption } from '@application/use-cases/RecordMaterialConsumption';
+import { ListTaskMaterialConsumptions } from '@application/use-cases/ListTaskMaterialConsumptions';
+import { DeleteMaterialConsumption } from '@application/use-cases/DeleteMaterialConsumption';
 import { DeviceTypeCatalogService } from '@application/services/DeviceTypeCatalogService';
+import {
+  InstalledItemNotFoundError,
+  MaterialConsumptionNotFoundError,
+  MaterialNotFoundError,
+  InvalidQuantityError,
+} from '@domain/errors/inventory';
+import { z } from 'zod';
 
 /**
  * Granular permission guards (one per route group). Built in app.ts from
- * `requirePerm(module, action)`. Task-scoped routes use the `scheduling` module
- * and contract routes the `clients` module — matching the FE's `Can`/`RequirePermission`
- * keys (scheduling.* / clients.*). Reads require `read`, mutations require `write`.
+ * `requirePerm(module, action)`. Task-scoped routes use the `scheduling` module;
+ * contract inventory routes use `inventory` (migrated from `clients`).
+ * Reads require `read`, mutations require `write`.
  */
 export interface InventoryRoutePerms {
-  taskRead: RequestHandler;
-  taskWrite: RequestHandler;
-  contractRead: RequestHandler;
-  contractWrite: RequestHandler;
+  taskRead: RequestHandler;       // scheduling.read  (suggestions — NOT changed)
+  taskWrite: RequestHandler;      // scheduling.write (suggestions — NOT changed)
+  contractRead: RequestHandler;   // inventory.read   (was clients.read)
+  contractWrite: RequestHandler;  // inventory.write  (was clients.write)
+  materialWrite: RequestHandler;  // inventory.write  (NEW — material consumption mutations)
 }
+
+const RecordConsumptionSchema = z.object({
+  materialCatalogId: z.string().min(1),
+  quantity: z.number().positive(),
+  unit: z.string().nullish(),
+  notes: z.string().nullish(),
+});
 
 /**
  * IClass closure → inventory HTTP surface. Mounted at `/api`; task-scoped
@@ -36,6 +55,10 @@ export function createContractInventoryRouter(
   listInstalled: ListContractInstalledItems,
   addManual: AddInstalledItemManually,
   updateItem: UpdateInstalledItem,
+  removeItem: RemoveInstalledItem,
+  recordConsumption: RecordMaterialConsumption,
+  listConsumptions: ListTaskMaterialConsumptions,
+  deleteConsumption: DeleteMaterialConsumption,
   auth: RequestHandler,
   perms: InventoryRoutePerms,
   deviceTypes: DeviceTypeCatalogService,
@@ -57,12 +80,12 @@ export function createContractInventoryRouter(
         res.status(422).json({ error: 'Invalid item type override', code: 'INVALID_ITEM_TYPE' });
         return;
       }
-      const item = await confirm.execute({
+      const result = await confirm.execute({
         suggestionId: req.params.suggestionId,
         addedByUserId: userId(req),
         typeOverride: (rawType as string | undefined) ?? null,
       });
-      res.status(201).json(item);
+      res.status(201).json(result);
     } catch (e) { next(e); }
   });
 
@@ -70,6 +93,55 @@ export function createContractInventoryRouter(
     try {
       res.json(await discard.execute(req.params.suggestionId));
     } catch (e) { next(e); }
+  });
+
+  // ── Task-scoped material consumption ──────────────────────────────────────
+  router.get('/scheduling/:taskId/inventory/materials', auth, perms.taskRead, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.json(await listConsumptions.execute(req.params.taskId));
+    } catch (e) { next(e); }
+  });
+
+  router.post('/scheduling/:taskId/inventory/materials', auth, perms.materialWrite, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = RecordConsumptionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      const c = await recordConsumption.execute({
+        taskId: req.params.taskId,
+        materialCatalogId: parsed.data.materialCatalogId,
+        quantity: parsed.data.quantity,
+        unit: parsed.data.unit ?? null,
+        notes: parsed.data.notes ?? null,
+        recordedByUserId: userId(req),
+      });
+      res.status(201).json(c);
+    } catch (e) {
+      if (e instanceof MaterialNotFoundError) {
+        (res as Response).status(404).json({ error: (e as MaterialNotFoundError).message, code: (e as MaterialNotFoundError).code });
+        return;
+      }
+      if (e instanceof InvalidQuantityError) {
+        (res as Response).status(422).json({ error: (e as InvalidQuantityError).message, code: (e as InvalidQuantityError).code });
+        return;
+      }
+      next(e);
+    }
+  });
+
+  router.delete('/scheduling/:taskId/inventory/materials/:id', auth, perms.materialWrite, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await deleteConsumption.execute(req.params.id);
+      res.status(204).send();
+    } catch (e) {
+      if (e instanceof MaterialConsumptionNotFoundError) {
+        (res as Response).status(404).json({ error: (e as MaterialConsumptionNotFoundError).message, code: (e as MaterialConsumptionNotFoundError).code });
+        return;
+      }
+      next(e);
+    }
   });
 
   // ── Contract inventory ─────────────────────────────────────────────────────
@@ -102,13 +174,34 @@ export function createContractInventoryRouter(
 
   router.patch('/contracts/:contractId/inventory/:itemId', auth, perms.contractWrite, async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const item = await updateItem.execute(req.params.itemId, (req.body ?? {}) as Record<string, never>);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      // Validate type if provided — mirrors POST validation (DIP: route is the validation boundary)
+      if (body.type !== undefined) {
+        if (!(await deviceTypes.isValid(body.type as string))) {
+          res.status(422).json({ error: 'Invalid item type', code: 'INVALID_ITEM_TYPE' });
+          return;
+        }
+      }
+      const item = await updateItem.execute(req.params.itemId, body as Record<string, never>);
       if (!item) {
         res.status(404).json({ error: 'Installed item not found', code: 'INSTALLED_ITEM_NOT_FOUND' });
         return;
       }
       res.json(item);
     } catch (e) { next(e); }
+  });
+
+  router.delete('/contracts/:contractId/inventory/:itemId', auth, perms.contractWrite, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const removed = await removeItem.execute(req.params.itemId);
+      res.json(removed);
+    } catch (e) {
+      if (e instanceof InstalledItemNotFoundError) {
+        (res as Response).status(404).json({ error: (e as InstalledItemNotFoundError).message, code: (e as InstalledItemNotFoundError).code });
+        return;
+      }
+      next(e);
+    }
   });
 
   return router;
