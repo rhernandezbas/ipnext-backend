@@ -883,6 +883,9 @@ model ScheduledTask {
   // IClass dispatch audit — intentos de envio a IClass (exito/fallo)
   iclassDispatchAttempts IClassDispatchAttempt[]
 
+  // F6 — auditoría IA de la calidad de instalación (1 vigente por tarea)
+  installationAudit TaskInstallationAudit?
+
   @@index([stageId])
   @@index([projectId])
   @@index([startDate])
@@ -965,6 +968,32 @@ model TaskCommentAttachment {
   sizeBytes Int?
 
   @@index([commentId])
+}
+
+// F6 — Auditoría IA de la instalación. Run padre (1 vigente por tarea, replace-on-rerun)
+// + hallazgos estructurados (severidad/categoría/texto/fotos).
+model TaskInstallationAudit {
+  id        String             @id @default(uuid())
+  taskId    String             @unique
+  task      ScheduledTask      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  model     String
+  auditedAt DateTime           @default(now())
+  findings  TaskAuditFinding[]
+
+  @@index([taskId])
+}
+
+model TaskAuditFinding {
+  id        String                @id @default(uuid())
+  auditId   String
+  audit     TaskInstallationAudit @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  severity  String // ok | warning | critical
+  category  String // señal | conexión | fotos | instalación | otros
+  text      String
+  photoUrls String[]
+  createdAt DateTime              @default(now())
+
+  @@index([auditId])
 }
 
 // =============================================

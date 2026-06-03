@@ -96,4 +96,15 @@ export const config = {
     /** Per-image inference timeout (ms). Abort → soft-fail to manual review. */
     timeoutMs: parseInt(process.env.OCR_TIMEOUT_MS || '120000', 10),
   },
+
+  /**
+   * AI installation audit (closure loop F6). Multimodal Ollama vision model.
+   * Opt-in via ICLASS_AUDIT_ENABLED — runs as a non-fatal closure side-effect.
+   */
+  audit: {
+    enabled: process.env.ICLASS_AUDIT_ENABLED === 'true',
+    ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434',
+    model: process.env.AUDIT_MODEL ?? 'qwen2.5vl:7b',
+    timeoutMs: parseInt(process.env.AUDIT_TIMEOUT_MS || '180000', 10),
+  },
 };

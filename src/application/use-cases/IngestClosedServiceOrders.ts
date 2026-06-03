@@ -6,6 +6,7 @@ import { dedupeStatusHistory } from '@application/services/dedupeStatusHistory';
 import { PostClosureComment } from '@application/use-cases/PostClosureComment';
 import { ExtractDeviceInfoFromPhoto } from '@application/use-cases/ExtractDeviceInfoFromPhoto';
 import { BuildInventorySuggestions } from '@application/use-cases/BuildInventorySuggestions';
+import { AuditInstallationQuality } from '@application/use-cases/AuditInstallationQuality';
 import { ScrapedOSDetail } from '@domain/entities/iclass-portal';
 import { OcrExtraction } from '@domain/entities/ocr-extraction';
 import { ClosedServiceOrderRepository } from '@domain/ports/ClosedServiceOrderRepository';
@@ -56,6 +57,8 @@ export interface IngestClosedOptions {
   postComment?: PostClosureComment;
   extractOcr?: ExtractDeviceInfoFromPhoto;
   buildSuggestions?: BuildInventorySuggestions;
+  /** F6 — AI installation audit (closure side-effect, opt-in, non-fatal). */
+  auditInstallation?: AuditInstallationQuality;
 }
 
 /**
@@ -70,6 +73,7 @@ export class IngestClosedServiceOrders {
   private readonly postComment?: PostClosureComment;
   private readonly extractOcr?: ExtractDeviceInfoFromPhoto;
   private readonly buildSuggestions?: BuildInventorySuggestions;
+  private readonly auditInstallation?: AuditInstallationQuality;
 
   constructor(
     private readonly iclass: IClassPort,
@@ -85,6 +89,7 @@ export class IngestClosedServiceOrders {
     this.postComment = opts.postComment;
     this.extractOcr = opts.extractOcr;
     this.buildSuggestions = opts.buildSuggestions;
+    this.auditInstallation = opts.auditInstallation;
   }
 
   async execute(): Promise<IngestClosedCounts> {
@@ -251,6 +256,14 @@ export class IngestClosedServiceOrders {
         await this.postComment.execute({ taskId, order, attachmentUrls });
       } catch {
         /* non-fatal */
+      }
+    }
+
+    if (this.auditInstallation) {
+      try {
+        await this.auditInstallation.execute({ taskId, order });
+      } catch {
+        /* non-fatal — la auditoría IA nunca afecta el cierre ya commiteado */
       }
     }
   }

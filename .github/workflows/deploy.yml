@@ -79,6 +79,8 @@ jobs:
             -e ICLASS_OCR_ENABLED="true" \
             -e OLLAMA_BASE_URL="${{ secrets.OLLAMA_BASE_URL }}" \
             -e OCR_MODEL="qwen2.5vl:7b" \
+            -e ICLASS_AUDIT_ENABLED="true" \
+            -e AUDIT_MODEL="qwen2.5vl:7b" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
