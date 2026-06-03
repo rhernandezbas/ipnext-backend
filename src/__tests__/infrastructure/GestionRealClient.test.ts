@@ -1,4 +1,9 @@
-import { parseClientsResponse, parseContractsResponse, isoDate } from '@infrastructure/adapters/gestion-real/GestionRealClient';
+import {
+  parseClientsResponse,
+  parseContractsResponse,
+  parseServiceOrdersResponse,
+  isoDate,
+} from '@infrastructure/adapters/gestion-real/GestionRealClient';
 
 // Contract fixture with lat/lng populated.
 const CONTRACTS_RESPONSE_WITH_LOCATION = {
@@ -183,6 +188,62 @@ describe('GestionRealClient parsing', () => {
     expect(k.address).toBeNull();
     expect(k.lat).toBeNull();
     expect(k.lng).toBeNull();
+  });
+
+  // Service order `observaciones` → the OS comment (backlog #16). Real shapes
+  // captured from api.gestionreal.com.ar on 2026-06-03: GR keys orders by id and
+  // the comment field is `observaciones`, arriving with UNDECODED HTML entities
+  // (e.g. instalaci&oacute;n) — we decode them so the task description reads clean.
+  it('maps observaciones and decodes HTML entities (#16)', () => {
+    const response = {
+      error: '0',
+      '17641': {
+        tipo: 'CI',
+        estado: 'CONF',
+        cliente: '205122',
+        contrato: '12020',
+        observaciones:
+          'Orden de servicio por instalaci&oacute;n de cliente generada autom&aacute;ticamente',
+        creado: '27-05-2026 10:59:47',
+      },
+    };
+
+    const orders = parseServiceOrdersResponse(response);
+
+    expect(orders).toHaveLength(1);
+    const o = orders[0];
+    expect(o.grOrdenId).toBe('17641');
+    expect(o.observaciones).toBe(
+      'Orden de servicio por instalación de cliente generada automáticamente',
+    );
+  });
+
+  it('decodes numeric HTML entities and preserves line breaks in observaciones (#16)', () => {
+    const response = {
+      error: '0',
+      '17635': {
+        tipo: 'CO',
+        estado: 'CONF',
+        observaciones: 'Señal ca&iacute;da&#46;\nLLevar equipo&#46;',
+      },
+    };
+
+    const orders = parseServiceOrdersResponse(response);
+
+    expect(orders[0].observaciones).toBe('Señal caída.\nLLevar equipo.');
+  });
+
+  it('returns null observaciones when GR omits or empties the field (#16)', () => {
+    const response = {
+      error: '0',
+      '1': { tipo: 'CI', estado: 'CONF' },
+      '2': { tipo: 'CI', estado: 'CONF', observaciones: '   ' },
+    };
+
+    const orders = parseServiceOrdersResponse(response);
+
+    expect(orders.find(o => o.grOrdenId === '1')!.observaciones).toBeNull();
+    expect(orders.find(o => o.grOrdenId === '2')!.observaciones).toBeNull();
   });
 
   it('builds the daily GR password date in Argentina time (UTC-3), not the container UTC date', () => {

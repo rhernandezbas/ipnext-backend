@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+import bcrypt from 'bcryptjs';
 import { config } from '../config';
 import { GestionRealClient } from '../adapters/gestion-real/GestionRealClient';
 import { PrismaGrLinkResolver } from '../adapters/prisma/PrismaGrLinkResolver';
@@ -8,8 +10,10 @@ import { PrismaProjectRepository } from '../adapters/prisma/PrismaProjectReposit
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
 import { PrismaTaskPriorityRepository } from '../adapters/prisma/PrismaTaskPriorityRepository';
 import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
+import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 import { IngestGestionRealOrders } from '@application/use-cases/IngestGestionRealOrders';
+import { bootstrapApiUser, API_USER_LOGIN } from '../bootstrap/bootstrapApiUser';
 import { GestionRealIngestScheduler } from './GestionRealIngestScheduler';
 
 /**
@@ -55,6 +59,15 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
   // start of each run and BLOCKS (zero tasks) if either is missing.
   const priorities = new PrismaTaskPriorityRepository();
   const categories = new PrismaTaskCategoryRepository();
+  // System "Api" reporter (#15): ensure it exists (idempotent) so ingested tasks
+  // are reported by a stable system user, not left null. The user is created with
+  // an UNUSABLE passwordHash (bcrypt of a random secret) — it can never log in,
+  // it only exists to be referenced as reporterId.
+  const rbacUsers = new PrismaRbacUserRepository();
+  const apiUser = await bootstrapApiUser(rbacUsers, {
+    passwordHash: bcrypt.hashSync(randomUUID(), 10),
+  });
+  console.log(`[gr-ingest] system "Api" reporter ${apiUser.outcome} (id=${apiUser.id})`);
 
   // Resolve a last-resort default stage for the NEEDS-REVIEW (null-project) path.
   //
@@ -105,7 +118,8 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
     featureFlags,
     priorities,
     categories,
-    { defaultStageId },
+    rbacUsers,
+    { defaultStageId, apiReporterLogin: API_USER_LOGIN },
   );
 
   // PgAdvisoryLock uses a dedicated pg.Client so session advisory locks stay
