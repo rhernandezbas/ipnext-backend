@@ -2,6 +2,9 @@ import { SchedulingRepository, UpdateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
+import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
+import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
+import { SYSTEM_ACTOR } from './taskActivityActor';
 
 export class UpdateTask {
   constructor(
@@ -11,9 +14,10 @@ export class UpdateTask {
     private readonly partnerLookup: EntityLookup,
     private readonly adminLookup: EntityLookup,
     private readonly projectLookup: EntityLookup,
+    private readonly recorder?: TaskActivityRecorder,
   ) {}
 
-  async execute(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null> {
+  async execute(id: string, data: UpdateTaskInput, actor?: ActorContext): Promise<ScheduledTask | null> {
     // FK validation — only for FKs PRESENT in the partial body (not undefined)
     // canonical order: customer → contract → partner → reporter → assignee → watchers
     if (data.customerId !== undefined && data.customerId !== null) {
@@ -47,6 +51,18 @@ export class UpdateTask {
       }
     }
 
-    return this.repo.updateTask(id, data);
+    // Snapshot the prior state for the diff BEFORE mutating (#10 / D.2).
+    const prev = this.recorder ? await this.repo.getTask(id) : null;
+
+    const updated = await this.repo.updateTask(id, data);
+
+    if (this.recorder && prev && updated) {
+      const events = computeUpdateTaskActivities(prev, data, actor ?? SYSTEM_ACTOR);
+      if (events.length > 0) {
+        await this.recorder.recordMany(id, events);
+      }
+    }
+
+    return updated;
   }
 }

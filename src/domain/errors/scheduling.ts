@@ -176,6 +176,14 @@ export class ProjectTypeNotFoundError extends DomainError {
   }
 }
 
+/** Raised when a task-activity pagination cursor is malformed (bad base64 / shape / date). */
+export class InvalidCursorError extends DomainError {
+  constructor() {
+    super('The provided activity cursor is malformed', 'INVALID_CURSOR');
+    this.name = 'InvalidCursorError';
+  }
+}
+
 export class ProjectTypeNameConflictError extends DomainError {
   constructor(name: string) {
     super(`A project type named "${name}" already exists`, 'PROJECT_TYPE_NAME_CONFLICT');

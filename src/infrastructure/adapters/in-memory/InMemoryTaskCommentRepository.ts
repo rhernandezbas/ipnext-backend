@@ -8,6 +8,10 @@ export class InMemoryTaskCommentRepository implements TaskCommentRepository {
     return Array.from(this.store.values()).filter(c => c.taskId === taskId);
   }
 
+  async getById(commentId: string): Promise<TaskComment | null> {
+    return this.store.get(commentId) ?? null;
+  }
+
   async create(comment: TaskComment): Promise<TaskComment> {
     this.store.set(comment.id, comment);
     return comment;

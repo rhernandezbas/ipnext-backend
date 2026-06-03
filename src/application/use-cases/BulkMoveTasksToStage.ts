@@ -1,6 +1,7 @@
 import { MoveTaskToStage } from './MoveTaskToStage';
 import { mapWithConcurrency } from '../util/mapWithConcurrency';
 import { domainErrorToCode } from '../util/domainErrorToCode';
+import { ActorContext } from '@domain/ports/TaskActivityRecorder';
 
 /** Max tasks processed in parallel — bounded to avoid saturating IClass (AD-2). */
 const CONCURRENCY = 5;
@@ -32,13 +33,13 @@ export interface BulkMoveTasksToStageOutput {
 export class BulkMoveTasksToStage {
   constructor(private readonly move: MoveTaskToStage) {}
 
-  async execute(ids: string[], stageId: string): Promise<BulkMoveTasksToStageOutput> {
+  async execute(ids: string[], stageId: string, actor?: ActorContext): Promise<BulkMoveTasksToStageOutput> {
     const results = await mapWithConcurrency<string, BulkMoveResult>(
       ids,
       CONCURRENCY,
       async (id) => {
         try {
-          await this.move.execute(id, stageId);
+          await this.move.execute(id, stageId, actor);
           return { taskId: id, ok: true };
         } catch (e) {
           const mapped = domainErrorToCode(e);

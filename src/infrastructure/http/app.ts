@@ -84,6 +84,7 @@ import { ClearTaskChecklist } from '@application/use-cases/ClearTaskChecklist';
 import { createProjectsRouter } from './routes/projects.routes';
 import { createTaskTemplateRouter } from './routes/taskTemplate.routes';
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
+import { PrismaTaskActivityRepository } from '../adapters/prisma/PrismaTaskActivityRepository';
 import { PrismaWorkflowRepository } from '../adapters/prisma/PrismaWorkflowRepository';
 import { PrismaStageRepository } from '../adapters/prisma/PrismaStageRepository';
 import { PrismaProjectCategoryRepository } from '../adapters/prisma/PrismaProjectCategoryRepository';
@@ -102,6 +103,9 @@ import { UpdateProject } from '@application/use-cases/UpdateProject';
 import { DeleteProject } from '@application/use-cases/DeleteProject';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { GetTask } from '@application/use-cases/GetTask';
+import { GetTaskActivity } from '@application/use-cases/GetTaskActivity';
+import { RecordTaskActivity } from '@application/use-cases/RecordTaskActivity';
+import { DefaultTaskActivityRecorder } from '../services/DefaultTaskActivityRecorder';
 import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
@@ -621,6 +625,10 @@ export function createApp() {
 
   const listTasks = new ListTasks(schedulingRepo);
   const getTask = new GetTask(schedulingRepo);
+  // task-activity-log (#10) — read side + best-effort recorder for write UCs
+  const taskActivityRepo = new PrismaTaskActivityRepository();
+  const getTaskActivity = new GetTaskActivity(schedulingRepo, taskActivityRepo);
+  const taskActivityRecorder = new DefaultTaskActivityRecorder(new RecordTaskActivity(taskActivityRepo));
   // Scheduling reporter/assignee/watcher ids are validated against RbacUser
   // (post SDD #2 — Admin table is being phased out, no fallback). The lookup
   // returns { id } on hit, null on miss — satisfies the EntityLookup port.
@@ -639,6 +647,7 @@ export function createApp() {
     userLookupForScheduling,
     { findById: (id: string) => prismaClientLookup('Project', id) },
     { findById: (id: string) => prismaClientLookup('Ticket', id) },
+    taskActivityRecorder,
   );
   const createTaskFromTicket = new CreateTaskFromTicket(createTask, schedulingRepo);
   const updateTask = new UpdateTask(
@@ -648,6 +657,7 @@ export function createApp() {
     { findById: (id: string) => prismaClientLookup('Partner', id) },
     userLookupForScheduling,
     { findById: (id: string) => prismaClientLookup('Project', id) },
+    taskActivityRecorder,
   );
   const deleteTask = new DeleteTask(schedulingRepo);
   // IClass integration: moving a task to "Enviar a IClass" delegates the OS
@@ -655,11 +665,11 @@ export function createApp() {
   const featureFlagRepo = new PrismaFeatureFlagRepository();
   // Audit repo for IClass dispatch attempts — injected as 4th arg (AD-6: optional on SendTaskToIClass).
   const iclassDispatchAttemptRepo = new PrismaIClassDispatchAttemptRepository();
-  const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient(), iclassDispatchAttemptRepo);
-  const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo, sendTaskToIClass);
+  const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient(), iclassDispatchAttemptRepo, taskActivityRecorder);
+  const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo, sendTaskToIClass, taskActivityRecorder);
 
   const bulkMoveTasksToStage = new BulkMoveTasksToStage(moveTaskToStage);
-  const setTaskInventoryReview = new SetTaskInventoryReview(schedulingRepo);
+  const setTaskInventoryReview = new SetTaskInventoryReview(schedulingRepo, taskActivityRecorder);
 
   const listWorkflows = new ListWorkflows(workflowRepo);
   const getWorkflow = new GetWorkflow(workflowRepo);
@@ -1008,9 +1018,9 @@ export function createApp() {
   ));
   // Task comments — mounted BEFORE the scheduling catch-all router to avoid /:id swallowing
   const taskCommentRepo = new PrismaTaskCommentRepository();
-  const addTaskComment = new AddTaskComment(taskCommentRepo);
+  const addTaskComment = new AddTaskComment(taskCommentRepo, taskActivityRecorder);
   const listTaskComments = new ListTaskComments(taskCommentRepo);
-  const deleteTaskComment = new DeleteTaskComment(taskCommentRepo);
+  const deleteTaskComment = new DeleteTaskComment(taskCommentRepo, taskActivityRecorder);
   app.use('/api/scheduling', createTaskCommentsRouter(
     listTaskComments,
     addTaskComment,
@@ -1066,13 +1076,13 @@ export function createApp() {
   // Instantiate checklist use cases (change 5)
   const taskTemplateRepoForChecklist = new PrismaTaskTemplateRepository();
   const replaceTemplateItemsUC = new ReplaceTaskTemplateItems(taskTemplateRepoForChecklist);
-  const addChecklistItemUC = new AddChecklistItem(schedulingRepo);
-  const toggleChecklistItemUC = new ToggleChecklistItem(schedulingRepo);
-  const updateChecklistItemUC = new UpdateChecklistItem(schedulingRepo);
-  const removeChecklistItemUC = new RemoveChecklistItem(schedulingRepo);
-  const reorderChecklistItemsUC = new ReorderChecklistItems(schedulingRepo);
-  const assignTemplateToTaskUC = new AssignTemplateToTask(schedulingRepo, taskTemplateRepoForChecklist);
-  const clearTaskChecklistUC = new ClearTaskChecklist(schedulingRepo);
+  const addChecklistItemUC = new AddChecklistItem(schedulingRepo, taskActivityRecorder);
+  const toggleChecklistItemUC = new ToggleChecklistItem(schedulingRepo, taskActivityRecorder);
+  const updateChecklistItemUC = new UpdateChecklistItem(schedulingRepo, taskActivityRecorder);
+  const removeChecklistItemUC = new RemoveChecklistItem(schedulingRepo, taskActivityRecorder);
+  const reorderChecklistItemsUC = new ReorderChecklistItems(schedulingRepo, taskActivityRecorder);
+  const assignTemplateToTaskUC = new AssignTemplateToTask(schedulingRepo, taskTemplateRepoForChecklist, taskActivityRecorder);
+  const clearTaskChecklistUC = new ClearTaskChecklist(schedulingRepo, taskActivityRecorder);
 
   // IClass manual resend use cases
   const listIClassNodes = new ListIClassNodes(buildIClassClient());
@@ -1096,7 +1106,7 @@ export function createApp() {
     listIClassNodes,
     resendTaskToIClassWithNode,
     requirePerm,
-  }));
+  }, getTaskActivity));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);

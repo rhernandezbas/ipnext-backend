@@ -2,6 +2,8 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { z } from 'zod';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { GetTask } from '@application/use-cases/GetTask';
+import { GetTaskActivity } from '@application/use-cases/GetTaskActivity';
+import { ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { CreateTask } from '@application/use-cases/CreateTask';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { DeleteTask } from '@application/use-cases/DeleteTask';
@@ -36,6 +38,7 @@ import {
 import {
   StageNotFoundError,
   TaskNotFoundError,
+  InvalidCursorError,
   ReferenceNotFoundError,
   ReferenceKind,
 } from '@domain/errors/scheduling';
@@ -85,9 +88,16 @@ export function createSchedulingRouter(
   setTaskInventoryReview?: SetTaskInventoryReview,
   bulkMoveTasksToStage?: BulkMoveTasksToStage,
   resendDeps?: ResendDeps,
+  getTaskActivity?: GetTaskActivity,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
+
+  // Actor for the activity log (#10), derived from the authenticated user.
+  const actorOf = (req: Request): ActorContext => ({
+    actorId: req.user?.id ?? null,
+    actorName: req.user?.username ?? 'System',
+  });
 
   router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
     // Wire format: frontend sends ?stageIds[]=a&stageIds[]=b
@@ -134,7 +144,7 @@ export function createSchedulingRouter(
         res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
         return;
       }
-      const item = await checklist.addChecklistItem.execute(req.params['id'] as string, parsed.data.text);
+      const item = await checklist.addChecklistItem.execute(req.params['id'] as string, parsed.data.text, actorOf(req));
       if (!item) {
         res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
         return;
@@ -150,7 +160,7 @@ export function createSchedulingRouter(
         return;
       }
       try {
-        const items = await checklist.assignTemplateToTask.execute(req.params['id'] as string, parsed.data.templateId);
+        const items = await checklist.assignTemplateToTask.execute(req.params['id'] as string, parsed.data.templateId, actorOf(req));
         res.json(items);
       } catch (err) {
         if (err instanceof TemplateNotFoundError) {
@@ -163,7 +173,7 @@ export function createSchedulingRouter(
 
     // DELETE /:id/checklist — clear all items
     router.delete('/:id/checklist', auth, async (req: Request, res: Response): Promise<void> => {
-      await checklist.clearTaskChecklist.execute(req.params['id'] as string);
+      await checklist.clearTaskChecklist.execute(req.params['id'] as string, actorOf(req));
       res.status(204).send();
     });
 
@@ -175,7 +185,7 @@ export function createSchedulingRouter(
         return;
       }
       try {
-        const items = await checklist.reorderChecklistItems.execute(req.params['id'] as string, parsed.data.orderedIds);
+        const items = await checklist.reorderChecklistItems.execute(req.params['id'] as string, parsed.data.orderedIds, actorOf(req));
         res.json(items);
       } catch (err) {
         if (err instanceof OrderingError) {
@@ -189,7 +199,7 @@ export function createSchedulingRouter(
     // PATCH /:id/checklist/:itemId/toggle — toggle done
     router.patch('/:id/checklist/:itemId/toggle', auth, async (req: Request, res: Response): Promise<void> => {
       try {
-        const item = await checklist.toggleChecklistItem.execute(req.params['itemId'] as string);
+        const item = await checklist.toggleChecklistItem.execute(req.params['itemId'] as string, actorOf(req));
         res.json(item);
       } catch (err) {
         if (err instanceof ChecklistItemNotFoundError) {
@@ -208,7 +218,7 @@ export function createSchedulingRouter(
         return;
       }
       try {
-        const item = await checklist.updateChecklistItem.execute(req.params['itemId'] as string, parsed.data.text);
+        const item = await checklist.updateChecklistItem.execute(req.params['itemId'] as string, parsed.data.text, actorOf(req));
         res.json(item);
       } catch (err) {
         if (err instanceof ChecklistItemNotFoundError) {
@@ -221,7 +231,7 @@ export function createSchedulingRouter(
 
     // DELETE /:id/checklist/:itemId — remove single item
     router.delete('/:id/checklist/:itemId', auth, async (req: Request, res: Response): Promise<void> => {
-      const deleted = await checklist.removeChecklistItem.execute(req.params['itemId'] as string);
+      const deleted = await checklist.removeChecklistItem.execute(req.params['itemId'] as string, req.params['id'] as string, actorOf(req));
       if (!deleted) {
         res.status(404).json({ error: 'Checklist item not found', code: 'CHECKLIST_ITEM_NOT_FOUND' });
         return;
@@ -244,7 +254,7 @@ export function createSchedulingRouter(
       }
       try {
         const actorId = (req as { user?: { id?: string } }).user?.id ?? null;
-        const task = await setTaskInventoryReview.execute(req.params['id'] as string, parsed.data.reviewed, actorId);
+        const task = await setTaskInventoryReview.execute(req.params['id'] as string, parsed.data.reviewed, actorId, actorOf(req));
         res.json(task);
       } catch (err) {
         if (err instanceof TaskNotFoundError) {
@@ -272,7 +282,7 @@ export function createSchedulingRouter(
         res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
         return;
       }
-      const result = await bulkMoveTasksToStage.execute(parsed.data.ids, parsed.data.stageId);
+      const result = await bulkMoveTasksToStage.execute(parsed.data.ids, parsed.data.stageId, actorOf(req));
       res.json(result);
     });
   }
@@ -323,6 +333,30 @@ export function createSchedulingRouter(
   }
 
   // ── End iclass resend routes ──────────────────────────────────────────────
+
+  // Activity feed (#10). MUST be registered BEFORE GET /:id so the extra
+  // `/activity` segment is not shadowed by the catch-all id route.
+  if (getTaskActivity) {
+    router.get('/:id/activity', auth, async (req: Request, res: Response): Promise<void> => {
+      const rawLimit = req.query['limit'];
+      const limit = rawLimit !== undefined ? parseInt(rawLimit as string, 10) : undefined;
+      const cursor = req.query['cursor'] as string | undefined;
+      try {
+        const result = await getTaskActivity.execute(req.params['id'] as string, { limit, cursor });
+        res.json(result);
+      } catch (err) {
+        if (err instanceof TaskNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof InvalidCursorError) {
+          res.status(400).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    });
+  }
 
   router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const task = await getTask.execute(req.params['id'] as string);
@@ -387,7 +421,7 @@ export function createSchedulingRouter(
     };
 
     try {
-      const task = await createTask.execute(normalized);
+      const task = await createTask.execute(normalized, actorOf(req));
       res.status(201).json(task);
     } catch (err: unknown) {
       if (err instanceof ReferenceNotFoundError) {
@@ -410,7 +444,7 @@ export function createSchedulingRouter(
     }
 
     try {
-      const task = await updateTask.execute(req.params['id'] as string, parsed.data);
+      const task = await updateTask.execute(req.params['id'] as string, parsed.data, actorOf(req));
       if (!task) {
         res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
         return;
@@ -433,7 +467,7 @@ export function createSchedulingRouter(
       return;
     }
     try {
-      const task = await moveTaskToStage.execute(req.params['id'] as string, parsed.data.stageId);
+      const task = await moveTaskToStage.execute(req.params['id'] as string, parsed.data.stageId, actorOf(req));
       res.json(task);
     } catch (err: unknown) {
       if (err instanceof StageNotFoundError) {

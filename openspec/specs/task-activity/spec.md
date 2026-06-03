@@ -8,8 +8,8 @@ The system records and exposes a per-task chronological activity log covering cr
 - `id: string (uuid)`
 - `taskId: string` — FK to ScheduledTask, ON DELETE CASCADE
 - `type: ActivityType` — string union (see proposal §What changes #9)
-- `actorId: string | null` — Admin id (nullable for system events)
-- `actorName: string` — snapshot of admin name OR `'System'`
+- `actorId: string | null` — RbacUser id (nullable for system events), FK ON DELETE SET NULL
+- `actorName: string` — snapshot of the user name OR `'System'`
 - `fromValue: Json | null` — previous value of the field (shape depends on type)
 - `toValue: Json | null` — new value of the field
 - `metadata: Json | null` — extra context (e.g. `{ field: 'startDate' }` for `due_date_changed`, `{ commentId, attachmentId }` for comment family)
@@ -46,7 +46,7 @@ The system records and exposes a per-task chronological activity log covering cr
 - WHEN `cursor` is malformed, THE SYSTEM SHALL return 400 `{ code: 'INVALID_CURSOR' }`.
 
 ### REQ-ACTOR-1 — Actor capture
-- WHEN a write request carries an authenticated user, THE SYSTEM SHALL record `actorId = req.user.id` and `actorName = req.user.name`.
+- WHEN a write request carries an authenticated user, THE SYSTEM SHALL record `actorId = req.user.id` and `actorName = req.user.username` (the `User` entity exposes `username`, not `name`).
 - WHEN a write happens with no authenticated user (e.g. system-triggered IClass auto-send delegated from MoveTaskToStage), THE SYSTEM SHALL record `actorId = null` and `actorName = 'System'`.
 
 ### REQ-RESILIENCE-1 — Best-effort recording

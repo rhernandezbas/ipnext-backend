@@ -37,7 +37,7 @@ export function createTaskCommentsRouter(
       body: commentBody,
       authorName,
       attachments: attachments ?? [],
-    });
+    }, { actorId: req.user?.id ?? null, actorName: req.user?.username ?? 'System' });
     res.status(201).json(comment);
   });
 
@@ -45,7 +45,7 @@ export function createTaskCommentsRouter(
   // NOTE: this sub-path must be registered on /api/scheduling so comments/:commentId
   // does not collide with /:taskId/comments — the caller mounts this router at /api/scheduling.
   router.delete('/comments/:commentId', auth, perms.delete, async (req: Request, res: Response): Promise<void> => {
-    const deleted = await deleteComment.execute(req.params['commentId'] as string);
+    const deleted = await deleteComment.execute(req.params['commentId'] as string, { actorId: req.user?.id ?? null, actorName: req.user?.username ?? 'System' });
     if (!deleted) {
       res.status(404).json({ error: 'Comment not found', code: 'TASK_COMMENT_NOT_FOUND' });
       return;

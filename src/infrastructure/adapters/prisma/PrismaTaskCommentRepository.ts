@@ -55,6 +55,14 @@ export class PrismaTaskCommentRepository implements TaskCommentRepository {
     return rows.map(toComment);
   }
 
+  async getById(commentId: string): Promise<TaskComment | null> {
+    const row = await prisma.taskComment.findUnique({
+      where: { id: commentId },
+      include: { attachments: true },
+    });
+    return row ? toComment(row) : null;
+  }
+
   async create(comment: TaskComment): Promise<TaskComment> {
     const row = await prisma.taskComment.create({
       data: {
