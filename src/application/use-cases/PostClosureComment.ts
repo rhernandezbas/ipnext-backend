@@ -57,8 +57,17 @@ export class PostClosureComment {
 /** Human-readable closure summary. */
 function buildBody(o: ClosedServiceOrder): string {
   const lines: string[] = [`Cierre IClass — OS ${o.iclassCodigo}`];
-  const tech = o.closedByName ?? o.teamTechnicianName;
-  if (tech) lines.push(`Técnico: ${tech}`);
+  // Técnico = el de campo (teamTechnicianName). closedByName es quien CERRÓ la OS
+  // en IClass (a menudo un operador/admin), no quien hizo el trabajo. Mostramos
+  // ambos solo cuando difieren.
+  if (o.teamTechnicianName) {
+    lines.push(`Técnico: ${o.teamTechnicianName}`);
+    if (o.closedByName && o.closedByName !== o.teamTechnicianName) {
+      lines.push(`Cerró: ${o.closedByName}`);
+    }
+  } else if (o.closedByName) {
+    lines.push(`Cerró: ${o.closedByName}`);
+  }
   if (o.resultCodeName) lines.push(`Motivo: ${o.resultCodeName}`);
 
   const qa: string[] = [];
