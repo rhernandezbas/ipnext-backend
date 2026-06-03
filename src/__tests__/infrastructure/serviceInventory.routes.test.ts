@@ -66,6 +66,26 @@ describe('contractInventory routes', () => {
     expect((await suggestions.get('s1'))!.status).toBe('confirmed');
   });
 
+  it('F5: POST confirm con type override válido → 201 y guarda el tipo elegido', async () => {
+    const { app, suggestions, scheduling } = buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ONU' }));
+
+    const res = await request(app).post('/api/scheduling/t1/inventory/suggestions/s1/confirm').send({ type: 'ROUTER' });
+    expect(res.status).toBe(201);
+    expect(res.body.type).toBe('ROUTER');
+  });
+
+  it('F5: POST confirm con type inválido → 422 INVALID_ITEM_TYPE', async () => {
+    const { app, suggestions, scheduling } = buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1' }));
+
+    const res = await request(app).post('/api/scheduling/t1/inventory/suggestions/s1/confirm').send({ type: 'SUBMARINO' });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('INVALID_ITEM_TYPE');
+  });
+
   it('POST confirm twice → 409 SUGGESTION_ALREADY_CONFIRMED', async () => {
     const { app, suggestions, scheduling } = buildApp();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
