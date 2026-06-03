@@ -395,6 +395,9 @@ import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeSt
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
 import { createContractInventoryRouter } from './routes/contractInventory.routes';
+import { createTaskAuditFindingsRouter } from './routes/taskAuditFindings.routes';
+import { ListTaskAuditFindings } from '@application/use-cases/ListTaskAuditFindings';
+import { PrismaTaskAuditRepository } from '../adapters/prisma/PrismaTaskAuditRepository';
 import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
@@ -987,6 +990,13 @@ export function createApp() {
       contractRead: requirePerm('clients', 'read'),
       contractWrite: requirePerm('clients', 'write'),
     },
+  ));
+
+  // F6 — AI installation audit read surface (before the scheduling /:id catch-all).
+  app.use('/api', createTaskAuditFindingsRouter(
+    new ListTaskAuditFindings(new PrismaTaskAuditRepository()),
+    createAuthMiddleware(authAdapter, sessionRepo),
+    requirePerm('scheduling', 'read'),
   ));
 
   // Instantiate checklist use cases (change 5)

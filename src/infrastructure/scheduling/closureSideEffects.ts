@@ -8,8 +8,12 @@ import { PrismaInventorySuggestionRepository } from '../adapters/prisma/PrismaIn
 import { PrismaOcrExtractionRepository } from '../adapters/prisma/PrismaOcrExtractionRepository';
 import { IClassPortalClient } from '../adapters/iclass-portal/IClassPortalClient';
 import { OllamaDevicePhotoOcr } from '../adapters/ocr/OllamaDevicePhotoOcr';
+import { AuditInstallationQuality } from '@application/use-cases/AuditInstallationQuality';
+import { OllamaInstallationAuditor } from '../adapters/audit/OllamaInstallationAuditor';
+import { PrismaTaskAuditRepository } from '../adapters/prisma/PrismaTaskAuditRepository';
+import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
 
-type SideEffects = Pick<IngestClosedOptions, 'portal' | 'postComment' | 'buildSuggestions' | 'extractOcr'>;
+type SideEffects = Pick<IngestClosedOptions, 'portal' | 'postComment' | 'buildSuggestions' | 'extractOcr' | 'auditInstallation'>;
 
 /**
  * Composition of the opt-in closure side effects shared by the cron and the
@@ -37,6 +41,19 @@ export function buildClosureSideEffects(): SideEffects {
         timeoutMs: config.ocr.timeoutMs,
       }),
       new PrismaOcrExtractionRepository(),
+    );
+  }
+
+  if (config.audit.enabled) {
+    eff.auditInstallation = new AuditInstallationQuality(
+      new OllamaInstallationAuditor({
+        baseUrl: config.audit.ollamaBaseUrl,
+        model: config.audit.model,
+        timeoutMs: config.audit.timeoutMs,
+      }),
+      new PrismaTaskAuditRepository(),
+      new PrismaSchedulingRepository(),
+      new PrismaTaskCommentRepository(),
     );
   }
 
