@@ -185,6 +185,14 @@ import { GetTaskPriority } from '@application/use-cases/GetTaskPriority';
 import { CreateTaskPriority } from '@application/use-cases/CreateTaskPriority';
 import { UpdateTaskPriority } from '@application/use-cases/UpdateTaskPriority';
 import { DeleteTaskPriority } from '@application/use-cases/DeleteTaskPriority';
+import { PrismaDeviceTypeCatalogRepository } from '../adapters/prisma/PrismaDeviceTypeCatalogRepository';
+import { createDeviceTypeCatalogRouter } from './routes/deviceTypeCatalog.routes';
+import { DeviceTypeCatalogService } from '@application/services/DeviceTypeCatalogService';
+import { ListDeviceType } from '@application/use-cases/ListDeviceType';
+import { GetDeviceType } from '@application/use-cases/GetDeviceType';
+import { CreateDeviceType } from '@application/use-cases/CreateDeviceType';
+import { UpdateDeviceType } from '@application/use-cases/UpdateDeviceType';
+import { DeleteDeviceType } from '@application/use-cases/DeleteDeviceType';
 import { PrismaTicketStatusRepository } from '../adapters/prisma/PrismaTicketStatusRepository';
 import { createTicketStatusesRouter } from './routes/ticketStatuses.routes';
 import { ListTicketStatuses } from '@application/use-cases/ListTicketStatuses';
@@ -682,6 +690,14 @@ export function createApp() {
   const updateTaskPriority = new UpdateTaskPriority(taskPriorityRepo);
   const deleteTaskPriority = new DeleteTaskPriority(taskPriorityRepo);
 
+  const deviceTypeCatalogRepo    = new PrismaDeviceTypeCatalogRepository();
+  const deviceTypeCatalogService = new DeviceTypeCatalogService(deviceTypeCatalogRepo);
+  const listDeviceType           = new ListDeviceType(deviceTypeCatalogRepo);
+  const getDeviceType            = new GetDeviceType(deviceTypeCatalogRepo);
+  const createDeviceType         = new CreateDeviceType(deviceTypeCatalogRepo);
+  const updateDeviceType         = new UpdateDeviceType(deviceTypeCatalogRepo);
+  const deleteDeviceType         = new DeleteDeviceType(deviceTypeCatalogRepo);
+
   const ticketStatusRepo = new PrismaTicketStatusRepository();
   const listTicketStatuses = new ListTicketStatuses(ticketStatusRepo);
   const getTicketStatus = new GetTicketStatus(ticketStatusRepo);
@@ -922,6 +938,13 @@ export function createApp() {
   app.use('/api/scheduling', createTaskPrioritiesRouter(
     authAdapter,
     listTaskPriority, getTaskPriority, createTaskPriority, updateTaskPriority, deleteTaskPriority,
+  ));
+  // DeviceTypeCatalog — mounted at /api/inventory BEFORE any catch-all.
+  app.use('/api/inventory', createDeviceTypeCatalogRouter(
+    authAdapter,
+    requirePerm,
+    listDeviceType, getDeviceType, createDeviceType, updateDeviceType, deleteDeviceType,
+    deviceTypeCatalogService,
   ));
   // GR client-sync config — RBAC-guarded settings (config GET/PUT + status).
   // Mounted at the more-specific /api/gestion-real/sync path BEFORE the broader
