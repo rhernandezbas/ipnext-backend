@@ -12,6 +12,8 @@ import {
   MissingIClassMappingError,
 } from '@domain/errors/iclass';
 import { dispatchToIClass, recordAttempt } from './dispatchTaskToIClass';
+import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
+import { SYSTEM_ACTOR } from './taskActivityActor';
 
 const FLAG_KEY = 'iclass-integration';
 /** Immutable business code for the "Registrado en IClass" stage. */
@@ -57,6 +59,8 @@ export class SendTaskToIClass {
     private readonly iclass: IClassPort,
     /** Optional audit repo (AD-6). Best-effort: failures are logged, not rethrown. */
     private readonly attempts?: IClassDispatchAttemptRepository,
+    /** task-activity-log (#10 / D.15). Optional, best-effort. */
+    private readonly recorder?: TaskActivityRecorder,
   ) {}
 
   /**
@@ -69,6 +73,7 @@ export class SendTaskToIClass {
     targetStageId: string,
     workflowId?: string,
     actorId?: string | null,
+    actor?: ActorContext,
   ): Promise<ScheduledTask> {
     const task = await this.tasks.getTask(taskId);
     if (!task) throw new TaskNotFoundError(taskId);
@@ -130,13 +135,22 @@ export class SendTaskToIClass {
     //      Pass attempts=undefined so the helper records nothing on failure — we audit below.
     //      SUCCESS is NOT audited (AD-7).
     try {
-      return await dispatchToIClass(
+      const dispatched = await dispatchToIClass(
         { tasks: this.tasks, iclass: this.iclass, attempts: undefined },
         task,
         mapping.iclassSoType.code, // resolved from project mapping (REQ-SCHED-4)
         node.code,
         { actorId, workflowId: workflowId! },
       );
+      // task-activity-log (#10 / D.15): OS created successfully → emit `sent_to_iclass`.
+      if (this.recorder) {
+        await this.recorder.record(taskId, 'sent_to_iclass', {
+          actor: actor ?? SYSTEM_ACTOR,
+          toValue: { iclassOrderCode: dispatched.iclassOrderCode },
+          metadata: { stageId: targetStageId },
+        });
+      }
+      return dispatched;
     } catch (err) {
       // Audit failure (best-effort — AD-6). Re-throw the original domain error.
       if (err instanceof IClassRejectedError) {

@@ -17,6 +17,8 @@ import {
   MissingIClassMappingError,
 } from '../../domain/errors/iclass';
 import { Stage } from '../../domain/entities/workflow';
+import { TaskActivityRecorder } from '../../domain/ports/TaskActivityRecorder';
+import { FakeTaskActivityRecorder } from '../helpers/FakeTaskActivityRecorder';
 
 const FLAG_KEY = 'iclass-integration';
 const WF = 'wf-1';
@@ -33,7 +35,7 @@ const DEFAULT_SO_TYPE = { id: 'so-type-1', code: 'INSTALL', active: true };
 /** The default project with an active SO type. */
 const DEFAULT_PROJECT_ID = 'proj-1';
 
-function setup(opts?: { flagEnabled?: boolean; nodes?: string[]; unavailable?: boolean }) {
+function setup(opts?: { flagEnabled?: boolean; nodes?: string[]; unavailable?: boolean; recorder?: TaskActivityRecorder }) {
   const stages = new InMemoryStageRepository();
   stages.addDirect(ENVIAR_STAGE);
   stages.addDirect(REGISTRADO_STAGE);
@@ -54,7 +56,7 @@ function setup(opts?: { flagEnabled?: boolean; nodes?: string[]; unavailable?: b
   iclass.nodes = (opts?.nodes ?? ['Rosario']).map(c => ({ code: c, description: c }));
   if (opts?.unavailable) iclass.failureMode = 'unavailable';
 
-  const useCase = new SendTaskToIClass(tasks, flags, iclass);
+  const useCase = new SendTaskToIClass(tasks, flags, iclass, undefined, opts?.recorder);
   return { tasks, stages, flags, iclass, useCase };
 }
 
@@ -213,6 +215,38 @@ describe('SendTaskToIClass', () => {
     const persisted = await tasks.getTask('t1');
     expect(persisted!.iclassOrderCode).toBe('OS-999');
     expect(persisted!.stageId).toBe(REGISTRADO_STAGE.id);
+  });
+
+  // ── task-activity-log #10 / D.15 ──
+  it('emits `sent_to_iclass` with the order code on a successful dispatch (D.15)', async () => {
+    const recorder = new FakeTaskActivityRecorder();
+    const { tasks, iclass, useCase } = setup({ recorder });
+    iclass.nextOrderCode = 'OS-777';
+    fullTask(tasks, { sequenceNumber: 5001 });
+
+    await useCase.execute('t1', ENVIAR_STAGE.id, WF, null, { actorId: 'u1', actorName: 'Alice' });
+
+    expect(recorder.calls).toContainEqual(
+      expect.objectContaining({
+        taskId: 't1',
+        type: 'sent_to_iclass',
+        payload: expect.objectContaining({
+          actor: { actorId: 'u1', actorName: 'Alice' },
+          toValue: { iclassOrderCode: 'OS-777' },
+          metadata: { stageId: ENVIAR_STAGE.id },
+        }),
+      }),
+    );
+  });
+
+  it('does NOT emit `sent_to_iclass` when the flag is OFF (plain move)', async () => {
+    const recorder = new FakeTaskActivityRecorder();
+    const { tasks, useCase } = setup({ flagEnabled: false, recorder });
+    fullTask(tasks);
+
+    await useCase.execute('t1', ENVIAR_STAGE.id, WF, null, { actorId: 'u1', actorName: 'Alice' });
+
+    expect(recorder.calls.filter(c => c.type === 'sent_to_iclass')).toHaveLength(0);
   });
 
   it('sends soCode = String(task.sequenceNumber) so the OS correlates to the backend task', async () => {

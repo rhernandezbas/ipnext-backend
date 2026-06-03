@@ -4,6 +4,7 @@ import { InMemoryTaskTemplateRepository } from '../../../infrastructure/adapters
 import { AddChecklistItem } from '../../../application/use-cases/AddChecklistItem';
 import { ReplaceTaskTemplateItems } from '../../../application/use-cases/ReplaceTaskTemplateItems';
 import { TemplateNotFoundError } from '../../../domain/errors/checklist';
+import { FakeTaskActivityRecorder } from '../../helpers/FakeTaskActivityRecorder';
 
 describe('AssignTemplateToTask', () => {
   let schedRepo: InMemorySchedulingRepository;
@@ -59,5 +60,25 @@ describe('AssignTemplateToTask', () => {
     const taskWithChecklist = await schedRepo.getTaskWithChecklist(TASK_ID);
     expect(taskWithChecklist!.checklist).toHaveLength(1);
     expect(taskWithChecklist!.checklist[0].text).toBe('Preserved item');
+  });
+
+  it('emits checklist_template_assigned (D.13)', async () => {
+    const recorder = new FakeTaskActivityRecorder();
+    const uc = new AssignTemplateToTask(schedRepo, templateRepo, recorder);
+    const replaceUC = new ReplaceTaskTemplateItems(templateRepo);
+    await replaceUC.execute(TEMPLATE_ID, [{ text: 'Step 1' }]);
+
+    await uc.execute(TASK_ID, TEMPLATE_ID, { actorId: 'u1', actorName: 'Alice' });
+
+    expect(recorder.calls).toContainEqual(
+      expect.objectContaining({
+        taskId: TASK_ID,
+        type: 'checklist_template_assigned',
+        payload: expect.objectContaining({
+          actor: { actorId: 'u1', actorName: 'Alice' },
+          metadata: { templateId: TEMPLATE_ID },
+        }),
+      }),
+    );
   });
 });

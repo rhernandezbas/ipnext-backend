@@ -2,6 +2,8 @@ import { SchedulingRepository, CreateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
+import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
+import { SYSTEM_ACTOR } from './taskActivityActor';
 
 export class CreateTask {
   constructor(
@@ -12,9 +14,10 @@ export class CreateTask {
     private readonly adminLookup: EntityLookup,
     private readonly projectLookup: EntityLookup,
     private readonly ticketLookup?: EntityLookup,
+    private readonly recorder?: TaskActivityRecorder,
   ) {}
 
-  async execute(data: CreateTaskInput): Promise<ScheduledTask> {
+  async execute(data: CreateTaskInput, actor?: ActorContext): Promise<ScheduledTask> {
     // FK validation in deterministic order (REQ-FK-ORDER-1):
     // customer → contract → partner → project → reporter → assignee → watchers[*] → ticket
     // REQ-REQUIRED-1/2: customerId and contractId are always required on create.
@@ -57,6 +60,24 @@ export class CreateTask {
       if (!found) throw new ReferenceNotFoundError('ticket', data.ticketId);
     }
 
-    return this.repo.createTask(data);
+    const task = await this.repo.createTask(data);
+
+    // task-activity-log (#10 / D.1): emit `created`. Best-effort — the recorder
+    // swallows its own errors, so this never aborts task creation.
+    if (this.recorder) {
+      await this.recorder.record(task.id, 'created', {
+        actor: actor ?? SYSTEM_ACTOR,
+        toValue: {
+          title: task.title,
+          stageId: task.stageId,
+          priority: task.priority,
+          category: task.category,
+          assigneeId: task.assigneeId,
+          watcherIds: task.watcherIds,
+        },
+      });
+    }
+
+    return task;
   }
 }

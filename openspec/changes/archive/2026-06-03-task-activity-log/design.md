@@ -9,8 +9,8 @@ model ScheduledTaskActivity {
   task       ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
   type       String        // ActivityType union — kept as String for forward-compat
   actorId    String?
-  actor      Admin?        @relation("TaskActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
-  actorName  String        // snapshot — survives admin rename/delete
+  actor      RbacUser?     @relation("TaskActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorName  String        // snapshot — survives user rename/delete
   fromValue  Json?
   toValue    Json?
   metadata   Json?
@@ -21,7 +21,7 @@ model ScheduledTaskActivity {
 }
 ```
 - Migration: `20260530000000_add_scheduled_task_activity` (or next free slot).
-- Back-relation added on `Admin` (`taskActivities TaskActivity[] @relation("TaskActivityActor")`) and on `ScheduledTask` (`activities ScheduledTaskActivity[]`).
+- Back-relation added on `RbacUser` (`taskActivities ScheduledTaskActivity[] @relation("TaskActivityActor")`) and on `ScheduledTask` (`activities ScheduledTaskActivity[]`).
 
 ### 2. Domain layer
 
@@ -138,7 +138,7 @@ Per-UC emission rules:
 |---|---|
 | `CreateTask` | `created` with `toValue` = snapshot of created task |
 | `UpdateTask` | Diff current vs incoming partial. For each changed field emit its event. `assigneeId` change → `assigned` (new=non-null) or `unassigned` (new=null); both → `assigned` with metadata.previousAssigneeId. `watcherIds` → set diff → N × `watcher_added` + M × `watcher_removed`. `isClosed` → `status_changed`. `reviewedByInventory` → `inventory_review_changed`. `startDate`/`endDate` → `due_date_changed` with `metadata.field`. `address`+`coordinates` → coalesced to one `address_changed`. `travelTimeTo`+`travelTimeFrom` → one `travel_time_changed`. |
-| `MoveTaskToStage` | `stage_changed` (fromStageId, toStageId, fromStageName, toStageName in metadata). When the IClass branch fires, `SendTaskToIClass` emits `sent_to_iclass` itself — no duplication here. |
+| `MoveTaskToStage` | `stage_changed` (fromStageId, toStageId, fromStageName, toStageName in metadata) on EVERY real stage move. When the IClass branch fires, `stage_changed` is recorded FIRST (before delegating), then `SendTaskToIClass` emits `sent_to_iclass` — so the feed shows both, in that order (spec REQ-MODEL-1). |
 | `BulkMoveTasksToStage` | One `stage_changed` per affected task |
 | `AddTaskComment` | `commented` + per-attachment `attachment_added` (metadata.commentId, metadata.attachmentId) |
 | `DeleteTaskComment` | `comment_deleted` (metadata.commentId) |

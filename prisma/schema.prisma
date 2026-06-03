@@ -948,6 +948,9 @@ model ScheduledTask {
   // F6 — auditoría IA de la calidad de instalación (1 vigente por tarea)
   installationAudit TaskInstallationAudit?
 
+  // task-activity-log — append-only audit feed for this task
+  activities ScheduledTaskActivity[]
+
   @@index([stageId])
   @@index([projectId])
   @@index([startDate])
@@ -958,6 +961,26 @@ model ScheduledTask {
   @@index([assigneeId])
   @@index([reporterId])
   @@index([ticketId])
+}
+
+// task-activity-log — append-only audit feed. One row per change on a task
+// (created, stage/priority/assignee changes, comments, checklist ops, ...).
+// `actorName` is a snapshot so entries survive a later user rename/delete.
+model ScheduledTaskActivity {
+  id         String        @id @default(uuid())
+  taskId     String
+  task       ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  type       String        // ActivityType union — kept as String for forward-compat
+  actorId    String?
+  actor      RbacUser?     @relation("TaskActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorName  String        // snapshot — survives user rename/delete
+  fromValue  Json?
+  toValue    Json?
+  metadata   Json?
+  createdAt  DateTime      @default(now())
+
+  @@index([taskId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([actorId])
 }
 
 model TaskWatcher {
@@ -1644,6 +1667,7 @@ model RbacUser {
   assignedTickets Ticket[]        @relation("TicketAssignee")
   auditEvents     AuditEvent[]
   sessions        Session[]
+  taskActivities  ScheduledTaskActivity[] @relation("TaskActivityActor")
 
   @@index([login])
 }

@@ -1,6 +1,8 @@
 import { TaskCommentRepository } from '@domain/ports/TaskCommentRepository';
 import { TaskComment, TaskCommentAttachment } from '@domain/entities/taskComment';
 import { randomUUID } from 'crypto';
+import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
+import { SYSTEM_ACTOR } from './taskActivityActor';
 
 export interface AddTaskCommentInput {
   taskId: string;
@@ -15,9 +17,12 @@ export interface AddTaskCommentInput {
 }
 
 export class AddTaskComment {
-  constructor(private readonly repo: TaskCommentRepository) {}
+  constructor(
+    private readonly repo: TaskCommentRepository,
+    private readonly recorder?: TaskActivityRecorder,
+  ) {}
 
-  execute(input: AddTaskCommentInput): Promise<TaskComment> {
+  async execute(input: AddTaskCommentInput, actor?: ActorContext): Promise<TaskComment> {
     const commentId = randomUUID();
     const attachments: TaskCommentAttachment[] = input.attachments.map(a => ({
       id: randomUUID(),
@@ -37,6 +42,23 @@ export class AddTaskComment {
       attachments,
     };
 
-    return this.repo.create(comment);
+    const created = await this.repo.create(comment);
+
+    // task-activity-log (#10 / D.5): `commented` + one `attachment_added` per file.
+    if (this.recorder) {
+      const a = actor ?? SYSTEM_ACTOR;
+      await this.recorder.record(input.taskId, 'commented', {
+        actor: a,
+        metadata: { commentId: created.id },
+      });
+      for (const att of created.attachments) {
+        await this.recorder.record(input.taskId, 'attachment_added', {
+          actor: a,
+          metadata: { commentId: created.id, attachmentId: att.id },
+        });
+      }
+    }
+
+    return created;
   }
 }
