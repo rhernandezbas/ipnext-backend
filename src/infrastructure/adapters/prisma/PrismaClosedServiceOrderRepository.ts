@@ -87,6 +87,10 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
 
       if (order.history.length) {
         await tx.iClassSoStatusHistory.createMany({
+          // skipDuplicates: belt-and-suspenders against IClass returning a
+          // repeated transition (iclassOsStatusId is @unique). The use case also
+          // dedupes upstream; this keeps the mirror safe for any direct caller.
+          skipDuplicates: true,
           data: order.history.map(h => ({
             serviceOrderId: soId,
             iclassOsStatusId: BigInt(h.iclassOsStatusId),

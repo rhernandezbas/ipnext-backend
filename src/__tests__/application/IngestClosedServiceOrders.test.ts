@@ -76,6 +76,40 @@ describe('IngestClosedServiceOrders', () => {
     expect(task!.stageId).toBe(INSTALADO.id);
   });
 
+  it('dedupes a repeated status-history entry before mirroring (IClass returns a transition twice)', async () => {
+    const { scheduling, iclass, closed, useCase } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
+    iclass.historyByOrder['900'] = [HISTORY_CLOSED[0], HISTORY_CLOSED[1], { ...HISTORY_CLOSED[1] }]; // id '2' twice
+
+    const counts = await useCase.execute();
+
+    expect(counts.mirrored).toBe(1);
+    expect(closed.orders.get('900')!.order.history.map((h) => h.iclassOsStatusId)).toEqual(['1', '2']);
+  });
+
+  it('isolates a failing SO: logs it, counts it, and still processes the rest', async () => {
+    const { scheduling, iclass, closed, useCase } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't2', sequenceNumber: 4014, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary({ iclassId: 'A', iclassCodigo: '4013' }), summary({ iclassId: 'B', iclassCodigo: '4014' })];
+    iclass.historyByOrder['A'] = HISTORY_CLOSED;
+    iclass.historyByOrder['B'] = HISTORY_CLOSED;
+    const realUpsert = closed.upsert.bind(closed);
+    closed.upsert = async (order, taskId) => {
+      if (order.iclassId === 'A') throw new Error('boom');
+      return realUpsert(order, taskId);
+    };
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const counts = await useCase.execute(); // must NOT throw
+
+    expect(counts.errored).toBe(1);
+    expect(counts.mirrored).toBe(1);
+    expect(closed.orders.has('B')).toBe(true);
+    expect(closed.orders.has('A')).toBe(false);
+  });
+
   it('derives closedAt from the status-7 history entry', async () => {
     const { scheduling, iclass, resultCodes, closed, useCase } = setup();
     scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });

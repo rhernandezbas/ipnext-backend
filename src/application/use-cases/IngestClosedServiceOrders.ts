@@ -2,6 +2,7 @@ import { IClassPort } from '@domain/ports/IClassPort';
 import { IClassPortalPort } from '@domain/ports/IClassPortalPort';
 import { correlateChecklistPhotos } from '@application/services/correlateChecklistPhotos';
 import { classifyDeviceType, isSnMacDevicePhoto } from '@application/services/classifyDeviceType';
+import { dedupeStatusHistory } from '@application/services/dedupeStatusHistory';
 import { PostClosureComment } from '@application/use-cases/PostClosureComment';
 import { ExtractDeviceInfoFromPhoto } from '@application/use-cases/ExtractDeviceInfoFromPhoto';
 import { BuildInventorySuggestions } from '@application/use-cases/BuildInventorySuggestions';
@@ -38,6 +39,8 @@ export interface IngestClosedCounts {
   skippedNotOurs: number;
   /** SOs already mirrored at the same iclassUpdatedAt (idempotent no-op). */
   skippedUnchanged: number;
+  /** SOs whose processing threw — logged and skipped so one bad SO never aborts the batch. */
+  errored: number;
 }
 
 export interface IngestClosedOptions {
@@ -98,7 +101,14 @@ export class IngestClosedServiceOrders {
       });
 
       for (const s of summaries) {
-        await this.processSummary(s, counts);
+        // Isolate per-SO failures: one bad SO is logged + counted, never aborts
+        // the batch (which would also stall the watermark and re-hit it forever).
+        try {
+          await this.processSummary(s, counts);
+        } catch (e) {
+          counts.errored++;
+          console.error(`[iclass-closed] SO ${s.iclassId} (codigo ${s.iclassCodigo}) failed: ${(e as Error).message}`);
+        }
       }
     } catch (err) {
       await this.state.save({
@@ -150,7 +160,7 @@ export class IngestClosedServiceOrders {
     }
 
     // Fan out to sub-resources (the adapter applies backoff between calls).
-    const history = await this.iclass.getServiceOrderHistory(s.iclassId);
+    const history = dedupeStatusHistory(await this.iclass.getServiceOrderHistory(s.iclassId));
     let checklists = await this.iclass.getServiceOrderChecklists(s.iclassId);
     const materials = await this.iclass.getServiceOrderMaterials(s.iclassId);
     const equipmentEvents = await this.iclass.getServiceOrderEquipmentEvents(s.iclassId);
@@ -258,7 +268,7 @@ export class IngestClosedServiceOrders {
 
 /** Fresh zeroed counts — exported so the backfill can accumulate into one tally. */
 export function emptyClosedCounts(): IngestClosedCounts {
-  return { mirrored: 0, transitioned: 0, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0 };
+  return { mirrored: 0, transitioned: 0, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0, errored: 0 };
 }
 
 function newCounts(): IngestClosedCounts {
