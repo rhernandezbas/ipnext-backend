@@ -1,5 +1,5 @@
 import request from 'supertest';
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import { AddTaskComment } from '../../application/use-cases/AddTaskComment';
 import { ListTaskComments } from '../../application/use-cases/ListTaskComments';
 import { DeleteTaskComment } from '../../application/use-cases/DeleteTaskComment';
@@ -15,7 +15,12 @@ function buildApp() {
   const listComments = new ListTaskComments(repo);
   const deleteComment = new DeleteTaskComment(repo);
 
-  app.use('/api/scheduling', createTaskCommentsRouter(listComments, addComment, deleteComment));
+  const authPass: RequestHandler = (req, _res, next) => { (req as unknown as { user: unknown }).user = { id: 'u1' }; next(); };
+  const permPass: RequestHandler = (_req, _res, next) => next();
+  app.use('/api/scheduling', createTaskCommentsRouter(
+    listComments, addComment, deleteComment, authPass,
+    { read: permPass, write: permPass, delete: permPass },
+  ));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);

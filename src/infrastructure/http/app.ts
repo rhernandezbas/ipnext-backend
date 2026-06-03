@@ -956,7 +956,17 @@ export function createApp() {
   const addTaskComment = new AddTaskComment(taskCommentRepo);
   const listTaskComments = new ListTaskComments(taskCommentRepo);
   const deleteTaskComment = new DeleteTaskComment(taskCommentRepo);
-  app.use('/api/scheduling', createTaskCommentsRouter(listTaskComments, addTaskComment, deleteTaskComment));
+  app.use('/api/scheduling', createTaskCommentsRouter(
+    listTaskComments,
+    addTaskComment,
+    deleteTaskComment,
+    createAuthMiddleware(authAdapter, sessionRepo),
+    {
+      read: requirePerm('scheduling', 'read'),
+      write: requirePerm('scheduling', 'write'),
+      delete: requirePerm('scheduling', 'delete'),
+    },
+  ));
 
   // IClass closure → inventory: task-scoped suggestion staging + contract installed items.
   // Mounted at /api BEFORE the scheduling /:id catch-all so /scheduling/:taskId/inventory/* survives.
