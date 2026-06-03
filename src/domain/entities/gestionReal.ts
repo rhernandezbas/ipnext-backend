@@ -89,6 +89,12 @@ export interface GrServiceOrder {
   } | null;
   /** Creation date "DD-MM-YYYY" (or as GR provides it). */
   fechaCreacion: string | null;
+  /**
+   * Free-text comment on the order (GR field `observaciones`), HTML-entities
+   * already decoded. Null when GR omits it or it is blank. Used as the ingested
+   * task description for normal (non-needs-review) tasks (#16).
+   */
+  observaciones: string | null;
   /** Full raw GR payload for the order, for debug/fidelity. */
   raw: Record<string, unknown>;
 }

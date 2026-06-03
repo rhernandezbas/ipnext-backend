@@ -7,6 +7,7 @@ import { ProjectRepository } from '@domain/ports/ProjectRepository';
 import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { TaskPriorityRepository } from '@domain/ports/TaskPriorityRepository';
 import { TaskCategoryRepository } from '@domain/ports/TaskCategoryRepository';
+import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { IngestCatalogEntryMissingError } from '@domain/errors/scheduling';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
 import { classifyTech } from './classifyTech';
@@ -63,6 +64,13 @@ export interface IngestOptions {
    * Tasks must land in a valid pending stage; `createTask` requires `stageId`.
    */
   defaultStageId: string;
+  /**
+   * Login of the system user to stamp as the task `reporterId` (#15). The ingest
+   * resolves its id PER RUN via RbacUserRepository, so a user seeded after the
+   * scheduler started is picked up on the next tick without a redeploy. When
+   * omitted (or the user is absent) tasks fall back to a null reporter.
+   */
+  apiReporterLogin?: string;
   /** Injectable clock for deterministic window/timestamps. */
   now?: () => Date;
 }
@@ -81,6 +89,7 @@ export interface IngestOptions {
 export class IngestGestionRealOrders {
   private readonly now: () => Date;
   private readonly defaultStageId: string;
+  private readonly apiReporterLogin: string | null;
 
   constructor(
     private readonly gr: GestionRealPort,
@@ -92,10 +101,12 @@ export class IngestGestionRealOrders {
     private readonly featureFlags: FeatureFlagRepository,
     private readonly priorities: TaskPriorityRepository,
     private readonly categories: TaskCategoryRepository,
+    private readonly rbacUsers: RbacUserRepository,
     opts: IngestOptions,
   ) {
     this.now = opts.now ?? (() => new Date());
     this.defaultStageId = opts.defaultStageId;
+    this.apiReporterLogin = opts.apiReporterLogin ?? null;
   }
 
   async execute(): Promise<IngestRunResult> {
@@ -121,6 +132,13 @@ export class IngestGestionRealOrders {
     const category = await this.categories.getByName(INGEST_CATEGORY_NAME);
     if (!category) throw new IngestCatalogEntryMissingError('category', INGEST_CATEGORY_NAME);
 
+    // Resolve the system "Api" reporter ONCE per run (#15). Resolving here — not
+    // in the constructor — means a user seeded after the scheduler started is
+    // picked up on the next tick. Absent user → null reporter (degraded, never fatal).
+    const reporterId = this.apiReporterLogin
+      ? (await this.rbacUsers.findByLogin(this.apiReporterLogin))?.id ?? null
+      : null;
+
     const config = await this.config.get();
 
     const today = this.now();
@@ -144,6 +162,7 @@ export class IngestGestionRealOrders {
         config.wirelessProjectId,
         priority.name,
         category.name,
+        reporterId,
         counts,
       );
     }
@@ -165,6 +184,7 @@ export class IngestGestionRealOrders {
     wirelessProjectId: string | null,
     priorityName: string,
     categoryName: string,
+    reporterId: string | null,
     counts: IngestRunResult,
   ): Promise<void> {
     // 1-2. Resolve local FKs. A miss is expected until the mirror catches up; skip + count.
@@ -206,11 +226,14 @@ export class IngestGestionRealOrders {
     const title = needsReview
       ? `${REVISAR_TITLE_PREFIX} ${client.name}`
       : `Instalación ${client.name}`;
+    // Needs-review tasks keep their REVISAR reason; normal tasks carry the GR
+    // order comment (#16). Order matters: the needs-review reason must NOT be
+    // clobbered by observaciones.
     const description = isUnclassified
       ? REVISAR_DESCRIPTION
       : isProjectNotConfigured
         ? projectNotConfiguredDescription(tech as 'FIBER' | 'WIRELESS')
-        : null;
+        : order.observaciones;
 
     // 7. Resolve initial stage from the project's workflow; fall back to default.
     const stageId = await this.resolveStageId(projectId);
@@ -238,7 +261,7 @@ export class IngestGestionRealOrders {
         customerId: client.id,
         contractId: contract.id,
         partnerId: null,
-        reporterId: null,
+        reporterId,
         assigneeId: null,
         travelTimeTo: null,
         travelTimeFrom: null,

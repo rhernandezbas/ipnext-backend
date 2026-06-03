@@ -9,6 +9,8 @@ import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memor
 import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
 import { InMemoryTaskPriorityRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskPriorityRepository';
 import { InMemoryTaskCategoryRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskCategoryRepository';
+import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
+import { bootstrapApiUser, API_USER_LOGIN } from '@infrastructure/bootstrap/bootstrapApiUser';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
 import { IngestCatalogEntryMissingError } from '@domain/errors/scheduling';
 
@@ -41,6 +43,7 @@ function order(overrides: Partial<GrServiceOrder> & Pick<GrServiceOrder, 'grOrde
         ? overrides.domicilio
         : { direccion: 'Calle Falsa 123', localidad: 'Springfield', provincia: 'BA' },
     fechaCreacion: overrides.fechaCreacion ?? '01-05-2026 10:00:00',
+    observaciones: overrides.observaciones !== undefined ? overrides.observaciones : null,
     raw: overrides.raw ?? {},
   };
 }
@@ -55,6 +58,8 @@ interface Harness {
   featureFlags: InMemoryFeatureFlagRepository;
   priorities: InMemoryTaskPriorityRepository;
   categories: InMemoryTaskCategoryRepository;
+  rbacUsers: InMemoryRbacUserRepository;
+  apiUserId: string;
   useCase: IngestGestionRealOrders;
 }
 
@@ -68,6 +73,9 @@ async function makeHarness(): Promise<Harness> {
   const featureFlags = new InMemoryFeatureFlagRepository();
   const priorities = new InMemoryTaskPriorityRepository();
   const categories = new InMemoryTaskCategoryRepository();
+  const rbacUsers = new InMemoryRbacUserRepository();
+  // Seed the system "Api" reporter (#15) the same way prod does (idempotent bootstrap).
+  const { id: apiUserId } = await bootstrapApiUser(rbacUsers, { passwordHash: 'unusable-hash' });
   // Master switch ON by default; per-test we flip it to assert gating.
   featureFlags.seed(INGEST_FLAG_KEY, true);
   await seedCatalogs(priorities, categories);
@@ -75,11 +83,12 @@ async function makeHarness(): Promise<Harness> {
     fiberProjectId: 'p-fiber',
     wirelessProjectId: 'p-wifi',
   });
-  const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
+  const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, rbacUsers, {
     defaultStageId: DEFAULT_STAGE_ID,
+    apiReporterLogin: API_USER_LOGIN,
     now: () => new Date('2026-05-29T12:00:00Z'),
   });
-  return { gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, useCase };
+  return { gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, rbacUsers, apiUserId, useCase };
 }
 
 describe('IngestGestionRealOrders', () => {
@@ -242,7 +251,8 @@ describe('IngestGestionRealOrders', () => {
       featureFlags,
       h.priorities,
       h.categories,
-      { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
+      h.rbacUsers,
+      { defaultStageId: DEFAULT_STAGE_ID, apiReporterLogin: API_USER_LOGIN, now: () => new Date('2026-05-29T12:00:00Z') },
     );
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Judy' });
     h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
@@ -318,9 +328,10 @@ describe('IngestGestionRealOrders', () => {
     featureFlags.seed(INGEST_FLAG_KEY, true);
     const priorities = new InMemoryTaskPriorityRepository();
     const categories = new InMemoryTaskCategoryRepository();
+    const rbacUsers = new InMemoryRbacUserRepository();
     await seedCatalogs(priorities, categories);
     await config.update({ fiberProjectId: null, wirelessProjectId: 'p-wifi' });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, rbacUsers, {
       defaultStageId: DEFAULT_STAGE_ID,
       now: () => new Date('2026-05-29T12:00:00Z'),
     });
@@ -355,9 +366,10 @@ describe('IngestGestionRealOrders', () => {
     featureFlags.seed(INGEST_FLAG_KEY, true);
     const priorities = new InMemoryTaskPriorityRepository();
     const categories = new InMemoryTaskCategoryRepository();
+    const rbacUsers = new InMemoryRbacUserRepository();
     await seedCatalogs(priorities, categories);
     await config.update({ fiberProjectId: 'p-fiber', wirelessProjectId: null });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, rbacUsers, {
       defaultStageId: DEFAULT_STAGE_ID,
       now: () => new Date('2026-05-29T12:00:00Z'),
     });
@@ -473,9 +485,10 @@ describe('IngestGestionRealOrders', () => {
 
     const priorities = new InMemoryTaskPriorityRepository();
     const categories = new InMemoryTaskCategoryRepository();
+    const rbacUsers = new InMemoryRbacUserRepository();
     await seedCatalogs(priorities, categories);
     await config.update({ fiberProjectId: fiberProject.id, wirelessProjectId: null });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, rbacUsers, {
       // Intentionally BLANK default — the workflow's initial stage must be used.
       defaultStageId: '',
       now: () => new Date('2026-05-29T12:00:00Z'),
@@ -508,9 +521,10 @@ describe('IngestGestionRealOrders', () => {
     featureFlags.seed(INGEST_FLAG_KEY, true);
     const priorities = new InMemoryTaskPriorityRepository();
     const categories = new InMemoryTaskCategoryRepository();
+    const rbacUsers = new InMemoryRbacUserRepository();
     await seedCatalogs(priorities, categories);
     await config.update({ windowMonths: 1 });
-    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
+    const useCase = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, rbacUsers, {
       defaultStageId: DEFAULT_STAGE_ID,
       // 2026-03-31 local time (avoid TZ rollover): construct via local Date.
       now: () => new Date(2026, 2, 31, 12, 0, 0),
@@ -564,7 +578,7 @@ describe('IngestGestionRealOrders', () => {
     await fresh.create({ name: 'Baja', color: '#aaa', weight: 1 });
     const useCase = new IngestGestionRealOrders(
       h.gr, h.resolver, h.scheduling, h.config, h.state, h.projects, h.featureFlags,
-      fresh, h.categories,
+      fresh, h.categories, h.rbacUsers,
       { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
     );
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
@@ -587,7 +601,7 @@ describe('IngestGestionRealOrders', () => {
     await fresh.create({ name: 'Otro', description: null });
     const useCase = new IngestGestionRealOrders(
       h.gr, h.resolver, h.scheduling, h.config, h.state, h.projects, h.featureFlags,
-      h.priorities, fresh,
+      h.priorities, fresh, h.rbacUsers,
       { defaultStageId: DEFAULT_STAGE_ID, now: () => new Date('2026-05-29T12:00:00Z') },
     );
     h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
@@ -599,5 +613,94 @@ describe('IngestGestionRealOrders', () => {
     expect(await h.scheduling.findTaskByGrOrdenId('blk-3')).toBeNull();
     const all = await h.scheduling.listTasks();
     expect(all.filter(t => t.grOrdenId != null)).toHaveLength(0);
+  });
+
+  // ── #16: the OS comment (observaciones) becomes the task description ──
+
+  it('sets the task description from the order observaciones for normal tasks (#16)', async () => {
+    const h = await makeHarness();
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [
+      order({ grOrdenId: 'obs-1', observaciones: 'Cliente pide instalación a la tarde' }),
+    ];
+
+    await h.useCase.execute();
+
+    const task = await h.scheduling.findTaskByGrOrdenId('obs-1');
+    expect(task!.description).toBe('Cliente pide instalación a la tarde');
+  });
+
+  it('leaves description null for a normal task when observaciones is null (#16)', async () => {
+    const h = await makeHarness();
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: 'obs-null', observaciones: null })];
+
+    await h.useCase.execute();
+
+    const task = await h.scheduling.findTaskByGrOrdenId('obs-null');
+    expect(task!.description).toBeNull();
+  });
+
+  it('does NOT overwrite the needs-review reason with observaciones (#16)', async () => {
+    const h = await makeHarness();
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Carol' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: 'FIBRA SIN NUMERO' });
+    h.gr.serviceOrders = [
+      order({ grOrdenId: 'obs-rev', observaciones: 'comentario que NO debe pisar el motivo' }),
+    ];
+
+    await h.useCase.execute();
+
+    const task = await h.scheduling.findTaskByGrOrdenId('obs-rev');
+    // Needs-review tasks keep their REVISAR reason, the comment must not clobber it.
+    expect(task!.description).toContain('asignar tecnología');
+    expect(task!.description).not.toContain('comentario que NO debe pisar');
+  });
+
+  // ── #15: GR-ingested tasks are reported by the system "Api" user ──
+
+  it('stamps the system "Api" user as the task reporter (#15)', async () => {
+    const h = await makeHarness();
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: 'rep-1' })];
+
+    await h.useCase.execute();
+
+    const task = await h.scheduling.findTaskByGrOrdenId('rep-1');
+    expect(task!.reporterId).toBe(h.apiUserId);
+  });
+
+  it('stamps the "Api" reporter on needs-review tasks too (#15)', async () => {
+    const h = await makeHarness();
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Carol' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: 'FIBRA SIN NUMERO' });
+    h.gr.serviceOrders = [order({ grOrdenId: 'rep-rev' })];
+
+    await h.useCase.execute();
+
+    const task = await h.scheduling.findTaskByGrOrdenId('rep-rev');
+    expect(task!.reporterId).toBe(h.apiUserId);
+  });
+
+  it('falls back to a null reporter when the "Api" user is absent (#15)', async () => {
+    const h = await makeHarness();
+    // Point a fresh use-case at an EMPTY rbac repo — no "Api" user seeded.
+    const emptyUsers = new InMemoryRbacUserRepository();
+    const useCase = new IngestGestionRealOrders(
+      h.gr, h.resolver, h.scheduling, h.config, h.state, h.projects, h.featureFlags,
+      h.priorities, h.categories, emptyUsers,
+      { defaultStageId: DEFAULT_STAGE_ID, apiReporterLogin: API_USER_LOGIN, now: () => new Date('2026-05-29T12:00:00Z') },
+    );
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: 'rep-none' })];
+
+    await useCase.execute();
+
+    const task = await h.scheduling.findTaskByGrOrdenId('rep-none');
+    expect(task!.reporterId).toBeNull();
   });
 });

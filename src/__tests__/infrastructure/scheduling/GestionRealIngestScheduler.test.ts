@@ -10,6 +10,7 @@ import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memor
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
 import { InMemoryTaskPriorityRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskPriorityRepository';
 import { InMemoryTaskCategoryRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskCategoryRepository';
+import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
 
@@ -37,7 +38,8 @@ function makeHarness(): Harness {
   void priorities.create({ name: 'Normal', color: '#888', weight: 2 });
   void categories.create({ name: 'Instalación', description: null });
   const lock = new InMemoryDistributedLock();
-  const ingest = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, {
+  const rbacUsers = new InMemoryRbacUserRepository();
+  const ingest = new IngestGestionRealOrders(gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, rbacUsers, {
     defaultStageId: DEFAULT_STAGE_ID,
     now: () => new Date('2026-05-29T12:00:00Z'),
   });

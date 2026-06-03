@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import crypto from 'crypto';
+import he from 'he';
 import {
   GestionRealPort,
   FetchClientsParams,
@@ -129,6 +130,15 @@ function str(v: unknown): string | null {
   if (v === null || v === undefined || v === false) return null;
   const s = String(v).trim();
   return s === '' ? null : s;
+}
+
+/**
+ * Decode HTML entities in GR free-text (e.g. `instalaci&oacute;n` → `instalación`,
+ * `&#46;` → `.`). GR returns `observaciones` with undecoded named + numeric
+ * entities; without this the task description would show raw `&oacute;`. Null in → null out.
+ */
+function decodeEntities(s: string | null): string | null {
+  return s === null ? null : he.decode(s);
 }
 
 function numOrNull(v: unknown): number | null {
@@ -323,6 +333,7 @@ export function parseServiceOrdersResponse(data: unknown): GrServiceOrder[] {
       contrato: str(o.contrato),
       domicilio: parseOrderDomicilio(o.domicilio),
       fechaCreacion: str(o.creado),
+      observaciones: decodeEntities(str(o.observaciones)),
       raw: o,
     });
   }
