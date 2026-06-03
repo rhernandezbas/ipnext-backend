@@ -46,10 +46,11 @@ export class ConfirmInventorySuggestion {
     if (!contractId) throw new TaskHasNoContractError(suggestion.taskId);
 
     const now = new Date().toISOString();
+    const effectiveType = toType(input.typeOverride ?? suggestion.deviceType);
     const item = await this.inventory.create({
       id: randomUUID(),
       contractId,
-      type: toType(input.typeOverride ?? suggestion.deviceType),
+      type: effectiveType,
       serialNumber: suggestion.serialNumber,
       mac: suggestion.mac,
       model: null,
@@ -63,7 +64,11 @@ export class ConfirmInventorySuggestion {
       updatedAt: now,
     });
 
-    await this.suggestions.setStatus(suggestion.id, 'confirmed', item.id);
+    // When the operator picked a type in the dropdown, persist it onto the
+    // suggestion too, so the resolved card shows what was confirmed (ANTENA),
+    // not the original scan (ONU). Without an override the scan value stays.
+    const persistedType = input.typeOverride != null ? effectiveType : undefined;
+    await this.suggestions.setStatus(suggestion.id, 'confirmed', item.id, persistedType);
     const user = input.addedByUserId ? await this.users.findById(input.addedByUserId) : null;
     return toInstalledItemDto(item, user?.name ?? null);
   }
