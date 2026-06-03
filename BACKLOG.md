@@ -2,12 +2,12 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 agregados el mismo día (#15, #16) → **16 totales**.
-> **10 hechos (en prod) · 6 pendientes.**
+> **11 hechos (en prod) · 5 pendientes.**
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (10, desplegados en producción)
+## ✅ Hechos (11, desplegados en producción)
 
 ### #1 — Crear tarea: proyecto + descripción obligatorios
 - **Qué se pidió**: el select de proyecto al crear tarea venía pre-seleccionado ("Fibra los…"); se quería que arrancara sin proyecto, obligatorio elegir uno, y descripción obligatoria.
@@ -69,9 +69,15 @@
 - **Dónde**: BE `gestionReal.ts`, `GestionRealClient.ts`, `IngestGestionRealOrders.ts`. **PR**: #39. Nueva dep `he`. Sin migración (aterriza en la columna `description` existente).
 - **Verificado en prod**: tarea OS 17741 con `description` = comentario de GR, entities decodificadas ("instalación", no "instalaci&oacute;n").
 
+### #10 — Activity log de la tarea
+- **Qué se pidió**: la pestaña "Actividad" de la tarea era un `<ComingSoonPanel>`. Reemplazarla por un feed real de auditoría (creación, cambios de etapa/prioridad/asignado, comentarios, checklist, IClass, etc.).
+- **Cómo se resolvió** (SDD `task-activity-log`, 5 fases, TDD estricto): tabla `ScheduledTaskActivity` (FK `actor→RbacUser`, `taskId` cascade) + `GET /api/scheduling/:id/activity` (cursor keyset) + recorder best-effort (nunca aborta la operación) + **15 use-cases de escritura instrumentados** + diff engine de `UpdateTask` (14 familias). FE: pestaña Actividad consume el feed con `useInfiniteQuery`, `describeActivity` mapea ~30 tipos a texto humano, gateada con `scheduling.read`.
+- **Dónde**: BE PR #41 (migración `20260604120000`) / FE PR #30. Archivado en `openspec/changes/archive/2026-06-03-task-activity-log/`. Verify SDD: PASS 20/20.
+- **Verificado en prod**: tabla creada + migración aplicada + FK a `RbacUser` confirmados en la DB; pestaña Actividad desplegada.
+
 ---
 
-## ⏳ Pendientes (6)
+## ⏳ Pendientes (5)
 
 ### #7 — Unificar sub-page "cierre de OS" + feature flag del auditor IA
 - **Qué**: en Scheduling → Configuraciones → integración IClass, unificar la sub-page de "cierre de OS" (manteniendo el diseño) y crear la **feature flag del auditor de IA**.
@@ -83,12 +89,6 @@
 - **Estado parcial**: el modelo ya soporta `ticketId` en la tarea y el tab "Relacionado" ya renderiza el ticket vinculado cuando `ticketId` está presente (visto en `TaskTabs.tsx`). Falta: setear el `ticketId` al crear desde el ticket + redirigir.
 - **Dónde**: FE (flujo crear-tarea-desde-ticket + navegación) + BE (que el create acepte/persista `ticketId` desde ese contexto).
 - **Tamaño**: mediano (tickets).
-
-### #10 — Activity log de la tarea  ⭐ *ya specced, listo para /sdd-apply*
-- **Qué**: la pestaña "Actividad" de la tarea hoy es un `<ComingSoonPanel>`. Reemplazarla por un feed real de auditoría: creación, cambios de etapa/prioridad/asignado, comentarios, etc.
-- **Estado**: SDD `task-activity-log` **planificado completo** en `openspec/changes/task-activity-log/` (proposal + design + tasks + spec). Backend ZERO hoy (sin modelo, sin port, sin emisión de eventos).
-- **Alcance**: nueva tabla `ScheduledTaskActivity` (JSON from/to + type), port + recorder, `GetTaskActivity` paginado, ruta `GET /scheduling/tasks/:id/activity`, instrumentar ~18 use-cases de escritura.
-- **Tamaño**: epic BE ~35-40 archivos, 2-3 sesiones. Listo para `/sdd-apply` en batches.
 
 ### #11 — Rediseño de tickets + ID autoincremental + filtros ocultos
 - **Qué**: (a) rediseño visual de tickets; (b) agregar un **ID autoincremental** como se hizo con tareas (`sequenceNumber`); (c) los filtros deben estar **ocultos** y mostrarse solo al clickear el botón de filtro.
@@ -116,5 +116,4 @@ Dos follow-ups del inventario shippeados el 2026-06-03 (archivados en `openspec/
 
 ## Notas de priorización (lectura del equipo)
 
-- **#10**: ya tiene el plano SDD completo (`openspec/changes/task-activity-log/`) → listo para `/sdd-apply` en automático.
 - **Epic Tickets** (#9 + #11) y **Epic Integraciones/flags** (#7 + #14): conviene agruparlos por epic.
