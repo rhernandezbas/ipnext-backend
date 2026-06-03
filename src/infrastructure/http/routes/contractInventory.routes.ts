@@ -81,17 +81,55 @@ export function createContractInventoryRouter(
     } catch (e) { next(e); }
   });
 
+  const ConfirmSchema = z.object({
+    type: z.string().optional(),
+    // 'replace' is intentionally absent — it must go through the dedicated replace route.
+    // Sending resolution='replace' here returns 400 VALIDATION_ERROR (zod rejects unknown enum value).
+    resolution: z.enum(['add', 'link_existing']).optional(),
+  });
+
   router.post('/scheduling/:taskId/inventory/suggestions/:suggestionId/confirm', auth, perms.taskWrite, async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const rawType = (req.body as { type?: unknown } | undefined)?.type;
-      if (rawType !== undefined && !(await deviceTypes.isValid(rawType as string))) {
+      const parsed = ConfirmSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      const rawType = parsed.data.type;
+      if (rawType !== undefined && !(await deviceTypes.isValid(rawType))) {
         res.status(422).json({ error: 'Invalid item type override', code: 'INVALID_ITEM_TYPE' });
         return;
       }
       const result = await confirm.execute({
         suggestionId: req.params.suggestionId,
         addedByUserId: userId(req),
-        typeOverride: (rawType as string | undefined) ?? null,
+        typeOverride: rawType ?? null,
+        resolution: parsed.data.resolution ?? 'add',
+      });
+      res.status(201).json(result);
+    } catch (e) { next(e); }
+  });
+
+  const ReplaceSchema = z.object({
+    type: z.string().optional(),
+  });
+
+  router.post('/scheduling/:taskId/inventory/suggestions/:suggestionId/replace', auth, perms.contractWrite, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = ReplaceSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      const rawType = parsed.data.type;
+      if (rawType !== undefined && !(await deviceTypes.isValid(rawType))) {
+        res.status(422).json({ error: 'Invalid item type override', code: 'INVALID_ITEM_TYPE' });
+        return;
+      }
+      const result = await confirm.replace({
+        suggestionId: req.params.suggestionId,
+        addedByUserId: userId(req),
+        typeOverride: rawType ?? null,
       });
       res.status(201).json(result);
     } catch (e) { next(e); }

@@ -5,6 +5,10 @@ import {
   AuthenticationError,
   SplynxUnavailableError,
 } from '../../domain/errors';
+import {
+  DuplicateInstalledItemError,
+  NoReplaceTargetError,
+} from '../../domain/errors/inventory';
 
 describe('Domain Errors', () => {
   describe('DomainError', () => {
@@ -54,6 +58,32 @@ describe('Domain Errors', () => {
       const err = new SplynxUnavailableError();
       expect(err.message).toBe('Splynx API is unavailable');
       expect(err.code).toBe('SPLYNX_UNAVAILABLE');
+    });
+  });
+});
+
+describe('Inventory domain errors', () => {
+  describe('DuplicateInstalledItemError', () => {
+    it('has code DUPLICATE_INSTALLED_ITEM', () => {
+      const err = new DuplicateInstalledItemError('sug1', 'item1');
+      expect(err.code).toBe('DUPLICATE_INSTALLED_ITEM');
+    });
+    it('is instanceof DomainError', () => {
+      expect(new DuplicateInstalledItemError('s', 'i')).toBeInstanceOf(DomainError);
+    });
+    it('exposes existingItemId', () => {
+      const err = new DuplicateInstalledItemError('s1', 'existing-id');
+      expect(err.existingItemId).toBe('existing-id');
+    });
+  });
+
+  describe('NoReplaceTargetError', () => {
+    it('has code NO_REPLACE_TARGET', () => {
+      const err = new NoReplaceTargetError('sug1');
+      expect(err.code).toBe('NO_REPLACE_TARGET');
+    });
+    it('is instanceof DomainError', () => {
+      expect(new NoReplaceTargetError('s')).toBeInstanceOf(DomainError);
     });
   });
 });

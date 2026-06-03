@@ -5,7 +5,8 @@ import { prisma } from '../../database/prisma';
 type Row = {
   id: string; contractId: string; type: string; serialNumber: string | null; mac: string | null;
   model: string | null; source: string; sourceTaskId: string | null; addedByUserId: string | null;
-  confirmedAt: Date | null; status: string; notes: string | null; createdAt: Date; updatedAt: Date;
+  confirmedAt: Date | null; status: string; notes: string | null; replacesItemId: string | null;
+  createdAt: Date; updatedAt: Date;
 };
 
 function toEntity(r: Row): ContractInstalledItem {
@@ -15,6 +16,7 @@ function toEntity(r: Row): ContractInstalledItem {
     sourceTaskId: r.sourceTaskId, addedByUserId: r.addedByUserId,
     confirmedAt: r.confirmedAt ? r.confirmedAt.toISOString() : null,
     status: r.status as ContractInstalledItem['status'], notes: r.notes,
+    replacesItemId: r.replacesItemId ?? null,
     createdAt: r.createdAt.toISOString(), updatedAt: r.updatedAt.toISOString(),
   };
 }
@@ -36,7 +38,7 @@ export class PrismaContractInventoryRepository implements ContractInventoryRepos
         id: item.id, contractId: item.contractId, type: item.type, serialNumber: item.serialNumber,
         mac: item.mac, model: item.model, source: item.source, sourceTaskId: item.sourceTaskId,
         addedByUserId: item.addedByUserId, confirmedAt: item.confirmedAt ? new Date(item.confirmedAt) : null,
-        status: item.status, notes: item.notes,
+        status: item.status, notes: item.notes, replacesItemId: item.replacesItemId ?? null,
         createdAt: new Date(item.createdAt), updatedAt: new Date(item.updatedAt),
       },
     });

@@ -14,7 +14,7 @@ const sug = (over: Partial<TaskInventorySuggestion>): TaskInventorySuggestion =>
 const makeItem = (over: Partial<ContractInstalledItem> = {}): ContractInstalledItem => ({
   id: 'i1', contractId: 'svc1', type: 'ONU', serialNumber: 'SN1', mac: null, model: null,
   source: 'OCR', sourceTaskId: 't1', addedByUserId: null, confirmedAt: null,
-  status: 'active', notes: null, createdAt: 'x', updatedAt: 'x', ...over,
+  status: 'active', notes: null, replacesItemId: null, createdAt: 'x', updatedAt: 'x', ...over,
 });
 
 async function setup() {

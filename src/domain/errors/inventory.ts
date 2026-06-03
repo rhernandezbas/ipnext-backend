@@ -125,3 +125,23 @@ export class SuggestionNotLinkedError extends DomainError {
     this.name = 'SuggestionNotLinkedError';
   }
 }
+
+export class DuplicateInstalledItemError extends DomainError {
+  constructor(suggestionId: string, public readonly existingItemId: string) {
+    super(
+      `Suggestion ${suggestionId} matches an already-installed device (${existingItemId})`,
+      'DUPLICATE_INSTALLED_ITEM',
+    );
+    this.name = 'DuplicateInstalledItemError';
+  }
+}
+
+export class NoReplaceTargetError extends DomainError {
+  constructor(suggestionId: string) {
+    super(
+      `Suggestion ${suggestionId} has no same-type active item to replace`,
+      'NO_REPLACE_TARGET',
+    );
+    this.name = 'NoReplaceTargetError';
+  }
+}

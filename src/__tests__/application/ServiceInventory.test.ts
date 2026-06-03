@@ -290,6 +290,189 @@ describe('Trazabilidad del aprobador (F4)', () => {
   });
 });
 
+describe('ConfirmInventorySuggestion — resolution matrix', () => {
+  const makeActiveItem = (over: Partial<import('@domain/entities/contract-installed-item').ContractInstalledItem> = {}) => ({
+    id: 'i_existing', contractId: 'svc1', type: 'ROUTER', serialNumber: 'R1', mac: null, model: null,
+    source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
+    status: 'active' as const, notes: null, replacesItemId: null, createdAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:00:00Z',
+    ...over,
+  });
+
+  // Case A: same_device + add → DUPLICATE_INSTALLED_ITEM
+  it('A: same_device + add → throws DUPLICATE_INSTALLED_ITEM; inventory unchanged', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeActiveItem({ id: 'i1', serialNumber: 'R1' }));
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R1' }));
+
+    await expect(confirm.execute({ suggestionId: 's1', resolution: 'add' })).rejects.toMatchObject({ code: 'DUPLICATE_INSTALLED_ITEM' });
+    expect(await inventory.listByContract('svc1')).toHaveLength(1);
+  });
+
+  // Case B: same_device by MAC + no resolution (default add) → DUPLICATE_INSTALLED_ITEM
+  it('B: same_device by MAC + default resolution → throws DUPLICATE_INSTALLED_ITEM', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeActiveItem({ id: 'i1', mac: 'AABBCC', serialNumber: null }));
+    await suggestions.upsert(sug({ id: 's1', mac: 'AA:BB:CC', serialNumber: null }));
+
+    await expect(confirm.execute({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'DUPLICATE_INSTALLED_ITEM' });
+  });
+
+  // Case C: same_device + link_existing → setStatus(confirmed, existing.id), no create
+  it('C: same_device + link_existing → suggestion confirmed to existing item, no new item created', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeActiveItem({ id: 'i_existing', serialNumber: 'R1' }));
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R1' }));
+
+    const result = await confirm.execute({ suggestionId: 's1', resolution: 'link_existing' });
+
+    expect(result.kind).toBe('DEVICE');
+    // No new item created — still exactly 1 item
+    expect(await inventory.listByContract('svc1')).toHaveLength(1);
+    // Suggestion now confirmed to the existing item
+    const stored = await suggestions.get('s1');
+    expect(stored!.status).toBe('confirmed');
+    expect(stored!.confirmedItemId).toBe('i_existing');
+    // Result DTO reflects the existing item
+    if (result.kind !== 'DEVICE') throw new Error('expected DEVICE');
+    expect(result.item.id).toBe('i_existing');
+  });
+
+  // Case D: same_type + add → creates 2nd item; both active; replacesItemId=null
+  it('D: same_type + add → creates 2nd item; both active; replacesItemId=null', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeActiveItem({ id: 'i1', serialNumber: 'R1', type: 'ROUTER' }));
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R2' }));
+
+    const result = await confirm.execute({ suggestionId: 's1', resolution: 'add' });
+
+    expect(result.kind).toBe('DEVICE');
+    const items = await inventory.listByContract('svc1');
+    expect(items).toHaveLength(2);
+    expect(items.every(i => i.status === 'active')).toBe(true);
+    if (result.kind !== 'DEVICE') throw new Error('expected DEVICE');
+    expect(result.item.replacesItemId).toBeNull();
+  });
+
+  // Case E: same_type + replace() → old=replaced; new active with replacesItemId=old.id
+  it('E: replace() same_type → old replaced; new active with replacesItemId', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeActiveItem({ id: 'i_old', serialNumber: 'R1', type: 'ROUTER' }));
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R2' }));
+
+    const result = await confirm.replace({ suggestionId: 's1' });
+
+    expect(result.kind).toBe('DEVICE');
+    if (result.kind !== 'DEVICE') throw new Error('expected DEVICE');
+    // New item links to the old one
+    expect(result.item.replacesItemId).toBe('i_old');
+    expect(result.item.status).toBe('active');
+    // Old item is now replaced
+    const oldItem = await inventory.getById('i_old');
+    expect(oldItem!.status).toBe('replaced');
+    // Suggestion confirmed to new item
+    const stored = await suggestions.get('s1');
+    expect(stored!.status).toBe('confirmed');
+    expect(stored!.confirmedItemId).toBe(result.item.id);
+  });
+
+  // Case F: no match + add (retrocompat: existing tests pass)
+  it('F: no match + no resolution → creates item (retrocompat)', async () => {
+    const { suggestions, scheduling, confirm, inventory } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R1' }));
+
+    const result = await confirm.execute({ suggestionId: 's1' });
+    expect(result.kind).toBe('DEVICE');
+    expect(await inventory.listByContract('svc1')).toHaveLength(1);
+  });
+
+  // Case G: replace() with empty inventory → NO_REPLACE_TARGET
+  it('G: replace() with no active items → NO_REPLACE_TARGET', async () => {
+    const { suggestions, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R1' }));
+
+    await expect(confirm.replace({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'NO_REPLACE_TARGET' });
+  });
+
+  // Case H: replace() with only replaced-status item → NO_REPLACE_TARGET
+  it('H: replace() when only replaced-status items exist → NO_REPLACE_TARGET', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeActiveItem({ id: 'i1', type: 'ROUTER', status: 'replaced' }));
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R_NEW' }));
+
+    await expect(confirm.replace({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'NO_REPLACE_TARGET' });
+  });
+
+  // Case I: MATERIAL + execute → unchanged MATERIAL path
+  it('I: MATERIAL suggestion + execute → MATERIAL path unchanged', async () => {
+    const { suggestions, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({
+      id: 's1', kind: 'MATERIAL', deviceType: null, serialNumber: null,
+      materialDesc: 'CABLE_UTP', quantity: 2, unit: 'm',
+    }));
+
+    const result = await confirm.execute({ suggestionId: 's1', resolution: 'add' });
+    expect(result.kind).toBe('MATERIAL');
+  });
+
+  // Case J: replace() with typeOverride → new item type=typeOverride
+  it('J: replace() with typeOverride → new item uses override type', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await inventory.create(makeActiveItem({ id: 'i_old', serialNumber: 'R1', type: 'ROUTER' }));
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'R2' }));
+
+    const result = await confirm.replace({ suggestionId: 's1', typeOverride: 'ANTENA' });
+
+    expect(result.kind).toBe('DEVICE');
+    if (result.kind !== 'DEVICE') throw new Error('expected DEVICE');
+    expect(result.item.type).toBe('ANTENA');
+    // Old item replaced
+    const oldItem = await inventory.getById('i_old');
+    expect(oldItem!.status).toBe('replaced');
+  });
+});
+
+describe('ContractInstalledItem — replacesItemId field', () => {
+  it('create item with replacesItemId persists and reads back', async () => {
+    const { inventory } = await setup();
+    const now = new Date().toISOString();
+    const older = await inventory.create({
+      id: 'i_old', contractId: 'svc1', type: 'ROUTER', serialNumber: 'OLD_SN', mac: null, model: null,
+      source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
+      status: 'active', notes: null, replacesItemId: null, createdAt: now, updatedAt: now,
+    });
+    const newer = await inventory.create({
+      id: 'i_new', contractId: 'svc1', type: 'ROUTER', serialNumber: 'NEW_SN', mac: null, model: null,
+      source: 'ICLASS', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
+      status: 'active', notes: null, replacesItemId: older.id, createdAt: now, updatedAt: now,
+    });
+    const read = await inventory.getById('i_new');
+    expect(read!.replacesItemId).toBe('i_old');
+  });
+
+  it('create item without replacesItemId → replacesItemId is null', async () => {
+    const { inventory } = await setup();
+    const now = new Date().toISOString();
+    const item = await inventory.create({
+      id: 'i1', contractId: 'svc1', type: 'ROUTER', serialNumber: 'R1', mac: null, model: null,
+      source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
+      status: 'active', notes: null, replacesItemId: null, createdAt: now, updatedAt: now,
+    });
+    expect(item.replacesItemId).toBeNull();
+    const read = await inventory.getById('i1');
+    expect(read!.replacesItemId).toBeNull();
+  });
+});
+
 describe('AddInstalledItemManually', () => {
   it('SCEN-MI-1: a manual 2nd router coexists with confirmed items', async () => {
     const { inventory, scheduling, confirm, suggestions, addManual } = await setup();
