@@ -4,7 +4,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId'
 > {
   watcherIds?: string[];
   /** GR ingest sets this; manual task creation omits it (defaults to null). */
@@ -36,8 +36,8 @@ export interface SchedulingRepository {
   deleteTask(id: string): Promise<boolean>;
   moveTaskToStage(id: string, stageId: string): Promise<ScheduledTask | null>;
 
-  // RV — Revisado por Inventario (change 6)
-  setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null>;
+  // RV — Revisado por Inventario (change 6, F3 traceability)
+  setInventoryReview(taskId: string, reviewed: boolean, actorId: string | null): Promise<ScheduledTask | null>;
 
   // Gestión Real installation-order ingest (gestion-real-installation-ingest)
   /** Find a task previously ingested from the given GR order id. Null when none. */

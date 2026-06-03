@@ -880,7 +880,10 @@ model ScheduledTask {
   isClosed Boolean @default(false)
 
   // RV — inventory team review flag
-  reviewedByInventory Boolean @default(false)
+  reviewedByInventory       Boolean   @default(false)
+  reviewedByInventoryAt     DateTime?
+  reviewedByInventoryUserId String?
+  reviewedByInventoryUser   RbacUser? @relation("TaskInventoryReviewer", fields: [reviewedByInventoryUserId], references: [id], onDelete: SetNull)
 
   // IClass — service order code returned when the task is sent to IClass
   iclassOrderCode String?
@@ -1590,8 +1593,9 @@ model RbacUser {
   updatedAt       DateTime        @updatedAt
   lastLoginAt     DateTime?
   roles           RbacUserRole[]
-  tasksReported   ScheduledTask[] @relation("TaskReporter")
-  tasksAssigned   ScheduledTask[] @relation("TaskAssignee")
+  tasksReported          ScheduledTask[] @relation("TaskReporter")
+  tasksAssigned          ScheduledTask[] @relation("TaskAssignee")
+  tasksInventoryReviewed ScheduledTask[] @relation("TaskInventoryReviewer")
   tasksWatching   TaskWatcher[]   @relation("TaskWatcher")
   assignedTickets Ticket[]        @relation("TicketAssignee")
   auditEvents     AuditEvent[]

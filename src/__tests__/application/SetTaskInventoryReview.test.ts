@@ -69,4 +69,43 @@ describe('SetTaskInventoryReview use case', () => {
     expect(updated.isClosed).toBe(false);
     expect(updated.priority).toBe('normal');
   });
+
+  // F3 — actorId traceability
+  it('sets reviewedByInventoryAt and resolves user name when actorId provided', async () => {
+    const repo = new InMemorySchedulingRepository();
+    repo.seedRbacUserName('user-1', 'Carlos López');
+    const useCase = new SetTaskInventoryReview(repo);
+
+    const task = await repo.createTask(CREATE_INPUT);
+    const before = new Date();
+    const updated = await useCase.execute(task.id, true, 'user-1');
+
+    expect(updated.reviewedByInventory).toBe(true);
+    expect(updated.reviewedByInventoryAt).not.toBeNull();
+    // reviewedByInventoryAt should be a valid ISO timestamp >= before
+    expect(new Date(updated.reviewedByInventoryAt!).getTime()).toBeGreaterThanOrEqual(before.getTime());
+    // In-memory resolves name from seeded map
+    expect(updated.reviewedByInventoryUserName).toBe('Carlos López');
+  });
+
+  it('clears reviewedByInventoryAt and reviewedByInventoryUserName when unmarking', async () => {
+    const repo = new InMemorySchedulingRepository();
+    repo.seedRbacUserName('user-1', 'Carlos López');
+    const useCase = new SetTaskInventoryReview(repo);
+
+    const task = await repo.createTask(CREATE_INPUT);
+    await useCase.execute(task.id, true, 'user-1');
+    const cleared = await useCase.execute(task.id, false, 'user-1');
+
+    expect(cleared.reviewedByInventory).toBe(false);
+    expect(cleared.reviewedByInventoryAt).toBeNull();
+    expect(cleared.reviewedByInventoryUserName).toBeNull();
+  });
+
+  it('unknown task → TaskNotFoundError even with actorId', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const useCase = new SetTaskInventoryReview(repo);
+
+    await expect(useCase.execute('nonexistent-id', true, 'user-1')).rejects.toBeInstanceOf(TaskNotFoundError);
+  });
 });

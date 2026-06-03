@@ -88,6 +88,10 @@ export function toTask(row: any): ScheduledTask {
     travelTimeFrom: row.travelTimeFrom ?? null,
     isClosed: row.isClosed ?? false,
     reviewedByInventory: row.reviewedByInventory ?? false,
+    reviewedByInventoryAt: row.reviewedByInventoryAt instanceof Date
+      ? row.reviewedByInventoryAt.toISOString()
+      : (row.reviewedByInventoryAt ?? null),
+    reviewedByInventoryUserName: row.reviewedByInventoryUser?.name ?? null,
     iclassOrderCode: row.iclassOrderCode ?? null,
     grOrdenId: row.grOrdenId ?? null,
     ticketId: row.ticketId ?? null,
@@ -135,6 +139,7 @@ const INCLUDE = {
   watchers: true,
   checklist: { orderBy: { order: 'asc' } },
   ticket: { select: { id: true, subject: true } },
+  reviewedByInventoryUser: { select: { id: true, name: true } },
 } as const;
 
 export class PrismaSchedulingRepository implements SchedulingRepository {
@@ -516,12 +521,15 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     return update;
   }
 
-  async setInventoryReview(taskId: string, reviewed: boolean): Promise<ScheduledTask | null> {
+  async setInventoryReview(taskId: string, reviewed: boolean, actorId: string | null): Promise<ScheduledTask | null> {
     try {
+      const data = reviewed
+        ? { reviewedByInventory: true, reviewedByInventoryAt: new Date(), reviewedByInventoryUserId: actorId }
+        : { reviewedByInventory: false, reviewedByInventoryAt: null, reviewedByInventoryUserId: null };
       const row = await (prisma.scheduledTask as any).update({
         where: { id: taskId },
         include: INCLUDE,
-        data: { reviewedByInventory: reviewed },
+        data,
       });
       return toTask(row);
     } catch {

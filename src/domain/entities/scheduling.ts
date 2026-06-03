@@ -55,7 +55,9 @@ export interface ScheduledTask {
   isClosed: boolean;
 
   // RV — Revisado por Inventario: inventory team review flag. Default false.
-  reviewedByInventory: boolean;
+  reviewedByInventory:         boolean;
+  reviewedByInventoryAt:       string | null;   // ISO 8601
+  reviewedByInventoryUserName: string | null;   // JOIN-resolved
 
   // IClass — service order code returned by IClass after a successful "Enviar a IClass". Null otherwise.
   iclassOrderCode: string | null;

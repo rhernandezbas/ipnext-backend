@@ -147,7 +147,7 @@ describe('SCEN-RV-2: PATCH /api/scheduling/:id/inventory-review — unset to fal
   it('returns 200 with reviewedByInventory: false after unsetting', async () => {
     const { app, repo } = buildApp();
     const task = await repo.createTask(CREATE_INPUT);
-    await repo.setInventoryReview(task.id, true);
+    await repo.setInventoryReview(task.id, true, null);
 
     const res = await request(app)
       .patch(`/api/scheduling/${task.id}/inventory-review`)
@@ -202,5 +202,62 @@ describe('SCEN-RV-4: PATCH /api/scheduling/:id/inventory-review — invalid body
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+// ── F3 traceability: reviewedByInventoryAt + reviewedByInventoryUserName ──────
+
+describe('F3 — PATCH /api/scheduling/:id/inventory-review — traceability fields', () => {
+  it('response DTO exposes reviewedByInventoryAt (non-null) and reviewedByInventoryUserName when reviewed=true', async () => {
+    const { app, repo } = buildApp();
+    // The FakeAuthProvider returns id='admin-1'; seed the name for in-memory resolution
+    repo.seedRbacUserName('admin-1', 'Test Admin');
+    const task = await repo.createTask(CREATE_INPUT);
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/inventory-review`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ reviewed: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.reviewedByInventory).toBe(true);
+    expect(res.body.reviewedByInventoryAt).not.toBeNull();
+    expect(res.body.reviewedByInventoryUserName).toBe('Test Admin');
+  });
+
+  it('response DTO exposes null fields when reviewed=false', async () => {
+    const { app, repo } = buildApp();
+    repo.seedRbacUserName('admin-1', 'Test Admin');
+    const task = await repo.createTask(CREATE_INPUT);
+    // First mark as reviewed
+    await repo.setInventoryReview(task.id, true, 'admin-1');
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/inventory-review`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ reviewed: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body.reviewedByInventory).toBe(false);
+    expect(res.body.reviewedByInventoryAt).toBeNull();
+    expect(res.body.reviewedByInventoryUserName).toBeNull();
+  });
+
+  it('actorId in req.body is IGNORED — actor comes from req.user.id', async () => {
+    const { app, repo } = buildApp();
+    // Seed the legitimate user name
+    repo.seedRbacUserName('admin-1', 'Real Admin');
+    const task = await repo.createTask(CREATE_INPUT);
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/inventory-review`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ reviewed: true, actorId: 'hacker-id' });
+
+    expect(res.status).toBe(200);
+    // actor should be 'admin-1' (from req.user), NOT 'hacker-id'
+    // In-memory resolves 'admin-1' → 'Real Admin', so hacker's name doesn't appear
+    expect(res.body.reviewedByInventoryUserName).toBe('Real Admin');
+    expect(res.body.reviewedByInventoryUserName).not.toBe('hacker-id');
   });
 });

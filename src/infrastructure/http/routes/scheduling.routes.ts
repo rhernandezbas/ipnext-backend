@@ -243,7 +243,8 @@ export function createSchedulingRouter(
         return;
       }
       try {
-        const task = await setTaskInventoryReview.execute(req.params['id'] as string, parsed.data.reviewed);
+        const actorId = (req as { user?: { id?: string } }).user?.id ?? null;
+        const task = await setTaskInventoryReview.execute(req.params['id'] as string, parsed.data.reviewed, actorId);
         res.json(task);
       } catch (err) {
         if (err instanceof TaskNotFoundError) {
