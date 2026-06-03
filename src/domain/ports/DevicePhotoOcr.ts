@@ -8,6 +8,8 @@ export interface DeviceOcrResult {
   confidence: number | null;
   /** Raw provider output (audit). */
   rawOutput: string;
+  /** Device type the vision model classified FROM THE IMAGE (raw, unnormalized). Optional. */
+  deviceType?: string;
 }
 
 /**

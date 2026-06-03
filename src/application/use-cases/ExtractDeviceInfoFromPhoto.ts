@@ -1,6 +1,7 @@
 import { DevicePhotoOcr } from '@domain/ports/DevicePhotoOcr';
 import { OcrExtractionRepository } from '@domain/ports/OcrExtractionRepository';
 import { OcrExtraction } from '@domain/entities/ocr-extraction';
+import { normalizeQwenDeviceType } from '@application/services/normalizeQwenDeviceType';
 import { randomUUID } from 'crypto';
 
 export interface ExtractDeviceInfoInput {
@@ -35,6 +36,7 @@ export class ExtractDeviceInfoFromPhoto {
       serviceOrderId: input.serviceOrderId ?? null,
       sourceTaskId: input.sourceTaskId ?? null,
       deviceType: input.deviceType ?? null,
+      qwenDeviceType: normalizeQwenDeviceType(result.deviceType ?? null),
       sn: result.sn,
       mac: result.mac,
       confidence: result.confidence,

@@ -1,4 +1,5 @@
-export type DeviceType = 'ONU' | 'ROUTER' | 'ANTENA' | 'REPETIDOR' | 'OTROS';
+import type { DeviceType } from '@domain/entities/device-type';
+export type { DeviceType };
 
 /**
  * Capa 2 — infer the device class from a checklist question label by keyword.

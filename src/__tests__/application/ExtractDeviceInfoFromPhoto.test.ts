@@ -43,4 +43,22 @@ describe('ExtractDeviceInfoFromPhoto', () => {
     expect(second.sn).toBe('SN1');
     expect(repo.store.size).toBe(1);
   });
+
+  it('F2: persiste qwenDeviceType validado desde la clasificación del modelo (imagen), sin pisar el label', async () => {
+    const { ocr, uc } = setup();
+    ocr.set('https://x/a.jpg', { sn: null, mac: 'DC8E8D156CE6', confidence: 0.8, rawOutput: '', deviceType: 'antena' });
+
+    const ext = await uc.execute({ photoUrl: 'https://x/a.jpg', deviceType: 'ONU' }); // el label dice ONU
+
+    expect(ext.deviceType).toBe('ONU'); // default del label intacto
+    expect(ext.qwenDeviceType).toBe('ANTENA'); // lo que vio el modelo en la foto, validado
+  });
+
+  it('F2: qwenDeviceType es null cuando el modelo da un tipo desconocido o no clasifica', async () => {
+    const { ocr, uc } = setup();
+    ocr.set('https://x/b.jpg', { sn: null, mac: null, confidence: 0, rawOutput: '', deviceType: 'switch' });
+
+    const ext = await uc.execute({ photoUrl: 'https://x/b.jpg', deviceType: 'ROUTER' });
+    expect(ext.qwenDeviceType).toBeNull();
+  });
 });

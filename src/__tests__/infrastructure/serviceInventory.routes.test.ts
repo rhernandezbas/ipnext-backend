@@ -17,7 +17,7 @@ import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem'
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 
 const sug = (over: Partial<TaskInventorySuggestion>): TaskInventorySuggestion => ({
-  id: 's1', taskId: 't1', kind: 'DEVICE', deviceType: 'ROUTER', serialNumber: 'R1', mac: 'MR',
+  id: 's1', taskId: 't1', kind: 'DEVICE', deviceType: 'ROUTER', qwenDeviceType: null, serialNumber: 'R1', mac: 'MR',
   materialDesc: null, quantity: null, unit: null, source: 'OCR', photoUrl: null,
   status: 'pending', confirmedItemId: null, createdAt: '2026-06-01T00:00:00Z', ...over,
 });

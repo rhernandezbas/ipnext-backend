@@ -4,9 +4,10 @@ import { finalizeOcrResult } from './finalizeOcrResult';
 
 const PROMPT =
   'This is a photo of a network device (router / ONU / antenna) label. ' +
-  'Extract ONLY the MAC address and the Serial Number (S/N). ' +
-  'Respond strictly as JSON: {"mac":"...","sn":"..."}. ' +
-  'Read carefully character by character. Do not invent characters; use null if unreadable.';
+  'Extract the MAC address, the Serial Number (S/N), and classify the device type. ' +
+  'Respond strictly as JSON: {"mac":"...","sn":"...","device_type":"ONU|ROUTER|ANTENA|REPETIDOR|OTROS"}. ' +
+  'Read carefully character by character. Do not invent characters; use null if unreadable. ' +
+  'For device_type use exactly one of: ONU, ROUTER, ANTENA, REPETIDOR, OTROS.';
 
 export interface OllamaOcrConfig {
   baseUrl: string;
