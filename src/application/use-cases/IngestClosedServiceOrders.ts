@@ -29,6 +29,8 @@ const BOOTSTRAP_DAYS = 25;
 const DEFAULT_OVERLAP_MINUTES = 30;
 /** Stage holding tasks sent to IClass and awaiting closure (rename-safe, by code). */
 const DEFAULT_IN_FLIGHT_STAGE_CODE = 'registered_in_iclass';
+/** Max audit attempts before giving up (so a broken model never hammers Ollama). */
+const DEFAULT_MAX_AUDIT_ATTEMPTS = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface IngestClosedCounts {
@@ -51,6 +53,8 @@ export interface IngestClosedOptions {
   overlapMinutes?: number;
   /** Immutable business code of the in-flight stage (sent, awaiting closure). */
   inFlightStageCode?: string;
+  /** Cap on audit attempts per SO (reprocess respects the same cap). */
+  maxAuditAttempts?: number;
   /**
    * Optional SEAM portal scraper. When present, each mirrored SO's checklist
    * photos are correlated by ordem from the portal HTML (API v2 is photo-blind).
@@ -74,6 +78,7 @@ export class IngestClosedServiceOrders {
   private readonly now: () => Date;
   private readonly overlapMinutes: number;
   private readonly inFlightStageCode: string;
+  private readonly maxAuditAttempts: number;
   private readonly portal?: IClassPortalPort;
   private readonly postComment?: PostClosureComment;
   private readonly extractOcr?: ExtractDeviceInfoFromPhoto;
@@ -91,6 +96,7 @@ export class IngestClosedServiceOrders {
     this.now = opts.now ?? (() => new Date());
     this.overlapMinutes = opts.overlapMinutes ?? DEFAULT_OVERLAP_MINUTES;
     this.inFlightStageCode = opts.inFlightStageCode ?? DEFAULT_IN_FLIGHT_STAGE_CODE;
+    this.maxAuditAttempts = opts.maxAuditAttempts ?? DEFAULT_MAX_AUDIT_ATTEMPTS;
     this.portal = opts.portal;
     this.postComment = opts.postComment;
     this.extractOcr = opts.extractOcr;
@@ -224,61 +230,77 @@ export class IngestClosedServiceOrders {
       counts.transitioned++;
     }
 
-    await this.orchestrateClosure(order, task.id, scraped);
+    await this.runClosureSideEffects(order, task.id, scraped);
   }
 
   /**
-   * Closure side effects (all opt-in, all non-fatal — a failure here never
-   * affects the mirror/transition already committed): OCR the SN/MAC device
-   * photos, build inventory suggestions (staging), and post the readable comment.
+   * Closure side effects (all opt-in, all non-fatal — a failure here never affects
+   * the mirror/transition already committed): OCR the SN/MAC device photos, build
+   * inventory suggestions (staging), post the readable comment, and run the AI audit.
+   *
+   * Idempotent per side-effect via the mirror's tracking columns: each effect runs
+   * ONLY when not yet marked done, and is marked on success. The audit additionally
+   * stops after maxAuditAttempts (a persistently-failing model never hammers Ollama).
+   * PUBLIC so the manual reprocess can re-fire only the pending effects on an
+   * already-mirrored SO (passing scraped = null — it does not re-scrape the portal).
    */
-  private async orchestrateClosure(
+  async runClosureSideEffects(
     order: ClosedServiceOrder,
     taskId: string,
-    scraped: ScrapedOSDetail | null,
+    scraped: ScrapedOSDetail | null = null,
   ): Promise<void> {
-    const extractions: OcrExtraction[] = [];
-    if (this.extractOcr) {
-      for (const checklist of order.checklists) {
-        for (const a of checklist.answers) {
-          if (a.questionType === 'Foto' && a.photoUrl && isSnMacDevicePhoto(a.questionText)) {
-            try {
-              extractions.push(
-                await this.extractOcr.execute({
-                  photoUrl: a.photoUrl,
-                  deviceType: classifyDeviceType(a.questionText),
-                  serviceOrderId: order.iclassId,
-                  sourceTaskId: taskId,
-                }),
-              );
-            } catch {
-              /* skip this photo */
+    const state = await this.closed.getSideEffectState(order.iclassId);
+    const commentDone = state?.commentPosted ?? false;
+    const inventoryDone = state?.inventoryBuilt ?? false;
+    const auditDone = state?.auditDone ?? false;
+    const auditAttempts = state?.auditAttempts ?? 0;
+
+    if (this.buildSuggestions && !inventoryDone) {
+      const extractions: OcrExtraction[] = [];
+      if (this.extractOcr) {
+        for (const checklist of order.checklists) {
+          for (const a of checklist.answers) {
+            if (a.questionType === 'Foto' && a.photoUrl && isSnMacDevicePhoto(a.questionText)) {
+              try {
+                extractions.push(
+                  await this.extractOcr.execute({
+                    photoUrl: a.photoUrl,
+                    deviceType: classifyDeviceType(a.questionText),
+                    serviceOrderId: order.iclassId,
+                    sourceTaskId: taskId,
+                  }),
+                );
+              } catch {
+                /* skip this photo */
+              }
             }
           }
         }
       }
-    }
-
-    if (this.buildSuggestions) {
       try {
         await this.buildSuggestions.execute({ taskId, extractions, materials: order.materials });
+        await this.closed.markSideEffect(order.iclassId, 'inventoryBuilt', true);
       } catch {
-        /* non-fatal */
+        /* non-fatal — stays pending, retried on the next reprocess */
       }
     }
 
-    if (this.postComment) {
+    if (this.postComment && !commentDone) {
       try {
         const attachmentUrls = (scraped?.attachments ?? []).map(a => a.url);
         await this.postComment.execute({ taskId, order, attachmentUrls });
+        await this.closed.markSideEffect(order.iclassId, 'commentPosted', true);
       } catch {
-        /* non-fatal */
+        /* non-fatal — stays pending */
       }
     }
 
-    if (this.auditInstallation) {
+    if (this.auditInstallation && !auditDone && auditAttempts < this.maxAuditAttempts) {
+      await this.closed.incrementAuditAttempt(order.iclassId);
       try {
-        await this.auditInstallation.execute({ taskId, order });
+        const result = await this.auditInstallation.execute({ taskId, order });
+        // execute() returns null on soft-fail (persisted nothing) → leave pending to retry.
+        if (result) await this.closed.markSideEffect(order.iclassId, 'auditDone', true);
       } catch (err) {
         // non-fatal — la auditoría IA nunca afecta el cierre ya commiteado, pero LOGUEAMOS el fallo
         // eslint-disable-next-line no-console

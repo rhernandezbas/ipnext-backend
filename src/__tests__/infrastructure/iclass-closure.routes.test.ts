@@ -47,12 +47,15 @@ function buildApp() {
     { soTypeId: '1', code: 'Cliente Ausente', type: 'Pendente' },
   ]);
   const backfill = { execute: async () => ({ mirrored: 2, transitioned: 2, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0 }) };
+  const reprocess = { execute: async () => ({ skipped: false, candidates: 3, processed: 2, noTask: 1 }) };
   const router = createIClassClosureRouter(
     new SyncIClassResultCodes(iclass, repo),
     new ListIClassResultCodes(repo),
     new AssignResultCodeStage(repo, fakeStages({ [STAGE.id]: STAGE })),
     new GetClosureStatus(state),
     backfill as never,
+    reprocess as never,
+    ((_req: unknown, _res: unknown, next: () => void) => next()) as never, // requireIClassManage stub (allows)
     new FakeAuthProvider(),
   );
   const app = express();
@@ -66,6 +69,13 @@ function buildApp() {
 const AUTH = ['Cookie', 'auth_token=fake'] as const;
 
 describe('IClass closure routes', () => {
+  it('POST /closure/reprocess re-fires pending side-effects and returns the counts', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/api/admin/iclass/closure/reprocess').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ skipped: false, candidates: 3, processed: 2, noTask: 1 });
+  });
+
   it('POST /result-codes/sync syncs the catalog', async () => {
     const { app } = buildApp();
     const res = await request(app).post('/api/admin/iclass/result-codes/sync').set(...AUTH);

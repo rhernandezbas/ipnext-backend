@@ -674,6 +674,14 @@ model IClassServiceOrder {
   ingestedAt      DateTime  @default(now())
   rawDetail       Json // full SO snapshot for forensics
 
+  // Closure side-effect tracking — lets the manual reprocess re-fire only the
+  // effects that have NOT yet succeeded, decoupled from the mirror idempotency.
+  commentPosted      Boolean   @default(false) // PostClosureComment succeeded
+  inventoryBuilt     Boolean   @default(false) // BuildInventorySuggestions succeeded
+  auditDone          Boolean   @default(false) // AuditInstallationQuality persisted
+  auditAttempts      Int       @default(0) // audit retries (cap to avoid hammering Ollama)
+  lastAuditAttemptAt DateTime? // when the last audit attempt ran
+
   history          IClassSoStatusHistory[]
   checklists       IClassSoChecklist[]
   materials        IClassSoMaterial[]
