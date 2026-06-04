@@ -37,7 +37,13 @@ export class PrismaIClassResultCodeRepository implements IClassResultCodeReposit
   }
 
   async findByCode(code: string): Promise<IClassResultCode | null> {
-    const row = await (prisma.iClassResultCode as any).findFirst({ where: { code }, include: INCLUDE });
+    // IClass varies the casing/whitespace of motivoFechamento vs the operator's
+    // catalog (e.g. "Cambio de Domicilio Realizado" vs "CAMBIO DE DOMICILIO
+    // REALIZADO"), so match case-insensitively + trimmed.
+    const row = await (prisma.iClassResultCode as any).findFirst({
+      where: { code: { equals: code.trim(), mode: 'insensitive' } },
+      include: INCLUDE,
+    });
     return row ? toEntity(row) : null;
   }
 

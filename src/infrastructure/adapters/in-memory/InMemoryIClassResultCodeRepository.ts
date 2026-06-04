@@ -28,8 +28,11 @@ export class InMemoryIClassResultCodeRepository implements IClassResultCodeRepos
   }
 
   async findByCode(code: string): Promise<IClassResultCode | null> {
+    // IClass varies the casing/whitespace of motivoFechamento vs the operator's
+    // catalog, so match case-insensitively + trimmed (mirrors the Prisma adapter).
+    const norm = code.trim().toLowerCase();
     for (const r of this.rows.values()) {
-      if (r.code === code) return { ...r };
+      if (r.code.trim().toLowerCase() === norm) return { ...r };
     }
     return null;
   }
