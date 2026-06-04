@@ -47,6 +47,14 @@ export class PrismaIClassResultCodeRepository implements IClassResultCodeReposit
     return row ? toEntity(row) : null;
   }
 
+  async findBySoTypeAndCode(soTypeId: string, code: string): Promise<IClassResultCode | null> {
+    const row = await (prisma.iClassResultCode as any).findFirst({
+      where: { soTypeId: BigInt(soTypeId), code: { equals: code.trim(), mode: 'insensitive' } },
+      include: INCLUDE,
+    });
+    return row ? toEntity(row) : null;
+  }
+
   async upsert(entry: UpsertResultCodeInput): Promise<{ status: 'created' | 'updated' }> {
     // findFirst-then-write rather than upsert: the (soTypeId, code) compound unique
     // includes a nullable soTypeId, which Prisma cannot target reliably in upsert.

@@ -624,6 +624,7 @@ model IClassServiceOrder {
   clusterName       String
   thirdPartyCode    String?
   nodeCode          String?
+  soTypeId          String? // IClass tipoOs.id — resolves the result-code mapping per SO type
   soTypeDescription String?
 
   customerCode String?

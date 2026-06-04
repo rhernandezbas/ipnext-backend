@@ -37,6 +37,14 @@ export class InMemoryIClassResultCodeRepository implements IClassResultCodeRepos
     return null;
   }
 
+  async findBySoTypeAndCode(soTypeId: string, code: string): Promise<IClassResultCode | null> {
+    const norm = code.trim().toLowerCase();
+    for (const r of this.rows.values()) {
+      if (String(r.soTypeId) === soTypeId && r.code.trim().toLowerCase() === norm) return { ...r };
+    }
+    return null;
+  }
+
   async upsert(entry: UpsertResultCodeInput): Promise<{ status: 'created' | 'updated' }> {
     for (const r of this.rows.values()) {
       if (r.soTypeId === entry.soTypeId && r.code === entry.code) {

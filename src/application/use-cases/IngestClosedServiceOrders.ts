@@ -179,7 +179,7 @@ export class IngestClosedServiceOrders {
     const existing = await this.closed.findSyncStateByIclassId(s.iclassId);
     if (existing && existing.iclassUpdatedAt === s.iclassUpdatedAt) {
       counts.skippedUnchanged++;
-      const rc = s.resultCodeName ? await this.resultCodes.findByCode(s.resultCodeName) : null;
+      const rc = await this.resolveResultCode(s);
       if (rc?.mappedStageId) {
         const moved = await this.scheduling.reconcileStuckTaskStage(task.id, rc.mappedStageId, this.inFlightStageCode);
         if (moved) counts.transitioned++;
@@ -207,7 +207,7 @@ export class IngestClosedServiceOrders {
     }
 
     // Resolve the configured closure mapping by result-code name.
-    const rc = s.resultCodeName ? await this.resultCodes.findByCode(s.resultCodeName) : null;
+    const rc = await this.resolveResultCode(s);
 
     const order: ClosedServiceOrder = {
       ...s,
@@ -307,6 +307,21 @@ export class IngestClosedServiceOrders {
         console.error(`[audit] task ${taskId}: side-effect lanzó (no deberia, audit() never throws):`, err instanceof Error ? err.message : err);
       }
     }
+  }
+
+  /**
+   * Resolve the closure mapping for an SO. Disambiguates by (soTypeId, code) first
+   * — the same result code maps to different stages across SO types (e.g. Posponer
+   * → Sin_material for most, Pospuesta for one) — then falls back to a name-only
+   * match for SOs with no soTypeId or an uncatalogued type.
+   */
+  private async resolveResultCode(s: ClosedServiceOrderSummary) {
+    if (!s.resultCodeName) return null;
+    if (s.soTypeId) {
+      const byType = await this.resultCodes.findBySoTypeAndCode(s.soTypeId, s.resultCodeName);
+      if (byType) return byType;
+    }
+    return this.resultCodes.findByCode(s.resultCodeName);
   }
 
   private resolveWindowBegin(cursor: string | null, now: Date): Date {
