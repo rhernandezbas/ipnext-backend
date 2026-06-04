@@ -22,11 +22,17 @@ export function computeUpdateTaskActivities(
   prev: ScheduledTask,
   data: UpdateTaskInput,
   actor: ActorContext,
+  /** The task AFTER the update — used to resolve the new `to` names for FK fields. */
+  next?: ScheduledTask,
 ): TaskActivityEvent[] {
   const events: TaskActivityEvent[] = [];
   const d = data as Record<string, unknown>;
   const p = prev as unknown as Record<string, unknown>;
   const changed = (field: string): boolean => d[field] !== undefined && d[field] !== p[field];
+
+  // Human-readable from/to names for FK fields (omitted when `next` is absent, e.g. unit tests).
+  const names = (fromName: string | null | undefined, toName: string | null | undefined) =>
+    next ? { fromName: fromName ?? null, toName: toName ?? null } : undefined;
 
   // ── Simple scalar fields ──
   if (changed('priority')) events.push({ type: 'priority_changed', actor, fromValue: prev.priority, toValue: data.priority });
@@ -34,8 +40,11 @@ export function computeUpdateTaskActivities(
   if (changed('description')) events.push({ type: 'description_changed', actor, fromValue: prev.description, toValue: data.description });
   if (changed('notes')) events.push({ type: 'notes_changed', actor, fromValue: prev.notes, toValue: data.notes });
   if (changed('estimatedHours')) events.push({ type: 'estimated_hours_changed', actor, fromValue: prev.estimatedHours, toValue: data.estimatedHours });
-  if (changed('projectId')) events.push({ type: 'project_changed', actor, fromValue: prev.projectId ?? null, toValue: data.projectId });
-  if (changed('reporterId')) events.push({ type: 'reporter_changed', actor, fromValue: prev.reporterId, toValue: data.reporterId });
+  if (changed('projectId')) events.push({ type: 'project_changed', actor, fromValue: prev.projectId ?? null, toValue: data.projectId, metadata: names(prev.projectName, next?.projectName) });
+  if (changed('reporterId')) events.push({ type: 'reporter_changed', actor, fromValue: prev.reporterId, toValue: data.reporterId, metadata: names(prev.reporterName, next?.reporterName) });
+  if (changed('contractId')) events.push({ type: 'contract_changed', actor, fromValue: prev.contractId, toValue: data.contractId });
+  if (changed('customerId')) events.push({ type: 'customer_changed', actor, fromValue: prev.customerId, toValue: data.customerId, metadata: names(prev.customerName, next?.customerName) });
+  if (changed('partnerId')) events.push({ type: 'partner_changed', actor, fromValue: prev.partnerId, toValue: data.partnerId });
   if (changed('isClosed')) events.push({ type: 'status_changed', actor, fromValue: prev.isClosed, toValue: data.isClosed });
   if (changed('reviewedByInventory')) events.push({ type: 'inventory_review_changed', actor, fromValue: prev.reviewedByInventory, toValue: data.reviewedByInventory });
 

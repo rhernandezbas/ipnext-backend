@@ -41,6 +41,23 @@ describe('computeUpdateTaskActivities (D.2 diff engine)', () => {
     expect(ev).toContainEqual({ type: 'reporter_changed', actor: ACTOR, fromValue: 'r0', toValue: 'r1' });
   });
 
+  it('contract_changed / customer_changed / partner_changed (FK fields)', () => {
+    const prev = prevWith({ contractId: 'c0', customerId: 'cust0', partnerId: null });
+    // mirrors the real report: contract removed (set to null)
+    const ev = diff(prev, { contractId: null, customerId: 'cust1', partnerId: 'p1' });
+    expect(ev).toContainEqual({ type: 'contract_changed', actor: ACTOR, fromValue: 'c0', toValue: null });
+    expect(ev).toContainEqual({ type: 'customer_changed', actor: ACTOR, fromValue: 'cust0', toValue: 'cust1' });
+    expect(ev).toContainEqual({ type: 'partner_changed', actor: ACTOR, fromValue: null, toValue: 'p1' });
+  });
+
+  it('FK changes carry from/to NAMES in metadata when the updated task is provided', () => {
+    const prev = prevWith({ projectId: 'p0', projectName: 'Fibra Norte', customerId: 'c0', customerName: 'Acme' });
+    const next = prevWith({ projectId: 'p1', projectName: 'Fibra Sur', customerId: 'c1', customerName: 'Globex' });
+    const ev = computeUpdateTaskActivities(prev, { projectId: 'p1', customerId: 'c1' }, ACTOR, next);
+    expect(ev).toContainEqual({ type: 'project_changed', actor: ACTOR, fromValue: 'p0', toValue: 'p1', metadata: { fromName: 'Fibra Norte', toName: 'Fibra Sur' } });
+    expect(ev).toContainEqual({ type: 'customer_changed', actor: ACTOR, fromValue: 'c0', toValue: 'c1', metadata: { fromName: 'Acme', toName: 'Globex' } });
+  });
+
   it('assigned when going from null → user', () => {
     const ev = diff(prevWith({ assigneeId: null }), { assigneeId: 'a1' });
     expect(ev).toEqual([{ type: 'assigned', actor: ACTOR, fromValue: null, toValue: 'a1' }]);
