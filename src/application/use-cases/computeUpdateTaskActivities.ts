@@ -48,14 +48,15 @@ export function computeUpdateTaskActivities(
   if (changed('isClosed')) events.push({ type: 'status_changed', actor, fromValue: prev.isClosed, toValue: data.isClosed });
   if (changed('reviewedByInventory')) events.push({ type: 'inventory_review_changed', actor, fromValue: prev.reviewedByInventory, toValue: data.reviewedByInventory });
 
-  // ── Assignee → assigned / unassigned ──
+  // ── Assignee → assigned / unassigned (with technician names for the diff) ──
   if (data.assigneeId !== undefined && data.assigneeId !== prev.assigneeId) {
+    const who = names(prev.assigneeName, next?.assigneeName);
     if (data.assigneeId === null) {
-      events.push({ type: 'unassigned', actor, fromValue: prev.assigneeId, toValue: null });
+      events.push({ type: 'unassigned', actor, fromValue: prev.assigneeId, toValue: null, metadata: who });
     } else if (prev.assigneeId === null) {
-      events.push({ type: 'assigned', actor, fromValue: null, toValue: data.assigneeId });
+      events.push({ type: 'assigned', actor, fromValue: null, toValue: data.assigneeId, metadata: who });
     } else {
-      events.push({ type: 'assigned', actor, fromValue: prev.assigneeId, toValue: data.assigneeId, metadata: { previousAssigneeId: prev.assigneeId } });
+      events.push({ type: 'assigned', actor, fromValue: prev.assigneeId, toValue: data.assigneeId, metadata: { ...who, previousAssigneeId: prev.assigneeId } });
     }
   }
 

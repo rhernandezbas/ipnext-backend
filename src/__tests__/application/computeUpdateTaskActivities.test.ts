@@ -58,6 +58,13 @@ describe('computeUpdateTaskActivities (D.2 diff engine)', () => {
     expect(ev).toContainEqual({ type: 'customer_changed', actor: ACTOR, fromValue: 'c0', toValue: 'c1', metadata: { fromName: 'Acme', toName: 'Globex' } });
   });
 
+  it('assigned carries the technician name when the updated task is provided', () => {
+    const prev = prevWith({ assigneeId: null, assigneeName: null });
+    const next = prevWith({ assigneeId: 'u1', assigneeName: 'Juan Pérez' });
+    const ev = computeUpdateTaskActivities(prev, { assigneeId: 'u1' }, ACTOR, next);
+    expect(ev).toContainEqual({ type: 'assigned', actor: ACTOR, fromValue: null, toValue: 'u1', metadata: { fromName: null, toName: 'Juan Pérez' } });
+  });
+
   it('assigned when going from null → user', () => {
     const ev = diff(prevWith({ assigneeId: null }), { assigneeId: 'a1' });
     expect(ev).toEqual([{ type: 'assigned', actor: ACTOR, fromValue: null, toValue: 'a1' }]);
