@@ -89,9 +89,13 @@ export function createSchedulingRouter(
   bulkMoveTasksToStage?: BulkMoveTasksToStage,
   resendDeps?: ResendDeps,
   getTaskActivity?: GetTaskActivity,
+  /** Granular guard for the inventory-review mutation (inventory:write). Defaults
+   * to a pass-through only when omitted (legacy callers/tests) — app.ts injects it. */
+  requireInventoryWrite?: RequestHandler,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
+  const invWrite: RequestHandler = requireInventoryWrite ?? ((_req, _res, next) => next());
 
   // Actor for the activity log (#10), derived from the authenticated user.
   const actorOf = (req: Request): ActorContext => ({
@@ -245,7 +249,7 @@ export function createSchedulingRouter(
   // ── RV — Revisado por Inventario ─────────────────────────────────────────
   // MUST be registered BEFORE /:id to avoid Express routing it as /:id with id='*'
   if (setTaskInventoryReview) {
-    router.patch('/:id/inventory-review', auth, async (req: Request, res: Response): Promise<void> => {
+    router.patch('/:id/inventory-review', auth, invWrite, async (req: Request, res: Response): Promise<void> => {
       const InventoryReviewSchema = z.object({ reviewed: z.boolean() });
       const parsed = InventoryReviewSchema.safeParse(req.body);
       if (!parsed.success) {

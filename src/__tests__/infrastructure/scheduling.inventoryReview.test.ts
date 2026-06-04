@@ -5,7 +5,7 @@
  */
 
 import request from 'supertest';
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import cookieParser from 'cookie-parser';
 
 import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
@@ -47,7 +47,7 @@ class FakeAuthProvider implements AuthProvider {
   }
 }
 
-function buildApp() {
+function buildApp(requireInventoryWrite?: RequestHandler) {
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
@@ -73,8 +73,12 @@ function buildApp() {
     new MoveTaskToStage(repo, stageRepo),
     authProvider,
     stageRepo,
-    undefined,
+    undefined,            // checklist
     setTaskInventoryReview,
+    undefined,            // bulkMoveTasksToStage
+    undefined,            // resendDeps
+    undefined,            // getTaskActivity
+    requireInventoryWrite,
   );
   app.use('/api/scheduling', router);
 
@@ -202,6 +206,38 @@ describe('SCEN-RV-4: PATCH /api/scheduling/:id/inventory-review — invalid body
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+// ── Granular permission guard (inventory:write) ──────────────────────────────
+
+describe('inventory-review is guarded by a granular permission (inventory:write), not auth-only', () => {
+  it('returns 403 when the inventory:write guard denies', async () => {
+    const deny: RequestHandler = (_req, res) => { res.status(403).json({ code: 'PERMISSION_DENIED' }); };
+    const { app, repo } = buildApp(deny);
+    const task = await repo.createTask(CREATE_INPUT);
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/inventory-review`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ reviewed: true });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('PERMISSION_DENIED');
+  });
+
+  it('allows the mutation when the guard passes', async () => {
+    const allow: RequestHandler = (_req, _res, next) => next();
+    const { app, repo } = buildApp(allow);
+    const task = await repo.createTask(CREATE_INPUT);
+
+    const res = await request(app)
+      .patch(`/api/scheduling/${task.id}/inventory-review`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ reviewed: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.reviewedByInventory).toBe(true);
   });
 });
 

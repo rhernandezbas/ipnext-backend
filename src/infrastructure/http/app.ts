@@ -1107,7 +1107,7 @@ export function createApp() {
     listIClassNodes,
     resendTaskToIClassWithNode,
     requirePerm,
-  }, getTaskActivity));
+  }, getTaskActivity, requirePerm('inventory', 'write')));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);
