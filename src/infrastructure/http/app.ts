@@ -434,6 +434,7 @@ import { UpdateMaterial } from '@application/use-cases/UpdateMaterial';
 import { DeleteMaterial } from '@application/use-cases/DeleteMaterial';
 import { buildClosureSideEffects } from '../scheduling/closureSideEffects';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
+import { ReprocessClosureSideEffects } from '@application/use-cases/ReprocessClosureSideEffects';
 import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
 import { PrismaRbacRoleRepository } from '../adapters/prisma/PrismaRbacRoleRepository';
@@ -1219,9 +1220,10 @@ export function createApp() {
 
   // IClass closure loop — result-code catalog + configurable result→stage mapping + status + backfill.
   const iclassResultCodeRepo = new PrismaIClassResultCodeRepository();
+  const closedServiceOrderRepo = new PrismaClosedServiceOrderRepository();
   const closureIngest = new IngestClosedServiceOrders(
     buildIClassClient(),
-    new PrismaClosedServiceOrderRepository(),
+    closedServiceOrderRepo,
     iclassResultCodeRepo,
     schedulingRepo,
     new PrismaSyncStateRepository(),
@@ -1233,6 +1235,9 @@ export function createApp() {
     new AssignResultCodeStage(iclassResultCodeRepo, stageRepo),
     new GetClosureStatus(new PrismaSyncStateRepository()),
     new BackfillClosedServiceOrders(buildIClassClient(), schedulingRepo, closureIngest),
+    // Manual side-effect reprocess — re-fires only pending effects (flag-gated).
+    new ReprocessClosureSideEffects(featureFlagRepo, closedServiceOrderRepo, closureIngest),
+    requirePerm('iclass', 'manage'),
     authAdapter,
   ));
 

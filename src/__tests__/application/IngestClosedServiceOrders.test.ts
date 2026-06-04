@@ -289,6 +289,25 @@ describe('IngestClosedServiceOrders', () => {
     expect(closed.orders.get('900')!.order.checklists[0].answers[0].photoUrl).toBeNull();
   });
 
+  it('marks the side-effect tracking columns on the mirror after a successful closure', async () => {
+    const { scheduling, iclass, resultCodes, closed, state } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    const commentRepo = new InMemoryTaskCommentRepository();
+    const useCase = new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, {
+      now: () => new Date('2026-05-29T12:00:00Z'),
+      postComment: new PostClosureComment(commentRepo),
+    });
+
+    await useCase.execute();
+
+    // comment posted → marked; no buildSuggestions/audit injected → those stay false.
+    expect(await closed.getSideEffectState('900')).toEqual({
+      commentPosted: true, inventoryBuilt: false, auditDone: false, auditAttempts: 0,
+    });
+  });
+
   it('orchestrates closure side effects: OCR → suggestions + auto-comment (all opt-in, non-fatal)', async () => {
     const { scheduling, iclass, resultCodes, closed, state } = setup();
     scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id, contractId: 'svc1' });

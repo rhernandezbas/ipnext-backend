@@ -1,9 +1,19 @@
 import { ClosedServiceOrder } from '@domain/entities/iclass-closed-order';
-import { ClosedServiceOrderRepository } from '@domain/ports/ClosedServiceOrderRepository';
+import {
+  ClosedServiceOrderRepository,
+  ClosureSideEffect,
+  ClosureSideEffectState,
+  PendingClosureSideEffects,
+} from '@domain/ports/ClosedServiceOrderRepository';
 
 interface StoredOrder {
   order: ClosedServiceOrder;
   scheduledTaskId: string | null;
+  sideEffects: ClosureSideEffectState;
+}
+
+function freshState(): ClosureSideEffectState {
+  return { commentPosted: false, inventoryBuilt: false, auditDone: false, auditAttempts: 0 };
 }
 
 /** In-memory mirror store for closed-SO use-case tests. */
@@ -17,7 +27,44 @@ export class InMemoryClosedServiceOrderRepository implements ClosedServiceOrderR
   }
 
   async upsert(order: ClosedServiceOrder, scheduledTaskId: string | null): Promise<void> {
-    this.orders.set(order.iclassId, { order: structuredCloneSafe(order), scheduledTaskId });
+    // Preserve existing side-effect state across a re-mirror (upsert never resets it).
+    const prev = this.orders.get(order.iclassId)?.sideEffects;
+    this.orders.set(order.iclassId, {
+      order: structuredCloneSafe(order),
+      scheduledTaskId,
+      sideEffects: prev ?? freshState(),
+    });
+  }
+
+  async getByIclassId(iclassId: string): Promise<ClosedServiceOrder | null> {
+    const found = this.orders.get(iclassId);
+    return found ? structuredCloneSafe(found.order) : null;
+  }
+
+  async getSideEffectState(iclassId: string): Promise<ClosureSideEffectState | null> {
+    const found = this.orders.get(iclassId);
+    return found ? { ...found.sideEffects } : null;
+  }
+
+  async listPendingSideEffects(maxAuditAttempts: number): Promise<PendingClosureSideEffects[]> {
+    const out: PendingClosureSideEffects[] = [];
+    for (const [iclassId, s] of this.orders) {
+      const se = s.sideEffects;
+      const pending =
+        !se.commentPosted || !se.inventoryBuilt || (!se.auditDone && se.auditAttempts < maxAuditAttempts);
+      if (pending) out.push({ iclassId, scheduledTaskId: s.scheduledTaskId, ...se });
+    }
+    return out;
+  }
+
+  async markSideEffect(iclassId: string, effect: ClosureSideEffect, done: boolean): Promise<void> {
+    const found = this.orders.get(iclassId);
+    if (found) found.sideEffects[effect] = done;
+  }
+
+  async incrementAuditAttempt(iclassId: string): Promise<void> {
+    const found = this.orders.get(iclassId);
+    if (found) found.sideEffects.auditAttempts += 1;
   }
 }
 
