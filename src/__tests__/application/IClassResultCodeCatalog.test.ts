@@ -46,6 +46,16 @@ describe('IClass result-code catalog', () => {
     });
   });
 
+  describe('findByCode', () => {
+    it('matches case-insensitively and trims surrounding whitespace', async () => {
+      const repo = new InMemoryIClassResultCodeRepository();
+      await repo.upsert({ soTypeId: '1', code: 'CAMBIO DE DOMICILIO REALIZADO', type: 'Sucesso' });
+      expect(await repo.findByCode('Cambio de Domicilio Realizado')).not.toBeNull();
+      expect(await repo.findByCode('  cambio de domicilio realizado  ')).not.toBeNull();
+      expect(await repo.findByCode('otro code distinto')).toBeNull();
+    });
+  });
+
   describe('ListIClassResultCodes', () => {
     it('filters to mapped entries', async () => {
       const repo = new InMemoryIClassResultCodeRepository();

@@ -77,6 +77,22 @@ describe('IngestClosedServiceOrders', () => {
     expect(task!.stageId).toBe(INSTALADO.id);
   });
 
+  it('matches the result code case-insensitively + trimmed (IClass varies the casing of motivoFechamento)', async () => {
+    const { scheduling, iclass, resultCodes, useCase } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    // IClass returns the result-code name in a DIFFERENT case (+ stray spaces) than the operator's catalog.
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', resultCodeName: '  CAMBIO DE DOMICILIO REALIZADO ' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    // Catalog stored it capitalized — must still match and transition.
+    await mapResultCode(resultCodes, 'Cambio de Domicilio Realizado', INSTALADO.id);
+
+    const counts = await useCase.execute();
+
+    expect(counts.transitioned).toBe(1);
+    const task = await scheduling.getTask('t1');
+    expect(task!.stageId).toBe(INSTALADO.id);
+  });
+
   it('dedupes a repeated status-history entry before mirroring (IClass returns a transition twice)', async () => {
     const { scheduling, iclass, closed, useCase } = setup();
     scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
