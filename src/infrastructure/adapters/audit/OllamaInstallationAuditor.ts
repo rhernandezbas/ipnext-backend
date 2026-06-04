@@ -2,6 +2,7 @@ import { Jimp, JimpMime } from 'jimp';
 import { InstallationAuditor } from '@domain/ports/InstallationAuditor';
 import { AuditContext, AuditResult } from '@domain/entities/installation-audit';
 import { parseAuditResult } from './parseAuditResult';
+import { auditFormatSchema } from './auditFormatSchema';
 
 export interface OllamaAuditConfig {
   baseUrl: string;
@@ -99,10 +100,15 @@ export class OllamaInstallationAuditor implements InstallationAuditor {
   }
 
   private async ask(prompt: string, images: string[]): Promise<string> {
+    // Structured outputs: pass the findings JSON Schema as `format` (not 'json').
+    // This grammar-constrains the vision model to emit a valid findings array,
+    // eliminating the `{status, issues}` object + `<|im_start|>` degeneration that
+    // made `format: 'json'` fail to parse ~always, and it runs far faster (~28s vs
+    // ~100s) since the constrained space collapses.
     const res = await fetch(`${this.cfg.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.cfg.model, prompt, images, stream: false, format: 'json', options: { temperature: 0 } }),
+      body: JSON.stringify({ model: this.cfg.model, prompt, images, stream: false, format: auditFormatSchema(), options: { temperature: 0 } }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     const json = (await res.json()) as { response?: string };
