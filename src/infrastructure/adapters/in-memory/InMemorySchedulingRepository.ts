@@ -494,6 +494,15 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return [];
   }
 
+  async reconcileStuckTaskStage(taskId: string, mappedStageId: string, inFlightStageCode: string): Promise<boolean> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (!task || task.stageId === mappedStageId || !this.stageRepo) return false;
+    const currentStage = await this.stageRepo.getById(task.stageId);
+    if (!currentStage || currentStage.code !== inFlightStageCode) return false; // already transitioned / manually placed
+    await this.moveTaskToStage(taskId, mappedStageId);
+    return true;
+  }
+
   /** Test helper: seed a fully-formed task (lets tests set derived JOIN fields). */
   seedTask(overrides: Partial<ScheduledTask> & Pick<ScheduledTask, 'id'>): ScheduledTask {
     const task = makeTask({

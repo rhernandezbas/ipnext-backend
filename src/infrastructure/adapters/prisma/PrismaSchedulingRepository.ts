@@ -285,6 +285,18 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     }
   }
 
+  async reconcileStuckTaskStage(taskId: string, mappedStageId: string, inFlightStageCode: string): Promise<boolean> {
+    const task = await (prisma.scheduledTask as any).findUnique({
+      where: { id: taskId },
+      select: { stageId: true, stage: { select: { code: true } } },
+    });
+    // Only move a task STILL parked in the in-flight stage — never override a
+    // task that already transitioned or was manually placed elsewhere.
+    if (!task || task.stageId === mappedStageId || task.stage?.code !== inFlightStageCode) return false;
+    await this.moveTaskToStage(taskId, mappedStageId);
+    return true;
+  }
+
   // ── Checklist methods ────────────────────────────────────────────────────
 
   async getTaskWithChecklist(id: string): Promise<(ScheduledTask & { checklist: TaskChecklistItem[] }) | null> {

@@ -27,6 +27,8 @@ const TERMINAL_STATUS = '7';
 const BOOTSTRAP_DAYS = 25;
 /** Overlap re-scanned each steady-state run (approval flips 4→50→7 days later). */
 const DEFAULT_OVERLAP_MINUTES = 30;
+/** Stage holding tasks sent to IClass and awaiting closure (rename-safe, by code). */
+const DEFAULT_IN_FLIGHT_STAGE_CODE = 'registered_in_iclass';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface IngestClosedCounts {
@@ -47,6 +49,8 @@ export interface IngestClosedCounts {
 export interface IngestClosedOptions {
   now?: () => Date;
   overlapMinutes?: number;
+  /** Immutable business code of the in-flight stage (sent, awaiting closure). */
+  inFlightStageCode?: string;
   /**
    * Optional SEAM portal scraper. When present, each mirrored SO's checklist
    * photos are correlated by ordem from the portal HTML (API v2 is photo-blind).
@@ -69,6 +73,7 @@ export interface IngestClosedOptions {
 export class IngestClosedServiceOrders {
   private readonly now: () => Date;
   private readonly overlapMinutes: number;
+  private readonly inFlightStageCode: string;
   private readonly portal?: IClassPortalPort;
   private readonly postComment?: PostClosureComment;
   private readonly extractOcr?: ExtractDeviceInfoFromPhoto;
@@ -85,6 +90,7 @@ export class IngestClosedServiceOrders {
   ) {
     this.now = opts.now ?? (() => new Date());
     this.overlapMinutes = opts.overlapMinutes ?? DEFAULT_OVERLAP_MINUTES;
+    this.inFlightStageCode = opts.inFlightStageCode ?? DEFAULT_IN_FLIGHT_STAGE_CODE;
     this.portal = opts.portal;
     this.postComment = opts.postComment;
     this.extractOcr = opts.extractOcr;
@@ -157,10 +163,21 @@ export class IngestClosedServiceOrders {
       return;
     }
 
-    // Idempotency — skip if already mirrored at the same modification timestamp.
+    // Idempotency — skip re-mirroring if already mirrored at the same modification
+    // timestamp. BUT still reconcile a stuck transition: the SO is unchanged, yet
+    // the task may remain parked in the in-flight stage because its result-code →
+    // stage mapping was missing/failed at first mirror (e.g. a case-mismatch fixed
+    // later, or the operator mapped the code afterwards). Re-evaluate ONLY the
+    // stage move — never re-mirror or re-fire side-effects (would duplicate
+    // comments/audits). No-op when the task already left the in-flight stage.
     const existing = await this.closed.findSyncStateByIclassId(s.iclassId);
     if (existing && existing.iclassUpdatedAt === s.iclassUpdatedAt) {
       counts.skippedUnchanged++;
+      const rc = s.resultCodeName ? await this.resultCodes.findByCode(s.resultCodeName) : null;
+      if (rc?.mappedStageId) {
+        const moved = await this.scheduling.reconcileStuckTaskStage(task.id, rc.mappedStageId, this.inFlightStageCode);
+        if (moved) counts.transitioned++;
+      }
       return;
     }
 

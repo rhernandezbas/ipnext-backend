@@ -78,6 +78,15 @@ export interface SchedulingRepository {
    * resolved by stage `code` (rename-safe).
    */
   listTasksInIClassStage(stageCode: string): Promise<ScheduledTask[]>;
+  /**
+   * Closure reconcile: move the task to `mappedStageId` ONLY IF it is still parked
+   * in the in-flight stage (resolved by `inFlightStageCode`) — i.e. it was mirrored
+   * but never transitioned because its result-code→stage mapping was missing/failed
+   * at first mirror and was fixed later. Returns true when it moved, false when the
+   * task already left the in-flight stage (so a reconcile never overrides a manual
+   * placement). Fires no closure side-effects.
+   */
+  reconcileStuckTaskStage(taskId: string, mappedStageId: string, inFlightStageCode: string): Promise<boolean>;
 
   // IClass SO type mapping (iclass-so-type-mapping)
   /**

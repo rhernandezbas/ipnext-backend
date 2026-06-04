@@ -20,6 +20,7 @@ import { Stage } from '@domain/entities/workflow';
 
 const REGISTRADO: Stage = { id: 'st-reg', workflowId: 'wf', name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'nuevo', order: 5, color: null };
 const INSTALADO: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', code: 'instalado', category: 'hecho', order: 8, color: null };
+const FACTURADO: Stage = { id: 'st-fact', workflowId: 'wf', name: 'Facturado', code: 'facturado', category: 'hecho', order: 9, color: null };
 
 function summary(over: Partial<ClosedServiceOrderSummary> & Pick<ClosedServiceOrderSummary, 'iclassId' | 'iclassCodigo'>): ClosedServiceOrderSummary {
   return {
@@ -45,6 +46,7 @@ function setup() {
   const stages = new InMemoryStageRepository();
   stages.addDirect(REGISTRADO);
   stages.addDirect(INSTALADO);
+  stages.addDirect(FACTURADO);
   const scheduling = new InMemorySchedulingRepository(stages);
   const iclass = new InMemoryIClassClient();
   const resultCodes = new InMemoryIClassResultCodeRepository();
@@ -173,6 +175,49 @@ describe('IngestClosedServiceOrders', () => {
     expect(first.mirrored).toBe(1);
     expect(second.mirrored).toBe(0);
     expect(second.skippedUnchanged).toBe(1);
+  });
+
+  it('reconciles a stuck task on an UNCHANGED SO: transitions it once the mapping exists (no re-mirror, no side-effects)', async () => {
+    const { scheduling, iclass, resultCodes, closed, useCase } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    // First run: result code NOT mapped yet → mirrors but the task stays in REGISTRADO.
+    const first = await useCase.execute();
+    expect(first.mirrored).toBe(1);
+    expect(first.transitioned).toBe(0);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(REGISTRADO.id);
+
+    // Operator maps the result code AFTER the OS was already mirrored.
+    await mapResultCode(resultCodes, 'Instalacion Completa Fibra', INSTALADO.id);
+
+    // Second run: SO unchanged (same iclassUpdatedAt) → skippedUnchanged, but the
+    // stuck task is reconciled to the now-mapped stage. No re-mirror.
+    const before = closed.orders.get('900')!.order;
+    const second = await useCase.execute();
+    expect(second.skippedUnchanged).toBe(1);
+    expect(second.transitioned).toBe(1);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id);
+    expect(closed.orders.get('900')!.order).toBe(before); // mirror untouched
+  });
+
+  it('does NOT reconcile a task that already left the in-flight stage (respects manual placement)', async () => {
+    const { scheduling, iclass, resultCodes, useCase } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    await mapResultCode(resultCodes, 'Instalacion Completa Fibra', INSTALADO.id);
+    await useCase.execute(); // mirrors + transitions to INSTALADO
+
+    // Operator manually parks it in a DIFFERENT stage (not the in-flight one).
+    await scheduling.moveTaskToStage('t1', FACTURADO.id);
+
+    // Re-run on the unchanged SO → must NOT yank it back to INSTALADO.
+    const second = await useCase.execute();
+    expect(second.skippedUnchanged).toBe(1);
+    expect(second.transitioned).toBe(0);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(FACTURADO.id);
   });
 
   it('mirrors but does NOT move the task when the result code has no mapped stage', async () => {
