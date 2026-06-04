@@ -19,7 +19,7 @@ const HISTORY: SoStatusHistoryEntry[] = [{ iclassOsStatusId: '2', occurredAt: '2
 function so(): ClosedServiceOrderSummary {
   return {
     iclassId: '900', iclassCodigo: '4013', clusterName: 'IPNEXT INTERNET', thirdPartyCode: null, nodeCode: null,
-    soTypeDescription: null, customerCode: null, customerName: null, addressCode: null, addressLine: null, addressCity: null,
+    soTypeId: null, soTypeDescription: null, customerCode: null, customerName: null, addressCode: null, addressLine: null, addressCity: null,
     addressLat: null, addressLng: null, statusCode: '7', statusDescription: 'Concluida',
     requestedAt: null, scheduledFor: null, availableAt: null, serviceStartedAt: null, serviceEndedAt: null,
     resultCodeName: 'OK', closedByLogin: null, closedByName: null, closeLatitude: null, closeLongitude: null, closeGpsAt: null,

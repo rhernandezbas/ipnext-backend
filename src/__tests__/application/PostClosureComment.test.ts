@@ -7,7 +7,7 @@ function order(over: Partial<ClosedServiceOrder> = {}): ClosedServiceOrder {
     iclassId: '900',
     iclassCodigo: '4013',
     clusterName: 'IPNEXT INTERNET',
-    thirdPartyCode: null, nodeCode: null, soTypeDescription: null,
+    thirdPartyCode: null, nodeCode: null, soTypeId: null, soTypeDescription: null,
     customerCode: null, customerName: null, addressCode: null, addressLine: null,
     addressCity: null, addressLat: null, addressLng: null,
     statusCode: '7', statusDescription: 'ENCERRADO',

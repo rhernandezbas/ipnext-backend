@@ -19,7 +19,7 @@ const HISTORY: SoStatusHistoryEntry[] = [
 function summary(iclassId: string, codigo: string, statusCode = '7'): ClosedServiceOrderSummary {
   return {
     iclassId, iclassCodigo: codigo, clusterName: 'IPNEXT INTERNET', thirdPartyCode: null, nodeCode: null,
-    soTypeDescription: null, customerCode: null, customerName: null, addressCode: null, addressLine: null,
+    soTypeId: null, soTypeDescription: null, customerCode: null, customerName: null, addressCode: null, addressLine: null,
     addressCity: null, addressLat: null, addressLng: null, statusCode, statusDescription: 'Concluida',
     requestedAt: null, scheduledFor: null, availableAt: null, serviceStartedAt: null, serviceEndedAt: null,
     resultCodeName: 'Instalacion Completa Fibra', closedByLogin: null, closedByName: null,

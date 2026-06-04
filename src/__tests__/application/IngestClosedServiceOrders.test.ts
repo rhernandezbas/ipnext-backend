@@ -24,7 +24,7 @@ const FACTURADO: Stage = { id: 'st-fact', workflowId: 'wf', name: 'Facturado', c
 
 function summary(over: Partial<ClosedServiceOrderSummary> & Pick<ClosedServiceOrderSummary, 'iclassId' | 'iclassCodigo'>): ClosedServiceOrderSummary {
   return {
-    clusterName: 'IPNEXT INTERNET', thirdPartyCode: null, nodeCode: 'Mercedes', soTypeDescription: 'INSTALACION FIBRA',
+    clusterName: 'IPNEXT INTERNET', thirdPartyCode: null, nodeCode: 'Mercedes', soTypeId: null, soTypeDescription: 'INSTALACION FIBRA',
     customerCode: '204382', customerName: 'Cliente X', addressCode: '204382', addressLine: 'Calle 1', addressCity: 'Mercedes',
     addressLat: null, addressLng: null, statusCode: '7', statusDescription: 'Concluida',
     requestedAt: null, scheduledFor: null, availableAt: null, serviceStartedAt: null, serviceEndedAt: null,
@@ -93,6 +93,37 @@ describe('IngestClosedServiceOrders', () => {
     expect(counts.transitioned).toBe(1);
     const task = await scheduling.getTask('t1');
     expect(task!.stageId).toBe(INSTALADO.id);
+  });
+
+  it('disambiguates the result code by soType when the same code maps differently per SO type', async () => {
+    const { scheduling, iclass, resultCodes, useCase } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    // Same code "Posponer", two SO types, DIFFERENT target stages.
+    await resultCodes.upsert({ soTypeId: 'A', code: 'Posponer', type: 'Pendente' });
+    await resultCodes.upsert({ soTypeId: 'B', code: 'Posponer', type: 'Pendente' });
+    const all = await resultCodes.list();
+    await resultCodes.assignStage(all.find(r => r.soTypeId === 'A')!.id, REGISTRADO.id); // type A → stays
+    await resultCodes.assignStage(all.find(r => r.soTypeId === 'B')!.id, INSTALADO.id);  // type B → Instalado
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', soTypeId: 'B', resultCodeName: 'Posponer' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    const counts = await useCase.execute();
+
+    expect(counts.transitioned).toBe(1);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id); // soType B's mapping, not A's
+  });
+
+  it('falls back to a name-only match when the SO carries no soTypeId', async () => {
+    const { scheduling, iclass, resultCodes, useCase } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    await mapResultCode(resultCodes, 'Instalacion Completa Fibra', INSTALADO.id); // catalogued under soTypeId '1'
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', soTypeId: null })]; // no soType on the SO
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    const counts = await useCase.execute();
+
+    expect(counts.transitioned).toBe(1);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id);
   });
 
   it('dedupes a repeated status-history entry before mirroring (IClass returns a transition twice)', async () => {

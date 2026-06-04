@@ -3,7 +3,7 @@ import { ClosedServiceOrder } from '@domain/entities/iclass-closed-order';
 
 function order(over: Partial<ClosedServiceOrder> & Pick<ClosedServiceOrder, 'iclassId' | 'iclassCodigo'>): ClosedServiceOrder {
   return {
-    clusterName: 'IPNEXT', thirdPartyCode: null, nodeCode: null, soTypeDescription: null,
+    clusterName: 'IPNEXT', thirdPartyCode: null, nodeCode: null, soTypeId: null, soTypeDescription: null,
     customerCode: null, customerName: null, addressCode: null, addressLine: null, addressCity: null,
     addressLat: null, addressLng: null, statusCode: '7', statusDescription: 'Concluida',
     requestedAt: null, scheduledFor: null, availableAt: null, serviceStartedAt: null, serviceEndedAt: null,

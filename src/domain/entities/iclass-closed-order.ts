@@ -70,6 +70,9 @@ export interface ClosedServiceOrderSummary {
   clusterName: string;
   thirdPartyCode: string | null;
   nodeCode: string | null;
+  /** IClass `tipoOs.id` — the SO type. Used to resolve the result-code mapping by
+   * (soTypeId, code), since the same result code maps differently per SO type. */
+  soTypeId: string | null;
   soTypeDescription: string | null;
 
   customerCode: string | null;

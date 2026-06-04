@@ -444,6 +444,7 @@ export function parseServiceOrderSummary(raw: Record<string, unknown>, clusterNa
     clusterName,
     thirdPartyCode: strOrNull(credenciada.codigo),
     nodeCode: strOrNull(node.codigo),
+    soTypeId: strOrNull(tipoOs.id),
     soTypeDescription: strOrNull(tipoOs.resumoTipoOs) ?? strOrNull(tipoOs.descricao),
     customerCode: strOrNull(contrato.codigo),
     customerName: strOrNull(contrato.nomeTitular),
