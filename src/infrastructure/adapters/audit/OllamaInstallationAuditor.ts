@@ -42,9 +42,18 @@ export class OllamaInstallationAuditor implements InstallationAuditor {
       const urls = ctx.photoUrls.slice(0, this.maxPhotos);
       const downloaded = await Promise.all(urls.map(u => this.fetchB64(u)));
       const images = downloaded.filter((x): x is string => !!x);
+      // eslint-disable-next-line no-console
+      console.log(`[audit] OS ${ctx.osCodigo}: ${ctx.photoUrls.length} fotos en checklist, ${images.length} descargadas; llamando ${this.cfg.model}`);
       const raw = await this.ask(this.renderPrompt(ctx), images);
-      return parseAuditResult(raw);
-    } catch {
+      const parsed = parseAuditResult(raw);
+      if (!parsed.ok) {
+        // eslint-disable-next-line no-console
+        console.warn(`[audit] OS ${ctx.osCodigo}: parse soft-fail. Respuesta cruda del modelo:`, String(raw).slice(0, 300));
+      }
+      return parsed;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[audit] OS ${ctx.osCodigo}: FALLO en audit():`, err instanceof Error ? err.message : err);
       return { ok: false, findings: [] };
     }
   }

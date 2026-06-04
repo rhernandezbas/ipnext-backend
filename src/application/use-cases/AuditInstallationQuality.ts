@@ -28,18 +28,29 @@ export class AuditInstallationQuality {
 
   async execute(input: AuditInstallationQualityInput): Promise<InstallationAudit | null> {
     const task = await this.scheduling.getTask(input.taskId);
-    if (!task) return null;
+    if (!task) {
+      // eslint-disable-next-line no-console
+      console.warn(`[audit] task ${input.taskId} no existe — se omite la auditoría`);
+      return null;
+    }
     const comments = await this.comments.listByTask(input.taskId);
     const context = buildAuditContext(input.order, task, comments);
 
     const result = await this.auditor.audit(context); // never throws
-    if (!result.ok) return null; // soft-fail: keep the prior audit, persist nothing
+    if (!result.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(`[audit] task ${input.taskId}: el auditor devolvió ok=false — no se persiste nada`);
+      return null; // soft-fail: keep the prior audit, persist nothing
+    }
 
     const findings =
       result.findings.length > 0
         ? result.findings
         : [{ severity: 'ok' as const, category: 'otros' as const, text: 'Instalación sin observaciones.', photoUrls: [] }];
 
-    return this.audits.replaceForTask(input.taskId, this.auditor.provider, { ok: true, findings });
+    const saved = await this.audits.replaceForTask(input.taskId, this.auditor.provider, { ok: true, findings });
+    // eslint-disable-next-line no-console
+    console.log(`[audit] task ${input.taskId}: auditoría guardada (${findings.length} hallazgos)`);
+    return saved;
   }
 }
