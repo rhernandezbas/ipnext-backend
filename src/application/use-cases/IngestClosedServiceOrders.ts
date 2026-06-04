@@ -262,8 +262,10 @@ export class IngestClosedServiceOrders {
     if (this.auditInstallation) {
       try {
         await this.auditInstallation.execute({ taskId, order });
-      } catch {
-        /* non-fatal — la auditoría IA nunca afecta el cierre ya commiteado */
+      } catch (err) {
+        // non-fatal — la auditoría IA nunca afecta el cierre ya commiteado, pero LOGUEAMOS el fallo
+        // eslint-disable-next-line no-console
+        console.error(`[audit] task ${taskId}: side-effect lanzó (no deberia, audit() never throws):`, err instanceof Error ? err.message : err);
       }
     }
   }
