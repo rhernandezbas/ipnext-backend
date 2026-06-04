@@ -2,12 +2,12 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 agregados el mismo día (#15, #16) → **16 totales**.
-> **11 hechos (en prod) · 5 pendientes.**
+> **12 hechos (en prod) · 4 pendientes.**
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (11, desplegados en producción)
+## ✅ Hechos (12, desplegados en producción)
 
 ### #1 — Crear tarea: proyecto + descripción obligatorios
 - **Qué se pidió**: el select de proyecto al crear tarea venía pre-seleccionado ("Fibra los…"); se quería que arrancara sin proyecto, obligatorio elegir uno, y descripción obligatoria.
@@ -75,20 +75,19 @@
 - **Dónde**: BE PR #41 (migración `20260604120000`) / FE PR #30. Archivado en `openspec/changes/archive/2026-06-03-task-activity-log/`. Verify SDD: PASS 20/20.
 - **Verificado en prod**: tabla creada + migración aplicada + FK a `RbacUser` confirmados en la DB; pestaña Actividad desplegada.
 
+### #9 — Crear tarea desde ticket: redirigir + relacionar
+- **Qué se pidió**: al crear una tarea desde un ticket, redirigir a la tarea y que el ticket aparezca en "Relacionado".
+- **Cómo se resolvió** (solo FE — el BE ya tenía el endpoint): causa raíz — el FE creaba la tarea por `POST /scheduling` (genérico), que **descarta el `ticketId` por diseño** (AD-7: no body-overridable). Fix: usar el endpoint dedicado `POST /tickets/:id/tasks` (ata el ticketId al path + lo persiste) vía `createTaskFromTicket`/`useCreateTaskFromTicket`, y redirigir a `/admin/scheduling/tasks/:id`. El tab "Relacionado" ya renderiza el ticket.
+- **Dónde**: FE PR #33. Sin cambios BE.
+
 ---
 
-## ⏳ Pendientes (5)
+## ⏳ Pendientes (4)
 
 ### #7 — Unificar sub-page "cierre de OS" + feature flag del auditor IA
 - **Qué**: en Scheduling → Configuraciones → integración IClass, unificar la sub-page de "cierre de OS" (manteniendo el diseño) y crear la **feature flag del auditor de IA**.
 - **Dónde**: FE config de scheduling (settings) + BE feature flags (`FeatureFlag`). El auditor IA ya existe (F6 de closure-inventory-intelligence) bajo `ICLASS_AUDIT_ENABLED` env — esto lo expondría como flag toggleable en UI.
 - **Tamaño**: mediano (integraciones/flags).
-
-### #9 — Crear tarea desde ticket: redirigir + relacionar
-- **Qué**: al crear un ticket y, dentro del ticket, crear una tarea: hoy la tarea se crea pero (a) NO redirige a la tarea en ese contexto, y (b) en la tarea, en "Relacionado", NO aparece el ticket desde el que se creó.
-- **Estado parcial**: el modelo ya soporta `ticketId` en la tarea y el tab "Relacionado" ya renderiza el ticket vinculado cuando `ticketId` está presente (visto en `TaskTabs.tsx`). Falta: setear el `ticketId` al crear desde el ticket + redirigir.
-- **Dónde**: FE (flujo crear-tarea-desde-ticket + navegación) + BE (que el create acepte/persista `ticketId` desde ese contexto).
-- **Tamaño**: mediano (tickets).
 
 ### #11 — Rediseño de tickets + ID autoincremental + filtros ocultos
 - **Qué**: (a) rediseño visual de tickets; (b) agregar un **ID autoincremental** como se hizo con tareas (`sequenceNumber`); (c) los filtros deben estar **ocultos** y mostrarse solo al clickear el botón de filtro.
@@ -114,6 +113,14 @@ Dos follow-ups del inventario shippeados el 2026-06-03 (archivados en `openspec/
 - **inventory-edit-and-match**: editar el tipo de un equipo confirmado (admin) sincronizando sugerencia + contrato + sidebar (fix tarea 4691); match de sugerencias contra el inventario actual (badge SN/MAC → "ya instalado" / tipo → "posible reemplazo").
 - **inventory-confirm-dedup-replace**: el match pasa de aviso a acción — frena el duplicado del mismo equipo; ofrece "Agregar" o "Reemplazar la actual" (la vieja → `status='replaced'` + `replacesItemId`).
 
+## Refinamientos del #10 (post-deploy 2026-06-04, ya en prod)
+
+Tres iteraciones del activity log pedidas tras usarlo en serio (no son ítems numerados):
+- **FKs faltantes**: el diff engine no trackeaba contrato/cliente/partner (por eso cambiar el contrato no generaba log) → se agregaron `contract_changed` / `customer_changed` / `partner_changed`. BE PR #43 / FE PR #34.
+- **Diff legible en todo el feed**: los eventos FK con nombre muestran el cambio (proyecto/cliente/reportante/asignado: "cambió el proyecto: A → B", "asignó a Juan", "reasignó: A → B"); contrato/partner por presencia ("quitó el contrato"); fechas, dirección y descripción muestran from→to. BE PR #44 / FE PR #35.
+- **Refresh en vivo**: el feed se invalida tras update/stage/checklist/inventario/comentarios → el evento aparece **sin recargar la página**. FE PR #34.
+- **Pendiente conocido**: los observadores (`watcher_added/removed`) muestran "agregó/quitó un observador" **sin nombre** — la tarea no expone los nombres de los watchers; requeriría resolverlos (BE o FE).
+
 ## Notas de priorización (lectura del equipo)
 
-- **Epic Tickets** (#9 + #11) y **Epic Integraciones/flags** (#7 + #14): conviene agruparlos por epic.
+- **Epic Tickets**: #9 ✅ hecho; queda **#11** (rediseño + ID autoincremental + filtros). **Epic Integraciones/flags** (#7 + #14): conviene agruparlos.
