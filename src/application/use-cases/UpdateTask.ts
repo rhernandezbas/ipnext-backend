@@ -57,7 +57,7 @@ export class UpdateTask {
     const updated = await this.repo.updateTask(id, data);
 
     if (this.recorder && prev && updated) {
-      const events = computeUpdateTaskActivities(prev, data, actor ?? SYSTEM_ACTOR);
+      const events = computeUpdateTaskActivities(prev, data, actor ?? SYSTEM_ACTOR, updated);
       if (events.length > 0) {
         await this.recorder.recordMany(id, events);
       }
