@@ -1,8 +1,8 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 agregados el mismo día (#15, #16) → **16 totales**.
-> **12 hechos (en prod) · 4 pendientes.**
+> Arrancó el 2026-06-03 con 14 ítems; +2 el mismo día (#15, #16) → 16; +1 el 2026-06-04 (#17) → **17 totales**.
+> **12 hechos (en prod) · 5 pendientes.**
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -82,7 +82,7 @@
 
 ---
 
-## ⏳ Pendientes (4)
+## ⏳ Pendientes (5)
 
 ### #7 — Unificar sub-page "cierre de OS" + feature flag del auditor IA
 - **Qué**: en Scheduling → Configuraciones → integración IClass, unificar la sub-page de "cierre de OS" (manteniendo el diseño) y crear la **feature flag del auditor de IA**.
@@ -105,6 +105,11 @@
 - **Dónde**: BE `ScheduledTask` (columnas/estado) + un job/use-case de auto-completado + `FeatureFlag` + UI de integraciones.
 - **Tamaño**: mediano-grande (integraciones/flags).
 
+### #17 — Activity log: nombre de los observadores (watchers)  *(agregado 2026-06-04)*
+- **Qué**: en el feed de actividad de la tarea, los eventos `watcher_added` / `watcher_removed` muestran "agregó/quitó un observador" **sin el nombre** — el único evento que no muestra el diff completo (los demás ya lo muestran tras los refinamientos del #10).
+- **Dónde**: BE `computeUpdateTaskActivities` (incluir el nombre del watcher en metadata — la tarea hoy solo tiene `watcherIds`, no `watcherNames`, así que hay que resolverlo) **o** FE `describeActivity` (resolver el id contra la lista de admins). El BE es más consistente con el resto (project/customer/reporter ya resuelven nombre en metadata).
+- **Tamaño**: chico.
+
 ---
 
 ## Refinamientos del #8 (ya en prod, NO son ítems numerados)
@@ -119,7 +124,7 @@ Tres iteraciones del activity log pedidas tras usarlo en serio (no son ítems nu
 - **FKs faltantes**: el diff engine no trackeaba contrato/cliente/partner (por eso cambiar el contrato no generaba log) → se agregaron `contract_changed` / `customer_changed` / `partner_changed`. BE PR #43 / FE PR #34.
 - **Diff legible en todo el feed**: los eventos FK con nombre muestran el cambio (proyecto/cliente/reportante/asignado: "cambió el proyecto: A → B", "asignó a Juan", "reasignó: A → B"); contrato/partner por presencia ("quitó el contrato"); fechas, dirección y descripción muestran from→to. BE PR #44 / FE PR #35.
 - **Refresh en vivo**: el feed se invalida tras update/stage/checklist/inventario/comentarios → el evento aparece **sin recargar la página**. FE PR #34.
-- **Pendiente conocido**: los observadores (`watcher_added/removed`) muestran "agregó/quitó un observador" **sin nombre** — la tarea no expone los nombres de los watchers; requeriría resolverlos (BE o FE).
+- **Pendiente → promovido a #17**: los observadores (`watcher_added/removed`) muestran "agregó/quitó un observador" **sin nombre** — el único evento sin diff completo. Ahora es el ítem **#17** en Pendientes.
 
 ## Notas de priorización (lectura del equipo)
 
