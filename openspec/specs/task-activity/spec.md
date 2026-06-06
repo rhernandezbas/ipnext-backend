@@ -69,6 +69,10 @@ ActivityDto {
 ```
 - THE SYSTEM SHALL NOT leak Prisma row shapes — adapters MUST map to ActivityDto / domain entity.
 
+### REQ-WATCHER-NAME-1 — Watcher events carry the watcher's name (#17)
+- WHEN a watcher is added or removed, THE `watcher_added` / `watcher_removed` activity SHALL carry the watcher's resolved name in `metadata` (`toName` for added, `fromName` for removed), consistent with reporter/customer/project name resolution.
+- WHEN the watcher's name cannot be resolved, THE event SHALL still be emitted (without a name in metadata) and the feed SHALL fall back to "agregó/quitó un observador".
+
 ### Out of scope (per Proposal)
 - Activity for entities other than ScheduledTask.
 - Notifications/email.
