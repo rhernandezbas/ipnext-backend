@@ -386,4 +386,45 @@ describe('IngestClosedServiceOrders', () => {
     expect(comments[0].body).toContain('OS 4013');
     expect(comments[0].attachments.map(a => a.url)).toEqual(expect.arrayContaining(['https://x/router.jpg', 'https://x/firma.jpg']));
   });
+
+  it('#22: a technical OCR failure leaves inventoryBuilt false (pending) and creates NO device suggestion', async () => {
+    const { scheduling, iclass, resultCodes, closed, state } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id, contractId: 'svc1' });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    iclass.checklistsByOrder['900'] = [{
+      iclassSurveyId: 's1', surveyAt: null,
+      answers: [{ questionId: null, questionText: 'SAQUE FOTO DE LA MAC Y SN DEL ROUTER', questionType: 'Foto', answerOrder: 3, answerText: null, photoMissing: true, photoUrl: null }],
+    }];
+
+    const portal = new InMemoryIClassPortal();
+    portal.set('900', {
+      questions: [{ ordem: 3, kind: 'photo', label: 'FOTO ROUTER', answerText: null, photoUrl: 'https://x/router.jpg', fileName: 'r.jpg', photoMissing: false }],
+      attachments: [],
+    });
+
+    const ocrStub = new InMemoryDevicePhotoOcr();
+    ocrStub.set('https://x/router.jpg', { sn: null, mac: null, confidence: 0, rawOutput: 'ocr-error: down', failed: true });
+    const ocrRepo = new InMemoryOcrExtractionRepository();
+    const suggestionsRepo = new InMemoryInventorySuggestionRepository();
+    const catalogRepo = new InMemoryDeviceTypeCatalogRepository();
+    for (const name of ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS']) {
+      await catalogRepo.create({ name, active: true, sortOrder: 0 });
+    }
+
+    const useCase = new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, {
+      now: () => new Date('2026-05-29T12:00:00Z'),
+      portal,
+      extractOcr: new ExtractDeviceInfoFromPhoto(ocrStub, ocrRepo, catalogRepo),
+      buildSuggestions: new BuildInventorySuggestions(suggestionsRepo),
+    });
+
+    await useCase.execute();
+
+    // technical failure → not cached, NOT built (stays pending for reprocess), no incomplete device suggestion
+    expect(await ocrRepo.findByPhotoUrl('https://x/router.jpg')).toBeNull();
+    expect((await closed.getSideEffectState('900'))?.inventoryBuilt).toBe(false);
+    const sugs = await suggestionsRepo.listByTask('t1');
+    expect(sugs.some(s => s.kind === 'DEVICE')).toBe(false);
+  });
 });

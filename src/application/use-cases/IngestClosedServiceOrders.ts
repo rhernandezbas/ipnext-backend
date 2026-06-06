@@ -257,21 +257,24 @@ export class IngestClosedServiceOrders {
 
     if (this.buildSuggestions && !inventoryDone) {
       const extractions: OcrExtraction[] = [];
+      let ocrFailed = false;
       if (this.extractOcr) {
         for (const checklist of order.checklists) {
           for (const a of checklist.answers) {
             if (a.questionType === 'Foto' && a.photoUrl && isSnMacDevicePhoto(a.questionText)) {
               try {
-                extractions.push(
-                  await this.extractOcr.execute({
-                    photoUrl: a.photoUrl,
-                    deviceType: classifyDeviceType(a.questionText),
-                    serviceOrderId: order.iclassId,
-                    sourceTaskId: taskId,
-                  }),
-                );
+                const ext = await this.extractOcr.execute({
+                  photoUrl: a.photoUrl,
+                  deviceType: classifyDeviceType(a.questionText),
+                  serviceOrderId: order.iclassId,
+                  sourceTaskId: taskId,
+                });
+                // null = technical OCR failure (LLM down/timeout): skip the device and
+                // leave inventory pending so the reprocess re-OCRs it once the model is back.
+                if (ext) extractions.push(ext);
+                else ocrFailed = true;
               } catch {
-                /* skip this photo */
+                ocrFailed = true;
               }
             }
           }
@@ -279,7 +282,8 @@ export class IngestClosedServiceOrders {
       }
       try {
         await this.buildSuggestions.execute({ taskId, extractions, materials: order.materials });
-        await this.closed.markSideEffect(order.iclassId, 'inventoryBuilt', true);
+        // Only mark built when no photo failed technically — otherwise stay pending for the reprocess.
+        if (!ocrFailed) await this.closed.markSideEffect(order.iclassId, 'inventoryBuilt', true);
       } catch {
         /* non-fatal — stays pending, retried on the next reprocess */
       }

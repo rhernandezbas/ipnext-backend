@@ -19,7 +19,7 @@ describe('ExtractDeviceInfoFromPhoto', () => {
     const { ocr, repo, uc } = await setup();
     ocr.set('https://x/router.jpg', { sn: '1100309242501444', mac: 'DC8E8D156CE6', confidence: 0.95, rawOutput: '{...}' });
 
-    const ext = await uc.execute({ photoUrl: 'https://x/router.jpg', deviceType: 'ROUTER', sourceTaskId: 't1' });
+    const ext = (await uc.execute({ photoUrl: 'https://x/router.jpg', deviceType: 'ROUTER', sourceTaskId: 't1' }))!;
 
     expect(ext.sn).toBe('1100309242501444');
     expect(ext.mac).toBe('DC8E8D156CE6');
@@ -30,19 +30,29 @@ describe('ExtractDeviceInfoFromPhoto', () => {
 
   it('SCEN-OCR-2: an unreadable photo persists null sn/mac and does not throw', async () => {
     const { uc } = await setup();
-    const ext = await uc.execute({ photoUrl: 'https://x/blurry.jpg', deviceType: 'ANTENA' });
+    const ext = (await uc.execute({ photoUrl: 'https://x/blurry.jpg', deviceType: 'ANTENA' }))!;
     expect(ext.sn).toBeNull();
     expect(ext.mac).toBeNull();
+  });
+
+  it('#22: a technical failure (failed) returns null and does NOT persist (reprocess re-OCRs)', async () => {
+    const { ocr, repo, uc } = await setup();
+    ocr.set('https://x/down.jpg', { sn: null, mac: null, confidence: 0, rawOutput: 'ocr-error: timeout', failed: true });
+
+    const ext = await uc.execute({ photoUrl: 'https://x/down.jpg', deviceType: 'ONU' });
+
+    expect(ext).toBeNull();
+    expect(await repo.findByPhotoUrl('https://x/down.jpg')).toBeNull(); // no quedó cache fallido → re-OCR posible
   });
 
   it('is idempotent by photoUrl — re-running returns the cached extraction', async () => {
     const { ocr, repo, uc } = await setup();
     ocr.set('https://x/r.jpg', { sn: 'SN1', mac: null, confidence: 0.9, rawOutput: '' });
 
-    const first = await uc.execute({ photoUrl: 'https://x/r.jpg', deviceType: 'ROUTER' });
+    const first = (await uc.execute({ photoUrl: 'https://x/r.jpg', deviceType: 'ROUTER' }))!;
     // change the stub; idempotency must ignore it
     ocr.set('https://x/r.jpg', { sn: 'SN2', mac: null, confidence: 0.9, rawOutput: '' });
-    const second = await uc.execute({ photoUrl: 'https://x/r.jpg', deviceType: 'ROUTER' });
+    const second = (await uc.execute({ photoUrl: 'https://x/r.jpg', deviceType: 'ROUTER' }))!;
 
     expect(second.id).toBe(first.id);
     expect(second.sn).toBe('SN1');
@@ -53,7 +63,7 @@ describe('ExtractDeviceInfoFromPhoto', () => {
     const { ocr, uc } = await setup();
     ocr.set('https://x/a.jpg', { sn: null, mac: 'DC8E8D156CE6', confidence: 0.8, rawOutput: '', deviceType: 'antena' });
 
-    const ext = await uc.execute({ photoUrl: 'https://x/a.jpg', deviceType: 'ONU' }); // label dice ONU
+    const ext = (await uc.execute({ photoUrl: 'https://x/a.jpg', deviceType: 'ONU' }))!; // label dice ONU
 
     expect(ext.deviceType).toBe('ONU'); // label intacto
     expect(ext.qwenDeviceType).toBe('ANTENA'); // lo que vio el modelo, validado contra catálogo
@@ -63,7 +73,7 @@ describe('ExtractDeviceInfoFromPhoto', () => {
     const { ocr, uc } = await setup();
     ocr.set('https://x/b.jpg', { sn: null, mac: null, confidence: 0, rawOutput: '', deviceType: 'switch' });
 
-    const ext = await uc.execute({ photoUrl: 'https://x/b.jpg', deviceType: 'ROUTER' });
+    const ext = (await uc.execute({ photoUrl: 'https://x/b.jpg', deviceType: 'ROUTER' }))!;
     expect(ext.qwenDeviceType).toBeNull();
   });
 
@@ -75,7 +85,7 @@ describe('ExtractDeviceInfoFromPhoto', () => {
     const uc = new ExtractDeviceInfoFromPhoto(ocr, repo, catalogRepo);
 
     ocr.set('https://x/cpe.jpg', { sn: 'SN99', mac: null, confidence: 0.9, rawOutput: '', deviceType: 'cpe' });
-    const ext = await uc.execute({ photoUrl: 'https://x/cpe.jpg', deviceType: 'CPE' });
+    const ext = (await uc.execute({ photoUrl: 'https://x/cpe.jpg', deviceType: 'CPE' }))!;
     expect(ext.qwenDeviceType).toBe('CPE');
   });
 });

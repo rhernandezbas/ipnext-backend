@@ -17,7 +17,9 @@ export interface ExtractDeviceInfoInput {
  * Runs OCR over one device photo and persists the result. Idempotent by
  * photoUrl — re-running returns the stored extraction without re-calling the
  * model. A null SN/MAC (unreadable) is a valid, persisted outcome (kept for
- * manual review); it never throws.
+ * manual review); it never throws. A TECHNICAL failure (model down/timeout —
+ * `result.failed`) is NOT persisted and returns null, so a later reprocess
+ * re-runs the model (the photoUrl cache is not poisoned with a failed read).
  */
 export class ExtractDeviceInfoFromPhoto {
   constructor(
@@ -26,11 +28,12 @@ export class ExtractDeviceInfoFromPhoto {
     private readonly catalog: DeviceTypeCatalogRepository,
   ) {}
 
-  async execute(input: ExtractDeviceInfoInput): Promise<OcrExtraction> {
+  async execute(input: ExtractDeviceInfoInput): Promise<OcrExtraction | null> {
     const cached = await this.repo.findByPhotoUrl(input.photoUrl);
     if (cached) return cached;
 
     const result = await this.ocr.extract(input.photoUrl, input.deviceType ?? undefined);
+    if (result.failed) return null; // technical failure → don't persist/cache → reprocess re-OCRs
 
     const validNames = new Set(await this.catalog.listActiveNames());
 
