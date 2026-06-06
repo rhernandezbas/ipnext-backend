@@ -10,6 +10,13 @@ export interface DeviceOcrResult {
   rawOutput: string;
   /** Device type the vision model classified FROM THE IMAGE (raw, unnormalized). Optional. */
   deviceType?: string;
+  /**
+   * True when the read failed for a TECHNICAL reason (model down, timeout, download
+   * error) — as opposed to "the model ran but the label was unreadable". A technical
+   * failure is transient: the caller must NOT persist/cache it so a later reprocess
+   * re-runs the model. Absent/false ⇒ a valid (possibly empty) read.
+   */
+  failed?: boolean;
 }
 
 /**

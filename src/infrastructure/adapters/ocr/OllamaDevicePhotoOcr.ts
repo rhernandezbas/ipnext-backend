@@ -65,7 +65,9 @@ export class OllamaDevicePhotoOcr implements DevicePhotoOcr {
       const raw = await this.ask(imageB64, prompt);
       return finalizeOcrResult(raw);
     } catch (e) {
-      return { sn: null, mac: null, confidence: 0, rawOutput: `ocr-error: ${(e as Error).message}` };
+      // Technical failure (download/timeout/Ollama down) → mark `failed` so the
+      // caller does not persist/cache it; a later reprocess re-runs the model.
+      return { sn: null, mac: null, confidence: 0, rawOutput: `ocr-error: ${(e as Error).message}`, failed: true };
     }
   }
 
