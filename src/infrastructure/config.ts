@@ -99,10 +99,11 @@ export const config = {
 
   /**
    * AI installation audit (closure loop F6). Multimodal Ollama vision model.
-   * Opt-in via ICLASS_AUDIT_ENABLED — runs as a non-fatal closure side-effect.
+   * El gate (on/off) ya NO es el env: lo controla el feature flag DB-backed
+   * `iclass-audit` (default OFF, toggleable en runtime desde la UI). El env
+   * solo provee la config del modelo Ollama.
    */
   audit: {
-    enabled: process.env.ICLASS_AUDIT_ENABLED === 'true',
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434',
     model: process.env.AUDIT_MODEL ?? 'qwen2.5vl:7b',
     timeoutMs: parseInt(process.env.AUDIT_TIMEOUT_MS || '180000', 10),
