@@ -89,6 +89,19 @@ describe('computeUpdateTaskActivities (D.2 diff engine)', () => {
     expect(ev).toHaveLength(2);
   });
 
+  it('watcher events carry the name from watcherNames when provided (#17)', () => {
+    const prev = prevWith({ watcherIds: ['a', 'b'] });
+    const watcherNames = { a: 'Ana Gómez', c: 'Carla Ruiz' };
+    const ev = computeUpdateTaskActivities(prev, { watcherIds: ['b', 'c'] }, ACTOR, undefined, watcherNames);
+    expect(ev).toContainEqual({ type: 'watcher_added', actor: ACTOR, toValue: 'c', metadata: { toName: 'Carla Ruiz' } });
+    expect(ev).toContainEqual({ type: 'watcher_removed', actor: ACTOR, fromValue: 'a', metadata: { fromName: 'Ana Gómez' } });
+  });
+
+  it('watcher events fall back to no name when the id is not in watcherNames', () => {
+    const ev = computeUpdateTaskActivities(prevWith({ watcherIds: ['a'] }), { watcherIds: [] }, ACTOR, undefined, { z: 'Zoe' });
+    expect(ev).toEqual([{ type: 'watcher_removed', actor: ACTOR, fromValue: 'a' }]);
+  });
+
   it('due_date_changed once per date field with metadata.field', () => {
     const prev = prevWith({ startDate: null, endDate: '2026-01-01T00:00:00Z' });
     const ev = diff(prev, { startDate: '2026-02-01T00:00:00Z', endDate: '2026-03-01T00:00:00Z' });

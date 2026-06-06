@@ -632,11 +632,12 @@ export function createApp() {
   const taskActivityRecorder = new DefaultTaskActivityRecorder(new RecordTaskActivity(taskActivityRepo));
   // Scheduling reporter/assignee/watcher ids are validated against RbacUser
   // (post SDD #2 — Admin table is being phased out, no fallback). The lookup
-  // returns { id } on hit, null on miss — satisfies the EntityLookup port.
+  // returns { id, name } on hit, null on miss — satisfies the EntityLookup port.
+  // The name powers the watcher add/remove diff in the activity feed (#17).
   const userLookupForScheduling = {
-    findById: async (id: string): Promise<{ id: string } | null> => {
+    findById: async (id: string): Promise<{ id: string; name?: string } | null> => {
       const rbacUser = await rbacUserRepo.findById(id);
-      return rbacUser ? { id: rbacUser.id } : null;
+      return rbacUser ? { id: rbacUser.id, name: rbacUser.name } : null;
     },
   };
   const createTask = new CreateTask(

@@ -57,7 +57,26 @@ export class UpdateTask {
     const updated = await this.repo.updateTask(id, data);
 
     if (this.recorder && prev && updated) {
-      const events = computeUpdateTaskActivities(prev, data, actor ?? SYSTEM_ACTOR, updated);
+      // Resolve watcher names for the diff (#17): only the ids that actually
+      // changed (added or removed), via the same admin lookup used to validate
+      // them. A miss leaves the event nameless (the feed degrades gracefully).
+      let watcherNames: Record<string, string> | undefined;
+      if (data.watcherIds !== undefined) {
+        const prevSet = new Set(prev.watcherIds);
+        const nextSet = new Set(data.watcherIds);
+        const changed = [
+          ...data.watcherIds.filter(w => !prevSet.has(w)),
+          ...prev.watcherIds.filter(w => !nextSet.has(w)),
+        ];
+        if (changed.length > 0) {
+          watcherNames = {};
+          for (const wId of changed) {
+            const found = await this.adminLookup.findById(wId);
+            if (found?.name) watcherNames[wId] = found.name;
+          }
+        }
+      }
+      const events = computeUpdateTaskActivities(prev, data, actor ?? SYSTEM_ACTOR, updated, watcherNames);
       if (events.length > 0) {
         await this.recorder.recordMany(id, events);
       }
