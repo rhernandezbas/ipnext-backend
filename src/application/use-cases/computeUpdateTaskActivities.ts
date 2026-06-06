@@ -24,6 +24,9 @@ export function computeUpdateTaskActivities(
   actor: ActorContext,
   /** The task AFTER the update — used to resolve the new `to` names for FK fields. */
   next?: ScheduledTask,
+  /** Optional watcher id→name map so watcher_added/removed carry the name (#17).
+   * When a watcher id is absent, the event is emitted without a name (degrades). */
+  watcherNames?: Record<string, string>,
 ): TaskActivityEvent[] {
   const events: TaskActivityEvent[] = [];
   const d = data as Record<string, unknown>;
@@ -60,12 +63,20 @@ export function computeUpdateTaskActivities(
     }
   }
 
-  // ── Watchers → set diff ──
+  // ── Watchers → set diff (with resolved names in metadata when available, #17) ──
   if (data.watcherIds !== undefined) {
     const prevSet = new Set(prev.watcherIds);
     const nextSet = new Set(data.watcherIds);
-    for (const id of data.watcherIds) if (!prevSet.has(id)) events.push({ type: 'watcher_added', actor, toValue: id });
-    for (const id of prev.watcherIds) if (!nextSet.has(id)) events.push({ type: 'watcher_removed', actor, fromValue: id });
+    for (const id of data.watcherIds) {
+      if (prevSet.has(id)) continue;
+      const name = watcherNames?.[id];
+      events.push({ type: 'watcher_added', actor, toValue: id, ...(name ? { metadata: { toName: name } } : {}) });
+    }
+    for (const id of prev.watcherIds) {
+      if (nextSet.has(id)) continue;
+      const name = watcherNames?.[id];
+      events.push({ type: 'watcher_removed', actor, fromValue: id, ...(name ? { metadata: { fromName: name } } : {}) });
+    }
   }
 
   // ── Due dates → one event per field, with metadata.field ──

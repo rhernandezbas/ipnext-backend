@@ -1,8 +1,8 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 el mismo día (#15, #16) → 16; +1 el 2026-06-04 (#17); +2 el 2026-06-04 (#18, #19) → **19 totales**.
-> **12 hechos (en prod) · 7 pendientes.**
+> Arrancó el 2026-06-03 con 14 ítems; +2 el mismo día (#15, #16) → 16; +1 el 2026-06-04 (#17); +2 el 2026-06-04 (#18, #19); +1 el 2026-06-06 (#20) → **20 totales**.
+> **12 hechos (en prod) · 8 pendientes.**
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -82,7 +82,7 @@
 
 ---
 
-## ⏳ Pendientes (7)
+## ⏳ Pendientes (8)
 
 ### #7 — Unificar sub-page "cierre de OS" + feature flag del auditor IA
 - **Qué**: en Scheduling → Configuraciones → integración IClass, unificar la sub-page de "cierre de OS" (manteniendo el diseño) y crear la **feature flag del auditor de IA**.
@@ -121,6 +121,13 @@
 - **Camino propuesto**: nuevo use-case + endpoint para crear una sugerencia/ítem manual en la tarea (`source = MANUAL`, kind DEVICE/MATERIAL); FE botón "Agregar ítem" en el panel de inventario de la tarea con form (tipo del `DeviceTypeCatalog` + SN/MAC/desc). Reusa la validación del #18.
 - **Dónde**: BE nuevo use-case (`AddTaskInventoryItem` o similar) + ruta bajo `/scheduling/:taskId/inventory`; FE `TaskInventorySuggestions` (form de alta). Permiso `inventory.write`.
 - **Tamaño**: mediano. **Relación**: depende del #18 (la validación) y se apoya en el catálogo del #5.
+
+### #20 — Audit IA: pasarle el detalle COMPLETO de IClass al modelo  *(agregado 2026-06-06)*
+- **Síntoma**: en OS con detalle en IClass (visto en la **4673** "Reparación de señal"), la IA marca warnings tipo *"no se especifica si se verificó la señal/conexión"*, *"el técnico no dejó observaciones"*, *"no se adjuntaron fotos"* — **cuando esa info SÍ está en los detalles de IClass**. La IA "refuta" porque audita con contexto incompleto.
+- **Causa**: `buildAuditContext` solo arma el contexto con `checklistText` (Q/A no-foto), `technicianNote`, `materials`, `photoUrls`, `taskTitle/description/taskComments`. **NO incluye** del mirror: `order.history` (status history con `commentary` por transición — el "qué pasó" en cada paso), `order.commentaryLog` (blob de comentarios de IClass), `order.internalNote` (obs interna), `order.equipmentEvents` (equipos install/remove/move con SN/MAC).
+- **Camino propuesto**: enriquecer `buildAuditContext` + el prompt con esos campos. Cuidar: (a) tamaño del prompt (el history puede ser largo — resumir/recortar); (b) re-auditar las ya hechas tras el cambio (poner `auditDone=false` + reprocesar para que tomen el contexto nuevo).
+- **Dónde**: BE `buildAuditContext.ts` + `OllamaInstallationAuditor.renderPrompt` + entity `AuditContext` (nuevos campos).
+- **Tamaño**: chico-mediano.
 
 ---
 

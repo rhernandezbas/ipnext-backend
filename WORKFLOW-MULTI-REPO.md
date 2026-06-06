@@ -49,6 +49,13 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 
 ## Verificación
 
+> **REGLA DE ORO — INNEGOCIABLE: VERIFY ANTES DE DEPLOY.** Nunca pushear/mergear a `main` (= producción)
+> sin antes correr el **verify completo**: suite de tests completa + `tsc --noEmit` (BE) / `typecheck` (FE)
+> y, en cambios SDD, **`sdd-verify`** con su matriz de spec-compliance (cada scenario probado por un test que
+> pasó). **El verify es donde se cazan los bugs ANTES de que lleguen a prod** — el deploy va recién cuando el
+> verify está en verde. Saltarse el verify (commit→deploy directo) = bug en producción. Orden obligatorio:
+> **codear → verify (verde) → commit → push/deploy → confirmar el run en `gh`.**
+
 - **El estado de cada deploy se revisa con `gh`** — fuente de verdad del pipeline. Tras pushear, se sigue el run con `gh run list` / `gh run watch` / `gh run view <id> --log` para confirmar que el job quedo verde (incluido el step `Run DB migrations`). No se asume "deployo bien" sin mirar el run en `gh`.
 - Para backend sin UI todavia, basta el run verde en `gh` + el log del step de migraciones.
 - Para features con UI, ademas se verifica con **Playwright** contra la app real (`http://190.7.234.37:7778`, login admin): se recorre el flujo real (crear/editar/borrar) y se limpian los datos de prueba.
