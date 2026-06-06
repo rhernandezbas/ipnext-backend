@@ -2,12 +2,17 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 el 2026-06-06 (#21, #22) → **22 totales**.
-> **14 hechos (en prod) · 8 pendientes.** (#17 y #7 cerrados vía SDD.)
+> **15 hechos (en prod) · 7 pendientes.** (#17, #7, #22 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (14, desplegados en producción)
+## ✅ Hechos (15, desplegados en producción)
+
+### #22 — Bug: inventario con foto pero sin SN cuando el OCR falla
+- **Resuelto** (SDD `closure-ocr-failure-retry`): el OCR ahora distingue el **fallo técnico** (LLM caída/timeout → `failed`) del label ilegible. Ante fallo técnico NO se cachea la extracción ni se crea el DEVICE incompleto y NO se marca `inventoryBuilt` → el reprocess re-OCR-ea. Una migración de remediación destildó los históricos y borró las extracciones `ocr-error` + los DEVICE pending vacíos.
+- **PR**: BE #59. Migración `20260606010000_remediate_ocr_failed_inventory`. Archivado en `openspec/changes/archive/2026-06-06-closure-ocr-failure-retry/`.
+- **Post-deploy**: correr "Reprocesar" (con la LLM arriba) para completar los SN de los inventory destildados.
 
 ### #7 — Unificar sub-page "Cierre de OS" + feature flag del auditor IA
 - **Resuelto** (SDD `iclass-audit-flag-and-unify`): el auditor IA pasó de gatearse por env `ICLASS_AUDIT_ENABLED` a un feature flag DB-backed `iclass-audit` (runtime, toggleable en UI, default OFF). El gate vive en `AuditInstallationQuality.execute()` → aplica al closure-loop **y** al reprocess. FE: la sub-page "Cierre de OS" unifica loop + reconciliar + reprocess + mapeo de resultados + toggle del auditor (**5 → 4 sub-tabs**).
@@ -91,7 +96,7 @@
 
 ---
 
-## ⏳ Pendientes (8)
+## ⏳ Pendientes (7)
 
 ### #11 — Rediseño de tickets + ID autoincremental + filtros ocultos
 - **Qué**: (a) rediseño visual de tickets; (b) agregar un **ID autoincremental** como se hizo con tareas (`sequenceNumber`); (c) los filtros deben estar **ocultos** y mostrarse solo al clickear el botón de filtro.
@@ -133,13 +138,6 @@
 - **Camino propuesto**: el `*` debe ir inline con el label (revisar el CSS del label / required-marker — probablemente un `display:block`, un `<br>` implícito o un wrap del span). Corregir el componente del label, no campo por campo.
 - **Dónde**: FE `CreateTaskModal` + su CSS module (el marcador de requerido).
 - **Tamaño**: chico.
-
-### #22 — Bug: sugerencia de inventario con FOTO pero SIN SN cuando el OCR falla  *(agregado 2026-06-06)*
-- **Síntoma**: varias tareas con sugerencia de inventario que tienen la **foto pero no la SN** (DEVICE con `serialNumber=null`). Coincide con la LLM (Ollama OCR) **caída**, así que no se sabe si no se analizó o si se creó la sugerencia igual sin OCR.
-- **Comportamiento deseado**: si el OCR **no** extrae la SN (o la LLM está caída), **NO crear la sugerencia DEVICE incompleta** ni marcar `inventoryBuilt=true` — dejarla **pendiente** para que el reprocess la re-OCR-ee después. "Si no está el OCR ok, no se pasa la imagen, para reprocesarla."
-- **Causa probable**: en `runClosureSideEffects`, el OCR loop agrega la extracción aunque no traiga SN (o `BuildInventorySuggestions` crea el DEVICE igual), y `inventoryBuilt` se marca `true` → el reprocess no la reintenta.
-- **Dónde**: BE `IngestClosedServiceOrders.runClosureSideEffects` (OCR loop) + `BuildInventorySuggestions` + `ExtractDeviceInfoFromPhoto`. Se apoya en el tracking del reprocess (B+C).
-- **Tamaño**: chico-mediano. **Relación**: #18 (validación), reprocess (re-OCR).
 
 ---
 
