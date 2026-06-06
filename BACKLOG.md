@@ -1,13 +1,22 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 el mismo día (#15, #16) → 16; +1 el 2026-06-04 (#17); +2 el 2026-06-04 (#18, #19); +1 el 2026-06-06 (#20) → **20 totales**.
-> **12 hechos (en prod) · 8 pendientes.**
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 el 2026-06-06 (#21, #22) → **22 totales**.
+> **14 hechos (en prod) · 8 pendientes.** (#17 y #7 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (12, desplegados en producción)
+## ✅ Hechos (14, desplegados en producción)
+
+### #7 — Unificar sub-page "Cierre de OS" + feature flag del auditor IA
+- **Resuelto** (SDD `iclass-audit-flag-and-unify`): el auditor IA pasó de gatearse por env `ICLASS_AUDIT_ENABLED` a un feature flag DB-backed `iclass-audit` (runtime, toggleable en UI, default OFF). El gate vive en `AuditInstallationQuality.execute()` → aplica al closure-loop **y** al reprocess. FE: la sub-page "Cierre de OS" unifica loop + reconciliar + reprocess + mapeo de resultados + toggle del auditor (**5 → 4 sub-tabs**).
+- **PRs**: BE #57 / FE #39. Migración `20260606000000_seed_iclass_audit_flag`. Archivado en `openspec/changes/archive/2026-06-06-iclass-audit-flag-and-unify/`.
+- **Post-deploy**: prender el flag `iclass-audit` desde la UI (arranca OFF) para reactivar el auditor.
+
+### #17 — Activity log: nombre de los observadores (watchers)
+- **Resuelto** (SDD `activity-watcher-names`, Approach B): el nombre del watcher se resuelve en `UpdateTask` vía el admin lookup (que ya validaba los watchers) y viaja en `metadata` (`toName`/`fromName`); el FE lo muestra como "agregó/quitó a {nombre}". Sin migración.
+- **PRs**: BE #55 / FE #38. Archivado en `openspec/changes/archive/2026-06-06-activity-watcher-names/`.
 
 ### #1 — Crear tarea: proyecto + descripción obligatorios
 - **Qué se pidió**: el select de proyecto al crear tarea venía pre-seleccionado ("Fibra los…"); se quería que arrancara sin proyecto, obligatorio elegir uno, y descripción obligatoria.
@@ -84,11 +93,6 @@
 
 ## ⏳ Pendientes (8)
 
-### #7 — Unificar sub-page "cierre de OS" + feature flag del auditor IA
-- **Qué**: en Scheduling → Configuraciones → integración IClass, unificar la sub-page de "cierre de OS" (manteniendo el diseño) y crear la **feature flag del auditor de IA**.
-- **Dónde**: FE config de scheduling (settings) + BE feature flags (`FeatureFlag`). El auditor IA ya existe (F6 de closure-inventory-intelligence) bajo `ICLASS_AUDIT_ENABLED` env — esto lo expondría como flag toggleable en UI.
-- **Tamaño**: mediano (integraciones/flags).
-
 ### #11 — Rediseño de tickets + ID autoincremental + filtros ocultos
 - **Qué**: (a) rediseño visual de tickets; (b) agregar un **ID autoincremental** como se hizo con tareas (`sequenceNumber`); (c) los filtros deben estar **ocultos** y mostrarse solo al clickear el botón de filtro.
 - **Dónde**: FE página de tickets + BE (columna `sequenceNumber` en `Ticket`, migración + backfill). Ya existe un worktree `tickets-redesign-fe`.
@@ -104,11 +108,6 @@
 - **Qué**: agregar al modelo de tareas dos campos (tipo `auditoria_ia` + `iclass_data`) para que, si a una tarea le falta la auditoría o la ingesta, se pueda **auto-completar**. Con una feature flag en integraciones. Es casi igual pero distinto a "Reconciliar tareas pendientes".
 - **Dónde**: BE `ScheduledTask` (columnas/estado) + un job/use-case de auto-completado + `FeatureFlag` + UI de integraciones.
 - **Tamaño**: mediano-grande (integraciones/flags).
-
-### #17 — Activity log: nombre de los observadores (watchers)  *(agregado 2026-06-04)*
-- **Qué**: en el feed de actividad de la tarea, los eventos `watcher_added` / `watcher_removed` muestran "agregó/quitó un observador" **sin el nombre** — el único evento que no muestra el diff completo (los demás ya lo muestran tras los refinamientos del #10).
-- **Dónde**: BE `computeUpdateTaskActivities` (incluir el nombre del watcher en metadata — la tarea hoy solo tiene `watcherIds`, no `watcherNames`, así que hay que resolverlo) **o** FE `describeActivity` (resolver el id contra la lista de admins). El BE es más consistente con el resto (project/customer/reporter ya resuelven nombre en metadata).
-- **Tamaño**: chico.
 
 ### #18 — Bug: confirmar inventario sin data (no validar el ítem antes de confirmar)  *(agregado 2026-06-04)*
 - **Síntoma**: en la confirmación de inventario de una OS (ejemplo visto en la **4175**), un ítem queda **confirmado pero sin data** — se puede confirmar aunque no tenga los datos mínimos (un DEVICE sin SN ni MAC, o un ítem sin descripción). No se debería poder confirmar un ítem vacío.
@@ -128,6 +127,19 @@
 - **Camino propuesto**: enriquecer `buildAuditContext` + el prompt con esos campos. Cuidar: (a) tamaño del prompt (el history puede ser largo — resumir/recortar); (b) re-auditar las ya hechas tras el cambio (poner `auditDone=false` + reprocesar para que tomen el contexto nuevo).
 - **Dónde**: BE `buildAuditContext.ts` + `OllamaInstallationAuditor.renderPrompt` + entity `AuditContext` (nuevos campos).
 - **Tamaño**: chico-mediano.
+
+### #21 — Bug (FE): el asterisco de obligatorio aparece DEBAJO del label, no al lado  *(agregado 2026-06-06)*
+- **Síntoma**: en el modal de crear tarea, el `*` de campo obligatorio cae en una línea aparte ("Proyecto" y abajo "*") en vez de "Proyecto *" en la misma línea. Pasa en **todos** los campos del modal.
+- **Camino propuesto**: el `*` debe ir inline con el label (revisar el CSS del label / required-marker — probablemente un `display:block`, un `<br>` implícito o un wrap del span). Corregir el componente del label, no campo por campo.
+- **Dónde**: FE `CreateTaskModal` + su CSS module (el marcador de requerido).
+- **Tamaño**: chico.
+
+### #22 — Bug: sugerencia de inventario con FOTO pero SIN SN cuando el OCR falla  *(agregado 2026-06-06)*
+- **Síntoma**: varias tareas con sugerencia de inventario que tienen la **foto pero no la SN** (DEVICE con `serialNumber=null`). Coincide con la LLM (Ollama OCR) **caída**, así que no se sabe si no se analizó o si se creó la sugerencia igual sin OCR.
+- **Comportamiento deseado**: si el OCR **no** extrae la SN (o la LLM está caída), **NO crear la sugerencia DEVICE incompleta** ni marcar `inventoryBuilt=true` — dejarla **pendiente** para que el reprocess la re-OCR-ee después. "Si no está el OCR ok, no se pasa la imagen, para reprocesarla."
+- **Causa probable**: en `runClosureSideEffects`, el OCR loop agrega la extracción aunque no traiga SN (o `BuildInventorySuggestions` crea el DEVICE igual), y `inventoryBuilt` se marca `true` → el reprocess no la reintenta.
+- **Dónde**: BE `IngestClosedServiceOrders.runClosureSideEffects` (OCR loop) + `BuildInventorySuggestions` + `ExtractDeviceInfoFromPhoto`. Se apoya en el tracking del reprocess (B+C).
+- **Tamaño**: chico-mediano. **Relación**: #18 (validación), reprocess (re-OCR).
 
 ---
 
