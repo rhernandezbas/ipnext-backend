@@ -1,8 +1,8 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 el mismo día (#15, #16) → 16; +1 el 2026-06-04 (#17) → **17 totales**.
-> **12 hechos (en prod) · 5 pendientes.**
+> Arrancó el 2026-06-03 con 14 ítems; +2 el mismo día (#15, #16) → 16; +1 el 2026-06-04 (#17); +2 el 2026-06-04 (#18, #19) → **19 totales**.
+> **12 hechos (en prod) · 7 pendientes.**
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -82,7 +82,7 @@
 
 ---
 
-## ⏳ Pendientes (5)
+## ⏳ Pendientes (7)
 
 ### #7 — Unificar sub-page "cierre de OS" + feature flag del auditor IA
 - **Qué**: en Scheduling → Configuraciones → integración IClass, unificar la sub-page de "cierre de OS" (manteniendo el diseño) y crear la **feature flag del auditor de IA**.
@@ -109,6 +109,18 @@
 - **Qué**: en el feed de actividad de la tarea, los eventos `watcher_added` / `watcher_removed` muestran "agregó/quitó un observador" **sin el nombre** — el único evento que no muestra el diff completo (los demás ya lo muestran tras los refinamientos del #10).
 - **Dónde**: BE `computeUpdateTaskActivities` (incluir el nombre del watcher en metadata — la tarea hoy solo tiene `watcherIds`, no `watcherNames`, así que hay que resolverlo) **o** FE `describeActivity` (resolver el id contra la lista de admins). El BE es más consistente con el resto (project/customer/reporter ya resuelven nombre en metadata).
 - **Tamaño**: chico.
+
+### #18 — Bug: confirmar inventario sin data (no validar el ítem antes de confirmar)  *(agregado 2026-06-04)*
+- **Síntoma**: en la confirmación de inventario de una OS (ejemplo visto en la **4175**), un ítem queda **confirmado pero sin data** — se puede confirmar aunque no tenga los datos mínimos (un DEVICE sin SN ni MAC, o un ítem sin descripción). No se debería poder confirmar un ítem vacío.
+- **Camino propuesto**: validar datos mínimos por `kind` antes de confirmar — DEVICE → al menos SN o MAC; MATERIAL → descripción + cantidad. Rechazar con error de validación si falta.
+- **Dónde**: BE `ConfirmInventorySuggestion` (guard de datos mínimos por kind) — fail-closed en el backend, no solo en el front; FE `SuggestionCard` / `TaskInventorySuggestions` (deshabilitar "Confirmar" o mostrar la validación). Permiso ya existente (`inventory.write`).
+- **Tamaño**: chico.
+
+### #19 — Agregar ítem de inventario MANUAL a la tarea (antena/onu/router/etc.)  *(agregado 2026-06-04)*
+- **Qué**: hoy las sugerencias de inventario salen **solo** del cierre (OCR de fotos device + materiales de IClass). Se quiere poder **agregar manualmente** un ítem de inventario en la tarea — elegir el tipo del catálogo (antena/onu/router/otros) y cargar su SN/MAC/datos — sin depender de que el OCR lo haya detectado.
+- **Camino propuesto**: nuevo use-case + endpoint para crear una sugerencia/ítem manual en la tarea (`source = MANUAL`, kind DEVICE/MATERIAL); FE botón "Agregar ítem" en el panel de inventario de la tarea con form (tipo del `DeviceTypeCatalog` + SN/MAC/desc). Reusa la validación del #18.
+- **Dónde**: BE nuevo use-case (`AddTaskInventoryItem` o similar) + ruta bajo `/scheduling/:taskId/inventory`; FE `TaskInventorySuggestions` (form de alta). Permiso `inventory.write`.
+- **Tamaño**: mediano. **Relación**: depende del #18 (la validación) y se apoya en el catálogo del #5.
 
 ---
 
