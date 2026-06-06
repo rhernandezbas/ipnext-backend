@@ -14,6 +14,7 @@ import { AuditInstallationQuality } from '@application/use-cases/AuditInstallati
 import { OllamaInstallationAuditor } from '../adapters/audit/OllamaInstallationAuditor';
 import { PrismaTaskAuditRepository } from '../adapters/prisma/PrismaTaskAuditRepository';
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
+import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
 
 type SideEffects = Pick<IngestClosedOptions, 'portal' | 'postComment' | 'buildSuggestions' | 'extractOcr' | 'auditInstallation'>;
 
@@ -50,18 +51,20 @@ export function buildClosureSideEffects(): SideEffects {
     );
   }
 
-  if (config.audit.enabled) {
-    eff.auditInstallation = new AuditInstallationQuality(
-      new OllamaInstallationAuditor({
-        baseUrl: config.audit.ollamaBaseUrl,
-        model: config.audit.model,
-        timeoutMs: config.audit.timeoutMs,
-      }),
-      new PrismaTaskAuditRepository(),
-      new PrismaSchedulingRepository(),
-      new PrismaTaskCommentRepository(),
-    );
-  }
+  // El auditor se instancia siempre (con la config Ollama del env); su ejecución
+  // la gatea el feature flag `iclass-audit` en runtime (AuditInstallationQuality),
+  // toggleable desde la UI sin redeploy — ya no por ICLASS_AUDIT_ENABLED.
+  eff.auditInstallation = new AuditInstallationQuality(
+    new OllamaInstallationAuditor({
+      baseUrl: config.audit.ollamaBaseUrl,
+      model: config.audit.model,
+      timeoutMs: config.audit.timeoutMs,
+    }),
+    new PrismaTaskAuditRepository(),
+    new PrismaSchedulingRepository(),
+    new PrismaTaskCommentRepository(),
+    new PrismaFeatureFlagRepository(),
+  );
 
   return eff;
 }

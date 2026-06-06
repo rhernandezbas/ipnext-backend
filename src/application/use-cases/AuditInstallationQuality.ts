@@ -2,9 +2,13 @@ import { InstallationAuditor } from '@domain/ports/InstallationAuditor';
 import { TaskAuditRepository } from '@domain/ports/TaskAuditRepository';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { TaskCommentRepository } from '@domain/ports/TaskCommentRepository';
+import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { ClosedServiceOrder } from '@domain/entities/iclass-closed-order';
 import { InstallationAudit } from '@domain/entities/installation-audit';
 import { buildAuditContext } from '@application/services/buildAuditContext';
+
+/** DB-backed feature flag gating the AI installation audit (default OFF, runtime-toggleable). */
+export const AUDIT_FLAG_KEY = 'iclass-audit';
 
 export interface AuditInstallationQualityInput {
   taskId: string;
@@ -24,9 +28,15 @@ export class AuditInstallationQuality {
     private readonly audits: TaskAuditRepository,
     private readonly scheduling: SchedulingRepository,
     private readonly comments: TaskCommentRepository,
+    private readonly flags: FeatureFlagRepository,
   ) {}
 
   async execute(input: AuditInstallationQualityInput): Promise<InstallationAudit | null> {
+    const flag = await this.flags.get(AUDIT_FLAG_KEY);
+    if (!flag?.enabled) {
+      // Auditoría apagada por flag (default OFF) — no se llama al modelo ni se persiste nada.
+      return null;
+    }
     const task = await this.scheduling.getTask(input.taskId);
     if (!task) {
       // eslint-disable-next-line no-console

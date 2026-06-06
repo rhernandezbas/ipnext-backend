@@ -99,7 +99,8 @@ describe('ReprocessClosureSideEffects', () => {
     const comments = new InMemoryTaskCommentRepository();
     const auditor = new StubAuditor();
     auditor.result = { ok: true, findings: [{ severity: 'ok', category: 'otros', text: 'bien', photoUrls: [] }] };
-    const auditInstallation = new AuditInstallationQuality(auditor, audits, scheduling, comments);
+    await flags.setEnabled('iclass-audit', true);
+    const auditInstallation = new AuditInstallationQuality(auditor, audits, scheduling, comments, flags);
     const ingest = new IngestClosedServiceOrders(
       new InMemoryIClassClient(), closed, new InMemoryIClassResultCodeRepository(),
       scheduling, new InMemorySyncStateRepository(), { auditInstallation },
@@ -123,7 +124,8 @@ describe('ReprocessClosureSideEffects', () => {
     scheduling.seedTask({ id: 't1', sequenceNumber: 4013 });
     const auditor = new StubAuditor();
     auditor.result = { ok: false, findings: [] }; // always soft-fails
-    const auditInstallation = new AuditInstallationQuality(auditor, new InMemoryTaskAuditRepository(), scheduling, new InMemoryTaskCommentRepository());
+    await flags.setEnabled('iclass-audit', true);
+    const auditInstallation = new AuditInstallationQuality(auditor, new InMemoryTaskAuditRepository(), scheduling, new InMemoryTaskCommentRepository(), flags);
     const ingest = new IngestClosedServiceOrders(
       new InMemoryIClassClient(), closed, new InMemoryIClassResultCodeRepository(),
       scheduling, new InMemorySyncStateRepository(), { auditInstallation, maxAuditAttempts: 2 },
