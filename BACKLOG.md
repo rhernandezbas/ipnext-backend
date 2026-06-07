@@ -2,12 +2,17 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 el 2026-06-06 (#21, #22) → **22 totales**.
-> **16 hechos (en prod) · 6 pendientes.** (#17, #7, #22, #18 cerrados vía SDD.)
+> **17 hechos (en prod) · 5 pendientes.** (#17, #7, #22, #18, #14 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (16, desplegados en producción)
+## ✅ Hechos (17, desplegados en producción)
+
+### #14 — Campos de completitud del cierre por tarea + auto-completado
+- **Resuelto** (SDD `task-completeness-tracking`): 3 flags en `ScheduledTask` (`closureCommentDone`, `closureAuditDone`, `closureHasDeviceInventory` — este último cuenta **solo equipos DEVICE**, no materiales) marcados por el closure (loop/reprocess/cron) vía `markClosureCompleteness`. Migración con backfill idempotente. Cron `TaskAutocompleteScheduler` (flag `task-autocomplete`, default OFF) que reusa `ReprocessClosureSideEffects`. La API de tareas expone los flags para medir.
+- **PRs**: BE #63 / FE #41. Migración `20260606020000_task_completeness_fields`. Archivado en `openspec/changes/archive/2026-06-06-task-completeness-tracking/`.
+- **Post-deploy**: prender el flag `task-autocomplete` (Cierre de OS) si se quiere el auto-completado automático.
 
 ### #18 — Bug: confirmar inventario sin data (validación de datos mínimos)
 - **Resuelto** (SDD `inventory-confirm-validation`): guard fail-closed en `ConfirmInventorySuggestion` (`execute` + `replace`) — DEVICE requiere SN o MAC, MATERIAL requiere descripción; sin eso, `IncompleteSuggestionError` → HTTP 422. FE: `SuggestionCard` deshabilita los botones de confirmar + hint del por qué. Eliminado el fallback silencioso a "OTRO" (visto en OS 4175).
@@ -100,7 +105,7 @@
 
 ---
 
-## ⏳ Pendientes (6)
+## ⏳ Pendientes (5)
 
 ### #11 — Rediseño de tickets + ID autoincremental + filtros ocultos
 - **Qué**: (a) rediseño visual de tickets; (b) agregar un **ID autoincremental** como se hizo con tareas (`sequenceNumber`); (c) los filtros deben estar **ocultos** y mostrarse solo al clickear el botón de filtro.
@@ -112,11 +117,6 @@
 - **Camino propuesto**: cuando no hay proyecto, el filtro de estados pasa a filtrar por **categoría de estado** (`stageCategory`: nuevo/enProgreso/hecho/cancelado) — transversal a todos los workflows, ya existe como filtro client-side.
 - **Dónde**: FE `TaskFilterBar.tsx` + `SchedulingTasksPage`.
 - **Tamaño**: chico-mediano.
-
-### #14 — Campos `auditoria_ia` + `iclass_data` en la tarea + flag de auto-completado
-- **Qué**: agregar al modelo de tareas dos campos (tipo `auditoria_ia` + `iclass_data`) para que, si a una tarea le falta la auditoría o la ingesta, se pueda **auto-completar**. Con una feature flag en integraciones. Es casi igual pero distinto a "Reconciliar tareas pendientes".
-- **Dónde**: BE `ScheduledTask` (columnas/estado) + un job/use-case de auto-completado + `FeatureFlag` + UI de integraciones.
-- **Tamaño**: mediano-grande (integraciones/flags).
 
 ### #19 — Agregar ítem de inventario MANUAL a la tarea (antena/onu/router/etc.)  *(agregado 2026-06-04)*
 - **Qué**: hoy las sugerencias de inventario salen **solo** del cierre (OCR de fotos device + materiales de IClass). Se quiere poder **agregar manualmente** un ítem de inventario en la tarea — elegir el tipo del catálogo (antena/onu/router/otros) y cargar su SN/MAC/datos — sin depender de que el OCR lo haya detectado.
