@@ -11,6 +11,7 @@ import {
   DuplicateInstalledItemError,
   NoReplaceTargetError,
   NotADeviceError,
+  IncompleteSuggestionError,
 } from '@domain/errors/inventory';
 import { randomUUID } from 'crypto';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
@@ -51,10 +52,22 @@ export class ConfirmInventorySuggestion {
     private readonly consumptions: TaskMaterialConsumptionRepository,
   ) {}
 
+  /** Min-data guard (#18): a DEVICE needs SN or MAC; a MATERIAL needs a description. */
+  private assertComplete(s: TaskInventorySuggestion): void {
+    if (s.kind === 'DEVICE') {
+      if (!s.serialNumber?.trim() && !s.mac?.trim()) {
+        throw new IncompleteSuggestionError(s.id, 'DEVICE requiere SN o MAC');
+      }
+    } else if (!s.materialDesc?.trim()) {
+      throw new IncompleteSuggestionError(s.id, 'MATERIAL requiere descripción');
+    }
+  }
+
   async execute(input: ConfirmInventorySuggestionInput): Promise<ConfirmResult> {
     const suggestion = await this.suggestions.get(input.suggestionId);
     if (!suggestion) throw new SuggestionNotFoundError(input.suggestionId);
     if (suggestion.status === 'confirmed') throw new SuggestionAlreadyConfirmedError(input.suggestionId);
+    this.assertComplete(suggestion);
 
     const task = await this.scheduling.getTask(suggestion.taskId);
     const contractId = task?.contractId ?? null;
@@ -143,6 +156,7 @@ export class ConfirmInventorySuggestion {
     if (!suggestion) throw new SuggestionNotFoundError(input.suggestionId);
     if (suggestion.status === 'confirmed') throw new SuggestionAlreadyConfirmedError(input.suggestionId);
     if (suggestion.kind !== 'DEVICE') throw new NotADeviceError(input.suggestionId);
+    this.assertComplete(suggestion);
 
     const task = await this.scheduling.getTask(suggestion.taskId);
     const contractId = task?.contractId ?? null;

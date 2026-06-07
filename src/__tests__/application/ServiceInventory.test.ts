@@ -163,7 +163,7 @@ describe('ConfirmInventorySuggestion — MATERIAL branch', () => {
     expect(result.consumption.materialCatalogId).toBe(created!.id);
   });
 
-  it('SCEN-MAT-3: kind=MATERIAL with empty materialDesc → fallback to OTRO', async () => {
+  it('SCEN-MAT-3: kind=MATERIAL with empty materialDesc → rejected (#18; was: fallback to OTRO)', async () => {
     const { suggestions, scheduling, confirm } = await setup();
     scheduling.seedTask({ id: 't1', contractId: 'svc1' });
     await suggestions.upsert(sug({
@@ -171,12 +171,8 @@ describe('ConfirmInventorySuggestion — MATERIAL branch', () => {
       materialDesc: null, quantity: 1, unit: null,
     }));
 
-    const result = await confirm.execute({ suggestionId: 's1' });
-
-    expect(result.kind).toBe('MATERIAL');
-    if (result.kind !== 'MATERIAL') throw new Error('expected MATERIAL');
-    // fallback material is OTRO
-    expect(result.consumption.materialName).toBe('OTRO');
+    // #18: confirming a MATERIAL with no description is now rejected (no more silent OTRO fallback).
+    await expect(confirm.execute({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'SUGGESTION_INCOMPLETE' });
   });
 
   it('SCEN-MAT-4: MATERIAL with task without contract → TASK_HAS_NO_CONTRACT', async () => {
@@ -287,6 +283,34 @@ describe('Trazabilidad del aprobador (F4)', () => {
     const items = await listItems.execute('svc1');
     expect(items).toHaveLength(1);
     expect(items[0].addedByUserName).toBe('Carlos Sánchez');
+  });
+});
+
+describe('ConfirmInventorySuggestion — min-data guard (#18)', () => {
+  it('DEVICE without SN nor MAC → rejects SUGGESTION_INCOMPLETE and creates no item', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', kind: 'DEVICE', serialNumber: null, mac: null }));
+
+    await expect(confirm.execute({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'SUGGESTION_INCOMPLETE' });
+    expect(await inventory.listByContract('svc1')).toHaveLength(0);
+  });
+
+  it('DEVICE with only MAC → confirms OK', async () => {
+    const { suggestions, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', kind: 'DEVICE', serialNumber: null, mac: 'AABBCCDDEEFF' }));
+
+    const result = await confirm.execute({ suggestionId: 's1' });
+    expect(result.kind).toBe('DEVICE');
+  });
+
+  it('replace() DEVICE without SN nor MAC → rejects SUGGESTION_INCOMPLETE', async () => {
+    const { suggestions, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', kind: 'DEVICE', serialNumber: null, mac: null }));
+
+    await expect(confirm.replace({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'SUGGESTION_INCOMPLETE' });
   });
 });
 
