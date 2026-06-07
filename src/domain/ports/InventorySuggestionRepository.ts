@@ -16,4 +16,6 @@ export interface InventorySuggestionRepository {
      * suggestion so the resolved view reflects what was confirmed, not the scan. */
     deviceType?: string,
   ): Promise<TaskInventorySuggestion | null>;
+  /** #14: true if the task has ≥1 DEVICE suggestion not discarded (materials don't count). */
+  hasDeviceForTask(taskId: string): Promise<boolean>;
 }

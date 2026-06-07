@@ -114,6 +114,7 @@ describe('ReprocessClosureSideEffects', () => {
     expect((await closed.getSideEffectState('900'))!.auditDone).toBe(true);
     expect((await closed.getSideEffectState('900'))!.auditAttempts).toBe(1);
     expect(await audits.listFindingsByTask('t1')).toHaveLength(1);
+    expect((await scheduling.getTask('t1'))!.closureAuditDone).toBe(true); // #14
   });
 
   it('integration: stops re-firing the audit once it is over the attempt cap', async () => {

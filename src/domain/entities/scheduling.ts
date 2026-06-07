@@ -59,6 +59,11 @@ export interface ScheduledTask {
   reviewedByInventoryAt:       string | null;   // ISO 8601
   reviewedByInventoryUserName: string | null;   // JOIN-resolved
 
+  // Closure completeness (#14) — per-task flags. closureHasDeviceInventory counts only DEVICE items.
+  closureCommentDone:        boolean;
+  closureAuditDone:          boolean;
+  closureHasDeviceInventory: boolean;
+
   // IClass — service order code returned by IClass after a successful "Enviar a IClass". Null otherwise.
   iclassOrderCode: string | null;
 

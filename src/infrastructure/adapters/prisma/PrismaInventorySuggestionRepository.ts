@@ -25,6 +25,14 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
     return rows.map(toEntity);
   }
 
+  async hasDeviceForTask(taskId: string): Promise<boolean> {
+    const row = await prisma.taskInventorySuggestion.findFirst({
+      where: { taskId, kind: 'DEVICE', status: { not: 'discarded' } },
+      select: { id: true },
+    });
+    return row !== null;
+  }
+
   /** Natural-key upsert: (taskId, kind, serialNumber, mac, materialDesc). */
   async upsert(s: TaskInventorySuggestion): Promise<TaskInventorySuggestion> {
     const existing = await prisma.taskInventorySuggestion.findFirst({

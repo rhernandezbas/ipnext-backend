@@ -937,6 +937,12 @@ model ScheduledTask {
   reviewedByInventoryUserId String?
   reviewedByInventoryUser   RbacUser? @relation("TaskInventoryReviewer", fields: [reviewedByInventoryUserId], references: [id], onDelete: SetNull)
 
+  // Closure completeness (#14) — per-task flags to measure/auto-complete closure processes.
+  // closureHasDeviceInventory counts only DEVICE items (ONU/router/…), NOT materials.
+  closureCommentDone        Boolean   @default(false)
+  closureAuditDone          Boolean   @default(false)
+  closureHasDeviceInventory Boolean   @default(false)
+
   // IClass — service order code returned when the task is sent to IClass
   iclassOrderCode String?
 

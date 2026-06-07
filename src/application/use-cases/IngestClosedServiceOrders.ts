@@ -13,6 +13,7 @@ import { ClosedServiceOrderRepository } from '@domain/ports/ClosedServiceOrderRe
 import { IClassResultCodeRepository } from '@domain/ports/IClassResultCodeRepository';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
+import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestionRepository';
 import {
   ClosedServiceOrder,
   ClosedServiceOrderSummary,
@@ -67,6 +68,8 @@ export interface IngestClosedOptions {
   buildSuggestions?: BuildInventorySuggestions;
   /** F6 — AI installation audit (closure side-effect, opt-in, non-fatal). */
   auditInstallation?: AuditInstallationQuality;
+  /** #14 — read access to suggestions to compute closureHasDeviceInventory on the task. */
+  suggestions?: InventorySuggestionRepository;
 }
 
 /**
@@ -84,6 +87,7 @@ export class IngestClosedServiceOrders {
   private readonly extractOcr?: ExtractDeviceInfoFromPhoto;
   private readonly buildSuggestions?: BuildInventorySuggestions;
   private readonly auditInstallation?: AuditInstallationQuality;
+  private readonly suggestions?: InventorySuggestionRepository;
 
   constructor(
     private readonly iclass: IClassPort,
@@ -102,6 +106,7 @@ export class IngestClosedServiceOrders {
     this.extractOcr = opts.extractOcr;
     this.buildSuggestions = opts.buildSuggestions;
     this.auditInstallation = opts.auditInstallation;
+    this.suggestions = opts.suggestions;
   }
 
   async execute(): Promise<IngestClosedCounts> {
@@ -284,6 +289,10 @@ export class IngestClosedServiceOrders {
         await this.buildSuggestions.execute({ taskId, extractions, materials: order.materials });
         // Only mark built when no photo failed technically — otherwise stay pending for the reprocess.
         if (!ocrFailed) await this.closed.markSideEffect(order.iclassId, 'inventoryBuilt', true);
+        // #14: reflect on the task whether it has ≥1 DEVICE (materials don't count). Never unmark.
+        if (this.suggestions && (await this.suggestions.hasDeviceForTask(taskId))) {
+          await this.scheduling.markClosureCompleteness(taskId, { closureHasDeviceInventory: true });
+        }
       } catch {
         /* non-fatal — stays pending, retried on the next reprocess */
       }
@@ -294,6 +303,7 @@ export class IngestClosedServiceOrders {
         const attachmentUrls = (scraped?.attachments ?? []).map(a => a.url);
         await this.postComment.execute({ taskId, order, attachmentUrls });
         await this.closed.markSideEffect(order.iclassId, 'commentPosted', true);
+        await this.scheduling.markClosureCompleteness(taskId, { closureCommentDone: true }); // #14
       } catch {
         /* non-fatal — stays pending */
       }
@@ -304,7 +314,10 @@ export class IngestClosedServiceOrders {
       try {
         const result = await this.auditInstallation.execute({ taskId, order });
         // execute() returns null on soft-fail (persisted nothing) → leave pending to retry.
-        if (result) await this.closed.markSideEffect(order.iclassId, 'auditDone', true);
+        if (result) {
+          await this.closed.markSideEffect(order.iclassId, 'auditDone', true);
+          await this.scheduling.markClosureCompleteness(taskId, { closureAuditDone: true }); // #14
+        }
       } catch (err) {
         // non-fatal — la auditoría IA nunca afecta el cierre ya commiteado, pero LOGUEAMOS el fallo
         // eslint-disable-next-line no-console
