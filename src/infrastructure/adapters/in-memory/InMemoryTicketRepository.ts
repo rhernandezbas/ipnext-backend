@@ -15,6 +15,7 @@ export interface InMemoryAdmin {
 }
 
 let nextId = 1;
+let nextSeq = 1; // #11 — monotonic sequenceNumber, like ScheduledTask
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -97,6 +98,7 @@ export class InMemoryTicketRepository implements TicketRepository {
 
     const ticket: Ticket = {
       id,
+      sequenceNumber: nextSeq++,
       subject: data.subject,
       description: data.description,
       status: 'open',

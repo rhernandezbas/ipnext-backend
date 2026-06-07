@@ -41,6 +41,7 @@ export class SplynxTicketAdapter implements TicketRepository {
     return {
       data: data.map((t) => ({
         id: String(t['id'] ?? ''),
+        sequenceNumber: Number(t['id']) || 0, // legacy Splynx: reuse its numeric id as display number
         subject: String(t['subject'] ?? ''),
         description: String(t['message'] ?? ''),
         customerId: t['customer_id'] ? String(t['customer_id']) : null,
@@ -89,6 +90,7 @@ export class SplynxTicketAdapter implements TicketRepository {
     });
     return {
       id: String(raw['id'] ?? ''),
+      sequenceNumber: Number(raw['id']) || 0, // legacy Splynx: reuse its numeric id
       subject: data.subject,
       description: data.description,
       customerId: data.customerId ?? null,
