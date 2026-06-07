@@ -145,3 +145,10 @@ export class NoReplaceTargetError extends DomainError {
     this.name = 'NoReplaceTargetError';
   }
 }
+
+export class IncompleteSuggestionError extends DomainError {
+  constructor(id: string, reason: string) {
+    super(`Inventory suggestion ${id} is incomplete: ${reason}`, 'SUGGESTION_INCOMPLETE');
+    this.name = 'IncompleteSuggestionError';
+  }
+}
