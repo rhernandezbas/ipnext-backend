@@ -1,13 +1,17 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 el 2026-06-07 (#25, #26) → **26 totales**.
-> **19 hechos (en prod) · 7 pendientes.** (#17, #7, #22, #18, #14, #11, #12 cerrados vía SDD.)
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27) → **27 totales**.
+> **20 hechos (en prod) · 7 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (19, desplegados en producción)
+## ✅ Hechos (20, desplegados en producción)
+
+### #25 — Filtros del listado de tickets (asignado + fechas) ahora aplican
+- **Resuelto** (SDD `ticket-assignee-filter`): filtrar por **Asignado** no hacía nada (traía sin-asignar) y las **fechas** (from/to) tampoco — el filtro se perdía en TODAS las capas (query FE, ruta, port, where del repo). Ahora `ListTicketsQuery` + `PrismaTicketRepository.list` filtran por `assigneeId` (exacto) y `createdAt` (rango, fin de día en `to`); la ruta lee/mapea `assignedTo→assigneeId`; el FE manda los params. Tareas ya filtraban server-side (sin cambios).
+- **PRs**: BE #68 / FE #45. Sin migración. Archivado en `openspec/changes/archive/2026-06-07-ticket-assignee-filter/`.
 
 ### #12 — Filtros usables en "Todos los proyectos" (filtrar por categoría de estado)
 - **Resuelto** (SDD `tasks-category-filter`, FE-only): sin proyecto seleccionado, el filtro de Estados muestra las 4 **categorías** (Nuevo / En progreso / Hecho / Cancelado, selección única) y setea `filter.stageCategory` — que ya filtraba client-side. Con proyecto, mantiene los stages del workflow. Cambiar de proyecto limpia el modo opuesto; la categoría activa muestra chip.
@@ -149,18 +153,16 @@
 - **Dónde**: FE tabla/columna RV de la vista general de tareas (gatear con `useMyPermissions().can('inventory.write')` / `<Can permission="inventory.write">`). BE ya OK.
 - **Tamaño**: chico.
 
-### #25 — Bug: filtro "Asignado" trae tickets sin asignar (verificar TODOS los filtros por usuario)  *(agregado 2026-06-07)*
-- **Síntoma**: en tickets, al filtrar por **Asignado = Luis**, sigue apareciendo un ticket que **no tiene nadie asignado**. El filtro por usuario no excluye los no-asignados.
-- **Qué**: filtrar por un usuario debe traer SOLO los de ese usuario (no los `null`). **Verificar TODOS los filtros asociados a un usuario** — Asignado y Reporter, en **tickets Y tareas** — que filtren correctamente (no traigan sin-asignar ni ignoren el filtro). Posible mismo patrón que el bug del status (filtro que no se aplica / `??` con vacío / la query no compara bien).
-- **Dónde**: BE (la query de filtro por assigneeId/reporterId en ticket-list y task-list) + FE (que el control mande el filtro). Auditar ambos.
-- **Tamaño**: chico-mediano.
-
 ### #26 — Rediseño visual del estado "cerrado/closed" en tickets  *(agregado 2026-06-07)*
 - **Qué**: el estado **closed/cerrado** en los tickets tendría que verse **mejor y diferenciarse fácil**. Propuesta del usuario: un diseño **blanco y negro** para distinguir de un vistazo los cerrados del resto.
 - **Dónde**: FE — el badge/estilo del estado en la lista y/o detalle de tickets (`SuggestionCard`/columna `status`, tab "closed", `TicketDetailPage`). Reusar el color del catálogo de status donde aplique.
 - **Tamaño**: chico.
 
----
+### #27 — Bug: el filtro de Prioridad en tareas no filtra  *(agregado 2026-06-07)*
+- **Síntoma**: en la lista de tareas, elegir una prioridad en el filtro no filtra (sigue trayendo todas). Para chequear.
+- **Pista**: el BE `PrismaSchedulingRepository.listTasks` SÍ arma `where['priority']` (existe), así que probablemente el bug es **FE** (el control no manda `priority`, o manda un valor que no matchea — p. ej. el catálogo de prioridades usa nombres/ids distintos a `low/normal/high/urgent`). Auditar el `<select>` de prioridad del `TaskFilterBar` vs los valores reales de las tareas.
+- **Dónde**: FE `TaskFilterBar` (control de prioridad) + verificar el valor que se compara. Posible relación con #25 (auditoría de filtros).
+- **Tamaño**: chico.
 
 ## Refinamientos del #8 (ya en prod, NO son ítems numerados)
 
