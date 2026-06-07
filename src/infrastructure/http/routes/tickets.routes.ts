@@ -104,7 +104,7 @@ export function createTicketsRouter(
   // GET / — list tickets, optional ?customerId filter
   router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
     try {
-      const { page, limit, search, status, priority, customerId } = req.query as Record<string, string>;
+      const { page, limit, search, status, priority, customerId, assignedTo, from, to } = req.query as Record<string, string>;
       const result = await listTickets.execute({
         page: page ? +page : 1,
         limit: limit ? +limit : 25,
@@ -112,6 +112,9 @@ export function createTicketsRouter(
         status: VALID_STATUSES.includes(status) ? status : undefined,
         priority: VALID_PRIORITIES.includes(priority as TicketPriority) ? (priority as TicketPriority) : undefined,
         customerId,
+        assigneeId: assignedTo || undefined, // #25 — FE manda `assignedTo`; el repo filtra por assigneeId
+        from: from || undefined,
+        to: to || undefined,
       });
       res.json(result);
     } catch (err) {
