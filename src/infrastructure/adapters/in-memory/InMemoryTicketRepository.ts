@@ -52,6 +52,16 @@ export class InMemoryTicketRepository implements TicketRepository {
     if (query.priority) {
       results = results.filter((t) => t.priority === query.priority);
     }
+    if (query.assigneeId) {
+      results = results.filter((t) => t.assigneeId === query.assigneeId);
+    }
+    if (query.from) {
+      results = results.filter((t) => t.createdAt >= query.from!);
+    }
+    if (query.to) {
+      const end = `${query.to}T23:59:59.999Z`;
+      results = results.filter((t) => t.createdAt <= end);
+    }
     if (query.search) {
       const q = query.search.toLowerCase();
       results = results.filter(

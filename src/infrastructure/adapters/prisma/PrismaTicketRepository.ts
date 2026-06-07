@@ -63,6 +63,13 @@ export class PrismaTicketRepository implements TicketRepository {
 
     if (query.customerId) where['customerId'] = query.customerId;
     if (query.priority) where['priority'] = query.priority;
+    if (query.assigneeId) where['assigneeId'] = query.assigneeId; // #25
+    if (query.from || query.to) { // #25 — rango por createdAt
+      where['createdAt'] = {
+        ...(query.from && { gte: new Date(query.from) }),
+        ...(query.to && { lte: new Date(`${query.to}T23:59:59.999Z`) }),
+      };
+    }
     // Phase 2: filter by status name via the relation
     if (query.status) {
       where['status'] = { name: query.status };

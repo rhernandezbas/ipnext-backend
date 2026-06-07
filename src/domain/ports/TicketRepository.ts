@@ -7,6 +7,9 @@ export interface ListTicketsQuery extends PaginatedQuery {
   status?: TicketStatus;
   priority?: TicketPriority;
   customerId?: string;            // habilita "Tickets (N)" por cliente
+  assigneeId?: string;            // #25 — filtrar por asignado (excluye no-asignados)
+  from?: string;                  // #25 — createdAt >= from (ISO date YYYY-MM-DD)
+  to?: string;                    // #25 — createdAt <= fin del día de to
 }
 
 export interface CreateTicketData {
