@@ -92,6 +92,9 @@ export function toTask(row: any): ScheduledTask {
       ? row.reviewedByInventoryAt.toISOString()
       : (row.reviewedByInventoryAt ?? null),
     reviewedByInventoryUserName: row.reviewedByInventoryUser?.name ?? null,
+    closureCommentDone: row.closureCommentDone ?? false,
+    closureAuditDone: row.closureAuditDone ?? false,
+    closureHasDeviceInventory: row.closureHasDeviceInventory ?? false,
     iclassOrderCode: row.iclassOrderCode ?? null,
     grOrdenId: row.grOrdenId ?? null,
     ticketId: row.ticketId ?? null,
@@ -531,6 +534,15 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     if (data.reviewedByInventory !== undefined) update['reviewedByInventory'] = data.reviewedByInventory;
     if (data.ticketId !== undefined) update['ticketId'] = data.ticketId;
     return update;
+  }
+
+  async markClosureCompleteness(
+    taskId: string,
+    flags: Partial<Pick<ScheduledTask, 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory'>>,
+  ): Promise<void> {
+    if (Object.keys(flags).length === 0) return;
+    // Non-fatal: a missing task never aborts the closure side-effects.
+    await (prisma.scheduledTask as any).update({ where: { id: taskId }, data: flags }).catch(() => { /* task gone */ });
   }
 
   async setInventoryReview(taskId: string, reviewed: boolean, actorId: string | null): Promise<ScheduledTask | null> {

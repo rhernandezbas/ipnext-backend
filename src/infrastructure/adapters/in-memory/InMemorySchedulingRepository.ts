@@ -70,6 +70,9 @@ const NEW_FIELDS_DEFAULTS = {
   reviewedByInventory: false,
   reviewedByInventoryAt: null,
   reviewedByInventoryUserName: null,
+  closureCommentDone: false,
+  closureAuditDone: false,
+  closureHasDeviceInventory: false,
   ticketId: null,
   ticketSubject: null,
 };
@@ -286,6 +289,14 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return this.tasks.find(t => t.id === id) ? { ...this.tasks.find(t => t.id === id)! } : null;
   }
 
+  async markClosureCompleteness(
+    taskId: string,
+    flags: Partial<Pick<ScheduledTask, 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory'>>,
+  ): Promise<void> {
+    const t = this.tasks.find(x => x.id === taskId);
+    if (t) Object.assign(t, flags);
+  }
+
   async createTask(data: CreateTaskInput): Promise<ScheduledTask> {
     const stageCategory = deriveStageCategory(data.stageId ?? DEFAULT_STAGE_ID_PENDING);
     const task: ScheduledTask = {
@@ -326,6 +337,9 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       reviewedByInventory: false,
       reviewedByInventoryAt: null,
       reviewedByInventoryUserName: null,
+      closureCommentDone: false,
+      closureAuditDone: false,
+      closureHasDeviceInventory: false,
       ticketId: data.ticketId ?? null,
       ticketSubject: (data.ticketId != null ? (this.ticketSubjects.get(data.ticketId) ?? null) : null),
       createdAt: new Date().toISOString(),

@@ -14,6 +14,12 @@ export class InMemoryInventorySuggestionRepository implements InventorySuggestio
     return Array.from(this.store.values()).filter(s => s.taskId === taskId);
   }
 
+  async hasDeviceForTask(taskId: string): Promise<boolean> {
+    return Array.from(this.store.values()).some(
+      s => s.taskId === taskId && s.kind === 'DEVICE' && s.status !== 'discarded',
+    );
+  }
+
   async upsert(suggestion: TaskInventorySuggestion): Promise<TaskInventorySuggestion> {
     const key = naturalKey(suggestion);
     const existingId = this.byNatural.get(key);

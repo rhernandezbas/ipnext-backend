@@ -16,7 +16,7 @@ import { PrismaTaskAuditRepository } from '../adapters/prisma/PrismaTaskAuditRep
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
 
-type SideEffects = Pick<IngestClosedOptions, 'portal' | 'postComment' | 'buildSuggestions' | 'extractOcr' | 'auditInstallation'>;
+type SideEffects = Pick<IngestClosedOptions, 'portal' | 'postComment' | 'buildSuggestions' | 'extractOcr' | 'auditInstallation' | 'suggestions'>;
 
 /**
  * Composition of the opt-in closure side effects shared by the cron and the
@@ -26,9 +26,11 @@ type SideEffects = Pick<IngestClosedOptions, 'portal' | 'postComment' | 'buildSu
  * effectively dormant — all side effects are non-fatal in the ingest regardless.
  */
 export function buildClosureSideEffects(): SideEffects {
+  const suggestionsRepo = new PrismaInventorySuggestionRepository();
   const eff: SideEffects = {
     postComment: new PostClosureComment(new PrismaTaskCommentRepository()),
-    buildSuggestions: new BuildInventorySuggestions(new PrismaInventorySuggestionRepository()),
+    buildSuggestions: new BuildInventorySuggestions(suggestionsRepo),
+    suggestions: suggestionsRepo, // #14 — to compute closureHasDeviceInventory on the task
   };
 
   const portal = config.iclassPortal;

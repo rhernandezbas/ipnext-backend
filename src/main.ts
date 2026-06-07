@@ -4,6 +4,7 @@ import { config } from './infrastructure/config';
 import { bootstrapGestionRealSync } from './infrastructure/scheduling/bootstrapGestionRealSync';
 import { bootstrapGestionRealIngest } from './infrastructure/scheduling/bootstrapGestionRealIngest';
 import { bootstrapIClassClosure } from './infrastructure/scheduling/bootstrapIClassClosure';
+import { bootstrapTaskAutocomplete } from './infrastructure/scheduling/bootstrapTaskAutocomplete';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
 // Splynx being unavailable inside an async route) must NOT take the whole
@@ -37,3 +38,8 @@ void bootstrapGestionRealIngest()
 // feature flag (default OFF). Returns null only when IClass credentials are missing.
 const iclassClosure = bootstrapIClassClosure();
 iclassClosure?.start();
+
+// Task auto-complete (#14) — starts dormant; gated by the `task-autocomplete`
+// feature flag (default OFF). Re-fires pending closure side-effects per task.
+const taskAutocomplete = bootstrapTaskAutocomplete();
+taskAutocomplete?.start();

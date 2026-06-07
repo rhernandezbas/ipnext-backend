@@ -427,4 +427,47 @@ describe('IngestClosedServiceOrders', () => {
     const sugs = await suggestionsRepo.listByTask('t1');
     expect(sugs.some(s => s.kind === 'DEVICE')).toBe(false);
   });
+
+  it('#14: marks closureCommentDone + closureHasDeviceInventory on the task after closure', async () => {
+    const { scheduling, iclass, resultCodes, closed, state } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id, contractId: 'svc1' });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    iclass.checklistsByOrder['900'] = [{
+      iclassSurveyId: 's1', surveyAt: null,
+      answers: [{ questionId: null, questionText: 'SAQUE FOTO DE LA MAC Y SN DEL ROUTER', questionType: 'Foto', answerOrder: 3, answerText: null, photoMissing: true, photoUrl: null }],
+    }];
+
+    const portal = new InMemoryIClassPortal();
+    portal.set('900', {
+      questions: [{ ordem: 3, kind: 'photo', label: 'FOTO ROUTER', answerText: null, photoUrl: 'https://x/router.jpg', fileName: 'r.jpg', photoMissing: false }],
+      attachments: [],
+    });
+
+    const ocrStub = new InMemoryDevicePhotoOcr();
+    ocrStub.set('https://x/router.jpg', { sn: 'SN1', mac: 'MAC1', confidence: 0.9, rawOutput: '' });
+    const ocrRepo = new InMemoryOcrExtractionRepository();
+    const suggestionsRepo = new InMemoryInventorySuggestionRepository();
+    const commentRepo = new InMemoryTaskCommentRepository();
+    const catalogRepo = new InMemoryDeviceTypeCatalogRepository();
+    for (const name of ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS']) {
+      await catalogRepo.create({ name, active: true, sortOrder: 0 });
+    }
+
+    const useCase = new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, {
+      now: () => new Date('2026-05-29T12:00:00Z'),
+      portal,
+      extractOcr: new ExtractDeviceInfoFromPhoto(ocrStub, ocrRepo, catalogRepo),
+      buildSuggestions: new BuildInventorySuggestions(suggestionsRepo),
+      suggestions: suggestionsRepo,
+      postComment: new PostClosureComment(commentRepo),
+    });
+
+    await useCase.execute();
+
+    const task = await scheduling.getTask('t1');
+    expect(task!.closureCommentDone).toBe(true);
+    expect(task!.closureHasDeviceInventory).toBe(true);
+    expect(task!.closureAuditDone).toBe(false); // no audit injected → stays false
+  });
 });
