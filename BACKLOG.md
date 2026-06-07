@@ -1,13 +1,17 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 el 2026-06-07 (#23, #24) → **24 totales**.
-> **18 hechos (en prod) · 6 pendientes.** (#17, #7, #22, #18, #14, #11 cerrados vía SDD.)
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 el 2026-06-07 (#25, #26) → **26 totales**.
+> **19 hechos (en prod) · 7 pendientes.** (#17, #7, #22, #18, #14, #11, #12 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (18, desplegados en producción)
+## ✅ Hechos (19, desplegados en producción)
+
+### #12 — Filtros usables en "Todos los proyectos" (filtrar por categoría de estado)
+- **Resuelto** (SDD `tasks-category-filter`, FE-only): sin proyecto seleccionado, el filtro de Estados muestra las 4 **categorías** (Nuevo / En progreso / Hecho / Cancelado, selección única) y setea `filter.stageCategory` — que ya filtraba client-side. Con proyecto, mantiene los stages del workflow. Cambiar de proyecto limpia el modo opuesto; la categoría activa muestra chip.
+- **PR**: FE #44. Sin backend (el filtrado por `stageCategory` ya existía). Archivado en `openspec/changes/archive/2026-06-07-tasks-category-filter/`.
 
 ### #11 — Rediseño de la lista de tickets (como tareas) + ID autoincremental
 - **Resuelto** (SDD `tickets-redesign-sequence`): la lista de tickets se rediseñó **espejando la de tareas** (single-column: header → barra de filtros horizontal → tabla full-width; `#sequenceNumber` linkeado; prioridad como pill color-coded). BE: `Ticket.sequenceNumber` (Int autoincrement) + migración con backfill por `createdAt` (réplica del patrón de tareas).
@@ -110,13 +114,7 @@
 
 ---
 
-## ⏳ Pendientes (6)
-
-### #12 — Filtros usables en "Todos los proyectos"
-- **Qué**: NO es bug. Hoy el filtro de Estados (`StageMultiSelect`) requiere un proyecto seleccionado, porque los stages vienen del workflow del proyecto. Se quiere poder filtrar estando en "Todos los proyectos".
-- **Camino propuesto**: cuando no hay proyecto, el filtro de estados pasa a filtrar por **categoría de estado** (`stageCategory`: nuevo/enProgreso/hecho/cancelado) — transversal a todos los workflows, ya existe como filtro client-side.
-- **Dónde**: FE `TaskFilterBar.tsx` + `SchedulingTasksPage`.
-- **Tamaño**: chico-mediano.
+## ⏳ Pendientes (7)
 
 ### #19 — Agregar ítem de inventario MANUAL a la tarea (antena/onu/router/etc.)  *(agregado 2026-06-04)*
 - **Qué**: hoy las sugerencias de inventario salen **solo** del cierre (OCR de fotos device + materiales de IClass). Se quiere poder **agregar manualmente** un ítem de inventario en la tarea — elegir el tipo del catálogo (antena/onu/router/otros) y cargar su SN/MAC/datos — sin depender de que el OCR lo haya detectado.
@@ -149,6 +147,17 @@
 - **Qué**: la columna **RV (Revisado por Inventario)** de la vista general de tareas solo la puede cambiar quien tenga el permiso de revisado por inventario (el **mismo** que ya exige la ruta: `inventory.write`).
 - **Estado actual**: el BE ya está protegido — `PATCH /:id/inventory-review` exige `inventory.write` (`invWrite`). Falta el **FE**: en la lista general, ocultar/deshabilitar el control de RV para quien no tiene el permiso (hoy se ve/clickea y el BE lo rechaza).
 - **Dónde**: FE tabla/columna RV de la vista general de tareas (gatear con `useMyPermissions().can('inventory.write')` / `<Can permission="inventory.write">`). BE ya OK.
+- **Tamaño**: chico.
+
+### #25 — Bug: filtro "Asignado" trae tickets sin asignar (verificar TODOS los filtros por usuario)  *(agregado 2026-06-07)*
+- **Síntoma**: en tickets, al filtrar por **Asignado = Luis**, sigue apareciendo un ticket que **no tiene nadie asignado**. El filtro por usuario no excluye los no-asignados.
+- **Qué**: filtrar por un usuario debe traer SOLO los de ese usuario (no los `null`). **Verificar TODOS los filtros asociados a un usuario** — Asignado y Reporter, en **tickets Y tareas** — que filtren correctamente (no traigan sin-asignar ni ignoren el filtro). Posible mismo patrón que el bug del status (filtro que no se aplica / `??` con vacío / la query no compara bien).
+- **Dónde**: BE (la query de filtro por assigneeId/reporterId en ticket-list y task-list) + FE (que el control mande el filtro). Auditar ambos.
+- **Tamaño**: chico-mediano.
+
+### #26 — Rediseño visual del estado "cerrado/closed" en tickets  *(agregado 2026-06-07)*
+- **Qué**: el estado **closed/cerrado** en los tickets tendría que verse **mejor y diferenciarse fácil**. Propuesta del usuario: un diseño **blanco y negro** para distinguir de un vistazo los cerrados del resto.
+- **Dónde**: FE — el badge/estilo del estado en la lista y/o detalle de tickets (`SuggestionCard`/columna `status`, tab "closed", `TicketDetailPage`). Reusar el color del catálogo de status donde aplique.
 - **Tamaño**: chico.
 
 ---
