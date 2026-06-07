@@ -1,13 +1,18 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 el 2026-06-06 (#21, #22) → **22 totales**.
-> **17 hechos (en prod) · 5 pendientes.** (#17, #7, #22, #18, #14 cerrados vía SDD.)
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 el 2026-06-07 (#23, #24) → **24 totales**.
+> **18 hechos (en prod) · 6 pendientes.** (#17, #7, #22, #18, #14, #11 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (17, desplegados en producción)
+## ✅ Hechos (18, desplegados en producción)
+
+### #11 — Rediseño de la lista de tickets (como tareas) + ID autoincremental
+- **Resuelto** (SDD `tickets-redesign-sequence`): la lista de tickets se rediseñó **espejando la de tareas** (single-column: header → barra de filtros horizontal → tabla full-width; `#sequenceNumber` linkeado; prioridad como pill color-coded). BE: `Ticket.sequenceNumber` (Int autoincrement) + migración con backfill por `createdAt` (réplica del patrón de tareas).
+- **PRs**: BE #65 / FE #42. Migración `20260607000000_add_ticket_sequence_number`. Archivado en `openspec/changes/archive/2026-06-07-tickets-redesign-sequence/`.
+- **Nota**: se eligió "como las tareas" (filtros visibles en barra horizontal) en vez del "ocultos con botón" del item original. Solo la LISTA (el detalle quedó fuera de scope). El worktree viejo `tickets-redesign-fe` se descartó (desactualizado).
 
 ### #14 — Campos de completitud del cierre por tarea + auto-completado
 - **Resuelto** (SDD `task-completeness-tracking`): 3 flags en `ScheduledTask` (`closureCommentDone`, `closureAuditDone`, `closureHasDeviceInventory` — este último cuenta **solo equipos DEVICE**, no materiales) marcados por el closure (loop/reprocess/cron) vía `markClosureCompleteness`. Migración con backfill idempotente. Cron `TaskAutocompleteScheduler` (flag `task-autocomplete`, default OFF) que reusa `ReprocessClosureSideEffects`. La API de tareas expone los flags para medir.
@@ -105,12 +110,7 @@
 
 ---
 
-## ⏳ Pendientes (5)
-
-### #11 — Rediseño de tickets + ID autoincremental + filtros ocultos
-- **Qué**: (a) rediseño visual de tickets; (b) agregar un **ID autoincremental** como se hizo con tareas (`sequenceNumber`); (c) los filtros deben estar **ocultos** y mostrarse solo al clickear el botón de filtro.
-- **Dónde**: FE página de tickets + BE (columna `sequenceNumber` en `Ticket`, migración + backfill). Ya existe un worktree `tickets-redesign-fe`.
-- **Tamaño**: mediano (tickets).
+## ⏳ Pendientes (6)
 
 ### #12 — Filtros usables en "Todos los proyectos"
 - **Qué**: NO es bug. Hoy el filtro de Estados (`StageMultiSelect`) requiere un proyecto seleccionado, porque los stages vienen del workflow del proyecto. Se quiere poder filtrar estando en "Todos los proyectos".
@@ -136,6 +136,19 @@
 - **Síntoma**: en el modal de crear tarea, el `*` de campo obligatorio cae en una línea aparte ("Proyecto" y abajo "*") en vez de "Proyecto *" en la misma línea. Pasa en **todos** los campos del modal.
 - **Camino propuesto**: el `*` debe ir inline con el label (revisar el CSS del label / required-marker — probablemente un `display:block`, un `<br>` implícito o un wrap del span). Corregir el componente del label, no campo por campo.
 - **Dónde**: FE `CreateTaskModal` + su CSS module (el marcador de requerido).
+- **Tamaño**: chico.
+
+### #23 — Auditor IA + OCR de inventario 100% asíncronos (background, no bloqueantes)  *(agregado 2026-06-07)*
+- **Síntoma**: el "Reprocesar" corre los side-effects pesados (OCR de inventario + auditoría IA) **síncrono dentro del request HTTP** → con carga (reprocess masivo) el modelo `qwen2.5vl:7b` tarda y el request corta con "No se pudo reprocesar", **aunque el backend siga procesando** en background. Visto el 2026-06-07.
+- **Qué se quiere**: que TODO el procesamiento de auditor IA y OCR de inventario sea **asíncrono** — el endpoint encola/dispara y devuelve al toque (202); el job corre en background y **tarda lo que tenga que tardar**, sin timeout. El progreso se mira por el tracking de side-effects + los flags de completitud (#14).
+- **Camino propuesto**: pasar `ReprocessClosureSideEffects` (y el closure) a un patrón job async (queue o fire-and-forget con lock). El botón "Reprocesar" responde "encolado". El cron `task-autocomplete` (#14) ya corre en background — unificar todo a ese modelo.
+- **Dónde**: BE `ReprocessClosureSideEffects` + endpoint de reprocess + runner/queue; FE el botón muestra "encolado".
+- **Tamaño**: mediano-grande. **Relación**: lo reveló el reprocess del 2026-06-07. NOTA: además el audit **degenera** bajo carga (el modelo devuelve JSON truncado `[`) — el async deja que tarde sin cortar, pero la degeneración puede requerir bajar `maxPhotos` (hoy 8) o más VRAM.
+
+### #24 — RV en la vista general de tareas: solo editable con permiso  *(agregado 2026-06-07)*
+- **Qué**: la columna **RV (Revisado por Inventario)** de la vista general de tareas solo la puede cambiar quien tenga el permiso de revisado por inventario (el **mismo** que ya exige la ruta: `inventory.write`).
+- **Estado actual**: el BE ya está protegido — `PATCH /:id/inventory-review` exige `inventory.write` (`invWrite`). Falta el **FE**: en la lista general, ocultar/deshabilitar el control de RV para quien no tiene el permiso (hoy se ve/clickea y el BE lo rechaza).
+- **Dónde**: FE tabla/columna RV de la vista general de tareas (gatear con `useMyPermissions().can('inventory.write')` / `<Can permission="inventory.write">`). BE ya OK.
 - **Tamaño**: chico.
 
 ---
