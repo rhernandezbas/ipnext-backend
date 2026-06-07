@@ -2,12 +2,18 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **22 hechos (en prod) · 6 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25 cerrados vía SDD.)
+> **25 hechos (en prod) · 3 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (22, desplegados en producción)
+## ✅ Hechos (25, desplegados en producción)
+
+### #21 + #24 + #26 — Tres chicos de FE en un PR (un commit por ítem)
+- **#21 — Asterisco debajo del label (CreateTaskModal)**: `.label` es flex column → el texto y el `<span>*</span>` eran flex items separados y el `*` caía a su línea propia en TODOS los campos. Fix: texto+asterisco comparten un span inline (5 campos). Test estructural.
+- **#24 — RV solo editable con `inventory.write`**: el BE ya lo exigía; el FE mostraba el botón a todos y el BE lo rechazaba. Sin permiso → indicador **read-only** (mismo footprint, sin botón, la info se sigue viendo). Gateado con `useCan('inventory.write')`.
+- **#26 — Estado closed en blanco y negro (tickets)**: la columna Estado pasó de texto plano a **pill** con el color del catálogo; `closed`/`cerrado` → variante negra con texto blanco. Aplica a lista + Archivo (mismo componente).
+- **PR**: FE #48 (commits d7af26e / 6b0b8f4 / c201d63). Sin BE. Sin migración.
 
 ### #27 — Filtro de Prioridad en tareas no filtraba
 - **Resuelto** (FE-only, directo con TDD). **Causa raíz**: el select manda el **name del catálogo** `TaskPriority` (Baja/Normal/Alta/Urgente — la migración `20260526010000` convirtió hasta las tareas legacy a esos nombres), pero `useTasksFilterUrl` whitelisteaba el valor de la URL contra el **enum legacy** (`low/normal/high/urgent`) en cada read/merge → todo valor real parseaba a `undefined` y el filtro nunca salía en el request. La cadena del BE estaba perfecta (ruta ✓ zod free-text ✓ `ListTasks` passthrough entero ✓ `where['priority']` ✓) — se verificó PRIMERO, aplicando la lección del #28.
@@ -128,7 +134,7 @@
 
 ---
 
-## ⏳ Pendientes (6)
+## ⏳ Pendientes (3)
 
 ### #19 — Agregar ítem de inventario MANUAL a la tarea (antena/onu/router/etc.)  *(agregado 2026-06-04)*
 - **Qué**: hoy las sugerencias de inventario salen **solo** del cierre (OCR de fotos device + materiales de IClass). Se quiere poder **agregar manualmente** un ítem de inventario en la tarea — elegir el tipo del catálogo (antena/onu/router/otros) y cargar su SN/MAC/datos — sin depender de que el OCR lo haya detectado.
@@ -144,29 +150,12 @@
 - **Dónde**: BE `buildAuditContext.ts` + `OllamaInstallationAuditor.renderPrompt` + entity `AuditContext` (nuevos campos).
 - **Tamaño**: chico-mediano.
 
-### #21 — Bug (FE): el asterisco de obligatorio aparece DEBAJO del label, no al lado  *(agregado 2026-06-06)*
-- **Síntoma**: en el modal de crear tarea, el `*` de campo obligatorio cae en una línea aparte ("Proyecto" y abajo "*") en vez de "Proyecto *" en la misma línea. Pasa en **todos** los campos del modal.
-- **Camino propuesto**: el `*` debe ir inline con el label (revisar el CSS del label / required-marker — probablemente un `display:block`, un `<br>` implícito o un wrap del span). Corregir el componente del label, no campo por campo.
-- **Dónde**: FE `CreateTaskModal` + su CSS module (el marcador de requerido).
-- **Tamaño**: chico.
-
 ### #23 — Auditor IA + OCR de inventario 100% asíncronos (background, no bloqueantes)  *(agregado 2026-06-07)*
 - **Síntoma**: el "Reprocesar" corre los side-effects pesados (OCR de inventario + auditoría IA) **síncrono dentro del request HTTP** → con carga (reprocess masivo) el modelo `qwen2.5vl:7b` tarda y el request corta con "No se pudo reprocesar", **aunque el backend siga procesando** en background. Visto el 2026-06-07.
 - **Qué se quiere**: que TODO el procesamiento de auditor IA y OCR de inventario sea **asíncrono** — el endpoint encola/dispara y devuelve al toque (202); el job corre en background y **tarda lo que tenga que tardar**, sin timeout. El progreso se mira por el tracking de side-effects + los flags de completitud (#14).
 - **Camino propuesto**: pasar `ReprocessClosureSideEffects` (y el closure) a un patrón job async (queue o fire-and-forget con lock). El botón "Reprocesar" responde "encolado". El cron `task-autocomplete` (#14) ya corre en background — unificar todo a ese modelo.
 - **Dónde**: BE `ReprocessClosureSideEffects` + endpoint de reprocess + runner/queue; FE el botón muestra "encolado".
 - **Tamaño**: mediano-grande. **Relación**: lo reveló el reprocess del 2026-06-07. NOTA: además el audit **degenera** bajo carga (el modelo devuelve JSON truncado `[`) — el async deja que tarde sin cortar, pero la degeneración puede requerir bajar `maxPhotos` (hoy 8) o más VRAM.
-
-### #24 — RV en la vista general de tareas: solo editable con permiso  *(agregado 2026-06-07)*
-- **Qué**: la columna **RV (Revisado por Inventario)** de la vista general de tareas solo la puede cambiar quien tenga el permiso de revisado por inventario (el **mismo** que ya exige la ruta: `inventory.write`).
-- **Estado actual**: el BE ya está protegido — `PATCH /:id/inventory-review` exige `inventory.write` (`invWrite`). Falta el **FE**: en la lista general, ocultar/deshabilitar el control de RV para quien no tiene el permiso (hoy se ve/clickea y el BE lo rechaza).
-- **Dónde**: FE tabla/columna RV de la vista general de tareas (gatear con `useMyPermissions().can('inventory.write')` / `<Can permission="inventory.write">`). BE ya OK.
-- **Tamaño**: chico.
-
-### #26 — Rediseño visual del estado "cerrado/closed" en tickets  *(agregado 2026-06-07)*
-- **Qué**: el estado **closed/cerrado** en los tickets tendría que verse **mejor y diferenciarse fácil**. Propuesta del usuario: un diseño **blanco y negro** para distinguir de un vistazo los cerrados del resto.
-- **Dónde**: FE — el badge/estilo del estado en la lista y/o detalle de tickets (`SuggestionCard`/columna `status`, tab "closed", `TicketDetailPage`). Reusar el color del catálogo de status donde aplique.
-- **Tamaño**: chico.
 
 ## Refinamientos del #8 (ya en prod, NO son ítems numerados)
 
