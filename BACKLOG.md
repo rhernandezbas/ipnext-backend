@@ -1,8 +1,8 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27) → **27 totales**.
-> **20 hechos (en prod) · 7 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25 cerrados vía SDD.)
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
+> **20 hechos (en prod) · 8 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -118,7 +118,7 @@
 
 ---
 
-## ⏳ Pendientes (7)
+## ⏳ Pendientes (8)
 
 ### #19 — Agregar ítem de inventario MANUAL a la tarea (antena/onu/router/etc.)  *(agregado 2026-06-04)*
 - **Qué**: hoy las sugerencias de inventario salen **solo** del cierre (OCR de fotos device + materiales de IClass). Se quiere poder **agregar manualmente** un ítem de inventario en la tarea — elegir el tipo del catálogo (antena/onu/router/otros) y cargar su SN/MAC/datos — sin depender de que el OCR lo haya detectado.
@@ -163,6 +163,13 @@
 - **Pista**: el BE `PrismaSchedulingRepository.listTasks` SÍ arma `where['priority']` (existe), así que probablemente el bug es **FE** (el control no manda `priority`, o manda un valor que no matchea — p. ej. el catálogo de prioridades usa nombres/ids distintos a `low/normal/high/urgent`). Auditar el `<select>` de prioridad del `TaskFilterBar` vs los valores reales de las tareas.
 - **Dónde**: FE `TaskFilterBar` (control de prioridad) + verificar el valor que se compara. Posible relación con #25 (auditoría de filtros).
 - **Tamaño**: chico.
+
+### #28 — Bug: el filtro de Asignado en tickets SIGUE trayendo el sin-asignar (tras el #25)  *(agregado 2026-06-07)*
+- **Síntoma**: tras desplegar el #25 (BE #68 + FE #45), filtrar por **Asignado = Luis** en "Todos los tickets" sigue mostrando un ticket **sin nadie asignado**.
+- **Primero descartar**: **caché del navegador** (el FE se deployó recién; hard refresh `Ctrl+Shift+R`). Si persiste tras el refresh, es causa real.
+- **Causas a investigar** (si persiste): (a) el param `assignedTo` no llega al BE (mirar logs `GET /tickets` en vivo); (b) **mismatch de id** — el `u.id` del select de Asignado (`useRbacUsers`) vs el `ticket.assigneeId` real (¿son el mismo RbacUser id? ¿el FE `Ticket.assignedTo:number` vs BE `assigneeId:string` causa desajuste?); (c) el ticket "sin asignar" en realidad tiene un assigneeId fantasma.
+- **Dónde**: verificar end-to-end el request real (Network tab: ¿manda `?assignedTo=`?) + el log del BE. FE `TicketFilterBar`/`useTicketList` + ruta.
+- **Tamaño**: chico (diagnóstico) — el fix depende de la causa.
 
 ## Refinamientos del #8 (ya en prod, NO son ítems numerados)
 
