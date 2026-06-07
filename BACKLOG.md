@@ -2,12 +2,16 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 el 2026-06-06 (#21, #22) → **22 totales**.
-> **15 hechos (en prod) · 7 pendientes.** (#17, #7, #22 cerrados vía SDD.)
+> **16 hechos (en prod) · 6 pendientes.** (#17, #7, #22, #18 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (15, desplegados en producción)
+## ✅ Hechos (16, desplegados en producción)
+
+### #18 — Bug: confirmar inventario sin data (validación de datos mínimos)
+- **Resuelto** (SDD `inventory-confirm-validation`): guard fail-closed en `ConfirmInventorySuggestion` (`execute` + `replace`) — DEVICE requiere SN o MAC, MATERIAL requiere descripción; sin eso, `IncompleteSuggestionError` → HTTP 422. FE: `SuggestionCard` deshabilita los botones de confirmar + hint del por qué. Eliminado el fallback silencioso a "OTRO" (visto en OS 4175).
+- **PRs**: BE #61 / FE #40. Sin migración. Prerequisito del #19. Archivado en `openspec/changes/archive/2026-06-06-inventory-confirm-validation/`.
 
 ### #22 — Bug: inventario con foto pero sin SN cuando el OCR falla
 - **Resuelto** (SDD `closure-ocr-failure-retry`): el OCR ahora distingue el **fallo técnico** (LLM caída/timeout → `failed`) del label ilegible. Ante fallo técnico NO se cachea la extracción ni se crea el DEVICE incompleto y NO se marca `inventoryBuilt` → el reprocess re-OCR-ea. Una migración de remediación destildó los históricos y borró las extracciones `ocr-error` + los DEVICE pending vacíos.
@@ -96,7 +100,7 @@
 
 ---
 
-## ⏳ Pendientes (7)
+## ⏳ Pendientes (6)
 
 ### #11 — Rediseño de tickets + ID autoincremental + filtros ocultos
 - **Qué**: (a) rediseño visual de tickets; (b) agregar un **ID autoincremental** como se hizo con tareas (`sequenceNumber`); (c) los filtros deben estar **ocultos** y mostrarse solo al clickear el botón de filtro.
@@ -114,15 +118,10 @@
 - **Dónde**: BE `ScheduledTask` (columnas/estado) + un job/use-case de auto-completado + `FeatureFlag` + UI de integraciones.
 - **Tamaño**: mediano-grande (integraciones/flags).
 
-### #18 — Bug: confirmar inventario sin data (no validar el ítem antes de confirmar)  *(agregado 2026-06-04)*
-- **Síntoma**: en la confirmación de inventario de una OS (ejemplo visto en la **4175**), un ítem queda **confirmado pero sin data** — se puede confirmar aunque no tenga los datos mínimos (un DEVICE sin SN ni MAC, o un ítem sin descripción). No se debería poder confirmar un ítem vacío.
-- **Camino propuesto**: validar datos mínimos por `kind` antes de confirmar — DEVICE → al menos SN o MAC; MATERIAL → descripción + cantidad. Rechazar con error de validación si falta.
-- **Dónde**: BE `ConfirmInventorySuggestion` (guard de datos mínimos por kind) — fail-closed en el backend, no solo en el front; FE `SuggestionCard` / `TaskInventorySuggestions` (deshabilitar "Confirmar" o mostrar la validación). Permiso ya existente (`inventory.write`).
-- **Tamaño**: chico.
-
 ### #19 — Agregar ítem de inventario MANUAL a la tarea (antena/onu/router/etc.)  *(agregado 2026-06-04)*
 - **Qué**: hoy las sugerencias de inventario salen **solo** del cierre (OCR de fotos device + materiales de IClass). Se quiere poder **agregar manualmente** un ítem de inventario en la tarea — elegir el tipo del catálogo (antena/onu/router/otros) y cargar su SN/MAC/datos — sin depender de que el OCR lo haya detectado.
-- **Camino propuesto**: nuevo use-case + endpoint para crear una sugerencia/ítem manual en la tarea (`source = MANUAL`, kind DEVICE/MATERIAL); FE botón "Agregar ítem" en el panel de inventario de la tarea con form (tipo del `DeviceTypeCatalog` + SN/MAC/desc). Reusa la validación del #18.
+- **Caso clave (visto 2026-06-06)**: una OS **sin foto de MAC** no genera ninguna sugerencia → el panel de inventario queda **vacío** y hoy no hay forma de cargar el equipo. Esto NO lo resuelve el #22 (ese re-OCR-ea cuando la LLM falló; acá directamente no hay foto que OCR-ear).
+- **Camino propuesto**: nuevo use-case + endpoint para crear una sugerencia/ítem manual en la tarea (`source = MANUAL`, kind DEVICE/MATERIAL); FE botón "Agregar ítem" **siempre visible** en el panel de inventario de la tarea (incluso con panel vacío / sin sugerencias) con form (tipo del `DeviceTypeCatalog` + SN/MAC/desc). Reusa la validación del #18.
 - **Dónde**: BE nuevo use-case (`AddTaskInventoryItem` o similar) + ruta bajo `/scheduling/:taskId/inventory`; FE `TaskInventorySuggestions` (form de alta). Permiso `inventory.write`.
 - **Tamaño**: mediano. **Relación**: depende del #18 (la validación) y se apoya en el catálogo del #5.
 
