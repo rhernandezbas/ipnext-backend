@@ -1591,6 +1591,8 @@ enum TicketPriority {
 
 model Ticket {
   id          String @id @default(uuid())
+  // #11: monotonic display number (like ScheduledTask.sequenceNumber). Never reused.
+  sequenceNumber Int @unique @default(autoincrement())
   subject     String
   description String
 

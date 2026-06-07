@@ -4,6 +4,7 @@ import type { Ticket } from '../../domain/entities/ticket';
 
 const mockTicket: Ticket = {
   id: '1',
+  sequenceNumber: 1,
   subject: 'Internet caído',
   description: 'No hay señal.',
   customerId: 'c42',

@@ -73,6 +73,15 @@ describe('POST /api/tickets', () => {
     expect(res.body.customerName).toBe('Alice García');
     expect(res.body.status).toBe('open');
     expect(res.body.id).toBeTruthy();
+    expect(typeof res.body.sequenceNumber).toBe('number'); // #11 — display number
+  });
+
+  it('#11: assigns a monotonic sequenceNumber (shown as #N in the list)', async () => {
+    const { app } = buildApp();
+    const mk = () => withAuth(request(app).post('/api/tickets').send({ subject: 'S', description: 'D' }));
+    const a = await mk();
+    const b = await mk();
+    expect(b.body.sequenceNumber).toBeGreaterThan(a.body.sequenceNumber);
   });
 
   it('returns 400 when subject is missing', async () => {

@@ -25,6 +25,7 @@ const INCLUDE = {
 export function toTicket(row: any): Ticket {
   return {
     id: row.id,
+    sequenceNumber: row.sequenceNumber,
     subject: row.subject,
     description: row.description,
     // Phase 2: status is a relation; expose name (the API contract string).

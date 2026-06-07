@@ -9,6 +9,7 @@ export type TicketStatus = string;
 
 export interface Ticket {
   id: string;
+  sequenceNumber: number;        // #11 — monotonic display number (#N), like tasks
   subject: string;
   description: string;
   status: TicketStatus;
