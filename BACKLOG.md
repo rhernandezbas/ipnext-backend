@@ -2,12 +2,17 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **21 hechos (en prod) · 7 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25 cerrados vía SDD.)
+> **22 hechos (en prod) · 6 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (21, desplegados en producción)
+## ✅ Hechos (22, desplegados en producción)
+
+### #27 — Filtro de Prioridad en tareas no filtraba
+- **Resuelto** (FE-only, directo con TDD). **Causa raíz**: el select manda el **name del catálogo** `TaskPriority` (Baja/Normal/Alta/Urgente — la migración `20260526010000` convirtió hasta las tareas legacy a esos nombres), pero `useTasksFilterUrl` whitelisteaba el valor de la URL contra el **enum legacy** (`low/normal/high/urgent`) en cada read/merge → todo valor real parseaba a `undefined` y el filtro nunca salía en el request. La cadena del BE estaba perfecta (ruta ✓ zod free-text ✓ `ListTasks` passthrough entero ✓ `where['priority']` ✓) — se verificó PRIMERO, aplicando la lección del #28.
+- **Fix**: fuera la whitelist `parsePriority`; eliminado el union legacy `TaskPriority` de `types/scheduling` (el typecheck cazó el único otro uso: un cast inútil en `KanbanCard`). 4 tests nuevos de round-trip en `useTasksFilterUrl.test.tsx`.
+- **PR**: FE #47. Sin cambios BE. Sin migración. Lección documentada en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md) ("Testear el SEAM completo").
 
 ### #28 — Filtro de Asignado en tickets traía sin-asignar (follow-up del #25) + contrato FE de tickets roto
 - **Resuelto** (directo con TDD, sin SDD). **Causa raíz BE**: `ListTickets` (use case) reconstruía el query campo a campo y **descartaba `assigneeId`/`from`/`to`** — el #25 cableó la ruta y los repos, pero el filtro moría en el medio (los tests de ruta mockean el use case y los de filtros pegan al repo: el seam no tenía cobertura). Test nuevo con el use case real + repo in-memory.
@@ -123,7 +128,7 @@
 
 ---
 
-## ⏳ Pendientes (7)
+## ⏳ Pendientes (6)
 
 ### #19 — Agregar ítem de inventario MANUAL a la tarea (antena/onu/router/etc.)  *(agregado 2026-06-04)*
 - **Qué**: hoy las sugerencias de inventario salen **solo** del cierre (OCR de fotos device + materiales de IClass). Se quiere poder **agregar manualmente** un ítem de inventario en la tarea — elegir el tipo del catálogo (antena/onu/router/otros) y cargar su SN/MAC/datos — sin depender de que el OCR lo haya detectado.
@@ -161,12 +166,6 @@
 ### #26 — Rediseño visual del estado "cerrado/closed" en tickets  *(agregado 2026-06-07)*
 - **Qué**: el estado **closed/cerrado** en los tickets tendría que verse **mejor y diferenciarse fácil**. Propuesta del usuario: un diseño **blanco y negro** para distinguir de un vistazo los cerrados del resto.
 - **Dónde**: FE — el badge/estilo del estado en la lista y/o detalle de tickets (`SuggestionCard`/columna `status`, tab "closed", `TicketDetailPage`). Reusar el color del catálogo de status donde aplique.
-- **Tamaño**: chico.
-
-### #27 — Bug: el filtro de Prioridad en tareas no filtra  *(agregado 2026-06-07)*
-- **Síntoma**: en la lista de tareas, elegir una prioridad en el filtro no filtra (sigue trayendo todas). Para chequear.
-- **Pista**: el BE `PrismaSchedulingRepository.listTasks` SÍ arma `where['priority']` (existe), así que probablemente el bug es **FE** (el control no manda `priority`, o manda un valor que no matchea — p. ej. el catálogo de prioridades usa nombres/ids distintos a `low/normal/high/urgent`). Auditar el `<select>` de prioridad del `TaskFilterBar` vs los valores reales de las tareas.
-- **Dónde**: FE `TaskFilterBar` (control de prioridad) + verificar el valor que se compara. Posible relación con #25 (auditoría de filtros).
 - **Tamaño**: chico.
 
 ## Refinamientos del #8 (ya en prod, NO son ítems numerados)

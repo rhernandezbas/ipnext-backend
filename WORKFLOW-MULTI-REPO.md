@@ -60,6 +60,19 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 - Para backend sin UI todavia, basta el run verde en `gh` + el log del step de migraciones.
 - Para features con UI, ademas se verifica con **Playwright** contra la app real (`http://190.7.234.37:7778`, login admin): se recorre el flujo real (crear/editar/borrar) y se limpian los datos de prueba.
 
+### Testear el SEAM completo, no solo las puntas (lección #28/#27)
+
+Cuando un dato cruza capas (control FE → URL/query → ruta → use case → repo), los tests por capa pueden dar todos verde con la feature ROTA: los tests de ruta **mockean** el use case, los tests de filtros pegan **directo al repo**, y el passthrough del medio queda sin cobertura. Pasó dos veces el 2026-06-07:
+
+- **#28 (BE)**: `ListTickets` reconstruía el query campo a campo y descartaba `assigneeId`/`from`/`to` — el #25 cableó la ruta y el repo, el verify dio verde, y el filtro nunca llegó al `where`.
+- **#27 (FE)**: `useTasksFilterUrl` whitelisteaba la priority de la URL contra el **enum legacy** (`low/normal/high/urgent`) cuando el select manda los **names del catálogo editable** (`Baja/Alta/...`) → todo valor real parseaba a `undefined`. El BE estaba perfecto de punta a punta.
+
+Reglas:
+
+1. **Todo filtro/param nuevo lleva al menos un test que recorre el viaje completo**: en BE, use case REAL + repo in-memory (no mockear el use case); en FE, el hook de URL/estado real (round-trip: set → URL → read).
+2. **Ojo con los validadores del contrato viejo en el medio del viaje**: whitelists de enums legacy, tipos del mock original (`assignedTo:number` vs `assigneeId:string` del BE), campos renombrados (`message` vs `description`). Si el valor está respaldado por un **catálogo editable**, NUNCA validarlo contra una lista hardcodeada.
+3. **Si un passthrough reconstruye el objeto campo a campo, es un punto de fragilidad**: cada campo nuevo hay que agregarlo a mano. Preferir pasar el objeto entero (como hace `ListTasks`) o, si se reconstruye, testear el forwarding de CADA campo.
+
 ## Reglas para agentes / asistentes de IA
 
 - **`git add` por PATH explícito, SIEMPRE.** Nunca `git add -A`, `git add .` ni `commit -am`. Un agente con `git add` amplio barrió trabajo ajeno del working tree y lo enterró en commits que no le correspondían — costó una remediación entera desenredarlo.
