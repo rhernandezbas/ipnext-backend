@@ -13,6 +13,9 @@ export class ListTickets {
       status: query.status,
       priority: query.priority,
       customerId: query.customerId,
+      assigneeId: query.assigneeId, // #28 — el #25 los cableó en ruta y repo,
+      from: query.from,             // pero este passthrough los descartaba y el
+      to: query.to,                 // filtro nunca llegaba al where.
     });
   }
 }
