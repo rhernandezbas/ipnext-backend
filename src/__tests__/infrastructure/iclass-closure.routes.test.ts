@@ -302,6 +302,17 @@ describe('IClass closure routes', () => {
     expect(res.body.counts.mirrored).toBe(0);
   });
 
+  // ── Task 2.2: status endpoint response includes `failed` field (REQ-STATUS-1) ──
+
+  it('2.2: GET /closure/status includes failed field (zero before first run)', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/admin/iclass/closure/status').set(...AUTH);
+    expect(res.status).toBe(200);
+    // failed must be present as a numeric field
+    expect(typeof res.body.counts.failed).toBe('number');
+    expect(res.body.counts.failed).toBe(0);
+  });
+
   // -----------------------------------------------------------------------
   // REQ-BACKFILL-1: POST /closure/backfill → 202 (async dispatch)
   // -----------------------------------------------------------------------

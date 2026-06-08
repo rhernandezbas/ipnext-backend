@@ -13,6 +13,10 @@ const DEFAULT_IN_FLIGHT_STAGE_CODE = 'registered_in_iclass';
  * days on a still-in-flight task are rare (a stuck task) and need a manual reconcile. */
 const DEFAULT_LOOKBACK_DAYS = 29;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Pausa entre tareas para no saturar la API de IClass (~78 tareas en vuelo típico). */
+const DEFAULT_THROTTLE_MS = 350;
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 export interface BackfillOptions {
   now?: () => Date;
@@ -20,6 +24,10 @@ export interface BackfillOptions {
   inFlightStageCode?: string;
   /** How far back to look for each task's closure (clamped to 29 by the IClass cap). */
   lookbackDays?: number;
+  /** Pausa en ms entre tareas (default 350ms). Pasar 0 en tests para no incurrir en waits reales. */
+  throttleMs?: number;
+  /** Función sleep inyectable para tests sin delays reales. */
+  _sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -32,6 +40,8 @@ export class BackfillClosedServiceOrders {
   private readonly now: () => Date;
   private readonly inFlightStageCode: string;
   private readonly lookbackDays: number;
+  private readonly throttleMs: number;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
     private readonly iclass: IClassPort,
@@ -42,6 +52,8 @@ export class BackfillClosedServiceOrders {
     this.now = opts.now ?? (() => new Date());
     this.inFlightStageCode = opts.inFlightStageCode ?? DEFAULT_IN_FLIGHT_STAGE_CODE;
     this.lookbackDays = Math.min(opts.lookbackDays ?? DEFAULT_LOOKBACK_DAYS, 29);
+    this.throttleMs = opts.throttleMs ?? DEFAULT_THROTTLE_MS;
+    this.sleep = opts._sleep ?? sleep;
   }
 
   async execute(): Promise<IngestClosedCounts> {
@@ -51,14 +63,20 @@ export class BackfillClosedServiceOrders {
 
     const tasks = await this.scheduling.listTasksInIClassStage(this.inFlightStageCode);
     for (const task of tasks) {
-      const summaries = await this.iclass.listServiceOrders({
-        updatedDateBegin: begin,
-        updatedDateEnd: now,
-        serviceOrderCode: String(task.sequenceNumber),
-      });
-      for (const s of summaries) {
-        await this.ingest.processSummary(s, counts);
+      try {
+        const summaries = await this.iclass.listServiceOrders({
+          updatedDateBegin: begin,
+          updatedDateEnd: now,
+          serviceOrderCode: String(task.sequenceNumber),
+        });
+        for (const s of summaries) {
+          await this.ingest.processSummary(s, counts);
+        }
+      } catch {
+        // Un fallo en la tarea no aborta el batch — se incrementa el contador y se continúa.
+        counts.failed++;
       }
+      await this.sleep(this.throttleMs);
     }
     return counts;
   }

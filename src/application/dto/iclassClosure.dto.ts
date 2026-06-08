@@ -20,6 +20,8 @@ export interface ClosureRunCounts {
   skippedNotClosed: number;
   skippedNotOurs: number;
   skippedUnchanged: number;
+  /** Tareas cuyo IClass call arrojó error durante el backfill (REQ-STATUS-1). */
+  failed: number;
 }
 
 /** API shape of the closure-ingest status (GET /closure/status). */

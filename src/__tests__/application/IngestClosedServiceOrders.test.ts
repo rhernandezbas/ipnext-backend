@@ -1,3 +1,4 @@
+import { emptyClosedCounts } from '@application/use-cases/IngestClosedServiceOrders';
 import { InMemoryIClassClient } from '@infrastructure/adapters/in-memory/InMemoryIClassClient';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
@@ -469,5 +470,22 @@ describe('IngestClosedServiceOrders', () => {
     expect(task!.closureCommentDone).toBe(true);
     expect(task!.closureHasDeviceInventory).toBe(true);
     expect(task!.closureAuditDone).toBe(false); // no audit injected → stays false
+  });
+});
+
+// ── Task 2.1: emptyClosedCounts() incluye failed: 0 (REQ-STATUS-1) ───────────
+
+describe('emptyClosedCounts — failed field (REQ-STATUS-1)', () => {
+  it('2.1: emptyClosedCounts().failed === 0', () => {
+    const counts = emptyClosedCounts();
+    expect(counts.failed).toBe(0);
+  });
+
+  it('2.1 triangulation: failed is a numeric property alongside existing fields', () => {
+    const counts = emptyClosedCounts();
+    expect(typeof counts.failed).toBe('number');
+    // All existing fields still present
+    expect(counts.mirrored).toBe(0);
+    expect(counts.errored).toBe(0);
   });
 });

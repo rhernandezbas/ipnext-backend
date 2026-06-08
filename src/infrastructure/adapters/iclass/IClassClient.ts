@@ -23,6 +23,8 @@ const SUBRESOURCE_BACKOFF_MS = 400;
 /** Window (days) scanned over recent SOs to discover active soType ids for the
  * result-code catalog sync. Under the IClass 30-day list cap. */
 const RESULT_CODE_DISCOVERY_DAYS = 28;
+/** Máximo de reintentos ante un HTTP 429 (rate-limit de estado). */
+const MAX_RATE_LIMIT_RETRIES = 4;
 
 export interface IClassClientOptions {
   baseUrl: string;
@@ -40,11 +42,30 @@ export interface IClassClientOptions {
   now?: () => Date;
   /** Override backoff for tests (default 400ms). */
   subresourceBackoffMs?: number;
+  /** Límite de reintentos ante HTTP 429. Default MAX_RATE_LIMIT_RETRIES (4). */
+  maxRateLimitRetries?: number;
+  /** Función sleep inyectable para tests (elimina waits reales). */
+  _sleep?: (ms: number) => Promise<void>;
 }
 
 /** Minimal shape of an axios-style transport error. */
-function isAxiosLikeError(e: unknown): e is { response?: { status?: number; data?: { erros?: unknown } } } {
+function isAxiosLikeError(e: unknown): e is {
+  response?: { status?: number; headers?: Record<string, unknown>; data?: { erros?: unknown } };
+} {
   return typeof e === 'object' && e !== null && 'isAxiosError' in e;
+}
+
+/**
+ * Extrae el tiempo de espera en ms del header `Retry-After` (sólo enteros en segundos).
+ * Formas de fecha HTTP y valores no numéricos son ignorados → undefined.
+ */
+export function parseRetryAfterMs(e: unknown): number | undefined {
+  if (!isAxiosLikeError(e)) return undefined;
+  const raw = e.response?.headers?.['retry-after'];
+  if (raw === null || raw === undefined) return undefined;
+  const seconds = parseInt(String(raw), 10);
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return seconds * 1000;
 }
 
 /**
@@ -86,6 +107,8 @@ export class IClassClient implements IClassPort {
   private readonly thirdPartyId: string;
   private readonly clusterName: string;
   private readonly subresourceBackoffMs: number;
+  private readonly maxRateLimitRetries: number;
+  private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => Date;
   private readonly nodesCacheTtlMs: number;
 
@@ -98,6 +121,8 @@ export class IClassClient implements IClassPort {
     this.thirdPartyId = opts.thirdPartyId;
     this.clusterName = opts.clusterName ?? DEFAULT_CLUSTER;
     this.subresourceBackoffMs = opts.subresourceBackoffMs ?? SUBRESOURCE_BACKOFF_MS;
+    this.maxRateLimitRetries = opts.maxRateLimitRetries ?? MAX_RATE_LIMIT_RETRIES;
+    this.sleep = opts._sleep ?? sleep;
     this.now = opts.now ?? (() => new Date());
     this.nodesCacheTtlMs = opts.nodesCacheTtlMs ?? 5 * 60 * 1000;
     this.http =
@@ -226,7 +251,7 @@ export class IClassClient implements IClassPort {
     const out: IClassResultCodeDescriptor[] = [];
     const seen = new Set<string>();
     for (const id of soTypeIds) {
-      await sleep(this.subresourceBackoffMs);
+      await this.sleep(this.subresourceBackoffMs);
       const codes = await this.fetchAllPages(
         `/serviceordertypes/${id}/resultcodes`,
         new URLSearchParams({ pagesize: '100' }),
@@ -256,7 +281,7 @@ export class IClassClient implements IClassPort {
       params.set('pagenumber', String(page));
       let data = await this.authedGet<unknown>(`${path}?${params.toString()}`);
       if (isRateLimited(data)) {
-        await sleep(this.subresourceBackoffMs * 2);
+        await this.sleep(this.subresourceBackoffMs * 2);
         data = await this.authedGet<unknown>(`${path}?${params.toString()}`);
       }
       if (!data || typeof data !== 'object') break; // 204 / empty / rate-limited text
@@ -322,25 +347,42 @@ export class IClassClient implements IClassPort {
     return { Authorization: `Bearer ${this.token}` };
   }
 
-  /** Ensure we have a token, run `fn`, and on a 401 re-login once and retry. */
+  /**
+   * Ejecuta `fn` con reintento automático ante 401 (re-login una vez) y ante
+   * 429 (espera Retry-After o backoff exponencial, hasta maxRateLimitRetries).
+   * Tras agotar reintentos 429 o ante cualquier otro error, delega a mapError.
+   *
+   * IMPORTANTE: el re-login 401 sólo se ejecuta en attempt===0 para no
+   * interferir con el loop 429.
+   */
   private async withAuthRetry<T>(fn: () => Promise<{ data: T }>): Promise<T> {
     if (!this.token) await this.login();
-    try {
-      const res = await fn();
-      return res.data;
-    } catch (e) {
-      if (isAxiosLikeError(e) && e.response?.status === 401) {
-        // Re-login once and retry the original call.
-        await this.login();
-        try {
-          const res = await fn();
-          return res.data;
-        } catch (e2) {
-          throw this.mapError(e2);
+
+    for (let attempt = 0; attempt <= this.maxRateLimitRetries; attempt++) {
+      try {
+        const res = await fn();
+        return res.data;
+      } catch (e) {
+        // 401 → re-login una única vez (sólo en el primer intento)
+        if (isAxiosLikeError(e) && e.response?.status === 401 && attempt === 0) {
+          await this.login();
+          continue;
         }
+
+        // 429 → esperar y reintentar mientras queden intentos
+        if (isAxiosLikeError(e) && e.response?.status === 429 && attempt < this.maxRateLimitRetries) {
+          const ms = parseRetryAfterMs(e) ?? this.subresourceBackoffMs * Math.pow(2, attempt);
+          await this.sleep(ms);
+          continue;
+        }
+
+        // Sin reintentos disponibles o error de otro tipo → propagar
+        throw this.mapError(e);
       }
-      throw this.mapError(e);
     }
+
+    // Nunca debería llegar acá (el loop siempre retorna o lanza), pero TypeScript lo requiere.
+    throw this.mapError(new Error('withAuthRetry: loop exhausted unexpectedly'));
   }
 
   private authedGet<T>(url: string): Promise<T> {

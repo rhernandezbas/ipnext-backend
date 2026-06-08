@@ -47,6 +47,9 @@ export interface IngestClosedCounts {
   skippedUnchanged: number;
   /** SOs whose processing threw — logged and skipped so one bad SO never aborts the batch. */
   errored: number;
+  /** Tareas cuyo IClass call arrojó error durante el backfill (distinto de errored).
+   * Un failed es fallo de tarea completa; errored es fallo de processSummary por SO. */
+  failed: number;
 }
 
 export interface IngestClosedOptions {
@@ -354,7 +357,7 @@ export class IngestClosedServiceOrders {
 
 /** Fresh zeroed counts — exported so the backfill can accumulate into one tally. */
 export function emptyClosedCounts(): IngestClosedCounts {
-  return { mirrored: 0, transitioned: 0, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0, errored: 0 };
+  return { mirrored: 0, transitioned: 0, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0, errored: 0, failed: 0 };
 }
 
 function newCounts(): IngestClosedCounts {

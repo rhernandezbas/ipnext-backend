@@ -5,8 +5,8 @@ import type { DistributedLock } from '@domain/ports/DistributedLock';
 
 /** Stub del use case BackfillClosedServiceOrders */
 function backfillStub(
-  result: { mirrored: number; transitioned: number; skippedNotClosed: number; skippedNotOurs: number; skippedUnchanged: number } = {
-    mirrored: 1, transitioned: 1, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0,
+  result: { mirrored: number; transitioned: number; skippedNotClosed: number; skippedNotOurs: number; skippedUnchanged: number; failed: number } = {
+    mirrored: 1, transitioned: 1, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0, failed: 0,
   },
 ) {
   return { execute: async () => result } as unknown as BackfillClosedServiceOrders;
@@ -112,5 +112,47 @@ describe('BackfillScheduler — triggerNow (REQ-BACKFILL-SCHEDULER-1)', () => {
     expect(acquiredKeys).toContain('iclass-closure-backfill');
     expect(acquiredKeys).not.toContain('task-autocomplete');
     expect(acquiredKeys).not.toContain('iclass-closed');
+  });
+
+  // ── Task 4.1: done-log line includes failed= (REQ-STATUS-1 logging) ──────
+
+  it('4.1: done-log line includes failed= field (REQ-STATUS-1)', async () => {
+    const logLines: string[] = [];
+    const captureLog = (msg: string) => logLines.push(msg);
+
+    // Stub with failed=2 to confirm it appears in the log
+    const stub = backfillStub({ mirrored: 3, transitioned: 2, skippedNotClosed: 0, skippedNotOurs: 1, skippedUnchanged: 0, failed: 2 });
+    const scheduler = new BackfillScheduler(stub, lockStub(true), { silent: false });
+    // Capture console.log
+    const origLog = console.log;
+    console.log = captureLog;
+    try {
+      await scheduler.runOnce();
+    } finally {
+      console.log = origLog;
+    }
+
+    const doneLine = logLines.find(l => l.includes('[backfill-scheduler] done'));
+    expect(doneLine).toBeDefined();
+    expect(doneLine).toContain('failed=2');
+  });
+
+  it('4.1 triangulation: failed=0 is also logged when no task failures', async () => {
+    const logLines: string[] = [];
+    const captureLog = (msg: string) => logLines.push(msg);
+
+    const stub = backfillStub({ mirrored: 1, transitioned: 1, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0, failed: 0 });
+    const scheduler = new BackfillScheduler(stub, lockStub(true), { silent: false });
+    const origLog = console.log;
+    console.log = captureLog;
+    try {
+      await scheduler.runOnce();
+    } finally {
+      console.log = origLog;
+    }
+
+    const doneLine = logLines.find(l => l.includes('[backfill-scheduler] done'));
+    expect(doneLine).toBeDefined();
+    expect(doneLine).toContain('failed=0');
   });
 });
