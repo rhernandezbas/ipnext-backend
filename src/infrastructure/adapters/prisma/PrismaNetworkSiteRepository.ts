@@ -18,6 +18,7 @@ function toSite(row: any): NetworkSite {
     uplink: row.uplink ?? null,
     parentSiteId: row.parentSiteId ?? null,
     description: row.description ?? null,
+    iclassNodeCode: row.iclassNodeCode ?? null,
   };
 }
 

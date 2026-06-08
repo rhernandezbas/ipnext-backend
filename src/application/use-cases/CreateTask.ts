@@ -3,6 +3,7 @@ import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
+import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 
 export class CreateTask {
@@ -15,22 +16,33 @@ export class CreateTask {
     private readonly projectLookup: EntityLookup,
     private readonly ticketLookup?: EntityLookup,
     private readonly recorder?: TaskActivityRecorder,
+    private readonly networkSiteRepo?: NetworkSiteRepository,
   ) {}
 
   async execute(data: CreateTaskInput, actor?: ActorContext): Promise<ScheduledTask> {
-    // FK validation in deterministic order (REQ-FK-ORDER-1):
-    // customer → contract → partner → project → reporter → assignee → watchers[*] → ticket
-    // REQ-REQUIRED-1/2: customerId and contractId are always required on create.
-    // The DTO schema guarantees they are non-null strings; the ! asserts that contract.
-    {
-      const cid = data.customerId!;
-      const found = await this.customerLookup.findById(cid);
-      if (!found) throw new ReferenceNotFoundError('customer', cid);
-    }
-    {
-      const cid = data.contractId!;
-      const found = await this.contractLookup.findById(cid);
-      if (!found) throw new ReferenceNotFoundError('contract', cid);
+    // network-node-task (#29): branch validation por kind.
+    if (data.kind === 'network') {
+      // Modo RED: validar que el networkSiteId existe; customer/contract no se validan.
+      const siteId = data.networkSiteId!;
+      const site = await this.networkSiteRepo?.findById(siteId);
+      if (!site) throw new ReferenceNotFoundError('networkSite', siteId);
+      // customer y contract son null por diseño — no hay nada que validar.
+    } else {
+      // Modo CUSTOMER (rama original, byte-identical):
+      // FK validation in deterministic order (REQ-FK-ORDER-1):
+      // customer → contract → partner → project → reporter → assignee → watchers[*] → ticket
+      // REQ-REQUIRED-1/2: customerId and contractId are always required on create.
+      // The DTO schema guarantees they are non-null strings; the ! asserts that contract.
+      {
+        const cid = data.customerId!;
+        const found = await this.customerLookup.findById(cid);
+        if (!found) throw new ReferenceNotFoundError('customer', cid);
+      }
+      {
+        const cid = data.contractId!;
+        const found = await this.contractLookup.findById(cid);
+        if (!found) throw new ReferenceNotFoundError('contract', cid);
+      }
     }
     if (data.partnerId != null) {
       const found = await this.partnerLookup.findById(data.partnerId);

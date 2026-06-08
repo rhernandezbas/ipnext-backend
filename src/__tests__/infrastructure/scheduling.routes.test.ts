@@ -58,6 +58,9 @@ const NEW_TASK_FIELDS = {
   watcherIds: [] as string[],
   travelTimeTo: null as null,
   travelTimeFrom: null as null,
+  // network-node-task (#29)
+  kind: 'customer' as const,
+  networkSiteId: null as null,
 };
 
 // FakeAuthProvider: implements AuthProvider port, always grants access
@@ -210,6 +213,8 @@ describe('POST /api/scheduling', () => {
         category: 'other',
         completedAt: null,
         notes: '',
+        // network-node-task (#29): kind es requerido en el discriminated union
+        kind: 'customer',
         customerId: DEFAULT_CUSTOMER_ID,
         contractId: DEFAULT_CONTRACT_ID,
       });
@@ -331,6 +336,8 @@ describe('POST /api/scheduling - validation', () => {
     scheduledTime: '09:00',
     estimatedHours: 1,
     category: 'other',
+    // network-node-task (#29): kind es ahora obligatorio
+    kind: 'customer',
     // REQ-REQUIRED-1/2: always required on create
     customerId: DEFAULT_CUSTOMER_ID,
     contractId: DEFAULT_CONTRACT_ID,
@@ -428,6 +435,8 @@ describe('POST /api/scheduling — phase 2+3: legacy fields stripped from input 
     priority: 'normal',
     estimatedHours: 1,
     category: 'other',
+    // network-node-task (#29): kind es ahora obligatorio
+    kind: 'customer',
     // REQ-REQUIRED-1/2: always required on create
     customerId: DEFAULT_CUSTOMER_ID,
     contractId: DEFAULT_CONTRACT_ID,
@@ -662,6 +671,7 @@ describe('Response shape: stageId and stageCategory (phase 3)', () => {
         priority: 'normal',
         estimatedHours: 1,
         category: 'other',
+        kind: 'customer',
         customerId: DEFAULT_CUSTOMER_ID,
         contractId: DEFAULT_CONTRACT_ID,
       });
@@ -687,6 +697,7 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
         priority: 'normal',
         estimatedHours: 1,
         category: 'installation',
+        kind: 'customer',
         customerId: DEFAULT_CUSTOMER_ID,
         contractId: DEFAULT_CONTRACT_ID,
       });
@@ -731,6 +742,7 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
         priority: 'normal',
         estimatedHours: 1,
         category: 'installation',
+        kind: 'customer',
         customerId: DEFAULT_CUSTOMER_ID,
         contractId: DEFAULT_CONTRACT_ID,
       });
@@ -769,6 +781,7 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
         priority: 'normal',
         estimatedHours: 1,
         category: 'installation',
+        kind: 'customer',
         customerId: DEFAULT_CUSTOMER_ID,
         contractId: DEFAULT_CONTRACT_ID,
       });
@@ -891,6 +904,8 @@ const validBase = {
   priority: 'normal',
   estimatedHours: 1,
   category: 'installation',
+  // network-node-task (#29): kind es ahora obligatorio
+  kind: 'customer',
   // REQ-REQUIRED-1/2: required on create; known by defaultCustomerLookup/defaultServiceLookup
   customerId: DEFAULT_CUSTOMER_ID,
   contractId:  DEFAULT_CONTRACT_ID,

@@ -8,8 +8,10 @@
  * Funcion pura sobre ports — NUNCA importa nada de @infrastructure/*.
  *
  * Traza: REQ-RESEND-8, REQ-AUDIT-5, REQ-AUDIT-6.
+ * network-node-task (#29): sustitucion de campos para tareas de RED.
  */
 import { ScheduledTask } from '@domain/entities/scheduling';
+import { NetworkSite } from '@domain/entities/networkSite';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { IClassPort } from '@domain/ports/IClassPort';
 import { IClassDispatchAttemptRepository } from '@domain/ports/IClassDispatchAttemptRepository';
@@ -20,6 +22,10 @@ import {
   IClassRejectedError,
   IClassUnavailableError,
 } from '@domain/errors/iclass';
+
+/** Constantes para tareas de RED (network-node-task #29). */
+export const NETWORK_PHONE          = '0000000000';
+export const NETWORK_CUSTOMER_CODE  = 'NETWORK';
 
 /** Immutable business code for the "Registrado en IClass" stage. */
 const REGISTERED_IN_ICLASS_CODE = 'registered_in_iclass';
@@ -38,6 +44,11 @@ export interface DispatchOpts {
   actorId?: string | null;
   /** workflowId del stage destino, para resolver registered_in_iclass scoped. */
   workflowId: string;
+  /**
+   * network-node-task (#29): sitio de red asociado a la tarea.
+   * Cuando viene, se usan sus campos en lugar de los del cliente.
+   */
+  networkSite?: NetworkSite | null;
 }
 
 /**
@@ -94,16 +105,28 @@ export async function dispatchToIClass(
   opts: DispatchOpts,
 ): Promise<ScheduledTask> {
   const { tasks, iclass, attempts } = deps;
-  const { actorId, workflowId } = opts;
+  const { actorId, workflowId, networkSite } = opts;
+
+  // network-node-task (#29): sustitucion de campos para tareas de RED.
+  const isNet = task.kind === 'network';
+  const effectiveCustomerCode = isNet
+    ? (networkSite?.iclassNodeCode ?? NETWORK_CUSTOMER_CODE)
+    : task.customerCode!;
+  const effectiveCustomerName = isNet ? (task.networkSiteName ?? '') : task.customerName!;
+  const effectivePhone        = isNet ? NETWORK_PHONE             : task.customerPhone!;
+  const effectiveAddress      = isNet
+    ? (networkSite?.address ?? task.networkSiteName ?? '')
+    : task.address!;
+  const effectiveCity         = isNet ? (networkSite?.city ?? '') : task.customerCity!;
 
   try {
     const { orderCode } = await iclass.createServiceOrder({
       soCode: String(task.sequenceNumber),
-      customerCode: task.customerCode!,
-      customerName: task.customerName!,
-      phone: task.customerPhone!,
-      address: task.address!,
-      city: task.customerCity!,
+      customerCode: effectiveCustomerCode,
+      customerName: effectiveCustomerName,
+      phone: effectivePhone,
+      address: effectiveAddress,
+      city: effectiveCity,
       description: task.description!,
       soType: soTypeCode,
       nodeCode,

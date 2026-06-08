@@ -11,4 +11,6 @@ export interface NetworkSite {
   uplink: string;
   parentSiteId: string | null;
   description: string;
+  // network-node-task (#29) — código de nodo en IClass para envío de OS de RED
+  iclassNodeCode: string | null;
 }

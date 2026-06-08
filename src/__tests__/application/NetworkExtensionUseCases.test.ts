@@ -55,6 +55,7 @@ describe('CreateNetworkSite', () => {
       uplink: '1 Gbps',
       parentSiteId: null,
       description: 'Test',
+      iclassNodeCode: null,
     });
 
     expect(result.id).toBeDefined();

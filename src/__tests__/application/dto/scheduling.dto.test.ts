@@ -1,11 +1,13 @@
 import { CreateTaskSchema, UpdateTaskSchema } from '../../../application/dto/scheduling.dto';
 
-// REQ-REQUIRED-1/2: customerId and contractId are required on create
+// REQ-REQUIRED-1/2: customerId and contractId are required on create.
+// network-node-task (#29): kind discriminator is now required.
 const BASE_VALID = {
   title: 'Test task',
   priority: 'normal' as const,
   estimatedHours: 1,
   category: 'installation' as const,
+  kind: 'customer' as const,
   customerId: 'customer-default-test-001',
   contractId: 'contract-default-test-001',
 };

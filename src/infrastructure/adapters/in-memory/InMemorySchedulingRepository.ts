@@ -75,6 +75,10 @@ const NEW_FIELDS_DEFAULTS = {
   closureHasDeviceInventory: false,
   ticketId: null,
   ticketSubject: null,
+  // network-node-task (#29) — discriminator + FK a NetworkSite
+  kind: 'customer' as 'customer' | 'network',
+  networkSiteId: null,
+  networkSiteName: null,
 };
 
 export class InMemorySchedulingRepository implements SchedulingRepository {
@@ -337,6 +341,10 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       reviewedByInventory: false,
       reviewedByInventoryAt: null,
       reviewedByInventoryUserName: null,
+      // network-node-task (#29)
+      kind: (data.kind ?? 'customer') as 'customer' | 'network',
+      networkSiteId: data.networkSiteId ?? null,
+      networkSiteName: null, // In-memory: no JOIN (nombre del sitio no se resuelve aquí)
       closureCommentDone: false,
       closureAuditDone: false,
       closureHasDeviceInventory: false,

@@ -88,6 +88,7 @@ function buildApp(activityRepo?: TaskActivityRepository) {
 const CREATE_BODY = {
   title: 'Integration task', description: 'd', priority: 'normal', estimatedHours: 1,
   address: 'X', coordinates: null, category: 'other', completedAt: null, notes: '',
+  kind: 'customer' as const,
   customerId: CUSTOMER_ID, contractId: CONTRACT_ID,
 };
 

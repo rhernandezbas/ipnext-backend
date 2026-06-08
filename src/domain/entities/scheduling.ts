@@ -64,6 +64,11 @@ export interface ScheduledTask {
   closureAuditDone:          boolean;
   closureHasDeviceInventory: boolean;
 
+  // network-node-task (#29) — discriminador de tipo de tarea y FK a NetworkSite
+  kind: 'customer' | 'network';
+  networkSiteId: string | null;
+  networkSiteName: string | null;  // JOIN-derived from NetworkSite.name
+
   // IClass — service order code returned by IClass after a successful "Enviar a IClass". Null otherwise.
   iclassOrderCode: string | null;
 

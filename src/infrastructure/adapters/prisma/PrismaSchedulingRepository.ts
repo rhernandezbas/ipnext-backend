@@ -99,6 +99,10 @@ export function toTask(row: any): ScheduledTask {
     grOrdenId: row.grOrdenId ?? null,
     ticketId: row.ticketId ?? null,
     ticketSubject: row.ticket?.subject ?? null,
+    // network-node-task (#29): discriminator + FK a NetworkSite
+    kind: (row.kind ?? 'customer') as 'customer' | 'network',
+    networkSiteId: row.networkSiteId ?? null,
+    networkSiteName: row.networkSite?.name ?? null,
     checklist: Array.isArray(row.checklist)
       ? row.checklist.map((ci: any) => ({
           id: ci.id,
@@ -143,6 +147,8 @@ const INCLUDE = {
   checklist: { orderBy: { order: 'asc' } },
   ticket: { select: { id: true, subject: true } },
   reviewedByInventoryUser: { select: { id: true, name: true } },
+  // network-node-task (#29): JOIN para obtener el nombre del sitio
+  networkSite: { select: { id: true, name: true } },
 } as const;
 
 export class PrismaSchedulingRepository implements SchedulingRepository {
@@ -495,6 +501,9 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       travelTimeFrom: data.travelTimeFrom ?? null,
       grOrdenId: data.grOrdenId ?? null,
       ticketId: data.ticketId ?? null,
+      // network-node-task (#29)
+      kind: data.kind ?? 'customer',
+      networkSiteId: data.networkSiteId ?? null,
     };
   }
 

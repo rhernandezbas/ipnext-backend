@@ -78,6 +78,7 @@ describe('POST /api/scheduling — contractId persistence (Feature C)', () => {
       estimatedHours: 1,
       category: 'installation',
       stageId: STAGE_1,
+      kind: 'customer',
       contractId: CONTRACT_ID,
       customerId: CUSTOMER_ID,
     }));
@@ -132,6 +133,7 @@ describe('PUT /api/scheduling/:id — contractId update persistence (Feature C)'
       estimatedHours: 1,
       category: 'installation',
       stageId: STAGE_1,
+      kind: 'customer',
       customerId: CUSTOMER_ID,
       contractId: CONTRACT_ID,
     }));

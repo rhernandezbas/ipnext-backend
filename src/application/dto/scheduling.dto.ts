@@ -57,12 +57,7 @@ const CreateTaskBaseSchema = z.object({
   startDate:      z.string().datetime({ offset: true }).nullable().optional(),
   endDate:        z.string().datetime({ offset: true }).nullable().optional(),
 
-  // NEW — FK references (min(1) NOT uuid — project uses mixed ID formats)
-  // NOTE: customerId and contractId are left nullable().optional() here so that
-  // UpdateTaskSchema (which inherits via .partial()) continues to accept partial
-  // payloads. CreateTaskSchema re-declares them as required (see below).
-  customerId:     z.string().min(1).nullable().optional(),
-  contractId:     z.string().min(1).nullable().optional(),
+  // FK references compartidas (partner, reporter, assignee, watchers, travel time)
   partnerId:      z.string().min(1).nullable().optional(),
   reporterId:     z.string().min(1).nullable().optional(),
   assigneeId:     z.string().min(1).nullable().optional(),
@@ -79,17 +74,37 @@ const CreateTaskBaseSchema = z.object({
   isClosed: z.boolean().optional(),
 });
 
-// REQ-REQUIRED-1/2: customerId and contractId are required on create.
-// We extend the base schema to override the nullable/optional definitions.
-export const CreateTaskSchema = CreateTaskBaseSchema
-  .extend({
-    customerId: z.string().min(1),
-    contractId: z.string().min(1),
-  })
+// REQ-VAL-1 (network-node-task #29): discriminated union on `kind`.
+// CustomerTask: requiere customerId + contractId. Prohibe networkSiteId.
+const CustomerTask = CreateTaskBaseSchema.extend({
+  kind:         z.literal('customer'),
+  customerId:   z.string().min(1),
+  contractId:   z.string().min(1),
+  // networkSiteId no permitido en modo customer
+  networkSiteId: z.undefined().optional(),
+});
+
+// NetworkTask: requiere networkSiteId. Prohíbe customerId/contractId.
+const NetworkTask = CreateTaskBaseSchema.extend({
+  kind:         z.literal('network'),
+  networkSiteId: z.string().min(1),
+  customerId:   z.null().optional(),
+  contractId:   z.null().optional(),
+});
+
+export const CreateTaskSchema = z
+  .discriminatedUnion('kind', [CustomerTask, NetworkTask])
   .superRefine(dateRangeRefine);
 
-// UpdateTaskSchema inherits nullable/optional FK fields — no change.
-export const UpdateTaskSchema = CreateTaskBaseSchema.partial().superRefine(dateRangeRefine);
+// UpdateTaskSchema — mantiene las FK como nullable/optional (sin kind obligatorio)
+// Se define antes del export de tipo para que no confunda con el union.
+const UpdateTaskBaseSchema = CreateTaskBaseSchema.extend({
+  customerId:   z.string().min(1).nullable().optional(),
+  contractId:   z.string().min(1).nullable().optional(),
+});
+
+// UpdateTaskSchema hereda nullable/optional para todos los FK — sin kind obligatorio.
+export const UpdateTaskSchema = UpdateTaskBaseSchema.partial().superRefine(dateRangeRefine);
 
 export const MoveStageSchema = z.object({ stageId: z.string().min(1) });
 
