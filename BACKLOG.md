@@ -2,7 +2,16 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **36 hechos (en prod) · 0 pendientes — backlog completo.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36 cerrados vía SDD.)
+> **36 hechos (en prod) · 1 en curso (#37).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36 cerrados vía SDD.)
+
+## 🔧 En curso (1)
+
+### #37 — Loguear fallos del reconcile + badge de cantidad en la página  *(agregado 2026-06-08)*
+- **Disparador**: investigando la discrepancia del #36 (4 OS cerradas pero clavadas = las `failed=6` del reconcile), descubrimos que el `catch` de `BackfillClosedServiceOrders.reconcileOne` (línea 92) **traga el error entero** (`catch {` sin capturar `err`) — solo cuenta `failed++`. Sin esto, cada fallo requiere arqueología manual (IClass + DB) para saber el por qué.
+- **Parte 1 (BE, observabilidad)**: el `catch` captura el error y lo **loguea** (`[backfill] task <sequenceNumber> FAILED: <error>`) además de contar `failed`. Beneficia el batch y el 1x1.
+- **Parte 2 (FE)**: la página de Reconciliar muestra **la cantidad** de OS in-flight (badge/mensajito), que debe coincidir con "Registrado en IClass". El dato ya está en `useInFlightTasks` (= `list.length`) — solo falta mostrarlo. impeccable.
+- **Dónde**: BE `src/application/use-cases/BackfillClosedServiceOrders.ts` (`reconcileOne` catch); FE página/tabla de Reconciliar (`ReconcileInFlightPage`/`InFlightTasksTable`). Sin migración.
+- **Tamaño**: chico. Multi-repo.
 
 ### #36 — Normalizar match de result-code (motivoFechamento con punto)  *(HECHO 2026-06-08)*
 - **Disparador**: 45 tareas clavadas en "Registrado en IClass". Verificado en vivo (IClass real + DB prod): de las 12 más viejas, **8 estaban `Concluida`** en IClass sin transicionar; 4 legítimamente abiertas.
