@@ -8,6 +8,7 @@ import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeSt
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { GetPendingSideEffectsCount } from '@application/use-cases/GetPendingSideEffectsCount';
+import { GetPendingSideEffectsList } from '@application/use-cases/GetPendingSideEffectsList';
 import { TaskAutocompleteScheduler } from '@infrastructure/scheduling/TaskAutocompleteScheduler';
 import { toResultCodeDTO } from '@application/dto/iclassClosure.dto';
 
@@ -29,6 +30,7 @@ const AssignSchema = z.object({
  *   POST  /closure/backfill              — reconcile in-flight tasks against IClass now
  *   POST  /closure/reprocess             — async dispatch via scheduler (flag-gated, 202)
  *   GET   /closure/reprocess/pending-count — count of SOs with pending side-effects
+ *   GET   /closure/reprocess/pending-list  — list of SOs with pending side-effects + joined task info
  */
 export function createIClassClosureRouter(
   syncResultCodes: SyncIClassResultCodes,
@@ -38,6 +40,7 @@ export function createIClassClosureRouter(
   backfillClosedOrders: BackfillClosedServiceOrders,
   scheduler: TaskAutocompleteScheduler | null,
   getPendingCount: GetPendingSideEffectsCount,
+  getPendingList: GetPendingSideEffectsList,
   requireIClassManage: RequestHandler,
   authProvider: AuthProvider,
 ): Router {
@@ -116,6 +119,16 @@ export function createIClassClosureRouter(
   router.get('/closure/reprocess/pending-count', auth, requireIClassManage, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       res.status(200).json(await getPendingCount.execute());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Listado enriquecido: cada SO pendiente con la info de la tarea vinculada.
+  // El FE lo usa para renderizar la tabla de progreso del reprocess.
+  router.get('/closure/reprocess/pending-list', auth, requireIClassManage, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json(await getPendingList.execute());
     } catch (err) {
       next(err);
     }

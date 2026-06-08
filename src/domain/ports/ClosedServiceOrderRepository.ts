@@ -17,6 +17,11 @@ export interface PendingClosureSideEffects extends ClosureSideEffectState {
   scheduledTaskId: string | null;
 }
 
+/** Same as PendingClosureSideEffects but includes the joined local task info (or null). */
+export interface PendingClosureSideEffectsWithTask extends PendingClosureSideEffects {
+  task: { id: string; sequenceNumber: number; title: string } | null;
+}
+
 /**
  * Persistence for the mirror of closed IClass Service Orders.
  *
@@ -50,6 +55,12 @@ export interface ClosedServiceOrderRepository {
    * inventoryBuilt=false OR (auditDone=false AND auditAttempts < maxAuditAttempts).
    */
   listPendingSideEffects(maxAuditAttempts: number): Promise<PendingClosureSideEffects[]>;
+  /**
+   * Same filter as listPendingSideEffects but joins the linked ScheduledTask
+   * (single query, no N+1). Returns task info or null when scheduledTaskId is null
+   * or the task cannot be resolved.
+   */
+  listPendingSideEffectsWithTask(maxAuditAttempts: number): Promise<PendingClosureSideEffectsWithTask[]>;
   /** Set a single side-effect completion column. */
   markSideEffect(iclassId: string, effect: ClosureSideEffect, done: boolean): Promise<void>;
   /** Increment auditAttempts and stamp lastAuditAttemptAt = now (cap guard upstream). */
