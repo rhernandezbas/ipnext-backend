@@ -5,6 +5,7 @@ import {
   ClosureSideEffect,
   ClosureSideEffectState,
   PendingClosureSideEffects,
+  PendingClosureSideEffectsWithTask,
 } from '@domain/ports/ClosedServiceOrderRepository';
 import { prisma } from '../../database/prisma';
 
@@ -299,6 +300,40 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
       inventoryBuilt: r.inventoryBuilt,
       auditDone: r.auditDone,
       auditAttempts: r.auditAttempts,
+    }));
+  }
+
+  async listPendingSideEffectsWithTask(maxAuditAttempts: number): Promise<PendingClosureSideEffectsWithTask[]> {
+    const rows = await (prisma.iClassServiceOrder as any).findMany({
+      where: {
+        OR: [
+          { commentPosted: false },
+          { inventoryBuilt: false },
+          { auditDone: false, auditAttempts: { lt: maxAuditAttempts } },
+        ],
+      },
+      select: {
+        iclassId: true,
+        scheduledTaskId: true,
+        commentPosted: true,
+        inventoryBuilt: true,
+        auditDone: true,
+        auditAttempts: true,
+        scheduledTask: {
+          select: { id: true, sequenceNumber: true, title: true },
+        },
+      },
+    });
+    return rows.map((r: any) => ({
+      iclassId: r.iclassId.toString(),
+      scheduledTaskId: r.scheduledTaskId,
+      commentPosted: r.commentPosted,
+      inventoryBuilt: r.inventoryBuilt,
+      auditDone: r.auditDone,
+      auditAttempts: r.auditAttempts,
+      task: r.scheduledTask
+        ? { id: r.scheduledTask.id, sequenceNumber: r.scheduledTask.sequenceNumber, title: r.scheduledTask.title }
+        : null,
     }));
   }
 

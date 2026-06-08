@@ -438,6 +438,7 @@ import { buildClosureSideEffects } from '../scheduling/closureSideEffects';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { ReprocessClosureSideEffects } from '@application/use-cases/ReprocessClosureSideEffects';
 import { GetPendingSideEffectsCount } from '@application/use-cases/GetPendingSideEffectsCount';
+import { GetPendingSideEffectsList } from '@application/use-cases/GetPendingSideEffectsList';
 import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
 import { PrismaRbacRoleRepository } from '../adapters/prisma/PrismaRbacRoleRepository';
@@ -1240,6 +1241,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
   );
   // GetPendingSideEffectsCount — usa el mismo closedServiceOrderRepo construido arriba.
   const getPendingSideEffectsCount = new GetPendingSideEffectsCount(closedServiceOrderRepo);
+  const getPendingSideEffectsList = new GetPendingSideEffectsList(closedServiceOrderRepo);
 
   app.use('/api/admin/iclass', createIClassClosureRouter(
     new SyncIClassResultCodes(buildIClassClient(), iclassResultCodeRepo),
@@ -1249,6 +1251,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
     new BackfillClosedServiceOrders(buildIClassClient(), schedulingRepo, closureIngest),
     taskAutocomplete ?? null,
     getPendingSideEffectsCount,
+    getPendingSideEffectsList,
     requirePerm('iclass', 'manage'),
     authAdapter,
   ));

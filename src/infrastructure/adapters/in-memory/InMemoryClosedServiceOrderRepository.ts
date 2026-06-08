@@ -4,6 +4,7 @@ import {
   ClosureSideEffect,
   ClosureSideEffectState,
   PendingClosureSideEffects,
+  PendingClosureSideEffectsWithTask,
 } from '@domain/ports/ClosedServiceOrderRepository';
 
 interface StoredOrder {
@@ -11,6 +12,8 @@ interface StoredOrder {
   scheduledTaskId: string | null;
   sideEffects: ClosureSideEffectState;
 }
+
+type TaskInfo = { id: string; sequenceNumber: number; title: string };
 
 function freshState(): ClosureSideEffectState {
   return { commentPosted: false, inventoryBuilt: false, auditDone: false, auditAttempts: 0 };
@@ -20,6 +23,12 @@ function freshState(): ClosureSideEffectState {
 export class InMemoryClosedServiceOrderRepository implements ClosedServiceOrderRepository {
   /** keyed by iclassId */
   readonly orders = new Map<string, StoredOrder>();
+
+  /**
+   * Injectable tasks Map for `listPendingSideEffectsWithTask`.
+   * Seeded by tests; defaults to empty (all task joins resolve null).
+   */
+  constructor(private readonly tasks: Map<string, TaskInfo> = new Map()) {}
 
   async findSyncStateByIclassId(iclassId: string): Promise<{ iclassUpdatedAt: string | null } | null> {
     const found = this.orders.get(iclassId);
@@ -53,6 +62,20 @@ export class InMemoryClosedServiceOrderRepository implements ClosedServiceOrderR
       const pending =
         !se.commentPosted || !se.inventoryBuilt || (!se.auditDone && se.auditAttempts < maxAuditAttempts);
       if (pending) out.push({ iclassId, scheduledTaskId: s.scheduledTaskId, ...se });
+    }
+    return out;
+  }
+
+  async listPendingSideEffectsWithTask(maxAuditAttempts: number): Promise<PendingClosureSideEffectsWithTask[]> {
+    const out: PendingClosureSideEffectsWithTask[] = [];
+    for (const [iclassId, s] of this.orders) {
+      const se = s.sideEffects;
+      const pending =
+        !se.commentPosted || !se.inventoryBuilt || (!se.auditDone && se.auditAttempts < maxAuditAttempts);
+      if (pending) {
+        const task = s.scheduledTaskId ? (this.tasks.get(s.scheduledTaskId) ?? null) : null;
+        out.push({ iclassId, scheduledTaskId: s.scheduledTaskId, ...se, task });
+      }
     }
     return out;
   }

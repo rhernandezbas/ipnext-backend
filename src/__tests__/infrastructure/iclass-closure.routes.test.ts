@@ -8,6 +8,7 @@ import { ListIClassResultCodes } from '../../application/use-cases/ListIClassRes
 import { AssignResultCodeStage } from '../../application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '../../application/use-cases/GetClosureStatus';
 import { GetPendingSideEffectsCount } from '../../application/use-cases/GetPendingSideEffectsCount';
+import { GetPendingSideEffectsList } from '../../application/use-cases/GetPendingSideEffectsList';
 import { createIClassClosureRouter } from '../../infrastructure/http/routes/iclass-closure.routes';
 import { errorHandler } from '../../infrastructure/http/middleware/errorHandler';
 import { IClassPort, IClassResultCodeDescriptor } from '../../domain/ports/IClassPort';
@@ -50,6 +51,7 @@ function schedulerStub(result: TriggerResult) {
 function buildApp(
   schedulerResult: TriggerResult = { queued: true },
   closedRepo?: InMemoryClosedServiceOrderRepository,
+  requireIClassManageOverride?: (req: unknown, res: unknown, next: () => void) => void,
 ) {
   const repo = new InMemoryIClassResultCodeRepository();
   const state = new InMemorySyncStateRepository();
@@ -61,6 +63,9 @@ function buildApp(
   const backfill = { execute: async () => ({ mirrored: 2, transitioned: 2, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0 }) };
   const scheduler = schedulerStub(schedulerResult);
   const getPendingCount = new GetPendingSideEffectsCount(closed);
+  const getPendingList = new GetPendingSideEffectsList(closed);
+  const requireIClassManage = requireIClassManageOverride
+    ?? ((_req: unknown, _res: unknown, next: () => void) => next());
   const router = createIClassClosureRouter(
     new SyncIClassResultCodes(iclass, repo),
     new ListIClassResultCodes(repo),
@@ -69,7 +74,8 @@ function buildApp(
     backfill as never,
     scheduler,
     getPendingCount,
-    ((_req: unknown, _res: unknown, next: () => void) => next()) as never, // requireIClassManage stub (allows)
+    getPendingList,
+    requireIClassManage as never,
     new FakeAuthProvider(),
   );
   const app = express();
@@ -88,6 +94,7 @@ function buildAppNullScheduler() {
   const iclass = fakeIClass([]);
   const backfill = { execute: async () => ({ mirrored: 0, transitioned: 0, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0 }) };
   const getPendingCount = new GetPendingSideEffectsCount(closed);
+  const getPendingList = new GetPendingSideEffectsList(closed);
   const router = createIClassClosureRouter(
     new SyncIClassResultCodes(iclass, repo),
     new ListIClassResultCodes(repo),
@@ -96,6 +103,7 @@ function buildAppNullScheduler() {
     backfill as never,
     null, // scheduler null → 503
     getPendingCount,
+    getPendingList,
     ((_req: unknown, _res: unknown, next: () => void) => next()) as never,
     new FakeAuthProvider(),
   );
@@ -252,6 +260,62 @@ describe('IClass closure routes', () => {
   it('POST /closure/backfill is 401 without auth', async () => {
     const { app } = buildApp();
     expect((await request(app).post('/api/admin/iclass/closure/backfill')).status).toBe(401);
+  });
+
+  // -----------------------------------------------------------------------
+  // REQ-LIST-1 SC1–SC5: GET /closure/reprocess/pending-list
+  // -----------------------------------------------------------------------
+
+  it('GET /closure/reprocess/pending-list → 200 {items:[3 SOs],total:3} (SC1)', async () => {
+    const tasks = new Map([
+      ['t-1', { id: 't-1', sequenceNumber: 1, title: 'Task 1' }],
+      ['t-2', { id: 't-2', sequenceNumber: 2, title: 'Task 2' }],
+      ['t-3', { id: 't-3', sequenceNumber: 3, title: 'Task 3' }],
+    ]);
+    const closed = new InMemoryClosedServiceOrderRepository(tasks);
+    await closed.upsert(makeSO('so-1'), 't-1');
+    await closed.upsert(makeSO('so-2'), 't-2');
+    await closed.upsert(makeSO('so-3'), 't-3');
+    const { app } = buildApp({ queued: true }, closed);
+    const res = await request(app).get('/api/admin/iclass/closure/reprocess/pending-list').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(3);
+    expect(res.body.items).toHaveLength(3);
+    expect(res.body.items[0]).toHaveProperty('iclassId');
+    expect(res.body.items[0]).toHaveProperty('task');
+    expect(res.body.items[0].task).not.toBeNull();
+  });
+
+  it('GET /closure/reprocess/pending-list → 200 {items:[],total:0} when nothing pending (SC3)', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/admin/iclass/closure/reprocess/pending-list').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ items: [], total: 0 });
+  });
+
+  it('GET /closure/reprocess/pending-list → item with task:null when SO has no linked task (SC2)', async () => {
+    const closed = new InMemoryClosedServiceOrderRepository();
+    await closed.upsert(makeSO('so-orphan'), null);
+    const { app } = buildApp({ queued: true }, closed);
+    const res = await request(app).get('/api/admin/iclass/closure/reprocess/pending-list').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.items[0].scheduledTaskId).toBeNull();
+    expect(res.body.items[0].task).toBeNull();
+  });
+
+  it('GET /closure/reprocess/pending-list → 401 without auth (SC4)', async () => {
+    const { app } = buildApp();
+    expect((await request(app).get('/api/admin/iclass/closure/reprocess/pending-list')).status).toBe(401);
+  });
+
+  it('GET /closure/reprocess/pending-list → 403 when requireIClassManage rejects (SC5)', async () => {
+    const rejectMiddleware = (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }, _next: unknown) => {
+      res.status(403).json({ code: 'FORBIDDEN' });
+    };
+    const { app } = buildApp({ queued: true }, undefined, rejectMiddleware as never);
+    const res = await request(app).get('/api/admin/iclass/closure/reprocess/pending-list').set(...AUTH);
+    expect(res.status).toBe(403);
   });
 });
 
