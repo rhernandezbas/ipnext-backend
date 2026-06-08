@@ -2,15 +2,12 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **31 hechos (en prod) · 1 en curso (#32).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30 cerrados vía SDD.)
+> **32 hechos (en prod) · 0 pendientes — backlog completo.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32 cerrados vía SDD.)
 
-## 🔧 En curso (1)
-
-### #32 — Backfill async + TODA acción al LLM async + página independiente de pendientes  *(agregado 2026-06-08)*
-- **Disparador**: "No se pudo reconciliar" en prod. Diagnóstico (logs del VPS, cero errores en 3h → timeout no crash): `BackfillClosedServiceOrders` hace `listTasksInIClassStage('registered_in_iclass')` (78 tareas) × 1 llamada IClass c/u **secuencial dentro del request** + corre `runClosureSideEffects` (OCR+audit Ollama) por cada cerrada → timeout. Mismo patrón del #23 pero el backfill nunca se hizo async.
-- **Qué (pedido usuario)**: (1) **backfill/Reconciliar async** (202 + background, patrón #23); (2) **cualquier acción que dispare el LLM** (Ollama: OCR/audit) o un loop largo a IClass **debe ser async** — auditar TODOS los entry points HTTP sync (backfill, cierre manual si existe, etc.); el reprocess ya lo está. (3) **Página independiente de pendientes**: el contador "N pendientes" (en la card de Reprocesar / Side-effects) pasa a ser **clickeable** y lleva a una **page propia** donde vive la lista; la `ClosureProgressTable` del #31 **se mueve allí** (sale del sub-tab Procesamiento). **impeccable** en el front.
-- **Dónde**: BE — pasar `BackfillClosedServiceOrders` (y cualquier otro disparador LLM/IClass-loop sync) al patrón `triggerNow`/fire-and-forget 202; FE — nueva ruta/página de pendientes + mover la tabla + el contador como link. Permiso `iclass.manage`.
-- **Tamaño**: mediano. **Relación**: cierra el círculo del #23/#31 (async + observabilidad).
+### #32 — Backfill async + TODA acción al LLM async + página independiente de pendientes  *(HECHO 2026-06-08)*
+- **Disparador**: "No se pudo reconciliar" en prod. Diagnóstico vía logs del VPS (cero errores en 3h → timeout, no crash): `BackfillClosedServiceOrders` hacía ~78 llamadas IClass secuenciales + OCR/audit por OS, **síncrono dentro del request** → timeout. Mismo patrón del #23, pero el backfill nunca se había hecho async.
+- **Resuelto** (SDD `closure-actions-async`, multi-repo, apply BE∥FE en paralelo): nuevo `BackfillScheduler` (espeja `TaskAutocompleteScheduler`: `inFlight` + `PgAdvisoryLock('iclass-closure-backfill')` + `triggerNow()` fire-and-forget, **sin cron**); la ruta devuelve **202**/503 y no bloquea. **Auditoría del scope**: el backfill era el ÚNICO entry point HTTP sync que tocaba el LLM/loop IClass — el reprocess ya era async (#23), el resto es rápido → con esto **ninguna acción de cierre bloquea el request**. FE: el contador pasó a `Link` → **`ClosurePendingPage`** standalone (gate `iclass.manage`) a donde se mudó la `ClosureProgressTable` del #31; banner del Reconciliar "encolada"/"en curso"/"no disponible". Front con **impeccable**.
+- **PRs**: BE #78 / FE #54. Sin migración. Verify SDD: PASS 14/14 (suite BE 2509, FE closure 40/40). Archivado en `openspec/changes/archive/2026-06-08-closure-actions-async/`.
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
