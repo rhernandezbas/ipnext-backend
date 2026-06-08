@@ -2,12 +2,17 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **26 hechos (en prod) · 2 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25, #20 cerrados vía SDD.)
+> **27 hechos (en prod) · 1 pendiente.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (26, desplegados en producción)
+## ✅ Hechos (27, desplegados en producción)
+
+### #19 — Agregar ítem de inventario MANUAL a la tarea
+- **Resuelto** (SDD `task-manual-inventory-item`, automático + hybrid, multi-repo con apply BE∥FE en paralelo): nuevo use case `CreateManualSuggestion` + `POST /scheduling/:taskId/inventory/suggestions` (guard `inventory.write`) — DEVICE con tipo del catálogo + SN/MAC, o MATERIAL con descripción; `source='MANUAL'` entra al pipeline confirm/discard normal. Validación #18 extraída a `domain/services/suggestionCompleteness.ts` (compartida con el confirm). FE: `ManualSuggestionForm` inline + botón "Agregar ítem" **siempre visible** (el early-return del panel vacío era justo lo que dejaba sin salida a la OS sin foto de MAC).
+- **2 bugs latentes arreglados** (los encontró la exploración): (a) el confirm etiquetaba todo lo no-OCR como `'ICLASS'` en el contrato (en `execute()` Y `replace()`) — ahora el source pasa through; (b) la clave natural del upsert de ingest era ciega al source → una sugerencia MANUAL pisaba la fila OCR del mismo SN/MAC; la clave ahora incluye `source` en ambos adapters.
+- **PRs**: BE #73 / FE #49. Sin migración. Verify SDD: PASS 23/23 scenarios (suite BE 2430 + FE 1907). Archivado en `openspec/changes/archive/2026-06-08-task-manual-inventory-item/`.
 
 ### #20 — Audit IA: pasarle el detalle COMPLETO de IClass al modelo
 - **Resuelto** (SDD `iclass-audit-full-context`, automático + hybrid): `AuditContext` ahora lleva `historyCommentary` (últimas 10 entradas CON comentario), `commentaryLog` (500 chars), `internalNote` (300) y `equipmentEvents` (20) del mirror — con presupuestos de recorte exportados en `buildAuditContext` (~1.5k tokens worst-case, seguro para qwen2.5vl:7b). `renderPrompt` agrega las secciones como bloques etiquetados condicionales (omitidos si vacíos) + instrucción siempre presente de NO marcar "falta X" si X está en el contexto.
@@ -139,14 +144,7 @@
 
 ---
 
-## ⏳ Pendientes (2)
-
-### #19 — Agregar ítem de inventario MANUAL a la tarea (antena/onu/router/etc.)  *(agregado 2026-06-04)*
-- **Qué**: hoy las sugerencias de inventario salen **solo** del cierre (OCR de fotos device + materiales de IClass). Se quiere poder **agregar manualmente** un ítem de inventario en la tarea — elegir el tipo del catálogo (antena/onu/router/otros) y cargar su SN/MAC/datos — sin depender de que el OCR lo haya detectado.
-- **Caso clave (visto 2026-06-06)**: una OS **sin foto de MAC** no genera ninguna sugerencia → el panel de inventario queda **vacío** y hoy no hay forma de cargar el equipo. Esto NO lo resuelve el #22 (ese re-OCR-ea cuando la LLM falló; acá directamente no hay foto que OCR-ear).
-- **Camino propuesto**: nuevo use-case + endpoint para crear una sugerencia/ítem manual en la tarea (`source = MANUAL`, kind DEVICE/MATERIAL); FE botón "Agregar ítem" **siempre visible** en el panel de inventario de la tarea (incluso con panel vacío / sin sugerencias) con form (tipo del `DeviceTypeCatalog` + SN/MAC/desc). Reusa la validación del #18.
-- **Dónde**: BE nuevo use-case (`AddTaskInventoryItem` o similar) + ruta bajo `/scheduling/:taskId/inventory`; FE `TaskInventorySuggestions` (form de alta). Permiso `inventory.write`.
-- **Tamaño**: mediano. **Relación**: depende del #18 (la validación) y se apoya en el catálogo del #5.
+## ⏳ Pendientes (1)
 
 ### #23 — Auditor IA + OCR de inventario 100% asíncronos (background, no bloqueantes)  *(agregado 2026-06-07)*
 - **Síntoma**: el "Reprocesar" corre los side-effects pesados (OCR de inventario + auditoría IA) **síncrono dentro del request HTTP** → con carga (reprocess masivo) el modelo `qwen2.5vl:7b` tarda y el request corta con "No se pudo reprocesar", **aunque el backend siga procesando** en background. Visto el 2026-06-07.
