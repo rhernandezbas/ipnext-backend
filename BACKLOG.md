@@ -2,7 +2,7 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **27 hechos (en prod) · 1 pendiente.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19 cerrados vía SDD.)
+> **28 hechos (en prod) · 1 en curso (#29).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -144,14 +144,13 @@
 
 ---
 
-## ⏳ Pendientes (1)
+## 🔧 En curso (1)
 
-### #23 — Auditor IA + OCR de inventario 100% asíncronos (background, no bloqueantes)  *(agregado 2026-06-07)*
-- **Síntoma**: el "Reprocesar" corre los side-effects pesados (OCR de inventario + auditoría IA) **síncrono dentro del request HTTP** → con carga (reprocess masivo) el modelo `qwen2.5vl:7b` tarda y el request corta con "No se pudo reprocesar", **aunque el backend siga procesando** en background. Visto el 2026-06-07.
-- **Qué se quiere**: que TODO el procesamiento de auditor IA y OCR de inventario sea **asíncrono** — el endpoint encola/dispara y devuelve al toque (202); el job corre en background y **tarda lo que tenga que tardar**, sin timeout. El progreso se mira por el tracking de side-effects + los flags de completitud (#14).
-- **Camino propuesto**: pasar `ReprocessClosureSideEffects` (y el closure) a un patrón job async (queue o fire-and-forget con lock). El botón "Reprocesar" responde "encolado". El cron `task-autocomplete` (#14) ya corre en background — unificar todo a ese modelo.
-- **Dónde**: BE `ReprocessClosureSideEffects` + endpoint de reprocess + runner/queue; FE el botón muestra "encolado".
-- **Tamaño**: mediano-grande. **Relación**: lo reveló el reprocess del 2026-06-07. NOTA: además el audit **degenera** bajo carga (el modelo devuelve JSON truncado `[`) — el async deja que tarde sin cortar, pero la degeneración puede requerir bajar `maxPhotos` (hoy 8) o más VRAM.
+### #29 — Tarea de RED (network-only task, solo nodo)  *(agregado 2026-06-08)*
+- **Qué**: un side button **rojo** en el modal de crear tarea que lo cambia a modo "RED" — en vez de cliente + servicio/contrato, se elige un **Nodo** del catálogo `NetworkSite` (page "Sitios de red"). Todo lo demás igual (proyecto, workflow, stages, envío a IClass, mismo kanban con badge RED).
+- **Decisiones lockeadas (usuario, 2026-06-08)**: (1) toggle en el mismo modal; (2) Opción A — `ScheduledTask` gana `kind` discriminador + `networkSiteId` FK; (3) mapeo IClass **explícito** vía nuevo `iclassNodeCode` en NetworkSite (sin match difuso); (4) mismo flujo completo.
+- **Estado**: SDD `network-node-task` en curso (explore ✅ vía agent team / propose ✅ / design ✅). Phone de la OS de IClass = placeholder `'0000000000'` (isBlank rechaza vacío). Open questions de apply: ¿IClass acepta ese mobile? ¿`customerCode`=`iclassNodeCode` vs `"NETWORK"` (límite de chars)?
+- **Tamaño**: mediano (~1-1.5 días). Migración aditiva. Archivos: ~14 (BE schema/use case/IClass + FE modal/selector/badge).
 
 ## Refinamientos del #8 (ya en prod, NO son ítems numerados)
 
