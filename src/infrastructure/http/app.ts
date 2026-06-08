@@ -400,6 +400,7 @@ import { ListIClassSoTypes } from '@application/use-cases/ListIClassSoTypes';
 import { AssignIClassSoTypeToProject } from '@application/use-cases/AssignIClassSoTypeToProject';
 import { createIClassAdminRouter } from './routes/iclass-admin.routes';
 import { createIClassClosureRouter } from './routes/iclass-closure.routes';
+import { TaskAutocompleteScheduler } from '../scheduling/TaskAutocompleteScheduler';
 import { PrismaIClassResultCodeRepository } from '../adapters/prisma/PrismaIClassResultCodeRepository';
 import { SyncIClassResultCodes } from '@application/use-cases/SyncIClassResultCodes';
 import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCodes';
@@ -436,6 +437,7 @@ import { DeleteMaterial } from '@application/use-cases/DeleteMaterial';
 import { buildClosureSideEffects } from '../scheduling/closureSideEffects';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { ReprocessClosureSideEffects } from '@application/use-cases/ReprocessClosureSideEffects';
+import { GetPendingSideEffectsCount } from '@application/use-cases/GetPendingSideEffectsCount';
 import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
 import { PrismaRbacRoleRepository } from '../adapters/prisma/PrismaRbacRoleRepository';
@@ -521,7 +523,7 @@ const resolveUserPermissions = new ResolveUserPermissions(rbacUserRoleRepo, rbac
 export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
   requirePermission(rbacUserRepo, m, a);
 
-export function createApp() {
+export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
   const app = express();
 
   // SDD #6a — behind EasyPanel's proxy; trust the first hop so the rate limiter
@@ -1232,14 +1234,17 @@ export function createApp() {
     new PrismaSyncStateRepository(),
     buildClosureSideEffects(),
   );
+  // GetPendingSideEffectsCount — usa el mismo closedServiceOrderRepo construido arriba.
+  const getPendingSideEffectsCount = new GetPendingSideEffectsCount(closedServiceOrderRepo);
+
   app.use('/api/admin/iclass', createIClassClosureRouter(
     new SyncIClassResultCodes(buildIClassClient(), iclassResultCodeRepo),
     new ListIClassResultCodes(iclassResultCodeRepo),
     new AssignResultCodeStage(iclassResultCodeRepo, stageRepo),
     new GetClosureStatus(new PrismaSyncStateRepository()),
     new BackfillClosedServiceOrders(buildIClassClient(), schedulingRepo, closureIngest),
-    // Manual side-effect reprocess — re-fires only pending effects (flag-gated).
-    new ReprocessClosureSideEffects(featureFlagRepo, closedServiceOrderRepo, closureIngest),
+    taskAutocomplete ?? null,
+    getPendingSideEffectsCount,
     requirePerm('iclass', 'manage'),
     authAdapter,
   ));

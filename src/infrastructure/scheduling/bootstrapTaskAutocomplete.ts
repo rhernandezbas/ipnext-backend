@@ -45,5 +45,8 @@ export function bootstrapTaskAutocomplete(): TaskAutocompleteScheduler | null {
   const lock = new PgAdvisoryLock();
   const reprocess = new ReprocessClosureSideEffects(flags, closed, ingest, { flagKey: AUTOCOMPLETE_FLAG });
 
-  return new TaskAutocompleteScheduler(reprocess, { intervalMs: DEFAULT_INTERVAL_MS }, lock);
+  // Segunda instancia para el disparo manual — usa el flag independiente 'iclass-closure-reprocess'
+  const manualReprocess = new ReprocessClosureSideEffects(flags, closed, ingest, { flagKey: 'iclass-closure-reprocess' });
+
+  return new TaskAutocompleteScheduler(reprocess, { intervalMs: DEFAULT_INTERVAL_MS }, lock, flags, manualReprocess);
 }
