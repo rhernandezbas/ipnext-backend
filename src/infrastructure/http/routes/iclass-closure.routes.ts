@@ -9,8 +9,10 @@ import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { GetPendingSideEffectsCount } from '@application/use-cases/GetPendingSideEffectsCount';
 import { GetPendingSideEffectsList } from '@application/use-cases/GetPendingSideEffectsList';
+import { GetIClassClosureConfig } from '@application/use-cases/GetIClassClosureConfig';
+import { UpdateIClassClosureConfig } from '@application/use-cases/UpdateIClassClosureConfig';
 import { TaskAutocompleteScheduler } from '@infrastructure/scheduling/TaskAutocompleteScheduler';
-import { toResultCodeDTO } from '@application/dto/iclassClosure.dto';
+import { toResultCodeDTO, UpdateIClassClosureConfigSchema } from '@application/dto/iclassClosure.dto';
 
 const ListQuerySchema = z.object({
   mapped: z.enum(['true', 'false']).optional().transform(v => (v === 'true' ? true : v === 'false' ? false : undefined)),
@@ -31,6 +33,8 @@ const AssignSchema = z.object({
  *   POST  /closure/reprocess             — async dispatch via scheduler (flag-gated, 202)
  *   GET   /closure/reprocess/pending-count — count of SOs with pending side-effects
  *   GET   /closure/reprocess/pending-list  — list of SOs with pending side-effects + joined task info
+ *   GET   /closure/config               — get persisted scheduler intervals (iclass:manage)
+ *   PUT   /closure/config               — update scheduler intervals (iclass:manage)
  */
 export function createIClassClosureRouter(
   syncResultCodes: SyncIClassResultCodes,
@@ -41,6 +45,8 @@ export function createIClassClosureRouter(
   scheduler: TaskAutocompleteScheduler | null,
   getPendingCount: GetPendingSideEffectsCount,
   getPendingList: GetPendingSideEffectsList,
+  getConfig: GetIClassClosureConfig,
+  updateConfig: UpdateIClassClosureConfig,
   requireIClassManage: RequestHandler,
   authProvider: AuthProvider,
 ): Router {
@@ -129,6 +135,28 @@ export function createIClassClosureRouter(
   router.get('/closure/reprocess/pending-list', auth, requireIClassManage, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       res.status(200).json(await getPendingList.execute());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Persisted scheduler interval config — read ONCE at startup, change takes effect after restart.
+  router.get('/closure/config', auth, requireIClassManage, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json(await getConfig.execute());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.put('/closure/config', auth, requireIClassManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const parsed = UpdateIClassClosureConfigSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+      return;
+    }
+    try {
+      res.status(200).json(await updateConfig.execute(parsed.data));
     } catch (err) {
       next(err);
     }

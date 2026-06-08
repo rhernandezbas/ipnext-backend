@@ -3,12 +3,15 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import { InMemoryIClassResultCodeRepository } from '../../infrastructure/adapters/in-memory/InMemoryIClassResultCodeRepository';
 import { InMemorySyncStateRepository } from '../../infrastructure/adapters/in-memory/InMemorySyncStateRepository';
+import { InMemoryIClassClosureConfigRepository } from '../../infrastructure/adapters/in-memory/InMemoryIClassClosureConfigRepository';
 import { SyncIClassResultCodes } from '../../application/use-cases/SyncIClassResultCodes';
 import { ListIClassResultCodes } from '../../application/use-cases/ListIClassResultCodes';
 import { AssignResultCodeStage } from '../../application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '../../application/use-cases/GetClosureStatus';
 import { GetPendingSideEffectsCount } from '../../application/use-cases/GetPendingSideEffectsCount';
 import { GetPendingSideEffectsList } from '../../application/use-cases/GetPendingSideEffectsList';
+import { GetIClassClosureConfig } from '../../application/use-cases/GetIClassClosureConfig';
+import { UpdateIClassClosureConfig } from '../../application/use-cases/UpdateIClassClosureConfig';
 import { createIClassClosureRouter } from '../../infrastructure/http/routes/iclass-closure.routes';
 import { errorHandler } from '../../infrastructure/http/middleware/errorHandler';
 import { IClassPort, IClassResultCodeDescriptor } from '../../domain/ports/IClassPort';
@@ -52,6 +55,7 @@ function buildApp(
   schedulerResult: TriggerResult = { queued: true },
   closedRepo?: InMemoryClosedServiceOrderRepository,
   requireIClassManageOverride?: (req: unknown, res: unknown, next: () => void) => void,
+  configRepo?: InMemoryIClassClosureConfigRepository,
 ) {
   const repo = new InMemoryIClassResultCodeRepository();
   const state = new InMemorySyncStateRepository();
@@ -66,6 +70,9 @@ function buildApp(
   const getPendingList = new GetPendingSideEffectsList(closed);
   const requireIClassManage = requireIClassManageOverride
     ?? ((_req: unknown, _res: unknown, next: () => void) => next());
+  const cfgRepo = configRepo ?? new InMemoryIClassClosureConfigRepository();
+  const getConfig = new GetIClassClosureConfig(cfgRepo);
+  const updateConfig = new UpdateIClassClosureConfig(cfgRepo);
   const router = createIClassClosureRouter(
     new SyncIClassResultCodes(iclass, repo),
     new ListIClassResultCodes(repo),
@@ -75,6 +82,8 @@ function buildApp(
     scheduler,
     getPendingCount,
     getPendingList,
+    getConfig,
+    updateConfig,
     requireIClassManage as never,
     new FakeAuthProvider(),
   );
@@ -83,7 +92,7 @@ function buildApp(
   app.use(express.json());
   app.use('/api/admin/iclass', router);
   app.use(errorHandler);
-  return { app, repo };
+  return { app, repo, cfgRepo };
 }
 
 /** Construye una app con scheduler=null para probar el 503 */
@@ -95,6 +104,9 @@ function buildAppNullScheduler() {
   const backfill = { execute: async () => ({ mirrored: 0, transitioned: 0, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0 }) };
   const getPendingCount = new GetPendingSideEffectsCount(closed);
   const getPendingList = new GetPendingSideEffectsList(closed);
+  const cfgRepo = new InMemoryIClassClosureConfigRepository();
+  const getConfig = new GetIClassClosureConfig(cfgRepo);
+  const updateConfig = new UpdateIClassClosureConfig(cfgRepo);
   const router = createIClassClosureRouter(
     new SyncIClassResultCodes(iclass, repo),
     new ListIClassResultCodes(repo),
@@ -104,6 +116,8 @@ function buildAppNullScheduler() {
     null, // scheduler null → 503
     getPendingCount,
     getPendingList,
+    getConfig,
+    updateConfig,
     ((_req: unknown, _res: unknown, next: () => void) => next()) as never,
     new FakeAuthProvider(),
   );
@@ -316,6 +330,107 @@ describe('IClass closure routes', () => {
     const { app } = buildApp({ queued: true }, undefined, rejectMiddleware as never);
     const res = await request(app).get('/api/admin/iclass/closure/reprocess/pending-list').set(...AUTH);
     expect(res.status).toBe(403);
+  });
+
+  // -----------------------------------------------------------------------
+  // Closure config endpoints — GET /closure/config, PUT /closure/config
+  // -----------------------------------------------------------------------
+
+  it('GET /closure/config → 200 with defaults when no record exists (spec scenario 4)', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/admin/iclass/closure/config').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ closureIntervalMs: 600000, autocompleteIntervalMs: 900000 });
+  });
+
+  it('GET /closure/config → 200 with persisted values (spec scenario 3)', async () => {
+    const cfgRepo = new InMemoryIClassClosureConfigRepository();
+    await cfgRepo.update({ closureIntervalMs: 120000, autocompleteIntervalMs: 300000 });
+    const { app } = buildApp({ queued: true }, undefined, undefined, cfgRepo);
+    const res = await request(app).get('/api/admin/iclass/closure/config').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ closureIntervalMs: 120000, autocompleteIntervalMs: 300000 });
+  });
+
+  it('PUT /closure/config → 200 full update persists both fields (spec scenario 5)', async () => {
+    const { app, cfgRepo } = buildApp();
+    const res = await request(app)
+      .put('/api/admin/iclass/closure/config')
+      .set(...AUTH)
+      .send({ closureIntervalMs: 120000, autocompleteIntervalMs: 300000 });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ closureIntervalMs: 120000, autocompleteIntervalMs: 300000 });
+    // Subsequent GET returns the same values
+    const getRes = await request(app).get('/api/admin/iclass/closure/config').set(...AUTH);
+    expect(getRes.body).toEqual({ closureIntervalMs: 120000, autocompleteIntervalMs: 300000 });
+    // Check repo directly as well
+    const stored = await cfgRepo.get();
+    expect(stored).toEqual({ closureIntervalMs: 120000, autocompleteIntervalMs: 300000 });
+  });
+
+  it('PUT /closure/config → 200 partial update (closureIntervalMs only) (spec scenario 6)', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .put('/api/admin/iclass/closure/config')
+      .set(...AUTH)
+      .send({ closureIntervalMs: 120000 });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ closureIntervalMs: 120000, autocompleteIntervalMs: 900000 });
+  });
+
+  it('PUT /closure/config → 400 VALIDATION_ERROR when interval below floor (30000) (spec scenario 7)', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .put('/api/admin/iclass/closure/config')
+      .set(...AUTH)
+      .send({ closureIntervalMs: 30000 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('PUT /closure/config → 400 VALIDATION_ERROR when non-positive (0) (spec scenario 8)', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .put('/api/admin/iclass/closure/config')
+      .set(...AUTH)
+      .send({ autocompleteIntervalMs: 0 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('PUT /closure/config → 400 VALIDATION_ERROR when wrong type ("soon") (spec scenario 9)', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .put('/api/admin/iclass/closure/config')
+      .set(...AUTH)
+      .send({ closureIntervalMs: 'soon' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('GET /closure/config → 401 without auth token (spec scenario 10)', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/admin/iclass/closure/config');
+    expect(res.status).toBe(401);
+  });
+
+  it('PUT /closure/config → 403 when requireIClassManage rejects (spec scenario 11)', async () => {
+    const rejectMiddleware = (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }, _next: unknown) => {
+      res.status(403).json({ code: 'PERMISSION_DENIED' });
+    };
+    const { app } = buildApp({ queued: true }, undefined, rejectMiddleware as never);
+    const res = await request(app)
+      .put('/api/admin/iclass/closure/config')
+      .set(...AUTH)
+      .send({ closureIntervalMs: 120000 });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('PERMISSION_DENIED');
+  });
+
+  it('GET /closure/config → 200 when authorized user has iclass:manage (spec scenario 12)', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/admin/iclass/closure/config').set(...AUTH);
+    expect(res.status).toBe(200);
   });
 });
 

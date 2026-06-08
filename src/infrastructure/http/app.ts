@@ -401,6 +401,9 @@ import { AssignIClassSoTypeToProject } from '@application/use-cases/AssignIClass
 import { createIClassAdminRouter } from './routes/iclass-admin.routes';
 import { createIClassClosureRouter } from './routes/iclass-closure.routes';
 import { TaskAutocompleteScheduler } from '../scheduling/TaskAutocompleteScheduler';
+import { PrismaIClassClosureConfigRepository } from '../adapters/prisma/PrismaIClassClosureConfigRepository';
+import { GetIClassClosureConfig } from '@application/use-cases/GetIClassClosureConfig';
+import { UpdateIClassClosureConfig } from '@application/use-cases/UpdateIClassClosureConfig';
 import { PrismaIClassResultCodeRepository } from '../adapters/prisma/PrismaIClassResultCodeRepository';
 import { SyncIClassResultCodes } from '@application/use-cases/SyncIClassResultCodes';
 import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCodes';
@@ -1243,6 +1246,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
   const getPendingSideEffectsCount = new GetPendingSideEffectsCount(closedServiceOrderRepo);
   const getPendingSideEffectsList = new GetPendingSideEffectsList(closedServiceOrderRepo);
 
+  const iclassClosureConfigRepo = new PrismaIClassClosureConfigRepository();
   app.use('/api/admin/iclass', createIClassClosureRouter(
     new SyncIClassResultCodes(buildIClassClient(), iclassResultCodeRepo),
     new ListIClassResultCodes(iclassResultCodeRepo),
@@ -1252,6 +1256,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
     taskAutocomplete ?? null,
     getPendingSideEffectsCount,
     getPendingSideEffectsList,
+    new GetIClassClosureConfig(iclassClosureConfigRepo),
+    new UpdateIClassClosureConfig(iclassClosureConfigRepo),
     requirePerm('iclass', 'manage'),
     authAdapter,
   ));

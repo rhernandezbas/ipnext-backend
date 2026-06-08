@@ -1577,6 +1577,15 @@ model GestionRealSyncConfig {
   updatedAt  DateTime @updatedAt
 }
 
+// Single-row config for IClass closure-loop and task-autocomplete scheduler intervals.
+// Both fields have application-level defaults (600000ms / 900000ms); no seed row.
+model IClassClosureConfig {
+  id                     String   @id @default("singleton")
+  closureIntervalMs      Int      @default(600000)
+  autocompleteIntervalMs Int      @default(900000)
+  updatedAt              DateTime @updatedAt
+}
+
 // =============================================
 // SUPPORT DOMAIN
 // =============================================

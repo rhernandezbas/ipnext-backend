@@ -10,9 +10,6 @@ import { IClassClosureScheduler } from './IClassClosureScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 import { buildClosureSideEffects } from './closureSideEffects';
 
-/** Default poll cadence for the closure loop (10 min). */
-const DEFAULT_INTERVAL_MS = 10 * 60 * 1000;
-
 /**
  * Composition root for the IClass closure-loop scheduler.
  *
@@ -20,8 +17,10 @@ const DEFAULT_INTERVAL_MS = 10 * 60 * 1000;
  * the scheduler re-reads the `iclass-closure-loop` feature flag (default OFF)
  * every tick, so the loop only runs once an operator flips the flag on after
  * mapping result codes → stages.
+ *
+ * @param intervalMs - Tick interval read from persisted config at startup (default 600000ms / 10 min).
  */
-export function bootstrapIClassClosure(): IClassClosureScheduler | null {
+export async function bootstrapIClassClosure(intervalMs: number): Promise<IClassClosureScheduler | null> {
   const { baseUrl, username, password, thirdPartyId } = config.iclass;
   if (!username || !password || !thirdPartyId) {
     console.warn('[iclass-closure] ICLASS_USERNAME/PASSWORD/THIRD_PARTY_ID missing — not starting');
@@ -40,5 +39,5 @@ export function bootstrapIClassClosure(): IClassClosureScheduler | null {
   const flags = new PrismaFeatureFlagRepository();
   const lock = new PgAdvisoryLock();
 
-  return new IClassClosureScheduler(ingest, flags, { intervalMs: DEFAULT_INTERVAL_MS }, lock);
+  return new IClassClosureScheduler(ingest, flags, { intervalMs }, lock);
 }
