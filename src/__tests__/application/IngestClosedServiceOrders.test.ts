@@ -7,6 +7,8 @@ import { InMemoryClosedServiceOrderRepository } from '@infrastructure/adapters/i
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { InMemoryIClassPortal } from '@infrastructure/adapters/in-memory/InMemoryIClassPortal';
 import { IClassPortalPort } from '@domain/ports/IClassPortalPort';
+import { IClassResultCodeRepository } from '@domain/ports/IClassResultCodeRepository';
+import { IClassResultCode } from '@domain/entities/iclass-result-code';
 import { PostClosureComment } from '@application/use-cases/PostClosureComment';
 import { ExtractDeviceInfoFromPhoto } from '@application/use-cases/ExtractDeviceInfoFromPhoto';
 import { BuildInventorySuggestions } from '@application/use-cases/BuildInventorySuggestions';
@@ -470,6 +472,168 @@ describe('IngestClosedServiceOrders', () => {
     expect(task!.closureCommentDone).toBe(true);
     expect(task!.closureHasDeviceInventory).toBe(true);
     expect(task!.closureAuditDone).toBe(false); // no audit injected → stays false
+  });
+});
+
+// ── #36: Normalized result-code match fallback ────────────────────────────────
+
+/**
+ * Adapter spy: delega todo al InMemoryIClassResultCodeRepository real, pero
+ * cuenta las llamadas a los métodos normalizados para el test "exact short-circuit".
+ */
+class SpyResultCodeRepository implements IClassResultCodeRepository {
+  calls = { findBySoTypeAndCodeNormalized: 0, findByCodeNormalized: 0 };
+  constructor(private inner: InMemoryIClassResultCodeRepository) {}
+  list(f?: { mapped?: boolean }) { return this.inner.list(f); }
+  getById(id: string) { return this.inner.getById(id); }
+  findByCode(code: string) { return this.inner.findByCode(code); }
+  findBySoTypeAndCode(soTypeId: string, code: string) { return this.inner.findBySoTypeAndCode(soTypeId, code); }
+  findBySoTypeAndCodeNormalized(soTypeId: string, code: string) {
+    this.calls.findBySoTypeAndCodeNormalized++;
+    return this.inner.findBySoTypeAndCodeNormalized(soTypeId, code);
+  }
+  findByCodeNormalized(code: string) {
+    this.calls.findByCodeNormalized++;
+    return this.inner.findByCodeNormalized(code);
+  }
+  upsert(e: Parameters<IClassResultCodeRepository['upsert']>[0]) { return this.inner.upsert(e); }
+  assignStage(id: string, stageId: string | null) { return this.inner.assignStage(id, stageId); }
+}
+
+function setupSpy() {
+  const stages = new InMemoryStageRepository();
+  stages.addDirect(REGISTRADO);
+  stages.addDirect(INSTALADO);
+  stages.addDirect(FACTURADO);
+  const scheduling = new InMemorySchedulingRepository(stages);
+  const iclass = new InMemoryIClassClient();
+  const innerRC = new InMemoryIClassResultCodeRepository();
+  const spyRC = new SpyResultCodeRepository(innerRC);
+  const closed = new InMemoryClosedServiceOrderRepository();
+  const state = new InMemorySyncStateRepository();
+  const useCase = new IngestClosedServiceOrders(iclass, closed, spyRC as unknown as InMemoryIClassResultCodeRepository, scheduling, state, { now: () => new Date('2026-05-29T12:00:00Z') });
+  return { stages, scheduling, iclass, innerRC, spyRC, closed, state, useCase };
+}
+
+describe('#36 — resolveResultCode: normalized fallback', () => {
+  it('normalized-fallback: trailing "." on motivoFechamento resolves and transitions the task', async () => {
+    const { scheduling, iclass, innerRC, useCase } = setupSpy();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    // El catálogo tiene "Cliente Ausente" (sin punto), IClass devuelve "Cliente Ausente."
+    await innerRC.upsert({ soTypeId: null, code: 'Cliente Ausente', type: 'Sucesso' });
+    const rc = await innerRC.findByCode('Cliente Ausente');
+    await innerRC.assignStage(rc!.id, INSTALADO.id);
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', resultCodeName: 'Cliente Ausente.' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    const counts = await useCase.execute();
+
+    expect(counts.transitioned).toBe(1);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id);
+  });
+
+  it('internal-whitespace-collapsed: "cliente  ausente" resolves via normalized fallback', async () => {
+    const { scheduling, iclass, innerRC, useCase } = setupSpy();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    await innerRC.upsert({ soTypeId: null, code: 'Cliente Ausente', type: 'Sucesso' });
+    const rc = await innerRC.findByCode('Cliente Ausente');
+    await innerRC.assignStage(rc!.id, INSTALADO.id);
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', resultCodeName: 'cliente  ausente' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    const counts = await useCase.execute();
+
+    expect(counts.transitioned).toBe(1);
+  });
+
+  it('exact-match-backward-compat: exact match short-circuits — normalized finders NOT called', async () => {
+    const { scheduling, iclass, innerRC, spyRC, useCase } = setupSpy();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    await innerRC.upsert({ soTypeId: null, code: 'Instalacion Completa Fibra', type: 'Sucesso' });
+    const rc = await innerRC.findByCode('Instalacion Completa Fibra');
+    await innerRC.assignStage(rc!.id, INSTALADO.id);
+    // El código en el SO coincide exactamente con el catálogo.
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', resultCodeName: 'Instalacion Completa Fibra' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    const counts = await useCase.execute();
+
+    expect(counts.transitioned).toBe(1);
+    // Los métodos normalizados NO deben haber sido invocados.
+    expect(spyRC.calls.findBySoTypeAndCodeNormalized).toBe(0);
+    expect(spyRC.calls.findByCodeNormalized).toBe(0);
+  });
+
+  it('soTypeId-disambiguation: normalized fallback respects soTypeId when present', async () => {
+    const { scheduling, iclass, innerRC, useCase } = setupSpy();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    // Mismo código "Code A" bajo dos soTypes con stages distintas.
+    await innerRC.upsert({ soTypeId: 'soType-A', code: 'Code A', type: 'Sucesso' });
+    await innerRC.upsert({ soTypeId: 'soType-B', code: 'Code A', type: 'Sucesso' });
+    const all = await innerRC.list();
+    await innerRC.assignStage(all.find(r => r.soTypeId === 'soType-A')!.id, REGISTRADO.id);
+    await innerRC.assignStage(all.find(r => r.soTypeId === 'soType-B')!.id, INSTALADO.id);
+    // El SO tiene soType-B y envía el código con un punto final.
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', soTypeId: 'soType-B', resultCodeName: 'Code A.' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    const counts = await useCase.execute();
+
+    expect(counts.transitioned).toBe(1);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id);
+  });
+
+  it('no-match: both exact and normalized return null — task NOT moved', async () => {
+    const { scheduling, iclass, innerRC, useCase } = setupSpy();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    await innerRC.upsert({ soTypeId: null, code: 'Otro Codigo', type: 'Sucesso' });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', resultCodeName: 'Sin catalogo alguno.' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    const counts = await useCase.execute();
+
+    expect(counts.transitioned).toBe(0);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(REGISTRADO.id);
+  });
+
+  it('unmapped: normalized finds the entry but mappedStageId=null — task NOT moved', async () => {
+    const { scheduling, iclass, innerRC, useCase } = setupSpy();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    // Catálogo tiene "Cliente Ausente" sin mappedStageId.
+    await innerRC.upsert({ soTypeId: null, code: 'Cliente Ausente', type: 'Sucesso' });
+    // No asignamos stage (mappedStageId queda null).
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', resultCodeName: 'Cliente Ausente.' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    const counts = await useCase.execute();
+
+    expect(counts.transitioned).toBe(0);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(REGISTRADO.id);
+  });
+
+  it('auto-heal: already-mirrored unchanged SO transitions via normalized fallback on next run', async () => {
+    const { scheduling, iclass, innerRC, closed, useCase } = setupSpy();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', resultCodeName: 'Cliente Ausente.' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+
+    // Primera corrida: el catálogo NO tiene el código → se espeja pero no transiciona.
+    const first = await useCase.execute();
+    expect(first.mirrored).toBe(1);
+    expect(first.transitioned).toBe(0);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(REGISTRADO.id);
+
+    // El operador agrega el código al catálogo (SIN punto — variante limpia).
+    await innerRC.upsert({ soTypeId: null, code: 'Cliente Ausente', type: 'Sucesso' });
+    const rc = await innerRC.findByCode('Cliente Ausente');
+    await innerRC.assignStage(rc!.id, INSTALADO.id);
+
+    // Segunda corrida: SO sin cambios (mismo iclassUpdatedAt) → idempotency path,
+    // pero resolveResultCode ahora resuelve vía normalized fallback → transitioned++.
+    const second = await useCase.execute();
+    expect(second.skippedUnchanged).toBe(1);
+    expect(second.transitioned).toBe(1);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id);
   });
 });
 

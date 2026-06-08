@@ -337,11 +337,21 @@ export class IngestClosedServiceOrders {
    */
   private async resolveResultCode(s: ClosedServiceOrderSummary) {
     if (!s.resultCodeName) return null;
+
+    // Intento exacto primero (sin normalizar): soType → código.
     if (s.soTypeId) {
       const byType = await this.resultCodes.findBySoTypeAndCode(s.soTypeId, s.resultCodeName);
       if (byType) return byType;
     }
-    return this.resultCodes.findByCode(s.resultCodeName);
+    const byCode = await this.resultCodes.findByCode(s.resultCodeName);
+    if (byCode) return byCode;
+
+    // Fallback normalizado: rescata variaciones de IClass (puntuación final, espacios internos).
+    if (s.soTypeId) {
+      const byTypeN = await this.resultCodes.findBySoTypeAndCodeNormalized(s.soTypeId, s.resultCodeName);
+      if (byTypeN) return byTypeN;
+    }
+    return this.resultCodes.findByCodeNormalized(s.resultCodeName);
   }
 
   private resolveWindowBegin(cursor: string | null, now: Date): Date {

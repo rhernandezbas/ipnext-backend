@@ -4,6 +4,7 @@ import {
   UpsertResultCodeInput,
 } from '@domain/ports/IClassResultCodeRepository';
 import { prisma } from '../../database/prisma';
+import { normalizeResultCode } from '@application/use-cases/normalizeResultCode';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toEntity(row: any): IClassResultCode {
@@ -53,6 +54,26 @@ export class PrismaIClassResultCodeRepository implements IClassResultCodeReposit
       include: INCLUDE,
     });
     return row ? toEntity(row) : null;
+  }
+
+  async findBySoTypeAndCodeNormalized(soTypeId: string, code: string): Promise<IClassResultCode | null> {
+    // Prisma no puede aplicar strip de puntuación final en WHERE, así que traemos
+    // los candidatos por soTypeId (catálogo pequeño: ~71 filas) y comparamos en JS.
+    const rows = await (prisma.iClassResultCode as any).findMany({
+      where: { soTypeId: BigInt(soTypeId) },
+      include: INCLUDE,
+    });
+    const norm = normalizeResultCode(code);
+    const match = rows.find((r: any) => normalizeResultCode(r.code) === norm);
+    return match ? toEntity(match) : null;
+  }
+
+  async findByCodeNormalized(code: string): Promise<IClassResultCode | null> {
+    // Traemos todos (catálogo pequeño) y comparamos normalizados en JS.
+    const rows = await (prisma.iClassResultCode as any).findMany({ include: INCLUDE });
+    const norm = normalizeResultCode(code);
+    const match = rows.find((r: any) => normalizeResultCode(r.code) === norm);
+    return match ? toEntity(match) : null;
   }
 
   async upsert(entry: UpsertResultCodeInput): Promise<{ status: 'created' | 'updated' }> {
