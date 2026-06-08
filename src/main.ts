@@ -16,7 +16,11 @@ process.on('uncaughtException', (err) => {
   console.error('[server] Uncaught exception (kept alive):', err);
 });
 
-const app = createApp();
+// Task auto-complete (#14/#23) — se bootstrapea ANTES de createApp para poder
+// inyectarlo en el router de closure. Starts dormant; gated by 'task-autocomplete'.
+const taskAutocomplete = bootstrapTaskAutocomplete();
+
+const app = createApp(taskAutocomplete);
 
 app.listen(config.port, () => {
   console.log(`[server] Running on port ${config.port}`);
@@ -39,7 +43,5 @@ void bootstrapGestionRealIngest()
 const iclassClosure = bootstrapIClassClosure();
 iclassClosure?.start();
 
-// Task auto-complete (#14) — starts dormant; gated by the `task-autocomplete`
-// feature flag (default OFF). Re-fires pending closure side-effects per task.
-const taskAutocomplete = bootstrapTaskAutocomplete();
+// Iniciar el scheduler del task auto-complete (fire-and-forget desde este punto).
 taskAutocomplete?.start();

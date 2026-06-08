@@ -7,7 +7,8 @@ import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCo
 import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
-import { ReprocessClosureSideEffects } from '@application/use-cases/ReprocessClosureSideEffects';
+import { GetPendingSideEffectsCount } from '@application/use-cases/GetPendingSideEffectsCount';
+import { TaskAutocompleteScheduler } from '@infrastructure/scheduling/TaskAutocompleteScheduler';
 import { toResultCodeDTO } from '@application/dto/iclassClosure.dto';
 
 const ListQuerySchema = z.object({
@@ -21,12 +22,13 @@ const AssignSchema = z.object({
 /**
  * Admin routes for the IClass closure loop. Mount at /api/admin/iclass.
  *
- *   POST  /result-codes/sync   — sync the result-code catalog from IClass
- *   GET   /result-codes        — list the catalog (?mapped=true|false)
- *   PATCH /result-codes/:id     — configure the closure mapping { stageId } (null clears)
- *   GET   /closure/status       — last closure-ingest run + counts
- *   POST  /closure/backfill     — reconcile in-flight tasks against IClass now
- *   POST  /closure/reprocess    — re-fire pending closure side-effects (flag-gated, iclass:manage)
+ *   POST  /result-codes/sync             — sync the result-code catalog from IClass
+ *   GET   /result-codes                  — list the catalog (?mapped=true|false)
+ *   PATCH /result-codes/:id              — configure the closure mapping { stageId } (null clears)
+ *   GET   /closure/status                — last closure-ingest run + counts
+ *   POST  /closure/backfill              — reconcile in-flight tasks against IClass now
+ *   POST  /closure/reprocess             — async dispatch via scheduler (flag-gated, 202)
+ *   GET   /closure/reprocess/pending-count — count of SOs with pending side-effects
  */
 export function createIClassClosureRouter(
   syncResultCodes: SyncIClassResultCodes,
@@ -34,7 +36,8 @@ export function createIClassClosureRouter(
   assignResultCodeStage: AssignResultCodeStage,
   getClosureStatus: GetClosureStatus,
   backfillClosedOrders: BackfillClosedServiceOrders,
-  reprocessClosure: ReprocessClosureSideEffects,
+  scheduler: TaskAutocompleteScheduler | null,
+  getPendingCount: GetPendingSideEffectsCount,
   requireIClassManage: RequestHandler,
   authProvider: AuthProvider,
 ): Router {
@@ -92,13 +95,27 @@ export function createIClassClosureRouter(
     }
   });
 
-  // Manual reprocess of pending closure side-effects (comment/inventory/audit) on
-  // already-mirrored SOs — re-fires only the effects still pending, decoupled from
-  // the mirror idempotency. Flag-gated (iclass-closure-reprocess) AND guarded by a
-  // granular permission (iclass:manage) — NOT auth-only.
+  // Disparo manual de reprocess: delega al scheduler para respuesta inmediata (202).
+  // El trabajo real (OCR/audit/comment) corre en segundo plano.
+  // 503 cuando el scheduler no está disponible (credenciales IClass ausentes).
   router.post('/closure/reprocess', auth, requireIClassManage, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      res.status(200).json(await reprocessClosure.execute());
+      if (!scheduler) {
+        res.status(503).json({ reason: 'unavailable' });
+        return;
+      }
+      const result = await scheduler.triggerNow();
+      res.status(202).json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Endpoint de progreso: cantidad de SOs con al menos un side-effect pendiente.
+  // El FE lo usa para mostrar el progreso del reprocess (polling cada 5s).
+  router.get('/closure/reprocess/pending-count', auth, requireIClassManage, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json(await getPendingCount.execute());
     } catch (err) {
       next(err);
     }
