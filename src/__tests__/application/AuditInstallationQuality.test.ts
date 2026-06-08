@@ -23,6 +23,7 @@ function order(over: Partial<ClosedServiceOrder> = {}): ClosedServiceOrder {
     iclassCodigo: '4691', teamTechnicianName: 'Rodrigo', closedByName: null,
     resultCodeName: 'Cambio de Ficha', technicianNote: 'ok',
     checklists: [], materials: [],
+    history: [], equipmentEvents: [], commentaryLog: null, internalNote: null,
     ...over,
   } as ClosedServiceOrder;
 }
@@ -125,5 +126,34 @@ describe('AuditInstallationQuality', () => {
     expect(out).toBeNull();
     expect(auditor.lastContext).toBeNull();
     expect(await audits.listFindingsByTask('t1')).toHaveLength(0);
+  });
+
+  // ── Task 4.1 — AuditContext passed to auditor includes mirror fields (F6-R7 integration) ──
+  it('el AuditContext incluye los campos mirror de IClass (historyCommentary, commentaryLog, internalNote, equipmentEvents)', async () => {
+    const { scheduling, auditor, uc } = setup();
+    scheduling.seedTask({ id: 't1', title: 'Instalación fibra' });
+
+    const mirrorOrder = order({
+      history: [
+        { iclassOsStatusId: 'h1', occurredAt: null, statusCode: '4', statusDescription: 'Fechada', durationMinutes: null, teamLogin: null, commentary: 'técnico cerró la OS' },
+        { iclassOsStatusId: 'h2', occurredAt: null, statusCode: '7', statusDescription: 'Concluida', durationMinutes: null, teamLogin: null, commentary: null },
+      ],
+      commentaryLog: 'log completo de la OS',
+      internalNote: 'nota interna del operador',
+      equipmentEvents: [
+        { occurredAt: null, type: 'install', serialNumber: 'SN001', mac: 'AA:BB:CC', patrimonialNo: null, modelDescription: 'ONT ZTE' },
+      ],
+    });
+
+    await uc.execute({ taskId: 't1', order: mirrorOrder });
+
+    const ctx = auditor.lastContext!;
+    expect(ctx.historyCommentary).toHaveLength(1);
+    expect(ctx.historyCommentary[0].commentary).toBe('técnico cerró la OS');
+    expect(ctx.commentaryLog).toBe('log completo de la OS');
+    expect(ctx.internalNote).toBe('nota interna del operador');
+    expect(ctx.equipmentEvents).toHaveLength(1);
+    expect(ctx.equipmentEvents[0].model).toBe('ONT ZTE');
+    expect(ctx.equipmentEvents[0].serialNumber).toBe('SN001');
   });
 });
