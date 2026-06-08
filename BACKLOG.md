@@ -2,7 +2,7 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **28 hechos (en prod) · 1 en curso (#29) · 2 pendientes (#30, #31).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23 cerrados vía SDD.)
+> **29 hechos (en prod) · 2 pendientes (#30, #31).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -144,13 +144,9 @@
 
 ---
 
-## 🔧 En curso (1)
-
-### #29 — Tarea de RED (network-only task, solo nodo)  *(agregado 2026-06-08)*
-- **Qué**: un side button **rojo** en el modal de crear tarea que lo cambia a modo "RED" — en vez de cliente + servicio/contrato, se elige un **Nodo** del catálogo `NetworkSite` (page "Sitios de red"). Todo lo demás igual (proyecto, workflow, stages, envío a IClass, mismo kanban con badge RED).
-- **Decisiones lockeadas (usuario, 2026-06-08)**: (1) toggle en el mismo modal; (2) Opción A — `ScheduledTask` gana `kind` discriminador + `networkSiteId` FK; (3) mapeo IClass **explícito** vía nuevo `iclassNodeCode` en NetworkSite (sin match difuso); (4) mismo flujo completo.
-- **Estado**: SDD `network-node-task` en curso (explore ✅ vía agent team / propose ✅ / design ✅). Phone de la OS de IClass = placeholder `'0000000000'` (isBlank rechaza vacío). Open questions de apply: ¿IClass acepta ese mobile? ¿`customerCode`=`iclassNodeCode` vs `"NETWORK"` (límite de chars)?
-- **Tamaño**: mediano (~1-1.5 días). Migración aditiva. Archivos: ~14 (BE schema/use case/IClass + FE modal/selector/badge).
+### #29 — Tarea de RED (network-only task, solo nodo)  *(HECHO 2026-06-08)*
+- **Resuelto** (SDD `network-node-task`, multi-repo, apply BE∥FE en paralelo): side-button rojo en el modal togglea a modo nodo (sin cliente/contrato), Nodo del catálogo `NetworkSite`, mismo flujo (proyecto/stages/IClass) con badge RED. `ScheduledTask` gana `kind` (discriminador) + `networkSiteId` FK; `NetworkSite` gana `iclassNodeCode`; el dispatch a IClass sustituye campos node-derived (name/address/city del sitio, `customerCode='NETWORK'`, `phone='0000000000'`) + `nodeCode` override explícito. Front con **impeccable** (acento OKLCH terracota).
+- **PRs**: BE #75 / FE #51. Migración `20260608000000_network_node_task`. Verify SDD: PASS 16/16. Archivado en `openspec/changes/archive/2026-06-08-network-node-task/`.
 
 ## ⏳ Pendientes (2)
 
