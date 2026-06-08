@@ -401,6 +401,7 @@ import { AssignIClassSoTypeToProject } from '@application/use-cases/AssignIClass
 import { createIClassAdminRouter } from './routes/iclass-admin.routes';
 import { createIClassClosureRouter } from './routes/iclass-closure.routes';
 import { TaskAutocompleteScheduler } from '../scheduling/TaskAutocompleteScheduler';
+import { BackfillScheduler } from '../scheduling/BackfillScheduler';
 import { PrismaIClassClosureConfigRepository } from '../adapters/prisma/PrismaIClassClosureConfigRepository';
 import { GetIClassClosureConfig } from '@application/use-cases/GetIClassClosureConfig';
 import { UpdateIClassClosureConfig } from '@application/use-cases/UpdateIClassClosureConfig';
@@ -438,7 +439,6 @@ import { CreateMaterial } from '@application/use-cases/CreateMaterial';
 import { UpdateMaterial } from '@application/use-cases/UpdateMaterial';
 import { DeleteMaterial } from '@application/use-cases/DeleteMaterial';
 import { buildClosureSideEffects } from '../scheduling/closureSideEffects';
-import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { ReprocessClosureSideEffects } from '@application/use-cases/ReprocessClosureSideEffects';
 import { GetPendingSideEffectsCount } from '@application/use-cases/GetPendingSideEffectsCount';
 import { GetPendingSideEffectsList } from '@application/use-cases/GetPendingSideEffectsList';
@@ -527,7 +527,7 @@ const resolveUserPermissions = new ResolveUserPermissions(rbacUserRoleRepo, rbac
 export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
   requirePermission(rbacUserRepo, m, a);
 
-export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
+export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, backfillScheduler?: BackfillScheduler | null) {
   const app = express();
 
   // SDD #6a — behind EasyPanel's proxy; trust the first hop so the rate limiter
@@ -1252,7 +1252,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
     new ListIClassResultCodes(iclassResultCodeRepo),
     new AssignResultCodeStage(iclassResultCodeRepo, stageRepo),
     new GetClosureStatus(new PrismaSyncStateRepository()),
-    new BackfillClosedServiceOrders(buildIClassClient(), schedulingRepo, closureIngest),
+    backfillScheduler ?? null,
     taskAutocomplete ?? null,
     getPendingSideEffectsCount,
     getPendingSideEffectsList,
