@@ -6,12 +6,12 @@ import { SyncIClassResultCodes } from '@application/use-cases/SyncIClassResultCo
 import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCodes';
 import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
-import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { GetPendingSideEffectsCount } from '@application/use-cases/GetPendingSideEffectsCount';
 import { GetPendingSideEffectsList } from '@application/use-cases/GetPendingSideEffectsList';
 import { GetIClassClosureConfig } from '@application/use-cases/GetIClassClosureConfig';
 import { UpdateIClassClosureConfig } from '@application/use-cases/UpdateIClassClosureConfig';
 import { TaskAutocompleteScheduler } from '@infrastructure/scheduling/TaskAutocompleteScheduler';
+import { BackfillScheduler } from '@infrastructure/scheduling/BackfillScheduler';
 import { toResultCodeDTO, UpdateIClassClosureConfigSchema } from '@application/dto/iclassClosure.dto';
 
 const ListQuerySchema = z.object({
@@ -29,7 +29,7 @@ const AssignSchema = z.object({
  *   GET   /result-codes                  — list the catalog (?mapped=true|false)
  *   PATCH /result-codes/:id              — configure the closure mapping { stageId } (null clears)
  *   GET   /closure/status                — last closure-ingest run + counts
- *   POST  /closure/backfill              — reconcile in-flight tasks against IClass now
+ *   POST  /closure/backfill              — async dispatch via backfill scheduler (202)
  *   POST  /closure/reprocess             — async dispatch via scheduler (flag-gated, 202)
  *   GET   /closure/reprocess/pending-count — count of SOs with pending side-effects
  *   GET   /closure/reprocess/pending-list  — list of SOs with pending side-effects + joined task info
@@ -41,7 +41,7 @@ export function createIClassClosureRouter(
   listResultCodes: ListIClassResultCodes,
   assignResultCodeStage: AssignResultCodeStage,
   getClosureStatus: GetClosureStatus,
-  backfillClosedOrders: BackfillClosedServiceOrders,
+  backfillScheduler: BackfillScheduler | null,
   scheduler: TaskAutocompleteScheduler | null,
   getPendingCount: GetPendingSideEffectsCount,
   getPendingList: GetPendingSideEffectsList,
@@ -94,11 +94,17 @@ export function createIClassClosureRouter(
     }
   });
 
-  // On-demand reconcile of in-flight tasks (sent to IClass, awaiting closure).
-  // Idempotent — safe to run repeatedly. Returns the run counts.
-  router.post('/closure/backfill', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  // On-demand reconcile of in-flight tasks (fire-and-forget via BackfillScheduler).
+  // Retorna 202 inmediatamente — el trabajo corre en segundo plano.
+  // 503 cuando el scheduler no está disponible (credenciales IClass ausentes).
+  router.post('/closure/backfill', auth, requireIClassManage, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      res.status(200).json(await backfillClosedOrders.execute());
+      if (!backfillScheduler) {
+        res.status(503).json({ reason: 'unavailable' });
+        return;
+      }
+      const result = await backfillScheduler.triggerNow();
+      res.status(202).json(result);
     } catch (err) {
       next(err);
     }

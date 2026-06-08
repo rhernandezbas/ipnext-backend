@@ -5,6 +5,7 @@ import { bootstrapGestionRealSync } from './infrastructure/scheduling/bootstrapG
 import { bootstrapGestionRealIngest } from './infrastructure/scheduling/bootstrapGestionRealIngest';
 import { bootstrapIClassClosure } from './infrastructure/scheduling/bootstrapIClassClosure';
 import { bootstrapTaskAutocomplete } from './infrastructure/scheduling/bootstrapTaskAutocomplete';
+import { bootstrapBackfill } from './infrastructure/scheduling/bootstrapBackfill';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
@@ -27,11 +28,14 @@ void (async () => {
   // (b) IClass closure loop — now async, receives interval from config
   const iclassClosure = await bootstrapIClassClosure(cfg.closureIntervalMs);
 
-  // (c) Task auto-complete — awaited so the instance is available for createApp
+  // (c) Task auto-complete — awaited so la instancia está disponible para createApp
   const taskAutocomplete = await bootstrapTaskAutocomplete(cfg.autocompleteIntervalMs);
 
-  // (d) createApp wires taskAutocomplete into the closure router — must run after await
-  const app = createApp(taskAutocomplete);
+  // (d) BackfillScheduler on-demand — awaited antes de createApp (#32)
+  const backfillScheduler = await bootstrapBackfill();
+
+  // (e) createApp wires both schedulers into the closure router — must run after await
+  const app = createApp(taskAutocomplete, backfillScheduler);
 
   app.listen(config.port, () => {
     console.log(`[server] Running on port ${config.port}`);

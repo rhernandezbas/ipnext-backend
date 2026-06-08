@@ -20,6 +20,7 @@ import { Stage } from '../../domain/entities/workflow';
 import { User } from '../../domain/entities/auth';
 import { AuthProvider } from '../../domain/ports/AuthProvider';
 import type { TriggerResult } from '../../infrastructure/scheduling/TaskAutocompleteScheduler';
+import type { BackfillTriggerResult } from '../../infrastructure/scheduling/BackfillScheduler';
 import { InMemoryClosedServiceOrderRepository } from '../../infrastructure/adapters/in-memory/InMemoryClosedServiceOrderRepository';
 
 class FakeAuthProvider implements AuthProvider {
@@ -46,8 +47,13 @@ function fakeIClass(codes: IClassResultCodeDescriptor[]): IClassPort {
   return { listResultCodes: async () => codes } as unknown as IClassPort;
 }
 
-/** Stub del scheduler con resultado configurable en triggerNow */
+/** Stub del reprocess scheduler con resultado configurable en triggerNow */
 function schedulerStub(result: TriggerResult) {
+  return { triggerNow: async () => result } as never;
+}
+
+/** Stub del backfill scheduler con resultado configurable en triggerNow */
+function backfillSchedulerStub(result: BackfillTriggerResult) {
   return { triggerNow: async () => result } as never;
 }
 
@@ -56,6 +62,7 @@ function buildApp(
   closedRepo?: InMemoryClosedServiceOrderRepository,
   requireIClassManageOverride?: (req: unknown, res: unknown, next: () => void) => void,
   configRepo?: InMemoryIClassClosureConfigRepository,
+  backfillResult: BackfillTriggerResult = { queued: true },
 ) {
   const repo = new InMemoryIClassResultCodeRepository();
   const state = new InMemorySyncStateRepository();
@@ -64,7 +71,7 @@ function buildApp(
     { soTypeId: '1', code: 'Instalacion Completa Fibra', type: 'Sucesso' },
     { soTypeId: '1', code: 'Cliente Ausente', type: 'Pendente' },
   ]);
-  const backfill = { execute: async () => ({ mirrored: 2, transitioned: 2, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0 }) };
+  const backfillSched = backfillSchedulerStub(backfillResult);
   const scheduler = schedulerStub(schedulerResult);
   const getPendingCount = new GetPendingSideEffectsCount(closed);
   const getPendingList = new GetPendingSideEffectsList(closed);
@@ -78,7 +85,7 @@ function buildApp(
     new ListIClassResultCodes(repo),
     new AssignResultCodeStage(repo, fakeStages({ [STAGE.id]: STAGE })),
     new GetClosureStatus(state),
-    backfill as never,
+    backfillSched,
     scheduler,
     getPendingCount,
     getPendingList,
@@ -95,13 +102,12 @@ function buildApp(
   return { app, repo, cfgRepo };
 }
 
-/** Construye una app con scheduler=null para probar el 503 */
+/** Construye una app con reprocess scheduler=null para probar el 503 del reprocess */
 function buildAppNullScheduler() {
   const repo = new InMemoryIClassResultCodeRepository();
   const state = new InMemorySyncStateRepository();
   const closed = new InMemoryClosedServiceOrderRepository();
   const iclass = fakeIClass([]);
-  const backfill = { execute: async () => ({ mirrored: 0, transitioned: 0, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0 }) };
   const getPendingCount = new GetPendingSideEffectsCount(closed);
   const getPendingList = new GetPendingSideEffectsList(closed);
   const cfgRepo = new InMemoryIClassClosureConfigRepository();
@@ -112,8 +118,41 @@ function buildAppNullScheduler() {
     new ListIClassResultCodes(repo),
     new AssignResultCodeStage(repo, fakeStages({})),
     new GetClosureStatus(state),
-    backfill as never,
-    null, // scheduler null → 503
+    backfillSchedulerStub({ queued: true }), // backfill scheduler presente
+    null, // reprocess scheduler null → 503 para /reprocess
+    getPendingCount,
+    getPendingList,
+    getConfig,
+    updateConfig,
+    ((_req: unknown, _res: unknown, next: () => void) => next()) as never,
+    new FakeAuthProvider(),
+  );
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+  app.use('/api/admin/iclass', router);
+  app.use(errorHandler);
+  return { app };
+}
+
+/** Construye una app con backfill scheduler=null para probar el 503 del backfill */
+function buildAppNullBackfillScheduler() {
+  const repo = new InMemoryIClassResultCodeRepository();
+  const state = new InMemorySyncStateRepository();
+  const closed = new InMemoryClosedServiceOrderRepository();
+  const iclass = fakeIClass([]);
+  const getPendingCount = new GetPendingSideEffectsCount(closed);
+  const getPendingList = new GetPendingSideEffectsList(closed);
+  const cfgRepo = new InMemoryIClassClosureConfigRepository();
+  const getConfig = new GetIClassClosureConfig(cfgRepo);
+  const updateConfig = new UpdateIClassClosureConfig(cfgRepo);
+  const router = createIClassClosureRouter(
+    new SyncIClassResultCodes(iclass, repo),
+    new ListIClassResultCodes(repo),
+    new AssignResultCodeStage(repo, fakeStages({})),
+    new GetClosureStatus(state),
+    null, // backfill scheduler null → 503 para /backfill
+    schedulerStub({ queued: true }), // reprocess scheduler presente
     getPendingCount,
     getPendingList,
     getConfig,
@@ -263,15 +302,36 @@ describe('IClass closure routes', () => {
     expect(res.body.counts.mirrored).toBe(0);
   });
 
-  it('POST /closure/backfill runs the reconcile and returns counts', async () => {
-    const { app } = buildApp();
+  // -----------------------------------------------------------------------
+  // REQ-BACKFILL-1: POST /closure/backfill → 202 (async dispatch)
+  // -----------------------------------------------------------------------
+
+  // A3.1: dispatch exitoso → 202 {queued:true}
+  it('POST /closure/backfill → 202 {queued:true} when dispatch succeeds', async () => {
+    const { app } = buildApp({ queued: true }, undefined, undefined, undefined, { queued: true });
     const res = await request(app).post('/api/admin/iclass/closure/backfill').set(...AUTH);
-    expect(res.status).toBe(200);
-    expect(res.body.mirrored).toBe(2);
-    expect(res.body.transitioned).toBe(2);
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ queued: true });
   });
 
-  it('POST /closure/backfill is 401 without auth', async () => {
+  // A3.2: run ya en vuelo → 202 {queued:false, reason:'already-running'}
+  it('POST /closure/backfill → 202 {queued:false, reason:"already-running"} when in flight', async () => {
+    const { app } = buildApp({ queued: true }, undefined, undefined, undefined, { queued: false, reason: 'already-running' });
+    const res = await request(app).post('/api/admin/iclass/closure/backfill').set(...AUTH);
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ queued: false, reason: 'already-running' });
+  });
+
+  // A3.3: scheduler null → 503 {reason:'unavailable'}
+  it('POST /closure/backfill → 503 when backfill scheduler is null', async () => {
+    const { app } = buildAppNullBackfillScheduler();
+    const res = await request(app).post('/api/admin/iclass/closure/backfill').set(...AUTH);
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ reason: 'unavailable' });
+  });
+
+  // A3.4: sin auth → 401
+  it('POST /closure/backfill → 401 without auth', async () => {
     const { app } = buildApp();
     expect((await request(app).post('/api/admin/iclass/closure/backfill')).status).toBe(401);
   });
