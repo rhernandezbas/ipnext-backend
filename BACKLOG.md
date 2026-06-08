@@ -2,7 +2,7 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **30 hechos (en prod) · 1 en curso (#30).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31 cerrados vía SDD.)
+> **31 hechos (en prod) · 0 pendientes — backlog completo.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -152,13 +152,9 @@
 - **Resuelto** (SDD `closure-page-restructure`, multi-repo, apply BE∥FE en paralelo): el "Mapeo de estado" (`IClassResultCodeMappingBody`) salió a su propio sub-tab; el tab `cierre` se relabeló **"Procesamiento"** (id preservado → deep-links intactos) y suma una **`ClosureProgressTable`** que muestra, por OS pendiente, comentario/inventario/auditoría ✓/✗ + `auditAttempts` + link a la tarea (#seq · título). 5 sub-tabs. Nuevo `GET /closure/reprocess/pending-list` (use case `GetPendingSideEffectsList` + port `listPendingSideEffectsWithTask`, JOIN sin N+1); `usePendingList` pollea y para al llegar a 0. Front con **impeccable** (pills ✓/✗ semánticos). Responde la pregunta del operador "¿de qué son los N pendientes?".
 - **PRs**: BE #76 / FE #52. Sin migración. Verify SDD: PASS 15/15. Archivado en `openspec/changes/archive/2026-06-08-closure-page-restructure/`.
 
-## 🔧 En curso (1)
-
-### #30 — Intervalos de los crons de cierre ajustables desde la UI  *(agregado 2026-06-08)*
-- **Qué**: hoy el cron de **cierre automático de OS** corre cada **10 min** y el de **auto-completado/reprocess** (#14) cada **15 min**, ambos **hardcodeados** (`bootstrapIClassClosure.ts:14`, `bootstrapTaskAutocomplete.ts:15` = `DEFAULT_INTERVAL_MS`). Para cambiarlos hay que editar código + redeploy. Se quiere **ajustar el intervalo desde la UI** (sub-page "Cierre de OS").
-- **Camino propuesto**: replicar el patrón que YA existe en Gestión Real — `bootstrapGestionRealIngest.ts:129-132` lee `intervalMs` de un **config-repo en la DB** (editable, con fallback al default). Hacer lo mismo para el closure loop y el autocomplete: un config persistido + endpoint + control en el FE. NO inventar nada nuevo, espejar el patrón GR (DB-backed config + el `intervalMs` que ya reciben los schedulers por options).
-- **Dónde**: BE config-repo (nuevo, espeja el de GR ingest) + `bootstrapIClassClosure`/`bootstrapTaskAutocomplete` leen de ahí + endpoint GET/PUT; FE control en `IClassClosureFlagBody`. Quizá migración (tabla de config, o reusar un store key-value existente).
-- **Tamaño**: chico-mediano. El scheduler ya acepta `intervalMs` por options — el trabajo es la fuente de verdad persistida + la UI.
+### #30 — Intervalos de los crons de cierre ajustables desde la UI  *(HECHO 2026-06-08)*
+- **Resuelto** (SDD `cron-interval-config`, BE + control FE): el cron de cierre (10 min) y el de auto-completado (15 min) tenían el intervalo hardcodeado; ahora lo leen de un config singleton en la DB (`IClassClosureConfig`, espeja el patrón de Gestión Real). `GET/PUT /closure/config` (guard `iclass.manage`, Zod floor 60000ms). `main.ts` pasó a un **async IIFE** que lee el config una vez y awaitea ambos bootstraps con los intervalos persistidos antes de `createApp`. El cambio aplica en el próximo reinicio (se lee al bootstrap). FE: card "Frecuencia de los procesos automáticos" en la tab "Procesamiento" (slot del #31), con impeccable.
+- **PRs**: BE #77 / FE #53. Migración `20260609000000_iclass_closure_config` (aditiva, sin seed). Verify: suite BE 2501 + FE 1977, container boot confirmado en prod. Archivado en `openspec/changes/archive/2026-06-08-cron-interval-config/`.
 
 ## Refinamientos del #8 (ya en prod, NO son ítems numerados)
 
