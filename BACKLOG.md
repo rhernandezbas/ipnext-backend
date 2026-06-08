@@ -2,7 +2,16 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **34 hechos (en prod) · 0 pendientes — backlog completo.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34 cerrados vía SDD.)
+> **34 hechos (en prod) · 1 en curso (#35).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34 cerrados vía SDD.)
+
+## 🔧 En curso (1)
+
+### #35 — Reset de auditAttempts + página de Reconciliar 1x1/batch  *(agregado 2026-06-08)*
+- **Disparador**: tras deployar el #34 (map-reduce), el usuario corrió el reprocess y NO rescató las OS que degeneraban. Diagnóstico: esas OS ya **quemaron sus 3 `auditAttempts`** en la corrida pre-#34 → `listPendingSideEffects` las excluye (`auditAttempts < 3`) → el reprocess ya no las agarra. El #34 arregla la degeneración pero solo para OS con intentos restantes.
+- **Parte 1 (urgente, chica)**: migración data-only que resetea `auditAttempts = 0` donde `auditDone = false AND auditAttempts >= 3` (mirror del #20 que reseteó `auditDone`). Las re-incluye → el próximo reprocess las agarra → el #34 las rescata con el map-reduce. **Shipea primero.**
+- **Parte 2 (feature)**: una **página de Reconciliar** que lista las tareas in-flight ("Registrado en IClass", stage `registered_in_iclass`) con su estado, donde el usuario puede reconciliar **1x1** (una tarea) o **batch** (todas, el backfill actual del #32/#33), para llevar el control de cuáles faltan. Espeja el patrón de la página de pendientes del #31/#32.
+- **Dónde**: BE — migración del reset + nuevo endpoint de reconcile **por-tarea** (`BackfillClosedServiceOrders` scoped a un taskId) + endpoint de listado de in-flight (sobre `listTasksInIClassStage`); FE — página nueva con lista + botón 1x1 por fila + botón batch, gate `iclass.manage`, **impeccable**.
+- **Tamaño**: mediano. Multi-repo.
 
 ### #34 — Auditor IA: map-reduce ante degeneración del modelo  *(HECHO 2026-06-08)*
 - **Disparador**: con el reprocess drenando, algunas OS multi-foto degeneran (`qwen2.5vl:7b` devuelve `<|im_start|>` en loop en vez de JSON → soft-fail → no persiste → reintenta con las mismas fotos → degenera igual). Visto en prod (OS 4564).
