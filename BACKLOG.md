@@ -2,7 +2,16 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **35 hechos (en prod) · 0 pendientes — backlog completo.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35 cerrados vía SDD.)
+> **35 hechos (en prod) · 1 en curso (#36).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35 cerrados vía SDD.)
+
+## 🔧 En curso (1)
+
+### #36 — Normalizar match de result-code (motivoFechamento con punto) — tareas clavadas en "Registrado en IClass"  *(agregado 2026-06-08)*
+- **Disparador**: 45 tareas clavadas en "Registrado en IClass" que no transicionan. Verificado en vivo (IClass real + DB de prod): de las 12 más viejas, **8 están `Concluida`** en IClass pero no se mueven; 4 están legítimamente abiertas (Em Analise/Fila Técnico).
+- **Causa raíz (bug de IClass)**: las 8 cerraron con `motivoFechamento = "Cliente Ausente."` (**con punto**), pero el catálogo de result-codes de IClass devuelve `codigo = "Cliente Ausente"` (**sin punto**). Nuestro sync guardó bien lo del catálogo (71/71 mapeados, "Cliente Ausente" → stage). El match en `IngestClosedServiceOrders.resolveResultCode` es **exacto** (`findBySoTypeAndCode`/`findByCode` por `code`) → `"Cliente Ausente."` ≠ `"Cliente Ausente"` → `rc=null` → se espeja pero `moved=0`. IClass es inconsistente entre la OS (con punto) y el catálogo (sin punto).
+- **Fix**: normalizar el match (trim + strip de puntuación final + collapse whitespace, posible case-insensitive) en `resolveResultCode`, en ambos lados. Genérico — cubre cualquier motivo con el mismo drift. **Sin migración ni reset**: el código ya re-evalúa el movimiento de stage en cada corrida incluso para las `unchanged` (`IngestClosedServiceOrders.ts:190-194`), así que apenas deploye, la próxima corrida del loop/reconcile mueve las clavadas solas.
+- **Dónde**: BE `src/application/use-cases/IngestClosedServiceOrders.ts` (`resolveResultCode`) + quizá los repos (`findByCode`/`findBySoTypeAndCode` + in-memory). Sin FE, sin migración.
+- **Tamaño**: chico, BE-only.
 
 ### #35 — Reset de auditAttempts + página de Reconciliar 1x1/batch  *(HECHO 2026-06-08)*
 - **Disparador**: tras el #34 (map-reduce), el reprocess NO rescataba las OS que degeneraban — ya habían **quemado sus 3 `auditAttempts`** pre-#34 → `listPendingSideEffects` las excluye → el #34 nunca corría. Y el "Reconciliar" era todo-o-nada.
