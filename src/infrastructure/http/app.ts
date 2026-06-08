@@ -411,6 +411,9 @@ import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCo
 import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
+import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
+import { ListInFlightTasks } from '@application/use-cases/ListInFlightTasks';
+import { ReconcileTaskClosure } from '@application/use-cases/ReconcileTaskClosure';
 import { createContractInventoryRouter } from './routes/contractInventory.routes';
 import { createMaterialTypeCatalogRouter } from './routes/materialTypeCatalog.routes';
 import { createTaskAuditFindingsRouter } from './routes/taskAuditFindings.routes';
@@ -1246,6 +1249,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const getPendingSideEffectsCount = new GetPendingSideEffectsCount(closedServiceOrderRepo);
   const getPendingSideEffectsList = new GetPendingSideEffectsList(closedServiceOrderRepo);
 
+  // #35 Part 2 — reconcile page: list in-flight tasks + per-task sync reconcile.
+  // Reusa closureIngest (mismo processSummary que el poll) dentro de un backfill;
+  // ReconcileTaskClosure delega en backfill.reconcileOne con la misma ventana.
+  const reconcileBackfill = new BackfillClosedServiceOrders(buildIClassClient(), schedulingRepo, closureIngest);
+  const listInFlightTasks = new ListInFlightTasks(schedulingRepo);
+  const reconcileTaskClosure = new ReconcileTaskClosure(schedulingRepo, reconcileBackfill);
+
   const iclassClosureConfigRepo = new PrismaIClassClosureConfigRepository();
   app.use('/api/admin/iclass', createIClassClosureRouter(
     new SyncIClassResultCodes(buildIClassClient(), iclassResultCodeRepo),
@@ -1258,6 +1268,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getPendingSideEffectsList,
     new GetIClassClosureConfig(iclassClosureConfigRepo),
     new UpdateIClassClosureConfig(iclassClosureConfigRepo),
+    listInFlightTasks,
+    reconcileTaskClosure,
     requirePerm('iclass', 'manage'),
     authAdapter,
   ));

@@ -1,5 +1,6 @@
 import { IClassResultCode } from '@domain/entities/iclass-result-code';
 import { IClassClosureConfig } from '@domain/ports/IClassClosureConfigRepository';
+import { ScheduledTask } from '@domain/entities/scheduling';
 import { z } from 'zod';
 
 /** API shape of a result-code catalog entry + its closure mapping. */
@@ -56,6 +57,31 @@ export const UpdateIClassClosureConfigSchema = z.object({
 export type UpdateIClassClosureConfigInput = z.infer<typeof UpdateIClassClosureConfigSchema>;
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// In-Flight Task DTO — tareas en el stage `registered_in_iclass` (enviadas a
+// IClass, esperando cierre). NUNCA exponer el ScheduledTask crudo (regla CLAUDE.md).
+// ---------------------------------------------------------------------------
+
+export interface InFlightTaskDto {
+  id: string;
+  sequenceNumber: number;
+  title: string;
+  customerName: string | null;
+  customerCode: string | null;
+  iclassOrderCode: string | null;
+}
+
+export function toInFlightTaskDto(task: ScheduledTask): InFlightTaskDto {
+  return {
+    id: task.id,
+    sequenceNumber: task.sequenceNumber,
+    title: task.title,
+    customerName: task.customerName,
+    customerCode: task.customerCode,
+    iclassOrderCode: task.iclassOrderCode,
+  };
+}
 
 export function toResultCodeDTO(rc: IClassResultCode): ResultCodeDTO {
   return {
