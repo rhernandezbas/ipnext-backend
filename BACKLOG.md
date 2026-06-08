@@ -2,12 +2,17 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **25 hechos (en prod) · 3 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25 cerrados vía SDD.)
+> **26 hechos (en prod) · 2 pendientes.** (#17, #7, #22, #18, #14, #11, #12, #25, #20 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
 
-## ✅ Hechos (25, desplegados en producción)
+## ✅ Hechos (26, desplegados en producción)
+
+### #20 — Audit IA: pasarle el detalle COMPLETO de IClass al modelo
+- **Resuelto** (SDD `iclass-audit-full-context`, automático + hybrid): `AuditContext` ahora lleva `historyCommentary` (últimas 10 entradas CON comentario), `commentaryLog` (500 chars), `internalNote` (300) y `equipmentEvents` (20) del mirror — con presupuestos de recorte exportados en `buildAuditContext` (~1.5k tokens worst-case, seguro para qwen2.5vl:7b). `renderPrompt` agrega las secciones como bloques etiquetados condicionales (omitidos si vacíos) + instrucción siempre presente de NO marcar "falta X" si X está en el contexto.
+- **Remediación**: migración data-only `20260607010000_remediate_audit_full_context` resetea `auditDone`/`auditAttempts` en `IClassServiceOrder` → el reprocess loop re-audita TODO con contexto completo (gradual; requiere flag `iclass-audit` ON + Ollama arriba).
+- **PR**: BE #72. Verify SDD: PASS 12/12 scenarios. El design cazó un error del spec (los flags viven en `IClassServiceOrder`, no `ScheduledTask`). Archivado en `openspec/changes/archive/2026-06-07-iclass-audit-full-context/`.
 
 ### #21 + #24 + #26 — Tres chicos de FE en un PR (un commit por ítem)
 - **#21 — Asterisco debajo del label (CreateTaskModal)**: `.label` es flex column → el texto y el `<span>*</span>` eran flex items separados y el `*` caía a su línea propia en TODOS los campos. Fix: texto+asterisco comparten un span inline (5 campos). Test estructural.
@@ -134,7 +139,7 @@
 
 ---
 
-## ⏳ Pendientes (3)
+## ⏳ Pendientes (2)
 
 ### #19 — Agregar ítem de inventario MANUAL a la tarea (antena/onu/router/etc.)  *(agregado 2026-06-04)*
 - **Qué**: hoy las sugerencias de inventario salen **solo** del cierre (OCR de fotos device + materiales de IClass). Se quiere poder **agregar manualmente** un ítem de inventario en la tarea — elegir el tipo del catálogo (antena/onu/router/otros) y cargar su SN/MAC/datos — sin depender de que el OCR lo haya detectado.
@@ -142,13 +147,6 @@
 - **Camino propuesto**: nuevo use-case + endpoint para crear una sugerencia/ítem manual en la tarea (`source = MANUAL`, kind DEVICE/MATERIAL); FE botón "Agregar ítem" **siempre visible** en el panel de inventario de la tarea (incluso con panel vacío / sin sugerencias) con form (tipo del `DeviceTypeCatalog` + SN/MAC/desc). Reusa la validación del #18.
 - **Dónde**: BE nuevo use-case (`AddTaskInventoryItem` o similar) + ruta bajo `/scheduling/:taskId/inventory`; FE `TaskInventorySuggestions` (form de alta). Permiso `inventory.write`.
 - **Tamaño**: mediano. **Relación**: depende del #18 (la validación) y se apoya en el catálogo del #5.
-
-### #20 — Audit IA: pasarle el detalle COMPLETO de IClass al modelo  *(agregado 2026-06-06)*
-- **Síntoma**: en OS con detalle en IClass (visto en la **4673** "Reparación de señal"), la IA marca warnings tipo *"no se especifica si se verificó la señal/conexión"*, *"el técnico no dejó observaciones"*, *"no se adjuntaron fotos"* — **cuando esa info SÍ está en los detalles de IClass**. La IA "refuta" porque audita con contexto incompleto.
-- **Causa**: `buildAuditContext` solo arma el contexto con `checklistText` (Q/A no-foto), `technicianNote`, `materials`, `photoUrls`, `taskTitle/description/taskComments`. **NO incluye** del mirror: `order.history` (status history con `commentary` por transición — el "qué pasó" en cada paso), `order.commentaryLog` (blob de comentarios de IClass), `order.internalNote` (obs interna), `order.equipmentEvents` (equipos install/remove/move con SN/MAC).
-- **Camino propuesto**: enriquecer `buildAuditContext` + el prompt con esos campos. Cuidar: (a) tamaño del prompt (el history puede ser largo — resumir/recortar); (b) re-auditar las ya hechas tras el cambio (poner `auditDone=false` + reprocesar para que tomen el contexto nuevo).
-- **Dónde**: BE `buildAuditContext.ts` + `OllamaInstallationAuditor.renderPrompt` + entity `AuditContext` (nuevos campos).
-- **Tamaño**: chico-mediano.
 
 ### #23 — Auditor IA + OCR de inventario 100% asíncronos (background, no bloqueantes)  *(agregado 2026-06-07)*
 - **Síntoma**: el "Reprocesar" corre los side-effects pesados (OCR de inventario + auditoría IA) **síncrono dentro del request HTTP** → con carga (reprocess masivo) el modelo `qwen2.5vl:7b` tarda y el request corta con "No se pudo reprocesar", **aunque el backend siga procesando** en background. Visto el 2026-06-07.

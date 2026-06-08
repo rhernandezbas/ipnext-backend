@@ -46,7 +46,9 @@
 - **F6-R4** (MUST): éxito sin problemas → persiste el run + 1 finding `ok` ("Instalación sin observaciones"). Task sin auditoría → endpoint `[]` (estado distinto).
 - **F6-R5** (MUST): cada finding tiene `severity ∈ {ok,warning,critical}` + `category ∈ {señal,conexión,fotos,instalación,otros}` + `text` no vacío.
 - **F6-R6** (MUST): `GET /scheduling/:taskId/audit-findings` con `auth` + `requirePerm('scheduling','read')`; tab FE bajo `Can permission="scheduling.read"`.
-- **F6-R7** (MUST): el `AuditContext` incluye, además del cierre IClass (checklist, observaciones, materiales, TODAS las fotos), el **detalle de la tarea local**: `taskTitle`, `taskDescription` (problema reportado) y `taskComments[]` (comentarios humanos) — para juzgar lo PEDIDO vs lo HECHO.
+- **F6-R7** (MUST): el `AuditContext` incluye, además del cierre IClass (checklist, observaciones, materiales, TODAS las fotos) y el **detalle de la tarea local** (`taskTitle`, `taskDescription`, `taskComments[]`), cuatro **campos espejo IClass**: `historyCommentary[]` (últimas 10 transiciones con commentary, cada una ≤300 chars), `commentaryLog` (≤500 chars), `internalNote` (≤300 chars), y `equipmentEvents[]` (hasta 20 equipos con type, serialNumber, mac, model). Campos ausentes o vacíos → empty array/string (nunca undefined/null).
+- **F6-R8** (MUST): `OllamaInstallationAuditor.renderPrompt` DEBE renderizar los cuatro campos espejo como bloques etiquetados en el prompt (omitidos si vacíos) e incluir la instrucción explícita: no marques "falta X" si X aparece en el contexto (checklist, observaciones, historyCommentary, commentaryLog, internalNote, o equipmentEvents).
+- **F6-R9** (MUST): migración de datos (Prisma, sin cambios de schema) resets `auditDone=false` y `auditAttempts=0` en todos los registros `IClassServiceOrder` donde `auditDone=true`, para que el loop de re-proceso los audite con el contexto completo nuevo. Idempotente (idempotencia: cualquier `auditDone=true` se resetea en cada ejecución; migración única de remediación, re-ejecución inofensiva).
 
 ## F0 — Auth de las rutas de comentarios
 - **SC-01..03** (MUST): request sin auth a cualquier ruta de comentarios → 401.
