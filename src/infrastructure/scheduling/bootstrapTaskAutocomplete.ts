@@ -11,9 +11,6 @@ import { TaskAutocompleteScheduler } from './TaskAutocompleteScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 import { buildClosureSideEffects } from './closureSideEffects';
 
-/** Default poll cadence for the task auto-complete (15 min). */
-const DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
-
 /** Feature flag gating the auto-complete (default OFF). */
 const AUTOCOMPLETE_FLAG = 'task-autocomplete';
 
@@ -23,8 +20,10 @@ const AUTOCOMPLETE_FLAG = 'task-autocomplete';
  * the `task-autocomplete` flag (default OFF) every tick, so it only runs once an
  * operator flips it on. Reuses ReprocessClosureSideEffects with a dedicated flagKey
  * — same runner as the closure loop, so it also marks the per-task completeness flags.
+ *
+ * @param intervalMs - Tick interval read from persisted config at startup (default 900000ms / 15 min).
  */
-export function bootstrapTaskAutocomplete(): TaskAutocompleteScheduler | null {
+export async function bootstrapTaskAutocomplete(intervalMs: number): Promise<TaskAutocompleteScheduler | null> {
   const { baseUrl, username, password, thirdPartyId } = config.iclass;
   if (!username || !password || !thirdPartyId) {
     console.warn('[task-autocomplete] ICLASS_USERNAME/PASSWORD/THIRD_PARTY_ID missing — not starting');
@@ -48,5 +47,5 @@ export function bootstrapTaskAutocomplete(): TaskAutocompleteScheduler | null {
   // Segunda instancia para el disparo manual — usa el flag independiente 'iclass-closure-reprocess'
   const manualReprocess = new ReprocessClosureSideEffects(flags, closed, ingest, { flagKey: 'iclass-closure-reprocess' });
 
-  return new TaskAutocompleteScheduler(reprocess, { intervalMs: DEFAULT_INTERVAL_MS }, lock, flags, manualReprocess);
+  return new TaskAutocompleteScheduler(reprocess, { intervalMs }, lock, flags, manualReprocess);
 }

@@ -5,6 +5,7 @@ import { bootstrapGestionRealSync } from './infrastructure/scheduling/bootstrapG
 import { bootstrapGestionRealIngest } from './infrastructure/scheduling/bootstrapGestionRealIngest';
 import { bootstrapIClassClosure } from './infrastructure/scheduling/bootstrapIClassClosure';
 import { bootstrapTaskAutocomplete } from './infrastructure/scheduling/bootstrapTaskAutocomplete';
+import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
 // Splynx being unavailable inside an async route) must NOT take the whole
@@ -16,32 +17,37 @@ process.on('uncaughtException', (err) => {
   console.error('[server] Uncaught exception (kept alive):', err);
 });
 
-// Task auto-complete (#14/#23) — se bootstrapea ANTES de createApp para poder
-// inyectarlo en el router de closure. Starts dormant; gated by 'task-autocomplete'.
-const taskAutocomplete = bootstrapTaskAutocomplete();
+// Async IIFE: read config ONCE, await both bootstraps (they need to be awaited so
+// taskAutocomplete is resolved before createApp), then start the server.
+// module: CommonJS → no top-level await; IIFE is the idiomatic alternative.
+void (async () => {
+  const configRepo = new PrismaIClassClosureConfigRepository();
+  const cfg = await configRepo.get(); // (a) read persisted intervals ONCE
 
-const app = createApp(taskAutocomplete);
+  // (b) IClass closure loop — now async, receives interval from config
+  const iclassClosure = await bootstrapIClassClosure(cfg.closureIntervalMs);
 
-app.listen(config.port, () => {
-  console.log(`[server] Running on port ${config.port}`);
-});
+  // (c) Task auto-complete — awaited so the instance is available for createApp
+  const taskAutocomplete = await bootstrapTaskAutocomplete(cfg.autocompleteIntervalMs);
 
-// Gestión Real read-only mirror sync — opt-in, no-op when disabled.
-// Async because the composition root reads the persisted interval/estados config.
-void bootstrapGestionRealSync()
-  .then((grSync) => grSync?.start())
-  .catch((err) => console.error('[gr-sync] bootstrap failed (server kept alive):', (err as Error).message));
+  // (d) createApp wires taskAutocomplete into the closure router — must run after await
+  const app = createApp(taskAutocomplete);
 
-// Gestión Real installation-order ingest — opt-in, no-op when disabled.
-// Async because the composition root resolves the fallback "Pendiente" stage.
-void bootstrapGestionRealIngest()
-  .then((grIngest) => grIngest?.start())
-  .catch((err) => console.error('[gr-ingest] bootstrap failed (server kept alive):', (err as Error).message));
+  app.listen(config.port, () => {
+    console.log(`[server] Running on port ${config.port}`);
+  });
 
-// IClass closure loop — starts dormant; gated by the `iclass-closure-loop`
-// feature flag (default OFF). Returns null only when IClass credentials are missing.
-const iclassClosure = bootstrapIClassClosure();
-iclassClosure?.start();
+  // Gestión Real read-only mirror sync — opt-in, fire-and-forget after listen.
+  void bootstrapGestionRealSync()
+    .then((grSync) => grSync?.start())
+    .catch((err) => console.error('[gr-sync] bootstrap failed (server kept alive):', (err as Error).message));
 
-// Iniciar el scheduler del task auto-complete (fire-and-forget desde este punto).
-taskAutocomplete?.start();
+  // Gestión Real installation-order ingest — opt-in, fire-and-forget after listen.
+  void bootstrapGestionRealIngest()
+    .then((grIngest) => grIngest?.start())
+    .catch((err) => console.error('[gr-ingest] bootstrap failed (server kept alive):', (err as Error).message));
+
+  // Start schedulers — both start dormant (gated by feature flags).
+  iclassClosure?.start();
+  taskAutocomplete?.start();
+})().catch((err) => console.error('[server] fatal bootstrap error:', err));
