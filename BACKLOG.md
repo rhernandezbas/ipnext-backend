@@ -2,7 +2,61 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**.
-> **37 hechos (en prod) · 0 pendientes — backlog completo.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
+> **37 hechos (en prod) · 1 EPIC en curso (#38).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
+
+---
+
+## 🏗️ EPIC #38 — Sistema de Inventario completo (equipos + materiales, multi-ubicación, descuento desde tareas)  *(agregado 2026-06-08)*
+
+> **Big epic, múltiples SDDs (waves).** Visión del usuario: llevar control real del inventario — equipos por cliente, equipos nuestros (depósito), devolución de equipos en los retiros, consumo de materiales (POEs, conectores, etc.), inventario por técnico/camioneta, y **descuento automático/semi-automático desde las tareas y los equipos técnicos**. Front a elección, **siempre impeccable**. Todo con foreign keys.
+
+### Concepto central (investigado + alineado al código)
+El patrón estándar de field-service inventory (ver Fuentes) conecta **depósito + camionetas + sitios de trabajo** en un solo sistema con un **ledger de movimientos en vivo**: cada *issue / transfer / install / return / consume / adjust* queda atado a una **work order (tarea) + técnico + ubicación** — "una sola fuente de verdad de qué se usó, dónde y por qué". Cuatro tipos de stock: **truck stock (camioneta), warehouse (depósito), serialized equipment (equipos por SN), job-specific (reservado a una tarea)**.
+
+**La pieza que FALTA hoy** es justamente esa: **ubicaciones de stock + ledger de movimientos**. El resto ya existe parcial.
+
+### Lo que YA existe (reutilizar, NO reinventar)
+- **Equipos serializados**: `InventoryProduct` (catálogo) + `InventoryUnit` (unidad física con `serialNumber`/`barcode`/`status` available|assigned|damaged|retired/`location` string/`assignedToClientId`). 6 páginas FE de inventario ya hechas (`/inventory/*`).
+- **Equipos x cliente**: `ContractInstalledItem` (roster de equipos instalados por contrato, `status` active|removed|replaced, `source` OCR|MANUAL|ICLASS).
+- **Materiales**: `MaterialCatalog` (catálogo UPPERCASE) + `TaskMaterialConsumption` (consumo por tarea, FK a tarea+usuario) + `IClassSoMaterial` (líneas de material de la OS).
+- **Eventos de equipos de IClass**: `IClassSoEquipmentEvent` (install|remove|move, serialNumber/mac/patrimonio/modelo) — **se capturan en el closure pero NO se consumen** (`IClassClient.getServiceOrderEquipmentEvents`, fetched en `IngestClosedServiceOrders.ts:202`).
+- **Staging**: `TaskInventorySuggestion` (pending→confirmed→discarded) + flujo confirm/discard/replace (add|link_existing|replace) ya battle-tested (#19).
+- **Técnico**: `RbacUser` (= técnico vía `ScheduledTask.assigneeId`).
+
+### ⚠️ Decisión arquitectónica clave (resolver en wave 1)
+Hoy conviven **DOS mundos de inventario** en paralelo: (a) genérico `InventoryItem`/`InventoryProduct`/`InventoryUnit`, y (b) específico de tareas/contratos `ContractInstalledItem`/`TaskMaterialConsumption`. El epic DEBE decidir cómo **unificarlos** (o cuál es la fuente de verdad) antes de construir encima. Es el mayor riesgo de diseño.
+
+### Modelo de dominio propuesto (a refinar en SDD)
+- **`StockLocation`** (NUEVO): tipos `DEPOSITO` | `CLIENTE` | `TECNICO` | `CAMIONETA`. FK polimórfica/tipada: TECNICO→`RbacUser`, CLIENTE→`Contract`/`Client`, CAMIONETA→`Vehicle` (nuevo). Todo lo que tiene stock apunta a una location.
+- **`InventoryUnit.currentLocationId`** (NUEVO FK): la unidad serializada se mueve depósito→técnico/camioneta→cliente (install)→depósito (retiro).
+- **`MaterialStock`** (NUEVO): `(materialCatalogId, locationId, qty)` — cantidad de un consumible por ubicación.
+- **`InventoryMovement`** (NUEVO, el ledger): `type` (ISSUE|TRANSFER|INSTALL|RETURN|CONSUME|ADJUST), `unitId?`/`materialCatalogId?`, `fromLocationId?`, `toLocationId?`, `qty`, `taskId?` (FK), `technicianId?` (FK), `source` (manual|iclass|ocr), `occurredAt`. El stock actual se deriva del ledger (o se materializa en `MaterialStock`/`InventoryUnit.location`).
+- **`Vehicle`/`Camioneta`** (NUEVO): para el truck stock. (v1 podría usar técnico-como-location y diferir camioneta.)
+
+### Waves (cada una = su propio SDD: explore→propose→spec∥design→tasks→apply→verify→deploy→archive)
+
+- **Wave 1 — Fundación**: resolver la decisión de unificación + `StockLocation` + `InventoryMovement` (ledger) + `MaterialStock` + `InventoryUnit.currentLocationId`. Derivación de saldos. Migraciones con FKs. Sin UI nueva todavía (o mínima).
+- **Wave 2 — Equipos x cliente (apartado)**: vista/endpoint + página FE de "qué equipos tiene cada cliente" (sobre `ContractInstalledItem` + unidad en location=cliente). impeccable.
+- **Wave 3 — Inventario nuestro (depósito)**: equipos sin cliente (location=depósito, available) + stock de consumibles en depósito. Página FE (extender/unificar las `/inventory/*` existentes).
+- **Wave 4 — Consumir eventos de IClass (install/remove) → el flujo clave**: nuevo side-effect del closure que consume `IClassSoEquipmentEvent`. `install` → unidad pasa a cliente (movimiento INSTALL, FK tarea). **`remove` (retiro) → vuelve al depósito (movimiento RETURN, unidad available, +1 en nuestro inventario)** — exactamente lo que pediste. Auto o semi-auto vía el flujo de confirmación del #19.
+- **Wave 5 — Inventario x técnico / camioneta**: TECNICO/CAMIONETA como locations. Asignar stock a un técnico/camioneta (movimiento ISSUE depósito→técnico). Vista de stock por técnico/camioneta. `Vehicle` model. impeccable.
+- **Wave 6 — Descuento desde tareas (auto/semi-auto)**: al cerrar una tarea con materiales (de `TaskMaterialConsumption` / `materiais` de IClass), descontar del stock del **técnico/camioneta** (movimiento CONSUME, FK tarea+técnico). Modo **auto** (aplica) o **semi-auto** (el operador confirma). Cubre el gap de "consumo no descuenta stock".
+- **Wave 7 — Dashboard unificado + impeccable**: vista por ubicación (depósito/cliente/técnico/camioneta), el ledger de movimientos, alertas de stock bajo (`minStock`). Reconciliar/unificar las 6 páginas `/inventory/*` con el modelo nuevo.
+
+### Cross-cutting / a tener en cuenta
+- **Serializado vs consumible**: equipos (SN único, ledger por unidad) vs materiales (cantidad por ubicación). Tratarlos distinto.
+- **IClass tiene** `/equipments`, `/materials`, `/equipments/move`, `/materials/move` (skill `iclass-ipnext`): podríamos espejar o empujar movimientos — decidir si v1 es solo-lectura (consumir eventos) o bidireccional.
+- **Auto vs semi-auto**: el usuario quiere ambos modos configurables (como los flags del cierre). El semi-auto reusa el patrón confirm/discard del #19.
+- **Foreign keys en todo**: cada movimiento atado a tarea/técnico/ubicación/unidad.
+
+### Fuentes (investigación de patrones)
+- [Field Service Inventory Management: 2026 Guide — FieldPulse](https://www.fieldpulse.com/resources/blog/field-service-inventory-management)
+- [Field Service Inventory Management Playbook — BuildOps](https://buildops.com/resources/field-service-inventory-management)
+- [Real-Time Multi-Location Stock Control For Field Teams](https://small-business-inventory-management.com/inventory-asset-tracking-for-industries/field-inventory-management-software.htm)
+
+> **Próximo paso**: arrancar **Wave 1** (la fundación + la decisión de unificación) con `/sdd-new inventory-foundation`. Cada wave es un SDD independiente; el orden importa (1 antes que todo; 4 y 6 dependen de 1).
+
+---
 
 ### #37 — Loguear fallos del reconcile + badge de cantidad en la página  *(HECHO 2026-06-08)*
 - **Disparador**: investigando la discrepancia del #36 (4 OS cerradas pero clavadas = las `failed=6` del reconcile), descubrimos que el `catch` de `reconcileOne` **tragaba el error entero** (`catch {` sin capturar `err`) — cada fallo requería arqueología manual (IClass + DB).
