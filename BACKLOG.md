@@ -2,7 +2,7 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **29 hechos (en prod) · 2 pendientes (#30, #31).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29 cerrados vía SDD.)
+> **30 hechos (en prod) · 1 en curso (#30).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -148,14 +148,11 @@
 - **Resuelto** (SDD `network-node-task`, multi-repo, apply BE∥FE en paralelo): side-button rojo en el modal togglea a modo nodo (sin cliente/contrato), Nodo del catálogo `NetworkSite`, mismo flujo (proyecto/stages/IClass) con badge RED. `ScheduledTask` gana `kind` (discriminador) + `networkSiteId` FK; `NetworkSite` gana `iclassNodeCode`; el dispatch a IClass sustituye campos node-derived (name/address/city del sitio, `customerCode='NETWORK'`, `phone='0000000000'`) + `nodeCode` override explícito. Front con **impeccable** (acento OKLCH terracota).
 - **PRs**: BE #75 / FE #51. Migración `20260608000000_network_node_task`. Verify SDD: PASS 16/16. Archivado en `openspec/changes/archive/2026-06-08-network-node-task/`.
 
-## ⏳ Pendientes (2)
+### #31 — Reestructurar "Cierre de OS" + vista de progreso por tarea  *(HECHO 2026-06-08)*
+- **Resuelto** (SDD `closure-page-restructure`, multi-repo, apply BE∥FE en paralelo): el "Mapeo de estado" (`IClassResultCodeMappingBody`) salió a su propio sub-tab; el tab `cierre` se relabeló **"Procesamiento"** (id preservado → deep-links intactos) y suma una **`ClosureProgressTable`** que muestra, por OS pendiente, comentario/inventario/auditoría ✓/✗ + `auditAttempts` + link a la tarea (#seq · título). 5 sub-tabs. Nuevo `GET /closure/reprocess/pending-list` (use case `GetPendingSideEffectsList` + port `listPendingSideEffectsWithTask`, JOIN sin N+1); `usePendingList` pollea y para al llegar a 0. Front con **impeccable** (pills ✓/✗ semánticos). Responde la pregunta del operador "¿de qué son los N pendientes?".
+- **PRs**: BE #76 / FE #52. Sin migración. Verify SDD: PASS 15/15. Archivado en `openspec/changes/archive/2026-06-08-closure-page-restructure/`.
 
-### #31 — Reestructurar "Cierre de OS" + vista de progreso por tarea  *(agregado 2026-06-08)*
-- **Qué**: hoy la sub-page "Cierre de OS" (#7) junta TODO en una (cierre automático, reconciliar, reprocesar, auditoría, autocompletado, mapeo de estado). Separar y dar **observabilidad** al reprocess async (#23 dejó solo un número "N pendientes", sin saber qué tarea va ni en qué efecto).
-- **Decisiones lockeadas (usuario, 2026-06-08)**: (1) **el "mapeo de estado" sale a su propia subpage**; reconciliar + reprocesar + flags + la vista de progreso quedan juntos en una página de "Procesamiento/Cierre". (2) La vista de progreso = **tabla por tarea/OS** con columnas comentario ✓/✗, inventario ✓/✗, auditoría ✓/✗ (+ `auditAttempts`) y link a la tarea.
-- **La data YA existe** (no hay tracking nuevo): los flags del **#14** (`closureCommentDone`/`closureAuditDone`/`closureHasDeviceInventory`) ya están en la API de tareas; el side-effect tracker (`IClassServiceOrder`: `commentPosted`/`inventoryBuilt`/`auditDone`/`auditAttempts`) ya existe. Es mayormente un endpoint de listado (join) + la vista FE. Esto además responde "¿de qué son los 67 pendientes?".
-- **Dónde**: BE endpoint de listado de pendientes con desglose por efecto (sobre `listPendingSideEffects` + flags #14); FE separar `IClassClosureFlagBody`, nueva subpage de mapeo, nueva tabla de progreso. Permiso `iclass.manage` (el que ya usa la página).
-- **Tamaño**: mediano. Mayormente FE + un endpoint de lectura.
+## 🔧 En curso (1)
 
 ### #30 — Intervalos de los crons de cierre ajustables desde la UI  *(agregado 2026-06-08)*
 - **Qué**: hoy el cron de **cierre automático de OS** corre cada **10 min** y el de **auto-completado/reprocess** (#14) cada **15 min**, ambos **hardcodeados** (`bootstrapIClassClosure.ts:14`, `bootstrapTaskAutocomplete.ts:15` = `DEFAULT_INTERVAL_MS`). Para cambiarlos hay que editar código + redeploy. Se quiere **ajustar el intervalo desde la UI** (sub-page "Cierre de OS").
