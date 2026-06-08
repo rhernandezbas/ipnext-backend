@@ -8,6 +8,8 @@ import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedSe
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { ClosedServiceOrderSummary, SoStatusHistoryEntry } from '@domain/entities/iclass-closed-order';
 import { Stage } from '@domain/entities/workflow';
+import { IClassPort } from '@domain/ports/IClassPort';
+import { IClassUnavailableError } from '@domain/errors/iclass';
 
 const REGISTRADO: Stage = { id: 'st-reg', workflowId: 'wf', name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'nuevo', order: 5, color: null };
 const INSTALADO: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', code: 'instalado', category: 'hecho', order: 8, color: null };
@@ -99,6 +101,153 @@ describe('BackfillClosedServiceOrders', () => {
     expect(counts.mirrored).toBe(0);
     expect(closed.orders.size).toBe(0);
     expect((await scheduling.getTask('t1'))!.stageId).toBe(REGISTRADO.id);
+  });
+
+  // ── Phase 3: per-task isolation + throttle (REQ-TASK-ISOLATION-1, REQ-THROTTLE-1) ─────
+
+  /**
+   * Fake IClass client that throws on specific serviceOrderCodes.
+   * Other tasks succeed (return empty list).
+   */
+  function makeFaultyIClass(throwOnCodes: string[]): IClassPort {
+    return {
+      listServiceOrders: async (params: { serviceOrderCode?: string; updatedDateBegin: Date; updatedDateEnd: Date }) => {
+        if (params.serviceOrderCode && throwOnCodes.includes(params.serviceOrderCode)) {
+          throw new IClassUnavailableError('IClass down for task');
+        }
+        return [];
+      },
+    } as unknown as IClassPort;
+  }
+
+  function setupIsolation(opts?: { inFlightStageCode?: string }) {
+    const stages = new InMemoryStageRepository();
+    stages.addDirect(REGISTRADO);
+    stages.addDirect(INSTALADO);
+    const scheduling = new InMemorySchedulingRepository(stages);
+    const resultCodes = new InMemoryIClassResultCodeRepository();
+    const closed = new InMemoryClosedServiceOrderRepository();
+    const state = new InMemorySyncStateRepository();
+    // iclass is passed externally per test
+    return { stages, scheduling, resultCodes, closed, state };
+  }
+
+  function makeBackfill(
+    iclass: IClassPort,
+    scheduling: InMemorySchedulingRepository,
+    resultCodes: InMemoryIClassResultCodeRepository,
+    closed: InMemoryClosedServiceOrderRepository,
+    state: InMemorySyncStateRepository,
+    opts: { throttleMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+  ) {
+    const ingest = new IngestClosedServiceOrders(iclass as any, closed, resultCodes, scheduling, state, { now: () => new Date('2026-05-29T12:00:00Z') });
+    return new BackfillClosedServiceOrders(iclass as any, scheduling, ingest, {
+      now: () => new Date('2026-05-29T12:00:00Z'),
+      throttleMs: opts.throttleMs ?? 0,
+      ...(opts.sleep !== undefined && { _sleep: opts.sleep }),
+    });
+  }
+
+  // ── Task 3.1: task 2 throws → tasks 1 and 3 process normally, failed=1 ───
+
+  it('3.1: task 2 throws → tasks 1 and 3 process normally, failed=1, no batch throw (REQ-TASK-ISOLATION-1)', async () => {
+    const { scheduling, resultCodes, closed, state } = setupIsolation();
+    // Tasks 1, 2, 3 all in-flight
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4001, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't2', sequenceNumber: 4002, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't3', sequenceNumber: 4003, stageId: REGISTRADO.id });
+
+    // task 2 (code '4002') throws; tasks 1 and 3 succeed with empty SO lists
+    const iclass = makeFaultyIClass(['4002']);
+
+    const backfill = makeBackfill(iclass, scheduling, resultCodes, closed, state);
+    const counts = await backfill.execute();
+
+    expect(counts.failed).toBe(1);
+    // Tasks 1 and 3 were processed (no throw)
+    // With empty SO lists → 0 mirrored, but no throw
+    expect(counts.mirrored).toBe(0);
+    // Batch itself did not throw (execute resolved)
+  });
+
+  // ── Task 3.2: all tasks succeed → failed=0 ───────────────────────────────
+
+  it('3.2: all tasks succeed → failed=0 (REQ-TASK-ISOLATION-1)', async () => {
+    const { scheduling, resultCodes, closed, state } = setupIsolation();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4001, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't2', sequenceNumber: 4002, stageId: REGISTRADO.id });
+
+    const iclass = new InMemoryIClassClient(); // no failures
+    const backfill = makeBackfill(iclass, scheduling, resultCodes, closed, state);
+
+    const counts = await backfill.execute();
+
+    expect(counts.failed).toBe(0);
+  });
+
+  // ── Task 3.3: all tasks throw → no batch throw, failed = task count ──────
+
+  it('3.3: all tasks throw → no batch throw, failed equals task count (REQ-TASK-ISOLATION-1)', async () => {
+    const { scheduling, resultCodes, closed, state } = setupIsolation();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4001, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't2', sequenceNumber: 4002, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't3', sequenceNumber: 4003, stageId: REGISTRADO.id });
+
+    const iclass = makeFaultyIClass(['4001', '4002', '4003']);
+    const backfill = makeBackfill(iclass, scheduling, resultCodes, closed, state);
+
+    const counts = await backfill.execute();
+
+    // No throw from execute()
+    expect(counts.failed).toBe(3);
+    expect(counts.mirrored).toBe(0);
+    expect(counts.transitioned).toBe(0);
+  });
+
+  // ── Task 3.4: sleep spy called exactly N times for 3-task run ────────────
+
+  it('3.4: sleep spy called exactly 3 times for a 3-task run (after each task, REQ-THROTTLE-1)', async () => {
+    const { scheduling, resultCodes, closed, state } = setupIsolation();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4001, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't2', sequenceNumber: 4002, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't3', sequenceNumber: 4003, stageId: REGISTRADO.id });
+
+    const sleepCalls: number[] = [];
+    const fakeSleep = (ms: number) => { sleepCalls.push(ms); return Promise.resolve(); };
+
+    const iclass = new InMemoryIClassClient();
+    const backfill = makeBackfill(iclass, scheduling, resultCodes, closed, state, {
+      throttleMs: 50,
+      sleep: fakeSleep,
+    });
+
+    await backfill.execute();
+
+    // The throttle sleeps once after EACH task (unconditional, inside the loop),
+    // so a 3-task run sleeps exactly 3 times.
+    expect(sleepCalls.length).toBe(3);
+    // All calls received the throttleMs value
+    expect(sleepCalls.every(ms => ms === 50)).toBe(true);
+  });
+
+  // ── Task 3.5: throttleMs=0 → test completes without real delays ──────────
+
+  it('3.5: throttleMs=0 → execute completes without real delays (REQ-THROTTLE-1)', async () => {
+    const { scheduling, resultCodes, closed, state } = setupIsolation();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4001, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't2', sequenceNumber: 4002, stageId: REGISTRADO.id });
+
+    const iclass = new InMemoryIClassClient();
+    const backfill = makeBackfill(iclass, scheduling, resultCodes, closed, state, { throttleMs: 0 });
+
+    const start = Date.now();
+    await backfill.execute();
+    const elapsed = Date.now() - start;
+
+    // With throttleMs=0 and in-memory iclass, should finish in < 500ms
+    expect(elapsed).toBeLessThan(500);
+    // And no failures
+    expect((await backfill.execute()).failed).toBe(0);
   });
 
   it('accepts inFlightStageCode option (rename-safe, REQ-BACKFILL-STAGE-1)', async () => {

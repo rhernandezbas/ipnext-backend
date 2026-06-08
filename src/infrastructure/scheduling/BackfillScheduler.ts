@@ -61,7 +61,7 @@ export class BackfillScheduler {
     this.inFlight = true;
     try {
       const r = await this.backfill.execute();
-      this.log(`[backfill-scheduler] done — mirrored=${r.mirrored} transitioned=${r.transitioned}`);
+      this.log(`[backfill-scheduler] done — mirrored=${r.mirrored} transitioned=${r.transitioned} failed=${r.failed}`);
       return {};
     } catch (err) {
       const message = (err as Error).message;

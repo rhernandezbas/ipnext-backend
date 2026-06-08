@@ -9,6 +9,7 @@ const ZERO: ClosureRunCounts = {
   skippedNotClosed: 0,
   skippedNotOurs: 0,
   skippedUnchanged: 0,
+  failed: 0,
 };
 
 /** Read the last closure-ingest run status from SyncState ('iclass-closed'). */
@@ -29,6 +30,7 @@ export class GetClosureStatus {
           skippedNotClosed: p.skippedNotClosed ?? 0,
           skippedNotOurs: p.skippedNotOurs ?? 0,
           skippedUnchanged: p.skippedUnchanged ?? 0,
+          failed: p.failed ?? 0,
         };
       } catch {
         // lastResult was an "error: ..." string → keep zeros.
