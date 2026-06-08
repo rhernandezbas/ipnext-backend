@@ -45,6 +45,9 @@ function makeBase() {
     watcherIds: [],
     travelTimeTo: null,
     travelTimeFrom: null,
+    // network-node-task (#29) — kind discriminator
+    kind: 'customer' as const,
+    networkSiteId: null,
   };
 }
 

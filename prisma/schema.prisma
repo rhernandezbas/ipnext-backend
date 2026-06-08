@@ -954,6 +954,11 @@ model ScheduledTask {
   ticketId String?
   ticket   Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
 
+  // network-node-task (#29) — discriminator + FK a NetworkSite
+  kind          String       @default("customer")
+  networkSiteId String?
+  networkSite   NetworkSite? @relation(fields: [networkSiteId], references: [id], onDelete: SetNull)
+
   // IClass closure loop — mirror of the closed SO, linked back by codigo↔sequenceNumber
   iclassClosedOrder IClassServiceOrder?
 
@@ -976,6 +981,7 @@ model ScheduledTask {
   @@index([assigneeId])
   @@index([reporterId])
   @@index([ticketId])
+  @@index([networkSiteId])
 }
 
 // task-activity-log — append-only audit feed. One row per change on a task
@@ -1267,6 +1273,12 @@ model NetworkSite {
   children     NetworkSite[] @relation("SiteHierarchy")
   description  String?
   createdAt    DateTime      @default(now())
+
+  // network-node-task (#29) — código de nodo en IClass para envío de OS de RED
+  iclassNodeCode String?
+
+  // Back-relation: tareas de RED vinculadas a este nodo
+  scheduledTasks ScheduledTask[]
 }
 
 model NasServer {

@@ -643,6 +643,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
       return rbacUser ? { id: rbacUser.id, name: rbacUser.name } : null;
     },
   };
+  // network-node-task (#29): instanciar antes de createTask para inyectarlo en el constructor
+  const networkSiteRepoForCreateTask = new PrismaNetworkSiteRepository();
+
   const createTask = new CreateTask(
     schedulingRepo,
     // EntityLookup wrappers for FK validation (return { id } | null)
@@ -653,6 +656,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
     { findById: (id: string) => prismaClientLookup('Project', id) },
     { findById: (id: string) => prismaClientLookup('Ticket', id) },
     taskActivityRecorder,
+    networkSiteRepoForCreateTask,
   );
   const createTaskFromTicket = new CreateTaskFromTicket(createTask, schedulingRepo);
   const updateTask = new UpdateTask(
@@ -670,7 +674,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null) {
   const featureFlagRepo = new PrismaFeatureFlagRepository();
   // Audit repo for IClass dispatch attempts — injected as 4th arg (AD-6: optional on SendTaskToIClass).
   const iclassDispatchAttemptRepo = new PrismaIClassDispatchAttemptRepository();
-  const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient(), iclassDispatchAttemptRepo, taskActivityRecorder);
+  const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient(), iclassDispatchAttemptRepo, taskActivityRecorder, networkSiteRepoForCreateTask);
   const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo, sendTaskToIClass, taskActivityRecorder);
 
   const bulkMoveTasksToStage = new BulkMoveTasksToStage(moveTaskToStage);

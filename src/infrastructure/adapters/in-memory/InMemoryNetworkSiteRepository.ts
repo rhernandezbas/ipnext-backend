@@ -18,6 +18,7 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       uplink: '10 Gbps fibra',
       parentSiteId: null,
       description: 'Nodo principal de distribución',
+      iclassNodeCode: 'NC-001',
     },
     {
       id: '2',
@@ -32,6 +33,7 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       uplink: '1 Gbps fibra',
       parentSiteId: '1',
       description: 'Punto de presencia zona norte',
+      iclassNodeCode: 'PN-001',
     },
     {
       id: '3',
@@ -46,6 +48,7 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       uplink: '500 Mbps radio',
       parentSiteId: '1',
       description: 'Torre de telecomunicaciones zona sur',
+      iclassNodeCode: 'TS-001',
     },
     {
       id: '4',
@@ -60,6 +63,7 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       uplink: '100 Gbps fibra',
       parentSiteId: null,
       description: 'Datacenter principal de la red',
+      iclassNodeCode: null,
     },
     {
       id: '5',
@@ -74,8 +78,17 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       uplink: '1 Gbps fibra',
       parentSiteId: '1',
       description: 'Nodo de distribución zona oeste',
+      iclassNodeCode: 'NO-001',
     },
   ];
+
+  /**
+   * Test helper: reemplaza toda la lista de sitios con los provistos.
+   * Útil para tests que necesitan control total sobre los datos.
+   */
+  seedSites(sites: NetworkSite[]): void {
+    this.sites = [...sites];
+  }
 
   async findAll(): Promise<NetworkSite[]> {
     return [...this.sites];

@@ -49,14 +49,16 @@ import {
 } from '@domain/errors/checklist';
 
 const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
-  customer: 'CUSTOMER_NOT_FOUND',
-  contract: 'CONTRACT_NOT_FOUND',
-  partner:  'PARTNER_NOT_FOUND',
-  project:  'PROJECT_NOT_FOUND',
-  reporter: 'REPORTER_NOT_FOUND',
-  assignee: 'ASSIGNEE_NOT_FOUND',
-  watcher:  'WATCHER_NOT_FOUND',
-  ticket:   'TICKET_NOT_FOUND',
+  customer:    'CUSTOMER_NOT_FOUND',
+  contract:    'CONTRACT_NOT_FOUND',
+  partner:     'PARTNER_NOT_FOUND',
+  project:     'PROJECT_NOT_FOUND',
+  reporter:    'REPORTER_NOT_FOUND',
+  assignee:    'ASSIGNEE_NOT_FOUND',
+  watcher:     'WATCHER_NOT_FOUND',
+  ticket:      'TICKET_NOT_FOUND',
+  // network-node-task (#29): REQ-REF-NETWORK-1
+  networkSite: 'NETWORK_SITE_NOT_FOUND',
 };
 
 export interface ChecklistUseCases {
@@ -422,6 +424,9 @@ export function createSchedulingRouter(
       watcherIds: data.watcherIds ?? [],
       travelTimeTo: data.travelTimeTo ?? null,
       travelTimeFrom: data.travelTimeFrom ?? null,
+      // network-node-task (#29): kind discriminator + networkSiteId
+      kind: data.kind,
+      networkSiteId: ('networkSiteId' in data ? data.networkSiteId : null) ?? null,
     };
 
     try {

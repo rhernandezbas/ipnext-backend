@@ -3,6 +3,7 @@ import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { IClassPort } from '@domain/ports/IClassPort';
 import { IClassDispatchAttemptRepository } from '@domain/ports/IClassDispatchAttemptRepository';
 import { ScheduledTask } from '@domain/entities/scheduling';
+import { NetworkSite } from '@domain/entities/networkSite';
 import { MissingRequiredFieldsError, TaskNotFoundError, StageNotFoundError } from '@domain/errors/scheduling';
 import {
   IClassNodeNotFoundError,
@@ -11,8 +12,9 @@ import {
   MissingProjectForIClassError,
   MissingIClassMappingError,
 } from '@domain/errors/iclass';
-import { dispatchToIClass, recordAttempt } from './dispatchTaskToIClass';
+import { dispatchToIClass, recordAttempt, NETWORK_PHONE, NETWORK_CUSTOMER_CODE } from './dispatchTaskToIClass';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
+import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 
 const FLAG_KEY = 'iclass-integration';
@@ -61,6 +63,8 @@ export class SendTaskToIClass {
     private readonly attempts?: IClassDispatchAttemptRepository,
     /** task-activity-log (#10 / D.15). Optional, best-effort. */
     private readonly recorder?: TaskActivityRecorder,
+    /** network-node-task (#29): necesario para tareas de RED. */
+    private readonly networkSiteRepo?: NetworkSiteRepository,
   ) {}
 
   /**
@@ -100,7 +104,82 @@ export class SendTaskToIClass {
       throw new MissingIClassMappingError(projectTitle);
     }
 
-    // 4. Validate the 5 required fields (in canonical order).
+    // network-node-task (#29): branch por kind.
+    const isNet = task.kind === 'network';
+    let networkSite: NetworkSite | null = null;
+
+    if (isNet) {
+      // 4-NET. Sustituir campos del cliente con datos del sitio de red.
+      // Resolver el sitio una sola vez para reusar en validación y dispatch.
+      if (task.networkSiteId && this.networkSiteRepo) {
+        networkSite = await this.networkSiteRepo.findById(task.networkSiteId) ?? null;
+      }
+
+      // Validar required fields usando valores sustituidos (REQ-NODE-DISPATCH-2).
+      const effectiveCustomerName = task.networkSiteName ?? null;
+      const effectivePhone        = NETWORK_PHONE;
+      const effectiveAddress      = networkSite?.address ?? task.address ?? null;
+      const effectiveCity         = networkSite?.city ?? null;
+
+      const substitutedValues: Record<(typeof REQUIRED_ORDER)[number], string | null> = {
+        customerName: effectiveCustomerName,
+        phone: effectivePhone,
+        address: effectiveAddress,
+        city: effectiveCity,
+        description: task.description,
+      };
+      const missingFields = REQUIRED_ORDER.filter(f => isBlank(substitutedValues[f]));
+      if (missingFields.length > 0) {
+        throw new MissingRequiredFieldsError([...missingFields]);
+      }
+
+      // 5-NET. No llamar a listNodes() — usar iclassNodeCode del sitio directamente (REQ-PORT-1).
+      const resolvedNodeCode = networkSite?.iclassNodeCode ?? NETWORK_CUSTOMER_CODE;
+
+      // 6+7. Crear OS con campos sustituidos y avanzar de stage.
+      try {
+        const dispatched = await dispatchToIClass(
+          { tasks: this.tasks, iclass: this.iclass, attempts: undefined },
+          task,
+          mapping.iclassSoType.code,
+          resolvedNodeCode,
+          { actorId, workflowId: workflowId!, networkSite },
+        );
+        if (this.recorder) {
+          await this.recorder.record(taskId, 'sent_to_iclass', {
+            actor: actor ?? SYSTEM_ACTOR,
+            toValue: { iclassOrderCode: dispatched.iclassOrderCode },
+            metadata: { stageId: targetStageId },
+          });
+        }
+        return dispatched;
+      } catch (err) {
+        if (err instanceof IClassRejectedError) {
+          await recordAttempt(this.attempts, {
+            taskId,
+            outcome: 'rejected',
+            errorCode: 'ICLASS_REJECTED',
+            errorMessage: err.message,
+            attemptedNodeCode: resolvedNodeCode,
+            resolvedNodeCode: null,
+            actorId: actorId ?? null,
+          });
+        } else if (err instanceof IClassUnavailableError) {
+          await recordAttempt(this.attempts, {
+            taskId,
+            outcome: 'unavailable',
+            errorCode: 'ICLASS_UNAVAILABLE',
+            errorMessage: err.message,
+            attemptedNodeCode: resolvedNodeCode,
+            resolvedNodeCode: null,
+            actorId: actorId ?? null,
+          });
+        }
+        throw err;
+      }
+    }
+
+    // 4. Validate the 5 required fields (in canonical order) — CUSTOMER path.
     const values: Record<(typeof REQUIRED_ORDER)[number], string | null> = {
       customerName: task.customerName,
       phone: task.customerPhone,
