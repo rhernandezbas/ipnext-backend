@@ -97,7 +97,7 @@ The endpoint MUST be guarded by `auth` + `requireIClassManage`. It MUST NOT requ
 - THEN the server responds `401`
 
 ## REQ-STATUS-1 — Estado
-`GET /api/admin/iclass/closure/status` DEBE devolver `lastRunAt` + counts `{ mirrored, transitioned, skippedNotClosed, skippedNotOurs, skippedUnchanged }`; null/ceros antes del primer run.
+`GET /api/admin/iclass/closure/status` DEBE devolver `lastRunAt` + counts `{ mirrored, transitioned, skippedNotClosed, skippedNotOurs, skippedUnchanged, failed }`; null/ceros antes del primer run. El campo `failed` (#33) cuenta las tareas cuyo IClass call arrojó error durante el batch del backfill (distinto de `errored`, que cuenta fallos por SO dentro de `processSummary`).
 
 ## REQ-REPROCESS-1 — Async reprocess dispatch
 
@@ -300,3 +300,15 @@ The pending count display in `IClassClosureFlagBody` MUST become a `<Link>` to `
 - GIVEN the user navigates to the Procesamiento sub-tab in IClass scheduling settings
 - WHEN the sub-tab renders
 - THEN `ClosureProgressTable` is NOT present in the sub-tab
+
+## REQ-429-RETRY-1 — IClass HTTP 429 retry with bounded backoff  *(#33)*
+
+When the IClass HTTP client receives a `429` response status, it MUST retry rather than propagate the error immediately. It MUST respect the `Retry-After` header (seconds) when present; when absent, it MUST apply exponential backoff seeded from `subresourceBackoffMs`. Retries MUST be bounded to a configurable maximum (`MAX_RATE_LIMIT_RETRIES`, default 4). After exhausting retries the client throws via `mapError`. A request that succeeds on retry returns its data transparently. This is DISTINCT from the existing 200-plain-text `isRateLimited` / "Espere um pouco" path (unchanged). The 401 re-login path stays `attempt===0`-only and does not interfere.
+
+## REQ-TASK-ISOLATION-1 — Backfill per-task failure isolation  *(#33)*
+
+`BackfillClosedServiceOrders.execute()` MUST wrap each top-level task iteration (IClass call + `processSummary`) in a `try/catch`. A thrown error for one task increments a top-level `failed` counter and MUST NOT abort the remaining tasks. `failed` is distinct from `IngestClosedCounts.errored` (per-SO `processSummary` failures). The returned counts include `failed`.
+
+## REQ-THROTTLE-1 — Configurable inter-task delay  *(#33)*
+
+`BackfillClosedServiceOrders` accepts a `throttleMs` option (`DEFAULT_THROTTLE_MS`, default 350 ms in prod, 0 in tests). After processing each task (success or failure) it `await sleep(throttleMs)` before the next. The `sleep` fn is injectable so tests assert it without real delays. For an N-task run, sleep is called exactly N times (once after each task, including the last).

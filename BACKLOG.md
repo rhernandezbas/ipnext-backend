@@ -2,16 +2,12 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **32 hechos (en prod) · 1 en curso (#33).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32 cerrados vía SDD.)
+> **33 hechos (en prod) · 0 pendientes — backlog completo.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33 cerrados vía SDD.)
 
-## 🔧 En curso (1)
-
-### #33 — Backfill resiliente al rate-limit de IClass (HTTP 429)  *(agregado 2026-06-08)*
-- **Disparador**: tras el #32 (backfill async), darle "Reconciliar" no hacía nada. Diagnóstico (logs del VPS): `[backfill-scheduler] ERROR: IClass responded with HTTP 429`. El backfill corre 1x1 secuencial (`for...await`) pero **sin pausa entre las ~78 llamadas top-level** → IClass rate-limitea con **HTTP 429** → el batch aborta.
-- **Causa raíz**: `IClassClient` maneja UNA forma de rate-limit (200 con texto "Espere um pouco" → `isRateLimited` + backoff×2 + retry) pero **NO el HTTP 429 real** (cae en el throw genérico, `IClassClient.ts:365`). Además `BackfillClosedServiceOrders` no tiene try/catch por tarea → un 429 mata todo el loop.
-- **Concepto (confirmado con el usuario)**: el modelo "1x1 async background" está bien (ya es así); la diferencia con el LLM es que **Ollama es local (sin rate limit) e IClass es externo (con límite)**. El fix mantiene el 1x1 y le agrega el respeto al rate limit.
-- **Fix**: (1) **`IClassClient`: manejar HTTP 429** — retry con backoff (respetar `Retry-After` si viene), pocos intentos — beneficia TODAS las llamadas IClass; (2) **backfill: aislamiento por tarea** (try/catch, cuenta fallidos, sigue) + **throttle** (delay entre llamadas top-level); (3) FE menor (opcional).
-- **Tamaño**: chico-mediano, BE-mayormente.
+### #33 — Backfill resiliente al rate-limit de IClass (HTTP 429)  *(HECHO 2026-06-08)*
+- **Disparador**: tras el #32 (backfill async), "Reconciliar" no hacía nada. Diagnóstico vía logs del VPS: `[backfill-scheduler] ERROR: IClass responded with HTTP 429` — el backfill rafagueaba ~78 llamadas a IClass sin pausa → 429 → un solo 429 abortaba todo el batch.
+- **Resuelto** (SDD `iclass-rate-limit-backfill`, BE-only): `IClassClient` reintenta el **HTTP 429** en `withAuthRetry` (`Retry-After`/backoff, acotado a `MAX_RATE_LIMIT_RETRIES=4`) — **protege TODAS las llamadas a IClass**; el 401 sigue solo en attempt 0 y el path 200-texto "Espere um pouco" intacto. `BackfillClosedServiceOrders` con try/catch por tarea (contador `failed` top-level, distinto del `errored` por-SO) + throttle (350ms) entre tareas. Mantiene el modelo 1x1 async del #32. `failed` llega al status + el log del scheduler.
+- **PR**: BE #79. Sin migración. Verify SDD: PASS 11/11 (suite 2523). Archivado en `openspec/changes/archive/2026-06-08-iclass-rate-limit-backfill/`.
 
 ### #32 — Backfill async + TODA acción al LLM async + página independiente de pendientes  *(HECHO 2026-06-08)*
 - **Disparador**: "No se pudo reconciliar" en prod. Diagnóstico vía logs del VPS (cero errores en 3h → timeout, no crash): `BackfillClosedServiceOrders` hacía ~78 llamadas IClass secuenciales + OCR/audit por OS, **síncrono dentro del request** → timeout. Mismo patrón del #23, pero el backfill nunca se había hecho async.
