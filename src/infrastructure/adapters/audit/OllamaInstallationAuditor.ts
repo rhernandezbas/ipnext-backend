@@ -13,6 +13,8 @@ export interface OllamaAuditConfig {
   downloadTimeoutMs?: number;
   /** Cap the number of photos sent (cost/latency). Default 8. */
   maxPhotos?: number;
+  /** Al fallar el parse del intento 1, cae a map-reduce (1x1 describe + síntesis). Default true. */
+  mapReduceOnDegeneration?: boolean;
 }
 
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -30,28 +32,58 @@ export class OllamaInstallationAuditor implements InstallationAuditor {
   private readonly timeoutMs: number;
   private readonly downloadTimeoutMs: number;
   private readonly maxPhotos: number;
+  private readonly mapReduceOnDegeneration: boolean;
 
   constructor(private readonly cfg: OllamaAuditConfig) {
     this.provider = `ollama:${cfg.model}`;
     this.timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.downloadTimeoutMs = cfg.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.maxPhotos = cfg.maxPhotos ?? DEFAULT_MAX_PHOTOS;
+    this.mapReduceOnDegeneration = cfg.mapReduceOnDegeneration ?? true;
   }
 
   async audit(ctx: AuditContext): Promise<AuditResult> {
     try {
+      // Descarga de fotos ONCE — el array se reutiliza en map-reduce si hace falta
       const urls = ctx.photoUrls.slice(0, this.maxPhotos);
       const downloaded = await Promise.all(urls.map(u => this.fetchB64(u)));
       const images = downloaded.filter((x): x is string => !!x);
       // eslint-disable-next-line no-console
       console.log(`[audit] OS ${ctx.osCodigo}: ${ctx.photoUrls.length} fotos en checklist, ${images.length} descargadas; llamando ${this.cfg.model}`);
-      const raw = await this.ask(this.renderPrompt(ctx), images);
-      const parsed = parseAuditResult(raw);
-      if (!parsed.ok) {
-        // eslint-disable-next-line no-console
-        console.warn(`[audit] OS ${ctx.osCodigo}: parse soft-fail. Respuesta cruda del modelo:`, String(raw).slice(0, 300));
+
+      // ── Intento 1: multimodal completo ──────────────────────────────────────
+      const raw1 = await this.ask(this.renderPrompt(ctx), images, true);
+      const parsed1 = parseAuditResult(raw1);
+      if (parsed1.ok) return parsed1;
+
+      // Soft-fail en intento 1
+      // eslint-disable-next-line no-console
+      console.warn(`[audit] OS ${ctx.osCodigo}: parse soft-fail (attempt-1). Respuesta cruda del modelo:`, String(raw1).slice(0, 300));
+
+      // ── Fallback map-reduce (solo si hay fotos y el flag está activo) ────────
+      if (images.length === 0 || !this.mapReduceOnDegeneration) {
+        return { ok: false, findings: [] };
       }
-      return parsed;
+
+      // eslint-disable-next-line no-console
+      console.log(`[audit] OS ${ctx.osCodigo}: degeneración con ${images.length} fotos — map-reduce (1x1 + síntesis)`);
+
+      // MAP: una llamada libre por foto
+      const observations: string[] = [];
+      for (const img of images) {
+        const obs = await this.ask(this.renderPhotoDescribePrompt(), [img], false);
+        observations.push(obs);
+      }
+
+      // REDUCE: síntesis texto-only con schema estructurado
+      const rawSynth = await this.ask(this.renderSynthesisPrompt(ctx, observations), [], true);
+      const parsedSynth = parseAuditResult(rawSynth);
+      if (!parsedSynth.ok) {
+        // eslint-disable-next-line no-console
+        console.warn(`[audit] OS ${ctx.osCodigo}: parse soft-fail (synthesis). Respuesta cruda:`, String(rawSynth).slice(0, 300));
+        return { ok: false, findings: [] };
+      }
+      return parsedSynth;
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(`[audit] OS ${ctx.osCodigo}: FALLO en audit():`, err instanceof Error ? err.message : err);
@@ -109,7 +141,30 @@ export class OllamaInstallationAuditor implements InstallationAuditor {
     ].join('\n');
   }
 
-  private async fetchB64(url: string): Promise<string | null> {
+  /**
+   * Prompt libre para la etapa MAP: describe una sola foto en texto plano.
+   * Sin instrucción JSON ni schema — el modelo devuelve texto libre.
+   */
+  private renderPhotoDescribePrompt(): string {
+    return 'Describí en 2-3 frases qué se ve en esta foto de instalación relevante para la calidad (equipos, conexiones, prolijidad, señal). Texto plano.';
+  }
+
+  /**
+   * Prompt para la etapa REDUCE (síntesis): reutiliza el contexto completo de
+   * renderPrompt + lista de observaciones por foto. Sin imágenes — texto puro.
+   */
+  private renderSynthesisPrompt(ctx: AuditContext, observations: string[]): string {
+    const base = this.renderPrompt(ctx);
+    const obsLines = observations.map((o, i) => `${i + 1}. ${o}`).join('\n');
+    return [
+      base,
+      '',
+      'Observaciones por foto:',
+      obsLines,
+    ].join('\n');
+  }
+
+  protected async fetchB64(url: string): Promise<string | null> {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(this.downloadTimeoutMs) });
       if (!res.ok) return null;
@@ -123,16 +178,31 @@ export class OllamaInstallationAuditor implements InstallationAuditor {
     }
   }
 
-  private async ask(prompt: string, images: string[]): Promise<string> {
+  /**
+   * Llama al modelo Ollama. Cuando `useSchema=true` incluye `format: auditFormatSchema()`
+   * (structured outputs para findings JSON). Cuando `useSchema=false` lo omite — para
+   * llamadas de describe libre en la etapa MAP.
+   */
+  private async ask(prompt: string, images: string[], useSchema: boolean): Promise<string> {
     // Structured outputs: pass the findings JSON Schema as `format` (not 'json').
     // This grammar-constrains the vision model to emit a valid findings array,
     // eliminating the `{status, issues}` object + `<|im_start|>` degeneration that
     // made `format: 'json'` fail to parse ~always, and it runs far faster (~28s vs
     // ~100s) since the constrained space collapses.
+    const body: Record<string, unknown> = {
+      model: this.cfg.model,
+      prompt,
+      images,
+      stream: false,
+      options: { temperature: 0 },
+    };
+    if (useSchema) {
+      body.format = auditFormatSchema();
+    }
     const res = await fetch(`${this.cfg.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.cfg.model, prompt, images, stream: false, format: auditFormatSchema(), options: { temperature: 0 } }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     const json = (await res.json()) as { response?: string };
