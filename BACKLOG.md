@@ -2,7 +2,7 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **28 hechos (en prod) · 1 en curso (#29).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23 cerrados vía SDD.)
+> **28 hechos (en prod) · 1 en curso (#29) · 1 pendiente (#30).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -151,6 +151,14 @@
 - **Decisiones lockeadas (usuario, 2026-06-08)**: (1) toggle en el mismo modal; (2) Opción A — `ScheduledTask` gana `kind` discriminador + `networkSiteId` FK; (3) mapeo IClass **explícito** vía nuevo `iclassNodeCode` en NetworkSite (sin match difuso); (4) mismo flujo completo.
 - **Estado**: SDD `network-node-task` en curso (explore ✅ vía agent team / propose ✅ / design ✅). Phone de la OS de IClass = placeholder `'0000000000'` (isBlank rechaza vacío). Open questions de apply: ¿IClass acepta ese mobile? ¿`customerCode`=`iclassNodeCode` vs `"NETWORK"` (límite de chars)?
 - **Tamaño**: mediano (~1-1.5 días). Migración aditiva. Archivos: ~14 (BE schema/use case/IClass + FE modal/selector/badge).
+
+## ⏳ Pendientes (1)
+
+### #30 — Intervalos de los crons de cierre ajustables desde la UI  *(agregado 2026-06-08)*
+- **Qué**: hoy el cron de **cierre automático de OS** corre cada **10 min** y el de **auto-completado/reprocess** (#14) cada **15 min**, ambos **hardcodeados** (`bootstrapIClassClosure.ts:14`, `bootstrapTaskAutocomplete.ts:15` = `DEFAULT_INTERVAL_MS`). Para cambiarlos hay que editar código + redeploy. Se quiere **ajustar el intervalo desde la UI** (sub-page "Cierre de OS").
+- **Camino propuesto**: replicar el patrón que YA existe en Gestión Real — `bootstrapGestionRealIngest.ts:129-132` lee `intervalMs` de un **config-repo en la DB** (editable, con fallback al default). Hacer lo mismo para el closure loop y el autocomplete: un config persistido + endpoint + control en el FE. NO inventar nada nuevo, espejar el patrón GR (DB-backed config + el `intervalMs` que ya reciben los schedulers por options).
+- **Dónde**: BE config-repo (nuevo, espeja el de GR ingest) + `bootstrapIClassClosure`/`bootstrapTaskAutocomplete` leen de ahí + endpoint GET/PUT; FE control en `IClassClosureFlagBody`. Quizá migración (tabla de config, o reusar un store key-value existente).
+- **Tamaño**: chico-mediano. El scheduler ya acepta `intervalMs` por options — el trabajo es la fuente de verdad persistida + la UI.
 
 ## Refinamientos del #8 (ya en prod, NO son ítems numerados)
 
