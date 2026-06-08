@@ -250,6 +250,34 @@ describe('BackfillClosedServiceOrders', () => {
     expect((await backfill.execute()).failed).toBe(0);
   });
 
+  // ── A1.1: reconcileOne extraction parity (REQ: Batch Behavior Preserved) ──
+
+  it('Batch processes all in-flight tasks identically after refactor (reconcileOne extraction)', async () => {
+    // The batch loop now delegates per-task work to the public reconcileOne method.
+    // Behavior must be byte-identical: same aggregate counts, same transitions.
+    const { scheduling, iclass, resultCodes, closed, backfill } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    scheduling.seedTask({ id: 't2', sequenceNumber: 4014, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary('900', '4013'), summary('901', '4014')];
+    iclass.historyByOrder['900'] = HISTORY;
+    iclass.historyByOrder['901'] = HISTORY;
+    await resultCodes.upsert({ soTypeId: '1', code: 'Instalacion Completa Fibra', type: 'Sucesso' });
+    const rc = await resultCodes.findByCode('Instalacion Completa Fibra');
+    await resultCodes.assignStage(rc!.id, INSTALADO.id);
+
+    // reconcileOne must be a callable public method on the instance.
+    expect(typeof backfill.reconcileOne).toBe('function');
+
+    const counts = await backfill.execute();
+
+    // Aggregate counts equal the sum of per-task counts (2 mirrored + 2 transitioned).
+    expect(counts.mirrored).toBe(2);
+    expect(counts.transitioned).toBe(2);
+    expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id);
+    expect((await scheduling.getTask('t2'))!.stageId).toBe(INSTALADO.id);
+    expect(closed.orders.size).toBe(2);
+  });
+
   it('accepts inFlightStageCode option (rename-safe, REQ-BACKFILL-STAGE-1)', async () => {
     // When the stage has a different name but same code, passing inFlightStageCode
     // must still find the tasks.

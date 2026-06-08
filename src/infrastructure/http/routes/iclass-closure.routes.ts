@@ -10,6 +10,8 @@ import { GetPendingSideEffectsCount } from '@application/use-cases/GetPendingSid
 import { GetPendingSideEffectsList } from '@application/use-cases/GetPendingSideEffectsList';
 import { GetIClassClosureConfig } from '@application/use-cases/GetIClassClosureConfig';
 import { UpdateIClassClosureConfig } from '@application/use-cases/UpdateIClassClosureConfig';
+import { ListInFlightTasks } from '@application/use-cases/ListInFlightTasks';
+import { ReconcileTaskClosure } from '@application/use-cases/ReconcileTaskClosure';
 import { TaskAutocompleteScheduler } from '@infrastructure/scheduling/TaskAutocompleteScheduler';
 import { BackfillScheduler } from '@infrastructure/scheduling/BackfillScheduler';
 import { toResultCodeDTO, UpdateIClassClosureConfigSchema } from '@application/dto/iclassClosure.dto';
@@ -35,6 +37,8 @@ const AssignSchema = z.object({
  *   GET   /closure/reprocess/pending-list  — list of SOs with pending side-effects + joined task info
  *   GET   /closure/config               — get persisted scheduler intervals (iclass:manage)
  *   PUT   /closure/config               — update scheduler intervals (iclass:manage)
+ *   GET   /closure/in-flight            — list tasks awaiting closure (iclass:manage)
+ *   POST  /closure/reconcile/:taskId    — sync per-task reconcile, 200 + counts (iclass:manage)
  */
 export function createIClassClosureRouter(
   syncResultCodes: SyncIClassResultCodes,
@@ -47,6 +51,8 @@ export function createIClassClosureRouter(
   getPendingList: GetPendingSideEffectsList,
   getConfig: GetIClassClosureConfig,
   updateConfig: UpdateIClassClosureConfig,
+  listInFlight: ListInFlightTasks,
+  reconcile: ReconcileTaskClosure,
   requireIClassManage: RequestHandler,
   authProvider: AuthProvider,
 ): Router {
@@ -165,6 +171,26 @@ export function createIClassClosureRouter(
       res.status(200).json(await updateConfig.execute(parsed.data));
     } catch (err) {
       next(err);
+    }
+  });
+
+  // Listado de tareas en vuelo (stage `registered_in_iclass`): enviadas a IClass,
+  // esperando cierre. El FE lo usa para la página de reconcile manual.
+  router.get('/closure/in-flight', auth, requireIClassManage, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json({ items: await listInFlight.execute() });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Reconcile síncrono de UNA tarea: corre la misma lógica del batch para esa SO y
+  // devuelve los counts (200). Task inexistente → TaskNotFoundError → 404 (handler global).
+  router.post('/closure/reconcile/:taskId', auth, requireIClassManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json(await reconcile.execute(req.params.taskId));
+    } catch (err) {
+      next(err); // TaskNotFoundError → 404
     }
   });
 

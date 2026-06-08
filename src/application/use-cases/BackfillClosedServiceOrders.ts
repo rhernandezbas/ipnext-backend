@@ -1,5 +1,6 @@
 import { IClassPort } from '@domain/ports/IClassPort';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
+import { ScheduledTask } from '@domain/entities/scheduling';
 import {
   IngestClosedServiceOrders,
   IngestClosedCounts,
@@ -56,26 +57,51 @@ export class BackfillClosedServiceOrders {
     this.sleep = opts._sleep ?? sleep;
   }
 
-  async execute(): Promise<IngestClosedCounts> {
-    const counts = emptyClosedCounts();
+  /**
+   * Ventana de búsqueda [begin, now] derivada de `lookbackDays`. Expuesta para que
+   * `ReconcileTaskClosure` reutilice exactamente la misma ventana que el batch al
+   * reconciliar una sola tarea (la fuente de verdad de begin/now vive acá).
+   */
+  computeWindow(): { begin: Date; now: Date } {
     const now = this.now();
     const begin = new Date(now.getTime() - this.lookbackDays * DAY_MS);
+    return { begin, now };
+  }
+
+  /**
+   * Reconcilia UNA tarea en vuelo: consulta IClass por su serviceOrderCode exacto
+   * (= sequenceNumber) dentro de [begin, now] y corre el MISMO processSummary que
+   * el poll estable. Un fallo a nivel tarea NO aborta al llamador — incrementa
+   * `counts.failed` y retorna. Compartido por el batch loop y `ReconcileTaskClosure`.
+   */
+  async reconcileOne(
+    task: ScheduledTask,
+    begin: Date,
+    now: Date,
+    counts: IngestClosedCounts,
+  ): Promise<void> {
+    try {
+      const summaries = await this.iclass.listServiceOrders({
+        updatedDateBegin: begin,
+        updatedDateEnd: now,
+        serviceOrderCode: String(task.sequenceNumber),
+      });
+      for (const s of summaries) {
+        await this.ingest.processSummary(s, counts);
+      }
+    } catch {
+      // Un fallo en la tarea no aborta el batch — se incrementa el contador y se continúa.
+      counts.failed++;
+    }
+  }
+
+  async execute(): Promise<IngestClosedCounts> {
+    const counts = emptyClosedCounts();
+    const { begin, now } = this.computeWindow();
 
     const tasks = await this.scheduling.listTasksInIClassStage(this.inFlightStageCode);
     for (const task of tasks) {
-      try {
-        const summaries = await this.iclass.listServiceOrders({
-          updatedDateBegin: begin,
-          updatedDateEnd: now,
-          serviceOrderCode: String(task.sequenceNumber),
-        });
-        for (const s of summaries) {
-          await this.ingest.processSummary(s, counts);
-        }
-      } catch {
-        // Un fallo en la tarea no aborta el batch — se incrementa el contador y se continúa.
-        counts.failed++;
-      }
+      await this.reconcileOne(task, begin, now, counts);
       await this.sleep(this.throttleMs);
     }
     return counts;

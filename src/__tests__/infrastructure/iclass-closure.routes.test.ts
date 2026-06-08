@@ -22,6 +22,13 @@ import { AuthProvider } from '../../domain/ports/AuthProvider';
 import type { TriggerResult } from '../../infrastructure/scheduling/TaskAutocompleteScheduler';
 import type { BackfillTriggerResult } from '../../infrastructure/scheduling/BackfillScheduler';
 import { InMemoryClosedServiceOrderRepository } from '../../infrastructure/adapters/in-memory/InMemoryClosedServiceOrderRepository';
+import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
+import { InMemoryStageRepository } from '../../infrastructure/adapters/in-memory/InMemoryStageRepository';
+import { InMemoryIClassClient } from '../../infrastructure/adapters/in-memory/InMemoryIClassClient';
+import { IngestClosedServiceOrders } from '../../application/use-cases/IngestClosedServiceOrders';
+import { BackfillClosedServiceOrders } from '../../application/use-cases/BackfillClosedServiceOrders';
+import { ListInFlightTasks } from '../../application/use-cases/ListInFlightTasks';
+import { ReconcileTaskClosure } from '../../application/use-cases/ReconcileTaskClosure';
 
 class FakeAuthProvider implements AuthProvider {
   async login() {
@@ -40,6 +47,27 @@ class FakeAuthProvider implements AuthProvider {
 }
 
 const STAGE: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', code: 'instalado', category: 'hecho', order: 8, color: null };
+const REGISTRADO: Stage = { id: 'st-reg', workflowId: 'wf', name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'nuevo', order: 5, color: null };
+
+/**
+ * Construye las dos use cases de la página de reconcile (in-flight + per-task)
+ * sobre un scheduling repo in-memory. Devuelve el repo para poder sembrar tareas.
+ */
+function buildReconcileUseCases() {
+  const stages = new InMemoryStageRepository();
+  stages.addDirect(REGISTRADO);
+  stages.addDirect(STAGE);
+  const scheduling = new InMemorySchedulingRepository(stages);
+  const iclass = new InMemoryIClassClient();
+  const rcRepo = new InMemoryIClassResultCodeRepository();
+  const closed = new InMemoryClosedServiceOrderRepository();
+  const state = new InMemorySyncStateRepository();
+  const ingest = new IngestClosedServiceOrders(iclass, closed, rcRepo, scheduling, state, { now: () => new Date('2026-05-29T12:00:00Z') });
+  const backfill = new BackfillClosedServiceOrders(iclass, scheduling, ingest, { now: () => new Date('2026-05-29T12:00:00Z') });
+  const listInFlight = new ListInFlightTasks(scheduling);
+  const reconcile = new ReconcileTaskClosure(scheduling, backfill);
+  return { scheduling, iclass, listInFlight, reconcile };
+}
 function fakeStages(known: Record<string, Stage>): StageRepository {
   return { getById: async (id: string) => known[id] ?? null } as unknown as StageRepository;
 }
@@ -63,6 +91,7 @@ function buildApp(
   requireIClassManageOverride?: (req: unknown, res: unknown, next: () => void) => void,
   configRepo?: InMemoryIClassClosureConfigRepository,
   backfillResult: BackfillTriggerResult = { queued: true },
+  reconcileUseCases = buildReconcileUseCases(),
 ) {
   const repo = new InMemoryIClassResultCodeRepository();
   const state = new InMemorySyncStateRepository();
@@ -91,6 +120,8 @@ function buildApp(
     getPendingList,
     getConfig,
     updateConfig,
+    reconcileUseCases.listInFlight,
+    reconcileUseCases.reconcile,
     requireIClassManage as never,
     new FakeAuthProvider(),
   );
@@ -99,7 +130,7 @@ function buildApp(
   app.use(express.json());
   app.use('/api/admin/iclass', router);
   app.use(errorHandler);
-  return { app, repo, cfgRepo };
+  return { app, repo, cfgRepo, scheduling: reconcileUseCases.scheduling, iclass: reconcileUseCases.iclass };
 }
 
 /** Construye una app con reprocess scheduler=null para probar el 503 del reprocess */
@@ -124,6 +155,8 @@ function buildAppNullScheduler() {
     getPendingList,
     getConfig,
     updateConfig,
+    buildReconcileUseCases().listInFlight,
+    buildReconcileUseCases().reconcile,
     ((_req: unknown, _res: unknown, next: () => void) => next()) as never,
     new FakeAuthProvider(),
   );
@@ -157,6 +190,8 @@ function buildAppNullBackfillScheduler() {
     getPendingList,
     getConfig,
     updateConfig,
+    buildReconcileUseCases().listInFlight,
+    buildReconcileUseCases().reconcile,
     ((_req: unknown, _res: unknown, next: () => void) => next()) as never,
     new FakeAuthProvider(),
   );
@@ -502,6 +537,97 @@ describe('IClass closure routes', () => {
     const { app } = buildApp();
     const res = await request(app).get('/api/admin/iclass/closure/config').set(...AUTH);
     expect(res.status).toBe(200);
+  });
+
+  // -----------------------------------------------------------------------
+  // #35 Part 2 — GET /closure/in-flight (in-flight task list)
+  // -----------------------------------------------------------------------
+
+  it('GET /closure/in-flight → 200 list with DTO fields per task', async () => {
+    const reconcileUseCases = buildReconcileUseCases();
+    reconcileUseCases.scheduling.seedTask({
+      id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id,
+      title: 'Instalación fibra', customerName: 'Juan Pérez', customerCode: 'CLI-99', iclassOrderCode: 'SO-900',
+    });
+    const { app } = buildApp({ queued: true }, undefined, undefined, undefined, { queued: true }, reconcileUseCases);
+    const res = await request(app).get('/api/admin/iclass/closure/in-flight').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0]).toEqual({
+      id: 't1', sequenceNumber: 4013, title: 'Instalación fibra',
+      customerName: 'Juan Pérez', customerCode: 'CLI-99', iclassOrderCode: 'SO-900',
+    });
+  });
+
+  it('GET /closure/in-flight → 200 empty array when no tasks are in-flight', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/admin/iclass/closure/in-flight').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ items: [] });
+  });
+
+  it('GET /closure/in-flight → 401 without auth', async () => {
+    const { app } = buildApp();
+    expect((await request(app).get('/api/admin/iclass/closure/in-flight')).status).toBe(401);
+  });
+
+  it('GET /closure/in-flight → 403 when requireIClassManage rejects', async () => {
+    const rejectMiddleware = (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }, _next: unknown) => {
+      res.status(403).json({ code: 'FORBIDDEN' });
+    };
+    const { app } = buildApp({ queued: true }, undefined, rejectMiddleware as never);
+    const res = await request(app).get('/api/admin/iclass/closure/in-flight').set(...AUTH);
+    expect(res.status).toBe(403);
+  });
+
+  // -----------------------------------------------------------------------
+  // #35 Part 2 — POST /closure/reconcile/:taskId (per-task sync reconcile)
+  // -----------------------------------------------------------------------
+
+  it('POST /closure/reconcile/:taskId → 200 with counts when task closed', async () => {
+    const reconcileUseCases = buildReconcileUseCases();
+    reconcileUseCases.scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    // SO not closed (statusCode !== '7') → safe deterministic counts, still 200.
+    reconcileUseCases.iclass.serviceOrders = [{
+      iclassId: '900', iclassCodigo: '4013', clusterName: 'IPNEXT INTERNET', thirdPartyCode: null, nodeCode: null,
+      soTypeId: null, soTypeDescription: null, customerCode: null, customerName: null, addressCode: null, addressLine: null,
+      addressCity: null, addressLat: null, addressLng: null, statusCode: '3', statusDescription: 'En curso',
+      requestedAt: null, scheduledFor: null, availableAt: null, serviceStartedAt: null, serviceEndedAt: null,
+      resultCodeName: null, closedByLogin: null, closedByName: null,
+      closeLatitude: null, closeLongitude: null, closeGpsAt: null, billingAmount: null,
+      technicianNote: null, internalNote: null, commentaryLog: null,
+      teamLogin: null, teamTechnicianName: null, teamPhone: null, teamEmail: null,
+      iclassCreatedAt: null, iclassUpdatedAt: '2026-05-21T17:49:12.000Z', rawDetail: {},
+    }];
+    const { app } = buildApp({ queued: true }, undefined, undefined, undefined, { queued: true }, reconcileUseCases);
+    const res = await request(app).post('/api/admin/iclass/closure/reconcile/t1').set(...AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('mirrored');
+    expect(res.body).toHaveProperty('transitioned');
+    expect(res.body).toHaveProperty('skippedNotClosed');
+    expect(res.body).toHaveProperty('failed');
+    expect(res.body.skippedNotClosed).toBe(1);
+  });
+
+  it('POST /closure/reconcile/:taskId → 404 for an unknown task id', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/api/admin/iclass/closure/reconcile/ghost').set(...AUTH);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('TASK_NOT_FOUND');
+  });
+
+  it('POST /closure/reconcile/:taskId → 401 without auth', async () => {
+    const { app } = buildApp();
+    expect((await request(app).post('/api/admin/iclass/closure/reconcile/t1')).status).toBe(401);
+  });
+
+  it('POST /closure/reconcile/:taskId → 403 when requireIClassManage rejects', async () => {
+    const rejectMiddleware = (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }, _next: unknown) => {
+      res.status(403).json({ code: 'FORBIDDEN' });
+    };
+    const { app } = buildApp({ queued: true }, undefined, rejectMiddleware as never);
+    const res = await request(app).post('/api/admin/iclass/closure/reconcile/t1').set(...AUTH);
+    expect(res.status).toBe(403);
   });
 });
 
