@@ -44,6 +44,15 @@ export interface AuditContext {
   taskDescription: string | null;
   /** Human comments already on the task (the reported problem + back-and-forth). */
   taskComments: string[];
+  // ── IClass mirror fields (F6-R7) ──
+  /** History transitions with non-empty commentary, last ≤10, each ≤300 chars. */
+  historyCommentary: { status: string; commentary: string }[];
+  /** Raw commentary log, ≤500 chars; '' when absent. */
+  commentaryLog: string;
+  /** Internal note, ≤300 chars; '' when absent. */
+  internalNote: string;
+  /** Equipment events, ≤20 entries. `model` maps from `modelDescription`. */
+  equipmentEvents: { type: string | null; serialNumber: string | null; mac: string | null; model: string | null }[];
 }
 
 /** What the auditor returns. ok=false ⇒ soft-fail (the use-case persists nothing). */

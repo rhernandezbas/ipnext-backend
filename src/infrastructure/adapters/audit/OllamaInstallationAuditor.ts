@@ -63,6 +63,28 @@ export class OllamaInstallationAuditor implements InstallationAuditor {
     const checklist = ctx.checklistText.map(q => `- ${q.question}: ${q.answer}`).join('\n') || '(sin respuestas de texto)';
     const materials = ctx.materials.map(m => `- ${m.description ?? 'material'} x${m.qty}`).join('\n') || '(sin materiales)';
     const comments = ctx.taskComments.join('\n') || '(sin comentarios)';
+
+    // ── Conditional IClass mirror sections (F6-R8) ──────────────────────────
+    // Each section only appears when the field is non-empty (no "(ninguno)" noise).
+    const optionalFragments: string[] = [];
+
+    if (ctx.historyCommentary.length > 0) {
+      const lines = ctx.historyCommentary.map(h => `- ${h.status}: ${h.commentary}`).join('\n');
+      optionalFragments.push(`Historial de estados:\n${lines}`);
+    }
+    if (ctx.commentaryLog) {
+      optionalFragments.push(`Commentary log:\n${ctx.commentaryLog}`);
+    }
+    if (ctx.internalNote) {
+      optionalFragments.push(`Nota interna:\n${ctx.internalNote}`);
+    }
+    if (ctx.equipmentEvents.length > 0) {
+      const lines = ctx.equipmentEvents
+        .map(e => `- ${e.type ?? 'evento'} SN:${e.serialNumber ?? '?'} MAC:${e.mac ?? '?'} modelo:${e.model ?? '?'}`)
+        .join('\n');
+      optionalFragments.push(`Equipos registrados:\n${lines}`);
+    }
+
     return [
       'Sos un auditor de calidad de instalaciones de fibra/ISP. Te paso el contexto de cierre de una orden de servicio',
       'y TODAS las fotos del técnico. Evaluá la CALIDAD de la instalación comparando el PROBLEMA REPORTADO con lo HECHO.',
@@ -78,7 +100,9 @@ export class OllamaInstallationAuditor implements InstallationAuditor {
       `Observaciones del técnico: ${ctx.technicianNote ?? '(ninguna)'}`,
       'Materiales:',
       materials,
+      ...optionalFragments,
       '',
+      'IMPORTANTE: el contexto ya incluye historial, comentarios y notas — no marques \'falta X\' si X aparece en el contexto.',
       'Respondé EXCLUSIVAMENTE un array JSON. Cada item:',
       '{"severity":"ok|warning|critical","category":"señal|conexión|fotos|instalación|otros","text":"..."}.',
       'severity y category DEBEN ser exactamente uno de esos valores. Si no hay problemas, devolvé []. No agregues texto fuera del JSON.',
