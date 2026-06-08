@@ -152,3 +152,9 @@ The FE MUST provide a page at `/admin/scheduling/iclass/closure/reconcile` gated
 
 - GIVEN `IClassClosureFlagBody` is rendered
 - THEN a link to the reconcile page is present (analogous to the pending-list link)
+
+## REQ-RECONCILE-FAILURE-LOG-1 — Logging de fallo por-tarea  *(#37)*
+`reconcileOne` DEBE loguear un warning por cada fallo por-tarea ANTES de incrementar `counts.failed`, identificando la tarea por `sequenceNumber` + el mensaje de error, sin abortar el batch (aislamiento intacto). Una tarea exitosa NO loguea. Formato: `[backfill] task <sequenceNumber> FAILED: <message>`. Cubre el batch y el 1x1 (`ReconcileTaskClosure`) que comparten `reconcileOne`.
+
+## REQ-RECONCILE-COUNT-1 — Badge de cantidad in-flight  *(#37)*
+La página de Reconciliar DEBE mostrar la cantidad de tareas in-flight = `items.length` de `useInFlightTasks` (la lista renderizada, no puede driftear). Lista vacía → muestra 0 u oculta el badge con el empty state. Pill sutil al lado del título.
