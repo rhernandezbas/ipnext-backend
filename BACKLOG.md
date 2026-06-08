@@ -2,7 +2,7 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **28 hechos (en prod) · 1 en curso (#29) · 1 pendiente (#30).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23 cerrados vía SDD.)
+> **28 hechos (en prod) · 1 en curso (#29) · 2 pendientes (#30, #31).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23 cerrados vía SDD.)
 > Reglas de trabajo en [`WORKFLOW-MULTI-REPO.md`](./WORKFLOW-MULTI-REPO.md). Estado vivo también en engram (`sdd/*`).
 
 ---
@@ -152,7 +152,14 @@
 - **Estado**: SDD `network-node-task` en curso (explore ✅ vía agent team / propose ✅ / design ✅). Phone de la OS de IClass = placeholder `'0000000000'` (isBlank rechaza vacío). Open questions de apply: ¿IClass acepta ese mobile? ¿`customerCode`=`iclassNodeCode` vs `"NETWORK"` (límite de chars)?
 - **Tamaño**: mediano (~1-1.5 días). Migración aditiva. Archivos: ~14 (BE schema/use case/IClass + FE modal/selector/badge).
 
-## ⏳ Pendientes (1)
+## ⏳ Pendientes (2)
+
+### #31 — Reestructurar "Cierre de OS" + vista de progreso por tarea  *(agregado 2026-06-08)*
+- **Qué**: hoy la sub-page "Cierre de OS" (#7) junta TODO en una (cierre automático, reconciliar, reprocesar, auditoría, autocompletado, mapeo de estado). Separar y dar **observabilidad** al reprocess async (#23 dejó solo un número "N pendientes", sin saber qué tarea va ni en qué efecto).
+- **Decisiones lockeadas (usuario, 2026-06-08)**: (1) **el "mapeo de estado" sale a su propia subpage**; reconciliar + reprocesar + flags + la vista de progreso quedan juntos en una página de "Procesamiento/Cierre". (2) La vista de progreso = **tabla por tarea/OS** con columnas comentario ✓/✗, inventario ✓/✗, auditoría ✓/✗ (+ `auditAttempts`) y link a la tarea.
+- **La data YA existe** (no hay tracking nuevo): los flags del **#14** (`closureCommentDone`/`closureAuditDone`/`closureHasDeviceInventory`) ya están en la API de tareas; el side-effect tracker (`IClassServiceOrder`: `commentPosted`/`inventoryBuilt`/`auditDone`/`auditAttempts`) ya existe. Es mayormente un endpoint de listado (join) + la vista FE. Esto además responde "¿de qué son los 67 pendientes?".
+- **Dónde**: BE endpoint de listado de pendientes con desglose por efecto (sobre `listPendingSideEffects` + flags #14); FE separar `IClassClosureFlagBody`, nueva subpage de mapeo, nueva tabla de progreso. Permiso `iclass.manage` (el que ya usa la página).
+- **Tamaño**: mediano. Mayormente FE + un endpoint de lectura.
 
 ### #30 — Intervalos de los crons de cierre ajustables desde la UI  *(agregado 2026-06-08)*
 - **Qué**: hoy el cron de **cierre automático de OS** corre cada **10 min** y el de **auto-completado/reprocess** (#14) cada **15 min**, ambos **hardcodeados** (`bootstrapIClassClosure.ts:14`, `bootstrapTaskAutocomplete.ts:15` = `DEFAULT_INTERVAL_MS`). Para cambiarlos hay que editar código + redeploy. Se quiere **ajustar el intervalo desde la UI** (sub-page "Cierre de OS").
