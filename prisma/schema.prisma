@@ -791,7 +791,7 @@ model TaskInventorySuggestion {
   materialDesc    String?
   quantity        Float?
   unit            String?
-  source          String // OCR | ICLASS_MATERIAL
+  source          String // OCR | ICLASS_MATERIAL | MANUAL
   photoUrl        String?       @db.Text
   status          String        @default("pending") // pending | confirmed | discarded
   confirmedItemId String?

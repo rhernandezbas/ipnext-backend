@@ -25,6 +25,7 @@ import { ListTaskMaterialConsumptions } from '@application/use-cases/ListTaskMat
 import { DeleteMaterialConsumption } from '@application/use-cases/DeleteMaterialConsumption';
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 import { ContractInstalledItem } from '@domain/entities/contract-installed-item';
+import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
 import { TaskMaterialConsumption } from '@domain/entities/task-material-consumption';
 
 const BASE_TYPES = ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS'];
@@ -82,6 +83,7 @@ async function buildApp() {
     auth,
     { taskRead: pass, taskWrite: pass, contractRead: pass, contractWrite: pass, materialWrite: pass, manage: pass },
     deviceTypeCatalogService,
+    new CreateManualSuggestion(suggestions, scheduling, inventory, deviceTypeCatalogService),
   );
 
   const app = express();
@@ -135,6 +137,7 @@ async function buildAppWithPerms(perms: {
       manage:        perms.manage        ? pass : deny,
     },
     deviceTypeCatalogService,
+    new CreateManualSuggestion(suggestions, scheduling, inventory, deviceTypeCatalogService),
   );
 
   const app = express();
@@ -621,5 +624,92 @@ describe('PATCH .../type — CorrectConfirmedDeviceType route', () => {
     expect(res.body[0]).toHaveProperty('match');
     expect(res.body[0].match).not.toBeNull();
     expect(res.body[0].match.status).toBe('same_device');
+  });
+});
+
+describe('POST /scheduling/:taskId/inventory/suggestions — CreateManualSuggestion route (A5.1)', () => {
+  it('POST 201 DEVICE con SN → sugerencia MANUAL creada', async () => {
+    const { app, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions')
+      .send({ kind: 'DEVICE', type: 'ROUTER', serialNumber: 'SN-001' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.source).toBe('MANUAL');
+    expect(res.body.status).toBe('pending');
+    expect(res.body.serialNumber).toBe('SN-001');
+  });
+
+  it('POST 201 MATERIAL con descripción → sugerencia MANUAL creada', async () => {
+    const { app, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions')
+      .send({ kind: 'MATERIAL', materialDesc: 'Cable coaxial 10m', quantity: 2, unit: 'm' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.source).toBe('MANUAL');
+    expect(res.body.materialDesc).toBe('Cable coaxial 10m');
+  });
+
+  it('POST 400 Zod validation fail — missing kind', async () => {
+    const { app, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions')
+      .send({ serialNumber: 'SN-001' }); // falta kind
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('POST 403 sin permiso materialWrite', async () => {
+    const { app, scheduling } = await buildAppWithPerms({ materialWrite: false });
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions')
+      .send({ kind: 'DEVICE', type: 'ROUTER', serialNumber: 'SN-001' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('POST 404 task no encontrada', async () => {
+    const { app } = await buildApp();
+
+    const res = await request(app)
+      .post('/api/scheduling/no-existe/inventory/suggestions')
+      .send({ kind: 'DEVICE', type: 'ROUTER', serialNumber: 'SN-001' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('TASK_NOT_FOUND');
+  });
+
+  it('POST 422 SUGGESTION_INCOMPLETE — DEVICE sin SN ni MAC', async () => {
+    const { app, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions')
+      .send({ kind: 'DEVICE', type: 'ANTENA' }); // sin SN ni MAC
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('SUGGESTION_INCOMPLETE');
+  });
+
+  it('POST 422 INVALID_ITEM_TYPE — tipo desconocido', async () => {
+    const { app, scheduling } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    const res = await request(app)
+      .post('/api/scheduling/t1/inventory/suggestions')
+      .send({ kind: 'DEVICE', type: 'SUBMARINO', serialNumber: 'SN-001' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('INVALID_ITEM_TYPE');
   });
 });

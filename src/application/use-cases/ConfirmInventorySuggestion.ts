@@ -11,7 +11,6 @@ import {
   DuplicateInstalledItemError,
   NoReplaceTargetError,
   NotADeviceError,
-  IncompleteSuggestionError,
 } from '@domain/errors/inventory';
 import { randomUUID } from 'crypto';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
@@ -19,6 +18,7 @@ import { InstalledItemDto, toInstalledItemDto } from '@application/dto/Installed
 import { MaterialConsumptionDto, toMaterialConsumptionDto } from '@application/dto/MaterialConsumptionDto';
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 import { matchInstalledItem } from '@application/services/matchInstalledItem';
+import { assertSuggestionComplete } from '@domain/services/suggestionCompleteness';
 
 export type SuggestionResolution = 'add' | 'replace' | 'link_existing';
 
@@ -52,22 +52,19 @@ export class ConfirmInventorySuggestion {
     private readonly consumptions: TaskMaterialConsumptionRepository,
   ) {}
 
-  /** Min-data guard (#18): a DEVICE needs SN or MAC; a MATERIAL needs a description. */
-  private assertComplete(s: TaskInventorySuggestion): void {
-    if (s.kind === 'DEVICE') {
-      if (!s.serialNumber?.trim() && !s.mac?.trim()) {
-        throw new IncompleteSuggestionError(s.id, 'DEVICE requiere SN o MAC');
-      }
-    } else if (!s.materialDesc?.trim()) {
-      throw new IncompleteSuggestionError(s.id, 'MATERIAL requiere descripción');
-    }
+  /**
+   * Mapea el source de la sugerencia al source que corresponde en ContractInstalledItem.
+   * OCR → 'OCR', MANUAL → 'MANUAL', cualquier otro (ICLASS_MATERIAL) → 'ICLASS'.
+   */
+  private toItemSource(source: string): string {
+    return source === 'OCR' || source === 'MANUAL' ? source : 'ICLASS';
   }
 
   async execute(input: ConfirmInventorySuggestionInput): Promise<ConfirmResult> {
     const suggestion = await this.suggestions.get(input.suggestionId);
     if (!suggestion) throw new SuggestionNotFoundError(input.suggestionId);
     if (suggestion.status === 'confirmed') throw new SuggestionAlreadyConfirmedError(input.suggestionId);
-    this.assertComplete(suggestion);
+    assertSuggestionComplete(suggestion);
 
     const task = await this.scheduling.getTask(suggestion.taskId);
     const contractId = task?.contractId ?? null;
@@ -121,7 +118,7 @@ export class ConfirmInventorySuggestion {
       serialNumber: suggestion.serialNumber,
       mac: suggestion.mac,
       model: null,
-      source: suggestion.source === 'OCR' ? 'OCR' : 'ICLASS',
+      source: this.toItemSource(suggestion.source),
       sourceTaskId: suggestion.taskId,
       addedByUserId: input.addedByUserId ?? null,
       confirmedAt: now,
@@ -156,7 +153,7 @@ export class ConfirmInventorySuggestion {
     if (!suggestion) throw new SuggestionNotFoundError(input.suggestionId);
     if (suggestion.status === 'confirmed') throw new SuggestionAlreadyConfirmedError(input.suggestionId);
     if (suggestion.kind !== 'DEVICE') throw new NotADeviceError(input.suggestionId);
-    this.assertComplete(suggestion);
+    assertSuggestionComplete(suggestion);
 
     const task = await this.scheduling.getTask(suggestion.taskId);
     const contractId = task?.contractId ?? null;
@@ -190,7 +187,7 @@ export class ConfirmInventorySuggestion {
       serialNumber: suggestion.serialNumber,
       mac: suggestion.mac,
       model: null,
-      source: suggestion.source === 'OCR' ? 'OCR' : 'ICLASS',
+      source: this.toItemSource(suggestion.source),
       sourceTaskId: suggestion.taskId,
       addedByUserId: input.addedByUserId ?? null,
       confirmedAt: now,

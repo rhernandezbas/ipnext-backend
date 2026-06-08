@@ -413,6 +413,7 @@ import { ListTaskAuditFindings } from '@application/use-cases/ListTaskAuditFindi
 import { PrismaTaskAuditRepository } from '../adapters/prisma/PrismaTaskAuditRepository';
 import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
+import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
 import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
@@ -1066,6 +1067,7 @@ export function createApp() {
       manage:        requirePerm('inventory', 'manage'),  // admin — correct confirmed device type
     },
     deviceTypeCatalogService,
+    new CreateManualSuggestion(inventorySuggestionRepo, schedulingRepo, contractInventoryRepo, deviceTypeCatalogService),
   ));
 
   // F6 — AI installation audit read surface (before the scheduling /:id catch-all).

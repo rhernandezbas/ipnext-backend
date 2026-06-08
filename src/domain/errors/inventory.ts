@@ -152,3 +152,10 @@ export class IncompleteSuggestionError extends DomainError {
     this.name = 'IncompleteSuggestionError';
   }
 }
+
+export class InvalidItemTypeError extends DomainError {
+  constructor(type: string) {
+    super(`Device type "${type}" is not valid`, 'INVALID_ITEM_TYPE');
+    this.name = 'InvalidItemTypeError';
+  }
+}

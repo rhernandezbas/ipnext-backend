@@ -10,6 +10,7 @@ import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem'
 import { RecordMaterialConsumption } from '@application/use-cases/RecordMaterialConsumption';
 import { ListTaskMaterialConsumptions } from '@application/use-cases/ListTaskMaterialConsumptions';
 import { DeleteMaterialConsumption } from '@application/use-cases/DeleteMaterialConsumption';
+import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
 import { DeviceTypeCatalogService } from '@application/services/DeviceTypeCatalogService';
 import {
   InstalledItemNotFoundError,
@@ -70,6 +71,7 @@ export function createContractInventoryRouter(
   auth: RequestHandler,
   perms: InventoryRoutePerms,
   deviceTypes: DeviceTypeCatalogService,
+  createManualSuggestion: CreateManualSuggestion,
 ): Router {
   const router = Router();
   const userId = (req: Request): string | null => (req as { user?: { id?: string } }).user?.id ?? null;
@@ -78,6 +80,38 @@ export function createContractInventoryRouter(
   router.get('/scheduling/:taskId/inventory/suggestions', auth, perms.taskRead, async (req: Request, res: Response, next: NextFunction) => {
     try {
       res.json(await listSuggestions.execute(req.params.taskId));
+    } catch (e) { next(e); }
+  });
+
+  // ── Crear sugerencia manual ───────────────────────────────────────────────
+  const CreateManualSuggestionSchema = z.object({
+    kind: z.enum(['DEVICE', 'MATERIAL']),
+    type: z.string().optional(),
+    serialNumber: z.string().nullish(),
+    mac: z.string().nullish(),
+    materialDesc: z.string().nullish(),
+    quantity: z.number().positive().nullish(),
+    unit: z.string().nullish(),
+  });
+
+  router.post('/scheduling/:taskId/inventory/suggestions', auth, perms.materialWrite, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = CreateManualSuggestionSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      const dto = await createManualSuggestion.execute({
+        taskId: req.params.taskId,
+        kind: parsed.data.kind,
+        type: parsed.data.type ?? null,
+        serialNumber: parsed.data.serialNumber ?? null,
+        mac: parsed.data.mac ?? null,
+        materialDesc: parsed.data.materialDesc ?? null,
+        quantity: parsed.data.quantity ?? null,
+        unit: parsed.data.unit ?? null,
+      });
+      res.status(201).json(dto);
     } catch (e) { next(e); }
   });
 
