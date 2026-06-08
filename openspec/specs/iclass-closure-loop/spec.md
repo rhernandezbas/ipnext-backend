@@ -26,9 +26,16 @@ El catálogo `IClassResultCode` DEBE permitir asignar (o limpiar con null) un `m
 - **Given** result-code inexistente, **Then** 404 `ICLASS_RESULT_CODE_NOT_FOUND`.
 - El sync (`POST /result-codes/sync`) DEBE preservar el mapping configurado.
 
-## REQ-MOVE-1 — Transición de la tarea
-- **Given** una OS cerrada matcheada cuyo `motivoFechamento` resuelve a un result-code con `mappedStageId`, **Then** la tarea se mueve a ese Stage (`transitioned`).
+## REQ-MOVE-1 — Transición de la tarea  *(#36: exact + normalized fallback)*
+El sistema DEBE resolver `motivoFechamento` a un result-code con `mappedStageId` usando **match exacto primero**; si el exacto devuelve null, DEBE reintentar con **match normalizado** (`normalizeResultCode` aplicado a ambos lados). Solo tras fallar ambos se considera irresoluble y la tarea NO se mueve. (Antes: solo match exacto — el drift de puntuación/espacios dejaba tareas clavadas en `registered_in_iclass`.)
+- **Given** una OS cerrada matcheada cuyo `motivoFechamento` resuelve (exacto o normalizado) a un result-code con `mappedStageId`, **Then** la tarea se mueve a ese Stage (`transitioned`).
+- **Given** `motivoFechamento = "Cliente Ausente."` (con punto) y catálogo `code = "Cliente Ausente"`, **Then** el exacto da null, el fallback normalizado lo resuelve y la tarea se mueve.
+- **Given** match exacto, **Then** los finders normalizados NO se llaman (short-circuit).
 - **Given** el result-code sin mapeo, **Then** la OS se espeja pero la tarea NO se mueve.
+- **Auto-heal**: una OS ya espejada (`unchanged`) cuya tarea quedó clavada porque el code no resolvía, **When** corre el loop/reconcile tras el fix, **Then** el path idempotente re-evalúa el movimiento, el fallback normalizado resuelve, y la tarea se mueve.
+
+## REQ-NORMALIZE-1 — Normalized result-code matching  *(#36)*
+El sistema DEBE exponer un helper puro `normalizeResultCode(s): string` que, en orden: trim, strip de puntuación final (al menos `.` final), collapse de whitespace interno a un espacio, y lowercase. Determinístico y sin side-effects. **Conservador**: preserva puntuación interna → no colapsa codes distintos. El port `IClassResultCodeRepository` DEBE exponer `findBySoTypeAndCodeNormalized` y `findByCodeNormalized` (normalizan ambos lados antes de comparar), implementados en el adapter Prisma y el in-memory con comportamiento equivalente. La desambiguación por `soTypeId` se preserva en el pase normalizado.
 
 ## REQ-SYNC-CAT-1 — Sync del catálogo
 El sync DEBE descubrir los soType ids desde `tipoOs.id` de OS recientes (los endpoints de tipos no exponen id numérico) y traer `/serviceordertypes/{id}/resultcodes`, deduplicando por `(soTypeId, code)`.
