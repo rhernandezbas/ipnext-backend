@@ -89,8 +89,9 @@ export class BackfillClosedServiceOrders {
       for (const s of summaries) {
         await this.ingest.processSummary(s, counts);
       }
-    } catch {
-      // Un fallo en la tarea no aborta el batch — se incrementa el contador y se continúa.
+    } catch (err) {
+      // Un fallo en la tarea no aborta el batch — se loguea, se incrementa el contador y se continúa.
+      console.warn(`[backfill] task ${task.sequenceNumber} FAILED: ${(err as Error).message}`);
       counts.failed++;
     }
   }

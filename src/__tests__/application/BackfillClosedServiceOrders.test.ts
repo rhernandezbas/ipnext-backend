@@ -278,6 +278,59 @@ describe('BackfillClosedServiceOrders', () => {
     expect(closed.orders.size).toBe(2);
   });
 
+  // ── A.1 / A.2: per-task failure logging (REQ: Per-Task Reconcile Failure Logging) ──
+
+  describe('per-task failure logging', () => {
+    let warnSpy: jest.SpyInstance;
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it('A.1: logs [backfill] task <seq> FAILED: <msg>, increments failed, does not throw (Scenarios 1+2)', async () => {
+      const { scheduling, resultCodes, closed, state } = setupIsolation();
+      scheduling.seedTask({ id: 't1', sequenceNumber: 4001, stageId: REGISTRADO.id });
+      scheduling.seedTask({ id: 't2', sequenceNumber: 4002, stageId: REGISTRADO.id });
+
+      // task 2 (code '4002') throws with a known message
+      const iclass = makeFaultyIClass(['4002']);
+      const backfill = makeBackfill(iclass, scheduling, resultCodes, closed, state);
+
+      warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const counts = await backfill.execute();
+
+      expect(counts.failed).toBe(1);
+
+      const failureLogs = warnSpy.mock.calls
+        .map(args => String(args[0]))
+        .filter(msg => msg.includes('[backfill] task') && msg.includes('FAILED'));
+      expect(failureLogs).toHaveLength(1);
+      // identifies the failing task by sequenceNumber AND includes the error message
+      expect(failureLogs[0]).toContain('4002');
+      expect(failureLogs[0]).toContain('IClass down for task');
+    });
+
+    it('A.2: a non-throwing task does NOT emit a failure warn (Scenario 3)', async () => {
+      const { scheduling, resultCodes, closed, state } = setupIsolation();
+      scheduling.seedTask({ id: 't1', sequenceNumber: 4001, stageId: REGISTRADO.id });
+      scheduling.seedTask({ id: 't2', sequenceNumber: 4002, stageId: REGISTRADO.id });
+
+      const iclass = new InMemoryIClassClient(); // no failures
+      const backfill = makeBackfill(iclass, scheduling, resultCodes, closed, state);
+
+      warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const counts = await backfill.execute();
+
+      expect(counts.failed).toBe(0);
+      const failureLogs = warnSpy.mock.calls
+        .map(args => String(args[0]))
+        .filter(msg => msg.includes('[backfill] task') && msg.includes('FAILED'));
+      expect(failureLogs).toHaveLength(0);
+    });
+  });
+
   it('accepts inFlightStageCode option (rename-safe, REQ-BACKFILL-STAGE-1)', async () => {
     // When the stage has a different name but same code, passing inFlightStageCode
     // must still find the tasks.
