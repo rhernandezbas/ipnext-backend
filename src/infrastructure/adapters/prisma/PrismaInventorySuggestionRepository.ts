@@ -33,11 +33,14 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
     return row !== null;
   }
 
-  /** Natural-key upsert: (taskId, kind, serialNumber, mac, materialDesc). */
+  /** Natural-key upsert: (taskId, kind, source, serialNumber, mac, materialDesc).
+   * El `source` fue incorporado para que el re-ingest de OCR no clobber filas MANUAL
+   * que compartan SN/MAC. La idempotencia OCR↔OCR y MANUAL↔MANUAL se conserva.
+   */
   async upsert(s: TaskInventorySuggestion): Promise<TaskInventorySuggestion> {
     const existing = await prisma.taskInventorySuggestion.findFirst({
       where: {
-        taskId: s.taskId, kind: s.kind,
+        taskId: s.taskId, kind: s.kind, source: s.source,
         serialNumber: s.serialNumber, mac: s.mac, materialDesc: s.materialDesc,
       },
     });
@@ -57,6 +60,21 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
         serialNumber: s.serialNumber, mac: s.mac, materialDesc: s.materialDesc,
         quantity: s.quantity, unit: s.unit, source: s.source, photoUrl: s.photoUrl,
         status: s.status, confirmedItemId: s.confirmedItemId, createdAt: new Date(s.createdAt),
+      },
+    });
+    return toEntity(row);
+  }
+
+  /** Plain insert sin dedup. Las sugerencias MANUAL nunca clobberizan filas OCR. */
+  async create(s: TaskInventorySuggestion): Promise<TaskInventorySuggestion> {
+    const row = await prisma.taskInventorySuggestion.create({
+      data: {
+        id: s.id, taskId: s.taskId, kind: s.kind, deviceType: s.deviceType,
+        qwenDeviceType: s.qwenDeviceType, serialNumber: s.serialNumber, mac: s.mac,
+        materialDesc: s.materialDesc, quantity: s.quantity, unit: s.unit,
+        source: s.source, photoUrl: s.photoUrl,
+        status: s.status, confirmedItemId: s.confirmedItemId,
+        createdAt: new Date(s.createdAt),
       },
     });
     return toEntity(row);

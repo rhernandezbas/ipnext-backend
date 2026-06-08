@@ -1,9 +1,13 @@
 import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestionRepository';
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 
-/** Natural key for idempotent upsert: task + kind + (sn|mac|materialDesc). */
+/**
+ * Clave natural para upsert idempotente: task + kind + source + (sn|mac|materialDesc).
+ * El `source` fue agregado para que un upsert OCR nunca clobber una fila MANUAL
+ * que comparte el mismo SN/MAC, y viceversa.
+ */
 function naturalKey(s: TaskInventorySuggestion): string {
-  return `${s.taskId}::${s.kind}::${s.serialNumber ?? s.mac ?? s.materialDesc ?? ''}`;
+  return `${s.taskId}::${s.kind}::${s.source}::${s.serialNumber ?? s.mac ?? s.materialDesc ?? ''}`;
 }
 
 export class InMemoryInventorySuggestionRepository implements InventorySuggestionRepository {
@@ -41,6 +45,14 @@ export class InMemoryInventorySuggestionRepository implements InventorySuggestio
     }
     this.store.set(suggestion.id, suggestion);
     this.byNatural.set(key, suggestion.id);
+    return suggestion;
+  }
+
+  /** Plain insert sin dedup. Las sugerencias MANUAL nunca modifican filas OCR. */
+  async create(suggestion: TaskInventorySuggestion): Promise<TaskInventorySuggestion> {
+    this.store.set(suggestion.id, suggestion);
+    // Intencionalmente NO se registra en byNatural para que un upsert posterior
+    // de OCR con el mismo SN/MAC no encuentre esta fila y la sobreescriba.
     return suggestion;
   }
 

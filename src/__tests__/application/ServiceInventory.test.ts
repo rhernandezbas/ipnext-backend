@@ -1,4 +1,5 @@
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
+import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
@@ -525,5 +526,188 @@ describe('DiscardInventorySuggestion', () => {
   it('unknown suggestion → SUGGESTION_NOT_FOUND', async () => {
     const { discard } = await setup();
     await expect(discard.execute('nope')).rejects.toMatchObject({ code: 'SUGGESTION_NOT_FOUND' });
+  });
+});
+
+describe('CreateManualSuggestion (A4.1)', () => {
+  async function setupManual() {
+    const base = await setup();
+    const catalogRepo = new InMemoryDeviceTypeCatalogRepository();
+    await seedDeviceCatalog(catalogRepo);
+    const deviceTypeCatalogService = new (await import('@application/services/DeviceTypeCatalogService')).DeviceTypeCatalogService(catalogRepo);
+    const createManual = new CreateManualSuggestion(
+      base.suggestions,
+      base.scheduling,
+      base.inventory,
+      deviceTypeCatalogService,
+    );
+    return { ...base, createManual };
+  }
+
+  it('DEVICE solo SN → sugerencia MANUAL pending guardada', async () => {
+    const { scheduling, createManual } = await setupManual();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    const dto = await createManual.execute({
+      taskId: 't1', kind: 'DEVICE', type: 'ROUTER', serialNumber: 'SN-001', mac: null,
+      materialDesc: null, quantity: null, unit: null,
+    });
+
+    expect(dto.source).toBe('MANUAL');
+    expect(dto.status).toBe('pending');
+    expect(dto.serialNumber).toBe('SN-001');
+    expect(dto.kind).toBe('DEVICE');
+  });
+
+  it('DEVICE solo MAC → sugerencia MANUAL pending guardada', async () => {
+    const { scheduling, createManual } = await setupManual();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    const dto = await createManual.execute({
+      taskId: 't1', kind: 'DEVICE', type: 'ONU', serialNumber: null, mac: 'AA:BB:CC:DD:EE:FF',
+      materialDesc: null, quantity: null, unit: null,
+    });
+
+    expect(dto.source).toBe('MANUAL');
+    expect(dto.status).toBe('pending');
+    expect(dto.mac).toBe('AA:BB:CC:DD:EE:FF');
+  });
+
+  it('MATERIAL happy path → sugerencia MANUAL pending guardada', async () => {
+    const { scheduling, createManual } = await setupManual();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    const dto = await createManual.execute({
+      taskId: 't1', kind: 'MATERIAL', type: undefined, serialNumber: null, mac: null,
+      materialDesc: 'Cable coaxial 10m', quantity: 2, unit: 'm',
+    });
+
+    expect(dto.source).toBe('MANUAL');
+    expect(dto.status).toBe('pending');
+    expect(dto.materialDesc).toBe('Cable coaxial 10m');
+    expect(dto.kind).toBe('MATERIAL');
+  });
+
+  it('DEVICE sin SN ni MAC → lanza IncompleteSuggestionError (422 code)', async () => {
+    const { scheduling, createManual } = await setupManual();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    await expect(createManual.execute({
+      taskId: 't1', kind: 'DEVICE', type: 'ANTENA', serialNumber: null, mac: null,
+      materialDesc: null, quantity: null, unit: null,
+    })).rejects.toMatchObject({ code: 'SUGGESTION_INCOMPLETE' });
+  });
+
+  it('tipo desconocido → lanza InvalidItemTypeError (422)', async () => {
+    const { scheduling, createManual } = await setupManual();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+
+    await expect(createManual.execute({
+      taskId: 't1', kind: 'DEVICE', type: 'SUBMARINO', serialNumber: 'SN-X', mac: null,
+      materialDesc: null, quantity: null, unit: null,
+    })).rejects.toMatchObject({ code: 'INVALID_ITEM_TYPE' });
+  });
+
+  it('task no encontrada → lanza TaskNotFoundError (404)', async () => {
+    const { createManual } = await setupManual();
+
+    await expect(createManual.execute({
+      taskId: 'no-existe', kind: 'DEVICE', type: 'ROUTER', serialNumber: 'SN-X', mac: null,
+      materialDesc: null, quantity: null, unit: null,
+    })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  });
+});
+
+describe('ConfirmInventorySuggestion — source pass-through (A3.1)', () => {
+  it('SCEN-CF-5: sugerencia MANUAL confirmada → ContractInstalledItem.source = MANUAL', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', source: 'MANUAL', serialNumber: 'SN-M' }));
+
+    const result = await confirm.execute({ suggestionId: 's1' });
+
+    expect(result.kind).toBe('DEVICE');
+    if (result.kind !== 'DEVICE') throw new Error('expected DEVICE');
+    const item = await inventory.getById(result.item.id);
+    expect(item!.source).toBe('MANUAL');
+  });
+
+  it('SCEN-CF-6: sugerencia OCR confirmada → ContractInstalledItem.source = OCR', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', source: 'OCR', serialNumber: 'SN-O' }));
+
+    const result = await confirm.execute({ suggestionId: 's1' });
+
+    expect(result.kind).toBe('DEVICE');
+    if (result.kind !== 'DEVICE') throw new Error('expected DEVICE');
+    const item = await inventory.getById(result.item.id);
+    expect(item!.source).toBe('OCR');
+  });
+
+  it('SCEN-CF-7: sugerencia ICLASS_MATERIAL confirmada → ContractInstalledItem.source = ICLASS', async () => {
+    const { suggestions, inventory, scheduling, confirm } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', source: 'ICLASS_MATERIAL', serialNumber: 'SN-I' }));
+
+    const result = await confirm.execute({ suggestionId: 's1' });
+
+    expect(result.kind).toBe('DEVICE');
+    if (result.kind !== 'DEVICE') throw new Error('expected DEVICE');
+    const item = await inventory.getById(result.item.id);
+    expect(item!.source).toBe('ICLASS');
+  });
+});
+
+describe('InventorySuggestionRepository.create() — aislamiento MANUAL/OCR (A2.1)', () => {
+  it('create(MANUAL, SN-1) no clobber upsert OCR: ambas filas coexisten y el OCR conserva photoUrl', async () => {
+    const { suggestions } = await setup();
+
+    // Seed OCR via upsert
+    const ocrSug: TaskInventorySuggestion = {
+      id: 'ocr-1', taskId: 'T1', kind: 'DEVICE', deviceType: 'ONU', qwenDeviceType: 'ONU',
+      serialNumber: 'SN-1', mac: null, materialDesc: null, quantity: null, unit: null,
+      source: 'OCR', photoUrl: 'http://photo.jpg',
+      status: 'pending', confirmedItemId: null, createdAt: '2026-06-01T00:00:00Z',
+    };
+    await suggestions.upsert(ocrSug);
+
+    // create() MANUAL con mismo SN
+    const manualSug: TaskInventorySuggestion = {
+      id: 'manual-1', taskId: 'T1', kind: 'DEVICE', deviceType: 'ONU', qwenDeviceType: null,
+      serialNumber: 'SN-1', mac: null, materialDesc: null, quantity: null, unit: null,
+      source: 'MANUAL', photoUrl: null,
+      status: 'pending', confirmedItemId: null, createdAt: '2026-06-01T00:00:00Z',
+    };
+    await suggestions.create(manualSug);
+
+    const all = await suggestions.listByTask('T1');
+    expect(all).toHaveLength(2);
+
+    const ocr = all.find(s => s.id === 'ocr-1');
+    expect(ocr).toBeDefined();
+    expect(ocr!.photoUrl).toBe('http://photo.jpg');   // no fue tocado
+    expect(ocr!.source).toBe('OCR');
+
+    const manual = all.find(s => s.id === 'manual-1');
+    expect(manual).toBeDefined();
+    expect(manual!.source).toBe('MANUAL');
+  });
+
+  it('create(MANUAL) agrega segunda fila para la misma clave natural (duplicados permitidos en staging)', async () => {
+    const { suggestions } = await setup();
+
+    const base: TaskInventorySuggestion = {
+      id: 'm1', taskId: 'T2', kind: 'DEVICE', deviceType: 'ROUTER', qwenDeviceType: null,
+      serialNumber: 'SN-DUP', mac: null, materialDesc: null, quantity: null, unit: null,
+      source: 'MANUAL', photoUrl: null,
+      status: 'pending', confirmedItemId: null, createdAt: '2026-06-01T00:00:00Z',
+    };
+    await suggestions.create(base);
+    await suggestions.create({ ...base, id: 'm2' });
+
+    const all = await suggestions.listByTask('T2');
+    expect(all).toHaveLength(2);
+    expect(all.map(s => s.id).sort()).toEqual(['m1', 'm2']);
   });
 });

@@ -70,6 +70,8 @@ const statusMap: Record<string, number> = {
   // inventory-confirm-dedup-replace
   DUPLICATE_INSTALLED_ITEM: 409,
   NO_REPLACE_TARGET: 409,
+  // task-manual-inventory-item
+  INVALID_ITEM_TYPE: 422,
 };
 
 /** Express global error-handling middleware. */

@@ -18,4 +18,9 @@ export interface InventorySuggestionRepository {
   ): Promise<TaskInventorySuggestion | null>;
   /** #14: true if the task has ≥1 DEVICE suggestion not discarded (materials don't count). */
   hasDeviceForTask(taskId: string): Promise<boolean>;
+  /**
+   * Plain insert — sin dedup por clave natural. Las entradas MANUAL nunca deben
+   * fusionarse con filas OCR que compartan SN/MAC.
+   */
+  create(suggestion: TaskInventorySuggestion): Promise<TaskInventorySuggestion>;
 }
