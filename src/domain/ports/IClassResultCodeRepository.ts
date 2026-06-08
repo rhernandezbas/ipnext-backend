@@ -29,6 +29,17 @@ export interface IClassResultCodeRepository {
   /** Upsert one entry keyed by (soTypeId, code) during the catalog sync. */
   upsert(entry: UpsertResultCodeInput): Promise<{ status: 'created' | 'updated' }>;
   /**
+   * Igual que `findBySoTypeAndCode` pero aplicando `normalizeResultCode` a ambos
+   * lados de la comparación. Rescata variaciones de IClass como puntuación final
+   * o espacios internos que el match exacto no cubre.
+   */
+  findBySoTypeAndCodeNormalized(soTypeId: string, code: string): Promise<IClassResultCode | null>;
+  /**
+   * Igual que `findByCode` pero con normalización de ambos lados. Fallback cuando
+   * el SO no tiene soTypeId o el match con soType no encontró nada.
+   */
+  findByCodeNormalized(code: string): Promise<IClassResultCode | null>;
+  /**
    * Set (or clear, with null) the target Stage for a result code — the
    * configurable closure mapping assigned from the admin UX. Returns the updated
    * entry, or null when the id does not exist.

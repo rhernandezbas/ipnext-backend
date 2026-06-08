@@ -4,6 +4,7 @@ import {
   IClassResultCodeRepository,
   UpsertResultCodeInput,
 } from '@domain/ports/IClassResultCodeRepository';
+import { normalizeResultCode } from '@application/use-cases/normalizeResultCode';
 
 export class InMemoryIClassResultCodeRepository implements IClassResultCodeRepository {
   private rows = new Map<string, IClassResultCode>();
@@ -41,6 +42,22 @@ export class InMemoryIClassResultCodeRepository implements IClassResultCodeRepos
     const norm = code.trim().toLowerCase();
     for (const r of this.rows.values()) {
       if (String(r.soTypeId) === soTypeId && r.code.trim().toLowerCase() === norm) return { ...r };
+    }
+    return null;
+  }
+
+  async findBySoTypeAndCodeNormalized(soTypeId: string, code: string): Promise<IClassResultCode | null> {
+    const norm = normalizeResultCode(code);
+    for (const r of this.rows.values()) {
+      if (String(r.soTypeId) === soTypeId && normalizeResultCode(r.code) === norm) return { ...r };
+    }
+    return null;
+  }
+
+  async findByCodeNormalized(code: string): Promise<IClassResultCode | null> {
+    const norm = normalizeResultCode(code);
+    for (const r of this.rows.values()) {
+      if (normalizeResultCode(r.code) === norm) return { ...r };
     }
     return null;
   }
