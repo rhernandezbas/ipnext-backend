@@ -2,7 +2,16 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → **28 totales**.
-> **33 hechos (en prod) · 0 pendientes — backlog completo.** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33 cerrados vía SDD.)
+> **33 hechos (en prod) · 1 en curso (#34).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33 cerrados vía SDD.)
+
+## 🔧 En curso (1)
+
+### #34 — Auditor IA: reintento con menos fotos ante degeneración del modelo  *(agregado 2026-06-08)*
+- **Disparador**: con el reprocess drenando (#23/#32/#33 + flags ON + Ollama), algunas OS multi-foto **degeneran**: `qwen2.5vl:7b` devuelve tokens basura repetidos (`<|im_start|>` en loop) en vez de JSON → `parseAuditResult` soft-fail-ea → `{ok:false}` → no se persiste. Visto en prod: OS 4564 (3 fotos) degenera, OS 4563 (4 fotos) anda. Intermitente.
+- **Causa**: prompt multimodal largo (hasta **8 fotos** `DEFAULT_MAX_PHOTOS` + el contexto enriquecido del #20). El auditor **ya** usa structured-outputs (`format: auditFormatSchema()` + `temperature:0`) para reducirlo, pero igual pasa. Y **no reintenta**: ante el soft-fail vuelve `ok:false` y la OS queda pendiente; en el próximo reprocess manda las MISMAS fotos → degenera igual → los 3 `auditAttempts` se desperdician en el mismo prompt.
+- **Fix propuesto**: en `OllamaInstallationAuditor.audit()`, ante un parse soft-fail, **reintentar con MENOS fotos** (escalera, ej. 8 → ~3 → 0), acotado, antes de devolver `ok:false`. Menos imágenes = prompt más corto = mucho menos degeneración. (Opcional: bajar `DEFAULT_MAX_PHOTOS` de baseline.)
+- **Dónde**: BE `src/infrastructure/adapters/audit/OllamaInstallationAuditor.ts` (+ quizá `parseAuditResult`). Sin FE, sin migración.
+- **Tamaño**: chico, BE-only.
 
 ### #33 — Backfill resiliente al rate-limit de IClass (HTTP 429)  *(HECHO 2026-06-08)*
 - **Disparador**: tras el #32 (backfill async), "Reconciliar" no hacía nada. Diagnóstico vía logs del VPS: `[backfill-scheduler] ERROR: IClass responded with HTTP 429` — el backfill rafagueaba ~78 llamadas a IClass sin pausa → 429 → un solo 429 abortaba todo el batch.
