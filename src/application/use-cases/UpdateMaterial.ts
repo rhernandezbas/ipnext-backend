@@ -1,12 +1,16 @@
 import { MaterialCatalogRepository } from '@domain/ports/MaterialCatalogRepository';
 import { MaterialCatalog } from '@domain/entities/material-catalog';
-import { MaterialNotFoundError, MaterialNameConflictError } from '@domain/errors/inventory';
+import { MaterialNotFoundError, MaterialNameConflictError, InvalidMinStockError } from '@domain/errors/inventory';
 
 export class UpdateMaterial {
   constructor(private readonly repo: MaterialCatalogRepository) {}
-  async execute(id: string, data: Partial<{ name: string; label: string | null; unit: string | null; active: boolean; sortOrder: number }>): Promise<MaterialCatalog> {
+  async execute(id: string, data: Partial<{ name: string; label: string | null; unit: string | null; active: boolean; sortOrder: number; minStock: number }>): Promise<MaterialCatalog> {
     const item = await this.repo.getById(id);
     if (!item) throw new MaterialNotFoundError(id);
+
+    if (data.minStock !== undefined && data.minStock < 0) {
+      throw new InvalidMinStockError(data.minStock);
+    }
 
     let patch = { ...data };
     if (data.name) {

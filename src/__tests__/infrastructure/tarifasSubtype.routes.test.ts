@@ -11,12 +11,9 @@ import { GetNetworkDevice } from '../../application/use-cases/GetNetworkDevice';
 import { CreateNetworkDevice } from '../../application/use-cases/CreateNetworkDevice';
 import { UpdateNetworkDevice } from '../../application/use-cases/UpdateNetworkDevice';
 import { DeleteNetworkDevice } from '../../application/use-cases/DeleteNetworkDevice';
-import { ListInventoryItems } from '../../application/use-cases/ListInventoryItems';
-import { GetInventoryItem } from '../../application/use-cases/GetInventoryItem';
-import { CreateInventoryItem } from '../../application/use-cases/CreateInventoryItem';
-import { UpdateInventoryItem } from '../../application/use-cases/UpdateInventoryItem';
-import { DeleteInventoryItem } from '../../application/use-cases/DeleteInventoryItem';
 import { createEmpresaRouter } from '../../infrastructure/http/routes/empresa.routes';
+
+// World A Inventory imports removed — Wave 7 (Capstone) retirement.
 
 function buildApp() {
   const app = express();
@@ -33,16 +30,10 @@ function buildApp() {
   const createNetworkDevice = new CreateNetworkDevice(repo);
   const updateNetworkDevice = new UpdateNetworkDevice(repo);
   const deleteNetworkDevice = new DeleteNetworkDevice(repo);
-  const listInventoryItems = new ListInventoryItems(repo);
-  const getInventoryItem = new GetInventoryItem(repo);
-  const createInventoryItem = new CreateInventoryItem(repo);
-  const updateInventoryItem = new UpdateInventoryItem(repo);
-  const deleteInventoryItem = new DeleteInventoryItem(repo);
 
   app.use('/api', createEmpresaRouter(
     listServicePlans, getServicePlan, createServicePlan, updateServicePlan, deleteServicePlan,
     listNetworkDevices, getNetworkDevice, createNetworkDevice, updateNetworkDevice, deleteNetworkDevice,
-    listInventoryItems, getInventoryItem, createInventoryItem, updateInventoryItem, deleteInventoryItem,
   ));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {

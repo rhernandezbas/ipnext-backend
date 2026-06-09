@@ -1,6 +1,7 @@
 import {
   InventoryMovementRepository,
   RecordMovementInput,
+  MovementFilters,
 } from '@domain/ports/InventoryMovementRepository';
 import { createInventoryMovement, InventoryMovement } from '@domain/entities/inventory-movement';
 import { computeAssetEffect } from '@domain/entities/inventory-asset-effect';
@@ -261,5 +262,59 @@ export class PrismaInventoryMovementRepository implements InventoryMovementRepos
   async findBySourceRef(sourceRef: string): Promise<InventoryMovement | null> {
     const row = await this.db.inventoryMovement.findFirst({ where: { sourceRef } });
     return row ? toEntity(row as Row) : null;
+  }
+
+  /**
+   * Wave 7 (Capstone) — paginated movement ledger, ordered occurredAt DESC.
+   * ONE findMany + ONE count — no N+1. Filters map to Prisma where clauses.
+   */
+  async listMovements(
+    filters: MovementFilters,
+    page: number,
+    limit: number,
+  ): Promise<{ items: InventoryMovement[]; total: number }> {
+    const where: Record<string, unknown> = {};
+
+    if (filters.type) {
+      where.type = filters.type;
+    }
+    if (filters.locationId) {
+      where.OR = [
+        { fromLocationId: filters.locationId },
+        { toLocationId: filters.locationId },
+      ];
+    }
+    if (filters.materialCatalogId) {
+      where.materialCatalogId = filters.materialCatalogId;
+    }
+    if (filters.taskId) {
+      where.taskId = filters.taskId;
+    }
+    if (filters.technicianId) {
+      where.technicianId = filters.technicianId;
+    }
+    if (filters.dateFrom || filters.dateTo) {
+      const dateFilter: Record<string, Date> = {};
+      if (filters.dateFrom) dateFilter.gte = new Date(filters.dateFrom);
+      if (filters.dateTo) dateFilter.lte = new Date(filters.dateTo);
+      where.occurredAt = dateFilter;
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [rows, total] = await Promise.all([
+      this.db.inventoryMovement.findMany({
+        where: where as any,
+        orderBy: { occurredAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.db.inventoryMovement.count({ where: where as any }),
+    ]);
+
+    return {
+      items: rows.map((r) => toEntity(r as Row)),
+      total,
+    };
   }
 }

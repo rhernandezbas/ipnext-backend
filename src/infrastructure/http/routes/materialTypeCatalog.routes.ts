@@ -14,6 +14,7 @@ import {
   MaterialNameConflictError,
   MaterialInUseError,
   MaterialProtectedError,
+  InvalidMinStockError,
 } from '@domain/errors/inventory';
 
 /** Factory matching `requirePerm` exported from app.ts (DIP-clean injection). */
@@ -86,6 +87,11 @@ export function createMaterialTypeCatalogRouter(
       }
       if (err instanceof MaterialNameConflictError) {
         res.status(409).json({ error: err.message, code: err.code });
+        return;
+      }
+      // FIX-5a: InvalidMinStockError from the use case must map to 400, not 500.
+      if (err instanceof InvalidMinStockError) {
+        res.status(400).json({ error: err.message, code: err.code });
         return;
       }
       throw err;

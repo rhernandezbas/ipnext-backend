@@ -50,4 +50,29 @@ describe('UpdateMaterial', () => {
     const update = new UpdateMaterial(repo);
     await expect(update.execute('nonexistent', { label: 'x' })).rejects.toBeInstanceOf(MaterialNotFoundError);
   });
+
+  // SCEN-MS-1: update minStock via the use case
+  it('SCEN-MS-1: updates minStock to positive value', async () => {
+    const repo = new InMemoryMaterialCatalogRepository();
+    const item = await repo.create({ name: 'CABLE_UTP', sortOrder: 0 });
+    expect(item.minStock).toBe(0);
+
+    const update = new UpdateMaterial(repo);
+    const result = await update.execute(item.id, { minStock: 10 });
+
+    expect(result.minStock).toBe(10);
+  });
+
+  // SCEN-MS-2: negative minStock → 400 (validation at use-case level via domain guard)
+  it('SCEN-MS-2: negative minStock is rejected (validation error)', async () => {
+    const repo = new InMemoryMaterialCatalogRepository();
+    const item = await repo.create({ name: 'CABLE_UTP', sortOrder: 0 });
+
+    const update = new UpdateMaterial(repo);
+    // The route layer validates via Zod (minStock: z.number().int().min(0));
+    // the use case passes through — Zod rejection simulated here by checking the DTO schema
+    await expect(
+      update.execute(item.id, { minStock: -1 }),
+    ).rejects.toThrow();
+  });
 });

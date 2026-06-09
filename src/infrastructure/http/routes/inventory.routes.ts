@@ -9,6 +9,10 @@ import { ConfirmMaterialDeduction } from '@application/use-cases/ConfirmMaterial
 // EPIC #38 W5b — vehicle stock
 import { GetVehicleStock } from '@application/use-cases/GetVehicleStock';
 import { IssueStockToVehicle } from '@application/use-cases/IssueStockToVehicle';
+// Wave 7 (Capstone) — dashboard use cases
+import { GetInventoryOverview } from '@application/use-cases/GetInventoryOverview';
+import { ListInventoryMovements } from '@application/use-cases/ListInventoryMovements';
+import { GetLowStockAlerts } from '@application/use-cases/GetLowStockAlerts';
 import {
   ReturnSuggestionNotFoundError,
   ReturnAlreadyResolvedError,
@@ -41,6 +45,55 @@ import { z } from 'zod';
  *
  * Use cases never mutate raw entities and never return them — DTOs only.
  */
+/**
+ * Accepts either a full ISO datetime (`2026-06-09T00:00:00.000Z`) or a bare
+ * date string (`2026-06-09`). Bare dates are validated strictly (month 01-12,
+ * day 01-31) and then normalized to UTC boundary:
+ *   dateFrom → `T00:00:00.000Z` (start of day)
+ *   dateTo   → `T23:59:59.999Z` (end of day)
+ * so that picking the same day for both inputs returns all movements on that day.
+ * Garbage input (`abc`, `2026-13-99`) produces a Zod validation failure → 400.
+ */
+const BARE_DATE_RE = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+function parseDateParam(val: string, side: 'from' | 'to'): string {
+  if (BARE_DATE_RE.test(val)) {
+    return side === 'from' ? `${val}T00:00:00.000Z` : `${val}T23:59:59.999Z`;
+  }
+  // Full ISO datetime — pass through (Zod .datetime() will validate below if we get here)
+  return val;
+}
+
+/**
+ * Wave 7 (Capstone) — Zod schema for the movement ledger query string.
+ * page ≥ 1, limit 1-100, type optional enum, other filters optional strings.
+ * Accepts both full ISO datetime AND bare YYYY-MM-DD for dateFrom/dateTo.
+ * Returns 400 on validation failure.
+ */
+const MovementsQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  type: z.enum(['ISSUE', 'TRANSFER', 'INSTALL', 'RETURN', 'CONSUME', 'ADJUST']).optional(),
+  locationId: z.string().min(1).optional(),
+  materialCatalogId: z.string().min(1).optional(),
+  taskId: z.string().min(1).optional(),
+  technicianId: z.string().min(1).optional(),
+  dateFrom: z.string()
+    .optional()
+    .refine(
+      (v) => v === undefined || BARE_DATE_RE.test(v) || z.string().datetime().safeParse(v).success,
+      { message: 'dateFrom must be YYYY-MM-DD or a full ISO datetime string' },
+    )
+    .transform((v) => (v !== undefined ? parseDateParam(v, 'from') : v)),
+  dateTo: z.string()
+    .optional()
+    .refine(
+      (v) => v === undefined || BARE_DATE_RE.test(v) || z.string().datetime().safeParse(v).success,
+      { message: 'dateTo must be YYYY-MM-DD or a full ISO datetime string' },
+    )
+    .transform((v) => (v !== undefined ? parseDateParam(v, 'to') : v)),
+});
+
 export function createInventoryRouter(
   getDepotStock: GetDepotStock,
   listPendingReturns: ListPendingReturns,
@@ -56,6 +109,10 @@ export function createInventoryRouter(
   // EPIC #38 W5b — vehicle stock routes (appended at END per W6 ordering rule)
   getVehicleStock?: GetVehicleStock,
   issueStockToVehicle?: IssueStockToVehicle,
+  // Wave 7 (Capstone) — dashboard routes (appended LAST per W6 ordering rule)
+  getInventoryOverview?: GetInventoryOverview,
+  listInventoryMovements?: ListInventoryMovements,
+  getLowStockAlerts?: GetLowStockAlerts,
 ): Router {
   const router = Router();
 
@@ -229,6 +286,63 @@ export function createInventoryRouter(
         handleVehicleIssueError(e, res, next);
       }
     });
+  }
+
+  // ── Wave 7 (Capstone) — dashboard read routes ────────────────────────────────
+  if (getInventoryOverview && listInventoryMovements && getLowStockAlerts) {
+    router.get(
+      '/overview/locations',
+      auth,
+      requireRead,
+      async (_req: Request, res: Response, next: NextFunction) => {
+        try {
+          res.json(await getInventoryOverview.execute());
+        } catch (e) {
+          next(e);
+        }
+      },
+    );
+
+    router.get(
+      '/movements',
+      auth,
+      requireRead,
+      async (req: Request, res: Response, next: NextFunction) => {
+        try {
+          const parsed = MovementsQuery.safeParse(req.query);
+          if (!parsed.success) {
+            res.status(400).json({
+              error: 'Validation error',
+              code: 'VALIDATION_ERROR',
+              details: parsed.error.issues,
+            });
+            return;
+          }
+          const { page, limit, type, locationId, materialCatalogId, taskId, technicianId, dateFrom, dateTo } = parsed.data;
+          const result = await listInventoryMovements.execute(
+            { type, locationId, materialCatalogId, taskId, technicianId, dateFrom, dateTo },
+            page,
+            limit,
+          );
+          res.json(result);
+        } catch (e) {
+          next(e);
+        }
+      },
+    );
+
+    router.get(
+      '/alerts',
+      auth,
+      requireRead,
+      async (_req: Request, res: Response, next: NextFunction) => {
+        try {
+          res.json(await getLowStockAlerts.execute());
+        } catch (e) {
+          next(e);
+        }
+      },
+    );
   }
 
   return router;

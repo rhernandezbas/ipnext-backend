@@ -1,6 +1,7 @@
 import {
   InventoryMovementRepository,
   RecordMovementInput,
+  MovementFilters,
 } from '@domain/ports/InventoryMovementRepository';
 import { createInventoryMovement, InventoryMovement } from '@domain/entities/inventory-movement';
 import { computeAssetEffect } from '@domain/entities/inventory-asset-effect';
@@ -111,5 +112,52 @@ export class InMemoryInventoryMovementRepository implements InventoryMovementRep
 
   async findBySourceRef(sourceRef: string): Promise<InventoryMovement | null> {
     return this.movements.find((m) => m.sourceRef === sourceRef) ?? null;
+  }
+
+  /**
+   * Wave 7 (Capstone) — paginated movement ledger, ordered occurredAt DESC.
+   * Parity with PrismaInventoryMovementRepository: same filter logic, same order.
+   */
+  async listMovements(
+    filters: MovementFilters,
+    page: number,
+    limit: number,
+  ): Promise<{ items: InventoryMovement[]; total: number }> {
+    let filtered = [...this.movements];
+
+    if (filters.type) {
+      filtered = filtered.filter((m) => m.type === filters.type);
+    }
+    if (filters.locationId) {
+      filtered = filtered.filter(
+        (m) => m.fromLocationId === filters.locationId || m.toLocationId === filters.locationId,
+      );
+    }
+    if (filters.materialCatalogId) {
+      filtered = filtered.filter((m) => m.materialCatalogId === filters.materialCatalogId);
+    }
+    if (filters.taskId) {
+      filtered = filtered.filter((m) => m.taskId === filters.taskId);
+    }
+    if (filters.technicianId) {
+      filtered = filtered.filter((m) => m.technicianId === filters.technicianId);
+    }
+    if (filters.dateFrom) {
+      const from = new Date(filters.dateFrom).getTime();
+      filtered = filtered.filter((m) => new Date(m.occurredAt).getTime() >= from);
+    }
+    if (filters.dateTo) {
+      const to = new Date(filters.dateTo).getTime();
+      filtered = filtered.filter((m) => new Date(m.occurredAt).getTime() <= to);
+    }
+
+    // occurredAt DESC
+    filtered.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+
+    const total = filtered.length;
+    const offset = (page - 1) * limit;
+    const items = filtered.slice(offset, offset + limit);
+
+    return { items, total };
   }
 }

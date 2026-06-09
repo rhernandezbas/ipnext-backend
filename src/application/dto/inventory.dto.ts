@@ -27,6 +27,7 @@ export const CreateMaterialSchema = z.object({
   unit:      z.string().nullish(),
   active:    z.boolean().optional(),
   sortOrder: z.number().int().optional(),
+  minStock:  z.number().int().min(0).optional(),
 });
 export const UpdateMaterialSchema = CreateMaterialSchema.partial();
 export type CreateMaterialInput = z.infer<typeof CreateMaterialSchema>;
@@ -39,6 +40,7 @@ export interface MaterialCatalogDto {
   unit:      string | null;
   active:    boolean;
   sortOrder: number;
+  minStock:  number;
   createdAt: string;
   updatedAt: string;
 }

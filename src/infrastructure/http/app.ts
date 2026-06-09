@@ -250,18 +250,7 @@ import { GetNetworkDevice } from '@application/use-cases/GetNetworkDevice';
 import { CreateNetworkDevice } from '@application/use-cases/CreateNetworkDevice';
 import { UpdateNetworkDevice } from '@application/use-cases/UpdateNetworkDevice';
 import { DeleteNetworkDevice } from '@application/use-cases/DeleteNetworkDevice';
-import { ListInventoryItems } from '@application/use-cases/ListInventoryItems';
-import { GetInventoryItem } from '@application/use-cases/GetInventoryItem';
-import { CreateInventoryItem } from '@application/use-cases/CreateInventoryItem';
-import { UpdateInventoryItem } from '@application/use-cases/UpdateInventoryItem';
-import { DeleteInventoryItem } from '@application/use-cases/DeleteInventoryItem';
-import { ListInventoryProducts } from '@application/use-cases/ListInventoryProducts';
-import { ListInventoryUnits } from '@application/use-cases/ListInventoryUnits';
-import { CreateInventoryUnit } from '@application/use-cases/CreateInventoryUnit';
-import { UpdateInventoryUnit } from '@application/use-cases/UpdateInventoryUnit';
-import { UpdateInventoryProduct } from '@application/use-cases/UpdateInventoryProduct';
-import { DeleteInventoryProduct } from '@application/use-cases/DeleteInventoryProduct';
-import { DeleteInventoryUnit } from '@application/use-cases/DeleteInventoryUnit';
+// World A Inventory use cases removed in Wave 7 (Capstone).
 import { createIpNetworkRouter } from './routes/ipNetwork.routes';
 import { PrismaIpNetworkRepository } from '../adapters/prisma/PrismaIpNetworkRepository';
 import { ListIpNetworks } from '@application/use-cases/ListIpNetworks';
@@ -432,6 +421,10 @@ import { IssueStockToTechnician } from '@application/use-cases/IssueStockToTechn
 import { ResolveTechnicianLocation } from '@application/use-cases/ResolveTechnicianLocation';
 import { StageMaterialDeduction } from '@application/use-cases/StageMaterialDeduction';
 import { createInventoryRouter } from './routes/inventory.routes';
+// Wave 7 (Capstone) — dashboard use cases
+import { GetInventoryOverview } from '@application/use-cases/GetInventoryOverview';
+import { ListInventoryMovements } from '@application/use-cases/ListInventoryMovements';
+import { GetLowStockAlerts } from '@application/use-cases/GetLowStockAlerts';
 // EPIC #38 W5b — vehicle stock
 import { GetVehicleStock } from '@application/use-cases/GetVehicleStock';
 import { IssueStockToVehicle } from '@application/use-cases/IssueStockToVehicle';
@@ -799,18 +792,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const createNetworkDevice = new CreateNetworkDevice(empresaRepo);
   const updateNetworkDevice = new UpdateNetworkDevice(empresaRepo);
   const deleteNetworkDevice = new DeleteNetworkDevice(empresaRepo);
-  const listInventoryItems = new ListInventoryItems(empresaRepo);
-  const getInventoryItem = new GetInventoryItem(empresaRepo);
-  const createInventoryItem = new CreateInventoryItem(empresaRepo);
-  const updateInventoryItem = new UpdateInventoryItem(empresaRepo);
-  const deleteInventoryItem = new DeleteInventoryItem(empresaRepo);
-  const listInventoryProducts = new ListInventoryProducts(empresaRepo);
-  const listInventoryUnits = new ListInventoryUnits(empresaRepo);
-  const createInventoryUnit = new CreateInventoryUnit(empresaRepo);
-  const updateInventoryUnit = new UpdateInventoryUnit(empresaRepo);
-  const updateInventoryProduct = new UpdateInventoryProduct(empresaRepo);
-  const deleteInventoryProduct = new DeleteInventoryProduct(empresaRepo);
-  const deleteInventoryUnit = new DeleteInventoryUnit(empresaRepo);
+  // World A Inventory use cases removed in Wave 7 (Capstone).
 
   const partnerRepo = new PrismaPartnerRepository();
   const listPartners = new ListPartners(partnerRepo);
@@ -1180,6 +1162,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // EPIC #38 W5b — vehicle stock routes (appended at END per W6 ordering rule)
     getVehicleStock,
     issueStockToVehicle,
+    // Wave 7 (Capstone) — dashboard read routes (appended LAST)
+    new GetInventoryOverview(stockLocationRepo),
+    new ListInventoryMovements(inventoryMovementRepo, materialCatalogRepo, stockLocationRepo, rbacUserRepo, schedulingRepo),
+    new GetLowStockAlerts(materialCatalogRepo),
   ));
 
   // EPIC #38 W5b — vehicle catalog CRUD surface. Mounted at /api/vehicles (fresh prefix).
@@ -1280,9 +1266,6 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api', createEmpresaRouter(
     listServicePlans, getServicePlan, createServicePlan, updateServicePlan, deleteServicePlan,
     listNetworkDevices, getNetworkDevice, createNetworkDevice, updateNetworkDevice, deleteNetworkDevice,
-    listInventoryItems, getInventoryItem, createInventoryItem, updateInventoryItem, deleteInventoryItem,
-    listInventoryProducts, listInventoryUnits, createInventoryUnit, updateInventoryUnit,
-    updateInventoryProduct, deleteInventoryProduct, deleteInventoryUnit,
   ));
   app.use('/api', createIpNetworkRouter(
     listIpNetworks, createIpNetwork, deleteIpNetwork,

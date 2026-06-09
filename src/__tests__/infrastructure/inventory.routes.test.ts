@@ -9,6 +9,9 @@ import { InMemoryMaterialStockRepository } from '@infrastructure/adapters/in-mem
 import { InMemoryDeviceTypeCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryDeviceTypeCatalogRepository';
 import { InMemoryMaterialCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialCatalogRepository';
 import { InMemoryVehicleRepository } from '@infrastructure/adapters/in-memory/InMemoryVehicleRepository';
+import { GetInventoryOverview } from '@application/use-cases/GetInventoryOverview';
+import { ListInventoryMovements } from '@application/use-cases/ListInventoryMovements';
+import { GetLowStockAlerts } from '@application/use-cases/GetLowStockAlerts';
 import { GetDepotStock } from '@application/use-cases/GetDepotStock';
 import { GetTechnicianStock } from '@application/use-cases/GetTechnicianStock';
 import { IssueStockToTechnician } from '@application/use-cases/IssueStockToTechnician';
@@ -489,5 +492,235 @@ describe('Vehicle stock routes (EPIC #38 W5b)', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('VEHICLE_INACTIVE');
+  });
+});
+
+// ── Wave 7 (Capstone) — Dashboard routes ────────────────────────────────────
+
+async function buildDashboardApp(opts: { canRead: boolean }) {
+  const locations = new InMemoryStockLocationRepository();
+  const assets = new InMemoryInventoryAssetRepository();
+  const stock = new InMemoryMaterialStockRepository();
+  const movements = new InMemoryInventoryMovementRepository(assets, stock);
+  const materialCatalog = new InMemoryMaterialCatalogRepository();
+  materialCatalog.stockRepo = stock;
+
+  const returns = new InMemoryReturnSuggestionRepository();
+  const deviceTypes = new InMemoryDeviceTypeCatalogRepository();
+  const suggestions = new InMemoryInventorySuggestionRepository();
+  const contractInv = new InMemoryContractInventoryRepository();
+  const uow = new InMemoryUnitOfWork(suggestions, contractInv, locations, assets, movements, stock, returns);
+
+  const auth = (req: Request, _res: Response, next: NextFunction) => {
+    (req as { user?: { id: string } }).user = { id: 'u1' };
+    next();
+  };
+  const pass = (_req: Request, _res: Response, next: NextFunction) => next();
+  const deny = (_req: Request, res: Response) => res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
+
+  const resolveDepot = new ResolveDepotLocation(locations);
+
+  const router = createInventoryRouter(
+    new GetDepotStock(locations, assets, stock, deviceTypes, materialCatalog),
+    new ListPendingReturns(returns),
+    new ConfirmAssetReturn(returns, assets, movements, locations, deviceTypes, resolveDepot, uow),
+    new GetTechnicianStock(locations, assets, stock, deviceTypes, materialCatalog),
+    new IssueStockToTechnician(resolveDepot, new ResolveTechnicianLocation(locations), assets, uow),
+    auth,
+    opts.canRead ? pass : deny,
+    pass, // write always allowed
+    undefined, // W6 deductions omitted
+    undefined,
+    undefined, // W5b vehicles omitted
+    undefined,
+    // Wave 7 dashboard use cases
+    new GetInventoryOverview(locations),
+    new ListInventoryMovements(movements, materialCatalog, locations),
+    new GetLowStockAlerts(materialCatalog),
+  );
+
+  const app = express();
+  app.use(express.json());
+  app.use('/api/inventory', router);
+  app.use(errorHandler);
+
+  return { app, locations, movements, stock, materialCatalog };
+}
+
+describe('Wave 7 — GET /api/inventory/overview/locations', () => {
+  // SCEN-LOC-3: 403 without inventory.read
+  it('SCEN-LOC-3: 403 without inventory.read', async () => {
+    const { app } = await buildDashboardApp({ canRead: false });
+    const res = await request(app).get('/api/inventory/overview/locations');
+    expect(res.status).toBe(403);
+  });
+
+  it('200 with empty groups when no locations have content', async () => {
+    const { app } = await buildDashboardApp({ canRead: true });
+    const res = await request(app).get('/api/inventory/overview/locations');
+    expect(res.status).toBe(200);
+    expect(res.body.groups).toHaveLength(4);
+    res.body.groups.forEach((g: { locationCount: number }) => expect(g.locationCount).toBe(0));
+  });
+
+  it('200 with locations that have content', async () => {
+    const { app, locations } = await buildDashboardApp({ canRead: true });
+
+    await locations.create(createStockLocation({ id: 'loc-depot', type: 'DEPOSITO', code: 'DEPOSITO' }));
+    locations.seedContent('loc-depot', { assetCount: 3, materialQty: 0, label: 'Depósito' });
+
+    const res = await request(app).get('/api/inventory/overview/locations');
+    expect(res.status).toBe(200);
+
+    const depotGroup = res.body.groups.find((g: { type: string }) => g.type === 'DEPOSITO');
+    expect(depotGroup.locationCount).toBe(1);
+    expect(depotGroup.totalAssets).toBe(3);
+    expect(depotGroup.locations[0].label).toBe('Depósito');
+  });
+});
+
+describe('Wave 7 — GET /api/inventory/movements', () => {
+  // SCEN-MOV-8: page=0 → 400
+  it('SCEN-MOV-8: page=0 → 400', async () => {
+    const { app } = await buildDashboardApp({ canRead: true });
+    const res = await request(app).get('/api/inventory/movements?page=0');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  // SCEN-MOV-9: limit=101 → 400
+  it('SCEN-MOV-9: limit=101 → 400', async () => {
+    const { app } = await buildDashboardApp({ canRead: true });
+    const res = await request(app).get('/api/inventory/movements?limit=101');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  // SCEN-MOV-10: invalid type → 400
+  it('SCEN-MOV-10: type=INVALID → 400', async () => {
+    const { app } = await buildDashboardApp({ canRead: true });
+    const res = await request(app).get('/api/inventory/movements?type=INVALID');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('200 with empty list when no movements', async () => {
+    const { app } = await buildDashboardApp({ canRead: true });
+    const res = await request(app).get('/api/inventory/movements');
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(0);
+    expect(res.body.total).toBe(0);
+    expect(res.body.page).toBe(1);
+    expect(res.body.limit).toBe(25);
+  });
+
+  it('200 with movements and enriched data', async () => {
+    const { app, locations, movements, stock, materialCatalog } = await buildDashboardApp({ canRead: true });
+
+    await locations.create(createStockLocation({ id: 'loc-depot', type: 'DEPOSITO', code: 'DEPOSITO' }));
+    locations.seedContent('loc-depot', { assetCount: 0, materialQty: 0, label: 'Depósito' });
+    const mat = await materialCatalog.create({ name: 'CABLE_UTP', label: 'Cable UTP', unit: 'm', sortOrder: 0 });
+    await stock.upsert({ id: 'ms1', materialCatalogId: mat.id, locationId: 'loc-depot', qty: 1000 });
+
+    await movements.record({ type: 'CONSUME', materialCatalogId: mat.id, qty: 5, fromLocationId: 'loc-depot', source: 'TEST' });
+
+    const res = await request(app).get('/api/inventory/movements');
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].materialName).toBe('CABLE_UTP');
+    expect(res.body.items[0].qty).toBe(5);
+  });
+});
+
+describe('Wave 7 — GET /api/inventory/movements — date filter (FIX-1)', () => {
+  // FIX-1: bare YYYY-MM-DD dates must be accepted and normalized server-side
+  it('SCEN-DATE-1: dateFrom=YYYY-MM-DD accepted → 200, same-day range returns that day', async () => {
+    const { app, movements, materialCatalog, locations, stock } = await buildDashboardApp({ canRead: true });
+
+    await locations.create(createStockLocation({ id: 'loc-depot', type: 'DEPOSITO', code: 'DEPOSITO' }));
+    locations.seedContent('loc-depot', { assetCount: 0, materialQty: 0, label: 'Depósito' });
+    const mat = await materialCatalog.create({ name: 'CABLE_UTP', label: 'Cable UTP', unit: 'm', sortOrder: 0 });
+    await stock.upsert({ id: 'ms1', materialCatalogId: mat.id, locationId: 'loc-depot', qty: 1000 });
+
+    // Record a movement with explicit occurredAt on 2026-06-09T12:00:00.000Z
+    await movements.record({
+      type: 'CONSUME', materialCatalogId: mat.id, qty: 5,
+      fromLocationId: 'loc-depot', source: 'TEST',
+      occurredAt: '2026-06-09T12:00:00.000Z',
+    });
+
+    // Same-day bare date range should return that movement
+    const res = await request(app)
+      .get('/api/inventory/movements?dateFrom=2026-06-09&dateTo=2026-06-09');
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+  });
+
+  it('SCEN-DATE-2: movement outside same-day bare-date range excluded', async () => {
+    const { app, movements, materialCatalog, locations, stock } = await buildDashboardApp({ canRead: true });
+
+    await locations.create(createStockLocation({ id: 'loc-depot', type: 'DEPOSITO', code: 'DEPOSITO' }));
+    locations.seedContent('loc-depot', { assetCount: 0, materialQty: 0, label: 'Depósito' });
+    const mat = await materialCatalog.create({ name: 'CABLE_UTP', label: 'Cable UTP', unit: 'm', sortOrder: 0 });
+    await stock.upsert({ id: 'ms1', materialCatalogId: mat.id, locationId: 'loc-depot', qty: 1000 });
+
+    // Movement on 2026-06-08 — should NOT match dateFrom/dateTo=2026-06-09
+    await movements.record({
+      type: 'CONSUME', materialCatalogId: mat.id, qty: 5,
+      fromLocationId: 'loc-depot', source: 'TEST',
+      occurredAt: '2026-06-08T12:00:00.000Z',
+    });
+
+    const res = await request(app)
+      .get('/api/inventory/movements?dateFrom=2026-06-09&dateTo=2026-06-09');
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(0);
+  });
+
+  it('SCEN-DATE-3: invalid date garbage → 400', async () => {
+    const { app } = await buildDashboardApp({ canRead: true });
+    const res = await request(app).get('/api/inventory/movements?dateFrom=abc');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('SCEN-DATE-4: invalid month/day → 400', async () => {
+    const { app } = await buildDashboardApp({ canRead: true });
+    const res = await request(app).get('/api/inventory/movements?dateFrom=2026-13-99');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('Wave 7 — GET /api/inventory/alerts', () => {
+  // SCEN-ALT-4: 403 without inventory.read
+  it('SCEN-ALT-4: 403 without inventory.read', async () => {
+    const { app } = await buildDashboardApp({ canRead: false });
+    const res = await request(app).get('/api/inventory/alerts');
+    expect(res.status).toBe(403);
+  });
+
+  it('200 with empty list when no materials have minStock configured', async () => {
+    const { app } = await buildDashboardApp({ canRead: true });
+    const res = await request(app).get('/api/inventory/alerts');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(0);
+  });
+
+  it('200 with alerts for materials below threshold', async () => {
+    const { app, materialCatalog, stock } = await buildDashboardApp({ canRead: true });
+
+    const mat = await materialCatalog.create({ name: 'CABLE_UTP', sortOrder: 0, minStock: 10 });
+    await stock.upsert({ id: 'ms1', materialCatalogId: mat.id, locationId: 'loc-depot', qty: 3 });
+
+    const res = await request(app).get('/api/inventory/alerts');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].deficit).toBe(7);
+    expect(res.body[0].totalQty).toBe(3);
+    expect(res.body[0].minStock).toBe(10);
   });
 });

@@ -18,6 +18,7 @@ import { createInventoryAsset } from '@domain/entities/inventory-asset';
 import { createStockLocation } from '@domain/entities/stock-location';
 import {
   InventoryMovementRepository,
+  MovementFilters,
   RecordMovementInput,
 } from '@domain/ports/InventoryMovementRepository';
 import { InventoryMovement } from '@domain/entities/inventory-movement';
@@ -49,6 +50,9 @@ class FailingMovementRepo implements InventoryMovementRepository {
   }
   async findBySourceRef(sourceRef: string): Promise<InventoryMovement | null> {
     return this.inner.findBySourceRef(sourceRef);
+  }
+  async listMovements(filters: MovementFilters, page: number, limit: number): Promise<{ items: InventoryMovement[]; total: number }> {
+    return this.inner.listMovements(filters, page, limit);
   }
 }
 
