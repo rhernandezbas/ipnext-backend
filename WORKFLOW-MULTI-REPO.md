@@ -73,6 +73,52 @@ Reglas:
 2. **Ojo con los validadores del contrato viejo en el medio del viaje**: whitelists de enums legacy, tipos del mock original (`assignedTo:number` vs `assigneeId:string` del BE), campos renombrados (`message` vs `description`). Si el valor está respaldado por un **catálogo editable**, NUNCA validarlo contra una lista hardcodeada.
 3. **Si un passthrough reconstruye el objeto campo a campo, es un punto de fragilidad**: cada campo nuevo hay que agregarlo a mano. Preferir pasar el objeto entero (como hace `ListTasks`) o, si se reconstruye, testear el forwarding de CADA campo.
 
+### El loop fix→review hasta CLEAN (caso de práctica — EPIC #38)
+
+El verify (suite + tsc + sdd-verify) NO alcanza para cambios que mutan datos reales. En el EPIC #38
+(7 waves de inventario, 2026-06-09), **TODAS las waves con review adversarial encontraron bugs
+FIX-FIRST que el verify había dado por verdes**. El loop que los cazó:
+
+```
+codear → verify (suite + tsc, corrido POR EL ORQUESTADOR, no confiar en el reporte del agente)
+       → review adversarial (1-4 agentes opus según riesgo, focos distintos, prompt "asumí que hay bugs")
+       → fix wave (TDD: test que falla primero, después el fix)
+       → re-review FOCALIZADA de los fixes (¿correctos? ¿completos? ¿rompieron algo nuevo?)
+       → CLEAN → commit → dry-run rolled-back de la migración vs prod → deploy
+```
+
+Calibración del tamaño del review por riesgo: **4 revisores** con focos separados (migración/staging ·
+mutación/concurrencia · tests · wiring/contrato) para waves que mutan stock (W4, W6); **1 revisor
+focalizado** para waves aditivas/clones (W5a, W5b); el loop corre las veces que haga falta (la W1
+necesitó 5 olas de fix + 3 análisis hasta IMPECABLE).
+
+Casos reales que el verify NO vio (todos con suite verde y tsc limpio):
+
+- **W6 — feature muerta en prod**: el apply cableó las rutas pero NO inyectó el hook `StageMaterialDeduction`
+  en los dos canales de consumo en `app.ts`. Los params eran opcionales y los tests inyectan su propio
+  wiring → CI verde, prod muerto. Regla derivada: **el wiring de `app.ts` se verifica a mano contra el
+  diseño, y se pinea con un composition-root test** (assertions estáticas sobre el código fuente de app.ts).
+- **W6 — contrato BE↔FE driftado**: el FE (construido desde el spec) esperaba `materialName`/`taskSeq`/
+  `consumptionId`; el BE devolvía la entidad cruda → la página renderizaba filas en blanco. Regla derivada:
+  cuando BE y FE se construyen en paralelo, **el wire contract va explícito y campo por campo en AMBOS
+  prompts**, y el review incluye un foco de contrato.
+- **W6 — TOCTOU teatral**: el re-check de stock "dentro de la tx" leía por un repo NO transaccional
+  (el slot no estaba rebindeado en el UnitOfWork). Los tests in-memory no lo podían ver (su repo ES el
+  store compartido). Lo cazó el revisor de concurrencia trazando los clientes Prisma.
+- **W5b — el clon pierde piezas**: clonar W5a "mecánicamente" dropeó los tests de RUTA de stock/issue
+  que el original sí tenía, y la race P2002 de plate caía a 500. Regla derivada: al clonar, **diffear la
+  cobertura del clon contra la del original**, no solo el código.
+
+Reglas operativas del loop:
+
+1. **El orquestador corre el gate por su cuenta** (suite completa + tsc en ambos repos). Los sub-agentes
+   reportan números que a veces no corrieron, o corrieron sobre un subconjunto.
+2. **Los revisores NO fixean** (reportan con file:line + escenario de fallo); el fix wave es un agente
+   aparte con TDD estricto. Separar el ojo del bisturí.
+3. **Después del fix wave, SIEMPRE re-review focalizada** — un fix puede introducir el bug siguiente
+   (en W6 el fix de `updateStatus` dejó `return updated!` que no tiraba; lo cazó la re-review).
+4. **CLEAN es el único estado que habilita el commit.** "Casi clean" no existe.
+
 ## Reglas para agentes / asistentes de IA
 
 - **`git add` por PATH explícito, SIEMPRE.** Nunca `git add -A`, `git add .` ni `commit -am`. Un agente con `git add` amplio barrió trabajo ajeno del working tree y lo enterró en commits que no le correspondían — costó una remediación entera desenredarlo.
