@@ -432,6 +432,17 @@ import { IssueStockToTechnician } from '@application/use-cases/IssueStockToTechn
 import { ResolveTechnicianLocation } from '@application/use-cases/ResolveTechnicianLocation';
 import { StageMaterialDeduction } from '@application/use-cases/StageMaterialDeduction';
 import { createInventoryRouter } from './routes/inventory.routes';
+// EPIC #38 W5b — vehicle stock
+import { GetVehicleStock } from '@application/use-cases/GetVehicleStock';
+import { IssueStockToVehicle } from '@application/use-cases/IssueStockToVehicle';
+import { ResolveVehicleLocation } from '@application/use-cases/ResolveVehicleLocation';
+import { PrismaVehicleRepository } from '../adapters/prisma/PrismaVehicleRepository';
+import { CreateVehicle } from '@application/use-cases/CreateVehicle';
+import { UpdateVehicle } from '@application/use-cases/UpdateVehicle';
+import { DeleteVehicle } from '@application/use-cases/DeleteVehicle';
+import { ListVehicles } from '@application/use-cases/ListVehicles';
+import { GetVehicle } from '@application/use-cases/GetVehicle';
+import { createVehicleRouter } from './routes/vehicle.routes';
 import { PrismaReturnSuggestionRepository } from '../adapters/prisma/PrismaReturnSuggestionRepository';
 import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
 import { ConfirmAssetReturn } from '@application/use-cases/ConfirmAssetReturn';
@@ -1129,6 +1140,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // POST /returns/:id/confirm + /discard (inventory.write — the ONLY stock mutation).
   const returnSuggestionRepo = new PrismaReturnSuggestionRepository();
   const inventoryDepotLocation = new ResolveDepotLocation(stockLocationRepo);
+
+  // EPIC #38 W5b — vehicle stock repos + use cases (wired before createInventoryRouter call)
+  const vehicleRepo = new PrismaVehicleRepository();
+  const resolveVehicleLocation = new ResolveVehicleLocation(stockLocationRepo);
+  const getVehicleStock = new GetVehicleStock(vehicleRepo, stockLocationRepo, inventoryAssetRepo, materialStockRepo, deviceTypeCatalogRepo, materialCatalogRepo);
+  const issueStockToVehicle = new IssueStockToVehicle(vehicleRepo, inventoryDepotLocation, resolveVehicleLocation, inventoryAssetRepo, inventoryUow);
+
   app.use('/api/inventory', createInventoryRouter(
     new GetDepotStock(stockLocationRepo, inventoryAssetRepo, materialStockRepo, deviceTypeCatalogRepo, materialCatalogRepo),
     new ListPendingReturns(returnSuggestionRepo),
@@ -1159,6 +1177,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       inventoryDepotLocation,
       inventoryUow,
     ),
+    // EPIC #38 W5b — vehicle stock routes (appended at END per W6 ordering rule)
+    getVehicleStock,
+    issueStockToVehicle,
+  ));
+
+  // EPIC #38 W5b — vehicle catalog CRUD surface. Mounted at /api/vehicles (fresh prefix).
+  app.use('/api/vehicles', createVehicleRouter(
+    new ListVehicles(vehicleRepo),
+    new GetVehicle(vehicleRepo),
+    new CreateVehicle(vehicleRepo),
+    new UpdateVehicle(vehicleRepo),
+    new DeleteVehicle(vehicleRepo),
+    createAuthMiddleware(authAdapter, sessionRepo),
+    requirePerm('inventory', 'read'),
+    requirePerm('inventory', 'manage'),
   ));
 
   // F6 — AI installation audit read surface (before the scheduling /:id catch-all).

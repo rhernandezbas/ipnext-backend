@@ -8,6 +8,7 @@ import { InMemoryInventoryAssetRepository } from '@infrastructure/adapters/in-me
 import { InMemoryMaterialStockRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialStockRepository';
 import { InMemoryDeviceTypeCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryDeviceTypeCatalogRepository';
 import { InMemoryMaterialCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialCatalogRepository';
+import { InMemoryVehicleRepository } from '@infrastructure/adapters/in-memory/InMemoryVehicleRepository';
 import { GetDepotStock } from '@application/use-cases/GetDepotStock';
 import { GetTechnicianStock } from '@application/use-cases/GetTechnicianStock';
 import { IssueStockToTechnician } from '@application/use-cases/IssueStockToTechnician';
@@ -15,6 +16,9 @@ import { ResolveTechnicianLocation } from '@application/use-cases/ResolveTechnic
 import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
 import { ConfirmAssetReturn } from '@application/use-cases/ConfirmAssetReturn';
 import { ResolveDepotLocation } from '@application/use-cases/ResolveDepotLocation';
+import { GetVehicleStock } from '@application/use-cases/GetVehicleStock';
+import { IssueStockToVehicle } from '@application/use-cases/IssueStockToVehicle';
+import { ResolveVehicleLocation } from '@application/use-cases/ResolveVehicleLocation';
 import { InMemoryReturnSuggestionRepository } from '@infrastructure/adapters/in-memory/InMemoryReturnSuggestionRepository';
 import { InMemoryInventoryMovementRepository } from '@infrastructure/adapters/in-memory/InMemoryInventoryMovementRepository';
 import { InMemoryUnitOfWork } from '@infrastructure/adapters/in-memory/InMemoryUnitOfWork';
@@ -24,6 +28,7 @@ import { createStockLocation } from '@domain/entities/stock-location';
 import { createInventoryAsset } from '@domain/entities/inventory-asset';
 import { createMaterialStock } from '@domain/entities/material-stock';
 import { createReturnSuggestion } from '@domain/entities/return-suggestion';
+import { createVehicle } from '@domain/entities/vehicle';
 
 async function buildApp(opts: { canRead: boolean; seed?: boolean; canWrite?: boolean }) {
   const locations = new InMemoryStockLocationRepository();
@@ -103,6 +108,82 @@ async function seedReturn(
   });
   await returns.create(s);
   return s;
+}
+
+/**
+ * Builds a minimal Express app wired with real in-memory repos for the vehicle
+ * stock routes (W5b). Positions 8-9 (W6 deductions) are omitted (undefined) so
+ * only the vehicle routes are registered.
+ */
+async function buildVehicleApp(opts: { canRead: boolean; canWrite?: boolean; seedVehicle?: boolean }) {
+  const locations = new InMemoryStockLocationRepository();
+  const assets = new InMemoryInventoryAssetRepository();
+  const stock = new InMemoryMaterialStockRepository();
+  const deviceTypes = new InMemoryDeviceTypeCatalogRepository();
+  const materials = new InMemoryMaterialCatalogRepository();
+  const returns = new InMemoryReturnSuggestionRepository();
+  const movements = new InMemoryInventoryMovementRepository(assets, stock);
+  const vehicles = new InMemoryVehicleRepository();
+
+  await deviceTypes.create({ name: 'OTROS', active: true, sortOrder: 9 });
+
+  // DEPOSITO always required for the depot resolution path
+  await locations.create(createStockLocation({ id: 'depot-1', type: 'DEPOSITO', code: 'DEPOSITO' }));
+
+  let vehicleId: string | undefined;
+  if (opts.seedVehicle) {
+    const v = createVehicle({ id: 'v-1', plate: 'ABC-001', status: 'active' });
+    await vehicles.create(v);
+    vehicleId = v.id;
+
+    // Seed an available asset and some material at the depot
+    const onu = await deviceTypes.create({ name: 'ONU', label: 'Optical Unit', active: true, sortOrder: 0 });
+    const cable = await materials.create({ name: 'CABLE_UTP', label: 'Cable UTP', unit: 'm', active: true, sortOrder: 0 });
+    await assets.create(
+      createInventoryAsset({
+        id: 'a1', serialNumber: 'SN-A1', mac: 'MAC1', deviceTypeId: onu.id,
+        status: 'available', currentLocationId: 'depot-1', source: 'MANUAL', sourceTaskId: 't9',
+      }),
+    );
+    await stock.upsert(createMaterialStock({ id: 'ms1', materialCatalogId: cable.id, locationId: 'depot-1', qty: 42 }));
+  }
+
+  const suggestions = new InMemoryInventorySuggestionRepository();
+  const contractInv = new InMemoryContractInventoryRepository();
+  const uow = new InMemoryUnitOfWork(suggestions, contractInv, locations, assets, movements, stock, returns);
+
+  const auth = (req: Request, _res: Response, next: NextFunction) => {
+    (req as { user?: { id: string } }).user = { id: 'u1' };
+    next();
+  };
+  const pass = (_req: Request, _res: Response, next: NextFunction) => next();
+  const deny = (_req: Request, res: Response) => res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
+
+  const resolveDepot = new ResolveDepotLocation(locations);
+
+  const router = createInventoryRouter(
+    new GetDepotStock(locations, assets, stock, deviceTypes, materials),
+    new ListPendingReturns(returns),
+    new ConfirmAssetReturn(returns, assets, movements, locations, deviceTypes, resolveDepot, uow),
+    new GetTechnicianStock(locations, assets, stock, deviceTypes, materials),
+    new IssueStockToTechnician(resolveDepot, new ResolveTechnicianLocation(locations), assets, uow),
+    auth,
+    opts.canRead ? pass : deny,
+    (opts.canWrite ?? true) ? pass : deny,
+    // W6 deductions: omit (undefined) — vehicle routes still register at pos 10-11
+    undefined,
+    undefined,
+    // W5b vehicle stock (positions 10-11)
+    new GetVehicleStock(vehicles, locations, assets, stock, deviceTypes, materials),
+    new IssueStockToVehicle(vehicles, resolveDepot, new ResolveVehicleLocation(locations), assets, uow),
+  );
+
+  const app = express();
+  app.use(express.json());
+  app.use('/api/inventory', router);
+  app.use(errorHandler);
+
+  return { app, vehicles, locations, assets, movements, stock, vehicleId };
 }
 
 describe('GET /api/inventory/depot', () => {
@@ -305,5 +386,108 @@ describe('Technician stock routes (EPIC #38 W5a)', () => {
       .post('/api/inventory/technicians/t-42/issue')
       .send({ items: 'not-an-array' });
     expect(res.status).toBe(400);
+  });
+});
+
+// ── EPIC #38 W5b — Vehicle stock routes ───────────────────────────────────────
+
+describe('Vehicle stock routes (EPIC #38 W5b)', () => {
+  // SCEN-GS-1 happy: GET /vehicles/:id/stock with vehicle that has no CAMIONETA location
+  it('GET /vehicles/:id/stock with vehicle but no location → 200 empty DTO', async () => {
+    const { app, vehicleId } = await buildVehicleApp({ canRead: true, seedVehicle: true });
+    const res = await request(app).get(`/api/inventory/vehicles/${vehicleId}/stock`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ vehicleId, assets: [], materials: [], locationId: null });
+  });
+
+  // SCEN-GS-3: GET /vehicles/:id/stock with unknown vehicle → 404 VEHICLE_NOT_FOUND
+  it('GET /vehicles/:id/stock with unknown vehicle → 404 VEHICLE_NOT_FOUND', async () => {
+    const { app } = await buildVehicleApp({ canRead: true, seedVehicle: false });
+    const res = await request(app).get('/api/inventory/vehicles/no-such-vehicle/stock');
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('VEHICLE_NOT_FOUND');
+  });
+
+  // SCEN-IS-1 happy: POST /vehicles/:id/issue moves asset + material, returns 200 {ok:true}
+  it('POST /vehicles/:id/issue moves asset depot→vehicle, 200 {ok:true}, stock shows in vehicle', async () => {
+    const { app, vehicleId, assets, movements } = await buildVehicleApp({ canRead: true, canWrite: true, seedVehicle: true });
+
+    const res = await request(app)
+      .post(`/api/inventory/vehicles/${vehicleId}/issue`)
+      .send({ items: [{ assetId: 'a1' }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+
+    // Asset moved out of depot
+    const asset = await assets.findById('a1');
+    expect(asset!.currentLocationId).not.toBe('depot-1');
+
+    // Movement recorded as TRANSFER
+    expect(movements.movements).toHaveLength(1);
+    expect(movements.movements[0].type).toBe('TRANSFER');
+
+    // Vehicle stock shows the asset
+    const stockRes = await request(app).get(`/api/inventory/vehicles/${vehicleId}/stock`);
+    expect(stockRes.body.assets.some((a: { id: string }) => a.id === 'a1')).toBe(true);
+  });
+
+  // Auth: POST /vehicles/:id/issue without inventory.write → 403
+  it('POST /vehicles/:id/issue without inventory.write → 403', async () => {
+    const { app, vehicleId } = await buildVehicleApp({ canRead: true, canWrite: false, seedVehicle: true });
+
+    const res = await request(app)
+      .post(`/api/inventory/vehicles/${vehicleId}/issue`)
+      .send({ items: [{ assetId: 'a1' }] });
+
+    expect(res.status).toBe(403);
+  });
+
+  // SCEN-IS-5: insufficient depot stock → 409 INSUFFICIENT_DEPOT_STOCK, atomic rollback
+  it('POST /vehicles/:id/issue insufficient depot stock → 409 INSUFFICIENT_DEPOT_STOCK, nothing moves', async () => {
+    const { app, vehicleId, movements, stock } = await buildVehicleApp({ canRead: true, canWrite: true, seedVehicle: true });
+
+    // Request 99 of a material that doesn't exist in depot (will trigger InsufficientStockError)
+    const res = await request(app)
+      .post(`/api/inventory/vehicles/${vehicleId}/issue`)
+      .send({ items: [{ assetId: 'a1' }, { materialCatalogId: 'unknown-mat', qty: 99 }] });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('INSUFFICIENT_DEPOT_STOCK');
+
+    // Atomic rollback: no movement recorded, asset untouched
+    expect(movements.movements).toHaveLength(0);
+    const asset = await (await buildVehicleApp({ canRead: true, seedVehicle: true })).assets.findById('a1');
+    // The important assertion: movements array is empty (rollback worked)
+    expect(movements.movements).toHaveLength(0);
+  });
+
+  // Bad payload: item has neither assetId nor materialCatalogId → 400
+  it('POST /vehicles/:id/issue with bad payload → 400 VALIDATION_ERROR', async () => {
+    const { app, vehicleId } = await buildVehicleApp({ canRead: true, canWrite: true, seedVehicle: true });
+
+    const res = await request(app)
+      .post(`/api/inventory/vehicles/${vehicleId}/issue`)
+      .send({ items: [{ bogusField: 'x' }] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  // SCEN-IS-3: vehicle inactive → 422 VEHICLE_INACTIVE
+  it('POST /vehicles/:id/issue on inactive vehicle → 422 VEHICLE_INACTIVE', async () => {
+    const { app, vehicles } = await buildVehicleApp({ canRead: true, canWrite: true, seedVehicle: true });
+
+    // Deactivate the vehicle
+    await vehicles.update('v-1', { status: 'inactive' });
+
+    const res = await request(app)
+      .post('/api/inventory/vehicles/v-1/issue')
+      .send({ items: [{ assetId: 'a1' }] });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('VEHICLE_INACTIVE');
   });
 });

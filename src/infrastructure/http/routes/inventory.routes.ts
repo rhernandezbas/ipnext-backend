@@ -6,6 +6,9 @@ import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
 import { ConfirmAssetReturn } from '@application/use-cases/ConfirmAssetReturn';
 import { ListPendingDeductions } from '@application/use-cases/ListPendingDeductions';
 import { ConfirmMaterialDeduction } from '@application/use-cases/ConfirmMaterialDeduction';
+// EPIC #38 W5b — vehicle stock
+import { GetVehicleStock } from '@application/use-cases/GetVehicleStock';
+import { IssueStockToVehicle } from '@application/use-cases/IssueStockToVehicle';
 import {
   ReturnSuggestionNotFoundError,
   ReturnAlreadyResolvedError,
@@ -15,6 +18,9 @@ import {
   DeductionAlreadyConfirmedError,
   DeductionHasNoTechnicianError,
   InsufficientStockError,
+  VehicleNotFoundError,
+  VehicleInactiveError,
+  AssetNotAtDepotError,
 } from '@domain/errors/inventory';
 import { DomainError } from '@domain/errors/index';
 import { z } from 'zod';
@@ -47,6 +53,9 @@ export function createInventoryRouter(
   // W6 — optional; when omitted the /deductions routes are not registered.
   listPendingDeductions?: ListPendingDeductions,
   confirmMaterialDeduction?: ConfirmMaterialDeduction,
+  // EPIC #38 W5b — vehicle stock routes (appended at END per W6 ordering rule)
+  getVehicleStock?: GetVehicleStock,
+  issueStockToVehicle?: IssueStockToVehicle,
 ): Router {
   const router = Router();
 
@@ -197,7 +206,55 @@ export function createInventoryRouter(
     );
   }
 
+  // ── EPIC #38 W5b — vehicle stock ────────────────────────────────────────────
+  if (getVehicleStock && issueStockToVehicle) {
+    router.get('/vehicles/:id/stock', auth, requireRead, async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.json(await getVehicleStock.execute(req.params.id));
+      } catch (e) {
+        handleVehicleIssueError(e, res, next);
+      }
+    });
+
+    router.post('/vehicles/:id/issue', auth, requireWrite, async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = IssueSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        await issueStockToVehicle.execute(req.params.id, { items: parsed.data.items });
+        res.status(200).json({ ok: true });
+      } catch (e) {
+        handleVehicleIssueError(e, res, next);
+      }
+    });
+  }
+
   return router;
+}
+
+/**
+ * Maps W5b vehicle issue domain errors to HTTP.
+ */
+function handleVehicleIssueError(e: unknown, res: Response, next: NextFunction): void {
+  if (e instanceof VehicleNotFoundError) {
+    res.status(404).json({ error: (e as DomainError).message, code: (e as DomainError).code });
+    return;
+  }
+  if (e instanceof VehicleInactiveError) {
+    res.status(422).json({ error: (e as DomainError).message, code: (e as DomainError).code });
+    return;
+  }
+  if (e instanceof AssetNotAtDepotError) {
+    res.status(409).json({ error: (e as DomainError).message, code: (e as DomainError).code });
+    return;
+  }
+  if (e instanceof InsufficientStockError) {
+    res.status(409).json({ error: (e as DomainError).message, code: 'INSUFFICIENT_DEPOT_STOCK' });
+    return;
+  }
+  next(e);
 }
 
 /**

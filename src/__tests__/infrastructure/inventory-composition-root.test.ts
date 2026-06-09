@@ -83,4 +83,18 @@ describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', 
     expect(args).toContain('ListPendingDeductions');
     expect(args).toContain('ConfirmMaterialDeduction');
   });
+
+  // EPIC #38 W5b — vehicle stock wiring guards
+  it('W5b: app.ts wires GetVehicleStock and IssueStockToVehicle into createInventoryRouter', () => {
+    const match = appSrc.match(/createInventoryRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('getVehicleStock');
+    expect(args).toContain('issueStockToVehicle');
+  });
+
+  it('W5b: app.ts mounts createVehicleRouter at /api/vehicles', () => {
+    expect(appSrc).toContain("'/api/vehicles'");
+    expect(appSrc).toContain('createVehicleRouter');
+  });
 });
