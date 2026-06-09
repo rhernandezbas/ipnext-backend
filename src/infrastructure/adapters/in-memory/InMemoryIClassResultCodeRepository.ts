@@ -16,6 +16,14 @@ export class InMemoryIClassResultCodeRepository implements IClassResultCodeRepos
     this.stageNames.set(stageId, name);
   }
 
+  /** Test helper (EPIC #38 W4): flag a result code as a removal code by name. */
+  setRemovalCode(code: string, isRemovalCode: boolean): void {
+    const norm = code.trim().toLowerCase();
+    for (const r of this.rows.values()) {
+      if (r.code.trim().toLowerCase() === norm) r.isRemovalCode = isRemovalCode;
+    }
+  }
+
   async list(filter?: { mapped?: boolean }): Promise<IClassResultCode[]> {
     let items = [...this.rows.values()];
     if (filter?.mapped === true) items = items.filter(r => r.mappedStageId !== null);
@@ -80,6 +88,7 @@ export class InMemoryIClassResultCodeRepository implements IClassResultCodeRepos
       type: entry.type,
       mappedStageId: null,
       mappedStageName: null,
+      isRemovalCode: false,
       lastSyncedAt: now,
       createdAt: now,
       updatedAt: now,

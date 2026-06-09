@@ -15,8 +15,14 @@ import { OllamaInstallationAuditor } from '../adapters/audit/OllamaInstallationA
 import { PrismaTaskAuditRepository } from '../adapters/prisma/PrismaTaskAuditRepository';
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
+import { StageReturnSuggestions } from '@application/use-cases/StageReturnSuggestions';
+import { PrismaReturnSuggestionRepository } from '../adapters/prisma/PrismaReturnSuggestionRepository';
+import { PrismaInventoryAssetRepository } from '../adapters/prisma/PrismaInventoryAssetRepository';
 
-type SideEffects = Pick<IngestClosedOptions, 'portal' | 'postComment' | 'buildSuggestions' | 'extractOcr' | 'auditInstallation' | 'suggestions'>;
+type SideEffects = Pick<
+  IngestClosedOptions,
+  'portal' | 'postComment' | 'buildSuggestions' | 'extractOcr' | 'auditInstallation' | 'suggestions' | 'stageReturns' | 'featureFlags'
+>;
 
 /**
  * Composition of the opt-in closure side effects shared by the cron and the
@@ -31,6 +37,13 @@ export function buildClosureSideEffects(): SideEffects {
     postComment: new PostClosureComment(new PrismaTaskCommentRepository()),
     buildSuggestions: new BuildInventorySuggestions(suggestionsRepo),
     suggestions: suggestionsRepo, // #14 — to compute closureHasDeviceInventory on the task
+    // EPIC #38 W4 — closure-detected returns staging (read-only). Gated at runtime by the
+    // `iclass-inventory-returns` flag (default OFF) via featureFlags below.
+    stageReturns: new StageReturnSuggestions(
+      new PrismaReturnSuggestionRepository(),
+      new PrismaInventoryAssetRepository(),
+    ),
+    featureFlags: new PrismaFeatureFlagRepository(),
   };
 
   const portal = config.iclassPortal;

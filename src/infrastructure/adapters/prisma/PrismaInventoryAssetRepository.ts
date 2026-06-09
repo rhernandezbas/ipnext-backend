@@ -1,6 +1,7 @@
 import { InventoryAssetRepository } from '@domain/ports/InventoryAssetRepository';
 import { InventoryAsset, AssetStatus } from '@domain/entities/inventory-asset';
 import { DuplicateSerialNumberError } from '@domain/errors/inventory';
+import { normalizeSerial } from '@domain/entities/return-suggestion';
 import { prisma } from '../../database/prisma';
 import { PrismaClientLike } from './PrismaClientLike';
 
@@ -39,6 +40,22 @@ export class PrismaInventoryAssetRepository implements InventoryAssetRepository 
   async findBySerialNumber(serialNumber: string): Promise<InventoryAsset | null> {
     const row = await this.db.inventoryAsset.findUnique({ where: { serialNumber } });
     return row ? toEntity(row) : null;
+  }
+
+  async findByNormalizedSerial(serial: string): Promise<InventoryAsset | null> {
+    const target = normalizeSerial(serial);
+    if (target == null) return null;
+    // Fast path: an exact (already-clean) serial hits the UNIQUE index directly.
+    const exact = await this.db.inventoryAsset.findUnique({ where: { serialNumber: serial } });
+    if (exact && (exact as Row).status === 'installed' && normalizeSerial((exact as Row).serialNumber) === target) {
+      return toEntity(exact);
+    }
+    // Drift path: no DB-side normalized column, so scan installed assets and
+    // normalize-compare in-process. W4 return volume is low (one per closed retiro),
+    // so this is acceptable; revisit with a stored normalized column if it grows.
+    const rows = (await this.db.inventoryAsset.findMany({ where: { status: 'installed' } })) as Row[];
+    const match = rows.find((r) => normalizeSerial(r.serialNumber) === target);
+    return match ? toEntity(match) : null;
   }
 
   async listByLocation(locationId: string): Promise<InventoryAsset[]> {

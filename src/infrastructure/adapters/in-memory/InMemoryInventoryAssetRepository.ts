@@ -1,6 +1,7 @@
 import { InventoryAssetRepository } from '@domain/ports/InventoryAssetRepository';
 import { InventoryAsset, AssetStatus } from '@domain/entities/inventory-asset';
 import { DuplicateSerialNumberError } from '@domain/errors/inventory';
+import { normalizeSerial } from '@domain/entities/return-suggestion';
 
 export class InMemoryInventoryAssetRepository implements InventoryAssetRepository {
   readonly store = new Map<string, InventoryAsset>();
@@ -12,6 +13,15 @@ export class InMemoryInventoryAssetRepository implements InventoryAssetRepositor
 
   async findBySerialNumber(serialNumber: string): Promise<InventoryAsset | null> {
     const a = Array.from(this.store.values()).find((x) => x.serialNumber === serialNumber);
+    return a ? { ...a } : null;
+  }
+
+  async findByNormalizedSerial(serial: string): Promise<InventoryAsset | null> {
+    const target = normalizeSerial(serial);
+    if (target == null) return null;
+    const a = Array.from(this.store.values()).find(
+      (x) => x.status === 'installed' && normalizeSerial(x.serialNumber) === target,
+    );
     return a ? { ...a } : null;
   }
 

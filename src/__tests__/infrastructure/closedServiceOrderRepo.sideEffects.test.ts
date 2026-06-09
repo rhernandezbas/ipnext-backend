@@ -23,6 +23,7 @@ describe('InMemoryClosedServiceOrderRepository — side-effect tracking', () => 
     await repo.upsert(order({ iclassId: '900', iclassCodigo: '4013' }), 't1');
     expect(await repo.getSideEffectState('900')).toEqual({
       commentPosted: false, inventoryBuilt: false, auditDone: false, auditAttempts: 0,
+      inventoryReturnsProcessed: false,
     });
   });
 
@@ -34,6 +35,7 @@ describe('InMemoryClosedServiceOrderRepository — side-effect tracking', () => 
     await repo.incrementAuditAttempt('900');
     expect(await repo.getSideEffectState('900')).toEqual({
       commentPosted: true, inventoryBuilt: false, auditDone: false, auditAttempts: 2,
+      inventoryReturnsProcessed: false,
     });
   });
 

@@ -274,3 +274,49 @@ export class UnresolvableDeviceTypeError extends DomainError {
     this.name = 'UnresolvableDeviceTypeError';
   }
 }
+
+// ── Closure-Detected Returns (EPIC #38, Wave 4) ──────────────────────────────
+
+/** The referenced ReturnSuggestion does not exist. */
+export class ReturnSuggestionNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`Return suggestion ${id} not found`, 'RETURN_SUGGESTION_NOT_FOUND');
+    this.name = 'ReturnSuggestionNotFoundError';
+  }
+}
+
+/**
+ * The ReturnSuggestion is already terminal (confirmed/discarded) — a re-confirm is a
+ * no-op double-action. Maps to 409 at the route. The sourceRef partial-unique is the
+ * deeper defense (concurrent confirms); this catches the common single-operator re-click.
+ */
+export class ReturnAlreadyResolvedError extends DomainError {
+  constructor(id: string, status: string) {
+    super(`Return suggestion ${id} is already ${status}`, 'RETURN_ALREADY_RESOLVED');
+    this.name = 'ReturnAlreadyResolvedError';
+  }
+}
+
+/** A matched/link resolution was requested but no asset id is available to RETURN. */
+export class ReturnHasNoAssetError extends DomainError {
+  constructor(id: string) {
+    super(`Return suggestion ${id} has no asset to return`, 'RETURN_HAS_NO_ASSET');
+    this.name = 'ReturnHasNoAssetError';
+  }
+}
+
+/**
+ * Fix #1 (Wave 4 review): at confirm time the asset to RETURN is missing OR is no longer
+ * `installed`. A device moved/returned between staging and confirm must NOT be silently
+ * flipped to available@DEPOSITO (inventory corruption). Re-checked inside the UoW; maps to
+ * 409 at the route. Also covers `link` to a non-existent/non-installed asset.
+ */
+export class AssetNotReturnableError extends DomainError {
+  constructor(assetId: string) {
+    super(
+      `Asset ${assetId} is not currently installed and cannot be returned`,
+      'ASSET_NOT_RETURNABLE',
+    );
+    this.name = 'AssetNotReturnableError';
+  }
+}

@@ -4,6 +4,15 @@ export interface InventoryAssetRepository {
   findById(id: string): Promise<InventoryAsset | null>;
   findBySerialNumber(serialNumber: string): Promise<InventoryAsset | null>;
   /**
+   * Match an asset by NORMALIZED serial (trim/upper/strip non-alphanumerics — survives
+   * IClass/OCR drift, #36 pattern) restricted to `status === 'installed'`. Returns null
+   * when no installed asset matches. EPIC #38 W4 return staging: a non-installed match is
+   * nonsensical (you cannot return an already-available/removed asset), so it is excluded
+   * here → the staging use case treats it as `needs_review`. `findBySerialNumber` (exact,
+   * any status) stays for #19.
+   */
+  findByNormalizedSerial(serial: string): Promise<InventoryAsset | null>;
+  /**
    * All assets currently at a location, REGARDLESS of status. Generic on
    * purpose (W7 dashboard reuse) — status filtering lives in the use case.
    */

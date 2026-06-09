@@ -15,6 +15,7 @@ function toEntity(row: any): IClassResultCode {
     type: row.type,
     mappedStageId: row.mappedStageId ?? null,
     mappedStageName: row.mappedStage?.name ?? null,
+    isRemovalCode: row.isRemovalCode ?? false,
     lastSyncedAt: row.lastSyncedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

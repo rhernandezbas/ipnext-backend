@@ -1,4 +1,5 @@
-import { emptyClosedCounts } from '@application/use-cases/IngestClosedServiceOrders';
+import { emptyClosedCounts, ICLASS_RETURNS_FLAG_KEY } from '@application/use-cases/IngestClosedServiceOrders';
+import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryIClassClient } from '@infrastructure/adapters/in-memory/InMemoryIClassClient';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMemoryStageRepository';
@@ -20,6 +21,10 @@ import { InMemoryDeviceTypeCatalogRepository } from '@infrastructure/adapters/in
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
 import { ClosedServiceOrderSummary, SoStatusHistoryEntry } from '@domain/entities/iclass-closed-order';
 import { Stage } from '@domain/entities/workflow';
+import { StageReturnSuggestions } from '@application/use-cases/StageReturnSuggestions';
+import { InMemoryReturnSuggestionRepository } from '@infrastructure/adapters/in-memory/InMemoryReturnSuggestionRepository';
+import { InMemoryInventoryAssetRepository } from '@infrastructure/adapters/in-memory/InMemoryInventoryAssetRepository';
+import { createInventoryAsset, AssetStatus } from '@domain/entities/inventory-asset';
 
 const REGISTRADO: Stage = { id: 'st-reg', workflowId: 'wf', name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'nuevo', order: 5, color: null };
 const INSTALADO: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', code: 'instalado', category: 'hecho', order: 8, color: null };
@@ -339,6 +344,7 @@ describe('IngestClosedServiceOrders', () => {
     // comment posted → marked; no buildSuggestions/audit injected → those stay false.
     expect(await closed.getSideEffectState('900')).toEqual({
       commentPosted: true, inventoryBuilt: false, auditDone: false, auditAttempts: 0,
+      inventoryReturnsProcessed: false,
     });
   });
 
@@ -634,6 +640,165 @@ describe('#36 — resolveResultCode: normalized fallback', () => {
     expect(second.skippedUnchanged).toBe(1);
     expect(second.transitioned).toBe(1);
     expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id);
+  });
+});
+
+// ── EPIC #38 W4 — processInventoryReturns side-effect (closure-detected returns) ──
+
+describe('IngestClosedServiceOrders — processInventoryReturns (W4)', () => {
+  const RETIRO_PHOTO_Q = 'SAQUE FOTO DE LA MAC Y SN DEL ROUTER A RETIRAR';
+
+  function seedInstalledAsset(assets: InMemoryInventoryAssetRepository, serial: string, status: AssetStatus = 'installed'): string {
+    const id = `asset-${serial}`;
+    assets.store.set(id, createInventoryAsset({
+      id, serialNumber: serial, deviceTypeId: 'dt-onu', status, currentLocationId: 'loc-client', source: 'OCR',
+    }));
+    return id;
+  }
+
+  /** Wires a closure use case with the returns side-effect + OCR producing one serial. */
+  function setupReturns(opts: { isRemoval: boolean; resultType?: string; serial?: string; flag?: boolean } = { isRemoval: true }) {
+    const base = setup();
+    const { scheduling, iclass, resultCodes, closed, state } = base;
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id, contractId: 'svc1' });
+    const resultType = opts.resultType ?? 'Sucesso';
+    iclass.serviceOrders = [summary({
+      iclassId: '900', iclassCodigo: '4013', soTypeId: 'RET',
+      soTypeDescription: 'RETIROS DE EQUIPOS', resultCodeName: 'Retiro completo Servicio Fibra',
+    })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    iclass.checklistsByOrder['900'] = [{
+      iclassSurveyId: 's1', surveyAt: null,
+      answers: [{ questionId: null, questionText: RETIRO_PHOTO_Q, questionType: 'Foto', answerOrder: 3, answerText: null, photoMissing: true, photoUrl: null }],
+    }];
+
+    const portal = new InMemoryIClassPortal();
+    portal.set('900', {
+      questions: [{ ordem: 3, kind: 'photo', label: RETIRO_PHOTO_Q, answerText: null, photoUrl: 'https://x/router.jpg', fileName: 'r.jpg', photoMissing: false }],
+      attachments: [],
+    });
+    const ocrStub = new InMemoryDevicePhotoOcr();
+    ocrStub.set('https://x/router.jpg', { sn: opts.serial ?? 'SN-RET-1', mac: 'MACRET', confidence: 0.9, rawOutput: '' });
+    const ocrRepo = new InMemoryOcrExtractionRepository();
+    const catalogRepo = new InMemoryDeviceTypeCatalogRepository();
+
+    const returns = new InMemoryReturnSuggestionRepository();
+    const assets = new InMemoryInventoryAssetRepository();
+    // When opts.flag is defined, wire a FeatureFlag repo so the runtime gate is enforced.
+    // When undefined, leave featureFlags absent → gate open (the existing tests' behavior).
+    const featureFlags = opts.flag !== undefined ? new InMemoryFeatureFlagRepository() : undefined;
+    if (featureFlags) featureFlags.seed(ICLASS_RETURNS_FLAG_KEY, opts.flag!);
+
+    return { ...base, portal, ocrStub, ocrRepo, catalogRepo, returns, assets, featureFlags,
+      build: async () => {
+        for (const name of ['ONU', 'ROUTER', 'OTROS']) await catalogRepo.create({ name, active: true, sortOrder: 0 });
+        await resultCodes.upsert({ soTypeId: 'RET', code: 'Retiro completo Servicio Fibra', type: resultType });
+        const rc = await resultCodes.findByCode('Retiro completo Servicio Fibra');
+        resultCodes.setRemovalCode('Retiro completo Servicio Fibra', opts.isRemoval);
+        void rc;
+        return new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, {
+          now: () => new Date('2026-05-29T12:00:00Z'),
+          portal,
+          extractOcr: new ExtractDeviceInfoFromPhoto(ocrStub, ocrRepo, catalogRepo),
+          stageReturns: new StageReturnSuggestions(returns, assets),
+          ...(featureFlags ? { featureFlags } : {}),
+        });
+      },
+    };
+  }
+
+  it('(a) completed-retiro SO stages a return suggestion + sets inventoryReturnsProcessed', async () => {
+    const ctx = setupReturns({ isRemoval: true });
+    const assetId = seedInstalledAsset(ctx.assets, 'SN-RET-1');
+    const useCase = await ctx.build();
+
+    await useCase.execute();
+
+    const staged = await ctx.returns.listByTask('t1');
+    expect(staged).toHaveLength(1);
+    expect(staged[0].status).toBe('pending');
+    expect(staged[0].matchedAssetId).toBe(assetId);
+    expect((await ctx.closed.getSideEffectState('900'))!.inventoryReturnsProcessed).toBe(true);
+  });
+
+  it('(b) re-closure with inventoryReturnsProcessed=true does not re-stage', async () => {
+    const ctx = setupReturns({ isRemoval: true });
+    seedInstalledAsset(ctx.assets, 'SN-RET-1');
+    const useCase = await ctx.build();
+
+    await useCase.execute();
+    // Second run — same iclassUpdatedAt (unchanged), flag already true → no re-stage.
+    await useCase.execute();
+
+    expect(await ctx.returns.listByTask('t1')).toHaveLength(1);
+  });
+
+  it('(c) non-removal result code (isRemovalCode=false) stages nothing, flag stays false', async () => {
+    const ctx = setupReturns({ isRemoval: false });
+    seedInstalledAsset(ctx.assets, 'SN-RET-1');
+    const useCase = await ctx.build();
+
+    await useCase.execute();
+
+    expect(await ctx.returns.listByTask('t1')).toHaveLength(0);
+    expect((await ctx.closed.getSideEffectState('900'))!.inventoryReturnsProcessed).toBe(false);
+  });
+
+  it('(c2) Pendente (Cliente Ausente) removal code is NOT a completed removal → stages nothing', async () => {
+    const ctx = setupReturns({ isRemoval: true, resultType: 'Pendente' });
+    seedInstalledAsset(ctx.assets, 'SN-RET-1');
+    const useCase = await ctx.build();
+
+    await useCase.execute();
+
+    expect(await ctx.returns.listByTask('t1')).toHaveLength(0);
+    expect((await ctx.closed.getSideEffectState('900'))!.inventoryReturnsProcessed).toBe(false);
+  });
+
+  // ── W4 review: the safe-rollout property — the `iclass-inventory-returns` flag GATE ──
+  it('(flag-off) flag seeded false → stages NOTHING even on a completed removal SO', async () => {
+    const ctx = setupReturns({ isRemoval: true, flag: false });
+    seedInstalledAsset(ctx.assets, 'SN-RET-1');
+    const useCase = await ctx.build();
+
+    await useCase.execute();
+
+    expect(await ctx.returns.listByTask('t1')).toHaveLength(0);
+    // The gate returns BEFORE the L1 flag is stamped → stays false (retried if turned on).
+    expect((await ctx.closed.getSideEffectState('900'))!.inventoryReturnsProcessed).toBe(false);
+  });
+
+  it('(flag-on) flag seeded true → stages the suggestion (gate open)', async () => {
+    const ctx = setupReturns({ isRemoval: true, flag: true });
+    const assetId = seedInstalledAsset(ctx.assets, 'SN-RET-1');
+    const useCase = await ctx.build();
+
+    await useCase.execute();
+
+    const staged = await ctx.returns.listByTask('t1');
+    expect(staged).toHaveLength(1);
+    expect(staged[0].matchedAssetId).toBe(assetId);
+    expect((await ctx.closed.getSideEffectState('900'))!.inventoryReturnsProcessed).toBe(true);
+  });
+
+  it('(d) REQ-IDEMP-1: unchanged SO with inventoryReturnsProcessed=false re-attempts staging', async () => {
+    const ctx = setupReturns({ isRemoval: true });
+    seedInstalledAsset(ctx.assets, 'SN-RET-1');
+    const useCase = await ctx.build();
+
+    // First run mirrors the SO but simulate the returns side-effect having NOT run yet:
+    // run once, then force the flag back to false to model a mid-deploy gap, and re-run
+    // the (now unchanged) SO — the skippedUnchanged path MUST re-attempt staging.
+    await useCase.execute();
+    // wipe staged + reset the flag to emulate "pending returns on an unchanged SO"
+    ctx.returns.store.clear();
+    await ctx.closed.markSideEffect('900', 'inventoryReturnsProcessed', false);
+
+    const counts = await useCase.execute();
+
+    expect(counts.skippedUnchanged).toBe(1);
+    expect(await ctx.returns.listByTask('t1')).toHaveLength(1);
+    expect((await ctx.closed.getSideEffectState('900'))!.inventoryReturnsProcessed).toBe(true);
   });
 });
 

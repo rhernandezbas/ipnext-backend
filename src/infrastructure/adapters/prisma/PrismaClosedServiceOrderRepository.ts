@@ -264,7 +264,13 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
   async getSideEffectState(iclassId: string): Promise<ClosureSideEffectState | null> {
     const row = await (prisma.iClassServiceOrder as any).findUnique({
       where: { iclassId: BigInt(iclassId) },
-      select: { commentPosted: true, inventoryBuilt: true, auditDone: true, auditAttempts: true },
+      select: {
+        commentPosted: true,
+        inventoryBuilt: true,
+        auditDone: true,
+        auditAttempts: true,
+        inventoryReturnsProcessed: true,
+      },
     });
     if (!row) return null;
     return {
@@ -272,11 +278,16 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
       inventoryBuilt: row.inventoryBuilt,
       auditDone: row.auditDone,
       auditAttempts: row.auditAttempts,
+      inventoryReturnsProcessed: row.inventoryReturnsProcessed,
     };
   }
 
   async listPendingSideEffects(maxAuditAttempts: number): Promise<PendingClosureSideEffects[]> {
     const rows = await (prisma.iClassServiceOrder as any).findMany({
+      // NOTE: inventoryReturnsProcessed is intentionally NOT in this OR. A non-retiro
+      // SO legitimately keeps it false forever, so including it would flood the
+      // reprocess list with every non-retiro closure. Returns re-eval for unchanged
+      // SOs runs through the closure skippedUnchanged path (REQ-IDEMP-1), not here.
       where: {
         OR: [
           { commentPosted: false },
@@ -291,6 +302,7 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
         inventoryBuilt: true,
         auditDone: true,
         auditAttempts: true,
+        inventoryReturnsProcessed: true,
       },
     });
     return rows.map((r: any) => ({
@@ -300,6 +312,7 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
       inventoryBuilt: r.inventoryBuilt,
       auditDone: r.auditDone,
       auditAttempts: r.auditAttempts,
+      inventoryReturnsProcessed: r.inventoryReturnsProcessed,
     }));
   }
 
@@ -319,6 +332,7 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
         inventoryBuilt: true,
         auditDone: true,
         auditAttempts: true,
+        inventoryReturnsProcessed: true,
         scheduledTask: {
           select: { id: true, sequenceNumber: true, title: true },
         },
@@ -331,6 +345,7 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
       inventoryBuilt: r.inventoryBuilt,
       auditDone: r.auditDone,
       auditAttempts: r.auditAttempts,
+      inventoryReturnsProcessed: r.inventoryReturnsProcessed,
       task: r.scheduledTask
         ? { id: r.scheduledTask.id, sequenceNumber: r.scheduledTask.sequenceNumber, title: r.scheduledTask.title }
         : null,
@@ -341,6 +356,13 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
     await (prisma.iClassServiceOrder as any).update({
       where: { iclassId: BigInt(iclassId) },
       data: { [effect]: done },
+    });
+  }
+
+  async markInventoryReturnsProcessed(iclassId: string): Promise<void> {
+    await (prisma.iClassServiceOrder as any).update({
+      where: { iclassId: BigInt(iclassId) },
+      data: { inventoryReturnsProcessed: true },
     });
   }
 

@@ -24,6 +24,15 @@ export class InMemoryInventoryMovementRepository implements InventoryMovementRep
   ) {}
 
   async record(input: RecordMovementInput): Promise<InventoryMovement> {
+    // 0) L2 idempotency (EPIC #38 W4): mirror the PARTIAL UNIQUE on sourceRef. A
+    //    re-record with an already-used sourceRef resolves to the EXISTING movement
+    //    (idempotent no-op) WITHOUT re-applying the balance effect — exactly what the
+    //    Prisma adapter does after catching P2002. NULL sourceRefs never collide.
+    if (input.sourceRef != null) {
+      const existing = this.movements.find((m) => m.sourceRef === input.sourceRef);
+      if (existing) return existing;
+    }
+
     // 1) Validate the movement shape (XOR + qty>0). Throws before any mutation.
     const movement = createInventoryMovement({
       id: randomUUID(),
@@ -39,6 +48,7 @@ export class InMemoryInventoryMovementRepository implements InventoryMovementRep
       note: input.note ?? null,
       occurredAt: input.occurredAt ?? null,
       status: input.status ?? null,
+      sourceRef: input.sourceRef ?? null,
     });
 
     // 2) Apply the balance effect atomically. Material decrements run their
@@ -97,5 +107,9 @@ export class InMemoryInventoryMovementRepository implements InventoryMovementRep
 
   async listByAsset(assetId: string): Promise<InventoryMovement[]> {
     return this.movements.filter((m) => m.assetId === assetId);
+  }
+
+  async findBySourceRef(sourceRef: string): Promise<InventoryMovement | null> {
+    return this.movements.find((m) => m.sourceRef === sourceRef) ?? null;
   }
 }

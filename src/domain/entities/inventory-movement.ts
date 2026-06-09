@@ -28,6 +28,13 @@ export interface InventoryMovement {
   readonly occurredAt: string;
   /** Optional explicit asset status — only meaningful for an ADJUST on an asset. */
   readonly status: AssetStatus | null;
+  /**
+   * Optional deterministic natural key for L2 idempotency (EPIC #38 W4 returns:
+   * `iclass:return:{iclassId}:{normalizedSerial}`). A PARTIAL UNIQUE index on the
+   * column makes a re-confirm collide → caught as P2002 and resolved to the
+   * existing movement. Null for every other movement (the unique index ignores NULLs).
+   */
+  readonly sourceRef: string | null;
 }
 
 export interface CreateInventoryMovementInput {
@@ -45,6 +52,8 @@ export interface CreateInventoryMovementInput {
   occurredAt?: string | null;
   /** Only honored for ADJUST on an asset — lets an ADJUST set the asset status. */
   status?: AssetStatus | null;
+  /** Optional L2 idempotency natural key (EPIC #38 W4). Null for non-return movements. */
+  sourceRef?: string | null;
 }
 
 /**
@@ -140,6 +149,7 @@ export function createInventoryMovement(input: CreateInventoryMovementInput): In
     note: input.note ?? null,
     occurredAt: input.occurredAt ?? new Date().toISOString(),
     status: input.status ?? null,
+    sourceRef: input.sourceRef ?? null,
   };
   return Object.freeze(mv);
 }
