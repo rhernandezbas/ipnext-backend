@@ -5,6 +5,8 @@ export interface MaterialStockRepository {
     materialCatalogId: string,
     locationId: string,
   ): Promise<MaterialStock | null>;
+  /** All material stock rows at a location. */
+  listByLocation(locationId: string): Promise<MaterialStock[]>;
   /** Find-or-create the (materialCatalogId, locationId) row, setting qty. */
   upsert(stock: MaterialStock): Promise<MaterialStock>;
   /** Decrement qty; throws InsufficientStockError if the result would be negative. */

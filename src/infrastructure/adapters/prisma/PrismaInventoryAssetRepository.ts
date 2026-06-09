@@ -41,6 +41,13 @@ export class PrismaInventoryAssetRepository implements InventoryAssetRepository 
     return row ? toEntity(row) : null;
   }
 
+  async listByLocation(locationId: string): Promise<InventoryAsset[]> {
+    // Generic: ALL assets at the location regardless of status (W7 dashboard
+    // reuse). Status filtering lives in the use case, NOT here.
+    const rows = await this.db.inventoryAsset.findMany({ where: { currentLocationId: locationId } });
+    return (rows as Row[]).map(toEntity);
+  }
+
   async create(asset: InventoryAsset): Promise<InventoryAsset> {
     try {
       const row = await this.db.inventoryAsset.create({

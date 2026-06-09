@@ -18,6 +18,12 @@ export class InMemoryMaterialStockRepository implements MaterialStockRepository 
     return s ? { ...s } : null;
   }
 
+  async listByLocation(locationId: string): Promise<MaterialStock[]> {
+    return Array.from(this.store.values())
+      .filter((s) => s.locationId === locationId)
+      .map((s) => ({ ...s }));
+  }
+
   async upsert(stock: MaterialStock): Promise<MaterialStock> {
     const k = this.key(stock.materialCatalogId, stock.locationId);
     const existing = this.store.get(k);

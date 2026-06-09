@@ -424,7 +424,10 @@ import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInvent
 import { PrismaStockLocationRepository } from '../adapters/prisma/PrismaStockLocationRepository';
 import { PrismaInventoryAssetRepository } from '../adapters/prisma/PrismaInventoryAssetRepository';
 import { PrismaInventoryMovementRepository } from '../adapters/prisma/PrismaInventoryMovementRepository';
+import { PrismaMaterialStockRepository } from '../adapters/prisma/PrismaMaterialStockRepository';
 import { PrismaUnitOfWork } from '../adapters/prisma/PrismaUnitOfWork';
+import { GetDepotStock } from '@application/use-cases/GetDepotStock';
+import { createInventoryRouter } from './routes/inventory.routes';
 import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
 import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
@@ -1095,6 +1098,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     },
     deviceTypeCatalogService,
     new CreateManualSuggestion(inventorySuggestionRepo, schedulingRepo, contractInventoryRepo, deviceTypeCatalogService),
+  ));
+
+  // Inventory depot read surface (EPIC #38 W3) — GET /api/inventory/depot.
+  // Read-only DEPOSITO stock (available assets + materials), guarded inventory.read.
+  const materialStockRepo = new PrismaMaterialStockRepository();
+  app.use('/api/inventory', createInventoryRouter(
+    new GetDepotStock(stockLocationRepo, inventoryAssetRepo, materialStockRepo, deviceTypeCatalogRepo, materialCatalogRepo),
+    createAuthMiddleware(authAdapter, sessionRepo),
+    requirePerm('inventory', 'read'),
   ));
 
   // F6 — AI installation audit read surface (before the scheduling /:id catch-all).
