@@ -645,6 +645,50 @@ describe.skip('DELETE /api/clients/:id', () => {
   });
 });
 
+// Fix #6 (EPIC #38 W2): deleting a client whose contract holds installed inventory
+// assets hits a RESTRICT FK during cascade. The route must translate that into a
+// clear 409 instead of a 500.
+describe('DELETE /api/clients/:id — inventory RESTRICT FK', () => {
+  function buildAppWithDelete(deleteImpl: () => Promise<boolean>) {
+    const app = express();
+    app.use(express.json());
+    app.use(cookieParser());
+    const stub = { execute: jest.fn() } as never;
+    const authProvider = {
+      getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }),
+    } as never;
+    app.use('/api/clients', createClientsRouter(
+      stub, stub, stub, stub, stub, authProvider, stub,
+      { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
+      { execute: jest.fn(deleteImpl) } as never,
+    ));
+    return app;
+  }
+
+  it('P2003 from an installed asset → 409 CLIENT_HAS_REFERENCES mentioning inventory', async () => {
+    const app = buildAppWithDelete(async () => {
+      const e: Error & { code?: string } = new Error('Foreign key constraint failed');
+      e.code = 'P2003';
+      throw e;
+    });
+    const res = await withAuth(request(app).delete('/api/clients/c1'));
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('CLIENT_HAS_REFERENCES');
+    expect(res.body.error).toMatch(/inventory|asset/i);
+  });
+
+  it('P2014 required-relation violation (cascade hits RESTRICT) → 409, not 500', async () => {
+    const app = buildAppWithDelete(async () => {
+      const e: Error & { code?: string } = new Error('Required relation violation');
+      e.code = 'P2014';
+      throw e;
+    });
+    const res = await withAuth(request(app).delete('/api/clients/c1'));
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('CLIENT_HAS_REFERENCES');
+  });
+});
+
 // TODO: refactor PATCH /api/clients/:id/status to PrismaCustomerRepository.
 describe.skip('PATCH /api/clients/:id/status', () => {
   it('updates client status and returns updated client', async () => {

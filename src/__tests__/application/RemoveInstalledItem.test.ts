@@ -15,7 +15,7 @@ const makeItem = (over: Partial<ContractInstalledItem> = {}): ContractInstalledI
   confirmedAt: null,
   status: 'active',
   notes: null,
-  replacesItemId: null,
+  replacesItemId: null, assetId: null,
   createdAt: '2026-06-01T00:00:00Z',
   updatedAt: '2026-06-01T00:00:00Z',
   ...over,

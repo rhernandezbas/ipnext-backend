@@ -222,6 +222,7 @@ model Contract {
   client         Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   tasks          ScheduledTask[]
   installedItems ContractInstalledItem[]
+  stockLocations StockLocation[]          @relation("ContractStockLocation")
 
   @@index([clientId])
   @@index([status])
@@ -534,6 +535,9 @@ model DeviceTypeCatalog {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Inventory Foundation (W1) — assets of this device type
+  assets    InventoryAsset[] @relation("AssetDeviceType")
+
   @@map("DeviceTypeCatalog")
 }
 
@@ -548,6 +552,9 @@ model MaterialCatalog {
   updatedAt DateTime @updatedAt
 
   consumptions TaskMaterialConsumption[]
+  // Inventory Foundation (W1) — stock balances + ledger movements
+  stocks       MaterialStock[]     @relation("MaterialStock")
+  movements    InventoryMovement[] @relation("MaterialMovement")
 
   @@map("MaterialCatalog")
 }
@@ -825,9 +832,118 @@ model ContractInstalledItem {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  // Inventory Foundation (W1): dual-write link to the unified asset ledger record.
+  // Nullable so legacy rows + fixtures don't break; backfilled by the W1 migration.
+  assetId       String?
+  asset         InventoryAsset? @relation("CiiAsset", fields: [assetId], references: [id], onDelete: SetNull)
+
   @@index([contractId])
   @@index([serialNumber])
   @@index([replacesItemId])
+  @@index([assetId])
+}
+
+// ============================================================================
+// Inventory Foundation (EPIC #38, Wave 1) — unified asset + material ledger.
+// StockLocation anchors every serialized asset and material balance. The
+// InventoryMovement ledger is the immutable audit trail; InventoryAsset.currentLocationId
+// and MaterialStock.qty are the materialized live truth.
+// ============================================================================
+
+// Physical/logical inventory location. DEPOSITO is a singleton (unique `code`);
+// CLIENTE is per-contract; TECNICO is per-technician. CAMIONETA is W5.
+model StockLocation {
+  id           String    @id @default(uuid())
+  type         String    // DEPOSITO | CLIENTE | TECNICO
+  code         String?   @unique // DEPOSITO singleton key (e.g. 'DEPOSITO')
+  contractId   String?
+  contract     Contract? @relation("ContractStockLocation", fields: [contractId], references: [id], onDelete: Cascade)
+  technicianId String?
+  technician   RbacUser? @relation("TechnicianStockLocation", fields: [technicianId], references: [id], onDelete: Cascade)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  assetsHere          InventoryAsset[]    @relation("AssetCurrentLocation")
+  materialStocks      MaterialStock[]
+  movementsFrom       InventoryMovement[] @relation("MovementFrom")
+  movementsTo         InventoryMovement[] @relation("MovementTo")
+
+  // One CLIENTE per contract / one TECNICO per technician (DEPOSITO uses unique code).
+  @@unique([type, contractId])
+  @@unique([type, technicianId])
+  @@index([type])
+}
+
+// Unified serialized equipment record (ONU, router, antenna, ...). Replaces
+// ContractInstalledItem as the single source of truth for tracked devices.
+model InventoryAsset {
+  id                String            @id @default(uuid())
+  serialNumber      String            @unique
+  mac               String?
+  deviceTypeId      String
+  deviceType        DeviceTypeCatalog @relation("AssetDeviceType", fields: [deviceTypeId], references: [id], onDelete: Restrict)
+  status            String            // available | installed | removed | damaged | retired
+  currentLocationId String
+  currentLocation   StockLocation     @relation("AssetCurrentLocation", fields: [currentLocationId], references: [id], onDelete: Restrict)
+  source            String            // OCR | MANUAL | ICLASS
+  sourceTaskId      String?
+  sourceTask        ScheduledTask?    @relation("AssetSourceTask", fields: [sourceTaskId], references: [id], onDelete: SetNull)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  movements        InventoryMovement[]     @relation("MovementAsset")
+  contractItems    ContractInstalledItem[] @relation("CiiAsset")
+
+  @@index([deviceTypeId])
+  @@index([currentLocationId])
+  @@index([status])
+  @@index([sourceTaskId])
+}
+
+// Consumable quantity balance of a catalog material at a location. One row per
+// (materialCatalogId, locationId). W1 operates DEPOSITO balances only.
+model MaterialStock {
+  id                String          @id @default(uuid())
+  materialCatalogId String
+  material          MaterialCatalog @relation("MaterialStock", fields: [materialCatalogId], references: [id], onDelete: Restrict)
+  locationId        String
+  location          StockLocation   @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  qty               Decimal         @default(0) @db.Decimal(12, 4)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@unique([materialCatalogId, locationId])
+  @@index([locationId])
+}
+
+// Immutable audit trail of every inventory event. RecordInventoryMovement is the
+// ONLY mutating entry point: it writes the ledger row AND the materialized balance
+// atomically. Either an asset moves (assetId) or a material qty moves (materialCatalogId+qty).
+model InventoryMovement {
+  id                String          @id @default(uuid())
+  type              String          // ISSUE | TRANSFER | INSTALL | RETURN | CONSUME | ADJUST
+  assetId           String?
+  asset             InventoryAsset? @relation("MovementAsset", fields: [assetId], references: [id], onDelete: SetNull)
+  materialCatalogId String?
+  material          MaterialCatalog? @relation("MaterialMovement", fields: [materialCatalogId], references: [id], onDelete: SetNull)
+  qty               Decimal?        @db.Decimal(12, 4)
+  fromLocationId    String?
+  fromLocation      StockLocation?  @relation("MovementFrom", fields: [fromLocationId], references: [id], onDelete: SetNull)
+  toLocationId      String?
+  toLocation        StockLocation?  @relation("MovementTo", fields: [toLocationId], references: [id], onDelete: SetNull)
+  taskId            String?
+  task              ScheduledTask?  @relation("MovementTask", fields: [taskId], references: [id], onDelete: SetNull)
+  technicianId      String?
+  technician        RbacUser?       @relation("MovementTechnician", fields: [technicianId], references: [id], onDelete: SetNull)
+  source            String
+  note              String?         @db.Text
+  occurredAt        DateTime        @default(now())
+  createdAt         DateTime        @default(now())
+
+  @@index([assetId, type])
+  @@index([materialCatalogId])
+  @@index([taskId])
+  @@index([occurredAt])
 }
 
 model Project {
@@ -970,6 +1086,10 @@ model ScheduledTask {
 
   // task-activity-log — append-only audit feed for this task
   activities ScheduledTaskActivity[]
+
+  // Inventory Foundation (W1) — back-relations
+  sourcedAssets     InventoryAsset[]    @relation("AssetSourceTask")
+  inventoryMovements InventoryMovement[] @relation("MovementTask")
 
   @@index([stageId])
   @@index([projectId])
@@ -1172,6 +1292,7 @@ model NetworkDevice {
   createdAt  DateTime  @default(now())
 }
 
+/// @deprecated W1 — superseded by InventoryAsset/MaterialStock; no live writer
 model InventoryItem {
   id        String  @id @default(uuid())
   name      String
@@ -1185,6 +1306,7 @@ model InventoryItem {
   status    String  @default("in_stock")
 }
 
+/// @deprecated W1 — superseded by InventoryAsset/MaterialStock; no live writer
 model InventoryProduct {
   id          String          @id @default(uuid())
   name        String
@@ -1199,6 +1321,7 @@ model InventoryProduct {
   units       InventoryUnit[]
 }
 
+/// @deprecated W1 — superseded by InventoryAsset/MaterialStock; no live writer
 model InventoryUnit {
   id                 String           @id @default(uuid())
   productId          String
@@ -1706,6 +1829,9 @@ model RbacUser {
   auditEvents     AuditEvent[]
   sessions        Session[]
   taskActivities  ScheduledTaskActivity[] @relation("TaskActivityActor")
+  // Inventory Foundation (W1) — back-relations
+  stockLocations    StockLocation[]     @relation("TechnicianStockLocation")
+  inventoryMovements InventoryMovement[] @relation("MovementTechnician")
 
   @@index([login])
 }

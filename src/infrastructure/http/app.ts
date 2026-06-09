@@ -421,6 +421,10 @@ import { ListTaskAuditFindings } from '@application/use-cases/ListTaskAuditFindi
 import { PrismaTaskAuditRepository } from '../adapters/prisma/PrismaTaskAuditRepository';
 import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
+import { PrismaStockLocationRepository } from '../adapters/prisma/PrismaStockLocationRepository';
+import { PrismaInventoryAssetRepository } from '../adapters/prisma/PrismaInventoryAssetRepository';
+import { PrismaInventoryMovementRepository } from '../adapters/prisma/PrismaInventoryMovementRepository';
+import { PrismaUnitOfWork } from '../adapters/prisma/PrismaUnitOfWork';
 import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
 import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
@@ -1054,12 +1058,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // Permisos granulares: suggestions usan scheduling.*, contract inventory usa inventory.* (migrado de clients.*).
   const inventorySuggestionRepo = new PrismaInventorySuggestionRepository();
   const contractInventoryRepo = new PrismaContractInventoryRepository();
+  // Inventory Foundation (W1) — unified asset/material ledger repos for the dual-write.
+  const stockLocationRepo = new PrismaStockLocationRepository();
+  const inventoryAssetRepo = new PrismaInventoryAssetRepository();
+  const inventoryMovementRepo = new PrismaInventoryMovementRepository();
+  // Inventory Foundation (W2 Fix #1/#3) — single transaction boundary for the
+  // confirm/replace dual-write (asset + INSTALL movement + CII + setStatus).
+  const inventoryUow = new PrismaUnitOfWork();
   const correctConfirmedDeviceType = new CorrectConfirmedDeviceType(inventorySuggestionRepo, contractInventoryRepo);
   app.use('/api', createContractInventoryRouter(
     new ListTaskInventorySuggestions(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo),
     new ConfirmInventorySuggestion(
       inventorySuggestionRepo, contractInventoryRepo, schedulingRepo, rbacUserRepo,
       deviceTypeCatalogRepo, materialCatalogRepo, taskMaterialConsumptionRepo,
+      stockLocationRepo, inventoryAssetRepo, inventoryMovementRepo, inventoryUow,
     ),
     new DiscardInventorySuggestion(inventorySuggestionRepo),
     correctConfirmedDeviceType,

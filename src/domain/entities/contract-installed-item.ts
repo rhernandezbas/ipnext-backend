@@ -23,6 +23,8 @@ export interface ContractInstalledItem {
   notes: string | null;
   /** Id of the item this one replaced (self-relation). null for items that didn't replace anything. */
   replacesItemId: string | null;
+  /** Inventory Foundation (W1): link to the unified InventoryAsset ledger record. null = not yet migrated. */
+  assetId: string | null;
   createdAt: string;
   updatedAt: string;
 }
