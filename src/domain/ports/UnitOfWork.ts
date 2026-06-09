@@ -3,6 +3,7 @@ import { ContractInventoryRepository } from './ContractInventoryRepository';
 import { StockLocationRepository } from './StockLocationRepository';
 import { InventoryAssetRepository } from './InventoryAssetRepository';
 import { InventoryMovementRepository } from './InventoryMovementRepository';
+import { ReturnSuggestionRepository } from './ReturnSuggestionRepository';
 
 /**
  * Tx-scoped repository bag handed to a `runInTransaction` callback. Every write
@@ -21,6 +22,12 @@ export interface TransactionalRepos {
   locations: StockLocationRepository;
   assets: InventoryAssetRepository;
   movements: InventoryMovementRepository;
+  /**
+   * EPIC #38 W4 — tx-scoped ReturnSuggestion repo. Optional: legacy #19 confirm/replace
+   * call sites do not need it. Present when the UnitOfWork is wired for the W4 return
+   * confirm, so the RETURN movement + asset flip + suggestion stamp commit atomically.
+   */
+  returns?: ReturnSuggestionRepository;
 }
 
 /**

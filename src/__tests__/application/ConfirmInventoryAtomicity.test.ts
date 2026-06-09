@@ -47,6 +47,9 @@ class FailingMovementRepo implements InventoryMovementRepository {
   async listByAsset(assetId: string): Promise<InventoryMovement[]> {
     return this.inner.listByAsset(assetId);
   }
+  async findBySourceRef(sourceRef: string): Promise<InventoryMovement | null> {
+    return this.inner.findBySourceRef(sourceRef);
+  }
 }
 
 async function setup() {

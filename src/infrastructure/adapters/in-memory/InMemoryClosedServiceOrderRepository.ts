@@ -16,7 +16,13 @@ interface StoredOrder {
 type TaskInfo = { id: string; sequenceNumber: number; title: string };
 
 function freshState(): ClosureSideEffectState {
-  return { commentPosted: false, inventoryBuilt: false, auditDone: false, auditAttempts: 0 };
+  return {
+    commentPosted: false,
+    inventoryBuilt: false,
+    auditDone: false,
+    auditAttempts: 0,
+    inventoryReturnsProcessed: false,
+  };
 }
 
 /** In-memory mirror store for closed-SO use-case tests. */
@@ -83,6 +89,11 @@ export class InMemoryClosedServiceOrderRepository implements ClosedServiceOrderR
   async markSideEffect(iclassId: string, effect: ClosureSideEffect, done: boolean): Promise<void> {
     const found = this.orders.get(iclassId);
     if (found) found.sideEffects[effect] = done;
+  }
+
+  async markInventoryReturnsProcessed(iclassId: string): Promise<void> {
+    const found = this.orders.get(iclassId);
+    if (found) found.sideEffects.inventoryReturnsProcessed = true;
   }
 
   async incrementAuditAttempt(iclassId: string): Promise<void> {

@@ -7,6 +7,7 @@ import { PostClosureComment } from '@application/use-cases/PostClosureComment';
 import { ExtractDeviceInfoFromPhoto } from '@application/use-cases/ExtractDeviceInfoFromPhoto';
 import { BuildInventorySuggestions } from '@application/use-cases/BuildInventorySuggestions';
 import { AuditInstallationQuality } from '@application/use-cases/AuditInstallationQuality';
+import { StageReturnSuggestions } from '@application/use-cases/StageReturnSuggestions';
 import { ScrapedOSDetail } from '@domain/entities/iclass-portal';
 import { OcrExtraction } from '@domain/entities/ocr-extraction';
 import { ClosedServiceOrderRepository } from '@domain/ports/ClosedServiceOrderRepository';
@@ -14,6 +15,7 @@ import { IClassResultCodeRepository } from '@domain/ports/IClassResultCodeReposi
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestionRepository';
+import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import {
   ClosedServiceOrder,
   ClosedServiceOrderSummary,
@@ -33,6 +35,8 @@ const DEFAULT_IN_FLIGHT_STAGE_CODE = 'registered_in_iclass';
 /** Max audit attempts before giving up (so a broken model never hammers Ollama). */
 const DEFAULT_MAX_AUDIT_ATTEMPTS = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** EPIC #38 W4 — runtime feature flag gating the closure-detected returns side-effect (default OFF). */
+export const ICLASS_RETURNS_FLAG_KEY = 'iclass-inventory-returns';
 
 export interface IngestClosedCounts {
   /** SOs upserted into the mirror. */
@@ -73,6 +77,18 @@ export interface IngestClosedOptions {
   auditInstallation?: AuditInstallationQuality;
   /** #14 — read access to suggestions to compute closureHasDeviceInventory on the task. */
   suggestions?: InventorySuggestionRepository;
+  /**
+   * EPIC #38 W4 — closure-detected equipment returns (opt-in, non-fatal). When present,
+   * a completed RETIRO SO (Sucesso + isRemovalCode) whose `inventoryReturnsProcessed` is
+   * false stages one ReturnSuggestion per OCR serial. NEVER mutates stock (staging only).
+   */
+  stageReturns?: StageReturnSuggestions;
+  /**
+   * EPIC #38 W4 — when present, the returns side-effect runs ONLY if the
+   * `iclass-inventory-returns` flag is enabled (runtime-toggleable, default OFF). When
+   * ABSENT, the gate is open (unit tests exercise staging without a flag dependency).
+   */
+  featureFlags?: FeatureFlagRepository;
 }
 
 /**
@@ -91,6 +107,8 @@ export class IngestClosedServiceOrders {
   private readonly buildSuggestions?: BuildInventorySuggestions;
   private readonly auditInstallation?: AuditInstallationQuality;
   private readonly suggestions?: InventorySuggestionRepository;
+  private readonly stageReturns?: StageReturnSuggestions;
+  private readonly featureFlags?: FeatureFlagRepository;
 
   constructor(
     private readonly iclass: IClassPort,
@@ -110,6 +128,8 @@ export class IngestClosedServiceOrders {
     this.buildSuggestions = opts.buildSuggestions;
     this.auditInstallation = opts.auditInstallation;
     this.suggestions = opts.suggestions;
+    this.stageReturns = opts.stageReturns;
+    this.featureFlags = opts.featureFlags;
   }
 
   async execute(): Promise<IngestClosedCounts> {
@@ -192,6 +212,19 @@ export class IngestClosedServiceOrders {
         const moved = await this.scheduling.reconcileStuckTaskStage(task.id, rc.mappedStageId, this.inFlightStageCode);
         if (moved) counts.transitioned++;
       }
+      // REQ-IDEMP-1 (W4): the unchanged path must still re-attempt a PENDING returns
+      // side-effect (inventoryReturnsProcessed=false) — a closure can leave it pending
+      // (mid-deploy, OCR was down, a 2nd run after enabling the flag). Reconstruct the
+      // order from the mirror (its checklists carry the correlated photoUrls) and stage.
+      // Scoped to RETURNS only — comment/inventory/audit re-eval stays out to avoid
+      // re-firing already-handled effects on an unchanged SO (keeps existing tests green).
+      if (this.stageReturns) {
+        const state = await this.closed.getSideEffectState(s.iclassId);
+        if (state && !state.inventoryReturnsProcessed) {
+          const mirrored = await this.closed.getByIclassId(s.iclassId);
+          if (mirrored) await this.processInventoryReturns(mirrored, task.id);
+        }
+      }
       return;
     }
 
@@ -262,32 +295,10 @@ export class IngestClosedServiceOrders {
     const inventoryDone = state?.inventoryBuilt ?? false;
     const auditDone = state?.auditDone ?? false;
     const auditAttempts = state?.auditAttempts ?? 0;
+    const returnsDone = state?.inventoryReturnsProcessed ?? false;
 
     if (this.buildSuggestions && !inventoryDone) {
-      const extractions: OcrExtraction[] = [];
-      let ocrFailed = false;
-      if (this.extractOcr) {
-        for (const checklist of order.checklists) {
-          for (const a of checklist.answers) {
-            if (a.questionType === 'Foto' && a.photoUrl && isSnMacDevicePhoto(a.questionText)) {
-              try {
-                const ext = await this.extractOcr.execute({
-                  photoUrl: a.photoUrl,
-                  deviceType: classifyDeviceType(a.questionText),
-                  serviceOrderId: order.iclassId,
-                  sourceTaskId: taskId,
-                });
-                // null = technical OCR failure (LLM down/timeout): skip the device and
-                // leave inventory pending so the reprocess re-OCRs it once the model is back.
-                if (ext) extractions.push(ext);
-                else ocrFailed = true;
-              } catch {
-                ocrFailed = true;
-              }
-            }
-          }
-        }
-      }
+      const { extractions, ocrFailed } = await this.collectDeviceExtractions(order, taskId);
       try {
         await this.buildSuggestions.execute({ taskId, extractions, materials: order.materials });
         // Only mark built when no photo failed technically — otherwise stay pending for the reprocess.
@@ -299,6 +310,12 @@ export class IngestClosedServiceOrders {
       } catch {
         /* non-fatal — stays pending, retried on the next reprocess */
       }
+    }
+
+    // EPIC #38 W4 — closure-detected returns. Gated + delegated (so the unchanged-SO
+    // path can reuse the same logic). Only when not yet staged (returnsDone false).
+    if (this.stageReturns && !returnsDone) {
+      await this.processInventoryReturns(order, taskId);
     }
 
     if (this.postComment && !commentDone) {
@@ -326,6 +343,67 @@ export class IngestClosedServiceOrders {
         // eslint-disable-next-line no-console
         console.error(`[audit] task ${taskId}: side-effect lanzó (no deberia, audit() never throws):`, err instanceof Error ? err.message : err);
       }
+    }
+  }
+
+  /**
+   * Collect the SN/MAC device extractions from the SO's checklist photos. Shared by
+   * inventoryBuilt (W1 #19) and processInventoryReturns (W4). `ocrFailed` is true when a
+   * photo OCR failed technically (LLM down) so the caller leaves its flag pending.
+   */
+  private async collectDeviceExtractions(
+    order: ClosedServiceOrder,
+    taskId: string,
+  ): Promise<{ extractions: OcrExtraction[]; ocrFailed: boolean }> {
+    const extractions: OcrExtraction[] = [];
+    let ocrFailed = false;
+    if (!this.extractOcr) return { extractions, ocrFailed };
+    for (const checklist of order.checklists) {
+      for (const a of checklist.answers) {
+        if (a.questionType === 'Foto' && a.photoUrl && isSnMacDevicePhoto(a.questionText)) {
+          try {
+            const ext = await this.extractOcr.execute({
+              photoUrl: a.photoUrl,
+              deviceType: classifyDeviceType(a.questionText),
+              serviceOrderId: order.iclassId,
+              sourceTaskId: taskId,
+            });
+            if (ext) extractions.push(ext);
+            else ocrFailed = true;
+          } catch {
+            ocrFailed = true;
+          }
+        }
+      }
+    }
+    return { extractions, ocrFailed };
+  }
+
+  /**
+   * EPIC #38 W4 — stage equipment-return suggestions for a completed RETIRO SO. Gate:
+   * the resolved result code is a completed removal (`type === 'Sucesso'` AND
+   * `isRemovalCode === true`). Stages ONE ReturnSuggestion per OCR serial and sets the
+   * L1 idempotency flag. READ-ONLY w.r.t. stock — the operator confirm is the only
+   * mutation. Non-fatal: a failure leaves the flag false, retried on the next reprocess.
+   * The caller owns the `!inventoryReturnsProcessed` pre-check (so this can re-resolve
+   * the gate from both the fresh-mirror and the unchanged-SO paths).
+   */
+  private async processInventoryReturns(order: ClosedServiceOrder, taskId: string): Promise<void> {
+    if (!this.stageReturns) return;
+    // Feature-flag gate (W4, default OFF). Only enforced when a flag repo is wired —
+    // unit tests omit it so staging is exercised directly. Missing flag → disabled.
+    if (this.featureFlags) {
+      const flag = await this.featureFlags.get(ICLASS_RETURNS_FLAG_KEY);
+      if (!flag?.enabled) return;
+    }
+    const rc = await this.resolveResultCode(order);
+    if (!(rc?.isRemovalCode === true && rc.type === 'Sucesso')) return; // not a completed removal
+    try {
+      const { extractions } = await this.collectDeviceExtractions(order, taskId);
+      await this.stageReturns.execute({ taskId, serviceOrderId: order.iclassId, extractions });
+      await this.closed.markInventoryReturnsProcessed(order.iclassId);
+    } catch {
+      /* non-fatal — stays pending, retried on the next reprocess */
     }
   }
 

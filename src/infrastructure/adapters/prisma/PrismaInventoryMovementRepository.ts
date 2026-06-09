@@ -48,6 +48,7 @@ type Row = {
   source: string;
   note: string | null;
   occurredAt: Date;
+  sourceRef?: string | null;
 };
 
 function toEntity(r: Row): InventoryMovement {
@@ -64,6 +65,7 @@ function toEntity(r: Row): InventoryMovement {
     source: r.source,
     note: r.note,
     occurredAt: r.occurredAt.toISOString(),
+    sourceRef: r.sourceRef ?? null,
   });
 }
 
@@ -105,6 +107,7 @@ export class PrismaInventoryMovementRepository implements InventoryMovementRepos
       note: input.note ?? null,
       occurredAt: input.occurredAt ?? null,
       status: input.status ?? null,
+      sourceRef: input.sourceRef ?? null,
     });
 
     const body = async (tx: Prisma.TransactionClient) => {
@@ -128,15 +131,36 @@ export class PrismaInventoryMovementRepository implements InventoryMovementRepos
           source: movement.source,
           note: movement.note,
           occurredAt: new Date(movement.occurredAt),
+          sourceRef: movement.sourceRef,
         },
       });
     };
 
-    const row = this.isTxScoped
-      ? await body(this.db as Prisma.TransactionClient)
-      : await (this.db as typeof prisma).$transaction(body);
-
-    return toEntity(row);
+    try {
+      const row = this.isTxScoped
+        ? await body(this.db as Prisma.TransactionClient)
+        : await (this.db as typeof prisma).$transaction(body);
+      return toEntity(row);
+    } catch (e) {
+      // L2 idempotency (EPIC #38 W4). The primary guard now lives in the use case
+      // (pre-write findBySourceRef, Fix #2) so this catch is only the LAST-RESORT race
+      // loser. Inside an outer tx the abort already POISONED the client — a recovery
+      // findFirst here would throw 25P02 and mask the P2002. So:
+      //   - tx-scoped: do NOT touch the poisoned client; rethrow the P2002 cleanly so the
+      //     route maps it to 409 (Fix #2). The outer tx rolls back; no second movement.
+      //   - root client (non-tx): the recovery read is safe → resolve to the existing row.
+      if (
+        movement.sourceRef != null &&
+        e && typeof e === 'object' && (e as { code?: string }).code === 'P2002' &&
+        !this.isTxScoped
+      ) {
+        const existing = await this.db.inventoryMovement.findFirst({
+          where: { sourceRef: movement.sourceRef },
+        });
+        if (existing) return toEntity(existing as Row);
+      }
+      throw e;
+    }
   }
 
   private async applyAssetEffect(
@@ -225,5 +249,17 @@ export class PrismaInventoryMovementRepository implements InventoryMovementRepos
       orderBy: { occurredAt: 'asc' },
     });
     return rows.map(toEntity);
+  }
+
+  /**
+   * Fix #2 (W4 review): L2 idempotency lookup BEFORE the RETURN write. The confirm use
+   * case calls this inside the UoW (a tx-scoped `this.db`) so the read joins the same
+   * snapshot — a concurrent confirm that already wrote the asset's RETURN is seen and
+   * resolved to a clean idempotent reject, instead of relying on the broken post-abort
+   * recovery (a P2002 catch + findFirst on a POISONED tx client → 25P02 → 500).
+   */
+  async findBySourceRef(sourceRef: string): Promise<InventoryMovement | null> {
+    const row = await this.db.inventoryMovement.findFirst({ where: { sourceRef } });
+    return row ? toEntity(row as Row) : null;
   }
 }

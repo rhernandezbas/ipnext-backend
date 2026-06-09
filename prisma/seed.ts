@@ -435,6 +435,25 @@ async function seedSchedulingFoundation() {
   }
 }
 
+/**
+ * EPIC #38 W4 — flag the 2 confirmed removal result codes so a completed (Sucesso)
+ * RETIRO SO closing with one of them stages equipment-return suggestions. Idempotent:
+ * a plain UPDATE on existing rows (the codes are synced from IClass; we only flip the
+ * flag, never create them). Re-running just re-sets true on the same rows.
+ */
+async function seedRemovalResultCodes() {
+  const REMOVAL_CODES = ['Retiro completo Servicio Fibra', 'Retiro completo Servicio Wireless']
+  try {
+    const { count } = await (prisma as any).iClassResultCode.updateMany({
+      where: { code: { in: REMOVAL_CODES } },
+      data: { isRemovalCode: true },
+    })
+    console.log(`  RETURNS seed: isRemovalCode=true on ${count} result code(s)`)
+  } catch (err) {
+    console.warn('  RETURNS seed: removal-code flag skipped (migration may not be applied yet):', (err as any).message)
+  }
+}
+
 async function main() {
   console.log('Starting seed...')
   await seedMockData()
@@ -443,6 +462,7 @@ async function main() {
   } catch (err) {
     console.warn('  Could not seed scheduling foundation (migration may not be applied yet):', (err as any).message)
   }
+  await seedRemovalResultCodes()
   await seedFromSplynx()
   console.log('Seed complete!')
 }

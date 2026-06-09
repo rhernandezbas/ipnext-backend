@@ -428,6 +428,10 @@ import { PrismaMaterialStockRepository } from '../adapters/prisma/PrismaMaterial
 import { PrismaUnitOfWork } from '../adapters/prisma/PrismaUnitOfWork';
 import { GetDepotStock } from '@application/use-cases/GetDepotStock';
 import { createInventoryRouter } from './routes/inventory.routes';
+import { PrismaReturnSuggestionRepository } from '../adapters/prisma/PrismaReturnSuggestionRepository';
+import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
+import { ConfirmAssetReturn } from '@application/use-cases/ConfirmAssetReturn';
+import { ResolveDepotLocation } from '@application/use-cases/ResolveDepotLocation';
 import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
 import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
@@ -1100,13 +1104,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new CreateManualSuggestion(inventorySuggestionRepo, schedulingRepo, contractInventoryRepo, deviceTypeCatalogService),
   ));
 
-  // Inventory depot read surface (EPIC #38 W3) — GET /api/inventory/depot.
-  // Read-only DEPOSITO stock (available assets + materials), guarded inventory.read.
+  // Inventory depot read surface (EPIC #38 W3) + closure-detected returns (W4).
+  // GET /depot (inventory.read); GET /returns/pending (inventory.read);
+  // POST /returns/:id/confirm + /discard (inventory.write — the ONLY stock mutation).
   const materialStockRepo = new PrismaMaterialStockRepository();
+  const returnSuggestionRepo = new PrismaReturnSuggestionRepository();
   app.use('/api/inventory', createInventoryRouter(
     new GetDepotStock(stockLocationRepo, inventoryAssetRepo, materialStockRepo, deviceTypeCatalogRepo, materialCatalogRepo),
+    new ListPendingReturns(returnSuggestionRepo),
+    new ConfirmAssetReturn(
+      returnSuggestionRepo, inventoryAssetRepo, inventoryMovementRepo, stockLocationRepo,
+      deviceTypeCatalogRepo, new ResolveDepotLocation(stockLocationRepo), inventoryUow,
+    ),
     createAuthMiddleware(authAdapter, sessionRepo),
     requirePerm('inventory', 'read'),
+    requirePerm('inventory', 'write'),
   ));
 
   // F6 — AI installation audit read surface (before the scheduling /:id catch-all).

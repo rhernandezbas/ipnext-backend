@@ -5,6 +5,7 @@ import { PrismaContractInventoryRepository } from './PrismaContractInventoryRepo
 import { PrismaStockLocationRepository } from './PrismaStockLocationRepository';
 import { PrismaInventoryAssetRepository } from './PrismaInventoryAssetRepository';
 import { PrismaInventoryMovementRepository } from './PrismaInventoryMovementRepository';
+import { PrismaReturnSuggestionRepository } from './PrismaReturnSuggestionRepository';
 
 /**
  * Prisma UnitOfWork (Fix #1/#3). Opens a single `prisma.$transaction` and builds
@@ -25,6 +26,7 @@ export class PrismaUnitOfWork implements UnitOfWork {
         locations: new PrismaStockLocationRepository(tx),
         assets: new PrismaInventoryAssetRepository(tx),
         movements: new PrismaInventoryMovementRepository(tx),
+        returns: new PrismaReturnSuggestionRepository(tx),
       };
       return fn(repos);
     });

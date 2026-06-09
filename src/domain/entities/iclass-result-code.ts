@@ -18,6 +18,12 @@ export interface IClassResultCode {
   mappedStageId: string | null;
   /** Resolved Stage name (derived via JOIN; null when unmapped). */
   mappedStageName: string | null;
+  /**
+   * EPIC #38 W4 — configurable removal-code gate. When true AND `type === 'Sucesso'`,
+   * a closing SO with this result code stages equipment-return suggestions. Default false;
+   * seeded true for the 2 confirmed retiro codes. Lets ops add codes without a redeploy.
+   */
+  isRemovalCode: boolean;
   lastSyncedAt: Date;
   createdAt: Date;
   updatedAt: Date;

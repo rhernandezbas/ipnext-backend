@@ -107,6 +107,7 @@ describe('GetPendingSideEffectsList', () => {
       inventoryBuilt: false,
       auditDone: false,
       auditAttempts: 0,
+      inventoryReturnsProcessed: false,
     });
     // Must NOT have a `task` field — legacy shape is unchanged
     expect((legacy[0] as unknown as Record<string, unknown>)['task']).toBeUndefined();

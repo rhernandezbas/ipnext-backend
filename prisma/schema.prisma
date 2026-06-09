@@ -615,6 +615,11 @@ model IClassResultCode {
   // (task is NOT moved; left for manual review). Assigned via the admin API/UX.
   mappedStageId String?
   mappedStage   Stage?   @relation("ResultCodeMappedStage", fields: [mappedStageId], references: [id], onDelete: SetNull)
+  // Closure-detected returns (EPIC #38 W4): when true, a completed (Sucesso) SO closing
+  // with this result code stages equipment-return suggestions. Configurable per code so
+  // ops can add removal codes without a redeploy. Default false; seeded true for the 2
+  // confirmed retiro codes.
+  isRemovalCode Boolean  @default(false)
   lastSyncedAt DateTime
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -689,6 +694,10 @@ model IClassServiceOrder {
   auditDone          Boolean   @default(false) // AuditInstallationQuality persisted
   auditAttempts      Int       @default(0) // audit retries (cap to avoid hammering Ollama)
   lastAuditAttemptAt DateTime? // when the last audit attempt ran
+  // EPIC #38 W4 — L1 idempotency for closure-detected returns. Mirrors inventoryBuilt:
+  // the processInventoryReturns side-effect stages return suggestions ONLY when false,
+  // and sets it true after staging. Re-mirror/re-closure never re-stages.
+  inventoryReturnsProcessed Boolean @default(false)
 
   history          IClassSoStatusHistory[]
   checklists       IClassSoChecklist[]
@@ -893,6 +902,8 @@ model InventoryAsset {
 
   movements        InventoryMovement[]     @relation("MovementAsset")
   contractItems    ContractInstalledItem[] @relation("CiiAsset")
+  // EPIC #38 W4 — return suggestions that matched THIS asset (installed → return-to-depot)
+  returnSuggestions ReturnSuggestion[]     @relation("ReturnMatchedAsset")
 
   @@index([deviceTypeId])
   @@index([currentLocationId])
@@ -939,11 +950,45 @@ model InventoryMovement {
   note              String?         @db.Text
   occurredAt        DateTime        @default(now())
   createdAt         DateTime        @default(now())
+  // EPIC #38 W4 — L2 idempotency for operator-confirmed returns. Deterministic natural
+  // key `iclass:return:{iclassId}:{normalizedSerial}` stamped on a RETURN confirm so a
+  // double-confirm / concurrent-confirm hits a UNIQUE and no-ops (caught as P2002).
+  // DO-NOT-CHURN: the UNIQUE is a hand-written PARTIAL index (WHERE sourceRef IS NOT NULL)
+  // in 20260612000000_iclass_returns/migration.sql, NOT a Prisma @@unique — @@unique would
+  // index NULLs and collide across the many legacy rows. Keep the column plain here; do not
+  // add @@unique([sourceRef]) or `prisma migrate` will try to recreate a full-NULL index.
+  sourceRef         String?
 
   @@index([assetId, type])
   @@index([materialCatalogId])
   @@index([taskId])
   @@index([occurredAt])
+}
+
+// EPIC #38 W4 — closure-detected equipment RETURN suggestion. Staged (read-only) when a
+// completed RETIRO SO closes; an operator later confirms (the ONLY stock mutation) which
+// records a RETURN→DEPOSITO movement. One concern per row; the inverse of #19's
+// TaskInventorySuggestion (find-existing-asset → return, not create-on-contract).
+model ReturnSuggestion {
+  id             String        @id @default(uuid())
+  taskId         String
+  task           ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  serviceOrderId String        // IClass iclassId (for sourceRef + traceability)
+  serialNumber   String?       // normalized OCR serial
+  mac            String?
+  deviceType     String?       // hint from the OCR label
+  matchedAssetId String?
+  matchedAsset   InventoryAsset? @relation("ReturnMatchedAsset", fields: [matchedAssetId], references: [id], onDelete: SetNull)
+  status         String   @default("pending") // pending | needs_review | confirmed | discarded
+  resolution     String?  // return | link | create | discard
+  confirmedMovementId String? // the real movement.id (uuid) produced on confirm (Fix #5)
+  sourceRef      String?  // L2 natural key `iclass:return:{assetId}` — the findBySourceRef key (Fix #3/#5)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([serviceOrderId, serialNumber]) // one suggestion per (SO, serial) — dedup on re-stage
+  @@index([status])
+  @@index([taskId])
 }
 
 model Project {
@@ -1090,6 +1135,9 @@ model ScheduledTask {
   // Inventory Foundation (W1) — back-relations
   sourcedAssets     InventoryAsset[]    @relation("AssetSourceTask")
   inventoryMovements InventoryMovement[] @relation("MovementTask")
+
+  // EPIC #38 W4 — closure-detected return suggestions staged for this task
+  returnSuggestions ReturnSuggestion[]
 
   @@index([stageId])
   @@index([projectId])

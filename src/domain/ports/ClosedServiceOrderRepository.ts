@@ -1,7 +1,11 @@
 import { ClosedServiceOrder } from '@domain/entities/iclass-closed-order';
 
 /** Closure side-effects tracked per mirrored SO (drives the manual reprocess). */
-export type ClosureSideEffect = 'commentPosted' | 'inventoryBuilt' | 'auditDone';
+export type ClosureSideEffect =
+  | 'commentPosted'
+  | 'inventoryBuilt'
+  | 'auditDone'
+  | 'inventoryReturnsProcessed';
 
 /** Per-side-effect completion state of a mirrored closure. */
 export interface ClosureSideEffectState {
@@ -9,6 +13,8 @@ export interface ClosureSideEffectState {
   inventoryBuilt: boolean;
   auditDone: boolean;
   auditAttempts: number;
+  /** EPIC #38 W4 — L1 idempotency: return suggestions already staged for this SO. */
+  inventoryReturnsProcessed: boolean;
 }
 
 /** A mirror with at least one pending side-effect, plus its local task link. */
@@ -63,6 +69,11 @@ export interface ClosedServiceOrderRepository {
   listPendingSideEffectsWithTask(maxAuditAttempts: number): Promise<PendingClosureSideEffectsWithTask[]>;
   /** Set a single side-effect completion column. */
   markSideEffect(iclassId: string, effect: ClosureSideEffect, done: boolean): Promise<void>;
+  /**
+   * EPIC #38 W4 — L1 idempotency: mark return suggestions as staged for this SO.
+   * Convenience over `markSideEffect(iclassId, 'inventoryReturnsProcessed', true)`.
+   */
+  markInventoryReturnsProcessed(iclassId: string): Promise<void>;
   /** Increment auditAttempts and stamp lastAuditAttemptAt = now (cap guard upstream). */
   incrementAuditAttempt(iclassId: string): Promise<void>;
 }

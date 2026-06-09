@@ -6,6 +6,7 @@ import { InMemoryContractInventoryRepository } from './InMemoryContractInventory
 import { InMemoryStockLocationRepository } from './InMemoryStockLocationRepository';
 import { InMemoryInventoryAssetRepository } from './InMemoryInventoryAssetRepository';
 import { InMemoryMaterialStockRepository } from './InMemoryMaterialStockRepository';
+import { InMemoryReturnSuggestionRepository } from './InMemoryReturnSuggestionRepository';
 
 /**
  * The in-memory UoW only needs the movement repo's backing `movements` array to
@@ -35,6 +36,10 @@ export class InMemoryUnitOfWork implements UnitOfWork {
     private readonly assets: InMemoryInventoryAssetRepository,
     private readonly movements: SnapshotableMovementRepo,
     private readonly materialStock: InMemoryMaterialStockRepository,
+    // EPIC #38 W4 — optional ReturnSuggestion repo. When present its store is
+    // snapshotted/rolled back with the rest, so the W4 confirm (RETURN movement +
+    // asset flip + suggestion stamp) is truly all-or-nothing in tests.
+    private readonly returns?: InMemoryReturnSuggestionRepository,
   ) {}
 
   async runInTransaction<T>(fn: (repos: TransactionalRepos) => Promise<T>): Promise<T> {
@@ -46,6 +51,7 @@ export class InMemoryUnitOfWork implements UnitOfWork {
         locations: this.locations,
         assets: this.assets,
         movements: this.movements,
+        returns: this.returns,
       });
     } catch (err) {
       this.restore(snapshot);
@@ -72,6 +78,7 @@ export class InMemoryUnitOfWork implements UnitOfWork {
       assets: new Map(this.assets.store),
       movements: [...this.movements.movements],
       materialStock: new Map(this.materialStock.store),
+      returns: this.returns ? new Map(this.returns.store) : null,
     };
   }
 
@@ -84,6 +91,7 @@ export class InMemoryUnitOfWork implements UnitOfWork {
     this.movements.movements.length = 0;
     this.movements.movements.push(...s.movements);
     this.replaceMap(this.materialStock.store, s.materialStock);
+    if (this.returns && s.returns) this.replaceMap(this.returns.store, s.returns);
   }
 
   private replaceMap<K, V>(target: Map<K, V>, source: Map<K, V>): void {
