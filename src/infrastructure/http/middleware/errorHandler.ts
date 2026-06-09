@@ -72,6 +72,9 @@ const statusMap: Record<string, number> = {
   NO_REPLACE_TARGET: 409,
   // task-manual-inventory-item
   INVALID_ITEM_TYPE: 422,
+  // inventory-technician-stock (EPIC #38 W5a)
+  INSUFFICIENT_STOCK: 422,
+  ASSET_NOT_AT_DEPOT: 422,
 };
 
 /** Express global error-handling middleware. */

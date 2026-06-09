@@ -1,5 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { GetDepotStock } from '@application/use-cases/GetDepotStock';
+import { GetTechnicianStock } from '@application/use-cases/GetTechnicianStock';
+import { IssueStockToTechnician } from '@application/use-cases/IssueStockToTechnician';
 import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
 import { ConfirmAssetReturn } from '@application/use-cases/ConfirmAssetReturn';
 import {
@@ -19,6 +21,8 @@ import { z } from 'zod';
  * - `POST /returns/:id/confirm` → resolve a suggestion (return/link/create/discard) — the
  *    ONLY stock mutation path (W4), `inventory.write`.
  * - `POST /returns/:id/discard` → convenience discard (W4), `inventory.write`.
+ * - `GET /technicians/:id/stock` → read-only technician stock (W5a), `inventory.read`.
+ * - `POST /technicians/:id/issue` → issue (TRANSFER) stock depot→technician (W5a), `inventory.write`.
  *
  * Use cases never mutate raw entities and never return them — DTOs only.
  */
@@ -26,6 +30,8 @@ export function createInventoryRouter(
   getDepotStock: GetDepotStock,
   listPendingReturns: ListPendingReturns,
   confirmAssetReturn: ConfirmAssetReturn,
+  getTechnicianStock: GetTechnicianStock,
+  issueStockToTechnician: IssueStockToTechnician,
   auth: RequestHandler,
   requireRead: RequestHandler,
   requireWrite: RequestHandler,
@@ -83,6 +89,36 @@ export function createInventoryRouter(
       res.status(200).json(dto);
     } catch (e) {
       handleReturnError(e, res, next);
+    }
+  });
+
+  // ── EPIC #38 W5a — technician stock ────────────────────────────────────────
+  router.get('/technicians/:id/stock', auth, requireRead, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.json(await getTechnicianStock.execute(req.params.id));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // An issue line is EITHER an asset OR a material+qty (XOR — same shape as a movement).
+  const IssueItemSchema = z.union([
+    z.object({ assetId: z.string().min(1) }).strict(),
+    z.object({ materialCatalogId: z.string().min(1), qty: z.number().positive() }).strict(),
+  ]);
+  const IssueSchema = z.object({ items: z.array(IssueItemSchema).min(1) });
+
+  router.post('/technicians/:id/issue', auth, requireWrite, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = IssueSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      await issueStockToTechnician.execute(req.params.id, { items: parsed.data.items });
+      res.status(200).json({ ok: true });
+    } catch (e) {
+      next(e);
     }
   });
 

@@ -9,6 +9,9 @@ import { InMemoryMaterialStockRepository } from '@infrastructure/adapters/in-mem
 import { InMemoryDeviceTypeCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryDeviceTypeCatalogRepository';
 import { InMemoryMaterialCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialCatalogRepository';
 import { GetDepotStock } from '@application/use-cases/GetDepotStock';
+import { GetTechnicianStock } from '@application/use-cases/GetTechnicianStock';
+import { IssueStockToTechnician } from '@application/use-cases/IssueStockToTechnician';
+import { ResolveTechnicianLocation } from '@application/use-cases/ResolveTechnicianLocation';
 import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
 import { ConfirmAssetReturn } from '@application/use-cases/ConfirmAssetReturn';
 import { ResolveDepotLocation } from '@application/use-cases/ResolveDepotLocation';
@@ -60,10 +63,19 @@ async function buildApp(opts: { canRead: boolean; seed?: boolean; canWrite?: boo
   const pass = (_req: Request, _res: Response, next: NextFunction) => next();
   const deny = (_req: Request, res: Response) => res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
 
+  const issueStock = new IssueStockToTechnician(
+    new ResolveDepotLocation(locations),
+    new ResolveTechnicianLocation(locations),
+    assets,
+    uow,
+  );
+
   const router = createInventoryRouter(
     new GetDepotStock(locations, assets, stock, deviceTypes, materials),
     new ListPendingReturns(returns),
     confirm,
+    new GetTechnicianStock(locations, assets, stock, deviceTypes, materials),
+    issueStock,
     auth,
     opts.canRead ? pass : deny,
     (opts.canWrite ?? true) ? pass : deny,
@@ -73,7 +85,7 @@ async function buildApp(opts: { canRead: boolean; seed?: boolean; canWrite?: boo
   app.use(express.json());
   app.use('/api/inventory', router);
   app.use(errorHandler);
-  return { app, returns, assets, locations, deviceTypes, movements };
+  return { app, returns, assets, locations, deviceTypes, movements, stock };
 }
 
 /** Stages a return suggestion directly for route tests. */
@@ -226,5 +238,72 @@ describe('Inventory returns routes (EPIC #38 W4)', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('discarded');
     expect((await returns.get('rs-1'))!.status).toBe('discarded');
+  });
+});
+
+describe('Technician stock routes (EPIC #38 W5a)', () => {
+  it('GET /technicians/:id/stock returns 200 with empty shape when the technician has no location', async () => {
+    const { app } = await buildApp({ canRead: true, seed: true });
+    const res = await request(app).get('/api/inventory/technicians/t-42/stock');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ technicianId: 't-42', assets: [], materials: [], locationId: null });
+  });
+
+  it('GET /technicians/:id/stock → 403 without inventory.read', async () => {
+    const { app } = await buildApp({ canRead: false, seed: true });
+    const res = await request(app).get('/api/inventory/technicians/t-42/stock');
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /technicians/:id/issue moves an asset depot→tecnico (TRANSFER), 200, asset shows in tech stock', async () => {
+    const { app, assets, movements } = await buildApp({ canRead: true, seed: true });
+    // seeded asset a1 is available@depot-1
+
+    const res = await request(app)
+      .post('/api/inventory/technicians/t-42/issue')
+      .send({ items: [{ assetId: 'a1' }] });
+
+    expect(res.status).toBe(200);
+    // the recorded movement is a TRANSFER, never an ISSUE
+    expect(movements.movements).toHaveLength(1);
+    expect(movements.movements[0].type).toBe('TRANSFER');
+
+    const asset = await assets.findById('a1');
+    expect(asset!.currentLocationId).not.toBe('depot-1');
+
+    const stockRes = await request(app).get('/api/inventory/technicians/t-42/stock');
+    expect(stockRes.body.assets.some((a: { id: string }) => a.id === 'a1')).toBe(true);
+  });
+
+  it('POST /technicians/:id/issue → 403 without inventory.write', async () => {
+    const { app } = await buildApp({ canRead: true, canWrite: false, seed: true });
+    const res = await request(app)
+      .post('/api/inventory/technicians/t-42/issue')
+      .send({ items: [{ assetId: 'a1' }] });
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /technicians/:id/issue → 422 on insufficient depot stock, atomic rollback (nothing moves)', async () => {
+    const { app, movements, stock } = await buildApp({ canRead: true, seed: true });
+    // seeded cable has qty 42 at depot-1; request 99 of it alongside a valid asset
+    const res = await request(app)
+      .post('/api/inventory/technicians/t-42/issue')
+      .send({ items: [{ assetId: 'a1' }, { materialCatalogId: 'will-be-resolved', qty: 99 }] });
+
+    expect(res.status).toBe(422);
+    // full rollback — no movement recorded, depot cable untouched
+    expect(movements.movements).toHaveLength(0);
+    const depotCable = await stock.findByMaterialAndLocation('will-be-resolved', 'depot-1');
+    // material did not exist → insufficient; nothing created
+    expect(depotCable).toBeNull();
+  });
+
+  it('POST /technicians/:id/issue with a bad payload → 400 validation error', async () => {
+    const { app } = await buildApp({ canRead: true, seed: true });
+    const res = await request(app)
+      .post('/api/inventory/technicians/t-42/issue')
+      .send({ items: 'not-an-array' });
+    expect(res.status).toBe(400);
   });
 });
