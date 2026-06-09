@@ -4,6 +4,7 @@ import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInvent
 import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
+import { ListClientEquipment } from '@application/use-cases/ListClientEquipment';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
@@ -62,6 +63,7 @@ export function createContractInventoryRouter(
   discard: DiscardInventorySuggestion,
   correctType: CorrectConfirmedDeviceType,
   listInstalled: ListContractInstalledItems,
+  listClientEquipment: ListClientEquipment,
   addManual: AddInstalledItemManually,
   updateItem: UpdateInstalledItem,
   removeItem: RemoveInstalledItem,
@@ -253,6 +255,14 @@ export function createContractInventoryRouter(
   router.get('/contracts/:contractId/inventory', auth, perms.contractRead, async (req: Request, res: Response, next: NextFunction) => {
     try {
       res.json(await listInstalled.execute(req.params.contractId));
+    } catch (e) { next(e); }
+  });
+
+  // ── Client equipment (vista agregada read-only, EPIC #38 W2) ────────────────
+  // Mismo guard que el inventario por contrato: inventory.read (perms.contractRead).
+  router.get('/clients/:clientId/equipment', auth, perms.contractRead, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.json(await listClientEquipment.execute(req.params.clientId));
     } catch (e) { next(e); }
   });
 

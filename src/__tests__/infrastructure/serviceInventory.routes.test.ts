@@ -22,6 +22,7 @@ import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInvent
 import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
+import { ListClientEquipment } from '@application/use-cases/ListClientEquipment';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
@@ -92,6 +93,7 @@ async function buildApp() {
     new DiscardInventorySuggestion(suggestions),
     new CorrectConfirmedDeviceType(suggestions, inventory),
     new ListContractInstalledItems(inventory, users),
+    new ListClientEquipment(inventory),
     new AddInstalledItemManually(inventory),
     new UpdateInstalledItem(inventory),
     new RemoveInstalledItem(inventory),
@@ -139,6 +141,7 @@ async function buildAppWithPerms(perms: {
     new DiscardInventorySuggestion(suggestions),
     new CorrectConfirmedDeviceType(suggestions, inventory),
     new ListContractInstalledItems(inventory, users),
+    new ListClientEquipment(inventory),
     new AddInstalledItemManually(inventory),
     new UpdateInstalledItem(inventory),
     new RemoveInstalledItem(inventory),
@@ -668,6 +671,38 @@ describe('PATCH .../type — CorrectConfirmedDeviceType route', () => {
     expect(res.body[0]).toHaveProperty('match');
     expect(res.body[0].match).not.toBeNull();
     expect(res.body[0].match.status).toBe('same_device');
+  });
+});
+
+describe('GET /clients/:clientId/equipment — ListClientEquipment route', () => {
+  it('200 → ClientInstalledItemDto[] aggregated across the client\'s contracts, with contract context, never raw entity', async () => {
+    const { app, inventory } = await buildApp();
+    inventory.seedContract('c1', { clientId: 'CL1', plan: 'Fibra 300', type: 'internet' });
+    inventory.seedContract('c2', { clientId: 'CL1', plan: 'TV Pack', type: 'tv' });
+    await inventory.create(makeItem({ id: 'i_c1', contractId: 'c1', serialNumber: 'SN-1', createdAt: '2026-06-01T00:00:00Z' }));
+    await inventory.create(makeItem({ id: 'i_c2', contractId: 'c2', serialNumber: 'SN-2', createdAt: '2026-06-02T00:00:00Z' }));
+
+    const res = await request(app).get('/api/clients/CL1/equipment');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body.map((d: { id: string }) => d.id)).toEqual(['i_c1', 'i_c2']);
+    // Contract context present (DTO, not raw entity)
+    expect(res.body[0]).toMatchObject({ contractId: 'c1', contractPlan: 'Fibra 300', contractType: 'internet' });
+    expect(res.body[1]).toMatchObject({ contractId: 'c2', contractPlan: 'TV Pack', contractType: 'tv' });
+  });
+
+  it('200 → [] for a client with no equipment', async () => {
+    const { app } = await buildApp();
+    const res = await request(app).get('/api/clients/NOBODY/equipment');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('403 when caller lacks inventory.read (contractRead guard)', async () => {
+    const { app } = await buildAppWithPerms({ contractRead: false });
+    const res = await request(app).get('/api/clients/CL1/equipment');
+    expect(res.status).toBe(403);
   });
 });
 

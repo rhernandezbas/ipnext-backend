@@ -16,6 +16,8 @@ import { InMemoryInventoryAssetRepository } from '@infrastructure/adapters/in-me
 import { InMemoryMaterialStockRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialStockRepository';
 import { InMemoryInventoryMovementRepository } from '@infrastructure/adapters/in-memory/InMemoryInventoryMovementRepository';
 import { InMemoryUnitOfWork } from '@infrastructure/adapters/in-memory/InMemoryUnitOfWork';
+import { ListClientEquipment } from '@application/use-cases/ListClientEquipment';
+import { ContractInstalledItem } from '@domain/entities/contract-installed-item';
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 
 const BASE_TYPES = ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS'];
@@ -815,5 +817,42 @@ describe('InventorySuggestionRepository.create() — aislamiento MANUAL/OCR (A2.
     const all = await suggestions.listByTask('T2');
     expect(all).toHaveLength(2);
     expect(all.map(s => s.id).sort()).toEqual(['m1', 'm2']);
+  });
+});
+
+describe('ListClientEquipment', () => {
+  const item = (over: Partial<ContractInstalledItem> = {}): ContractInstalledItem => ({
+    id: 'i1', contractId: 'c1', type: 'ROUTER', serialNumber: 'R1', mac: null, model: null,
+    source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
+    status: 'active', notes: null, replacesItemId: null, assetId: null,
+    createdAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:00:00Z', ...over,
+  });
+
+  it('aggregates installed items across ALL of a client\'s contracts, grouped/sorted by contractId, decorated with contract context', async () => {
+    const { inventory } = await setup();
+    // Client CL1 has two contracts; CL2 has one (must be excluded).
+    inventory.seedContract('c1', { clientId: 'CL1', plan: 'Fibra 300', type: 'internet' });
+    inventory.seedContract('c2', { clientId: 'CL1', plan: 'TV Pack', type: 'tv' });
+    inventory.seedContract('c9', { clientId: 'CL2', plan: 'Otro', type: 'internet' });
+    await inventory.create(item({ id: 'i_c2', contractId: 'c2', createdAt: '2026-06-02T00:00:00Z' }));
+    await inventory.create(item({ id: 'i_c1a', contractId: 'c1', createdAt: '2026-06-01T00:00:00Z', status: 'removed' }));
+    await inventory.create(item({ id: 'i_c1b', contractId: 'c1', createdAt: '2026-06-03T00:00:00Z' }));
+    await inventory.create(item({ id: 'i_other', contractId: 'c9' })); // CL2 — must NOT appear
+
+    const dtos = await new ListClientEquipment(inventory).execute('CL1');
+
+    // Both contracts of CL1, none of CL2
+    expect(dtos.map(d => d.id)).toEqual(['i_c1a', 'i_c1b', 'i_c2']);
+    // Contract context decorated
+    expect(dtos[0]).toMatchObject({ contractId: 'c1', contractPlan: 'Fibra 300', contractType: 'internet' });
+    expect(dtos[2]).toMatchObject({ contractId: 'c2', contractPlan: 'TV Pack', contractType: 'tv' });
+    // ALL statuses shown (active + removed)
+    expect(dtos.find(d => d.id === 'i_c1a')!.status).toBe('removed');
+  });
+
+  it('returns [] for a client with no contracts/items', async () => {
+    const { inventory } = await setup();
+    const dtos = await new ListClientEquipment(inventory).execute('NOBODY');
+    expect(dtos).toEqual([]);
   });
 });
