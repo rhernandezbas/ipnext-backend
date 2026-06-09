@@ -320,3 +320,20 @@ export class AssetNotReturnableError extends DomainError {
     this.name = 'AssetNotReturnableError';
   }
 }
+
+// ── Technician Stock (EPIC #38, Wave 5a) ─────────────────────────────────────
+
+/**
+ * An operator-driven issue (TRANSFER DEPOSITO→TECNICO) referenced an asset that is
+ * NOT currently `available` at the DEPOSITO. Issuing it would silently relocate an
+ * installed/elsewhere device — so we refuse before any ledger write. Maps to 422.
+ */
+export class AssetNotAtDepotError extends DomainError {
+  constructor(assetId: string) {
+    super(
+      `Asset ${assetId} is not available at the depot and cannot be issued`,
+      'ASSET_NOT_AT_DEPOT',
+    );
+    this.name = 'AssetNotAtDepotError';
+  }
+}

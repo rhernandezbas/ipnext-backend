@@ -427,6 +427,9 @@ import { PrismaInventoryMovementRepository } from '../adapters/prisma/PrismaInve
 import { PrismaMaterialStockRepository } from '../adapters/prisma/PrismaMaterialStockRepository';
 import { PrismaUnitOfWork } from '../adapters/prisma/PrismaUnitOfWork';
 import { GetDepotStock } from '@application/use-cases/GetDepotStock';
+import { GetTechnicianStock } from '@application/use-cases/GetTechnicianStock';
+import { IssueStockToTechnician } from '@application/use-cases/IssueStockToTechnician';
+import { ResolveTechnicianLocation } from '@application/use-cases/ResolveTechnicianLocation';
 import { createInventoryRouter } from './routes/inventory.routes';
 import { PrismaReturnSuggestionRepository } from '../adapters/prisma/PrismaReturnSuggestionRepository';
 import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
@@ -1115,6 +1118,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new ConfirmAssetReturn(
       returnSuggestionRepo, inventoryAssetRepo, inventoryMovementRepo, stockLocationRepo,
       deviceTypeCatalogRepo, new ResolveDepotLocation(stockLocationRepo), inventoryUow,
+    ),
+    // EPIC #38 W5a — technician stock: GET /technicians/:id/stock (read) +
+    // POST /technicians/:id/issue (write). "Issue" = TRANSFER movement, NOT the ISSUE type.
+    new GetTechnicianStock(stockLocationRepo, inventoryAssetRepo, materialStockRepo, deviceTypeCatalogRepo, materialCatalogRepo),
+    new IssueStockToTechnician(
+      new ResolveDepotLocation(stockLocationRepo),
+      new ResolveTechnicianLocation(stockLocationRepo),
+      inventoryAssetRepo,
+      inventoryUow,
     ),
     createAuthMiddleware(authAdapter, sessionRepo),
     requirePerm('inventory', 'read'),
