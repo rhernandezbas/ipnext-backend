@@ -5,7 +5,8 @@ import { CreateServicePlan } from '../../application/use-cases/CreateServicePlan
 import { UpdateServicePlan } from '../../application/use-cases/UpdateServicePlan';
 import { DeleteServicePlan } from '../../application/use-cases/DeleteServicePlan';
 import { ListNetworkDevices } from '../../application/use-cases/ListNetworkDevices';
-import { ListInventoryItems } from '../../application/use-cases/ListInventoryItems';
+
+// World A Inventory use cases removed — Wave 7 (Capstone) retirement.
 
 function makeRepo() {
   return new InMemoryEmpresaRepository();
@@ -88,31 +89,6 @@ describe('ListNetworkDevices', () => {
 
     expect(result).toHaveLength(5);
     expect(result.every(d => d.id && d.name && d.type && d.ipAddress)).toBe(true);
-  });
-});
-
-describe('ListInventoryItems', () => {
-  it('returns 5 seeded inventory items', async () => {
-    const repo = makeRepo();
-    const uc = new ListInventoryItems(repo);
-
-    const result = await uc.execute();
-
-    expect(result).toHaveLength(5);
-    expect(result.every(i => i.id && i.name && i.sku)).toBe(true);
-  });
-
-  it('item status is low_stock when quantity < minStock', async () => {
-    const repo = makeRepo();
-    const uc = new ListInventoryItems(repo);
-
-    const result = await uc.execute();
-    const lowStockItems = result.filter(i => i.status === 'low_stock');
-
-    expect(lowStockItems.length).toBeGreaterThan(0);
-    lowStockItems.forEach(item => {
-      expect(item.quantity).toBeLessThan(item.minStock);
-    });
   });
 });
 

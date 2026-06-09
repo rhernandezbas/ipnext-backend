@@ -411,3 +411,12 @@ export class VehicleInactiveError extends DomainError {
     this.name = 'VehicleInactiveError';
   }
 }
+
+
+/** Wave 7 (Capstone) — minStock must be >= 0. Maps to 400. */
+export class InvalidMinStockError extends DomainError {
+  constructor(value: number) {
+    super(`minStock must be >= 0, got ${value}`, 'INVALID_MIN_STOCK');
+    this.name = 'InvalidMinStockError';
+  }
+}

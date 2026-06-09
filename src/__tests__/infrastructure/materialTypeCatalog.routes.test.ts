@@ -14,6 +14,7 @@ import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { RequestHandler } from 'express';
+import { InvalidMinStockError } from '@domain/errors/inventory';
 
 // Echo cookie token back as userId — same pattern as deviceTypeCatalog.routes.test.ts
 class EchoAuthProvider implements AuthProvider {
@@ -166,6 +167,42 @@ describe('materialTypeCatalog routes', () => {
       const mat2 = await repo.create({ name: 'CONECTOR', unit: 'unidad', active: true, sortOrder: 1 });
       const res = await authed(request(app).put(`/api/inventory/material-types/${mat2.id}`).send({ name: 'cable_utp' }));
       expect(res.status).toBe(409);
+    });
+
+    it('FIX-5a: use case throws InvalidMinStockError → 400 INVALID_MIN_STOCK (not 500)', async () => {
+      // Bypass Zod by injecting an UpdateMaterial that always throws InvalidMinStockError.
+      // This simulates the scenario where the error reaches the route handler unhandled.
+      const repo = new InMemoryMaterialCatalogRepository();
+      const service = new MaterialCatalogService(repo);
+      const mat = await repo.create({ name: 'CABLE_UTP', unit: 'm', active: true, sortOrder: 0 });
+
+      // Stub UpdateMaterial to always throw InvalidMinStockError
+      const stubUpdate = {
+        execute: async (_id: string, _data: unknown) => { throw new InvalidMinStockError(-1); },
+      } as unknown as UpdateMaterial;
+
+      const requirePerm = (_mod: RbacModuleCode, _act: PermissionAction): RequestHandler =>
+        (_r, _s, n) => n();
+
+      const router = createMaterialTypeCatalogRouter(
+        new EchoAuthProvider(),
+        requirePerm,
+        new ListMaterial(repo),
+        new GetMaterial(repo),
+        new CreateMaterial(repo),
+        stubUpdate,
+        new DeleteMaterial(repo),
+        service,
+      );
+      const app = express();
+      app.use(cookieParser());
+      app.use(express.json());
+      app.use('/api/inventory', router);
+      app.use(errorHandler);
+
+      const res = await authed(request(app).put(`/api/inventory/material-types/${mat.id}`).send({ label: 'test' }));
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVALID_MIN_STOCK');
     });
   });
 

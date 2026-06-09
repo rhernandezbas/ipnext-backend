@@ -548,6 +548,8 @@ model MaterialCatalog {
   unit      String?                   // "m" | "unidad" | "rollo" — default applied in use-case
   active    Boolean  @default(true)
   sortOrder Int      @default(0)
+  // Wave 7 (Capstone) — global low-stock threshold. 0 = no alert configured.
+  minStock  Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1024,6 +1026,9 @@ model InventoryMovement {
   @@index([materialCatalogId])
   @@index([taskId])
   @@index([occurredAt])
+  // Wave 7 (Capstone) — composite index for type filter + occurredAt DESC order.
+  // sort: Desc matches the hand-written migration SQL: ("type","occurredAt" DESC)
+  @@index([type, occurredAt(sort: Desc)])
 }
 
 // EPIC #38 W4 — closure-detected equipment RETURN suggestion. Staged (read-only) when a

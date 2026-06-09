@@ -24,6 +24,21 @@ export interface RecordMovementInput {
   sourceRef?: string;
 }
 
+/**
+ * Wave 7 (Capstone) — filters for the movement ledger endpoint.
+ * locationId matches EITHER fromLocationId OR toLocationId (inclusive OR).
+ * dateFrom/dateTo are ISO strings, inclusive range.
+ */
+export interface MovementFilters {
+  type?: MovementType;
+  locationId?: string;
+  materialCatalogId?: string;
+  taskId?: string;
+  technicianId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
 export interface InventoryMovementRepository {
   /**
    * Atomic: persists the ledger row AND updates the materialized balance
@@ -40,4 +55,13 @@ export interface InventoryMovementRepository {
    * relying on the post-abort recovery inside a poisoned transaction.
    */
   findBySourceRef(sourceRef: string): Promise<InventoryMovement | null>;
+  /**
+   * Wave 7 (Capstone) — paginated movement ledger, ordered occurredAt DESC.
+   * Returns items (page slice) + total (for FE pagination). One findMany + one count.
+   */
+  listMovements(
+    filters: MovementFilters,
+    page: number,
+    limit: number,
+  ): Promise<{ items: InventoryMovement[]; total: number }>;
 }

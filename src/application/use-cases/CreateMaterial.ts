@@ -4,7 +4,7 @@ import { MaterialNameConflictError } from '@domain/errors/inventory';
 
 export class CreateMaterial {
   constructor(private readonly repo: MaterialCatalogRepository) {}
-  async execute(data: { name: string; label?: string | null; unit?: string | null; active?: boolean; sortOrder?: number }): Promise<MaterialCatalog> {
+  async execute(data: { name: string; label?: string | null; unit?: string | null; active?: boolean; sortOrder?: number; minStock?: number }): Promise<MaterialCatalog> {
     const normalized = data.name.trim().toUpperCase();
     const existing = await this.repo.getByName(normalized);
     if (existing) throw new MaterialNameConflictError(normalized);

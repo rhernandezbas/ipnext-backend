@@ -97,4 +97,26 @@ describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', 
     expect(appSrc).toContain("'/api/vehicles'");
     expect(appSrc).toContain('createVehicleRouter');
   });
+
+  // Wave 7 (Capstone) — dashboard use case wiring guards
+  it('W7: app.ts wires GetInventoryOverview into createInventoryRouter', () => {
+    const match = appSrc.match(/createInventoryRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('GetInventoryOverview');
+  });
+
+  it('W7: app.ts wires ListInventoryMovements into createInventoryRouter', () => {
+    const match = appSrc.match(/createInventoryRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('ListInventoryMovements');
+  });
+
+  it('W7: app.ts wires GetLowStockAlerts into createInventoryRouter', () => {
+    const match = appSrc.match(/createInventoryRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('GetLowStockAlerts');
+  });
 });
