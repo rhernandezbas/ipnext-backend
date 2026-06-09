@@ -1,4 +1,4 @@
-import { ContractInventoryRepository } from '@domain/ports/ContractInventoryRepository';
+import { ContractInventoryRepository, ClientInstalledItemRow } from '@domain/ports/ContractInventoryRepository';
 import { ContractInstalledItem } from '@domain/entities/contract-installed-item';
 import { prisma } from '../../database/prisma';
 import { PrismaClientLike } from './PrismaClientLike';
@@ -30,6 +30,20 @@ export class PrismaContractInventoryRepository implements ContractInventoryRepos
   async listByContract(contractId: string): Promise<ContractInstalledItem[]> {
     const rows = await this.db.contractInstalledItem.findMany({ where: { contractId }, orderBy: { createdAt: 'asc' } });
     return rows.map(toEntity);
+  }
+
+  async listByClient(clientId: string): Promise<ClientInstalledItemRow[]> {
+    // Single JOIN: CII ⋈ Contract WHERE Contract.clientId = $id. Sin N+1.
+    const rows = await this.db.contractInstalledItem.findMany({
+      where: { contract: { clientId } },
+      include: { contract: { select: { plan: true, type: true } } },
+      orderBy: [{ contractId: 'asc' }, { createdAt: 'asc' }],
+    });
+    return rows.map((r: Row & { contract: { plan: string; type: string } }) => ({
+      ...toEntity(r),
+      contractPlan: r.contract.plan,
+      contractType: r.contract.type,
+    }));
   }
 
   async getById(id: string): Promise<ContractInstalledItem | null> {

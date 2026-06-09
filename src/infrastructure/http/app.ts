@@ -429,6 +429,7 @@ import { CreateManualSuggestion } from '@application/use-cases/CreateManualSugge
 import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
+import { ListClientEquipment } from '@application/use-cases/ListClientEquipment';
 import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
@@ -1076,6 +1077,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new DiscardInventorySuggestion(inventorySuggestionRepo),
     correctConfirmedDeviceType,
     new ListContractInstalledItems(contractInventoryRepo, rbacUserRepo),
+    new ListClientEquipment(contractInventoryRepo),
     new AddInstalledItemManually(contractInventoryRepo),
     new UpdateInstalledItem(contractInventoryRepo),
     new RemoveInstalledItem(contractInventoryRepo),
