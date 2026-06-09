@@ -4,6 +4,9 @@ import { StockLocationRepository } from './StockLocationRepository';
 import { InventoryAssetRepository } from './InventoryAssetRepository';
 import { InventoryMovementRepository } from './InventoryMovementRepository';
 import { ReturnSuggestionRepository } from './ReturnSuggestionRepository';
+import { MaterialDeductionSuggestionRepository } from './MaterialDeductionSuggestionRepository';
+import { TaskMaterialConsumptionRepository } from './TaskMaterialConsumptionRepository';
+import { MaterialStockRepository } from './MaterialStockRepository';
 
 /**
  * Tx-scoped repository bag handed to a `runInTransaction` callback. Every write
@@ -28,6 +31,24 @@ export interface TransactionalRepos {
    * confirm, so the RETURN movement + asset flip + suggestion stamp commit atomically.
    */
   returns?: ReturnSuggestionRepository;
+  /**
+   * EPIC #38 W6 — tx-scoped MaterialDeductionSuggestion repo. Present when the UoW is
+   * wired for the W6 deduction confirm, so the CONSUME movement + suggestion stamp +
+   * consumption link all commit atomically.
+   */
+  deductions?: MaterialDeductionSuggestionRepository;
+  /**
+   * EPIC #38 W6 — tx-scoped TaskMaterialConsumption repo for stamping deductedAt/movementId
+   * inside the same transaction as the CONSUME movement.
+   */
+  consumptions?: TaskMaterialConsumptionRepository;
+  /**
+   * EPIC #38 W6 — tx-scoped MaterialStock repo so the TOCTOU re-check in
+   * ConfirmMaterialDeduction.handleDeduct reads stock INSIDE the same transaction,
+   * eliminating the read-outside-tx window (Fix 3b). Optional: legacy call sites
+   * that do not need the stock re-check omit this slot.
+   */
+  stock?: MaterialStockRepository;
 }
 
 /**

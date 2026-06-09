@@ -17,11 +17,16 @@ import { UnitOfWork, TransactionalRepos } from '@domain/ports/UnitOfWork';
  *     wired it does not — proving the wiring is load-bearing.
  */
 describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', () => {
-  it('app.ts passes inventoryUow into ConfirmInventorySuggestion', () => {
-    const appSrc = readFileSync(
+  let appSrc: string;
+
+  beforeAll(() => {
+    appSrc = readFileSync(
       join(__dirname, '..', '..', 'infrastructure', 'http', 'app.ts'),
       'utf8',
     );
+  });
+
+  it('app.ts passes inventoryUow into ConfirmInventorySuggestion', () => {
     // Isolate the `new ConfirmInventorySuggestion( ... )` argument block.
     const match = appSrc.match(/new ConfirmInventorySuggestion\(([\s\S]*?)\)\s*,/);
     expect(match).not.toBeNull();
@@ -50,5 +55,32 @@ describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', 
       {} as never, {} as never,
     );
     expect((withoutUow as unknown as { uow?: UnitOfWork }).uow).toBeUndefined();
+  });
+
+  // FIX 7c — composition-root guard: W6 staging wiring assertions
+  it('FIX-7c: app.ts passes stageMaterialDeduction into ConfirmInventorySuggestion as 12th arg', () => {
+    // ConfirmInventorySuggestion's 12th arg is stageMaterialDeduction (the staging hook).
+    // The regex isolates its argument block.
+    const match = appSrc.match(/new ConfirmInventorySuggestion\(([\s\S]*?)\)\s*,/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('stageMaterialDeduction');
+  });
+
+  it('FIX-7c: app.ts passes stageMaterialDeduction into RecordMaterialConsumption (stage object)', () => {
+    // RecordMaterialConsumption is wired with { stage: stageMaterialDeduction, scheduling: schedulingRepo }
+    const match = appSrc.match(/new RecordMaterialConsumption\(([\s\S]*?)\)\s*,/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('stage: stageMaterialDeduction');
+  });
+
+  it('FIX-7c: app.ts wires ListPendingDeductions and ConfirmMaterialDeduction into createInventoryRouter', () => {
+    // These are the 9th and 10th args to createInventoryRouter — both optional W6 routes.
+    const match = appSrc.match(/createInventoryRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('ListPendingDeductions');
+    expect(args).toContain('ConfirmMaterialDeduction');
   });
 });

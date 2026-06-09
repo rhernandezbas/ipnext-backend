@@ -555,6 +555,8 @@ model MaterialCatalog {
   // Inventory Foundation (W1) — stock balances + ledger movements
   stocks       MaterialStock[]     @relation("MaterialStock")
   movements    InventoryMovement[] @relation("MaterialMovement")
+  // EPIC #38 W6 — deduction suggestions for this material
+  deductionSuggestions MaterialDeductionSuggestion[]
 
   @@map("MaterialCatalog")
 }
@@ -571,10 +573,46 @@ model TaskMaterialConsumption {
   notes             String?         @db.Text
   recordedByUserId  String?
   recordedByUser    RbacUser?       @relation("TaskMaterialRecorder", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+  // EPIC #38 W6 — link to the deduction that consumed this stock. Null = never deducted.
+  deductedAt        DateTime?
+  deductedMovementId String?
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
 
+  // W6 back-relation
+  deductionSuggestion MaterialDeductionSuggestion?
+
   @@index([taskId])
+}
+
+// EPIC #38 W6 — operator surface for semi-automatic technician stock deduction.
+// Staged (read-only) on every consumption; operator confirms (the ONLY mutation) via
+// ConfirmMaterialDeduction (UnitOfWork, atomic). Mirror of ReturnSuggestion (W4).
+model MaterialDeductionSuggestion {
+  id                       String                  @id @default(uuid())
+  // L1 unique: one consumption → at most one suggestion. DO NOT change to @@unique;
+  // see the hand-written UNIQUE index in the migration (same reason as W4 sourceRef).
+  taskMaterialConsumptionId String                 @unique
+  consumption               TaskMaterialConsumption @relation(fields: [taskMaterialConsumptionId], references: [id], onDelete: Cascade)
+  taskId                   String
+  task                     ScheduledTask           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  technicianId             String?
+  materialCatalogId        String
+  material                 MaterialCatalog         @relation(fields: [materialCatalogId], references: [id], onDelete: Restrict)
+  qty                      Decimal                 @db.Decimal(12,4)
+  technicianLocationId     String?
+  status                   String                  @default("pending") // pending | needs_review | confirmed | discarded
+  resolution               String?                 // deduct | issue-first | depot | discard
+  // L2 natural key: consume:task-material:{consumptionId}
+  sourceRef                String?
+  deductedMovementId       String?                 @unique
+  deductedMovement         InventoryMovement?      @relation("DeductionMovement", fields: [deductedMovementId], references: [id], onDelete: SetNull)
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+
+  @@index([status])
+  @@index([taskId])
+  @@index([sourceRef])
 }
 
 model ProjectType {
@@ -958,6 +996,8 @@ model InventoryMovement {
   // index NULLs and collide across the many legacy rows. Keep the column plain here; do not
   // add @@unique([sourceRef]) or `prisma migrate` will try to recreate a full-NULL index.
   sourceRef         String?
+  // EPIC #38 W6 — back-relation: deduction suggestion that consumed via this movement.
+  deductionSuggestion MaterialDeductionSuggestion? @relation("DeductionMovement")
 
   @@index([assetId, type])
   @@index([materialCatalogId])
@@ -1138,6 +1178,8 @@ model ScheduledTask {
 
   // EPIC #38 W4 — closure-detected return suggestions staged for this task
   returnSuggestions ReturnSuggestion[]
+  // EPIC #38 W6 — material deduction suggestions staged for this task
+  materialDeductionSuggestions MaterialDeductionSuggestion[]
 
   @@index([stageId])
   @@index([projectId])

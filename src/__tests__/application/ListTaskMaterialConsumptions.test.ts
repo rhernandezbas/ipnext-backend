@@ -12,6 +12,8 @@ const makeConsumption = (over: Partial<TaskMaterialConsumption>): TaskMaterialCo
   unit: 'm',
   notes: null,
   recordedByUserId: null,
+  deductedAt: null,
+  deductedMovementId: null,
   createdAt: '2026-06-01T00:00:00Z',
   updatedAt: '2026-06-01T00:00:00Z',
   ...over,

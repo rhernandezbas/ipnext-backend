@@ -7,6 +7,8 @@ import { InMemoryStockLocationRepository } from './InMemoryStockLocationReposito
 import { InMemoryInventoryAssetRepository } from './InMemoryInventoryAssetRepository';
 import { InMemoryMaterialStockRepository } from './InMemoryMaterialStockRepository';
 import { InMemoryReturnSuggestionRepository } from './InMemoryReturnSuggestionRepository';
+import { InMemoryMaterialDeductionSuggestionRepository } from './InMemoryMaterialDeductionSuggestionRepository';
+import { InMemoryTaskMaterialConsumptionRepository } from './InMemoryTaskMaterialConsumptionRepository';
 
 /**
  * The in-memory UoW only needs the movement repo's backing `movements` array to
@@ -36,10 +38,12 @@ export class InMemoryUnitOfWork implements UnitOfWork {
     private readonly assets: InMemoryInventoryAssetRepository,
     private readonly movements: SnapshotableMovementRepo,
     private readonly materialStock: InMemoryMaterialStockRepository,
-    // EPIC #38 W4 — optional ReturnSuggestion repo. When present its store is
-    // snapshotted/rolled back with the rest, so the W4 confirm (RETURN movement +
-    // asset flip + suggestion stamp) is truly all-or-nothing in tests.
+    // EPIC #38 W4 — optional ReturnSuggestion repo.
     private readonly returns?: InMemoryReturnSuggestionRepository,
+    // EPIC #38 W6 — optional MaterialDeductionSuggestion repo.
+    private readonly deductions?: InMemoryMaterialDeductionSuggestionRepository,
+    // EPIC #38 W6 — optional TaskMaterialConsumption repo (for stampDeduction).
+    private readonly consumptionsRepo?: InMemoryTaskMaterialConsumptionRepository,
   ) {}
 
   async runInTransaction<T>(fn: (repos: TransactionalRepos) => Promise<T>): Promise<T> {
@@ -52,6 +56,12 @@ export class InMemoryUnitOfWork implements UnitOfWork {
         assets: this.assets,
         movements: this.movements,
         returns: this.returns,
+        deductions: this.deductions,
+        consumptions: this.consumptionsRepo,
+        // W6 Fix 3 — expose the shared in-memory stock repo in the tx bag so
+        // TOCTOU re-checks in ConfirmMaterialDeduction.handleDeduct read the
+        // same store that movements.record() mutates.
+        stock: this.materialStock,
       });
     } catch (err) {
       this.restore(snapshot);
@@ -79,6 +89,8 @@ export class InMemoryUnitOfWork implements UnitOfWork {
       movements: [...this.movements.movements],
       materialStock: new Map(this.materialStock.store),
       returns: this.returns ? new Map(this.returns.store) : null,
+      deductions: this.deductions ? new Map(this.deductions.store) : null,
+      consumptionsRepo: this.consumptionsRepo ? new Map(this.consumptionsRepo.store) : null,
     };
   }
 
@@ -92,6 +104,8 @@ export class InMemoryUnitOfWork implements UnitOfWork {
     this.movements.movements.push(...s.movements);
     this.replaceMap(this.materialStock.store, s.materialStock);
     if (this.returns && s.returns) this.replaceMap(this.returns.store, s.returns);
+    if (this.deductions && s.deductions) this.replaceMap(this.deductions.store, s.deductions);
+    if (this.consumptionsRepo && s.consumptionsRepo) this.replaceMap(this.consumptionsRepo.store, s.consumptionsRepo);
   }
 
   private replaceMap<K, V>(target: Map<K, V>, source: Map<K, V>): void {

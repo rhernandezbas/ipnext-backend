@@ -11,6 +11,8 @@ function makeConsumption(overrides: Partial<TaskMaterialConsumption> = {}): Task
     unit: 'm',
     notes: null,
     recordedByUserId: null,
+    deductedAt: null,
+    deductedMovementId: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

@@ -1,6 +1,7 @@
 import { TaskMaterialConsumption } from '@domain/entities/task-material-consumption';
 import { TaskMaterialConsumptionRepository } from '@domain/ports/TaskMaterialConsumptionRepository';
 import { prisma } from '../../database/prisma';
+import { PrismaClientLike } from './PrismaClientLike';
 
 function toEntity(row: any): TaskMaterialConsumption {
   return {
@@ -12,14 +13,19 @@ function toEntity(row: any): TaskMaterialConsumption {
     unit: row.unit ?? null,
     notes: row.notes ?? null,
     recordedByUserId: row.recordedByUserId ?? null,
+    // EPIC #38 W6 — deduction link fields (nullable, additive)
+    deductedAt: row.deductedAt instanceof Date ? row.deductedAt : (row.deductedAt ? new Date(row.deductedAt) : null),
+    deductedMovementId: row.deductedMovementId ?? null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
   };
 }
 
 export class PrismaTaskMaterialConsumptionRepository implements TaskMaterialConsumptionRepository {
+  constructor(private readonly db: PrismaClientLike = prisma) {}
+
   async listByTask(taskId: string): Promise<TaskMaterialConsumption[]> {
-    const rows = await (prisma as any).taskMaterialConsumption.findMany({
+    const rows = await (this.db as any).taskMaterialConsumption.findMany({
       where: { taskId },
       orderBy: { createdAt: 'asc' },
     });
@@ -27,7 +33,7 @@ export class PrismaTaskMaterialConsumptionRepository implements TaskMaterialCons
   }
 
   async create(consumption: TaskMaterialConsumption): Promise<TaskMaterialConsumption> {
-    const row = await (prisma as any).taskMaterialConsumption.create({
+    const row = await (this.db as any).taskMaterialConsumption.create({
       data: {
         id: consumption.id,
         taskId: consumption.taskId,
@@ -46,10 +52,22 @@ export class PrismaTaskMaterialConsumptionRepository implements TaskMaterialCons
 
   async delete(id: string): Promise<boolean> {
     try {
-      await (prisma as any).taskMaterialConsumption.delete({ where: { id } });
+      await (this.db as any).taskMaterialConsumption.delete({ where: { id } });
       return true;
     } catch {
       return false;
     }
+  }
+
+  async findById(id: string): Promise<TaskMaterialConsumption | null> {
+    const row = await (this.db as any).taskMaterialConsumption.findUnique({ where: { id } });
+    return row ? toEntity(row) : null;
+  }
+
+  async stampDeduction(id: string, deductedAt: Date, deductedMovementId: string): Promise<void> {
+    await (this.db as any).taskMaterialConsumption.update({
+      where: { id },
+      data: { deductedAt, deductedMovementId },
+    });
   }
 }
