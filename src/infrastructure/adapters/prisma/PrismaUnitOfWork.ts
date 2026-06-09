@@ -6,6 +6,9 @@ import { PrismaStockLocationRepository } from './PrismaStockLocationRepository';
 import { PrismaInventoryAssetRepository } from './PrismaInventoryAssetRepository';
 import { PrismaInventoryMovementRepository } from './PrismaInventoryMovementRepository';
 import { PrismaReturnSuggestionRepository } from './PrismaReturnSuggestionRepository';
+import { PrismaMaterialDeductionSuggestionRepository } from './PrismaMaterialDeductionSuggestionRepository';
+import { PrismaTaskMaterialConsumptionRepository } from './PrismaTaskMaterialConsumptionRepository';
+import { PrismaMaterialStockRepository } from './PrismaMaterialStockRepository';
 
 /**
  * Prisma UnitOfWork (Fix #1/#3). Opens a single `prisma.$transaction` and builds
@@ -27,6 +30,11 @@ export class PrismaUnitOfWork implements UnitOfWork {
         assets: new PrismaInventoryAssetRepository(tx),
         movements: new PrismaInventoryMovementRepository(tx),
         returns: new PrismaReturnSuggestionRepository(tx),
+        // W6 — material deduction suggestion + consumption stamping (tx-scoped).
+        deductions: new PrismaMaterialDeductionSuggestionRepository(tx),
+        consumptions: new PrismaTaskMaterialConsumptionRepository(tx),
+        // W6 Fix 3 — tx-scoped stock so TOCTOU re-check reads inside the tx.
+        stock: new PrismaMaterialStockRepository(tx),
       };
       return fn(repos);
     });

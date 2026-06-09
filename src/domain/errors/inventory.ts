@@ -321,6 +321,43 @@ export class AssetNotReturnableError extends DomainError {
   }
 }
 
+// ── Material Deduction (EPIC #38, Wave 6) ────────────────────────────────────
+
+/** The MaterialDeductionSuggestion does not exist. */
+export class DeductionSuggestionNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`Deduction suggestion ${id} not found`, 'DEDUCTION_SUGGESTION_NOT_FOUND');
+    this.name = 'DeductionSuggestionNotFoundError';
+  }
+}
+
+/**
+ * The suggestion is already terminal (confirmed/discarded) — a double-confirm.
+ * Maps to 409 at the route. The sourceRef partial-unique is the deeper concurrency guard.
+ */
+export class DeductionAlreadyConfirmedError extends DomainError {
+  constructor(id: string, status: string) {
+    super(`Deduction suggestion ${id} is already ${status}`, 'DEDUCTION_ALREADY_CONFIRMED');
+    this.name = 'DeductionAlreadyConfirmedError';
+  }
+}
+
+/**
+ * Fix 5 (Wave 6 review): issue-first was attempted but the suggestion has no
+ * technicianLocationId (the tech had no TECNICO location at stage time, or the
+ * assignee was null). Silently falling back to depot-as-source would mask the
+ * data problem; 409 forces the operator to pick 'depot' or 'discard' instead.
+ */
+export class DeductionHasNoTechnicianError extends DomainError {
+  constructor(id: string) {
+    super(
+      `Deduction suggestion ${id} has no technician location — cannot perform issue-first`,
+      'DEDUCTION_NO_TECHNICIAN',
+    );
+    this.name = 'DeductionHasNoTechnicianError';
+  }
+}
+
 // ── Technician Stock (EPIC #38, Wave 5a) ─────────────────────────────────────
 
 /**

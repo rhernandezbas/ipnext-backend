@@ -4,6 +4,7 @@ import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { DeviceTypeCatalogRepository } from '@domain/ports/DeviceTypeCatalogRepository';
 import { MaterialCatalogRepository } from '@domain/ports/MaterialCatalogRepository';
 import { TaskMaterialConsumptionRepository } from '@domain/ports/TaskMaterialConsumptionRepository';
+import { StageMaterialDeduction } from '@application/use-cases/StageMaterialDeduction';
 import {
   SuggestionNotFoundError,
   SuggestionAlreadyConfirmedError,
@@ -72,6 +73,8 @@ export class ConfirmInventorySuggestion {
     // transaction via this UnitOfWork. Optional: without it the writes run on the
     // standalone repos above (legacy behavior).
     private readonly uow?: UnitOfWork,
+    // EPIC #38 W6 — optional staging hook for MATERIAL confirms. null = not wired.
+    private readonly stageMaterialDeduction?: StageMaterialDeduction | null,
   ) {
     if (locations) this.resolveClientLocation = new ResolveClientLocation(locations);
   }
@@ -449,11 +452,30 @@ export class ConfirmInventorySuggestion {
       unit: suggestion.unit ?? mat.unit,
       notes: null,
       recordedByUserId: addedByUserId,
+      deductedAt: null,
+      deductedMovementId: null,
       createdAt: now,
       updatedAt: now,
     });
 
     await this.suggestions.setStatus(suggestion.id, 'confirmed', consumption.id);
+
+    // EPIC #38 W6 — best-effort stage hook (mirrors W4 side-effect pattern).
+    // Staging failures MUST NOT abort this confirm — swallow silently.
+    if (this.stageMaterialDeduction) {
+      try {
+        const task = await this.scheduling.getTask(suggestion.taskId);
+        await this.stageMaterialDeduction.execute({
+          consumptionId: consumption.id,
+          taskId: consumption.taskId,
+          technicianId: task?.assigneeId ?? null,
+          materialCatalogId: mat.id,
+          qty: suggestion.quantity ?? 1,
+        });
+      } catch {
+        // best-effort — never propagate
+      }
+    }
 
     const user = addedByUserId ? await this.users.findById(addedByUserId) : null;
     return { kind: 'MATERIAL', consumption: toMaterialConsumptionDto(consumption, user?.name ?? null) };

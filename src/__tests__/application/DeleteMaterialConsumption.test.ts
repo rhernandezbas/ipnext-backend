@@ -11,6 +11,8 @@ const makeConsumption = (id: string): TaskMaterialConsumption => ({
   unit: 'm',
   notes: null,
   recordedByUserId: null,
+  deductedAt: null,
+  deductedMovementId: null,
   createdAt: '2026-06-01T00:00:00Z',
   updatedAt: '2026-06-01T00:00:00Z',
 });

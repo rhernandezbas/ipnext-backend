@@ -430,6 +430,7 @@ import { GetDepotStock } from '@application/use-cases/GetDepotStock';
 import { GetTechnicianStock } from '@application/use-cases/GetTechnicianStock';
 import { IssueStockToTechnician } from '@application/use-cases/IssueStockToTechnician';
 import { ResolveTechnicianLocation } from '@application/use-cases/ResolveTechnicianLocation';
+import { StageMaterialDeduction } from '@application/use-cases/StageMaterialDeduction';
 import { createInventoryRouter } from './routes/inventory.routes';
 import { PrismaReturnSuggestionRepository } from '../adapters/prisma/PrismaReturnSuggestionRepository';
 import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
@@ -450,6 +451,9 @@ import { PrismaInventorySuggestionRepository } from '../adapters/prisma/PrismaIn
 import { PrismaContractInventoryRepository } from '../adapters/prisma/PrismaContractInventoryRepository';
 import { PrismaMaterialCatalogRepository } from '../adapters/prisma/PrismaMaterialCatalogRepository';
 import { PrismaTaskMaterialConsumptionRepository } from '../adapters/prisma/PrismaTaskMaterialConsumptionRepository';
+import { PrismaMaterialDeductionSuggestionRepository } from '../adapters/prisma/PrismaMaterialDeductionSuggestionRepository';
+import { ListPendingDeductions } from '@application/use-cases/ListPendingDeductions';
+import { ConfirmMaterialDeduction } from '@application/use-cases/ConfirmMaterialDeduction';
 import { MaterialCatalogService } from '@application/services/MaterialCatalogService';
 import { ListMaterial } from '@application/use-cases/ListMaterial';
 import { GetMaterial } from '@application/use-cases/GetMaterial';
@@ -1077,12 +1081,22 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // confirm/replace dual-write (asset + INSTALL movement + CII + setStatus).
   const inventoryUow = new PrismaUnitOfWork();
   const correctConfirmedDeviceType = new CorrectConfirmedDeviceType(inventorySuggestionRepo, contractInventoryRepo);
+  // EPIC #38 W6 — material-deduction staging hook, injected into BOTH consumption
+  // channels (RecordMaterialConsumption + ConfirmInventorySuggestion.handleMaterial).
+  // Flag-gated (inventory-material-auto-deduct, default OFF); best-effort in callers.
+  const materialStockRepo = new PrismaMaterialStockRepository();
+  const materialDeductionSuggestionRepo = new PrismaMaterialDeductionSuggestionRepository();
+  const stageMaterialDeduction = new StageMaterialDeduction(
+    featureFlagRepo, materialStockRepo, materialDeductionSuggestionRepo,
+    new ResolveTechnicianLocation(stockLocationRepo),
+  );
   app.use('/api', createContractInventoryRouter(
     new ListTaskInventorySuggestions(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo),
     new ConfirmInventorySuggestion(
       inventorySuggestionRepo, contractInventoryRepo, schedulingRepo, rbacUserRepo,
       deviceTypeCatalogRepo, materialCatalogRepo, taskMaterialConsumptionRepo,
       stockLocationRepo, inventoryAssetRepo, inventoryMovementRepo, inventoryUow,
+      stageMaterialDeduction,
     ),
     new DiscardInventorySuggestion(inventorySuggestionRepo),
     correctConfirmedDeviceType,
@@ -1091,7 +1105,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new AddInstalledItemManually(contractInventoryRepo),
     new UpdateInstalledItem(contractInventoryRepo),
     new RemoveInstalledItem(contractInventoryRepo),
-    new RecordMaterialConsumption(taskMaterialConsumptionRepo, materialCatalogRepo),
+    new RecordMaterialConsumption(taskMaterialConsumptionRepo, materialCatalogRepo, {
+      stage: stageMaterialDeduction,
+      scheduling: schedulingRepo,
+    }),
     new ListTaskMaterialConsumptions(taskMaterialConsumptionRepo, rbacUserRepo),
     new DeleteMaterialConsumption(taskMaterialConsumptionRepo),
     createAuthMiddleware(authAdapter, sessionRepo),
@@ -1110,20 +1127,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // Inventory depot read surface (EPIC #38 W3) + closure-detected returns (W4).
   // GET /depot (inventory.read); GET /returns/pending (inventory.read);
   // POST /returns/:id/confirm + /discard (inventory.write — the ONLY stock mutation).
-  const materialStockRepo = new PrismaMaterialStockRepository();
   const returnSuggestionRepo = new PrismaReturnSuggestionRepository();
+  const inventoryDepotLocation = new ResolveDepotLocation(stockLocationRepo);
   app.use('/api/inventory', createInventoryRouter(
     new GetDepotStock(stockLocationRepo, inventoryAssetRepo, materialStockRepo, deviceTypeCatalogRepo, materialCatalogRepo),
     new ListPendingReturns(returnSuggestionRepo),
     new ConfirmAssetReturn(
       returnSuggestionRepo, inventoryAssetRepo, inventoryMovementRepo, stockLocationRepo,
-      deviceTypeCatalogRepo, new ResolveDepotLocation(stockLocationRepo), inventoryUow,
+      deviceTypeCatalogRepo, inventoryDepotLocation, inventoryUow,
     ),
     // EPIC #38 W5a — technician stock: GET /technicians/:id/stock (read) +
     // POST /technicians/:id/issue (write). "Issue" = TRANSFER movement, NOT the ISSUE type.
     new GetTechnicianStock(stockLocationRepo, inventoryAssetRepo, materialStockRepo, deviceTypeCatalogRepo, materialCatalogRepo),
     new IssueStockToTechnician(
-      new ResolveDepotLocation(stockLocationRepo),
+      inventoryDepotLocation,
       new ResolveTechnicianLocation(stockLocationRepo),
       inventoryAssetRepo,
       inventoryUow,
@@ -1131,6 +1148,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     createAuthMiddleware(authAdapter, sessionRepo),
     requirePerm('inventory', 'read'),
     requirePerm('inventory', 'write'),
+    // EPIC #38 W6 — material deduction routes. FIX 6: enriched with material/user/task data.
+    new ListPendingDeductions(materialDeductionSuggestionRepo, materialCatalogRepo, rbacUserRepo, schedulingRepo),
+    new ConfirmMaterialDeduction(
+      materialDeductionSuggestionRepo,
+      taskMaterialConsumptionRepo,
+      inventoryMovementRepo,
+      materialStockRepo,
+      stockLocationRepo,
+      inventoryDepotLocation,
+      inventoryUow,
+    ),
   ));
 
   // F6 — AI installation audit read surface (before the scheduling /:id catch-all).
