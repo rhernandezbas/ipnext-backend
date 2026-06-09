@@ -15,6 +15,14 @@ export class InMemoryInventoryAssetRepository implements InventoryAssetRepositor
     return a ? { ...a } : null;
   }
 
+  async listByLocation(locationId: string): Promise<InventoryAsset[]> {
+    // Generic: ALL assets at the location regardless of status (W7 reuse).
+    // The use case applies any status filter.
+    return Array.from(this.store.values())
+      .filter((a) => a.currentLocationId === locationId)
+      .map((a) => ({ ...a }));
+  }
+
   async create(asset: InventoryAsset): Promise<InventoryAsset> {
     const dup = Array.from(this.store.values()).some(
       (x) => x.serialNumber === asset.serialNumber,

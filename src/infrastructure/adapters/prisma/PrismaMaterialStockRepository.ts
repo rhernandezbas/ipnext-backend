@@ -64,6 +64,11 @@ export class PrismaMaterialStockRepository implements MaterialStockRepository {
     return row ? toEntity(row) : null;
   }
 
+  async listByLocation(locationId: string): Promise<MaterialStock[]> {
+    const rows = await this.db.materialStock.findMany({ where: { locationId } });
+    return (rows as Row[]).map(toEntity);
+  }
+
   async upsert(stock: MaterialStock): Promise<MaterialStock> {
     const row = await this.db.materialStock.upsert({
       where: {
