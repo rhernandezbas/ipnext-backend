@@ -898,15 +898,18 @@ model ContractInstalledItem {
 // ============================================================================
 
 // Physical/logical inventory location. DEPOSITO is a singleton (unique `code`);
-// CLIENTE is per-contract; TECNICO is per-technician. CAMIONETA is W5.
+// CLIENTE is per-contract; TECNICO is per-technician; CAMIONETA is per-vehicle (W5b).
 model StockLocation {
   id           String    @id @default(uuid())
-  type         String    // DEPOSITO | CLIENTE | TECNICO
+  type         String    // DEPOSITO | CLIENTE | TECNICO | CAMIONETA
   code         String?   @unique // DEPOSITO singleton key (e.g. 'DEPOSITO')
   contractId   String?
   contract     Contract? @relation("ContractStockLocation", fields: [contractId], references: [id], onDelete: Cascade)
   technicianId String?
   technician   RbacUser? @relation("TechnicianStockLocation", fields: [technicianId], references: [id], onDelete: Cascade)
+  // EPIC #38 W5b — CAMIONETA location: one per vehicle
+  vehicleId    String?
+  vehicle      Vehicle?  @relation("VehicleStockLocation", fields: [vehicleId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -916,9 +919,27 @@ model StockLocation {
   movementsTo         InventoryMovement[] @relation("MovementTo")
 
   // One CLIENTE per contract / one TECNICO per technician (DEPOSITO uses unique code).
+  // @@unique([type, vehicleId]) uses PG NULL-distinct semantics — no NULLS NOT DISTINCT needed.
   @@unique([type, contractId])
   @@unique([type, technicianId])
+  @@unique([type, vehicleId])
   @@index([type])
+}
+
+// EPIC #38 Wave 5b — Vehicle catalog (ABM). Mirrors MaterialCatalog pattern.
+// Each vehicle can have at most one CAMIONETA StockLocation (compound unique).
+model Vehicle {
+  id                    String          @id @default(uuid())
+  plate                 String          @unique
+  name                  String?
+  assignedTechnicianId  String?
+  assignedTechnician    RbacUser?       @relation("AssignedVehicleTechnician", fields: [assignedTechnicianId], references: [id], onDelete: SetNull)
+  status                String          @default("active") // active | inactive
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  // One CAMIONETA StockLocation per vehicle (find-or-create via ResolveVehicleLocation)
+  locations             StockLocation[] @relation("VehicleStockLocation")
 }
 
 // Unified serialized equipment record (ONU, router, antenna, ...). Replaces
@@ -1922,6 +1943,8 @@ model RbacUser {
   // Inventory Foundation (W1) — back-relations
   stockLocations    StockLocation[]     @relation("TechnicianStockLocation")
   inventoryMovements InventoryMovement[] @relation("MovementTechnician")
+  // EPIC #38 W5b — vehicles assigned to this technician
+  assignedVehicles  Vehicle[]           @relation("AssignedVehicleTechnician")
 
   @@index([login])
 }

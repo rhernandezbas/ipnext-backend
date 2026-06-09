@@ -9,6 +9,7 @@ type Row = {
   code: string | null;
   contractId: string | null;
   technicianId: string | null;
+  vehicleId: string | null;
 };
 
 function toEntity(r: Row): StockLocation {
@@ -18,6 +19,7 @@ function toEntity(r: Row): StockLocation {
     code: r.code,
     contractId: r.contractId,
     technicianId: r.technicianId,
+    vehicleId: (r as any).vehicleId ?? null,
   };
 }
 
@@ -43,6 +45,14 @@ export class PrismaStockLocationRepository implements StockLocationRepository {
     return row ? toEntity(row) : null;
   }
 
+  /** One CAMIONETA per vehicle — uses the compound unique (type, vehicleId). */
+  async findByTypeAndVehicle(type: StockLocationType, vehicleId: string): Promise<StockLocation | null> {
+    const row = await (this.db.stockLocation as any).findUnique({
+      where: { type_vehicleId: { type, vehicleId } },
+    });
+    return row ? toEntity(row) : null;
+  }
+
   async create(location: StockLocation): Promise<StockLocation> {
     const row = await this.db.stockLocation.create({
       data: {
@@ -51,6 +61,7 @@ export class PrismaStockLocationRepository implements StockLocationRepository {
         code: location.code,
         contractId: location.contractId,
         technicianId: location.technicianId,
+        vehicleId: location.vehicleId ?? null,
       },
     });
     return toEntity(row);

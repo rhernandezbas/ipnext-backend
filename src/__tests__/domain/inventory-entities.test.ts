@@ -30,8 +30,23 @@ describe('StockLocation entity', () => {
   });
 
   it('SL-invalid-type: unknown type rejected', () => {
-    expect(() => createStockLocation({ id: 'L4', type: 'CAMIONETA' as never })).toThrow(
+    expect(() => createStockLocation({ id: 'L4', type: 'UNKNOWN_TYPE' as never })).toThrow(
       expect.objectContaining({ code: 'INVALID_LOCATION_TYPE' }),
+    );
+  });
+
+  // EPIC #38 W5b — CAMIONETA is now a valid type
+  it('SL-camioneta: CAMIONETA with vehicleId is valid', () => {
+    const loc = createStockLocation({ id: 'L7', type: 'CAMIONETA', vehicleId: 'V1' });
+    expect(loc.type).toBe('CAMIONETA');
+    expect(loc.vehicleId).toBe('V1');
+    expect(loc.contractId).toBeNull();
+    expect(loc.technicianId).toBeNull();
+  });
+
+  it('SL-camioneta-without-vehicleId: rejected with MISSING_LOCATION_FK', () => {
+    expect(() => createStockLocation({ id: 'L8', type: 'CAMIONETA', vehicleId: null })).toThrow(
+      expect.objectContaining({ code: 'MISSING_LOCATION_FK' }),
     );
   });
 

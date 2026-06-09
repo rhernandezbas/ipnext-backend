@@ -1,5 +1,5 @@
 import { StockLocationRepository } from '@domain/ports/StockLocationRepository';
-import { StockLocation } from '@domain/entities/stock-location';
+import { StockLocation, StockLocationType } from '@domain/entities/stock-location';
 
 export class InMemoryStockLocationRepository implements StockLocationRepository {
   readonly store = new Map<string, StockLocation>();
@@ -19,6 +19,13 @@ export class InMemoryStockLocationRepository implements StockLocationRepository 
   async findByTypeAndTechnician(type: string, technicianId: string): Promise<StockLocation | null> {
     const found = Array.from(this.store.values()).find(
       (l) => l.type === type && l.technicianId === technicianId,
+    );
+    return found ? { ...found } : null;
+  }
+
+  async findByTypeAndVehicle(type: StockLocationType, vehicleId: string): Promise<StockLocation | null> {
+    const found = Array.from(this.store.values()).find(
+      (l) => l.type === type && l.vehicleId === vehicleId,
     );
     return found ? { ...found } : null;
   }

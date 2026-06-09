@@ -374,3 +374,40 @@ export class AssetNotAtDepotError extends DomainError {
     this.name = 'AssetNotAtDepotError';
   }
 }
+
+// ── Vehicle Stock (EPIC #38, Wave 5b) ────────────────────────────────────────
+
+/** A vehicle with the given id does not exist. Maps to 404. */
+export class VehicleNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`Vehicle ${id} not found`, 'VEHICLE_NOT_FOUND');
+    this.name = 'VehicleNotFoundError';
+  }
+}
+
+/** A vehicle with the same plate already exists. Maps to 409. */
+export class DuplicatePlateError extends DomainError {
+  constructor(plate: string) {
+    super(`A vehicle with plate "${plate}" already exists`, 'VEHICLE_PLATE_CONFLICT');
+    this.name = 'DuplicatePlateError';
+  }
+}
+
+/** A vehicle deletion was attempted but it has CAMIONETA StockLocation references. Maps to 409. */
+export class VehicleInUseError extends DomainError {
+  constructor(id: string) {
+    super(`Vehicle ${id} has stock references and cannot be deleted`, 'VEHICLE_IN_USE');
+    this.name = 'VehicleInUseError';
+  }
+}
+
+/**
+ * An issue to an inactive vehicle was attempted. The vehicle must be `active`
+ * before stock can be transferred to it. Maps to 422.
+ */
+export class VehicleInactiveError extends DomainError {
+  constructor(id: string) {
+    super(`Vehicle ${id} is inactive and cannot receive stock`, 'VEHICLE_INACTIVE');
+    this.name = 'VehicleInactiveError';
+  }
+}
