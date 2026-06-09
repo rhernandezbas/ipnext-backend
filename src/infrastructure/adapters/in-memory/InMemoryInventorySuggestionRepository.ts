@@ -14,6 +14,17 @@ export class InMemoryInventorySuggestionRepository implements InventorySuggestio
   readonly store = new Map<string, TaskInventorySuggestion>(); // keyed by id
   private readonly byNatural = new Map<string, string>(); // naturalKey → id
 
+  /** UoW rollback support: snapshot the natural-key index. */
+  snapshotNatural(): Map<string, string> {
+    return new Map(this.byNatural);
+  }
+
+  /** UoW rollback support: restore the natural-key index from a snapshot. */
+  restoreNatural(snapshot: Map<string, string>): void {
+    this.byNatural.clear();
+    for (const [k, v] of snapshot) this.byNatural.set(k, v);
+  }
+
   async listByTask(taskId: string): Promise<TaskInventorySuggestion[]> {
     return Array.from(this.store.values()).filter(s => s.taskId === taskId);
   }

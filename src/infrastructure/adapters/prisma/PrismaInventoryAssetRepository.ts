@@ -1,0 +1,84 @@
+import { InventoryAssetRepository } from '@domain/ports/InventoryAssetRepository';
+import { InventoryAsset, AssetStatus } from '@domain/entities/inventory-asset';
+import { DuplicateSerialNumberError } from '@domain/errors/inventory';
+import { prisma } from '../../database/prisma';
+import { PrismaClientLike } from './PrismaClientLike';
+
+type Row = {
+  id: string;
+  serialNumber: string;
+  mac: string | null;
+  deviceTypeId: string;
+  status: string;
+  currentLocationId: string;
+  source: string;
+  sourceTaskId: string | null;
+};
+
+function toEntity(r: Row): InventoryAsset {
+  return {
+    id: r.id,
+    serialNumber: r.serialNumber,
+    mac: r.mac,
+    deviceTypeId: r.deviceTypeId,
+    status: r.status as AssetStatus,
+    currentLocationId: r.currentLocationId,
+    source: r.source,
+    sourceTaskId: r.sourceTaskId,
+  };
+}
+
+export class PrismaInventoryAssetRepository implements InventoryAssetRepository {
+  constructor(private readonly db: PrismaClientLike = prisma) {}
+
+  async findById(id: string): Promise<InventoryAsset | null> {
+    const row = await this.db.inventoryAsset.findUnique({ where: { id } });
+    return row ? toEntity(row) : null;
+  }
+
+  async findBySerialNumber(serialNumber: string): Promise<InventoryAsset | null> {
+    const row = await this.db.inventoryAsset.findUnique({ where: { serialNumber } });
+    return row ? toEntity(row) : null;
+  }
+
+  async create(asset: InventoryAsset): Promise<InventoryAsset> {
+    try {
+      const row = await this.db.inventoryAsset.create({
+        data: {
+          id: asset.id,
+          serialNumber: asset.serialNumber,
+          mac: asset.mac,
+          deviceTypeId: asset.deviceTypeId,
+          status: asset.status,
+          currentLocationId: asset.currentLocationId,
+          source: asset.source,
+          sourceTaskId: asset.sourceTaskId,
+        },
+      });
+      return toEntity(row);
+    } catch (e) {
+      // Prisma P2002 = unique constraint failed (serialNumber)
+      if (e && typeof e === 'object' && (e as { code?: string }).code === 'P2002') {
+        throw new DuplicateSerialNumberError(asset.serialNumber);
+      }
+      throw e;
+    }
+  }
+
+  async updateLocation(id: string, locationId: string): Promise<InventoryAsset | null> {
+    const existing = await this.db.inventoryAsset.findUnique({ where: { id } });
+    if (!existing) return null;
+    const row = await this.db.inventoryAsset.update({
+      where: { id },
+      data: { currentLocationId: locationId },
+    });
+    return toEntity(row);
+  }
+
+  async updateStatus(id: string, status: AssetStatus): Promise<InventoryAsset | null> {
+    const existing = await this.db.inventoryAsset.findUnique({ where: { id } });
+    if (!existing) return null;
+    const row = await this.db.inventoryAsset.update({ where: { id }, data: { status } });
+    return toEntity(row);
+  }
+}

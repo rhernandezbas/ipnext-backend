@@ -170,10 +170,14 @@ export function createClientsRouter(
       res.status(204).send();
     } catch (err: unknown) {
       const code = (err as { code?: string })?.code;
-      // Prisma P2003 -> FK constraint (the client is referenced by tasks/contracts/etc.)
-      if (code === 'P2003') {
+      // FK constraint violation. P2003 = explicit FK; P2014 = required-relation
+      // violation Prisma raises when a cascade hits a RESTRICT'd child. Fix #6:
+      // deleting a client cascades Contract → CLIENTE StockLocation, but
+      // InventoryAsset.currentLocationId is onDelete: Restrict, so an installed
+      // asset blocks the delete. Surface a clear 409 instead of a 500.
+      if (code === 'P2003' || code === 'P2014') {
         res.status(409).json({
-          error: 'Cannot delete: client is referenced by other records (tasks, contracts, invoices). Detach those first.',
+          error: 'Cannot delete: client is referenced by other records (tasks, contracts, invoices, or installed inventory/assets). Detach or return those first.',
           code: 'CLIENT_HAS_REFERENCES',
         });
         return;

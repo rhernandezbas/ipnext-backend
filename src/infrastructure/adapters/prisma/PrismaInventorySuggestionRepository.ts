@@ -1,6 +1,7 @@
 import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestionRepository';
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 import { prisma } from '../../database/prisma';
+import { PrismaClientLike } from './PrismaClientLike';
 
 type Row = {
   id: string; taskId: string; kind: string; deviceType: string | null; qwenDeviceType: string | null;
@@ -20,13 +21,15 @@ function toEntity(r: Row): TaskInventorySuggestion {
 }
 
 export class PrismaInventorySuggestionRepository implements InventorySuggestionRepository {
+  constructor(private readonly db: PrismaClientLike = prisma) {}
+
   async listByTask(taskId: string): Promise<TaskInventorySuggestion[]> {
-    const rows = await prisma.taskInventorySuggestion.findMany({ where: { taskId }, orderBy: { createdAt: 'asc' } });
+    const rows = await this.db.taskInventorySuggestion.findMany({ where: { taskId }, orderBy: { createdAt: 'asc' } });
     return rows.map(toEntity);
   }
 
   async hasDeviceForTask(taskId: string): Promise<boolean> {
-    const row = await prisma.taskInventorySuggestion.findFirst({
+    const row = await this.db.taskInventorySuggestion.findFirst({
       where: { taskId, kind: 'DEVICE', status: { not: 'discarded' } },
       select: { id: true },
     });
@@ -38,14 +41,14 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
    * que compartan SN/MAC. La idempotencia OCR↔OCR y MANUAL↔MANUAL se conserva.
    */
   async upsert(s: TaskInventorySuggestion): Promise<TaskInventorySuggestion> {
-    const existing = await prisma.taskInventorySuggestion.findFirst({
+    const existing = await this.db.taskInventorySuggestion.findFirst({
       where: {
         taskId: s.taskId, kind: s.kind, source: s.source,
         serialNumber: s.serialNumber, mac: s.mac, materialDesc: s.materialDesc,
       },
     });
     if (existing) {
-      const row = await prisma.taskInventorySuggestion.update({
+      const row = await this.db.taskInventorySuggestion.update({
         where: { id: existing.id },
         data: {
           deviceType: s.deviceType, qwenDeviceType: s.qwenDeviceType, serialNumber: s.serialNumber, mac: s.mac,
@@ -54,7 +57,7 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
       });
       return toEntity(row);
     }
-    const row = await prisma.taskInventorySuggestion.create({
+    const row = await this.db.taskInventorySuggestion.create({
       data: {
         id: s.id, taskId: s.taskId, kind: s.kind, deviceType: s.deviceType, qwenDeviceType: s.qwenDeviceType,
         serialNumber: s.serialNumber, mac: s.mac, materialDesc: s.materialDesc,
@@ -67,7 +70,7 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
 
   /** Plain insert sin dedup. Las sugerencias MANUAL nunca clobberizan filas OCR. */
   async create(s: TaskInventorySuggestion): Promise<TaskInventorySuggestion> {
-    const row = await prisma.taskInventorySuggestion.create({
+    const row = await this.db.taskInventorySuggestion.create({
       data: {
         id: s.id, taskId: s.taskId, kind: s.kind, deviceType: s.deviceType,
         qwenDeviceType: s.qwenDeviceType, serialNumber: s.serialNumber, mac: s.mac,
@@ -81,7 +84,7 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
   }
 
   async get(id: string): Promise<TaskInventorySuggestion | null> {
-    const row = await prisma.taskInventorySuggestion.findUnique({ where: { id } });
+    const row = await this.db.taskInventorySuggestion.findUnique({ where: { id } });
     return row ? toEntity(row) : null;
   }
 
@@ -91,9 +94,9 @@ export class PrismaInventorySuggestionRepository implements InventorySuggestionR
     confirmedItemId?: string,
     deviceType?: string,
   ): Promise<TaskInventorySuggestion | null> {
-    const existing = await prisma.taskInventorySuggestion.findUnique({ where: { id } });
+    const existing = await this.db.taskInventorySuggestion.findUnique({ where: { id } });
     if (!existing) return null;
-    const row = await prisma.taskInventorySuggestion.update({
+    const row = await this.db.taskInventorySuggestion.update({
       where: { id },
       data: {
         status,

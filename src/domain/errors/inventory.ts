@@ -159,3 +159,118 @@ export class InvalidItemTypeError extends DomainError {
     this.name = 'InvalidItemTypeError';
   }
 }
+
+// ── Inventory Foundation (EPIC #38, Wave 1) ───────────────────────────────────
+
+/** A consumable decrement would drive MaterialStock.qty below zero. */
+export class InsufficientStockError extends DomainError {
+  constructor(materialCatalogId: string, available: number, requested: number) {
+    super(
+      `Insufficient stock for material ${materialCatalogId}: have ${available}, requested ${requested}`,
+      'INSUFFICIENT_STOCK',
+    );
+    this.name = 'InsufficientStockError';
+  }
+}
+
+/** A movement violates the XOR (asset vs material+qty) shape or the qty>0 guard. */
+export class InconsistentMovementError extends DomainError {
+  constructor(reason: string) {
+    super(`Inconsistent inventory movement: ${reason}`, 'INCONSISTENT_MOVEMENT');
+    this.name = 'InconsistentMovementError';
+  }
+}
+
+/** A second InventoryAsset with an already-used serialNumber was attempted. */
+export class DuplicateSerialNumberError extends DomainError {
+  constructor(serialNumber: string) {
+    super(`An asset with serialNumber "${serialNumber}" already exists`, 'DUPLICATE_SERIAL_NUMBER');
+    this.name = 'DuplicateSerialNumberError';
+  }
+}
+
+/** The referenced deviceType is not in the DeviceTypeCatalog. */
+export class UnknownDeviceTypeError extends DomainError {
+  constructor(deviceTypeId: string) {
+    super(`Device type ${deviceTypeId} is not in the catalog`, 'UNKNOWN_DEVICE_TYPE');
+    this.name = 'UnknownDeviceTypeError';
+  }
+}
+
+/** An asset status transition is not allowed by the lifecycle map. */
+export class InvalidStatusTransitionError extends DomainError {
+  constructor(from: string, to: string) {
+    super(`Invalid asset status transition: ${from} → ${to}`, 'INVALID_STATUS_TRANSITION');
+    this.name = 'InvalidStatusTransitionError';
+  }
+}
+
+/** A mutation/delete was attempted on an immutable InventoryMovement ledger row. */
+export class MovementImmutableError extends DomainError {
+  constructor() {
+    super('InventoryMovement records are immutable and cannot be updated or deleted', 'MOVEMENT_IMMUTABLE');
+    this.name = 'MovementImmutableError';
+  }
+}
+
+/** A StockLocation was created with a type outside DEPOSITO|CLIENTE|TECNICO. */
+export class InvalidLocationTypeError extends DomainError {
+  constructor(type: string) {
+    super(`Location type "${type}" is not valid`, 'INVALID_LOCATION_TYPE');
+    this.name = 'InvalidLocationTypeError';
+  }
+}
+
+/** A typed location is missing its required FK (CLIENTE→contractId, TECNICO→technicianId). */
+export class MissingLocationFkError extends DomainError {
+  constructor(type: string, fk: string) {
+    super(`Location type ${type} requires ${fk}`, 'MISSING_LOCATION_FK');
+    this.name = 'MissingLocationFkError';
+  }
+}
+
+/** A second MaterialStock for an existing (materialCatalogId, locationId) was attempted. */
+export class DuplicateMaterialStockError extends DomainError {
+  constructor(materialCatalogId: string, locationId: string) {
+    super(
+      `MaterialStock already exists for material ${materialCatalogId} at location ${locationId}`,
+      'DUPLICATE_MATERIAL_STOCK',
+    );
+    this.name = 'DuplicateMaterialStockError';
+  }
+}
+
+// ── Inventory Foundation (EPIC #38, Wave 2 — atomicity + integration) ─────────
+
+/**
+ * Fix #2: a dual-write tried to reuse a serialNumber that belongs to an asset
+ * already `installed` at a DIFFERENT contract's location. Reusing it would
+ * silently relocate someone else's installed device — so we refuse.
+ */
+export class AssetInstalledElsewhereError extends DomainError {
+  constructor(
+    public readonly serialNumber: string,
+    public readonly currentLocationId: string,
+  ) {
+    super(
+      `Asset with serialNumber "${serialNumber}" is already installed elsewhere (location ${currentLocationId})`,
+      'ASSET_INSTALLED_ELSEWHERE',
+    );
+    this.name = 'AssetInstalledElsewhereError';
+  }
+}
+
+/**
+ * Fix #5: a DEVICE confirm could not resolve its deviceType NAME to a catalog
+ * row and OTROS was not present either. We refuse rather than write the raw
+ * NAME into the deviceTypeId FK column (a corrupt-FK footgun).
+ */
+export class UnresolvableDeviceTypeError extends DomainError {
+  constructor(typeName: string) {
+    super(
+      `Device type "${typeName}" could not be resolved to a catalog id and OTROS fallback is missing`,
+      'UNRESOLVABLE_DEVICE_TYPE',
+    );
+    this.name = 'UnresolvableDeviceTypeError';
+  }
+}

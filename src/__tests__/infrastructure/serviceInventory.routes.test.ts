@@ -11,6 +11,11 @@ import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/I
 import { InMemoryDeviceTypeCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryDeviceTypeCatalogRepository';
 import { InMemoryMaterialCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialCatalogRepository';
 import { InMemoryTaskMaterialConsumptionRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskMaterialConsumptionRepository';
+import { InMemoryStockLocationRepository } from '@infrastructure/adapters/in-memory/InMemoryStockLocationRepository';
+import { InMemoryInventoryAssetRepository } from '@infrastructure/adapters/in-memory/InMemoryInventoryAssetRepository';
+import { InMemoryMaterialStockRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialStockRepository';
+import { InMemoryInventoryMovementRepository } from '@infrastructure/adapters/in-memory/InMemoryInventoryMovementRepository';
+import { InMemoryUnitOfWork } from '@infrastructure/adapters/in-memory/InMemoryUnitOfWork';
 import { DeviceTypeCatalogService } from '@application/services/DeviceTypeCatalogService';
 import { ListTaskInventorySuggestions } from '@application/use-cases/ListTaskInventorySuggestions';
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
@@ -39,7 +44,7 @@ const sug = (over: Partial<TaskInventorySuggestion>): TaskInventorySuggestion =>
 const makeItem = (over: Partial<ContractInstalledItem> = {}): ContractInstalledItem => ({
   id: 'i1', contractId: 'svc1', type: 'ROUTER', serialNumber: 'R1', mac: null, model: null,
   source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
-  status: 'active', notes: null, replacesItemId: null, createdAt: 'x', updatedAt: 'x', ...over,
+  status: 'active', notes: null, replacesItemId: null, assetId: null, createdAt: 'x', updatedAt: 'x', ...over,
 });
 
 const makeConsumption = (over: Partial<TaskMaterialConsumption> = {}): TaskMaterialConsumption => ({
@@ -60,6 +65,16 @@ async function buildApp() {
   await materialRepo.create({ name: 'CABLE_UTP', unit: 'm', active: true, sortOrder: 0 });
   await materialRepo.create({ name: 'OTRO', unit: 'unidad', active: true, sortOrder: 99 });
   const consumptionRepo = new InMemoryTaskMaterialConsumptionRepository();
+  // Inventory Foundation (W1) dual-write deps
+  const locationRepo = new InMemoryStockLocationRepository();
+  const assetRepo = new InMemoryInventoryAssetRepository();
+  const materialStockRepo = new InMemoryMaterialStockRepository();
+  const movementRepo = new InMemoryInventoryMovementRepository(assetRepo, materialStockRepo);
+  // Fix #1/#7: the route confirm runs the dual-write through a UnitOfWork, just
+  // like app.ts. Pins that the composed route path stays transactional.
+  const uow = new InMemoryUnitOfWork(
+    suggestions, inventory, locationRepo, assetRepo, movementRepo, materialStockRepo,
+  );
 
   const auth = (req: Request, _res: Response, next: NextFunction) => {
     (req as { user?: { id: string } }).user = { id: 'u1' };
@@ -70,7 +85,10 @@ async function buildApp() {
 
   const router = createContractInventoryRouter(
     new ListTaskInventorySuggestions(suggestions, inventory, scheduling),
-    new ConfirmInventorySuggestion(suggestions, inventory, scheduling, users, catalogRepo, materialRepo, consumptionRepo),
+    new ConfirmInventorySuggestion(
+      suggestions, inventory, scheduling, users, catalogRepo, materialRepo, consumptionRepo,
+      locationRepo, assetRepo, movementRepo, uow,
+    ),
     new DiscardInventorySuggestion(suggestions),
     new CorrectConfirmedDeviceType(suggestions, inventory),
     new ListContractInstalledItems(inventory, users),
@@ -90,7 +108,7 @@ async function buildApp() {
   app.use(express.json());
   app.use('/api', router);
   app.use(errorHandler);
-  return { app, suggestions, inventory, scheduling, materialRepo, consumptionRepo };
+  return { app, suggestions, inventory, scheduling, materialRepo, consumptionRepo, assetRepo, movementRepo, locationRepo };
 }
 
 // App with deny middleware to test permission guards
@@ -160,6 +178,32 @@ describe('contractInventory routes', () => {
     expect(res.body.item.serialNumber).toBe('R1');
     expect(res.body.item.addedByUserId).toBe('u1');
     expect((await suggestions.get('s1'))!.status).toBe('confirmed');
+  });
+
+  it('POST confirm DEVICE → dual-write (W1): CII.assetId set, asset installed + one INSTALL movement', async () => {
+    const { app, suggestions, scheduling, inventory, assetRepo, movementRepo, locationRepo } = await buildApp();
+    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'SN-W1', mac: null }));
+
+    const res = await request(app).post('/api/scheduling/t1/inventory/suggestions/s1/confirm').send();
+    expect(res.status).toBe(201);
+    expect(res.body.kind).toBe('DEVICE');
+
+    // CII row carries a non-null assetId
+    const cii = await inventory.getById(res.body.item.id);
+    expect(cii!.assetId).not.toBeNull();
+
+    // Asset created installed at the CLIENTE location of svc1
+    const asset = await assetRepo.findBySerialNumber('SN-W1');
+    expect(asset).not.toBeNull();
+    expect(asset!.status).toBe('installed');
+    const cliente = await locationRepo.findByTypeAndContract('CLIENTE', 'svc1');
+    expect(asset!.currentLocationId).toBe(cliente!.id);
+
+    // Exactly one INSTALL movement for the asset
+    const movements = await movementRepo.listByAsset(asset!.id);
+    expect(movements).toHaveLength(1);
+    expect(movements[0].type).toBe('INSTALL');
   });
 
   it('POST confirm MATERIAL → 201 + {kind:"MATERIAL", consumption}', async () => {

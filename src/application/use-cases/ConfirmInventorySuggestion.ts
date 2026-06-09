@@ -11,6 +11,8 @@ import {
   DuplicateInstalledItemError,
   NoReplaceTargetError,
   NotADeviceError,
+  AssetInstalledElsewhereError,
+  UnresolvableDeviceTypeError,
 } from '@domain/errors/inventory';
 import { randomUUID } from 'crypto';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
@@ -19,6 +21,12 @@ import { MaterialConsumptionDto, toMaterialConsumptionDto } from '@application/d
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 import { matchInstalledItem } from '@application/services/matchInstalledItem';
 import { assertSuggestionComplete } from '@domain/services/suggestionCompleteness';
+import { StockLocationRepository } from '@domain/ports/StockLocationRepository';
+import { InventoryAssetRepository } from '@domain/ports/InventoryAssetRepository';
+import { InventoryMovementRepository } from '@domain/ports/InventoryMovementRepository';
+import { ResolveClientLocation } from '@application/use-cases/ResolveClientLocation';
+import { createInventoryAsset, nextStatus } from '@domain/entities/inventory-asset';
+import { UnitOfWork, TransactionalRepos } from '@domain/ports/UnitOfWork';
 
 export type SuggestionResolution = 'add' | 'replace' | 'link_existing';
 
@@ -42,6 +50,9 @@ export type ConfirmResult =
  * ONE suggestion → ONE item/consumption. Re-confirming is rejected.
  */
 export class ConfirmInventorySuggestion {
+  /** Lazily built from the locations repo; resolves/creates the contract's CLIENTE location. */
+  private readonly resolveClientLocation?: ResolveClientLocation;
+
   constructor(
     private readonly suggestions: InventorySuggestionRepository,
     private readonly inventory: ContractInventoryRepository,
@@ -50,7 +61,157 @@ export class ConfirmInventorySuggestion {
     private readonly catalog: DeviceTypeCatalogRepository,
     private readonly materials: MaterialCatalogRepository,
     private readonly consumptions: TaskMaterialConsumptionRepository,
-  ) {}
+    // Inventory Foundation (W1) — dual-write deps. Optional so legacy call sites
+    // (tests that don't exercise the ledger) keep working; when all three are
+    // present, every DEVICE confirm also writes an InventoryAsset + INSTALL movement.
+    private readonly locations?: StockLocationRepository,
+    private readonly assets?: InventoryAssetRepository,
+    private readonly movements?: InventoryMovementRepository,
+    // Inventory Foundation (W2 Fix #1/#3) — when present, the DEVICE confirm/replace
+    // dual-write (asset + INSTALL movement + CII + setStatus) runs inside ONE
+    // transaction via this UnitOfWork. Optional: without it the writes run on the
+    // standalone repos above (legacy behavior).
+    private readonly uow?: UnitOfWork,
+  ) {
+    if (locations) this.resolveClientLocation = new ResolveClientLocation(locations);
+  }
+
+  /** True when the full dual-write wiring is present. */
+  private get dualWriteEnabled(): boolean {
+    return !!(this.resolveClientLocation && this.assets && this.movements);
+  }
+
+  /**
+   * Tx-scoped repo bag used by the dual-write helpers. When a UnitOfWork is
+   * driving the confirm (inside `runInTransaction`), `repos` is the tx-scoped
+   * bag; otherwise the helpers fall back to the standalone constructor repos.
+   */
+  private bag(repos?: TransactionalRepos): {
+    suggestions: InventorySuggestionRepository;
+    inventory: ContractInventoryRepository;
+    locations?: StockLocationRepository;
+    assets?: InventoryAssetRepository;
+    movements?: InventoryMovementRepository;
+    resolveClientLocation?: ResolveClientLocation;
+  } {
+    if (repos) {
+      return {
+        suggestions: repos.suggestions,
+        inventory: repos.inventory,
+        locations: repos.locations,
+        assets: repos.assets,
+        movements: repos.movements,
+        resolveClientLocation: new ResolveClientLocation(repos.locations),
+      };
+    }
+    return {
+      suggestions: this.suggestions,
+      inventory: this.inventory,
+      locations: this.locations,
+      assets: this.assets,
+      movements: this.movements,
+      resolveClientLocation: this.resolveClientLocation,
+    };
+  }
+
+  /**
+   * Dual-write side of a DEVICE confirm: resolve the contract's CLIENTE location,
+   * create the unified InventoryAsset (status=installed, idempotent by serialNumber),
+   * and record the INSTALL movement. Returns the asset id to stamp onto the CII,
+   * or null when dual-write is not wired.
+   *
+   * Fix #2: serial reuse is now SCOPED — an existing asset is reused only when it
+   * is `available` OR already installed at THIS contract's CLIENTE location. An
+   * asset `installed` somewhere else throws AssetInstalledElsewhereError instead
+   * of being silently relocated onto this contract.
+   *
+   * Fix #5: the deviceType NAME must resolve to a catalog id (or OTROS). If
+   * neither resolves we throw UnresolvableDeviceTypeError rather than writing the
+   * raw NAME into the deviceTypeId FK column.
+   */
+  private async dualWriteAsset(
+    b: ReturnType<ConfirmInventorySuggestion['bag']>,
+    args: {
+      contractId: string;
+      type: string;
+      serialNumber: string | null;
+      mac: string | null;
+      source: string;
+      sourceTaskId: string | null;
+      taskId: string;
+      technicianId: string | null;
+    },
+  ): Promise<string | null> {
+    if (!b.resolveClientLocation || !b.assets || !b.movements) return null;
+
+    const loc = await b.resolveClientLocation.execute(args.contractId);
+
+    // Fix #5: resolve deviceTypeId by catalog NAME (UPPERCASE), OTROS fallback.
+    // Never fall back to the raw NAME as the FK id.
+    const byName = await this.catalog.getByName(args.type);
+    const fallback = byName ? null : await this.catalog.getByName('OTROS');
+    const resolvedType = byName ?? fallback;
+    if (!resolvedType) throw new UnresolvableDeviceTypeError(args.type);
+    const deviceTypeId = resolvedType.id;
+
+    // Synthesize a stable serial when the device has none (MAC-only devices),
+    // so the asset UNIQUE(serialNumber) holds.
+    const serial = args.serialNumber && args.serialNumber.trim()
+      ? args.serialNumber
+      : `CII-${randomUUID()}`;
+
+    // Fix #2: scoped idempotent reuse. Reuse only when the asset is `available`
+    // OR already at THIS contract's CLIENTE location; otherwise it is installed
+    // elsewhere and reusing it would relocate someone else's device → refuse.
+    let asset = await b.assets.findBySerialNumber(serial);
+    if (asset) {
+      const reusable =
+        asset.status === 'available' || asset.currentLocationId === loc.id;
+      if (!reusable) {
+        throw new AssetInstalledElsewhereError(serial, asset.currentLocationId);
+      }
+    } else {
+      asset = await b.assets.create(
+        createInventoryAsset({
+          id: randomUUID(),
+          serialNumber: serial,
+          mac: args.mac,
+          deviceTypeId,
+          status: 'installed',
+          currentLocationId: loc.id,
+          source: args.source,
+          sourceTaskId: args.sourceTaskId,
+        }),
+      );
+    }
+
+    await b.movements.record({
+      type: 'INSTALL',
+      assetId: asset.id,
+      toLocationId: loc.id,
+      taskId: args.taskId,
+      technicianId: args.technicianId ?? undefined,
+      source: args.source,
+    });
+
+    return asset.id;
+  }
+
+  /**
+   * Retire a replaced item's asset (Fix #3): route it through the validated
+   * asset state machine (`nextStatus`) so an illegal transition throws inside the
+   * transaction and rolls the whole replace() back. installed → removed is legal.
+   */
+  private async markAssetRemoved(
+    b: ReturnType<ConfirmInventorySuggestion['bag']>,
+    assetId: string | null,
+  ): Promise<void> {
+    if (!assetId || !b.assets) return;
+    const asset = await b.assets.findById(assetId);
+    if (!asset) return;
+    const to = nextStatus(asset.status, 'removed'); // throws on illegal transition
+    await b.assets.updateStatus(assetId, to);
+  }
 
   /**
    * Mapea el source de la sugerencia al source que corresponde en ContractInstalledItem.
@@ -111,31 +272,63 @@ export class ConfirmInventorySuggestion {
       t && valid.has(t.toUpperCase()) ? t.toUpperCase() : 'OTROS';
 
     const effectiveType = toType(input.typeOverride ?? suggestion.deviceType);
-    const item = await this.inventory.create({
-      id: randomUUID(),
-      contractId,
-      type: effectiveType,
-      serialNumber: suggestion.serialNumber,
-      mac: suggestion.mac,
-      model: null,
-      source: this.toItemSource(suggestion.source),
-      sourceTaskId: suggestion.taskId,
-      addedByUserId: input.addedByUserId ?? null,
-      confirmedAt: now,
-      status: 'active',
-      notes: null,
-      replacesItemId: null, // add never replaces
-      createdAt: now,
-      updatedAt: now,
-    });
-
+    const itemSource = this.toItemSource(suggestion.source);
     // When the operator picked a type in the dropdown, persist it onto the
     // suggestion too, so the resolved card shows what was confirmed (ANTENA),
     // not the original scan (ONU). Without an override the scan value stays.
     const persistedType = input.typeOverride != null ? effectiveType : undefined;
-    await this.suggestions.setStatus(suggestion.id, 'confirmed', item.id, persistedType);
+
+    // Fix #1: asset + INSTALL movement + CII + setStatus run in ONE transaction.
+    const item = await this.runUnit(async (b) => {
+      const assetId = await this.dualWriteAsset(b, {
+        contractId,
+        type: effectiveType,
+        serialNumber: suggestion.serialNumber,
+        mac: suggestion.mac,
+        source: itemSource,
+        sourceTaskId: suggestion.taskId,
+        taskId: suggestion.taskId,
+        technicianId: input.addedByUserId ?? null,
+      });
+      const created = await b.inventory.create({
+        id: randomUUID(),
+        contractId,
+        type: effectiveType,
+        serialNumber: suggestion.serialNumber,
+        mac: suggestion.mac,
+        model: null,
+        source: itemSource,
+        sourceTaskId: suggestion.taskId,
+        addedByUserId: input.addedByUserId ?? null,
+        confirmedAt: now,
+        status: 'active',
+        notes: null,
+        replacesItemId: null, // add never replaces
+        assetId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await b.suggestions.setStatus(suggestion.id, 'confirmed', created.id, persistedType);
+      return created;
+    });
+
     const user = input.addedByUserId ? await this.users.findById(input.addedByUserId) : null;
     return { kind: 'DEVICE', item: toInstalledItemDto(item, user?.name ?? null) };
+  }
+
+  /**
+   * Runs `fn` inside the UnitOfWork transaction when one is wired (Fix #1/#3),
+   * passing a tx-scoped repo bag; otherwise runs it against the standalone repos.
+   * Either way `fn` only touches repos via the bag, so the same code path is
+   * atomic in prod and rolls back cleanly in the in-memory adapter.
+   */
+  private async runUnit<T>(
+    fn: (b: ReturnType<ConfirmInventorySuggestion['bag']>) => Promise<T>,
+  ): Promise<T> {
+    if (this.uow) {
+      return this.uow.runInTransaction((repos) => fn(this.bag(repos)));
+    }
+    return fn(this.bag());
   }
 
   /**
@@ -171,35 +364,58 @@ export class ConfirmInventorySuggestion {
 
     const now = new Date().toISOString();
 
-    // 1) Retire the old item first (safe order: never produces two active items on failure)
-    await this.inventory.update(match.item!.id, { status: 'replaced' });
-
-    // 2) Create the new item, linked to the retired one
     const valid = new Set(await this.catalog.listActiveNames());
     const toType = (t: string | null): string =>
       t && valid.has(t.toUpperCase()) ? t.toUpperCase() : 'OTROS';
 
     const effectiveType = toType(input.typeOverride ?? suggestion.deviceType);
-    const item = await this.inventory.create({
-      id: randomUUID(),
-      contractId,
-      type: effectiveType,
-      serialNumber: suggestion.serialNumber,
-      mac: suggestion.mac,
-      model: null,
-      source: this.toItemSource(suggestion.source),
-      sourceTaskId: suggestion.taskId,
-      addedByUserId: input.addedByUserId ?? null,
-      confirmedAt: now,
-      status: 'active',
-      notes: null,
-      replacesItemId: match.item!.id, // link to the retired item
-      createdAt: now,
-      updatedAt: now,
+    const itemSource = this.toItemSource(suggestion.source);
+    const persistedType = input.typeOverride != null ? effectiveType : undefined;
+
+    // Fix #1/#3: retire old (validated transition) + new asset + INSTALL movement
+    // + new CII + setStatus all run in ONE transaction. A mid-replace failure
+    // (e.g. illegal asset transition, failing INSTALL movement) rolls everything
+    // back — the old item is NOT left replaced with no successor.
+    const item = await this.runUnit(async (b) => {
+      // 1) Retire the old item
+      await b.inventory.update(match.item!.id, { status: 'replaced' });
+      // Fix #3: mark the retired item's asset `removed` via the validated state
+      // machine (illegal transition throws → rollback).
+      await this.markAssetRemoved(b, match.item!.assetId);
+
+      // 2) Create the new item, linked to the retired one
+      const assetId = await this.dualWriteAsset(b, {
+        contractId,
+        type: effectiveType,
+        serialNumber: suggestion.serialNumber,
+        mac: suggestion.mac,
+        source: itemSource,
+        sourceTaskId: suggestion.taskId,
+        taskId: suggestion.taskId,
+        technicianId: input.addedByUserId ?? null,
+      });
+      const created = await b.inventory.create({
+        id: randomUUID(),
+        contractId,
+        type: effectiveType,
+        serialNumber: suggestion.serialNumber,
+        mac: suggestion.mac,
+        model: null,
+        source: itemSource,
+        sourceTaskId: suggestion.taskId,
+        addedByUserId: input.addedByUserId ?? null,
+        confirmedAt: now,
+        status: 'active',
+        notes: null,
+        replacesItemId: match.item!.id, // link to the retired item
+        assetId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await b.suggestions.setStatus(suggestion.id, 'confirmed', created.id, persistedType);
+      return created;
     });
 
-    const persistedType = input.typeOverride != null ? effectiveType : undefined;
-    await this.suggestions.setStatus(suggestion.id, 'confirmed', item.id, persistedType);
     const user = input.addedByUserId ? await this.users.findById(input.addedByUserId) : null;
     return { kind: 'DEVICE', item: toInstalledItemDto(item, user?.name ?? null) };
   }

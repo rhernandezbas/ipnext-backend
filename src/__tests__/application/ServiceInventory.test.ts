@@ -11,6 +11,11 @@ import { InMemoryStageRepository } from '@infrastructure/adapters/in-memory/InMe
 import { InMemoryDeviceTypeCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryDeviceTypeCatalogRepository';
 import { InMemoryMaterialCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialCatalogRepository';
 import { InMemoryTaskMaterialConsumptionRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskMaterialConsumptionRepository';
+import { InMemoryStockLocationRepository } from '@infrastructure/adapters/in-memory/InMemoryStockLocationRepository';
+import { InMemoryInventoryAssetRepository } from '@infrastructure/adapters/in-memory/InMemoryInventoryAssetRepository';
+import { InMemoryMaterialStockRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialStockRepository';
+import { InMemoryInventoryMovementRepository } from '@infrastructure/adapters/in-memory/InMemoryInventoryMovementRepository';
+import { InMemoryUnitOfWork } from '@infrastructure/adapters/in-memory/InMemoryUnitOfWork';
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 
 const BASE_TYPES = ['ONU', 'ROUTER', 'ANTENA', 'REPETIDOR', 'OTROS'];
@@ -37,13 +42,25 @@ async function setup() {
   const materialRepo = new InMemoryMaterialCatalogRepository();
   await seedMaterialCatalog(materialRepo);
   const consumptionRepo = new InMemoryTaskMaterialConsumptionRepository();
+  // Inventory Foundation (W1) dual-write deps
+  const locationRepo = new InMemoryStockLocationRepository();
+  const assetRepo = new InMemoryInventoryAssetRepository();
+  const materialStockRepo = new InMemoryMaterialStockRepository();
+  const movementRepo = new InMemoryInventoryMovementRepository(assetRepo, materialStockRepo);
+  const uow = new InMemoryUnitOfWork(
+    suggestions, inventory, locationRepo, assetRepo, movementRepo, materialStockRepo,
+  );
   const confirm = new ConfirmInventorySuggestion(
     suggestions, inventory, scheduling, users, catalogRepo, materialRepo, consumptionRepo,
+    locationRepo, assetRepo, movementRepo, uow,
   );
   const listItems = new ListContractInstalledItems(inventory, users);
   const addManual = new AddInstalledItemManually(inventory);
   const discard = new DiscardInventorySuggestion(suggestions);
-  return { suggestions, inventory, scheduling, users, confirm, listItems, addManual, discard, materialRepo, consumptionRepo };
+  return {
+    suggestions, inventory, scheduling, users, confirm, listItems, addManual, discard,
+    materialRepo, consumptionRepo, locationRepo, assetRepo, movementRepo, materialStockRepo, uow,
+  };
 }
 
 const sug = (over: Partial<TaskInventorySuggestion>): TaskInventorySuggestion => ({
@@ -319,7 +336,7 @@ describe('ConfirmInventorySuggestion — resolution matrix', () => {
   const makeActiveItem = (over: Partial<import('@domain/entities/contract-installed-item').ContractInstalledItem> = {}) => ({
     id: 'i_existing', contractId: 'svc1', type: 'ROUTER', serialNumber: 'R1', mac: null, model: null,
     source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
-    status: 'active' as const, notes: null, replacesItemId: null, createdAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:00:00Z',
+    status: 'active' as const, notes: null, replacesItemId: null, assetId: null, createdAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:00:00Z',
     ...over,
   });
 
@@ -473,12 +490,12 @@ describe('ContractInstalledItem — replacesItemId field', () => {
     const older = await inventory.create({
       id: 'i_old', contractId: 'svc1', type: 'ROUTER', serialNumber: 'OLD_SN', mac: null, model: null,
       source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
-      status: 'active', notes: null, replacesItemId: null, createdAt: now, updatedAt: now,
+      status: 'active', notes: null, replacesItemId: null, assetId: null, createdAt: now, updatedAt: now,
     });
     const newer = await inventory.create({
       id: 'i_new', contractId: 'svc1', type: 'ROUTER', serialNumber: 'NEW_SN', mac: null, model: null,
       source: 'ICLASS', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
-      status: 'active', notes: null, replacesItemId: older.id, createdAt: now, updatedAt: now,
+      status: 'active', notes: null, replacesItemId: older.id, assetId: null, createdAt: now, updatedAt: now,
     });
     const read = await inventory.getById('i_new');
     expect(read!.replacesItemId).toBe('i_old');
@@ -490,11 +507,100 @@ describe('ContractInstalledItem — replacesItemId field', () => {
     const item = await inventory.create({
       id: 'i1', contractId: 'svc1', type: 'ROUTER', serialNumber: 'R1', mac: null, model: null,
       source: 'MANUAL', sourceTaskId: null, addedByUserId: null, confirmedAt: null,
-      status: 'active', notes: null, replacesItemId: null, createdAt: now, updatedAt: now,
+      status: 'active', notes: null, replacesItemId: null, assetId: null, createdAt: now, updatedAt: now,
     });
     expect(item.replacesItemId).toBeNull();
     const read = await inventory.getById('i1');
     expect(read!.replacesItemId).toBeNull();
+  });
+});
+
+describe('ConfirmInventorySuggestion — dual-write (W1 HIGH-CARE)', () => {
+  it('SIM-asset-created: confirm DEVICE → asset(installed,CLIENTE) + INSTALL movement + CII.assetId', async () => {
+    const { suggestions, inventory, scheduling, confirm, assetRepo, movementRepo, locationRepo } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'C1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'SN123' }));
+
+    const result = await confirm.execute({ suggestionId: 's1', addedByUserId: 'u1' });
+    if (result.kind !== 'DEVICE') throw new Error('expected DEVICE');
+
+    // CII created with a non-null assetId
+    const cii = await inventory.getById(result.item.id);
+    expect(cii!.assetId).not.toBeNull();
+
+    // Asset created: installed, at the contract's CLIENTE location
+    const asset = await assetRepo.findBySerialNumber('SN123');
+    expect(asset).not.toBeNull();
+    expect(asset!.status).toBe('installed');
+    const clienteLoc = await locationRepo.findByTypeAndContract('CLIENTE', 'C1');
+    expect(clienteLoc).not.toBeNull();
+    expect(asset!.currentLocationId).toBe(clienteLoc!.id);
+    expect(cii!.assetId).toBe(asset!.id);
+
+    // Exactly one INSTALL movement referencing the asset + task
+    const movements = await movementRepo.listByAsset(asset!.id);
+    expect(movements).toHaveLength(1);
+    expect(movements[0].type).toBe('INSTALL');
+    expect(movements[0].taskId).toBe('t1');
+  });
+
+  it('SIM-cii-queryable: CII still queryable after confirm (operator UX unchanged)', async () => {
+    const { suggestions, scheduling, confirm, listItems } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'C1' });
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'SN123' }));
+
+    await confirm.execute({ suggestionId: 's1' });
+
+    const items = await listItems.execute('C1');
+    expect(items).toHaveLength(1);
+    expect(items[0].serialNumber).toBe('SN123');
+    expect(items[0].type).toBe('ROUTER');
+    expect(items[0].status).toBe('active');
+  });
+
+  it('SIM-material-no-asset: confirm MATERIAL → no asset, no movement', async () => {
+    const { suggestions, scheduling, confirm, assetRepo, movementRepo } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'C1' });
+    await suggestions.upsert(sug({
+      id: 's1', kind: 'MATERIAL', deviceType: null, serialNumber: null,
+      materialDesc: 'CABLE_UTP', quantity: 5, unit: 'm',
+    }));
+
+    const result = await confirm.execute({ suggestionId: 's1' });
+    expect(result.kind).toBe('MATERIAL');
+    expect(assetRepo.store.size).toBe(0);
+    expect(movementRepo.movements).toHaveLength(0);
+  });
+
+  it('replace() DEVICE → retired asset marked removed, new asset installed', async () => {
+    const { suggestions, inventory, scheduling, confirm, assetRepo } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'C1' });
+    // First confirm creates the original asset+CII
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'OLD' }));
+    const first = await confirm.execute({ suggestionId: 's1' });
+    if (first.kind !== 'DEVICE') throw new Error('expected DEVICE');
+    const oldAssetId = (await inventory.getById(first.item.id))!.assetId!;
+
+    // replace with a new device → old asset removed, new installed, CII linked
+    await suggestions.upsert(sug({ id: 's2', deviceType: 'ROUTER', serialNumber: 'NEW' }));
+    const result = await confirm.replace({ suggestionId: 's2' });
+    if (result.kind !== 'DEVICE') throw new Error('expected DEVICE');
+
+    const oldAsset = await assetRepo.findById(oldAssetId);
+    expect(oldAsset!.status).toBe('removed');
+    const newAsset = await assetRepo.findBySerialNumber('NEW');
+    expect(newAsset!.status).toBe('installed');
+    const newCii = await inventory.getById(result.item.id);
+    expect(newCii!.assetId).toBe(newAsset!.id);
+  });
+
+  it('TaskHasNoContractError unchanged under dual-write', async () => {
+    const { suggestions, scheduling, confirm, assetRepo } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: null });
+    await suggestions.upsert(sug({ id: 's1', serialNumber: 'SN1' }));
+
+    await expect(confirm.execute({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'TASK_HAS_NO_CONTRACT' });
+    expect(assetRepo.store.size).toBe(0);
   });
 });
 
