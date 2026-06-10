@@ -420,6 +420,8 @@ import { GetTechnicianStock } from '@application/use-cases/GetTechnicianStock';
 import { IssueStockToTechnician } from '@application/use-cases/IssueStockToTechnician';
 import { ResolveTechnicianLocation } from '@application/use-cases/ResolveTechnicianLocation';
 import { StageMaterialDeduction } from '@application/use-cases/StageMaterialDeduction';
+import { AddAssetToDepot } from '@application/use-cases/AddAssetToDepot';
+import { AddMaterialToDepot } from '@application/use-cases/AddMaterialToDepot';
 import { createInventoryRouter } from './routes/inventory.routes';
 // Wave 7 (Capstone) — dashboard use cases
 import { GetInventoryOverview } from '@application/use-cases/GetInventoryOverview';
@@ -1166,6 +1168,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new GetInventoryOverview(stockLocationRepo),
     new ListInventoryMovements(inventoryMovementRepo, materialCatalogRepo, stockLocationRepo, rbacUserRepo, schedulingRepo),
     new GetLowStockAlerts(materialCatalogRepo),
+    // EPIC #38 follow-up — depot stock entry
+    new AddAssetToDepot(inventoryAssetRepo, inventoryMovementRepo, deviceTypeCatalogRepo, inventoryDepotLocation, inventoryUow),
+    new AddMaterialToDepot(inventoryMovementRepo, materialCatalogRepo, materialStockRepo, inventoryDepotLocation),
   ));
 
   // EPIC #38 W5b — vehicle catalog CRUD surface. Mounted at /api/vehicles (fresh prefix).

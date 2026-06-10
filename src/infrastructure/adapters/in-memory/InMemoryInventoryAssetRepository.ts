@@ -16,6 +16,11 @@ export class InMemoryInventoryAssetRepository implements InventoryAssetRepositor
     return a ? { ...a } : null;
   }
 
+  async findByMac(mac: string): Promise<InventoryAsset | null> {
+    const a = Array.from(this.store.values()).find((x) => x.mac === mac);
+    return a ? { ...a } : null;
+  }
+
   async findByNormalizedSerial(serial: string): Promise<InventoryAsset | null> {
     const target = normalizeSerial(serial);
     if (target == null) return null;

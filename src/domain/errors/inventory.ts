@@ -420,3 +420,33 @@ export class InvalidMinStockError extends DomainError {
     this.name = 'InvalidMinStockError';
   }
 }
+
+// ── Depot Stock Entry (EPIC #38 follow-up) ───────────────────────────────────
+
+/**
+ * An asset entry was attempted but an asset with the same normalized serialNumber
+ * OR mac already exists anywhere in the system (any status/location). Maps to 409.
+ */
+export class AssetAlreadyExistsError extends DomainError {
+  constructor(field: 'serialNumber' | 'mac', value: string) {
+    super(
+      `An asset with ${field} "${value}" already exists`,
+      'ASSET_ALREADY_EXISTS',
+    );
+    this.name = 'AssetAlreadyExistsError';
+  }
+}
+
+/**
+ * At least one of serialNumber or mac is required for an asset depot entry.
+ * Maps to 400 VALIDATION_ERROR.
+ */
+export class AssetIdentifierRequiredError extends DomainError {
+  constructor() {
+    super(
+      'At least one of serialNumber or mac is required',
+      'VALIDATION_ERROR',
+    );
+    this.name = 'AssetIdentifierRequiredError';
+  }
+}

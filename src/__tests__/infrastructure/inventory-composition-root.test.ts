@@ -119,4 +119,19 @@ describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', 
     const args = match![1];
     expect(args).toContain('GetLowStockAlerts');
   });
+
+  // EPIC #38 follow-up — depot stock entry wiring guards
+  it('depot-entry: app.ts wires AddAssetToDepot into createInventoryRouter', () => {
+    const match = appSrc.match(/createInventoryRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('AddAssetToDepot');
+  });
+
+  it('depot-entry: app.ts wires AddMaterialToDepot into createInventoryRouter', () => {
+    const match = appSrc.match(/createInventoryRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('AddMaterialToDepot');
+  });
 });

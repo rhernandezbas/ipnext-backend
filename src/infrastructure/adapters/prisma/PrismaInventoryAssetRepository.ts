@@ -42,6 +42,11 @@ export class PrismaInventoryAssetRepository implements InventoryAssetRepository 
     return row ? toEntity(row) : null;
   }
 
+  async findByMac(mac: string): Promise<InventoryAsset | null> {
+    const row = await this.db.inventoryAsset.findFirst({ where: { mac } });
+    return row ? toEntity(row as Row) : null;
+  }
+
   async findByNormalizedSerial(serial: string): Promise<InventoryAsset | null> {
     const target = normalizeSerial(serial);
     if (target == null) return null;

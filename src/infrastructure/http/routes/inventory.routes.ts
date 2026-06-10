@@ -13,6 +13,9 @@ import { IssueStockToVehicle } from '@application/use-cases/IssueStockToVehicle'
 import { GetInventoryOverview } from '@application/use-cases/GetInventoryOverview';
 import { ListInventoryMovements } from '@application/use-cases/ListInventoryMovements';
 import { GetLowStockAlerts } from '@application/use-cases/GetLowStockAlerts';
+// EPIC #38 follow-up — depot stock entry
+import { AddAssetToDepot } from '@application/use-cases/AddAssetToDepot';
+import { AddMaterialToDepot } from '@application/use-cases/AddMaterialToDepot';
 import {
   ReturnSuggestionNotFoundError,
   ReturnAlreadyResolvedError,
@@ -25,6 +28,11 @@ import {
   VehicleNotFoundError,
   VehicleInactiveError,
   AssetNotAtDepotError,
+  AssetAlreadyExistsError,
+  AssetIdentifierRequiredError,
+  DeviceTypeNotFoundError,
+  MaterialNotFoundError,
+  InvalidQuantityError,
 } from '@domain/errors/inventory';
 import { DomainError } from '@domain/errors/index';
 import { z } from 'zod';
@@ -113,6 +121,9 @@ export function createInventoryRouter(
   getInventoryOverview?: GetInventoryOverview,
   listInventoryMovements?: ListInventoryMovements,
   getLowStockAlerts?: GetLowStockAlerts,
+  // EPIC #38 follow-up — depot stock entry routes (optional; omitted in legacy wiring)
+  addAssetToDepot?: AddAssetToDepot,
+  addMaterialToDepot?: AddMaterialToDepot,
 ): Router {
   const router = Router();
 
@@ -123,6 +134,61 @@ export function createInventoryRouter(
       next(e);
     }
   });
+
+  // ── EPIC #38 follow-up — depot stock entry ─────────────────────────────────
+  if (addAssetToDepot) {
+    const AssetEntrySchema = z.object({
+      deviceTypeId: z.string().min(1),
+      serialNumber: z.string().nullish(),
+      mac: z.string().nullish(),
+      note: z.string().nullish(),
+    });
+
+    router.post('/depot/assets', auth, requireWrite, async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = AssetEntrySchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        const dto = await addAssetToDepot.execute({
+          deviceTypeId: parsed.data.deviceTypeId,
+          serialNumber: parsed.data.serialNumber ?? null,
+          mac: parsed.data.mac ?? null,
+          note: parsed.data.note ?? null,
+        });
+        res.status(201).json(dto);
+      } catch (e) {
+        handleDepotEntryError(e, res, next);
+      }
+    });
+  }
+
+  if (addMaterialToDepot) {
+    const MaterialEntrySchema = z.object({
+      materialCatalogId: z.string().min(1),
+      qty: z.number().positive(),
+      note: z.string().nullish(),
+    });
+
+    router.post('/depot/materials', auth, requireWrite, async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = MaterialEntrySchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        const dto = await addMaterialToDepot.execute({
+          materialCatalogId: parsed.data.materialCatalogId,
+          qty: parsed.data.qty,
+          note: parsed.data.note ?? null,
+        });
+        res.status(200).json(dto);
+      } catch (e) {
+        handleDepotEntryError(e, res, next);
+      }
+    });
+  }
 
   // ── EPIC #38 W4 — closure-detected returns ────────────────────────────────
   router.get('/returns/pending', auth, requireRead, async (_req: Request, res: Response, next: NextFunction) => {
@@ -346,6 +412,28 @@ export function createInventoryRouter(
   }
 
   return router;
+}
+
+/**
+ * Maps depot stock entry domain errors to HTTP.
+ * 400 → validation / qty / identifier-required.
+ * 404 → deviceType or material not found.
+ * 409 → asset already exists (duplicate serial/mac).
+ */
+function handleDepotEntryError(e: unknown, res: Response, next: NextFunction): void {
+  if (e instanceof AssetIdentifierRequiredError || e instanceof InvalidQuantityError) {
+    res.status(400).json({ error: (e as DomainError).message, code: (e as DomainError).code });
+    return;
+  }
+  if (e instanceof DeviceTypeNotFoundError || e instanceof MaterialNotFoundError) {
+    res.status(404).json({ error: (e as DomainError).message, code: (e as DomainError).code });
+    return;
+  }
+  if (e instanceof AssetAlreadyExistsError) {
+    res.status(409).json({ error: (e as DomainError).message, code: (e as DomainError).code });
+    return;
+  }
+  next(e);
 }
 
 /**

@@ -4,6 +4,11 @@ export interface InventoryAssetRepository {
   findById(id: string): Promise<InventoryAsset | null>;
   findBySerialNumber(serialNumber: string): Promise<InventoryAsset | null>;
   /**
+   * Find any asset (any status/location) whose mac field matches exactly.
+   * Used by the depot entry duplicate-check (409 guard). Returns null if not found.
+   */
+  findByMac(mac: string): Promise<InventoryAsset | null>;
+  /**
    * Match an asset by NORMALIZED serial (trim/upper/strip non-alphanumerics — survives
    * IClass/OCR drift, #36 pattern) restricted to `status === 'installed'`. Returns null
    * when no installed asset matches. EPIC #38 W4 return staging: a non-installed match is
