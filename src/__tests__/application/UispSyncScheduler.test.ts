@@ -180,12 +180,12 @@ describe('UispSyncScheduler', () => {
   it('FIX-4: two concurrent runOnce calls → only one executes', async () => {
     const flags = new InMemoryFeatureFlagRepository();
     flags.seed(FLAG_KEY, true);
-    let resolveSync: ((v: { sitesUpserted: number; devicesUpserted: number; sitesMissing: number; devicesMissing: number; sitesReappeared: number; devicesReappeared: number; durationMs: number }) => void) | undefined;
+    let resolveSync: ((v: { sitesUpserted: number; devicesUpserted: number; sitesMissing: number; devicesMissing: number; sitesReappeared: number; devicesReappeared: number; durationMs: number; networkSitesCreated: number }) => void) | undefined;
     const blockingSync = {
       execute: jest.fn().mockImplementation(
         () => new Promise<{
           sitesUpserted: number; devicesUpserted: number; sitesMissing: number; devicesMissing: number;
-          sitesReappeared: number; devicesReappeared: number; durationMs: number;
+          sitesReappeared: number; devicesReappeared: number; durationMs: number; networkSitesCreated: number;
         }>(resolve => {
           resolveSync = resolve;
         }),
@@ -208,7 +208,7 @@ describe('UispSyncScheduler', () => {
 
     // Now unblock the first
     await new Promise(res => setTimeout(res, 0)); // ensure sync.execute was called
-    resolveSync?.({ sitesUpserted: 1, devicesUpserted: 1, sitesMissing: 0, devicesMissing: 0, sitesReappeared: 0, devicesReappeared: 0, durationMs: 10 });
+    resolveSync?.({ sitesUpserted: 1, devicesUpserted: 1, sitesMissing: 0, devicesMissing: 0, sitesReappeared: 0, devicesReappeared: 0, durationMs: 10, networkSitesCreated: 0 });
     const r1 = await first;
 
     // Exactly one should have run (not skipped), the other should be skipped

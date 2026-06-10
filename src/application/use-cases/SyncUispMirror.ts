@@ -3,6 +3,7 @@ import type { UispSiteRepository } from '@domain/ports/UispSiteRepository';
 import type { UispDeviceRepository } from '@domain/ports/UispDeviceRepository';
 import type { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 import type { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
+import type { NetworkSite } from '@domain/entities/networkSite';
 
 export interface SyncUispMirrorResult {
   sitesUpserted: number;
@@ -113,16 +114,17 @@ export class SyncUispMirror {
 
     // 8. Auto-import NetworkSites from non-missing UispSites.
     // Algorithm: ONE findAll() → Map<uispSiteId, NetworkSite> → O(1) lookup per UISP site.
-    // This replaces the previous N-query loop (findByUispSiteId per site) with a single
-    // batch read — same pattern as ListNetworkSitesWithUisp (no N+1).
+    // This avoids N round-trips (findByUispSiteId per site) with a single batch read.
     //
     // For each UISP site that is NOT missing:
-    //   - No NetworkSite linked → CREATE (name, coordinates, uispSiteId, status=active)
-    //   - NetworkSite already linked → UPDATE coordinates ONLY if currently null (manual wins)
+    //   - No NetworkSite linked → CREATE (name, address, coordinates, uispSiteId, status=active)
+    //   - NetworkSite already linked:
+    //       * coordinates null → fill from UISP (manual wins)
+    //       * address empty/null → fill from UISP (manual wins)
     // Missing UISP sites → their NetworkSite (if any) is KEPT untouched (never auto-delete).
     let networkSitesCreated = 0;
     if (this.networkSiteRepo) {
-      // Single batch read — O(n) total instead of O(n) Prisma round-trips
+      // Single batch read — O(n) total instead of O(n) DB round-trips
       const allNetworkSites = await this.networkSiteRepo.findAll();
       const nsByUispId = new Map(
         allNetworkSites
@@ -133,14 +135,14 @@ export class SyncUispMirror {
       for (const site of sites) {
         const existing = nsByUispId.get(site.uispId) ?? null;
         if (!existing) {
-          // CREATE: minimal set — name from UISP, coordinates from lat/lng, status=active
+          // CREATE: minimal set — name + address from UISP, coordinates from lat/lng
           const coordinates =
             site.latitude !== null && site.longitude !== null
               ? { lat: site.latitude, lng: site.longitude }
               : null;
           await this.networkSiteRepo.create({
             name: site.name,
-            address: '',
+            address: site.address ?? '',
             city: '',
             coordinates,
             type: 'nodo',
@@ -154,15 +156,19 @@ export class SyncUispMirror {
             uispSiteId: site.uispId,
           });
           networkSitesCreated++;
-        } else if (existing.coordinates === null) {
-          // UPDATE coordinates only when not yet set manually
-          if (site.latitude !== null && site.longitude !== null) {
-            await this.networkSiteRepo.update(existing.id, {
-              coordinates: { lat: site.latitude, lng: site.longitude },
-            });
+        } else {
+          // UPDATE only fields that are not yet set manually (manual wins)
+          const updates: Partial<NetworkSite> = {};
+          if (existing.coordinates === null && site.latitude !== null && site.longitude !== null) {
+            updates.coordinates = { lat: site.latitude, lng: site.longitude };
+          }
+          if ((!existing.address || existing.address.trim() === '') && site.address) {
+            updates.address = site.address;
+          }
+          if (Object.keys(updates).length > 0) {
+            await this.networkSiteRepo.update(existing.id, updates);
           }
         }
-        // If existing.coordinates !== null → manual value wins, do nothing
       }
     }
 

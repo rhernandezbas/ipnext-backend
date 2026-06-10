@@ -67,6 +67,7 @@ function makeUispSite(uispId: string): UispSite {
     deviceCount: 3,
     outageCount: 0,
     contact: null,
+    address: null,
     missingSince: null,
     lastSyncAt: now,
     createdAt: now,

@@ -2083,6 +2083,7 @@ model UispSite {
   deviceCount   Int       @default(0)
   outageCount   Int       @default(0)
   contact       String?
+  address       String?
   missingSince  DateTime?
   lastSyncAt    DateTime
   createdAt     DateTime  @default(now())
