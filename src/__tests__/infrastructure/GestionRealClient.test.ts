@@ -61,6 +61,9 @@ const CLIENTS_RESPONSE = {
       },
       mail: 'achupallas_2012@hotmail.com',
       estado: { codigo: '1', valor: 'Activo' },
+      // GR uses fecha_creacion here (NOT `creado` like in ordenesdeservicio);
+      // legacy rows carry the "00-00-0000 00:00:00" placeholder.
+      fecha_creacion: '23-10-2014 00:00:00',
       ultima_modificacion: '15-04-2026 13:12:21',
       telefonos: { Telefono: '23464114762346540252' },
     },
@@ -100,6 +103,7 @@ describe('GestionRealClient parsing', () => {
     expect(c.province).toBe('Buenos Aires');
     expect(c.address).toBe('CUARTEL 8 VO');
     expect(c.ultimaModificacion).toBe('15-04-2026 13:12:21');
+    expect(c.fechaCreacion).toBe('23-10-2014 00:00:00');
     expect(c.phone).toBe('23464114762346540252');
   });
 

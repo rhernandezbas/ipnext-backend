@@ -14,6 +14,7 @@ function makeGrClient(id: string, statusCode = '2'): GrClient {
     city: 'Mercedes',
     province: 'Buenos Aires',
     ultimaModificacion: '01-01-2026 10:00:00',
+    fechaCreacion: null,
     raw: { original: true },
   };
 }

@@ -14,7 +14,7 @@ function client(id: string): GrClient {
   return {
     grClienteId: id, name: `C${id}`, documento: id, email: null, phone: null,
     status: 'Activo', statusCode: '1', address: null, city: null, province: null,
-    ultimaModificacion: '27-05-2026 10:00:00', raw: { id },
+    ultimaModificacion: '27-05-2026 10:00:00', fechaCreacion: null, raw: { id },
   };
 }
 function contract(id: string, cli: string): GrContract {

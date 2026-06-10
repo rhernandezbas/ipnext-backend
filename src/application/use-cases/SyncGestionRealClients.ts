@@ -42,10 +42,16 @@ export interface SyncOptions {
  * Pulls clients from Gestión Real into the local mirror.
  *
  * - First run (no cursor) → full backfill, paginated, no date filter.
- * - Subsequent runs → delta by modification date (fecha_tipo=m) starting from
- *   the previous run's date. The re-scan from the last day is intentional:
- *   GR's delta is day-granular, and upserts are idempotent, so a small overlap
- *   guarantees we never miss a same-day change.
+ * - Subsequent runs → TWO deltas over the same window: by modification date
+ *   (fecha_tipo=m) AND by creation date (fecha_tipo=c), starting from the
+ *   previous run's date. The creation scan exists because GR does not always
+ *   set ultima_modificacion on newly created clients (verified live: 205160,
+ *   09-06-2026) and fecha_tipo=m EXCLUDES rows with an empty modification
+ *   date — without the c-scan those clients never reach the mirror. Clients
+ *   returned by both scans are processed once (deduped per run).
+ * - The re-scan from the last day is intentional: GR's delta is day-granular,
+ *   and upserts are idempotent, so a small overlap guarantees we never miss a
+ *   same-day change.
  */
 export class SyncGestionRealClients {
   private readonly now: () => Date;
@@ -93,29 +99,41 @@ export class SyncGestionRealClients {
     const touchedClientIds: string[] = [];
     const createdClientIds: string[] = [];
 
+    // Delta runs scan modification AND creation dates; backfill is one
+    // unfiltered scan. A client can appear in both delta scans (created and
+    // then modified inside the window) — `processed` dedupes it per run so
+    // counts stay accurate and contracts aren't re-fetched downstream.
+    const fechaTipos: ('m' | 'c' | undefined)[] =
+      mode === 'delta' ? ['m', 'c'] : [undefined];
+    const processed = new Set<string>();
+
     try {
-      // Each estado segment is paginated independently from offset 0.
+      // Each estado segment × fechaTipo scan is paginated independently from offset 0.
       for (const estado of this.estados) {
-        let offset = 0;
-        // total is read from each response and used as the upper bound.
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const params: FetchClientsParams = { cantidad: this.pageSize, offset };
-          if (estado) params.estado = estado;
-          if (mode === 'delta' && prior?.cursor) {
-            params.fechaTipo = 'm';
-            params.fechaDesde = prior.cursor;
-            params.fechaHasta = runDate;
+        for (const fechaTipo of fechaTipos) {
+          let offset = 0;
+          // total is read from each response and used as the upper bound.
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            const params: FetchClientsParams = { cantidad: this.pageSize, offset };
+            if (estado) params.estado = estado;
+            if (fechaTipo && prior?.cursor) {
+              params.fechaTipo = fechaTipo;
+              params.fechaDesde = prior.cursor;
+              params.fechaHasta = runDate;
+            }
+            const { total, clients } = await this.gr.fetchClients(params);
+            for (const client of clients) {
+              if (processed.has(client.grClienteId)) continue;
+              processed.add(client.grClienteId);
+              const { created: wasCreated } = await this.mirror.upsertClient(client);
+              if (wasCreated) { created++; createdClientIds.push(client.grClienteId); } else updated++;
+              touchedClientIds.push(client.grClienteId);
+              fetched++;
+            }
+            offset += this.pageSize;
+            if (clients.length === 0 || offset >= total) break;
           }
-          const { total, clients } = await this.gr.fetchClients(params);
-          for (const client of clients) {
-            const { created: wasCreated } = await this.mirror.upsertClient(client);
-            if (wasCreated) { created++; createdClientIds.push(client.grClienteId); } else updated++;
-            touchedClientIds.push(client.grClienteId);
-            fetched++;
-          }
-          offset += this.pageSize;
-          if (clients.length === 0 || offset >= total) break;
         }
       }
     } catch (err) {

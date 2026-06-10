@@ -46,6 +46,7 @@ function grClient(id: string, statusCode: string | null = '1'): GrClient {
     city: null,
     province: null,
     ultimaModificacion: null,
+    fechaCreacion: null,
     raw: {},
   };
 }

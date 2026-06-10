@@ -14,6 +14,7 @@ describe('GetIngestStatus', () => {
       skippedDuplicate: 0,
       skippedUnmirrored: 0,
       unclassified: 0,
+      skippedOrders: [],
     });
   });
 
@@ -29,6 +30,9 @@ describe('GetIngestStatus', () => {
         skippedDuplicate: 2,
         skippedUnmirrored: 1,
         unclassified: 3,
+        skippedOrders: [
+          { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
+        ],
       }),
       itemsSynced: 5,
     });
@@ -42,6 +46,9 @@ describe('GetIngestStatus', () => {
       skippedDuplicate: 2,
       skippedUnmirrored: 1,
       unclassified: 3,
+      skippedOrders: [
+        { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
+      ],
     });
   });
 
@@ -65,6 +72,24 @@ describe('GetIngestStatus', () => {
       skippedDuplicate: 0,
       skippedUnmirrored: 0,
       unclassified: 0,
+      skippedOrders: [],
     });
+  });
+
+  it('degrades a malformed skippedOrders blob to an empty list (never throws)', async () => {
+    const state = new InMemorySyncStateRepository();
+    await state.save({
+      entity: 'gr-ingest',
+      cursor: null,
+      lastRunAt: new Date('2026-06-10T10:00:00.000Z'),
+      lastResult: JSON.stringify({ created: 1, skippedOrders: 'garbage' }),
+      itemsSynced: 1,
+    });
+    const useCase = new GetIngestStatus(state);
+
+    const dto = await useCase.execute();
+
+    expect(dto.created).toBe(1);
+    expect(dto.skippedOrders).toEqual([]);
   });
 });

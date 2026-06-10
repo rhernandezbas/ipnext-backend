@@ -182,6 +182,11 @@ describe('IngestGestionRealOrders', () => {
     expect(result.created).toBe(1);
     expect(await h.scheduling.findTaskByGrOrdenId('10')).toBeNull();
     expect(await h.scheduling.findTaskByGrOrdenId('11')).not.toBeNull();
+    // REQ-SKIPLIST-1: the skip is reported with full GR refs so the operator
+    // can repair the mirror (e.g. touch the client in GR) without log archaeology.
+    expect(result.skippedOrders).toEqual([
+      { grOrdenId: '10', grClienteId: 'gr-cli-MISSING', grContratoId: 'gr-con-2', reason: 'client-unmirrored' },
+    ]);
   });
 
   it('skips an order whose contract is not mirrored (REQ-FK-2)', async () => {
@@ -195,6 +200,9 @@ describe('IngestGestionRealOrders', () => {
     expect(result.skippedUnmirrored).toBe(1);
     expect(result.created).toBe(0);
     expect(await h.scheduling.findTaskByGrOrdenId('20')).toBeNull();
+    expect(result.skippedOrders).toEqual([
+      { grOrdenId: '20', grClienteId: 'gr-cli-1', grContratoId: 'gr-con-1', reason: 'contract-unmirrored' },
+    ]);
   });
 
   it('is idempotent: re-running over the same order creates no duplicate (REQ-IDEMP-1)', async () => {
@@ -231,6 +239,7 @@ describe('IngestGestionRealOrders', () => {
       skippedDuplicate: 0,
       skippedUnmirrored: 0,
       unclassified: 0,
+      skippedOrders: [],
     });
     expect(h.gr.serviceOrderCalls).toHaveLength(0);
     expect(await h.scheduling.findTaskByGrOrdenId('2000')).toBeNull();
@@ -296,7 +305,38 @@ describe('IngestGestionRealOrders', () => {
       skippedDuplicate: 0,
       skippedUnmirrored: 0,
       unclassified: 0,
+      skippedOrders: [],
     });
+  });
+
+  it('caps skippedOrders at 100 refs while skippedUnmirrored keeps the real total (REQ-SKIPLIST-3)', async () => {
+    const h = await makeHarness();
+    // 105 orders, none resolvable: a stalled mirror must not balloon the
+    // persisted blob nor the status payload.
+    h.gr.serviceOrders = Array.from({ length: 105 }, (_, i) =>
+      order({ grOrdenId: String(5000 + i), cliente: `cli-${i}`, contrato: `con-${i}` }),
+    );
+
+    const result = await h.useCase.execute();
+
+    expect(result.skippedUnmirrored).toBe(105);
+    expect(result.skippedOrders).toHaveLength(100);
+    expect(result.skippedOrders[0].grOrdenId).toBe('5000');
+  });
+
+  it('persists the skipped-order refs in SyncState so the status endpoint can list them (REQ-SKIPLIST-2)', async () => {
+    const h = await makeHarness();
+    // Client never mirrored (e.g. GR row with empty ultima_modificacion).
+    h.gr.serviceOrders = [order({ grOrdenId: '17774', cliente: '205160', contrato: '12064' })];
+
+    await h.useCase.execute();
+
+    const saved = await h.state.get('gr-ingest');
+    const counts = JSON.parse(saved!.lastResult ?? '{}');
+    expect(counts.skippedUnmirrored).toBe(1);
+    expect(counts.skippedOrders).toEqual([
+      { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
+    ]);
   });
 
   it('queries GR with the configured source estado (default CONF), fecha_tipo c and a window derived from windowMonths', async () => {

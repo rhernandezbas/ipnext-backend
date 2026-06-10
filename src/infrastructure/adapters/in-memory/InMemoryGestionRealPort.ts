@@ -42,6 +42,15 @@ export class InMemoryGestionRealPort implements GestionRealPort {
         return mod !== null && mod >= from;
       });
     }
+    // Mirrors the real GR semantics verified live: fecha_tipo=c filters by
+    // fecha_creacion, and rows without a parseable creation date never match.
+    if (params.fechaTipo === 'c' && params.fechaDesde) {
+      const from = parseGrDate(params.fechaDesde);
+      matched = matched.filter(c => {
+        const created = c.fechaCreacion ? parseGrDateTime(c.fechaCreacion) : null;
+        return created !== null && created >= from;
+      });
+    }
     if (params.estado) {
       matched = matched.filter(c => c.statusCode === params.estado);
     }
