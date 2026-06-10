@@ -39,6 +39,7 @@ function makeUispSite(uispId: string, overrides: Partial<UispSite> = {}): UispSi
     id: `internal-${uispId}`,
     uispId,
     name: `UISP ${uispId}`,
+    address: null,
     status: 'active',
     parentUispId: null,
     latitude: null,
