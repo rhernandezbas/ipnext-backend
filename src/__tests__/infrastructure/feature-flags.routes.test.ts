@@ -5,6 +5,7 @@
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import type { Request, Response, NextFunction } from 'express';
 import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { ListFeatureFlags } from '../../application/use-cases/ListFeatureFlags';
 import { GetFeatureFlag } from '../../application/use-cases/GetFeatureFlag';
@@ -12,6 +13,10 @@ import { SetFeatureFlag } from '../../application/use-cases/SetFeatureFlag';
 import { createFeatureFlagsRouter } from '../../infrastructure/http/routes/featureFlags.routes';
 import { errorHandler } from '../../infrastructure/http/middleware/errorHandler';
 import type { AuthProvider } from '../../domain/ports/AuthProvider';
+
+// Pass-through middleware: these tests focus on UC behaviour, not RBAC.
+// The RBAC scenarios are covered in featureFlags.routes.rbac.test.ts.
+const allowAllFlags = (_req: Request, _res: Response, next: NextFunction) => next();
 
 function buildApp() {
   const app = express();
@@ -29,7 +34,7 @@ function buildApp() {
     getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }),
   } as unknown as AuthProvider;
 
-  app.use('/api/admin/feature-flags', createFeatureFlagsRouter(authProvider, listUC, getUC, setUC));
+  app.use('/api/admin/feature-flags', createFeatureFlagsRouter(authProvider, listUC, getUC, setUC, allowAllFlags));
 
   // Exercise the REAL production error handler so the FLAG_NOT_FOUND mapping
   // cannot drift out from under this test.
