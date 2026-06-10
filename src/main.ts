@@ -6,6 +6,7 @@ import { bootstrapGestionRealIngest } from './infrastructure/scheduling/bootstra
 import { bootstrapIClassClosure } from './infrastructure/scheduling/bootstrapIClassClosure';
 import { bootstrapTaskAutocomplete } from './infrastructure/scheduling/bootstrapTaskAutocomplete';
 import { bootstrapBackfill } from './infrastructure/scheduling/bootstrapBackfill';
+import { bootstrapUispSync } from './infrastructure/scheduling/bootstrapUispSync';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
@@ -34,8 +35,11 @@ void (async () => {
   // (d) BackfillScheduler on-demand — awaited antes de createApp (#32)
   const backfillScheduler = await bootstrapBackfill();
 
+  // (f) UISP mirror sync — opt-in (absent env → scheduler skips each tick)
+  const uispSync = await bootstrapUispSync(300_000);
+
   // (e) createApp wires both schedulers into the closure router — must run after await
-  const app = createApp(taskAutocomplete, backfillScheduler);
+  const app = createApp(taskAutocomplete, backfillScheduler, uispSync);
 
   app.listen(config.port, () => {
     console.log(`[server] Running on port ${config.port}`);
@@ -54,4 +58,5 @@ void (async () => {
   // Start schedulers — both start dormant (gated by feature flags).
   iclassClosure?.start();
   taskAutocomplete?.start();
+  uispSync.start();
 })().catch((err) => console.error('[server] fatal bootstrap error:', err));

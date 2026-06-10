@@ -75,6 +75,9 @@ const statusMap: Record<string, number> = {
   // inventory-technician-stock (EPIC #38 W5a)
   INSUFFICIENT_STOCK: 422,
   ASSET_NOT_AT_DEPOT: 422,
+  // uisp-integration — used for 404 on GET /sites/:uispId AND 422 on NetworkSite link
+  UISP_SITE_NOT_FOUND: 422,
+  UISP_UNAVAILABLE: 502,
 };
 
 /** Express global error-handling middleware. */

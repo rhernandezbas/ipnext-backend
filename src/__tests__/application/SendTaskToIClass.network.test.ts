@@ -37,6 +37,7 @@ function makeSite(overrides: Partial<NetworkSite> & { id: string; name: string }
     parentSiteId: null,
     description: '',
     iclassNodeCode: 'TN-001',
+    uispSiteId: null,
     ...overrides,
   };
 }

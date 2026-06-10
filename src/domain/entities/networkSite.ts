@@ -13,4 +13,6 @@ export interface NetworkSite {
   description: string;
   // network-node-task (#29) — código de nodo en IClass para envío de OS de RED
   iclassNodeCode: string | null;
+  // uisp-integration — optional link to UISP mirror (uispId TEXT, no DB FK)
+  uispSiteId: string | null;
 }

@@ -19,6 +19,7 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       parentSiteId: null,
       description: 'Nodo principal de distribución',
       iclassNodeCode: 'NC-001',
+      uispSiteId: null,
     },
     {
       id: '2',
@@ -34,6 +35,7 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       parentSiteId: '1',
       description: 'Punto de presencia zona norte',
       iclassNodeCode: 'PN-001',
+      uispSiteId: null,
     },
     {
       id: '3',
@@ -49,6 +51,7 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       parentSiteId: '1',
       description: 'Torre de telecomunicaciones zona sur',
       iclassNodeCode: 'TS-001',
+      uispSiteId: null,
     },
     {
       id: '4',
@@ -64,6 +67,7 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       parentSiteId: null,
       description: 'Datacenter principal de la red',
       iclassNodeCode: null,
+      uispSiteId: null,
     },
     {
       id: '5',
@@ -79,6 +83,7 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
       parentSiteId: '1',
       description: 'Nodo de distribución zona oeste',
       iclassNodeCode: 'NO-001',
+      uispSiteId: null,
     },
   ];
 
@@ -96,6 +101,10 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
 
   async findById(id: string): Promise<NetworkSite | null> {
     return this.sites.find(s => s.id === id) ?? null;
+  }
+
+  async findByUispSiteId(uispSiteId: string): Promise<NetworkSite | null> {
+    return this.sites.find(s => s.uispSiteId === uispSiteId) ?? null;
   }
 
   async create(data: Omit<NetworkSite, 'id'>): Promise<NetworkSite> {
