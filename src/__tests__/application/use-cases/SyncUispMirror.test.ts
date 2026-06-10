@@ -24,6 +24,7 @@ function makeSite(uispId: string, overrides: Partial<UispSite> = {}): UispSite {
     deviceCount: 0,
     outageCount: 0,
     contact: null,
+    address: null,
     missingSince: null,
     lastSyncAt: now,
     createdAt: now,

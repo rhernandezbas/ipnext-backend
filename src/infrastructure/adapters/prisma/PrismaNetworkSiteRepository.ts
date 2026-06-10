@@ -54,6 +54,8 @@ export class PrismaNetworkSiteRepository implements NetworkSiteRepository {
         uplink: data.uplink ?? null,
         parentSiteId: data.parentSiteId ?? null,
         description: data.description ?? null,
+        iclassNodeCode: data.iclassNodeCode ?? null,
+        uispSiteId: data.uispSiteId ?? null,
       },
     });
     return toSite(row);

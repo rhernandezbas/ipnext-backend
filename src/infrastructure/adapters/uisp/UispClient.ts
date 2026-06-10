@@ -25,6 +25,10 @@ function mapSite(raw: Record<string, unknown>): UispSite {
   const contact = (description['contact'] ?? null) as Record<string, unknown> | null;
   const parent = (identification['parent'] ?? null) as Record<string, unknown> | null;
 
+  const rawAddress = (description['address'] as string | null | undefined) ?? null;
+  const trimmedAddress = rawAddress != null ? rawAddress.trim() : null;
+  const address = trimmedAddress && trimmedAddress.length > 0 ? trimmedAddress : null;
+
   const now = new Date();
   return {
     id: '',  // filled by repository on upsert
@@ -37,6 +41,7 @@ function mapSite(raw: Record<string, unknown>): UispSite {
     deviceCount: (description['deviceCount'] as number) ?? 0,
     outageCount: (description['deviceOutageCount'] as number) ?? 0,
     contact: contact ? (contact['name'] as string) ?? null : null,
+    address,
     missingSince: null,
     lastSyncAt: now,
     createdAt: now,

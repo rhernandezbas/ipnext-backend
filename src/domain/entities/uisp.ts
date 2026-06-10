@@ -17,6 +17,8 @@ export interface UispSite {
   deviceCount: number;
   outageCount: number;
   contact: string | null;
+  /** Address from UISP description.address — trimmed, null when absent or blank. */
+  address: string | null;
   missingSince: Date | null;
   lastSyncAt: Date;
   createdAt: Date;

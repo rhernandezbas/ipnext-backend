@@ -24,6 +24,7 @@ function toEntity(row: {
   deviceCount: number;
   outageCount: number;
   contact: string | null;
+  address?: string | null;
   missingSince: Date | null;
   lastSyncAt: Date;
   createdAt: Date;
@@ -40,6 +41,7 @@ function toEntity(row: {
     deviceCount: row.deviceCount,
     outageCount: row.outageCount,
     contact: row.contact,
+    address: row.address ?? null,
     missingSince: row.missingSince,
     lastSyncAt: row.lastSyncAt,
     createdAt: row.createdAt,
@@ -62,6 +64,7 @@ export class PrismaUispSiteRepository implements UispSiteRepository {
         deviceCount: site.deviceCount,
         outageCount: site.outageCount,
         contact: site.contact,
+        address: site.address ?? null,
         missingSince: site.missingSince,
         lastSyncAt: site.lastSyncAt,
         updatedAt: now,
@@ -75,6 +78,7 @@ export class PrismaUispSiteRepository implements UispSiteRepository {
         deviceCount: site.deviceCount,
         outageCount: site.outageCount,
         contact: site.contact,
+        address: site.address ?? null,
         lastSyncAt: site.lastSyncAt,
         updatedAt: now,
       },

@@ -22,6 +22,7 @@ describe('InMemoryUispClient', () => {
     deviceCount: 272,
     outageCount: 33,
     contact: 'Pablo Sarto',
+    address: null,
     missingSince: null,
     lastSyncAt: now,
     createdAt: now,
