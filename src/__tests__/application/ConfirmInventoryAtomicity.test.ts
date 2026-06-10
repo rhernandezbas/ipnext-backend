@@ -181,6 +181,94 @@ describe('Fix #2: cross-contract serial reuse is refused', () => {
   });
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// FIX A: dualWriteAsset uses normalized serial match (findByNormalizedSerialAny)
+// so OCR/manual drift (case, dashes, spaces) doesn't create silent duplicates.
+// ──────────────────────────────────────────────────────────────────────────────
+describe('FIX A: normalized serial match prevents silent duplicates on confirm', () => {
+  it('depot asset SN-001 + confirm serial "sn-001 " → ONE asset, INSTALL movement from depot to client', async () => {
+    const { suggestions, scheduling, confirm, assetRepo, locationRepo, inventory, innerMovementRepo } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'C1' });
+
+    // Seed a depot location and an available asset with uppercase serial.
+    const depot = await locationRepo.create(createStockLocation({ id: 'dep', type: 'DEPOSITO', code: 'DEPOSITO' }));
+    await assetRepo.create(createInventoryAsset({
+      id: 'asset-depot', serialNumber: 'SN-001', deviceTypeId: 'whatever',
+      status: 'available', currentLocationId: depot.id, source: 'MANUAL',
+    }));
+
+    // Confirm with drifted serial (lowercase + trailing space) — should reuse.
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: 'sn-001 ' }));
+    const r = await confirm.execute({ suggestionId: 's1' });
+    expect(r.kind).toBe('DEVICE');
+
+    // Only ONE asset — no duplicate created.
+    expect(assetRepo.store.size).toBe(1);
+    expect(assetRepo.store.get('asset-depot')).toBeDefined();
+
+    // That asset is now installed at the client location (not depot).
+    const asset = await assetRepo.findById('asset-depot');
+    expect(asset!.status).toBe('installed');
+
+    // The contract inventory item links to that asset.
+    const cii = await inventory.getById((r as { kind: 'DEVICE'; item: { id: string } }).item.id);
+    expect(cii!.assetId).toBe('asset-depot');
+
+    // An INSTALL movement was recorded.
+    const movements = innerMovementRepo.movements.filter((m) => m.assetId === 'asset-depot');
+    expect(movements).toHaveLength(1);
+    expect(movements[0].type).toBe('INSTALL');
+    // fromLocationId must be set (depot → client path)
+    expect(movements[0].fromLocationId).toBe(depot.id);
+  });
+
+  it('normalized serial installed at another client → AssetInstalledElsewhereError', async () => {
+    const { suggestions, inventory, scheduling, confirm, assetRepo, locationRepo } = await setup();
+    // Install SN-001 on contract A.
+    scheduling.seedTask({ id: 'tA', contractId: 'A' });
+    await suggestions.upsert(sug({ id: 'sA', taskId: 'tA', deviceType: 'ROUTER', serialNumber: 'SN-001' }));
+    const a = await confirm.execute({ suggestionId: 'sA' });
+    if (a.kind !== 'DEVICE') throw new Error('expected DEVICE');
+    const assetId = (await inventory.getById(a.item.id))!.assetId!;
+    const locA = (await locationRepo.findByTypeAndContract('CLIENTE', 'A'))!;
+
+    // Contract B tries to confirm with a drift variant → refused.
+    scheduling.seedTask({ id: 'tB', contractId: 'B' });
+    await suggestions.upsert(sug({ id: 'sB', taskId: 'tB', deviceType: 'ROUTER', serialNumber: 'sn001' }));
+    await expect(confirm.execute({ suggestionId: 'sB' })).rejects.toMatchObject({ code: 'ASSET_INSTALLED_ELSEWHERE' });
+
+    // Asset NOT relocated — still at A.
+    expect((await assetRepo.findById(assetId))!.currentLocationId).toBe(locA.id);
+    expect(await inventory.listByContract('B')).toHaveLength(0);
+  });
+
+  it('MAC-only suggestion matches depot asset by MAC → moved to client, not duplicated', async () => {
+    const { suggestions, scheduling, confirm, assetRepo, locationRepo, inventory } = await setup();
+    scheduling.seedTask({ id: 't1', contractId: 'C1' });
+
+    const depot = await locationRepo.create(createStockLocation({ id: 'dep', type: 'DEPOSITO', code: 'DEPOSITO' }));
+    // An asset with a MAC but no meaningful serial (will be stored with CII-... uuid serial by the old path).
+    // For MAC lookup: seed an asset with a real serialNumber but a known MAC.
+    await assetRepo.create(createInventoryAsset({
+      id: 'asset-mac', serialNumber: 'SN-MAC-DEPOT', mac: 'AA:BB:CC:DD:EE:FF',
+      deviceTypeId: 'whatever', status: 'available', currentLocationId: depot.id, source: 'MANUAL',
+    }));
+
+    // Suggestion has NO serial but matches by MAC.
+    await suggestions.upsert(sug({ id: 's1', deviceType: 'ROUTER', serialNumber: null, mac: 'AA:BB:CC:DD:EE:FF' }));
+    const r = await confirm.execute({ suggestionId: 's1' });
+    expect(r.kind).toBe('DEVICE');
+
+    // Only ONE asset — no duplicate created.
+    expect(assetRepo.store.size).toBe(1);
+    const asset = await assetRepo.findById('asset-mac');
+    expect(asset!.status).toBe('installed');
+
+    const cii = await inventory.getById((r as { kind: 'DEVICE'; item: { id: string } }).item.id);
+    expect(cii!.assetId).toBe('asset-mac');
+  });
+});
+
 describe('Fix #5: unresolvable deviceType is refused, never written as FK', () => {
   it('throws UNRESOLVABLE_DEVICE_TYPE when neither the type name nor OTROS resolves', async () => {
     const { suggestions, scheduling, confirm, catalogRepo, assetRepo, inventory } = await setup();

@@ -16,6 +16,10 @@ import { GetLowStockAlerts } from '@application/use-cases/GetLowStockAlerts';
 // EPIC #38 follow-up — depot stock entry
 import { AddAssetToDepot } from '@application/use-cases/AddAssetToDepot';
 import { AddMaterialToDepot } from '@application/use-cases/AddMaterialToDepot';
+// FIX B — technician list endpoint
+import { ListTechniciansWithStock } from '@application/use-cases/ListTechniciansWithStock';
+// FIX C — return suggestions by task
+import { ListReturnSuggestionsByTask } from '@application/use-cases/ListReturnSuggestionsByTask';
 import {
   ReturnSuggestionNotFoundError,
   ReturnAlreadyResolvedError,
@@ -124,6 +128,10 @@ export function createInventoryRouter(
   // EPIC #38 follow-up — depot stock entry routes (optional; omitted in legacy wiring)
   addAssetToDepot?: AddAssetToDepot,
   addMaterialToDepot?: AddMaterialToDepot,
+  // FIX B — technician list (optional; omitted when not wired)
+  listTechniciansWithStock?: ListTechniciansWithStock,
+  // FIX C — return suggestions by task (optional; omitted when not wired)
+  listReturnSuggestionsByTask?: ListReturnSuggestionsByTask,
 ): Router {
   const router = Router();
 
@@ -190,6 +198,19 @@ export function createInventoryRouter(
     });
   }
 
+  // ── FIX B — technician list (GET /technicians — inventory.read) ───────────
+  // Returns all active users with their TECNICO stock summary.
+  // MUST be mounted BEFORE /technicians/:id/* to avoid /:id catching "technicians".
+  if (listTechniciansWithStock) {
+    router.get('/technicians', auth, requireRead, async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.json(await listTechniciansWithStock.execute());
+      } catch (e) {
+        next(e);
+      }
+    });
+  }
+
   // ── EPIC #38 W4 — closure-detected returns ────────────────────────────────
   router.get('/returns/pending', auth, requireRead, async (_req: Request, res: Response, next: NextFunction) => {
     try {
@@ -198,6 +219,18 @@ export function createInventoryRouter(
       next(e);
     }
   });
+
+  // ── FIX C — return suggestions by task ────────────────────────────────────
+  // MUST be mounted BEFORE /returns/:id/* to avoid /:id swallowing "by-task".
+  if (listReturnSuggestionsByTask) {
+    router.get('/returns/by-task/:taskId', auth, requireRead, async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        res.json(await listReturnSuggestionsByTask.execute(req.params.taskId));
+      } catch (e) {
+        next(e);
+      }
+    });
+  }
 
   const ConfirmSchema = z.object({
     resolution: z.enum(['return', 'link', 'create', 'discard']),

@@ -188,6 +188,40 @@ describe('AddAssetToDepot', () => {
     ).rejects.toBeInstanceOf(AssetAlreadyExistsError);
   });
 
+  // ── W2: MAC canonicalization ──────────────────────────────────────────────
+  // depot entry with raw mac 'aa-bb-cc-dd-ee-ff' must be stored canonicalized
+  // so a later findByMac('AA:BB:CC:DD:EE:FF') (OCR canonical) matches it.
+  it('W2 — depot mac aa-bb-cc-dd-ee-ff + OCR confirm AA:BB:CC:DD:EE:FF → same asset, no dup', async () => {
+    const { useCase, assets, onu } = await setup();
+
+    // Operator enters mac with dashes (non-canonical).
+    const result = await useCase.execute({
+      deviceTypeId: onu.id,
+      serialNumber: null,
+      mac: 'aa-bb-cc-dd-ee-ff',
+    });
+
+    // The stored mac must be canonical (AA:BB:CC:DD:EE:FF).
+    const stored = Array.from(assets.store.values()).find(a => a.id === result.id);
+    expect(stored!.mac).toBe('AA:BB:CC:DD:EE:FF');
+
+    // findByMac with canonical form must find the same asset.
+    const found = await assets.findByMac('AA:BB:CC:DD:EE:FF');
+    expect(found).not.toBeNull();
+    expect(found!.id).toBe(result.id);
+  });
+
+  it('W2 — duplicate mac detection: aa-bb-cc-dd-ee-ff + AA:BB:CC:DD:EE:FF → AssetAlreadyExistsError', async () => {
+    const { useCase, onu } = await setup();
+
+    await useCase.execute({ deviceTypeId: onu.id, serialNumber: 'SN-W2-A', mac: 'aa-bb-cc-dd-ee-ff' });
+
+    // Second entry with canonical form of same MAC must be refused.
+    await expect(
+      useCase.execute({ deviceTypeId: onu.id, serialNumber: 'SN-W2-B', mac: 'AA:BB:CC:DD:EE:FF' }),
+    ).rejects.toBeInstanceOf(AssetAlreadyExistsError);
+  });
+
   it('atomicity: if movement fails → no asset persisted', async () => {
     const { assets, movements, onu, resolveDepot, deviceTypes, uow } = await setup();
     // Poison the movements.record to throw on ADJUST

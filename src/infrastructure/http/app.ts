@@ -466,6 +466,8 @@ import { GetMaterial } from '@application/use-cases/GetMaterial';
 import { CreateMaterial } from '@application/use-cases/CreateMaterial';
 import { UpdateMaterial } from '@application/use-cases/UpdateMaterial';
 import { DeleteMaterial } from '@application/use-cases/DeleteMaterial';
+import { ListTechniciansWithStock } from '@application/use-cases/ListTechniciansWithStock';
+import { ListReturnSuggestionsByTask } from '@application/use-cases/ListReturnSuggestionsByTask';
 import { buildClosureSideEffects } from '../scheduling/closureSideEffects';
 import { ReprocessClosureSideEffects } from '@application/use-cases/ReprocessClosureSideEffects';
 import { GetPendingSideEffectsCount } from '@application/use-cases/GetPendingSideEffectsCount';
@@ -1171,6 +1173,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // EPIC #38 follow-up — depot stock entry
     new AddAssetToDepot(inventoryAssetRepo, inventoryMovementRepo, deviceTypeCatalogRepo, inventoryDepotLocation, inventoryUow),
     new AddMaterialToDepot(inventoryMovementRepo, materialCatalogRepo, materialStockRepo, inventoryDepotLocation),
+    // FIX B — technician list: GET /technicians (inventory.read)
+    new ListTechniciansWithStock(rbacUserRepo, stockLocationRepo),
+    // FIX C — return suggestions by task: GET /returns/by-task/:taskId (inventory.read)
+    new ListReturnSuggestionsByTask(returnSuggestionRepo),
   ));
 
   // EPIC #38 W5b — vehicle catalog CRUD surface. Mounted at /api/vehicles (fresh prefix).
