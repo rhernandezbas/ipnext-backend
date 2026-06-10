@@ -3,6 +3,29 @@ import { IngestConfig } from '@domain/ports/GestionRealIngestConfigRepository';
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { SyncState } from '@domain/ports/SyncStateRepository';
 
+// ── Skipped-order refs (REQ-SKIPLIST) ───────────────────────────────────────
+
+/**
+ * Why an order was skipped as unmirrored: which local FK failed to resolve.
+ * Single source of truth — the type is derived from the list so the parser
+ * below can never silently drop a reason added later.
+ */
+export const UNMIRRORED_REASONS = ['client-unmirrored', 'contract-unmirrored'] as const;
+export type UnmirroredReason = (typeof UNMIRRORED_REASONS)[number];
+
+/**
+ * GR refs of one skipped order. The mirror can lag GR in two known ways
+ * (clients created without ultima_modificacion; new contracts on
+ * never-modified clients), so the skip must surface WHO is missing — the
+ * operator repairs it by touching the client in GR, not by reading logs + DB.
+ */
+export interface SkippedOrderRef {
+  grOrdenId: string;
+  grClienteId: string | null;
+  grContratoId: string | null;
+  reason: UnmirroredReason;
+}
+
 // ── Config DTO ─────────────────────────────────────────────────────────────
 
 /**
@@ -60,6 +83,8 @@ export interface IngestStatusDTO {
   skippedDuplicate: number;
   skippedUnmirrored: number;
   unclassified: number;
+  /** GR refs of the orders skipped as unmirrored on the last run (REQ-SKIPLIST-2). */
+  skippedOrders: SkippedOrderRef[];
 }
 
 /**
@@ -73,18 +98,39 @@ interface RunCounts {
   skippedDuplicate: number;
   skippedUnmirrored: number;
   unclassified: number;
+  skippedOrders: SkippedOrderRef[];
 }
 
-const ZERO_COUNTS: RunCounts = {
+const ZERO_COUNTS: Omit<RunCounts, 'skippedOrders'> = {
   created: 0,
   skippedDuplicate: 0,
   skippedUnmirrored: 0,
   unclassified: 0,
 };
 
+/**
+ * Parse the persisted skip list defensively: anything that is not an array of
+ * well-formed entries degrades to [] — old SyncState rows predate the field
+ * and the status endpoint must never 500 over sync metadata.
+ */
+function parseSkippedOrders(value: unknown): SkippedOrderRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((e): e is SkippedOrderRef => {
+    if (typeof e !== 'object' || e === null) return false;
+    const entry = e as Record<string, unknown>;
+    return (
+      typeof entry.grOrdenId === 'string' &&
+      (typeof entry.grClienteId === 'string' || entry.grClienteId === null) &&
+      (typeof entry.grContratoId === 'string' || entry.grContratoId === null) &&
+      typeof entry.reason === 'string' &&
+      (UNMIRRORED_REASONS as readonly string[]).includes(entry.reason)
+    );
+  });
+}
+
 export function toIngestStatusDTO(state: SyncState | null): IngestStatusDTO {
   if (!state) {
-    return { lastRunAt: null, ...ZERO_COUNTS };
+    return { lastRunAt: null, ...ZERO_COUNTS, skippedOrders: [] };
   }
   return {
     lastRunAt: state.lastRunAt ? state.lastRunAt.toISOString() : null,
@@ -93,7 +139,7 @@ export function toIngestStatusDTO(state: SyncState | null): IngestStatusDTO {
 }
 
 function parseCounts(lastResult: string | null): RunCounts {
-  if (!lastResult) return { ...ZERO_COUNTS };
+  if (!lastResult) return { ...ZERO_COUNTS, skippedOrders: [] };
   try {
     const parsed = JSON.parse(lastResult) as Record<string, unknown>;
     return {
@@ -101,9 +147,10 @@ function parseCounts(lastResult: string | null): RunCounts {
       skippedDuplicate: numberOrZero(parsed['skippedDuplicate']),
       skippedUnmirrored: numberOrZero(parsed['skippedUnmirrored']),
       unclassified: numberOrZero(parsed['unclassified']),
+      skippedOrders: parseSkippedOrders(parsed['skippedOrders']),
     };
   } catch {
-    return { ...ZERO_COUNTS };
+    return { ...ZERO_COUNTS, skippedOrders: [] };
   }
 }
 

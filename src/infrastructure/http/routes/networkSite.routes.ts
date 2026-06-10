@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { ListNetworkSites } from '@application/use-cases/ListNetworkSites';
+import { ListNetworkSitesWithUisp } from '@application/use-cases/ListNetworkSitesWithUisp';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
@@ -11,12 +12,18 @@ export function createNetworkSiteRouter(
   createNetworkSite: CreateNetworkSite,
   updateNetworkSite: UpdateNetworkSite,
   deleteNetworkSite: DeleteNetworkSite,
+  listNetworkSitesWithUisp?: ListNetworkSitesWithUisp,
 ): Router {
   const router = Router();
 
   router.get('/', async (_req: Request, res: Response): Promise<void> => {
-    const sites = await listNetworkSites.execute();
-    res.json(sites);
+    if (listNetworkSitesWithUisp) {
+      const sites = await listNetworkSitesWithUisp.execute();
+      res.json(sites);
+    } else {
+      const sites = await listNetworkSites.execute();
+      res.json(sites);
+    }
   });
 
   router.post('/', async (req: Request, res: Response): Promise<void> => {

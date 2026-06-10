@@ -185,6 +185,7 @@ describe('gestionRealIngest.routes', () => {
       skippedDuplicate: 0,
       skippedUnmirrored: 0,
       unclassified: 0,
+      skippedOrders: [],
     });
   });
 
@@ -195,7 +196,15 @@ describe('gestionRealIngest.routes', () => {
       entity: 'gr-ingest',
       cursor: '29-05-2026',
       lastRunAt,
-      lastResult: JSON.stringify({ created: 5, skippedDuplicate: 2, skippedUnmirrored: 1, unclassified: 3 }),
+      lastResult: JSON.stringify({
+        created: 5,
+        skippedDuplicate: 2,
+        skippedUnmirrored: 1,
+        unclassified: 3,
+        skippedOrders: [
+          { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
+        ],
+      }),
       itemsSynced: 5,
     });
     const res = await request(app).get('/api/gestion-real-ingest/status').set('Cookie', AUTH_COOKIE);
@@ -206,6 +215,9 @@ describe('gestionRealIngest.routes', () => {
       skippedDuplicate: 2,
       skippedUnmirrored: 1,
       unclassified: 3,
+      skippedOrders: [
+        { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
+      ],
     });
   });
 

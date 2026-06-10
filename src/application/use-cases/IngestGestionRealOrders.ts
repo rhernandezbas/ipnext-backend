@@ -10,6 +10,7 @@ import { TaskCategoryRepository } from '@domain/ports/TaskCategoryRepository';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { IngestCatalogEntryMissingError } from '@domain/errors/scheduling';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
+import { SkippedOrderRef, UnmirroredReason } from '@application/dto/gestionRealIngest.dto';
 import { classifyTech } from './classifyTech';
 
 const SYNC_ENTITY = 'gr-ingest';
@@ -49,12 +50,22 @@ function isUniqueViolation(err: unknown): boolean {
   return typeof message === 'string' && /unique constraint/i.test(message);
 }
 
+/**
+ * Cap on the persisted/exposed skip refs (REQ-SKIPLIST-3). A stalled mirror
+ * (clients sync down or flag off) makes EVERY CI order in the window skip, and
+ * the list is rebuilt per run — without a cap each tick would persist and serve
+ * an unbounded blob. `skippedUnmirrored` always carries the real total.
+ */
+const MAX_SKIPPED_REFS = 100;
+
 /** Outcome counts for one ingest run. */
 export interface IngestRunResult {
   created: number;
   skippedDuplicate: number;
   skippedUnmirrored: number;
   unclassified: number;
+  /** First MAX_SKIPPED_REFS unmirrored skips (REQ-SKIPLIST-1); total in `skippedUnmirrored`. */
+  skippedOrders: SkippedOrderRef[];
 }
 
 export interface IngestOptions {
@@ -115,6 +126,7 @@ export class IngestGestionRealOrders {
       skippedDuplicate: 0,
       skippedUnmirrored: 0,
       unclassified: 0,
+      skippedOrders: [],
     };
 
     // Master switch (release flag). OFF → no-op. Checked per run so it can be
@@ -187,17 +199,18 @@ export class IngestGestionRealOrders {
     reporterId: string | null,
     counts: IngestRunResult,
   ): Promise<void> {
-    // 1-2. Resolve local FKs. A miss is expected until the mirror catches up; skip + count.
+    // 1-2. Resolve local FKs. A miss is expected until the mirror catches up;
+    // skip + count + record the GR refs so the status endpoint can list them.
     const client = order.cliente ? await this.resolver.findClientByGrId(order.cliente) : null;
     if (!client) {
-      counts.skippedUnmirrored++;
+      recordSkip(counts, order, 'client-unmirrored');
       return;
     }
     const contract = order.contrato
       ? await this.resolver.findContractByGrContratoId(order.contrato)
       : null;
     if (!contract) {
-      counts.skippedUnmirrored++;
+      recordSkip(counts, order, 'contract-unmirrored');
       return;
     }
 
@@ -307,6 +320,19 @@ export class IngestGestionRealOrders {
       }
     }
     return this.defaultStageId;
+  }
+}
+
+/** Count an unmirrored skip and record its GR refs (capped at MAX_SKIPPED_REFS). */
+function recordSkip(counts: IngestRunResult, order: GrServiceOrder, reason: UnmirroredReason): void {
+  counts.skippedUnmirrored++;
+  if (counts.skippedOrders.length < MAX_SKIPPED_REFS) {
+    counts.skippedOrders.push({
+      grOrdenId: order.grOrdenId,
+      grClienteId: order.cliente ?? null,
+      grContratoId: order.contrato ?? null,
+      reason,
+    });
   }
 }
 
