@@ -137,6 +137,8 @@ Reglas operativas del loop:
 
 ## Gotchas conocidos
 
+- **Dry-run de migraciones: COMMIT interno rompe el wrapper (incidente 2026-06-10)**: si el `migration.sql` trae su propio `BEGIN;`/`COMMIT;`, el COMMIT interno commitea la transacción del dry-run y el ROLLBACK final no deshace nada — el DDL queda aplicado en prod. Regla doble: (1) NO escribir `BEGIN`/`COMMIT` dentro de migration.sql (`prisma migrate deploy` ya envuelve cada migración en su transacción); (2) todo script de dry-run debe DETECTAR `COMMIT;` en el SQL y abortar o strippear los BEGIN/COMMIT de primer nivel ANTES de wrappear. El incidente UISP fue inocuo (todo aditivo+idempotente, el ledger de prisma se auto-reconcilió en el deploy), pero con una migración destructiva habría sido grave.
+
 - **`NODE_ENV=development` en prod**: el container de prod corre con `NODE_ENV=development` (ver `deploy.yml`). Cualquier lógica condicionada a "es dev" se activa en prod. Por eso el logging de Prisma se controla con una env var explícita (`PRISMA_LOG_QUERIES`), no con `NODE_ENV`.
 - **Edit tool y caracteres no-ASCII**: editar archivos con acentos/em-dashes puede fallar en silencio (reporta éxito sin cambiar el disco). Verificar con `rg` después; usar reescritura completa como fallback. Anclar los matches en texto ASCII cuando se pueda.
 - **`(prisma as any).<tabla>`**: aparece cuando se agrega una tabla al schema sin re-correr `prisma generate`. El `Dockerfile` lo corre en el build, así que en prod está bien; es solo el entorno local.

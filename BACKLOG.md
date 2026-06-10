@@ -2,7 +2,25 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**.
-> **37 hechos (en prod) · EPIC #38 COMPLETO (7/7 waves en prod, 2026-06-09).** (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
+> **37 hechos (en prod) · EPIC #38 COMPLETO (7/7 waves en prod, 2026-06-09) · +1 pendiente (#39) · UISP en curso.**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
+
+---
+
+## 📋 Pendientes
+
+### #39 — Retiro manual desde la tarea, gateado por "proyectos de retiro"  *(agregado 2026-06-10)*
+
+> Complementa el retiro AUTOMÁTICO de la W4 (cierre IClass con result-code `isRemovalCode` → Devoluciones pendientes). Este es el camino **MANUAL del operador desde la tarea**, habilitado solo en proyectos mapeados.
+
+- **Mapeo de proyectos de retiro (config)**: page/tab nueva en Configuración — "Proyectos de retiro": se mapean N proyectos de Prominense. **Solo las tareas de esos proyectos muestran el botón "Retirar"** en su panel de inventario. Gate del mapeo: `inventory.manage` (o `scheduling.manage` — decidir en el SDD). Dos capas como siempre.
+- **Botón "Retirar" en la tarea**: toma el equipo asociado al **cliente/contrato actual** de la tarea (si existe); **sin equipo asociado → no-op amable** (no pasa nada, sin error).
+- **Quitado SOFT del cliente**: la `ContractInstalledItem` NO se borra — queda como historial (`status='removed'`, patrón soft-delete del #8). "Ya no es el real": si un día el equipo se instala de nuevo (en otro cliente), **el real pasa a ser el cliente nuevo** — el asset se mueve, el historial de dónde estuvo queda íntegro en el ledger.
+- **Efectos de inventario (ledger, ya cableados por el EPIC #38)**:
+  - **Retirar** → movimiento `RETURN` al depósito: el equipo queda `available@DEPOSITO` (depósito **+1**), visible en la W3.
+  - **Instalar** → ya descuenta del depósito desde el fix del 2026-06-10 (match normalizado: el asset se MUEVE depósito→cliente, depósito **−1**).
+- **Permisos del botón**: `inventory.write` (dos capas).
+- **Decisiones cerradas (usuario, 2026-06-10)**: (a) **Retiro POR ÍTEM con PICKER**: un contrato con N equipos abre un picker listando los activos — se retira el/los seleccionados, NUNCA todo-o-nada (hay retiros parciales). (b) **Aplicación DIRECTA** con confirm-dialog (sin encolar en Devoluciones pendientes — el operador YA está decidiendo al apretar el botón), registrando `source='MANUAL'` en el movimiento RETURN.
+- **Sub-ítem (gap de configurabilidad W4)**: toggle **"Es retiro de equipo"** por fila en la sub-tab "Mapeo de resultados" del Cierre de OS — hoy `IClassResultCode.isRemovalCode` solo se edita por SQL (cero referencias en el FE); un código de retiro nuevo de IClass requiere migración a mano. BE expone el campo en el PUT del mapping + FE el switch (gate `iclass.manage`).
 
 ---
 
