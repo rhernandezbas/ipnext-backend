@@ -2,13 +2,17 @@
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
 > Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**.
-> **37 hechos (en prod) · EPIC #38 COMPLETO (7/7 waves en prod, 2026-06-09) · +1 pendiente (#39) · UISP en curso.**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
+> **38 hechos (en prod, #39 incluido) · EPIC #38 COMPLETO (7/7 waves) · UISP V1 EN PROD (2026-06-10, BE #99 + FE #71 — flag `uisp-sync` OFF, rotar token post-activación).**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
 
 ---
 
 ## 📋 Pendientes
 
-### #39 — Retiro manual desde la tarea, gateado por "proyectos de retiro"  *(agregado 2026-06-10)*
+*(vacío — todo lo numerado está en prod)*
+
+---
+
+### #39 — Retiro manual desde la tarea, gateado por "proyectos de retiro" ✅ HECHO *(agregado y SHIPPEADO 2026-06-10, BE PR #100 + FE PR #72)*
 
 > Complementa el retiro AUTOMÁTICO de la W4 (cierre IClass con result-code `isRemovalCode` → Devoluciones pendientes). Este es el camino **MANUAL del operador desde la tarea**, habilitado solo en proyectos mapeados.
 
