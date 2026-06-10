@@ -16,7 +16,9 @@ describe('Migration: iclass_returns', () => {
 
   beforeAll(() => {
     const migrationsDir = path.resolve(__dirname, '../../../prisma/migrations');
-    const dirs = fs.readdirSync(migrationsDir).filter(d => d.includes('iclass_returns'));
+    // endsWith, not includes: 20260616000000_seed_iclass_returns_flag (the W4 flag
+    // seed hotfix) also contains the substring and must NOT match here.
+    const dirs = fs.readdirSync(migrationsDir).filter(d => d.endsWith('_iclass_returns'));
     expect(dirs.length).toBe(1);
     const migrationFile = path.join(migrationsDir, dirs[0], 'migration.sql');
     expect(fs.existsSync(migrationFile)).toBe(true);
