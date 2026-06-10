@@ -132,7 +132,8 @@ Reglas operativas del loop:
   - **Frontend** — `RequirePermission` (pages/rutas) o `Can` (botones, secciones, acciones) con la clave que el front realmente recibe del `/me`.
   - **Backend** — el guard de la ruta con el permiso correspondiente (NO alcanza con "solo autenticado"; una ruta protegida solo en el front es un agujero).
   - Si el permiso todavía no existe: agregarlo al **catálogo RBAC del backend** Y exponerlo para que el front lo reciba — **cambio coordinado en ambos repos**. Nunca dejar una page/ruta nueva sin permiso por default ni inventar una clave; **documentar en el PR la clave usada**.
-  - Deuda conocida a saldar: las rutas de inventario por servicio (`/api/services/:serviceId/inventory`, `/api/scheduling/:taskId/inventory/...`) hoy están solo autenticadas — falta el guard granular en el backend.
+  - ~~Deuda: rutas de inventario por servicio solo autenticadas~~ **SALDADA** (#8 + auditoría 2026-06-09: `contractInventory.routes.ts` tiene guard granular en TODAS las rutas — scheduling.* para sugerencias, inventory.* para contrato/materiales; `/api/services/:serviceId/inventory` ya no existe).
+  - Deuda VIGENTE (auditoría 2026-06-09): `PATCH /api/admin/feature-flags/:key` está solo-autenticado — cualquier usuario logueado puede flipear CUALQUIER flag por API directa (la UI sí gatea por módulo: `iclass.manage` / `inventory.manage`). Cerrarla requiere decidir la política: un permiso `admin.flags` global, o guard por namespace del flag.
 
 ## Gotchas conocidos
 
