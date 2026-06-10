@@ -297,6 +297,7 @@ import { UpdateRadiusConfig } from '@application/use-cases/UpdateRadiusConfig';
 import { createNetworkSiteRouter } from './routes/networkSite.routes';
 import { PrismaNetworkSiteRepository } from '../adapters/prisma/PrismaNetworkSiteRepository';
 import { ListNetworkSites } from '@application/use-cases/ListNetworkSites';
+import { ListNetworkSitesWithUisp } from '@application/use-cases/ListNetworkSitesWithUisp';
 // UISP mirror routes
 import { createUispRouter } from './routes/uisp.routes';
 import { PrismaUispSiteRepository } from '../adapters/prisma/PrismaUispSiteRepository';
@@ -908,6 +909,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const uispSiteRepoForNs = new PrismaUispSiteRepository();
   const updateNetworkSite = new UpdateNetworkSite(networkSiteRepo, uispSiteRepoForNs);
   const deleteNetworkSite = new DeleteNetworkSite(networkSiteRepo);
+  // uisp-networksite-autoimport: enriched list (batch join with UISP mirror, no N+1)
+  const listNetworkSitesWithUisp = new ListNetworkSitesWithUisp(networkSiteRepo, uispSiteRepoForNs);
 
   const cpeRepo = new PrismaCpeRepository();
   const listCpeDevices = new ListCpeDevices(cpeRepo);
@@ -1312,6 +1315,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // that is the known deferred permission pass).
   app.use('/api/network-sites', createAuthMiddleware(authAdapter, sessionRepo), createNetworkSiteRouter(
     listNetworkSites, getNetworkSite, createNetworkSite, updateNetworkSite, deleteNetworkSite,
+    listNetworkSitesWithUisp,
   ));
   app.use('/api/cpe', createCpeRouter(
     listCpeDevices, getCpeDevice, createCpeDevice, updateCpeDevice, deleteCpeDevice, assignCpeToClient,
