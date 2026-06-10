@@ -1,9 +1,10 @@
 /**
  * Route tests for /api/projects/* endpoints.
  * Covers iclassSoTypeId assignment (REQ-PROJ-3..8) plus existing CRUD.
+ * SCEN-MAP-2: allowsEquipmentRetirement mutation requires inventory.manage.
  */
 import request from 'supertest';
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import cookieParser from 'cookie-parser';
 import { InMemoryProjectRepository } from '../../infrastructure/adapters/in-memory/InMemoryProjectRepository';
 import { InMemoryIClassSoTypeRepository } from '../../infrastructure/adapters/in-memory/InMemoryIClassSoTypeRepository';
@@ -40,7 +41,15 @@ class StubRepo<T> {
   async findById(id: string): Promise<{ id: string } | null> { return { id }; }
 }
 
-async function buildApp() {
+/** Guard middleware that always rejects (simulates lacking a permission). */
+const rejectGuard: RequestHandler = (_req, res) => {
+  res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
+};
+
+/** Guard middleware that always passes (simulates having a permission). */
+const allowGuard: RequestHandler = (_req, _res, next) => next();
+
+async function buildApp(opts?: { inventoryManageGuard?: RequestHandler }) {
   const projectRepo = new InMemoryProjectRepository();
   const soTypeRepo = new InMemoryIClassSoTypeRepository();
 
@@ -90,6 +99,7 @@ async function buildApp() {
       new DeleteProject(projectRepo),
       new FakeAuthProvider(),
       assignUC,
+      opts?.inventoryManageGuard,
     ),
   );
   app.use(errorHandler);
@@ -233,6 +243,27 @@ describe('PATCH /api/projects/:id — iclassSoTypeId assignment', () => {
   });
 });
 
+// ─── PUT /api/projects/:id — allowsEquipmentRetirement backdoor (FIX-3) ─────────
+
+describe('PUT /api/projects/:id — allowsEquipmentRetirement must be ignored (FIX-3)', () => {
+  it('FIX-3: PUT with allowsEquipmentRetirement field → field is silently ignored (not persisted)', async () => {
+    // PUT uses UpdateProjectSchema which must NOT include allowsEquipmentRetirement.
+    // If the field leaks through, the project would have allowsEquipmentRetirement=true
+    // after a full PUT — a privilege-escalation back-door.
+    const { app, project } = await buildApp({ inventoryManageGuard: rejectGuard });
+
+    const res = await request(app)
+      .put(`/api/projects/${project.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ title: 'Via PUT', allowsEquipmentRetirement: true });
+
+    // PUT must succeed (rejectGuard must NOT be triggered by PUT)
+    expect(res.status).toBe(200);
+    // The field must NOT be persisted — response reflects actual stored value (false)
+    expect(res.body.allowsEquipmentRetirement).toBe(false);
+  });
+});
+
 // ─── POST /api/projects ───────────────────────────────────────────────────────
 
 describe('POST /api/projects', () => {
@@ -249,5 +280,67 @@ describe('POST /api/projects', () => {
     expect(res.body).toHaveProperty('iclassSoType');
     expect(res.body.iclassSoTypeId).toBeNull();
     expect(res.body.iclassSoType).toBeNull();
+  });
+});
+
+// ─── FIX 2: requireManageForRetirementFlag — real middleware, no promise wrapper ───
+
+describe('PATCH /api/projects/:id — retirement-flag guard is a real middleware (FIX-2)', () => {
+  it('FIX-2: guard that calls next(err) must propagate to 500, not silently continue', async () => {
+    // With the old promise-wrapper `await new Promise(resolve => invManage(req, res, () => resolve()))`,
+    // a guard that calls `next(err)` resolves the promise (the arg is ignored) and then
+    // `res.headersSent` is false, so the handler continues into the update path — the guard error
+    // is silently swallowed. The correct middleware chain must forward `next(err)` to the error handler.
+    const errorGuard: RequestHandler = (_req, _res, next) => next(new Error('guard-boom'));
+    const { app, project } = await buildApp({ inventoryManageGuard: errorGuard });
+
+    const res = await request(app)
+      .patch(`/api/projects/${project.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ allowsEquipmentRetirement: true });
+
+    // Guard forwarded an error → must reach errorHandler → 500 (NOT 200, which would mean error was swallowed)
+    expect(res.status).toBe(500);
+  });
+});
+
+// ─── SCEN-MAP-2: allowsEquipmentRetirement guard (inventory.manage) ───────────
+
+describe('PATCH /api/projects/:id — allowsEquipmentRetirement guard (SCEN-MAP-2)', () => {
+  it('SCEN-MAP-2: PATCH with allowsEquipmentRetirement without inventory.manage guard → 403', async () => {
+    const { app, project } = await buildApp({ inventoryManageGuard: rejectGuard });
+
+    const res = await request(app)
+      .patch(`/api/projects/${project.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ allowsEquipmentRetirement: true });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FORBIDDEN');
+  });
+
+  it('SCEN-MAP-2 (tri): PATCH with allowsEquipmentRetirement WITH inventory.manage guard → 200', async () => {
+    const { app, project } = await buildApp({ inventoryManageGuard: allowGuard });
+
+    const res = await request(app)
+      .patch(`/api/projects/${project.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ allowsEquipmentRetirement: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.allowsEquipmentRetirement).toBe(true);
+  });
+
+  it('SCEN-MAP-2 (guard bypass): PATCH without allowsEquipmentRetirement still works without guard', async () => {
+    const { app, project } = await buildApp({ inventoryManageGuard: rejectGuard });
+
+    const res = await request(app)
+      .patch(`/api/projects/${project.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ title: 'Updated Title' });
+
+    // Guard is only applied when allowsEquipmentRetirement is in the body
+    expect(res.status).toBe(200);
+    expect(res.body.title).toBe('Updated Title');
   });
 });

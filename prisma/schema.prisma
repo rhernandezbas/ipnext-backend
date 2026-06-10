@@ -1075,6 +1075,7 @@ model Project {
   projectLeadId  String?
   projectLead    Admin?           @relation(fields: [projectLeadId], references: [id], onDelete: SetNull)
   visible        Boolean          @default(true)
+  allowsEquipmentRetirement Boolean @default(false)
   partners       ProjectPartner[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt

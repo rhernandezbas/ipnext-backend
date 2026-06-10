@@ -13,3 +13,7 @@ build/
 # Splynx exploration artifacts (kept locally, see md/splynx-scheduling/OVERVIEW.md)
 md/splynx-scheduling/screenshots/
 md/splynx-scheduling/snapshots/
+
+# Agent scratch + coverage (footgun: untracked-but-not-ignored leaks via broad git add)
+coverage/
+.claire/

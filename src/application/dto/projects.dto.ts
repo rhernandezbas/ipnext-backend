@@ -15,7 +15,13 @@ export const CreateProjectSchema = z.object({
   partnerIds: z.array(z.string().min(1)).optional(),
 });
 
-export const UpdateProjectSchema = CreateProjectSchema.extend({
+/**
+ * Schema for PUT /projects/:id — full replacement.
+ * Does NOT include `allowsEquipmentRetirement`: the retirement flag is a
+ * privileged mutation gated by inventory.manage and must only be set via
+ * PATCH. Including it here would create a back-door that bypasses the guard.
+ */
+export const PutProjectSchema = CreateProjectSchema.extend({
   /**
    * Assigns or clears the IClass SO type mapping on a project (REQ-PROJ-7).
    * - string: must be a valid UUID (FK to IClassSoType).
@@ -25,10 +31,25 @@ export const UpdateProjectSchema = CreateProjectSchema.extend({
   iclassSoTypeId: z.string().uuid().nullable().optional(),
 }).partial();
 
+/**
+ * Schema for PATCH /projects/:id — partial update.
+ * Superset of PutProjectSchema; adds the guarded retirement-flag field.
+ * The route layer enforces inventory.manage when this field is present.
+ */
+export const UpdateProjectSchema = PutProjectSchema.extend({
+  /**
+   * #39 — enables/disables equipment retirement for this project.
+   * Guarded by inventory.manage at the route layer.
+   * Only settable via PATCH — deliberately excluded from PutProjectSchema.
+   */
+  allowsEquipmentRetirement: z.boolean().optional(),
+});
+
 export const ListProjectsQuerySchema = z.object({
   visible: z.enum(['true', 'false', 'all']).optional(),
 });
 
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>;
+export type PutProjectInput = z.infer<typeof PutProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>;
 export type ListProjectsQueryInput = z.infer<typeof ListProjectsQuerySchema>;

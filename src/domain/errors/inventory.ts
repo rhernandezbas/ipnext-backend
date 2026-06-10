@@ -421,6 +421,50 @@ export class InvalidMinStockError extends DomainError {
   }
 }
 
+// ── Manual Equipment Retirement (#39) ────────────────────────────────────────
+
+/**
+ * The project linked to the task does not have `allowsEquipmentRetirement = true`.
+ * Maps to 422 at the route.
+ */
+export class ProjectNotRetirementError extends DomainError {
+  constructor(projectId: string) {
+    super(
+      `Project ${projectId} does not allow equipment retirement`,
+      'PROJECT_NOT_RETIREMENT',
+    );
+    this.name = 'ProjectNotRetirementError';
+  }
+}
+
+/**
+ * The CII referenced in itemIds does not belong to the task's contract
+ * (or does not exist). Maps to 422 at the route.
+ */
+export class EquipmentNotOnContractError extends DomainError {
+  constructor(itemId: string) {
+    super(
+      `Item ${itemId} is not on the task's contract or does not exist`,
+      'EQUIPMENT_NOT_ON_CONTRACT',
+    );
+    this.name = 'EquipmentNotOnContractError';
+  }
+}
+
+/**
+ * A retirement for this (task, CII) pair already exists in the ledger
+ * (sourceRef collision). Maps to 409 at the route.
+ */
+export class RetireAlreadyDoneError extends DomainError {
+  constructor(itemId: string) {
+    super(
+      `Item ${itemId} has already been retired from this task`,
+      'RETIRE_ALREADY_DONE',
+    );
+    this.name = 'RetireAlreadyDoneError';
+  }
+}
+
 // ── Depot Stock Entry (EPIC #38 follow-up) ───────────────────────────────────
 
 /**

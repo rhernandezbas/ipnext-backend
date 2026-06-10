@@ -143,4 +143,27 @@ describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', 
     const args = match![1];
     expect(args).toContain('AddMaterialToDepot');
   });
+
+  // #39 — manual equipment retirement wiring guard
+  it('#39: app.ts instantiates RetireContractEquipment and passes it into createSchedulingRouter', () => {
+    expect(appSrc).toContain('RetireContractEquipment');
+    // Verify it is passed to createSchedulingRouter (not just imported)
+    const match = appSrc.match(/createSchedulingRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('retireContractEquipment');
+  });
+
+  // FIX 1 (#39 security) — createProjectsRouter must receive requirePerm('inventory','manage') as last arg
+  it('#39 FIX-1: app.ts passes requirePerm(inventory,manage) into createProjectsRouter', () => {
+    // Find the line (or block) containing the createProjectsRouter call.
+    // We search the full source for the call + the guard expression.
+    // Using a single regex that matches the entire line(s) of the call is
+    // fragile with nested parens, so we assert both literals co-occur within
+    // a bounded window of 300 chars — robust against minor formatting changes.
+    const callIdx = appSrc.indexOf('createProjectsRouter(');
+    expect(callIdx).toBeGreaterThan(-1);
+    const callWindow = appSrc.slice(callIdx, callIdx + 300);
+    expect(callWindow).toMatch(/requirePerm\s*\(\s*['"]inventory['"]\s*,\s*['"]manage['"]\s*\)/);
+  });
 });

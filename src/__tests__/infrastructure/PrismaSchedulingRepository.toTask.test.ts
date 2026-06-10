@@ -143,3 +143,29 @@ describe('PrismaSchedulingRepository.toTask — projectName mapping (REQ-STATUS-
     expect(task.sequenceNumber).toBe(123);
   });
 });
+
+// SCEN-MAP-5/6/7: projectAllowsRetirement derived from project.allowsEquipmentRetirement
+describe('PrismaSchedulingRepository.toTask — projectAllowsRetirement (#39)', () => {
+  it('SCEN-MAP-5: projectAllowsRetirement is true when project.allowsEquipmentRetirement = true', () => {
+    const task = toTask({
+      ...BASE_ROW,
+      projectId: 'proj-1',
+      project: { title: 'RetiroProj', allowsEquipmentRetirement: true },
+    });
+    expect(task.projectAllowsRetirement).toBe(true);
+  });
+
+  it('SCEN-MAP-6: projectAllowsRetirement is false when project.allowsEquipmentRetirement = false', () => {
+    const task = toTask({
+      ...BASE_ROW,
+      projectId: 'proj-1',
+      project: { title: 'RegularProj', allowsEquipmentRetirement: false },
+    });
+    expect(task.projectAllowsRetirement).toBe(false);
+  });
+
+  it('SCEN-MAP-7: projectAllowsRetirement defaults to false when project is null (no project FK)', () => {
+    const task = toTask({ ...BASE_ROW, projectId: null, project: null });
+    expect(task.projectAllowsRetirement).toBe(false);
+  });
+});

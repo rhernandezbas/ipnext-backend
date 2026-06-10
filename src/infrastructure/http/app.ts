@@ -450,6 +450,7 @@ import { createVehicleRouter } from './routes/vehicle.routes';
 import { PrismaReturnSuggestionRepository } from '../adapters/prisma/PrismaReturnSuggestionRepository';
 import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
 import { ConfirmAssetReturn } from '@application/use-cases/ConfirmAssetReturn';
+import { RetireContractEquipment } from '@application/use-cases/RetireContractEquipment';
 import { ResolveDepotLocation } from '@application/use-cases/ResolveDepotLocation';
 import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
 import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
@@ -1140,6 +1141,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const returnSuggestionRepo = new PrismaReturnSuggestionRepository();
   const inventoryDepotLocation = new ResolveDepotLocation(stockLocationRepo);
 
+  // #39 — manual equipment retirement
+  const retireContractEquipment = new RetireContractEquipment(
+    schedulingRepo,
+    contractInventoryRepo,
+    inventoryAssetRepo,
+    inventoryMovementRepo,
+    inventoryDepotLocation,
+    inventoryUow,
+  );
+
   // EPIC #38 W5b — vehicle stock repos + use cases (wired before createInventoryRouter call)
   const vehicleRepo = new PrismaVehicleRepository();
   const resolveVehicleLocation = new ResolveVehicleLocation(stockLocationRepo);
@@ -1244,7 +1255,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listIClassNodes,
     resendTaskToIClassWithNode,
     requirePerm,
-  }, getTaskActivity, requirePerm('inventory', 'write')));
+  }, getTaskActivity, requirePerm('inventory', 'write'), retireContractEquipment));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);
@@ -1258,7 +1269,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const listIClassSoTypes = new ListIClassSoTypes(iclassSoTypeRepo);
   const assignIClassSoType = new AssignIClassSoTypeToProject(projectRepo, iclassSoTypeRepo);
 
-  app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter, assignIClassSoType));
+  app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter, assignIClassSoType, requirePerm('inventory', 'manage')));
   // GR installation-order ingest admin — config/status/needs-review (projectRepo + schedulingRepo already built above).
   const grIngestConfigRepo = new PrismaGestionRealIngestConfigRepository();
   app.use('/api/gestion-real-ingest', createGestionRealIngestRouter(
