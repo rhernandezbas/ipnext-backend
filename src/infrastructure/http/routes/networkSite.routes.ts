@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ListNetworkSites } from '@application/use-cases/ListNetworkSites';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
@@ -33,13 +33,17 @@ export function createNetworkSiteRouter(
     res.json(site);
   });
 
-  router.put('/:id', async (req: Request, res: Response): Promise<void> => {
-    const site = await updateNetworkSite.execute(req.params['id'] as string, req.body);
-    if (!site) {
-      res.status(404).json({ error: 'Network site not found', code: 'NETWORK_SITE_NOT_FOUND' });
-      return;
+  router.put('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const site = await updateNetworkSite.execute(req.params['id'] as string, req.body);
+      if (!site) {
+        res.status(404).json({ error: 'Network site not found', code: 'NETWORK_SITE_NOT_FOUND' });
+        return;
+      }
+      res.json(site);
+    } catch (err) {
+      next(err);
     }
-    res.json(site);
   });
 
   router.delete('/:id', async (req: Request, res: Response): Promise<void> => {

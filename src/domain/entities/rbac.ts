@@ -62,6 +62,8 @@ export const KNOWN_ACTIONS = [
   'manage_api_tokens',
   'manage_backups',
 ] as const;
+// NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
+// uisp module uses those base actions — no new action codes needed.
 
 export type PermissionAction = (typeof KNOWN_ACTIONS)[number];
 
@@ -99,6 +101,8 @@ export const RBAC_MODULES = [
   'tariffs',
   // contracts-page (service-technology change) — own permission module for contract/service views
   'contracts',
+  // UISP mirror module — read-only mirror of UISP NMS data
+  'uisp',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

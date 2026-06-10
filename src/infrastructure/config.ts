@@ -108,4 +108,14 @@ export const config = {
     model: process.env.AUDIT_MODEL ?? 'qwen2.5vl:7b',
     timeoutMs: parseInt(process.env.AUDIT_TIMEOUT_MS || '180000', 10),
   },
+
+  /**
+   * UISP NMS mirror sync. Opt-in: absent env → client null → scheduler skip with log.
+   * NOT in REQUIRED_VARS — no fail-fast at boot.
+   * UISP uses a self-signed internal TLS cert (rejectUnauthorized: false in adapter).
+   */
+  uisp: {
+    baseUrl: process.env.UISP_BASE_URL ?? '',
+    token: process.env.UISP_TOKEN ?? '',
+  },
 };

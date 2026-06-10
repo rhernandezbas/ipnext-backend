@@ -81,6 +81,8 @@ jobs:
             -e OCR_MODEL="qwen2.5vl:7b" \
             -e ICLASS_AUDIT_ENABLED="true" \
             -e AUDIT_MODEL="qwen2.5vl:7b" \
+            -e UISP_BASE_URL="${{ secrets.UISP_BASE_URL }}" \
+            -e UISP_TOKEN="${{ secrets.UISP_TOKEN }}" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 

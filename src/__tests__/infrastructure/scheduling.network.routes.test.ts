@@ -58,6 +58,7 @@ const TEST_SITE: NetworkSite = {
   parentSiteId: null,
   description: 'Nodo de prueba',
   iclassNodeCode: 'TN-TEST',
+  uispSiteId: null,
 };
 
 function buildApp() {

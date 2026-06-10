@@ -19,6 +19,7 @@ function toSite(row: any): NetworkSite {
     parentSiteId: row.parentSiteId ?? null,
     description: row.description ?? null,
     iclassNodeCode: row.iclassNodeCode ?? null,
+    uispSiteId: row.uispSiteId ?? null,
   };
 }
 
@@ -30,6 +31,11 @@ export class PrismaNetworkSiteRepository implements NetworkSiteRepository {
 
   async findById(id: string): Promise<NetworkSite | null> {
     const row = await prisma.networkSite.findUnique({ where: { id } });
+    return row ? toSite(row) : null;
+  }
+
+  async findByUispSiteId(uispSiteId: string): Promise<NetworkSite | null> {
+    const row = await prisma.networkSite.findFirst({ where: { uispSiteId } });
     return row ? toSite(row) : null;
   }
 
@@ -72,6 +78,9 @@ export class PrismaNetworkSiteRepository implements NetworkSiteRepository {
           ...(data.uplink !== undefined && { uplink: data.uplink }),
           ...(data.parentSiteId !== undefined && { parentSiteId: data.parentSiteId }),
           ...(data.description !== undefined && { description: data.description }),
+          ...(data.iclassNodeCode !== undefined && { iclassNodeCode: data.iclassNodeCode }),
+          // uispSiteId: explicit undefined check so null (delink) is persisted
+          ...(data.uispSiteId !== undefined && { uispSiteId: data.uispSiteId }),
         },
       });
       return toSite(row);

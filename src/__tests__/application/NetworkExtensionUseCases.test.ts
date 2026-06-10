@@ -56,6 +56,7 @@ describe('CreateNetworkSite', () => {
       parentSiteId: null,
       description: 'Test',
       iclassNodeCode: null,
+      uispSiteId: null,
     });
 
     expect(result.id).toBeDefined();

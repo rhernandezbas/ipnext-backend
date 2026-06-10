@@ -1521,8 +1521,16 @@ model NetworkSite {
   // network-node-task (#29) — código de nodo en IClass para envío de OS de RED
   iclassNodeCode String?
 
+  // uisp-integration — optional link to the UISP mirror site (uispId TEXT).
+  // Intentionally NO @relation FK: the mirror re-upserts by uispId TEXT;
+  // validation is enforced at the application layer (not DB), same reasoning
+  // as UispDevice.uispSiteId.
+  uispSiteId String?
+
   // Back-relation: tareas de RED vinculadas a este nodo
   scheduledTasks ScheduledTask[]
+
+  @@index([uispSiteId])
 }
 
 model NasServer {
@@ -2055,4 +2063,59 @@ model IClassDispatchAttempt {
   createdAt         DateTime @default(now())
 
   @@index([taskId, createdAt])
+}
+
+// =============================================
+// UISP MIRROR DOMAIN
+// =============================================
+
+/// Mirror of UISP site data. Synced every 5min by UispSyncScheduler.
+/// uispId is the UISP-internal UUID (used as the upsert key).
+model UispSite {
+  id            String    @id @default(uuid())
+  uispId        String    @unique
+  name          String
+  status        String
+  parentUispId  String?
+  latitude      Float?
+  longitude     Float?
+  deviceCount   Int       @default(0)
+  outageCount   Int       @default(0)
+  contact       String?
+  missingSince  DateTime?
+  lastSyncAt    DateTime
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime
+
+  @@index([status])
+  @@index([missingSince])
+}
+
+/// Mirror of UISP device data. Synced every 5min by UispSyncScheduler.
+/// uispSiteId is the UISP site UUID — intentionally NOT an @relation FK so upserts
+/// are order-independent (sites and devices can be upserted in any order).
+model UispDevice {
+  id           String    @id @default(uuid())
+  uispId       String    @unique
+  uispSiteId   String
+  name         String
+  model        String
+  modelName    String?
+  type         String?
+  role         String?
+  mac          String?
+  ip           String?
+  firmware     String?
+  status       String
+  signal       Int?
+  uptime       BigInt?
+  lastSeenAt   DateTime?
+  missingSince DateTime?
+  lastSyncAt   DateTime
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime
+
+  @@index([uispSiteId])
+  @@index([status])
+  @@index([missingSince])
 }

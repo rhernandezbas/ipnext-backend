@@ -297,6 +297,15 @@ import { UpdateRadiusConfig } from '@application/use-cases/UpdateRadiusConfig';
 import { createNetworkSiteRouter } from './routes/networkSite.routes';
 import { PrismaNetworkSiteRepository } from '../adapters/prisma/PrismaNetworkSiteRepository';
 import { ListNetworkSites } from '@application/use-cases/ListNetworkSites';
+// UISP mirror routes
+import { createUispRouter } from './routes/uisp.routes';
+import { PrismaUispSiteRepository } from '../adapters/prisma/PrismaUispSiteRepository';
+import { PrismaUispDeviceRepository } from '../adapters/prisma/PrismaUispDeviceRepository';
+import { ListUispSites } from '@application/use-cases/ListUispSites';
+import { GetUispSiteDetail } from '@application/use-cases/GetUispSiteDetail';
+import { GetUispSyncStatus } from '@application/use-cases/GetUispSyncStatus';
+import { TriggerUispSync } from '@application/use-cases/TriggerUispSync';
+import { UispSyncScheduler } from '../scheduling/UispSyncScheduler';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
@@ -557,7 +566,7 @@ const resolveUserPermissions = new ResolveUserPermissions(rbacUserRoleRepo, rbac
 export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
   requirePermission(rbacUserRepo, m, a);
 
-export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, backfillScheduler?: BackfillScheduler | null) {
+export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, backfillScheduler?: BackfillScheduler | null, uispSyncScheduler?: UispSyncScheduler | null) {
   const app = express();
 
   // SDD #6a — behind EasyPanel's proxy; trust the first hop so the rate limiter
@@ -892,7 +901,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const listNetworkSites = new ListNetworkSites(networkSiteRepo);
   const getNetworkSite = new GetNetworkSite(networkSiteRepo);
   const createNetworkSite = new CreateNetworkSite(networkSiteRepo);
-  const updateNetworkSite = new UpdateNetworkSite(networkSiteRepo);
+  // uispSiteRepo created here (eagerly) so UpdateNetworkSite can be fully instantiated
+  // before the network-site router is wired. This prevents the deferred-closure bug
+  // where createNetworkSiteRouter captured an undefined updateNetworkSite reference.
+  const uispSiteRepoForNs = new PrismaUispSiteRepository();
+  const updateNetworkSite = new UpdateNetworkSite(networkSiteRepo, uispSiteRepoForNs);
   const deleteNetworkSite = new DeleteNetworkSite(networkSiteRepo);
 
   const cpeRepo = new PrismaCpeRepository();
@@ -1283,7 +1296,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listIpPools, createIpPool, listIpAssignments,
     deleteIpPool, listIpv6Networks, createIpv6Network,
   ));
-  app.use('/api/network-sites', createNetworkSiteRouter(
+  // FIX-5: /api/network-sites was unauthenticated — all CRUD was open including the
+  // uispSiteId connector field. Adding createAuthMiddleware (auth-only, no granular guard yet —
+  // that is the known deferred permission pass).
+  app.use('/api/network-sites', createAuthMiddleware(authAdapter, sessionRepo), createNetworkSiteRouter(
     listNetworkSites, getNetworkSite, createNetworkSite, updateNetworkSite, deleteNetworkSite,
   ));
   app.use('/api/cpe', createCpeRouter(
@@ -1514,6 +1530,27 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const profileRouter = Router();
   profileRoutes(profileRouter);
   app.use('/api', profileRouter);
+
+  // UISP mirror read + sync routes (/api/uisp)
+  // uispSiteRepoForNs was already created above (for UpdateNetworkSite eager wiring).
+  // We reuse it here for the UISP read routes — same Prisma repo instance, no double-init.
+  const uispSiteRepo   = uispSiteRepoForNs;
+  const uispDeviceRepo = new PrismaUispDeviceRepository();
+  const uispSyncState  = new PrismaSyncStateRepository();
+  const uispConfigured = !!(config.uisp.baseUrl && config.uisp.token);
+  const listUispSitesUC    = new ListUispSites(uispSiteRepo);
+  // GetUispSiteDetail gets networkSiteRepo for reverse lookup (linkedNetworkSite)
+  const getUispSiteDetailUC = new GetUispSiteDetail(uispSiteRepo, uispDeviceRepo, networkSiteRepo);
+  const getUispSyncStatusUC = new GetUispSyncStatus(uispSyncState, featureFlagRepo, uispConfigured);
+  const triggerUispSyncUC   = new TriggerUispSync(uispSyncScheduler ?? { triggerNow: async () => ({ queued: false, reason: 'flag-disabled' as const }) } as unknown as UispSyncScheduler);
+  app.use('/api/uisp', createAuthMiddleware(authAdapter, sessionRepo), createUispRouter(
+    listUispSitesUC,
+    getUispSiteDetailUC,
+    getUispSyncStatusUC,
+    triggerUispSyncUC,
+    requirePerm('uisp', 'read'),
+    requirePerm('uisp', 'manage'),
+  ));
 
   // 404
   app.use((_req: Request, res: Response): void => {

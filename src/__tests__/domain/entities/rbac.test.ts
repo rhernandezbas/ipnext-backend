@@ -2,6 +2,7 @@
  * Phase 1.1 / Phase 2.4 — Entity shape tests for RBAC domain types.
  * Phase 2: updated to assert 25 modules and 28 known actions.
  * service-technology change: added 'contracts' module → 26 total.
+ * uisp-integration change: added 'uisp' module → 27 total.
  */
 import {
   PermissionAction,
@@ -19,8 +20,8 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 26 module codes (14 original + 11 Phase 2 + 1 contracts)', () => {
-    expect(RBAC_MODULES).toHaveLength(26);
+  it('contains exactly 27 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp)', () => {
+    expect(RBAC_MODULES).toHaveLength(27);
   });
 
   it('includes all 14 original module codes', () => {
@@ -48,8 +49,12 @@ describe('RBAC_MODULES constant', () => {
     expect(RBAC_MODULES).toContain('contracts');
   });
 
+  it('includes the uisp module (uisp-integration change)', () => {
+    expect(RBAC_MODULES).toContain('uisp');
+  });
+
   it('is readonly (as const)', () => {
-    // Type-level check: RbacModuleCode is a union of the 26 values
+    // Type-level check: RbacModuleCode is a union of the 27 values
     const code: RbacModuleCode = 'clients';
     expect(code).toBe('clients');
   });
