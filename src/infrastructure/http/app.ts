@@ -1373,13 +1373,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     authAdapter,
   ));
 
-  // Feature flags — runtime toggles persisted in DB (admin-only).
+  // Feature flags — runtime toggles persisted in DB.
+  // GETs remain auth-only (reading flag state is harmless).
+  // PATCH is guarded by admin.flags — only super_admin (*) can flip flags until
+  // the operator assigns this permission to a role via the roles UI.
   // featureFlagRepo is created earlier (wired into SendTaskToIClass).
   app.use('/api/admin/feature-flags', createFeatureFlagsRouter(
     authAdapter,
     new ListFeatureFlags(featureFlagRepo),
     new GetFeatureFlag(featureFlagRepo),
     new SetFeatureFlag(featureFlagRepo),
+    requirePerm('admin', 'flags'),
   ));
 
   // SDD #2 Phase 6 — RBAC user management CRUD + role assignment endpoints

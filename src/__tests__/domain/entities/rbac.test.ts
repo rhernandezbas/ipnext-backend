@@ -85,8 +85,8 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 31 valid action codes (4 base + 27 sub-actions)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(31);
+  it('contains exactly 32 valid action codes (4 base + 28 sub-actions)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(32);
   });
 
   it('includes all 4 base actions', () => {
@@ -96,7 +96,7 @@ describe('KNOWN_ACTIONS constant', () => {
     expect(KNOWN_ACTIONS).toContain('manage');
   });
 
-  it('includes all 25 sub-action codes from spec (24 original + iclass_manual_resend)', () => {
+  it('includes all 28 sub-action codes from spec (admin.flags + view_sessions + revoke_sessions added)', () => {
     const subActions = [
       // tickets
       'close', 'reopen',
@@ -114,7 +114,7 @@ describe('KNOWN_ACTIONS constant', () => {
       // clients
       'manage_documents', 'manage_online_sessions',
       // admin
-      'view_activity_log', 'manage_2fa',
+      'view_activity_log', 'manage_2fa', 'view_sessions', 'revoke_sessions', 'flags',
       // rbac
       'manage_users', 'manage_user_roles', 'change_user_password', 'manage_roles',
       // profile
@@ -122,7 +122,7 @@ describe('KNOWN_ACTIONS constant', () => {
       // settings
       'manage_api_tokens', 'manage_backups',
     ];
-    expect(subActions).toHaveLength(25);
+    expect(subActions).toHaveLength(28);
     for (const action of subActions) {
       expect(KNOWN_ACTIONS).toContain(action);
     }

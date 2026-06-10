@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, RequestHandler } from 'express';
 import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -13,6 +13,8 @@ export function createFeatureFlagsRouter(
   listFeatureFlags: ListFeatureFlags,
   getFeatureFlag: GetFeatureFlag,
   setFeatureFlag: SetFeatureFlag,
+  /** Permission guard for PATCH /:key — requires admin.flags. GETs remain auth-only. */
+  requireFlags: RequestHandler,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -29,7 +31,7 @@ export function createFeatureFlagsRouter(
     }
   });
 
-  router.patch('/:key', auth, async (req: Request, res: Response, next): Promise<void> => {
+  router.patch('/:key', auth, requireFlags, async (req: Request, res: Response, next): Promise<void> => {
     const parsed = SetFeatureFlagSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
