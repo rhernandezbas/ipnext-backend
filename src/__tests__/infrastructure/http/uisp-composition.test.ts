@@ -5,6 +5,8 @@
  * 2. InMemoryUispDeviceRepository implements UispDeviceRepository port.
  * 3. app.ts mounts createUispRouter at /api/uisp.
  * 4. app.ts wires UispSiteRepository and UispDeviceRepository.
+ * 5. bootstrapUispSync.ts passes PrismaNetworkSiteRepository (5th arg) to SyncUispMirror.
+ * 6. app.ts passes listNetworkSitesWithUisp to createNetworkSiteRouter.
  *
  * Mirrors inventory-composition-root.test.ts pattern (static source-text + behavioral).
  */
@@ -17,10 +19,15 @@ import type { UispDeviceRepository } from '../../../domain/ports/UispDeviceRepos
 
 describe('UISP composition root', () => {
   let appSrc: string;
+  let bootstrapSrc: string;
 
   beforeAll(() => {
     appSrc = readFileSync(
       join(__dirname, '..', '..', '..', 'infrastructure', 'http', 'app.ts'),
+      'utf8',
+    );
+    bootstrapSrc = readFileSync(
+      join(__dirname, '..', '..', '..', 'infrastructure', 'scheduling', 'bootstrapUispSync.ts'),
       'utf8',
     );
   });
@@ -90,5 +97,28 @@ describe('UISP composition root', () => {
 
   it("app.ts wires requirePerm('uisp', 'manage') for the UISP router", () => {
     expect(appSrc).toMatch(/requirePerm\(['"]uisp['"],\s*['"]manage['"]\)/);
+  });
+
+  // FIX-2a: bootstrapUispSync.ts passes PrismaNetworkSiteRepository as 5th arg to SyncUispMirror.
+  // If this arg is ever silently removed, the autoimport stops running in production
+  // while tests stay green (InMemory always persists uispSiteId, Prisma doesn't).
+  it('bootstrapUispSync.ts passes PrismaNetworkSiteRepository to SyncUispMirror constructor', () => {
+    // Must import PrismaNetworkSiteRepository
+    expect(bootstrapSrc).toContain('PrismaNetworkSiteRepository');
+    // Must pass networkSiteRepo variable to SyncUispMirror (5th positional arg)
+    expect(bootstrapSrc).toContain('new SyncUispMirror(');
+    // The networkSiteRepo local variable must be referenced in the SyncUispMirror call
+    expect(bootstrapSrc).toMatch(/new SyncUispMirror\([^)]*networkSiteRepo[^)]*\)/s);
+  });
+
+  // FIX-2b: app.ts passes listNetworkSitesWithUisp to createNetworkSiteRouter.
+  // If the 6th optional arg is ever dropped, the GET /api/network-sites falls back
+  // to the non-enriched ListNetworkSites (no uisp column data) — silently broken.
+  it('app.ts passes listNetworkSitesWithUisp to createNetworkSiteRouter', () => {
+    // Must have the use case wired
+    expect(appSrc).toContain('listNetworkSitesWithUisp');
+    expect(appSrc).toContain('ListNetworkSitesWithUisp');
+    // The createNetworkSiteRouter call must include listNetworkSitesWithUisp as an arg
+    expect(appSrc).toMatch(/createNetworkSiteRouter\([^)]*listNetworkSitesWithUisp[^)]*\)/s);
   });
 });

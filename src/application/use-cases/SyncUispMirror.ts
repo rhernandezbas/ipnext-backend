@@ -2,6 +2,7 @@ import type { UispClient } from '@domain/ports/UispClient';
 import type { UispSiteRepository } from '@domain/ports/UispSiteRepository';
 import type { UispDeviceRepository } from '@domain/ports/UispDeviceRepository';
 import type { SyncStateRepository } from '@domain/ports/SyncStateRepository';
+import type { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 
 export interface SyncUispMirrorResult {
   sitesUpserted: number;
@@ -11,6 +12,7 @@ export interface SyncUispMirrorResult {
   sitesReappeared: number;
   devicesReappeared: number;
   durationMs: number;
+  networkSitesCreated: number;
 }
 
 /**
@@ -34,6 +36,7 @@ export class SyncUispMirror {
     private readonly siteRepo: UispSiteRepository,
     private readonly deviceRepo: UispDeviceRepository,
     private readonly syncStateRepo: SyncStateRepository,
+    private readonly networkSiteRepo?: NetworkSiteRepository,
   ) {}
 
   async execute(): Promise<SyncUispMirrorResult> {
@@ -108,6 +111,61 @@ export class SyncUispMirror {
       console.warn('[uisp-sync] WARNING: UISP returned 0 devices — skipping missing-marking for devices (possible truncated response)');
     }
 
+    // 8. Auto-import NetworkSites from non-missing UispSites.
+    // Algorithm: ONE findAll() → Map<uispSiteId, NetworkSite> → O(1) lookup per UISP site.
+    // This replaces the previous N-query loop (findByUispSiteId per site) with a single
+    // batch read — same pattern as ListNetworkSitesWithUisp (no N+1).
+    //
+    // For each UISP site that is NOT missing:
+    //   - No NetworkSite linked → CREATE (name, coordinates, uispSiteId, status=active)
+    //   - NetworkSite already linked → UPDATE coordinates ONLY if currently null (manual wins)
+    // Missing UISP sites → their NetworkSite (if any) is KEPT untouched (never auto-delete).
+    let networkSitesCreated = 0;
+    if (this.networkSiteRepo) {
+      // Single batch read — O(n) total instead of O(n) Prisma round-trips
+      const allNetworkSites = await this.networkSiteRepo.findAll();
+      const nsByUispId = new Map(
+        allNetworkSites
+          .filter(ns => ns.uispSiteId !== null)
+          .map(ns => [ns.uispSiteId as string, ns]),
+      );
+
+      for (const site of sites) {
+        const existing = nsByUispId.get(site.uispId) ?? null;
+        if (!existing) {
+          // CREATE: minimal set — name from UISP, coordinates from lat/lng, status=active
+          const coordinates =
+            site.latitude !== null && site.longitude !== null
+              ? { lat: site.latitude, lng: site.longitude }
+              : null;
+          await this.networkSiteRepo.create({
+            name: site.name,
+            address: '',
+            city: '',
+            coordinates,
+            type: 'nodo',
+            status: 'active',
+            deviceCount: 0,
+            clientCount: 0,
+            uplink: '',
+            parentSiteId: null,
+            description: '',
+            iclassNodeCode: null,
+            uispSiteId: site.uispId,
+          });
+          networkSitesCreated++;
+        } else if (existing.coordinates === null) {
+          // UPDATE coordinates only when not yet set manually
+          if (site.latitude !== null && site.longitude !== null) {
+            await this.networkSiteRepo.update(existing.id, {
+              coordinates: { lat: site.latitude, lng: site.longitude },
+            });
+          }
+        }
+        // If existing.coordinates !== null → manual value wins, do nothing
+      }
+    }
+
     const durationMs = Date.now() - startedAt;
 
     // 7. Persist SyncState
@@ -115,6 +173,7 @@ export class SyncUispMirror {
       sites: sites.length,
       devices: devices.length,
       missing: missingSiteIds.length + missingDeviceIds.length,
+      networkSitesCreated,
       durationMs,
     });
     await this.syncStateRepo.save({
@@ -133,6 +192,7 @@ export class SyncUispMirror {
       sitesReappeared: reappearedSiteIds.length,
       devicesReappeared: reappearedDeviceIds.length,
       durationMs,
+      networkSitesCreated,
     };
   }
 }
