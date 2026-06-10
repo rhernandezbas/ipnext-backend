@@ -72,6 +72,9 @@ export interface ScheduledTask {
   // IClass — service order code returned by IClass after a successful "Enviar a IClass". Null otherwise.
   iclassOrderCode: string | null;
 
+  // #39 — whether the task's project allows equipment retirement (false if no project)
+  projectAllowsRetirement?: boolean;
+
   // Gestión Real — upstream service order id this task was ingested from.
   // Null for manually-created tasks. Used as the idempotency key on ingest.
   grOrdenId: string | null;

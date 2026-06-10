@@ -47,6 +47,13 @@ import {
   TemplateNotFoundError,
   OrderingError,
 } from '@domain/errors/checklist';
+import { RetireContractEquipment } from '@application/use-cases/RetireContractEquipment';
+import {
+  TaskHasNoContractError,
+  ProjectNotRetirementError,
+  EquipmentNotOnContractError,
+  RetireAlreadyDoneError,
+} from '@domain/errors/inventory';
 
 const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
   customer:    'CUSTOMER_NOT_FOUND',
@@ -94,6 +101,8 @@ export function createSchedulingRouter(
   /** Granular guard for the inventory-review mutation (inventory:write). Defaults
    * to a pass-through only when omitted (legacy callers/tests) — app.ts injects it. */
   requireInventoryWrite?: RequestHandler,
+  /** Use case for manual equipment retirement (#39). Optional — route only registered when provided. */
+  retireContractEquipment?: RetireContractEquipment,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -363,6 +372,62 @@ export function createSchedulingRouter(
       }
     });
   }
+
+  // ── Manual equipment retirement (#39) ────────────────────────────────────
+  // MUST be registered BEFORE GET /:id to avoid shadowing.
+  if (retireContractEquipment) {
+    const RetireSchema = z.object({ itemIds: z.array(z.string().min(1)).min(1, 'itemIds must contain at least one item') });
+
+    router.post('/:id/inventory/retire', auth, invWrite, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const parsed = RetireSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const result = await retireContractEquipment.execute({
+          taskId: req.params['id'] as string,
+          itemIds: parsed.data.itemIds,
+          actorId: (req as any).user?.id ?? null,
+        });
+        // Map internal result to wire contract: { retired: [{itemId, status, assetReturned}] }
+        res.status(200).json({
+          retired: result.retired.map(r => ({
+            itemId: r.itemId,
+            status: r.status,
+            assetReturned: r.assetId !== null && r.movementId !== null,
+          })),
+        });
+      } catch (err) {
+        if (err instanceof TaskHasNoContractError) {
+          res.status(422).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof ProjectNotRetirementError) {
+          res.status(422).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof EquipmentNotOnContractError) {
+          res.status(422).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof RetireAlreadyDoneError) {
+          res.status(409).json({ error: err.message, code: err.code });
+          return;
+        }
+        // FIX-4: P2002 from the partial-unique index (concurrent retire race condition).
+        // Both concurrent requests pass the pre-write findBySourceRef check; the loser
+        // hits the DB constraint and gets P2002. Map to 409 so the client retries gracefully.
+        if ((err as any)?.code === 'P2002') {
+          res.status(409).json({ error: 'This item has already been retired', code: 'RETIRE_ALREADY_DONE' });
+          return;
+        }
+        next(err);
+      }
+    });
+  }
+
+  // ── End equipment retirement ──────────────────────────────────────────────
 
   router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const task = await getTask.execute(req.params['id'] as string);

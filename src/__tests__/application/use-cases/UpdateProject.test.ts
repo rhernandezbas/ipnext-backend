@@ -87,6 +87,28 @@ describe('UpdateProject use case', () => {
     expect(updated).not.toBeNull();
   });
 
+  // SCEN-MAP-1: allowsEquipmentRetirement flag persists after update
+  it('SCEN-MAP-1: allowsEquipmentRetirement flag is persisted by UpdateProject', async () => {
+    const { projectRepo, categoryRepo, typeRepo, workflowRepo, adminRepo, partnerRepo } = await buildDeps();
+    const project = await projectRepo.create({ title: 'P' });
+    expect(project.allowsEquipmentRetirement).toBe(false);
+
+    const uc = new UpdateProject(projectRepo, categoryRepo, typeRepo, workflowRepo, adminRepo, partnerRepo);
+    const updated = await uc.execute(project.id, { allowsEquipmentRetirement: true });
+    expect(updated?.allowsEquipmentRetirement).toBe(true);
+
+    // Triangulate: can also set back to false
+    const reverted = await uc.execute(project.id, { allowsEquipmentRetirement: false });
+    expect(reverted?.allowsEquipmentRetirement).toBe(false);
+  });
+
+  // SCEN-MAP-4: new project defaults to allowsEquipmentRetirement: false
+  it('SCEN-MAP-4: new project defaults allowsEquipmentRetirement to false', async () => {
+    const { projectRepo } = await buildDeps();
+    const project = await projectRepo.create({ title: 'Nuevo Proyecto' });
+    expect(project.allowsEquipmentRetirement).toBe(false);
+  });
+
   it('throws ReferenceNotFoundError for unknown partner in update', async () => {
     const { projectRepo, categoryRepo, typeRepo, workflowRepo, adminRepo, partnerRepo } = await buildDeps();
     const project = await projectRepo.create({ title: 'P' });

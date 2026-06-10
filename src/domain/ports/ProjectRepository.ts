@@ -11,7 +11,10 @@ export interface CreateProjectInput {
   partnerIds?: string[];
 }
 
-export interface UpdateProjectInput extends Partial<CreateProjectInput> {}
+export interface UpdateProjectInput extends Partial<CreateProjectInput> {
+  /** When present, sets whether the project allows equipment retirement. */
+  allowsEquipmentRetirement?: boolean;
+}
 
 export interface ListProjectsFilter {
   visible?: boolean;

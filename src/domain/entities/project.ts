@@ -7,6 +7,7 @@ export interface Project {
   workflowId: string | null;
   projectLeadId: string | null;
   visible: boolean;
+  allowsEquipmentRetirement: boolean;
   partners: Array<{ id: string; name: string }>;
   taskCounts?: {
     nuevo: number;

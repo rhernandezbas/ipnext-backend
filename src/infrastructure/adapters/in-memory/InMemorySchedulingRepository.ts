@@ -79,6 +79,8 @@ const NEW_FIELDS_DEFAULTS = {
   kind: 'customer' as 'customer' | 'network',
   networkSiteId: null,
   networkSiteName: null,
+  // #39 — project allows equipment retirement
+  projectAllowsRetirement: false,
 };
 
 export class InMemorySchedulingRepository implements SchedulingRepository {

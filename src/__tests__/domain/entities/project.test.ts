@@ -20,6 +20,7 @@ describe('Project entity — enriched shape', () => {
       taskCounts: { nuevo: 0, enProgreso: 0, hecho: 0, total: 0 },
       iclassSoTypeId: null,
       iclassSoType: null,
+      allowsEquipmentRetirement: false,
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
     };
@@ -44,8 +45,10 @@ describe('Project entity — enriched shape', () => {
       projectLeadId: 'admin-1',
       visible: false,
       partners: [{ id: 'partner-1', name: 'IPNEXT BA' }],
+      taskCounts: { nuevo: 0, enProgreso: 0, hecho: 0, total: 0 },
       iclassSoTypeId: null,
       iclassSoType: null,
+      allowsEquipmentRetirement: false,
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
     };

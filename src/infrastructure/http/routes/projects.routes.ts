@@ -1,8 +1,8 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { ReferenceNotFoundError, ReferenceKind, ProjectHasActiveTasksError } from '@domain/errors/projects';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
-import { CreateProjectSchema, UpdateProjectSchema, ListProjectsQuerySchema } from '@application/dto/projects.dto';
+import { CreateProjectSchema, PutProjectSchema, UpdateProjectSchema, ListProjectsQuerySchema } from '@application/dto/projects.dto';
 import { ListProjects } from '@application/use-cases/ListProjects';
 import { GetProject } from '@application/use-cases/GetProject';
 import { CreateProject } from '@application/use-cases/CreateProject';
@@ -26,9 +26,12 @@ export function createProjectsRouter(
   deleteProject: DeleteProject,
   authProvider: AuthProvider,
   assignIClassSoType?: AssignIClassSoTypeToProject,
+  /** Guard for the `allowsEquipmentRetirement` mutation (inventory.manage). Pass-through when omitted. */
+  requireInventoryManage?: RequestHandler,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
+  const invManage: RequestHandler = requireInventoryManage ?? ((_req, _res, next) => next());
 
   router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
     const parsed = ListProjectsQuerySchema.safeParse(req.query);
@@ -79,7 +82,9 @@ export function createProjectsRouter(
   });
 
   router.put('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const parsed = UpdateProjectSchema.safeParse(req.body);
+    // PUT uses PutProjectSchema — deliberately excludes allowsEquipmentRetirement
+    // to prevent a privilege-escalation back-door (that field is PATCH-only, guarded).
+    const parsed = PutProjectSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
@@ -112,12 +117,26 @@ export function createProjectsRouter(
     }
   });
 
-  router.patch('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  /**
+   * requireManageForRetirementFlag — inline middleware that gates `invManage` only
+   * when `allowsEquipmentRetirement` is present in the request body.
+   * Using a real middleware (not a promise wrapper) ensures next(err) propagates
+   * correctly to the error handler and the deny-path never hangs.
+   */
+  const requireManageForRetirementFlag: RequestHandler = (req, res, next) => {
+    if (req.body != null && 'allowsEquipmentRetirement' in req.body) {
+      return invManage(req, res, next);
+    }
+    return next();
+  };
+
+  router.patch('/:id', auth, requireManageForRetirementFlag, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateProjectSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
     }
+
     try {
       const { iclassSoTypeId, ...rest } = parsed.data;
 
