@@ -120,6 +120,15 @@ describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', 
     expect(args).toContain('GetLowStockAlerts');
   });
 
+  // Inventory flow fixes — technician list + return-by-task wiring guards
+  it('flow-fixes: app.ts wires ListTechniciansWithStock and ListReturnSuggestionsByTask into createInventoryRouter', () => {
+    const match = appSrc.match(/createInventoryRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    const args = match![1];
+    expect(args).toContain('ListTechniciansWithStock');
+    expect(args).toContain('ListReturnSuggestionsByTask');
+  });
+
   // EPIC #38 follow-up — depot stock entry wiring guards
   it('depot-entry: app.ts wires AddAssetToDepot into createInventoryRouter', () => {
     const match = appSrc.match(/createInventoryRouter\(([\s\S]*?)\)\s*\)/);

@@ -75,3 +75,21 @@ export function normalizeSerial(s: string | null | undefined): string | null {
   const normalized = s.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   return normalized === '' ? null : normalized;
 }
+
+/**
+ * Canonicaliza una MAC address a `XX:XX:XX:XX:XX:XX` (uppercase, separador `:`)
+ * sobreviviendo separadores alternos (`-`, `.`, sin separador).
+ *
+ * - Inputs con exactamente 12 hex-digits (tras strip de separadores) → canonical.
+ * - Inputs malformados (< 12 hex, caracteres inválidos, etc.) → null.
+ *
+ * W2: usada en AddAssetToDepot y CreateManualSuggestion (application layer) para
+ * garantizar que las MACs se almacenan siempre en forma canónica, de modo que
+ * findByMac('AA:BB:CC:DD:EE:FF') encuentre un asset guardado como 'aa-bb-cc-dd-ee-ff'.
+ */
+export function canonicalizeMac(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const hex = raw.replace(/[:\-.\s]/g, '').toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(hex)) return null;
+  return (hex.match(/.{2}/g) as string[]).join(':');
+}

@@ -8,6 +8,7 @@ import { assertSuggestionComplete } from '@domain/services/suggestionCompletenes
 import { TaskInventorySuggestionDto, toTaskInventorySuggestionDto } from '@application/dto/TaskInventorySuggestionDto';
 import { matchInstalledItem, toSuggestionMatch } from '@application/services/matchInstalledItem';
 import { DeviceTypeCatalogService } from '@application/services/DeviceTypeCatalogService';
+import { canonicalizeMac } from '@domain/entities/return-suggestion';
 
 export interface CreateManualSuggestionInput {
   taskId: string;
@@ -59,7 +60,9 @@ export class CreateManualSuggestion {
       deviceType: resolvedType,
       qwenDeviceType: null,
       serialNumber: input.serialNumber ?? null,
-      mac: input.mac ?? null,
+      // W2b: canonicalize MAC on create so it's stored as 'AA:BB:CC:DD:EE:FF'.
+      // canonicalizeMac returns null for invalid/null inputs (no exception).
+      mac: input.mac != null ? (canonicalizeMac(input.mac) ?? input.mac) : null,
       materialDesc: input.materialDesc ?? null,
       quantity: input.quantity ?? null,
       unit: input.unit ?? null,

@@ -1,7 +1,7 @@
 import { InventoryAssetRepository } from '@domain/ports/InventoryAssetRepository';
 import { InventoryAsset, AssetStatus } from '@domain/entities/inventory-asset';
 import { DuplicateSerialNumberError } from '@domain/errors/inventory';
-import { normalizeSerial } from '@domain/entities/return-suggestion';
+import { normalizeSerial, canonicalizeMac } from '@domain/entities/return-suggestion';
 import { prisma } from '../../database/prisma';
 import { PrismaClientLike } from './PrismaClientLike';
 
@@ -43,8 +43,17 @@ export class PrismaInventoryAssetRepository implements InventoryAssetRepository 
   }
 
   async findByMac(mac: string): Promise<InventoryAsset | null> {
-    const row = await this.db.inventoryAsset.findFirst({ where: { mac } });
-    return row ? toEntity(row as Row) : null;
+    // W2: normalize arg before the exact DB query — new rows are stored canonical so
+    // 'AA:BB:CC:DD:EE:FF' hits the exact match. For legacy non-canonical rows, fall
+    // back to in-process scan (same pattern as findByNormalizedSerialAny drift path).
+    const canonical = canonicalizeMac(mac);
+    if (canonical == null) return null;
+    const exact = await this.db.inventoryAsset.findFirst({ where: { mac: canonical } });
+    if (exact) return toEntity(exact as Row);
+    // Drift fallback: scan and normalize-compare (legacy rows stored without canonical form).
+    const rows = (await this.db.inventoryAsset.findMany({ where: { mac: { not: null } } })) as Row[];
+    const match = rows.find((r) => r.mac != null && canonicalizeMac(r.mac) === canonical);
+    return match ? toEntity(match) : null;
   }
 
   async findByNormalizedSerial(serial: string): Promise<InventoryAsset | null> {

@@ -159,19 +159,31 @@ export class ConfirmInventorySuggestion {
 
     // Synthesize a stable serial when the device has none (MAC-only devices),
     // so the asset UNIQUE(serialNumber) holds.
-    const serial = args.serialNumber && args.serialNumber.trim()
-      ? args.serialNumber
+    const hasMeaningfulSerial = !!(args.serialNumber && args.serialNumber.trim());
+    const serial = hasMeaningfulSerial
+      ? args.serialNumber!
       : `CII-${randomUUID()}`;
 
-    // Fix #2: scoped idempotent reuse. Reuse only when the asset is `available`
+    // FIX A: use normalized serial lookup (any status/location) so OCR/manual drift
+    // (case, dashes, spaces: "sn-001 " vs "SN001") doesn't create a silent duplicate.
+    // Fall back to MAC lookup when there is no meaningful serial.
+    let asset = hasMeaningfulSerial
+      ? await b.assets.findByNormalizedSerialAny(serial)
+      : (args.mac ? await b.assets.findByMac(args.mac) : null);
+
+    // Fix #2 (scoped idempotent reuse): reuse only when the asset is `available`
     // OR already at THIS contract's CLIENTE location; otherwise it is installed
     // elsewhere and reusing it would relocate someone else's device → refuse.
-    let asset = await b.assets.findBySerialNumber(serial);
+    let fromLocationId: string | undefined;
     if (asset) {
       const reusable =
         asset.status === 'available' || asset.currentLocationId === loc.id;
       if (!reusable) {
         throw new AssetInstalledElsewhereError(serial, asset.currentLocationId);
+      }
+      // Capture the asset's current location so the INSTALL movement records depot→client.
+      if (asset.currentLocationId && asset.currentLocationId !== loc.id) {
+        fromLocationId = asset.currentLocationId;
       }
     } else {
       asset = await b.assets.create(
@@ -191,6 +203,7 @@ export class ConfirmInventorySuggestion {
     await b.movements.record({
       type: 'INSTALL',
       assetId: asset.id,
+      fromLocationId,
       toLocationId: loc.id,
       taskId: args.taskId,
       technicianId: args.technicianId ?? undefined,

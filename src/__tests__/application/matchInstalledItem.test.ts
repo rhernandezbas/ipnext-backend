@@ -26,6 +26,35 @@ describe('normSn', () => {
   it('whitespace-only → null', () => expect(normSn('   ')).toBeNull());
 });
 
+// W1 — SN match uses normalizeSerial (strips non-alphanum) so 'SN-001' and 'SN001'
+// are treated as the same device. Without this, same_device is missed and the confirm
+// path creates a second CII pointing to the same assetId.
+describe('W1: normSn-aligned SN match with dash variants', () => {
+  it('CII serial SN-001 + suggestion SN001 → same_device (not a miss)', () => {
+    const item = makeItem({ serialNumber: 'SN-001' });
+    const s    = makeSug({ serialNumber: 'SN001' });
+    const result = matchInstalledItem(s, [item]);
+    expect(result.status).toBe('same_device');
+    expect(result.item).toBe(item);
+  });
+
+  it('CII serial SN001 + suggestion SN-001 → same_device (symmetric)', () => {
+    const item = makeItem({ serialNumber: 'SN001' });
+    const s    = makeSug({ serialNumber: 'SN-001' });
+    const result = matchInstalledItem(s, [item]);
+    expect(result.status).toBe('same_device');
+    expect(result.item).toBe(item);
+  });
+
+  it('truly different serials (ABC vs XYZ) are NOT matched as same_device', () => {
+    const item = makeItem({ serialNumber: 'SN-ABC', type: 'ROUTER' });
+    const s    = makeSug({ serialNumber: 'SN-XYZ', deviceType: 'ROUTER' });
+    const result = matchInstalledItem(s, [item]);
+    // Falls through to same_type (same ROUTER), not same_device
+    expect(result.status).toBe('same_type');
+  });
+});
+
 describe('normMac', () => {
   it('strips colons and uppercases', () => expect(normMac('aa:bb:cc:dd:ee:ff')).toBe('AABBCCDDEEFF'));
   it('strips dashes and uppercases', () => expect(normMac('AA-BB-CC')).toBe('AABBCC'));

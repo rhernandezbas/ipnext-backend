@@ -4,7 +4,7 @@ import { DeviceTypeCatalogRepository } from '@domain/ports/DeviceTypeCatalogRepo
 import { UnitOfWork, TransactionalRepos } from '@domain/ports/UnitOfWork';
 import { ResolveDepotLocation } from '@application/use-cases/ResolveDepotLocation';
 import { createInventoryAsset } from '@domain/entities/inventory-asset';
-import { normalizeSerial } from '@domain/entities/return-suggestion';
+import { normalizeSerial, canonicalizeMac } from '@domain/entities/return-suggestion';
 import {
   AssetAlreadyExistsError,
   AssetIdentifierRequiredError,
@@ -79,8 +79,14 @@ export class AddAssetToDepot {
         if (dup) throw new AssetAlreadyExistsError('serialNumber', input.serialNumber!.trim());
       }
     }
+    // W2: canonicalize the MAC before any lookup or storage so that 'aa-bb-cc-dd-ee-ff'
+    // and 'AA:BB:CC:DD:EE:FF' are treated as the same address throughout the system.
+    const canonicalMac = hasMac ? canonicalizeMac(input.mac!) : null;
+
     if (hasMac) {
-      const dup = await this.assets.findByMac(input.mac!.trim());
+      // Use canonical form for the dup lookup — findByMac also normalizes its arg
+      // (W2c), but passing canonical here is explicit and avoids double-normalization.
+      const dup = await this.assets.findByMac(canonicalMac ?? input.mac!.trim());
       if (dup) throw new AssetAlreadyExistsError('mac', input.mac!.trim());
     }
 
@@ -103,7 +109,9 @@ export class AddAssetToDepot {
         createInventoryAsset({
           id: assetId,
           serialNumber,
-          mac: hasMac ? input.mac!.trim() : null,
+          // W2: store canonical MAC ('AA:BB:CC:DD:EE:FF') — raw input is normalized above.
+          // If canonicalizeMac returns null (invalid format), fall back to trimmed raw.
+          mac: hasMac ? (canonicalMac ?? input.mac!.trim()) : null,
           deviceTypeId: input.deviceTypeId,
           status: 'available',
           currentLocationId: depot.id,
@@ -130,7 +138,7 @@ export class AddAssetToDepot {
       deviceTypeId: input.deviceTypeId,
       deviceTypeName: deviceType.name,
       serialNumber: hasSerial ? serialNumber : null,
-      mac: hasMac ? input.mac!.trim() : null,
+      mac: hasMac ? (canonicalMac ?? input.mac!.trim()) : null,
       status: 'available',
     };
   }

@@ -1,7 +1,7 @@
 import { InventoryAssetRepository } from '@domain/ports/InventoryAssetRepository';
 import { InventoryAsset, AssetStatus } from '@domain/entities/inventory-asset';
 import { DuplicateSerialNumberError } from '@domain/errors/inventory';
-import { normalizeSerial } from '@domain/entities/return-suggestion';
+import { normalizeSerial, canonicalizeMac } from '@domain/entities/return-suggestion';
 
 export class InMemoryInventoryAssetRepository implements InventoryAssetRepository {
   readonly store = new Map<string, InventoryAsset>();
@@ -17,7 +17,14 @@ export class InMemoryInventoryAssetRepository implements InventoryAssetRepositor
   }
 
   async findByMac(mac: string): Promise<InventoryAsset | null> {
-    const a = Array.from(this.store.values()).find((x) => x.mac === mac);
+    // W2: normalize the argument AND the stored value so 'aa-bb-cc-dd-ee-ff'
+    // and 'AA:BB:CC:DD:EE:FF' resolve to the same asset regardless of how
+    // legacy rows were written (new rows are always stored canonical).
+    const target = canonicalizeMac(mac);
+    if (target == null) return null;
+    const a = Array.from(this.store.values()).find(
+      (x) => x.mac != null && canonicalizeMac(x.mac) === target,
+    );
     return a ? { ...a } : null;
   }
 
@@ -54,12 +61,14 @@ export class InMemoryInventoryAssetRepository implements InventoryAssetRepositor
     );
     if (dupSerial) throw new DuplicateSerialNumberError(asset.serialNumber);
 
-    // FIX 3: mac partial unique mirror — NULLs are free; non-null macs must be unique.
-    // Throws a P2002-shaped error so the route handler maps it to 409 ASSET_ALREADY_EXISTS
-    // (same signal as the DB partial unique index on InventoryAsset.mac WHERE mac IS NOT NULL).
+    // FIX 3 / W2: mac partial unique mirror — NULLs are free; non-null macs must be unique.
+    // W2: compare normalized forms so 'aa-bb-cc-dd-ee-ff' and 'AA:BB:CC:DD:EE:FF' are
+    // treated as the same MAC (mirrors the canonical storage requirement).
+    // Throws a P2002-shaped error so the route handler maps it to 409 ASSET_ALREADY_EXISTS.
     if (asset.mac != null) {
-      const dupMac = Array.from(this.store.values()).some(
-        (x) => x.mac != null && x.mac === asset.mac,
+      const assetMacNorm = canonicalizeMac(asset.mac);
+      const dupMac = assetMacNorm != null && Array.from(this.store.values()).some(
+        (x) => x.mac != null && canonicalizeMac(x.mac) === assetMacNorm,
       );
       if (dupMac) {
         const err = Object.assign(
