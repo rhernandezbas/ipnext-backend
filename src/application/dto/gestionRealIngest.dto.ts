@@ -2,7 +2,29 @@ import { z } from 'zod';
 import { IngestConfig } from '@domain/ports/GestionRealIngestConfigRepository';
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { SyncState } from '@domain/ports/SyncStateRepository';
-import { SkippedOrderRef } from '@application/use-cases/IngestGestionRealOrders';
+
+// ── Skipped-order refs (REQ-SKIPLIST) ───────────────────────────────────────
+
+/**
+ * Why an order was skipped as unmirrored: which local FK failed to resolve.
+ * Single source of truth — the type is derived from the list so the parser
+ * below can never silently drop a reason added later.
+ */
+export const UNMIRRORED_REASONS = ['client-unmirrored', 'contract-unmirrored'] as const;
+export type UnmirroredReason = (typeof UNMIRRORED_REASONS)[number];
+
+/**
+ * GR refs of one skipped order. The mirror can lag GR in two known ways
+ * (clients created without ultima_modificacion; new contracts on
+ * never-modified clients), so the skip must surface WHO is missing — the
+ * operator repairs it by touching the client in GR, not by reading logs + DB.
+ */
+export interface SkippedOrderRef {
+  grOrdenId: string;
+  grClienteId: string | null;
+  grContratoId: string | null;
+  reason: UnmirroredReason;
+}
 
 // ── Config DTO ─────────────────────────────────────────────────────────────
 
@@ -86,8 +108,6 @@ const ZERO_COUNTS: Omit<RunCounts, 'skippedOrders'> = {
   unclassified: 0,
 };
 
-const UNMIRRORED_REASONS: readonly string[] = ['client-unmirrored', 'contract-unmirrored'];
-
 /**
  * Parse the persisted skip list defensively: anything that is not an array of
  * well-formed entries degrades to [] — old SyncState rows predate the field
@@ -103,7 +123,7 @@ function parseSkippedOrders(value: unknown): SkippedOrderRef[] {
       (typeof entry.grClienteId === 'string' || entry.grClienteId === null) &&
       (typeof entry.grContratoId === 'string' || entry.grContratoId === null) &&
       typeof entry.reason === 'string' &&
-      UNMIRRORED_REASONS.includes(entry.reason)
+      (UNMIRRORED_REASONS as readonly string[]).includes(entry.reason)
     );
   });
 }

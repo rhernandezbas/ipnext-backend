@@ -17,6 +17,7 @@ function makeDebtor(id: string): GrClient {
     city: null,
     province: null,
     ultimaModificacion: null,
+    fechaCreacion: null,
     raw: {},
   };
 }

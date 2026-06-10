@@ -96,6 +96,38 @@ describe('GestionRealIngestScheduler', () => {
     }
   });
 
+  it('logs at most 10 skipped refs per tick plus a remainder line (no perpetual log flood)', async () => {
+    const h = makeHarness();
+    const skippedOrders = Array.from({ length: 12 }, (_, i) => ({
+      grOrdenId: String(9000 + i),
+      grClienteId: String(100 + i),
+      grContratoId: String(200 + i),
+      reason: 'client-unmirrored' as const,
+    }));
+    jest.spyOn(h.ingest, 'execute').mockResolvedValueOnce({
+      created: 0,
+      skippedDuplicate: 0,
+      skippedUnmirrored: 12,
+      unclassified: 0,
+      skippedOrders,
+    });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const noisy = new GestionRealIngestScheduler(h.ingest, { intervalMs: 1000 }, new InMemoryDistributedLock());
+
+      await noisy.runOnce();
+
+      const logged = logSpy.mock.calls.flat().join('\n');
+      expect(logged).toContain('9000');
+      expect(logged).toContain('9009');
+      expect(logged).not.toContain('9010');
+      expect(logged).not.toContain('9011');
+      expect(logged).toContain('2 más');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('runs the ingest once when the lock is free', async () => {
     const h = makeHarness();
     const spy = jest.spyOn(h.ingest, 'execute');

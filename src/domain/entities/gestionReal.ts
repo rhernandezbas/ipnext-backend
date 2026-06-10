@@ -23,13 +23,12 @@ export interface GrClient {
   /** Raw GR modification timestamp "DD-MM-YYYY HH:MM:SS". */
   ultimaModificacion: string | null;
   /**
-   * Raw GR creation timestamp "DD-MM-YYYY HH:MM:SS". Optional: only the
-   * clientes_consulta parser fills it; GR can also hold "00-00-0000 00:00:00"
-   * placeholders on legacy rows. Needed because the delta scans by creation
-   * date too (clients created without ultima_modificacion are invisible to
-   * the modification delta).
+   * Raw GR creation timestamp "DD-MM-YYYY HH:MM:SS" (clientes_consulta field
+   * `fecha_creacion`; legacy rows hold the "00-00-0000 00:00:00" placeholder).
+   * Needed because the delta scans by creation date too (clients created
+   * without ultima_modificacion are invisible to the modification delta).
    */
-  fechaCreacion?: string | null;
+  fechaCreacion: string | null;
   /** Full GR payload, persisted into Client.customAttributes for fidelity. */
   raw: Record<string, unknown>;
 }

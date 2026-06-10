@@ -20,6 +20,9 @@ export interface IngestRunSummary {
  */
 const LOCK_KEY = 'gr-ingest';
 
+/** Max skipped-order detail lines per tick — the full list lives in GET /status. */
+const MAX_SKIP_LOG_LINES = 10;
+
 /**
  * In-process scheduler for the Gestión Real installation-order ingest. Runs
  * IngestGestionRealOrders on a fixed interval, mirroring GestionRealSyncScheduler.
@@ -87,13 +90,17 @@ export class GestionRealIngestScheduler {
         `unclassified=${result.unclassified}`,
       );
       // Surface WHICH orders the mirror is blocking — `unmirrored=N` alone
-      // forced log+DB archaeology to find the client to repair in GR.
-      for (const s of result.skippedOrders) {
+      // forced log+DB archaeology to find the client to repair in GR. Capped:
+      // skips are stable across ticks (until someone repairs the mirror), so
+      // an uncapped loop would re-flood the log every interval.
+      for (const s of result.skippedOrders.slice(0, MAX_SKIP_LOG_LINES)) {
         this.log(
           `[gr-ingest] skipped orden ${s.grOrdenId}: ${s.reason} ` +
           `(cliente ${s.grClienteId ?? '?'}, contrato ${s.grContratoId ?? '?'})`,
         );
       }
+      const unlogged = result.skippedOrders.length - MAX_SKIP_LOG_LINES;
+      if (unlogged > 0) this.log(`[gr-ingest] ... y ${unlogged} más (ver GET /status)`);
       return { result };
     } catch (err) {
       const message = (err as Error).message;

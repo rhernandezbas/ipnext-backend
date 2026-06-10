@@ -10,6 +10,7 @@ import { TaskCategoryRepository } from '@domain/ports/TaskCategoryRepository';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { IngestCatalogEntryMissingError } from '@domain/errors/scheduling';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
+import { SkippedOrderRef, UnmirroredReason } from '@application/dto/gestionRealIngest.dto';
 import { classifyTech } from './classifyTech';
 
 const SYNC_ENTITY = 'gr-ingest';
@@ -49,21 +50,13 @@ function isUniqueViolation(err: unknown): boolean {
   return typeof message === 'string' && /unique constraint/i.test(message);
 }
 
-/** Why an order was skipped as unmirrored: which local FK failed to resolve. */
-export type UnmirroredReason = 'client-unmirrored' | 'contract-unmirrored';
-
 /**
- * GR refs of one skipped order (REQ-SKIPLIST-1). The mirror can lag GR in two
- * known ways (clients created without ultima_modificacion; new contracts on
- * never-modified clients), so the skip must surface WHO is missing — the
- * operator repairs it by touching the client in GR, not by reading logs + DB.
+ * Cap on the persisted/exposed skip refs (REQ-SKIPLIST-3). A stalled mirror
+ * (clients sync down or flag off) makes EVERY CI order in the window skip, and
+ * the list is rebuilt per run — without a cap each tick would persist and serve
+ * an unbounded blob. `skippedUnmirrored` always carries the real total.
  */
-export interface SkippedOrderRef {
-  grOrdenId: string;
-  grClienteId: string | null;
-  grContratoId: string | null;
-  reason: UnmirroredReason;
-}
+const MAX_SKIPPED_REFS = 100;
 
 /** Outcome counts for one ingest run. */
 export interface IngestRunResult {
@@ -71,7 +64,7 @@ export interface IngestRunResult {
   skippedDuplicate: number;
   skippedUnmirrored: number;
   unclassified: number;
-  /** One entry per unmirrored skip — always `skippedUnmirrored` items long. */
+  /** First MAX_SKIPPED_REFS unmirrored skips (REQ-SKIPLIST-1); total in `skippedUnmirrored`. */
   skippedOrders: SkippedOrderRef[];
 }
 
@@ -210,16 +203,14 @@ export class IngestGestionRealOrders {
     // skip + count + record the GR refs so the status endpoint can list them.
     const client = order.cliente ? await this.resolver.findClientByGrId(order.cliente) : null;
     if (!client) {
-      counts.skippedUnmirrored++;
-      counts.skippedOrders.push(skippedRef(order, 'client-unmirrored'));
+      recordSkip(counts, order, 'client-unmirrored');
       return;
     }
     const contract = order.contrato
       ? await this.resolver.findContractByGrContratoId(order.contrato)
       : null;
     if (!contract) {
-      counts.skippedUnmirrored++;
-      counts.skippedOrders.push(skippedRef(order, 'contract-unmirrored'));
+      recordSkip(counts, order, 'contract-unmirrored');
       return;
     }
 
@@ -332,14 +323,17 @@ export class IngestGestionRealOrders {
   }
 }
 
-/** Build the skip-list entry for an order whose local FK resolution failed. */
-function skippedRef(order: GrServiceOrder, reason: UnmirroredReason): SkippedOrderRef {
-  return {
-    grOrdenId: order.grOrdenId,
-    grClienteId: order.cliente ?? null,
-    grContratoId: order.contrato ?? null,
-    reason,
-  };
+/** Count an unmirrored skip and record its GR refs (capped at MAX_SKIPPED_REFS). */
+function recordSkip(counts: IngestRunResult, order: GrServiceOrder, reason: UnmirroredReason): void {
+  counts.skippedUnmirrored++;
+  if (counts.skippedOrders.length < MAX_SKIPPED_REFS) {
+    counts.skippedOrders.push({
+      grOrdenId: order.grOrdenId,
+      grClienteId: order.cliente ?? null,
+      grContratoId: order.contrato ?? null,
+      reason,
+    });
+  }
 }
 
 /** Date → "DD-MM-AAAA" (GR's expected window format). */

@@ -309,6 +309,21 @@ describe('IngestGestionRealOrders', () => {
     });
   });
 
+  it('caps skippedOrders at 100 refs while skippedUnmirrored keeps the real total (REQ-SKIPLIST-3)', async () => {
+    const h = await makeHarness();
+    // 105 orders, none resolvable: a stalled mirror must not balloon the
+    // persisted blob nor the status payload.
+    h.gr.serviceOrders = Array.from({ length: 105 }, (_, i) =>
+      order({ grOrdenId: String(5000 + i), cliente: `cli-${i}`, contrato: `con-${i}` }),
+    );
+
+    const result = await h.useCase.execute();
+
+    expect(result.skippedUnmirrored).toBe(105);
+    expect(result.skippedOrders).toHaveLength(100);
+    expect(result.skippedOrders[0].grOrdenId).toBe('5000');
+  });
+
   it('persists the skipped-order refs in SyncState so the status endpoint can list them (REQ-SKIPLIST-2)', async () => {
     const h = await makeHarness();
     // Client never mirrored (e.g. GR row with empty ultima_modificacion).
