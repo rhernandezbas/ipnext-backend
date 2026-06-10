@@ -25,27 +25,18 @@ export interface AddMaterialToDepotOutput {
  * (EPIC #38 follow-up). Increments the depot MaterialStock balance and records an
  * ADJUST ledger movement atomically.
  *
- * Semantics:
- *   - Reads the current depot balance FIRST (0 if no row exists yet) so the ADJUST
- *     movement carries the RESULTING total (currentQty + input.qty). The in-memory
- *     adapter's `record(ADJUST for material)` does an `upsert(SET qty)` — by passing
- *     the new total we get correct increment semantics from the existing ADJUST path.
- *   - `roundQty` applied to the input qty AND the resulting balance (W1 rule).
+ * Semantics (FIX W1 cardinal — DELTA-additive ADJUST):
+ *   - NO pre-read of the current balance. The use case passes the raw DELTA (input.qty)
+ *     directly to movements.record() as the movement qty.
+ *   - Both adapters apply ADJUST(material) via `increment` (additive upsert), so two
+ *     concurrent loads over the same base both commit — no lost-update window.
+ *   - The ledger row carries the DELTA, not the running total. "ADJUST 5" means the
+ *     operator loaded 5 units; the resulting balance is old+5.
+ *   - `roundQty` applied to input qty (W1 rule).
  *   - qty must be > 0 → 400 INVALID_QUANTITY.
  *   - materialCatalogId must exist → 404 MATERIAL_NOT_FOUND.
- *
- * No UnitOfWork: the two writes (MaterialStock.increment + movement.record) use the
- * same in-memory structure and are effectively atomic at the application level. For
- * the Prisma adapter, Prisma's built-in atomicity per-operation is sufficient here
- * (no cross-table constraint violation is possible — stock goes up, movement is
- * appended). Using a UoW here would add wiring complexity for minimal safety benefit
- * (unlike asset-entry which has the create+movement dual-write constraint).
- *
- * Actually: we DO need atomicity — if movement.record fails, the stock was already
- * incremented. The simplest correct approach is to record the movement FIRST (which
- * in the in-memory adapter calls upsert(SET newQty) for ADJUST), so a single call
- * to movements.record() materializes BOTH the ledger row AND the balance. We just
- * need to compute newQty = current + qty before calling record().
+ *   - `newQty` in the response: read-after-write from MaterialStock (acceptable;
+ *     the increment already committed).
  */
 export class AddMaterialToDepot {
   constructor(
@@ -67,28 +58,25 @@ export class AddMaterialToDepot {
     // 3) Resolve depot (find-or-create idempotent).
     const depot = await this.resolveDepot.execute('DEPOSITO');
 
-    // 4) Read the current balance so we can pass the RESULTING total to the ADJUST
-    //    movement. The in-memory and Prisma ADJUST paths both SET (upsert) the qty
-    //    at toLocation, so currentQty + qty = the new balance.
-    const currentStock = await this.materialStock.findByMaterialAndLocation(
-      input.materialCatalogId,
-      depot.id,
-    );
-    const currentQty = currentStock?.qty ?? 0;
-    const newQty = roundQty(currentQty + qty);
-
-    // 5) Record the ADJUST movement — this is the SINGLE write that atomically:
-    //    (a) appends the ledger row
-    //    (b) upserts the MaterialStock balance to newQty at depot (via applyMaterialEffect)
-    // Note: createInventoryMovement requires ADJUST to have a non-empty note.
+    // 4) Record the ADJUST movement with the raw DELTA (no pre-read).
+    //    Both adapters apply ADJUST(material) via `increment` — the ledger row qty IS
+    //    the delta. This eliminates the lost-update window under concurrency (W1 cardinal).
+    //    Note: createInventoryMovement requires ADJUST to have a non-empty note.
     await this.movements.record({
       type: 'ADJUST',
       materialCatalogId: input.materialCatalogId,
-      qty: newQty,
+      qty,
       toLocationId: depot.id,
       source: 'MANUAL',
       note: (input.note && input.note.trim()) ? input.note.trim() : 'Carga manual de material al depósito',
     });
+
+    // 5) Read the resulting balance (read-after-write — the increment already committed).
+    const afterStock = await this.materialStock.findByMaterialAndLocation(
+      input.materialCatalogId,
+      depot.id,
+    );
+    const newQty = roundQty(afterStock?.qty ?? qty);
 
     return {
       ok: true,

@@ -433,6 +433,13 @@ function handleDepotEntryError(e: unknown, res: Response, next: NextFunction): v
     res.status(409).json({ error: (e as DomainError).message, code: (e as DomainError).code });
     return;
   }
+  // FIX 2b: DB backstop — concurrent creation wins the race and hits the unique constraint
+  // (serialNumber or mac partial unique). P2002 propagates as a raw Prisma error from inside
+  // the UoW tx (no recovery possible on a poisoned tx client). Map it to 409.
+  if (e && typeof e === 'object' && (e as { code?: string }).code === 'P2002') {
+    res.status(409).json({ error: 'Asset already exists', code: 'ASSET_ALREADY_EXISTS' });
+    return;
+  }
   next(e);
 }
 

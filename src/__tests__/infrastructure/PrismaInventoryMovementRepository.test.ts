@@ -194,14 +194,16 @@ describe('PrismaInventoryMovementRepository — $transaction boundary', () => {
     jest.restoreAllMocks();
   });
 
-  it('ADJUST writes a Decimal-safe absolute value (no float drift)', async () => {
+  it('ADJUST writes a Decimal-safe delta increment (no float drift, FIX W1 DELTA-additive)', async () => {
+    // FIX W1: ADJUST(material) is now DELTA-additive. The Prisma adapter issues
+    // update: { qty: { increment: Decimal(delta) } } NOT update: { qty: Decimal(set) }.
     const { Prisma } = await import('@prisma/client');
-    const upsertArgs: { update: { qty: unknown } }[] = [];
+    const upsertArgs: { update: { qty: { increment: unknown } } }[] = [];
     const tx = {
       inventoryAsset: { update: jest.fn(async () => ({})) },
       materialStock: {
         findUnique: jest.fn(async () => ({ qty: 1000 })),
-        upsert: jest.fn(async (a: { update: { qty: unknown } }) => {
+        upsert: jest.fn(async (a: { update: { qty: { increment: unknown } } }) => {
           upsertArgs.push(a);
           return {};
         }),
@@ -216,9 +218,10 @@ describe('PrismaInventoryMovementRepository — $transaction boundary', () => {
     const repo = new PrismaInventoryMovementRepository();
     await repo.record({ type: 'ADJUST', materialCatalogId: 'M1', qty: 0.1 + 0.2, toLocationId: 'L1', note: 'count', source: 'X' });
 
-    const qty = upsertArgs[0].update.qty;
-    expect(Prisma.Decimal.isDecimal(qty)).toBe(true);
-    expect((qty as InstanceType<typeof Prisma.Decimal>).toString()).toBe('0.3');
+    // The update payload must be { increment: Decimal('0.3') } — not a raw SET value.
+    const increment = upsertArgs[0].update.qty.increment;
+    expect(Prisma.Decimal.isDecimal(increment)).toBe(true);
+    expect((increment as InstanceType<typeof Prisma.Decimal>).toString()).toBe('0.3');
     jest.restoreAllMocks();
   });
 

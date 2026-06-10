@@ -121,16 +121,22 @@ describe('Adapter parity — material balance through applyMaterialEffect', () =
       expectBalances: { L_depot: 60, L_tech: 50 },
     },
     {
-      name: 'ADJUST sets an absolute balance',
+      // FIX W1 cardinal: ADJUST(material) is now DELTA-additive. Ledger row qty = delta.
+      // The depot entry use case (AddMaterialToDepot) passes the raw input qty as the
+      // delta; both adapters apply it via increment (upsert additive). Two concurrent
+      // loads both commit without a lost-update window.
+      name: 'ADJUST adds delta to balance (DELTA-additive, FIX W1)',
       input: { type: 'ADJUST', materialCatalogId: M, qty: 7, toLocationId: 'L_depot', note: 'count', source: 'X' },
       seed: [{ loc: 'L_depot', qty: start }],
-      expectBalances: { L_depot: 7 },
+      expectBalances: { L_depot: 107 }, // 100 + 7 = 107
     },
     {
-      name: 'ADJUST to zero (Fix H2)',
+      // ADJUST with qty=0 is a no-op on the balance (delta=0 → increment(0) → unchanged).
+      // Fix H2 allowed qty=0; with delta-additive semantics a zero-delta is idempotent.
+      name: 'ADJUST delta=0 is a balance no-op (Fix H2, DELTA-additive)',
       input: { type: 'ADJUST', materialCatalogId: M, qty: 0, toLocationId: 'L_depot', note: 'counted zero', source: 'X' },
       seed: [{ loc: 'L_depot', qty: start }],
-      expectBalances: { L_depot: 0 },
+      expectBalances: { L_depot: 100 }, // 100 + 0 = 100 (no change)
     },
     {
       // Fix Test-H3/M3 — the INSTALL/RETURN increment fall-through branch
@@ -219,8 +225,8 @@ describe('Adapter parity — material balance through applyMaterialEffect', () =
     } else if (input.type === 'ADJUST') {
       expect(upsertArgs).toHaveLength(1);
       expect((upsertArgs[0].where as { materialCatalogId_locationId: { locationId: string } }).materialCatalogId_locationId.locationId).toBe(toLoc);
-      // ADJUST is an absolute SET — update.qty is the raw value (Decimal-safe).
-      expect(Number(upsertArgs[0].update.qty)).toBe(roundQty(input.qty!));
+      // FIX W1: ADJUST(material) is now DELTA-additive — update.qty = { increment: delta }.
+      expect(Number((upsertArgs[0].update.qty as { increment: number }).increment)).toBe(roundQty(input.qty!));
     } else if (input.type === 'INSTALL' || input.type === 'RETURN') {
       // Material INSTALL/RETURN fall-through → additive increment at toLocation.
       expect(upsertArgs).toHaveLength(1);

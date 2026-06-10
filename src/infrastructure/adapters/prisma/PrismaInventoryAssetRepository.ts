@@ -63,6 +63,22 @@ export class PrismaInventoryAssetRepository implements InventoryAssetRepository 
     return match ? toEntity(match) : null;
   }
 
+  async findByNormalizedSerialAny(serial: string): Promise<InventoryAsset | null> {
+    const target = normalizeSerial(serial);
+    if (target == null) return null;
+    // Depot entry duplicate guard (FIX 2a): any status/location.
+    // Fast path: try exact hit on the UNIQUE index first.
+    const exact = await this.db.inventoryAsset.findUnique({ where: { serialNumber: serial } });
+    if (exact && normalizeSerial((exact as Row).serialNumber) === target) {
+      return toEntity(exact);
+    }
+    // Drift path: scan all assets and normalize-compare in-process.
+    // Depot entry volume is low (manual operator action), so this is acceptable.
+    const rows = (await this.db.inventoryAsset.findMany({})) as Row[];
+    const match = rows.find((r) => normalizeSerial(r.serialNumber) === target);
+    return match ? toEntity(match) : null;
+  }
+
   async listByLocation(locationId: string): Promise<InventoryAsset[]> {
     // Generic: ALL assets at the location regardless of status (W7 dashboard
     // reuse). Status filtering lives in the use case, NOT here.

@@ -949,6 +949,11 @@ model Vehicle {
 model InventoryAsset {
   id                String            @id @default(uuid())
   serialNumber      String            @unique
+  // FIX 3 (depot-stock-entry): mac has a hand-written PARTIAL UNIQUE index
+  // (WHERE mac IS NOT NULL) in 20260617000000_inventory_asset_mac_unique/migration.sql.
+  // NULLs are free (MAC-unknown entries); non-null macs are device-unique.
+  // DO-NOT-ADD @unique here — Prisma cannot express the WHERE clause and would create
+  // a full unique index that collides on NULLs. Keep plain String? + this comment.
   mac               String?
   deviceTypeId      String
   deviceType        DeviceTypeCatalog @relation("AssetDeviceType", fields: [deviceTypeId], references: [id], onDelete: Restrict)

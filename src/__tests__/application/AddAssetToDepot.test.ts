@@ -131,6 +131,63 @@ describe('AddAssetToDepot', () => {
     ).rejects.toBeInstanceOf(DeviceTypeNotFoundError);
   });
 
+  // ── FIX 2a: normalized serial guard ──────────────────────────────────────
+
+  // ── FIX 3: mac uniqueness enforced in-memory (mirrors DB partial unique) ─
+
+  it('FIX3 — in-memory: second create with same mac → throws P2002-shaped error', async () => {
+    // The in-memory adapter must mirror the DB partial unique on mac (non-null).
+    // The test verifies that creating two assets with the same mac throws a
+    // P2002-shaped error (code: 'P2002'), which is the same signal the route maps to 409.
+    const { assets, onu, resolveDepot } = await setup();
+
+    // Resolve (create) the depot location first.
+    const depot = await resolveDepot.execute('DEPOSITO');
+
+    const { createInventoryAsset } = await import('@domain/entities/inventory-asset');
+    const { randomUUID } = await import('crypto');
+
+    const asset1 = createInventoryAsset({
+      id: randomUUID(),
+      serialNumber: 'SN-MAC-A',
+      mac: 'AA:BB:CC:DD:EE:FF',
+      deviceTypeId: onu.id,
+      status: 'available',
+      currentLocationId: depot.id,
+      source: 'MANUAL',
+      sourceTaskId: null,
+    });
+    const asset2 = createInventoryAsset({
+      id: randomUUID(),
+      serialNumber: 'SN-MAC-B', // different serial
+      mac: 'AA:BB:CC:DD:EE:FF', // same mac
+      deviceTypeId: onu.id,
+      status: 'available',
+      currentLocationId: depot.id,
+      source: 'MANUAL',
+      sourceTaskId: null,
+    });
+
+    await assets.create(asset1);
+    const err = await assets.create(asset2).catch((e: unknown) => e);
+    expect(err).toBeTruthy();
+    expect((err as { code?: string }).code).toBe('P2002');
+  });
+
+  // ── FIX 2a: normalized serial guard ──────────────────────────────────────
+
+  it('FIX2a — duplicate serial with dashes/case → AssetAlreadyExistsError (normalized match)', async () => {
+    // 'SN-AAA-001' normalized = 'SNAAA001'; 'sn-aaa-001' normalizes to the same.
+    const { useCase, onu } = await setup();
+
+    await useCase.execute({ deviceTypeId: onu.id, serialNumber: 'SN-AAA-001', mac: null });
+
+    // Different raw value, same normalized form — must be rejected.
+    await expect(
+      useCase.execute({ deviceTypeId: onu.id, serialNumber: 'SNAAA001', mac: null }),
+    ).rejects.toBeInstanceOf(AssetAlreadyExistsError);
+  });
+
   it('atomicity: if movement fails → no asset persisted', async () => {
     const { assets, movements, onu, resolveDepot, deviceTypes, uow } = await setup();
     // Poison the movements.record to throw on ADJUST

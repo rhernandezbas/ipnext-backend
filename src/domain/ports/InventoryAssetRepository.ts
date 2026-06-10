@@ -18,6 +18,13 @@ export interface InventoryAssetRepository {
    */
   findByNormalizedSerial(serial: string): Promise<InventoryAsset | null>;
   /**
+   * Match any asset (ANY status/location) by NORMALIZED serial. Used by the depot entry
+   * duplicate guard (FIX 2a): an asset with the same normalized serial cannot be added
+   * again regardless of its current status — `SN-AAA-001`, `sn-aaa-001`, `SNAAA001` are
+   * all the SAME device. Returns null if no asset matches.
+   */
+  findByNormalizedSerialAny(serial: string): Promise<InventoryAsset | null>;
+  /**
    * All assets currently at a location, REGARDLESS of status. Generic on
    * purpose (W7 dashboard reuse) — status filtering lives in the use case.
    */

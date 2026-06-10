@@ -68,11 +68,14 @@ export class AddAssetToDepot {
     // 3) Duplicate guard (pre-UoW; false negatives under true concurrency are caught
     //    by the DB unique constraint → P2002 → propagated as-is; use case layer stays
     //    adapter-agnostic and does not re-wrap Prisma errors here).
+    //    FIX 2a: use findByNormalizedSerial (W4 normalized lookup) so variants like
+    //    'SN-AAA-001' / 'SNAAA001' / 'sn-aaa-001' are treated as the SAME device.
     if (hasSerial) {
       const normalizedSn = normalizeSerial(input.serialNumber!);
       if (normalizedSn != null) {
-        // Check by exact serial (covers same-value re-entry)
-        const dup = await this.assets.findBySerialNumber(input.serialNumber!.trim());
+        // Normalized lookup (any status/location): strips dashes/case so variants like
+        // 'SN-AAA-001' and 'SNAAA001' are treated as the SAME device (FIX 2a).
+        const dup = await this.assets.findByNormalizedSerialAny(input.serialNumber!.trim());
         if (dup) throw new AssetAlreadyExistsError('serialNumber', input.serialNumber!.trim());
       }
     }
@@ -85,6 +88,13 @@ export class AddAssetToDepot {
     const depot = await this.resolveDepot.execute('DEPOSITO');
 
     const assetId = randomUUID();
+    // FIX 5: synthetic serial for MAC-only entries. InventoryAsset.serialNumber is a
+    // UNIQUE NOT NULL column — there is no nullable-serial escape hatch in the schema.
+    // For MAC-only entries the operator never sees this value (the DTO returns serialNumber=null).
+    // Format 'ENTRY-{8-hex}' is collision-resistant (2^32 space) and deterministic from
+    // assetId, so a re-run that re-generates the same assetId would produce the same filler.
+    // P2002 collision on this value is THEORETICAL (concurrent MAC-only entries for the same
+    // assetId) and already caught by the P2002→409 handler in FIX 2b.
     const serialNumber = hasSerial ? input.serialNumber!.trim() : `ENTRY-${assetId.slice(0, 8).toUpperCase()}`;
 
     // 5) Atomic: create asset + record ADJUST movement.

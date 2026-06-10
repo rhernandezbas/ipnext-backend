@@ -173,6 +173,25 @@ describe('POST /api/inventory/depot/assets', () => {
   });
 });
 
+  it('FIX2b — 409 ASSET_ALREADY_EXISTS when asset create throws P2002 (DB backstop)', async () => {
+    // Simulate a concurrent creation that wins the race: the repo throws a Prisma P2002.
+    const { app, onu, assets } = await buildApp();
+    const original = assets.create.bind(assets);
+    assets.create = async (_asset) => {
+      const err = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+      throw err;
+    };
+    // Restore after 1 call (just for cleanliness — the app is fresh anyway).
+
+    const res = await request(app)
+      .post('/api/inventory/depot/assets')
+      .send({ deviceTypeId: onu.id, serialNumber: 'SN-RACE-001' });
+
+    assets.create = original; // restore
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ASSET_ALREADY_EXISTS');
+  });
+
 describe('POST /api/inventory/depot/materials', () => {
   it('200 happy path — returns ok:true + newQty', async () => {
     const { app, cable } = await buildApp();

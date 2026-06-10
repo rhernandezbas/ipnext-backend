@@ -110,4 +110,62 @@ describe('AddMaterialToDepot', () => {
       useCase.execute({ materialCatalogId: 'unknown-mat', qty: 10 }),
     ).rejects.toBeInstanceOf(MaterialNotFoundError);
   });
+
+  // ── FIX 1: ADJUST is DELTA-additive ───────────────────────────────────────
+
+  it('FIX1a — ledger row qty equals the DELTA loaded, not the running total', async () => {
+    // Seed an existing balance of 10, then load 5 more.
+    // The ADJUST movement qty MUST be 5 (the delta), not 15.
+    const { useCase, movements, materialStock, locations, cable } = await setup();
+
+    // Seed balance to 10 by doing an initial load.
+    await useCase.execute({ materialCatalogId: cable.id, qty: 10 });
+
+    // Second load: delta = 5.
+    await useCase.execute({ materialCatalogId: cable.id, qty: 5 });
+
+    // There should be 2 ledger rows.
+    expect(movements.movements).toHaveLength(2);
+    // The second row must carry qty=5 (the delta), not 15.
+    expect(movements.movements[1].qty).toBe(5);
+    // But the actual balance must be 15.
+    const depot = await locations.findByCode('DEPOSITO');
+    const stock = await materialStock.findByMaterialAndLocation(cable.id, depot!.id);
+    expect(stock?.qty).toBe(15);
+  });
+
+  it('FIX1b — two sequential loads +5 +3 over base 10 → balance 18', async () => {
+    const { useCase, materialStock, locations, cable } = await setup();
+
+    await useCase.execute({ materialCatalogId: cable.id, qty: 10 });
+    await useCase.execute({ materialCatalogId: cable.id, qty: 5 });
+    const r3 = await useCase.execute({ materialCatalogId: cable.id, qty: 3 });
+
+    expect(r3.newQty).toBe(18);
+    const depot = await locations.findByCode('DEPOSITO');
+    const stock = await materialStock.findByMaterialAndLocation(cable.id, depot!.id);
+    expect(stock?.qty).toBe(18);
+  });
+
+  it('FIX1c — concurrent loads (Promise.all) both committed, balance is additive', async () => {
+    // Both in-memory calls execute "simultaneously" — final balance must be sum of both.
+    const { useCase, materialStock, locations, cable } = await setup();
+
+    // Seed base = 10.
+    await useCase.execute({ materialCatalogId: cable.id, qty: 10 });
+
+    // Fire both concurrently.
+    const [r1, r2] = await Promise.all([
+      useCase.execute({ materialCatalogId: cable.id, qty: 5 }),
+      useCase.execute({ materialCatalogId: cable.id, qty: 3 }),
+    ]);
+
+    // Both must succeed and their deltas must both appear in the balance.
+    expect(r1.ok).toBe(true);
+    expect(r2.ok).toBe(true);
+    const depot = await locations.findByCode('DEPOSITO');
+    const stock = await materialStock.findByMaterialAndLocation(cable.id, depot!.id);
+    // 10 + 5 + 3 = 18; order doesn't matter since additive ops commute.
+    expect(stock?.qty).toBe(18);
+  });
 });
