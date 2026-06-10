@@ -8,7 +8,11 @@ import { GrClient } from '@domain/entities/gestionReal';
 const SYNC_ENTITY = 'gr-clients';
 const SYNC_FLAG_KEY = 'gestion-real-sync';
 
-function makeClient(id: string, mod = '01-01-2026 10:00:00'): GrClient {
+function makeClient(
+  id: string,
+  mod: string | null = '01-01-2026 10:00:00',
+  creado: string | null = null,
+): GrClient {
   return {
     grClienteId: id,
     name: `Cliente ${id}`,
@@ -21,6 +25,7 @@ function makeClient(id: string, mod = '01-01-2026 10:00:00'): GrClient {
     city: 'Mercedes',
     province: 'Buenos Aires',
     ultimaModificacion: mod,
+    fechaCreacion: creado,
     raw: { id },
   };
 }
@@ -122,6 +127,51 @@ describe('SyncGestionRealClients', () => {
     expect(estadosQueried).toContain('1');
     expect(estadosQueried).toContain('2');
     expect(estadosQueried.every(e => e === '1' || e === '2')).toBe(true);
+  });
+
+  // ── Delta por creación (REQ-DELTA-C) ──────────────────────────────────────
+  // GR no siempre setea ultima_modificacion al dar de alta un cliente (caso
+  // real: 205160 GOPAR GUSTAVO HERNAN, creado 09-06-2026, ult_mod vacía). El
+  // delta fecha_tipo=m EXCLUYE esas filas, así que el run delta debe escanear
+  // también fecha_tipo=c (creación) sobre la misma ventana.
+  describe('delta also scans by creation date (never-modified clients)', () => {
+    beforeEach(async () => {
+      await state.save({ entity: SYNC_ENTITY, cursor: '20-05-2026', lastRunAt: null, lastResult: 'ok', itemsSynced: 0 });
+    });
+
+    it('picks up a client with empty ultimaModificacion created inside the window', async () => {
+      gr.clients = [makeClient('9', null, '26-05-2026 11:00:00')];
+
+      const res = await sync.execute();
+
+      expect(mirror.clients.has('9')).toBe(true);
+      expect(res.fetched).toBe(1);
+      expect(res.created).toBe(1);
+      expect(res.touchedClientIds).toEqual(['9']);
+      const tipos = gr.calls.map(c => c.fechaTipo);
+      expect(tipos).toContain('m');
+      expect(tipos).toContain('c');
+    });
+
+    it('processes a client returned by both scans only once (no double counts)', async () => {
+      gr.clients = [makeClient('7', '25-05-2026 10:00:00', '24-05-2026 09:00:00')];
+
+      const res = await sync.execute();
+
+      expect(res.fetched).toBe(1);
+      expect(res.created).toBe(1);
+      expect(res.touchedClientIds).toEqual(['7']);
+      expect(mirror.clients.size).toBe(1);
+    });
+
+    it('both scans share the same cursor window', async () => {
+      gr.clients = [makeClient('9', null, '26-05-2026 11:00:00')];
+
+      await sync.execute();
+
+      const deltaCalls = gr.calls.filter(c => c.fechaTipo !== undefined);
+      expect(deltaCalls.every(c => c.fechaDesde === '20-05-2026' && c.fechaHasta === '27-05-2026')).toBe(true);
+    });
   });
 
   it('records an error result and rethrows when the upstream fails', async () => {

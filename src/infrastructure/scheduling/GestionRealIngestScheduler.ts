@@ -86,6 +86,14 @@ export class GestionRealIngestScheduler {
         `duplicate=${result.skippedDuplicate}, unmirrored=${result.skippedUnmirrored}, ` +
         `unclassified=${result.unclassified}`,
       );
+      // Surface WHICH orders the mirror is blocking — `unmirrored=N` alone
+      // forced log+DB archaeology to find the client to repair in GR.
+      for (const s of result.skippedOrders) {
+        this.log(
+          `[gr-ingest] skipped orden ${s.grOrdenId}: ${s.reason} ` +
+          `(cliente ${s.grClienteId ?? '?'}, contrato ${s.grContratoId ?? '?'})`,
+        );
+      }
       return { result };
     } catch (err) {
       const message = (err as Error).message;

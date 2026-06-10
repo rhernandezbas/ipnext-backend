@@ -199,6 +199,7 @@ export function parseClientsResponse(data: unknown): FetchClientsResult {
     city: c.domicilio ? nested(c.domicilio as Record<string, unknown>, 'localidad', 'valor') : null,
     province: c.domicilio ? nested(c.domicilio as Record<string, unknown>, 'provincia', 'valor') : null,
     ultimaModificacion: str(c.ultima_modificacion),
+    fechaCreacion: str(c.fecha_creacion),
     raw: c,
   }));
 

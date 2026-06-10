@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { IngestConfig } from '@domain/ports/GestionRealIngestConfigRepository';
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { SyncState } from '@domain/ports/SyncStateRepository';
+import { SkippedOrderRef } from '@application/use-cases/IngestGestionRealOrders';
 
 // ── Config DTO ─────────────────────────────────────────────────────────────
 
@@ -60,6 +61,8 @@ export interface IngestStatusDTO {
   skippedDuplicate: number;
   skippedUnmirrored: number;
   unclassified: number;
+  /** GR refs of the orders skipped as unmirrored on the last run (REQ-SKIPLIST-2). */
+  skippedOrders: SkippedOrderRef[];
 }
 
 /**
@@ -73,18 +76,41 @@ interface RunCounts {
   skippedDuplicate: number;
   skippedUnmirrored: number;
   unclassified: number;
+  skippedOrders: SkippedOrderRef[];
 }
 
-const ZERO_COUNTS: RunCounts = {
+const ZERO_COUNTS: Omit<RunCounts, 'skippedOrders'> = {
   created: 0,
   skippedDuplicate: 0,
   skippedUnmirrored: 0,
   unclassified: 0,
 };
 
+const UNMIRRORED_REASONS: readonly string[] = ['client-unmirrored', 'contract-unmirrored'];
+
+/**
+ * Parse the persisted skip list defensively: anything that is not an array of
+ * well-formed entries degrades to [] — old SyncState rows predate the field
+ * and the status endpoint must never 500 over sync metadata.
+ */
+function parseSkippedOrders(value: unknown): SkippedOrderRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((e): e is SkippedOrderRef => {
+    if (typeof e !== 'object' || e === null) return false;
+    const entry = e as Record<string, unknown>;
+    return (
+      typeof entry.grOrdenId === 'string' &&
+      (typeof entry.grClienteId === 'string' || entry.grClienteId === null) &&
+      (typeof entry.grContratoId === 'string' || entry.grContratoId === null) &&
+      typeof entry.reason === 'string' &&
+      UNMIRRORED_REASONS.includes(entry.reason)
+    );
+  });
+}
+
 export function toIngestStatusDTO(state: SyncState | null): IngestStatusDTO {
   if (!state) {
-    return { lastRunAt: null, ...ZERO_COUNTS };
+    return { lastRunAt: null, ...ZERO_COUNTS, skippedOrders: [] };
   }
   return {
     lastRunAt: state.lastRunAt ? state.lastRunAt.toISOString() : null,
@@ -93,7 +119,7 @@ export function toIngestStatusDTO(state: SyncState | null): IngestStatusDTO {
 }
 
 function parseCounts(lastResult: string | null): RunCounts {
-  if (!lastResult) return { ...ZERO_COUNTS };
+  if (!lastResult) return { ...ZERO_COUNTS, skippedOrders: [] };
   try {
     const parsed = JSON.parse(lastResult) as Record<string, unknown>;
     return {
@@ -101,9 +127,10 @@ function parseCounts(lastResult: string | null): RunCounts {
       skippedDuplicate: numberOrZero(parsed['skippedDuplicate']),
       skippedUnmirrored: numberOrZero(parsed['skippedUnmirrored']),
       unclassified: numberOrZero(parsed['unclassified']),
+      skippedOrders: parseSkippedOrders(parsed['skippedOrders']),
     };
   } catch {
-    return { ...ZERO_COUNTS };
+    return { ...ZERO_COUNTS, skippedOrders: [] };
   }
 }
 

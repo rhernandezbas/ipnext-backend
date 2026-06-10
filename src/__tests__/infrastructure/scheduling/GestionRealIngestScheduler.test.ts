@@ -63,7 +63,37 @@ describe('GestionRealIngestScheduler', () => {
       skippedDuplicate: 0,
       skippedUnmirrored: 0,
       unclassified: 0,
+      skippedOrders: [],
     });
+  });
+
+  it('logs the GR refs of unmirrored skips so the operator can repair without DB access', async () => {
+    const h = makeHarness();
+    jest.spyOn(h.ingest, 'execute').mockResolvedValueOnce({
+      created: 0,
+      skippedDuplicate: 0,
+      skippedUnmirrored: 2,
+      unclassified: 0,
+      skippedOrders: [
+        { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
+        { grOrdenId: '17733', grClienteId: '100742', grContratoId: '12038', reason: 'contract-unmirrored' },
+      ],
+    });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const noisy = new GestionRealIngestScheduler(h.ingest, { intervalMs: 1000 }, new InMemoryDistributedLock());
+
+      await noisy.runOnce();
+
+      const logged = logSpy.mock.calls.flat().join('\n');
+      expect(logged).toContain('17774');
+      expect(logged).toContain('205160');
+      expect(logged).toContain('client-unmirrored');
+      expect(logged).toContain('17733');
+      expect(logged).toContain('contract-unmirrored');
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('runs the ingest once when the lock is free', async () => {

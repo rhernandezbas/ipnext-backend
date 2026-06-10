@@ -49,12 +49,30 @@ function isUniqueViolation(err: unknown): boolean {
   return typeof message === 'string' && /unique constraint/i.test(message);
 }
 
+/** Why an order was skipped as unmirrored: which local FK failed to resolve. */
+export type UnmirroredReason = 'client-unmirrored' | 'contract-unmirrored';
+
+/**
+ * GR refs of one skipped order (REQ-SKIPLIST-1). The mirror can lag GR in two
+ * known ways (clients created without ultima_modificacion; new contracts on
+ * never-modified clients), so the skip must surface WHO is missing — the
+ * operator repairs it by touching the client in GR, not by reading logs + DB.
+ */
+export interface SkippedOrderRef {
+  grOrdenId: string;
+  grClienteId: string | null;
+  grContratoId: string | null;
+  reason: UnmirroredReason;
+}
+
 /** Outcome counts for one ingest run. */
 export interface IngestRunResult {
   created: number;
   skippedDuplicate: number;
   skippedUnmirrored: number;
   unclassified: number;
+  /** One entry per unmirrored skip — always `skippedUnmirrored` items long. */
+  skippedOrders: SkippedOrderRef[];
 }
 
 export interface IngestOptions {
@@ -115,6 +133,7 @@ export class IngestGestionRealOrders {
       skippedDuplicate: 0,
       skippedUnmirrored: 0,
       unclassified: 0,
+      skippedOrders: [],
     };
 
     // Master switch (release flag). OFF → no-op. Checked per run so it can be
@@ -187,10 +206,12 @@ export class IngestGestionRealOrders {
     reporterId: string | null,
     counts: IngestRunResult,
   ): Promise<void> {
-    // 1-2. Resolve local FKs. A miss is expected until the mirror catches up; skip + count.
+    // 1-2. Resolve local FKs. A miss is expected until the mirror catches up;
+    // skip + count + record the GR refs so the status endpoint can list them.
     const client = order.cliente ? await this.resolver.findClientByGrId(order.cliente) : null;
     if (!client) {
       counts.skippedUnmirrored++;
+      counts.skippedOrders.push(skippedRef(order, 'client-unmirrored'));
       return;
     }
     const contract = order.contrato
@@ -198,6 +219,7 @@ export class IngestGestionRealOrders {
       : null;
     if (!contract) {
       counts.skippedUnmirrored++;
+      counts.skippedOrders.push(skippedRef(order, 'contract-unmirrored'));
       return;
     }
 
@@ -308,6 +330,16 @@ export class IngestGestionRealOrders {
     }
     return this.defaultStageId;
   }
+}
+
+/** Build the skip-list entry for an order whose local FK resolution failed. */
+function skippedRef(order: GrServiceOrder, reason: UnmirroredReason): SkippedOrderRef {
+  return {
+    grOrdenId: order.grOrdenId,
+    grClienteId: order.cliente ?? null,
+    grContratoId: order.contrato ?? null,
+    reason,
+  };
 }
 
 /** Date → "DD-MM-AAAA" (GR's expected window format). */
