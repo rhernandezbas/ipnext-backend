@@ -4,6 +4,11 @@ export interface InventoryAssetRepository {
   findById(id: string): Promise<InventoryAsset | null>;
   findBySerialNumber(serialNumber: string): Promise<InventoryAsset | null>;
   /**
+   * Find any asset (any status/location) whose mac field matches exactly.
+   * Used by the depot entry duplicate-check (409 guard). Returns null if not found.
+   */
+  findByMac(mac: string): Promise<InventoryAsset | null>;
+  /**
    * Match an asset by NORMALIZED serial (trim/upper/strip non-alphanumerics — survives
    * IClass/OCR drift, #36 pattern) restricted to `status === 'installed'`. Returns null
    * when no installed asset matches. EPIC #38 W4 return staging: a non-installed match is
@@ -12,6 +17,13 @@ export interface InventoryAssetRepository {
    * any status) stays for #19.
    */
   findByNormalizedSerial(serial: string): Promise<InventoryAsset | null>;
+  /**
+   * Match any asset (ANY status/location) by NORMALIZED serial. Used by the depot entry
+   * duplicate guard (FIX 2a): an asset with the same normalized serial cannot be added
+   * again regardless of its current status — `SN-AAA-001`, `sn-aaa-001`, `SNAAA001` are
+   * all the SAME device. Returns null if no asset matches.
+   */
+  findByNormalizedSerialAny(serial: string): Promise<InventoryAsset | null>;
   /**
    * All assets currently at a location, REGARDLESS of status. Generic on
    * purpose (W7 dashboard reuse) — status filtering lives in the use case.

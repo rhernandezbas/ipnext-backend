@@ -207,7 +207,11 @@ export class PrismaInventoryMovementRepository implements InventoryMovementRepos
         break;
       }
       case 'ADJUST': {
-        await setQty(mv.toLocationId!, qty);
+        // ADJUST(material) = DELTA-additive (FIX W1 cardinal): record the DELTA, apply
+        // it with `increment` (Prisma upsert with qty: { increment }) so two concurrent
+        // ADJUST movements both land — no lost-update window, no ledger↔balance divergence.
+        // Document: "ADJUST(material) = additive delta" — the ledger row qty IS the delta.
+        await increment(mv.toLocationId!, qty);
         break;
       }
       default: {

@@ -124,15 +124,20 @@ describe('RecordInventoryMovement — consumable (material) movements', () => {
     expect(movements.movements).toHaveLength(1);
   });
 
-  it('ADJUST corrects material quantity to a given value with note', async () => {
+  it('ADJUST(material) adds delta to balance (DELTA-additive, FIX W1 cardinal)', async () => {
+    // FIX W1: ADJUST(material) is now additive — the ledger row qty IS the delta,
+    // both adapters apply it via increment. Old SET semantics are gone.
     const { materials, movements, uc } = setup();
     await materials.upsert({ id: 's1', materialCatalogId: 'M1', locationId: 'L1', qty: 10 });
 
     const mv = await uc.execute({ type: 'ADJUST', materialCatalogId: 'M1', qty: 15, toLocationId: 'L1', note: 'physical count correction', source: 'X' });
 
-    expect((await materials.findByMaterialAndLocation('M1', 'L1'))!.qty).toBe(15);
+    // 10 (seed) + 15 (delta) = 25
+    expect((await materials.findByMaterialAndLocation('M1', 'L1'))!.qty).toBe(25);
     expect(mv.note).toBe('physical count correction');
     expect(movements.movements).toHaveLength(1);
+    // The ledger row records the delta, not the running total.
+    expect(mv.qty).toBe(15);
   });
 
   it('ISSUE decrements material stock at fromLocationId (Fix #5)', async () => {

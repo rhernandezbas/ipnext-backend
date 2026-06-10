@@ -16,11 +16,26 @@ export class InMemoryInventoryAssetRepository implements InventoryAssetRepositor
     return a ? { ...a } : null;
   }
 
+  async findByMac(mac: string): Promise<InventoryAsset | null> {
+    const a = Array.from(this.store.values()).find((x) => x.mac === mac);
+    return a ? { ...a } : null;
+  }
+
   async findByNormalizedSerial(serial: string): Promise<InventoryAsset | null> {
     const target = normalizeSerial(serial);
     if (target == null) return null;
     const a = Array.from(this.store.values()).find(
       (x) => x.status === 'installed' && normalizeSerial(x.serialNumber) === target,
+    );
+    return a ? { ...a } : null;
+  }
+
+  async findByNormalizedSerialAny(serial: string): Promise<InventoryAsset | null> {
+    const target = normalizeSerial(serial);
+    if (target == null) return null;
+    // Any status/location — used by depot entry duplicate guard (FIX 2a).
+    const a = Array.from(this.store.values()).find(
+      (x) => normalizeSerial(x.serialNumber) === target,
     );
     return a ? { ...a } : null;
   }
@@ -34,10 +49,27 @@ export class InMemoryInventoryAssetRepository implements InventoryAssetRepositor
   }
 
   async create(asset: InventoryAsset): Promise<InventoryAsset> {
-    const dup = Array.from(this.store.values()).some(
+    const dupSerial = Array.from(this.store.values()).some(
       (x) => x.serialNumber === asset.serialNumber,
     );
-    if (dup) throw new DuplicateSerialNumberError(asset.serialNumber);
+    if (dupSerial) throw new DuplicateSerialNumberError(asset.serialNumber);
+
+    // FIX 3: mac partial unique mirror — NULLs are free; non-null macs must be unique.
+    // Throws a P2002-shaped error so the route handler maps it to 409 ASSET_ALREADY_EXISTS
+    // (same signal as the DB partial unique index on InventoryAsset.mac WHERE mac IS NOT NULL).
+    if (asset.mac != null) {
+      const dupMac = Array.from(this.store.values()).some(
+        (x) => x.mac != null && x.mac === asset.mac,
+      );
+      if (dupMac) {
+        const err = Object.assign(
+          new Error(`Unique constraint failed on the fields: (\`mac\`)`),
+          { code: 'P2002', meta: { target: ['mac'] } },
+        );
+        throw err;
+      }
+    }
+
     this.store.set(asset.id, { ...asset });
     return { ...asset };
   }

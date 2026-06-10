@@ -42,6 +42,11 @@ export class PrismaInventoryAssetRepository implements InventoryAssetRepository 
     return row ? toEntity(row) : null;
   }
 
+  async findByMac(mac: string): Promise<InventoryAsset | null> {
+    const row = await this.db.inventoryAsset.findFirst({ where: { mac } });
+    return row ? toEntity(row as Row) : null;
+  }
+
   async findByNormalizedSerial(serial: string): Promise<InventoryAsset | null> {
     const target = normalizeSerial(serial);
     if (target == null) return null;
@@ -54,6 +59,22 @@ export class PrismaInventoryAssetRepository implements InventoryAssetRepository 
     // normalize-compare in-process. W4 return volume is low (one per closed retiro),
     // so this is acceptable; revisit with a stored normalized column if it grows.
     const rows = (await this.db.inventoryAsset.findMany({ where: { status: 'installed' } })) as Row[];
+    const match = rows.find((r) => normalizeSerial(r.serialNumber) === target);
+    return match ? toEntity(match) : null;
+  }
+
+  async findByNormalizedSerialAny(serial: string): Promise<InventoryAsset | null> {
+    const target = normalizeSerial(serial);
+    if (target == null) return null;
+    // Depot entry duplicate guard (FIX 2a): any status/location.
+    // Fast path: try exact hit on the UNIQUE index first.
+    const exact = await this.db.inventoryAsset.findUnique({ where: { serialNumber: serial } });
+    if (exact && normalizeSerial((exact as Row).serialNumber) === target) {
+      return toEntity(exact);
+    }
+    // Drift path: scan all assets and normalize-compare in-process.
+    // Depot entry volume is low (manual operator action), so this is acceptable.
+    const rows = (await this.db.inventoryAsset.findMany({})) as Row[];
     const match = rows.find((r) => normalizeSerial(r.serialNumber) === target);
     return match ? toEntity(match) : null;
   }

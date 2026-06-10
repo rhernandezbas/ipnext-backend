@@ -89,13 +89,11 @@ export class InMemoryInventoryMovementRepository implements InventoryMovementRep
         await this.materials.increment(materialId, mv.toLocationId!, qty);
         break;
       case 'ADJUST':
-        // set the balance to the given qty at toLocation
-        await this.materials.upsert({
-          id: '',
-          materialCatalogId: materialId,
-          locationId: mv.toLocationId!,
-          qty,
-        });
+        // ADJUST(material) = DELTA-additive (FIX W1 cardinal): record the DELTA, apply
+        // it with `increment` (upsert additive). Two concurrent loads over the same base
+        // both land because each is an independent increment — no lost-update window.
+        // Document: "ADJUST(material) = additive delta" — the ledger row qty IS the delta.
+        await this.materials.increment(materialId, mv.toLocationId!, qty);
         break;
       case 'INSTALL':
       case 'RETURN':

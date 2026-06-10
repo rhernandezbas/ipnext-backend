@@ -86,8 +86,11 @@ export function createInventoryMovement(input: CreateInventoryMovementInput): In
   if (hasAsset && (input.type === 'CONSUME' || input.type === 'ISSUE')) {
     throw new InconsistentMovementError(`${input.type} is a material movement and cannot target an asset`);
   }
-  // Fix H2: ADJUST is an ABSOLUTE set — a physical count of 0 is the canonical
-  // correction, so ADJUST allows qty>=0. Every other material verb still needs qty>0.
+  // ADJUST(material) is an ADDITIVE DELTA (depot-stock-entry fix wave: the adapters
+  // apply it via the atomic `increment`, never SET — see both movement adapters).
+  // qty>=0 is kept from the SET era: qty=0 is a tolerated no-op row; NEGATIVE
+  // deltas (shrinkage corrections) are not supported yet — a future feature must
+  // extend this guard AND the adapters together.
   if (hasMaterial) {
     const qtyOk =
       input.type === 'ADJUST'
@@ -125,7 +128,7 @@ export function createInventoryMovement(input: CreateInventoryMovementInput): In
       if (!(typeof input.note === 'string' && input.note.trim() !== '')) {
         throw new InconsistentMovementError('ADJUST requires a non-empty note');
       }
-      // Fix H1: a MATERIAL ADJUST is an absolute SET at a location — without a
+      // Fix H1: a MATERIAL ADJUST applies its delta AT a location — without a
       // toLocationId the adapters would write to `toLocationId!` (null → FK
       // violation in Prisma, phantom "M1::undefined" key in-memory). Require it.
       // An ASSET ADJUST has no location target (it sets status), so it's exempt.
