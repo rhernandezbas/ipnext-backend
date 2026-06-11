@@ -110,6 +110,7 @@ export class SplynxCustomerAdapter implements CustomerRepository {
       address: null,
       lat: null,
       lng: null,
+      technology: null,
       name: null,
       services: [],
     }));

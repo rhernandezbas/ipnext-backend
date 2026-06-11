@@ -68,6 +68,8 @@ export function toService(row: any): Contract {
     address: row.address ?? null,
     lat: row.lat ?? null,
     lng: row.lng ?? null,
+    // #42 — free-text technology name from the ContractTechnology catalog.
+    technology: row.technology ?? null,
     // #43 — manual name (null for GR-synced contracts) + eager-loaded services.
     name: row.name ?? null,
     services: (row.contractServices ?? []).map((cs: any) => ({
