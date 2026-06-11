@@ -56,6 +56,9 @@
 - (b) **El punto de entrada de la activación es el CONTRATO**: elegir "TV" en el picker de servicios de la card (#42) abre el flujo Gigared (vincular CIC / registrar → elegir pack; el ítem local lo crea el reconcile del BE); el chip TV abre el mismo panel en modo gestión (packs/OTT/quitar). Sin Gigared configurado → ítem local plano con aviso.
 - (c) La tab TV del cliente se ELIMINA (un solo lugar de gestión).
 
+### #47f — TV: vincular crea el chip TV del contrato ✅ HECHO *(2026-06-11, BE PR #113 + FE PR #91, en prod)*
+> Gap cazado ANTES de la vinculación masiva: el link seteaba internal_id pero el reconcile solo corría en add/remove de packs → vincular las 84 cuentas con packs YA activos dejaba los contratos sin chip. Ahora `POST .../link {cic, contractId?}` reconcilia el ContractService TV (404 de contrato ANTES de tocar Gigared; 207 local:'failed' con retry idempotente); el FE manda el contractId del dueño + amber 207 + la invalidación de client-contracts que faltaba. Gates BE 3614/0, FE 2591/0.
+
 ### #47e — TV: picker de CICs disponibles + registro prefilleado ✅ HECHO *(2026-06-11, FE PR #90, en prod)*
 > Pedidos del usuario: (1) Vincular elige el CIC de un picker buscable (cuentas registradas sin vincular, label nombre+CIC+packs, placeholder anti-mismatch, fallback manual; hook paginado de a 20 en un solo queryFn, solo se dispara al abrir el panel). (2) Registrar se precarga con nombre/apellido/email del cliente (split "APELLIDO NOMBRE(S)", tolera coma) y el CIC sale de las cuentas SIN registrar (Gigared exige CIC libre). Review CLEAN + 2 cosméticos aplicados. Gates 2586/0.
 
