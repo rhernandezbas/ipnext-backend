@@ -34,4 +34,12 @@ describe('Gigared composition root (#47)', () => {
   it('(d) new AddTvService is constructed with the contract-services repo', () => {
     expect(appSrc).toMatch(/new AddTvService\(/);
   });
+
+  it('(e) new LinkCustomerToCic is wired with the contract-services + catalog repos (47f reconcile)', () => {
+    const m = appSrc.match(/new LinkCustomerToCic\(([^)]*)\)/);
+    expect(m).not.toBeNull();
+    expect(m![1]).toMatch(/contractServiceRepo/);
+    expect(m![1]).toMatch(/serviceCatalogRepo/);
+    expect(m![1]).toMatch(/contractLookup/);
+  });
 });

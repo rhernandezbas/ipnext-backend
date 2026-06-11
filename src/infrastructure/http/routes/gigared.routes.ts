@@ -200,8 +200,13 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
 
   router.post('/customers/:id/link', deps.requireWrite, async (req, res, next): Promise<void> => {
     try {
-      const cic = String((req.body as { cic?: unknown }).cic ?? '');
-      res.json(await deps.linkCustomerToCic.execute(req.params['id'] as string, cic));
+      const body = req.body as { cic?: unknown; contractId?: unknown };
+      const cic = String(body.cic ?? '');
+      // contractId optional (47f): present → reconcile the local TV slot in that contract.
+      const contractId = typeof body.contractId === 'string' && body.contractId !== '' ? body.contractId : undefined;
+      const result = await deps.linkCustomerToCic.execute(req.params['id'] as string, cic, contractId);
+      // local:'failed' mirrors AddTvService → 207 (link kept, retry = re-POST). Else 200.
+      res.status(result.local === 'failed' ? 207 : 200).json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) next(err);
     }

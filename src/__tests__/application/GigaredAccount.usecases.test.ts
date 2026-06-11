@@ -10,6 +10,9 @@ import { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterG
 import type { GigaredPort, GigaredAccount, GigaredSummary } from '@domain/ports/GigaredPort';
 import { GigaredNotFoundError, CicNotFoundError, CicAlreadyLinkedError } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
+import { ContractNotFoundError } from '@domain/errors/contractServices';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 
 function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
   return {
@@ -130,6 +133,144 @@ describe('LinkCustomerToCic (#47 / C2 — CIC_ALREADY_LINKED implemented)', () =
     await expect(uc.execute('ghost', '0000001234')).rejects.toBeInstanceOf(ClientNotFoundError);
     expect(port.getAccountByCic).not.toHaveBeenCalled();
     expect(port.setInternalId).not.toHaveBeenCalled();
+  });
+});
+
+describe('LinkCustomerToCic (#47f — reconcile TV ContractService on link)', () => {
+  // Optional contractId on link. When present + account ends up linked WITH active services,
+  // reconcile the TV ContractService in THAT contract (same helper as AddTvService). When absent,
+  // behavior is byte-for-byte the current link (back-compat). Invalid contractId → 404 BEFORE Gigared.
+  let cs: InMemoryContractServiceRepository;
+  let catalog: InMemoryServiceCatalogRepository;
+
+  beforeEach(() => {
+    cs = new InMemoryContractServiceRepository();
+    catalog = new InMemoryServiceCatalogRepository();
+  });
+
+  async function seedTvCatalog(active = true) {
+    const cat = await catalog.create({ name: 'TV', label: 'TV', active, sortOrder: 0 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (cs as any).catalog[cat.id] = { name: cat.name, label: cat.label };
+    return cat;
+  }
+
+  const contractLookup = (exists: boolean) => ({ findById: async (id: string) => (exists ? { id } : null) });
+
+  it('(a) link with contractId + account already linked WITH services → ContractService TV created, notes correct', async () => {
+    await seedTvCatalog();
+    const port = fakePort({
+      // already linked to THIS customer (path 3) WITH active packs
+      getAccountByCic: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(true), cs, catalog);
+    const result = await uc.execute('cust-1', '0000001234', 'C1');
+
+    expect(result.account.internalId).toBe('cust-1');
+    expect(result.local).toBe('synced');
+    const row = await cs.getByPair('C1', (await catalog.getByName('TV'))!.id);
+    expect(row).not.toBeNull();
+    expect(row!.notes).toBe('CIC 0000001234 · Gigared Play Full');
+    expect(row!.status).toBe('active');
+  });
+
+  it('(a2) link with contractId + FREE CIC then linked WITH services → setInternalId + reconcile', async () => {
+    await seedTvCatalog();
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: '' })),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(true), cs, catalog);
+    const result = await uc.execute('cust-1', '0000001234', 'C1');
+
+    expect(port.setInternalId).toHaveBeenCalledWith('0000001234', 'cust-1');
+    expect(result.local).toBe('synced');
+    const row = await cs.getByPair('C1', (await catalog.getByName('TV'))!.id);
+    expect(row!.notes).toBe('CIC 0000001234 · Gigared Play Full');
+  });
+
+  it('(b) link with contractId but account has NO services → does NOT create a local row', async () => {
+    await seedTvCatalog();
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: '' })),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', internalId: 'cust-1', services: [] })),
+    });
+    const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(true), cs, catalog);
+    const result = await uc.execute('cust-1', '0000001234', 'C1');
+
+    expect(result.local).toBe('synced');
+    const row = await cs.getByPair('C1', (await catalog.getByName('TV'))!.id);
+    expect(row).toBeNull();
+  });
+
+  it('(c) link WITHOUT contractId → never touches contracts (regression, exact back-compat)', async () => {
+    await seedTvCatalog();
+    const addSpy = jest.spyOn(cs, 'add');
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: '' })),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(true), cs, catalog);
+    const result = await uc.execute('cust-1', '0000001234');
+
+    expect(result.account.internalId).toBe('cust-1');
+    expect(result.local).toBeUndefined();
+    expect(addSpy).not.toHaveBeenCalled();
+  });
+
+  it('(d) invalid contractId → ContractNotFoundError and Gigared was NEVER called', async () => {
+    await seedTvCatalog();
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: '' })),
+    });
+    const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(false), cs, catalog);
+    await expect(uc.execute('cust-1', '0000001234', 'ghost')).rejects.toBeInstanceOf(ContractNotFoundError);
+    expect(port.getAccountByCic).not.toHaveBeenCalled();
+    expect(port.setInternalId).not.toHaveBeenCalled();
+  });
+
+  it('(e) reconcile local fails (csRepo throws) → local:"failed" and the Gigared link stays done', async () => {
+    await seedTvCatalog();
+    jest.spyOn(cs, 'add').mockRejectedValue(new Error('db down'));
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: '' })),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(true), cs, catalog);
+    const result = await uc.execute('cust-1', '0000001234', 'C1');
+
+    // Link is NOT reverted — Gigared setInternalId still ran.
+    expect(port.setInternalId).toHaveBeenCalledWith('0000001234', 'cust-1');
+    expect(result.account.internalId).toBe('cust-1');
+    expect(result.local).toBe('failed');
+  });
+
+  it('(f) idempotent: re-link same customer+cic+contract → no duplicate row (upsert on UNIQUE pair)', async () => {
+    await seedTvCatalog();
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(true), cs, catalog);
+    const r1 = await uc.execute('cust-1', '0000001234', 'C1');
+    const r2 = await uc.execute('cust-1', '0000001234', 'C1');
+
+    expect(r1.local).toBe('synced');
+    expect(r2.local).toBe('synced');
+    const tvId = (await catalog.getByName('TV'))!.id;
+    const row = await cs.getByPair('C1', tvId);
+    expect(row).not.toBeNull();
+    // exactly ONE row for the pair — getByPair would only ever return one, but assert no second slot exists
+    expect(row!.notes).toBe('CIC 0000001234 · Gigared Play Full');
   });
 });
 

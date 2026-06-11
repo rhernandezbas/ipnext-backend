@@ -1,31 +1,68 @@
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
+import type { ContractServiceRepository } from '@domain/ports/ContractServiceRepository';
+import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
 import { ClientNotFoundError } from '@domain/errors';
+import { ContractNotFoundError } from '@domain/errors/contractServices';
 import {
   GigaredNotFoundError,
   CicNotFoundError,
   CicAlreadyLinkedError,
 } from '@domain/errors/gigared';
-import type { CustomerLookup } from './lookups';
+import type { CustomerLookup, ContractLookup } from './lookups';
+import { reconcileTvContractService } from './reconcileTvContractService';
 
 /**
- * LinkCustomerToCic (#47 / C2) — binds an existing Gigared CIC to our customer.
+ * Result of LinkCustomerToCic.
+ * `local` is present ONLY when a `contractId` was supplied (47f). Otherwise the response is
+ * the bare account, byte-for-byte the legacy contract (back-compat).
+ *   - 'synced' → the local TV ContractService was reconciled in the contract (router → 200)
+ *   - 'failed' → the Gigared link succeeded but the local reconcile threw (router → 207).
+ *               The link in Gigared is NEVER reverted (mirror of AddTvService D7).
+ */
+export interface LinkCustomerResult {
+  account: GigaredAccount;
+  local?: 'synced' | 'failed';
+}
+
+/**
+ * LinkCustomerToCic (#47 / C2 + #47f) — binds an existing Gigared CIC to our customer and,
+ * when a `contractId` is supplied, reconciles the local TV ContractService slot in THAT contract.
  *
- * Ownership guard (the task #47 "CIC_ALREADY_LINKED" path, previously missing):
- *   0. customer must exist locally          → ClientNotFoundError
- *   1. GET /accounts/{cic} (by CIC)         → CicNotFoundError (404) if the partner 404s
- *   2. internal_id NON-empty AND ≠ customer → CicAlreadyLinkedError (409)
- *   3. internal_id == customerId            → idempotent OK (no re-set)
- *   4. internal_id empty                    → setInternalId, then read back by internal_id
+ * Why 47f: linking a CIC that ALREADY carries active packs used to leave the contract with no
+ * local TV chip — `reconcileTvContractService` was only ever called by Add/RemoveTvService. The
+ * fix threads the same helper (same notes/ownership/upsert) through the link path.
+ *
+ * Guard order (pinned):
+ *   0. customer must exist locally               → ClientNotFoundError
+ *   0b. if contractId supplied → it must exist    → ContractNotFoundError (BEFORE any Gigared call)
+ *   1. GET /accounts/{cic} (by CIC)              → CicNotFoundError (404) if the partner 404s
+ *   2. internal_id NON-empty AND ≠ customer      → CicAlreadyLinkedError (409)
+ *   3. internal_id == customerId                 → idempotent OK (no re-set)
+ *   4. internal_id empty                         → setInternalId, read back by internal_id
+ *   5. if contractId supplied → reconcile the local TV slot (failure → local:'failed', link kept)
+ *
+ * Reconcile deps (csRepo/catalogRepo/contractLookup) are OPTIONAL: when absent (or no contractId),
+ * the use case behaves exactly as the legacy link.
  */
 export class LinkCustomerToCic {
   constructor(
     private readonly gigared: GigaredPort,
     private readonly customerLookup: CustomerLookup,
+    private readonly contractLookup?: ContractLookup,
+    private readonly csRepo?: ContractServiceRepository,
+    private readonly catalogRepo?: ServiceCatalogRepository,
   ) {}
 
-  async execute(customerId: string, cic: string): Promise<{ account: GigaredAccount }> {
+  async execute(customerId: string, cic: string, contractId?: string): Promise<LinkCustomerResult> {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
+
+    // 0b. Validate the contract FIRST — never touch Gigared if the target contract is invalid.
+    const wantsReconcile = typeof contractId === 'string' && contractId !== '';
+    if (wantsReconcile && this.contractLookup) {
+      const contract = await this.contractLookup.findById(contractId as string);
+      if (!contract) throw new ContractNotFoundError(contractId as string);
+    }
 
     // 1. Resolve the partner BY CIC. A 404 upstream is a CIC-specific not-found.
     let partner: GigaredAccount;
@@ -38,15 +75,35 @@ export class LinkCustomerToCic {
 
     const linked = partner.internalId ?? '';
 
-    // 3. Already linked to THIS customer → idempotent success, nothing to do.
-    if (linked === customerId) return { account: partner };
-
     // 2. Linked to a DIFFERENT customer → refuse (409), never steal the CIC.
-    if (linked !== '') throw new CicAlreadyLinkedError(cic, linked);
+    if (linked !== '' && linked !== customerId) throw new CicAlreadyLinkedError(cic, linked);
 
-    // 4. Free CIC → bind it, then read back the authoritative account by internal_id.
-    await this.gigared.setInternalId(cic, customerId);
-    const account = await this.gigared.getAccountByInternalId(customerId);
-    return { account };
+    // 3 / 4. Already linked to THIS customer → idempotent (no re-set). Free CIC → bind it.
+    let account: GigaredAccount;
+    if (linked === customerId) {
+      account = partner;
+    } else {
+      await this.gigared.setInternalId(cic, customerId);
+      account = await this.gigared.getAccountByInternalId(customerId);
+    }
+
+    // 5. No contractId (or reconcile deps missing) → legacy response, untouched.
+    if (!wantsReconcile || !this.csRepo || !this.catalogRepo) {
+      return { account };
+    }
+
+    // Reconcile the local TV slot. Failure here is a partial success — the link stays (207).
+    try {
+      await reconcileTvContractService({
+        gigared: this.gigared,
+        csRepo: this.csRepo,
+        catalogRepo: this.catalogRepo,
+        customerId,
+        contractId: contractId as string,
+      });
+      return { account, local: 'synced' };
+    } catch {
+      return { account, local: 'failed' };
+    }
   }
 }

@@ -92,7 +92,7 @@ async function buildApp(opts: Opts = {}) {
     getSummary: new GetGigaredSummary(port),
     listAccounts: new ListGigaredAccounts(port),
     getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup),
-    linkCustomerToCic: new LinkCustomerToCic(port, customerLookup),
+    linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog),
     registerAccount: new RegisterGigaredAccount(port, customerLookup),
     addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
@@ -327,5 +327,55 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
     const res = await request(app).post('/api/gigared/customers/cust-1/link').send({ cic: '0000001234' });
     expect(res.status).toBe(200);
     expect(res.body.account).toBeDefined();
+  });
+
+  it('47f: link with contractId + services → 200 { account, local:"synced" } and TV row reconciled', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ internalId: '' })),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const app = await buildApp({ port, csRepo, catalog });
+    const res = await request(app).post('/api/gigared/customers/cust-1/link').send({ cic: '0000001234', contractId: 'C1' });
+    expect(res.status).toBe(200);
+    expect(res.body.account).toBeDefined();
+    expect(res.body.local).toBe('synced');
+    const tvId = (await catalog.getByName('TV'))!.id;
+    const row = await csRepo.getByPair('C1', tvId);
+    expect(row!.notes).toBe('CIC 0000000001 · Gigared Play Full');
+  });
+
+  it('47f: link with invalid contractId → 404 CONTRACT_NOT_FOUND (before Gigared)', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port, contractExists: false });
+    const res = await request(app).post('/api/gigared/customers/cust-1/link').send({ cic: '0000001234', contractId: 'ghost' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
+    expect(port.getAccountByCic).not.toHaveBeenCalled();
+  });
+
+  it('47f: link with contractId but local reconcile fails → 207 { local:"failed" }, link stays', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    jest.spyOn(csRepo, 'add').mockRejectedValue(new Error('db down'));
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ internalId: '' })),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const app = await buildApp({ port, csRepo, catalog });
+    const res = await request(app).post('/api/gigared/customers/cust-1/link').send({ cic: '0000001234', contractId: 'C1' });
+    expect(res.status).toBe(207);
+    expect(res.body.local).toBe('failed');
+    expect(port.setInternalId).toHaveBeenCalled();
+  });
+
+  it('47f: link WITHOUT contractId → 200 and no local field (back-compat)', async () => {
+    const app = await buildApp();
+    const res = await request(app).post('/api/gigared/customers/cust-1/link').send({ cic: '0000001234' });
+    expect(res.status).toBe(200);
+    expect(res.body.local).toBeUndefined();
   });
 });
