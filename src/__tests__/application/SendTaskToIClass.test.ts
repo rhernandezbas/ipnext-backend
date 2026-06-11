@@ -53,7 +53,7 @@ function setup(opts?: { flagEnabled?: boolean; nodes?: string[]; unavailable?: b
   flags.seed(FLAG_KEY, opts?.flagEnabled ?? true);
 
   const iclass = new InMemoryIClassClient();
-  iclass.nodes = (opts?.nodes ?? ['Rosario']).map(c => ({ code: c, description: c }));
+  iclass.nodes = (opts?.nodes ?? ['Rosario']).map((c, i) => ({ nodeId: 1000 + i, code: c, description: c }));
   if (opts?.unavailable) iclass.failureMode = 'unavailable';
 
   const useCase = new SendTaskToIClass(tasks, flags, iclass, undefined, opts?.recorder);
@@ -341,7 +341,7 @@ describe('SendTaskToIClass', () => {
     const flags = new InMemoryFeatureFlagRepository();
     flags.seed(FLAG_KEY, true);
     const iclass = new InMemoryIClassClient();
-    iclass.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+    iclass.nodes = [{ nodeId: 1001, code: 'Rosario', description: 'Rosario' }];
     const useCase = new SendTaskToIClass(tasks, flags, iclass);
     fullTask(tasks);
 
@@ -436,7 +436,7 @@ describe('SendTaskToIClass', () => {
     const taskRepo = new InMemorySchedulingRepository(stages);
     taskRepo.seedProject({ id: DEFAULT_PROJECT_ID, title: 'P', iclassSoType: { id: 'st1', code: 'INSTALL', active: true } });
     const iclass2 = new InMemoryIClassClient();
-    iclass2.nodes = [{ code: 'Córdoba', description: 'Córdoba' }];
+    iclass2.nodes = [{ nodeId: 1002, code: 'Córdoba', description: 'Córdoba' }];
     const attemptRepo = new InMemoryIClassDispatchAttemptRepository();
     const useCaseWithAudit = new SendTaskToIClass(taskRepo, flags, iclass2, attemptRepo);
 
@@ -471,7 +471,7 @@ describe('SendTaskToIClass', () => {
     const flags2 = new InMemoryFeatureFlagRepository();
     flags2.seed(FLAG_KEY, true);
     const iclass3 = new InMemoryIClassClient();
-    iclass3.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+    iclass3.nodes = [{ nodeId: 1003, code: 'Rosario', description: 'Rosario' }];
     iclass3.failureMode = 'rejected';
     const attemptRepo2 = new InMemoryIClassDispatchAttemptRepository();
     const useCaseWithAudit2 = new SendTaskToIClass(taskRepo2, flags2, iclass3, attemptRepo2);
@@ -506,7 +506,7 @@ describe('SendTaskToIClass', () => {
     const flags3 = new InMemoryFeatureFlagRepository();
     flags3.seed(FLAG_KEY, true);
     const iclass4 = new InMemoryIClassClient();
-    iclass4.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+    iclass4.nodes = [{ nodeId: 1004, code: 'Rosario', description: 'Rosario' }];
     // Only createServiceOrder fails with unavailable, listNodes works
     iclass4.createServiceOrder = async () => { throw new IClassUnavailableError(); };
     const attemptRepo3 = new InMemoryIClassDispatchAttemptRepository();
@@ -541,7 +541,7 @@ describe('SendTaskToIClass', () => {
     const flags4 = new InMemoryFeatureFlagRepository();
     flags4.seed(FLAG_KEY, true);
     const iclass5 = new InMemoryIClassClient();
-    iclass5.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+    iclass5.nodes = [{ nodeId: 1005, code: 'Rosario', description: 'Rosario' }];
     const attemptRepo4 = new InMemoryIClassDispatchAttemptRepository();
     const useCaseSuccess = new SendTaskToIClass(taskRepo4, flags4, iclass5, attemptRepo4);
 
@@ -574,7 +574,7 @@ describe('SendTaskToIClass', () => {
     const flags5 = new InMemoryFeatureFlagRepository();
     flags5.seed(FLAG_KEY, true);
     const iclass6 = new InMemoryIClassClient();
-    iclass6.nodes = [{ code: 'Córdoba', description: 'Córdoba' }]; // Rosario won't match
+    iclass6.nodes = [{ nodeId: 1006, code: 'Córdoba', description: 'Córdoba' }]; // Rosario won't match
 
     // Audit repo that always throws
     const faultyAttemptRepo = new InMemoryIClassDispatchAttemptRepository();

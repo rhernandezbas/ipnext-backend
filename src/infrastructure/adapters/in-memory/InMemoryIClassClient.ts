@@ -1,6 +1,6 @@
 import {
   IClassPort,
-  IClassNode,
+  IClassNodeDescriptor,
   IClassSoTypeDescriptor,
   IClassResultCodeDescriptor,
   CreateServiceOrderInput,
@@ -26,7 +26,7 @@ interface CreatedOrder {
  */
 export class InMemoryIClassClient implements IClassPort {
   /** Nodes returned by listNodes(). */
-  nodes: IClassNode[] = [];
+  nodes: IClassNodeDescriptor[] = [];
   /** SO type descriptors returned by listServiceOrderTypes(). Settable for tests. */
   serviceOrderTypes: IClassSoTypeDescriptor[] = [];
   /** Every OS created, for assertions. */
@@ -43,7 +43,7 @@ export class InMemoryIClassClient implements IClassPort {
 
   private seq = 0;
 
-  async listNodes(): Promise<IClassNode[]> {
+  async listNodes(): Promise<IClassNodeDescriptor[]> {
     if (this.failureMode === 'unavailable') throw new IClassUnavailableError();
     return this.nodes;
   }

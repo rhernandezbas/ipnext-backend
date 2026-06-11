@@ -57,7 +57,7 @@ function setup(opts?: { nodes?: string[]; failureMode?: 'rejected' | 'unavailabl
   flags.seed(FLAG_KEY, true);
 
   const iclass = new InMemoryIClassClient();
-  iclass.nodes = (opts?.nodes ?? ['Rosario', 'Lujan', 'Mercedes']).map(c => ({ code: c, description: `${c} SY` }));
+  iclass.nodes = (opts?.nodes ?? ['Rosario', 'Lujan', 'Mercedes']).map((c, i) => ({ nodeId: 1000 + i, code: c, description: `${c} SY` }));
   if (opts?.failureMode) iclass.failureMode = opts.failureMode;
 
   const attempts = new InMemoryIClassDispatchAttemptRepository();

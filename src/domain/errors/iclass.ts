@@ -39,6 +39,22 @@ export class IClassSoTypeNotFoundError extends DomainError {
   }
 }
 
+/**
+ * Raised when a NetworkSite assignment targets an IClass node that exists but
+ * cannot be assigned — it is inactive (deactivated by a sync) or non-selectable
+ * (a grouping node like "Main"). `reason` carries the human-readable cause.
+ */
+export class IClassNodeNotAssignableError extends DomainError {
+  readonly nodeCode: string;
+  readonly reason: string;
+  constructor(code: string, reason: string) {
+    super(`IClass node "${code}" is not assignable: ${reason}`, 'ICLASS_NODE_NOT_ASSIGNABLE');
+    this.name = 'IClassNodeNotAssignableError';
+    this.nodeCode = code;
+    this.reason = reason;
+  }
+}
+
 /** Raised when an IClass result-code id is not found in the catalog (closure mapping). */
 export class IClassResultCodeNotFoundError extends DomainError {
   constructor(id: string) {
