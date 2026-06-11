@@ -22,21 +22,39 @@ describe('ListTicketComments', () => {
   });
 
   it('returns comments in createdAt ASC order', async () => {
+    // #44 flake fix: AddTicketComment stamps createdAt = new Date().toISOString(),
+    // so two rapid calls can collide on the same millisecond → order becomes
+    // tiebreaker-dependent (flaky). Seed with EXPLICIT distinct timestamps and
+    // insert out of order so ASC sorting is what's actually asserted.
     const commentRepo = new InMemoryTicketCommentRepository();
     const ticketRepo = new InMemoryTicketRepository();
     const ticketId = await seedTicket(ticketRepo);
-    const add = new AddTicketComment(commentRepo, ticketRepo);
     const list = new ListTicketComments(commentRepo, ticketRepo);
 
-    await add.execute({ ticketId, authorName: 'A', body: 'first', attachments: [] });
-    await add.execute({ ticketId, authorName: 'B', body: 'second', attachments: [] });
+    // Insert "second" (later timestamp) BEFORE "first" (earlier timestamp).
+    await commentRepo.create({
+      id: 'c-second',
+      ticketId,
+      authorName: 'B',
+      body: 'second',
+      createdAt: '2026-01-01T00:00:02.000Z',
+      attachments: [],
+    });
+    await commentRepo.create({
+      id: 'c-first',
+      ticketId,
+      authorName: 'A',
+      body: 'first',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      attachments: [],
+    });
 
     const result = await list.execute(ticketId);
 
     expect(result).toHaveLength(2);
     expect(result[0].body).toBe('first');
     expect(result[1].body).toBe('second');
-    expect(result[0].createdAt <= result[1].createdAt).toBe(true);
+    expect(result[0].createdAt < result[1].createdAt).toBe(true);
   });
 
   it('throws TicketNotFoundError when the ticket does not exist', async () => {

@@ -660,7 +660,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const getTicket = new GetTicket(ticketAdapter);
   const updateTicketStatus = new UpdateTicketStatus(ticketAdapter);
   const updateTicket = new UpdateTicket(ticketAdapter);
-  const closeTicket = new CloseTicket(ticketAdapter);
+  // ticketStatusRepo is needed by CloseTicket (#46 M1: resolve the closed-like
+  // catalog name instead of hardcoding 'closed'). Instantiated here so it is in
+  // scope for closeTicket; reused below for the status-catalog use cases.
+  const ticketStatusRepo = new PrismaTicketStatusRepository();
+  const closeTicket = new CloseTicket(ticketAdapter, ticketStatusRepo);
   const getSummary = new GetBillingSummary(billingAdapter);
   const listInvoices = new ListInvoices(billingAdapter);
   const listPayments = new ListPayments(billingAdapter);
@@ -813,7 +817,6 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const updateDeviceType         = new UpdateDeviceType(deviceTypeCatalogRepo);
   const deleteDeviceType         = new DeleteDeviceType(deviceTypeCatalogRepo);
 
-  const ticketStatusRepo = new PrismaTicketStatusRepository();
   const listTicketStatuses = new ListTicketStatuses(ticketStatusRepo);
   const getTicketStatus = new GetTicketStatus(ticketStatusRepo);
   const createTicketStatus = new CreateTicketStatus(ticketStatusRepo);
@@ -1014,7 +1017,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     authAdapter,
     listTicketStatuses, getTicketStatus, createTicketStatus, updateTicketStatusCatalog, deleteTicketStatus,
   ));
-  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, authAdapter, createTaskFromTicket, schedulingRepo, stageRepo));
+  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, ticketStatusRepo, authAdapter, createTaskFromTicket, schedulingRepo, stageRepo));
   // #44 — persisted ticket comments. Mounted on /api/tickets; the tickets router has no
   // catch-all and /:id does not capture /:id/comments (distinct segments), so no collision.
   const ticketCommentRepo = new PrismaTicketCommentRepository();

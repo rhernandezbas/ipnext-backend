@@ -36,5 +36,10 @@ export interface TicketRepository {
   getStats(): Promise<TicketStats>;
   create(data: CreateTicketData): Promise<Ticket>;
   update(id: string, data: UpdateTicketData): Promise<Ticket | null>;
-  close(id: string): Promise<Ticket | null>;
+  /**
+   * Persist the ticket as closed using the canonical catalog status NAME
+   * resolved by the caller (CloseTicket). The repo never hardcodes 'closed' —
+   * it writes exactly the name it is given (catalog-aware, casing-safe).
+   */
+  close(id: string, statusName: string): Promise<Ticket | null>;
 }

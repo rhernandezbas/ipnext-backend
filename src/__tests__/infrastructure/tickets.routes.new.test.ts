@@ -6,6 +6,7 @@ import request from 'supertest';
 import express, { Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import { InMemoryTicketRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketRepository';
+import { InMemoryTicketStatusRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketStatusRepository';
 import { ListTickets } from '../../application/use-cases/ListTickets';
 import { GetTicketStats } from '../../application/use-cases/GetTicketStats';
 import { CreateTicket } from '../../application/use-cases/CreateTicket';
@@ -27,13 +28,18 @@ function buildApp() {
     { id: 'c2', name: 'Bob Martínez' },
   ]);
 
+  // Status catalog — seeded with the legacy canonical set (open/pending/closed).
+  const statusRepo = new InMemoryTicketStatusRepository();
+
   const listTickets = new ListTickets(repo);
   const getStats = new GetTicketStats(repo);
   const createTicket = new CreateTicket(repo);
   const getTicket = new GetTicket(repo);
   const updateStatus = new UpdateTicketStatus(repo);
   const updateTicket = new UpdateTicket(repo);
-  const closeTicket = new CloseTicket(repo);
+  // M1 (#46): CloseTicket resolves the "closed-like" entry from the catalog
+  // (case-insensitive, fallback 'cerrado') instead of writing 'closed' hardcoded.
+  const closeTicket = new CloseTicket(repo, statusRepo);
 
   const authProvider = {
     getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }),
@@ -41,7 +47,7 @@ function buildApp() {
 
   app.use(
     '/api/tickets',
-    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicket, closeTicket, authProvider),
+    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicket, closeTicket, statusRepo, authProvider),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -49,7 +55,13 @@ function buildApp() {
     res.status(500).json({ error: 'Internal server error' });
   });
 
-  return { app, repo };
+  return { app, repo, statusRepo };
+}
+
+async function seedCanonicalStatuses(statusRepo: InMemoryTicketStatusRepository) {
+  await statusRepo.create({ name: 'open', color: '#22c55e', weight: 0 });
+  await statusRepo.create({ name: 'pending', color: '#f59e0b', weight: 1 });
+  await statusRepo.create({ name: 'closed', color: '#6b7280', weight: 2 });
 }
 
 function withAuth(req: request.Test) {
@@ -134,6 +146,22 @@ describe('GET /api/tickets', () => {
     expect(res.body.total).toBe(0);
     expect(res.body.data).toHaveLength(0);
   });
+
+  it('M2: filters by ?status= case-insensitively (protects Archive: closed vs Closed)', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
+    const created = await new CreateTicket(repo).execute({ subject: 'Closable', description: 'D' });
+    // Close it → ticket.status becomes the canonical catalog name 'closed'.
+    await withAuth(request(app).delete(`/api/tickets/${created.id}`));
+    // An extra open ticket that must NOT match the closed filter.
+    await new CreateTicket(repo).execute({ subject: 'Open', description: 'D' });
+
+    // Query with a different casing than the stored status.
+    const res = await withAuth(request(app).get('/api/tickets?status=Closed'));
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0].id).toBe(created.id);
+  });
 });
 
 describe('GET /api/tickets/:id', () => {
@@ -157,7 +185,8 @@ describe('GET /api/tickets/:id', () => {
 
 describe('PATCH /api/tickets/:id/status', () => {
   it('persists the status change (not an in-memory override)', async () => {
-    const { app, repo } = buildApp();
+    const { app, repo, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
     const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
 
     const res = await withAuth(
@@ -171,19 +200,79 @@ describe('PATCH /api/tickets/:id/status', () => {
     expect(fetched?.status).toBe('pending');
   });
 
-  it('returns 400 for invalid status', async () => {
-    const { app, repo } = buildApp();
+  it('accepts a custom catalog status and persists its canonical name (regresión del 400)', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await statusRepo.create({ name: 'Resuelto', color: '#3b82f6', weight: 3 });
     const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
 
     const res = await withAuth(
-      request(app).patch(`/api/tickets/${created.id}/status`).send({ status: 'resolved' }),
+      request(app).patch(`/api/tickets/${created.id}/status`).send({ status: 'Resuelto' }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('Resuelto');
+
+    const fetched = await repo.getById(created.id);
+    expect(fetched?.status).toBe('Resuelto');
+  });
+
+  it("case-insensitive: 'cerrado' resolves to the canonical 'Cerrado'", async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await statusRepo.create({ name: 'Cerrado', color: '#6b7280', weight: 5 });
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}/status`).send({ status: 'cerrado' }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('Cerrado'); // canonical name persisted (AD-3)
+
+    const fetched = await repo.getById(created.id);
+    expect(fetched?.status).toBe('Cerrado');
+  });
+
+  it("legacy catalog in English still works ('closed' seed, no regresión)", async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}/status`).send({ status: 'closed' }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('closed');
+  });
+
+  it('returns 422 TICKET_STATUS_NOT_FOUND for a status not in the catalog', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}/status`).send({ status: 'archivado' }),
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TICKET_STATUS_NOT_FOUND');
+
+    // Ticket unchanged
+    const fetched = await repo.getById(created.id);
+    expect(fetched?.status).toBe('open');
+  });
+
+  it('returns 400 VALIDATION_ERROR when status is missing', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}/status`).send({}),
     );
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
   });
 
   it('returns 404 when ticket not found', async () => {
-    const { app } = buildApp();
+    const { app, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
     const res = await withAuth(
       request(app).patch('/api/tickets/non-existent/status').send({ status: 'pending' }),
     );
@@ -219,7 +308,8 @@ describe('PATCH /api/tickets/:id (update fields)', () => {
 
 describe('DELETE /api/tickets/:id (close)', () => {
   it('closes the ticket and returns 200', async () => {
-    const { app, repo } = buildApp();
+    const { app, repo, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
     const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
 
     const res = await withAuth(request(app).delete(`/api/tickets/${created.id}`));
@@ -230,8 +320,37 @@ describe('DELETE /api/tickets/:id (close)', () => {
     expect(fetched?.status).toBe('closed');
   });
 
+  it('M1: closes using the catalog canonical name when catalog only has "Cerrado" (no \'closed\')', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    // Catalog renamed/recased: only "Cerrado" exists, no 'closed'.
+    await statusRepo.create({ name: 'Cerrado', color: '#6b7280', weight: 2 });
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(request(app).delete(`/api/tickets/${created.id}`));
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('Cerrado'); // canonical catalog name, not hardcoded 'closed'
+
+    const fetched = await repo.getById(created.id);
+    expect(fetched?.status).toBe('Cerrado');
+  });
+
+  it('M1: returns 422 (not 500) when no closed-like status exists in the catalog', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    // Catalog has no 'closed'/'cerrado' entry at all.
+    await statusRepo.create({ name: 'open', color: '#22c55e', weight: 0 });
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(request(app).delete(`/api/tickets/${created.id}`));
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NO_CLOSABLE_STATUS');
+
+    const fetched = await repo.getById(created.id);
+    expect(fetched?.status).toBe('open'); // unchanged
+  });
+
   it('returns 404 for unknown ticket', async () => {
-    const { app } = buildApp();
+    const { app, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
     const res = await withAuth(request(app).delete('/api/tickets/no-such-id'));
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('TICKET_NOT_FOUND');

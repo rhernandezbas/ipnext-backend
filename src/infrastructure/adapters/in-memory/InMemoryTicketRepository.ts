@@ -47,7 +47,9 @@ export class InMemoryTicketRepository implements TicketRepository {
       results = results.filter((t) => t.customerId === query.customerId);
     }
     if (query.status) {
-      results = results.filter((t) => t.status === query.status);
+      // M2 (#46): case-insensitive — protects Archive ('closed' vs 'Closed').
+      const wanted = query.status.toLowerCase();
+      results = results.filter((t) => t.status.toLowerCase() === wanted);
     }
     if (query.priority) {
       results = results.filter((t) => t.priority === query.priority);
@@ -148,7 +150,7 @@ export class InMemoryTicketRepository implements TicketRepository {
     return updated;
   }
 
-  async close(id: string): Promise<Ticket | null> {
-    return this.update(id, { status: 'closed' });
+  async close(id: string, statusName: string): Promise<Ticket | null> {
+    return this.update(id, { status: statusName });
   }
 }

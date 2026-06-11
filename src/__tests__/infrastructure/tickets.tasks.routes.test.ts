@@ -13,6 +13,7 @@ import cookieParser from 'cookie-parser';
 import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryTicketRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketRepository';
 import { InMemoryStageRepository } from '../../infrastructure/adapters/in-memory/InMemoryStageRepository';
+import { InMemoryTicketStatusRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketStatusRepository';
 import { InMemoryEntityLookup } from '../../infrastructure/adapters/in-memory/InMemoryEntityLookup';
 import { ListTickets } from '../../application/use-cases/ListTickets';
 import { GetTicketStats } from '../../application/use-cases/GetTicketStats';
@@ -84,7 +85,9 @@ function buildApp() {
   const getTicket = new GetTicket(ticketRepo);
   const updateStatus = new UpdateTicketStatus(ticketRepo);
   const updateTicket = new UpdateTicket(ticketRepo);
-  const closeTicket = new CloseTicket(ticketRepo);
+
+  const statusRepo = new InMemoryTicketStatusRepository();
+  const closeTicket = new CloseTicket(ticketRepo, statusRepo);
 
   const authProvider = {
     getSession: jest.fn().mockResolvedValue({ id: 'admin-1', email: 'admin@test.com', role: 'admin' }),
@@ -100,6 +103,7 @@ function buildApp() {
       updateStatus,
       updateTicket,
       closeTicket,
+      statusRepo,
       authProvider,
       createTaskFromTicket,
       taskRepo,
@@ -112,7 +116,7 @@ function buildApp() {
     res.status(500).json({ error: 'Internal server error' });
   });
 
-  return { app, taskRepo, ticketRepo };
+  return { app, taskRepo, ticketRepo, statusRepo };
 }
 
 function withAuth(req: request.Test) {
@@ -209,5 +213,47 @@ describe('POST /api/tickets/:id/tasks', () => {
     // ticketId must be from the path, not the body
     expect(res.body.ticketId).toBe(TICKET_ID);
     expect(res.body.ticketId).not.toBe('attacker-injected-id');
+  });
+});
+
+function withAuth2(req: request.Test) {
+  return req.set('Cookie', 'auth_token=mock-token');
+}
+
+describe('GET /api/tickets?status= (pass-through filter, AD-5)', () => {
+  it('filters by a custom catalog status, returning only matches', async () => {
+    const { app, statusRepo } = buildApp();
+    await statusRepo.create({ name: 'Resuelto', color: '#3b82f6', weight: 3 });
+
+    // Create two tickets; move one to "Resuelto" via the status route
+    const a = await withAuth2(request(app).post('/api/tickets').send({ subject: 'A', description: 'D' }));
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'B', description: 'D' }));
+    await withAuth2(request(app).patch(`/api/tickets/${a.body.id}/status`).send({ status: 'Resuelto' }));
+
+    const res = await withAuth2(request(app).get('/api/tickets?status=Resuelto'));
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data.every((t: { status: string }) => t.status === 'Resuelto')).toBe(true);
+  });
+
+  it('returns an empty list for a status no ticket has (filter applied, not ignored)', async () => {
+    const { app } = buildApp();
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'A', description: 'D' }));
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'B', description: 'D' }));
+
+    const res = await withAuth2(request(app).get('/api/tickets?status=nope'));
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+    expect(res.body.data).toHaveLength(0);
+  });
+
+  it('without status, returns the unfiltered list (regresión)', async () => {
+    const { app } = buildApp();
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'A', description: 'D' }));
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'B', description: 'D' }));
+
+    const res = await withAuth2(request(app).get('/api/tickets'));
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
   });
 });
