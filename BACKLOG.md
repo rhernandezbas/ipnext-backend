@@ -56,6 +56,11 @@
 - (b) **El punto de entrada de la activación es el CONTRATO**: elegir "TV" en el picker de servicios de la card (#42) abre el flujo Gigared (vincular CIC / registrar → elegir pack; el ítem local lo crea el reconcile del BE); el chip TV abre el mismo panel en modo gestión (packs/OTT/quitar). Sin Gigared configurado → ítem local plano con aviso.
 - (c) La tab TV del cliente se ELIMINA (un solo lugar de gestión).
 
+### #47e — TV: picker de CICs disponibles + registro prefilleado ✅ HECHO *(2026-06-11, FE PR #90, en prod)*
+> Pedidos del usuario: (1) Vincular elige el CIC de un picker buscable (cuentas registradas sin vincular, label nombre+CIC+packs, placeholder anti-mismatch, fallback manual; hook paginado de a 20 en un solo queryFn, solo se dispara al abrir el panel). (2) Registrar se precarga con nombre/apellido/email del cliente (split "APELLIDO NOMBRE(S)", tolera coma) y el CIC sale de las cuentas SIN registrar (Gigared exige CIC libre). Review CLEAN + 2 cosméticos aplicados. Gates 2586/0.
+
+### #47e-bis — Calendario oculta descartadas ✅ HECHO *(2026-06-11, FE PR #89 — deuda #41 cerrada con default "descartada=fuera de la vista"; cerradas se mantienen)*
+
 ### #47d — TV: mapeo de errores REALES de Gigared ✅ HECHO *(2026-06-11, BE PR #112, en prod)*
 > Bug del usuario con la key real: el panel TV daba error genérico para no-vinculados. La API REAL difiere de su doc: internal_id desconocido → 424 external-service-error (no 404); CIC ajeno → 403 cic-ownership-error (no 404). `mapError` discrimina por el `type` RFC 9457 → ambos a NotFound; fixtures reales pineados. Lección: toda integración nueva necesita pasada de unhappy-paths contra la API real ANTES del primer uso (van 3 mentiras de la doc: status codes, cap de paginación 20, ?city= roto de IClass).
 
