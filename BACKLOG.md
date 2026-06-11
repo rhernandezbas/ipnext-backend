@@ -51,6 +51,11 @@
 ### Batch de deudas de los reviews 2026-06-11 ✅ HECHO *(BE PR #110, en prod — no es ítem numerado)*
 > 5 deudas saldadas el mismo día: guard de kind en GR ingest (#40) · `technology` en toService (#42) · rename-guard de OTROS en UpdateDeviceType (#43) · composition-guard test #46 · e2e dual-parser #44. Gates 3476/0 + tsc. Review CLEAN. Deuda restante menor: doble `projects.get` por orden en el ingest (perf, trivial) · Calendar muestra dismissed (#41, decisión de producto).
 
+### #47b — TV: flujo desde el contrato + page en Clientes ✅ HECHO *(2026-06-11, FE PR #87, en prod)*
+- (a) La page de TV se muda de "Clientes potenciales" a la sección **Clientes** del sidebar (ruta → `/admin/customers/tv`).
+- (b) **El punto de entrada de la activación es el CONTRATO**: elegir "TV" en el picker de servicios de la card (#42) abre el flujo Gigared (vincular CIC / registrar → elegir pack; el ítem local lo crea el reconcile del BE); el chip TV abre el mismo panel en modo gestión (packs/OTT/quitar). Sin Gigared configurado → ítem local plano con aviso.
+- (c) La tab TV del cliente se ELIMINA (un solo lugar de gestión).
+
 ### #47 — Integración TV **Gigared Partners** ✅ HECHO *(2026-06-11, BE PR #111 + FE PR #86, en prod — INERTE hasta cargar la API key)*
 > SDD `tv-gigared-integration`. API: partners.gigaredsa.com.ar (doc formateada en `tv.md`). BE: GigaredClient (X-API-Key por-request desde config DB, retry-429, RFC 9457→errores tipados), GigaredConfig singleton (key enmascarada — GET solo last4; **el audit middleware ahora enmascara `apikey`**, sin eso quedaba EN CLARO en AuditEvent), módulo RBAC `tv` + grants (migración `20260630000000`), flag `gigared-integration` OFF, 10 use cases (link CIC con guards 404/409, register+activate, add/remove servicio con **reconcile del ítem TV local** del #43 — ownership por notes-prefix, inactiva en vez de borrar, 207 retry-idempotente, OTT). FE: page `/admin/crm/tv` + tab TV en el cliente (3 estados) + config con **Probar conexión** (funciona con flag OFF — onboarding: pegar key → probar → activar). Review: 2 CRITICAL BE (key en audit, guard falso-hecho) + 3 CRITICAL FE (drift spec/design) corregidos → CLEAN. Gates BE 3597/0, FE 2534/0. Dry-run prod OK.
 > **Post-deploy (usuario)**: pegar la API key en Configuración de clientes → tab "Gigared TV" → Probar conexión → prender el toggle. Listo.
