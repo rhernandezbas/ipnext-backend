@@ -177,7 +177,17 @@ export class GigaredClient implements GigaredPort {
     throw this.mapError(new Error('withRetry429: loop exhausted unexpectedly'));
   }
 
-  /** Translate transport errors to domain errors. Never leak axios cross-layer. */
+  /**
+   * Translate transport errors to domain errors. Never leak axios cross-layer.
+   *
+   * #47d — the LIVE Gigared API (verified 2026-06-11) DIFFERS from its docs. It speaks
+   * RFC 9457: every 4xx carries a `type` URI. We discriminate on `type` (NOT free-text):
+   *   - .../external-service-error (424) + detail "no se encontró" → NOT_FOUND (the CUA's
+   *     "this account/internal_id does not exist"). Any OTHER 424 → UNAVAILABLE (CUA down).
+   *   - .../cic-ownership-error (403) → NOT_FOUND ("the reseller does not own this CIC" ≡
+   *     inexistent for us; maps to CIC_NOT_FOUND in the link, not-found in lookups).
+   *   - .../invalid-api-key (403/401), or any 401/403 WITHOUT a recognized type → AUTH.
+   */
   private mapError(e: unknown): Error {
     if (
       e instanceof GigaredNotConfiguredError ||
@@ -190,12 +200,24 @@ export class GigaredClient implements GigaredPort {
     }
     if (isAxiosLikeError(e)) {
       const status = e.response?.status;
+      const body = e.response?.data as { type?: string; title?: string; detail?: string } | undefined;
+      const type = body?.type ?? '';
+
+      // RFC 9457 type-based discrimination (#47d) — takes precedence over bare status.
+      // cic-ownership (403): for our partner, "not owned" ≡ "not found".
+      if (type.endsWith('/cic-ownership-error')) return new GigaredNotFoundError();
+      // external-service-error (424): the CUA's "no se encontró ..." is a real not-found;
+      // any other 424 is the CUA genuinely failing → outage.
+      if (type.endsWith('/external-service-error')) {
+        if (/no se encontr/i.test(body?.detail ?? '')) return new GigaredNotFoundError();
+        return new GigaredUnavailableError('Gigared external service (CUA) error');
+      }
+
       if (status === 401 || status === 403) return new GigaredAuthError();
       if (status === 404) return new GigaredNotFoundError();
       // 429 reaching mapError means retries were exhausted → treat as an outage, not a rejection.
       if (status === 429) return new GigaredUnavailableError('Gigared rate limit exceeded');
       if (status !== undefined && status >= 400 && status < 500) {
-        const body = e.response?.data as { title?: string; detail?: string } | undefined;
         return new GigaredRejectedError(body?.title ?? 'Gigared rejected the request', body?.detail ?? '');
       }
       return new GigaredUnavailableError(

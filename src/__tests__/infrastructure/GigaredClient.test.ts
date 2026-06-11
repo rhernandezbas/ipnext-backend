@@ -381,4 +381,87 @@ describe('GigaredClient (#47)', () => {
       await expect(client.getSummary()).rejects.toBeInstanceOf(GigaredUnavailableError);
     });
   });
+
+  // ---- #47d — REAL Gigared error bodies (verified live 2026-06-11) ----------
+  // The live API DIFFERS from its docs: "not found" is HTTP 424 (external-service-error),
+  // and "CIC not owned" is HTTP 403 (cic-ownership-error) — NOT 404. mapError discriminates
+  // on the RFC 9457 `type` field. Fixtures below are pinned VERBATIM from the live responses.
+  describe('#47d — real Gigared RFC 9457 error mapping (verified live 2026-06-11)', () => {
+    // GET /accounts/{uuid}?use_internal_id=true with an UNKNOWN internal_id → HTTP 424.
+    const NOT_FOUND_424_BODY = {
+      type: 'https://partners.gigaredsa.com.ar/errors/external-service-error',
+      title: 'Error en servicio externo',
+      status: 424,
+      detail: 'No se encontró una cuenta con internal_id 8054e9f3-...',
+    };
+
+    // GET /accounts/{cic} with a CIC the reseller does NOT own → HTTP 403.
+    const CIC_OWNERSHIP_403_BODY = {
+      type: 'https://partners.gigaredsa.com.ar/errors/cic-ownership-error',
+      title: 'Error de propiedad de CIC',
+      status: 403,
+      detail: 'El revendedor no posee esta cuenta',
+    };
+
+    // The genuine auth failure (invalid/missing key) must STILL be an auth error.
+    const INVALID_API_KEY_403_BODY = {
+      type: 'https://partners.gigaredsa.com.ar/errors/invalid-api-key',
+      title: 'Clave de API inválida',
+      status: 403,
+      detail: 'La clave de API proporcionada no es válida',
+    };
+
+    it('(a) 424 external-service-error "no se encontró" → getAccountByInternalId throws GigaredNotFoundError (→ linked:false upstream)', async () => {
+      const http = makeHttp();
+      http.get.mockRejectedValue(axiosError(424, { data: NOT_FOUND_424_BODY }));
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getAccountByInternalId('8054e9f3-...')).rejects.toBeInstanceOf(
+        GigaredNotFoundError,
+      );
+    });
+
+    it('(b) 403 cic-ownership-error → getAccountByCic throws GigaredNotFoundError (→ CIC_NOT_FOUND 404 in the link)', async () => {
+      const http = makeHttp();
+      http.get.mockRejectedValue(axiosError(403, { data: CIC_OWNERSHIP_403_BODY }));
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getAccountByCic('0009999999')).rejects.toBeInstanceOf(
+        GigaredNotFoundError,
+      );
+    });
+
+    it('(c) regression: 403 invalid-api-key → GigaredAuthError', async () => {
+      const http = makeHttp();
+      http.get.mockRejectedValue(axiosError(403, { data: INVALID_API_KEY_403_BODY }));
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getSummary()).rejects.toBeInstanceOf(GigaredAuthError);
+    });
+
+    it('(d) 424 WITHOUT "no se encontró" (CUA genuinely down) → GigaredUnavailableError', async () => {
+      const http = makeHttp();
+      http.get.mockRejectedValue(
+        axiosError(424, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/external-service-error',
+            title: 'Error en servicio externo',
+            status: 424,
+            detail: 'El servicio CUA no respondió a tiempo',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getSummary()).rejects.toBeInstanceOf(GigaredUnavailableError);
+    });
+
+    it('(e) bare 403 without an RFC 9457 type still → GigaredAuthError (legacy/unknown bodies)', async () => {
+      const http = makeHttp();
+      http.get.mockRejectedValue(axiosError(403));
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getSummary()).rejects.toBeInstanceOf(GigaredAuthError);
+    });
+  });
 });
