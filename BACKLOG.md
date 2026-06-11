@@ -56,6 +56,9 @@
 - (b) **El punto de entrada de la activación es el CONTRATO**: elegir "TV" en el picker de servicios de la card (#42) abre el flujo Gigared (vincular CIC / registrar → elegir pack; el ítem local lo crea el reconcile del BE); el chip TV abre el mismo panel en modo gestión (packs/OTT/quitar). Sin Gigared configurado → ítem local plano con aviso.
 - (c) La tab TV del cliente se ELIMINA (un solo lugar de gestión).
 
+### #47g — TV: pager real + modal de vincular + errores con motivo ✅ HECHO *(2026-06-11, BE PR #114 + FE PR #92, en prod)*
+> Bugs de uso real: (1) pager incoherente → totalPages real desde el summary por status (fallback heurístico con filtros de texto); (2) el picker de vincular pasó a MODAL impeccable (búsqueda autofocus, filas nombre+CIC+packs, selección con resumen y Cambiar); (3) errores mudos → `detail` RFC 9457 del partner en TODOS los errores (502/503 incl.) + log `[gigared] upstream` para diagnóstico; (4) **5to bug de la API**: lista filtrada sin resultados devuelve 404 `empty-accounts_list` (no lista vacía) — mapeado a `[]`. El register fallido del usuario fue transitorio del CUA — con el detail visible, el próximo retry muestra el motivo real.
+
 ### #47f — TV: vincular crea el chip TV del contrato ✅ HECHO *(2026-06-11, BE PR #113 + FE PR #91, en prod)*
 > Gap cazado ANTES de la vinculación masiva: el link seteaba internal_id pero el reconcile solo corría en add/remove de packs → vincular las 84 cuentas con packs YA activos dejaba los contratos sin chip. Ahora `POST .../link {cic, contractId?}` reconcilia el ContractService TV (404 de contrato ANTES de tocar Gigared; 207 local:'failed' con retry idempotente); el FE manda el contractId del dueño + amber 207 + la invalidación de client-contracts que faltaba. Gates BE 3614/0, FE 2591/0.
 
