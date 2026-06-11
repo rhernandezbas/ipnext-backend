@@ -96,6 +96,76 @@ All 5 project routes MUST enforce authentication via the `auth_token` cookie usi
 **Given** the same endpoint without the `visible` query parameter
 **Then** the response MUST include all projects regardless of `visible`
 
+### REQ-PROJ-NET-1: `Project` gains `isNetworkProject` boolean flag
+
+The `Project` domain entity, Prisma schema, and all response DTOs MUST include `isNetworkProject: boolean`. The DB column MUST be added via an ADDITIVE migration with `@default(false)`. Existing rows gain `false` automatically; no data migration needed.
+
+**Given** the database has existing `Project` rows before the migration
+**When** the migration `ALTER TABLE "Project" ADD COLUMN "isNetworkProject" BOOLEAN NOT NULL DEFAULT false` runs
+**Then** all existing rows MUST have `isNetworkProject = false`
+**And** no existing API behavior MUST change
+
+**Given** an authenticated `POST /api/projects` request with a valid body that omits `isNetworkProject`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 201
+**And** the returned project MUST have `isNetworkProject: false`
+
+### REQ-PROJ-NET-2: All project responses include `isNetworkProject`
+
+Every endpoint returning a `Project` object (GET list, GET by id, POST, PUT) MUST include `isNetworkProject: boolean` in the response. It MUST NOT be absent or `undefined`.
+
+**Given** an authenticated `GET /api/projects` request
+**When** the response is received
+**Then** every element in the array MUST have `isNetworkProject` as a boolean
+
+**Given** an authenticated `GET /api/projects/:id` request for an existing project
+**When** the response is received
+**Then** the body MUST include `isNetworkProject: boolean`
+
+### REQ-PROJ-NET-3: PATCH `isNetworkProject` requires `scheduling.manage` permission
+
+`PATCH /api/projects/:id` (or `PUT /api/projects/:id`) with `isNetworkProject` in the request body MUST be gated by the `scheduling.manage` permission. Requests that include `isNetworkProject` without this permission MUST be rejected with HTTP 403. Requests to the same endpoints that do NOT include `isNetworkProject` in the body MUST be unaffected by this guard (other fields update as before).
+
+**Given** an authenticated `PATCH /api/projects/:id` request
+**And** the caller does NOT have `scheduling.manage`
+**And** the body is `{ "isNetworkProject": true }`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 403
+**And** the project MUST NOT be modified
+
+**Given** an authenticated `PATCH /api/projects/:id` request
+**And** the caller HAS `scheduling.manage`
+**And** the body is `{ "isNetworkProject": true }`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 200
+**And** the returned project MUST have `isNetworkProject: true`
+
+**Given** an authenticated `PUT /api/projects/:id` request
+**And** the caller does NOT have `scheduling.manage`
+**And** the body is `{ "title": "New Title" }` (no `isNetworkProject`)
+**When** the request is processed
+**Then** the server MUST respond with HTTP 200 (existing auth/perm behavior unchanged)
+
+**Given** a project with `isNetworkProject: true`
+**And** the caller HAS `scheduling.manage`
+**And** the body is `{ "isNetworkProject": false }`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 200
+**And** the returned project MUST have `isNetworkProject: false`
+
+### REQ-PROJ-NET-4: "Proyectos de red" sub-tab in Scheduling Settings UI
+
+The `SchedulingSettingsPage` MUST include a sub-tab "Proyectos de red" (mirroring the pattern of `RetirementProjectsBody` for `allowsEquipmentRetirement`). This tab MUST be gated by `scheduling.manage`. It MUST list all projects and allow toggling `isNetworkProject` per project.
+
+**Given** a user with `scheduling.manage`
+**When** they navigate to `/admin/scheduling/settings`
+**Then** a tab "Proyectos de red" MUST be visible
+**And** it MUST list projects with a toggle for `isNetworkProject`
+
+**Given** a user without `scheduling.manage`
+**When** they navigate to `/admin/scheduling/settings`
+**Then** the "Proyectos de red" tab MUST be absent or disabled
+
 ---
 
 ## 3. Get Project by ID
@@ -330,8 +400,11 @@ Every `Project` response object MUST contain at minimum the following fields:
 | `workflowId` | `string \| null` | Yes |
 | `projectLeadId` | `string \| null` | Yes |
 | `visible` | `boolean` | No |
+| `isNetworkProject` | `boolean` | No |
 | `partners` | `Array<{ id: string, name: string }>` | No (MAY be empty) |
 | `taskCounts` | `{ nuevo: number, enProgreso: number, hecho: number, total: number }` | No |
+| `iclassSoTypeId` | `string \| null` | Yes |
+| `iclassSoType` | `{ id, code, description, active } \| null` | Yes |
 | `createdAt` | `string` (ISO 8601) | No |
 | `updatedAt` | `string` (ISO 8601) | No |
 
@@ -356,11 +429,16 @@ Even when a project has zero partners, the response MUST include `partners: []` 
 - `workflowId`: `z.string().uuid().nullable().optional()`
 - `projectLeadId`: `z.string().uuid().nullable().optional()`
 - `visible`: `z.boolean().optional()` (defaults to `true`)
+- `isNetworkProject`: `z.boolean().optional()` — defaults to `false` when omitted
 - `partnerIds`: `z.array(z.string().uuid()).optional()` (defaults to `[]`)
 
 ### REQ-VAL-2: `UpdateProjectSchema` is a partial of `CreateProjectSchema`
 
 All fields MUST be optional. The same per-field validators apply.
+
+- `isNetworkProject`: `z.boolean().optional()`
+
+Non-boolean values for `isNetworkProject` MUST be rejected with 400 `VALIDATION_ERROR`.
 
 ### REQ-VAL-3: `ListProjectsQuerySchema`
 
@@ -456,3 +534,5 @@ All error responses MUST follow this shape:
 | Workflow ID not found | 404 | `WORKFLOW_NOT_FOUND` |
 | Admin (project lead) ID not found | 404 | `LEAD_NOT_FOUND` |
 | Partner ID not found | 404 | `PARTNER_NOT_FOUND` |
+| `isNetworkProject` in body without `scheduling.manage` | 403 | `FORBIDDEN` |
+| Non-boolean `isNetworkProject` | 400 | `VALIDATION_ERROR` |

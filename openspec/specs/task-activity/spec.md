@@ -16,17 +16,38 @@ The system records and exposes a per-task chronological activity log covering cr
 - `createdAt: DateTime` — auto-set on insert
 - Index: `(taskId, createdAt DESC, id DESC)` for cursor pagination
 
-### REQ-MODEL-1 — Persistence
+### REQ-MODEL-1 — Persistence (MODIFIED)
+
+(Previously: `status_changed` event used `fromValue: prev.isClosed` and `toValue: data.isClosed` — boolean values. Watcher/field events unchanged.)
+
 - WHEN any tracked write succeeds, THE SYSTEM SHALL insert a `ScheduledTaskActivity` row whose `taskId` matches the affected task.
 - WHEN the activity insert fails, THE SYSTEM SHALL log a warning AND NOT roll back the originating write.
 - WHEN a task is deleted, THE SYSTEM SHALL cascade-delete its activity rows.
+- WHEN user U calls `POST /api/scheduling/:id/status { status }`, THE SYSTEM SHALL persist one `status_changed` activity with `fromValue=<previous generalStatus>`, `toValue='<new generalStatus>'` (string values).
+- WHEN user U calls the endpoint to reopen a dismissed task, THE SYSTEM SHALL persist one `status_changed` with `fromValue='dismissed'`, `toValue='open'`.
+- WHEN user U calls `PUT /:id { isClosed: true }` (legacy path), THE SYSTEM SHALL persist one `status_changed` activity using string values `fromValue=<prev generalStatus>`, `toValue='closed'`.
+- WHEN the activity feed renders an older `status_changed` with boolean `fromValue`/`toValue`, THE renderer SHALL NOT crash — it MUST fall back gracefully (e.g. `true` → display as 'closed', `false` → 'open').
+- All other activity types (priority_changed, stage_changed, etc.) are UNCHANGED.
 
 #### Scenarios
 - WHEN user U creates task T, THE SYSTEM SHALL persist exactly one `created` activity with `actorId=U.id`, `actorName=U.name`, `fromValue=null`, `toValue={title, stageId, priority, category, assigneeId, watcherIds}`.
 - WHEN user U updates task T changing `priority` from 'low' to 'high', THE SYSTEM SHALL persist one `priority_changed` activity with `fromValue='low'`, `toValue='high'`.
 - WHEN user U updates task T changing both `priority` and `category` in the same request, THE SYSTEM SHALL persist TWO separate activities (one per field).
 - WHEN user U updates task T changing `watcherIds` from `[a, b]` to `[a, c]`, THE SYSTEM SHALL persist one `watcher_removed` (`toValue=b`) and one `watcher_added` (`toValue=c`).
-- WHEN user U updates task T setting `isClosed=true`, THE SYSTEM SHALL persist one `status_changed` activity with `fromValue=false`, `toValue=true`.
+- GIVEN task `t-1` has `generalStatus='open'`
+- WHEN `POST /api/scheduling/t-1/status { status: 'dismissed' }` succeeds
+- THEN a `status_changed` activity MUST be persisted with `fromValue='open'`, `toValue='dismissed'`
+- AND `actorId` MUST equal the authenticated user's id
+- GIVEN task `t-1` has `generalStatus='dismissed'`
+- WHEN `POST /api/scheduling/t-1/status { status: 'open' }` succeeds
+- THEN a `status_changed` activity MUST be persisted with `fromValue='dismissed'`, `toValue='open'`
+- GIVEN the activity feed contains a legacy item with `type='status_changed'`, `fromValue=false`, `toValue=true`
+- WHEN the feed renders that item
+- THEN it MUST display without throwing a runtime error
+- AND MAY show a fallback label (e.g. "cerró la tarea")
+- GIVEN `PUT /api/scheduling/:id { isClosed: true }` (legacy caller)
+- WHEN `UpdateTask` normalizes to `generalStatus='closed'` and emits activity
+- THEN the `status_changed` activity MUST carry `toValue='closed'` (string, not boolean)
 - WHEN the system auto-sends task T to IClass via MoveTaskToStage, THE SYSTEM SHALL persist one `stage_changed` AND one `sent_to_iclass` activity, in that order.
 - WHEN user U adds a comment with 2 attachments, THE SYSTEM SHALL persist one `commented` activity AND two `attachment_added` activities with `metadata.commentId` set.
 - WHEN the activity-insert side-effect throws, THE SYSTEM SHALL still return 201/200 for the originating request.

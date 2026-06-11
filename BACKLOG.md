@@ -1,14 +1,58 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**.
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**.
 > **38 hechos (en prod, #39 incluido) · EPIC #38 COMPLETO (7/7 waves) · UISP V1 EN PROD (2026-06-10, BE #99 + FE #71 — flag `uisp-sync` OFF, rotar token post-activación).**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
 
 ---
 
 ## 📋 Pendientes
 
-*(vacío — todo lo numerado está en prod)*
+> Bloque agregado 2026-06-11. Orden de ejecución sugerido (por dependencias): **#40 → #41 → #43 → #42 → #44 → #46 → #45 → #47**. SDD automático + hybrid, agent teams, review adversarial post-apply (loop fix→review del WORKFLOW).
+
+### #40 — Page "Tareas Nodos" (gemela de Tareas, solo tareas de nodo) ✅ HECHO *(2026-06-11, BE PR #104 + FE PR #78, en prod)*
+> SDD `tareas-nodos-page`. `Project.isNetworkProject` (migración `20260623000000`) + filtro `kind` + guard simétrico create/update (`ProjectKindLookup`, 422 `INVALID_PROJECT_KIND`, dispara por CAMBIO no por presencia) + composition-root test. FE: `TasksPageBase` extraído (paridad verificada), página `/admin/scheduling/nodos`, modal locked en modo nodo, proyectos de red excluidos de los 3 call sites de creación + DatosForm (con pinning "(fuera de tipo)" anti-tarea-ineditable), tab "Proyectos de red" en config. Review: 2 adversariales + fix wave + 2 micro-fixes + 2 re-reviews → CLEAN. Gates: BE 3201/0+tsc, FE 2335/0+typecheck. Post-deploy: "Red - Fibra" y "RED - Wireless" tagueados en prod (TOTAL_FLAGGED=2). Pendiente menor: smoke visual UI (faltan creds admin de prod). Deuda anotada: `IngestGestionRealOrders` crea tareas DIRECTO en el repo (bypassa el guard — pre-existente, inofensivo hoy).
+- Page nueva **idéntica a Tareas** pero exclusiva de tareas de nodo (`kind='network'`, del #29): el botón "Añadir" abre DIRECTO el modal de nodos (sin el toggle rojo), y el select de proyecto lista **solo 2 proyectos: "Red - fibra" y "Red Wireless"**.
+- Esos 2 proyectos **dejan de aparecer** en el crear-tarea de clientes → **independizar la lógica de proyectos** para ambos casos (candidato: flag en `Project` tipo `isNetworkProject`, patrón del `allowsEquipmentRetirement` del #39 — decidir en el SDD si es flag fijo o mapeo configurable).
+- En la **página de Proyectos** las tareas de red siguen apareciendo como hoy (sin cambios), y se comportan IGUAL que las de cliente: `sequenceNumber`/iclass-code **auto-incremental SECUENCIAL al de las tareas de cliente** (misma secuencia compartida, NO una secuencia aparte). La dirección se carga **manual en el nodo** (ya existe en NetworkSite).
+- **Relaciones**: #29 (kind + networkSiteId en prod) · NetworkSite/auto-import UISP (los nodos ya viven ahí) · #41 (el filtro de estados generales aplica a esta lista también) · badge "Faltan datos IClass" (FE #76) para nodos incompletos.
+
+### #40b — Follow-ups de Tareas Nodos ✅ HECHO *(2026-06-11, FE PR #79, en prod)*
+> (a)+(b)+(c) hechos + yapa del review: el deep-link de Proyectos para proyectos de RED ahora navega a `/admin/scheduling/nodos?projectId=...` (sin eso, con el filtro kind quedaba lista vacía). Gates 2342/0 + typecheck. Review: 1 FIX-FIRST real (deep-link) + 1 falso positivo descartado verificando origin/main.
+- **(a)** En el modal de crear tarea de CLIENTES ya no debe aparecer el slide/toggle de "Nodo RED" (#29) — la creación de tareas de nodo vive ahora en la página Tareas Nodos.
+- **(b)** En la tabla de Tareas Nodos no debe salir la columna Cliente (es tarea de nodo, no aplica).
+- **(c)** Las tareas de nodo NO deben aparecer en la lista de Tareas de clientes (la page de clientes debe filtrar `kind=customer` — hoy no manda kind y se cuelan). En la página de **Proyectos sí coexisten ambas** (sin cambios ahí).
+
+### #41 — Estados GENERALES de tarea [open | closed | dismissed] + filtro ✅ HECHO *(2026-06-11, BE PR #105 + FE PR #80, en prod)*
+> SDD `task-general-status`. `generalStatus` fuente de verdad (migración `20260624000000` + backfill idempotente, dry-run prod OK — 218 tareas todas open), `isClosed` facade. `POST /:id/status` (scheduling.write), filtro `?status` (omit≡all) en ambas páginas default Abiertas, acciones Cerrar/Descartar/Reabrir + pill, cierre AUTO por flujo IClass (move a 'hecho' → closed, atado al evento — reopen no se deshace), dismissed fuera de TODOS los loops de cierre (incl. fix del NOT-relación-nullable de Prisma #25226 + choke-point). Review: 2 adversariales + fix waves + re-reviews → CLEAN. Gates BE 3260/0, FE 2369/0. Deuda menor: Calendar muestra todas (incl. descartadas) — revisar si molesta.
+- Para tareas de **clientes Y nodos**: 3 estados de gestión de la tarea — `open` (al crearse), `closed`, `dismissed` — **independientes de los stages de workflow** (que quedan como están, esos ya están OK).
+- Tarea cerrada/dismissed → **no aparece en la lista a simple vista**. Filtro de 4 opciones: open / closed / dismissed / **todos**; la vista principal SIEMPRE es open.
+- **Relaciones**: #40 (aplica a las DOS listas: Tareas y Tareas Nodos) · contrato del list BE↔FE (campo nuevo en DTO + query param) · el cierre IClass ya marca cosas — revisar si `closed` se setea manual, desde el cierre de OS, o ambos (decidir en SDD).
+
+### #42 — Redesign moderno de la tab Contratos del cliente ✅ HECHO *(2026-06-11, FE PR #81, en prod)*
+> SDD `contracts-tab-redesign`. Cards impeccable (name??plan editable inline, pill status, dirección "Instalación", chips de servicios con picker/confirm/toggle, equipos ligados — fuera el borderLeft) + tab "Servicios" en settings (clients.manage) + fixes de drift (Contract.id era type-lie number→string; columna IP nunca renderizaba por ip/ipAddress) + removals del CRUD stub que JAMÁS persistió (-790 líneas, ServicesTab muerto). Review CLEAN + 3 warnings corregidos (alert→toast, gating test, msg NON_RENAMEABLE). Gates 2408/0 + typecheck. Deuda: BE no mapea `technology` en toService (pre-existente).
+
+### #43 — Modelado: Cliente → N Contratos (con nombre) → Servicios + equipos instalados ✅ HECHO *(2026-06-11, BE PR #106, en prod — BE-only; la UI es el #42)*
+> SDD `contract-services-model`. `Contract.name` manual-only (sync GR jamás lo pisa — data-block pinning; address sigue GR-wins = instalación) + `PATCH /api/contracts/:id {name}` real (stub in-memory deprecated) + `ServiceCatalog` (seed INTERNET/TV/VOZ/CAMARAS/OTROS; OTROS no-borrable ni renombrable) + ABM `/api/service-catalog` + pivot `ContractService` con CRUD (`409` race-safe) + `services[]` eager en listContracts (aditivo). Migraciones 20260625/26/27 (la 27 grantea `clients.manage` a administrador — sin eso el ABM era solo-super_admin). Dry-run prod OK. Review → 2 FIX-FIRST + 3 W corregidos → CLEAN. Gates 3372/0 + tsc.
+- El contrato debe poder contener **servicios** (internet, TV, cámaras, etc. — catálogo editable, patrón `DeviceTypeCatalog`/`MaterialCatalog`) además de los **equipos instalados** como hoy (`ContractInstalledItem`).
+- Contratos con **nombre** (identificables) bajo el cliente: cliente 1—N contratos → servicios + equipos.
+- **Dirección POR CONTRATO** *(agregado 2026-06-11)*: cada contrato lleva su dirección asociada — **GR ya la trae**. Semántica: la dirección del CLIENTE es la de **facturación**; la del CONTRATO es **donde se instaló el servicio**. Mapear desde la ingesta/sync de GR y mostrarla en la UI del #42.
+- **Relaciones**: #42 (la UI que lo muestra) · #47 (la integración TV agrega un ítem/servicio TV al contrato — este modelo es su prerequisito) · inventario EPIC #38 (equipos ya cuelgan del contrato).
+
+### #44 — Redesign detalle de ticket + fotos en comentarios ✅ HECHO *(2026-06-11, BE PR #107 + FE PR #82, en prod)*
+> SDD `ticket-detail-redesign`. BE: `TicketComment`+`TicketCommentAttachment` persistidos (migración `20260628000000` — mata el `ticketRepliesStore` in-memory que PERDÍA la conversación en cada deploy), imágenes base64 data-URI (container sin volumen), 3×2MB image/* SIN SVG (XSS), parser 8mb path-scoped ANTES del global (+413 limpio), audit middleware elide data-URIs (sin eso ~12MB/comment al AuditEvent), tasks[] en GET /:id. FE: redesign impeccable (header+tabs+sidebar), descripción POR FIN visible (bug: nunca se renderizaba), composer con paste real (items+files — los browsers entregan screenshots por items), lightbox, error+Reintentar, ticket.id number→string. Review: 2 adversariales → 4 HIGH + 3 MEDIUM corregidos → re-review CLEAN. Gates BE 3405/0, FE 2434/0. Dry-run prod OK.
+
+### #45 — Config de nodos: mapper de CIUDADES de IClass ✅ HECHO *(2026-06-11, BE PR #109 + FE PR #84, en prod)*
+> SDD `nodes-city-mapper`. **Hallazgo live contra la API real**: IClass NO tiene catálogo de ciudades — los NODOS son las ciudades (36 valores, codigo≡descricao, id como `nodeId` inglés entre campos portugueses; ?city= roto). Tabla `IClassNode` (migración `20260629000000`) + `SyncIClassNodes` (upsert por nodeId, agrupadores IPNEXT INTERNET/Main/Argentina no-seleccionables) + asignación validada vía PUT network-sites {iclassNodeId} que setea código + city JUNTOS (anti-desync: city manual en el mismo body se descarta). FE: select del catálogo en Mapeo de nodos + botón Sincronizar + estados "(inactivo en IClass)"/"(sin validar)". Review: 1 CRITICAL falso positivo descartado con evidencia live + H1/M1/M2 corregidos → CLEAN. Gates BE 3459/0, FE 2482/0. Dry-run prod OK. **Post-deploy pendiente: apretar "Sincronizar desde IClass" y mapear los nodos.**
+
+### #46 — Redesign `/admin/tickets/opened`: bulk actions + filtros ocultos ✅ HECHO *(2026-06-11, BE PR #108 + FE PR #83, en prod)*
+> SDD `tickets-list-redesign`. FE: selección múltiple + BulkActionBar (Asignar/Cambiar estado/Cerrar/Eliminar, Can write/write/close/delete, mapWithConcurrency(5), fallo parcial deja SOLO los fallidos seleccionados — DataTable ganó prop controlada backward-compatible) + filtros colapsables (badge count, chips siempre visibles). BE: **muere la whitelist VALID_STATUSES** (lección #27 — prod funcionaba DE CASUALIDAD con el catálogo en inglés): PATCH /:id/status valida contra el catálogo (case-insensitive, name canónico), GET ?status= pass-through real, CloseTicket catalog-aware (antes 500 si renombraban 'closed'). Review: 2 HIGH + 2 MEDIUM corregidos → CLEAN. Gates BE 3417/0, FE 2473/0. Deuda menor: composition-guard test del wiring #46 (sugerencia).
+
+### #47 — Integración TV (`tv.md`) — ⚠️ BLOQUEADO: tv.md está VACÍO (0 bytes)
+- **El archivo `tv.md` en la raíz del BE existe pero no tiene contenido** — falta que el usuario pegue la doc de la integración. Sin eso no se sabe qué API/proveedor es.
+- Scope conocido (de la consigna): vive en el apartado **CRM** · configuraciones en la page de Config · **activación a nivel usuario** (solapa/menú para activarlo) · agrega un **ítem de TV al contrato** (depende del #43) · page de los clientes actuales (CIC, etc. que ya tenemos).
+- El **token** lo pasa el usuario después; la integración se puede construir antes (config + modelo + UI, token como secret al final).
+- **Relaciones**: #43 (prerequisito: servicios x contrato) · patrón de integraciones existente (Splynx/GR/IClass/UISP adapters) · secrets vía `gh secret set` + `deploy.yml`.
 
 ---
 

@@ -72,13 +72,22 @@ All 6 scheduling routes MUST enforce authentication via the `auth_token` cookie 
 
 ## 2. List Tasks
 
-### REQ-LIST-1: Returns all tasks as a JSON array
+### REQ-LIST-1: Returns all tasks as a JSON array (MODIFIED)
 
-**Given** an authenticated request to `GET /api/scheduling`  
-**When** the repository contains tasks  
-**Then** the server MUST respond with HTTP 200  
-**And** the body MUST be a JSON array  
-**And** each element MUST be a `ScheduledTask` object
+(Previously: no `kind` filter; returned all tasks unconditionally)
+
+`GET /api/scheduling` MUST accept an optional `kind` query parameter. When omitted, ALL tasks are returned (behavior unchanged). When `kind` is provided and valid, only tasks of that kind are returned. Invalid `kind` values return 400.
+
+**Given** authenticated `GET /api/scheduling` with no query params
+**When** the repository contains both customer and network tasks
+**Then** the server MUST respond with HTTP 200 with ALL tasks
+
+**Given** authenticated `GET /api/scheduling?kind=network`
+**Then** the response MUST contain only tasks where `kind='network'`
+
+**Given** authenticated `GET /api/scheduling?kind=network`
+**And** no network tasks exist
+**Then** the server MUST respond with HTTP 200 and body `[]`
 
 ### REQ-LIST-2: Returns empty array when no tasks exist
 
@@ -94,6 +103,105 @@ All 6 scheduling routes MUST enforce authentication via the `auth_token` cookie 
 **Then** every item in the response array MUST include a `projectName` field  
 **And** items linked to a project MUST have `projectName` as a non-null string  
 **And** items not linked to a project MUST have `projectName` as `null`
+
+### REQ-KIND-FILTER-1: `kind` query parameter filters task list
+
+`GET /api/scheduling` MUST accept an optional `kind` query parameter with values `'customer'` or `'network'`. When omitted, the endpoint MUST return all tasks regardless of kind (current behavior preserved). When provided, only tasks matching the given `kind` MUST be returned. This is additive; no existing caller is affected.
+
+**Given** authenticated `GET /api/scheduling?kind=network`
+**And** the repository contains both customer and network tasks
+**When** the request is processed
+**Then** the server MUST respond with HTTP 200
+**And** every task in the response MUST have `kind: 'network'`
+**And** customer tasks MUST be absent
+
+**Given** authenticated `GET /api/scheduling?kind=customer`
+**When** the request is processed
+**Then** every task in the response MUST have `kind: 'customer'`
+
+**Given** authenticated `GET /api/scheduling` with no `kind` param
+**When** the request is processed
+**Then** tasks with BOTH `kind='customer'` AND `kind='network'` MUST be returned
+
+**Given** `GET /api/scheduling?kind=mixed`
+**Then** the server MUST respond with HTTP 400
+**And** the body MUST contain `{ "code": "VALIDATION_ERROR" }`
+
+**Given** `GET /api/scheduling?kind=network&priority=high`
+**Then** the response MUST contain only network tasks with `priority='high'`
+
+### REQ-KIND-FILTER-2: `kind` added to `ListTasksFilterSchema` and `TaskListFilter`
+
+The Zod schema `ListTasksFilterSchema` MUST add `kind: z.enum(['customer', 'network']).optional()`. The domain DTO `TaskListFilter` MUST add `kind?: 'customer' | 'network'`. The FE type `TaskListFilter` in `src/types/scheduling.ts` MUST also add `kind?: 'customer' | 'network'`. The `buildFilterParams` function in `scheduling.api.ts` MUST serialize `kind` when present.
+
+**Given** `ListTasksFilterSchema.parse({ kind: 'network' })` succeeds
+**When** `ListTasks.execute` receives it
+**Then** `repo.listTasks({ kind: 'network' })` MUST be called
+
+### REQ-GS-FILTER-1 — `status` query parameter filters by generalStatus
+
+`GET /api/scheduling` MUST accept an optional `status` query parameter with values `open | closed | dismissed | all`. When omitted, ALL tasks are returned (`≡ all`, back-compat — no caller breaks). When provided, only tasks with the matching `generalStatus` are returned. `all` returns all tasks regardless of status. This is additive and orthogonal to `kind`, `search`, `priority`, `projectId`.
+
+| `status` param | Behavior |
+|----------------|----------|
+| omitted | return all (same as today — back-compat) |
+| `all` | return all explicitly |
+| `open` | `generalStatus = 'open'` only |
+| `closed` | `generalStatus = 'closed'` only |
+| `dismissed` | `generalStatus = 'dismissed'` only |
+| any other value | HTTP 400 `VALIDATION_ERROR` |
+
+#### Scenario: Default (omitted) returns all tasks
+
+- GIVEN tasks exist with `generalStatus='open'`, `'closed'`, `'dismissed'`
+- WHEN `GET /api/scheduling` with no `status` param
+- THEN all three MUST appear in the response (back-compat preserved)
+
+#### Scenario: status=open filters to open only
+
+- GIVEN tasks exist with multiple statuses
+- WHEN `GET /api/scheduling?status=open`
+- THEN response MUST contain only tasks with `generalStatus='open'`
+
+#### Scenario: status=closed filters to closed only
+
+- WHEN `GET /api/scheduling?status=closed`
+- THEN response MUST contain only tasks with `generalStatus='closed'`
+
+#### Scenario: status=dismissed filters to dismissed only
+
+- WHEN `GET /api/scheduling?status=dismissed`
+- THEN response MUST contain only tasks with `generalStatus='dismissed'`
+
+#### Scenario: status=all returns all tasks (explicit)
+
+- WHEN `GET /api/scheduling?status=all`
+- THEN response MUST contain tasks of all three generalStatus values
+
+#### Scenario: Invalid status value
+
+- WHEN `GET /api/scheduling?status=archived`
+- THEN server MUST respond HTTP 400 `{ code: 'VALIDATION_ERROR' }`
+
+#### Scenario: status combines with kind
+
+- WHEN `GET /api/scheduling?status=open&kind=network`
+- THEN response MUST contain only tasks where `generalStatus='open'` AND `kind='network'`
+
+#### Scenario: status combines with search
+
+- WHEN `GET /api/scheduling?status=closed&q=fibra`
+- THEN response MUST contain only tasks where `generalStatus='closed'` AND title matches 'fibra'
+
+#### Scenario: status combines with priority
+
+- WHEN `GET /api/scheduling?status=open&priority=high`
+- THEN response MUST contain only tasks where `generalStatus='open'` AND `priority='high'`
+
+#### Scenario: status combines with projectId
+
+- WHEN `GET /api/scheduling?status=open&projectId=<p>`
+- THEN response MUST contain only tasks where `generalStatus='open'` AND `projectId=<p>`
 
 ---
 
@@ -261,7 +369,16 @@ Rationale: documents the contract that the defaulted value goes through the same
 
 ---
 
-### REQ-CREATE-12: `CreateTask` rejects a non-existent `projectId` with 404 PROJECT_NOT_FOUND
+### REQ-CREATE-12: `CreateTask` project-kind validation added (MODIFIED)
+
+(Previously: project FK lookup only — existence check, no kind check)
+
+`CreateTask.execute` MUST:
+1. Look up the project by `projectId` if non-null (existing behavior — PROJECT_NOT_FOUND if absent)
+2. Verify project kind matches task kind (NEW — INVALID_PROJECT_KIND if mismatch)
+3. Persist the task
+
+Tasks with `projectId: null` bypass step 2 (unchanged).
 
 **Given** an authenticated `POST /api/scheduling` request
 **And** the body contains a `projectId` that does NOT correspond to any existing Project
@@ -280,6 +397,16 @@ Then response status is 404
 And response body.code === 'PROJECT_NOT_FOUND'
 And the task repository remains empty
 ```
+
+#### Scenario — existing flow with null projectId still accepted
+
+**Given** `POST /api/scheduling` with `projectId: null` and `kind: 'customer'`
+**Then** the server MUST respond with HTTP 201 (no project lookup, no kind check)
+
+#### Scenario — existing flow with non-existent projectId still returns 404
+
+**Given** `POST /api/scheduling` with `projectId: 'does-not-exist'`
+**Then** the server MUST respond with HTTP 404 `PROJECT_NOT_FOUND`
 
 ---
 
@@ -353,6 +480,53 @@ When PUT /api/scheduling/task-1 with body { projectId: "" }
 Then response status is 200
 And response body.projectId === null
 ```
+
+---
+
+### REQ-PROJECT-KIND-GUARD-1: CreateTask enforces project-kind match
+
+When `kind='network'` is provided and `projectId` is non-null, `CreateTask` MUST verify that `project.isNetworkProject === true`. If the project is NOT a network project, the request MUST be rejected with HTTP 422 `INVALID_PROJECT_KIND`. Symmetrically, when `kind='customer'` and `projectId` is non-null, `CreateTask` MUST verify that `project.isNetworkProject === false`; if the project IS a network project, the request MUST be rejected with HTTP 422 `INVALID_PROJECT_KIND`. Tasks with `projectId: null` MUST bypass both checks (existing behavior — REQ-CREATE-13 preserved).
+
+**Given** `POST /api/scheduling` with `{ kind: 'network', networkSiteId: '<id>', projectId: '<customer-project-id>' }`
+**And** the project has `isNetworkProject: false`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 422
+**And** the body MUST contain `{ "code": "INVALID_PROJECT_KIND" }`
+**And** NO task MUST be persisted
+
+**Given** `POST /api/scheduling` with `{ kind: 'network', networkSiteId: '<id>', projectId: '<network-project-id>' }`
+**And** the project has `isNetworkProject: true`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 201
+
+**Given** `POST /api/scheduling` with `{ kind: 'customer', customerId: '<id>', contractId: '<id>', projectId: '<network-project-id>' }`
+**And** the project has `isNetworkProject: true`
+**When** the request is processed
+**Then** the server MUST respond with HTTP 422
+**And** the body MUST contain `{ "code": "INVALID_PROJECT_KIND" }`
+**And** NO task MUST be persisted
+
+**Given** `POST /api/scheduling` with `{ kind: 'customer', projectId: '<customer-project-id>' }`
+**And** the project has `isNetworkProject: false`
+**Then** the server MUST respond with HTTP 201
+
+**Given** `POST /api/scheduling` with `{ kind: 'network', networkSiteId: '<id>', projectId: null }`
+**When** the request is processed
+**Then** NO project-kind check MUST be performed
+**And** the server MUST respond with HTTP 201 (existing REQ-CREATE-13 behavior)
+
+**Given** ALL projects in the system have `isNetworkProject: false` (post-migration default)
+**When** any existing customer task creation flow runs (no `projectId` override needed)
+**Then** the guard MUST NOT reject any request (false is the correct value for customer projects)
+
+### REQ-PROJECT-KIND-GUARD-2: Project-kind check order in CreateTask
+
+The project-kind validation MUST occur AFTER the project FK lookup (the project must exist before its flag can be read). The order MUST be: project FK lookup → kind guard → persist. If the project does not exist, `PROJECT_NOT_FOUND` MUST be returned (REQ-CREATE-12 preserved).
+
+**Given** `POST /api/scheduling` with `{ kind: 'network', projectId: 'fake-id' }`
+**And** no project with `fake-id` exists
+**Then** the server MUST respond with HTTP 404 `PROJECT_NOT_FOUND`
+**And** NOT with HTTP 422 `INVALID_PROJECT_KIND`
 
 ---
 
@@ -560,9 +734,11 @@ And response status is 404
 **And** `projectName` MUST be a non-null string when the task is linked to a project  
 **And** `projectName` MUST be `null` when the task has no linked project
 
-### REQ-SHAPE-2: Task object field structure
+### REQ-SHAPE-2: Task object field structure (MODIFIED)
 
 Every `ScheduledTask` response object MUST contain at minimum the following fields:
+
+(Previously: no `generalStatus` field; `isClosed` not listed)
 
 | Field | Type | Nullable |
 |-------|------|----------|
@@ -575,6 +751,8 @@ Every `ScheduledTask` response object MUST contain at minimum the following fiel
 | `clientName` | `string \| null` | Yes |
 | `serviceId` | `string` | No |
 | `status` | `'pending' \| 'in_progress' \| 'completed' \| 'cancelled'` (deprecated) | No |
+| `generalStatus` | `'open' \| 'closed' \| 'dismissed'` | No |
+| `isClosed` | `boolean` | No |
 | `priority` | `'low' \| 'normal' \| 'high' \| 'urgent'` | No |
 | `scheduledDate` | `string` | No |
 | `scheduledTime` | `string` | No |
@@ -593,6 +771,13 @@ Every `ScheduledTask` response object MUST contain at minimum the following fiel
 | `stageId` | `string` | No |
 | `stageCategory` | `'nuevo' \| 'enProgreso' \| 'hecho'` | No |
 | `reviewedByInventory` | `boolean` | No |
+
+#### Scenario: Response shape includes new fields
+
+- GIVEN any authenticated request that returns a `ScheduledTask`
+- WHEN the response is received
+- THEN `generalStatus` MUST be one of `'open' | 'closed' | 'dismissed'`
+- AND `isClosed` MUST equal `generalStatus === 'closed'`
 
 ---
 
@@ -1400,3 +1585,12 @@ The global error handler MUST map `NETWORK_SITE_NOT_FOUND` → HTTP 404.
 |----------|------|--------|
 | Non-existent `networkSiteId` | 404 | `NETWORK_SITE_NOT_FOUND` |
 | Invalid discriminated kind | 400 | `VALIDATION_ERROR` |
+
+## Appendix: New Error Codes (tareas-nodos-page / #40)
+
+| Scenario | HTTP | `code` |
+|----------|------|--------|
+| `kind` param with invalid value | 400 | `VALIDATION_ERROR` |
+| Project kind mismatch in CreateTask | 422 | `INVALID_PROJECT_KIND` |
+
+**Seam note**: `#41` will add `status` filter to `ListTasksFilterSchema` and `buildFilterParams`. The `kind` key added here is orthogonal. Merge conflicts are possible in `scheduling.dto.ts`, `PrismaSchedulingRepository.ts`, `scheduling.ts` (types), and `scheduling.api.ts` — keep both changes strictly additive.
