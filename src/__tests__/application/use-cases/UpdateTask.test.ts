@@ -3,16 +3,17 @@ import { CreateTask } from '../../../application/use-cases/CreateTask';
 import { InMemorySchedulingRepository } from '../../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { ReferenceNotFoundError } from '../../../domain/errors/scheduling';
 import { EntityLookup } from '../../../domain/ports/EntityLookup';
+import { ProjectKindLookup } from '../../../domain/ports/ProjectKindLookup';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
 // REQ-REQUIRED-1/2: default IDs for the required FKs in makeBaseInput
 const DEFAULT_CUSTOMER_ID  = 'customer-default-0000-000000000001';
 const DEFAULT_CONTRACT_ID  = 'contract-default-00000-000000000001';
 
-class StubLookup implements EntityLookup {
+class StubLookup implements EntityLookup, ProjectKindLookup {
   private ids: Set<string>;
   constructor(...ids: string[]) { this.ids = new Set(ids); }
-  async findById(id: string) { return this.ids.has(id) ? { id } : null; }
+  async findById(id: string) { return this.ids.has(id) ? { id, isNetworkProject: false } : null; }
 }
 
 const emptyLookup = new StubLookup();
@@ -77,7 +78,7 @@ function makeUpdateUC(
     customerLookup?: EntityLookup;
     contractLookup?: EntityLookup;
     partnerLookup?: EntityLookup;
-    projectLookup?: EntityLookup;
+    projectLookup?: ProjectKindLookup;
     adminLookup?: EntityLookup;
   } = {},
 ) {
@@ -137,7 +138,7 @@ describe('UpdateTask — FK validation', () => {
   it('REQ-UPDATE-7: projectLookup NOT called when projectId is absent (undefined)', async () => {
     const repo = new InMemorySchedulingRepository();
     const task = await createTaskInRepo(repo);
-    const spyLookup: EntityLookup = { findById: jest.fn().mockResolvedValue(null) };
+    const spyLookup: ProjectKindLookup = { findById: jest.fn().mockResolvedValue(null) };
     const uc = makeUpdateUC(repo, { projectLookup: spyLookup });
     await uc.execute(task.id, { title: 'Only title changed' });
     expect(spyLookup.findById).not.toHaveBeenCalled();

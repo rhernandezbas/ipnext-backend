@@ -49,7 +49,7 @@ const rejectGuard: RequestHandler = (_req, res) => {
 /** Guard middleware that always passes (simulates having a permission). */
 const allowGuard: RequestHandler = (_req, _res, next) => next();
 
-async function buildApp(opts?: { inventoryManageGuard?: RequestHandler }) {
+async function buildApp(opts?: { inventoryManageGuard?: RequestHandler; schedulingManageGuard?: RequestHandler }) {
   const projectRepo = new InMemoryProjectRepository();
   const soTypeRepo = new InMemoryIClassSoTypeRepository();
 
@@ -100,6 +100,7 @@ async function buildApp(opts?: { inventoryManageGuard?: RequestHandler }) {
       new FakeAuthProvider(),
       assignUC,
       opts?.inventoryManageGuard,
+      opts?.schedulingManageGuard,
     ),
   );
   app.use(errorHandler);
@@ -342,5 +343,60 @@ describe('PATCH /api/projects/:id — allowsEquipmentRetirement guard (SCEN-MAP-
     // Guard is only applied when allowsEquipmentRetirement is in the body
     expect(res.status).toBe(200);
     expect(res.body.title).toBe('Updated Title');
+  });
+});
+
+// ─── #40: isNetworkProject guard (scheduling.manage) + PUT backdoor ───────────
+
+describe('PATCH /api/projects/:id — isNetworkProject guard (#40)', () => {
+  it('REQ-PROJ-NET-3: PATCH with isNetworkProject without scheduling.manage → 403', async () => {
+    const { app, project } = await buildApp({ schedulingManageGuard: rejectGuard });
+
+    const res = await request(app)
+      .patch(`/api/projects/${project.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ isNetworkProject: true });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FORBIDDEN');
+  });
+
+  it('REQ-PROJ-NET-3: PATCH with isNetworkProject WITH scheduling.manage → 200 + field updated', async () => {
+    const { app, project } = await buildApp({ schedulingManageGuard: allowGuard });
+
+    const res = await request(app)
+      .patch(`/api/projects/${project.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ isNetworkProject: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.isNetworkProject).toBe(true);
+  });
+
+  it('REQ-PROJ-NET-3: PATCH without isNetworkProject bypasses the scheduling.manage guard → 200', async () => {
+    const { app, project } = await buildApp({ schedulingManageGuard: rejectGuard });
+
+    const res = await request(app)
+      .patch(`/api/projects/${project.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ title: 'Renamed (no flag)' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.title).toBe('Renamed (no flag)');
+  });
+
+  it('backdoor closed: PUT with isNetworkProject → field silently ignored (not persisted)', async () => {
+    // PUT uses PutProjectSchema which must NOT include isNetworkProject.
+    const { app, project } = await buildApp({ schedulingManageGuard: rejectGuard });
+
+    const res = await request(app)
+      .put(`/api/projects/${project.id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ title: 'Via PUT', isNetworkProject: true });
+
+    // PUT must succeed (the scheduling.manage guard must NOT trigger on PUT)
+    expect(res.status).toBe(200);
+    // The field must NOT be persisted — response reflects the stored default (false)
+    expect(res.body.isNetworkProject).toBe(false);
   });
 });

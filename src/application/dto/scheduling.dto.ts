@@ -128,5 +128,7 @@ export const ListTasksFilterSchema = z.object({
   from:       z.string().datetime({ offset: true }).optional(),
   to:         z.string().datetime({ offset: true }).optional(),
   isClosed:   z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  // #40 — filter by task kind. Omitted ⇒ all kinds. Orthogonal to #41's `status`.
+  kind:       z.enum(['customer', 'network']).optional(),
 });
 export type TaskListFilter = z.infer<typeof ListTasksFilterSchema>;

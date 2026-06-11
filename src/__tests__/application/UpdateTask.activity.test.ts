@@ -6,7 +6,7 @@ import { FakeTaskActivityRecorder } from '../helpers/FakeTaskActivityRecorder';
 const ACTOR = { actorId: 'u1', actorName: 'Alice' };
 
 class AnyLookup implements EntityLookup {
-  async findById(id: string) { return { id }; }
+  async findById(id: string) { return { id, isNetworkProject: false }; }
 }
 
 /** Resolves id→name (like the real user lookup); returns null for unknown ids. */

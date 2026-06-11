@@ -11,7 +11,7 @@ const emptyLookup = new StubLookup();
 
 // Accepts any ID — used for required FKs where identity is not under test
 class AnyLookup implements EntityLookup {
-  async findById(id: string) { return { id }; }
+  async findById(id: string) { return { id, isNetworkProject: false }; }
 }
 const anyLookup = new AnyLookup();
 

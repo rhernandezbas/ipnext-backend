@@ -19,7 +19,7 @@ import { AuthProvider } from '../../domain/ports/AuthProvider';
 import { EntityLookup } from '../../domain/ports/EntityLookup';
 
 class StubLookup implements EntityLookup {
-  async findById(id: string) { return { id }; }
+  async findById(id: string) { return { id, isNetworkProject: false }; }
 }
 const emptyLookup = new StubLookup();
 

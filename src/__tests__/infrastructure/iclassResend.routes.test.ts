@@ -46,7 +46,7 @@ import type { RbacModuleCode, PermissionAction } from '../../domain/entities/rba
 // ─── Stub lookups — accept any ID (FK identity not under test here) ────────
 
 class AnyLookup implements EntityLookup {
-  async findById(id: string) { return { id }; }
+  async findById(id: string) { return { id, isNetworkProject: false }; }
 }
 const anyLookup = new AnyLookup();
 

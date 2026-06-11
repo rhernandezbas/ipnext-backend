@@ -2,16 +2,17 @@ import { CreateTask } from '../../../application/use-cases/CreateTask';
 import { InMemorySchedulingRepository } from '../../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { ReferenceNotFoundError } from '../../../domain/errors/scheduling';
 import { EntityLookup } from '../../../domain/ports/EntityLookup';
+import { ProjectKindLookup } from '../../../domain/ports/ProjectKindLookup';
 
 const DEFAULT_STAGE_ID = '10000000-0000-4000-a000-000000000001';
 const DEFAULT_CUSTOMER_ID  = 'customer-default-0000-000000000001';
 const DEFAULT_CONTRACT_ID  = 'contract-default-00000-000000000001';
 
 // Simple in-memory lookup that can be pre-populated with known IDs
-class StubLookup implements EntityLookup {
+class StubLookup implements EntityLookup, ProjectKindLookup {
   private ids: Set<string>;
   constructor(...ids: string[]) { this.ids = new Set(ids); }
-  async findById(id: string) { return this.ids.has(id) ? { id } : null; }
+  async findById(id: string) { return this.ids.has(id) ? { id, isNetworkProject: false } : null; }
 }
 
 function makeBase() {
@@ -55,7 +56,7 @@ function makeUseCase(overrides?: {
   customerLookup?: EntityLookup;
   contractLookup?: EntityLookup;
   partnerLookup?: EntityLookup;
-  projectLookup?: EntityLookup;
+  projectLookup?: ProjectKindLookup;
   adminLookup?: EntityLookup;
 }) {
   const repo = new InMemorySchedulingRepository();

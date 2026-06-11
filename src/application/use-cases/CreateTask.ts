@@ -1,7 +1,8 @@
 import { SchedulingRepository, CreateTaskInput } from '@domain/ports/SchedulingRepository';
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
-import { ReferenceNotFoundError } from '@domain/errors/scheduling';
+import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
+import { ReferenceNotFoundError, ProjectKindMismatchError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -13,7 +14,7 @@ export class CreateTask {
     private readonly contractLookup: EntityLookup,
     private readonly partnerLookup: EntityLookup,
     private readonly adminLookup: EntityLookup,
-    private readonly projectLookup: EntityLookup,
+    private readonly projectLookup: ProjectKindLookup,
     private readonly ticketLookup?: EntityLookup,
     private readonly recorder?: TaskActivityRecorder,
     private readonly networkSiteRepo?: NetworkSiteRepository,
@@ -49,8 +50,14 @@ export class CreateTask {
       if (!found) throw new ReferenceNotFoundError('partner', data.partnerId);
     }
     if (data.projectId != null) {
-      const found = await this.projectLookup.findById(data.projectId);
-      if (!found) throw new ReferenceNotFoundError('project', data.projectId);
+      // #40 — single lookup verifies existence AND resolves the network flag,
+      // then enforces the symmetric project↔kind guard (no extra query).
+      const project = await this.projectLookup.findById(data.projectId);
+      if (!project) throw new ReferenceNotFoundError('project', data.projectId);
+      const wantsNetwork = data.kind === 'network';
+      if (wantsNetwork !== project.isNetworkProject) {
+        throw new ProjectKindMismatchError(data.projectId, data.kind ?? 'customer');
+      }
     }
     if (data.reporterId != null) {
       const found = await this.adminLookup.findById(data.reporterId);

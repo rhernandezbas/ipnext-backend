@@ -8,6 +8,7 @@ export interface Project {
   projectLeadId: string | null;
   visible: boolean;
   allowsEquipmentRetirement: boolean;
+  isNetworkProject: boolean;
   partners: Array<{ id: string; name: string }>;
   taskCounts?: {
     nuevo: number;

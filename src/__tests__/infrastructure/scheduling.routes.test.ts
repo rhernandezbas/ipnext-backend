@@ -19,17 +19,18 @@ import { User } from '../../domain/entities/auth';
 import { AuthProvider } from '../../domain/ports/AuthProvider';
 import { Stage } from '../../domain/entities/workflow';
 import { EntityLookup } from '../../domain/ports/EntityLookup';
+import { ProjectKindLookup } from '../../domain/ports/ProjectKindLookup';
 
 // Simple in-memory lookup for tests
-class StubLookup implements EntityLookup {
+class StubLookup implements EntityLookup, ProjectKindLookup {
   private ids: Set<string>;
   constructor(...ids: string[]) { this.ids = new Set(ids); }
-  async findById(id: string) { return this.ids.has(id) ? { id } : null; }
+  async findById(id: string) { return this.ids.has(id) ? { id, isNetworkProject: false } : null; }
 }
 
 // Accepts any non-null ID — used where FK identity is not under test.
-class AnyLookup implements EntityLookup {
-  async findById(id: string) { return { id }; }
+class AnyLookup implements EntityLookup, ProjectKindLookup {
+  async findById(id: string) { return { id, isNetworkProject: false }; }
 }
 
 const emptyLookup = new StubLookup();
@@ -863,7 +864,7 @@ function buildEnrichedApp(opts: {
   serviceLookup?: EntityLookup;
   partnerLookup?: EntityLookup;
   adminLookup?: EntityLookup;
-  projectLookup?: EntityLookup;
+  projectLookup?: ProjectKindLookup;
 } = {}) {
   const app = express();
   app.use(cookieParser());
@@ -1588,5 +1589,70 @@ describe('PATCH /:id/stage — FASE 4: IClass mapping errors (flag ON)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.iclassOrderCode).toBe('OS-FASE4');
+  });
+});
+
+// ─── #40: GET /api/scheduling?kind=... filter ────────────────────────────────
+
+describe('GET /api/scheduling?kind — kind filter (#40)', () => {
+  async function buildAppWithMixedTasks() {
+    const repo = new InMemorySchedulingRepository();
+    // Clear default seeded tasks for a deterministic count.
+    (repo as unknown as { tasks: unknown[] }).tasks = [];
+    await repo.createTask({
+      title: 'Cliente 1', stageId: DEFAULT_STAGE_ID_PENDING, priority: 'normal',
+      estimatedHours: 1, category: 'installation',
+      ...NEW_TASK_FIELDS, kind: 'customer', networkSiteId: null,
+    } as never);
+    await repo.createTask({
+      title: 'Cliente 2', stageId: DEFAULT_STAGE_ID_PENDING, priority: 'normal',
+      estimatedHours: 1, category: 'installation',
+      ...NEW_TASK_FIELDS, kind: 'customer', networkSiteId: null,
+    } as never);
+    await repo.createTask({
+      title: 'Nodo 1', stageId: DEFAULT_STAGE_ID_PENDING, priority: 'normal',
+      estimatedHours: 1, category: 'maintenance',
+      ...NEW_TASK_FIELDS, kind: 'network', networkSiteId: 'ns-1',
+    } as never);
+    const { app } = buildEnrichedApp({ repo });
+    return app;
+  }
+
+  it('REQ-KIND-FILTER-1: ?kind=network returns only network tasks', async () => {
+    const app = await buildAppWithMixedTasks();
+    const res = await request(app)
+      .get('/api/scheduling?kind=network')
+      .set('Cookie', 'auth_token=fake');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body.every((t: { kind: string }) => t.kind === 'network')).toBe(true);
+  });
+
+  it('REQ-KIND-FILTER-1: ?kind=customer returns only customer tasks', async () => {
+    const app = await buildAppWithMixedTasks();
+    const res = await request(app)
+      .get('/api/scheduling?kind=customer')
+      .set('Cookie', 'auth_token=fake');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body.every((t: { kind: string }) => t.kind === 'customer')).toBe(true);
+  });
+
+  it('REQ-LIST-1: no kind param returns all tasks (backward compat)', async () => {
+    const app = await buildAppWithMixedTasks();
+    const res = await request(app)
+      .get('/api/scheduling')
+      .set('Cookie', 'auth_token=fake');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(3);
+  });
+
+  it('REQ-KIND-FILTER-1: invalid ?kind=mixed → 400 VALIDATION_ERROR', async () => {
+    const app = await buildAppWithMixedTasks();
+    const res = await request(app)
+      .get('/api/scheduling?kind=mixed')
+      .set('Cookie', 'auth_token=fake');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
   });
 });

@@ -1,7 +1,8 @@
 import { SchedulingRepository, UpdateTaskInput } from '@domain/ports/SchedulingRepository';
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
-import { ReferenceNotFoundError } from '@domain/errors/scheduling';
+import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
+import { ReferenceNotFoundError, ProjectKindMismatchError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -13,7 +14,7 @@ export class UpdateTask {
     private readonly contractLookup: EntityLookup,
     private readonly partnerLookup: EntityLookup,
     private readonly adminLookup: EntityLookup,
-    private readonly projectLookup: EntityLookup,
+    private readonly projectLookup: ProjectKindLookup,
     private readonly recorder?: TaskActivityRecorder,
   ) {}
 
@@ -33,8 +34,25 @@ export class UpdateTask {
       if (!found) throw new ReferenceNotFoundError('partner', data.partnerId);
     }
     if (data.projectId !== undefined && data.projectId !== null) {
-      const found = await this.projectLookup.findById(data.projectId);
-      if (!found) throw new ReferenceNotFoundError('project', data.projectId);
+      // #40 — the project↔kind guard must fire on REASSIGNMENT, not on mere
+      // presence. The FE edit form resubmits the FULL body on every save,
+      // including the UNCHANGED projectId; if a project was later flagged
+      // isNetworkProject=true, naively guarding on presence would make a
+      // customer task un-editable (422 on each save). So we load the task FIRST
+      // and short-circuit when the incoming projectId equals the current one:
+      // no reassignment → skip the lookup AND the guard entirely (the FK already
+      // points there, re-validating is a wasted query). When the ids differ it
+      // is a real move: a single lookup verifies existence AND the network flag,
+      // then the symmetric guard rejects a customer↔network mismatch.
+      const current = await this.repo.getTask(id);
+      if (current && data.projectId !== current.projectId) {
+        const project = await this.projectLookup.findById(data.projectId);
+        if (!project) throw new ReferenceNotFoundError('project', data.projectId);
+        const wantsNetwork = current.kind === 'network';
+        if (wantsNetwork !== project.isNetworkProject) {
+          throw new ProjectKindMismatchError(data.projectId, current.kind);
+        }
+      }
     }
     if (data.reporterId !== undefined && data.reporterId !== null) {
       const found = await this.adminLookup.findById(data.reporterId);
