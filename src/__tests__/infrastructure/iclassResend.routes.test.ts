@@ -183,8 +183,8 @@ async function buildApp(opts?: { iclassFails?: boolean }): Promise<AppFixture> {
 
   const iclass = new InMemoryIClassClient();
   iclass.nodes = [
-    { code: 'Mercedes', description: 'Mercedes - Zona Norte' },
-    { code: 'Lujan', description: 'Lujan' },
+    { nodeId: 1001, code: 'Mercedes', description: 'Mercedes - Zona Norte' },
+    { nodeId: 1002, code: 'Lujan', description: 'Lujan' },
   ];
   if (opts?.iclassFails) {
     iclass.failureMode = 'unavailable';

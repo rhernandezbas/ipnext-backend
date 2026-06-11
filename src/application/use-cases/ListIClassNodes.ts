@@ -1,7 +1,7 @@
 /**
  * ListIClassNodes — use case de listado de nodos IClass disponibles.
  *
- * Envuelve IClassPort.listNodes() y mapea cada IClassNode a IClassNodeDTO.
+ * Envuelve IClassPort.listNodes() y mapea cada IClassNodeDescriptor a IClassNodeDTO.
  * Reusado por el GET /api/scheduling/iclass/nodes (dropdown de seleccion manual).
  *
  * Traza: REQ-NODES-1, REQ-NODES-5.

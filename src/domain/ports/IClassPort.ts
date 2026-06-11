@@ -6,8 +6,10 @@ import {
   SoEquipmentEvent,
 } from '@domain/entities/iclass-closed-order';
 
-/** A node (microárea) in IClass. The node code is used as the service order's nodeCode. */
-export interface IClassNode {
+/** A node (microárea) descriptor from IClass. The node code is used as the service order's nodeCode. */
+export interface IClassNodeDescriptor {
+  /** IClass node id — stable unique key, used as the upsert key by the catalog sync. */
+  nodeId: number;
   code: string;
   description: string;
 }
@@ -74,7 +76,7 @@ export interface CreateServiceOrderInput {
  * and payload mapping; the application layer only sees this contract.
  */
 export interface IClassPort {
-  listNodes(): Promise<IClassNode[]>;
+  listNodes(): Promise<IClassNodeDescriptor[]>;
   /**
    * Returns the catalog of SO types available for the configured thirdParty.
    * Used by SyncIClassSoTypeCatalog.

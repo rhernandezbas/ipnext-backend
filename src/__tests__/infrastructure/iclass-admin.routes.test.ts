@@ -10,10 +10,14 @@ import { InMemoryIClassSoTypeRepository } from '../../infrastructure/adapters/in
 import { InMemoryIClassClient } from '../../infrastructure/adapters/in-memory/InMemoryIClassClient';
 import { SyncIClassSoTypes } from '../../application/use-cases/SyncIClassSoTypes';
 import { ListIClassSoTypes } from '../../application/use-cases/ListIClassSoTypes';
+import { SyncIClassNodes } from '../../application/use-cases/SyncIClassNodes';
+import { ListIClassNodeCatalog } from '../../application/use-cases/ListIClassNodeCatalog';
 import { createIClassAdminRouter } from '../../infrastructure/http/routes/iclass-admin.routes';
 import { errorHandler } from '../../infrastructure/http/middleware/errorHandler';
 import { User } from '../../domain/entities/auth';
 import { AuthProvider } from '../../domain/ports/AuthProvider';
+import { IClassNodeRepository, UpsertNodeInput } from '../../domain/ports/IClassNodeRepository';
+import { IClassSoTypeRepository } from '../../domain/ports/IClassSoTypeRepository';
 
 class FakeAuthProvider implements AuthProvider {
   async login() {
@@ -172,5 +176,84 @@ describe('GET /api/admin/iclass/so-types', () => {
 
     expect(res.status).toBe(401);
     expect(res.body.code).toBe('UNAUTHORIZED');
+  });
+});
+
+// ─── Error path: handlers must forward DB failures to next(err) → 500 ─────────
+// Regression for M2: GET /nodes and GET /so-types were `async` without try/catch,
+// so a repo rejection escaped the route and hung the request (no response sent).
+// A throwing repo must now surface a 500 INTERNAL_ERROR via the errorHandler.
+
+class ThrowingSoTypeRepository implements IClassSoTypeRepository {
+  async list(): Promise<never> {
+    throw new Error('db down');
+  }
+  async getById(): Promise<never> {
+    throw new Error('db down');
+  }
+  async getByCode(): Promise<never> {
+    throw new Error('db down');
+  }
+  async upsertByCode(): Promise<never> {
+    throw new Error('db down');
+  }
+  async markInactiveExcept(): Promise<never> {
+    throw new Error('db down');
+  }
+}
+
+class ThrowingNodeRepository implements IClassNodeRepository {
+  async list(): Promise<never> {
+    throw new Error('db down');
+  }
+  async getById(): Promise<never> {
+    throw new Error('db down');
+  }
+  async upsertByNodeId(_node: UpsertNodeInput): Promise<never> {
+    throw new Error('db down');
+  }
+  async markInactiveExcept(): Promise<never> {
+    throw new Error('db down');
+  }
+}
+
+function buildAppWithFailingRepos() {
+  const iclassClient = new InMemoryIClassClient();
+  const soTypeRepo = new ThrowingSoTypeRepository();
+  const nodeRepo = new ThrowingNodeRepository();
+
+  const syncSoTypes = new SyncIClassSoTypes(iclassClient, soTypeRepo);
+  const listSoTypes = new ListIClassSoTypes(soTypeRepo);
+  const syncNodes = new SyncIClassNodes(iclassClient, nodeRepo);
+  const listNodes = new ListIClassNodeCatalog(nodeRepo);
+
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+  app.use(
+    '/api/admin/iclass',
+    createIClassAdminRouter(syncSoTypes, listSoTypes, new FakeAuthProvider(), syncNodes, listNodes),
+  );
+  app.use(errorHandler);
+  return app;
+}
+
+describe('IClass admin routes — DB failure forwards to errorHandler (M2)', () => {
+  it('GET /nodes → 500 INTERNAL_ERROR when the repo throws (does not hang)', async () => {
+    const app = buildAppWithFailingRepos();
+    const res = await request(app)
+      .get('/api/admin/iclass/nodes')
+      .set('Cookie', 'auth_token=fake');
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
+  });
+
+  it('GET /so-types → 500 INTERNAL_ERROR when the repo throws (does not hang)', async () => {
+    const app = buildAppWithFailingRepos();
+    const res = await request(app)
+      .get('/api/admin/iclass/so-types')
+      .set('Cookie', 'auth_token=fake');
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
   });
 });

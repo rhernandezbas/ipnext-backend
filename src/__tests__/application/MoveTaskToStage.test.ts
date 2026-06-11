@@ -31,7 +31,7 @@ function setup(flagEnabled = true) {
   const flags = new InMemoryFeatureFlagRepository();
   flags.seed('iclass-integration', flagEnabled);
   const iclass = new InMemoryIClassClient();
-  iclass.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+  iclass.nodes = [{ nodeId: 1001, code: 'Rosario', description: 'Rosario' }];
 
   const sendToIClass = new SendTaskToIClass(tasks, flags, iclass);
   const useCase = new MoveTaskToStage(tasks, stages, sendToIClass);
@@ -106,7 +106,7 @@ describe('MoveTaskToStage — IClass hook', () => {
     const flags = new InMemoryFeatureFlagRepository();
     flags.seed('iclass-integration', true);
     const iclass = new InMemoryIClassClient();
-    iclass.nodes = [{ code: 'Rosario', description: 'Rosario' }];
+    iclass.nodes = [{ nodeId: 1001, code: 'Rosario', description: 'Rosario' }];
     const sendToIClass = new SendTaskToIClass(tasks, flags, iclass);
     const useCase = new MoveTaskToStage(tasks, stages, sendToIClass);
 

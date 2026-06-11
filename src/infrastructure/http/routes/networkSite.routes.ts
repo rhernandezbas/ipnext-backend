@@ -5,6 +5,7 @@ import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
 import { DeleteNetworkSite } from '@application/use-cases/DeleteNetworkSite';
+import { AssignIClassNodeToNetworkSite } from '@application/use-cases/AssignIClassNodeToNetworkSite';
 
 export function createNetworkSiteRouter(
   listNetworkSites: ListNetworkSites,
@@ -13,6 +14,7 @@ export function createNetworkSiteRouter(
   updateNetworkSite: UpdateNetworkSite,
   deleteNetworkSite: DeleteNetworkSite,
   listNetworkSitesWithUisp?: ListNetworkSitesWithUisp,
+  assignIClassNode?: AssignIClassNodeToNetworkSite,
 ): Router {
   const router = Router();
 
@@ -42,7 +44,36 @@ export function createNetworkSiteRouter(
 
   router.put('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const site = await updateNetworkSite.execute(req.params['id'] as string, req.body);
+      const id = req.params['id'] as string;
+      const body = (req.body ?? {}) as Record<string, unknown>;
+
+      // nodes-city-mapper (#45): conditional delegation (pattern projects.routes PUT).
+      // If `iclassNodeId` is explicitly present (including null), validate+assign via
+      // AssignIClassNodeToNetworkSite (sets iclassNodeCode + city = node.code, or
+      // clears iclassNodeCode on null). Remaining fields fall through to updateNetworkSite.
+      if ('iclassNodeId' in body && assignIClassNode !== undefined) {
+        const { iclassNodeId, ...rest } = body;
+        const assigned = await assignIClassNode.execute(id, (iclassNodeId as string | null) ?? null);
+        if (!assigned) {
+          res.status(404).json({ error: 'Network site not found', code: 'NETWORK_SITE_NOT_FOUND' });
+          return;
+        }
+        // H1: the assignment is the source of truth for `city` and `iclassNodeCode`
+        // (city = node.code on assign). A manual `city`/`iclassNodeCode` riding along
+        // in the same body would clobber that derived value in the follow-up update —
+        // so strip them. Any OTHER field (name, status, …) still falls through.
+        delete (rest as Record<string, unknown>)['city'];
+        delete (rest as Record<string, unknown>)['iclassNodeCode'];
+        if (Object.keys(rest).length === 0) {
+          res.json(assigned);
+          return;
+        }
+        const updated = await updateNetworkSite.execute(id, rest);
+        res.json(updated ?? assigned);
+        return;
+      }
+
+      const site = await updateNetworkSite.execute(id, body);
       if (!site) {
         res.status(404).json({ error: 'Network site not found', code: 'NETWORK_SITE_NOT_FOUND' });
         return;

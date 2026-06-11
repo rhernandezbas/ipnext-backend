@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import {
   IClassPort,
-  IClassNode,
+  IClassNodeDescriptor,
   IClassSoTypeDescriptor,
   IClassResultCodeDescriptor,
   CreateServiceOrderInput,
@@ -113,7 +113,7 @@ export class IClassClient implements IClassPort {
   private readonly nodesCacheTtlMs: number;
 
   private token: string | null = null;
-  private nodesCache: { nodes: IClassNode[]; expiresAt: number } | null = null;
+  private nodesCache: { nodes: IClassNodeDescriptor[]; expiresAt: number } | null = null;
 
   constructor(opts: IClassClientOptions) {
     this.username = opts.username;
@@ -134,15 +134,19 @@ export class IClassClient implements IClassPort {
       });
   }
 
-  async listNodes(): Promise<IClassNode[]> {
+  async listNodes(): Promise<IClassNodeDescriptor[]> {
     const now = this.now().getTime();
     if (this.nodesCache && this.nodesCache.expiresAt > now) {
       return this.nodesCache.nodes;
     }
-    const data = await this.authedGet<{ objects?: Array<{ codigo?: string; descricao?: string }> }>(
-      `/thirdparties/${this.thirdPartyId}/nodes?pagesize=100`,
-    );
-    const nodes: IClassNode[] = (data.objects ?? []).map(o => ({
+    // Shape verificado live 2026-06-11 contra api-v2.iclass.com.br: el id viene como
+    // `nodeId` (inglés) conviviendo con `codigo`/`descricao` (portugués) en el mismo
+    // objeto. La API es inconsistente a propósito — NO "corregir" nodeId a un nombre pt.
+    const data = await this.authedGet<{
+      objects?: Array<{ nodeId?: unknown; codigo?: string; descricao?: string }>;
+    }>(`/thirdparties/${this.thirdPartyId}/nodes?pagesize=100`);
+    const nodes: IClassNodeDescriptor[] = (data.objects ?? []).map(o => ({
+      nodeId: Number(o.nodeId ?? 0),
       code: String(o.codigo ?? ''),
       description: String(o.descricao ?? ''),
     }));

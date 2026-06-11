@@ -43,7 +43,7 @@ function makeHttp(postQueue: Array<() => unknown>, getQueue: Array<() => unknown
 }
 
 const LOGIN_TOKEN = { access_token: 'TKN' };
-const NODES_DATA = { objects: [{ codigo: 'M', descricao: 'Mercedes' }], hasMoreElements: false };
+const NODES_DATA = { objects: [{ nodeId: 7, codigo: 'M', descricao: 'Mercedes' }], hasMoreElements: false };
 
 // ── Task 1.1: 429 on attempt 1 → succeeds on attempt 2, returns data ─────────
 
@@ -75,7 +75,7 @@ describe('IClassClient — 429 retry (REQ-429-RETRY-1)', () => {
     const nodes = await client.listNodes();
 
     // Data returned transparently from the successful attempt
-    expect(nodes).toEqual([{ code: 'M', description: 'Mercedes' }]);
+    expect(nodes).toEqual([{ nodeId: 7, code: 'M', description: 'Mercedes' }]);
     // Sleep was called exactly once (before the retry)
     expect(sleepCalls).toHaveLength(1);
   });

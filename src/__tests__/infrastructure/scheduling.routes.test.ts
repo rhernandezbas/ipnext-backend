@@ -1231,7 +1231,7 @@ function buildIClassApp(opts: {
   flags.seed('iclass-integration', opts.flagEnabled);
 
   const iclass = new InMemoryIClassClient();
-  if (opts.nodeCity) iclass.nodes = [{ code: opts.nodeCity, description: opts.nodeCity }];
+  if (opts.nodeCity) iclass.nodes = [{ nodeId: 1001, code: opts.nodeCity, description: opts.nodeCity }];
   if (opts.iclassFails) iclass.failureMode = 'unavailable';
   if (opts.iclassRejects) iclass.failureMode = 'rejected';
 
@@ -1394,7 +1394,7 @@ function buildBulkApp() {
   flags.seed('iclass-integration', true);
 
   const iclass = new InMemoryIClassClient();
-  iclass.nodes = [{ code: 'Cordoba', description: 'Cordoba' }];
+  iclass.nodes = [{ nodeId: 1002, code: 'Cordoba', description: 'Cordoba' }];
 
   const sendToIClass = new SendTaskToIClass(repo, flags, iclass);
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo, sendToIClass);

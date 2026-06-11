@@ -669,6 +669,23 @@ model IClassSoType {
   @@index([active])
 }
 
+// nodes-city-mapper (#45) — persisted mirror of the IClass node catalog.
+// Nodes ARE the cities in Prominense. Upsert key is `nodeId` (stable IClass id).
+// `selectable=false` flags grouping nodes that must NOT be assignable to a site.
+model IClassNode {
+  id           String   @id @default(uuid())
+  nodeId       Int      @unique
+  code         String
+  description  String
+  active       Boolean  @default(true)
+  selectable   Boolean  @default(true)
+  lastSyncedAt DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([active])
+}
+
 // ============================================================================
 // IClass closure loop — mirror of CLOSED service orders pulled back from IClass.
 // Join to local work: SO.codigo (iclass) == ScheduledTask.sequenceNumber (we send

@@ -17,8 +17,8 @@ describe('InMemoryIClassClient', () => {
   it('listNodes() returns the configured nodes', async () => {
     const client = new InMemoryIClassClient();
     client.nodes = [
-      { code: 'Mercedes', description: 'Mercedes SY' },
-      { code: 'Dolores', description: 'Dolores SY' },
+      { nodeId: 1001, code: 'Mercedes', description: 'Mercedes SY' },
+      { nodeId: 1002, code: 'Dolores', description: 'Dolores SY' },
     ];
 
     const nodes = await client.listNodes();

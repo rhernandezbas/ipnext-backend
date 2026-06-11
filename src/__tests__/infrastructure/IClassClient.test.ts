@@ -59,12 +59,14 @@ function makeHttp(script: Scripted) {
 
 const LOGIN_OK = { ok: { data: { access_token: 'TKN1' } } };
 const CREATE_OK = { ok: { data: { codigoOS: 'OS-123', codigoCliente: 'C1', codigoEndereco: 'A1', erros: null } } };
+// Shape verificado live 2026-06-11 contra api-v2.iclass.com.br: el id es `nodeId`
+// (inglés) junto a `codigo`/`descricao` (portugués). La API mezcla idiomas a propósito.
 const NODES_OK = {
   ok: {
     data: {
       objects: [
-        { codigo: 'Mercedes', descricao: 'Mercedes SY' },
-        { codigo: 'Dolores', descricao: 'Dolores SY' },
+        { nodeId: 35270699, codigo: 'Mercedes', descricao: 'Mercedes SY' },
+        { nodeId: 35270700, codigo: 'Dolores', descricao: 'Dolores SY' },
       ],
       totalobjects: 2,
       hasMoreElements: false,
@@ -122,8 +124,8 @@ describe('IClassClient', () => {
     const nodes = await client.listNodes();
 
     expect(nodes).toEqual([
-      { code: 'Mercedes', description: 'Mercedes SY' },
-      { code: 'Dolores', description: 'Dolores SY' },
+      { nodeId: 35270699, code: 'Mercedes', description: 'Mercedes SY' },
+      { nodeId: 35270700, code: 'Dolores', description: 'Dolores SY' },
     ]);
   });
 
@@ -236,7 +238,7 @@ describe('IClassClient', () => {
 
     const nodes = await client.listNodes();
     for (const n of nodes) {
-      expect(Object.keys(n).sort()).toEqual(['code', 'description']);
+      expect(Object.keys(n).sort()).toEqual(['code', 'description', 'nodeId']);
     }
   });
 

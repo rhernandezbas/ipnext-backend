@@ -148,7 +148,7 @@ describe('SendTaskToIClass — customer task regression (REQ-NODE-DISPATCH-1)', 
     flags.seed(FLAG_KEY, true);
 
     const iclass = new InMemoryIClassClient();
-    iclass.nodes = [{ code: 'Mercedes', description: 'Mercedes' }];
+    iclass.nodes = [{ nodeId: 1001, code: 'Mercedes', description: 'Mercedes' }];
 
     const useCase = new SendTaskToIClass(tasks, flags, iclass);
     const listNodesSpy = jest.spyOn(iclass, 'listNodes');

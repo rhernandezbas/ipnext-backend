@@ -415,6 +415,10 @@ import { PrismaIClassSoTypeRepository } from '../adapters/prisma/PrismaIClassSoT
 import { SyncIClassSoTypes } from '@application/use-cases/SyncIClassSoTypes';
 import { ListIClassSoTypes } from '@application/use-cases/ListIClassSoTypes';
 import { AssignIClassSoTypeToProject } from '@application/use-cases/AssignIClassSoTypeToProject';
+import { PrismaIClassNodeRepository } from '../adapters/prisma/PrismaIClassNodeRepository';
+import { SyncIClassNodes } from '@application/use-cases/SyncIClassNodes';
+import { ListIClassNodeCatalog } from '@application/use-cases/ListIClassNodeCatalog';
+import { AssignIClassNodeToNetworkSite } from '@application/use-cases/AssignIClassNodeToNetworkSite';
 import { createIClassAdminRouter } from './routes/iclass-admin.routes';
 import { createIClassClosureRouter } from './routes/iclass-closure.routes';
 import { TaskAutocompleteScheduler } from '../scheduling/TaskAutocompleteScheduler';
@@ -1344,6 +1348,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const listIClassSoTypes = new ListIClassSoTypes(iclassSoTypeRepo);
   const assignIClassSoType = new AssignIClassSoTypeToProject(projectRepo, iclassSoTypeRepo);
 
+  // IClass node catalog (nodes-city-mapper #45) — nodes ARE the cities.
+  const iclassNodeRepo = new PrismaIClassNodeRepository();
+  const syncIClassNodes = new SyncIClassNodes(buildIClassClient(), iclassNodeRepo);
+  const listIClassNodeCatalog = new ListIClassNodeCatalog(iclassNodeRepo);
+  const assignIClassNodeToNetworkSite = new AssignIClassNodeToNetworkSite(networkSiteRepo, iclassNodeRepo);
+
   app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter, assignIClassSoType, requirePerm('inventory', 'manage'), requirePerm('scheduling', 'manage')));
   // GR installation-order ingest admin — config/status/needs-review (projectRepo + schedulingRepo already built above).
   const grIngestConfigRepo = new PrismaGestionRealIngestConfigRepository();
@@ -1387,7 +1397,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // that is the known deferred permission pass).
   app.use('/api/network-sites', createAuthMiddleware(authAdapter, sessionRepo), createNetworkSiteRouter(
     listNetworkSites, getNetworkSite, createNetworkSite, updateNetworkSite, deleteNetworkSite,
-    listNetworkSitesWithUisp,
+    listNetworkSitesWithUisp, assignIClassNodeToNetworkSite,
   ));
   app.use('/api/cpe', createCpeRouter(
     listCpeDevices, getCpeDevice, createCpeDevice, updateCpeDevice, deleteCpeDevice, assignCpeToClient,
@@ -1440,7 +1450,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/notifications', createNotificationsRouter(listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification));
 
   // IClass admin — SO type catalog sync + list (admin-only).
-  app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter));
+  app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter, syncIClassNodes, listIClassNodeCatalog));
 
   // IClass closure loop — result-code catalog + configurable result→stage mapping + status + backfill.
   const iclassResultCodeRepo = new PrismaIClassResultCodeRepository();

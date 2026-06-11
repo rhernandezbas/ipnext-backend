@@ -1,6 +1,11 @@
 import { DomainError } from '@domain/errors';
 import { MissingRequiredFieldsError } from '@domain/errors/scheduling';
-import { IClassRejectedError, MissingIClassMappingError, IClassSoTypeInactiveError } from '@domain/errors/iclass';
+import {
+  IClassRejectedError,
+  MissingIClassMappingError,
+  IClassSoTypeInactiveError,
+  IClassNodeNotAssignableError,
+} from '@domain/errors/iclass';
 
 /** Shape of a domain error mapped to a transport-agnostic result. */
 export interface DomainErrorCode {
@@ -31,6 +36,9 @@ export function domainErrorToCode(err: unknown): DomainErrorCode | null {
   }
   if (err instanceof IClassRejectedError) {
     result.reason = err.detail;
+  }
+  if (err instanceof IClassNodeNotAssignableError) {
+    result.reason = err.reason;
   }
   if (err instanceof MissingIClassMappingError) {
     result.projectTitle = err.projectTitle;
