@@ -118,6 +118,7 @@ import { ResendTaskToIClassWithNode } from '@application/use-cases/ResendTaskToI
 import { buildIClassClient } from './iclass.factory';
 import { PrismaIClassDispatchAttemptRepository } from '../adapters/prisma/PrismaIClassDispatchAttemptRepository';
 import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
+import { SetTaskGeneralStatus } from '@application/use-cases/SetTaskGeneralStatus';
 import { AddTaskComment } from '@application/use-cases/AddTaskComment';
 import { ListTaskComments } from '@application/use-cases/ListTaskComments';
 import { DeleteTaskComment } from '@application/use-cases/DeleteTaskComment';
@@ -735,6 +736,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
 
   const bulkMoveTasksToStage = new BulkMoveTasksToStage(moveTaskToStage);
   const setTaskInventoryReview = new SetTaskInventoryReview(schedulingRepo, taskActivityRecorder);
+  // #41 — general status (open / closed / dismissed) writer.
+  const setTaskGeneralStatus = new SetTaskGeneralStatus(schedulingRepo, taskActivityRecorder);
 
   const listWorkflows = new ListWorkflows(workflowRepo);
   const getWorkflow = new GetWorkflow(workflowRepo);
@@ -1269,7 +1272,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listIClassNodes,
     resendTaskToIClassWithNode,
     requirePerm,
-  }, getTaskActivity, requirePerm('inventory', 'write'), retireContractEquipment));
+  }, getTaskActivity, requirePerm('inventory', 'write'), retireContractEquipment, setTaskGeneralStatus, requirePerm('scheduling', 'write')));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);
@@ -1390,7 +1393,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     iclassResultCodeRepo,
     schedulingRepo,
     new PrismaSyncStateRepository(),
-    buildClosureSideEffects(),
+    // #41 — pass the activity recorder so a closure into a `hecho` stage emits the
+    // System `status_changed` alongside generalStatus='closed' (REQ-GS-ICLASS-CLOSEDBY-FLOW-1).
+    { ...buildClosureSideEffects(), recorder: taskActivityRecorder },
   );
   // GetPendingSideEffectsCount — usa el mismo closedServiceOrderRepo construido arriba.
   const getPendingSideEffectsCount = new GetPendingSideEffectsCount(closedServiceOrderRepo);

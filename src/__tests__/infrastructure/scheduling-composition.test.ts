@@ -30,6 +30,7 @@ import { RemoveChecklistItem } from '../../application/use-cases/RemoveChecklist
 import { ReorderChecklistItems } from '../../application/use-cases/ReorderChecklistItems';
 import { AssignTemplateToTask } from '../../application/use-cases/AssignTemplateToTask';
 import { ClearTaskChecklist } from '../../application/use-cases/ClearTaskChecklist';
+import { SetTaskGeneralStatus } from '../../application/use-cases/SetTaskGeneralStatus';
 import { ListWorkflows } from '../../application/use-cases/ListWorkflows';
 import { GetWorkflow } from '../../application/use-cases/GetWorkflow';
 import { CreateWorkflow } from '../../application/use-cases/CreateWorkflow';
@@ -133,6 +134,14 @@ function buildApp() {
       assignTemplateToTask: new AssignTemplateToTask(schedRepo, templateRepo),
       clearTaskChecklist: new ClearTaskChecklist(schedRepo),
     },
+    undefined, // setTaskInventoryReview
+    undefined, // bulkMoveTasksToStage
+    undefined, // resendDeps
+    undefined, // getTaskActivity
+    undefined, // requireInventoryWrite
+    undefined, // retireContractEquipment
+    new SetTaskGeneralStatus(schedRepo), // #41 — POST /:id/status reachable
+    undefined, // requireSchedulingWrite (pass-through)
   ));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -239,6 +248,27 @@ describe('Composition: scheduling + workflows routers on same prefix', () => {
       .patch('/api/scheduling/1/status')
       .set('Cookie', cookie)
       .send({ status: 'completed' });
+    expect(res.status).toBe(404);
+  });
+
+  // #41 — POST /:id/status is reachable (not shadowed by GET /:id catch-all).
+  it('POST /api/scheduling/:id/status reaches the handler (200, not shadowed)', async () => {
+    const res = await request(buildApp())
+      .post('/api/scheduling/1/status')
+      .set('Cookie', cookie)
+      .send({ status: 'closed' });
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe('1');
+    expect(res.body.generalStatus).toBe('closed');
+    expect(res.body.isClosed).toBe(true);
+  });
+
+  // #41 — PATCH /:id/status still 404 even though POST /:id/status now exists.
+  it('PATCH /api/scheduling/:id/status still 404 with POST /:id/status registered', async () => {
+    const res = await request(buildApp())
+      .patch('/api/scheduling/1/status')
+      .set('Cookie', cookie)
+      .send({ status: 'closed' });
     expect(res.status).toBe(404);
   });
 

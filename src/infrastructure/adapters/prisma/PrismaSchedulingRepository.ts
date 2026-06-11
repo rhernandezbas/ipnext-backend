@@ -7,7 +7,7 @@
  * is executed. The runtime behaviour IS correct — the new columns exist
  * after the migration runs.
  */
-import { ScheduledTask } from '@domain/entities/scheduling';
+import { ScheduledTask, TaskGeneralStatus } from '@domain/entities/scheduling';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory, Stage } from '@domain/entities/workflow';
 import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping } from '@domain/ports/SchedulingRepository';
@@ -86,7 +86,10 @@ export function toTask(row: any): ScheduledTask {
     watcherIds,
     travelTimeTo: row.travelTimeTo ?? null,
     travelTimeFrom: row.travelTimeFrom ?? null,
-    isClosed: row.isClosed ?? false,
+    // #41 — generalStatus is the truth; isClosed derived. Fallback legacy-row
+    // (pinned tests pass rows without the column).
+    generalStatus: (row.generalStatus ?? (row.isClosed ? 'closed' : 'open')) as TaskGeneralStatus,
+    isClosed: (row.generalStatus ?? (row.isClosed ? 'closed' : 'open')) === 'closed',
     reviewedByInventory: row.reviewedByInventory ?? false,
     reviewedByInventoryAt: row.reviewedByInventoryAt instanceof Date
       ? row.reviewedByInventoryAt.toISOString()
@@ -181,7 +184,14 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       if (filter.to) startDateFilter['lte'] = new Date(filter.to);
       where['startDate'] = startDateFilter;
     }
-    if (filter?.isClosed !== undefined) where['isClosed'] = filter.isClosed;
+    // #41 — isClosed legacy filter is remapped onto generalStatus (D5): no read
+    // path touches the isClosed DB column. isClosed=false ≡ generalStatus != 'closed'
+    // (includes dismissed — preserves the boolean semantics).
+    if (filter?.isClosed !== undefined) {
+      where['generalStatus'] = filter.isClosed ? 'closed' : { not: 'closed' };
+    }
+    // #41 — explicit status filter wins (set last). 'all'/omitted ≡ no status filter.
+    if (filter?.status && filter.status !== 'all') where['generalStatus'] = filter.status;
     if (filter?.kind) where['kind'] = filter.kind;
 
     const rows = await (prisma.scheduledTask as any).findMany({
@@ -542,7 +552,10 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     if (data.assigneeId !== undefined) update['assigneeId'] = data.assigneeId;
     if (data.travelTimeTo !== undefined) update['travelTimeTo'] = data.travelTimeTo;
     if (data.travelTimeFrom !== undefined) update['travelTimeFrom'] = data.travelTimeFrom;
-    if (data.isClosed !== undefined) update['isClosed'] = data.isClosed;
+    // #41 — generalStatus is the truth; isClosed is synced for ops tooling only.
+    // generalStatus wins over isClosed when both present (precedence D4).
+    const gs = data.generalStatus ?? (data.isClosed !== undefined ? (data.isClosed ? 'closed' : 'open') : undefined);
+    if (gs !== undefined) { update['generalStatus'] = gs; update['isClosed'] = gs === 'closed'; }
     if (data.reviewedByInventory !== undefined) update['reviewedByInventory'] = data.reviewedByInventory;
     if (data.ticketId !== undefined) update['ticketId'] = data.ticketId;
     return update;
@@ -667,8 +680,10 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
 
   async listTasksInIClassStage(stageCode: string): Promise<ScheduledTask[]> {
     // Resolve by stage code (rename-safe) — filter tasks whose stage has this code.
+    // #41 — dismissed tasks are excluded from the IClass loop (no reconcile/backfill).
+    // Closed tasks ARE still listed (a closed in-flight task should still reconcile).
     const rows = await (prisma.scheduledTask as any).findMany({
-      where: { stage: { is: { code: stageCode } } },
+      where: { stage: { is: { code: stageCode } }, generalStatus: { not: 'dismissed' } },
       include: INCLUDE,
       orderBy: { createdAt: 'desc' },
     });

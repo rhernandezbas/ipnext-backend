@@ -13,7 +13,7 @@ interface StoredOrder {
   sideEffects: ClosureSideEffectState;
 }
 
-type TaskInfo = { id: string; sequenceNumber: number; title: string };
+type TaskInfo = { id: string; sequenceNumber: number; title: string; generalStatus?: 'open' | 'closed' | 'dismissed' };
 
 function freshState(): ClosureSideEffectState {
   return {
@@ -64,6 +64,8 @@ export class InMemoryClosedServiceOrderRepository implements ClosedServiceOrderR
   async listPendingSideEffects(maxAuditAttempts: number): Promise<PendingClosureSideEffects[]> {
     const out: PendingClosureSideEffects[] = [];
     for (const [iclassId, s] of this.orders) {
+      // #41 F1 — exclude SOs whose linked task is dismissed (parity with Prisma WHERE).
+      if (this.isDismissed(s.scheduledTaskId)) continue;
       const se = s.sideEffects;
       const pending =
         !se.commentPosted || !se.inventoryBuilt || (!se.auditDone && se.auditAttempts < maxAuditAttempts);
@@ -75,15 +77,25 @@ export class InMemoryClosedServiceOrderRepository implements ClosedServiceOrderR
   async listPendingSideEffectsWithTask(maxAuditAttempts: number): Promise<PendingClosureSideEffectsWithTask[]> {
     const out: PendingClosureSideEffectsWithTask[] = [];
     for (const [iclassId, s] of this.orders) {
+      // #41 F1 — dismissed tasks are excluded (the FE progress table must not show them).
+      if (this.isDismissed(s.scheduledTaskId)) continue;
       const se = s.sideEffects;
       const pending =
         !se.commentPosted || !se.inventoryBuilt || (!se.auditDone && se.auditAttempts < maxAuditAttempts);
       if (pending) {
-        const task = s.scheduledTaskId ? (this.tasks.get(s.scheduledTaskId) ?? null) : null;
+        const info = s.scheduledTaskId ? (this.tasks.get(s.scheduledTaskId) ?? null) : null;
+        // Keep the task projection shape stable (no generalStatus leaked).
+        const task = info ? { id: info.id, sequenceNumber: info.sequenceNumber, title: info.title } : null;
         out.push({ iclassId, scheduledTaskId: s.scheduledTaskId, ...se, task });
       }
     }
     return out;
+  }
+
+  /** True only when the SO's task IS in the seeded map AND is dismissed. Null/unknown tasks are kept. */
+  private isDismissed(scheduledTaskId: string | null): boolean {
+    if (!scheduledTaskId) return false;
+    return this.tasks.get(scheduledTaskId)?.generalStatus === 'dismissed';
   }
 
   async markSideEffect(iclassId: string, effect: ClosureSideEffect, done: boolean): Promise<void> {

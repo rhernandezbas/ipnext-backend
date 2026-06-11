@@ -3,6 +3,10 @@ import { TaskChecklistItem } from './checklist';
 
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
+// #41 — lifecycle management state, independent of workflow stage.
+// `open` (default) | `closed` | `dismissed`. Single source of truth; `isClosed` is derived.
+export type TaskGeneralStatus = 'open' | 'closed' | 'dismissed';
+
 export interface ScheduledTask {
   id: string;
   sequenceNumber: number;
@@ -51,7 +55,9 @@ export interface ScheduledTask {
   // NEW — checklist (change 5)
   checklist?: TaskChecklistItem[];
 
-  // Flag: task is closed (soft-close, not deleted). Default false.
+  // #41 — lifecycle management state. Single source of truth (DB column). Default 'open'.
+  generalStatus: TaskGeneralStatus;
+  // Flag: task is closed (soft-close, not deleted). Derived: generalStatus === 'closed'.
   isClosed: boolean;
 
   // RV — Revisado por Inventario: inventory team review flag. Default false.

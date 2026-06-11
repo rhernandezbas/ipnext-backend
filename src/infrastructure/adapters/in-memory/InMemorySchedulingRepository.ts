@@ -66,6 +66,8 @@ const NEW_FIELDS_DEFAULTS = {
   watcherIds: [] as string[],
   travelTimeTo: null,
   travelTimeFrom: null,
+  // #41 — generalStatus is the truth; isClosed derived. Both default consistently.
+  generalStatus: 'open' as 'open' | 'closed' | 'dismissed',
   isClosed: false,
   reviewedByInventory: false,
   reviewedByInventoryAt: null,
@@ -287,8 +289,13 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       const to = new Date(filter.to).getTime();
       tasks = tasks.filter(t => t.startDate != null && new Date(t.startDate).getTime() <= to);
     }
-    if (filter.isClosed !== undefined) tasks = tasks.filter(t => t.isClosed === filter.isClosed);
+    // #41 — explicit status wins over legacy isClosed (D4/D5): when a real status
+    // filter is present, ignore isClosed entirely (parity with the Prisma WHERE,
+    // where `status` overwrites the generalStatus key set by isClosed).
+    const hasStatusFilter = filter.status !== undefined && filter.status !== 'all';
+    if (filter.isClosed !== undefined && !hasStatusFilter) tasks = tasks.filter(t => t.isClosed === filter.isClosed);
     if (filter.kind) tasks = tasks.filter(t => t.kind === filter.kind);
+    if (hasStatusFilter) tasks = tasks.filter(t => t.generalStatus === filter.status);
     return tasks;
   }
 
@@ -340,6 +347,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       watcherIds: data.watcherIds ? [...data.watcherIds] : [],
       travelTimeTo: data.travelTimeTo ?? null,
       travelTimeFrom: data.travelTimeFrom ?? null,
+      // #41 — new tasks are always born open; isClosed derived consistently.
+      generalStatus: 'open',
       isClosed: false,
       reviewedByInventory: false,
       reviewedByInventoryAt: null,
@@ -373,6 +382,10 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ? [...data.watcherIds]
       : [...current.watcherIds];
 
+    // #41 — generalStatus is the truth; isClosed derived. generalStatus wins over
+    // isClosed when both present (precedence D4). Omitted → preserve current.
+    const gs = data.generalStatus ?? (data.isClosed !== undefined ? (data.isClosed ? 'closed' : 'open') : undefined);
+
     this.tasks[index] = {
       ...current,
       ...(data.title !== undefined && { title: data.title }),
@@ -397,7 +410,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...(data.assigneeId !== undefined && { assigneeId: data.assigneeId }),
       ...(data.travelTimeTo !== undefined && { travelTimeTo: data.travelTimeTo }),
       ...(data.travelTimeFrom !== undefined && { travelTimeFrom: data.travelTimeFrom }),
-      ...(data.isClosed !== undefined && { isClosed: data.isClosed }),
+      ...(gs !== undefined && { generalStatus: gs, isClosed: gs === 'closed' }),
       ...(data.reviewedByInventory !== undefined && { reviewedByInventory: data.reviewedByInventory }),
       watcherIds,
     };
@@ -514,7 +527,10 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (stageRepoAny.stages) {
       const stage = stageRepoAny.stages.find((s: Stage) => s.code === stageCode);
       if (!stage) return [];
-      return this.tasks.filter(t => t.stageId === stage!.id).map(t => ({ ...t }));
+      // #41 — dismissed tasks are excluded from the IClass loop (no reconcile/backfill).
+      return this.tasks
+        .filter(t => t.stageId === stage!.id && t.generalStatus !== 'dismissed')
+        .map(t => ({ ...t }));
     }
     return [];
   }
