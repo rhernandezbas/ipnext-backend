@@ -48,6 +48,9 @@
 ### #46 — Redesign `/admin/tickets/opened`: bulk actions + filtros ocultos ✅ HECHO *(2026-06-11, BE PR #108 + FE PR #83, en prod)*
 > SDD `tickets-list-redesign`. FE: selección múltiple + BulkActionBar (Asignar/Cambiar estado/Cerrar/Eliminar, Can write/write/close/delete, mapWithConcurrency(5), fallo parcial deja SOLO los fallidos seleccionados — DataTable ganó prop controlada backward-compatible) + filtros colapsables (badge count, chips siempre visibles). BE: **muere la whitelist VALID_STATUSES** (lección #27 — prod funcionaba DE CASUALIDAD con el catálogo en inglés): PATCH /:id/status valida contra el catálogo (case-insensitive, name canónico), GET ?status= pass-through real, CloseTicket catalog-aware (antes 500 si renombraban 'closed'). Review: 2 HIGH + 2 MEDIUM corregidos → CLEAN. Gates BE 3417/0, FE 2473/0. Deuda menor: composition-guard test del wiring #46 (sugerencia).
 
+### Batch de deudas de los reviews 2026-06-11 ✅ HECHO *(BE PR #110, en prod — no es ítem numerado)*
+> 5 deudas saldadas el mismo día: guard de kind en GR ingest (#40) · `technology` en toService (#42) · rename-guard de OTROS en UpdateDeviceType (#43) · composition-guard test #46 · e2e dual-parser #44. Gates 3476/0 + tsc. Review CLEAN. Deuda restante menor: doble `projects.get` por orden en el ingest (perf, trivial) · Calendar muestra dismissed (#41, decisión de producto).
+
 ### #47 — Integración TV (`tv.md`) — ⚠️ BLOQUEADO: tv.md está VACÍO (0 bytes)
 - **El archivo `tv.md` en la raíz del BE existe pero no tiene contenido** — falta que el usuario pegue la doc de la integración. Sin eso no se sabe qué API/proveedor es.
 - Scope conocido (de la consigna): vive en el apartado **CRM** · configuraciones en la page de Config · **activación a nivel usuario** (solapa/menú para activarlo) · agrega un **ítem de TV al contrato** (depende del #43) · page de los clientes actuales (CIC, etc. que ya tenemos).
