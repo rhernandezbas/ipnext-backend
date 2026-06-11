@@ -74,11 +74,17 @@ function sendGigaredError(res: Response, err: unknown): boolean {
     return true;
   }
   if (err instanceof GigaredUnavailableError) {
-    res.status(503).json({ error: err.message, code: err.code });
+    // #47g — surface the upstream detail (the REAL reason) when Gigared gave one.
+    const body: Record<string, unknown> = { error: err.message, code: err.code };
+    if (err.detail) body['detail'] = err.detail;
+    res.status(503).json(body);
     return true;
   }
   if (err instanceof GigaredAuthError) {
-    res.status(502).json({ error: err.message, code: err.code });
+    // #47g — surface the upstream detail (the REAL reason) when Gigared gave one.
+    const body: Record<string, unknown> = { error: err.message, code: err.code };
+    if (err.detail) body['detail'] = err.detail;
+    res.status(502).json(body);
     return true;
   }
   if (err instanceof GigaredNotFoundError) {

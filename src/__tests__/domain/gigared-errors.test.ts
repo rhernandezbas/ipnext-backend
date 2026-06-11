@@ -28,10 +28,23 @@ describe('Gigared domain errors (#47)', () => {
     expect(e.name).toBe('GigaredUnavailableError');
   });
 
+  it('GigaredUnavailableError carries an optional upstream detail (#47g transparency)', () => {
+    const e = new GigaredUnavailableError('Gigared external service (CUA) error', 'CUA timeout');
+    expect(e.detail).toBe('CUA timeout');
+    // detail is optional — omitting it leaves it undefined (no crash)
+    expect(new GigaredUnavailableError().detail).toBeUndefined();
+  });
+
   it('GigaredAuthError → code GIGARED_AUTH_FAILED', () => {
     const e = new GigaredAuthError();
     expect(e.code).toBe('GIGARED_AUTH_FAILED');
     expect(e.name).toBe('GigaredAuthError');
+  });
+
+  it('GigaredAuthError carries an optional upstream detail (#47g transparency)', () => {
+    const e = new GigaredAuthError('Gigared API key is invalid', 'La clave de API no es válida');
+    expect(e.detail).toBe('La clave de API no es válida');
+    expect(new GigaredAuthError().detail).toBeUndefined();
   });
 
   it('GigaredNotFoundError → code GIGARED_NOT_FOUND', () => {

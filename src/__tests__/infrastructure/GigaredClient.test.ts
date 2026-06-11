@@ -464,4 +464,141 @@ describe('GigaredClient (#47)', () => {
       await expect(client.getSummary()).rejects.toBeInstanceOf(GigaredAuthError);
     });
   });
+
+  // ---- #47g — filtered listing with no matches is an EMPTY RESULT, not an error -----
+  // The LIVE Gigared API (verified 2026-06-11) returns HTTP 404 with RFC 9457
+  // type .../empty-accounts_list when a filtered GET /accounts matches nothing.
+  // That is NOT a failure — it is "zero rows". listAccounts must return [] so the
+  // page can render an empty table instead of crashing on a filter miss.
+  describe('#47g — empty-accounts_list (404) → [] not error (verified live 2026-06-11)', () => {
+    const EMPTY_ACCOUNTS_404_BODY = {
+      type: 'https://partners.gigaredsa.com.ar/errors/empty-accounts_list',
+      title: 'Cuentas inexistentes',
+      status: 404,
+      detail: 'No hay cuentas que se correspondan con los filtros especificados',
+    };
+
+    it('listAccounts with a no-match filter → [] (empty-accounts_list is empty, not 404)', async () => {
+      const http = makeHttp();
+      http.get.mockRejectedValue(axiosError(404, { data: EMPTY_ACCOUNTS_404_BODY }));
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.listAccounts({ email: 'nobody@x.com' })).resolves.toEqual([]);
+    });
+
+    it('a GENUINE 404 (no empty-accounts_list type) on listAccounts still → GigaredNotFoundError', async () => {
+      const http = makeHttp();
+      http.get.mockRejectedValue(axiosError(404));
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.listAccounts({ email: 'x@x.com' })).rejects.toBeInstanceOf(GigaredNotFoundError);
+    });
+
+    it('empty-accounts_list type does NOT swallow a lookup-by-internal-id 404 (still throws)', async () => {
+      const http = makeHttp();
+      // empty-accounts_list is list-only semantics; a single-account lookup that 404s with it
+      // is degenerate, but listAccounts is the ONLY caller that treats it as empty.
+      http.get.mockRejectedValue(axiosError(404, { data: EMPTY_ACCOUNTS_404_BODY }));
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getAccountByInternalId('CLIENTE_001')).rejects.toBeInstanceOf(GigaredNotFoundError);
+    });
+  });
+
+  // ---- #47g — upstream diagnostics: console.warn on every non-NotFound error --------
+  describe('#47g — upstream error diagnostics (console.warn)', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    it('logs [gigared] upstream status/type/detail on a 5xx (unavailable)', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const http = makeHttp();
+      http.get.mockRejectedValue(
+        axiosError(503, { data: { type: 'https://partners.gigaredsa.com.ar/errors/x', detail: 'down hard' } }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getSummary()).rejects.toBeInstanceOf(GigaredUnavailableError);
+      expect(warn).toHaveBeenCalledWith(
+        '[gigared] upstream',
+        503,
+        'https://partners.gigaredsa.com.ar/errors/x',
+        'down hard',
+      );
+    });
+
+    it('logs the upstream detail on a generic 424 (rejected/unavailable)', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const http = makeHttp();
+      http.get.mockRejectedValue(
+        axiosError(424, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/external-service-error',
+            detail: 'El servicio CUA no respondió a tiempo',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getSummary()).rejects.toBeInstanceOf(GigaredUnavailableError);
+      expect(warn).toHaveBeenCalledWith(
+        '[gigared] upstream',
+        424,
+        'https://partners.gigaredsa.com.ar/errors/external-service-error',
+        'El servicio CUA no respondió a tiempo',
+      );
+    });
+
+    it('does NOT warn on a not-found (the expected "this account does not exist")', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const http = makeHttp();
+      http.get.mockRejectedValue(
+        axiosError(424, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/external-service-error',
+            detail: 'No se encontró una cuenta con internal_id abc',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getAccountByInternalId('abc')).rejects.toBeInstanceOf(GigaredNotFoundError);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('carries the upstream detail into GigaredUnavailableError on a generic 424', async () => {
+      const http = makeHttp();
+      http.get.mockRejectedValue(
+        axiosError(424, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/external-service-error',
+            detail: 'El servicio CUA no respondió a tiempo',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getSummary()).rejects.toMatchObject({
+        code: 'GIGARED_UNAVAILABLE',
+        detail: 'El servicio CUA no respondió a tiempo',
+      });
+    });
+
+    it('carries the upstream detail into GigaredAuthError on a 401/403', async () => {
+      const http = makeHttp();
+      http.get.mockRejectedValue(
+        axiosError(403, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/invalid-api-key',
+            detail: 'La clave de API proporcionada no es válida',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.getSummary()).rejects.toMatchObject({
+        code: 'GIGARED_AUTH_FAILED',
+        detail: 'La clave de API proporcionada no es válida',
+      });
+    });
+  });
 });

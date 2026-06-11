@@ -202,6 +202,7 @@ export class GigaredClient implements GigaredPort {
       const status = e.response?.status;
       const body = e.response?.data as { type?: string; title?: string; detail?: string } | undefined;
       const type = body?.type ?? '';
+      const detail = body?.detail;
 
       // RFC 9457 type-based discrimination (#47d) — takes precedence over bare status.
       // cic-ownership (403): for our partner, "not owned" ≡ "not found".
@@ -209,19 +210,34 @@ export class GigaredClient implements GigaredPort {
       // external-service-error (424): the CUA's "no se encontró ..." is a real not-found;
       // any other 424 is the CUA genuinely failing → outage.
       if (type.endsWith('/external-service-error')) {
-        if (/no se encontr/i.test(body?.detail ?? '')) return new GigaredNotFoundError();
-        return new GigaredUnavailableError('Gigared external service (CUA) error');
+        if (/no se encontr/i.test(detail ?? '')) return new GigaredNotFoundError();
+        // #47g — every non-NotFound error is diagnostic noise worth seeing in prod logs.
+        console.warn('[gigared] upstream', status, type, detail);
+        return new GigaredUnavailableError('Gigared external service (CUA) error', detail);
       }
 
-      if (status === 401 || status === 403) return new GigaredAuthError();
+      // #47g — empty-accounts_list (404): a FILTERED listing that matched nothing. It is a
+      // ZERO-ROW result, not a failure — return a NotFound TAGGED so ONLY listAccounts reads it
+      // as []. Any other caller (single lookup) still sees a plain not-found. No warn (expected).
+      if (status === 404 && type.endsWith('/empty-accounts_list')) {
+        const nf = new GigaredNotFoundError() as GigaredNotFoundError & { _emptyList?: boolean };
+        nf._emptyList = true;
+        return nf;
+      }
+
+      // #47g — from here every branch is a non-NotFound failure → log it for prod diagnosis.
+      if (status !== 404) console.warn('[gigared] upstream', status, type, detail);
+
+      if (status === 401 || status === 403) return new GigaredAuthError('Gigared API key is invalid', detail);
       if (status === 404) return new GigaredNotFoundError();
       // 429 reaching mapError means retries were exhausted → treat as an outage, not a rejection.
-      if (status === 429) return new GigaredUnavailableError('Gigared rate limit exceeded');
+      if (status === 429) return new GigaredUnavailableError('Gigared rate limit exceeded', detail);
       if (status !== undefined && status >= 400 && status < 500) {
-        return new GigaredRejectedError(body?.title ?? 'Gigared rejected the request', body?.detail ?? '');
+        return new GigaredRejectedError(body?.title ?? 'Gigared rejected the request', detail ?? '');
       }
       return new GigaredUnavailableError(
         status ? `Gigared responded with HTTP ${status}` : 'Gigared connection failed',
+        detail,
       );
     }
     return new GigaredUnavailableError();
@@ -267,8 +283,19 @@ export class GigaredClient implements GigaredPort {
     if (filter?.paginationLimit !== undefined) qs.set('pagination_limit', String(filter.paginationLimit));
     if (filter?.paginationOffset !== undefined) qs.set('pagination_offset', String(filter.paginationOffset));
     const query = qs.toString();
-    const env = await this.get<Envelope<RawAccount[]>>(`/accounts${query ? `?${query}` : ''}`);
-    return env.detail.map(mapAccount);
+    const path = `/accounts${query ? `?${query}` : ''}`;
+    const { baseUrl, headers } = await this.requestConfig();
+    try {
+      const env = await this.withRetry429<Envelope<RawAccount[]>>(() => this.http.get(`${baseUrl}${path}`, { headers }));
+      return env.detail.map(mapAccount);
+    } catch (e) {
+      // #47g — a filtered listing with no matches is HTTP 404 RFC 9457 `empty-accounts_list`
+      // upstream. That is a ZERO-ROW result, NOT a failure. mapError turned it into a generic
+      // GigaredNotFoundError (404 with no recognized type); we re-detect the precise type from
+      // the original NotFound to return [] ONLY here (list semantics), never in single lookups.
+      if (e instanceof GigaredNotFoundError && (e as { _emptyList?: boolean })._emptyList) return [];
+      throw e;
+    }
   }
 
   async getAccountByInternalId(internalId: string): Promise<GigaredAccount> {
