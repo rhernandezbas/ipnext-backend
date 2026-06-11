@@ -26,6 +26,7 @@ import {
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
+import { generateGigaredPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 
 /**
  * Readiness middleware (M1). Two gating levels, both built from the same repos:
@@ -221,15 +222,30 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   router.post('/customers/:id/register', deps.requireWrite, async (req, res, next): Promise<void> => {
     try {
       const b = req.body as {
-        firstName: string; lastName: string; email: string; cic: string; sendActivationEmail?: boolean;
+        firstName: string; lastName: string; email: string; cic: string;
+        password?: unknown; sendActivationEmail?: boolean;
       };
+      // #47h — password is transit-only (never persisted/logged/returned). If the caller
+      // provides one it must satisfy Gigared's policy ([a-z0-9], 8..64); otherwise the
+      // server generates a COMPLIANT one. base64url (old impl) emitted A-Z/-/_ → upstream 400.
+      let password: string;
+      if (b.password === undefined || b.password === null || b.password === '') {
+        password = generateGigaredPassword();
+      } else if (typeof b.password === 'string' && isValidGigaredPassword(b.password)) {
+        password = b.password;
+      } else {
+        res.status(400).json({
+          error: 'La contraseña solo puede contener letras minúsculas y números (8 a 64)',
+          code: 'VALIDATION_ERROR',
+        });
+        return;
+      }
       const account = await deps.registerAccount.execute(req.params['id'] as string, {
         firstName: b.firstName,
         lastName: b.lastName,
         email: b.email,
         cic: b.cic,
-        // Password is generated server-side and is transit-only (never persisted/returned).
-        password: cryptoRandomPassword(),
+        password,
         sendActivationEmail: b.sendActivationEmail ?? true,
       });
       res.status(201).json(account);
@@ -275,11 +291,4 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   });
 
   return router;
-}
-
-/** Server-side random password for register (transit-only). */
-function cryptoRandomPassword(): string {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { randomBytes } = require('crypto') as typeof import('crypto');
-  return randomBytes(18).toString('base64url');
 }

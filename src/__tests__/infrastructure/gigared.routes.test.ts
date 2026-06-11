@@ -258,6 +258,71 @@ describe('gigared.routes — happy + 207 (#47)', () => {
   });
 });
 
+describe('#47h POST /register — password policy (Gigared accepts only [a-z0-9])', () => {
+  it('b) caller-provided VALID password is forwarded verbatim to Gigared', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }) });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'lowercase42' });
+    expect(res.status).toBe(201);
+    expect(register).toHaveBeenCalledTimes(1);
+    expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'lowercase42' });
+  });
+
+  it('c) INVALID password (uppercase) → 400 and Gigared is never touched', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }) });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'BadPass123' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/minúsculas y números/i);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('c) INVALID password (symbol) → 400, Gigared untouched', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }) });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'abc_12345' });
+    expect(res.status).toBe(400);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('c) INVALID password (too short, 7 chars) → 400, Gigared untouched', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }) });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'abc1234' });
+    expect(res.status).toBe(400);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('d) NO password provided → server generates a COMPLIANT [a-z0-9]{12} password', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }) });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+    expect(res.status).toBe(201);
+    const sent = (register.mock.calls[0] as unknown[])[0] as { password: string };
+    expect(sent.password).toMatch(/^[a-z0-9]{12}$/);
+  });
+
+  it('e) the password NEVER appears in the endpoint response body', async () => {
+    const app = await buildApp();
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'lowercase42' });
+    expect(res.status).toBe(201);
+    expect(JSON.stringify(res.body)).not.toContain('lowercase42');
+    expect(JSON.stringify(res.body).toLowerCase()).not.toContain('password');
+  });
+});
+
 describe('gigared.routes — domain error → status mapping (#47)', () => {
   it('GigaredAuthError → 502 GIGARED_AUTH_FAILED', async () => {
     const port = fakePort({ getSummary: jest.fn(async () => { throw new GigaredAuthError(); }) });
