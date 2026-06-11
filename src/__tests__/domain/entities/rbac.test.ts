@@ -20,8 +20,8 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 27 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp)', () => {
-    expect(RBAC_MODULES).toHaveLength(27);
+  it('contains exactly 28 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv)', () => {
+    expect(RBAC_MODULES).toHaveLength(28);
   });
 
   it('includes all 14 original module codes', () => {
@@ -53,8 +53,12 @@ describe('RBAC_MODULES constant', () => {
     expect(RBAC_MODULES).toContain('uisp');
   });
 
+  it('includes the tv module (gigared-integration change #47)', () => {
+    expect(RBAC_MODULES).toContain('tv');
+  });
+
   it('is readonly (as const)', () => {
-    // Type-level check: RbacModuleCode is a union of the 27 values
+    // Type-level check: RbacModuleCode is a union of the 28 values
     const code: RbacModuleCode = 'clients';
     expect(code).toBe('clients');
   });

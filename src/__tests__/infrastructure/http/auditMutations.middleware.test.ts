@@ -153,6 +153,19 @@ describe('maskSensitive', () => {
     expect(maskSensitive({ a: 1, b: 'ok' })).toEqual({ a: 1, b: 'ok' });
   });
 
+  it('masks the Gigared apiKey (C1) — PUT /config never persists it in clear', () => {
+    // The PUT /api/gigared/config body uses `apiKey`; normalized to lowercase it is `apikey`.
+    expect(maskSensitive({ apiKey: 'supersecretKEY99', baseUrl: 'https://x/api' }))
+      .toEqual({ apiKey: '***', baseUrl: 'https://x/api' });
+    // snake_case variant also masked.
+    expect(maskSensitive({ api_key: 'k' })).toEqual({ api_key: '***' });
+  });
+
+  it('does NOT mask apiKeyLast4 — the masked tail is public', () => {
+    // apiKeyLast4 is the public preview returned by GET /config; it must NOT be redacted.
+    expect(maskSensitive({ apiKeyLast4: 'EY99' })).toEqual({ apiKeyLast4: 'EY99' });
+  });
+
   it('elides large data: URIs regardless of key name (generic)', () => {
     const big = `data:image/png;base64,${'A'.repeat(5000)}`;
     const out = maskSensitive({ anyKey: big }) as Record<string, unknown>;

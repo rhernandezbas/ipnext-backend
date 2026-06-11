@@ -103,6 +103,8 @@ export const RBAC_MODULES = [
   'contracts',
   // UISP mirror module — read-only mirror of UISP NMS data
   'uisp',
+  // TV / Gigared integration module (#47) — uses base read/write/manage actions
+  'tv',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];
