@@ -90,6 +90,25 @@ describe('GetPendingSideEffectsList', () => {
     expect(result.items).toHaveLength(0);
   });
 
+  // F1 — dismissed tasks must NOT appear in the FE progress table (their side-effects
+  // are intentionally not reprocessed). Excluded at the repo level so list+count agree.
+  it('excludes SOs whose linked task is dismissed', async () => {
+    const tasks = new Map([
+      ['t-open', { id: 't-open', sequenceNumber: 1, title: 'Open', generalStatus: 'open' as const }],
+      ['t-dismissed', { id: 't-dismissed', sequenceNumber: 2, title: 'Dismissed', generalStatus: 'dismissed' as const }],
+    ]);
+    const repo = new InMemoryClosedServiceOrderRepository(tasks);
+    await repo.upsert(makeSO('so-open'), 't-open');
+    await repo.upsert(makeSO('so-dismissed'), 't-dismissed');
+    await repo.upsert(makeSO('so-no-task'), null); // null task is kept (not dismissed)
+
+    const result = await new GetPendingSideEffectsList(repo).execute();
+
+    const ids = result.items.map(i => i.iclassId).sort();
+    expect(ids).toEqual(['so-no-task', 'so-open']);
+    expect(result.total).toBe(2);
+  });
+
   // iclass-closure-loop SC3: existing listPendingSideEffects is unchanged
   it('existing listPendingSideEffects still returns original shape unmodified', async () => {
     const tasks = new Map([

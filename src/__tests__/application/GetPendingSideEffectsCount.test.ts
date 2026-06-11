@@ -67,6 +67,21 @@ describe('GetPendingSideEffectsCount', () => {
     expect(result).toEqual({ pending: 2 });
   });
 
+  // F1 — dismissed tasks are excluded from the pending count (parity with the list).
+  it('excludes SOs whose linked task is dismissed', async () => {
+    const tasks = new Map([
+      ['t-open', { id: 't-open', sequenceNumber: 1, title: 'Open', generalStatus: 'open' as const }],
+      ['t-dismissed', { id: 't-dismissed', sequenceNumber: 2, title: 'Dismissed', generalStatus: 'dismissed' as const }],
+    ]);
+    const repo = new InMemoryClosedServiceOrderRepository(tasks);
+    await repo.upsert(minimalSO('so-open'), 't-open');
+    await repo.upsert(minimalSO('so-dismissed'), 't-dismissed');
+
+    const result = await new GetPendingSideEffectsCount(repo).execute();
+
+    expect(result).toEqual({ pending: 1 });
+  });
+
   it('REQ-PENDING-COUNT-1 no pending SOs: returns pending = 0', async () => {
     const repo = new InMemoryClosedServiceOrderRepository();
     await repo.upsert(minimalSO('so-done'), 'task-done');

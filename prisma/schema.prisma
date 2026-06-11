@@ -1162,7 +1162,9 @@ model ScheduledTask {
   // IClass closure → inventory: staged suggestions for this task
   inventorySuggestions TaskInventorySuggestion[]
 
-  // Flag: task is closed (soft-close, not deleted)
+  // #41 — lifecycle management state (single source of truth). isClosed is derived.
+  generalStatus String @default("open")
+  // Flag: task is closed (soft-close, not deleted). Derived from generalStatus; synced on write for ops tooling.
   isClosed Boolean @default(false)
 
   // RV — inventory team review flag

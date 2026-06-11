@@ -17,6 +17,7 @@ import { ReorderChecklistItems } from '@application/use-cases/ReorderChecklistIt
 import { AssignTemplateToTask } from '@application/use-cases/AssignTemplateToTask';
 import { ClearTaskChecklist } from '@application/use-cases/ClearTaskChecklist';
 import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
+import { SetTaskGeneralStatus } from '@application/use-cases/SetTaskGeneralStatus';
 import { ListIClassNodes } from '@application/use-cases/ListIClassNodes';
 import { ResendTaskToIClassWithNode } from '@application/use-cases/ResendTaskToIClassWithNode';
 import { AuthProvider } from '@domain/ports/AuthProvider';
@@ -39,6 +40,7 @@ import {
   StageNotFoundError,
   TaskNotFoundError,
   InvalidCursorError,
+  InvalidGeneralStatusError,
   ReferenceNotFoundError,
   ReferenceKind,
   ProjectKindMismatchError,
@@ -104,10 +106,15 @@ export function createSchedulingRouter(
   requireInventoryWrite?: RequestHandler,
   /** Use case for manual equipment retirement (#39). Optional — route only registered when provided. */
   retireContractEquipment?: RetireContractEquipment,
+  /** #41 — use case for the general-status mutation. Optional — POST /:id/status only registered when provided. */
+  setTaskGeneralStatus?: SetTaskGeneralStatus,
+  /** #41 — granular guard for the general-status mutation (scheduling:write). Pass-through when omitted. */
+  requireSchedulingWrite?: RequestHandler,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
   const invWrite: RequestHandler = requireInventoryWrite ?? ((_req, _res, next) => next());
+  const schedWrite: RequestHandler = requireSchedulingWrite ?? ((_req, _res, next) => next());
 
   // Actor for the activity log (#10), derived from the authenticated user.
   const actorOf = (req: Request): ActorContext => ({
@@ -139,6 +146,7 @@ export function createSchedulingRouter(
       to:         req.query['to'],
       isClosed:   req.query['isClosed'],
       kind:       req.query['kind'],
+      status:     req.query['status'],
     };
 
     const parsed = ListTasksFilterSchema.safeParse(rawQuery);
@@ -430,6 +438,37 @@ export function createSchedulingRouter(
   }
 
   // ── End equipment retirement ──────────────────────────────────────────────
+
+  // ── #41 — General status (open / closed / dismissed) ──────────────────────
+  // MUST be registered BEFORE GET /:id so the catch-all id route does not shadow it.
+  // Gated by auth + scheduling:write (schedWrite is pass-through when omitted).
+  if (setTaskGeneralStatus) {
+    const StatusSchema = z.object({ status: z.enum(['open', 'closed', 'dismissed']) });
+
+    router.post('/:id/status', auth, schedWrite, async (req: Request, res: Response): Promise<void> => {
+      const parsed = StatusSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const task = await setTaskGeneralStatus.execute(req.params['id'] as string, parsed.data.status, actorOf(req));
+        res.status(200).json(task);
+      } catch (err) {
+        if (err instanceof TaskNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof InvalidGeneralStatusError) {
+          res.status(422).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    });
+  }
+
+  // ── End general status ────────────────────────────────────────────────────
 
   router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const task = await getTask.execute(req.params['id'] as string);

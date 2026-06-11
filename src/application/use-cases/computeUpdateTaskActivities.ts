@@ -48,7 +48,11 @@ export function computeUpdateTaskActivities(
   if (changed('contractId')) events.push({ type: 'contract_changed', actor, fromValue: prev.contractId, toValue: data.contractId });
   if (changed('customerId')) events.push({ type: 'customer_changed', actor, fromValue: prev.customerId, toValue: data.customerId, metadata: names(prev.customerName, next?.customerName) });
   if (changed('partnerId')) events.push({ type: 'partner_changed', actor, fromValue: prev.partnerId, toValue: data.partnerId });
-  if (changed('isClosed')) events.push({ type: 'status_changed', actor, fromValue: prev.isClosed, toValue: data.isClosed });
+  // #41 — status_changed: dual branch. Explicit generalStatus emits a STRING event
+  // and wins (a single event even if isClosed is also present). The legacy isClosed
+  // path stays for callers that send only the boolean (12 pinned tests).
+  if (changed('generalStatus')) events.push({ type: 'status_changed', actor, fromValue: prev.generalStatus, toValue: data.generalStatus });
+  else if (changed('isClosed')) events.push({ type: 'status_changed', actor, fromValue: prev.isClosed, toValue: data.isClosed });
   if (changed('reviewedByInventory')) events.push({ type: 'inventory_review_changed', actor, fromValue: prev.reviewedByInventory, toValue: data.reviewedByInventory });
 
   // ── Assignee → assigned / unassigned (with technician names for the diff) ──

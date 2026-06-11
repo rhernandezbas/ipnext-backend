@@ -288,11 +288,37 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
       // SO legitimately keeps it false forever, so including it would flood the
       // reprocess list with every non-retiro closure. Returns re-eval for unchanged
       // SOs runs through the closure skippedUnchanged path (REQ-IDEMP-1), not here.
+      // Two independent OR groups MUST be composed via AND — a single `where`
+      // object cannot hold two `OR` keys (they'd collide), and we need BOTH the
+      // pending-side-effect filter AND the dismissed exclusion to apply.
       where: {
-        OR: [
-          { commentPosted: false },
-          { inventoryBuilt: false },
-          { auditDone: false, auditAttempts: { lt: maxAuditAttempts } },
+        AND: [
+          {
+            OR: [
+              { commentPosted: false },
+              { inventoryBuilt: false },
+              { auditDone: false, auditAttempts: { lt: maxAuditAttempts } },
+            ],
+          },
+          // #41 F1 — exclude SOs whose linked task is dismissed (the operator discarded it;
+          // its side-effects must not be reprocessed nor shown in the FE progress table).
+          //
+          // WHY the explicit OR with the scheduledTaskId:null leg, and NOT a bare
+          // `NOT: { scheduledTask: { generalStatus: 'dismissed' } }`:
+          // under Prisma 1:1 (to-one) semantics a relation filter on a NULL relation
+          // is FALSE, so `NOT {...}` would also be false for null-task rows and would
+          // silently DROP them (prisma/prisma#25226). Null-task mirrors are real
+          // (scheduledTask onDelete: SetNull + task deletion), and in-memory parity
+          // (isDismissed → false when scheduledTaskId is null) KEEPS them. Truth table:
+          //   - null-task      → leg 1 (scheduledTaskId: null) TRUE          → kept
+          //   - task=dismissed → leg 1 false, leg 2 false                    → excluded
+          //   - task=other     → leg 2 (generalStatus not 'dismissed') TRUE  → kept
+          {
+            OR: [
+              { scheduledTaskId: null },
+              { scheduledTask: { generalStatus: { not: 'dismissed' } } },
+            ],
+          },
         ],
       },
       select: {
@@ -318,11 +344,24 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
 
   async listPendingSideEffectsWithTask(maxAuditAttempts: number): Promise<PendingClosureSideEffectsWithTask[]> {
     const rows = await (prisma.iClassServiceOrder as any).findMany({
+      // #41 F1 — same AND-composed dismissed exclusion as listPendingSideEffects
+      // (parity). See that method's comment for the 1:1-relation truth table and
+      // why the explicit scheduledTaskId:null leg is required.
       where: {
-        OR: [
-          { commentPosted: false },
-          { inventoryBuilt: false },
-          { auditDone: false, auditAttempts: { lt: maxAuditAttempts } },
+        AND: [
+          {
+            OR: [
+              { commentPosted: false },
+              { inventoryBuilt: false },
+              { auditDone: false, auditAttempts: { lt: maxAuditAttempts } },
+            ],
+          },
+          {
+            OR: [
+              { scheduledTaskId: null },
+              { scheduledTask: { generalStatus: { not: 'dismissed' } } },
+            ],
+          },
         ],
       },
       select: {

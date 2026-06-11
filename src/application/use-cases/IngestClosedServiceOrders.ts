@@ -16,6 +16,8 @@ import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestionRepository';
 import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+import { TaskActivityRecorder } from '@domain/ports/TaskActivityRecorder';
+import { SYSTEM_ACTOR } from './taskActivityActor';
 import {
   ClosedServiceOrder,
   ClosedServiceOrderSummary,
@@ -49,6 +51,8 @@ export interface IngestClosedCounts {
   skippedNotOurs: number;
   /** SOs already mirrored at the same iclassUpdatedAt (idempotent no-op). */
   skippedUnchanged: number;
+  /** #41 — SOs whose matched task is dismissed: mirror ingested, task side-effects skipped. */
+  skippedDismissed: number;
   /** SOs whose processing threw — logged and skipped so one bad SO never aborts the batch. */
   errored: number;
   /** Tareas cuyo IClass call arrojó error durante el backfill (distinto de errored).
@@ -89,6 +93,13 @@ export interface IngestClosedOptions {
    * ABSENT, the gate is open (unit tests exercise staging without a flag dependency).
    */
   featureFlags?: FeatureFlagRepository;
+  /**
+   * #41 REQ-GS-ICLASS-CLOSEDBY-FLOW-1 — optional activity recorder. When wired, a
+   * closure flow that moves a task into a `hecho`-category stage also emits a
+   * `status_changed` activity (actor System) alongside the generalStatus='closed'
+   * write. Best-effort: a recorder that throws never aborts the already-committed move.
+   */
+  recorder?: TaskActivityRecorder;
 }
 
 /**
@@ -109,6 +120,7 @@ export class IngestClosedServiceOrders {
   private readonly suggestions?: InventorySuggestionRepository;
   private readonly stageReturns?: StageReturnSuggestions;
   private readonly featureFlags?: FeatureFlagRepository;
+  private readonly recorder?: TaskActivityRecorder;
 
   constructor(
     private readonly iclass: IClassPort,
@@ -130,6 +142,7 @@ export class IngestClosedServiceOrders {
     this.suggestions = opts.suggestions;
     this.stageReturns = opts.stageReturns;
     this.featureFlags = opts.featureFlags;
+    this.recorder = opts.recorder;
   }
 
   async execute(): Promise<IngestClosedCounts> {
@@ -197,6 +210,11 @@ export class IngestClosedServiceOrders {
       return;
     }
 
+    // #41 — REQ-GS-ICLASS-INGEST-1: a dismissed task still gets its SO mirrored, but
+    // NO task side-effects (stage move, comment, audit, reconcile). The operator
+    // discarded it intentionally; mirroring preserves audit without contaminating it.
+    const isDismissed = task.generalStatus === 'dismissed';
+
     // Idempotency — skip re-mirroring if already mirrored at the same modification
     // timestamp. BUT still reconcile a stuck transition: the SO is unchanged, yet
     // the task may remain parked in the in-flight stage because its result-code →
@@ -206,6 +224,11 @@ export class IngestClosedServiceOrders {
     // comments/audits). No-op when the task already left the in-flight stage.
     const existing = await this.closed.findSyncStateByIclassId(s.iclassId);
     if (existing && existing.iclassUpdatedAt === s.iclassUpdatedAt) {
+      // #41 G1 — dismissed: no reconcile, no pending-returns re-attempt. Count and bail.
+      if (isDismissed) {
+        counts.skippedDismissed++;
+        return;
+      }
       counts.skippedUnchanged++;
       const rc = await this.resolveResultCode(s);
       if (rc?.mappedStageId) {
@@ -265,10 +288,35 @@ export class IngestClosedServiceOrders {
     await this.closed.upsert(order, task.id);
     counts.mirrored++;
 
+    // #41 G2 — dismissed: the mirror is ingested above, but ALL task side-effects are
+    // skipped (no stage move, no comment/audit/inventory). Count and bail.
+    if (isDismissed) {
+      counts.skippedDismissed++;
+      console.log(`[iclass-closed] SO ${s.iclassId} (codigo ${s.iclassCodigo}) → task ${task.id} is dismissed: mirror only, side-effects skipped (#41)`);
+      return;
+    }
+
     // Move the task only when the operator mapped this result code to a stage.
     if (rc?.mappedStageId) {
-      await this.scheduling.moveTaskToStage(task.id, rc.mappedStageId);
+      const moved = await this.scheduling.moveTaskToStage(task.id, rc.mappedStageId);
       counts.transitioned++;
+      // #41 REQ-GS-ICLASS-CLOSEDBY-FLOW-1 — when the closure flow lands the task in a
+      // `hecho`-category stage, the management state follows the workflow outcome:
+      // set generalStatus='closed' + emit a System `status_changed`. Tied to THIS move
+      // event (not "task is in hecho stage"), so a later reconcile of an UNCHANGED order
+      // never re-closes a task the operator reopened (that path never re-invokes this).
+      // Guarded by `task.generalStatus !== 'closed'` to stay idempotent (D8) — a no-op
+      // move into hecho when already closed emits nothing.
+      if (moved?.stageCategory === 'hecho' && task.generalStatus !== 'closed') {
+        await this.scheduling.updateTask(task.id, { generalStatus: 'closed' });
+        if (this.recorder) {
+          await this.recorder.record(task.id, 'status_changed', {
+            actor: SYSTEM_ACTOR,
+            fromValue: task.generalStatus,
+            toValue: 'closed',
+          });
+        }
+      }
     }
 
     await this.runClosureSideEffects(order, task.id, scraped);
@@ -290,6 +338,14 @@ export class IngestClosedServiceOrders {
     taskId: string,
     scraped: ScrapedOSDetail | null = null,
   ): Promise<void> {
+    // #41 F1 — SINGLE CHOKE POINT covering ALL callers (the cron, the manual reprocess
+    // via ReprocessClosureSideEffects, the backfill). A dismissed task must never get a
+    // comment/inventory/audit posted: the operator discarded it. The G1/G2 ingest guards
+    // only cover processSummary; this guard protects the side-effects path itself, so a
+    // dismissed task reaching here (e.g. a stale pending row) is bailed before any effect.
+    const taskNow = await this.scheduling.getTask(taskId);
+    if (taskNow?.generalStatus === 'dismissed') return;
+
     const state = await this.closed.getSideEffectState(order.iclassId);
     const commentDone = state?.commentPosted ?? false;
     const inventoryDone = state?.inventoryBuilt ?? false;
@@ -445,7 +501,7 @@ export class IngestClosedServiceOrders {
 
 /** Fresh zeroed counts — exported so the backfill can accumulate into one tally. */
 export function emptyClosedCounts(): IngestClosedCounts {
-  return { mirrored: 0, transitioned: 0, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0, errored: 0, failed: 0 };
+  return { mirrored: 0, transitioned: 0, skippedNotClosed: 0, skippedNotOurs: 0, skippedUnchanged: 0, skippedDismissed: 0, errored: 0, failed: 0 };
 }
 
 function newCounts(): IngestClosedCounts {

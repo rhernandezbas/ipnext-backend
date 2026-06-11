@@ -97,4 +97,22 @@ describe('InMemorySchedulingRepository — listTasksInIClassStage by code (T-06)
     const tasks = await repo.listTasksInIClassStage('no_such_code');
     expect(tasks).toEqual([]);
   });
+
+  // #41 — dismissed tasks are excluded from the IClass loop; closed + open still appear.
+  it('excludes dismissed tasks but keeps closed and open ones', async () => {
+    const stageRepo = new InMemoryStageRepository();
+    const stage: Stage = { id: 'st-iclass', workflowId: 'wf', name: 'Registrado', code: 'registered_in_iclass', category: 'enProgreso', order: 3, color: null };
+    stageRepo.addDirect(stage);
+    const repo = new InMemorySchedulingRepository(stageRepo);
+
+    repo.seedTask({ id: 'open-1', stageId: 'st-iclass', generalStatus: 'open', isClosed: false });
+    repo.seedTask({ id: 'closed-1', stageId: 'st-iclass', generalStatus: 'closed', isClosed: true });
+    repo.seedTask({ id: 'dismissed-1', stageId: 'st-iclass', generalStatus: 'dismissed', isClosed: false });
+
+    const ids = (await repo.listTasksInIClassStage('registered_in_iclass')).map(t => t.id);
+
+    expect(ids).toContain('open-1');
+    expect(ids).toContain('closed-1');
+    expect(ids).not.toContain('dismissed-1');
+  });
 });

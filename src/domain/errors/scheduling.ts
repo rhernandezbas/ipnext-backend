@@ -36,6 +36,18 @@ export class TaskNotFoundError extends DomainError {
   }
 }
 
+/**
+ * #41 — Raised by SetTaskGeneralStatus when an unknown general-status value is
+ * supplied (defensive validation in the use case; the zod body guard already
+ * rejects bad values at the HTTP edge with 400). Mapped to 422 at the route.
+ */
+export class InvalidGeneralStatusError extends DomainError {
+  constructor(public readonly value: string) {
+    super(`Invalid general status: ${value}`, 'INVALID_GENERAL_STATUS');
+    this.name = 'InvalidGeneralStatusError';
+  }
+}
+
 /** Raised when required fields are missing before sending a task to IClass. Carries the missing field names for the front-end modal. */
 export class MissingRequiredFieldsError extends DomainError {
   constructor(public readonly missingFields: string[]) {

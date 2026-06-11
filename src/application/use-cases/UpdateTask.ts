@@ -19,6 +19,12 @@ export class UpdateTask {
   ) {}
 
   async execute(id: string, data: UpdateTaskInput, actor?: ActorContext): Promise<ScheduledTask | null> {
+    // #41 — legacy isClosed → generalStatus. generalStatus explicit WINS if both present (D4).
+    // Done before the snapshot so the diff sees a single canonical generalStatus change.
+    if (data.generalStatus === undefined && data.isClosed !== undefined) {
+      data = { ...data, generalStatus: data.isClosed ? 'closed' : 'open' };
+    }
+
     // FK validation — only for FKs PRESENT in the partial body (not undefined)
     // canonical order: customer → contract → partner → reporter → assignee → watchers
     if (data.customerId !== undefined && data.customerId !== null) {

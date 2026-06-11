@@ -72,6 +72,11 @@ const CreateTaskBaseSchema = z.object({
   // isClosed is only on the base schema as optional so UpdateTaskSchema inherits it.
   // CreateTaskSchema does NOT expose it (DB default false covers create).
   isClosed: z.boolean().optional(),
+
+  // #41 — lifecycle status. Optional on the base so UpdateTaskSchema inherits it
+  // (PUT /:id accepts it; generalStatus wins over isClosed via UpdateTask normalize).
+  // CreateTaskSchema ignores it (DB default 'open' covers create).
+  generalStatus: z.enum(['open', 'closed', 'dismissed']).optional(),
 });
 
 // REQ-VAL-1 (network-node-task #29): discriminated union on `kind`.
@@ -130,5 +135,7 @@ export const ListTasksFilterSchema = z.object({
   isClosed:   z.enum(['true', 'false']).transform(v => v === 'true').optional(),
   // #40 — filter by task kind. Omitted ⇒ all kinds. Orthogonal to #41's `status`.
   kind:       z.enum(['customer', 'network']).optional(),
+  // #41 — filter by generalStatus. Omitted ≡ all (back-compat). 'all' = explicit no-filter.
+  status:     z.enum(['open', 'closed', 'dismissed', 'all']).optional(),
 });
 export type TaskListFilter = z.infer<typeof ListTasksFilterSchema>;

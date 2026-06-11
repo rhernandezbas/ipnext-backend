@@ -116,6 +116,22 @@ describe('computeUpdateTaskActivities (D.2 diff engine)', () => {
     expect(ev).toContainEqual({ type: 'inventory_review_changed', actor: ACTOR, fromValue: false, toValue: true });
   });
 
+  // #41 — explicit generalStatus emits a STRING status_changed event.
+  it('status_changed (generalStatus) carries STRING from/to values', () => {
+    const prev = prevWith({ generalStatus: 'open', isClosed: false });
+    const ev = diff(prev, { generalStatus: 'dismissed' });
+    expect(ev).toContainEqual({ type: 'status_changed', actor: ACTOR, fromValue: 'open', toValue: 'dismissed' });
+  });
+
+  // #41 — when BOTH generalStatus and isClosed are present, emit ONE event (string wins).
+  it('status_changed: generalStatus + isClosed present → ONE string event (no double-fire)', () => {
+    const prev = prevWith({ generalStatus: 'open', isClosed: false });
+    const ev = diff(prev, { generalStatus: 'closed', isClosed: true });
+    const statusEvents = ev.filter(e => e.type === 'status_changed');
+    expect(statusEvents).toHaveLength(1);
+    expect(statusEvents[0]).toEqual({ type: 'status_changed', actor: ACTOR, fromValue: 'open', toValue: 'closed' });
+  });
+
   it('address_changed coalesces address + coordinates into ONE event', () => {
     const prev = prevWith({ address: 'Old St', coordinates: null });
     const ev = diff(prev, { address: 'New St', coordinates: { lat: 1, lng: 2 } });
