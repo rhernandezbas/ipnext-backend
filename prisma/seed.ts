@@ -433,6 +433,36 @@ async function seedSchedulingFoundation() {
   } catch (err) {
     console.warn('  RBAC seed: inventory.manage assignment skipped (RBAC tables may not exist yet):', (err as any).message)
   }
+
+  // contract-services (#43): ensure clients.manage granted to 'administrador' role.
+  // Dev parity with migration 20260627000000_grant_clients_manage. The catalog ABM
+  // (POST/PATCH/DELETE /api/service-catalog) is gated by clients.manage; without this
+  // grant a normal administrador would get 403. super_admin already has it via migration.
+  try {
+    const adminRole = await (prisma as any).rbacRole.findUnique({ where: { code: 'administrador' } })
+    const clientsModule = await (prisma as any).rbacModule.findUnique({ where: { code: 'clients' } })
+    if (adminRole && clientsModule) {
+      let perm = await (prisma as any).rbacPermission.findFirst({
+        where: { moduleId: clientsModule.id, action: 'manage' },
+      })
+      if (!perm) {
+        perm = await (prisma as any).rbacPermission.create({
+          data: { moduleId: clientsModule.id, action: 'manage' },
+        })
+        console.log('  Created RBAC permission: clients.manage')
+      }
+      await (prisma as any).rbacRolePermission.upsert({
+        where: { roleId_permissionId: { roleId: adminRole.id, permissionId: perm.id } },
+        update: {},
+        create: { roleId: adminRole.id, permissionId: perm.id },
+      })
+      console.log('  RBAC: administrador → clients.manage (upserted)')
+    } else {
+      console.warn('  RBAC seed: administrador role or clients module not found — skipping clients.manage assignment')
+    }
+  } catch (err) {
+    console.warn('  RBAC seed: clients.manage assignment skipped (RBAC tables may not exist yet):', (err as any).message)
+  }
 }
 
 /**

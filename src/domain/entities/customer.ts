@@ -25,6 +25,20 @@ export interface Customer {
   balanceStale?: boolean;
 }
 
+/**
+ * A ContractService as embedded in a Contract's `services[]` array (spec CSV-4.1).
+ * Note: NO `contractId` — the owning contract is implicit.
+ */
+export interface ContractServiceItem {
+  id: string;
+  serviceCatalogId: string;
+  name: string;            // from ServiceCatalog.name
+  label: string | null;    // from ServiceCatalog.label
+  status: string;          // active | inactive
+  notes: string | null;
+  createdAt: string;       // ISO 8601
+}
+
 export interface Contract {
   id: string;
   type: string;
@@ -36,6 +50,10 @@ export interface Contract {
   address: string | null;
   lat: number | null;
   lng: number | null;
+  /** #43 manual-only identifier. null for GR-synced contracts with no manual name. */
+  name: string | null;
+  /** #43 eager-loaded services for this contract. Empty array when none. */
+  services: ContractServiceItem[];
 }
 
 export interface ClientLog {

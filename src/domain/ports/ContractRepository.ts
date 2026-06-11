@@ -32,4 +32,13 @@ export interface ContractRepository {
   list(query: ListContractsQuery): Promise<PaginatedResult<ContractListItem>>;
   /** Returns total count + per-status breakdown. Status values are dynamic (from Gestión Real). */
   stats(): Promise<ContractStats>;
+  /**
+   * #43 — persist the manual-only `name` on a contract. Returns `{ id, name }` on
+   * success, or `null` when the contract does not exist. Empty-string normalization
+   * to `null` is done at the use-case layer.
+   *
+   * `name === undefined` is a no-op (W-3): the column is left untouched and the current
+   * `{ id, name }` is returned (still `null` when the contract does not exist).
+   */
+  updateName(id: string, name?: string | null): Promise<{ id: string; name: string | null } | null>;
 }

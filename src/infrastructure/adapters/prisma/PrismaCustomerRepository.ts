@@ -68,6 +68,17 @@ export function toService(row: any): Contract {
     address: row.address ?? null,
     lat: row.lat ?? null,
     lng: row.lng ?? null,
+    // #43 — manual name (null for GR-synced contracts) + eager-loaded services.
+    name: row.name ?? null,
+    services: (row.contractServices ?? []).map((cs: any) => ({
+      id: cs.id,
+      serviceCatalogId: cs.serviceCatalogId,
+      name: cs.serviceCatalog?.name ?? '',
+      label: cs.serviceCatalog?.label ?? null,
+      status: cs.status,
+      notes: cs.notes ?? null,
+      createdAt: cs.createdAt instanceof Date ? cs.createdAt.toISOString() : cs.createdAt,
+    })),
   };
 }
 
@@ -196,6 +207,15 @@ export class PrismaCustomerRepository implements CustomerRepository {
     const rows = await prisma.contract.findMany({
       where: { clientId },
       orderBy: { startDate: 'desc' },
+      // #43 — eager-load services in a SINGLE query (spec CSV-4.4, no N+1).
+      // `as any` scoped to the include only (generated types lag the new relation),
+      // so where/orderBy keep full type-checking.
+      include: {
+        contractServices: {
+          include: { serviceCatalog: true },
+          orderBy: { createdAt: 'asc' },
+        },
+      } as any,
     });
     return rows.map(toService);
   }

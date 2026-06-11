@@ -60,4 +60,22 @@ export class PrismaContractRepository implements ContractRepository {
     }
     return { total, byStatus };
   }
+
+  async updateName(id: string, name?: string | null): Promise<{ id: string; name: string | null } | null> {
+    try {
+      // W-3 — undefined is a no-op: omit `name` from data so the column is left untouched.
+      // Prisma still returns the (unchanged) row, so the route can echo the current name.
+      const data = name === undefined ? {} : { name };
+      const row = await (prisma as any).contract.update({
+        where: { id },
+        data,
+        select: { id: true, name: true },
+      });
+      return { id: row.id, name: row.name ?? null };
+    } catch (err: unknown) {
+      // P2025 — row to update does not exist; treat as a not-found.
+      if ((err as { code?: string })?.code === 'P2025') return null;
+      throw err;
+    }
+  }
 }
