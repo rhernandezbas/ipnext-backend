@@ -1,0 +1,274 @@
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
+import type { GetGigaredConfig } from '@application/use-cases/gigared/GetGigaredConfig';
+import type { UpdateGigaredConfig } from '@application/use-cases/gigared/UpdateGigaredConfig';
+import type { GetGigaredSummary } from '@application/use-cases/gigared/GetGigaredSummary';
+import type { ListGigaredAccounts } from '@application/use-cases/gigared/ListGigaredAccounts';
+import type { GetGigaredCustomerAccount } from '@application/use-cases/gigared/GetGigaredCustomerAccount';
+import type { LinkCustomerToCic } from '@application/use-cases/gigared/LinkCustomerToCic';
+import type { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterGigaredAccount';
+import type { AddTvService } from '@application/use-cases/gigared/AddTvService';
+import type { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
+import type { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
+import type { GigaredConfigRepository } from '@domain/ports/GigaredConfigRepository';
+import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+import type { ListAccountsFilter } from '@domain/ports/GigaredPort';
+import { GIGARED_FLAG } from '@application/use-cases/gigared/GetGigaredConfig';
+import { updateGigaredConfigSchema } from '@application/dto/gigared.dto';
+import {
+  GigaredNotConfiguredError,
+  GigaredUnavailableError,
+  GigaredAuthError,
+  GigaredNotFoundError,
+  GigaredRejectedError,
+  TvCatalogMissingError,
+  CicNotFoundError,
+  CicAlreadyLinkedError,
+} from '@domain/errors/gigared';
+import { ClientNotFoundError } from '@domain/errors';
+import { ContractNotFoundError } from '@domain/errors/contractServices';
+
+/**
+ * Readiness middleware (M1). Two gating levels, both built from the same repos:
+ *
+ *  - apiKey is required ALWAYS (key === '' → 503), so the "test connection" probe still
+ *    validates the key. This is the floor for EVERY gated route, flag ON or OFF.
+ *  - the FLAG gates everything EXCEPT /config and GET /summary. /summary is the probe:
+ *    with the flag OFF but a key set it must answer (200) so the operator can validate the
+ *    key before turning the integration on. Pass { requireFlag: false } for the probe route.
+ *
+ * Defense-in-depth: GigaredClient also throws if the key is empty at call time, covering the
+ * race between this check and the outbound request.
+ */
+export function createGigaredReadyMiddleware(
+  configRepo: GigaredConfigRepository,
+  flagRepo: FeatureFlagRepository,
+  opts: { requireFlag?: boolean } = {},
+): RequestHandler {
+  const requireFlag = opts.requireFlag ?? true;
+  return async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const cfg = await configRepo.get();
+      // Key required always — probe included.
+      if (cfg.apiKey === '') {
+        res.status(503).json({ error: 'Gigared integration is not configured', code: 'GIGARED_NOT_CONFIGURED' });
+        return;
+      }
+      if (requireFlag) {
+        const flag = await flagRepo.get(GIGARED_FLAG);
+        if (!flag?.enabled) {
+          res.status(503).json({ error: 'Gigared integration is not configured', code: 'GIGARED_NOT_CONFIGURED' });
+          return;
+        }
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+/** Map a Gigared/domain error to its FROZEN wire-contract HTTP status + body. Returns false if unhandled. */
+function sendGigaredError(res: Response, err: unknown): boolean {
+  if (err instanceof GigaredNotConfiguredError) {
+    res.status(503).json({ error: err.message, code: err.code });
+    return true;
+  }
+  if (err instanceof GigaredUnavailableError) {
+    res.status(503).json({ error: err.message, code: err.code });
+    return true;
+  }
+  if (err instanceof GigaredAuthError) {
+    res.status(502).json({ error: err.message, code: err.code });
+    return true;
+  }
+  if (err instanceof GigaredNotFoundError) {
+    res.status(404).json({ error: err.message, code: err.code });
+    return true;
+  }
+  if (err instanceof CicNotFoundError) {
+    res.status(404).json({ error: err.message, code: err.code });
+    return true;
+  }
+  if (err instanceof CicAlreadyLinkedError) {
+    res.status(409).json({ error: err.message, code: err.code, linkedInternalId: err.linkedInternalId });
+    return true;
+  }
+  if (err instanceof ClientNotFoundError) {
+    res.status(404).json({ error: err.message, code: err.code });
+    return true;
+  }
+  if (err instanceof ContractNotFoundError) {
+    res.status(404).json({ error: err.message, code: err.code });
+    return true;
+  }
+  if (err instanceof GigaredRejectedError) {
+    res.status(422).json({ error: err.message, code: err.code, title: err.title, detail: err.detail });
+    return true;
+  }
+  if (err instanceof TvCatalogMissingError) {
+    res.status(422).json({ error: err.message, code: err.code });
+    return true;
+  }
+  return false;
+}
+
+export interface GigaredRouterDeps {
+  getConfig: GetGigaredConfig;
+  updateConfig: UpdateGigaredConfig;
+  getSummary: GetGigaredSummary;
+  listAccounts: ListGigaredAccounts;
+  getCustomerAccount: GetGigaredCustomerAccount;
+  linkCustomerToCic: LinkCustomerToCic;
+  registerAccount: RegisterGigaredAccount;
+  addTvService: AddTvService;
+  removeTvService: RemoveTvService;
+  setOttStatus: SetOttStatus;
+  requireRead: RequestHandler;
+  requireWrite: RequestHandler;
+  requireManage: RequestHandler;
+  /** Key-required + flag-required — gates every non-probe, non-config route. */
+  gigaredReady: RequestHandler;
+  /** Key-required only (flag exempt) — gates the GET /summary probe (M1). */
+  gigaredProbeReady: RequestHandler;
+}
+
+/**
+ * Gigared TV router (#47). Mount: app.use('/api/gigared', createAuthMiddleware(...), router).
+ * Order (D2): /config (GET/PUT, tv.manage) → router.use(gigaredReady) → the rest (read/write).
+ * Errors are caught BY INSTANCE here so each maps to its pinned status (pattern uisp.routes.ts).
+ */
+export function createGigaredRouter(deps: GigaredRouterDeps): Router {
+  const router = Router();
+
+  // ---- /config — always accessible (no gigaredReady gate) ------------------
+  router.get('/config', deps.requireManage, async (_req, res, next): Promise<void> => {
+    try {
+      res.json(await deps.getConfig.execute());
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  router.put('/config', deps.requireManage, async (req, res, next): Promise<void> => {
+    const parsed = updateGigaredConfigSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid config payload', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    try {
+      res.json(await deps.updateConfig.execute(parsed.data));
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  // ---- probe: GET /summary — key required, flag EXEMPT (M1) -----------------
+  // Lets the operator validate the API key with the flag OFF ("test connection").
+  router.get('/summary', deps.gigaredProbeReady, deps.requireRead, async (_req, res, next): Promise<void> => {
+    try {
+      res.json(await deps.getSummary.execute());
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  // ---- everything below requires the integration to be fully ready (key + flag) ----
+  router.use(deps.gigaredReady);
+
+  router.get('/accounts', deps.requireRead, async (req, res, next): Promise<void> => {
+    try {
+      const q = req.query;
+      const filter: ListAccountsFilter = {};
+      if (typeof q['email'] === 'string') filter.email = q['email'];
+      if (typeof q['account_id'] === 'string') filter.accountId = q['account_id'];
+      if (q['status'] === 'registered' || q['status'] === 'unregistered') filter.status = q['status'];
+      if (typeof q['pagination_limit'] === 'string') filter.paginationLimit = Number(q['pagination_limit']);
+      if (typeof q['pagination_offset'] === 'string') filter.paginationOffset = Number(q['pagination_offset']);
+      res.json(await deps.listAccounts.execute(filter));
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  router.get('/customers/:id/account', deps.requireRead, async (req, res, next): Promise<void> => {
+    try {
+      res.json(await deps.getCustomerAccount.execute(req.params['id'] as string));
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  router.post('/customers/:id/link', deps.requireWrite, async (req, res, next): Promise<void> => {
+    try {
+      const cic = String((req.body as { cic?: unknown }).cic ?? '');
+      res.json(await deps.linkCustomerToCic.execute(req.params['id'] as string, cic));
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  router.post('/customers/:id/register', deps.requireWrite, async (req, res, next): Promise<void> => {
+    try {
+      const b = req.body as {
+        firstName: string; lastName: string; email: string; cic: string; sendActivationEmail?: boolean;
+      };
+      const account = await deps.registerAccount.execute(req.params['id'] as string, {
+        firstName: b.firstName,
+        lastName: b.lastName,
+        email: b.email,
+        cic: b.cic,
+        // Password is generated server-side and is transit-only (never persisted/returned).
+        password: cryptoRandomPassword(),
+        sendActivationEmail: b.sendActivationEmail ?? true,
+      });
+      res.status(201).json(account);
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  router.post('/customers/:id/services', deps.requireWrite, async (req, res, next): Promise<void> => {
+    try {
+      const b = req.body as { serviceId: string; contractId: string };
+      const result = await deps.addTvService.execute(req.params['id'] as string, {
+        serviceId: b.serviceId,
+        contractId: b.contractId,
+      });
+      res.status(result.local === 'failed' ? 207 : 200).json(result);
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  router.delete('/customers/:id/services/:serviceId', deps.requireWrite, async (req, res, next): Promise<void> => {
+    try {
+      const contractId = String(req.query['contractId'] ?? '');
+      const result = await deps.removeTvService.execute(req.params['id'] as string, {
+        serviceId: req.params['serviceId'] as string,
+        contractId,
+      });
+      res.status(result.local === 'failed' ? 207 : 200).json(result);
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  router.put('/customers/:id/ott', deps.requireWrite, async (req, res, next): Promise<void> => {
+    try {
+      const enabled = Boolean((req.body as { enabled?: unknown }).enabled);
+      await deps.setOttStatus.execute(req.params['id'] as string, enabled);
+      res.json({ ok: true });
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  return router;
+}
+
+/** Server-side random password for register (transit-only). */
+function cryptoRandomPassword(): string {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { randomBytes } = require('crypto') as typeof import('crypto');
+  return randomBytes(18).toString('base64url');
+}

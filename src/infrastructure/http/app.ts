@@ -325,6 +325,20 @@ import { GetUispSiteDetail } from '@application/use-cases/GetUispSiteDetail';
 import { GetUispSyncStatus } from '@application/use-cases/GetUispSyncStatus';
 import { TriggerUispSync } from '@application/use-cases/TriggerUispSync';
 import { UispSyncScheduler } from '../scheduling/UispSyncScheduler';
+// Gigared TV integration routes (#47)
+import { createGigaredRouter, createGigaredReadyMiddleware } from './routes/gigared.routes';
+import { PrismaGigaredConfigRepository } from '../adapters/prisma/PrismaGigaredConfigRepository';
+import { GigaredClient } from '../adapters/gigared/GigaredClient';
+import { GetGigaredConfig } from '@application/use-cases/gigared/GetGigaredConfig';
+import { UpdateGigaredConfig } from '@application/use-cases/gigared/UpdateGigaredConfig';
+import { GetGigaredSummary } from '@application/use-cases/gigared/GetGigaredSummary';
+import { ListGigaredAccounts } from '@application/use-cases/gigared/ListGigaredAccounts';
+import { GetGigaredCustomerAccount } from '@application/use-cases/gigared/GetGigaredCustomerAccount';
+import { LinkCustomerToCic } from '@application/use-cases/gigared/LinkCustomerToCic';
+import { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterGigaredAccount';
+import { AddTvService } from '@application/use-cases/gigared/AddTvService';
+import { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
+import { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
@@ -1650,6 +1664,29 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     requirePerm('uisp', 'read'),
     requirePerm('uisp', 'manage'),
   ));
+
+  // Gigared TV integration (#47) — /api/gigared. apiKey read per-request from DB (flag-gated).
+  // Reuses featureFlagRepo (762), serviceCatalogRepo + contractServiceRepo + contractLookup (#43, ~1068).
+  const gigaredConfigRepo = new PrismaGigaredConfigRepository();
+  const gigaredClient = new GigaredClient({ configProvider: gigaredConfigRepo });
+  const gigaredCustomerLookup = { findById: (id: string) => prismaClientLookup('Client', id) };
+  app.use('/api/gigared', createAuthMiddleware(authAdapter, sessionRepo), createGigaredRouter({
+    getConfig:          new GetGigaredConfig(gigaredConfigRepo, featureFlagRepo),
+    updateConfig:       new UpdateGigaredConfig(gigaredConfigRepo, featureFlagRepo),
+    getSummary:         new GetGigaredSummary(gigaredClient),
+    listAccounts:       new ListGigaredAccounts(gigaredClient),
+    getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup),
+    linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup),
+    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup),
+    addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, contractLookup, gigaredCustomerLookup),
+    removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, contractLookup, gigaredCustomerLookup),
+    setOttStatus:       new SetOttStatus(gigaredClient, gigaredCustomerLookup),
+    requireRead:        requirePerm('tv', 'read'),
+    requireWrite:       requirePerm('tv', 'write'),
+    requireManage:      requirePerm('tv', 'manage'),
+    gigaredReady:       createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo),
+    gigaredProbeReady:  createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo, { requireFlag: false }),
+  }));
 
   // 404
   app.use((_req: Request, res: Response): void => {

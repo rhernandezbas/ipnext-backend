@@ -24,6 +24,10 @@ const SENSITIVE_KEYS = new Set([
   'token',
   'secret',
   'passwordhash',
+  // C1: the Gigared API key — PUT /api/gigared/config sends `apiKey` (snake variant `api_key`).
+  // NOT 'apikeylast4' — the last-4 tail is the public preview returned by GET /config.
+  'apikey',
+  'api_key',
 ]);
 
 /**

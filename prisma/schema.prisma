@@ -2201,3 +2201,12 @@ model UispDevice {
   @@index([status])
   @@index([missingSince])
 }
+
+/// Gigared Partners TV integration config (#47). Single-row (id = "singleton").
+/// Empty apiKey means unconfigured. The full apiKey never leaves the API (masked to last4).
+model GigaredConfig {
+  id        String   @id @default("singleton")
+  apiKey    String   @default("")
+  baseUrl   String   @default("https://partners.gigaredsa.com.ar/api/v1")
+  updatedAt DateTime @updatedAt
+}
