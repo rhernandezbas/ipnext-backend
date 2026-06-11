@@ -72,6 +72,10 @@ import { GetClientPortalSettings } from '@application/use-cases/GetClientPortalS
 import { UpdateClientPortalSettings } from '@application/use-cases/UpdateClientPortalSettings';
 import { createSchedulingRouter } from './routes/scheduling.routes';
 import { createTaskCommentsRouter } from './routes/taskComments.routes';
+import { createTicketCommentsRouter } from './routes/ticketComments.routes';
+import { ListTicketComments } from '@application/use-cases/ListTicketComments';
+import { AddTicketComment } from '@application/use-cases/AddTicketComment';
+import { PrismaTicketCommentRepository } from '../adapters/prisma/PrismaTicketCommentRepository';
 import { createWorkflowsRouter } from './routes/workflows.routes';
 import { ReplaceTaskTemplateItems } from '@application/use-cases/ReplaceTaskTemplateItems';
 import { AddChecklistItem } from '@application/use-cases/AddChecklistItem';
@@ -600,6 +604,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // SDD #6a — security headers (helmet) + CORS origin from env.
   app.use(helmet());
   app.use(cors({ origin: config.corsOrigin, credentials: true }));
+  // #44 — ticket comment images travel as base64 data-URIs; the default 100kb limit
+  // would reject them. This path-scoped 8mb parser MUST be registered BEFORE the global
+  // express.json() — the global parser runs ahead of every router and would otherwise
+  // reject big bodies with 413 before the comments router ever sees them. body-parser
+  // skips the second parse (req._body), so the double registration is safe.
+  app.use('/api/tickets/:ticketId/comments', express.json({ limit: '8mb' }));
   app.use(express.json());
   app.use(cookieParser());
 
@@ -1005,6 +1015,18 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listTicketStatuses, getTicketStatus, createTicketStatus, updateTicketStatusCatalog, deleteTicketStatus,
   ));
   app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, authAdapter, createTaskFromTicket, schedulingRepo, stageRepo));
+  // #44 — persisted ticket comments. Mounted on /api/tickets; the tickets router has no
+  // catch-all and /:id does not capture /:id/comments (distinct segments), so no collision.
+  const ticketCommentRepo = new PrismaTicketCommentRepository();
+  app.use('/api/tickets', createTicketCommentsRouter(
+    new ListTicketComments(ticketCommentRepo, ticketAdapter),
+    new AddTicketComment(ticketCommentRepo, ticketAdapter),
+    createAuthMiddleware(authAdapter, sessionRepo),
+    {
+      read: requirePerm('tickets', 'read'),
+      write: requirePerm('tickets', 'write'),
+    },
+  ));
   app.use('/api/billing', createBillingRouter(getSummary, listInvoices, listPayments, listTransactions, authAdapter));
   app.use('/api/billing', createBillingMonthlyRouter(getMonthly));
   app.use('/api/billing', createCreditNotesRouter(listCreditNotes, getCreditNote, createCreditNote, applyCreditNote, voidCreditNote));

@@ -251,41 +251,25 @@ describe('GET /api/tickets/stats', () => {
   });
 });
 
-describe('GET/POST /api/tickets/:id/replies', () => {
-  it('returns empty array for ticket with no replies', async () => {
+describe('GET/POST /api/tickets/:id/replies removed (#44)', () => {
+  it('GET /:id/replies is no longer registered (404)', async () => {
     const { app, repo } = buildApp();
     const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
 
     const res = await withAuth(request(app).get(`/api/tickets/${created.id}/replies`));
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.status).toBe(404);
   });
 
-  it('creates a reply and it appears in GET', async () => {
-    const { app, repo } = buildApp();
-    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
-
-    await withAuth(
-      request(app)
-        .post(`/api/tickets/${created.id}/replies`)
-        .send({ message: 'Hola, revisando el caso.', authorId: 1, authorName: 'Admin' }),
-    );
-
-    const res = await withAuth(request(app).get(`/api/tickets/${created.id}/replies`));
-    expect(res.status).toBe(200);
-    const messages = res.body.map((r: { message: string }) => r.message);
-    expect(messages).toContain('Hola, revisando el caso.');
-  });
-
-  it('returns 400 when reply message is missing', async () => {
+  it('POST /:id/replies is no longer registered (404)', async () => {
     const { app, repo } = buildApp();
     const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
 
     const res = await withAuth(
-      request(app).post(`/api/tickets/${created.id}/replies`).send({ authorId: 1 }),
+      request(app)
+        .post(`/api/tickets/${created.id}/replies`)
+        .send({ message: 'x', authorId: 1, authorName: 'Admin' }),
     );
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.status).toBe(404);
   });
 });
 

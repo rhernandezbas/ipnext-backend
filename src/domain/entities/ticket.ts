@@ -21,6 +21,9 @@ export interface Ticket {
   grCasoId: string | null;
   createdAt: string;             // ISO 8601
   updatedAt: string;             // ISO 8601
+  // #44 (D7) — related tasks, enriched via PrismaTicketRepository.getById include.
+  // Optional so existing fixtures/tests that don't set it keep compiling.
+  tasks?: Array<{ id: string; sequenceNumber: number; title: string }>;
 }
 
 export interface TicketStats {

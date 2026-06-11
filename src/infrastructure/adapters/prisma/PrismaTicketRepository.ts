@@ -41,6 +41,14 @@ export function toTicket(row: any): Ticket {
     grCasoId: row.grCasoId ?? null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
+    // #44 (D7) — related tasks only present when the query included them (getById).
+    ...(Array.isArray(row.tasks) && {
+      tasks: row.tasks.map((t: any) => ({
+        id: t.id,
+        sequenceNumber: t.sequenceNumber,
+        title: t.title,
+      })),
+    }),
   };
 }
 
@@ -107,7 +115,11 @@ export class PrismaTicketRepository implements TicketRepository {
   async getById(id: string): Promise<Ticket | null> {
     const row = await (prisma as any).ticket.findUnique({
       where: { id },
-      include: INCLUDE,
+      include: {
+        ...INCLUDE,
+        // #44 (D7) — enrich the single-ticket read with its related tasks.
+        tasks: { select: { id: true, sequenceNumber: true, title: true } },
+      },
     });
     return row ? toTicket(row) : null;
   }

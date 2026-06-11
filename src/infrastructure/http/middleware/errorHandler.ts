@@ -82,6 +82,13 @@ const statusMap: Record<string, number> = {
 
 /** Express global error-handling middleware. */
 export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
+  // #44 — body-parser raises `entity.too.large` when a request body exceeds the
+  // configured limit (e.g. the 8mb path-scoped parser on /api/tickets/:id/comments).
+  // Map it to 413 BEFORE the DomainError check so it never falls through to the 500 handler.
+  if ((err as { type?: string })?.type === 'entity.too.large') {
+    res.status(413).json({ error: 'Payload too large', code: 'PAYLOAD_TOO_LARGE' });
+    return;
+  }
   if (err instanceof DomainError) {
     const status = statusMap[err.code] ?? 400;
     const mapped = domainErrorToCode(err);

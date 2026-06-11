@@ -157,21 +157,12 @@ describe('PATCH /api/tickets/:id/status', () => {
   });
 });
 
-describe('GET /api/tickets/:id/replies', () => {
-  it('returns 200 with replies array (in-memory, AD-6)', async () => {
+describe('GET /api/tickets/:id/replies removed (#44)', () => {
+  it('is no longer registered (404)', async () => {
     const app = buildApp();
     const res = await withAuth(request(app).get('/api/tickets/1/replies'));
 
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-  });
-
-  it('returns empty array for ticket with no replies', async () => {
-    const app = buildApp();
-    const res = await withAuth(request(app).get('/api/tickets/9999/replies'));
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.status).toBe(404);
   });
 });
 
@@ -191,30 +182,16 @@ describe('DELETE /api/tickets/:id (close)', () => {
   });
 });
 
-describe('POST /api/tickets/:id/replies', () => {
-  it('returns 201 with the created reply', async () => {
+describe('POST /api/tickets/:id/replies removed (#44)', () => {
+  it('is no longer registered (404)', async () => {
     const app = buildApp();
     const res = await withAuth(
       request(app)
         .post('/api/tickets/1/replies')
-        .send({ message: 'Gracias por su respuesta.', authorId: 1, authorName: 'Admin' }),
+        .send({ message: 'x', authorId: 1, authorName: 'Admin' }),
     );
 
-    expect(res.status).toBe(201);
-    expect(res.body.message).toBe('Gracias por su respuesta.');
-    expect(res.body.authorName).toBe('Admin');
-    expect(res.body.id).toBeTruthy();
-    expect(res.body.createdAt).toBeTruthy();
-  });
-
-  it('returns 400 when message is missing', async () => {
-    const app = buildApp();
-    const res = await withAuth(
-      request(app).post('/api/tickets/1/replies').send({ authorId: 1, authorName: 'Admin' }),
-    );
-
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.status).toBe(404);
   });
 });
 
