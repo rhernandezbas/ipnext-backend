@@ -307,6 +307,29 @@ describe('PUT /api/inventory/device-types/:id', () => {
     );
     expect(res.status).toBe(403);
   });
+
+  // #43 DEBT — renaming OTROS is blocked at the route with 422 NON_RENAMEABLE.
+  it('rename OTROS → 422 DEVICE_TYPE_NON_RENAMEABLE (#43 debt)', async () => {
+    const otros = await fx.catalogRepo.create({ name: 'OTROS', active: true, sortOrder: 4 });
+    const res = await asUser(
+      request(fx.app).put(`/api/inventory/device-types/${otros.id}`).send({ name: 'MISC' }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('DEVICE_TYPE_NON_RENAMEABLE');
+  });
+
+  it('editing OTROS label/active only → 200 (name frozen, rest editable) (#43 debt)', async () => {
+    const otros = await fx.catalogRepo.create({ name: 'OTROS', active: true, sortOrder: 4 });
+    const res = await asUser(
+      request(fx.app).put(`/api/inventory/device-types/${otros.id}`).send({ label: 'Otros equipos', active: false }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.label).toBe('Otros equipos');
+    expect(res.body.active).toBe(false);
+    expect(res.body.name).toBe('OTROS');
+  });
 });
 
 // ─── DELETE ───────────────────────────────────────────────────────────────────

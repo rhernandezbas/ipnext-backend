@@ -1,6 +1,10 @@
 import { DeviceTypeCatalogRepository } from '@domain/ports/DeviceTypeCatalogRepository';
 import { DeviceTypeCatalog } from '@domain/entities/device-type-catalog';
-import { DeviceTypeNotFoundError, DeviceTypeNameConflictError } from '@domain/errors/inventory';
+import {
+  DeviceTypeNotFoundError,
+  DeviceTypeNameConflictError,
+  DeviceTypeNonRenameableError,
+} from '@domain/errors/inventory';
 
 export class UpdateDeviceType {
   constructor(private readonly repo: DeviceTypeCatalogRepository) {}
@@ -11,7 +15,11 @@ export class UpdateDeviceType {
     let patch = { ...data };
     if (data.name) {
       const normalized = data.name.trim().toUpperCase();
-      if (normalized.toLowerCase() !== item.name.toLowerCase()) {
+      const isRename = normalized.toLowerCase() !== item.name.toLowerCase();
+      if (isRename) {
+        // #43 — OTROS is the protected catch-all; its name is frozen. Renaming it
+        // would bypass the non-deletable guard. A no-op name (same value) is allowed.
+        if (item.name === 'OTROS') throw new DeviceTypeNonRenameableError();
         const conflict = await this.repo.getByName(normalized);
         if (conflict && conflict.id !== id) throw new DeviceTypeNameConflictError(normalized);
       }

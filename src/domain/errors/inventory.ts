@@ -49,6 +49,19 @@ export class DeviceTypeProtectedError extends DomainError {
   }
 }
 
+/**
+ * The OTROS device type cannot be renamed. Maps to 422.
+ * Mirrors ServiceCatalogNonRenameableError: renaming OTROS would bypass the
+ * non-deletable guard (rename OTROS → "X", then create a fresh deletable
+ * "OTROS"). The protected catch-all name is frozen.
+ */
+export class DeviceTypeNonRenameableError extends DomainError {
+  constructor() {
+    super('The OTROS device type cannot be renamed', 'DEVICE_TYPE_NON_RENAMEABLE');
+    this.name = 'DeviceTypeNonRenameableError';
+  }
+}
+
 export class MaterialNotFoundError extends DomainError {
   constructor(id: string) {
     super(`Material with id ${id} not found`, 'MATERIAL_NOT_FOUND');

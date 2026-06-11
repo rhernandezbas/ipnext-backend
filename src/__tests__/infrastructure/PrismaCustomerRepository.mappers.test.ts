@@ -94,6 +94,36 @@ describe('PrismaCustomerRepository mappers', () => {
       expect(s.startDate).toBe('2024-01-01T00:00:00.000Z');
       expect(s.ip).toBe('192.168.1.1');
     });
+
+    // #42 DEBT — the Contract model HAS `technology` but the mapper dropped it,
+    // making it a dead field in the FE ContractCard + buildContractLabel.
+    it('maps the contract technology (#42 debt)', () => {
+      const s = toService({
+        id: 's-2',
+        type: 'internet',
+        plan: 'Fibra 300',
+        ip: '10.0.0.1',
+        status: 'active',
+        startDate: new Date('2024-01-01T00:00:00Z'),
+        endDate: null,
+        technology: 'FIBRA',
+      });
+      expect(s.technology).toBe('FIBRA');
+    });
+
+    it('preserves a null technology (#42 debt)', () => {
+      const s = toService({
+        id: 's-3',
+        type: 'internet',
+        plan: 'Plan X',
+        ip: '',
+        status: 'active',
+        startDate: new Date('2024-01-01T00:00:00Z'),
+        endDate: null,
+        technology: null,
+      });
+      expect(s.technology).toBeNull();
+    });
   });
 
   describe('toClientLog', () => {

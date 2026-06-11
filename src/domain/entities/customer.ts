@@ -50,6 +50,8 @@ export interface Contract {
   address: string | null;
   lat: number | null;
   lng: number | null;
+  /** #42 free-text technology name (from the ContractTechnology catalog). null when unset. */
+  technology: string | null;
   /** #43 manual-only identifier. null for GR-synced contracts with no manual name. */
   name: string | null;
   /** #43 eager-loaded services for this contract. Empty array when none. */

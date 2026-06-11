@@ -223,12 +223,24 @@ export class IngestGestionRealOrders {
 
     // 4-5. Classify and pick the target project.
     const tech = classifyTech(contract.plan);
-    const projectId =
+    let projectId =
       tech === 'FIBER' ? fiberProjectId : tech === 'WIRELESS' ? wirelessProjectId : null;
+
+    // #40 DEBT — the project↔kind guard. CreateTask refuses to put a customer-kind
+    // task on a project flagged isNetworkProject; this ingest calls the repo
+    // directly and would bypass that guard. Mirror it here: if the configured
+    // target project is (mis)flagged as a network project, DON'T create a customer
+    // task on it — degrade to needs-review (null project), exactly like the
+    // "project not configured" case below. Graceful: the batch is not aborted.
+    if (projectId !== null) {
+      const targetProject = await this.projects.get(projectId);
+      if (targetProject?.isNetworkProject === true) projectId = null;
+    }
 
     // 6. Needs-review reasons (two distinct cases, both land a REVISAR task):
     //   (a) UNCLASSIFIED      → plan not recognized.
-    //   (b) classified but the target project is not configured (projectId null).
+    //   (b) classified but the target project is not configured (projectId null) —
+    //       this now ALSO covers a target project misflagged as network (#40 debt).
     // Both must be a proper needs-review task (REVISAR title + reason), NOT a
     // silent normal task with a null project, and counted in the review bucket.
     const isUnclassified = tech === 'UNCLASSIFIED';

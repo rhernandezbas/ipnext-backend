@@ -743,4 +743,50 @@ describe('IngestGestionRealOrders', () => {
     const task = await h.scheduling.findTaskByGrOrdenId('rep-none');
     expect(task!.reporterId).toBeNull();
   });
+
+  // ── #40 DEBT: the ingest must not create a customer-kind task on a project
+  //    flagged isNetworkProject (it bypasses CreateTask's project↔kind guard).
+  //    Degrades gracefully like the C1 "project not configured" path: needs-review
+  //    task with a null project, batch continues. ──
+
+  it('does NOT create a customer task on a fiber project flagged isNetworkProject — degrades to needs-review (#40 debt)', async () => {
+    const h = await makeHarness();
+    // Create a real network project and point fiberProjectId at it.
+    const netProject = await h.projects.create({ title: 'NODOS RED' });
+    await h.projects.update(netProject.id, { isNetworkProject: true });
+    await h.config.update({ fiberProjectId: netProject.id, wirelessProjectId: 'p-wifi' });
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' }); // FIBER plan
+    h.gr.serviceOrders = [order({ grOrdenId: 'net-1' })];
+
+    const result = await h.useCase.execute();
+
+    // The task is NOT created on the network project — it lands as needs-review.
+    expect(result.created).toBe(0);
+    expect(result.unclassified).toBe(1);
+    const task = await h.scheduling.findTaskByGrOrdenId('net-1');
+    expect(task).not.toBeNull();
+    expect(task!.projectId).toBeNull(); // never the network project
+    expect(task!.title.startsWith('[REVISAR - Logística] Instalación')).toBe(true);
+    // appears in the needs-review bucket
+    const needsReview = await h.scheduling.listNeedsReview();
+    expect(needsReview.some(t => t.grOrdenId === 'net-1')).toBe(true);
+  });
+
+  it('a non-network fiber project still creates a normal task (#40 debt — guard is targeted)', async () => {
+    const h = await makeHarness();
+    const fiberProject = await h.projects.create({ title: 'INSTALACION FIBRA' });
+    // isNetworkProject defaults to false — leave it.
+    await h.config.update({ fiberProjectId: fiberProject.id, wirelessProjectId: 'p-wifi' });
+    h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'Acme' });
+    h.resolver.seedContract('gr-con-1', { id: 'svc-1', plan: '300MB' });
+    h.gr.serviceOrders = [order({ grOrdenId: 'ok-net' })];
+
+    const result = await h.useCase.execute();
+
+    expect(result.created).toBe(1);
+    const task = await h.scheduling.findTaskByGrOrdenId('ok-net');
+    expect(task!.projectId).toBe(fiberProject.id);
+    expect(task!.title).not.toContain('REVISAR');
+  });
 });

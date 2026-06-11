@@ -14,6 +14,7 @@ import {
   DeviceTypeNameConflictError,
   DeviceTypeInUseError,
   DeviceTypeProtectedError,
+  DeviceTypeNonRenameableError,
 } from '@domain/errors/inventory';
 
 /** Factory matching `requirePerm` exported from app.ts (DIP-clean injection). */
@@ -86,6 +87,10 @@ export function createDeviceTypeCatalogRouter(
       }
       if (err instanceof DeviceTypeNameConflictError) {
         res.status(409).json({ error: err.message, code: err.code });
+        return;
+      }
+      if (err instanceof DeviceTypeNonRenameableError) {
+        res.status(422).json({ error: err.message, code: err.code });
         return;
       }
       throw err;
