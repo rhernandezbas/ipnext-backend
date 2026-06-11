@@ -1676,7 +1676,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getSummary:         new GetGigaredSummary(gigaredClient),
     listAccounts:       new ListGigaredAccounts(gigaredClient),
     getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup),
-    linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup),
+    linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, contractLookup, contractServiceRepo, serviceCatalogRepo),
     registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup),
     addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, contractLookup, gigaredCustomerLookup),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, contractLookup, gigaredCustomerLookup),
