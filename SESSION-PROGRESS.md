@@ -20,7 +20,11 @@ Batch de 8 ítems nuevos (#40–#47) pedidos por el usuario. **7 de 8 SHIPPEADOS
 | #44 | Detalle de ticket redesign + comentarios PERSISTIDOS con fotos base64 (paste/upload) — mata replies in-memory | BE #107 + FE #82 | ✅ PROD |
 | #46 | Lista tickets: bulk actions + filtros colapsables + muere whitelist VALID_STATUSES + CloseTicket catalog-aware | BE #108 + FE #83 | ✅ PROD |
 | #45 | Mapper de ciudades: catálogo IClassNode (los nodos SON las ciudades, verificado live) + select en Mapeo de nodos | BE #109 + FE #84+#85 | ✅ PROD |
-| #47 | Integración TV | — | ⛔ BLOQUEADO: `tv.md` está VACÍO (0 bytes) — el usuario debe pegar la doc; token lo pasa después |
+| #47 | Integración TV **Gigared Partners** (desbloqueado: el usuario pegó la doc) | BE #111 + FE #86 | ✅ PROD (flag OFF hasta cargar key — **key YA CARGADA por el usuario**) |
+| #47b | TV desde el contrato (panel con contrato dueño, page en Clientes, fuera la tab) | FE #87 | ✅ PROD |
+| #47c | Paginación Gigared capeada en 20 + quitar ítem TV local + alta local sin Gigared | FE #88 | ✅ PROD |
+
+**TV-MATCHES.md** (raíz BE): cruce de las 84 cuentas Gigared registradas vs clientes — 66 directos, 14 multi-contrato, 4 sin match. El usuario vincula A MANO desde el panel. ⚠️ Gigared Play Full 102/102 (cupo lleno). #45 bootstrap aplicado (catálogo 36 nodos + 26 auto-matches; quedan 47 barriales).
 
 ## 2. Incidente de la sesión (resuelto)
 
