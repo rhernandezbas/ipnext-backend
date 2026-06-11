@@ -59,20 +59,8 @@ const REFERENCE_TO_CODE: Record<string, string> = {
 const VALID_STATUSES: string[] = ['open', 'pending', 'closed'];
 const VALID_PRIORITIES: TicketPriority[] = ['low', 'medium', 'high'];
 
-// In-memory store for ticket replies (out-of-scope for Prisma this iteration — AD-6)
-// TicketReply stays in-memory until the TicketReply model is implemented in a future change.
-export interface TicketReply {
-  id: number;
-  ticketId: string;
-  message: string;
-  authorId: number;
-  authorName: string;
-  createdAt: string;
-  isInternal: boolean;
-}
-
-const ticketRepliesStore = new Map<string, TicketReply[]>();
-let nextReplyId = 1;
+// #44 — replies were in-memory and lost on each deploy. Replaced by persisted
+// ticket comments (createTicketCommentsRouter mounted on /api/tickets in app.ts).
 
 export function createTicketsRouter(
   listTickets: ListTickets,
@@ -280,43 +268,6 @@ export function createTicketsRouter(
       console.error('[tickets] createTaskFromTicket error', err);
       res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }
-  });
-
-  // GET /:id/replies — in-memory (AD-6: replies out of scope for Prisma this iteration)
-  router.get('/:id/replies', auth, async (req: Request, res: Response): Promise<void> => {
-    const id = req.params['id'] as string;
-    const replies = ticketRepliesStore.get(id) ?? [];
-    res.json(replies);
-  });
-
-  // POST /:id/replies — in-memory (AD-6)
-  router.post('/:id/replies', auth, async (req: Request, res: Response): Promise<void> => {
-    const ticketId = req.params['id'] as string;
-    const { message, authorId, authorName } = req.body as {
-      message?: string;
-      authorId?: number;
-      authorName?: string;
-    };
-
-    if (!message) {
-      res.status(400).json({ error: 'message is required', code: 'VALIDATION_ERROR' });
-      return;
-    }
-
-    const reply: TicketReply = {
-      id: nextReplyId++,
-      ticketId,
-      message,
-      authorId: authorId ?? 1,
-      authorName: authorName ?? 'Admin',
-      createdAt: new Date().toISOString(),
-      isInternal: false,
-    };
-
-    const existing = ticketRepliesStore.get(ticketId) ?? [];
-    existing.push(reply);
-    ticketRepliesStore.set(ticketId, existing);
-    res.status(201).json(reply);
   });
 
   // POST / — create ticket

@@ -26,6 +26,25 @@ const SENSITIVE_KEYS = new Set([
   'passwordhash',
 ]);
 
+/**
+ * Strings >= this many bytes that look like a `data:` URI are elided before
+ * persisting, so a single base64 attachment can't bloat an AuditEvent to MBs.
+ */
+const DATA_URI_ELIDE_THRESHOLD_BYTES = 1024;
+
+/**
+ * If `value` is a `data:` URI string above the threshold, replace it with a
+ * short placeholder that records the original byte length. Generic — covers any
+ * current or future upload field, not just ticket comments. Returns the value
+ * unchanged otherwise.
+ */
+function elideDataUri(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  if (value.length < DATA_URI_ELIDE_THRESHOLD_BYTES) return value;
+  if (!value.startsWith('data:')) return value;
+  return `data:[elided ${value.length} bytes]`;
+}
+
 /** Recursively mask sensitive values. Pure; null/undefined-safe. */
 export function maskSensitive(value: unknown): unknown {
   if (value === null || value === undefined) return value;
@@ -37,7 +56,7 @@ export function maskSensitive(value: unknown): unknown {
     }
     return out;
   }
-  return value;
+  return elideDataUri(value);
 }
 
 function extractErrorMessage(body: unknown): string | null {

@@ -1353,6 +1353,31 @@ model TaskCommentAttachment {
   @@index([commentId])
 }
 
+// #44 — Conversación persistida de tickets con adjuntos inline (espejo de TaskComment).
+model TicketComment {
+  id          String                    @id @default(uuid())
+  ticketId    String
+  ticket      Ticket                    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorName  String
+  body        String
+  createdAt   DateTime                  @default(now())
+  attachments TicketCommentAttachment[]
+
+  @@index([ticketId])
+}
+
+model TicketCommentAttachment {
+  id        String        @id @default(uuid())
+  commentId String
+  comment   TicketComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  url       String
+  filename  String
+  mimeType  String?
+  sizeBytes Int?
+
+  @@index([commentId])
+}
+
 // F6 — Auditoría IA de la instalación. Run padre (1 vigente por tarea, replace-on-rerun)
 // + hallazgos estructurados (severidad/categoría/texto/fotos).
 model TaskInstallationAudit {
@@ -1925,6 +1950,9 @@ model Ticket {
 
   // Back-relation: tasks created from this ticket (tickets-actions-be)
   tasks ScheduledTask[]
+
+  // #44 — Back-relation: persisted comments on this ticket.
+  comments TicketComment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
