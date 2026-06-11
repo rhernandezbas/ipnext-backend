@@ -275,6 +275,36 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
     expect(res.body.code).toBe('GIGARED_UNAVAILABLE');
   });
 
+  it('#47g: GigaredUnavailableError with detail → 503 body carries detail (transparency)', async () => {
+    const port = fakePort({
+      register: jest.fn(async () => { throw new GigaredUnavailableError('Gigared API is unavailable', 'CUA no respondió a tiempo'); }),
+    });
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', sendActivationEmail: true });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('GIGARED_UNAVAILABLE');
+    expect(res.body.detail).toBe('CUA no respondió a tiempo');
+  });
+
+  it('#47g: GigaredUnavailableError WITHOUT detail → 503 body has no detail key (no null noise)', async () => {
+    const port = fakePort({ getSummary: jest.fn(async () => { throw new GigaredUnavailableError(); }) });
+    const app = await buildApp({ port });
+    const res = await request(app).get('/api/gigared/summary');
+    expect(res.status).toBe(503);
+    expect(res.body.detail).toBeUndefined();
+  });
+
+  it('#47g: GigaredAuthError with detail → 502 body carries detail (transparency)', async () => {
+    const port = fakePort({ getSummary: jest.fn(async () => { throw new GigaredAuthError('Gigared API key is invalid', 'Clave de API inválida'); }) });
+    const app = await buildApp({ port });
+    const res = await request(app).get('/api/gigared/summary');
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('GIGARED_AUTH_FAILED');
+    expect(res.body.detail).toBe('Clave de API inválida');
+  });
+
   it('GigaredNotFoundError on account lookup → 404 GIGARED_NOT_FOUND', async () => {
     const port = fakePort({ listAccounts: jest.fn(async () => { throw new GigaredNotFoundError(); }) });
     const app = await buildApp({ port });

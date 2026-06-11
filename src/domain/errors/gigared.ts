@@ -17,17 +17,30 @@ export class GigaredNotConfiguredError extends DomainError {
   }
 }
 
-/** Network failure, 5xx, or 429 retries exhausted. */
+/**
+ * Network failure, 5xx, or 429 retries exhausted.
+ * `detail` (#47g) carries the upstream RFC 9457 `detail` so the front-end/audit can show
+ * the REAL reason ("CUA timed out") instead of an opaque "service unavailable".
+ */
 export class GigaredUnavailableError extends DomainError {
-  constructor(message = 'Gigared API is unavailable') {
+  constructor(
+    message = 'Gigared API is unavailable',
+    public readonly detail?: string,
+  ) {
     super(message, 'GIGARED_UNAVAILABLE');
     this.name = 'GigaredUnavailableError';
   }
 }
 
-/** 401/403 from Gigared — the API key is missing or invalid. */
+/**
+ * 401/403 from Gigared — the API key is missing or invalid.
+ * `detail` (#47g) carries the upstream RFC 9457 `detail` for transparency.
+ */
 export class GigaredAuthError extends DomainError {
-  constructor(message = 'Gigared API key is invalid') {
+  constructor(
+    message = 'Gigared API key is invalid',
+    public readonly detail?: string,
+  ) {
     super(message, 'GIGARED_AUTH_FAILED');
     this.name = 'GigaredAuthError';
   }
