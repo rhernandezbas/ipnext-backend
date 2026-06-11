@@ -218,11 +218,13 @@ model Contract {
   lat          Float?
   lng          Float?
   technology   String?         // Phase 1: free-text name from ContractTechnology catalog. NOT a FK.
+  name         String?         // #43 manual-only identifier. GR sync NEVER writes this.
   createdAt    DateTime        @default(now())
   client         Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   tasks          ScheduledTask[]
   installedItems ContractInstalledItem[]
   stockLocations StockLocation[]          @relation("ContractStockLocation")
+  contractServices ContractService[]
 
   @@index([clientId])
   @@index([status])
@@ -539,6 +541,36 @@ model DeviceTypeCatalog {
   assets    InventoryAsset[] @relation("AssetDeviceType")
 
   @@map("DeviceTypeCatalog")
+}
+
+// #43 — editable catalog of contracted service types (INTERNET, TV, VOZ, CAMARAS, OTROS).
+// Mirrors DeviceTypeCatalog. OTROS is non-deletable (use-case guard).
+model ServiceCatalog {
+  id        String   @id @default(uuid())
+  name      String   @unique          // canonical, UPPERCASE (INTERNET, TV, ...)
+  label     String?                   // optional human label for the UI
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contractServices ContractService[]
+}
+
+// #43 — pivot linking a Contract to a ServiceCatalog entry.
+model ContractService {
+  id               String   @id @default(uuid())
+  contractId       String
+  serviceCatalogId String
+  status           String   @default("active")  // active | inactive
+  notes            String?
+  createdAt        DateTime @default(now())
+
+  contract       Contract       @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  serviceCatalog ServiceCatalog @relation(fields: [serviceCatalogId], references: [id], onDelete: Restrict)
+
+  @@unique([contractId, serviceCatalogId])
+  @@index([contractId])
 }
 
 model MaterialCatalog {

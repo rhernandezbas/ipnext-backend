@@ -14,6 +14,8 @@ import {
  */
 export class InMemoryContractRepository implements ContractRepository {
   private items: ContractListItem[] = [];
+  /** #43 — manual `name` per contract id, exercised by updateName. */
+  public names: Record<string, string | null> = {};
 
   /** Test seam: seed a contract list item. Returns the generated id. */
   seed(data: Partial<ContractListItem> & { clientName: string; plan: string }): ContractListItem {
@@ -26,6 +28,7 @@ export class InMemoryContractRepository implements ContractRepository {
       startDate: data.startDate ?? new Date().toISOString(),
     };
     this.items.push(item);
+    if (!(item.id in this.names)) this.names[item.id] = null;
     return item;
   }
 
@@ -65,5 +68,12 @@ export class InMemoryContractRepository implements ContractRepository {
       byStatus[item.status] = (byStatus[item.status] ?? 0) + 1;
     }
     return { total: this.items.length, byStatus };
+  }
+
+  async updateName(id: string, name?: string | null): Promise<{ id: string; name: string | null } | null> {
+    if (!(id in this.names)) return null;
+    // W-3 — undefined is a no-op: leave the stored name untouched.
+    if (name !== undefined) this.names[id] = name;
+    return { id, name: this.names[id] };
   }
 }

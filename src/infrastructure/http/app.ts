@@ -153,6 +153,19 @@ import { PrismaContractRepository } from '../adapters/prisma/PrismaContractRepos
 import { createContractsRouter } from './routes/contracts.routes';
 import { ListContracts } from '@application/use-cases/ListContracts';
 import { GetContractStats } from '@application/use-cases/GetContractStats';
+// #43 — ServiceCatalog ABM + ContractService CRUD + Contract name.
+import { PrismaServiceCatalogRepository } from '../adapters/prisma/PrismaServiceCatalogRepository';
+import { PrismaContractServiceRepository } from '../adapters/prisma/PrismaContractServiceRepository';
+import { createServiceCatalogRouter } from './routes/serviceCatalog.routes';
+import { createContractServicesRouter } from './routes/contractServices.routes';
+import { ListServiceCatalog } from '@application/use-cases/ListServiceCatalog';
+import { CreateServiceCatalog } from '@application/use-cases/CreateServiceCatalog';
+import { UpdateServiceCatalog } from '@application/use-cases/UpdateServiceCatalog';
+import { DeleteServiceCatalog } from '@application/use-cases/DeleteServiceCatalog';
+import { AddContractService } from '@application/use-cases/AddContractService';
+import { UpdateContractService } from '@application/use-cases/UpdateContractService';
+import { RemoveContractService } from '@application/use-cases/RemoveContractService';
+import { UpdateContractName } from '@application/use-cases/UpdateContractName';
 import { createGestionRealRouter } from './routes/gestionReal.routes';
 import { createGrSyncRouter } from './routes/gr-sync.routes';
 import { ResetGrClientsCursor } from '@application/use-cases/ResetGrClientsCursor';
@@ -1021,6 +1034,26 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   ));
   // Global contracts listing — mounted at /api root, before the catch-all.
   app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats));
+  // #43 — ServiceCatalog ABM + ContractService CRUD + Contract name, mounted at /api root.
+  const serviceCatalogRepo  = new PrismaServiceCatalogRepository();
+  const contractServiceRepo = new PrismaContractServiceRepository();
+  const contractLookup = { findById: (id: string) => prismaClientLookup('Contract', id) };
+  app.use('/api', createServiceCatalogRouter(
+    authAdapter,
+    requirePerm,
+    new ListServiceCatalog(serviceCatalogRepo),
+    new CreateServiceCatalog(serviceCatalogRepo),
+    new UpdateServiceCatalog(serviceCatalogRepo),
+    new DeleteServiceCatalog(serviceCatalogRepo),
+  ));
+  app.use('/api', createContractServicesRouter(
+    authAdapter,
+    requirePerm,
+    new UpdateContractName(contractRepo),
+    new AddContractService(contractServiceRepo, serviceCatalogRepo, contractLookup),
+    new UpdateContractService(contractServiceRepo),
+    new RemoveContractService(contractServiceRepo),
+  ));
   // TaskPriority catalog — also before the scheduling catch-all router.
   app.use('/api/scheduling', createTaskPrioritiesRouter(
     authAdapter,
