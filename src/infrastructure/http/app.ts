@@ -546,6 +546,14 @@ function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project'
   }
 }
 
+// #40 — ProjectKindLookup wiring: a single findUnique resolves both project
+// existence AND the isNetworkProject flag, so CreateTask's symmetric project↔kind
+// guard runs from ONE query (no N+1). Replaces the old prismaClientLookup('Project')
+// wrapper at the CreateTask project slot.
+function prismaProjectKindLookup(id: string): Promise<{ id: string; isNetworkProject: boolean } | null> {
+  return (prisma.project as any).findUnique({ where: { id }, select: { id: true, isNetworkProject: true } });
+}
+
 // RBAC repositories — module-level singletons so requirePerm can be a named export
 const rbacUserRepo           = new PrismaRbacUserRepository();
 const rbacRoleRepo           = new PrismaRbacRoleRepository();
@@ -698,7 +706,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     { findById: (id: string) => prismaClientLookup('Contract', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
     userLookupForScheduling,
-    { findById: (id: string) => prismaClientLookup('Project', id) },
+    // #40 — project slot uses the kind-aware lookup (existence + isNetworkProject).
+    { findById: (id: string) => prismaProjectKindLookup(id) },
     { findById: (id: string) => prismaClientLookup('Ticket', id) },
     taskActivityRecorder,
     networkSiteRepoForCreateTask,
@@ -710,7 +719,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     { findById: (id: string) => prismaClientLookup('Contract', id) },
     { findById: (id: string) => prismaClientLookup('Partner', id) },
     userLookupForScheduling,
-    { findById: (id: string) => prismaClientLookup('Project', id) },
+    // #40 — project slot uses the kind-aware lookup (existence + isNetworkProject),
+    // so the symmetric project↔kind guard runs on update too.
+    { findById: (id: string) => prismaProjectKindLookup(id) },
     taskActivityRecorder,
   );
   const deleteTask = new DeleteTask(schedulingRepo);
@@ -1272,7 +1283,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const listIClassSoTypes = new ListIClassSoTypes(iclassSoTypeRepo);
   const assignIClassSoType = new AssignIClassSoTypeToProject(projectRepo, iclassSoTypeRepo);
 
-  app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter, assignIClassSoType, requirePerm('inventory', 'manage')));
+  app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter, assignIClassSoType, requirePerm('inventory', 'manage'), requirePerm('scheduling', 'manage')));
   // GR installation-order ingest admin — config/status/needs-review (projectRepo + schedulingRepo already built above).
   const grIngestConfigRepo = new PrismaGestionRealIngestConfigRepository();
   app.use('/api/gestion-real-ingest', createGestionRealIngestRouter(

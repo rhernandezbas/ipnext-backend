@@ -28,10 +28,13 @@ export function createProjectsRouter(
   assignIClassSoType?: AssignIClassSoTypeToProject,
   /** Guard for the `allowsEquipmentRetirement` mutation (inventory.manage). Pass-through when omitted. */
   requireInventoryManage?: RequestHandler,
+  /** #40 — Guard for the `isNetworkProject` mutation (scheduling.manage). Pass-through when omitted. */
+  requireSchedulingManage?: RequestHandler,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
   const invManage: RequestHandler = requireInventoryManage ?? ((_req, _res, next) => next());
+  const schedManage: RequestHandler = requireSchedulingManage ?? ((_req, _res, next) => next());
 
   router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
     const parsed = ListProjectsQuerySchema.safeParse(req.query);
@@ -130,7 +133,20 @@ export function createProjectsRouter(
     return next();
   };
 
-  router.patch('/:id', auth, requireManageForRetirementFlag, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  /**
+   * #40 — requireManageForNetworkFlag — gates schedManage only when
+   * `isNetworkProject` is present in the request body. Mirror of
+   * requireManageForRetirementFlag. Using a real middleware (not a promise
+   * wrapper) ensures next(err) propagates correctly to the error handler.
+   */
+  const requireManageForNetworkFlag: RequestHandler = (req, res, next) => {
+    if (req.body != null && 'isNetworkProject' in req.body) {
+      return schedManage(req, res, next);
+    }
+    return next();
+  };
+
+  router.patch('/:id', auth, requireManageForRetirementFlag, requireManageForNetworkFlag, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateProjectSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });

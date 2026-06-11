@@ -10,7 +10,7 @@ import { EntityLookup } from '../../domain/ports/EntityLookup';
 
 // Lookup que acepta cualquier ID
 class AnyLookup implements EntityLookup {
-  async findById(id: string) { return { id }; }
+  async findById(id: string) { return { id, isNetworkProject: false }; }
 }
 
 // Lookup vacío (siempre retorna null)

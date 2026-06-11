@@ -26,6 +26,7 @@ type EnrichedProjectRow = {
   projectLeadId: string | null;
   visible: boolean;
   allowsEquipmentRetirement: boolean;
+  isNetworkProject: boolean;
   partners: Array<{ partner: { id: string; name: string } }>;
   tasks: Array<{ stage: { category: 'nuevo' | 'enProgreso' | 'hecho' } | null }>;
   iclassSoTypeId: string | null;
@@ -57,6 +58,7 @@ function mapProject(p: EnrichedProjectRow): Project {
     projectLeadId: p.projectLeadId ?? null,
     visible: p.visible,
     allowsEquipmentRetirement: p.allowsEquipmentRetirement ?? false,
+    isNetworkProject: p.isNetworkProject ?? false,
     partners: p.partners.map(pp => ({ id: pp.partner.id, name: pp.partner.name })),
     taskCounts,
     iclassSoTypeId: p.iclassSoTypeId ?? null,
@@ -103,6 +105,7 @@ export class PrismaProjectRepository implements ProjectRepository {
         projectLeadId: data.projectLeadId ?? null,
         visible: data.visible ?? true,
         allowsEquipmentRetirement: false,
+        isNetworkProject: false,
         ...(partnerIds.length > 0 && {
           partners: {
             createMany: { data: partnerIds.map((partnerId: string) => ({ partnerId })) },
@@ -190,6 +193,9 @@ export class PrismaProjectRepository implements ProjectRepository {
     if ('visible' in data && data.visible !== undefined) update['visible'] = data.visible;
     if ('allowsEquipmentRetirement' in data && data.allowsEquipmentRetirement !== undefined) {
       update['allowsEquipmentRetirement'] = data.allowsEquipmentRetirement;
+    }
+    if ('isNetworkProject' in data && data.isNetworkProject !== undefined) {
+      update['isNetworkProject'] = data.isNetworkProject;
     }
     return update;
   }

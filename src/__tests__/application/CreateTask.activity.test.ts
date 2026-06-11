@@ -8,7 +8,7 @@ const CUSTOMER_ID = 'customer-default-0000-000000000001';
 const CONTRACT_ID = 'contract-default-00000-000000000001';
 
 class AnyLookup implements EntityLookup {
-  async findById(id: string) { return { id }; }
+  async findById(id: string) { return { id, isNetworkProject: false }; }
 }
 
 function makeBase() {

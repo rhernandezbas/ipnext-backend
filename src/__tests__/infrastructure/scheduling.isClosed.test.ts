@@ -36,7 +36,7 @@ const DEFAULT_STAGE_ID_CANCELLED = '10000000-0000-4000-a000-000000000004';
 class StubLookup implements EntityLookup {
   private ids: Set<string>;
   constructor(...ids: string[]) { this.ids = new Set(ids); }
-  async findById(id: string) { return this.ids.has(id) ? { id } : null; }
+  async findById(id: string) { return this.ids.has(id) ? { id, isNetworkProject: false } : null; }
 }
 
 class FakeAuthProvider implements AuthProvider {

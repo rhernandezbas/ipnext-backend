@@ -288,6 +288,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       tasks = tasks.filter(t => t.startDate != null && new Date(t.startDate).getTime() <= to);
     }
     if (filter.isClosed !== undefined) tasks = tasks.filter(t => t.isClosed === filter.isClosed);
+    if (filter.kind) tasks = tasks.filter(t => t.kind === filter.kind);
     return tasks;
   }
 

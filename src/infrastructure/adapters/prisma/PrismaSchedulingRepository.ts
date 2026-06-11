@@ -182,6 +182,7 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       where['startDate'] = startDateFilter;
     }
     if (filter?.isClosed !== undefined) where['isClosed'] = filter.isClosed;
+    if (filter?.kind) where['kind'] = filter.kind;
 
     const rows = await (prisma.scheduledTask as any).findMany({
       where,

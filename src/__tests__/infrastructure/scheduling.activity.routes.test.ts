@@ -17,7 +17,7 @@ import { EntityLookup } from '@domain/ports/EntityLookup';
 import { User } from '@domain/entities/auth';
 
 class AnyLookup implements EntityLookup {
-  async findById(id: string) { return { id }; }
+  async findById(id: string) { return { id, isNetworkProject: false }; }
 }
 
 class FakeAuth implements AuthProvider {

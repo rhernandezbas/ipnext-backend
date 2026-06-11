@@ -14,6 +14,8 @@ export interface CreateProjectInput {
 export interface UpdateProjectInput extends Partial<CreateProjectInput> {
   /** When present, sets whether the project allows equipment retirement. */
   allowsEquipmentRetirement?: boolean;
+  /** When present, sets whether the project is a network (nodos) project (#40). */
+  isNetworkProject?: boolean;
 }
 
 export interface ListProjectsFilter {

@@ -9,6 +9,26 @@ export class ReferenceNotFoundError extends Error {
   }
 }
 
+/**
+ * #40 — Raised when a task's kind does not match the kind of the project it is
+ * being attached to (network task → non-network project, or vice versa).
+ *
+ * Domain code is PROJECT_KIND_MISMATCH; the HTTP layer maps it to 422 with the
+ * wire code INVALID_PROJECT_KIND (frozen Wire Contract).
+ */
+export class ProjectKindMismatchError extends DomainError {
+  constructor(
+    public readonly projectId: string,
+    public readonly taskKind: 'customer' | 'network',
+  ) {
+    super(
+      `Project ${projectId} kind does not match task kind '${taskKind}'`,
+      'PROJECT_KIND_MISMATCH',
+    );
+    this.name = 'ProjectKindMismatchError';
+  }
+}
+
 export class TaskNotFoundError extends DomainError {
   constructor(id: string) {
     super(`Task with id ${id} not found`, 'TASK_NOT_FOUND');

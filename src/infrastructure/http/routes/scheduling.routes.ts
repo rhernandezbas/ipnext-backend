@@ -41,6 +41,7 @@ import {
   InvalidCursorError,
   ReferenceNotFoundError,
   ReferenceKind,
+  ProjectKindMismatchError,
 } from '@domain/errors/scheduling';
 import {
   ChecklistItemNotFoundError,
@@ -137,6 +138,7 @@ export function createSchedulingRouter(
       from:       req.query['from'],
       to:         req.query['to'],
       isClosed:   req.query['isClosed'],
+      kind:       req.query['kind'],
     };
 
     const parsed = ListTasksFilterSchema.safeParse(rawQuery);
@@ -506,6 +508,12 @@ export function createSchedulingRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
+      // #40 — project↔kind mismatch. Domain code is PROJECT_KIND_MISMATCH; the
+      // frozen Wire Contract maps it to 422 with the wire code INVALID_PROJECT_KIND.
+      if (err instanceof ProjectKindMismatchError) {
+        res.status(422).json({ error: err.message, code: 'INVALID_PROJECT_KIND' });
+        return;
+      }
       throw err;
     }
   });
@@ -527,6 +535,12 @@ export function createSchedulingRouter(
     } catch (err: unknown) {
       if (err instanceof ReferenceNotFoundError) {
         res.status(404).json({ error: err.message, code: REFERENCE_TO_CODE[err.kind] });
+        return;
+      }
+      // #40 — project↔kind mismatch on update. Same frozen Wire Contract as POST:
+      // domain code PROJECT_KIND_MISMATCH maps to 422 INVALID_PROJECT_KIND.
+      if (err instanceof ProjectKindMismatchError) {
+        res.status(422).json({ error: err.message, code: 'INVALID_PROJECT_KIND' });
         return;
       }
       throw err;

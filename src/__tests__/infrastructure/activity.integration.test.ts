@@ -33,7 +33,7 @@ const CONTRACT_ID = 'contract-default-00000-000000000001';
 const AUTH = ['Cookie', 'auth_token=fake'] as const;
 
 class AnyLookup implements EntityLookup {
-  async findById(id: string) { return { id }; }
+  async findById(id: string) { return { id, isNetworkProject: false }; }
 }
 class FakeAuth implements AuthProvider {
   async login() {

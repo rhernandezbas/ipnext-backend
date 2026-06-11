@@ -43,6 +43,13 @@ export const UpdateProjectSchema = PutProjectSchema.extend({
    * Only settable via PATCH — deliberately excluded from PutProjectSchema.
    */
   allowsEquipmentRetirement: z.boolean().optional(),
+  /**
+   * #40 — marks/unmarks the project as a network (nodos) project.
+   * Guarded by scheduling.manage at the route layer.
+   * Only settable via PATCH — deliberately excluded from PutProjectSchema
+   * (zod strips unknown keys → PUT silently ignores it, closing the back-door).
+   */
+  isNetworkProject: z.boolean().optional(),
 });
 
 export const ListProjectsQuerySchema = z.object({
