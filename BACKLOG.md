@@ -56,6 +56,9 @@
 - (b) **El punto de entrada de la activación es el CONTRATO**: elegir "TV" en el picker de servicios de la card (#42) abre el flujo Gigared (vincular CIC / registrar → elegir pack; el ítem local lo crea el reconcile del BE); el chip TV abre el mismo panel en modo gestión (packs/OTT/quitar). Sin Gigared configurado → ítem local plano con aviso.
 - (c) La tab TV del cliente se ELIMINA (un solo lugar de gestión).
 
+### #47h — TV: password compliant + campo Contraseña + checkbox activación ✅ HECHO *(2026-06-11, BE PR #115 + FE PR #92→, en prod)*
+> Causa raíz del registro fallido (visible gracias al #47g): el generador usaba base64url (mayúsculas/guiones) y el CUA exige `a-z0-9`. Generador nuevo crypto.randomInt `[a-z0-9]{12}` (policy pineada con 1000 generaciones) + `password?` opcional del operador (400 claro si no cumple, sin tocar Gigared) + campo Contraseña en el form (mostrar/ocultar, validación viva) + checkbox "Enviar email de activación" — **form 1:1 con el doc** (los 6 campos del register cubiertos, chequeado a pedido del usuario).
+
 ### #47g — TV: pager real + modal de vincular + errores con motivo ✅ HECHO *(2026-06-11, BE PR #114 + FE PR #92, en prod)*
 > Bugs de uso real: (1) pager incoherente → totalPages real desde el summary por status (fallback heurístico con filtros de texto); (2) el picker de vincular pasó a MODAL impeccable (búsqueda autofocus, filas nombre+CIC+packs, selección con resumen y Cambiar); (3) errores mudos → `detail` RFC 9457 del partner en TODOS los errores (502/503 incl.) + log `[gigared] upstream` para diagnóstico; (4) **5to bug de la API**: lista filtrada sin resultados devuelve 404 `empty-accounts_list` (no lista vacía) — mapeado a `[]`. El register fallido del usuario fue transitorio del CUA — con el detail visible, el próximo retry muestra el motivo real.
 
