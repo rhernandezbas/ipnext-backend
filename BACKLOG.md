@@ -56,6 +56,9 @@
 - (b) **El punto de entrada de la activación es el CONTRATO**: elegir "TV" en el picker de servicios de la card (#42) abre el flujo Gigared (vincular CIC / registrar → elegir pack; el ítem local lo crea el reconcile del BE); el chip TV abre el mismo panel en modo gestión (packs/OTT/quitar). Sin Gigared configurado → ítem local plano con aviso.
 - (c) La tab TV del cliente se ELIMINA (un solo lugar de gestión).
 
+### #47d — TV: mapeo de errores REALES de Gigared ✅ HECHO *(2026-06-11, BE PR #112, en prod)*
+> Bug del usuario con la key real: el panel TV daba error genérico para no-vinculados. La API REAL difiere de su doc: internal_id desconocido → 424 external-service-error (no 404); CIC ajeno → 403 cic-ownership-error (no 404). `mapError` discrimina por el `type` RFC 9457 → ambos a NotFound; fixtures reales pineados. Lección: toda integración nueva necesita pasada de unhappy-paths contra la API real ANTES del primer uso (van 3 mentiras de la doc: status codes, cap de paginación 20, ?city= roto de IClass).
+
 ### #47c — TV: paginación rota + quitar ítem local + reporte de matches ✅ HECHO *(2026-06-11, FE PR #88, en prod)*
 > (1) La API de Gigared capea `pagination_limit` en 20 (verificado live, la doc no lo decía) — la page pedía 25 → 400 siempre; fix PAGE_SIZE=20. (2) Sección "Ítem local" en el GigaredPanel: quitar el ítem TV del contrato (confirm, remove del #43, gate clients.write) + alta del ítem local sin Gigared en estado no-vinculado. (3) **`TV-MATCHES.md`** en la raíz del BE: barrido completo de las 84 cuentas registradas en Gigared cruzado contra clientes activos — 66 matches directos (1 contrato), 14 multi-contrato, 4 sin match. El usuario eligió vincular A MANO desde el panel (no bulk). ⚠️ Gigared Play Full 102/102 = cupo lleno.
 
