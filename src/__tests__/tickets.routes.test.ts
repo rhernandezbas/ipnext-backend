@@ -8,6 +8,7 @@ import request from 'supertest';
 import express, { Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import { createTicketsRouter } from '../infrastructure/http/routes/tickets.routes';
+import { InMemoryTicketStatusRepository } from '../infrastructure/adapters/in-memory/InMemoryTicketStatusRepository';
 import type { ListTickets } from '../application/use-cases/ListTickets';
 import type { GetTicketStats } from '../application/use-cases/GetTicketStats';
 import type { CreateTicket } from '../application/use-cases/CreateTicket';
@@ -75,13 +76,21 @@ function buildApp() {
     ),
   } as unknown as CloseTicket;
 
+  // Real status catalog seeded with the canonical legacy set.
+  // create() mutates the in-memory array synchronously (no I/O before the implicit
+  // resolve), so seeding without await is safe here.
+  const statusRepo = new InMemoryTicketStatusRepository();
+  void statusRepo.create({ name: 'open', color: '#22c55e', weight: 0 });
+  void statusRepo.create({ name: 'pending', color: '#f59e0b', weight: 1 });
+  void statusRepo.create({ name: 'closed', color: '#6b7280', weight: 2 });
+
   const authProvider = {
     getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }),
   } as unknown as JwtAuthAdapter;
 
   app.use(
     '/api/tickets',
-    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicketUc, closeTicket, authProvider),
+    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicketUc, closeTicket, statusRepo, authProvider),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -126,20 +135,20 @@ describe('PATCH /api/tickets/:id/status', () => {
     expect(res.body.status).toBe('pending');
   });
 
-  it('returns 400 for invalid status (resolved is not canonical)', async () => {
+  it('returns 422 TICKET_STATUS_NOT_FOUND for a status not in the catalog', async () => {
     const app = buildApp();
     const res = await withAuth(
       request(app).patch('/api/tickets/1/status').send({ status: 'resolved' }),
     );
 
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TICKET_STATUS_NOT_FOUND');
   });
 
-  it('returns 400 for unknown status', async () => {
+  it('returns 400 VALIDATION_ERROR when status is missing', async () => {
     const app = buildApp();
     const res = await withAuth(
-      request(app).patch('/api/tickets/1/status').send({ status: 'unknown' }),
+      request(app).patch('/api/tickets/1/status').send({}),
     );
 
     expect(res.status).toBe(400);

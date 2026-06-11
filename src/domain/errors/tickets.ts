@@ -27,3 +27,19 @@ export class TicketStatusInUseError extends DomainError {
     this.name = 'TicketStatusInUseError';
   }
 }
+
+/**
+ * Thrown by CloseTicket when the editable status catalog has no "closed-like"
+ * entry (none of the known CLOSED slugs: 'closed', 'cerrado', case-insensitive).
+ * Mapped to HTTP 422 — closing is impossible until a closed status is seeded,
+ * but it is a client/config problem, not an internal 500.
+ */
+export class NoClosableStatusError extends DomainError {
+  constructor() {
+    super(
+      'No closed-like status found in the ticket status catalog',
+      'NO_CLOSABLE_STATUS',
+    );
+    this.name = 'NoClosableStatusError';
+  }
+}

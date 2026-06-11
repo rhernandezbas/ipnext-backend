@@ -57,8 +57,11 @@ export function toTicket(row: any): Ticket {
  * Throws TicketStatusUnknownError if no catalog entry matches.
  */
 async function resolveStatusId(name: string): Promise<string> {
+  // Case-insensitive: tolerate casing drift between the API string and the
+  // canonical catalog name (e.g. 'closed' vs 'Closed') so close()/update()
+  // never 500 on a mismatch that is really just a different casing.
   const row = await (prisma as any).ticketStatusCatalog.findFirst({
-    where: { name },
+    where: { name: { equals: name, mode: 'insensitive' } },
     select: { id: true },
   });
   if (!row) throw new TicketStatusUnknownError(name);
@@ -78,9 +81,10 @@ export class PrismaTicketRepository implements TicketRepository {
         ...(query.to && { lte: new Date(`${query.to}T23:59:59.999Z`) }),
       };
     }
-    // Phase 2: filter by status name via the relation
+    // Phase 2: filter by status name via the relation.
+    // M2 (#46): case-insensitive — protects Archive ('closed' vs 'Closed').
     if (query.status) {
-      where['status'] = { name: query.status };
+      where['status'] = { name: { equals: query.status, mode: 'insensitive' } };
     }
     if (query.search) {
       where['OR'] = [
@@ -188,7 +192,8 @@ export class PrismaTicketRepository implements TicketRepository {
     }
   }
 
-  async close(id: string): Promise<Ticket | null> {
-    return this.update(id, { status: 'closed' });
+  async close(id: string, statusName: string): Promise<Ticket | null> {
+    // statusName is the canonical catalog name resolved by CloseTicket.
+    return this.update(id, { status: statusName });
   }
 }

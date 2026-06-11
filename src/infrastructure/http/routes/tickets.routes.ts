@@ -11,7 +11,9 @@ import { CreateTaskFromTicket } from '@application/use-cases/CreateTaskFromTicke
 import { TicketPriority } from '@domain/entities/ticket';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
+import { TicketStatusRepository } from '@domain/ports/TicketStatusRepository';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
+import { NoClosableStatusError } from '@domain/errors/tickets';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 
@@ -53,10 +55,8 @@ const REFERENCE_TO_CODE: Record<string, string> = {
   ticket:   'TICKET_NOT_FOUND',
 };
 
-// Phase 2: TicketStatus is now a dynamic string from the catalog.
-// This whitelist preserves the frontend contract (status filter accepts exactly these three names).
-// If the catalog grows, update this list or replace with a catalog lookup.
-const VALID_STATUSES: string[] = ['open', 'pending', 'closed'];
+// Ticket status is validated against the editable TicketStatusCatalog (the single
+// source of truth), not a hardcoded whitelist. See PATCH /:id/status and GET /.
 const VALID_PRIORITIES: TicketPriority[] = ['low', 'medium', 'high'];
 
 // #44 — replies were in-memory and lost on each deploy. Replaced by persisted
@@ -70,6 +70,7 @@ export function createTicketsRouter(
   updateStatus: UpdateTicketStatus,
   updateTicket: UpdateTicket,
   closeTicket: CloseTicket,
+  ticketStatusRepo: TicketStatusRepository,
   authProvider: JwtAuthAdapter,
   createTaskFromTicket?: CreateTaskFromTicket,
   taskRepo?: SchedulingRepository,
@@ -97,7 +98,7 @@ export function createTicketsRouter(
         page: page ? +page : 1,
         limit: limit ? +limit : 25,
         search,
-        status: VALID_STATUSES.includes(status) ? status : undefined,
+        status: status || undefined, // AD-5: pass-through; el catálogo es la fuente de verdad, sin whitelist
         priority: VALID_PRIORITIES.includes(priority as TicketPriority) ? (priority as TicketPriority) : undefined,
         customerId,
         assigneeId: assignedTo || undefined, // #25 — FE manda `assignedTo`; el repo filtra por assigneeId
@@ -132,16 +133,27 @@ export function createTicketsRouter(
     const id = req.params['id'] as string;
     const { status } = req.body as { status?: string };
 
-    if (!status || !VALID_STATUSES.includes(status)) {
+    if (!status) {
       res.status(400).json({
-        error: `Invalid or missing status. Must be one of: ${VALID_STATUSES.join(', ')}`,
+        error: 'Missing required field: status',
         code: 'VALIDATION_ERROR',
       });
       return;
     }
 
     try {
-      const ticket = await updateStatus.execute(id, status);
+      // Validate against the editable catalog (case-insensitive), not a whitelist.
+      const catalogEntry = await ticketStatusRepo.getByName(status);
+      if (!catalogEntry) {
+        res.status(422).json({
+          error: `Status "${status}" is not in the ticket status catalog`,
+          code: 'TICKET_STATUS_NOT_FOUND',
+        });
+        return;
+      }
+
+      // AD-3: persist the canonical catalog name (avoids casing drift, e.g. 'cerrado' → 'Cerrado').
+      const ticket = await updateStatus.execute(id, catalogEntry.name);
       if (!ticket) {
         res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
         return;
@@ -182,7 +194,9 @@ export function createTicketsRouter(
     }
   });
 
-  // DELETE /:id — closes the ticket (soft delete via status=closed, preserves history)
+  // DELETE /:id — closes the ticket (soft delete via the catalog's closed status,
+  // preserves history). The closed status NAME is resolved from the catalog
+  // (case-insensitive, fallback 'cerrado') by CloseTicket — never hardcoded.
   router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     try {
       const id = req.params['id'] as string;
@@ -193,6 +207,11 @@ export function createTicketsRouter(
       }
       res.json(ticket);
     } catch (err) {
+      // M1 (#46): no closed-like status in the catalog is a 422, not a 500.
+      if (err instanceof NoClosableStatusError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
       console.error('[tickets] close error', err);
       res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }
