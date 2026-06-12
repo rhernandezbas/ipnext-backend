@@ -109,8 +109,11 @@ export function toTask(row: any): ScheduledTask {
     ticketSubject: row.ticket?.subject ?? null,
     // network-node-task (#29): discriminator + FK a NetworkSite
     kind: (row.kind ?? 'customer') as 'customer' | 'network',
+    // #66 — Red/FO switch. null treated as 'red' for back-compat.
+    networkType: (row.networkType ?? null) as 'red' | 'fibra' | null,
     networkSiteId: row.networkSiteId ?? null,
-    networkSiteName: row.networkSite?.name ?? null,
+    // JOIN wins for red tasks (networkSite.name); stored column used for fibra (networkSiteId null).
+    networkSiteName: row.networkSite?.name ?? row.networkSiteName ?? null,
     // #54 — task-level locality snapshot
     iclassCityCode: row.iclassCityCode ?? null,
     checklist: Array.isArray(row.checklist)
@@ -528,7 +531,13 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       ticketId: data.ticketId ?? null,
       // network-node-task (#29)
       kind: data.kind ?? 'customer',
+      // #66 — Red/FO switch. Default to 'red' when kind='network' and not provided.
+      networkType: data.kind === 'network'
+        ? (data.networkType ?? 'red')
+        : null,
       networkSiteId: data.networkSiteId ?? null,
+      // #66 — stored for fibra tasks; ignored for red (JOIN-derived).
+      networkSiteName: data.networkSiteName ?? null,
       // #54 — locality snapshot
       iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
     };
@@ -575,6 +584,9 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     // #54 — locality snapshot
     const cityCode = (data as { iclassCityCode?: string | null }).iclassCityCode;
     if (cityCode !== undefined) update['iclassCityCode'] = cityCode;
+    // #66 — networkType + networkSiteName
+    if (data.networkType !== undefined) update['networkType'] = data.networkType;
+    if (data.networkSiteName !== undefined) update['networkSiteName'] = data.networkSiteName;
     return update;
   }
 

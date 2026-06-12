@@ -115,17 +115,27 @@ export class SendTaskToIClass {
     let networkSite: NetworkSite | null = null;
 
     if (isNet) {
-      // 4-NET. Sustituir campos del cliente con datos del sitio de red.
-      // Resolver el sitio una sola vez para reusar en validación y dispatch.
-      if (task.networkSiteId && this.networkSiteRepo) {
-        networkSite = await this.networkSiteRepo.findById(task.networkSiteId) ?? null;
+      // #66 — fibra tasks have no networkSiteId; skip site lookup entirely.
+      const isFibra = task.networkType === 'fibra';
+
+      if (!isFibra) {
+        // 4-NET. RED: Resolver el sitio una sola vez para reusar en validación y dispatch.
+        if (task.networkSiteId && this.networkSiteRepo) {
+          networkSite = await this.networkSiteRepo.findById(task.networkSiteId) ?? null;
+        }
       }
 
       // Validar required fields usando valores sustituidos (REQ-NODE-DISPATCH-2).
+      // fibra: customerName=networkSiteName, address=task.address, city=iclassCityCode.
+      // red: customerName=networkSiteName (JOIN), address=site.address??task.address, city=iclassCityCode??site.city.
       const effectiveCustomerName = task.networkSiteName ?? null;
       const effectivePhone        = NETWORK_PHONE;
-      const effectiveAddress      = firstNonBlank(networkSite?.address, task.address);
-      const effectiveCity         = firstNonBlank(task.iclassCityCode, networkSite?.city);
+      const effectiveAddress      = isFibra
+        ? firstNonBlank(task.address, task.networkSiteName)
+        : firstNonBlank(networkSite?.address, task.address);
+      const effectiveCity         = isFibra
+        ? (task.iclassCityCode ?? null)
+        : firstNonBlank(task.iclassCityCode, networkSite?.city);
 
       const substitutedValues: Record<(typeof REQUIRED_ORDER)[number], string | null> = {
         customerName: effectiveCustomerName,
@@ -139,8 +149,10 @@ export class SendTaskToIClass {
         throw new MissingRequiredFieldsError([...missingFields]);
       }
 
-      // 5-NET. No llamar a listNodes() — usar iclassNodeCode del sitio directamente (REQ-PORT-1).
-      const resolvedNodeCode = networkSite?.iclassNodeCode ?? NETWORK_CUSTOMER_CODE;
+      // 5-NET. fibra: nodeCode = iclassCityCode. red: iclassNodeCode del sitio (REQ-PORT-1).
+      const resolvedNodeCode = isFibra
+        ? (task.iclassCityCode ?? NETWORK_CUSTOMER_CODE)
+        : (networkSite?.iclassNodeCode ?? NETWORK_CUSTOMER_CODE);
 
       // 6+7. Crear OS con campos sustituidos y avanzar de stage.
       try {

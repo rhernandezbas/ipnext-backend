@@ -244,10 +244,22 @@ export class NetworkTaskAddressRequiredError extends DomainError {
 /**
  * #54 — Raised when a network task is created or updated with a blank iclassCityCode.
  * Domain code: NETWORK_TASK_LOCALITY_REQUIRED; HTTP layer maps it to 422.
+ * #66 — Now only thrown for fibra tasks; red tasks do NOT require locality.
  */
 export class NetworkTaskLocalityRequiredError extends DomainError {
   constructor() {
     super('Network tasks require a non-blank iclassCityCode (locality)', 'NETWORK_TASK_LOCALITY_REQUIRED');
     this.name = 'NetworkTaskLocalityRequiredError';
+  }
+}
+
+/**
+ * #66 — Raised when a fibra network task is created or updated with a blank networkSiteName.
+ * Domain code: NETWORK_TASK_NODE_NAME_REQUIRED; HTTP layer maps it to 422.
+ */
+export class NetworkTaskNodeNameRequiredError extends DomainError {
+  constructor() {
+    super('Fibra network tasks require a non-blank networkSiteName (node name)', 'NETWORK_TASK_NODE_NAME_REQUIRED');
+    this.name = 'NetworkTaskNodeNameRequiredError';
   }
 }

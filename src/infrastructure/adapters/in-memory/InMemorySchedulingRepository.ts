@@ -81,6 +81,8 @@ const NEW_FIELDS_DEFAULTS = {
   ticketSubject: null,
   // network-node-task (#29) — discriminator + FK a NetworkSite
   kind: 'customer' as 'customer' | 'network',
+  // #66 — Red/FO switch. null = legacy 'red' back-compat.
+  networkType: null as 'red' | 'fibra' | null,
   networkSiteId: null,
   networkSiteName: null,
   // #39 — project allows equipment retirement
@@ -366,8 +368,13 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       reviewedByInventoryUserName: null,
       // network-node-task (#29)
       kind: (data.kind ?? 'customer') as 'customer' | 'network',
+      // #66 — Red/FO switch. Default to 'red' when kind='network' and not provided.
+      networkType: data.kind === 'network'
+        ? ((data.networkType ?? 'red') as 'red' | 'fibra')
+        : null,
       networkSiteId: data.networkSiteId ?? null,
-      networkSiteName: null, // In-memory: no JOIN (nombre del sitio no se resuelve aquí)
+      // #66 — fibra: use the stored free-text name from input. red: no JOIN in-memory (null).
+      networkSiteName: data.networkSiteName ?? null,
       // #54 — locality snapshot
       iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
       closureCommentDone: false,
@@ -427,6 +434,9 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...(data.reviewedByInventory !== undefined && { reviewedByInventory: data.reviewedByInventory }),
       // #54 — locality snapshot
       ...((data as { iclassCityCode?: string | null }).iclassCityCode !== undefined && { iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode }),
+      // #66 — networkType + networkSiteName
+      ...(data.networkType !== undefined && { networkType: data.networkType }),
+      ...(data.networkSiteName !== undefined && { networkSiteName: data.networkSiteName }),
       watcherIds,
     };
     return { ...this.tasks[index] };

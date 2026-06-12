@@ -4,20 +4,30 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType'
 > {
   /** Discriminador de tipo de tarea. Por defecto 'customer' para retro-compatibilidad. */
   kind?: 'customer' | 'network';
-  /** FK al NetworkSite. Solo aplica cuando kind='network'. */
+  /**
+   * #66 — Red/FO switch. 'red' = FK to NetworkSite; 'fibra' = free-text node name.
+   * Defaults to 'red' when kind='network' and not provided.
+   */
+  networkType?: 'red' | 'fibra' | null;
+  /** FK al NetworkSite. Solo aplica cuando kind='network' y networkType='red'. */
   networkSiteId?: string | null;
+  /**
+   * #66 — Free-text node name for fibra tasks (networkSiteId must be null).
+   * For red tasks, networkSiteName is JOIN-derived from NetworkSite.name (input ignored).
+   */
+  networkSiteName?: string | null;
   watcherIds?: string[];
   /** GR ingest sets this; manual task creation omits it (defaults to null). */
   grOrdenId?: string | null;
   /** Optional ticket FK — validated against ticketLookup when non-null. */
   ticketId?: string | null;
   /**
-   * #54 — task-level locality snapshot. Required (non-blank) for network tasks;
-   * optional for customer tasks. Guard fires in CreateTask/UpdateTask use cases.
+   * #54 — task-level locality snapshot. Required (non-blank) for fibra tasks;
+   * optional for red tasks and customer tasks. Guard fires in CreateTask/UpdateTask use cases.
    * Omitted from the base Omit so it's explicitly typed as optional here.
    */
   iclassCityCode?: string | null;

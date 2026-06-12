@@ -2,7 +2,7 @@ import { SchedulingRepository, CreateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
-import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError } from '@domain/errors/scheduling';
+import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError, NetworkTaskNodeNameRequiredError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -23,18 +23,32 @@ export class CreateTask {
   async execute(data: CreateTaskInput, actor?: ActorContext): Promise<ScheduledTask> {
     // network-node-task (#29): branch validation por kind.
     if (data.kind === 'network') {
-      // Modo RED: validar que el networkSiteId existe; customer/contract no se validan.
-      const siteId = data.networkSiteId!;
-      const site = await this.networkSiteRepo?.findById(siteId);
-      if (!site) throw new ReferenceNotFoundError('networkSite', siteId);
-      // #53 — network tasks require a non-blank address.
+      // #66 — Default networkType to 'red' when not provided.
+      const networkType = data.networkType ?? 'red';
+
+      // #53 — all network tasks (red and fibra) require a non-blank address.
       if (!data.address || !data.address.trim()) {
         throw new NetworkTaskAddressRequiredError();
       }
-      // #54 — network tasks require a non-blank iclassCityCode (locality).
-      const cityCode = (data as { iclassCityCode?: string | null }).iclassCityCode;
-      if (cityCode == null || (typeof cityCode === 'string' && !cityCode.trim())) {
-        throw new NetworkTaskLocalityRequiredError();
+
+      if (networkType === 'fibra') {
+        // FIBRA path: no networkSiteId FK lookup; requires free-text node name + locality.
+        // networkSiteId must be null for fibra — ignore any provided value.
+        const nodeName = data.networkSiteName;
+        if (nodeName == null || (typeof nodeName === 'string' && !nodeName.trim())) {
+          throw new NetworkTaskNodeNameRequiredError();
+        }
+        const cityCode = (data as { iclassCityCode?: string | null }).iclassCityCode;
+        if (cityCode == null || (typeof cityCode === 'string' && !cityCode.trim())) {
+          throw new NetworkTaskLocalityRequiredError();
+        }
+      } else {
+        // RED path (networkType 'red' or null): validate networkSiteId FK exists.
+        const siteId = data.networkSiteId!;
+        const site = await this.networkSiteRepo?.findById(siteId);
+        if (!site) throw new ReferenceNotFoundError('networkSite', siteId);
+        // #54 — locality (iclassCityCode) is now OPTIONAL for red tasks (#66 relaxation).
+        // Dispatch can fall back to site.city for back-compat.
       }
       // customer y contract son null por diseño — no hay nada que validar.
     } else {

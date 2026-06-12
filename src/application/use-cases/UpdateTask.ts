@@ -2,7 +2,7 @@ import { SchedulingRepository, UpdateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
-import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError } from '@domain/errors/scheduling';
+import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError, NetworkTaskNodeNameRequiredError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -93,18 +93,34 @@ export class UpdateTask {
       }
     }
 
-    // #54 (fix wave #53/#54) — Same change-not-presence rule as the address guard
-    // above: clearing an existing locality on a network task is a 422, but
-    // re-sending blank on a task whose locality was ALREADY blank/null is a no-op
-    // (legacy tasks stay editable when the FE echoes iclassCityCode).
+    // #54/#66 — Locality guard: change-not-presence, only for FIBRA tasks.
+    // RED tasks no longer require locality (#66 relaxation). FIBRA still does.
+    // The effective networkType = incoming (if provided) else existing.
     if ('iclassCityCode' in data && (data as { iclassCityCode?: string | null }).iclassCityCode !== undefined) {
       const cityCode = (data as { iclassCityCode?: string | null }).iclassCityCode;
       const isBlank = cityCode === null || cityCode === '' || (typeof cityCode === 'string' && !cityCode.trim());
       if (isBlank) {
         const existing = await this.repo.getTask(id);
         const existingBlank = !existing?.iclassCityCode || !existing.iclassCityCode.trim();
-        if (existing?.kind === 'network' && !existingBlank) {
+        // Effective networkType: incoming wins; fall back to existing.
+        const effectiveNetworkType = (data as { networkType?: 'red' | 'fibra' | null }).networkType ?? existing?.networkType;
+        // Guard only fires for fibra; red tasks are exempt (#66).
+        if (existing?.kind === 'network' && !existingBlank && effectiveNetworkType === 'fibra') {
           throw new NetworkTaskLocalityRequiredError();
+        }
+      }
+    }
+
+    // #66 — Node-name guard for fibra tasks (change-not-presence, same as locality).
+    if ('networkSiteName' in data && data.networkSiteName !== undefined) {
+      const nodeName = data.networkSiteName;
+      const isBlank = nodeName === null || nodeName === '' || (typeof nodeName === 'string' && !nodeName.trim());
+      if (isBlank) {
+        const existing = await this.repo.getTask(id);
+        const existingBlank = !existing?.networkSiteName || !existing.networkSiteName.trim();
+        const effectiveNetworkType = (data as { networkType?: 'red' | 'fibra' | null }).networkType ?? existing?.networkType;
+        if (existing?.kind === 'network' && !existingBlank && effectiveNetworkType === 'fibra') {
+          throw new NetworkTaskNodeNameRequiredError();
         }
       }
     }

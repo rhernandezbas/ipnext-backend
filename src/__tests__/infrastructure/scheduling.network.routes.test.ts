@@ -179,3 +179,67 @@ describe('POST /api/scheduling — network task', () => {
     });
   });
 });
+
+// #66 — Fibra network tasks (networkType='fibra')
+const BASE_FIBRA_BODY = {
+  title: 'Instalación Fibra Óptica',
+  priority: 'normal',
+  estimatedHours: 2,
+  category: 'installation',
+  kind: 'network',
+  networkType: 'fibra',
+  networkSiteId: null,
+  networkSiteName: 'Nodo FO-1',
+  address: 'Av. Fibra 100',
+  iclassCityCode: 'Mercedes',
+};
+
+describe('POST /api/scheduling — fibra network task (#66)', () => {
+  it('REQ-FIBRA-ROUTE-1: returns 201 with kind=network, networkType=fibra, networkSiteId=null', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send(BASE_FIBRA_BODY);
+
+    expect(res.status).toBe(201);
+    expect(res.body.kind).toBe('network');
+    expect(res.body.networkType).toBe('fibra');
+    expect(res.body.networkSiteId).toBeNull();
+    expect(res.body.networkSiteName).toBe('Nodo FO-1');
+    expect(res.body.customerId).toBeNull();
+  });
+
+  it('REQ-FIBRA-ROUTE-2: fibra + blank networkSiteName → 422 NETWORK_TASK_NODE_NAME_REQUIRED', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...BASE_FIBRA_BODY, networkSiteName: '' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NETWORK_TASK_NODE_NAME_REQUIRED');
+  });
+
+  it('REQ-FIBRA-ROUTE-3: fibra + null iclassCityCode → 422 NETWORK_TASK_LOCALITY_REQUIRED', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...BASE_FIBRA_BODY, iclassCityCode: null });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NETWORK_TASK_LOCALITY_REQUIRED');
+  });
+
+  it('REQ-FIBRA-ROUTE-4: fibra response has iclassCityCode persisted', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send(BASE_FIBRA_BODY);
+
+    expect(res.status).toBe(201);
+    expect(res.body.iclassCityCode).toBe('Mercedes');
+  });
+});

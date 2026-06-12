@@ -93,25 +93,52 @@ const CustomerTask = CreateTaskBaseSchema.extend({
   contractId:   z.string().min(1),
   // networkSiteId no permitido en modo customer
   networkSiteId: z.undefined().optional(),
+  networkType:   z.undefined().optional(),
+  networkSiteName: z.undefined().optional(),
 });
 
-// NetworkTask: requiere networkSiteId. Prohíbe customerId/contractId.
+// #66 — NetworkTask: single discriminator 'network', with networkType sub-discriminating red/fibra.
+// Both sub-variants share the same kind='network' so we use a single member with a refine.
+// networkSiteId is required for red, must be null for fibra — enforced in use-case guard (not DTO).
 const NetworkTask = CreateTaskBaseSchema.extend({
   kind:         z.literal('network'),
-  networkSiteId: z.string().min(1),
   customerId:   z.null().optional(),
   contractId:   z.null().optional(),
+  // RED: networkSiteId required. FIBRA: networkSiteId null/omitted.
+  // The domain guard (CreateTask) enforces this distinction after parsing.
+  networkSiteId: z.string().min(1).nullable().optional(),
+  // networkType: defaults to 'red' in use-case when omitted.
+  networkType:  z.enum(['red', 'fibra']).optional(),
+  // #66 — free-text node name for fibra tasks.
+  networkSiteName: z.string().nullable().optional(),
 });
 
 export const CreateTaskSchema = z
   .discriminatedUnion('kind', [CustomerTask, NetworkTask])
-  .superRefine(dateRangeRefine);
+  .superRefine(dateRangeRefine)
+  .superRefine((v, ctx) => {
+    // #66 — For red network tasks (networkType='red' or omitted), networkSiteId is required.
+    if (v.kind === 'network' && v.networkType !== 'fibra') {
+      const siteId = (v as { networkSiteId?: string | null }).networkSiteId;
+      if (!siteId || (typeof siteId === 'string' && !siteId.trim())) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['networkSiteId'],
+          message: 'networkSiteId is required for red network tasks',
+        });
+      }
+    }
+  });
 
 // UpdateTaskSchema — mantiene las FK como nullable/optional (sin kind obligatorio)
 // Se define antes del export de tipo para que no confunda con el union.
 const UpdateTaskBaseSchema = CreateTaskBaseSchema.extend({
   customerId:   z.string().min(1).nullable().optional(),
   contractId:   z.string().min(1).nullable().optional(),
+  // #66 — networkType + networkSiteName on update
+  networkType:  z.enum(['red', 'fibra']).nullable().optional(),
+  networkSiteName: z.string().nullable().optional(),
+  networkSiteId: z.string().min(1).nullable().optional(),
 });
 
 // UpdateTaskSchema hereda nullable/optional para todos los FK — sin kind obligatorio.

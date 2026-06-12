@@ -46,6 +46,7 @@ import {
   ProjectKindMismatchError,
   NetworkTaskAddressRequiredError,
   NetworkTaskLocalityRequiredError,
+  NetworkTaskNodeNameRequiredError,
 } from '@domain/errors/scheduling';
 import {
   ChecklistItemNotFoundError,
@@ -534,7 +535,11 @@ export function createSchedulingRouter(
       travelTimeFrom: data.travelTimeFrom ?? null,
       // network-node-task (#29): kind discriminator + networkSiteId
       kind: data.kind,
+      // #66 — Red/FO switch
+      networkType: ('networkType' in data ? (data as { networkType?: 'red' | 'fibra' | null }).networkType : null) ?? null,
       networkSiteId: ('networkSiteId' in data ? data.networkSiteId : null) ?? null,
+      // #66 — free-text node name for fibra tasks
+      networkSiteName: ('networkSiteName' in data ? (data as { networkSiteName?: string | null }).networkSiteName : null) ?? null,
       // #54 — locality snapshot for network tasks
       iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
     };
@@ -564,6 +569,11 @@ export function createSchedulingRouter(
       }
       // #54 — network task requires a non-blank iclassCityCode (locality).
       if (err instanceof NetworkTaskLocalityRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
+      // #66 — fibra task requires a non-blank networkSiteName (node name).
+      if (err instanceof NetworkTaskNodeNameRequiredError) {
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }
@@ -603,6 +613,11 @@ export function createSchedulingRouter(
       }
       // #54 — network task requires a non-blank iclassCityCode on update.
       if (err instanceof NetworkTaskLocalityRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
+      // #66 — fibra task requires a non-blank networkSiteName on update.
+      if (err instanceof NetworkTaskNodeNameRequiredError) {
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }

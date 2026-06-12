@@ -1,14 +1,14 @@
 /**
- * #54 — UpdateTask locality guard for network tasks.
+ * #54/#66 — UpdateTask locality guard for network tasks.
  *
- * REQ-LOC-UPDATE-1: update network task with blank iclassCityCode → NetworkTaskLocalityRequiredError
- * REQ-LOC-UPDATE-2: update network task NOT sending iclassCityCode → ok (partial update)
- * REQ-LOC-UPDATE-3: update customer task with blank iclassCityCode → ok (guard only applies to network)
+ * #66 changes: RED tasks no longer require locality. Only FIBRA tasks do.
  *
- * #53/#54 fix wave — the guard must fire on a real CHANGE, not mere presence:
- * REQ-LOC-UPDATE-4: legacy network task (iclassCityCode null) + PUT echoing it blank + other
- *   fields → ok (no-op blank on an already-blank value, task stays editable).
- * REQ-LOC-UPDATE-5: network task WITH a locality + PUT blanking it → 422.
+ * RED tasks (networkType='red' or null):
+ *   REQ-LOC-UPDATE-RED-1: update red task with blank iclassCityCode → ok (relaxed by #66)
+ *   REQ-LOC-UPDATE-2: update network task NOT sending iclassCityCode → ok (partial update)
+ *   REQ-LOC-UPDATE-3: update customer task with blank iclassCityCode → ok
+ *   REQ-LOC-UPDATE-4: legacy network task (iclassCityCode null) + PUT echoing blank → ok
+ *   REQ-LOC-UPDATE-5-FIBRA: FIBRA task WITH locality + PUT blanking it → 422 (still required for fibra)
  *
  * NOTE on in-memory id collisions: InMemorySchedulingRepository pre-seeds tasks
  * with ids '1'–'7', and nextId (module-level) starts at 7. The first createTask()
@@ -53,11 +53,12 @@ const BASE_TASK = {
   iclassCityCode: 'Mercedes',  // valid locality for network tasks
 };
 
-describe('UpdateTask — locality guard for network tasks (#54)', () => {
+describe('UpdateTask — locality guard for network tasks (#54/#66)', () => {
   let repo: InMemorySchedulingRepository;
   let useCase: UpdateTask;
-  let networkTaskId: string;
+  let redTaskId: string;        // RED task with existing locality
   let customerTaskId: string;
+  let fibraTaskId: string;      // FIBRA task with existing locality
 
   beforeAll(async () => {
     repo = new InMemorySchedulingRepository();
@@ -72,38 +73,34 @@ describe('UpdateTask — locality guard for network tasks (#54)', () => {
     );
 
     // Consume id '7' (would collide with pre-seeded task '7') with a dummy customer task.
-    // This advances nextId to 8, avoiding the collision for subsequent seeds.
     await repo.createTask({ ...BASE_TASK, category: 'installation', kind: 'customer', customerId: 'c-dummy', contractId: 'ct-dummy', networkSiteId: null } as never);
 
-    // Network task gets id '8' — no collision with pre-seeded tasks.
-    const networkTask = await repo.createTask({ ...BASE_TASK, category: 'maintenance', kind: 'network', networkSiteId: '1', customerId: null, contractId: null } as never);
-    networkTaskId = networkTask.id;
+    // RED network task gets id '8' — with existing locality (Mercedes).
+    const redTask = await repo.createTask({ ...BASE_TASK, category: 'maintenance', kind: 'network', networkType: 'red', networkSiteId: '1', customerId: null, contractId: null } as never);
+    redTaskId = redTask.id;
 
     // Customer task gets id '9'.
     const customerTask = await repo.createTask({ ...BASE_TASK, category: 'installation', kind: 'customer', customerId: 'c-1', contractId: 'ct-1', networkSiteId: null, iclassCityCode: null } as never);
     customerTaskId = customerTask.id;
+
+    // FIBRA task — with existing locality (for guard testing).
+    const fibraTask = repo.seedTask({ id: 'fibra-task-loc-guard', kind: 'network', networkType: 'fibra', networkSiteId: null, networkSiteName: 'Nodo FO', address: 'x', iclassCityCode: 'Mercedes' });
+    fibraTaskId = fibraTask.id;
   });
 
-  it('update network task with iclassCityCode="" → rejects NetworkTaskLocalityRequiredError', async () => {
-    await expect(
-      useCase.execute(networkTaskId, { iclassCityCode: '' } as never),
-    ).rejects.toBeInstanceOf(NetworkTaskLocalityRequiredError);
+  // RED: locality now optional — blanking it must NOT reject (#66 relaxation)
+  it('REQ-LOC-UPDATE-RED-1: update RED task with iclassCityCode="" → ok (relaxed by #66)', async () => {
+    const updated = await useCase.execute(redTaskId, { iclassCityCode: '' } as never);
+    expect(updated).not.toBeNull();
   });
 
-  it('update network task with iclassCityCode="   " (whitespace) → rejects NetworkTaskLocalityRequiredError', async () => {
-    await expect(
-      useCase.execute(networkTaskId, { iclassCityCode: '   ' } as never),
-    ).rejects.toBeInstanceOf(NetworkTaskLocalityRequiredError);
-  });
-
-  it('update network task with iclassCityCode=null → rejects NetworkTaskLocalityRequiredError', async () => {
-    await expect(
-      useCase.execute(networkTaskId, { iclassCityCode: null } as never),
-    ).rejects.toBeInstanceOf(NetworkTaskLocalityRequiredError);
+  it('REQ-LOC-UPDATE-RED-2: update RED task with iclassCityCode=null → ok (relaxed by #66)', async () => {
+    const updated = await useCase.execute(redTaskId, { iclassCityCode: null } as never);
+    expect(updated).not.toBeNull();
   });
 
   it('update network task NOT sending iclassCityCode (undefined) → ok (partial update)', async () => {
-    const updated = await useCase.execute(networkTaskId, { title: 'renamed' } as never);
+    const updated = await useCase.execute(redTaskId, { title: 'renamed' } as never);
     expect(updated?.title).toBe('renamed');
   });
 
@@ -119,10 +116,17 @@ describe('UpdateTask — locality guard for network tasks (#54)', () => {
     expect(updated?.title).toBe('edited legacy');
   });
 
-  it('REQ-LOC-UPDATE-5: network task WITH locality + PUT blanking it → 422', async () => {
-    const withLoc = repo.seedTask({ id: 'net-with-loc-1', kind: 'network', networkSiteId: '1', address: 'x', iclassCityCode: 'Mercedes' });
+  // FIBRA: locality still required — blanking it must reject
+  it('REQ-LOC-UPDATE-5-FIBRA: fibra task WITH locality + PUT blanking it → 422', async () => {
     await expect(
-      useCase.execute(withLoc.id, { iclassCityCode: '' } as never),
+      useCase.execute(fibraTaskId, { iclassCityCode: '' } as never),
+    ).rejects.toBeInstanceOf(NetworkTaskLocalityRequiredError);
+  });
+
+  it('FIBRA task WITH locality + PUT setting null → 422', async () => {
+    const fibraWithLoc = repo.seedTask({ id: 'fibra-loc-null-test', kind: 'network', networkType: 'fibra', networkSiteId: null, networkSiteName: 'Nodo FO-2', address: 'x', iclassCityCode: 'Rosario' });
+    await expect(
+      useCase.execute(fibraWithLoc.id, { iclassCityCode: null } as never),
     ).rejects.toBeInstanceOf(NetworkTaskLocalityRequiredError);
   });
 });
