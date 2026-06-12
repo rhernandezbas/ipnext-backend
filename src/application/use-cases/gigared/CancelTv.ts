@@ -4,9 +4,26 @@ import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepos
 import type { CancelTvResult } from '@application/dto/gigared.dto';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
-import { GigaredNotFoundError, TvNotLinkedError } from '@domain/errors/gigared';
+import { GigaredNotFoundError, GigaredUnavailableError, TvNotLinkedError } from '@domain/errors/gigared';
 import type { CustomerLookup, ContractLookup } from './lookups';
 import { reconcileTvContractService } from './reconcileTvContractService';
+
+/**
+ * #67 — el pack BASE ("Gigared Play Full") es IRREMOVIBLE por política del CUA. Verificado LIVE
+ * (2026-06-12, CIC 0006230159): DELETE del pack base → 424 external-service-error con detail
+ * "El servicio seleccionado no se puede dar de baja". El adapter lo mapea a
+ * GigaredUnavailableError('Gigared external service (CUA) error', detail). Discriminamos por el
+ * DETAIL (no por el id, que puede cambiar): esta firma significa "este servicio no se da de baja
+ * por DELETE — lo recicla la renovación del CIC". Un GigaredUnavailableError con OTRO detail (CUA
+ * caído de verdad) NO matchea y sigue siendo un fallo bloqueante normal.
+ */
+function isUnremovableBasePack(e: unknown): boolean {
+  return (
+    e instanceof GigaredUnavailableError &&
+    typeof e.detail === 'string' &&
+    /no se puede dar de baja/i.test(e.detail)
+  );
+}
 
 /**
  * CancelTv (#47k) — dar de baja TV por completo para un cliente.
@@ -15,9 +32,12 @@ import { reconcileTvContractService } from './reconcileTvContractService';
  *   cuenta del cliente por use_internal_id; un 404 upstream (no vinculada) se mapea a
  *   TvNotLinkedError (router → 404 TV_NOT_LINKED).
  *
- * Luego, por cada servicio de la cuenta: DELETE en Gigared (incluido el base — libera
- * cupo). Cada DELETE es independiente: si uno falla, se registra en `failed` y se sigue
- * con el resto (nunca aborta el lote). Después, OTT disable (idempotente: el adapter ya
+ * Luego, por cada servicio de la cuenta: DELETE en Gigared. Cada DELETE es independiente: si uno
+ * falla, se registra y se sigue con el resto (nunca aborta el lote). #67 — el pack BASE no se
+ * puede dar de baja por DELETE (424 "no se puede dar de baja"): ese fallo CONOCIDO va a
+ * `unremovable` (informativo), NO a `failed`, así no bloquea el renew (la renovación del CIC
+ * recicla el pack base). Cualquier otro fallo va a `failed` y bloquea renew+unlink (guard #64).
+ * Después, OTT disable (idempotente: el adapter ya
  * tolera "ya deshabilitada" como éxito). Por último, reconcile del ContractService TV:
  * relee la cuenta y, si quedó vacía, INACTIVA el ítem local (helper existente, H1).
  *
@@ -87,15 +107,25 @@ export class CancelTv {
     // Solo hay algo que renovar si había servicios o el OTT estaba habilitado al inicio de esta corrida.
     const renewAttempted = account.services.length > 0 || account.ott?.status === 'enabled';
 
-    // DELETE por servicio (base incluido — libera cupo). Cada uno es independiente.
+    // DELETE por servicio. Cada uno es independiente: un fallo nunca aborta el lote.
+    // #67 — el pack BASE no se puede dar de baja por DELETE (el CUA responde 424 "no se puede dar
+    // de baja"). Ese fallo CONOCIDO va a `unremovable` (informativo), NO a `failed`: así failed.length
+    // queda en 0 y el guard #64 deja correr renew+unlink — la renovación del CIC recicla el pack base.
+    // Cualquier OTRO fallo (CUA caído, otro error) sí va a `failed` y bloquea el renew (comportamiento #64).
     const removed: string[] = [];
     const failed: { id: string; detail: string }[] = [];
+    const unremovable: { id: string; detail: string }[] = [];
     for (const service of account.services) {
       try {
         await this.gigared.removeService(customerId, service.id);
         removed.push(service.id);
       } catch (e) {
-        failed.push({ id: service.id, detail: (e as Error).message });
+        const detail = e instanceof GigaredUnavailableError && e.detail ? e.detail : (e as Error).message;
+        if (isUnremovableBasePack(e)) {
+          unremovable.push({ id: service.id, detail });
+        } else {
+          failed.push({ id: service.id, detail });
+        }
       }
     }
 
@@ -160,6 +190,6 @@ export class CancelTv {
       }
     }
 
-    return { removed, failed, ottDisabled, local, renew, unlinked, renewAttempted };
+    return { removed, failed, unremovable, ottDisabled, local, renew, unlinked, renewAttempted };
   }
 }
