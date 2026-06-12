@@ -229,3 +229,14 @@ export class ProjectTypeInUseError extends DomainError {
     this.name = 'ProjectTypeInUseError';
   }
 }
+
+/**
+ * #53 — Raised when a network task is created or updated with a blank address.
+ * Domain code: NETWORK_TASK_ADDRESS_REQUIRED; HTTP layer maps it to 422.
+ */
+export class NetworkTaskAddressRequiredError extends DomainError {
+  constructor() {
+    super('Network tasks require a non-blank address', 'NETWORK_TASK_ADDRESS_REQUIRED');
+    this.name = 'NetworkTaskAddressRequiredError';
+  }
+}

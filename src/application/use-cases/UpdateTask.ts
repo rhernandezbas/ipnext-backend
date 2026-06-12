@@ -2,7 +2,7 @@ import { SchedulingRepository, UpdateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
-import { ReferenceNotFoundError, ProjectKindMismatchError } from '@domain/errors/scheduling';
+import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -72,6 +72,21 @@ export class UpdateTask {
       for (const watcherId of data.watcherIds) {
         const found = await this.adminLookup.findById(watcherId);
         if (!found) throw new ReferenceNotFoundError('watcher', watcherId);
+      }
+    }
+
+    // #53 — When the caller explicitly sends `address` and it is blank, enforce
+    // that network tasks cannot have their address cleared. We only fire when the
+    // field IS present in the body (partial update: callers that omit address are
+    // unaffected). We load the task only in this branch to avoid an extra query
+    // on the common path.
+    if ('address' in data && data.address !== undefined) {
+      const isBlank = data.address === null || data.address === '' || (typeof data.address === 'string' && !data.address.trim());
+      if (isBlank) {
+        const existing = await this.repo.getTask(id);
+        if (existing?.kind === 'network') {
+          throw new NetworkTaskAddressRequiredError();
+        }
       }
     }
 

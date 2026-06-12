@@ -79,6 +79,8 @@ const statusMap: Record<string, number> = {
   // uisp-integration — used for 404 on GET /sites/:uispId AND 422 on NetworkSite link
   UISP_SITE_NOT_FOUND: 422,
   UISP_UNAVAILABLE: 502,
+  // #53 — network task requires a non-blank address
+  NETWORK_TASK_ADDRESS_REQUIRED: 422,
 };
 
 /** Express global error-handling middleware. */

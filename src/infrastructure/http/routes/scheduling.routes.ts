@@ -44,6 +44,7 @@ import {
   ReferenceNotFoundError,
   ReferenceKind,
   ProjectKindMismatchError,
+  NetworkTaskAddressRequiredError,
 } from '@domain/errors/scheduling';
 import {
   ChecklistItemNotFoundError,
@@ -553,6 +554,11 @@ export function createSchedulingRouter(
         res.status(422).json({ error: err.message, code: 'INVALID_PROJECT_KIND' });
         return;
       }
+      // #53 — network task requires a non-blank address.
+      if (err instanceof NetworkTaskAddressRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
       throw err;
     }
   });
@@ -580,6 +586,11 @@ export function createSchedulingRouter(
       // domain code PROJECT_KIND_MISMATCH maps to 422 INVALID_PROJECT_KIND.
       if (err instanceof ProjectKindMismatchError) {
         res.status(422).json({ error: err.message, code: 'INVALID_PROJECT_KIND' });
+        return;
+      }
+      // #53 — network task requires a non-blank address on update.
+      if (err instanceof NetworkTaskAddressRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
         return;
       }
       throw err;
