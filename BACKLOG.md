@@ -1,7 +1,7 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +16 (#48–#63, sesión 2026-06-12: tickets reporter/áreas/búsqueda + cluster TV + tareas fibra/nodo + semántica código IClass por contrato) → **61 totales**.
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +19 (#48–#66, sesión 2026-06-12: tickets reporter/áreas/búsqueda + cluster TV completo + tareas Red/FO + códigos IClass por contrato/nodo) → **64 totales — TODOS HECHOS** (batch 2026-06-12 cerrado: 18 shippeados + #57 no-bug, BE PRs #118–#127 / FE PRs #97–#112, 7 migraciones 20260701–20260708).
 > **38 hechos (en prod, #39 incluido) · EPIC #38 COMPLETO (7/7 waves) · UISP V1 EN PROD (2026-06-10, BE #99 + FE #71 — flag `uisp-sync` OFF, rotar token post-activación).**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
 
 ---
@@ -11,58 +11,62 @@
 > **Bloque agregado 2026-06-12 (batch #48–#62, 15 ítems).** SDD automático + hybrid, **worktree por ítem** (pedido explícito del usuario), review adversarial post-apply (loop fix→review del WORKFLOW). Olas sugeridas:
 > **A (quick fixes)**: #48 → #56 → #58 · **B (cluster TV page)**: #61 → #62 → #57 → #60 → #50 · **C (tickets/feedback)**: #49 → #59 · **D (tareas fibra + IClass, en orden)**: #52 → #53 → #54 → #51 → #55.
 
-### #48 — Ticket detail: Reporter visible + botón GUARDAR en Detalles
-- Al entrar al ticket no se muestra el **Reporter** (quién creó el ticket) — sale "—" aunque el ticket tenga creador (caso real: cliente HERNANDEZ RONALD, estado closed). Revisar si el BE persiste/expone `reporterId`/`reporterName` (las TAREAS ya lo tienen del 2026-05-28 `task-detail-reporter-and-unified-save` — patrón a espejar) o si es drift del FE.
-- En el panel **Detalles** debe haber **Guardar**: cambiar área/asignado/estado/prioridad y persistir en un solo save (hoy no hay forma de editar desde ahí).
+### #48 — Ticket detail: Reporter visible + botón GUARDAR ✅ HECHO *(2026-06-12, BE PR #119 + FE PR #99, en prod)*
+> SDD `ticket-reporter-and-save`. `Ticket.reporterId` (migración `20260701000000`, FK SetNull, sin backfill — viejos muestran "—"), POST estampa `req.user.id` (body `reporterId` validado → 422 REPORTER_NOT_FOUND), PATCH unificado `{assigneeId,status,priority,...}` con status validado contra catálogo ANTES de persistir. FE re-aplicado sobre el redesign #44: draft local re-seedeado por ticketId (la review cazó drafts cruzados entre tickets), banner de error del 422, columna Reporter del listado (la re-review cazó la key a medio renombrar — la columna DESAPARECÍA). Deudas anotadas: warn-before-leave no cubre navegación SPA; cerrar sin tickets.close vía draft (pre-#44).
 
-### #49 — Áreas de tickets (catálogo + obligatorio + filtro + config)
-- Crear **áreas** (seed: Soporte, Administración, Facturación) como **catálogo editable** (patrón `DeviceTypeCatalog`/`ServiceCatalog`).
-- **Obligatoria al crear** el ticket; se agrega a los **filtros** de la lista; columna/pill en lista y detalle.
-- Config en Configuración → apartado **"Tickets" (no existe — crearlo)**. Front impeccable siguiendo el patrón de la página.
+### #49 — Áreas de tickets ✅ HECHO *(2026-06-12, BE PR #122 + FE PR #107, en prod)*
+> SDD `ticket-areas` (encadenado con #63). `TicketAreaCatalog` (ABM /api/tickets/areas, read=tickets.read/writes=tickets.manage — sin lockout del operador común, verificado por la review) + `Ticket.areaId` FK SetNull + obligatoria al crear (422 antes del write) + filtro ?areaId (seam #28 cazado de nuevo y pineado) + área en el draft+GUARDAR del #48. Config: page nueva /admin/tickets/settings. Migraciones 20260703 (grant tickets.manage a administrador) + 20260704 (tabla+FK+seed Soporte/Administración/Facturación). Fix waves: selects con loading/error+Reintentar, trim del nombre, composition-pin del wiring.
 
-### #50 — TV: permisos granulares
-- La TV debe tener permisos granulares (creación, etc.). El módulo RBAC `tv` existe del #47 — auditar qué acciones quedan bajo un permiso genérico y separar (read / write / manage / register…), **dos capas** (FE `Can`/`RequirePermission` + guard BE).
+### #50 — TV: permisos granulares ✅ HECHO *(2026-06-12, BE PR #121 + FE PR #106, en prod)*
+> SDD `tv-granular-permissions`. 5 permisos nuevos (tv.link/register/packs/ott/cancel) reemplazan tv.write en las rutas gigared; FE parte el Can por acción. Migración 20260705 (seed+grants idempotentes). Query pre-deploy en prod: ningún rol no-sistema tenía tv.write → sin lockout. Deuda: `tv.write` huérfano en el catálogo (checkbox sin efecto en PermissionMatrix — limpiar en migración futura).
 
-### #51 — Networking settings: código IClass = ID fijo + localidad seteable + dirección UISP
-- En `/admin/networking/settings`, el **código IClass** debe ser un **ID fijo autogenerado por la base** (formato `NODO {número}`), NO la localidad.
-- La **localidad** se setea con el catálogo IClass actual (#45). La **dirección** es la coordenada que llega de UISP.
+### #51 — Networking: identidad fija NODO {n} ✅ HECHO *(2026-06-12, BE PR #123 + FE PR #108, en prod)*
+> SDD `network-site-fixed-code`. `NetworkSite.siteNumber` autoincremental (migración 20260706 patrón serial probado — la review cazó el drift de dbgenerated; dry-run prod 73/73) → `fixedCode = "NODO {n}"` derivado en dominio, read-only. **El dispatch NO cambió** (los nodos de IClass SON las ciudades — fixedCode es identidad interna; labels de la UI desambiguados: "Localidad (código IClass)" vs "Código — no se envía a IClass"). Dirección con hint coordenadas UISP (manual gana).
 
-### #52 — Tareas de fibra: tipo "Nodo" → "Nodo Fibra"
-- Switch del tipo de tarea de nodo a **"Nodo Fibra"**: de momento solo el nombre (texto), sin dropdown.
+### #52 — Tipo "Nodo" → "Nodo Fibra" ✅ HECHO *(2026-06-12, FE PR #104, en prod)*
+> Rename label-only del badge (tabla/kanban/modal); testid y aria intactos; sin dropdown de tipos.
 
-### #53 — Tareas nodo-fibra y red: dirección OBLIGATORIA al crear
-- La dirección debe ser obligatoria al crear tareas de nodo fibra y de red. En las de red, **al seleccionar un nodo se autocarga la dirección del nodo** (NetworkSite ya la tiene).
+### #53 + #54 — Dirección y localidad en tareas de nodo ✅ HECHO *(2026-06-12, BE PR #120 + FE PR #105, en prod)*
+> Cadena SDD con #52. #53: 422 NETWORK_TASK_ADDRESS_REQUIRED en create; update por CAMBIO real (la review cazó el lockout de tareas legacy — lección #40 otra vez) + task.address llega al dispatch blank-aware (la re-review cazó el `??` con `''`). #54: `iclassCityCode` snapshot (migración 20260702) + dropdown del catálogo IClassNode + precedencia dispatch task>site. ⚠️ El #54 exigía localidad para TODO kind=network — **relajado a solo-fibra en el #66**. Deuda: localidad no editable post-create desde el detail.
 
-### #54 — Tareas de fibra: localidad obligatoria (dropdown IClass)
-- Campo **localidad** obligatorio al crear tarea de fibra, valores del dropdown de IClass (#45): hoy solo **Mercedes** o **Chivilcoy** (sin config extra por ahora).
+### #55 — Envío a IClass: código = contrato ✅ HECHO *(2026-06-12, BE PR #124 + FE PR #109, en prod)*
+> SDD `iclass-contract-code`. customerCode = `Contract.grContratoId` (código GR real @unique — NO secuencia inventada; sin migración) con fallback blank-aware al cliente para tareas sin contrato; network intacto; IClass crea/matchea el customer inline (verificado). FE: badge mono en la card. Post-deploy: identidades mixtas en IClass (OS viejas por cliente, nuevas por contrato) — esperado. Deuda: fidelidad del JOIN contractCode en in-memory.
 
-### #55 — Envío a IClass: identificador = ID de CONTRATO único
-- Al enviar a IClass, el identificador (código iclass) debe ser el **ID del contrato** (único). Si el contrato no tiene id propio exportable, **generarle uno automático**.
-- Se pueden crear N tareas por cliente siempre que el código sea único **por contrato** (la tarea queda asociada al contrato). ⚠️ Cambia la semántica del `sequenceNumber`/iclass-code actual — diseño con cuidado (back-compat con tareas ya enviadas).
+### #56 — `/admin/contracts/`: hiperlink al cliente ✅ HECHO *(2026-06-12, BE PR #118 + FE PR #97, en prod)*
+> `clientId` aditivo en el DTO del listado (la review cazó el route test sin actualizar — el builder no corrió la suite) + Link con fallback a texto plano si falta (deploy desfasado/cache, patrón #47j).
 
-### #56 — `/admin/contracts/`: hiperlink al cliente
-- La lista de contratos debe linkear al cliente (patrón del link de `/admin/customers/tv` del #47j).
+### #57 — TV: cupos "mal mostrados" ✅ CERRADO COMO NO-BUG *(2026-06-12, verificado live)*
+> El panel reproduce el `/partners/summary` campo por campo: **Gigared Play Full está realmente 102/102 agotado** en el partner (`qty_available:0`); los "18→17 disponibles" son de OTRO servicio (Pack Todo Futbol 63/80). Sin caché ni mezcla de campos. Si se quiere más cupo de GPF, es comercial con Gigared.
 
-### #57 — TV: cupos mal mostrados (102/102 vs disponibles)
-- Las cards de cupo muestran "Gigared Play Full — En uso 102 de 102, sin cupo" con 102 cuentas totales / 86 registradas, y "Pack Todo Futbol 62/80, 18 disponibles". El usuario reporta que está MAL. Investigar contra `/partners/summary` real (qty_used/qty_purchased/qty_available) — puede ser mapeo del FE o interpretación del summary (octava divergencia doc↔realidad candidata).
+### #58 — Modal "+ Agregar servicio" cortado ✅ HECHO *(2026-06-12, FE PR #98, en prod)*
+> Causa: popover inline absolute dentro de `.card{overflow:hidden}` (AD-4 del #42 era el bug). Portal a body + fixed + scroll interno + flip anclado al trigger + toast portaleado + teclado ARIA (la review cazó resize con TypeError y flip flotando a 200px). Deuda: dropdowns de CustomerDetailPage/CustomersListPage con el mismo riesgo estructural.
 
-### #58 — Modal "+ Agregar servicio" cortado
-- En `#contracts` del cliente, el modal/popover de "+ Agregar servicio" se corta — no se ven todas las opciones (overflow/clipping). Fix CSS + verificar en todas las cards.
+### #59 — Feedback en "Reprocesar ahora" ✅ HECHO *(2026-06-12, FE PR #102, en prod)*
+> Causa raíz REAL: el botón estaba `disabled` cuando `pending>0` — justo cuando había trabajo (del #23; "hay pendientes" ≠ "run en curso"). Habilitado + banner con conteo + "Procesando…" en vivo (polling existente) + 503 simétrico. Re-disparo seguro (BE responde already-running, idempotente). Follow-ups: sin estado final post-drain; invalidar pendingCount tras queued; a11y de banners viejos.
 
-### #59 — IClass settings: feedback visible en "Re-disparar efectos" / "Reprocesar ahora"
-- En `/admin/scheduling/settings#iclass`, al apretar **Re-disparar efectos faltantes** o **Reprocesar ahora** no se ve ningún cambio — debe mostrar estado (encolado/en curso/resultado), patrón del banner del Reconciliar (#32).
+### #60 — TV: dispositivos registrados ✅ CERRADO *(2026-06-12, FE PR #103, en prod — la API no lo expone)*
+> Verificado live: `qty_registered_devices` viene **0 en las 87 cuentas** (roto upstream) y el OpenAPI oficial no tiene ningún path de devices. Se eliminó el segmento "· N dispositivos registrados" del copy OTT (mentía); licencias quedan. Divergencia #8 de Gigared documentada en engram.
 
-### #60 — TV: dispositivos registrados (si la API los trae)
-- El panel dice "0 dispositivos registrados" pero el usuario registró dispositivos (la web de Gigared lista ID/Dispositivo/Tipo, ej. 1660988 Macintosh Móvil). La doc solo expone `qty_registered_devices` — **verificar contra la API real** si hay endpoint/campo de lista de dispositivos. Si lo trae → mostrar lista + fix del contador; si no → está OK, documentar.
+### #61 — TV: filtro único LIKE ✅ HECHO *(2026-06-12, FE PR #100, en prod)*
+> Un input LIKE (nombre/CIC/email, trim, debounce) sobre las cuentas completas vía el hook agregador del #47e; paginación client-side con total real; "Todos" = dual-call dedup. La review cazó la regresión de invalidación (las mutaciones no invalidaban `all-accounts` → page stale 5 min tras vincular) — las 6 mutaciones invalidan ambas keys. Cap 200 documentado + notice.
 
-### #61 — `/admin/customers/tv`: filtro único LIKE
-- Los filtros deben ser **UNO solo** estilo LIKE a nivel tabla: busca por nombre, CIC o email.
+### #62 — TV: columna de estado ✅ HECHO *(2026-06-12, FE PR #101, en prod)*
+> Columna OTT → "Estado" con pill: enabled→Activa, disabled→Suspendida (semántica #47k), null/sin OTT→Sin OTT.
 
-### #62 — `/admin/customers/tv`: columna de estado activo/desactivado
-- La page de TV de clientes debe mostrar el **estado** (activa/desactivada — OTT/cuenta) por fila.
+### #63 — Tickets: búsqueda LIKE por nombre ✅ HECHO *(2026-06-12, BE PR #122 — junto al #49, en prod)*
+> El search ya era LIKE sobre subject+description; pasó a subject + **customer.name** + sequenceNumber exacto (se dropeó description). Guard int4 falsificable vía helper `sequenceNumberClause` unit-testeado (un CUIT pegado daba 500) — mismo fix aplicado al search de TAREAS (deuda del patrón original saldada). La re-review exigió RED real: verificado revirtiendo.
 
-### #63 — Tickets: filtrar por nombre + búsqueda LIKE  *(agregado 2026-06-12, mismo batch)*
-- El filtro de la lista de tickets debe permitir **filtrar por nombre** (cliente), y el **buscar** tiene que ser un **LIKE** (substring, no match exacto). Patrón del search de tareas (#13 viejo: OR sobre title + customer.name + sequenceNumber numérico).
+### #64 — Baja TV: renovar CIC + desvincular + modal ✅ HECHO *(2026-06-12, BE PR #125 + FE PR #110, en prod)*
+> Hallazgo de diseño: NO hay dato local que ate Client↔CIC (el vínculo ES el internal_id en el partner) → "como si no tuviera" = renew + `setInternalId(newCic,'')`. Orden: guards → packs → OTT → reconcile → renew → unlink, con **renew SOLO si el desmontaje fue completo** (la review cazó el minteo ilimitado de CICs en el retry) y best-effort 207+retry. FE: modal "La TV se estará deshabilitando en los próximos minutos." en el PADRE (la review cazó el modal fantasma del happy path), status-driven, 404 del retry = "ya se completó". ⚠️ Riesgo documentado: la doc no confirma que el PATCH internal_id acepte '' — si el partner lo rechaza, queda 207 con retry.
+
+### #66 — REWORK del #52: switch Red/FO ✅ HECHO *(2026-06-12, BE PR #127 + FE PR #112, en prod)*
+> SDD `network-task-red-fo-switch`. Revierte el rename global del #52 (labels RED restaurados) + tipo NUEVO **Nodo Fibra**: `networkType 'red'|'fibra'` + `networkSiteName` libre (migración 20260708, backfill 'red', dry-run prod OK). Red = flujo anterior (localidad pasó a OPCIONAL); fibra = nombre libre + dirección/localidad obligatorias, híbrido fibra+siteId → 422 (la review lo cazó persistiendo la FK), networkType inmutable post-create. Dispatch fibra: nodeCode=city=localidad. Deudas: normalizar siteId whitespace-only a null en fibra; comentario falso del Update DTO; resend no maneja network (pre-existente del #29).
+
+### #65 — TV: alta determinística + credenciales ✅ HECHO *(2026-06-12, BE PR #126 + FE PR #111, en prod)*
+> SDD `tv-register-deterministic`. Email `{apellido}{idGR}@gmail.com` + clave `ip{idGR}` paddeada a 8 (CUA [a-z0-9]; fallback #47h sin grClienteId), prefill editable, checkbox de email SIEMPRE off. Credenciales impactadas en `ContractService.tvLogin/tvPassword` (migración 20260707, fila TV asegurada en alta fresca; el cancel #64 las limpia). Sección "Credenciales Gigared Play": Login `GIGA{abonado}` + clave lazy del endpoint dedicado `GET .../tv-credentials` (tv.register, DOS capas — la password JAMÁS viaja en los DTOs de contratos, la review cazó la exposición) + "Cambiar contraseña" (`PATCH password` confirmado en la doc; cuenta resuelta server-side — la review cazó el cic libre). Deudas: gmail reales posibles (default off mitiga), test cross-repo del generador, tvLogin column no leída.
+
+### #64 — TV: la baja renueva el CIC + borra los datos locales + modal  *(agregado 2026-06-12, mismo batch)*
+- Hoy "Dar de baja TV" (#47k) solo quita packs + apaga OTT. Debe ADEMÁS: (1) **renovar el CIC** (`PUT /accounts/{id}/renew` de Gigared — ojo: la doc dice que el internal_id pasa al CIC nuevo, hay que DESVINCULAR localmente para que quede libre), (2) **eliminar los datos de TV locales** del cliente — debe quedar **como si no tuviera TV**, (3) al confirmar, **modal**: "la TV se estará deshabilitando en los próximos minutos" (la API responde async).
 
 ---
 

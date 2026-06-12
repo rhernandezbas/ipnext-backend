@@ -1,4 +1,4 @@
-# SESSION PROGRESS — IPNext (Prominense) — 2026-06-11
+# SESSION PROGRESS — IPNext (Prominense) — 2026-06-12
 
 > **Documento de handoff durable.** Estado completo de la sesión, para retomar tras compactar.
 > Repos: BE `C:\Users\ronald\projects\ipnext\ipnext-backend` · FE `C:\Users\ronald\projects\ipnext\ipnext-frontend`.
@@ -8,51 +8,51 @@
 
 ## 1. Resumen de la sesión
 
-Batch de 8 ítems nuevos (#40–#47) pedidos por el usuario. **7 de 8 SHIPPEADOS A PROD** en el día, todos vía SDD automático + hybrid con el loop fix→review hasta CLEAN. `BACKLOG.md` es la fuente de verdad con el detalle por ítem.
+**Batch #48–#66 (19 ítems) COMPLETO en el día** — 18 shippeados a prod + #57 cerrado como no-bug. Todo vía SDD automático + híbrido, worktree por ítem, **builders Opus 4.8 / arquitecto+reviews Fable 5** (directiva del usuario), loop fix→review hasta CLEAN con gates corridos por el orquestador. `BACKLOG.md` es la fuente de verdad con el detalle por ítem.
 
-| # | Qué | PRs | Estado |
+| # | Qué | PRs | Migración |
 |---|---|---|---|
-| #40 | Page Tareas Nodos (kind=network, proyectos de red exclusivos, secuencia compartida) | BE #104 + FE #78 | ✅ PROD |
-| #40b | Follow-ups (sin toggle en modal cliente, sin col Cliente, kind=customer en lista clientes, deep-link Proyectos→nodos) | FE #79 | ✅ PROD |
-| #41 | Estados generales open/closed/dismissed + filtro default Abiertas + cierre auto por flujo IClass + dismissed fuera de loops | BE #105 + FE #80 | ✅ PROD |
-| #43 | Contract.name + ServiceCatalog + ContractService + grant clients.manage (migraciones 20260625/26/27) | BE #106 | ✅ PROD |
-| #42 | Redesign tab Contratos (cards impeccable, servicios, name editable, fixes id-string/ip) | FE #81 | ✅ PROD |
-| #44 | Detalle de ticket redesign + comentarios PERSISTIDOS con fotos base64 (paste/upload) — mata replies in-memory | BE #107 + FE #82 | ✅ PROD |
-| #46 | Lista tickets: bulk actions + filtros colapsables + muere whitelist VALID_STATUSES + CloseTicket catalog-aware | BE #108 + FE #83 | ✅ PROD |
-| #45 | Mapper de ciudades: catálogo IClassNode (los nodos SON las ciudades, verificado live) + select en Mapeo de nodos | BE #109 + FE #84+#85 | ✅ PROD |
-| #47 | Integración TV **Gigared Partners** (desbloqueado: el usuario pegó la doc) | BE #111 + FE #86 | ✅ PROD (flag OFF hasta cargar key — **key YA CARGADA por el usuario**) |
-| #47b | TV desde el contrato (panel con contrato dueño, page en Clientes, fuera la tab) | FE #87 | ✅ PROD |
-| #47c | Paginación Gigared capeada en 20 + quitar ítem TV local + alta local sin Gigared | FE #88 | ✅ PROD |
+| #48 | Reporter + GUARDAR en detalle de ticket | BE #119 + FE #99 | 20260701 |
+| #56 | Link al cliente en /admin/contracts | BE #118 + FE #97 | — |
+| #58 | Picker "+ Agregar servicio" portaleado | FE #98 | — |
+| #61/#62 | TV: filtro LIKE único + columna Estado | FE #100/#101 | — |
+| #59 | Feedback Reprocesar (botón estaba disabled con pendientes) | FE #102 | — |
+| #60 | TV: fuera el contador de devices (roto upstream, verificado live) | FE #103 | — |
+| #57 | Cupos TV | **no-bug** (GPF realmente 102/102 en el partner) | — |
+| #52→#66 | Switch Red/FO (el #52 rename se reinterpretó; #66 es el modelo final) | FE #104 → BE #127 + FE #112 | 20260708 |
+| #53/#54 | Dirección obligatoria + localidad snapshot en tareas de nodo | BE #120 + FE #105 | 20260702 |
+| #50 | Permisos granulares TV (link/register/packs/ott/cancel) | BE #121 + FE #106 | 20260705 |
+| #63/#49 | Búsqueda LIKE tickets + Áreas (catálogo+config+filtro) | BE #122 + FE #107 | 20260703/04 |
+| #51 | NetworkSite: identidad fija NODO {n} (dispatch intacto) | BE #123 + FE #108 | 20260706 |
+| #55 | customerCode a IClass = grContratoId del contrato | BE #124 + FE #109 | — |
+| #64 | Baja TV: renew CIC + unlink + modal async | BE #125 + FE #110 | — |
+| #65 | Alta TV determinística + credenciales + cambio de password | BE #126 + FE #111 | 20260707 |
 
-**TV-MATCHES.md** (raíz BE): cruce de las 84 cuentas Gigared registradas vs clientes — 66 directos, 14 multi-contrato, 4 sin match. El usuario vincula A MANO desde el panel. ⚠️ Gigared Play Full 102/102 (cupo lleno). #45 bootstrap aplicado (catálogo 36 nodos + 26 auto-matches; quedan 47 barriales).
+## 2. Decisiones/hallazgos clave de la sesión
 
-## 2. Incidente de la sesión (resuelto)
-
-**Commit incompleto rompió el BUILD de main FE** (PR #84): el staging encadenado con `2>/dev/null` se tragó un fallo del add de untracked → 6 archivos nuevos no entraron → `Could not load src/hooks/useIClassNodes`. **Prod NO se afectó** (deploy fail-fast). Hotfix PR #85 con `git add` uno-por-uno + verificación. Lección en engram (`incidents/2026-06-11-incomplete-commit-main-build`): nunca silenciar stderr en staging; verificar `git show --stat HEAD` contra la lista esperada ANTES de pushear.
+1. **#57/#60 verificados contra la API real** (SSH→container→node+pg): el summary es fiel; `qty_registered_devices` viene 0 en las 87 cuentas (roto upstream) y NO hay endpoint de devices (OpenAPI revisado). Divergencia #8 de Gigared.
+2. **#64**: NO hay dato local del vínculo TV — el link ES el internal_id en el partner. Baja = renew + `setInternalId(newCic,'')`, renew SOLO con desmontaje completo (un retry podía mintear CICs sin límite). ⚠️ Sin confirmar que el partner acepte internal_id '' — si lo rechaza: 207 + retry visible.
+3. **#55**: `Contract.grContratoId` es el código (dato GR real, no secuencia inventada); IClass crea/matchea el customer inline. Identidades mixtas en IClass post-deploy (esperado).
+4. **#51**: los nodos de IClass SON las ciudades → el fixedCode NODO {n} es identidad interna, NO viaja a IClass (labels desambiguados en la UI).
+5. **#66**: networkType inmutable post-create; fibra = nombre libre + localidad como nodeCode; localidad OPCIONAL para red (relajación del #54).
+6. **Las reviews adversariales volvieron a cazar FIX-FIRST en CASI TODOS los ítems** (modal fantasma, minteo de CICs, password expuesta a cualquier autenticado, cic sin amarrar, lockout de tareas legacy, columna que desaparecía, cache sin invalidar, suite sin migrar, tests no-falsificables…). El verify solo NUNCA alcanza.
+7. Builders reportando "verde" sin correr suites completas: pasó 2 veces (#56, #66) — el gate del orquestador y la regla pipefail los cazaron.
 
 ## 3. Pendientes del usuario (post-deploy)
 
-1. **#47 TV**: pegar el contenido de `tv.md` (está vacío) + token después. El modelo de servicios x contrato (#43) ya está listo para colgarle el ítem TV.
-2. **#45**: apretar **"Sincronizar desde IClass"** en Gestión de red → Mapeo de nodos (puebla el catálogo: 36 nodos, 3 agrupadores quedan no-seleccionables) y asignar nodo/ciudad a los 73 NetworkSites (el badge "Faltan datos IClass" se va solo).
-3. **Smoke visual de prod**: no tengo credenciales de admin (las del seed dan 401) — pasarlas si querés el recorrido Playwright de todo lo shippeado.
-4. Pendientes heredados: rotar token UISP · prender flags W4/W6 cuando se decida · asignar admin.flags/uisp.* a roles no-super_admin.
+1. **Smoke visual de prod** de todo el batch (sigo sin credenciales admin de prod).
+2. **#64/#65 en vivo**: probar una baja real (verificar que el partner acepte el unlink con '') y un alta determinística.
+3. Heredados: rotar token UISP · flags W4/W6 · admin.flags/uisp.* a roles no-super_admin.
 
-## 4. Deudas técnicas anotadas en la sesión
+## 4. Deudas técnicas del batch (anotadas en BACKLOG por ítem)
 
-- `IngestGestionRealOrders` crea tareas DIRECTO en el repo (bypassa el guard de kind del #40) — inofensivo hoy.
-- Calendar muestra tareas dismissed (#41) — revisar si molesta.
-- BE `toService` no mapea `technology` (campo muerto en cards #42 y buildContractLabel) — pre-existente.
-- `UpdateDeviceType` tiene el mismo agujero de rename-bypass que se cerró en ServiceCatalog (#43).
-- Test e2e del dual-parser (8mb scoped + global 100kb) — sugerencia del review #44.
-- Composition-guard test del wiring #46 — sugerencia.
+- `tv.write` huérfano en el catálogo RBAC (checkbox sin efecto en PermissionMatrix).
+- Localidad de tarea no editable post-create desde el detail (#54/#66).
+- M4/M5 del #48 (warn-before-leave SPA; cerrar sin tickets.close vía draft — pre-#44).
+- Fidelidad del JOIN contractCode en in-memory (#55); test cross-repo del generador (#65); tvLogin column no leída (#65).
+- Fibra: normalizar siteId whitespace-only; resend no maneja network (pre-existente #29).
+- Dropdowns de CustomerDetailPage/CustomersListPage con el mismo riesgo de clipping del #58.
 
-## 5. Aprendizajes clave (también en engram, topic_keys backlog/*)
+## 5. Cómo operar (sin cambios)
 
-1. **El loop fix→review cazó bugs FIX-FIRST en TODAS las waves** otra vez (audit middleware persistiendo 12MB de base64, SVG XSS, paste roto en browsers reales, Prisma NOT sobre relación nullable, whitelist que funcionaba de casualidad, checkbox desync). El verify NUNCA alcanza solo.
-2. **Verificar findings de reviewers contra origin/main y contra la API REAL** — 2 falsos positivos descartados con evidencia (filtro kind "inexistente", campo nodeId "improbable" que era real, verificado live).
-3. Guard de update por CAMBIO no por presencia; select filtrado pinea el valor actual; misma acción = mismo permiso en todas las superficies; todo writer de valores de catálogo resuelve vía catálogo.
-4. Parser path-scoped ANTES del global; elidir data-URIs del audit; el paste real llega por clipboardData.items.
-
-## 6. Cómo operar (sin cambios)
-
-Ver `WORKFLOW-MULTI-REPO.md`. DB prod vía node+pg dentro del container (SSH 2222). Dry-run rolled-back para toda migración. Worktrees por agente. `git add` por path explícito CON verificación.
+Ver `WORKFLOW-MULTI-REPO.md`. Worktrees por ítem en `.claude/worktrees/` (los del batch quedaron vivos — limpiar con `git worktree remove` cuando se quiera). Gates SIEMPRE con `set -o pipefail` (un `| tail` sin eso se traga el exit de jest/vitest). Dry-run rolled-back para toda migración (3 corridos hoy: #51 73/73, #65, #66).
