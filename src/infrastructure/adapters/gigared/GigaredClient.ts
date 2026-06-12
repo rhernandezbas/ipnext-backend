@@ -5,6 +5,7 @@ import type {
   GigaredAccount,
   GigaredSummary,
   GigaredOtt,
+  GigaredOttStatus,
   GigaredService,
   GigaredPartnerService,
   ListAccountsFilter,
@@ -79,6 +80,22 @@ interface Envelope<T> {
   detail: T;
 }
 
+/**
+ * #47j — the LIVE Gigared API sends ott.status as Spanish free-text
+ * ("habilitado"/"deshabilitado", also null) — NOT the docs' 'active'. Normalize to the
+ * frozen tri-state 'enabled'|'disabled'|null so the FE never parses raw upstream text.
+ * Tolerant: lowercase + trim. Any other non-empty string → warn + null (defensive).
+ */
+function normalizeOttStatus(raw: string | null): GigaredOttStatus {
+  if (raw === null || raw === undefined) return null;
+  const v = String(raw).trim().toLowerCase();
+  if (v === '') return null;
+  if (v === 'habilitado') return 'enabled';
+  if (v === 'deshabilitado') return 'disabled';
+  console.warn('[gigared] unknown ott.status', raw);
+  return null;
+}
+
 function mapOtt(o: RawOtt | null): GigaredOtt | null {
   if (!o) return null;
   return {
@@ -86,7 +103,7 @@ function mapOtt(o: RawOtt | null): GigaredOtt | null {
     stationaryLicenses: o.qty_stationary_licenses,
     mobileLicenses: o.qty_mobile_licenses,
     registeredDevices: o.qty_registered_devices,
-    status: o.status,
+    status: normalizeOttStatus(o.status),
   };
 }
 
@@ -351,6 +368,16 @@ export class GigaredClient implements GigaredPort {
 
   async setOtt(internalId: string, enabled: boolean): Promise<void> {
     const action = enabled ? 'enable' : 'disable';
-    await this.put(`/ott/${encodeURIComponent(internalId)}/${action}?use_internal_id=true`);
+    try {
+      await this.put(`/ott/${encodeURIComponent(internalId)}/${action}?use_internal_id=true`);
+    } catch (e) {
+      // #47j — idempotent toggle: if the partner rejects because the account is ALREADY in
+      // the desired state ("ya se encuentra (des)?habilitada"), that IS success — the FE's
+      // desired state already holds. Any other rejection still propagates.
+      if (e instanceof GigaredRejectedError && /ya se encuentra (des)?habilitada/i.test(e.detail)) {
+        return;
+      }
+      throw e;
+    }
   }
 }
