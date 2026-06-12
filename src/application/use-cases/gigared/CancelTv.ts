@@ -21,11 +21,23 @@ import { reconcileTvContractService } from './reconcileTvContractService';
  * tolera "ya deshabilitada" como éxito). Por último, reconcile del ContractService TV:
  * relee la cuenta y, si quedó vacía, INACTIVA el ítem local (helper existente, H1).
  *
+ * #64 — "RENOVAR CIC": tras los pasos anteriores, renueva el CIC (genera uno nuevo) y
+ * desvincula el internal_id del NUEVO CIC, de modo que el cliente quede "como si no tuviera
+ * TV" (getAccountByInternalId(customerId) → 404 después → panel NO vinculado). Ambos pasos son
+ * best-effort y se ejecutan DESPUÉS de packs+OTT+reconcile:
+ *   - renewCic(customerId) → { oldCic, newCic }. Si falla → renew=null, NO se intenta el unlink
+ *     (sin newCic no sabemos qué CIC limpiar).
+ *   - setInternalId(newCic, '') desata el vínculo en el partner → unlinked=true. Si el partner
+ *     rechaza el internal_id vacío → unlinked=false (renew ya quedó hecho).
+ *   NOTA: no existe un dato LOCAL Client↔CIC que limpiar — el vínculo vive sólo en Gigared como
+ *   account.internal_id. El ítem TV local se inactiva en el reconcile. Si en el futuro se
+ *   re-vincula, el PATCH internal_id (LinkCustomerToCic) pisa el vínculo.
+ *
  * Idempotente por diseño (retry = re-POST): los packs ya quitados no están en la cuenta
  * en la re-corrida → no se reintentan; el "ya deshabilitada" del OTT es éxito.
  *
- * Shape: { removed, failed, ottDisabled, local }. El router responde 200 si
- * failed.length === 0 && local === 'synced', si no 207.
+ * Shape: { removed, failed, ottDisabled, local, renew, unlinked }. El router responde 200 si
+ * failed.length === 0 && local === 'synced' && renew !== null && unlinked; si no 207.
  */
 export class CancelTv {
   constructor(
@@ -91,6 +103,26 @@ export class CancelTv {
       local = 'failed';
     }
 
-    return { removed, failed, ottDisabled, local };
+    // #64 — RENOVAR CIC + desvincular. Best-effort, DESPUÉS de packs/OTT/reconcile.
+    // El renew genera un CIC nuevo; el partner reasigna nuestro internal_id a ese CIC, así que
+    // sin el unlink el cliente seguiría apareciendo vinculado. Limpiamos el internal_id del
+    // nuevo CIC para que getAccountByInternalId(customerId) responda 404 ("como si no tuviera TV").
+    let renew: { oldCic: string; newCic: string } | null = null;
+    let unlinked = false;
+    try {
+      renew = await this.gigared.renewCic(customerId);
+    } catch {
+      renew = null;
+    }
+    if (renew) {
+      try {
+        await this.gigared.setInternalId(renew.newCic, '');
+        unlinked = true;
+      } catch {
+        unlinked = false;
+      }
+    }
+
+    return { removed, failed, ottDisabled, local, renew, unlinked };
   }
 }

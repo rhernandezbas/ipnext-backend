@@ -82,4 +82,10 @@ export interface GigaredPort {
   addService(internalId: string, serviceId: string): Promise<void>;
   removeService(internalId: string, serviceId: string): Promise<void>;
   setOtt(internalId: string, enabled: boolean): Promise<void>;
+  /**
+   * PUT /accounts/{internalId}/renew?use_internal_id=true (#64). Genera un CIC nuevo para la
+   * cuenta y devuelve { oldCic, newCic }. El partner mueve el internal_id al nuevo CIC
+   * automáticamente; para que el cliente quede "sin TV" hay que limpiarlo con setInternalId(newCic, '').
+   */
+  renewCic(internalId: string): Promise<{ oldCic: string; newCic: string }>;
 }

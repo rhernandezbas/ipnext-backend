@@ -35,6 +35,7 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
     addService: jest.fn(async () => {}),
     removeService: jest.fn(async () => {}),
     setOtt: jest.fn(async () => {}),
+    renewCic: jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' })),
     ...over,
   };
 }

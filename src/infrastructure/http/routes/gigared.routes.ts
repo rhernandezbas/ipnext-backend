@@ -302,13 +302,15 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  // #47k — dar de baja TV completa. Body { contractId }. tv.cancel requerido (#50).
-  // 200 si removed sin fallos y local synced; 207 si algún DELETE falló o local falló.
+  // #47k / #64 — dar de baja TV completa (RENOVAR CIC). Body { contractId }. tv.cancel (#50).
+  // 200 si removed sin fallos, local synced, renew OK y desvinculado; 207 si algún paso falló
+  // (DELETE, local, renew o unlink) — retry idempotente.
   router.post('/customers/:id/cancel', deps.requireCancel, async (req, res, next): Promise<void> => {
     try {
       const contractId = String((req.body as { contractId?: unknown }).contractId ?? '');
       const result = await deps.cancelTv.execute(req.params['id'] as string, { contractId });
-      const partial = result.failed.length > 0 || result.local === 'failed';
+      const partial =
+        result.failed.length > 0 || result.local === 'failed' || result.renew === null || !result.unlinked;
       res.status(partial ? 207 : 200).json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) next(err);

@@ -56,6 +56,7 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
     getAccountByCic: jest.fn(async () => fakeAccount({ internalId: '' })),
     register: jest.fn(async () => {}), activate: jest.fn(async () => {}), setInternalId: jest.fn(async () => {}),
     addService: jest.fn(async () => {}), removeService: jest.fn(async () => {}), setOtt: jest.fn(async () => {}),
+    renewCic: jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' })),
     ...over,
   };
 }
@@ -374,6 +375,24 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     expect(res.body.failed).toEqual([]);
     expect(res.body.ottDisabled).toBe(true);
     expect(res.body.local).toBe('synced');
+    // #64 — el body de la baja expone el renew (old/new CIC) y la desvinculación.
+    expect(res.body.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
+    expect(res.body.unlinked).toBe(true);
+  });
+
+  it('#64 renew falla → 207 { renew:null, unlinked:false }', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const renewCic = jest.fn(async () => { throw new Error('renew upstream 500'); });
+    const port = fakePort({ getAccountByInternalId, renewCic });
+    const app = await buildApp({ port, csRepo, catalog });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(207);
+    expect(res.body.renew).toBeNull();
+    expect(res.body.unlinked).toBe(false);
   });
 
   it('cuenta sin vincular → 404 TV_NOT_LINKED', async () => {

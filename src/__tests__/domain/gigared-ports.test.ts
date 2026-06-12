@@ -74,9 +74,11 @@ describe('Gigared ports shape witnesses (#47)', () => {
       addService: async () => {},
       removeService: async () => {},
       setOtt: async () => {},
+      renewCic: async () => ({ oldCic: '0000000001', newCic: '0000000002' }),
     };
     expect(typeof fake.getSummary).toBe('function');
     expect(typeof fake.setOtt).toBe('function');
+    expect(typeof fake.renewCic).toBe('function');
   });
 
   it('GigaredConfigRepository get/update shape', () => {
