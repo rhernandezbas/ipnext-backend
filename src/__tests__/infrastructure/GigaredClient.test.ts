@@ -174,7 +174,7 @@ describe('GigaredClient (#47)', () => {
       expect(a.internalId).toBe('CLIENTE_001');
       expect(a.services).toEqual([{ id: '129', name: 'Gigared Play Full' }]);
       expect(a.ott).toEqual({
-        id: 'GIGA10000000100', stationaryLicenses: 3, mobileLicenses: 5, registeredDevices: 0, status: 'deshabilitado',
+        id: 'GIGA10000000100', stationaryLicenses: 3, mobileLicenses: 5, registeredDevices: 0, status: 'disabled',
       });
       // query passed through
       const [url] = http.get.mock.calls[0]!;
@@ -598,6 +598,134 @@ describe('GigaredClient (#47)', () => {
       await expect(client.getSummary()).rejects.toMatchObject({
         code: 'GIGARED_AUTH_FAILED',
         detail: 'La clave de API proporcionada no es válida',
+      });
+    });
+  });
+
+  // ---- #47j — OTT status normalization + idempotent toggle (verified live 2026-06-11) -----
+  // The LIVE Gigared API sends ott.status as Spanish free-text ("habilitado"/"deshabilitado",
+  // also null) — NOT the docs' 'active'. The FE compared against 'active' and always showed the
+  // toggle OFF even when the account was enabled; re-enabling then got rejected with
+  // "La cuenta OTT ya se encuentra habilitada". Fix: normalize status to 'enabled'|'disabled'|null,
+  // and treat an "already (dis/en)abled" partner rejection as success (the desired state holds).
+  describe('#47j — mapOtt status normalization', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    const accountWith = (status: unknown) => ({
+      message: 'Éxito',
+      detail: {
+        crm: {
+          cic: '0000000001', gigared_id: '10000000100', email: null, first_name: null,
+          last_name: null, registration_date: null, services: [],
+        },
+        internal_id: 'CLIENTE_001',
+        ott: {
+          id: 'GIGA10000000100', qty_stationary_licenses: 3, qty_mobile_licenses: 5,
+          qty_registered_devices: 0, status,
+        },
+      },
+    });
+
+    it('"habilitado" → "enabled"', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWith('habilitado') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.ott!.status).toBe('enabled');
+    });
+
+    it('"deshabilitado" → "disabled"', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWith('deshabilitado') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.ott!.status).toBe('disabled');
+    });
+
+    it('null → null', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWith(null) });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.ott!.status).toBeNull();
+    });
+
+    it('tolerant: uppercase/whitespace " Habilitado " → "enabled"', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWith(' Habilitado ') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.ott!.status).toBe('enabled');
+    });
+
+    it('unrecognized non-empty string "raro" → null + console.warn', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWith('raro') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.ott!.status).toBeNull();
+      expect(warn).toHaveBeenCalledWith('[gigared] unknown ott.status', 'raro');
+    });
+  });
+
+  describe('#47j — setOtt idempotent toggle (partner "already (dis/en)abled" = success)', () => {
+    it('setOtt(true) when partner rejects "ya se encuentra habilitada" → resolves (success)', async () => {
+      const http = makeHttp();
+      http.put.mockRejectedValue(
+        axiosError(409, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/ott-state-error',
+            title: 'Estado OTT inválido',
+            status: 409,
+            detail: 'La cuenta OTT ya se encuentra habilitada',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.setOtt('CLIENTE_001', true)).resolves.toBeUndefined();
+    });
+
+    it('setOtt(false) when partner rejects "ya se encuentra deshabilitada" → resolves (success)', async () => {
+      const http = makeHttp();
+      http.put.mockRejectedValue(
+        axiosError(409, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/ott-state-error',
+            title: 'Estado OTT inválido',
+            status: 409,
+            detail: 'La cuenta OTT ya se encuentra deshabilitada',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.setOtt('CLIENTE_001', false)).resolves.toBeUndefined();
+    });
+
+    it('a DIFFERENT partner rejection still propagates as an error (with detail)', async () => {
+      const http = makeHttp();
+      http.put.mockRejectedValue(
+        axiosError(422, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/ott-error',
+            title: 'Sin licencias',
+            status: 422,
+            detail: 'No hay licencias OTT disponibles',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.setOtt('CLIENTE_001', true)).rejects.toMatchObject({
+        code: 'GIGARED_REJECTED',
+        detail: 'No hay licencias OTT disponibles',
       });
     });
   });

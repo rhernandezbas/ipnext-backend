@@ -11,12 +11,19 @@ export interface GigaredService {
   name: string;
 }
 
+/**
+ * Normalized OTT status (#47j). The LIVE Gigared API sends Spanish free-text
+ * ("habilitado" / "deshabilitado", also null) — NOT the docs' 'active'. The adapter
+ * normalizes it to this frozen tri-state so the front-end never parses raw upstream text.
+ */
+export type GigaredOttStatus = 'enabled' | 'disabled' | null;
+
 export interface GigaredOtt {
   id: string;
   stationaryLicenses: number;
   mobileLicenses: number;
   registeredDevices: number;
-  status: string | null;
+  status: GigaredOttStatus;
 }
 
 export interface GigaredAccount {

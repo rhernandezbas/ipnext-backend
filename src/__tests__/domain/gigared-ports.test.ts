@@ -24,7 +24,7 @@ describe('Gigared ports shape witnesses (#47)', () => {
       stationaryLicenses: 3,
       mobileLicenses: 5,
       registeredDevices: 0,
-      status: 'deshabilitado',
+      status: 'disabled',
     };
     const acc: GigaredAccount = {
       cic: '0000000001',
