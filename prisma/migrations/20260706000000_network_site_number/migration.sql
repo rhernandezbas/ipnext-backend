@@ -1,17 +1,22 @@
 -- network-site-fixed-code (#51): siteNumber estable por sitio vía secuencia dedicada.
--- Aditiva e idempotente. Sin BEGIN/COMMIT (Prisma envuelve la migración).
+-- Alineada al precedente probado 20260514100000_add_task_sequence_number:
+--   secuencia con naming serial de Prisma ("NetworkSite_siteNumber_seq"),
+--   OWNED BY la columna, y schema con @default(autoincrement()) — así NO hay drift
+--   Prisma↔SQL (autoincrement mapea exactamente a este naming/ownership).
+-- Aditiva e idempotente (guards) para soportar re-corrida en estado mixto.
+-- Sin BEGIN/COMMIT (Prisma envuelve la migración).
 
--- 1. Secuencia dedicada (idempotente).
-CREATE SEQUENCE IF NOT EXISTS network_site_number_seq;
-
--- 2. Columna nullable primero (para poder backfillear antes del NOT NULL).
+-- 1. Columna nullable primero (para poder backfillear antes del NOT NULL).
 ALTER TABLE "NetworkSite" ADD COLUMN IF NOT EXISTS "siteNumber" INTEGER;
 
--- 3. Backfill idempotente con guard: solo numera filas sin siteNumber, en orden
---    estable (createdAt, id). Re-correr NO re-numera lo ya numerado.
+-- 2. Backfill idempotente con offset. Solo numera filas sin siteNumber, en orden
+--    estable (createdAt, id). El offset `+ COALESCE(MAX(siteNumber),0)` arranca por
+--    encima de lo ya numerado, así una re-corrida en estado mixto NO colisiona ni
+--    re-numera lo existente (idempotencia real).
 WITH numbered AS (
   SELECT id,
-         ROW_NUMBER() OVER (ORDER BY "createdAt" ASC, id ASC) AS rn
+         ROW_NUMBER() OVER (ORDER BY "createdAt" ASC, id ASC)
+           + COALESCE((SELECT MAX("siteNumber") FROM "NetworkSite"), 0) AS rn
   FROM "NetworkSite"
   WHERE "siteNumber" IS NULL
 )
@@ -20,25 +25,22 @@ SET "siteNumber" = numbered.rn
 FROM numbered
 WHERE ns.id = numbered.id;
 
--- 4. Avanzar la secuencia más allá del mayor siteNumber asignado, para que el
---    próximo nextval() no colisione con el backfill.
+-- 3. Secuencia con naming serial de Prisma + OWNED BY (cleanup en cascada con la
+--    columna). Igual que "ScheduledTask_sequenceNumber_seq".
+CREATE SEQUENCE IF NOT EXISTS "NetworkSite_siteNumber_seq" OWNED BY "NetworkSite"."siteNumber";
+
+-- 4. Posicionar la secuencia tras el mayor siteNumber asignado, para que el próximo
+--    nextval() no colisione con el backfill.
 SELECT setval(
-  'network_site_number_seq',
-  GREATEST((SELECT COALESCE(MAX("siteNumber"), 0) FROM "NetworkSite"), 1),
-  (SELECT COUNT(*) FROM "NetworkSite") > 0
+  '"NetworkSite_siteNumber_seq"',
+  COALESCE((SELECT MAX("siteNumber") FROM "NetworkSite"), 0) + 1,
+  false
 );
 
--- 5. Default = nextval para inserts futuros.
-ALTER TABLE "NetworkSite" ALTER COLUMN "siteNumber" SET DEFAULT nextval('network_site_number_seq');
+-- 5. Default = nextval + NOT NULL (ya backfilleado).
+ALTER TABLE "NetworkSite"
+  ALTER COLUMN "siteNumber" SET DEFAULT nextval('"NetworkSite_siteNumber_seq"'),
+  ALTER COLUMN "siteNumber" SET NOT NULL;
 
--- 6. NOT NULL (ya backfilleado) + UNIQUE.
-ALTER TABLE "NetworkSite" ALTER COLUMN "siteNumber" SET NOT NULL;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'NetworkSite_siteNumber_key'
-  ) THEN
-    ALTER TABLE "NetworkSite" ADD CONSTRAINT "NetworkSite_siteNumber_key" UNIQUE ("siteNumber");
-  END IF;
-END $$;
+-- 6. UNIQUE como CREATE UNIQUE INDEX, igual que el precedente (naming "_key").
+CREATE UNIQUE INDEX IF NOT EXISTS "NetworkSite_siteNumber_key" ON "NetworkSite"("siteNumber");

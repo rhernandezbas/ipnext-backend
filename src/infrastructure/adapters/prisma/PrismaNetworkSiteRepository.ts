@@ -1,11 +1,6 @@
-import { NetworkSite } from '@domain/entities/networkSite';
+import { NetworkSite, fixedCodeFor } from '@domain/entities/networkSite';
 import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 import { prisma } from '../../database/prisma';
-
-/** network-site-fixed-code (#51) — código fijo derivado del siteNumber. */
-export function fixedCodeFor(siteNumber: number): string {
-  return `NODO ${siteNumber}`;
-}
 
 function toSite(row: any): NetworkSite {
   return {

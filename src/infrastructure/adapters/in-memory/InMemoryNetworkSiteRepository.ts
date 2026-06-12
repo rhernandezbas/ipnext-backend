@@ -1,12 +1,7 @@
-import { NetworkSite } from '@domain/entities/networkSite';
+import { NetworkSite, fixedCodeFor } from '@domain/entities/networkSite';
 import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 
 let nextId = 6;
-
-/** network-site-fixed-code (#51) — código fijo derivado del siteNumber. */
-function fixedCodeFor(siteNumber: number): string {
-  return `NODO ${siteNumber}`;
-}
 
 export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
   /** Secuencia in-memory que emula `network_site_number_seq`. */

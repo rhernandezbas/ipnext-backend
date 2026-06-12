@@ -27,3 +27,13 @@ export interface NetworkSite {
   // uisp-integration — optional link to UISP mirror (uispId TEXT, no DB FK)
   uispSiteId: string | null;
 }
+
+/**
+ * network-site-fixed-code (#51) — deriva el código fijo de un sitio a partir de su
+ * `siteNumber`: `"NODO {siteNumber}"`. Helper de dominio puro (sin dependencias),
+ * fuente única de verdad para ambos adapters (Prisma e in-memory). NO es el código
+ * de localidad IClass (ese es `iclassNodeCode`).
+ */
+export function fixedCodeFor(siteNumber: number): string {
+  return `NODO ${siteNumber}`;
+}
