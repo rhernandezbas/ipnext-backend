@@ -22,6 +22,7 @@ describe('ListContracts use case', () => {
     expect(res.data[0]).toEqual({
       id: expect.any(String),
       clientId: 'client-42',
+      code: null,
       clientName: 'Acme Corp',
       plan: 'Fiber 100',
       status: 'active',

@@ -75,6 +75,7 @@ describe('GET /api/contracts', () => {
     expect(res.body.data[0]).toEqual({
       id: expect.any(String),
       clientId: 'client-acme-1',
+      code: null,
       clientName: 'Acme Corp',
       plan: 'Fiber 100',
       status: 'active',
