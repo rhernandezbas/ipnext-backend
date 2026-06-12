@@ -31,8 +31,13 @@ export type RemoveTvServiceResult = AddTvServiceResult;
 
 /**
  * #47k / #64 — result of CancelTv (dar de baja TV completa, "RENOVAR CIC").
- *   - `removed`: serviceIds successfully DELETEd in Gigared (base incluido — libera cupo)
- *   - `failed`: serviceIds whose DELETE threw, with the upstream detail (retry idempotente)
+ *   - `removed`: serviceIds successfully DELETEd in Gigared (add-ons con cupo liberable)
+ *   - `failed`: serviceIds whose DELETE threw con un error BLOQUEANTE, con el upstream detail (retry idempotente)
+ *   - `unremovable`: #67 — serviceIds que el CUA rechaza con 424 external-service-error
+ *              "no se puede dar de baja" (el pack BASE "Gigared Play Full", verificado live 2026-06-12).
+ *              Es un fallo CONOCIDO y NO bloqueante: el pack base no se libera por DELETE, lo recicla
+ *              la renovación del CIC. NO cuenta para el 207 — el flujo sigue a renew+unlink. Informativo
+ *              para el modal ("el pack base lo libera la renovación del CIC").
  *   - `ottDisabled`: whether the OTT disable succeeded (idempotent: "ya deshabilitada" = true)
  *   - `local`: 'synced' if the local TV ContractService reconcile succeeded, else 'failed'
  *   - `renew`: #64 — { oldCic, newCic } when the CIC renew succeeded, else null (best-effort).
@@ -53,6 +58,8 @@ export type RemoveTvServiceResult = AddTvServiceResult;
 export interface CancelTvResult {
   removed: string[];
   failed: { id: string; detail: string }[];
+  /** #67 — packs irremovibles por política del CUA (pack base). Informativo, NO bloquea el 207. */
+  unremovable: { id: string; detail: string }[];
   ottDisabled: boolean;
   local: 'synced' | 'failed';
   renew: { oldCic: string; newCic: string } | null;

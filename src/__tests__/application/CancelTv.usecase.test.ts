@@ -14,7 +14,7 @@ import { CancelTv } from '@application/use-cases/gigared/CancelTv';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
-import { GigaredNotFoundError, TvNotLinkedError } from '@domain/errors/gigared';
+import { GigaredNotFoundError, GigaredUnavailableError, TvNotLinkedError } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 
@@ -464,5 +464,186 @@ describe('CancelTv (#47k)', () => {
     const result = await uc.execute('cust-1', { contractId: 'C1' });
     expect(result.renewAttempted).toBe(true);
     expect(renewCic).toHaveBeenCalledTimes(1);
+  });
+
+  // ----- #67: el pack BASE es IRREMOVIBLE por política del CUA (no bloquea la baja) -----
+  // Verificado LIVE 2026-06-12 (CIC 0006230159): DELETE del pack base 129 "Gigared Play Full"
+  // → 424 external-service-error, detail "El servicio seleccionado no se puede dar de baja".
+  // El adapter lo mapea a GigaredUnavailableError('Gigared external service (CUA) error', detail).
+  // Decisión #67: ese error NO cuenta como `failed` bloqueante → va a `unremovable`, el flujo
+  // sigue a renew+unlink y el modal lo reporta informativo. El cupo del pack base lo recicla el renew.
+
+  // detail EXACTO del CUA capturado live.
+  const CUA_UNREMOVABLE_DETAIL = 'El servicio seleccionado no se puede dar de baja';
+  const unremovableError = () =>
+    new GigaredUnavailableError('Gigared external service (CUA) error', CUA_UNREMOVABLE_DETAIL);
+
+  it('(n) #67 el caso real HONESTO: SOLO queda el pack base 129; su DELETE da el 424 "no se puede dar de baja". El reconcile RELEE la cuenta y el base SIGUE ahí (nunca se borró) → la fila TV igual se INACTIVA y limpia credenciales (excluye el irremovible) → renueva + desvincula', async () => {
+    const cat = await seedTvCatalog(catalog, cs);
+    // Fila TV viva con credenciales y notes del CIC viejo: lo que el reconcile deshonesto dejaba intacto.
+    const row = await cs.add({
+      contractId: 'C1', serviceCatalogId: cat.id,
+      notes: 'CIC 0006230159 · Gigared Play Full', tvLogin: 'GIGA129', tvPassword: 'old-secret',
+    });
+    const removeService = jest.fn(async () => { throw unremovableError(); });
+    const renewCic = jest.fn(async () => ({ oldCic: '0006230159', newCic: '0006230160' }));
+    const setInternalId = jest.fn(async () => {});
+    // HONESTO: el base 129 NUNCA se borró (su DELETE lanzó 424). La relectura del reconcile
+    // DEBE seguir viendo el base en la cuenta — esto es lo que el mock viejo ocultaba.
+    const getAccountByInternalId = jest.fn(async () =>
+      fakeAccount({ cic: '0006230159', services: [{ id: '129', name: 'Gigared Play Full' }] }),
+    );
+    const port = fakePort({ removeService, renewCic, setInternalId, getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+
+    // el pack base NO está en removed ni en failed: está en unremovable (informativo).
+    expect(result.removed).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(result.unremovable).toHaveLength(1);
+    expect(result.unremovable[0]!.id).toBe('129');
+    expect(result.unremovable[0]!.detail).toContain('no se puede dar de baja');
+    // failed.length === 0 → el guard #64 ya NO bloquea → renew + unlink corren.
+    expect(result.renewAttempted).toBe(true);
+    expect(renewCic).toHaveBeenCalledWith('cust-1');
+    expect(result.renew).toEqual({ oldCic: '0006230159', newCic: '0006230160' });
+    expect(setInternalId).toHaveBeenCalledWith('0006230160', '');
+    expect(result.unlinked).toBe(true);
+    // CRITICAL (#67 re-review): el reconcile EXCLUYE el id irremovible al decidir vacía/no-vacía.
+    // Con sólo el base (excluido) la rama es "vacía" → la fila se INACTIVA y limpia credenciales,
+    // NO queda activa con el CIC viejo. local='synced'.
+    expect(result.local).toBe('synced');
+    const after = await cs.getById(row.id);
+    expect(after!.status).toBe('inactive');
+    expect(after!.tvLogin).toBeNull();
+    expect(after!.tvPassword).toBeNull();
+  });
+
+  it('(o) #67 mixto HONESTO: add-on se quita OK + pack base unremovable; el reconcile relee y el base SIGUE ahí → excluyendo el base la fila se INACTIVA → renueva', async () => {
+    const cat = await seedTvCatalog(catalog, cs);
+    const row = await cs.add({
+      contractId: 'C1', serviceCatalogId: cat.id,
+      notes: 'CIC 0000000001 · Gigared Play Full · Pack Todo Futbol',
+      tvLogin: 'GIGA129', tvPassword: 'old-secret',
+    });
+    // 129 (base) tira el 424 unremovable; 39 (add-on) se quita bien.
+    const removeService = jest.fn(async (_c: string, id: string) => {
+      if (id === '129') throw unremovableError();
+    });
+    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
+    // HONESTO: loop ve ambos; tras el run el add-on 39 está borrado pero el base 129 SIGUE
+    // (su DELETE lanzó). El reconcile DEBE seguir viéndolo.
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [
+        { id: '129', name: 'Gigared Play Full' },
+        { id: '39', name: 'Pack Todo Futbol' },
+      ] }))
+      .mockResolvedValue(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }));
+    const port = fakePort({ removeService, renewCic, getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+
+    expect(result.removed).toEqual(['39']);
+    expect(result.unremovable.map(u => u.id)).toEqual(['129']);
+    expect(result.failed).toEqual([]);
+    // sin failed bloqueante → renueva.
+    expect(renewCic).toHaveBeenCalledTimes(1);
+    expect(result.renew).not.toBeNull();
+    // CRITICAL: el reconcile excluye el base irremovible → fila inactivada + credenciales limpias.
+    expect(result.local).toBe('synced');
+    const after = await cs.getById(row.id);
+    expect(after!.status).toBe('inactive');
+    expect(after!.tvLogin).toBeNull();
+    expect(after!.tvPassword).toBeNull();
+  });
+
+  it('(p) #67 un 424 REAL del CUA (otro detail, no "no se puede dar de baja") SIGUE siendo failed bloqueante → NO renueva', async () => {
+    await seedTvCatalog(catalog, cs);
+    // Un GigaredUnavailableError con OTRO detail (CUA caído de verdad) NO es el caso del pack base.
+    const removeService = jest.fn(async () => {
+      throw new GigaredUnavailableError('Gigared external service (CUA) error', 'El CUA no respondió a tiempo');
+    });
+    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }));
+    const port = fakePort({ removeService, renewCic, getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+
+    // este SÍ es failed bloqueante (no es la firma del pack base).
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.id).toBe('129');
+    expect(result.unremovable).toEqual([]);
+    // failed > 0 → el guard #64 bloquea: NO renueva ni desvincula.
+    expect(renewCic).not.toHaveBeenCalled();
+    expect(result.renew).toBeNull();
+    expect(result.unlinked).toBe(false);
+  });
+
+  it('(q) #67 happy path normal (add-ons quitados OK) → unremovable=[] (shape siempre presente)', async () => {
+    await seedTvCatalog(catalog, cs);
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '39', name: 'Pack Todo Futbol' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+    expect(result.removed).toEqual(['39']);
+    expect(result.unremovable).toEqual([]);
+    expect(result.failed).toEqual([]);
+  });
+
+  // ----- #67 re-review MEDIUM: hardening de la cardinalidad. La firma "no se puede dar de baja"
+  // sólo identifica al pack base si MATCHEA UN ÚNICO servicio. Si ≥2 servicios devuelven esa
+  // firma (p.ej. el CUA la usa también para rechazar un add-on), es AMBIGUO: el partner pudo
+  // renombrar el base, no podemos asumir cuál es el irremovible → TODOS van a `failed`
+  // (conservador, el guard #64 bloquea renew/unlink y el retry re-procesa). NO usamos el nombre
+  // "Gigared Play Full" hardcodeado: la cardinalidad 1 es la única señal robusta.
+
+  it('(r) #67 MEDIUM: DOS servicios matchean "no se puede dar de baja" → AMBIGUO → ambos a `failed`, unremovable=[] → NO renueva (guard #64)', async () => {
+    await seedTvCatalog(catalog, cs);
+    // 129 y 39 dan AMBOS la firma unremovable. No sabemos cuál es el base → conservador.
+    const removeService = jest.fn(async () => { throw unremovableError(); });
+    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
+    const setInternalId = jest.fn(async () => {});
+    const getAccountByInternalId = jest.fn(async () =>
+      fakeAccount({ services: [
+        { id: '129', name: 'Gigared Play Full' },
+        { id: '39', name: 'Add-on que el CUA también rechaza' },
+      ] }),
+    );
+    const port = fakePort({ removeService, renewCic, setInternalId, getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+
+    // AMBIGUO: cardinalidad 2 → todos a failed, ninguno a unremovable.
+    expect(result.unremovable).toEqual([]);
+    expect(result.failed.map(f => f.id).sort()).toEqual(['129', '39']);
+    // failed > 0 → guard #64 bloquea renew + unlink: la cuenta sigue resoluble por internal_id.
+    expect(renewCic).not.toHaveBeenCalled();
+    expect(setInternalId).not.toHaveBeenCalled();
+    expect(result.renew).toBeNull();
+    expect(result.unlinked).toBe(false);
+  });
+
+  it('(s) #67 MEDIUM: cuando matchea la firma unremovable, se emite un console.warn (señal de revisar)', async () => {
+    await seedTvCatalog(catalog, cs);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const removeService = jest.fn(async () => { throw unremovableError(); });
+      const renewCic = jest.fn(async () => ({ oldCic: '0006230159', newCic: '0006230160' }));
+      const getAccountByInternalId = jest.fn(async () =>
+        fakeAccount({ cic: '0006230159', services: [{ id: '129', name: 'Gigared Play Full' }] }),
+      );
+      const port = fakePort({ removeService, renewCic, getAccountByInternalId });
+      const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+      await uc.execute('cust-1', { contractId: 'C1' });
+
+      expect(warn).toHaveBeenCalled();
+      expect(String(warn.mock.calls[0]![0])).toContain('[gigared] unremovable inesperado');
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
