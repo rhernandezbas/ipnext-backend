@@ -77,6 +77,12 @@ const CreateTaskBaseSchema = z.object({
   // (PUT /:id accepts it; generalStatus wins over isClosed via UpdateTask normalize).
   // CreateTaskSchema ignores it (DB default 'open' covers create).
   generalStatus: z.enum(['open', 'closed', 'dismissed']).optional(),
+
+  // #54 — task-level locality snapshot (iClass OS city). Required for network tasks;
+  // optional (nullable) for customer tasks. The REQUIRED enforcement is a domain guard
+  // (NetworkTaskLocalityRequiredError → 422), NOT a zod discriminated constraint,
+  // so both kinds share this field permissively.
+  iclassCityCode: z.string().nullable().optional(),
 });
 
 // REQ-VAL-1 (network-node-task #29): discriminated union on `kind`.

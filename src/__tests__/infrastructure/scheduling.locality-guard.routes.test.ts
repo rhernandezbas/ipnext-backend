@@ -1,11 +1,11 @@
 /**
- * #53 — Route seam test: address guard for network tasks.
+ * #54 — Route seam test: locality guard for network tasks.
  *
- * Proves that the global errorHandler wires NetworkTaskAddressRequiredError → HTTP 422
- * with code NETWORK_TASK_ADDRESS_REQUIRED end-to-end.
+ * Proves that the global errorHandler wires NetworkTaskLocalityRequiredError → HTTP 422
+ * with code NETWORK_TASK_LOCALITY_REQUIRED end-to-end.
  *
- * REQ-ADDR-ROUTE-1: POST network task without address → 422, code NETWORK_TASK_ADDRESS_REQUIRED
- * REQ-ADDR-ROUTE-2: POST network task with valid address → 201 (regression)
+ * REQ-LOC-ROUTE-1: POST network task without iclassCityCode → 422, code NETWORK_TASK_LOCALITY_REQUIRED
+ * REQ-LOC-ROUTE-2: POST network task with valid iclassCityCode → 201 (regression)
  */
 import request from 'supertest';
 import express from 'express';
@@ -49,8 +49,8 @@ class FakeAuthProvider implements AuthProvider {
 const DEFAULT_STAGE_ID_PENDING = '10000000-0000-4000-a000-000000000001';
 
 const TEST_SITE: NetworkSite = {
-  id: 'site-addr-test-001',
-  name: 'Torre Test Addr',
+  id: 'site-loc-route-001',
+  name: 'Torre Test Loc',
   address: 'Ruta 7 km 5',
   city: 'Mercedes',
   coordinates: null,
@@ -60,8 +60,8 @@ const TEST_SITE: NetworkSite = {
   clientCount: 0,
   uplink: '1 Gbps',
   parentSiteId: null,
-  description: 'Nodo de prueba para address guard',
-  iclassNodeCode: 'TN-ADDR',
+  description: 'Nodo de prueba para locality guard',
+  iclassNodeCode: 'TN-LOC',
   uispSiteId: null,
 };
 
@@ -102,50 +102,49 @@ function buildApp() {
   return { app, repo };
 }
 
+// BASE body with valid address (#53) but NO iclassCityCode
 const BASE_NETWORK_BODY = {
-  title: 'Mantenimiento Torre Test Addr',
+  title: 'Mantenimiento Torre Test Loc',
   priority: 'normal',
   estimatedHours: 2,
   category: 'maintenance',
   kind: 'network',
   networkSiteId: TEST_SITE.id,
-  // #54 — locality required for network tasks; include so the address guard test
-  // only exercises the address guard (not the locality guard).
-  iclassCityCode: 'Mercedes',
+  address: 'Ruta 7 km 5',  // #53 address required
 };
 
-describe('POST /api/scheduling — network task address guard (#53)', () => {
-  it('POST network task without address → 422 NETWORK_TASK_ADDRESS_REQUIRED (REQ-ADDR-ROUTE-1)', async () => {
+describe('POST /api/scheduling — network task locality guard (#54)', () => {
+  it('POST network task without iclassCityCode → 422 NETWORK_TASK_LOCALITY_REQUIRED (REQ-LOC-ROUTE-1)', async () => {
     const { app } = buildApp();
-    // No address field in body → address will be null → guard fires
+    // No iclassCityCode field → guard fires
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
       .send(BASE_NETWORK_BODY);
 
     expect(res.status).toBe(422);
-    expect(res.body.code).toBe('NETWORK_TASK_ADDRESS_REQUIRED');
+    expect(res.body.code).toBe('NETWORK_TASK_LOCALITY_REQUIRED');
   });
 
-  it('POST network task with address="" → 422 NETWORK_TASK_ADDRESS_REQUIRED', async () => {
+  it('POST network task with iclassCityCode="" → 422 NETWORK_TASK_LOCALITY_REQUIRED', async () => {
     const { app } = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
-      .send({ ...BASE_NETWORK_BODY, address: '' });
+      .send({ ...BASE_NETWORK_BODY, iclassCityCode: '' });
 
     expect(res.status).toBe(422);
-    expect(res.body.code).toBe('NETWORK_TASK_ADDRESS_REQUIRED');
+    expect(res.body.code).toBe('NETWORK_TASK_LOCALITY_REQUIRED');
   });
 
-  it('POST network task with valid address → 201 (REQ-ADDR-ROUTE-2 regression)', async () => {
+  it('POST network task with valid iclassCityCode → 201 (REQ-LOC-ROUTE-2 regression)', async () => {
     const { app } = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
-      .send({ ...BASE_NETWORK_BODY, address: 'Av. Libertador 1234' });
+      .send({ ...BASE_NETWORK_BODY, iclassCityCode: 'Mercedes' });
 
     expect(res.status).toBe(201);
-    expect(res.body.address).toBe('Av. Libertador 1234');
+    expect(res.body.iclassCityCode).toBe('Mercedes');
   });
 });

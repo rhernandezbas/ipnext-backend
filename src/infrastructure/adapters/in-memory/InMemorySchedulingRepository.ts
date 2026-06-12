@@ -83,6 +83,8 @@ const NEW_FIELDS_DEFAULTS = {
   networkSiteName: null,
   // #39 — project allows equipment retirement
   projectAllowsRetirement: false,
+  // #54 — task-level locality snapshot (null for seeded tasks; back-compat via site.city)
+  iclassCityCode: null as string | null,
 };
 
 export class InMemorySchedulingRepository implements SchedulingRepository {
@@ -357,6 +359,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       kind: (data.kind ?? 'customer') as 'customer' | 'network',
       networkSiteId: data.networkSiteId ?? null,
       networkSiteName: null, // In-memory: no JOIN (nombre del sitio no se resuelve aquí)
+      // #54 — locality snapshot
+      iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
       closureCommentDone: false,
       closureAuditDone: false,
       closureHasDeviceInventory: false,
@@ -412,6 +416,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...(data.travelTimeFrom !== undefined && { travelTimeFrom: data.travelTimeFrom }),
       ...(gs !== undefined && { generalStatus: gs, isClosed: gs === 'closed' }),
       ...(data.reviewedByInventory !== undefined && { reviewedByInventory: data.reviewedByInventory }),
+      // #54 — locality snapshot
+      ...((data as { iclassCityCode?: string | null }).iclassCityCode !== undefined && { iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode }),
       watcherIds,
     };
     return { ...this.tasks[index] };

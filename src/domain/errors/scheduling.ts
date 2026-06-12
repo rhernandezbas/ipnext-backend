@@ -240,3 +240,14 @@ export class NetworkTaskAddressRequiredError extends DomainError {
     this.name = 'NetworkTaskAddressRequiredError';
   }
 }
+
+/**
+ * #54 — Raised when a network task is created or updated with a blank iclassCityCode.
+ * Domain code: NETWORK_TASK_LOCALITY_REQUIRED; HTTP layer maps it to 422.
+ */
+export class NetworkTaskLocalityRequiredError extends DomainError {
+  constructor() {
+    super('Network tasks require a non-blank iclassCityCode (locality)', 'NETWORK_TASK_LOCALITY_REQUIRED');
+    this.name = 'NetworkTaskLocalityRequiredError';
+  }
+}

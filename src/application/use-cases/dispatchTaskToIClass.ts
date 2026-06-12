@@ -117,7 +117,9 @@ export async function dispatchToIClass(
   const effectiveAddress      = isNet
     ? (networkSite?.address ?? task.networkSiteName ?? '')
     : task.address!;
-  const effectiveCity         = isNet ? (networkSite?.city ?? '') : task.customerCity!;
+  // #54 — dispatch precedence: task.iclassCityCode (snapshot) overrides site.city (fallback).
+  // Existing tasks without a snapshot (iclassCityCode=null) fall back to site.city (back-compat).
+  const effectiveCity         = isNet ? (task.iclassCityCode ?? networkSite?.city ?? '') : task.customerCity!;
 
   try {
     const { orderCode } = await iclass.createServiceOrder({

@@ -45,6 +45,7 @@ import {
   ReferenceKind,
   ProjectKindMismatchError,
   NetworkTaskAddressRequiredError,
+  NetworkTaskLocalityRequiredError,
 } from '@domain/errors/scheduling';
 import {
   ChecklistItemNotFoundError,
@@ -534,6 +535,8 @@ export function createSchedulingRouter(
       // network-node-task (#29): kind discriminator + networkSiteId
       kind: data.kind,
       networkSiteId: ('networkSiteId' in data ? data.networkSiteId : null) ?? null,
+      // #54 — locality snapshot for network tasks
+      iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
     };
 
     try {
@@ -556,6 +559,11 @@ export function createSchedulingRouter(
       }
       // #53 — network task requires a non-blank address.
       if (err instanceof NetworkTaskAddressRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
+      // #54 — network task requires a non-blank iclassCityCode (locality).
+      if (err instanceof NetworkTaskLocalityRequiredError) {
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }
@@ -590,6 +598,11 @@ export function createSchedulingRouter(
       }
       // #53 — network task requires a non-blank address on update.
       if (err instanceof NetworkTaskAddressRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
+      // #54 — network task requires a non-blank iclassCityCode on update.
+      if (err instanceof NetworkTaskLocalityRequiredError) {
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }

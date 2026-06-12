@@ -2,7 +2,7 @@ import { SchedulingRepository, UpdateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
-import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError } from '@domain/errors/scheduling';
+import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -86,6 +86,20 @@ export class UpdateTask {
         const existing = await this.repo.getTask(id);
         if (existing?.kind === 'network') {
           throw new NetworkTaskAddressRequiredError();
+        }
+      }
+    }
+
+    // #54 — When the caller explicitly sends `iclassCityCode` and it is blank, enforce
+    // that network tasks cannot have their locality cleared. Only fires when the field
+    // IS present in the body (partial update: callers that omit iclassCityCode are unaffected).
+    if ('iclassCityCode' in data && (data as { iclassCityCode?: string | null }).iclassCityCode !== undefined) {
+      const cityCode = (data as { iclassCityCode?: string | null }).iclassCityCode;
+      const isBlank = cityCode === null || cityCode === '' || (typeof cityCode === 'string' && !cityCode.trim());
+      if (isBlank) {
+        const existing = await this.repo.getTask(id);
+        if (existing?.kind === 'network') {
+          throw new NetworkTaskLocalityRequiredError();
         }
       }
     }

@@ -115,6 +115,8 @@ const BASE_NETWORK_BODY = {
   networkSiteId: TEST_SITE.id,
   // #53 — network tasks require a non-blank address.
   address: 'Ruta 7 km 5',
+  // #54 — network tasks require a non-blank iclassCityCode (locality).
+  iclassCityCode: 'Mercedes',
 };
 
 // REQ-KIND-1: Network task created successfully

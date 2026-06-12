@@ -82,7 +82,10 @@ const NETWORK_BASE = {
   contractId: null,
   stageId: '10000000-0000-4000-a000-000000000001',
   description: null,
-  address: null,
+  // #53/#54 — address + locality required for network tasks; include so this test
+  // only exercises the kind guard (not address/locality guards).
+  address: 'Ruta 7 km 5',
+  iclassCityCode: 'Mercedes',
   coordinates: null,
   projectName: null,
   completedAt: null,

@@ -81,6 +81,8 @@ const statusMap: Record<string, number> = {
   UISP_UNAVAILABLE: 502,
   // #53 — network task requires a non-blank address
   NETWORK_TASK_ADDRESS_REQUIRED: 422,
+  // #54 — network task requires a non-blank iclassCityCode (locality)
+  NETWORK_TASK_LOCALITY_REQUIRED: 422,
 };
 
 /** Express global error-handling middleware. */

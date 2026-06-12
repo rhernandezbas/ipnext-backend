@@ -119,7 +119,7 @@ export class SendTaskToIClass {
       const effectiveCustomerName = task.networkSiteName ?? null;
       const effectivePhone        = NETWORK_PHONE;
       const effectiveAddress      = networkSite?.address ?? task.address ?? null;
-      const effectiveCity         = networkSite?.city ?? null;
+      const effectiveCity         = task.iclassCityCode ?? networkSite?.city ?? null;
 
       const substitutedValues: Record<(typeof REQUIRED_ORDER)[number], string | null> = {
         customerName: effectiveCustomerName,

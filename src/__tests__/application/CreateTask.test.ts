@@ -72,7 +72,9 @@ const BASE_NETWORK_INPUT = {
   contractId: null,
   stageId: '10000000-0000-4000-a000-000000000001',
   description: null,
-  address: null,
+  // #53/#54 — address + locality required for network tasks.
+  address: 'Ruta 7 km 5',
+  iclassCityCode: 'Mercedes',
   coordinates: null,
   projectId: null,
   projectName: null,

@@ -1,14 +1,14 @@
 /**
- * #53 — CreateTask address guard for network tasks.
+ * #54 — CreateTask locality guard for network tasks.
  *
- * REQ-ADDR-CREATE-1: network task + blank address (null/empty/whitespace) → NetworkTaskAddressRequiredError
- * REQ-ADDR-CREATE-2: network task + valid address → ok
- * REQ-ADDR-CREATE-3: customer task + null address → ok (regression, address stays optional)
+ * REQ-LOC-CREATE-1: network task + blank iclassCityCode (null/empty/whitespace) → NetworkTaskLocalityRequiredError
+ * REQ-LOC-CREATE-2: network task + valid iclassCityCode → ok
+ * REQ-LOC-CREATE-3: customer task + null iclassCityCode → ok (regression, locality optional for customers)
  */
 import { CreateTask } from '../../application/use-cases/CreateTask';
 import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryNetworkSiteRepository } from '../../infrastructure/adapters/in-memory/InMemoryNetworkSiteRepository';
-import { NetworkTaskAddressRequiredError } from '../../domain/errors/scheduling';
+import { NetworkTaskLocalityRequiredError } from '../../domain/errors/scheduling';
 import { EntityLookup } from '../../domain/ports/EntityLookup';
 import { ProjectKindLookup } from '../../domain/ports/ProjectKindLookup';
 
@@ -26,13 +26,13 @@ function buildUseCase() {
   const networkSiteRepo = new InMemoryNetworkSiteRepository();
   const useCase = new CreateTask(
     repo,
-    new AnyLookup(),         // customerLookup
-    new AnyLookup(),         // contractLookup
-    new AnyLookup(),         // partnerLookup
-    new AnyLookup(),         // adminLookup
+    new AnyLookup(),          // customerLookup
+    new AnyLookup(),          // contractLookup
+    new AnyLookup(),          // partnerLookup
+    new AnyLookup(),          // adminLookup
     new EmptyProjectLookup(), // projectLookup
-    undefined,               // ticketLookup
-    undefined,               // recorder
+    undefined,                // ticketLookup
+    undefined,                // recorder
     networkSiteRepo,
   );
   return { repo, useCase };
@@ -47,6 +47,7 @@ const NETWORK_BASE = {
   networkSiteId: '1',   // seeded in InMemoryNetworkSiteRepository
   customerId: null,
   contractId: null,
+  address: 'Ruta 7 km 5',  // #53 address required — must be non-blank for network tasks
   stageId: '10000000-0000-4000-a000-000000000001',
   description: null,
   coordinates: null,
@@ -60,8 +61,6 @@ const NETWORK_BASE = {
   assigneeId: null,
   travelTimeTo: null,
   travelTimeFrom: null,
-  // #54 — locality required for network tasks; include so this test only exercises address guard.
-  iclassCityCode: 'Mercedes',
 };
 
 const CUSTOMER_BASE = {
@@ -89,37 +88,38 @@ const CUSTOMER_BASE = {
   networkSiteId: null,
 };
 
-describe('CreateTask — address guard for network tasks (#53)', () => {
-  it('network task + address=null → rejects NetworkTaskAddressRequiredError', async () => {
+describe('CreateTask — locality guard for network tasks (#54)', () => {
+  it('network task + iclassCityCode=null → rejects NetworkTaskLocalityRequiredError', async () => {
     const { useCase } = buildUseCase();
     await expect(
-      useCase.execute({ ...NETWORK_BASE, address: null } as never),
-    ).rejects.toBeInstanceOf(NetworkTaskAddressRequiredError);
+      useCase.execute({ ...NETWORK_BASE, iclassCityCode: null } as never),
+    ).rejects.toBeInstanceOf(NetworkTaskLocalityRequiredError);
   });
 
-  it('network task + address="" (empty string) → rejects NetworkTaskAddressRequiredError', async () => {
+  it('network task + iclassCityCode="" (empty string) → rejects NetworkTaskLocalityRequiredError', async () => {
     const { useCase } = buildUseCase();
     await expect(
-      useCase.execute({ ...NETWORK_BASE, address: '' } as never),
-    ).rejects.toBeInstanceOf(NetworkTaskAddressRequiredError);
+      useCase.execute({ ...NETWORK_BASE, iclassCityCode: '' } as never),
+    ).rejects.toBeInstanceOf(NetworkTaskLocalityRequiredError);
   });
 
-  it('network task + address="   " (whitespace only) → rejects NetworkTaskAddressRequiredError', async () => {
+  it('network task + iclassCityCode="   " (whitespace only) → rejects NetworkTaskLocalityRequiredError', async () => {
     const { useCase } = buildUseCase();
     await expect(
-      useCase.execute({ ...NETWORK_BASE, address: '   ' } as never),
-    ).rejects.toBeInstanceOf(NetworkTaskAddressRequiredError);
+      useCase.execute({ ...NETWORK_BASE, iclassCityCode: '   ' } as never),
+    ).rejects.toBeInstanceOf(NetworkTaskLocalityRequiredError);
   });
 
-  it('network task + valid address → resolves with id truthy', async () => {
+  it('network task + valid iclassCityCode → resolves with id truthy', async () => {
     const { useCase } = buildUseCase();
-    const task = await useCase.execute({ ...NETWORK_BASE, address: 'Av. Siempreviva 742' } as never);
+    const task = await useCase.execute({ ...NETWORK_BASE, iclassCityCode: 'Mercedes' } as never);
     expect(task.id).toBeTruthy();
+    expect(task.iclassCityCode).toBe('Mercedes');
   });
 
-  it('customer task + address=null → still resolves (address is optional for customers)', async () => {
+  it('customer task + iclassCityCode=null → still resolves (locality is optional for customers)', async () => {
     const { useCase } = buildUseCase();
-    const task = await useCase.execute({ ...CUSTOMER_BASE, address: null } as never);
+    const task = await useCase.execute({ ...CUSTOMER_BASE, iclassCityCode: null } as never);
     expect(task.id).toBeTruthy();
   });
 });

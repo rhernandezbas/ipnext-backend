@@ -1244,6 +1244,11 @@ model ScheduledTask {
   networkSiteId String?
   networkSite   NetworkSite? @relation(fields: [networkSiteId], references: [id], onDelete: SetNull)
 
+  // #54 — task-level locality snapshot for network tasks. Required on create/update
+  // when kind='network'. Dispatch precedence: iclassCityCode ?? networkSite?.city ?? null.
+  // Nullable + additive: existing tasks fall back to site.city (back-compat, no backfill).
+  iclassCityCode String?
+
   // IClass closure loop — mirror of the closed SO, linked back by codigo↔sequenceNumber
   iclassClosedOrder IClassServiceOrder?
 

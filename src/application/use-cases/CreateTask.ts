@@ -2,7 +2,7 @@ import { SchedulingRepository, CreateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
-import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError } from '@domain/errors/scheduling';
+import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -30,6 +30,11 @@ export class CreateTask {
       // #53 — network tasks require a non-blank address.
       if (!data.address || !data.address.trim()) {
         throw new NetworkTaskAddressRequiredError();
+      }
+      // #54 — network tasks require a non-blank iclassCityCode (locality).
+      const cityCode = (data as { iclassCityCode?: string | null }).iclassCityCode;
+      if (cityCode == null || (typeof cityCode === 'string' && !cityCode.trim())) {
+        throw new NetworkTaskLocalityRequiredError();
       }
       // customer y contract son null por diseño — no hay nada que validar.
     } else {
