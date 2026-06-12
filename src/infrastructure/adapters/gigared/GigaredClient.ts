@@ -366,6 +366,15 @@ export class GigaredClient implements GigaredPort {
     );
   }
 
+  async renewCic(internalId: string): Promise<{ oldCic: string; newCic: string }> {
+    // #64 — renueva el CIC por internal_id. Devuelve {old_cic,new_cic}; el partner reasigna
+    // el internal_id al nuevo CIC. CancelTv lo limpia después con setInternalId(newCic, '').
+    const env = await this.put<Envelope<{ old_cic: string; new_cic: string }>>(
+      `/accounts/${encodeURIComponent(internalId)}/renew?use_internal_id=true`,
+    );
+    return { oldCic: env.detail.old_cic, newCic: env.detail.new_cic };
+  }
+
   async setOtt(internalId: string, enabled: boolean): Promise<void> {
     const action = enabled ? 'enable' : 'disable';
     try {

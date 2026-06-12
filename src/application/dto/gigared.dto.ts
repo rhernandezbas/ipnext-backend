@@ -30,19 +30,35 @@ export interface AddTvServiceResult {
 export type RemoveTvServiceResult = AddTvServiceResult;
 
 /**
- * #47k — result of CancelTv (dar de baja TV completa).
+ * #47k / #64 — result of CancelTv (dar de baja TV completa, "RENOVAR CIC").
  *   - `removed`: serviceIds successfully DELETEd in Gigared (base incluido — libera cupo)
  *   - `failed`: serviceIds whose DELETE threw, with the upstream detail (retry idempotente)
  *   - `ottDisabled`: whether the OTT disable succeeded (idempotent: "ya deshabilitada" = true)
  *   - `local`: 'synced' if the local TV ContractService reconcile succeeded, else 'failed'
+ *   - `renew`: #64 — { oldCic, newCic } when the CIC renew succeeded, else null (best-effort).
+ *              Renovar genera un CIC nuevo; el internal_id se reasigna a ese CIC en el partner.
+ *   - `unlinked`: #64 — true if internal_id was cleared on the NEW cic (setInternalId(newCic, '')),
+ *                 dejando al cliente "como si no tuviera TV" (getAccountByInternalId 404 después).
+ *                 false si el renew falló (no hay newCic) o si el partner rechazó el internal_id vacío.
  *
- * Router maps: failed.length === 0 && local === 'synced' → 200; otherwise → 207.
+ * Router maps:
+ *   200 when failed.length === 0 && local === 'synced' && ottDisabled && (!renewAttempted || (renew !== null && unlinked))
+ *   207 otherwise (parcial, retry idempotente).
+ *
+ * `renewAttempted` guards the anti-re-renew logic (#64 H1): it is true only when there was
+ * something to tear down at the START of this run (services.length > 0 OR ott was 'enabled').
+ * When false (account already peeled), renewCic is NOT called and the 207 criterion skips
+ * renew/unlink checks to avoid a permanent 207 on an already-complete account.
  */
 export interface CancelTvResult {
   removed: string[];
   failed: { id: string; detail: string }[];
   ottDisabled: boolean;
   local: 'synced' | 'failed';
+  renew: { oldCic: string; newCic: string } | null;
+  unlinked: boolean;
+  /** #64 H1 — true if this run had something to tear down at start; false on a peeled-account no-op. */
+  renewAttempted: boolean;
 }
 
 /**

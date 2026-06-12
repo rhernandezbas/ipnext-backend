@@ -281,6 +281,20 @@ describe('GigaredClient (#47)', () => {
       expect(body).toEqual({ internal_id: 'CLIENTE_001' });
     });
 
+    it('renewCic → PUT /accounts/{internalId}/renew?use_internal_id=true → {oldCic,newCic}', async () => {
+      const http = makeHttp();
+      http.put.mockResolvedValue({
+        data: { message: 'Éxito', detail: { old_cic: '0000000001', new_cic: '0000000002' } },
+      });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const res = await client.renewCic('CLIENTE_001');
+      const [url] = http.put.mock.calls[0]!;
+      expect(String(url)).toContain('/accounts/CLIENTE_001/renew');
+      expect(String(url)).toContain('use_internal_id=true');
+      expect(res).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
+    });
+
     it('register → POST /accounts/register with snake_case body (send_activation_email)', async () => {
       const http = makeHttp();
       http.post.mockResolvedValue({ data: { message: 'Éxito', detail: 'Registracion iniciada correctamente' } });
