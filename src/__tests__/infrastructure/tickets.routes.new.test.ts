@@ -541,3 +541,40 @@ describe('Authentication', () => {
     expect(res.status).toBe(401);
   });
 });
+
+// #63 — búsqueda LIKE — seam route→use-case→repo
+describe('GET /api/tickets?search= — LIKE search seam (#63)', () => {
+  it('#63-route-search-customer-name: ?search=<customerName> returns matching ticket through full seam', async () => {
+    const { app, repo } = buildApp();
+    // c1 = 'Alice García', c2 = 'Bob Martínez' (seeded in buildApp)
+    await new CreateTicket(repo).execute({ subject: 'Ticket Alice', description: 'D', customerId: 'c1' });
+    await new CreateTicket(repo).execute({ subject: 'Ticket Bob', description: 'D', customerId: 'c2' });
+
+    const res = await withAuth(request(app).get('/api/tickets?search=alice'));
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0].customerName).toBe('Alice García');
+  });
+
+  it('#63-route-search-subject: ?search=<subjectTerm> returns matching ticket through full seam', async () => {
+    const { app, repo } = buildApp();
+    await new CreateTicket(repo).execute({ subject: 'Sin señal en nodo sur', description: 'D' });
+    await new CreateTicket(repo).execute({ subject: 'Factura incorrecta', description: 'D' });
+
+    const res = await withAuth(request(app).get('/api/tickets?search=señal'));
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0].subject).toBe('Sin señal en nodo sur');
+  });
+
+  it('#63-route-search-sequence: ?search=<N> returns ticket with that sequenceNumber', async () => {
+    const { app, repo } = buildApp();
+    const t1 = await new CreateTicket(repo).execute({ subject: 'Ticket A', description: 'D' });
+    await new CreateTicket(repo).execute({ subject: 'Ticket B', description: 'D' });
+
+    const res = await withAuth(request(app).get(`/api/tickets?search=${t1.sequenceNumber}`));
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0].sequenceNumber).toBe(t1.sequenceNumber);
+  });
+});

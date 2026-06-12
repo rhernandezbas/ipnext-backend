@@ -91,10 +91,15 @@ export class PrismaTicketRepository implements TicketRepository {
       where['status'] = { name: { equals: query.status, mode: 'insensitive' } };
     }
     if (query.search) {
-      where['OR'] = [
+      // #63 — LIKE over subject + customer.name + sequenceNumber (exact if numeric)
+      const or: unknown[] = [
         { subject: { contains: query.search, mode: 'insensitive' } },
-        { description: { contains: query.search, mode: 'insensitive' } },
+        { customer: { is: { name: { contains: query.search, mode: 'insensitive' } } } },
       ];
+      if (/^\d+$/.test(query.search)) {
+        or.push({ sequenceNumber: Number(query.search) });
+      }
+      where['OR'] = or;
     }
 
     const page = query.page ?? 1;

@@ -66,10 +66,13 @@ export class InMemoryTicketRepository implements TicketRepository {
     }
     if (query.search) {
       const q = query.search.toLowerCase();
+      // #63 — LIKE over subject + customer.name + sequenceNumber (exact if numeric)
+      const isNumeric = /^\d+$/.test(query.search);
       results = results.filter(
         (t) =>
           t.subject.toLowerCase().includes(q) ||
-          t.description.toLowerCase().includes(q),
+          (t.customerName != null && t.customerName.toLowerCase().includes(q)) ||
+          (isNumeric && t.sequenceNumber === Number(query.search)),
       );
     }
 
