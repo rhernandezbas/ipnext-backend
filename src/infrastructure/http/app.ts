@@ -1694,7 +1694,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     setOttStatus:       new SetOttStatus(gigaredClient, gigaredCustomerLookup),
     cancelTv:           new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     requireRead:        requirePerm('tv', 'read'),
-    requireWrite:       requirePerm('tv', 'write'),
+    // #50 — granular TV permissions (replace generic tv.write).
+    requireLink:        requirePerm('tv', 'link'),
+    requireRegister:    requirePerm('tv', 'register'),
+    requirePacks:       requirePerm('tv', 'packs'),
+    requireOtt:         requirePerm('tv', 'ott'),
+    requireCancel:      requirePerm('tv', 'cancel'),
     requireManage:      requirePerm('tv', 'manage'),
     gigaredReady:       createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo),
     gigaredProbeReady:  createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo, { requireFlag: false }),

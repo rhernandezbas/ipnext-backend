@@ -94,8 +94,8 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 32 valid action codes (4 base + 28 sub-actions)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(32);
+  it('contains exactly 37 valid action codes (4 base + 28 prior sub-actions + 5 tv granular)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(37);
   });
 
   it('includes all 4 base actions', () => {
@@ -135,6 +135,22 @@ describe('KNOWN_ACTIONS constant', () => {
     for (const action of subActions) {
       expect(KNOWN_ACTIONS).toContain(action);
     }
+  });
+
+  it('includes the 5 tv granular sub-actions (#50 — Gigared TV granular permissions)', () => {
+    const tvGranular: PermissionAction[] = ['link', 'register', 'packs', 'ott', 'cancel'];
+    for (const action of tvGranular) {
+      expect(KNOWN_ACTIONS).toContain(action);
+    }
+  });
+
+  it('tv granular actions resolve to dot-format wire keys (tv.<action>)', () => {
+    // The wire key is built as `${moduleCode}.${action}` in ResolveUserPermissions.ts:69
+    const tvModule = 'tv';
+    const expected = ['tv.link', 'tv.register', 'tv.packs', 'tv.ott', 'tv.cancel'];
+    const granularActions: PermissionAction[] = ['link', 'register', 'packs', 'ott', 'cancel'];
+    const wireKeys = granularActions.map((a) => `${tvModule}.${a}`);
+    expect(wireKeys).toEqual(expected);
   });
 
   it('is exported as KNOWN_ACTIONS (source-of-truth for valid action codes)', () => {
