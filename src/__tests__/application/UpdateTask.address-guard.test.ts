@@ -5,6 +5,11 @@
  * REQ-ADDR-UPDATE-2: update network task NOT sending address → ok (partial update)
  * REQ-ADDR-UPDATE-3: update customer task to address='' → ok (guard only applies to network)
  *
+ * #53/#54 fix wave — the guard must fire on a real CHANGE, not mere presence:
+ * REQ-ADDR-UPDATE-4: legacy network task (address null) + PUT echoing address=null
+ *   alongside other fields → ok (no-op blank on an already-blank value, task stays editable).
+ * REQ-ADDR-UPDATE-5: network task WITH an address + PUT blanking it → 422 (clearing a required value).
+ *
  * NOTE on in-memory id collisions: InMemorySchedulingRepository pre-seeds tasks
  * with ids '1'–'7', and nextId (module-level) starts at 7. The first createTask()
  * call in this file produces id '7' — which collides with the pre-seeded task '7'
@@ -104,5 +109,27 @@ describe('UpdateTask — address guard for network tasks (#53)', () => {
   it('update customer task with address="" → ok (guard only applies to network)', async () => {
     const updated = await useCase.execute(customerTaskId, { address: '' } as never);
     expect(updated).not.toBeNull();
+  });
+
+  it('REQ-ADDR-UPDATE-4: legacy network task (address null) + PUT echoing address=null + other fields → ok', async () => {
+    // The detail page ALWAYS echoes `address` in the PUT. A legacy network task
+    // with a null address must stay editable: blanking an already-blank value is a no-op.
+    const legacy = repo.seedTask({ id: 'legacy-net-1', kind: 'network', networkSiteId: '1', address: null });
+    const updated = await useCase.execute(legacy.id, { address: null, title: 'edited legacy' } as never);
+    expect(updated).not.toBeNull();
+    expect(updated?.title).toBe('edited legacy');
+  });
+
+  it('REQ-ADDR-UPDATE-4b: legacy network task (address null) + PUT echoing address="" + other fields → ok', async () => {
+    const legacy = repo.seedTask({ id: 'legacy-net-2', kind: 'network', networkSiteId: '1', address: null });
+    const updated = await useCase.execute(legacy.id, { address: '', assigneeId: null } as never);
+    expect(updated).not.toBeNull();
+  });
+
+  it('REQ-ADDR-UPDATE-5: network task WITH address + PUT blanking it → 422', async () => {
+    const withAddr = repo.seedTask({ id: 'net-with-addr-1', kind: 'network', networkSiteId: '1', address: 'Ruta 7 km 5' });
+    await expect(
+      useCase.execute(withAddr.id, { address: '' } as never),
+    ).rejects.toBeInstanceOf(NetworkTaskAddressRequiredError);
   });
 });

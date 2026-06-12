@@ -116,6 +116,20 @@ describe('SendTaskToIClass — locality precedence (task.iclassCityCode ?? site.
     expect(order.city).toBe('Mercedes');
   });
 
+  it('REQ-ADDR-DISPATCH-1: site has no address + task.address set → OS address == task.address (#53 fix)', async () => {
+    // The shared dispatch helper must honour task.address (the address #53 forces on
+    // create) when the site itself has no address — otherwise it fell back to
+    // networkSiteName and the address never reached IClass.
+    const { tasks, iclass, useCase, networkSiteRepo } = setup('Mercedes');
+    networkSiteRepo.seedSites([makeSite({ id: 'site-loc-1', name: 'Torre Loc', city: 'Mercedes', address: '' })]);
+    seedNetworkTaskWithLocality(tasks, 'Mercedes', 'task-addr-1');
+
+    await useCase.execute('task-addr-1', ENVIAR_STAGE.id, WF);
+
+    expect(iclass.createdOrders).toHaveLength(1);
+    expect(iclass.createdOrders[0].input.address).toBe('Ruta 7 km 5');
+  });
+
   it('REQ-LOC-DISPATCH-3: both blank → MissingRequiredFieldsError includes city', async () => {
     // task.iclassCityCode=null, site.city='' (blank) → MissingRequiredFieldsError with city
     // NetworkSite.city is typed as string (not nullable) — use empty string to simulate missing.

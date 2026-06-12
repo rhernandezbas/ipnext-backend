@@ -5,6 +5,11 @@
  * REQ-LOC-UPDATE-2: update network task NOT sending iclassCityCode → ok (partial update)
  * REQ-LOC-UPDATE-3: update customer task with blank iclassCityCode → ok (guard only applies to network)
  *
+ * #53/#54 fix wave — the guard must fire on a real CHANGE, not mere presence:
+ * REQ-LOC-UPDATE-4: legacy network task (iclassCityCode null) + PUT echoing it blank + other
+ *   fields → ok (no-op blank on an already-blank value, task stays editable).
+ * REQ-LOC-UPDATE-5: network task WITH a locality + PUT blanking it → 422.
+ *
  * NOTE on in-memory id collisions: InMemorySchedulingRepository pre-seeds tasks
  * with ids '1'–'7', and nextId (module-level) starts at 7. The first createTask()
  * call in this file produces id '7' — which collides with the pre-seeded task '7'
@@ -105,5 +110,19 @@ describe('UpdateTask — locality guard for network tasks (#54)', () => {
   it('update customer task with iclassCityCode="" → ok (guard only applies to network)', async () => {
     const updated = await useCase.execute(customerTaskId, { iclassCityCode: '' } as never);
     expect(updated).not.toBeNull();
+  });
+
+  it('REQ-LOC-UPDATE-4: legacy network task (iclassCityCode null) + PUT echoing it blank + other fields → ok', async () => {
+    const legacy = repo.seedTask({ id: 'legacy-net-loc-1', kind: 'network', networkSiteId: '1', address: 'x', iclassCityCode: null });
+    const updated = await useCase.execute(legacy.id, { iclassCityCode: null, title: 'edited legacy' } as never);
+    expect(updated).not.toBeNull();
+    expect(updated?.title).toBe('edited legacy');
+  });
+
+  it('REQ-LOC-UPDATE-5: network task WITH locality + PUT blanking it → 422', async () => {
+    const withLoc = repo.seedTask({ id: 'net-with-loc-1', kind: 'network', networkSiteId: '1', address: 'x', iclassCityCode: 'Mercedes' });
+    await expect(
+      useCase.execute(withLoc.id, { iclassCityCode: '' } as never),
+    ).rejects.toBeInstanceOf(NetworkTaskLocalityRequiredError);
   });
 });

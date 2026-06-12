@@ -49,3 +49,9 @@ Purely additive, nullable, no default, no data migration, no BEGIN/COMMIT. Times
 
 ## Back-compat
 Additive column, no backfill. Old network tasks (iclassCityCode null) dispatch via site.city fallback exactly as before.
+
+## Accepted divergence: node ↔ city (#53/#54 review)
+When the operator picks a locality (`iclassCityCode`) that differs from the node implied by the selected site, the OS is created with the SITE's `nodeCode` while the `city` is overridden by the chosen locality. This node↔city mismatch is **ACCEPTED** as an intentional decision: the semantics of these codes change in the upcoming #51/#55 work (node code resolution is being reworked), so hard-coupling locality to node now would be premature. Dispatch precedence stays `task.iclassCityCode ?? networkSite.city` — the snapshot wins, the node is independent.
+
+### Tech debt (tracked)
+- **Locality not editable post-create from the detail page.** The detail PUT echoes `iclassCityCode`, and the guard (fixed in the #53/#54 wave) now only rejects *clearing* an existing value — but there is no UI affordance on the detail page to CHANGE the locality of an existing network task. Operators can only set it at create time. Editing requires a dedicated control on the detail view; deferred to a follow-up (likely alongside #51/#55).
