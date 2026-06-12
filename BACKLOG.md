@@ -1,14 +1,72 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**.
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +16 (#48–#63, sesión 2026-06-12: tickets reporter/áreas/búsqueda + cluster TV + tareas fibra/nodo + semántica código IClass por contrato) → **61 totales**.
 > **38 hechos (en prod, #39 incluido) · EPIC #38 COMPLETO (7/7 waves) · UISP V1 EN PROD (2026-06-10, BE #99 + FE #71 — flag `uisp-sync` OFF, rotar token post-activación).**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
 
 ---
 
 ## 📋 Pendientes
 
-> Bloque agregado 2026-06-11. Orden de ejecución sugerido (por dependencias): **#40 → #41 → #43 → #42 → #44 → #46 → #45 → #47**. SDD automático + hybrid, agent teams, review adversarial post-apply (loop fix→review del WORKFLOW).
+> **Bloque agregado 2026-06-12 (batch #48–#62, 15 ítems).** SDD automático + hybrid, **worktree por ítem** (pedido explícito del usuario), review adversarial post-apply (loop fix→review del WORKFLOW). Olas sugeridas:
+> **A (quick fixes)**: #48 → #56 → #58 · **B (cluster TV page)**: #61 → #62 → #57 → #60 → #50 · **C (tickets/feedback)**: #49 → #59 · **D (tareas fibra + IClass, en orden)**: #52 → #53 → #54 → #51 → #55.
+
+### #48 — Ticket detail: Reporter visible + botón GUARDAR en Detalles
+- Al entrar al ticket no se muestra el **Reporter** (quién creó el ticket) — sale "—" aunque el ticket tenga creador (caso real: cliente HERNANDEZ RONALD, estado closed). Revisar si el BE persiste/expone `reporterId`/`reporterName` (las TAREAS ya lo tienen del 2026-05-28 `task-detail-reporter-and-unified-save` — patrón a espejar) o si es drift del FE.
+- En el panel **Detalles** debe haber **Guardar**: cambiar área/asignado/estado/prioridad y persistir en un solo save (hoy no hay forma de editar desde ahí).
+
+### #49 — Áreas de tickets (catálogo + obligatorio + filtro + config)
+- Crear **áreas** (seed: Soporte, Administración, Facturación) como **catálogo editable** (patrón `DeviceTypeCatalog`/`ServiceCatalog`).
+- **Obligatoria al crear** el ticket; se agrega a los **filtros** de la lista; columna/pill en lista y detalle.
+- Config en Configuración → apartado **"Tickets" (no existe — crearlo)**. Front impeccable siguiendo el patrón de la página.
+
+### #50 — TV: permisos granulares
+- La TV debe tener permisos granulares (creación, etc.). El módulo RBAC `tv` existe del #47 — auditar qué acciones quedan bajo un permiso genérico y separar (read / write / manage / register…), **dos capas** (FE `Can`/`RequirePermission` + guard BE).
+
+### #51 — Networking settings: código IClass = ID fijo + localidad seteable + dirección UISP
+- En `/admin/networking/settings`, el **código IClass** debe ser un **ID fijo autogenerado por la base** (formato `NODO {número}`), NO la localidad.
+- La **localidad** se setea con el catálogo IClass actual (#45). La **dirección** es la coordenada que llega de UISP.
+
+### #52 — Tareas de fibra: tipo "Nodo" → "Nodo Fibra"
+- Switch del tipo de tarea de nodo a **"Nodo Fibra"**: de momento solo el nombre (texto), sin dropdown.
+
+### #53 — Tareas nodo-fibra y red: dirección OBLIGATORIA al crear
+- La dirección debe ser obligatoria al crear tareas de nodo fibra y de red. En las de red, **al seleccionar un nodo se autocarga la dirección del nodo** (NetworkSite ya la tiene).
+
+### #54 — Tareas de fibra: localidad obligatoria (dropdown IClass)
+- Campo **localidad** obligatorio al crear tarea de fibra, valores del dropdown de IClass (#45): hoy solo **Mercedes** o **Chivilcoy** (sin config extra por ahora).
+
+### #55 — Envío a IClass: identificador = ID de CONTRATO único
+- Al enviar a IClass, el identificador (código iclass) debe ser el **ID del contrato** (único). Si el contrato no tiene id propio exportable, **generarle uno automático**.
+- Se pueden crear N tareas por cliente siempre que el código sea único **por contrato** (la tarea queda asociada al contrato). ⚠️ Cambia la semántica del `sequenceNumber`/iclass-code actual — diseño con cuidado (back-compat con tareas ya enviadas).
+
+### #56 — `/admin/contracts/`: hiperlink al cliente
+- La lista de contratos debe linkear al cliente (patrón del link de `/admin/customers/tv` del #47j).
+
+### #57 — TV: cupos mal mostrados (102/102 vs disponibles)
+- Las cards de cupo muestran "Gigared Play Full — En uso 102 de 102, sin cupo" con 102 cuentas totales / 86 registradas, y "Pack Todo Futbol 62/80, 18 disponibles". El usuario reporta que está MAL. Investigar contra `/partners/summary` real (qty_used/qty_purchased/qty_available) — puede ser mapeo del FE o interpretación del summary (octava divergencia doc↔realidad candidata).
+
+### #58 — Modal "+ Agregar servicio" cortado
+- En `#contracts` del cliente, el modal/popover de "+ Agregar servicio" se corta — no se ven todas las opciones (overflow/clipping). Fix CSS + verificar en todas las cards.
+
+### #59 — IClass settings: feedback visible en "Re-disparar efectos" / "Reprocesar ahora"
+- En `/admin/scheduling/settings#iclass`, al apretar **Re-disparar efectos faltantes** o **Reprocesar ahora** no se ve ningún cambio — debe mostrar estado (encolado/en curso/resultado), patrón del banner del Reconciliar (#32).
+
+### #60 — TV: dispositivos registrados (si la API los trae)
+- El panel dice "0 dispositivos registrados" pero el usuario registró dispositivos (la web de Gigared lista ID/Dispositivo/Tipo, ej. 1660988 Macintosh Móvil). La doc solo expone `qty_registered_devices` — **verificar contra la API real** si hay endpoint/campo de lista de dispositivos. Si lo trae → mostrar lista + fix del contador; si no → está OK, documentar.
+
+### #61 — `/admin/customers/tv`: filtro único LIKE
+- Los filtros deben ser **UNO solo** estilo LIKE a nivel tabla: busca por nombre, CIC o email.
+
+### #62 — `/admin/customers/tv`: columna de estado activo/desactivado
+- La page de TV de clientes debe mostrar el **estado** (activa/desactivada — OTT/cuenta) por fila.
+
+### #63 — Tickets: filtrar por nombre + búsqueda LIKE  *(agregado 2026-06-12, mismo batch)*
+- El filtro de la lista de tickets debe permitir **filtrar por nombre** (cliente), y el **buscar** tiene que ser un **LIKE** (substring, no match exacto). Patrón del search de tareas (#13 viejo: OR sobre title + customer.name + sequenceNumber numérico).
+
+---
+
+> Bloque 2026-06-11 (#40–#47, COMPLETO). Orden de ejecución sugerido (por dependencias): **#40 → #41 → #43 → #42 → #44 → #46 → #45 → #47**. SDD automático + hybrid, agent teams, review adversarial post-apply (loop fix→review del WORKFLOW).
 
 ### #40 — Page "Tareas Nodos" (gemela de Tareas, solo tareas de nodo) ✅ HECHO *(2026-06-11, BE PR #104 + FE PR #78, en prod)*
 > SDD `tareas-nodos-page`. `Project.isNetworkProject` (migración `20260623000000`) + filtro `kind` + guard simétrico create/update (`ProjectKindLookup`, 422 `INVALID_PROJECT_KIND`, dispara por CAMBIO no por presencia) + composition-root test. FE: `TasksPageBase` extraído (paridad verificada), página `/admin/scheduling/nodos`, modal locked en modo nodo, proyectos de red excluidos de los 3 call sites de creación + DatosForm (con pinning "(fuera de tipo)" anti-tarea-ineditable), tab "Proyectos de red" en config. Review: 2 adversariales + fix wave + 2 micro-fixes + 2 re-reviews → CLEAN. Gates: BE 3201/0+tsc, FE 2335/0+typecheck. Post-deploy: "Red - Fibra" y "RED - Wireless" tagueados en prod (TOTAL_FLAGGED=2). Pendiente menor: smoke visual UI (faltan creds admin de prod). Deuda anotada: `IngestGestionRealOrders` crea tareas DIRECTO en el repo (bypassa el guard — pre-existente, inofensivo hoy).
