@@ -21,7 +21,7 @@ describe('DeleteTicketArea', () => {
   });
 
   it('deletes an unused area and removes it from list', async () => {
-    const area = await createArea.execute({ name: 'Soporte' });
+    const area = await createArea.execute({ name: 'Soporte', color: '#6366f1' });
     await deleteArea.execute(area.id);
     expect(await listAreas.execute()).toHaveLength(0);
   });
@@ -33,13 +33,13 @@ describe('DeleteTicketArea', () => {
   });
 
   it('throws TicketAreaInUseError (409) when area has tickets', async () => {
-    const area = await createArea.execute({ name: 'Soporte' });
+    const area = await createArea.execute({ name: 'Soporte', color: '#6366f1' });
     repo.ticketCounts[area.id] = 3;
     await expect(deleteArea.execute(area.id)).rejects.toBeInstanceOf(TicketAreaInUseError);
   });
 
   it('allows deleting any seed area (no protection)', async () => {
-    const soporte = await createArea.execute({ name: 'Soporte' });
+    const soporte = await createArea.execute({ name: 'Soporte', color: '#6366f1' });
     await expect(deleteArea.execute(soporte.id)).resolves.toBeUndefined();
   });
 });

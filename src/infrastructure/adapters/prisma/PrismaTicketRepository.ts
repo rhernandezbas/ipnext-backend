@@ -22,7 +22,7 @@ const INCLUDE = {
   customer: { select: { id: true, name: true } },
   assignee: { select: { id: true, name: true } },
   reporter: { select: { id: true, name: true } },       // #48 — JOIN para reporterName (espejo de assignee)
-  area: { select: { id: true, name: true } },           // #49 — JOIN para areaName
+  area: { select: { id: true, name: true, color: true } }, // #49 areaName / #69 areaColor
 } as const;
 
 export function toTicket(row: any): Ticket {
@@ -47,6 +47,7 @@ export function toTicket(row: any): Ticket {
     // #49 — área denormalizada igual que customer/assignee/reporter.
     areaId: row.areaId ?? null,
     areaName: row.area?.name ?? null,
+    areaColor: row.area?.color ?? null,   // #69
     grCasoId: row.grCasoId ?? null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,

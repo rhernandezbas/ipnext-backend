@@ -100,7 +100,7 @@ function withAuth(req: request.Test) {
 describe('POST /api/tickets', () => {
   it('returns 201 and creates the ticket with customerId', async () => {
     const { app, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await withAuth(
       request(app).post('/api/tickets').send({
         subject: 'Sin señal',
@@ -121,7 +121,7 @@ describe('POST /api/tickets', () => {
 
   it('#11: assigns a monotonic sequenceNumber (shown as #N in the list)', async () => {
     const { app, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const mk = () => withAuth(request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }));
     const a = await mk();
     const b = await mk();
@@ -182,7 +182,7 @@ describe('GET /api/tickets', () => {
   it('M2: filters by ?status= case-insensitively (protects Archive: closed vs Closed)', async () => {
     const { app, repo, statusRepo, areaRepo } = buildApp();
     await seedCanonicalStatuses(statusRepo);
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const created = await new CreateTicket(repo).execute({ subject: 'Closable', description: 'D', areaId: area.id });
     // Close it → ticket.status becomes the canonical catalog name 'closed'.
     await withAuth(request(app).delete(`/api/tickets/${created.id}`));
@@ -343,7 +343,7 @@ describe('PATCH /api/tickets/:id (update fields)', () => {
 describe('POST /api/tickets — reporter (#48)', () => {
   it('REQ-TICKET-CREATE-1: stamps reporterId from the session when body omits it', async () => {
     const { app, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await withAuth(
       request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }),
     );
@@ -355,7 +355,7 @@ describe('POST /api/tickets — reporter (#48)', () => {
 
   it('REQ-TICKET-CREATE-2: explicit reporterId in the body wins over the session default', async () => {
     const { app, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await withAuth(
       request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: '2', areaId: area.id }),
     );
@@ -366,7 +366,7 @@ describe('POST /api/tickets — reporter (#48)', () => {
 
   it('REQ-TICKET-CREATE-3: a body reporterId that is NOT a known user → 422 REPORTER_NOT_FOUND', async () => {
     const { app, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     // An unknown reporterId would hit a Prisma FK violation (P2003) in prod and
     // surface as a 500. Validate existence up-front and reject with a clear 422.
     const res = await withAuth(
@@ -378,7 +378,7 @@ describe('POST /api/tickets — reporter (#48)', () => {
 
   it('REQ-TICKET-CREATE-1b: the session-default path (no body reporterId) is NOT validated and stays 201', async () => {
     const { app, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     // The session user exists by definition; the default stamp must never be
     // re-validated nor blocked. Session id is '1' (Admin Uno).
     const res = await withAuth(
@@ -577,7 +577,7 @@ describe('POST /api/tickets — areaId required (#49)', () => {
 
   it('REQ-TICKET-AREA-3: valid areaId → 201, DTO has areaId + areaName', async () => {
     const { app, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
 
     const res = await withAuth(
       request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }),
@@ -591,10 +591,10 @@ describe('POST /api/tickets — areaId required (#49)', () => {
 describe('PATCH /api/tickets/:id — areaId (#49)', () => {
   it('REQ-TICKET-AREA-4: PATCH with valid areaId updates the area', async () => {
     const { app, repo, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Facturación' });
+    const area = await areaRepo.create({ name: 'Facturación', color: '#6366f1' });
     const created = await repo.create({ subject: 'T', description: 'D', areaId: area.id });
 
-    const area2 = await areaRepo.create({ name: 'Administración' });
+    const area2 = await areaRepo.create({ name: 'Administración', color: '#6366f1' });
     const res = await withAuth(
       request(app).patch(`/api/tickets/${created.id}`).send({ areaId: area2.id }),
     );
@@ -605,7 +605,7 @@ describe('PATCH /api/tickets/:id — areaId (#49)', () => {
 
   it('REQ-TICKET-AREA-5: PATCH with null areaId clears the area', async () => {
     const { app, repo, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const created = await repo.create({ subject: 'T', description: 'D', areaId: area.id });
 
     const res = await withAuth(
@@ -618,7 +618,7 @@ describe('PATCH /api/tickets/:id — areaId (#49)', () => {
 
   it('REQ-TICKET-AREA-6: PATCH with unknown areaId → 422 TICKET_AREA_NOT_FOUND', async () => {
     const { app, repo, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const created = await repo.create({ subject: 'T', description: 'D', areaId: area.id });
 
     const res = await withAuth(
@@ -630,7 +630,7 @@ describe('PATCH /api/tickets/:id — areaId (#49)', () => {
 
   it('REQ-TICKET-AREA-7: PATCH without areaId field does not change area', async () => {
     const { app, repo, areaRepo } = buildApp();
-    const area = await areaRepo.create({ name: 'Soporte' });
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const created = await repo.create({ subject: 'T', description: 'D', areaId: area.id });
 
     const res = await withAuth(
@@ -646,8 +646,8 @@ describe('PATCH /api/tickets/:id — areaId (#49)', () => {
 describe('GET /api/tickets?areaId= — filter by area (#49)', () => {
   it('REQ-TICKET-AREA-8: ?areaId= filters tickets by area', async () => {
     const { app, repo, areaRepo } = buildApp();
-    const areaA = await areaRepo.create({ name: 'Soporte' });
-    const areaB = await areaRepo.create({ name: 'Facturación' });
+    const areaA = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
+    const areaB = await areaRepo.create({ name: 'Facturación', color: '#6366f1' });
     await repo.create({ subject: 'T1', description: 'D', areaId: areaA.id });
     await repo.create({ subject: 'T2', description: 'D', areaId: areaA.id });
     await repo.create({ subject: 'T3', description: 'D', areaId: areaB.id });

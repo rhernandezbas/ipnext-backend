@@ -21,13 +21,13 @@ export class InMemoryTicketAreaCatalogRepository implements TicketAreaCatalogRep
     return item ? { ...item } : null;
   }
 
-  async create(data: { name: string }): Promise<TicketAreaCatalog> {
+  async create(data: { name: string; color: string }): Promise<TicketAreaCatalog> {
     const item: TicketAreaCatalog = { id: randomUUID(), ...data };
     this.items.push(item);
     return { ...item };
   }
 
-  async update(id: string, data: Partial<{ name: string }>): Promise<TicketAreaCatalog | null> {
+  async update(id: string, data: Partial<{ name: string; color: string }>): Promise<TicketAreaCatalog | null> {
     const index = this.items.findIndex(i => i.id === id);
     if (index === -1) return null;
     this.items[index] = { ...this.items[index]!, ...data };

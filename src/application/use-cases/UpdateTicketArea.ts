@@ -4,7 +4,7 @@ import { TicketAreaNotFoundError, TicketAreaNameConflictError } from '@domain/er
 
 export class UpdateTicketArea {
   constructor(private readonly repo: TicketAreaCatalogRepository) {}
-  async execute(id: string, data: { name?: string }): Promise<TicketAreaCatalog> {
+  async execute(id: string, data: { name?: string; color?: string }): Promise<TicketAreaCatalog> {
     const item = await this.repo.getById(id);
     if (!item) throw new TicketAreaNotFoundError(id);
 

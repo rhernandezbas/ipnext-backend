@@ -3,7 +3,7 @@ import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepo
 import { prisma } from '../../database/prisma';
 
 function toTicketAreaCatalog(row: any): TicketAreaCatalog {
-  return { id: row.id, name: row.name };
+  return { id: row.id, name: row.name, color: row.color };
 }
 
 export class PrismaTicketAreaCatalogRepository implements TicketAreaCatalogRepository {
@@ -23,12 +23,12 @@ export class PrismaTicketAreaCatalogRepository implements TicketAreaCatalogRepos
     return row ? toTicketAreaCatalog(row) : null;
   }
 
-  async create(data: { name: string }): Promise<TicketAreaCatalog> {
+  async create(data: { name: string; color: string }): Promise<TicketAreaCatalog> {
     const row = await (prisma as any).ticketAreaCatalog.create({ data });
     return toTicketAreaCatalog(row);
   }
 
-  async update(id: string, data: Partial<{ name: string }>): Promise<TicketAreaCatalog | null> {
+  async update(id: string, data: Partial<{ name: string; color: string }>): Promise<TicketAreaCatalog | null> {
     try {
       const row = await (prisma as any).ticketAreaCatalog.update({ where: { id }, data });
       return toTicketAreaCatalog(row);

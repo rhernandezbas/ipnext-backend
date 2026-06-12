@@ -54,6 +54,7 @@ export class SplynxTicketAdapter implements TicketRepository {
         reporterName: null,
         areaId: null,        // #49 — Splynx legacy has no area concept
         areaName: null,
+        areaColor: null,
         grCasoId: null,
         createdAt: String(t['date_created'] ?? new Date().toISOString()),
         updatedAt: String(t['date_created'] ?? new Date().toISOString()),
@@ -107,6 +108,7 @@ export class SplynxTicketAdapter implements TicketRepository {
       reporterName: null,
       areaId: null,           // #49 — Splynx legacy has no area concept
       areaName: null,
+      areaColor: null,
       grCasoId: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

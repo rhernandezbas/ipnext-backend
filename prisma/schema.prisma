@@ -1940,9 +1940,11 @@ model IClassClosureConfig {
 // =============================================
 
 // #49 — Ticket area catalog. Editable list; 3 seed areas.
+// #69 — `color` (hex) drives the area pill in the tickets list.
 model TicketAreaCatalog {
   id        String   @id @default(uuid())
   name      String   @unique
+  color     String   @default("#6366f1")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   tickets   Ticket[]

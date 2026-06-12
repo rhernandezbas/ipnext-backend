@@ -45,16 +45,23 @@ export interface TicketDto {
   reporterName: string | null;  // #48 — JOIN-derived (RbacUser.name)
   areaId: string | null;        // #49
   areaName: string | null;      // #49 — JOIN-derived (TicketAreaCatalog.name)
+  areaColor: string | null;     // #69 — JOIN-derived (TicketAreaCatalog.color)
   grCasoId: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-// TicketArea catalog DTOs — simple name-only catalog
+// #69 — 6-digit hex color (e.g. #6366f1). Stricter than the status schema on
+// purpose: the area pill renders the raw value as a CSS background, so we reject
+// anything that isn't a valid hex string at the edge.
+const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'color must be a 6-digit hex like #6366f1');
+
+// TicketArea catalog DTOs — name + pill color (#69)
 export const CreateTicketAreaSchema = z.object({
   // .trim() before .min(1): a name of " " or "Soporte " would otherwise slip
   // past the uniqueness conflict check by carrying invisible whitespace.
   name: z.string().trim().min(1),
+  color: HexColorSchema,
 });
 export const UpdateTicketAreaSchema = CreateTicketAreaSchema.partial();
 export type CreateTicketAreaInput = z.infer<typeof CreateTicketAreaSchema>;
