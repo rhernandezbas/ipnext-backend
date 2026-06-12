@@ -84,6 +84,8 @@ interface Opts {
   catalog?: InMemoryServiceCatalogRepository;
   contractExists?: boolean;
   customerExists?: boolean;
+  /** #70 — grClienteId the customer lookup reports. Defaults to '243200' (a registerable client). */
+  grClienteId?: string | null;
   /** Owner (clientId) the contract lookup reports. Defaults to 'cust-1' (the test customer). */
   contractOwner?: string;
   /** #65 H3 — what the TV credentials reader returns for the customer (null = no TV row → 404). */
@@ -103,7 +105,12 @@ async function buildApp(opts: Opts = {}) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (csRepo as any).catalog[cat.id] = { name: cat.name, label: cat.label };
 
-  const customerLookup = { findById: async (id: string) => (opts.customerExists === false ? null : { id }) };
+  const customerLookup = {
+    findById: async (id: string) =>
+      opts.customerExists === false
+        ? null
+        : { id, grClienteId: opts.grClienteId === undefined ? '243200' : opts.grClienteId },
+  };
   const contractLookup = {
     findById: async (id: string) =>
       (opts.contractExists === false ? null : { id, clientId: opts.contractOwner ?? 'cust-1' }),
@@ -268,7 +275,7 @@ describe('gigared.routes — granular TV RBAC guards (#50)', () => {
     const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200' });
     expect(res.status).toBe(201);
     const [, body] = (port.register as jest.Mock).mock.calls[0];
     expect((port.register as jest.Mock).mock.calls[0][0].sendActivationEmail).toBe(false);
@@ -453,7 +460,7 @@ describe('gigared.routes — happy + 207 (#47)', () => {
     const app = await buildApp();
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', sendActivationEmail: true });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true });
     expect(res.status).toBe(201);
     expect(res.body.account.cic).toBe('0000000001');
   });
@@ -657,67 +664,65 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
   });
 });
 
-describe('#47h POST /register — password policy (Gigared accepts only [a-z0-9])', () => {
-  it('b) caller-provided VALID password is forwarded verbatim to Gigared', async () => {
+// #70 rework — la password del registro se GENERA SERVER-SIDE a partir del grClienteId
+// del cliente (helper determinístico del #65: `ip{grClienteId}` paddeado a 8). El body del
+// register YA NO acepta password: si viene, se ignora (strip silencioso para tolerar el FE
+// viejo en la ventana de deploy). Sin grClienteId → 422 GR_CLIENT_ID_REQUIRED, Gigared intacto.
+describe('#70 POST /register — password generada server-side (el body ya no la acepta)', () => {
+  it('register SIN password en el body → 201 con la determinística ip{grClienteId} reenviada a Gigared', async () => {
     const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }) });
-    const res = await request(app)
-      .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'lowercase42' });
-    expect(res.status).toBe(201);
-    expect(register).toHaveBeenCalledTimes(1);
-    expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'lowercase42' });
-  });
-
-  it('c) INVALID password (uppercase) → 400 and Gigared is never touched', async () => {
-    const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }) });
-    const res = await request(app)
-      .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'BadPass123' });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/minúsculas y números/i);
-    expect(register).not.toHaveBeenCalled();
-  });
-
-  it('c) INVALID password (symbol) → 400, Gigared untouched', async () => {
-    const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }) });
-    const res = await request(app)
-      .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'abc_12345' });
-    expect(res.status).toBe(400);
-    expect(register).not.toHaveBeenCalled();
-  });
-
-  it('c) INVALID password (too short, 7 chars) → 400, Gigared untouched', async () => {
-    const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }) });
-    const res = await request(app)
-      .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'abc1234' });
-    expect(res.status).toBe(400);
-    expect(register).not.toHaveBeenCalled();
-  });
-
-  it('d) NO password provided → server generates a COMPLIANT [a-z0-9]{12} password', async () => {
-    const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }) });
+    const app = await buildApp({ port: fakePort({ register }), grClienteId: '243200' });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
     expect(res.status).toBe(201);
-    const sent = (register.mock.calls[0] as unknown[])[0] as { password: string };
-    expect(sent.password).toMatch(/^[a-z0-9]{12}$/);
+    expect(register).toHaveBeenCalledTimes(1);
+    // ip243200 ya cumple la longitud mínima (8) → sin padding.
+    expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip243200' });
+  });
+
+  it('grClienteId corto → la determinística se paddea a 8 (ip12 → ip120000)', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }), grClienteId: '12' });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+    expect(res.status).toBe(201);
+    expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip120000' });
+  });
+
+  it('body CON password → se IGNORA: se usa SIEMPRE la determinística (tolera FE viejo)', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }), grClienteId: '243200' });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'otracosa99' });
+    expect(res.status).toBe(201);
+    expect(register).toHaveBeenCalledTimes(1);
+    // la del body NO viaja; viaja la generada server-side.
+    expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip243200' });
+    expect((register.mock.calls[0] as unknown[])[0]).not.toMatchObject({ password: 'otracosa99' });
+  });
+
+  it('cliente SIN grClienteId → 422 GR_CLIENT_ID_REQUIRED, Gigared NUNCA tocado', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }), grClienteId: null });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('GR_CLIENT_ID_REQUIRED');
+    expect(res.body.error).toMatch(/Gestión Real/i);
+    expect(register).not.toHaveBeenCalled();
   });
 
   it('e) the password NEVER appears in the endpoint response body', async () => {
-    const app = await buildApp();
+    const app = await buildApp({ grClienteId: '243200' });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'lowercase42' });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
     expect(res.status).toBe(201);
-    expect(JSON.stringify(res.body)).not.toContain('lowercase42');
+    expect(JSON.stringify(res.body)).not.toContain('ip243200');
     expect(JSON.stringify(res.body).toLowerCase()).not.toContain('password');
   });
 });
@@ -746,7 +751,7 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
     const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', sendActivationEmail: true });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true });
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('GIGARED_UNAVAILABLE');
     expect(res.body.detail).toBe('CUA no respondió a tiempo');

@@ -8,7 +8,7 @@ import { GetGigaredCustomerAccount } from '@application/use-cases/gigared/GetGig
 import { LinkCustomerToCic } from '@application/use-cases/gigared/LinkCustomerToCic';
 import { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterGigaredAccount';
 import type { GigaredPort, GigaredAccount, GigaredSummary } from '@domain/ports/GigaredPort';
-import { GigaredNotFoundError, CicNotFoundError, CicAlreadyLinkedError } from '@domain/errors/gigared';
+import { GigaredNotFoundError, CicNotFoundError, CicAlreadyLinkedError, GrClientIdRequiredError } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
@@ -41,8 +41,11 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
   };
 }
 
-const customerLookup = (exists: boolean) => ({
-  findById: async (id: string) => (exists ? { id } : null),
+// #70 — the lookup now also reports grClienteId so RegisterGigaredAccount can derive the
+// deterministic password server-side (`ip{grClienteId}` padded). Defaults to '243200', which
+// yields `ip243200` and keeps the #65 persistence assertions byte-for-byte.
+const customerLookup = (exists: boolean, grClienteId: string | null = '243200') => ({
+  findById: async (id: string) => (exists ? { id, grClienteId } : null),
 });
 
 describe('GetGigaredSummary (#47)', () => {
@@ -326,17 +329,42 @@ describe('RegisterGigaredAccount (#47)', () => {
       setInternalId: jest.fn(async () => { calls.push('setInternalId'); }),
       getAccountByInternalId: jest.fn(async () => { calls.push('get'); return fakeAccount(); }),
     });
+    // #70 — la password ya NO viaja en el input: el use case la genera server-side
+    // a partir del grClienteId del cliente (default '243200' → ip243200).
     const uc = new RegisterGigaredAccount(port, customerLookup(true));
     const result = await uc.execute('cust-1', {
       firstName: 'Juan', lastName: 'Pérez', email: 'e@x.com', cic: '0000001234',
-      password: 'transient', sendActivationEmail: true,
+      sendActivationEmail: true,
     });
     expect(calls).toEqual(['register', 'activate', 'setInternalId', 'get']);
     expect(port.activate).toHaveBeenCalledWith({ cic: '0000001234', email: 'e@x.com' });
     expect(port.setInternalId).toHaveBeenCalledWith('0000001234', 'cust-1');
     expect(result.account.cic).toBe('0000000001');
-    // password must not surface in the returned account
-    expect(JSON.stringify(result)).not.toContain('transient');
+    // #70 — la generada (ip243200) viaja a Gigared en el register.
+    expect((port.register as jest.Mock).mock.calls[0][0]).toMatchObject({ password: 'ip243200' });
+  });
+
+  // #70 — la password la genera el use case con el helper determinístico del #65.
+  it('#70 generates the password SERVER-SIDE from grClienteId (ip{grClienteId} padded)', async () => {
+    const port = fakePort();
+    const uc = new RegisterGigaredAccount(port, customerLookup(true, '12'));
+    await uc.execute('cust-1', {
+      firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
+      sendActivationEmail: false,
+    });
+    // ip12 < 8 → padded with '0' → ip120000
+    expect((port.register as jest.Mock).mock.calls[0][0]).toMatchObject({ password: 'ip120000' });
+  });
+
+  // #70 — sin grClienteId no se puede derivar la password → 422 GR_CLIENT_ID_REQUIRED, Gigared intacto.
+  it('#70 customer WITHOUT grClienteId → GrClientIdRequiredError, Gigared never touched', async () => {
+    const port = fakePort();
+    const uc = new RegisterGigaredAccount(port, customerLookup(true, null));
+    await expect(uc.execute('cust-1', {
+      firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
+      sendActivationEmail: false,
+    })).rejects.toBeInstanceOf(GrClientIdRequiredError);
+    expect(port.register).not.toHaveBeenCalled();
   });
 
   it('back-compat: WITHOUT contractId never touches contracts', async () => {
@@ -347,7 +375,7 @@ describe('RegisterGigaredAccount (#47)', () => {
     const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
     await uc.execute('cust-1', {
       firstName: 'Juan', lastName: 'Pérez', email: 'e@x.com', cic: '0000001234',
-      password: 'transient', sendActivationEmail: false,
+      sendActivationEmail: false,
     });
     expect(addSpy).not.toHaveBeenCalled();
   });
@@ -383,7 +411,7 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
     const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
     const result = await uc.execute('cust-1', {
       firstName: 'Ronald', lastName: 'Hernández', email: 'ronald2432@gmail.com', cic: '0000001234',
-      password: 'ip243200', sendActivationEmail: false, contractId: 'C1',
+      sendActivationEmail: false, contractId: 'C1',
     });
     const tvId = (await catalog.getByName('TV'))!.id;
     const row = await cs.getByPair('C1', tvId);
@@ -406,7 +434,7 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
     const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
     const result = await uc.execute('cust-1', {
       firstName: 'R', lastName: 'H', email: 'e@x.com', cic: '0000001234',
-      password: 'ip243200', sendActivationEmail: false, contractId: 'C1',
+      sendActivationEmail: false, contractId: 'C1',
     });
     const tvId = (await catalog.getByName('TV'))!.id;
     const row = await cs.getByPair('C1', tvId);
@@ -424,7 +452,7 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
     const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true, 'cust-B'), cs, catalog);
     await expect(uc.execute('cust-1', {
       firstName: 'R', lastName: 'H', email: 'e@x.com', cic: '0000001234',
-      password: 'ip243200', sendActivationEmail: false, contractId: 'C-of-B',
+      sendActivationEmail: false, contractId: 'C-of-B',
     })).rejects.toBeInstanceOf(ContractNotFoundError);
     expect(port.register).not.toHaveBeenCalled();
   });
@@ -440,7 +468,7 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
     const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
     const result = await uc.execute('cust-1', {
       firstName: 'R', lastName: 'H', email: 'e@x.com', cic: '0000001234',
-      password: 'ip243200', sendActivationEmail: false, contractId: 'C1',
+      sendActivationEmail: false, contractId: 'C1',
     });
     expect(result.account.cic).toBe('0000001234');
     expect(result.credentialsPersisted).toBe(false);
@@ -451,7 +479,7 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
     const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
     const result = await uc.execute('cust-1', {
       firstName: 'R', lastName: 'H', email: 'e@x.com', cic: '0000001234',
-      password: 'ip243200', sendActivationEmail: false,
+      sendActivationEmail: false,
     });
     expect(result.credentialsPersisted).toBe(false);
   });

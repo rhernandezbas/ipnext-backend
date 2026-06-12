@@ -89,6 +89,22 @@ export class GigaredInvalidPasswordError extends DomainError {
   }
 }
 
+/**
+ * #70 — register: the password is generated server-side from the customer's grClienteId
+ * (deterministic `ip{grClienteId}` padded, #65). A customer with no grClienteId has no source
+ * for that password, so the register cannot proceed → router 422 GR_CLIENT_ID_REQUIRED. No
+ * hidden random fallback (that generator was removed in the #70 first pass).
+ */
+export class GrClientIdRequiredError extends DomainError {
+  constructor(
+    public readonly customerId: string,
+    message = 'El cliente no tiene ID de Gestión Real — no se puede generar la contraseña',
+  ) {
+    super(message, 'GR_CLIENT_ID_REQUIRED');
+    this.name = 'GrClientIdRequiredError';
+  }
+}
+
 /** No active 'TV' entry in the ServiceCatalog — local reconcile cannot proceed. */
 export class TvCatalogMissingError extends DomainError {
   constructor(message = "ServiceCatalog has no active 'TV' entry") {
