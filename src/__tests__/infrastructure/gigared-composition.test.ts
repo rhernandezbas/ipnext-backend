@@ -19,7 +19,9 @@ describe('Gigared composition root (#47)', () => {
   it("(a) createGigaredRouter is wired with requirePerm('tv', …)", () => {
     const idx = appSrc.indexOf('createGigaredRouter(');
     expect(idx).toBeGreaterThan(-1);
-    const window = appSrc.slice(idx, idx + 1600);
+    // #65 fix wave — the deps block grew (getTvCredentials); widen the window so the first
+    // requirePerm('tv', …) is still inside it.
+    const window = appSrc.slice(idx, idx + 1900);
     expect(window).toMatch(/requirePerm\(\s*['"]tv['"]/);
   });
 

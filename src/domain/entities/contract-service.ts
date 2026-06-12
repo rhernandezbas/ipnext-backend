@@ -11,5 +11,9 @@ export interface ContractServiceView {
   label: string | null;    // from ServiceCatalog.label
   status: string;          // active | inactive
   notes: string | null;
+  /** #65 Gigared Play login (GIGA{abonado}). null for non-TV rows. */
+  tvLogin: string | null;
+  /** #65 deterministic TV password (visible to the operator). null for non-TV rows. */
+  tvPassword: string | null;
   createdAt: string;       // ISO 8601
 }

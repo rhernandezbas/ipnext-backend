@@ -244,6 +244,27 @@ describe('PATCH /api/contracts/:contractId/services/:id', () => {
     expect(res.body.notes).toBe('secundario');
   });
 
+  // #65 fix wave H3 — the contract-service response NEVER leaks the TV credentials.
+  it('H3 — PATCH response on a Gigared-managed TV row strips tvLogin/tvPassword', async () => {
+    fx.contracts.add('C');
+    const cat = await seedCatalog(fx, 'TV');
+    // Seed a managed TV row carrying credentials directly via the repo (mirrors register).
+    const row = await fx.csRepo.add({
+      contractId: 'C', serviceCatalogId: cat.id,
+      notes: 'CIC 0000001234 · Gigared Play Full', tvLogin: 'GIGA2432', tvPassword: 'ip243200',
+    });
+    const res = await asUser(
+      request(fx.app).patch(`/api/contracts/C/services/${row.id}`).send({ notes: 'updated' }),
+      fx.writeUserId,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.notes).toBe('updated');
+    // The password (and login) must NEVER ride out on a contract-service response.
+    expect(res.body.tvPassword).toBeUndefined();
+    expect(res.body.tvLogin).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain('ip243200');
+  });
+
   // CSV-2.4
   it('unknown id → 404 CONTRACT_SERVICE_NOT_FOUND', async () => {
     fx.contracts.add('C');

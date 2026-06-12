@@ -10,6 +10,7 @@ import {
   UpdateContractNameSchema,
   AddContractServiceSchema,
   UpdateContractServiceSchema,
+  toContractServiceDto,
 } from '@application/dto/contract-services.dto';
 import {
   ContractNotFoundError,
@@ -61,7 +62,8 @@ export function createContractServicesRouter(
     }
     try {
       const result = await addSvc.execute(req.params['contractId'] as string, parsed.data);
-      res.status(201).json(result);
+      // H3 — never leak the TV credentials on a contract-service response.
+      res.status(201).json(toContractServiceDto(result));
     } catch (err) {
       if (err instanceof ContractNotFoundError || err instanceof ServiceCatalogNotFoundError) {
         res.status(404).json({ error: err.message, code: err.code });
@@ -87,7 +89,9 @@ export function createContractServicesRouter(
       return;
     }
     try {
-      res.json(await updateSvc.execute(req.params['id'] as string, parsed.data));
+      const updated = await updateSvc.execute(req.params['id'] as string, parsed.data);
+      // H3 — never leak the TV credentials on a contract-service response.
+      res.json(toContractServiceDto(updated));
     } catch (err) {
       if (err instanceof ContractServiceNotFoundError) {
         res.status(404).json({ error: err.message, code: err.code });

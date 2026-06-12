@@ -78,6 +78,8 @@ export interface GigaredPort {
     sendActivationEmail: boolean;
   }): Promise<void>;
   activate(input: { cic: string; email: string }): Promise<void>;
+  /** #65 — PATCH /accounts/{cic} { password }. Changes the account password (CUA [a-z0-9]). */
+  changePassword(cic: string, password: string): Promise<void>;
   setInternalId(cic: string, internalId: string): Promise<void>;
   addService(internalId: string, serviceId: string): Promise<void>;
   removeService(internalId: string, serviceId: string): Promise<void>;

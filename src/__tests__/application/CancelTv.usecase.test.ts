@@ -35,6 +35,7 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
     addService: jest.fn(async () => {}),
     removeService: jest.fn(async () => {}),
     setOtt: jest.fn(async () => {}),
+    changePassword: jest.fn(async () => {}),
     renewCic: jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' })),
     ...over,
   };
@@ -102,6 +103,27 @@ describe('CancelTv (#47k)', () => {
     const after = await cs.getById(row.id);
     expect(after).not.toBeNull();
     expect(after!.status).toBe('inactive');
+  });
+
+  it('(a2) #65 M6 — al inactivar la fila TV, LIMPIA tvLogin/tvPassword (baja = como si no tuviera)', async () => {
+    const cat = await seedTvCatalog(catalog, cs);
+    const row = await cs.add({
+      contractId: 'C1', serviceCatalogId: cat.id,
+      notes: 'CIC 0000000001 · Gigared Play Full', tvLogin: 'GIGA100', tvPassword: 'secret99',
+    });
+    // loop ve 1 pack; reconcile relee la cuenta vacía → inactiva la fila.
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    await uc.execute('cust-1', { contractId: 'C1' });
+
+    const after = await cs.getById(row.id);
+    expect(after!.status).toBe('inactive');
+    // M6 — las credenciales zombie quedan limpias.
+    expect(after!.tvLogin).toBeNull();
+    expect(after!.tvPassword).toBeNull();
   });
 
   it('(b) cuenta sin vincular → TvNotLinkedError (router → 404 TV_NOT_LINKED)', async () => {
@@ -346,6 +368,7 @@ describe('CancelTv (#47k)', () => {
       setOtt: jest.fn(async (_customerId: string, enabled: boolean) => {
         state.ott.status = enabled ? 'enabled' : 'disabled';
       }),
+      changePassword: jest.fn(async () => {}),
       renewCic: jest.fn(async () => {
         renewCicCallCount++;
         return { oldCic: '0000000001', newCic: '0000000002' };

@@ -15,6 +15,14 @@ function isGigaredManaged(notes: string | null | undefined): boolean {
   return typeof notes === 'string' && notes.startsWith(GIGARED_NOTES_PREFIX);
 }
 
+/** Extract the cic recorded in a managed row's notes ("CIC {cic} · …"). null when not present. */
+function cicFromNotes(notes: string | null | undefined): string | null {
+  if (!isGigaredManaged(notes)) return null;
+  const rest = (notes as string).slice(GIGARED_NOTES_PREFIX.length);
+  const cic = rest.split(' · ')[0]?.trim();
+  return cic && cic !== '' ? cic : null;
+}
+
 /**
  * Reconcile the local TV ContractService slot with Gigared's current service list (D6).
  *
@@ -28,6 +36,17 @@ function isGigaredManaged(notes: string | null | undefined): boolean {
  *
  * If the (contractId, TV) slot is occupied by a NON-managed row (manual #42 UI), reconcile does
  * NOT touch it and does NOT create a second row (the UNIQUE pair forbids it).
+ *
+ * #65 fix wave options:
+ *   - `ensureRow` (H2/M8): when the account has NO services and no managed row exists yet, CREATE the
+ *     managed row (status 'inactive') anyway, so the alta-fresca credentials have a home. Without this
+ *     flag the empty-services + no-row case is a no-op (legacy behaviour, used by link/cancel).
+ *   - `clearCredentialsOnInactive` (M6): when inactivating the managed row (services empty), also null
+ *     out tvLogin/tvPassword — a baja must leave no zombie credentials. Used by CancelTv.
+ *
+ * #65 fix wave M6 (always on): when the managed row is reactivated/upserted for a cic DIFFERENT from
+ * the one recorded in its notes, stale tvLogin/tvPassword from the previous account are CLEARED — a
+ * re-link to a new CIC must never inherit the old account's credentials.
  */
 export async function reconcileTvContractService(deps: {
   gigared: GigaredPort;
@@ -35,8 +54,10 @@ export async function reconcileTvContractService(deps: {
   catalogRepo: ServiceCatalogRepository;
   customerId: string;
   contractId: string;
+  ensureRow?: boolean;
+  clearCredentialsOnInactive?: boolean;
 }): Promise<{ contractServiceId?: string }> {
-  const { gigared, csRepo, catalogRepo, customerId, contractId } = deps;
+  const { gigared, csRepo, catalogRepo, customerId, contractId, ensureRow, clearCredentialsOnInactive } = deps;
 
   const tvCatalog = await catalogRepo.getByName('TV');
   if (!tvCatalog || !tvCatalog.active) throw new TvCatalogMissingError();
@@ -50,15 +71,40 @@ export async function reconcileTvContractService(deps: {
   }
 
   if (account.services.length === 0) {
-    // H1: never delete — inactivate the managed row so history survives. Idempotent if absent.
-    if (existing) await csRepo.update(existing.id, { status: 'inactive' });
-    return existing ? { contractServiceId: existing.id } : {};
+    if (existing) {
+      // H1: never delete — inactivate the managed row so history survives.
+      // M6: a baja clears the credentials so the inactive row holds no zombie login/password.
+      await csRepo.update(existing.id, {
+        status: 'inactive',
+        ...(clearCredentialsOnInactive ? { tvLogin: null, tvPassword: null } : {}),
+      });
+      return { contractServiceId: existing.id };
+    }
+    // H2/M8: ensure a managed row exists for a fresh account so the credentials have a home.
+    if (ensureRow) {
+      const created = await csRepo.add({
+        contractId,
+        serviceCatalogId: tvCatalog.id,
+        notes: `${GIGARED_NOTES_PREFIX}${account.cic}`,
+      });
+      // Brand-new account → start inactive (no packs yet). The add() default status is 'active',
+      // so force it down.
+      await csRepo.update(created.id, { status: 'inactive' });
+      return { contractServiceId: created.id };
+    }
+    return {};
   }
 
   const notes = `${GIGARED_NOTES_PREFIX}${account.cic} · ${account.services.map((s) => s.name).join(' · ')}`;
 
   if (existing) {
-    await csRepo.update(existing.id, { status: 'active', notes });
+    // M6: if the cic changed, the credentials of the OLD account must not survive the reactivation.
+    const cicChanged = cicFromNotes(existing.notes) !== account.cic;
+    await csRepo.update(existing.id, {
+      status: 'active',
+      notes,
+      ...(cicChanged ? { tvLogin: null, tvPassword: null } : {}),
+    });
     return { contractServiceId: existing.id };
   }
   const created = await csRepo.add({ contractId, serviceCatalogId: tvCatalog.id, notes });

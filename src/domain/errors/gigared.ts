@@ -77,6 +77,18 @@ export class TvNotLinkedError extends DomainError {
   }
 }
 
+/**
+ * #65 — a caller-provided password fails the Gigared CUA policy ([a-z0-9], 8..64).
+ * Distinct so the change-password route maps it to 400 VALIDATION_ERROR (not a 422 upstream
+ * rejection): the request never leaves our boundary.
+ */
+export class GigaredInvalidPasswordError extends DomainError {
+  constructor(message = 'La contraseña solo puede contener letras minúsculas y números (8 a 64)') {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'GigaredInvalidPasswordError';
+  }
+}
+
 /** No active 'TV' entry in the ServiceCatalog — local reconcile cannot proceed. */
 export class TvCatalogMissingError extends DomainError {
   constructor(message = "ServiceCatalog has no active 'TV' entry") {

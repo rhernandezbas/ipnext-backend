@@ -13,6 +13,8 @@ function toView(row: any): ContractServiceView {
     label: row.serviceCatalog?.label ?? null,
     status: row.status,
     notes: row.notes ?? null,
+    tvLogin: row.tvLogin ?? null,
+    tvPassword: row.tvPassword ?? null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
   };
 }
@@ -33,13 +35,15 @@ export class PrismaContractServiceRepository implements ContractServiceRepositor
     return row ? toView(row) : null;
   }
 
-  async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null }): Promise<ContractServiceView> {
+  async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView> {
     try {
       const row = await (prisma as any).contractService.create({
         data: {
           contractId: data.contractId,
           serviceCatalogId: data.serviceCatalogId,
           notes: data.notes ?? null,
+          ...(data.tvLogin !== undefined ? { tvLogin: data.tvLogin } : {}),
+          ...(data.tvPassword !== undefined ? { tvPassword: data.tvPassword } : {}),
         },
         include: INCLUDE,
       });
@@ -52,9 +56,21 @@ export class PrismaContractServiceRepository implements ContractServiceRepositor
     }
   }
 
-  async update(id: string, data: { status?: string; notes?: string | null }): Promise<ContractServiceView | null> {
+  async update(
+    id: string,
+    data: { status?: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null },
+  ): Promise<ContractServiceView | null> {
     try {
-      const row = await (prisma as any).contractService.update({ where: { id }, data, include: INCLUDE });
+      // #65 fix wave — forward tvLogin/tvPassword too. The previous signature dropped them, so
+      // credentials written via update() (ChangeTvPassword persistence, register on an existing row,
+      // M6 cleanup on baja) silently never reached the DB. Spread only the keys that are present so a
+      // status/notes-only PATCH never clobbers the credentials.
+      const patch: Record<string, unknown> = {};
+      if (data.status !== undefined) patch['status'] = data.status;
+      if (data.notes !== undefined) patch['notes'] = data.notes;
+      if (data.tvLogin !== undefined) patch['tvLogin'] = data.tvLogin;
+      if (data.tvPassword !== undefined) patch['tvPassword'] = data.tvPassword;
+      const row = await (prisma as any).contractService.update({ where: { id }, data: patch, include: INCLUDE });
       return toView(row);
     } catch {
       return null;

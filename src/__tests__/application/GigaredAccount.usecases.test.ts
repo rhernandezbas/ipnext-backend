@@ -35,6 +35,7 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
     addService: jest.fn(async () => {}),
     removeService: jest.fn(async () => {}),
     setOtt: jest.fn(async () => {}),
+    changePassword: jest.fn(async () => {}),
     renewCic: jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' })),
     ...over,
   };
@@ -269,6 +270,31 @@ describe('LinkCustomerToCic (#47f — reconcile TV ContractService on link)', ()
     expect(result.local).toBe('failed');
   });
 
+  it('(g) #65 M6 — re-link with a DIFFERENT cic on an existing managed row → old credentials are CLEARED', async () => {
+    const cat = await seedTvCatalog();
+    // Seed an existing Gigared-managed TV row carrying credentials from a PREVIOUS cic.
+    await cs.add({
+      contractId: 'C1', serviceCatalogId: cat.id,
+      notes: 'CIC 0000000001 · Gigared Play Full', tvLogin: 'GIGA100', tvPassword: 'oldpass99',
+    });
+    // Now link a NEW cic (0000009999) with active services — reconcile reactivates the row.
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () =>
+        fakeAccount({ cic: '0000009999', gigaredId: '999', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000009999', gigaredId: '999', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(true), cs, catalog);
+    const result = await uc.execute('cust-1', '0000009999', 'C1');
+
+    expect(result.local).toBe('synced');
+    const row = await cs.getByPair('C1', cat.id);
+    // The cic changed → stale credentials of the OLD account must not survive.
+    expect(row!.notes).toBe('CIC 0000009999 · Gigared Play Full');
+    expect(row!.tvLogin).toBeNull();
+    expect(row!.tvPassword).toBeNull();
+  });
+
   it('(f) idempotent: re-link same customer+cic+contract → no duplicate row (upsert on UNIQUE pair)', async () => {
     await seedTvCatalog();
     const port = fakePort({
@@ -311,5 +337,122 @@ describe('RegisterGigaredAccount (#47)', () => {
     expect(result.account.cic).toBe('0000000001');
     // password must not surface in the returned account
     expect(JSON.stringify(result)).not.toContain('transient');
+  });
+
+  it('back-compat: WITHOUT contractId never touches contracts', async () => {
+    const cs = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const addSpy = jest.spyOn(cs, 'add');
+    const port = fakePort();
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
+    await uc.execute('cust-1', {
+      firstName: 'Juan', lastName: 'Pérez', email: 'e@x.com', cic: '0000001234',
+      password: 'transient', sendActivationEmail: false,
+    });
+    expect(addSpy).not.toHaveBeenCalled();
+  });
+});
+
+// #65 — register persists the deterministic credentials on the TV ContractService.
+const contractLookupReg = (exists: boolean, ownerId = 'cust-1') => ({
+  findById: async (id: string) => (exists ? { id, clientId: ownerId } : null),
+});
+
+describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
+  let cs: InMemoryContractServiceRepository;
+  let catalog: InMemoryServiceCatalogRepository;
+
+  beforeEach(() => {
+    cs = new InMemoryContractServiceRepository();
+    catalog = new InMemoryServiceCatalogRepository();
+  });
+
+  async function seedTvCatalog() {
+    const cat = await catalog.create({ name: 'TV', label: 'TV', active: true, sortOrder: 0 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (cs as any).catalog[cat.id] = { name: cat.name, label: cat.label };
+    return cat;
+  }
+
+  it('persists tvLogin=GIGA{gigaredId} + tvPassword on the TV row when account has services', async () => {
+    await seedTvCatalog();
+    const port = fakePort({
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', gigaredId: '2432', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
+    const result = await uc.execute('cust-1', {
+      firstName: 'Ronald', lastName: 'Hernández', email: 'ronald2432@gmail.com', cic: '0000001234',
+      password: 'ip243200', sendActivationEmail: false, contractId: 'C1',
+    });
+    const tvId = (await catalog.getByName('TV'))!.id;
+    const row = await cs.getByPair('C1', tvId);
+    expect(row).not.toBeNull();
+    expect(row!.tvLogin).toBe('GIGA2432');
+    expect(row!.tvPassword).toBe('ip243200');
+    // notes still follow the reconcile prefix (ownership intact)
+    expect(row!.notes).toBe('CIC 0000001234 · Gigared Play Full');
+    // M7 — the result tells the FE whether credentials made it to the slot.
+    expect(result.credentialsPersisted).toBe(true);
+  });
+
+  it('H2/M8 — FRESH account with NO services still PERSISTS credentials on an ensured (inactive) TV row', async () => {
+    await seedTvCatalog();
+    // The hallmark of an alta fresca: the account exists but the partner returns no services yet.
+    const port = fakePort({
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', gigaredId: '2432', internalId: 'cust-1', services: [] })),
+    });
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
+    const result = await uc.execute('cust-1', {
+      firstName: 'R', lastName: 'H', email: 'e@x.com', cic: '0000001234',
+      password: 'ip243200', sendActivationEmail: false, contractId: 'C1',
+    });
+    const tvId = (await catalog.getByName('TV'))!.id;
+    const row = await cs.getByPair('C1', tvId);
+    // The row MUST exist (ensured) so the credentials have a home — even with no packs.
+    expect(row).not.toBeNull();
+    expect(row!.status).toBe('inactive'); // no packs → inactive, but credentials still live here
+    expect(row!.tvLogin).toBe('GIGA2432');
+    expect(row!.tvPassword).toBe('ip243200');
+    expect(result.credentialsPersisted).toBe(true);
+  });
+
+  it('rejects a foreign contractId (404) BEFORE any Gigared call', async () => {
+    await seedTvCatalog();
+    const port = fakePort();
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true, 'cust-B'), cs, catalog);
+    await expect(uc.execute('cust-1', {
+      firstName: 'R', lastName: 'H', email: 'e@x.com', cic: '0000001234',
+      password: 'ip243200', sendActivationEmail: false, contractId: 'C-of-B',
+    })).rejects.toBeInstanceOf(ContractNotFoundError);
+    expect(port.register).not.toHaveBeenCalled();
+  });
+
+  it('M7 — persistence failure does NOT abort the register (account still returned, credentialsPersisted:false)', async () => {
+    await seedTvCatalog();
+    jest.spyOn(cs, 'add').mockRejectedValue(new Error('db down'));
+    jest.spyOn(cs, 'update').mockRejectedValue(new Error('db down'));
+    const port = fakePort({
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', gigaredId: '2432', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
+    const result = await uc.execute('cust-1', {
+      firstName: 'R', lastName: 'H', email: 'e@x.com', cic: '0000001234',
+      password: 'ip243200', sendActivationEmail: false, contractId: 'C1',
+    });
+    expect(result.account.cic).toBe('0000001234');
+    expect(result.credentialsPersisted).toBe(false);
+  });
+
+  it('M7 — back-compat: WITHOUT contractId there is no persistence target → credentialsPersisted:false', async () => {
+    const port = fakePort();
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
+    const result = await uc.execute('cust-1', {
+      firstName: 'R', lastName: 'H', email: 'e@x.com', cic: '0000001234',
+      password: 'ip243200', sendActivationEmail: false,
+    });
+    expect(result.credentialsPersisted).toBe(false);
   });
 });

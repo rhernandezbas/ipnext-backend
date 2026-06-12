@@ -49,6 +49,28 @@ export interface ContractServiceDto {
   createdAt:        string;   // ISO 8601
 }
 
+/**
+ * #65 fix wave H3 (SECURITY) — map the internal ContractServiceView read model to the wire DTO,
+ * STRIPPING the TV credentials. `tvLogin`/`tvPassword` live on the row for internal use (the
+ * dedicated `/tv-credentials` endpoint reads them) but MUST NOT travel on any contract/service
+ * response. This is the single serialization boundary for add/update service responses.
+ */
+export function toContractServiceDto(view: {
+  id: string; contractId: string; serviceCatalogId: string;
+  name: string; label: string | null; status: string; notes: string | null; createdAt: string;
+}): ContractServiceDto {
+  return {
+    id: view.id,
+    contractId: view.contractId,
+    serviceCatalogId: view.serviceCatalogId,
+    name: view.name,
+    label: view.label,
+    status: view.status,
+    notes: view.notes,
+    createdAt: view.createdAt,
+  };
+}
+
 // ── Contract name ────────────────────────────────────────────────────────────
 
 // W-3 — `name` is optional: PATCH body {} is a valid no-op (returns the contract unchanged).

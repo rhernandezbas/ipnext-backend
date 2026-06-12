@@ -281,6 +281,18 @@ describe('GigaredClient (#47)', () => {
       expect(body).toEqual({ internal_id: 'CLIENTE_001' });
     });
 
+    it('changePassword → PATCH /accounts/{cic} with { password } (#65)', async () => {
+      const http = makeHttp();
+      http.patch.mockResolvedValue({ data: { message: 'Éxito', detail: '...' } });
+      const { client, ready } = makeClient(http);
+      await ready;
+      await client.changePassword('0000001234', 'ip243200');
+      const [url, body] = http.patch.mock.calls[0]!;
+      expect(String(url)).toContain('/accounts/0000001234');
+      expect(String(url)).not.toContain('/internal_id');
+      expect(body).toEqual({ password: 'ip243200' });
+    });
+
     it('renewCic → PUT /accounts/{internalId}/renew?use_internal_id=true → {oldCic,newCic}', async () => {
       const http = makeHttp();
       http.put.mockResolvedValue({
