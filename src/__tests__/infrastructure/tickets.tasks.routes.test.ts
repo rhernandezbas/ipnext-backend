@@ -105,6 +105,7 @@ function buildApp() {
       closeTicket,
       statusRepo,
       authProvider,
+      undefined, // rbacUserRepo — #48 reporter validation not exercised here
       createTaskFromTicket,
       taskRepo,
       stageRepo,

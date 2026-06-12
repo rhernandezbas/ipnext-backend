@@ -12,6 +12,7 @@ import { TicketPriority } from '@domain/entities/ticket';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { TicketStatusRepository } from '@domain/ports/TicketStatusRepository';
+import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
 import { NoClosableStatusError } from '@domain/errors/tickets';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -72,6 +73,9 @@ export function createTicketsRouter(
   closeTicket: CloseTicket,
   ticketStatusRepo: TicketStatusRepository,
   authProvider: JwtAuthAdapter,
+  // #48 — used to validate a body-provided reporterId exists before persisting.
+  // Optional so legacy wirings/tests that never set an explicit reporter still work.
+  rbacUserRepo?: RbacUserRepository,
   createTaskFromTicket?: CreateTaskFromTicket,
   taskRepo?: SchedulingRepository,
   stageRepo?: StageRepository,
@@ -331,6 +335,22 @@ export function createTicketsRouter(
     }
 
     try {
+      // #48 — a body-provided reporterId must reference a real user. Without this
+      // guard an unknown id reaches Prisma as an FK violation (P2003 → 500) and
+      // also lets a caller spoof an arbitrary reporter. Validate up-front → 422.
+      // The session-default stamp (req.user.id) is NOT re-validated: the session
+      // user exists by definition.
+      if (reporterId != null && rbacUserRepo) {
+        const reporterUser = await rbacUserRepo.findById(reporterId);
+        if (!reporterUser) {
+          res.status(422).json({
+            error: `Reporter "${reporterId}" is not a known user`,
+            code: 'REPORTER_NOT_FOUND',
+          });
+          return;
+        }
+      }
+
       const ticket = await createTicket.execute({
         subject,
         description,

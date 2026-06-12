@@ -16,6 +16,20 @@ import { UpdateTicket } from '../../application/use-cases/UpdateTicket';
 import { CloseTicket } from '../../application/use-cases/CloseTicket';
 import { createTicketsRouter } from '../../infrastructure/http/routes/tickets.routes';
 import type { JwtAuthAdapter } from '../../infrastructure/adapters/jwt/JwtAuthAdapter';
+import type { RbacUserRepository } from '../../domain/ports/RbacUserRepository';
+import type { RbacUser } from '../../domain/entities/rbac';
+
+// Minimal RbacUserRepository test double: only findById is exercised by the
+// tickets router (#48 — reporter existence validation). Seeded with the same
+// ids the in-memory ticket repo seeds as admins ('1' Admin Uno, '2' Admin Dos)
+// so a body-provided reporterId is validated against a real user pool.
+function buildRbacUserRepo(ids: string[]): RbacUserRepository {
+  const pool = new Set(ids);
+  return {
+    findById: async (id: string): Promise<RbacUser | null> =>
+      pool.has(id) ? ({ id } as unknown as RbacUser) : null,
+  } as unknown as RbacUserRepository;
+}
 
 function buildApp() {
   const app = express();
@@ -51,9 +65,13 @@ function buildApp() {
     getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }),
   } as unknown as JwtAuthAdapter;
 
+  // #48 — reporter existence is validated against the RbacUser pool. Seed the
+  // same ids the ticket repo knows as admins so explicit reporterIds resolve.
+  const rbacUserRepo = buildRbacUserRepo(['1', '2']);
+
   app.use(
     '/api/tickets',
-    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicket, closeTicket, statusRepo, authProvider),
+    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicket, closeTicket, statusRepo, authProvider, rbacUserRepo),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -335,16 +353,27 @@ describe('POST /api/tickets — reporter (#48)', () => {
     expect(res.body.reporterName).toBe('Admin Dos');
   });
 
-  it('REQ-TICKET-READ-2: a ticket created without a known reporter still exposes null fields', async () => {
+  it('REQ-TICKET-CREATE-3: a body reporterId that is NOT a known user → 422 REPORTER_NOT_FOUND', async () => {
     const { app } = buildApp();
-    // Explicit null reporterId AND the session id is unknown to admins → reporterName null.
-    // (Here the session is '1' which IS known, so we assert the shape on an explicit unknown.)
+    // An unknown reporterId would hit a Prisma FK violation (P2003) in prod and
+    // surface as a 500. Validate existence up-front and reject with a clear 422.
     const res = await withAuth(
       request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: 'ghost' }),
     );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('REPORTER_NOT_FOUND');
+  });
+
+  it('REQ-TICKET-CREATE-1b: the session-default path (no body reporterId) is NOT validated and stays 201', async () => {
+    const { app } = buildApp();
+    // The session user exists by definition; the default stamp must never be
+    // re-validated nor blocked. Session id is '1' (Admin Uno).
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D' }),
+    );
     expect(res.status).toBe(201);
-    expect(res.body.reporterId).toBe('ghost');
-    expect(res.body.reporterName).toBeNull();
+    expect(res.body.reporterId).toBe('1');
+    expect(res.body.reporterName).toBe('Admin Uno');
   });
 });
 
