@@ -222,6 +222,13 @@ import { GetTicketStatus } from '@application/use-cases/GetTicketStatus';
 import { CreateTicketStatus } from '@application/use-cases/CreateTicketStatus';
 import { UpdateTicketStatusCatalog } from '@application/use-cases/UpdateTicketStatusCatalog';
 import { DeleteTicketStatus } from '@application/use-cases/DeleteTicketStatus';
+import { PrismaTicketAreaCatalogRepository } from '../adapters/prisma/PrismaTicketAreaCatalogRepository';
+import { createTicketAreasRouter } from './routes/ticketAreas.routes';
+import { ListTicketAreas } from '@application/use-cases/ListTicketAreas';
+import { GetTicketArea } from '@application/use-cases/GetTicketArea';
+import { CreateTicketArea } from '@application/use-cases/CreateTicketArea';
+import { UpdateTicketArea } from '@application/use-cases/UpdateTicketArea';
+import { DeleteTicketArea } from '@application/use-cases/DeleteTicketArea';
 import { ListProjectType } from '@application/use-cases/ListProjectType';
 import { GetProjectType } from '@application/use-cases/GetProjectType';
 import { CreateProjectType } from '@application/use-cases/CreateProjectType';
@@ -849,6 +856,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const updateTicketStatusCatalog = new UpdateTicketStatusCatalog(ticketStatusRepo);
   const deleteTicketStatus = new DeleteTicketStatus(ticketStatusRepo);
 
+  // TicketArea catalog — #49
+  const ticketAreaRepo = new PrismaTicketAreaCatalogRepository();
+  const listTicketAreas = new ListTicketAreas(ticketAreaRepo);
+  const getTicketArea = new GetTicketArea(ticketAreaRepo);
+  const createTicketArea = new CreateTicketArea(ticketAreaRepo);
+  const updateTicketArea = new UpdateTicketArea(ticketAreaRepo);
+  const deleteTicketArea = new DeleteTicketArea(ticketAreaRepo);
+
   const listProjectType = new ListProjectType(projectTypeRepo);
   const getProjectType = new GetProjectType(projectTypeRepo);
   const createProjectType = new CreateProjectType(projectTypeRepo);
@@ -1042,6 +1057,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/tickets/statuses', createTicketStatusesRouter(
     authAdapter,
     listTicketStatuses, getTicketStatus, createTicketStatus, updateTicketStatusCatalog, deleteTicketStatus,
+  ));
+  // TicketArea catalog — mounted BEFORE the tickets router (#49)
+  app.use('/api/tickets/areas', createTicketAreasRouter(
+    authAdapter,
+    requirePerm,
+    listTicketAreas, getTicketArea, createTicketArea, updateTicketArea, deleteTicketArea,
   ));
   app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, ticketStatusRepo, authAdapter, rbacUserRepo, createTaskFromTicket, schedulingRepo, stageRepo));
   // #44 — persisted ticket comments. Mounted on /api/tickets; the tickets router has no

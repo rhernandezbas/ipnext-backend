@@ -1925,6 +1925,17 @@ model IClassClosureConfig {
 // SUPPORT DOMAIN
 // =============================================
 
+// #49 — Ticket area catalog. Editable list; 3 seed areas.
+model TicketAreaCatalog {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tickets   Ticket[]
+
+  @@map("TicketAreaCatalog")
+}
+
 // Phase 2 complete: TicketStatus enum dropped; Ticket.status is now a FK → TicketStatusCatalog.
 // The API still exposes status as a string (the catalog name) — see PrismaTicketRepository.
 model TicketStatusCatalog {
@@ -1975,6 +1986,10 @@ model Ticket {
   // Previsto para la futura integracion de "casos" de Gestion Real (out-of-scope)
   grCasoId String? @unique
 
+  // #49 — Area FK (optional; BATCH 2 wires business logic)
+  areaId String?
+  area   TicketAreaCatalog? @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
   // Back-relation: tasks created from this ticket (tickets-actions-be)
   tasks ScheduledTask[]
 
@@ -1988,6 +2003,7 @@ model Ticket {
   @@index([statusId])
   @@index([assigneeId])
   @@index([reporterId])
+  @@index([areaId])
 }
 
 // =============================================

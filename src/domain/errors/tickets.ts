@@ -28,6 +28,36 @@ export class TicketStatusInUseError extends DomainError {
   }
 }
 
+// ─── Ticket Area Catalog errors ──────────────────────────────────────────────
+
+export class TicketAreaNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`TicketArea with id ${id} not found`, 'TICKET_AREA_NOT_FOUND');
+    this.name = 'TicketAreaNotFoundError';
+  }
+}
+
+export class TicketAreaNameConflictError extends DomainError {
+  constructor(name: string) {
+    super(`A ticket area named "${name}" already exists`, 'TICKET_AREA_NAME_CONFLICT');
+    this.name = 'TicketAreaNameConflictError';
+  }
+}
+
+export class TicketAreaInUseError extends DomainError {
+  constructor(public readonly ticketCount: number) {
+    super(`TicketArea is in use by ${ticketCount} ticket(s)`, 'TICKET_AREA_IN_USE');
+    this.name = 'TicketAreaInUseError';
+  }
+}
+
+export class TicketAreaRequiredError extends DomainError {
+  constructor() {
+    super('Ticket area is required', 'TICKET_AREA_REQUIRED');
+    this.name = 'TicketAreaRequiredError';
+  }
+}
+
 /**
  * Thrown by CloseTicket when the editable status catalog has no "closed-like"
  * entry (none of the known CLOSED slugs: 'closed', 'cerrado', case-insensitive).

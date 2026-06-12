@@ -45,6 +45,14 @@ export interface TicketDto {
   updatedAt: string;
 }
 
+// TicketArea catalog DTOs — simple name-only catalog
+export const CreateTicketAreaSchema = z.object({
+  name: z.string().min(1),
+});
+export const UpdateTicketAreaSchema = CreateTicketAreaSchema.partial();
+export type CreateTicketAreaInput = z.infer<typeof CreateTicketAreaSchema>;
+export type UpdateTicketAreaInput = z.infer<typeof UpdateTicketAreaSchema>;
+
 // TicketStatus catalog DTOs (name + color + sort weight) — mirrors TaskPriority
 export const CreateTicketStatusSchema = z.object({
   name: z.string().min(1),
