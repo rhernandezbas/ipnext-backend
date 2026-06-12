@@ -31,7 +31,7 @@ import {
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
-import { generateGigaredPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
+import { isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 
 /**
  * Readiness middleware (M1). Two gating levels, both built from the same repos:
@@ -246,14 +246,18 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         firstName: string; lastName: string; email: string; cic: string;
         password?: unknown; sendActivationEmail?: boolean; contractId?: unknown;
       };
-      // #65 fix wave L12 — password policy + persistence. The password is NOT logged/returned in
-      // the open, but since #65 a copy IS persisted on the local TV row (tvLogin/tvPassword) and
-      // read back ONLY via the guarded /tv-credentials endpoint (the old "transit-only" note was
-      // stale). If the caller provides a password it must satisfy Gigared's policy ([a-z0-9], 8..64);
-      // otherwise the server generates a COMPLIANT one. base64url (old impl) emitted A-Z/-/_ → 400.
+      // #70 — la contraseña es OBLIGATORIA. Se elimina el fallback al generador random del #47h:
+      // el form (#65) la prefillea con la determinística `ip{grId}` y el operador la confirma.
+      // Si falta (undefined/null/'') → 400; si no cumple la política Gigared ([a-z0-9], 8..64)
+      // → 400. La password recibida se usa SIEMPRE (y desde #65 se persiste en la fila TV local
+      // tvLogin/tvPassword, legible sólo vía el endpoint guardado /tv-credentials).
       let password: string;
       if (b.password === undefined || b.password === null || b.password === '') {
-        password = generateGigaredPassword();
+        res.status(400).json({
+          error: 'La contraseña es obligatoria',
+          code: 'VALIDATION_ERROR',
+        });
+        return;
       } else if (typeof b.password === 'string' && isValidGigaredPassword(b.password)) {
         password = b.password;
       } else {

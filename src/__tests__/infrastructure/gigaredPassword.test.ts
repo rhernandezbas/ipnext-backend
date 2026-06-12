@@ -6,24 +6,11 @@
  * exactly 12 chars, all in [a-z0-9], cryptographically random (crypto, not Math.random).
  */
 import {
-  generateGigaredPassword,
   GIGARED_PASSWORD_RE,
   isValidGigaredPassword,
 } from '@infrastructure/security/gigaredPassword';
 
-describe('#47h generateGigaredPassword — policy compliance', () => {
-  it('produces a 12-char [a-z0-9] string on every one of 1000 generations', () => {
-    const re = /^[a-z0-9]{12}$/;
-    for (let i = 0; i < 1000; i++) {
-      const pw = generateGigaredPassword();
-      expect(pw).toMatch(re);
-    }
-  });
-
-  it('is not deterministic (two consecutive generations differ)', () => {
-    expect(generateGigaredPassword()).not.toBe(generateGigaredPassword());
-  });
-
+describe('#47h GIGARED_PASSWORD_RE — policy alphabet', () => {
   it('GIGARED_PASSWORD_RE only matches lowercase letters and digits', () => {
     expect(GIGARED_PASSWORD_RE.test('abc12345')).toBe(true);
     expect(GIGARED_PASSWORD_RE.test('ABC12345')).toBe(false);

@@ -268,7 +268,7 @@ describe('gigared.routes — granular TV RBAC guards (#50)', () => {
     const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200' });
     expect(res.status).toBe(201);
     const [, body] = (port.register as jest.Mock).mock.calls[0];
     expect((port.register as jest.Mock).mock.calls[0][0].sendActivationEmail).toBe(false);
@@ -453,7 +453,7 @@ describe('gigared.routes — happy + 207 (#47)', () => {
     const app = await buildApp();
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', sendActivationEmail: true });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true });
     expect(res.status).toBe(201);
     expect(res.body.account.cic).toBe('0000000001');
   });
@@ -700,15 +700,37 @@ describe('#47h POST /register — password policy (Gigared accepts only [a-z0-9]
     expect(register).not.toHaveBeenCalled();
   });
 
-  it('d) NO password provided → server generates a COMPLIANT [a-z0-9]{12} password', async () => {
+  // #70 — la contraseña pasa a ser OBLIGATORIA: se elimina el fallback al generador random
+  // del #47h. Sin password (o vacía/null) el register devuelve 400 y NO toca Gigared.
+  it('#70 d) NO password provided → 400 PASSWORD_REQUIRED, Gigared untouched (no random fallback)', async () => {
     const register = jest.fn(async () => {});
     const app = await buildApp({ port: fakePort({ register }) });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
-    expect(res.status).toBe(201);
-    const sent = (register.mock.calls[0] as unknown[])[0] as { password: string };
-    expect(sent.password).toMatch(/^[a-z0-9]{12}$/);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('#70 d) empty-string password → 400, Gigared untouched', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }) });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: '' });
+    expect(res.status).toBe(400);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('#70 d) null password → 400, Gigared untouched', async () => {
+    const register = jest.fn(async () => {});
+    const app = await buildApp({ port: fakePort({ register }) });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: null });
+    expect(res.status).toBe(400);
+    expect(register).not.toHaveBeenCalled();
   });
 
   it('e) the password NEVER appears in the endpoint response body', async () => {
@@ -746,7 +768,7 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
     const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', sendActivationEmail: true });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true });
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('GIGARED_UNAVAILABLE');
     expect(res.body.detail).toBe('CUA no respondió a tiempo');
