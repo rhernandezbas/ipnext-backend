@@ -263,3 +263,31 @@ export class NetworkTaskNodeNameRequiredError extends DomainError {
     this.name = 'NetworkTaskNodeNameRequiredError';
   }
 }
+
+/**
+ * #66 — Raised when a fibra network task carries a networkSiteId FK (the hybrid
+ * fibra+site shape). Fibra tasks use a free-text node name, never a site FK; the
+ * JOIN would otherwise win over the free-text name (and a non-existent siteId would
+ * blow up as a Prisma 500). Rejected at both DTO superRefine and CreateTask (two
+ * layers of the seam). Domain code: FIBRA_TASK_NO_SITE; HTTP layer maps it to 422.
+ */
+export class FibraTaskNoSiteError extends DomainError {
+  constructor() {
+    super('Fibra network tasks must not carry a networkSiteId (use a free-text node name)', 'FIBRA_TASK_NO_SITE');
+    this.name = 'FibraTaskNoSiteError';
+  }
+}
+
+/**
+ * #66 — Raised when an UpdateTask attempts to change networkType after create.
+ * networkType is an IDENTITY discriminator (red vs fibra), not a mutable state:
+ * a task created with the wrong type must be recreated, not switched. Switching
+ * would leave a dangling FK (red→fibra) or accept-and-ignore a site change
+ * (fibra→red). Domain code: NETWORK_TYPE_IMMUTABLE; HTTP layer maps it to 422.
+ */
+export class NetworkTypeImmutableError extends DomainError {
+  constructor() {
+    super('networkType is immutable after creation; create a new task instead', 'NETWORK_TYPE_IMMUTABLE');
+    this.name = 'NetworkTypeImmutableError';
+  }
+}

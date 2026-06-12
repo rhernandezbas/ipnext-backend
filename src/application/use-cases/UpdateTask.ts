@@ -2,7 +2,7 @@ import { SchedulingRepository, UpdateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
-import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError, NetworkTaskNodeNameRequiredError } from '@domain/errors/scheduling';
+import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError, NetworkTaskNodeNameRequiredError, NetworkTypeImmutableError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -72,6 +72,22 @@ export class UpdateTask {
       for (const watcherId of data.watcherIds) {
         const found = await this.adminLookup.findById(watcherId);
         if (!found) throw new ReferenceNotFoundError('watcher', watcherId);
+      }
+    }
+
+    // #66 — networkType is IMMUTABLE post-create. It is an IDENTITY discriminator
+    // (red vs fibra), not a mutable state: switching would leave a dangling FK
+    // (red→fibra) or accept-and-ignore a site change (fibra→red). Reject any CHANGE.
+    // Change-not-presence: the FE edit form resubmits the FULL body on every save
+    // (including the unchanged networkType), so echoing the SAME value is a no-op
+    // (mirrors the #40 projectId same-id no-op). We only load the task in this branch.
+    if ('networkType' in data && (data as { networkType?: 'red' | 'fibra' | null }).networkType != null) {
+      const incoming = (data as { networkType?: 'red' | 'fibra' | null }).networkType;
+      const existing = await this.repo.getTask(id);
+      // Existing network tasks always carry a concrete networkType ('red' default).
+      // Only fire on a real mismatch against an existing network task.
+      if (existing?.kind === 'network' && existing.networkType != null && incoming !== existing.networkType) {
+        throw new NetworkTypeImmutableError();
       }
     }
 

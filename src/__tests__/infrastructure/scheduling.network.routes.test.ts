@@ -242,4 +242,79 @@ describe('POST /api/scheduling — fibra network task (#66)', () => {
     expect(res.status).toBe(201);
     expect(res.body.iclassCityCode).toBe('Mercedes');
   });
+
+  // #66 — Reject the hybrid fibra+site shape end-to-end (REQ-FIBRA-CREATE-1).
+  // The DTO superRefine rejects it at the HTTP edge → 422 FIBRA_TASK_NO_SITE
+  // (no Prisma 500, no dangling FK winning the JOIN over the free-text name).
+  it('REQ-FIBRA-ROUTE-5: fibra + networkSiteId non-null → 422 FIBRA_TASK_NO_SITE', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      // Use an EXISTING site id to prove we reject on SHAPE, not on FK-missing.
+      .send({ ...BASE_FIBRA_BODY, networkSiteId: TEST_SITE.id });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('FIBRA_TASK_NO_SITE');
+  });
+});
+
+// #66 — networkType is IMMUTABLE post-create (MEDIUM fix). PUT must reject any
+// networkType change with 422 NETWORK_TYPE_IMMUTABLE (identity discriminator, not state).
+describe('PUT /api/scheduling/:id — networkType immutable (#66)', () => {
+  async function createRedTask(app: ReturnType<typeof buildApp>) {
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send(BASE_NETWORK_BODY);
+    expect(res.status).toBe(201);
+    return res.body.id as string;
+  }
+
+  async function createFibraTask(app: ReturnType<typeof buildApp>) {
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send(BASE_FIBRA_BODY);
+    expect(res.status).toBe(201);
+    return res.body.id as string;
+  }
+
+  it('REQ-IMMUT-ROUTE-1: red→fibra via PUT {networkType:"fibra"} → 422 NETWORK_TYPE_IMMUTABLE', async () => {
+    const app = buildApp();
+    const id = await createRedTask(app);
+    const res = await request(app)
+      .put(`/api/scheduling/${id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ networkType: 'fibra' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NETWORK_TYPE_IMMUTABLE');
+  });
+
+  it('REQ-IMMUT-ROUTE-2: fibra→red via PUT {networkType:"red"} → 422 NETWORK_TYPE_IMMUTABLE', async () => {
+    const app = buildApp();
+    const id = await createFibraTask(app);
+    const res = await request(app)
+      .put(`/api/scheduling/${id}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ networkType: 'red' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NETWORK_TYPE_IMMUTABLE');
+  });
+
+  it('REQ-IMMUT-ROUTE-3: PUT echoing the SAME networkType is a no-op → 200 (FE resubmits full body)', async () => {
+    const app = buildApp();
+    const id = await createRedTask(app);
+    const res = await request(app)
+      .put(`/api/scheduling/${id}`)
+      .set('Cookie', 'auth_token=fake')
+      // FE edit form resubmits the full body including the unchanged networkType.
+      .send({ networkType: 'red', title: 'Renamed red task' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.networkType).toBe('red');
+    expect(res.body.title).toBe('Renamed red task');
+  });
 });

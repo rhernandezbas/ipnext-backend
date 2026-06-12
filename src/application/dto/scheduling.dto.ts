@@ -128,6 +128,22 @@ export const CreateTaskSchema = z
         });
       }
     }
+    // #66 — Reject the hybrid fibra+site shape: a fibra task must NOT carry a
+    // networkSiteId FK (it uses a free-text node name). The JOIN would otherwise
+    // win over the free-text name, and a bad siteId would blow up as a Prisma 500.
+    // First layer of the seam; CreateTask repeats the check (defence in depth).
+    // Surfaced via params.fibraTaskNoSite so the route can map it to 422 FIBRA_TASK_NO_SITE.
+    if (v.kind === 'network' && v.networkType === 'fibra') {
+      const siteId = (v as { networkSiteId?: string | null }).networkSiteId;
+      if (siteId != null && (typeof siteId !== 'string' || siteId.trim() !== '')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['networkSiteId'],
+          message: 'Fibra network tasks must not carry a networkSiteId',
+          params: { fibraTaskNoSite: true },
+        });
+      }
+    }
   });
 
 // UpdateTaskSchema — mantiene las FK como nullable/optional (sin kind obligatorio)
@@ -135,10 +151,15 @@ export const CreateTaskSchema = z
 const UpdateTaskBaseSchema = CreateTaskBaseSchema.extend({
   customerId:   z.string().min(1).nullable().optional(),
   contractId:   z.string().min(1).nullable().optional(),
-  // #66 — networkType + networkSiteName on update
+  // #66 — networkType is accepted on update ONLY so the use case can detect (and
+  // reject) an attempted CHANGE: networkType is IMMUTABLE post-create
+  // (NetworkTypeImmutableError → 422). The FE resubmits the unchanged value, which
+  // is a no-op. networkSiteName stays editable (fibra node-name rename).
   networkType:  z.enum(['red', 'fibra']).nullable().optional(),
   networkSiteName: z.string().nullable().optional(),
-  networkSiteId: z.string().min(1).nullable().optional(),
+  // #66 — networkSiteId is NOT updatable. It was previously accepted-and-ignored
+  // (no repo maps it on update), which is a silent lie to the client. Changing a
+  // red task's site was never in scope; removed to fail loud (400) instead.
 });
 
 // UpdateTaskSchema hereda nullable/optional para todos los FK — sin kind obligatorio.

@@ -17,6 +17,7 @@ import {
   NetworkTaskLocalityRequiredError,
   NetworkTaskNodeNameRequiredError,
   ReferenceNotFoundError,
+  FibraTaskNoSiteError,
 } from '../../domain/errors/scheduling';
 import { EntityLookup } from '../../domain/ports/EntityLookup';
 import { ProjectKindLookup } from '../../domain/ports/ProjectKindLookup';
@@ -101,6 +102,20 @@ const RED_BASE = {
 };
 
 describe('CreateTask — fibra tasks (#66)', () => {
+  it('REQ-FIBRA-CREATE-1: fibra + networkSiteId non-null → FibraTaskNoSiteError', async () => {
+    const { useCase } = buildUseCase();
+    // Hybrid shape: fibra task carrying a site FK. Must be rejected — the JOIN
+    // would otherwise win over the free-text name (and a bad siteId → Prisma 500).
+    await expect(
+      useCase.execute({
+        ...FIBRA_BASE,
+        networkSiteId: '1', // seeded, EXISTS — proves we reject on the hybrid SHAPE, not on FK-missing
+        networkSiteName: 'Nodo FO-1',
+        iclassCityCode: 'Mercedes',
+      } as never),
+    ).rejects.toBeInstanceOf(FibraTaskNoSiteError);
+  });
+
   it('REQ-FIBRA-CREATE-2: fibra + blank networkSiteName → NetworkTaskNodeNameRequiredError', async () => {
     const { useCase } = buildUseCase();
     await expect(

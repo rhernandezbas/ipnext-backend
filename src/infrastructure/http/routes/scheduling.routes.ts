@@ -47,6 +47,7 @@ import {
   NetworkTaskAddressRequiredError,
   NetworkTaskLocalityRequiredError,
   NetworkTaskNodeNameRequiredError,
+  NetworkTypeImmutableError,
 } from '@domain/errors/scheduling';
 import {
   ChecklistItemNotFoundError,
@@ -485,6 +486,16 @@ export function createSchedulingRouter(
   router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
     const parsed = CreateTaskSchema.safeParse(req.body);
     if (!parsed.success) {
+      // #66 — The hybrid fibra+site shape is a semantic conflict, not a malformed
+      // body: map it to 422 FIBRA_TASK_NO_SITE (the DTO superRefine tags it via
+      // params.fibraTaskNoSite). Any other failure stays a generic 400.
+      const fibraNoSite = parsed.error.issues.some(
+        (i) => (i as { params?: { fibraTaskNoSite?: boolean } }).params?.fibraTaskNoSite === true,
+      );
+      if (fibraNoSite) {
+        res.status(422).json({ error: 'Fibra network tasks must not carry a networkSiteId', code: 'FIBRA_TASK_NO_SITE' });
+        return;
+      }
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
       return;
     }
@@ -618,6 +629,11 @@ export function createSchedulingRouter(
       }
       // #66 — fibra task requires a non-blank networkSiteName on update.
       if (err instanceof NetworkTaskNodeNameRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
+      // #66 — networkType is immutable post-create.
+      if (err instanceof NetworkTypeImmutableError) {
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }

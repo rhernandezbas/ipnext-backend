@@ -2,7 +2,7 @@ import { SchedulingRepository, CreateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
-import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError, NetworkTaskNodeNameRequiredError } from '@domain/errors/scheduling';
+import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError, NetworkTaskNodeNameRequiredError, FibraTaskNoSiteError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -33,7 +33,13 @@ export class CreateTask {
 
       if (networkType === 'fibra') {
         // FIBRA path: no networkSiteId FK lookup; requires free-text node name + locality.
-        // networkSiteId must be null for fibra — ignore any provided value.
+        // #66 — Reject the hybrid fibra+site shape (second seam layer; the DTO
+        // superRefine is the first). A fibra task must NOT carry a networkSiteId:
+        // the JOIN would win over the free-text name, and a bad siteId → Prisma 500.
+        const siteId = (data as { networkSiteId?: string | null }).networkSiteId;
+        if (siteId != null && (typeof siteId !== 'string' || siteId.trim() !== '')) {
+          throw new FibraTaskNoSiteError();
+        }
         const nodeName = data.networkSiteName;
         if (nodeName == null || (typeof nodeName === 'string' && !nodeName.trim())) {
           throw new NetworkTaskNodeNameRequiredError();

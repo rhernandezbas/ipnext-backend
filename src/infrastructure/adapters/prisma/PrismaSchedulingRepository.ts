@@ -536,8 +536,11 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
         ? (data.networkType ?? 'red')
         : null,
       networkSiteId: data.networkSiteId ?? null,
-      // #66 — stored for fibra tasks; ignored for red (JOIN-derived).
-      networkSiteName: data.networkSiteName ?? null,
+      // #66 — stored only for fibra tasks; for red the name is JOIN-derived from
+      // NetworkSite, so we persist null and never write a stale free-text name.
+      networkSiteName: (data.kind === 'network' && (data.networkType ?? 'red') === 'fibra')
+        ? (data.networkSiteName ?? null)
+        : null,
       // #54 — locality snapshot
       iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
     };

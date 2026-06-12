@@ -6,7 +6,8 @@
 -- Idempotent backfill: existing network tasks get networkType='red'.
 -- NO BEGIN/COMMIT wrapper per project convention.
 
-ALTER TABLE "ScheduledTask" ADD COLUMN "networkType" TEXT;
-ALTER TABLE "ScheduledTask" ADD COLUMN "networkSiteName" TEXT;
+-- IF NOT EXISTS so the migration is idempotent / re-runnable (pattern #65).
+ALTER TABLE "ScheduledTask" ADD COLUMN IF NOT EXISTS "networkType" TEXT;
+ALTER TABLE "ScheduledTask" ADD COLUMN IF NOT EXISTS "networkSiteName" TEXT;
 
 UPDATE "ScheduledTask" SET "networkType" = 'red' WHERE "kind" = 'network' AND "networkType" IS NULL;

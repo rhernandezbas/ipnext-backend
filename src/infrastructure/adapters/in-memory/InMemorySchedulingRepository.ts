@@ -28,7 +28,10 @@ function deriveStageCategory(stageId: string): StageCategory {
   return 'nuevo';
 }
 
-let nextId = 7;
+// Seeded fixtures occupy ids 1..7 — nextId MUST start at 8 so an auto-generated
+// id never collides with a fixture (a collision shadows the created task in
+// getTask, which returns the first array match). nextSequenceNumber mirrors this.
+let nextId = 8;
 let nextSequenceNumber = 8;
 let nextChecklistItemId = 1;
 
@@ -373,8 +376,12 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
         ? ((data.networkType ?? 'red') as 'red' | 'fibra')
         : null,
       networkSiteId: data.networkSiteId ?? null,
-      // #66 — fibra: use the stored free-text name from input. red: no JOIN in-memory (null).
-      networkSiteName: data.networkSiteName ?? null,
+      // #66 — fibra: store the free-text name from input. red: the name is
+      // JOIN-derived from NetworkSite (Prisma); the free-text column stays null so
+      // we never persist a stale/misleading name on a red task.
+      networkSiteName: (data.kind === 'network' && (data.networkType ?? 'red') === 'fibra')
+        ? (data.networkSiteName ?? null)
+        : null,
       // #54 — locality snapshot
       iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
       closureCommentDone: false,
