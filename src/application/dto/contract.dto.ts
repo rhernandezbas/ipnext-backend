@@ -8,6 +8,7 @@
 
 export interface ContractSummaryDto {
   id: string;
+  clientId: string;
   clientName: string;
   plan: string;
   status: string;

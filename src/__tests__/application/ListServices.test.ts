@@ -16,11 +16,12 @@ describe('ListContracts use case', () => {
   });
 
   it('returns ContractSummary-shaped items with the FE envelope', async () => {
-    repo.seed({ clientName: 'Acme Corp', plan: 'Fiber 100', status: 'active', technology: 'Fiber', startDate: '2024-01-10T00:00:00.000Z' });
+    repo.seed({ clientId: 'client-42', clientName: 'Acme Corp', plan: 'Fiber 100', status: 'active', technology: 'Fiber', startDate: '2024-01-10T00:00:00.000Z' });
     const res = await listContracts.execute({ page: 1, limit: 25 });
     expect(res.total).toBe(1);
     expect(res.data[0]).toEqual({
       id: expect.any(String),
+      clientId: 'client-42',
       clientName: 'Acme Corp',
       plan: 'Fiber 100',
       status: 'active',
@@ -29,6 +30,12 @@ describe('ListContracts use case', () => {
     });
     // Envelope keys match the frontend PaginatedResponse exactly.
     expect(Object.keys(res).sort()).toEqual(['data', 'page', 'pageSize', 'total', 'totalPages']);
+  });
+
+  it('exposes clientId so the contracts page can deep-link to the customer (#56)', async () => {
+    repo.seed({ clientId: 'abc-123', clientName: 'Juan Pérez', plan: 'P1' });
+    const res = await listContracts.execute({ page: 1, limit: 25 });
+    expect(res.data[0]!.clientId).toBe('abc-123');
   });
 
   it('preserves null technology', async () => {

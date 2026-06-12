@@ -6,6 +6,8 @@ import { PaginatedResult, PaginatedQuery } from '../../application/dto/paginatio
  */
 export interface ContractListItem {
   id: string;
+  /** Owning client's id — lets the contracts page deep-link to the customer detail (#56). */
+  clientId: string;
   clientName: string;
   plan: string;
   status: string;
