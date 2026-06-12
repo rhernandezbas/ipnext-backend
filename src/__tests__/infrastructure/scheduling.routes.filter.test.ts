@@ -183,6 +183,19 @@ describe('GET /api/scheduling — filter extension (REQ-FILTER-*)', () => {
     expect(tasks.length).toBe(1);
   });
 
+  it('fix: q=<phone/CUIT> overflowing int4 does not 500 — returns 200', async () => {
+    // The original int4-overflow pattern: a phone/CUIT pasted into the box would
+    // make the Prisma adapter throw a PrismaClientValidationError → 500 on the
+    // sequenceNumber clause. The range guard skips that arm; the seam mirrors it.
+    const res = await withAuth(
+      request(app).get('/api/scheduling?q=11445566778')
+    );
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    // No task has that sequenceNumber; the numeric arm is skipped, never throws.
+    expect(res.body.length).toBe(0);
+  });
+
   it('REQ-FILTER-3: partnerId filters by partner', async () => {
     const res = await withAuth(
       request(app).get(`/api/scheduling?partnerId=${PARTNER_X}`)

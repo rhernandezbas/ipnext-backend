@@ -221,6 +221,35 @@ describe('POST /api/tickets/areas', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
   });
+
+  it('fix: trims the name — 201 created without trailing whitespace', async () => {
+    const res = await asUser(
+      request(fx.app).post('/api/tickets/areas').send({ name: '  Soporte  ' }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(201);
+    expect(res.body.name).toBe('Soporte');
+  });
+
+  it('fix: whitespace-only name → 400 (trim collapses to empty)', async () => {
+    const res = await asUser(
+      request(fx.app).post('/api/tickets/areas').send({ name: '   ' }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('fix: trailing whitespace cannot dodge the conflict check → 409', async () => {
+    await asUser(request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte' }), fx.manageUserId);
+    // 'Soporte ' would slip past the uniqueness check without .trim().
+    const res = await asUser(
+      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte ' }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('TICKET_AREA_NAME_CONFLICT');
+  });
 });
 
 // ─── PUT ──────────────────────────────────────────────────────────────────────

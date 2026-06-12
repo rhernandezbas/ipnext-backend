@@ -694,4 +694,20 @@ describe('GET /api/tickets?search= — LIKE search seam (#63)', () => {
     expect(res.body.total).toBe(1);
     expect(res.body.data[0].sequenceNumber).toBe(t1.sequenceNumber);
   });
+
+  it('#63-fix: ?search=<phone/CUIT> overflowing int4 does not 500 — returns 200 list', async () => {
+    // A phone/CUIT pasted into the box overflows PostgreSQL int4. On Prisma this
+    // would throw a PrismaClientValidationError → 500; the range guard skips the
+    // numeric sequenceNumber clause. The InMemory seam mirrors the same guard.
+    const { app, repo } = buildApp();
+    // Subject carries the overflowing digit string so the text arm still matches.
+    await new CreateTicket(repo).execute({ subject: 'Cliente 11445566778', description: 'D' });
+    await new CreateTicket(repo).execute({ subject: 'Otro ticket', description: 'D' });
+
+    const res = await withAuth(request(app).get('/api/tickets?search=11445566778'));
+    expect(res.status).toBe(200);
+    // Matched by subject (the numeric arm is skipped, never throws).
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0].subject).toBe('Cliente 11445566778');
+  });
 });

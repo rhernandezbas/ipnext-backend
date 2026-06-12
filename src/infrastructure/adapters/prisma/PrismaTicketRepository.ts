@@ -102,8 +102,15 @@ export class PrismaTicketRepository implements TicketRepository {
         { subject: { contains: query.search, mode: 'insensitive' } },
         { customer: { is: { name: { contains: query.search, mode: 'insensitive' } } } },
       ];
+      // Guard the numeric arm: a long digit string (phone / CUIT pasted into the
+      // search box) overflows PostgreSQL's int4 and makes Prisma throw a
+      // PrismaClientValidationError → 500. Only push the exact-sequence clause
+      // when the value fits a signed 32-bit int (max sequenceNumber column type).
       if (/^\d+$/.test(query.search)) {
-        or.push({ sequenceNumber: Number(query.search) });
+        const n = Number(query.search);
+        if (Number.isSafeInteger(n) && n <= 2147483647) {
+          or.push({ sequenceNumber: n });
+        }
       }
       where['OR'] = or;
     }

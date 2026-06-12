@@ -79,12 +79,16 @@ export class InMemoryTicketRepository implements TicketRepository {
     if (query.search) {
       const q = query.search.toLowerCase();
       // #63 — LIKE over subject + customer.name + sequenceNumber (exact if numeric)
-      const isNumeric = /^\d+$/.test(query.search);
+      // Mirror the Prisma int4-overflow guard so the seam is faithful: a numeric
+      // term that overflows a signed 32-bit int never participates in the exact
+      // sequenceNumber match (the Prisma side skips that clause to avoid a 500).
+      const sn = Number(query.search);
+      const isNumeric = /^\d+$/.test(query.search) && Number.isSafeInteger(sn) && sn <= 2147483647;
       results = results.filter(
         (t) =>
           t.subject.toLowerCase().includes(q) ||
           (t.customerName != null && t.customerName.toLowerCase().includes(q)) ||
-          (isNumeric && t.sequenceNumber === Number(query.search)),
+          (isNumeric && t.sequenceNumber === sn),
       );
     }
 

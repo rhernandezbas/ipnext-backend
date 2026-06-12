@@ -177,7 +177,14 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
         { customer: { is: { name: { contains: q, mode: 'insensitive' } } } },
         { address: { contains: q, mode: 'insensitive' } },
       ];
-      if (/^\d+$/.test(q)) or.push({ sequenceNumber: Number(q) });
+      // Same int4-overflow guard as the tickets search (this is the original
+      // pattern it was copied from): a phone/CUIT pasted into the box overflows
+      // PostgreSQL's int4 and makes Prisma throw → 500. Only push the exact-seq
+      // clause when the value fits a signed 32-bit int.
+      if (/^\d+$/.test(q)) {
+        const n = Number(q);
+        if (Number.isSafeInteger(n) && n <= 2147483647) or.push({ sequenceNumber: n });
+      }
       where['OR'] = or;
     }
     if (filter?.from || filter?.to) {

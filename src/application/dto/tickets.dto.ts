@@ -52,7 +52,9 @@ export interface TicketDto {
 
 // TicketArea catalog DTOs — simple name-only catalog
 export const CreateTicketAreaSchema = z.object({
-  name: z.string().min(1),
+  // .trim() before .min(1): a name of " " or "Soporte " would otherwise slip
+  // past the uniqueness conflict check by carrying invisible whitespace.
+  name: z.string().trim().min(1),
 });
 export const UpdateTicketAreaSchema = CreateTicketAreaSchema.partial();
 export type CreateTicketAreaInput = z.infer<typeof CreateTicketAreaSchema>;

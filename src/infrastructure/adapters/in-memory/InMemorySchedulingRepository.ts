@@ -276,11 +276,16 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       const q = filter.q.toLowerCase();
       // Search spans title + customer name + address + sequence number, so
       // "buscar por nombre" (the customer's, which lives on the JOIN) works.
+      // Mirror the Prisma int4-overflow guard so the seam is faithful: a numeric
+      // term that overflows a signed 32-bit int never participates in the
+      // sequenceNumber match (the Prisma side skips that clause to avoid a 500).
+      const sn = Number(filter.q);
+      const seqEligible = /^\d+$/.test(filter.q) && Number.isSafeInteger(sn) && sn <= 2147483647;
       tasks = tasks.filter(t =>
         t.title.toLowerCase().includes(q) ||
         (t.customerName ?? '').toLowerCase().includes(q) ||
         (t.address ?? '').toLowerCase().includes(q) ||
-        String(t.sequenceNumber).includes(q),
+        (seqEligible && t.sequenceNumber === sn),
       );
     }
     if (filter.from) {
