@@ -44,6 +44,8 @@ import {
   ReferenceNotFoundError,
   ReferenceKind,
   ProjectKindMismatchError,
+  NetworkTaskAddressRequiredError,
+  NetworkTaskLocalityRequiredError,
 } from '@domain/errors/scheduling';
 import {
   ChecklistItemNotFoundError,
@@ -533,6 +535,8 @@ export function createSchedulingRouter(
       // network-node-task (#29): kind discriminator + networkSiteId
       kind: data.kind,
       networkSiteId: ('networkSiteId' in data ? data.networkSiteId : null) ?? null,
+      // #54 — locality snapshot for network tasks
+      iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
     };
 
     try {
@@ -551,6 +555,16 @@ export function createSchedulingRouter(
       // frozen Wire Contract maps it to 422 with the wire code INVALID_PROJECT_KIND.
       if (err instanceof ProjectKindMismatchError) {
         res.status(422).json({ error: err.message, code: 'INVALID_PROJECT_KIND' });
+        return;
+      }
+      // #53 — network task requires a non-blank address.
+      if (err instanceof NetworkTaskAddressRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
+      // #54 — network task requires a non-blank iclassCityCode (locality).
+      if (err instanceof NetworkTaskLocalityRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
         return;
       }
       throw err;
@@ -580,6 +594,16 @@ export function createSchedulingRouter(
       // domain code PROJECT_KIND_MISMATCH maps to 422 INVALID_PROJECT_KIND.
       if (err instanceof ProjectKindMismatchError) {
         res.status(422).json({ error: err.message, code: 'INVALID_PROJECT_KIND' });
+        return;
+      }
+      // #53 — network task requires a non-blank address on update.
+      if (err instanceof NetworkTaskAddressRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
+      // #54 — network task requires a non-blank iclassCityCode on update.
+      if (err instanceof NetworkTaskLocalityRequiredError) {
+        res.status(422).json({ error: err.message, code: err.code });
         return;
       }
       throw err;

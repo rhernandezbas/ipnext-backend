@@ -4,7 +4,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode'
 > {
   /** Discriminador de tipo de tarea. Por defecto 'customer' para retro-compatibilidad. */
   kind?: 'customer' | 'network';
@@ -15,6 +15,12 @@ export interface CreateTaskInput extends Omit<ScheduledTask,
   grOrdenId?: string | null;
   /** Optional ticket FK — validated against ticketLookup when non-null. */
   ticketId?: string | null;
+  /**
+   * #54 — task-level locality snapshot. Required (non-blank) for network tasks;
+   * optional for customer tasks. Guard fires in CreateTask/UpdateTask use cases.
+   * Omitted from the base Omit so it's explicitly typed as optional here.
+   */
+  iclassCityCode?: string | null;
 }
 
 export interface UpdateTaskInput extends Partial<CreateTaskInput> {

@@ -75,6 +75,10 @@ export interface ScheduledTask {
   networkSiteId: string | null;
   networkSiteName: string | null;  // JOIN-derived from NetworkSite.name
 
+  // #54 — task-level locality snapshot. Required for network tasks. Dispatch precedence:
+  // iclassCityCode ?? networkSite?.city ?? null. Null for customer tasks (optional).
+  iclassCityCode: string | null;
+
   // IClass — service order code returned by IClass after a successful "Enviar a IClass". Null otherwise.
   iclassOrderCode: string | null;
 

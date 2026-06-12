@@ -106,6 +106,8 @@ export function toTask(row: any): ScheduledTask {
     kind: (row.kind ?? 'customer') as 'customer' | 'network',
     networkSiteId: row.networkSiteId ?? null,
     networkSiteName: row.networkSite?.name ?? null,
+    // #54 — task-level locality snapshot
+    iclassCityCode: row.iclassCityCode ?? null,
     checklist: Array.isArray(row.checklist)
       ? row.checklist.map((ci: any) => ({
           id: ci.id,
@@ -517,6 +519,8 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       // network-node-task (#29)
       kind: data.kind ?? 'customer',
       networkSiteId: data.networkSiteId ?? null,
+      // #54 — locality snapshot
+      iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
     };
   }
 
@@ -558,6 +562,9 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     if (gs !== undefined) { update['generalStatus'] = gs; update['isClosed'] = gs === 'closed'; }
     if (data.reviewedByInventory !== undefined) update['reviewedByInventory'] = data.reviewedByInventory;
     if (data.ticketId !== undefined) update['ticketId'] = data.ticketId;
+    // #54 — locality snapshot
+    const cityCode = (data as { iclassCityCode?: string | null }).iclassCityCode;
+    if (cityCode !== undefined) update['iclassCityCode'] = cityCode;
     return update;
   }
 

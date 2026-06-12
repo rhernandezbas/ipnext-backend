@@ -28,6 +28,12 @@ function isBlank(v: string | null | undefined): boolean {
   return v == null || v.trim() === '';
 }
 
+/** Primer valor NO-blank ('' cuenta como blank — NetworkSite.address es string, nunca null). */
+function firstNonBlank(...vals: Array<string | null | undefined>): string | null {
+  for (const v of vals) if (!isBlank(v)) return v!;
+  return null;
+}
+
 /**
  * Normalizes a string for accent- and case-insensitive comparison:
  * trims, lowercases, and strips diacritics via NFD decomposition.
@@ -118,8 +124,8 @@ export class SendTaskToIClass {
       // Validar required fields usando valores sustituidos (REQ-NODE-DISPATCH-2).
       const effectiveCustomerName = task.networkSiteName ?? null;
       const effectivePhone        = NETWORK_PHONE;
-      const effectiveAddress      = networkSite?.address ?? task.address ?? null;
-      const effectiveCity         = networkSite?.city ?? null;
+      const effectiveAddress      = firstNonBlank(networkSite?.address, task.address);
+      const effectiveCity         = firstNonBlank(task.iclassCityCode, networkSite?.city);
 
       const substitutedValues: Record<(typeof REQUIRED_ORDER)[number], string | null> = {
         customerName: effectiveCustomerName,

@@ -2,7 +2,7 @@ import { SchedulingRepository, UpdateTaskInput } from '@domain/ports/SchedulingR
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
-import { ReferenceNotFoundError, ProjectKindMismatchError } from '@domain/errors/scheduling';
+import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
@@ -72,6 +72,40 @@ export class UpdateTask {
       for (const watcherId of data.watcherIds) {
         const found = await this.adminLookup.findById(watcherId);
         if (!found) throw new ReferenceNotFoundError('watcher', watcherId);
+      }
+    }
+
+    // #53 (fix wave #53/#54) — The address guard must fire on a real CHANGE, not
+    // on mere presence. The detail page ALWAYS echoes `address` in the PUT, so a
+    // legacy network task with a null address would otherwise become un-editable:
+    // any save (assignee, date) would re-send address=null and trip a 422.
+    // Rule: a blank incoming value is only rejected when it CLEARS an existing
+    // value. If the task's address was ALREADY blank/null, re-sending blank is a
+    // no-op and must pass. We load the task only in this branch.
+    if ('address' in data && data.address !== undefined) {
+      const isBlank = data.address === null || data.address === '' || (typeof data.address === 'string' && !data.address.trim());
+      if (isBlank) {
+        const existing = await this.repo.getTask(id);
+        const existingBlank = !existing?.address || !existing.address.trim();
+        if (existing?.kind === 'network' && !existingBlank) {
+          throw new NetworkTaskAddressRequiredError();
+        }
+      }
+    }
+
+    // #54 (fix wave #53/#54) — Same change-not-presence rule as the address guard
+    // above: clearing an existing locality on a network task is a 422, but
+    // re-sending blank on a task whose locality was ALREADY blank/null is a no-op
+    // (legacy tasks stay editable when the FE echoes iclassCityCode).
+    if ('iclassCityCode' in data && (data as { iclassCityCode?: string | null }).iclassCityCode !== undefined) {
+      const cityCode = (data as { iclassCityCode?: string | null }).iclassCityCode;
+      const isBlank = cityCode === null || cityCode === '' || (typeof cityCode === 'string' && !cityCode.trim());
+      if (isBlank) {
+        const existing = await this.repo.getTask(id);
+        const existingBlank = !existing?.iclassCityCode || !existing.iclassCityCode.trim();
+        if (existing?.kind === 'network' && !existingBlank) {
+          throw new NetworkTaskLocalityRequiredError();
+        }
       }
     }
 

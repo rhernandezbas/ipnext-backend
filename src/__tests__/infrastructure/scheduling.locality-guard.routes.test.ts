@@ -1,9 +1,14 @@
 /**
- * A6.3 [RED] Integration tests: POST /api/scheduling con tareas de RED.
- * Cubre REQ-KIND-1, REQ-KIND-2, REQ-KIND-3, REQ-SHAPE-2, REQ-REF-NETWORK-1.
+ * #54 — Route seam test: locality guard for network tasks.
+ *
+ * Proves that the global errorHandler wires NetworkTaskLocalityRequiredError → HTTP 422
+ * with code NETWORK_TASK_LOCALITY_REQUIRED end-to-end.
+ *
+ * REQ-LOC-ROUTE-1: POST network task without iclassCityCode → 422, code NETWORK_TASK_LOCALITY_REQUIRED
+ * REQ-LOC-ROUTE-2: POST network task with valid iclassCityCode → 201 (regression)
  */
 import request from 'supertest';
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
 import cookieParser from 'cookie-parser';
 import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryStageRepository } from '../../infrastructure/adapters/in-memory/InMemoryStageRepository';
@@ -18,9 +23,8 @@ import { createSchedulingRouter } from '../../infrastructure/http/routes/schedul
 import { errorHandler } from '../../infrastructure/http/middleware/errorHandler';
 import { User } from '../../domain/entities/auth';
 import { AuthProvider } from '../../domain/ports/AuthProvider';
-import { Stage } from '../../domain/entities/workflow';
-import { EntityLookup } from '../../domain/ports/EntityLookup';
 import { NetworkSite } from '../../domain/entities/networkSite';
+import { EntityLookup } from '../../domain/ports/EntityLookup';
 
 class AnyLookup implements EntityLookup {
   async findById(id: string) { return { id, isNetworkProject: false }; }
@@ -45,8 +49,8 @@ class FakeAuthProvider implements AuthProvider {
 const DEFAULT_STAGE_ID_PENDING = '10000000-0000-4000-a000-000000000001';
 
 const TEST_SITE: NetworkSite = {
-  id: 'site-test-001',
-  name: 'Torre Norte Test',
+  id: 'site-loc-route-001',
+  name: 'Torre Test Loc',
   address: 'Ruta 7 km 5',
   city: 'Mercedes',
   coordinates: null,
@@ -56,8 +60,8 @@ const TEST_SITE: NetworkSite = {
   clientCount: 0,
   uplink: '1 Gbps',
   parentSiteId: null,
-  description: 'Nodo de prueba',
-  iclassNodeCode: 'TN-TEST',
+  description: 'Nodo de prueba para locality guard',
+  iclassNodeCode: 'TN-LOC',
   uispSiteId: null,
 };
 
@@ -89,91 +93,58 @@ function buildApp() {
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
   const authProvider = new FakeAuthProvider();
 
-  app.use('/api/scheduling', createSchedulingRouter(listTasksUC(repo), getTaskUC(repo), createTask, updateTask, deleteTask, moveTaskToStage, authProvider));
+  const listTasks = new ListTasks(repo);
+  const getTask = new GetTask(repo);
 
-  // Error handler que mapea errores conocidos
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider));
   app.use(errorHandler);
 
-  return app;
+  return { app, repo };
 }
 
-function listTasksUC(repo: InMemorySchedulingRepository) {
-  const { ListTasks } = require('../../application/use-cases/ListTasks');
-  return new ListTasks(repo);
-}
-function getTaskUC(repo: InMemorySchedulingRepository) {
-  const { GetTask } = require('../../application/use-cases/GetTask');
-  return new GetTask(repo);
-}
-
+// BASE body with valid address (#53) but NO iclassCityCode
 const BASE_NETWORK_BODY = {
-  title: 'Mantenimiento Torre Norte',
+  title: 'Mantenimiento Torre Test Loc',
   priority: 'normal',
   estimatedHours: 2,
   category: 'maintenance',
   kind: 'network',
   networkSiteId: TEST_SITE.id,
-  // #53 — network tasks require a non-blank address.
-  address: 'Ruta 7 km 5',
-  // #54 — network tasks require a non-blank iclassCityCode (locality).
-  iclassCityCode: 'Mercedes',
+  address: 'Ruta 7 km 5',  // #53 address required
 };
 
-// REQ-KIND-1: Network task created successfully
-describe('POST /api/scheduling — network task', () => {
-  it('returns 201 with kind=network and networkSiteId (REQ-KIND-1)', async () => {
-    const app = buildApp();
+describe('POST /api/scheduling — network task locality guard (#54)', () => {
+  it('POST network task without iclassCityCode → 422 NETWORK_TASK_LOCALITY_REQUIRED (REQ-LOC-ROUTE-1)', async () => {
+    const { app } = buildApp();
+    // No iclassCityCode field → guard fires
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
       .send(BASE_NETWORK_BODY);
 
-    expect(res.status).toBe(201);
-    expect(res.body.kind).toBe('network');
-    expect(res.body.networkSiteId).toBe(TEST_SITE.id);
-    expect(res.body.customerId).toBeNull();
-    expect(res.body.contractId).toBeNull();
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NETWORK_TASK_LOCALITY_REQUIRED');
   });
 
-  // REQ-KIND-2: Missing networkSiteId → 400
-  it('returns 400 when networkSiteId is missing (REQ-KIND-2)', async () => {
-    const app = buildApp();
-    const { networkSiteId: _, ...noSite } = BASE_NETWORK_BODY;
+  it('POST network task with iclassCityCode="" → 422 NETWORK_TASK_LOCALITY_REQUIRED', async () => {
+    const { app } = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
-      .send(noSite);
+      .send({ ...BASE_NETWORK_BODY, iclassCityCode: '' });
 
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NETWORK_TASK_LOCALITY_REQUIRED');
   });
 
-  // REQ-KIND-3: Non-existent networkSiteId → 404
-  it('returns 404 when networkSiteId does not exist (REQ-KIND-3)', async () => {
-    const app = buildApp();
+  it('POST network task with valid iclassCityCode → 201 (REQ-LOC-ROUTE-2 regression)', async () => {
+    const { app } = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
-      .send({ ...BASE_NETWORK_BODY, networkSiteId: 'does-not-exist' });
-
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('NETWORK_SITE_NOT_FOUND');
-  });
-
-  // REQ-SHAPE-2: Network task response exposes kind and site fields
-  it('response contains kind, networkSiteId, null customerId (REQ-SHAPE-2)', async () => {
-    const app = buildApp();
-    const res = await request(app)
-      .post('/api/scheduling')
-      .set('Cookie', 'auth_token=fake')
-      .send(BASE_NETWORK_BODY);
+      .send({ ...BASE_NETWORK_BODY, iclassCityCode: 'Mercedes' });
 
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({
-      kind: 'network',
-      networkSiteId: TEST_SITE.id,
-      customerId: null,
-      contractId: null,
-    });
+    expect(res.body.iclassCityCode).toBe('Mercedes');
   });
 });
