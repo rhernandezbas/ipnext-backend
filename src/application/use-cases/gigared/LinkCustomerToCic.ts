@@ -60,8 +60,9 @@ export class LinkCustomerToCic {
     // 0b. Validate the contract FIRST — never touch Gigared if the target contract is invalid.
     const wantsReconcile = typeof contractId === 'string' && contractId !== '';
     if (wantsReconcile && this.contractLookup) {
+      // #47k HIGH: el contrato debe PERTENECER al customer (un contractId ajeno → 404, sin leak).
       const contract = await this.contractLookup.findById(contractId as string);
-      if (!contract) throw new ContractNotFoundError(contractId as string);
+      if (!contract || contract.clientId !== customerId) throw new ContractNotFoundError(contractId as string);
     }
 
     // 1. Resolve the partner BY CIC. A 404 upstream is a CIC-specific not-found.

@@ -30,6 +30,22 @@ export interface AddTvServiceResult {
 export type RemoveTvServiceResult = AddTvServiceResult;
 
 /**
+ * #47k — result of CancelTv (dar de baja TV completa).
+ *   - `removed`: serviceIds successfully DELETEd in Gigared (base incluido — libera cupo)
+ *   - `failed`: serviceIds whose DELETE threw, with the upstream detail (retry idempotente)
+ *   - `ottDisabled`: whether the OTT disable succeeded (idempotent: "ya deshabilitada" = true)
+ *   - `local`: 'synced' if the local TV ContractService reconcile succeeded, else 'failed'
+ *
+ * Router maps: failed.length === 0 && local === 'synced' → 200; otherwise → 207.
+ */
+export interface CancelTvResult {
+  removed: string[];
+  failed: { id: string; detail: string }[];
+  ottDisabled: boolean;
+  local: 'synced' | 'failed';
+}
+
+/**
  * PUT /api/gigared/config body. Every field optional:
  *   - apiKey omitted = no change; '' = clear the key (unconfigured)
  *   - baseUrl must be a valid URL when present

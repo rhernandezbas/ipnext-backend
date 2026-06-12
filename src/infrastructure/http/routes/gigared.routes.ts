@@ -9,6 +9,7 @@ import type { RegisterGigaredAccount } from '@application/use-cases/gigared/Regi
 import type { AddTvService } from '@application/use-cases/gigared/AddTvService';
 import type { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
 import type { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
+import type { CancelTv } from '@application/use-cases/gigared/CancelTv';
 import type { GigaredConfigRepository } from '@domain/ports/GigaredConfigRepository';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import type { ListAccountsFilter } from '@domain/ports/GigaredPort';
@@ -21,6 +22,7 @@ import {
   GigaredNotFoundError,
   GigaredRejectedError,
   TvCatalogMissingError,
+  TvNotLinkedError,
   CicNotFoundError,
   CicAlreadyLinkedError,
 } from '@domain/errors/gigared';
@@ -116,6 +118,10 @@ function sendGigaredError(res: Response, err: unknown): boolean {
     res.status(422).json({ error: err.message, code: err.code });
     return true;
   }
+  if (err instanceof TvNotLinkedError) {
+    res.status(404).json({ error: err.message, code: err.code });
+    return true;
+  }
   return false;
 }
 
@@ -130,6 +136,7 @@ export interface GigaredRouterDeps {
   addTvService: AddTvService;
   removeTvService: RemoveTvService;
   setOttStatus: SetOttStatus;
+  cancelTv: CancelTv;
   requireRead: RequestHandler;
   requireWrite: RequestHandler;
   requireManage: RequestHandler;
@@ -285,6 +292,19 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       const enabled = Boolean((req.body as { enabled?: unknown }).enabled);
       await deps.setOttStatus.execute(req.params['id'] as string, enabled);
       res.json({ ok: true });
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  // #47k — dar de baja TV completa. Body { contractId }. tv.write requerido.
+  // 200 si removed sin fallos y local synced; 207 si algún DELETE falló o local falló.
+  router.post('/customers/:id/cancel', deps.requireWrite, async (req, res, next): Promise<void> => {
+    try {
+      const contractId = String((req.body as { contractId?: unknown }).contractId ?? '');
+      const result = await deps.cancelTv.execute(req.params['id'] as string, { contractId });
+      const partial = result.failed.length > 0 || result.local === 'failed';
+      res.status(partial ? 207 : 200).json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) next(err);
     }

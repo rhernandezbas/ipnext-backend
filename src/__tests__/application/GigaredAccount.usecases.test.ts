@@ -155,7 +155,11 @@ describe('LinkCustomerToCic (#47f — reconcile TV ContractService on link)', ()
     return cat;
   }
 
-  const contractLookup = (exists: boolean) => ({ findById: async (id: string) => (exists ? { id } : null) });
+  // Contract lookup carries ownership (clientId). Defaults the owner to 'cust-1' so the
+  // existing tests keep passing; pass a different owner to simulate a foreign contract (#47k).
+  const contractLookup = (exists: boolean, ownerId = 'cust-1') => ({
+    findById: async (id: string) => (exists ? { id, clientId: ownerId } : null),
+  });
 
   it('(a) link with contractId + account already linked WITH services → ContractService TV created, notes correct', async () => {
     await seedTvCatalog();
@@ -231,6 +235,18 @@ describe('LinkCustomerToCic (#47f — reconcile TV ContractService on link)', ()
     });
     const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(false), cs, catalog);
     await expect(uc.execute('cust-1', '0000001234', 'ghost')).rejects.toBeInstanceOf(ContractNotFoundError);
+    expect(port.getAccountByCic).not.toHaveBeenCalled();
+    expect(port.setInternalId).not.toHaveBeenCalled();
+  });
+
+  it('(d2) #47k HIGH: contractId de OTRO cliente → ContractNotFoundError, Gigared NUNCA llamado', async () => {
+    await seedTvCatalog();
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: '' })),
+    });
+    // El contrato existe pero pertenece a 'cust-B'.
+    const uc = new LinkCustomerToCic(port, customerLookup(true), contractLookup(true, 'cust-B'), cs, catalog);
+    await expect(uc.execute('cust-1', '0000001234', 'C-of-B')).rejects.toBeInstanceOf(ContractNotFoundError);
     expect(port.getAccountByCic).not.toHaveBeenCalled();
     expect(port.setInternalId).not.toHaveBeenCalled();
   });

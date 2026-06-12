@@ -19,7 +19,7 @@ describe('Gigared composition root (#47)', () => {
   it("(a) createGigaredRouter is wired with requirePerm('tv', …)", () => {
     const idx = appSrc.indexOf('createGigaredRouter(');
     expect(idx).toBeGreaterThan(-1);
-    const window = appSrc.slice(idx, idx + 1200);
+    const window = appSrc.slice(idx, idx + 1600);
     expect(window).toMatch(/requirePerm\(\s*['"]tv['"]/);
   });
 
@@ -40,6 +40,27 @@ describe('Gigared composition root (#47)', () => {
     expect(m).not.toBeNull();
     expect(m![1]).toMatch(/contractServiceRepo/);
     expect(m![1]).toMatch(/serviceCatalogRepo/);
-    expect(m![1]).toMatch(/contractLookup/);
+    // #47k: ownership-aware contract lookup, not the existence-only one.
+    expect(m![1]).toMatch(/gigaredContractLookup/);
+  });
+
+  it('(f) #47k new CancelTv is wired with gigared client + contract-services + catalog repos', () => {
+    const m = appSrc.match(/new CancelTv\(([^)]*)\)/);
+    expect(m).not.toBeNull();
+    expect(m![1]).toMatch(/gigaredClient/);
+    expect(m![1]).toMatch(/contractServiceRepo/);
+    expect(m![1]).toMatch(/serviceCatalogRepo/);
+    expect(m![1]).toMatch(/gigaredContractLookup/);
+  });
+
+  it('(g) #47k: the Gigared TV use cases use an ownership-aware contract lookup (clientId)', () => {
+    // The dedicated lookup must select clientId so the use cases can assert ownership.
+    expect(appSrc).toMatch(/prismaContractOwnershipLookup/);
+    expect(appSrc).toMatch(/select:\s*\{\s*id:\s*true,\s*clientId:\s*true\s*\}/);
+    // Add/Remove TV are wired with the ownership lookup too — not the existence-only one.
+    const add = appSrc.match(/new AddTvService\(([^)]*)\)/);
+    expect(add![1]).toMatch(/gigaredContractLookup/);
+    const rem = appSrc.match(/new RemoveTvService\(([^)]*)\)/);
+    expect(rem![1]).toMatch(/gigaredContractLookup/);
   });
 });

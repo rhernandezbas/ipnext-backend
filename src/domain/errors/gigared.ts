@@ -65,6 +65,18 @@ export class GigaredRejectedError extends DomainError {
   }
 }
 
+/**
+ * #47k — the customer has no Gigared account bound (getAccountByInternalId → 404).
+ * Distinct from GIGARED_NOT_FOUND so the cancel flow can surface a TV-specific message
+ * ("este cliente no tiene TV vinculada") → router 404 TV_NOT_LINKED.
+ */
+export class TvNotLinkedError extends DomainError {
+  constructor(public readonly customerId: string) {
+    super(`Customer ${customerId} has no Gigared TV account linked`, 'TV_NOT_LINKED');
+    this.name = 'TvNotLinkedError';
+  }
+}
+
 /** No active 'TV' entry in the ServiceCatalog — local reconcile cannot proceed. */
 export class TvCatalogMissingError extends DomainError {
   constructor(message = "ServiceCatalog has no active 'TV' entry") {
