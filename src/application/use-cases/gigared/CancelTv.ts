@@ -24,7 +24,8 @@ import { reconcileTvContractService } from './reconcileTvContractService';
  * #64 — "RENOVAR CIC": tras los pasos anteriores, renueva el CIC (genera uno nuevo) y
  * desvincula el internal_id del NUEVO CIC, de modo que el cliente quede "como si no tuviera
  * TV" (getAccountByInternalId(customerId) → 404 después → panel NO vinculado). Ambos pasos son
- * best-effort y se ejecutan DESPUÉS de packs+OTT+reconcile:
+ * best-effort y se ejecutan DESPUÉS de packs+OTT+reconcile, SOLO si renewAttempted && failed.length===0
+ * (ver re-review abajo):
  *   - renewCic(customerId) → { oldCic, newCic }. Si falla → renew=null, NO se intenta el unlink
  *     (sin newCic no sabemos qué CIC limpiar).
  *   - setInternalId(newCic, '') desata el vínculo en el partner → unlinked=true. Si el partner
@@ -41,9 +42,18 @@ import { reconcileTvContractService } from './reconcileTvContractService';
  *   Post-unlink exitoso la cuenta desaparece de Gigared (404), así que el siguiente retry
  *   lanzará TvNotLinkedError ANTES de llegar acá.
  *
+ * #64 re-review (BLOQUEANTE) — Guard anti-desmontaje-incompleto: renew+unlink corren SOLO si
+ *   failed.length === 0 (todos los removes de packs OK). Con failed > 0 NI renew NI unlink: el
+ *   renew movería el internal_id a un CIC nuevo y el unlink lo borraría, dejando la cuenta
+ *   IRRESOLUBLE por internal_id (404) mientras packs fallidos siguen activos (cupo consumido) y
+ *   el ítem local cuelga inactivo — el retry del 207 daría 404 y enmascararía una baja a medias.
+ *   Preservando el vínculo (sin renew/unlink) la cuenta sigue resoluble: el "Reintentar baja"
+ *   re-procesa los packs pendientes y, ya sin fallos, recién entonces renueva y desvincula.
+ *
  * Shape: { removed, failed, ottDisabled, local, renew, unlinked, renewAttempted }.
  * El router responde 200 si failed.length===0 && local==='synced' && ottDisabled &&
- * (!renewAttempted || (renew!==null && unlinked)); si no 207.
+ * (!renewAttempted || (renew!==null && unlinked)); si no 207. Con failed>0 ya es 207 por el
+ * primer criterio, así que el retry queda habilitado.
  */
 export class CancelTv {
   constructor(
@@ -121,9 +131,18 @@ export class CancelTv {
     // H1 — Guard anti re-renew: solo ejecutar cuando renewAttempted=true. Si la cuenta ya estaba
     // pelada (services:[], ott disabled) al inicio de esta corrida, no hay nada que renovar; no
     // llamar a renewCic evita generar un tercer CIC en un retry sobre una baja parcialmente hecha.
+    //
+    // #64 re-review (BLOQUEANTE) — Guard anti-desmontaje-incompleto: renew+unlink SOLO si
+    // failed.length === 0. Si ALGÚN remove de pack falló, el renew NO debe correr: el renew
+    // genera un CIC nuevo, el partner mueve el internal_id a ese CIC y el unlink lo borra,
+    // dejando la cuenta IRRESOLUBLE por internal_id (404). Pero los packs fallidos siguen
+    // activos consumiendo cupo, y el ítem local ya quedó inactivado/colgado. El retry del 207
+    // daría 404 (cuenta desvinculada) enmascarando una baja a medias. Con failed>0 NO renovamos
+    // ni desvinculamos: la cuenta sigue resoluble por internal_id, así el "Reintentar baja"
+    // re-procesa los packs pendientes y, ya sin fallos, recién entonces renueva y desvincula.
     let renew: { oldCic: string; newCic: string } | null = null;
     let unlinked = false;
-    if (renewAttempted) {
+    if (renewAttempted && failed.length === 0) {
       try {
         renew = await this.gigared.renewCic(customerId);
       } catch {

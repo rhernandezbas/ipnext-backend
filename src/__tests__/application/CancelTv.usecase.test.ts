@@ -306,15 +306,20 @@ describe('CancelTv (#47k)', () => {
     expect(renewCic).toHaveBeenCalledTimes(1);
   });
 
-  it('(k) #64 H1: stateful retry — baja completa → 2da llamada lanza TvNotLinkedError (404), renewCic llamado UNA sola vez', async () => {
+  it('(k) #64 re-review: stateful — packs fallan → 207 SIN renew (cuenta sigue vinculada) → retry packs OK → renueva → unlink → 404', async () => {
     await seedTvCatalog(catalog, cs);
 
-    // Stateful fake port: tracks current state
+    // Stateful fake port: tracks current state. removeService falla mientras `failNext` esté
+    // activo (simula el partner caído); el retry lo desactiva y los packs se quitan de verdad.
     const state = {
-      services: [{ id: '129', name: 'Gigared Play Full' }] as { id: string; name: string }[],
+      services: [
+        { id: '129', name: 'Gigared Play Full' },
+        { id: '39', name: 'Pack Todo Futbol' },
+      ] as { id: string; name: string }[],
       ott: { status: 'enabled' as 'enabled' | 'disabled' | null },
       internalId: 'cust-1' as string,
       unlinked: false,
+      failRemoves: true,
     };
 
     let renewCicCallCount = 0;
@@ -322,19 +327,20 @@ describe('CancelTv (#47k)', () => {
     const statefulPort: GigaredPort = {
       getSummary: jest.fn(),
       listAccounts: jest.fn(),
-      getAccountByInternalId: jest.fn(async (customerId: string) => {
-        // After unlink (state.unlinked), the account is gone from Gigared's perspective
+      getAccountByInternalId: jest.fn(async () => {
+        // Tras el unlink (state.unlinked), la cuenta desaparece por internal_id (404).
         if (state.unlinked) throw new GigaredNotFoundError();
         return fakeAccount({ services: state.services, ott: { id: 'ott-1', stationaryLicenses: 2, mobileLicenses: 1, registeredDevices: 0, status: state.ott.status } });
       }),
       getAccountByCic: jest.fn(async () => fakeAccount()),
       register: jest.fn(), activate: jest.fn(),
-      setInternalId: jest.fn(async (cic: string, internalId: string) => {
-        // Clearing internal_id means the account is unlinked
+      setInternalId: jest.fn(async (_cic: string, internalId: string) => {
+        // Limpiar internal_id = la cuenta queda desvinculada.
         if (internalId === '') state.unlinked = true;
       }),
       addService: jest.fn(async () => {}),
       removeService: jest.fn(async (_customerId: string, serviceId: string) => {
+        if (state.failRemoves) throw new Error('partner 500');
         state.services = state.services.filter(s => s.id !== serviceId);
       }),
       setOtt: jest.fn(async (_customerId: string, enabled: boolean) => {
@@ -348,19 +354,59 @@ describe('CancelTv (#47k)', () => {
 
     const uc = new CancelTv(statefulPort, cs, catalog, contractLookup(true), lookup(true));
 
-    // First run: full baja (packs removed, ott off, renew, unlink succeeds)
+    // 1ª corrida: TODOS los removes fallan → failed.length > 0 → NI renew NI unlink.
     const result1 = await uc.execute('cust-1', { contractId: 'C1' });
     expect(result1.renewAttempted).toBe(true);
-    expect(result1.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
-    expect(result1.unlinked).toBe(true);
-    expect(renewCicCallCount).toBe(1);
+    expect(result1.failed).toHaveLength(2);
+    // BLOQUEANTE: con packs fallidos, el renew NO corre → cuenta sigue resoluble por internal_id.
+    expect(result1.renew).toBeNull();
+    expect(result1.unlinked).toBe(false);
+    expect(renewCicCallCount).toBe(0);
+    expect(state.unlinked).toBe(false);
+    // El router lo ve como 207 (failed.length > 0).
+    expect(result1.failed.length > 0).toBe(true);
 
-    // Second run (retry): getAccountByInternalId now throws 404 → TvNotLinkedError
+    // La cuenta SIGUE vinculada: un getAccountByInternalId no lanza 404 (el retry funciona).
+    await expect(statefulPort.getAccountByInternalId('cust-1')).resolves.toBeDefined();
+
+    // 2ª corrida (retry): el partner se recuperó → los packs se quitan de verdad → sin fallos →
+    // recién ahora renueva y desvincula.
+    state.failRemoves = false;
+    const result2 = await uc.execute('cust-1', { contractId: 'C1' });
+    expect(result2.failed).toEqual([]);
+    expect(result2.removed.sort()).toEqual(['129', '39']);
+    expect(result2.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
+    expect(result2.unlinked).toBe(true);
+    expect(renewCicCallCount).toBe(1);
+    expect(state.unlinked).toBe(true);
+
+    // 3ª corrida (retry sobre baja ya completa): la cuenta desapareció → TvNotLinkedError (404).
     await expect(uc.execute('cust-1', { contractId: 'C1' }))
       .rejects.toBeInstanceOf(TvNotLinkedError);
-
-    // renewCic must have been called exactly ONCE across both runs (no re-renew)
+    // renewCic siguió en UNA sola llamada (no re-renueva).
     expect(renewCicCallCount).toBe(1);
+  });
+
+  it('(k2) #64 re-review: failed > 0 pero renewAttempted → NO renueva ni desvincula (preserva el vínculo)', async () => {
+    await seedTvCatalog(catalog, cs);
+    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
+    const setInternalId = jest.fn(async () => {});
+    // Un único pack que falla al removerse → failed.length === 1.
+    const removeService = jest.fn(async () => { throw new Error('partner 500'); });
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }));
+    const port = fakePort({ renewCic, setInternalId, removeService, getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+
+    expect(result.renewAttempted).toBe(true);
+    expect(result.failed).toHaveLength(1);
+    // Guard BLOQUEANTE: con failed>0, renew y unlink se saltan por completo.
+    expect(renewCic).not.toHaveBeenCalled();
+    expect(setInternalId).not.toHaveBeenCalled();
+    expect(result.renew).toBeNull();
+    expect(result.unlinked).toBe(false);
   });
 
   it('(l) #64 H1: cuenta ya pelada (services:[], ott disabled) pero aún existe → renewAttempted false, renewCic NO llamado', async () => {
