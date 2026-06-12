@@ -2,6 +2,7 @@ import { Ticket, TicketStats, TicketPriority } from '@domain/entities/ticket';
 import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
 import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
 import { PaginatedResult } from '@application/dto/pagination';
+import { sequenceNumberClause } from '../search/sequenceNumberClause';
 
 // Minimal in-memory customer map for JOIN-derived customerName in tests
 export interface InMemoryCustomer {
@@ -82,13 +83,13 @@ export class InMemoryTicketRepository implements TicketRepository {
       // Mirror the Prisma int4-overflow guard so the seam is faithful: a numeric
       // term that overflows a signed 32-bit int never participates in the exact
       // sequenceNumber match (the Prisma side skips that clause to avoid a 500).
-      const sn = Number(query.search);
-      const isNumeric = /^\d+$/.test(query.search) && Number.isSafeInteger(sn) && sn <= 2147483647;
+      // Same shared helper as PrismaTicketRepository — single source of truth.
+      const seqClause = sequenceNumberClause(query.search);
       results = results.filter(
         (t) =>
           t.subject.toLowerCase().includes(q) ||
           (t.customerName != null && t.customerName.toLowerCase().includes(q)) ||
-          (isNumeric && t.sequenceNumber === sn),
+          (seqClause !== null && t.sequenceNumber === seqClause.sequenceNumber),
       );
     }
 

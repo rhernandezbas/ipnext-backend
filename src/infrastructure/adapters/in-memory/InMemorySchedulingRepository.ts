@@ -6,6 +6,7 @@ import { StageRepository } from '@domain/ports/StageRepository';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskTemplateRepository } from '@domain/ports/TaskTemplateRepository';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
+import { sequenceNumberClause } from '../search/sequenceNumberClause';
 
 /** Minimal project shape needed for getTaskProjectMapping. */
 interface InMemoryProject {
@@ -279,13 +280,14 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       // Mirror the Prisma int4-overflow guard so the seam is faithful: a numeric
       // term that overflows a signed 32-bit int never participates in the
       // sequenceNumber match (the Prisma side skips that clause to avoid a 500).
-      const sn = Number(filter.q);
-      const seqEligible = /^\d+$/.test(filter.q) && Number.isSafeInteger(sn) && sn <= 2147483647;
+      // Same shared helper as PrismaSchedulingRepository — single source of truth
+      // for the eligibility decision. The match is EXACT, never substring.
+      const seqClause = sequenceNumberClause(filter.q);
       tasks = tasks.filter(t =>
         t.title.toLowerCase().includes(q) ||
         (t.customerName ?? '').toLowerCase().includes(q) ||
         (t.address ?? '').toLowerCase().includes(q) ||
-        (seqEligible && t.sequenceNumber === sn),
+        (seqClause !== null && t.sequenceNumber === seqClause.sequenceNumber),
       );
     }
     if (filter.from) {

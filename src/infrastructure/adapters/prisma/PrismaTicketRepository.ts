@@ -14,6 +14,7 @@ import { Ticket, TicketStats } from '@domain/entities/ticket';
 import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
 import { PaginatedResult } from '@application/dto/pagination';
 import { TicketStatusUnknownError } from '@domain/errors/tickets';
+import { sequenceNumberClause } from '../search/sequenceNumberClause';
 import { prisma } from '../../database/prisma';
 
 const INCLUDE = {
@@ -104,14 +105,11 @@ export class PrismaTicketRepository implements TicketRepository {
       ];
       // Guard the numeric arm: a long digit string (phone / CUIT pasted into the
       // search box) overflows PostgreSQL's int4 and makes Prisma throw a
-      // PrismaClientValidationError → 500. Only push the exact-sequence clause
-      // when the value fits a signed 32-bit int (max sequenceNumber column type).
-      if (/^\d+$/.test(query.search)) {
-        const n = Number(query.search);
-        if (Number.isSafeInteger(n) && n <= 2147483647) {
-          or.push({ sequenceNumber: n });
-        }
-      }
+      // PrismaClientValidationError → 500. The shared helper returns the exact
+      // clause only when the value fits a signed 32-bit int (the sequenceNumber
+      // column type), and null otherwise. Unit-tested in isolation.
+      const seqClause = sequenceNumberClause(query.search);
+      if (seqClause) or.push(seqClause);
       where['OR'] = or;
     }
 

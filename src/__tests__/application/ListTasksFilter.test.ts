@@ -156,6 +156,50 @@ describe('InMemorySchedulingRepository.listTasks — search (q) across multiple 
     expect(tasks.some(t => t.id === created.id)).toBe(true);
   });
 
+  it('sequenceNumber match is EXACT, not substring (pins Prisma prod semantics)', async () => {
+    // RED against the pre-fix InMemory, which used String(seq).includes(q): a
+    // partial numeric term that is a substring of a real sequenceNumber would
+    // wrongly match. Prisma uses an exact equality clause in prod, so a partial
+    // term must yield ZERO results. This pins the in-memory seam to that truth.
+    const repo = new InMemorySchedulingRepository();
+    const createTask = new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup);
+    // Title/customer/address carry no digits so the only possible hit is the
+    // sequenceNumber arm — isolating the exact-vs-substring decision.
+    // sequenceNumber is monotonic & process-global; create until ours has >= 3
+    // digits so a 2-char prefix (>= 10) exists that cannot collide with the
+    // seeded 1..7 range — guaranteeing a strict, non-colliding substring.
+    let created = await createTask.execute({ ...BASE, title: 'alpha bravo charlie', stageId: STAGE_S1 });
+    while (String(created.sequenceNumber).length < 3) {
+      created = await createTask.execute({ ...BASE, title: 'alpha bravo charlie', stageId: STAGE_S1 });
+    }
+
+    const seq = String(created.sequenceNumber);
+    const all = await repo.listTasks();
+    const fullSeqs = new Set(all.map(t => String(t.sequenceNumber)));
+    // Pick a STRICT substring of `seq` (shorter than seq) that is NOT the full
+    // sequenceNumber of ANY task — so the only way it could match `created` is
+    // the buggy substring semantics, never a legitimate exact hit elsewhere.
+    // We scan all substrings (longest first) to dodge collisions with the
+    // monotonic counter's other values.
+    let partial = '';
+    for (let len = seq.length - 1; len >= 1 && !partial; len--) {
+      for (let start = 0; start + len <= seq.length && !partial; start++) {
+        const cand = seq.slice(start, start + len);
+        if (!fullSeqs.has(cand)) partial = cand;
+      }
+    }
+    // Precondition: we found a non-colliding strict substring of `seq`.
+    expect(partial).not.toBe('');
+    expect(partial.length).toBeLessThan(seq.length);
+    expect(seq.includes(partial)).toBe(true);
+    expect(fullSeqs.has(partial)).toBe(false);
+
+    // OLD substring InMemory: String(seq).includes(partial) is true → match → RED.
+    // NEW exact InMemory: seq === Number(partial) is false → 0 results → GREEN.
+    const tasks = await repo.listTasks({ q: partial });
+    expect(tasks.length).toBe(0);
+  });
+
   it('search is AND-combined with other filters (project scope respected)', async () => {
     const repo = new InMemorySchedulingRepository();
     repo.seedCustomerName('cust-z', 'Zulema Ramos');
