@@ -80,6 +80,8 @@ describe('SyncUispMirror — auto-import NetworkSites (step 8)', () => {
   it('SCEN-AUTO-03: fills address when NetworkSite has no address set (auto-complete)', async () => {
     const existingNs = {
       id: 'ns-1',
+      siteNumber: 1,
+      fixedCode: 'NODO 1',
       name: 'Site site-1',
       address: '',
       city: '',
@@ -106,6 +108,8 @@ describe('SyncUispMirror — auto-import NetworkSites (step 8)', () => {
   it('SCEN-AUTO-04: does NOT overwrite manually-set address on existing NetworkSite', async () => {
     const existingNs = {
       id: 'ns-1',
+      siteNumber: 1,
+      fixedCode: 'NODO 1',
       name: 'Site site-1',
       address: 'Manual Address 999',
       city: 'Buenos Aires',

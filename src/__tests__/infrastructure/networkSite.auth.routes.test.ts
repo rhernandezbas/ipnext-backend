@@ -44,6 +44,8 @@ class EchoAuthProvider implements AuthProvider {
 function makeSite(id: string): NetworkSite {
   return {
     id,
+    siteNumber: 1,
+    fixedCode: 'NODO 1',
     name: `Site ${id}`,
     address: 'Calle Test 1',
     city: 'Buenos Aires',

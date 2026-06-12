@@ -1,10 +1,12 @@
-import { NetworkSite } from '@domain/entities/networkSite';
+import { NetworkSite, fixedCodeFor } from '@domain/entities/networkSite';
 import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 import { prisma } from '../../database/prisma';
 
 function toSite(row: any): NetworkSite {
   return {
     id: row.id,
+    siteNumber: row.siteNumber,
+    fixedCode: fixedCodeFor(row.siteNumber),
     name: row.name,
     address: row.address ?? null,
     city: row.city ?? null,
@@ -39,7 +41,7 @@ export class PrismaNetworkSiteRepository implements NetworkSiteRepository {
     return row ? toSite(row) : null;
   }
 
-  async create(data: Omit<NetworkSite, 'id'>): Promise<NetworkSite> {
+  async create(data: Omit<NetworkSite, 'id' | 'siteNumber' | 'fixedCode'>): Promise<NetworkSite> {
     const row = await prisma.networkSite.create({
       data: {
         name: data.name,

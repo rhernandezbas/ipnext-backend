@@ -50,6 +50,8 @@ const DEFAULT_STAGE_ID_PENDING = '10000000-0000-4000-a000-000000000001';
 
 const TEST_SITE: NetworkSite = {
   id: 'site-addr-test-001',
+  siteNumber: 1,
+  fixedCode: 'NODO 1',
   name: 'Torre Test Addr',
   address: 'Ruta 7 km 5',
   city: 'Mercedes',

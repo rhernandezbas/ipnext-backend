@@ -38,6 +38,8 @@ const now = new Date('2026-06-20T00:00:00Z');
 function makeSite(id: string, overrides: Partial<NetworkSite> = {}): NetworkSite {
   return {
     id,
+    siteNumber: 1,
+    fixedCode: 'NODO 1',
     name: `Site ${id}`,
     address: 'Calle Test 123',
     city: 'Buenos Aires',

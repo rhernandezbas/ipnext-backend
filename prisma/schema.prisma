@@ -1585,6 +1585,11 @@ model IpAssignment {
 
 model NetworkSite {
   id           String        @id @default(uuid())
+  // network-site-fixed-code (#51) — número estable por sitio, secuencia dedicada.
+  // Mismo patrón serial que ScheduledTask.sequenceNumber: Prisma genera/posee
+  // la secuencia `"NetworkSite_siteNumber_seq"`. La migración 20260706000000 la
+  // crea con OWNED BY + backfill para datos existentes (autoincrement no backfillea).
+  siteNumber   Int           @unique @default(autoincrement())
   name         String
   address      String?
   city         String?
