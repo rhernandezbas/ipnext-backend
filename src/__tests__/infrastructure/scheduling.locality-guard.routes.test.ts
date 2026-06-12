@@ -1,11 +1,16 @@
 /**
- * #54 — Route seam test: locality guard for network tasks.
+ * #54/#66 — Route seam test: locality guard for network tasks.
  *
- * Proves that the global errorHandler wires NetworkTaskLocalityRequiredError → HTTP 422
+ * Proves that the route wires NetworkTaskLocalityRequiredError → HTTP 422
  * with code NETWORK_TASK_LOCALITY_REQUIRED end-to-end.
  *
- * REQ-LOC-ROUTE-1: POST network task without iclassCityCode → 422, code NETWORK_TASK_LOCALITY_REQUIRED
- * REQ-LOC-ROUTE-2: POST network task with valid iclassCityCode → 201 (regression)
+ * #66 migrated the contract: locality is REQUIRED only for FIBRA tasks. RED tasks
+ * (networkType 'red' or omitted) no longer require a locality — dispatch falls back
+ * to the site city.
+ *
+ * REQ-LOC-ROUTE-1 (#66): POST FIBRA task without iclassCityCode → 422 NETWORK_TASK_LOCALITY_REQUIRED
+ * REQ-LOC-ROUTE-2 (#66): POST RED task without iclassCityCode → 201 (locality relaxed for red)
+ * REQ-LOC-ROUTE-3:       POST FIBRA task with valid iclassCityCode → 201 (regression)
  */
 import request from 'supertest';
 import express from 'express';
@@ -104,8 +109,20 @@ function buildApp() {
   return { app, repo };
 }
 
-// BASE body with valid address (#53) but NO iclassCityCode
-const BASE_NETWORK_BODY = {
+// FIBRA body: free-text node name, NO site FK. Locality is required for fibra.
+const FIBRA_BODY = {
+  title: 'Mantenimiento Nodo FO',
+  priority: 'normal',
+  estimatedHours: 2,
+  category: 'maintenance',
+  kind: 'network',
+  networkType: 'fibra',
+  networkSiteName: 'Nodo FO-1',
+  address: 'Ruta 7 km 5',  // #53 address required
+};
+
+// RED body: site FK, no networkType (defaults to red). Locality is OPTIONAL for red (#66).
+const RED_BODY = {
   title: 'Mantenimiento Torre Test Loc',
   priority: 'normal',
   estimatedHours: 2,
@@ -115,36 +132,47 @@ const BASE_NETWORK_BODY = {
   address: 'Ruta 7 km 5',  // #53 address required
 };
 
-describe('POST /api/scheduling — network task locality guard (#54)', () => {
-  it('POST network task without iclassCityCode → 422 NETWORK_TASK_LOCALITY_REQUIRED (REQ-LOC-ROUTE-1)', async () => {
+describe('POST /api/scheduling — network task locality guard (#54/#66)', () => {
+  it('POST FIBRA task without iclassCityCode → 422 NETWORK_TASK_LOCALITY_REQUIRED (REQ-LOC-ROUTE-1)', async () => {
     const { app } = buildApp();
-    // No iclassCityCode field → guard fires
+    // No iclassCityCode field on a fibra task → guard fires
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
-      .send(BASE_NETWORK_BODY);
+      .send(FIBRA_BODY);
 
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('NETWORK_TASK_LOCALITY_REQUIRED');
   });
 
-  it('POST network task with iclassCityCode="" → 422 NETWORK_TASK_LOCALITY_REQUIRED', async () => {
+  it('POST FIBRA task with iclassCityCode="" → 422 NETWORK_TASK_LOCALITY_REQUIRED', async () => {
     const { app } = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
-      .send({ ...BASE_NETWORK_BODY, iclassCityCode: '' });
+      .send({ ...FIBRA_BODY, iclassCityCode: '' });
 
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('NETWORK_TASK_LOCALITY_REQUIRED');
   });
 
-  it('POST network task with valid iclassCityCode → 201 (REQ-LOC-ROUTE-2 regression)', async () => {
+  it('POST RED task without iclassCityCode → 201 (REQ-LOC-ROUTE-2, locality relaxed for red #66)', async () => {
     const { app } = buildApp();
     const res = await request(app)
       .post('/api/scheduling')
       .set('Cookie', 'auth_token=fake')
-      .send({ ...BASE_NETWORK_BODY, iclassCityCode: 'Mercedes' });
+      .send(RED_BODY);
+
+    expect(res.status).toBe(201);
+    expect(res.body.networkType).toBe('red');
+  });
+
+  it('POST FIBRA task with valid iclassCityCode → 201 (REQ-LOC-ROUTE-3 regression)', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/scheduling')
+      .set('Cookie', 'auth_token=fake')
+      .send({ ...FIBRA_BODY, iclassCityCode: 'Mercedes' });
 
     expect(res.status).toBe(201);
     expect(res.body.iclassCityCode).toBe('Mercedes');

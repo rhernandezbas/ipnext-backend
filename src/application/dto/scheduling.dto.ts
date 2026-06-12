@@ -93,25 +93,73 @@ const CustomerTask = CreateTaskBaseSchema.extend({
   contractId:   z.string().min(1),
   // networkSiteId no permitido en modo customer
   networkSiteId: z.undefined().optional(),
+  networkType:   z.undefined().optional(),
+  networkSiteName: z.undefined().optional(),
 });
 
-// NetworkTask: requiere networkSiteId. Prohíbe customerId/contractId.
+// #66 — NetworkTask: single discriminator 'network', with networkType sub-discriminating red/fibra.
+// Both sub-variants share the same kind='network' so we use a single member with a refine.
+// networkSiteId is required for red, must be null for fibra — enforced in use-case guard (not DTO).
 const NetworkTask = CreateTaskBaseSchema.extend({
   kind:         z.literal('network'),
-  networkSiteId: z.string().min(1),
   customerId:   z.null().optional(),
   contractId:   z.null().optional(),
+  // RED: networkSiteId required. FIBRA: networkSiteId null/omitted.
+  // The domain guard (CreateTask) enforces this distinction after parsing.
+  networkSiteId: z.string().min(1).nullable().optional(),
+  // networkType: defaults to 'red' in use-case when omitted.
+  networkType:  z.enum(['red', 'fibra']).optional(),
+  // #66 — free-text node name for fibra tasks.
+  networkSiteName: z.string().nullable().optional(),
 });
 
 export const CreateTaskSchema = z
   .discriminatedUnion('kind', [CustomerTask, NetworkTask])
-  .superRefine(dateRangeRefine);
+  .superRefine(dateRangeRefine)
+  .superRefine((v, ctx) => {
+    // #66 — For red network tasks (networkType='red' or omitted), networkSiteId is required.
+    if (v.kind === 'network' && v.networkType !== 'fibra') {
+      const siteId = (v as { networkSiteId?: string | null }).networkSiteId;
+      if (!siteId || (typeof siteId === 'string' && !siteId.trim())) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['networkSiteId'],
+          message: 'networkSiteId is required for red network tasks',
+        });
+      }
+    }
+    // #66 — Reject the hybrid fibra+site shape: a fibra task must NOT carry a
+    // networkSiteId FK (it uses a free-text node name). The JOIN would otherwise
+    // win over the free-text name, and a bad siteId would blow up as a Prisma 500.
+    // First layer of the seam; CreateTask repeats the check (defence in depth).
+    // Surfaced via params.fibraTaskNoSite so the route can map it to 422 FIBRA_TASK_NO_SITE.
+    if (v.kind === 'network' && v.networkType === 'fibra') {
+      const siteId = (v as { networkSiteId?: string | null }).networkSiteId;
+      if (siteId != null && (typeof siteId !== 'string' || siteId.trim() !== '')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['networkSiteId'],
+          message: 'Fibra network tasks must not carry a networkSiteId',
+          params: { fibraTaskNoSite: true },
+        });
+      }
+    }
+  });
 
 // UpdateTaskSchema — mantiene las FK como nullable/optional (sin kind obligatorio)
 // Se define antes del export de tipo para que no confunda con el union.
 const UpdateTaskBaseSchema = CreateTaskBaseSchema.extend({
   customerId:   z.string().min(1).nullable().optional(),
   contractId:   z.string().min(1).nullable().optional(),
+  // #66 — networkType is accepted on update ONLY so the use case can detect (and
+  // reject) an attempted CHANGE: networkType is IMMUTABLE post-create
+  // (NetworkTypeImmutableError → 422). The FE resubmits the unchanged value, which
+  // is a no-op. networkSiteName stays editable (fibra node-name rename).
+  networkType:  z.enum(['red', 'fibra']).nullable().optional(),
+  networkSiteName: z.string().nullable().optional(),
+  // #66 — networkSiteId is NOT updatable. It was previously accepted-and-ignored
+  // (no repo maps it on update), which is a silent lie to the client. Changing a
+  // red task's site was never in scope; removed to fail loud (400) instead.
 });
 
 // UpdateTaskSchema hereda nullable/optional para todos los FK — sin kind obligatorio.

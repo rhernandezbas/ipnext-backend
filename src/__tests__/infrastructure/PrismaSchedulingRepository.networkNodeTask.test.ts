@@ -2,6 +2,7 @@
  * A4.1 [RED] Tests para el mapeo de kind/networkSiteId/networkSiteName en
  * PrismaSchedulingRepository.toTask y _buildCreateData.
  * Cubre REQ-SHAPE-2.
+ * #66 — extended to cover networkType + fibra networkSiteName stored column.
  */
 import { toTask } from '../../infrastructure/adapters/prisma/PrismaSchedulingRepository';
 
@@ -56,23 +57,55 @@ describe('PrismaSchedulingRepository.toTask — network-node-task fields (REQ-SH
     expect(task.kind).toBe('customer');
     expect(task.networkSiteId).toBeNull();
     expect(task.networkSiteName).toBeNull();
+    expect(task.networkType).toBeNull();
   });
 
-  it('maps kind=network with networkSiteId and networkSiteName', () => {
+  it('maps kind=network (red) with networkSiteId and networkSiteName from JOIN', () => {
     const task = toTask({
       ...BASE_ROW,
       kind: 'network',
+      networkType: 'red',
       networkSiteId: 'site-abc',
       networkSite: { id: 'site-abc', name: 'Torre Norte' },
+      networkSiteName: null, // stored column null — JOIN wins
     });
     expect(task.kind).toBe('network');
+    expect(task.networkType).toBe('red');
     expect(task.networkSiteId).toBe('site-abc');
+    // JOIN-derived wins over stored column for red tasks
     expect(task.networkSiteName).toBe('Torre Norte');
   });
 
-  it('networkSiteName is null when networkSite JOIN is null', () => {
-    const task = toTask({ ...BASE_ROW, kind: 'network', networkSiteId: 'site-abc', networkSite: null });
+  it('networkSiteName is null when networkSite JOIN is null and stored column is null', () => {
+    const task = toTask({ ...BASE_ROW, kind: 'network', networkType: 'red', networkSiteId: 'site-abc', networkSite: null, networkSiteName: null });
     expect(task.networkSiteName).toBeNull();
+  });
+
+  it('#66 — fibra: networkSiteName comes from stored column when JOIN is null', () => {
+    const task = toTask({
+      ...BASE_ROW,
+      kind: 'network',
+      networkType: 'fibra',
+      networkSiteId: null,     // fibra: no FK
+      networkSite: null,       // fibra: no JOIN
+      networkSiteName: 'Nodo FO-1', // stored column
+    });
+    expect(task.kind).toBe('network');
+    expect(task.networkType).toBe('fibra');
+    expect(task.networkSiteId).toBeNull();
+    expect(task.networkSiteName).toBe('Nodo FO-1');
+  });
+
+  it('#66 — red: JOIN name wins over stored column', () => {
+    const task = toTask({
+      ...BASE_ROW,
+      kind: 'network',
+      networkType: 'red',
+      networkSiteId: 'site-abc',
+      networkSite: { id: 'site-abc', name: 'JOIN Name' },
+      networkSiteName: 'Stored Name', // should be ignored — JOIN wins for red
+    });
+    expect(task.networkSiteName).toBe('JOIN Name');
   });
 
   it('defaults kind to customer when column is absent (legacy rows)', () => {
@@ -81,5 +114,11 @@ describe('PrismaSchedulingRepository.toTask — network-node-task fields (REQ-SH
     expect(task.kind).toBe('customer');
     expect(task.networkSiteId).toBeNull();
     expect(task.networkSiteName).toBeNull();
+    expect(task.networkType).toBeNull();
+  });
+
+  it('networkType is null for legacy rows (pre-#66 migration)', () => {
+    const task = toTask({ ...BASE_ROW, kind: 'network', networkType: null, networkSiteId: 'site-abc', networkSite: null, networkSiteName: null });
+    expect(task.networkType).toBeNull();
   });
 });

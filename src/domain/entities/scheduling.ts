@@ -75,8 +75,12 @@ export interface ScheduledTask {
 
   // network-node-task (#29) — discriminador de tipo de tarea y FK a NetworkSite
   kind: 'customer' | 'network';
+  // #66 — Red/FO switch. 'red' = FK to NetworkSite; 'fibra' = free-text node name, no FK.
+  // null treated as 'red' for back-compat (existing network tasks).
+  networkType: 'red' | 'fibra' | null;
   networkSiteId: string | null;
-  networkSiteName: string | null;  // JOIN-derived from NetworkSite.name
+  // JOIN-derived from NetworkSite.name for red tasks. Stored column for fibra tasks.
+  networkSiteName: string | null;
 
   // #54 — task-level locality snapshot. Required for network tasks. Dispatch precedence:
   // iclassCityCode ?? networkSite?.city ?? null. Null for customer tasks (optional).

@@ -1251,6 +1251,13 @@ model ScheduledTask {
   // Nullable + additive: existing tasks fall back to site.city (back-compat, no backfill).
   iclassCityCode String?
 
+  // #66 — Red/FO switch. networkType = 'red' (FK to networkSite) | 'fibra' (free-text node).
+  // NULL treated as 'red' for back-compat (backfill sets it on existing network rows).
+  networkType String?
+  // Stored free-text node name for fibra tasks (networkSiteId is NULL for fibra).
+  // For red tasks the name is JOIN-derived from networkSite.name; this column stays NULL.
+  networkSiteName String?
+
   // IClass closure loop — mirror of the closed SO, linked back by codigo↔sequenceNumber
   iclassClosedOrder IClassServiceOrder?
 

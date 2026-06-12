@@ -113,25 +113,34 @@ export async function dispatchToIClass(
   const { tasks, iclass, attempts } = deps;
   const { actorId, workflowId, networkSite } = opts;
 
-  // network-node-task (#29): sustitucion de campos para tareas de RED.
+  // network-node-task (#29): sustitucion de campos para tareas de RED/FIBRA.
   const isNet = task.kind === 'network';
+  // #66 — fibra branch: networkType === 'fibra' uses locality + free-text node name only.
+  const isFibra = isNet && task.networkType === 'fibra';
+
   // #55 (iclass-contract-code): for CUSTOMER tasks the IClass customerCode must identify
   // the CONTRACT when the task has one (task.contractCode = Contract.grContratoId), falling
-  // back to the client code otherwise. NETWORK path is untouched.
+  // back to the client code otherwise. NETWORK path: red uses site.iclassNodeCode; fibra uses iclassCityCode.
   const effectiveCustomerCode = isNet
-    ? (networkSite?.iclassNodeCode ?? NETWORK_CUSTOMER_CODE)
+    ? (isFibra
+        ? (task.iclassCityCode ?? NETWORK_CUSTOMER_CODE)
+        : (networkSite?.iclassNodeCode ?? NETWORK_CUSTOMER_CODE))
     : (firstNonBlank(task.contractCode, task.customerCode) ?? task.customerCode!);
+  // fibra: node name; red: site name (JOIN-derived).
   const effectiveCustomerName = isNet ? (task.networkSiteName ?? '') : task.customerName!;
   const effectivePhone        = isNet ? NETWORK_PHONE             : task.customerPhone!;
-  // #53 (fix wave): honour task.address — the address #53 forces on create — when
-  // the site has none, BEFORE falling back to the site name. Aligned with the
-  // precedence in SendTaskToIClass's validation (networkSite.address ?? task.address).
+  // fibra: task.address (req'd) or free-text name; red (#53 fix): site.address ?? task.address ?? site.name.
   const effectiveAddress      = isNet
-    ? (firstNonBlank(networkSite?.address, task.address, task.networkSiteName) ?? '')
+    ? (isFibra
+        ? (firstNonBlank(task.address, task.networkSiteName) ?? '')
+        : (firstNonBlank(networkSite?.address, task.address, task.networkSiteName) ?? ''))
     : task.address!;
-  // #54 — dispatch precedence: task.iclassCityCode (snapshot) overrides site.city (fallback).
-  // Existing tasks without a snapshot (iclassCityCode=null) fall back to site.city (back-compat).
-  const effectiveCity         = isNet ? (firstNonBlank(task.iclassCityCode, networkSite?.city) ?? '') : task.customerCity!;
+  // fibra: iclassCityCode is both city and nodeCode; red (#54): iclassCityCode ?? site.city.
+  const effectiveCity         = isNet
+    ? (isFibra
+        ? (task.iclassCityCode ?? '')
+        : (firstNonBlank(task.iclassCityCode, networkSite?.city) ?? ''))
+    : task.customerCity!;
 
   try {
     const { orderCode } = await iclass.createServiceOrder({

@@ -28,7 +28,10 @@ function deriveStageCategory(stageId: string): StageCategory {
   return 'nuevo';
 }
 
-let nextId = 7;
+// Seeded fixtures occupy ids 1..7 — nextId MUST start at 8 so an auto-generated
+// id never collides with a fixture (a collision shadows the created task in
+// getTask, which returns the first array match). nextSequenceNumber mirrors this.
+let nextId = 8;
 let nextSequenceNumber = 8;
 let nextChecklistItemId = 1;
 
@@ -81,6 +84,8 @@ const NEW_FIELDS_DEFAULTS = {
   ticketSubject: null,
   // network-node-task (#29) — discriminator + FK a NetworkSite
   kind: 'customer' as 'customer' | 'network',
+  // #66 — Red/FO switch. null = legacy 'red' back-compat.
+  networkType: null as 'red' | 'fibra' | null,
   networkSiteId: null,
   networkSiteName: null,
   // #39 — project allows equipment retirement
@@ -366,8 +371,17 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       reviewedByInventoryUserName: null,
       // network-node-task (#29)
       kind: (data.kind ?? 'customer') as 'customer' | 'network',
+      // #66 — Red/FO switch. Default to 'red' when kind='network' and not provided.
+      networkType: data.kind === 'network'
+        ? ((data.networkType ?? 'red') as 'red' | 'fibra')
+        : null,
       networkSiteId: data.networkSiteId ?? null,
-      networkSiteName: null, // In-memory: no JOIN (nombre del sitio no se resuelve aquí)
+      // #66 — fibra: store the free-text name from input. red: the name is
+      // JOIN-derived from NetworkSite (Prisma); the free-text column stays null so
+      // we never persist a stale/misleading name on a red task.
+      networkSiteName: (data.kind === 'network' && (data.networkType ?? 'red') === 'fibra')
+        ? (data.networkSiteName ?? null)
+        : null,
       // #54 — locality snapshot
       iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode ?? null,
       closureCommentDone: false,
@@ -427,6 +441,9 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...(data.reviewedByInventory !== undefined && { reviewedByInventory: data.reviewedByInventory }),
       // #54 — locality snapshot
       ...((data as { iclassCityCode?: string | null }).iclassCityCode !== undefined && { iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode }),
+      // #66 — networkType + networkSiteName
+      ...(data.networkType !== undefined && { networkType: data.networkType }),
+      ...(data.networkSiteName !== undefined && { networkSiteName: data.networkSiteName }),
       watcherIds,
     };
     return { ...this.tasks[index] };
