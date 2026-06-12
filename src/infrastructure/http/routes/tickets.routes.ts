@@ -12,6 +12,7 @@ import { TicketPriority } from '@domain/entities/ticket';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { TicketStatusRepository } from '@domain/ports/TicketStatusRepository';
+import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
 import { NoClosableStatusError } from '@domain/errors/tickets';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -72,6 +73,9 @@ export function createTicketsRouter(
   closeTicket: CloseTicket,
   ticketStatusRepo: TicketStatusRepository,
   authProvider: JwtAuthAdapter,
+  // #48 — used to validate a body-provided reporterId exists before persisting.
+  // Optional so legacy wirings/tests that never set an explicit reporter still work.
+  rbacUserRepo?: RbacUserRepository,
   createTaskFromTicket?: CreateTaskFromTicket,
   taskRepo?: SchedulingRepository,
   stageRepo?: StageRepository,
@@ -165,23 +169,45 @@ export function createTicketsRouter(
     }
   });
 
-  // PATCH /:id — update ticket fields (subject, description, priority, assigneeId)
+  // PATCH /:id — update ticket fields in a single unified save (#48).
+  // Accepts subject, description, priority, assigneeId AND status. The status is
+  // validated against the editable TicketStatusCatalog (case-insensitive, never a
+  // whitelist — lección #46) and persisted as its CANONICAL name. Validation runs
+  // BEFORE any persistence so an invalid status never partially applies the other
+  // fields (REQ-TICKET-UPDATE-2).
   router.patch('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const id = req.params['id'] as string;
-    const { subject, description, priority, assigneeId } = req.body as {
+    const { subject, description, priority, assigneeId, status } = req.body as {
       subject?: string;
       description?: string;
       priority?: string;
       assigneeId?: string | null;
+      status?: string;
     };
 
     try {
+      // #48 — validate status against the catalog up-front (422 if unknown), and
+      // resolve the canonical name. Mirrors PATCH /:id/status.
+      let canonicalStatus: string | undefined;
+      if (status !== undefined) {
+        const catalogEntry = await ticketStatusRepo.getByName(status);
+        if (!catalogEntry) {
+          res.status(422).json({
+            error: `Status "${status}" is not in the ticket status catalog`,
+            code: 'TICKET_STATUS_NOT_FOUND',
+          });
+          return;
+        }
+        canonicalStatus = catalogEntry.name;
+      }
+
       const ticket = await updateTicket.execute(id, {
         ...(subject !== undefined && { subject }),
         ...(description !== undefined && { description }),
         ...(priority !== undefined &&
           VALID_PRIORITIES.includes(priority as TicketPriority) && { priority: priority as TicketPriority }),
         ...(assigneeId !== undefined && { assigneeId: assigneeId ?? null }),
+        ...(canonicalStatus !== undefined && { status: canonicalStatus }),
       });
       if (!ticket) {
         res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
@@ -291,12 +317,13 @@ export function createTicketsRouter(
 
   // POST / — create ticket
   router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
-    const { subject, description, customerId, priority, assigneeId } = req.body as {
+    const { subject, description, customerId, priority, assigneeId, reporterId } = req.body as {
       subject?: string;
       description?: string;
       customerId?: string | null;
       priority?: string;
       assigneeId?: string | null;
+      reporterId?: string | null;
     };
 
     if (!subject || !description) {
@@ -308,6 +335,22 @@ export function createTicketsRouter(
     }
 
     try {
+      // #48 — a body-provided reporterId must reference a real user. Without this
+      // guard an unknown id reaches Prisma as an FK violation (P2003 → 500) and
+      // also lets a caller spoof an arbitrary reporter. Validate up-front → 422.
+      // The session-default stamp (req.user.id) is NOT re-validated: the session
+      // user exists by definition.
+      if (reporterId != null && rbacUserRepo) {
+        const reporterUser = await rbacUserRepo.findById(reporterId);
+        if (!reporterUser) {
+          res.status(422).json({
+            error: `Reporter "${reporterId}" is not a known user`,
+            code: 'REPORTER_NOT_FOUND',
+          });
+          return;
+        }
+      }
+
       const ticket = await createTicket.execute({
         subject,
         description,
@@ -316,6 +359,9 @@ export function createTicketsRouter(
           ? (priority as TicketPriority)
           : 'medium',
         assigneeId: assigneeId ?? null,
+        // #48 — stamp the creator from the session when the body omits it.
+        // Mirror of POST /:id/tasks. Explicit body value wins.
+        reporterId: reporterId ?? req.user?.id ?? null,
       });
       res.status(201).json(ticket);
     } catch (err) {

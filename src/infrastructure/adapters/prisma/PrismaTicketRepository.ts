@@ -20,6 +20,7 @@ const INCLUDE = {
   status: true,                                          // Phase 2: resolve name from relation
   customer: { select: { id: true, name: true } },
   assignee: { select: { id: true, name: true } },
+  reporter: { select: { id: true, name: true } },       // #48 — JOIN para reporterName (espejo de assignee)
 } as const;
 
 export function toTicket(row: any): Ticket {
@@ -38,6 +39,9 @@ export function toTicket(row: any): Ticket {
     customerName: row.customer?.name ?? null,
     assigneeId: row.assigneeId ?? null,
     assigneeName: row.assignee?.name ?? null,
+    // #48 — reporter denormalizado igual que assignee.
+    reporterId: row.reporterId ?? null,
+    reporterName: row.reporter?.name ?? null,
     grCasoId: row.grCasoId ?? null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
@@ -161,6 +165,7 @@ export class PrismaTicketRepository implements TicketRepository {
         statusId,
         ...(data.customerId != null && { customerId: data.customerId }),
         ...(data.assigneeId != null && { assigneeId: data.assigneeId }),
+        ...(data.reporterId != null && { reporterId: data.reporterId }),   // #48
       },
       include: INCLUDE,
     });

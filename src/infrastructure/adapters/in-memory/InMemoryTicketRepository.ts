@@ -107,6 +107,10 @@ export class InMemoryTicketRepository implements TicketRepository {
     const assigneeName = data.assigneeId
       ? (this.admins.get(data.assigneeId)?.name ?? null)
       : null;
+    // #48 — reporterName resuelto del mismo admins map que assigneeName (JOIN espejo).
+    const reporterName = data.reporterId
+      ? (this.admins.get(data.reporterId)?.name ?? null)
+      : null;
 
     const ticket: Ticket = {
       id,
@@ -119,6 +123,8 @@ export class InMemoryTicketRepository implements TicketRepository {
       customerName,
       assigneeId: data.assigneeId ?? null,
       assigneeName,
+      reporterId: data.reporterId ?? null,
+      reporterName,
       grCasoId: null,
       createdAt: now,
       updatedAt: now,

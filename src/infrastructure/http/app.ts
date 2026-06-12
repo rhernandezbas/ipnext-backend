@@ -1043,7 +1043,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     authAdapter,
     listTicketStatuses, getTicketStatus, createTicketStatus, updateTicketStatusCatalog, deleteTicketStatus,
   ));
-  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, ticketStatusRepo, authAdapter, createTaskFromTicket, schedulingRepo, stageRepo));
+  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, ticketStatusRepo, authAdapter, rbacUserRepo, createTaskFromTicket, schedulingRepo, stageRepo));
   // #44 — persisted ticket comments. Mounted on /api/tickets; the tickets router has no
   // catch-all and /:id does not capture /:id/comments (distinct segments), so no collision.
   const ticketCommentRepo = new PrismaTicketCommentRepository();

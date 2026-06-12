@@ -1962,6 +1962,11 @@ model Ticket {
   assigneeId String?
   assignee   RbacUser? @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
+  // #48 — quien creo el ticket. Estampado en create desde la sesion (req.user.id).
+  // Opcional: tickets viejos sin reporter quedan null (sin backfill). Espejo de assigneeId.
+  reporterId String?
+  reporter   RbacUser? @relation("TicketReporter", fields: [reporterId], references: [id], onDelete: SetNull)
+
   // Previsto para la futura integracion de "casos" de Gestion Real (out-of-scope)
   grCasoId String? @unique
 
@@ -1977,6 +1982,7 @@ model Ticket {
   @@index([customerId])
   @@index([statusId])
   @@index([assigneeId])
+  @@index([reporterId])
 }
 
 // =============================================
@@ -2036,6 +2042,7 @@ model RbacUser {
   materialsRecorded TaskMaterialConsumption[] @relation("TaskMaterialRecorder")
   tasksWatching   TaskWatcher[]   @relation("TaskWatcher")
   assignedTickets Ticket[]        @relation("TicketAssignee")
+  reportedTickets Ticket[]        @relation("TicketReporter")
   auditEvents     AuditEvent[]
   sessions        Session[]
   taskActivities  ScheduledTaskActivity[] @relation("TaskActivityActor")

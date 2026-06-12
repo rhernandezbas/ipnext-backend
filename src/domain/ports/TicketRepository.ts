@@ -18,6 +18,7 @@ export interface CreateTicketData {
   customerId?: string | null;     // FK (replaces clientId texto libre)
   priority?: TicketPriority;
   assigneeId?: string | null;
+  reporterId?: string | null;     // #48 — estampado desde la sesion (req.user.id) en el route
 }
 
 export interface UpdateTicketData {
