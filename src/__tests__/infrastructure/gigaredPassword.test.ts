@@ -2,8 +2,8 @@
  * #47h — password policy for Gigared register.
  *
  * Gigared rejects passwords with anything outside [a-z0-9] ("La password solo puede
- * contener letras minusculas y numeros"). The server-generated password MUST comply:
- * exactly 12 chars, all in [a-z0-9], cryptographically random (crypto, not Math.random).
+ * contener letras minusculas y numeros"). The server-side deterministic password (#70:
+ * `ip{grClienteId}` padded to 8, #65) and operator-typed ones (ChangeTvPassword) MUST comply.
  */
 import {
   GIGARED_PASSWORD_RE,

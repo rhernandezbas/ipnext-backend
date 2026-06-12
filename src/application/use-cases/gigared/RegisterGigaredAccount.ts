@@ -4,7 +4,7 @@ import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepos
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { GrClientIdRequiredError } from '@domain/errors/gigared';
-import { deterministicTvPassword } from '@infrastructure/security/gigaredPassword';
+import { deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from './lookups';
 import { reconcileTvContractService } from './reconcileTvContractService';
 
@@ -62,6 +62,11 @@ export class RegisterGigaredAccount {
       throw new GrClientIdRequiredError(customerId);
     }
     const password = deterministicTvPassword(customer.grClienteId);
+    // Re-review #70: a grClienteId with chars outside [a-z0-9] would yield a non-CUA
+    // password and an opaque 400 from the partner — fail LOCAL with the clear 422 instead.
+    if (!isValidGigaredPassword(password)) {
+      throw new GrClientIdRequiredError(customerId);
+    }
 
     // #65 — validate ownership of the target contract BEFORE any Gigared write (mirror of
     // LinkCustomerToCic #47k). A foreign/absent contractId → 404, Gigared never touched.

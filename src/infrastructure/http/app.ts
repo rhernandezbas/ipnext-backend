@@ -583,7 +583,9 @@ import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
  * concrete argument type — no `as any` needed, TypeScript can verify each call.
  */
 // Covers entity kinds used for FK validation in scheduling use cases.
-function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project' | 'Ticket', id: string): Promise<{ id: string } | null> {
+// #70: the declared shape includes grClienteId so reverting the select below breaks the COMPILE,
+// not just runtime (RegisterGigaredAccount needs it to derive the deterministic password).
+function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project' | 'Ticket', id: string): Promise<{ id: string; grClienteId?: string | null } | null> {
   switch (model) {
     // #70 — Client carries grClienteId so RegisterGigaredAccount can derive the deterministic
     // TV password server-side. Selecting it here is harmless for the existence-only callers.

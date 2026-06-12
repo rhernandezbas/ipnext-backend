@@ -8,9 +8,9 @@
  *  - alphabet: [a-z0-9] (36 symbols)
  *  - caller-provided passwords: 8..64 chars, same alphabet
  *
- * #70 — the random server-side generator was REMOVED. The password is now mandatory
- * on register: the form (#65) prefills the deterministic `ip{grId}` and the operator
- * confirms it; there is no autogeneration fallback anymore.
+ * #70 (rework) — the random generator was REMOVED and the register form has NO
+ * password field: the backend generates the deterministic `ip{grId}` (#65) server-side
+ * from the customer's grClienteId. Manual passwords exist only in ChangeTvPassword.
  */
 const MIN_LENGTH = 8;
 const MAX_LENGTH = 64;
