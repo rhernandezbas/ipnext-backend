@@ -118,6 +118,8 @@ export class CancelTv {
         catalogRepo: this.catalogRepo,
         customerId,
         contractId,
+        // #65 M6 — la baja LIMPIA las credenciales de la fila al inactivarla (sin zombies).
+        clearCredentialsOnInactive: true,
       });
     } catch {
       local = 'failed';

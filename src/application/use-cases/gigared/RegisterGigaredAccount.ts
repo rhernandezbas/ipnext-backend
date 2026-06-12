@@ -50,7 +50,7 @@ export class RegisterGigaredAccount {
       /** #65 — owner contract for the local TV reconcile + credential persistence. */
       contractId?: string;
     },
-  ): Promise<{ account: GigaredAccount }> {
+  ): Promise<{ account: GigaredAccount; credentialsPersisted: boolean }> {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
 
@@ -72,6 +72,11 @@ export class RegisterGigaredAccount {
     const account = await this.gigared.getAccountByInternalId(customerId);
 
     // #65 — persist credentials on the local TV slot. Best-effort: never abort the register.
+    // H2/M8 fix: a fresh account comes back with services:[] → the reconcile would otherwise
+    // create NO row and the credentials would vanish silently. We pass `ensureRow` so reconcile
+    // creates/asegura the managed TV row (status inactive when there are no packs yet) and we
+    // ALWAYS write the credentials onto it. M7: the result flags whether it actually persisted.
+    let credentialsPersisted = false;
     if (wantsPersist && this.csRepo && this.catalogRepo) {
       try {
         const { contractServiceId } = await reconcileTvContractService({
@@ -80,18 +85,23 @@ export class RegisterGigaredAccount {
           catalogRepo: this.catalogRepo,
           customerId,
           contractId: input.contractId as string,
+          ensureRow: true,
         });
         if (contractServiceId) {
           await this.csRepo.update(contractServiceId, {
             tvLogin: tvLoginFromAccount(account),
             tvPassword: input.password,
           });
+          credentialsPersisted = true;
         }
-      } catch {
+      } catch (err) {
         // Persistence is non-fatal — the Gigared register already succeeded.
+        // eslint-disable-next-line no-console
+        console.warn('[gigared] register: TV credential persistence failed (best-effort)', err);
+        credentialsPersisted = false;
       }
     }
 
-    return { account };
+    return { account, credentialsPersisted };
   }
 }

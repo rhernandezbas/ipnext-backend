@@ -1,12 +1,14 @@
 /**
- * #65 — ChangeTvPassword: PATCH /accounts/{cic} { password } + persist the new
- * password on the local TV ContractService slot (visible to the operator).
+ * #65 — ChangeTvPassword: resolves the customer's account server-side (NO cic in the
+ * contract — H1), PATCHes /accounts/{account.cic} { password } and persists the new
+ * password on the local TV ContractService slot (best-effort, M5 → result.persisted).
  */
 import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
-import { GigaredInvalidPasswordError } from '@domain/errors/gigared';
+import { GigaredInvalidPasswordError, TvNotLinkedError } from '@domain/errors/gigared';
+import { GigaredNotFoundError } from '@domain/errors/gigared';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 
@@ -36,7 +38,7 @@ const contractLookup = (exists: boolean, ownerId = 'cust-1') => ({
   findById: async (id: string) => (exists ? { id, clientId: ownerId } : null),
 });
 
-describe('ChangeTvPassword (#65)', () => {
+describe('ChangeTvPassword (#65 — cic resolved server-side, H1)', () => {
   let cs: InMemoryContractServiceRepository;
   let catalog: InMemoryServiceCatalogRepository;
 
@@ -53,39 +55,71 @@ describe('ChangeTvPassword (#65)', () => {
     return cs.add({ contractId: 'C1', serviceCatalogId: tvId, notes: 'CIC 0000001234 · Gigared Play Full' });
   }
 
-  it('PATCHes the password and persists it on the TV row', async () => {
+  it('resolves the cic from the customer account (NEVER from the body) and PATCHes with it', async () => {
     await seedTvRow();
-    const port = fakePort();
+    // The account the partner returns has cic 0000009999 — the use case MUST use THIS one.
+    const port = fakePort({ getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: '0000009999' })) });
     const uc = new ChangeTvPassword(port, customerLookup(true), contractLookup(true), cs, catalog);
-    const result = await uc.execute('cust-1', { cic: '0000001234', contractId: 'C1', password: 'ip243200' });
+    const result = await uc.execute('cust-1', { contractId: 'C1', password: 'ip243200' });
 
-    expect(port.changePassword).toHaveBeenCalledWith('0000001234', 'ip243200');
+    expect(port.getAccountByInternalId).toHaveBeenCalledWith('cust-1');
+    expect(port.changePassword).toHaveBeenCalledWith('0000009999', 'ip243200');
+    expect(result.password).toBe('ip243200');
+    expect(result.persisted).toBe(true);
     const tvId = (await catalog.getByName('TV'))!.id;
     const row = await cs.getByPair('C1', tvId);
     expect(row!.tvPassword).toBe('ip243200');
-    expect(result.password).toBe('ip243200');
+  });
+
+  it('a customer with NO linked account → TvNotLinkedError (404), Gigared password never touched', async () => {
+    const port = fakePort({ getAccountByInternalId: jest.fn(async () => { throw new GigaredNotFoundError(); }) });
+    const uc = new ChangeTvPassword(port, customerLookup(true), contractLookup(true), cs, catalog);
+    await expect(uc.execute('cust-1', { contractId: 'C1', password: 'ip243200' }))
+      .rejects.toBeInstanceOf(TvNotLinkedError);
+    expect(port.changePassword).not.toHaveBeenCalled();
   });
 
   it('rejects a non-CUA password BEFORE calling Gigared', async () => {
     const port = fakePort();
     const uc = new ChangeTvPassword(port, customerLookup(true), contractLookup(true), cs, catalog);
-    await expect(uc.execute('cust-1', { cic: '0000001234', contractId: 'C1', password: 'ABC-123' }))
+    await expect(uc.execute('cust-1', { contractId: 'C1', password: 'ABC-123' }))
       .rejects.toBeInstanceOf(GigaredInvalidPasswordError);
     expect(port.changePassword).not.toHaveBeenCalled();
+    expect(port.getAccountByInternalId).not.toHaveBeenCalled();
   });
 
   it('rejects an unknown customer', async () => {
     const port = fakePort();
     const uc = new ChangeTvPassword(port, customerLookup(false), contractLookup(true), cs, catalog);
-    await expect(uc.execute('ghost', { cic: '0000001234', contractId: 'C1', password: 'ip243200' }))
+    await expect(uc.execute('ghost', { contractId: 'C1', password: 'ip243200' }))
       .rejects.toBeInstanceOf(ClientNotFoundError);
   });
 
   it('rejects a foreign contract (404) before calling Gigared', async () => {
     const port = fakePort();
     const uc = new ChangeTvPassword(port, customerLookup(true), contractLookup(true, 'cust-B'), cs, catalog);
-    await expect(uc.execute('cust-1', { cic: '0000001234', contractId: 'C-of-B', password: 'ip243200' }))
+    await expect(uc.execute('cust-1', { contractId: 'C-of-B', password: 'ip243200' }))
       .rejects.toBeInstanceOf(ContractNotFoundError);
     expect(port.changePassword).not.toHaveBeenCalled();
+  });
+
+  it('M5 — persistence is best-effort: a local write failure AFTER a successful PATCH → persisted:false, NO throw', async () => {
+    await seedTvRow();
+    const port = fakePort();
+    jest.spyOn(cs, 'update').mockRejectedValue(new Error('db down'));
+    const uc = new ChangeTvPassword(port, customerLookup(true), contractLookup(true), cs, catalog);
+    const result = await uc.execute('cust-1', { contractId: 'C1', password: 'ip243200' });
+    // The partner password DID change — never surface a 4xx/5xx after that.
+    expect(port.changePassword).toHaveBeenCalledWith('0000001234', 'ip243200');
+    expect(result.password).toBe('ip243200');
+    expect(result.persisted).toBe(false);
+  });
+
+  it('M5 — no local TV row present → persisted:false (nothing to write), still 200', async () => {
+    const port = fakePort();
+    const uc = new ChangeTvPassword(port, customerLookup(true), contractLookup(true), cs, catalog);
+    const result = await uc.execute('cust-1', { contractId: 'C1', password: 'ip243200' });
+    expect(result.persisted).toBe(false);
+    expect(result.password).toBe('ip243200');
   });
 });

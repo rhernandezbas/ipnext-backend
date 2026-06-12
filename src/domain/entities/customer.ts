@@ -36,11 +36,9 @@ export interface ContractServiceItem {
   label: string | null;    // from ServiceCatalog.label
   status: string;          // active | inactive
   notes: string | null;
-  /** #65 Gigared Play login (GIGA{abonado}) on the TV row. null otherwise. */
-  tvLogin: string | null;
-  /** #65 deterministic TV password (visible to the operator) on the TV row. null otherwise. */
-  tvPassword: string | null;
   createdAt: string;       // ISO 8601
+  // #65 fix wave H3 (SECURITY): TV credentials NEVER ride on the contracts list. They live on the
+  // ContractService row internally and are served ONLY by GET /api/gigared/customers/:id/tv-credentials.
 }
 
 export interface Contract {

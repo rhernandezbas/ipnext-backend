@@ -56,9 +56,21 @@ export class PrismaContractServiceRepository implements ContractServiceRepositor
     }
   }
 
-  async update(id: string, data: { status?: string; notes?: string | null }): Promise<ContractServiceView | null> {
+  async update(
+    id: string,
+    data: { status?: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null },
+  ): Promise<ContractServiceView | null> {
     try {
-      const row = await (prisma as any).contractService.update({ where: { id }, data, include: INCLUDE });
+      // #65 fix wave — forward tvLogin/tvPassword too. The previous signature dropped them, so
+      // credentials written via update() (ChangeTvPassword persistence, register on an existing row,
+      // M6 cleanup on baja) silently never reached the DB. Spread only the keys that are present so a
+      // status/notes-only PATCH never clobbers the credentials.
+      const patch: Record<string, unknown> = {};
+      if (data.status !== undefined) patch['status'] = data.status;
+      if (data.notes !== undefined) patch['notes'] = data.notes;
+      if (data.tvLogin !== undefined) patch['tvLogin'] = data.tvLogin;
+      if (data.tvPassword !== undefined) patch['tvPassword'] = data.tvPassword;
+      const row = await (prisma as any).contractService.update({ where: { id }, data: patch, include: INCLUDE });
       return toView(row);
     } catch {
       return null;
