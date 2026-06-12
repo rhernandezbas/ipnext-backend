@@ -30,6 +30,7 @@ import { AddTvService } from '@application/use-cases/gigared/AddTvService';
 import { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
 import { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
 import { CancelTv } from '@application/use-cases/gigared/CancelTv';
+import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import {
@@ -56,6 +57,7 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
     getAccountByCic: jest.fn(async () => fakeAccount({ internalId: '' })),
     register: jest.fn(async () => {}), activate: jest.fn(async () => {}), setInternalId: jest.fn(async () => {}),
     addService: jest.fn(async () => {}), removeService: jest.fn(async () => {}), setOtt: jest.fn(async () => {}),
+    changePassword: jest.fn(async () => {}),
     renewCic: jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' })),
     ...over,
   };
@@ -110,11 +112,12 @@ async function buildApp(opts: Opts = {}) {
     listAccounts: new ListGigaredAccounts(port),
     getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup),
     linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog),
-    registerAccount: new RegisterGigaredAccount(port, customerLookup),
+    registerAccount: new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog),
     addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus: new SetOttStatus(port, customerLookup),
     cancelTv: new CancelTv(port, csRepo, catalog, contractLookup, customerLookup),
+    changeTvPassword: new ChangeTvPassword(port, customerLookup, contractLookup, csRepo, catalog),
     requireRead: opts.perms?.read ?? pass,
     requireLink: opts.perms?.link ?? opts.perms?.write ?? pass,
     requireRegister: opts.perms?.register ?? opts.perms?.write ?? pass,
@@ -251,6 +254,58 @@ describe('gigared.routes — granular TV RBAC guards (#50)', () => {
       .post('/api/gigared/customers/cust-1/register')
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
     expect(res.status).not.toBe(403);
+  });
+
+  it('#65 default: POST /register sends sendActivationEmail=false (ficticio)', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+    expect(res.status).toBe(201);
+    const [, body] = (port.register as jest.Mock).mock.calls[0];
+    expect((port.register as jest.Mock).mock.calls[0][0].sendActivationEmail).toBe(false);
+    void body;
+  });
+
+  it('#65 no tv.register → 403 on POST /customers/:id/tv-password', async () => {
+    const app = await buildApp({ perms: { register: deny } });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/tv-password')
+      .send({ cic: '0000001234', contractId: 'C1', password: 'ip243200' });
+    expect(res.status).toBe(403);
+  });
+
+  it('#65 POST /tv-password OK → 200 + PATCHes the password', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port, perms: { register: pass } });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/tv-password')
+      .send({ cic: '0000001234', contractId: 'C1', password: 'ip243200' });
+    expect(res.status).toBe(200);
+    expect(res.body.password).toBe('ip243200');
+    expect(port.changePassword).toHaveBeenCalledWith('0000001234', 'ip243200');
+  });
+
+  it('#65 POST /tv-password with a non-CUA password → 400 VALIDATION_ERROR (Gigared not touched)', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port, perms: { register: pass } });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/tv-password')
+      .send({ cic: '0000001234', contractId: 'C1', password: 'ABC-123' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(port.changePassword).not.toHaveBeenCalled();
+  });
+
+  it('#65 POST /tv-password with a foreign contract → 404 CONTRACT_NOT_FOUND', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port, perms: { register: pass }, contractOwner: 'cust-B' });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/tv-password')
+      .send({ cic: '0000001234', contractId: 'C-of-B', password: 'ip243200' });
+    expect(res.status).toBe(404);
+    expect(port.changePassword).not.toHaveBeenCalled();
   });
 
   it('no tv.packs → 403 on POST /customers/:id/services', async () => {

@@ -13,6 +13,8 @@ function toView(row: any): ContractServiceView {
     label: row.serviceCatalog?.label ?? null,
     status: row.status,
     notes: row.notes ?? null,
+    tvLogin: row.tvLogin ?? null,
+    tvPassword: row.tvPassword ?? null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
   };
 }
@@ -33,13 +35,15 @@ export class PrismaContractServiceRepository implements ContractServiceRepositor
     return row ? toView(row) : null;
   }
 
-  async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null }): Promise<ContractServiceView> {
+  async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView> {
     try {
       const row = await (prisma as any).contractService.create({
         data: {
           contractId: data.contractId,
           serviceCatalogId: data.serviceCatalogId,
           notes: data.notes ?? null,
+          ...(data.tvLogin !== undefined ? { tvLogin: data.tvLogin } : {}),
+          ...(data.tvPassword !== undefined ? { tvPassword: data.tvPassword } : {}),
         },
         include: INCLUDE,
       });

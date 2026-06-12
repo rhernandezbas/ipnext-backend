@@ -24,6 +24,10 @@ const SENSITIVE_KEYS = new Set([
   'token',
   'secret',
   'passwordhash',
+  // #65 — the deterministic TV password persisted on the ContractService. The change-password
+  // route body carries `password` (already masked); this also covers any path that echoes the
+  // persisted field name back through a mutation body.
+  'tvpassword',
   // C1: the Gigared API key — PUT /api/gigared/config sends `apiKey` (snake variant `api_key`).
   // NOT 'apikeylast4' — the last-4 tail is the public preview returned by GET /config.
   'apikey',

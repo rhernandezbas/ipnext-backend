@@ -10,6 +10,7 @@ import type { AddTvService } from '@application/use-cases/gigared/AddTvService';
 import type { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
 import type { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
 import type { CancelTv } from '@application/use-cases/gigared/CancelTv';
+import type { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import type { GigaredConfigRepository } from '@domain/ports/GigaredConfigRepository';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import type { ListAccountsFilter } from '@domain/ports/GigaredPort';
@@ -21,6 +22,7 @@ import {
   GigaredAuthError,
   GigaredNotFoundError,
   GigaredRejectedError,
+  GigaredInvalidPasswordError,
   TvCatalogMissingError,
   TvNotLinkedError,
   CicNotFoundError,
@@ -110,6 +112,10 @@ function sendGigaredError(res: Response, err: unknown): boolean {
     res.status(404).json({ error: err.message, code: err.code });
     return true;
   }
+  if (err instanceof GigaredInvalidPasswordError) {
+    res.status(400).json({ error: err.message, code: err.code });
+    return true;
+  }
   if (err instanceof GigaredRejectedError) {
     res.status(422).json({ error: err.message, code: err.code, title: err.title, detail: err.detail });
     return true;
@@ -137,6 +143,7 @@ export interface GigaredRouterDeps {
   removeTvService: RemoveTvService;
   setOttStatus: SetOttStatus;
   cancelTv: CancelTv;
+  changeTvPassword: ChangeTvPassword;
   requireRead: RequestHandler;
   // #50 — granular TV permissions (replace the generic tv.write guard).
   requireLink: RequestHandler;     // tv.link — vincular/desvincular CIC
@@ -235,7 +242,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     try {
       const b = req.body as {
         firstName: string; lastName: string; email: string; cic: string;
-        password?: unknown; sendActivationEmail?: boolean;
+        password?: unknown; sendActivationEmail?: boolean; contractId?: unknown;
       };
       // #47h — password is transit-only (never persisted/logged/returned). If the caller
       // provides one it must satisfy Gigared's policy ([a-z0-9], 8..64); otherwise the
@@ -252,15 +259,44 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         });
         return;
       }
+      // #65 — el correo del alta es ficticio: el checkbox de activación viene SIEMPRE inactivo
+      // por default (no se envía email). El operador puede forzarlo a true explícitamente.
+      const contractId =
+        typeof b.contractId === 'string' && b.contractId !== '' ? b.contractId : undefined;
       const account = await deps.registerAccount.execute(req.params['id'] as string, {
         firstName: b.firstName,
         lastName: b.lastName,
         email: b.email,
         cic: b.cic,
         password,
-        sendActivationEmail: b.sendActivationEmail ?? true,
+        sendActivationEmail: b.sendActivationEmail ?? false,
+        ...(contractId ? { contractId } : {}),
       });
       res.status(201).json(account);
+    } catch (err) {
+      if (!sendGigaredError(res, err)) next(err);
+    }
+  });
+
+  // #65 — cambiar la contraseña de la cuenta de TV. Body { cic, contractId, password }.
+  // Guard tv.register (gestión de credenciales de la cuenta). El use case valida CUA antes de
+  // tocar Gigared (400 VALIDATION_ERROR); un rechazo del partner sube RFC 9457 detail (#47g).
+  router.post('/customers/:id/tv-password', deps.requireRegister, async (req, res, next): Promise<void> => {
+    try {
+      const b = req.body as { cic?: unknown; contractId?: unknown; password?: unknown };
+      const cic = String(b.cic ?? '');
+      const contractId = String(b.contractId ?? '');
+      const password = typeof b.password === 'string' ? b.password : '';
+      if (cic === '' || contractId === '') {
+        res.status(400).json({ error: 'cic y contractId son obligatorios', code: 'VALIDATION_ERROR' });
+        return;
+      }
+      const result = await deps.changeTvPassword.execute(req.params['id'] as string, {
+        cic,
+        contractId,
+        password,
+      });
+      res.json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) next(err);
     }

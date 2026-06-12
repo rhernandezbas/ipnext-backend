@@ -350,6 +350,12 @@ export class GigaredClient implements GigaredPort {
     await this.post('/accounts/activate', { cic: input.cic, email: input.email });
   }
 
+  async changePassword(cic: string, password: string): Promise<void> {
+    // #65 — PATCH /accounts/{cic} { password }. Documented in tv.md; reuses the same
+    // RFC 9457 error mapping as every other call (a rejection surfaces detail upstream).
+    await this.patch(`/accounts/${encodeURIComponent(cic)}`, { password });
+  }
+
   async setInternalId(cic: string, internalId: string): Promise<void> {
     await this.patch(`/accounts/${encodeURIComponent(cic)}/internal_id`, { internal_id: internalId });
   }

@@ -9,6 +9,8 @@ interface Row {
   serviceCatalogId: string;
   status: string;
   notes: string | null;
+  tvLogin: string | null;
+  tvPassword: string | null;
   createdAt: string;
 }
 
@@ -32,6 +34,8 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
       label: cat?.label ?? null,
       status: row.status,
       notes: row.notes,
+      tvLogin: row.tvLogin,
+      tvPassword: row.tvPassword,
       createdAt: row.createdAt,
     };
   }
@@ -46,7 +50,7 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
     return row ? this.toView(row) : null;
   }
 
-  async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null }): Promise<ContractServiceView> {
+  async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView> {
     // Parity with the Prisma UNIQUE(contractId, serviceCatalogId): the Prisma adapter maps
     // P2002 → ContractServiceDuplicateError; the in-memory port must mirror that so tests
     // that rely on the seam catch the same race the production DB enforces.
@@ -60,17 +64,21 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
       serviceCatalogId: data.serviceCatalogId,
       status: 'active',
       notes: data.notes ?? null,
+      tvLogin: data.tvLogin ?? null,
+      tvPassword: data.tvPassword ?? null,
       createdAt: new Date().toISOString(),
     };
     this.rows.push(row);
     return this.toView(row);
   }
 
-  async update(id: string, data: { status?: string; notes?: string | null }): Promise<ContractServiceView | null> {
+  async update(id: string, data: { status?: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView | null> {
     const row = this.rows.find(r => r.id === id);
     if (!row) return null;
     if (data.status !== undefined) row.status = data.status;
     if (data.notes !== undefined) row.notes = data.notes;
+    if (data.tvLogin !== undefined) row.tvLogin = data.tvLogin;
+    if (data.tvPassword !== undefined) row.tvPassword = data.tvPassword;
     return this.toView(row);
   }
 

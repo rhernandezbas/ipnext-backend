@@ -35,6 +35,7 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
     addService: jest.fn(async () => {}),
     removeService: jest.fn(async () => {}),
     setOtt: jest.fn(async () => {}),
+    changePassword: jest.fn(async () => {}),
     renewCic: jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' })),
     ...over,
   };
@@ -346,6 +347,7 @@ describe('CancelTv (#47k)', () => {
       setOtt: jest.fn(async (_customerId: string, enabled: boolean) => {
         state.ott.status = enabled ? 'enabled' : 'disabled';
       }),
+      changePassword: jest.fn(async () => {}),
       renewCic: jest.fn(async () => {
         renewCicCallCount++;
         return { oldCic: '0000000001', newCic: '0000000002' };

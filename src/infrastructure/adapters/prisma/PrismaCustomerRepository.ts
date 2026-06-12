@@ -81,6 +81,8 @@ export function toService(row: any): Contract {
       label: cs.serviceCatalog?.label ?? null,
       status: cs.status,
       notes: cs.notes ?? null,
+      tvLogin: cs.tvLogin ?? null,
+      tvPassword: cs.tvPassword ?? null,
       createdAt: cs.createdAt instanceof Date ? cs.createdAt.toISOString() : cs.createdAt,
     })),
   };

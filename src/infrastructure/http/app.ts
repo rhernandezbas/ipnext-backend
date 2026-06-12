@@ -347,6 +347,7 @@ import { AddTvService } from '@application/use-cases/gigared/AddTvService';
 import { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
 import { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
 import { CancelTv } from '@application/use-cases/gigared/CancelTv';
+import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
@@ -1709,11 +1710,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listAccounts:       new ListGigaredAccounts(gigaredClient),
     getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup),
     linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
-    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup),
+    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
     addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     setOttStatus:       new SetOttStatus(gigaredClient, gigaredCustomerLookup),
     cancelTv:           new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
+    changeTvPassword:   new ChangeTvPassword(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
     requireRead:        requirePerm('tv', 'read'),
     // #50 — granular TV permissions (replace generic tv.write).
     requireLink:        requirePerm('tv', 'link'),

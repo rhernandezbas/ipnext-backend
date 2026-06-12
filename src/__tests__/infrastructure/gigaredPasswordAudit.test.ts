@@ -19,4 +19,11 @@ describe('#47h audit redaction of the register password', () => {
     // non-sensitive fields are preserved
     expect(masked['cic']).toBe('0000001234');
   });
+
+  it("#65 masks the 'tvPassword' field (persisted credential) case-insensitively", () => {
+    const masked = maskSensitive({ tvLogin: 'GIGA2432', tvPassword: 'ip243200' }) as Record<string, unknown>;
+    expect(masked['tvPassword']).toBe('***');
+    expect(masked['tvLogin']).toBe('GIGA2432'); // login is not secret
+    expect(JSON.stringify(masked)).not.toContain('ip243200');
+  });
 });
