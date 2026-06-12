@@ -10,6 +10,7 @@ import { prisma } from '../../database/prisma';
 function toContractListItem(row: any): ContractListItem {
   return {
     id: row.id,
+    clientId: row.clientId,
     clientName: row.client?.name ?? '',
     plan: row.plan,
     status: row.status,

@@ -68,12 +68,13 @@ describe('GET /api/contracts', () => {
 
   it('returns 200 with ContractSummary items matching the FE shape', async () => {
     const { app, repo } = buildApp();
-    repo.seed({ clientName: 'Acme Corp', plan: 'Fiber 100', status: 'active', technology: 'Fiber', startDate: '2024-01-10T00:00:00.000Z' });
+    repo.seed({ clientId: 'client-acme-1', clientName: 'Acme Corp', plan: 'Fiber 100', status: 'active', technology: 'Fiber', startDate: '2024-01-10T00:00:00.000Z' });
     const res = await request(app).get('/api/contracts').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.data[0]).toEqual({
       id: expect.any(String),
+      clientId: 'client-acme-1',
       clientName: 'Acme Corp',
       plan: 'Fiber 100',
       status: 'active',

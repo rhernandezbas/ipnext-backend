@@ -21,6 +21,7 @@ export class InMemoryContractRepository implements ContractRepository {
   seed(data: Partial<ContractListItem> & { clientName: string; plan: string }): ContractListItem {
     const item: ContractListItem = {
       id: data.id ?? randomUUID(),
+      clientId: data.clientId ?? randomUUID(),
       clientName: data.clientName,
       plan: data.plan,
       status: data.status ?? 'active',

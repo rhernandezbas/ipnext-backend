@@ -27,6 +27,7 @@ export class ListContracts {
     return {
       data: result.data.map((s) => ({
         id: s.id,
+        clientId: s.clientId,
         clientName: s.clientName,
         plan: s.plan,
         status: s.status,
