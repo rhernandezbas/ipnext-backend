@@ -56,6 +56,12 @@
 - (b) **El punto de entrada de la activación es el CONTRATO**: elegir "TV" en el picker de servicios de la card (#42) abre el flujo Gigared (vincular CIC / registrar → elegir pack; el ítem local lo crea el reconcile del BE); el chip TV abre el mismo panel en modo gestión (packs/OTT/quitar). Sin Gigared configurado → ítem local plano con aviso.
 - (c) La tab TV del cliente se ELIMINA (un solo lugar de gestión).
 
+### #47j — TV: OTT sincronizado + pack base + links + cupos legibles ✅ HECHO *(2026-06-12, BE PR #116 + FE PR #95, en prod)*
+> Gigared manda el estado OTT en ESPAÑOL (habilitado/deshabilitado — 7ma divergencia con su doc): el toggle siempre se veía apagado y re-habilitar daba "ya se encuentra habilitada". Adapter normaliza a enabled/disabled/null + toggle idempotente. FE: "Gigared Play Full" marcado **Pack base** sin Quitar · nombres de /admin/customers/tv como link al cliente vinculado · cards "En uso X de Y · sin cupo".
+
+### #47k — TV: Suspender/Reactivar + Dar de baja ✅ HECHO *(2026-06-12, BE PR #117 + FE PR #96, en prod)*
+> Diseño aprobado: ① Suspender TV = OTT off (reversible, packs+cupo se conservan, badge/chip ámbar SUSPENDIDA); ② Dar de baja TV = quita TODOS los packs (libera cupo) + OTT off + ítem local inactivo (reconcile con re-fetch real — solo inactiva si la cuenta quedó vacía); 207 parcial con retry idempotente. **HIGH del review**: ownership del contractId validado en los 4 use cases (antes un contractId ajeno reconciliaba el contrato de OTRO cliente). Gates BE 3669/0, FE 2656/0.
+
 ### #47i — TV: UX del panel vinculado (3 feedbacks de uso real) ✅ HECHO *(2026-06-12, FE PR #94, en prod)*
 > (1) "Agregar servicio" excluye los packs que la cuenta YA tiene; todos → control oculto + hint. (2) OTT en humano: "Streaming (OTT) — la app de TV de Gigared" + "Puede ver en hasta N pantallas fijas y N móviles · N dispositivos registrados". (3) Sección "Ítem local" ELIMINADA en cuentas vinculadas (todo va por Gigared; el reconcile baja el ítem solo) — queda solo en no-vinculadas.
 
