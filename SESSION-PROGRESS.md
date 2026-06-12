@@ -28,6 +28,16 @@
 | #64 | Baja TV: renew CIC + unlink + modal async | BE #125 + FE #110 | — |
 | #65 | Alta TV determinística + credenciales + cambio de password | BE #126 + FE #111 | 20260707 |
 
+## 1b. Mini-batch de la tarde (#67–#71, también COMPLETO)
+
+| # | Qué | PRs |
+|---|---|---|
+| #67 | Pack base irremovible en la baja TV (424 determinístico del CUA — divergencia #9; reconcile excluye irremovibles) | BE #129 + FE #115 |
+| #68 | Coords UISP en el autofill de dirección de tareas de nodo | FE #113 |
+| #69 | Área de tickets con color (catálogo + pill + picker, migración 20260709) | BE #128 + FE #114 |
+| #70 | Password del alta TV autogenerada server-side (campo fuera del form; cambio de pw sigue libre) | BE #130 + FE #116 |
+| #71 | Link al cliente del detalle de ticket: /admin/clients → /admin/customers/view | FE #117 |
+
 ## 2. Decisiones/hallazgos clave de la sesión
 
 1. **#57/#60 verificados contra la API real** (SSH→container→node+pg): el summary es fiel; `qty_registered_devices` viene 0 en las 87 cuentas (roto upstream) y NO hay endpoint de devices (OpenAPI revisado). Divergencia #8 de Gigared.

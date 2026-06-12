@@ -1,12 +1,29 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +19 (#48–#66, sesión 2026-06-12: tickets reporter/áreas/búsqueda + cluster TV completo + tareas Red/FO + códigos IClass por contrato/nodo) → **64 totales — TODOS HECHOS** (batch 2026-06-12 cerrado: 18 shippeados + #57 no-bug, BE PRs #118–#127 / FE PRs #97–#112, 7 migraciones 20260701–20260708).
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +19 (#48–#66) +5 (#67–#71, mini-batch de la tarde: pack base CUA, coords, área con color, password autogenerada, link roto) → **69 totales — TODOS HECHOS** (jornada 2026-06-12 completa: 23 shippeados + #57 no-bug, BE PRs #118–#130 / FE PRs #97–#117, 8 migraciones 20260701–20260709).
 > **38 hechos (en prod, #39 incluido) · EPIC #38 COMPLETO (7/7 waves) · UISP V1 EN PROD (2026-06-10, BE #99 + FE #71 — flag `uisp-sync` OFF, rotar token post-activación).**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
 
 ---
 
 ## 📋 Pendientes
+
+> **Mini-batch 2026-06-12 (tarde) — #67–#71, COMPLETO.** SDD automático + híbrido, worktree por ítem. BE PRs #128–#130 / FE PRs #113–#117, migración 20260709.
+
+### #67 — Baja TV: el pack base irremovible ✅ HECHO *(2026-06-12, BE PR #129 + FE PR #115, en prod)*
+> Investigado LIVE (CIC 0006230159): el CUA responde **424 determinístico "El servicio seleccionado no se puede dar de baja"** al DELETE del pack base — cupo 1:1 con la cuenta, lo recicla el renew (**divergencia #9 de Gigared**). Fix: el 424 con esa firma va a `unremovable[]` informativo (cardinalidad 1; ≥2 matcheos → todos a failed, conservador) → la baja sigue a renew+unlink → 200; **el reconcile excluye los irremovibles** (la re-review cazó la fila TV quedando ACTIVA con credenciales zombie en el 100% de las bajas reales — mocks deshonestos corregidos). FE: línea informativa neutra "se libera al renovar el CIC". Limitación documentada: retry post renew-OK/unlink-FAIL puede acuñar otro CIC.
+
+### #68 — Coordenadas en dirección de tareas de nodo ✅ HECHO *(2026-06-12, FE PR #113, en prod)*
+> `resolveSiteAddress`: address manual gana → coords UISP `"{lat},{lng}"` (formato exacto del #51) → vacío. Editable, ref-guard contra pisadas, refresca al cambiar de nodo.
+
+### #70 — TV: la contraseña del alta se autogenera ✅ HECHO *(2026-06-12, BE PR #130 + FE PR #116, en prod)*
+> Rework sobre la primera interpretación ("obligatoria en el form"): el form **ya no pide contraseña** (nota "La contraseña se genera automáticamente"); el BE la construye server-side (`ip{grClienteId}` paddeada a 8, #65) con assert CUA local — sin grClienteId → 422 GR_CLIENT_ID_REQUIRED (generador random borrado, sin fallbacks ocultos). Se persiste y se ve en Credenciales. **El cambio de contraseña sigue libre** (modal #65).
+
+### #71 — Link al cliente roto en detalle de ticket ✅ HECHO *(2026-06-12, FE PR #117, en prod)*
+> `/admin/clients/{id}` (ruta fantasma → 404) → `/admin/customers/view/{id}`. Barrido completo: era el único uso del prefijo viejo; test pinea el href canónico.
+
+### #69 — Columna de área con color en tickets ✅ HECHO *(2026-06-12, BE PR #128 + FE PR #114, en prod)*
+> `TicketAreaCatalog.color` (hex validado, migración `20260709` + seeds idempotentes: Soporte índigo / Administración ámbar / Facturación esmeralda — dry-run prod OK; el área "GigaRed" que creaste quedó índigo default, recoloreable del ABM) + `areaColor` en el DTO (INCLUDE compartido) + pill con contraste por luminancia + color picker en el ABM.
 
 > **Bloque agregado 2026-06-12 (batch #48–#62, 15 ítems).** SDD automático + hybrid, **worktree por ítem** (pedido explícito del usuario), review adversarial post-apply (loop fix→review del WORKFLOW). Olas sugeridas:
 > **A (quick fixes)**: #48 → #56 → #58 · **B (cluster TV page)**: #61 → #62 → #57 → #60 → #50 · **C (tickets/feedback)**: #49 → #59 · **D (tareas fibra + IClass, en orden)**: #52 → #53 → #54 → #51 → #55.
