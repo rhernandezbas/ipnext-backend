@@ -30,6 +30,7 @@ const mockTicket = {
   reporterName: null,
   areaId: null,      // #49
   areaName: null,    // #49
+  areaColor: null,   // #69
   grCasoId: null,
   priority: 'high' as const,
   status: 'open' as const,

@@ -23,6 +23,7 @@ export interface Ticket {
   reporterName: string | null;   // JOIN-derived (RbacUser.name)
   areaId: string | null;          // #49 — FK to TicketAreaCatalog
   areaName: string | null;        // #49 — JOIN-derived (TicketAreaCatalog.name)
+  areaColor: string | null;       // #69 — JOIN-derived (TicketAreaCatalog.color), for the area pill
   grCasoId: string | null;
   createdAt: string;             // ISO 8601
   updatedAt: string;             // ISO 8601

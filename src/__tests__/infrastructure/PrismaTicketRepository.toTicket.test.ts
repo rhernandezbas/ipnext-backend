@@ -15,7 +15,7 @@ const baseRow = {
   reporterId: 'admin-2',
   reporter: { id: 'admin-2', name: 'Reporter Person' },
   areaId: 'area-1',                                       // #49
-  area: { id: 'area-1', name: 'Soporte' },                // #49
+  area: { id: 'area-1', name: 'Soporte', color: '#6366f1' }, // #49 / #69
   grCasoId: null,
   createdAt: new Date('2024-01-01T10:00:00Z'),
   updatedAt: new Date('2024-01-02T10:00:00Z'),
@@ -89,10 +89,16 @@ describe('toTicket mapper', () => {
     expect(ticket.areaName).toBe('Soporte');
   });
 
-  it('#49: returns areaId=null and areaName=null when area relation is null', () => {
+  it('#69: derives areaColor from JOIN (mirror of areaName)', () => {
+    const ticket = toTicket(baseRow);
+    expect(ticket.areaColor).toBe('#6366f1');
+  });
+
+  it('#49/#69: returns areaId/areaName/areaColor null when area relation is null', () => {
     const ticket = toTicket({ ...baseRow, areaId: null, area: null });
     expect(ticket.areaId).toBeNull();
     expect(ticket.areaName).toBeNull();
+    expect(ticket.areaColor).toBeNull();
   });
 
   it('converts Date objects to ISO strings', () => {

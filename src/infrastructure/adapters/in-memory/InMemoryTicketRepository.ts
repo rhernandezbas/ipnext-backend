@@ -134,9 +134,11 @@ export class InMemoryTicketRepository implements TicketRepository {
     // #49 — areaName resolved from the shared area catalog (JOIN-derived, like customerName).
     const areaId = data.areaId ?? null;
     let areaName: string | null = null;
+    let areaColor: string | null = null;   // #69
     if (areaId && this.areaRepo) {
       const areaEntry = await this.areaRepo.getById(areaId);
       areaName = areaEntry?.name ?? null;
+      areaColor = areaEntry?.color ?? null;
     }
 
     const ticket: Ticket = {
@@ -154,6 +156,7 @@ export class InMemoryTicketRepository implements TicketRepository {
       reporterName,
       areaId,
       areaName,
+      areaColor,
       grCasoId: null,
       createdAt: now,
       updatedAt: now,
@@ -176,13 +179,16 @@ export class InMemoryTicketRepository implements TicketRepository {
     // areaId === undefined → don't touch; areaId === null → clear; areaId = id → resolve name.
     let areaId = existing.areaId;
     let areaName = existing.areaName;
+    let areaColor = existing.areaColor;   // #69
     if (data.areaId !== undefined) {
       areaId = data.areaId ?? null;
       if (areaId && this.areaRepo) {
         const areaEntry = await this.areaRepo.getById(areaId);
         areaName = areaEntry?.name ?? null;
+        areaColor = areaEntry?.color ?? null;
       } else {
         areaName = null;
+        areaColor = null;
       }
     }
 
@@ -193,7 +199,7 @@ export class InMemoryTicketRepository implements TicketRepository {
       ...(data.status !== undefined && { status: data.status }),
       ...(data.priority !== undefined && { priority: data.priority }),
       ...(data.assigneeId !== undefined && { assigneeId: data.assigneeId ?? null, assigneeName }),
-      ...(data.areaId !== undefined && { areaId, areaName }),
+      ...(data.areaId !== undefined && { areaId, areaName, areaColor }),
       updatedAt: nowIso(),
     };
     this.tickets[idx] = updated;

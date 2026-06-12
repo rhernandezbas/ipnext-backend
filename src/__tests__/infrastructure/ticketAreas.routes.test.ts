@@ -141,7 +141,7 @@ describe('GET /api/tickets/areas', () => {
   beforeEach(async () => { fx = await buildApp(); });
 
   it('with tickets.read → 200 array', async () => {
-    await fx.areaRepo.create({ name: 'Soporte' });
+    await fx.areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await asUser(request(fx.app).get('/api/tickets/areas'), fx.readOnlyUserId);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
@@ -166,7 +166,7 @@ describe('GET /api/tickets/areas/:id', () => {
   beforeEach(async () => { fx = await buildApp(); });
 
   it('returns 200 with area for readers', async () => {
-    const area = await fx.areaRepo.create({ name: 'Soporte' });
+    const area = await fx.areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await asUser(request(fx.app).get(`/api/tickets/areas/${area.id}`), fx.readOnlyUserId);
     expect(res.status).toBe(200);
     expect(res.body.name).toBe('Soporte');
@@ -187,18 +187,37 @@ describe('POST /api/tickets/areas', () => {
 
   it('with tickets.manage → 201 created', async () => {
     const res = await asUser(
-      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte' }),
+      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte', color: '#6366f1' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(201);
     expect(res.body.name).toBe('Soporte');
+    expect(res.body.color).toBe('#6366f1');
     expect(res.body.id).toBeTruthy();
   });
 
-  it('returns 409 on duplicate name', async () => {
-    await asUser(request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte' }), fx.manageUserId);
+  it('#69 — rejects a non-hex color → 400', async () => {
+    const res = await asUser(
+      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte', color: 'red' }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('#69 — rejects a missing color → 400', async () => {
     const res = await asUser(
       request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte' }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns 409 on duplicate name', async () => {
+    await asUser(request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte', color: '#6366f1' }), fx.manageUserId);
+    const res = await asUser(
+      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte', color: '#10b981' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(409);
@@ -207,7 +226,7 @@ describe('POST /api/tickets/areas', () => {
 
   it('without tickets.manage → 403', async () => {
     const res = await asUser(
-      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte' }),
+      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte', color: '#6366f1' }),
       fx.readOnlyUserId,
     );
     expect(res.status).toBe(403);
@@ -224,7 +243,7 @@ describe('POST /api/tickets/areas', () => {
 
   it('fix: trims the name — 201 created without trailing whitespace', async () => {
     const res = await asUser(
-      request(fx.app).post('/api/tickets/areas').send({ name: '  Soporte  ' }),
+      request(fx.app).post('/api/tickets/areas').send({ name: '  Soporte  ', color: '#6366f1' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(201);
@@ -241,10 +260,10 @@ describe('POST /api/tickets/areas', () => {
   });
 
   it('fix: trailing whitespace cannot dodge the conflict check → 409', async () => {
-    await asUser(request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte' }), fx.manageUserId);
+    await asUser(request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte', color: '#6366f1' }), fx.manageUserId);
     // 'Soporte ' would slip past the uniqueness check without .trim().
     const res = await asUser(
-      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte ' }),
+      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte ', color: '#10b981' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(409);
@@ -259,18 +278,19 @@ describe('PUT /api/tickets/areas/:id', () => {
   beforeEach(async () => { fx = await buildApp(); });
 
   it('with tickets.manage → 200 updated', async () => {
-    const area = await fx.areaRepo.create({ name: 'Soporte' });
+    const area = await fx.areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await asUser(
-      request(fx.app).put(`/api/tickets/areas/${area.id}`).send({ name: 'Soporte Técnico' }),
+      request(fx.app).put(`/api/tickets/areas/${area.id}`).send({ name: 'Soporte Técnico', color: '#f59e0b' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(200);
     expect(res.body.name).toBe('Soporte Técnico');
+    expect(res.body.color).toBe('#f59e0b');
   });
 
   it('returns 409 on name conflict', async () => {
-    await fx.areaRepo.create({ name: 'Facturación' });
-    const area2 = await fx.areaRepo.create({ name: 'Soporte' });
+    await fx.areaRepo.create({ name: 'Facturación', color: '#10b981' });
+    const area2 = await fx.areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await asUser(
       request(fx.app).put(`/api/tickets/areas/${area2.id}`).send({ name: 'Facturación' }),
       fx.manageUserId,
@@ -289,7 +309,7 @@ describe('PUT /api/tickets/areas/:id', () => {
   });
 
   it('without tickets.manage → 403', async () => {
-    const area = await fx.areaRepo.create({ name: 'Soporte' });
+    const area = await fx.areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await asUser(
       request(fx.app).put(`/api/tickets/areas/${area.id}`).send({ name: 'X' }),
       fx.readOnlyUserId,
@@ -305,7 +325,7 @@ describe('DELETE /api/tickets/areas/:id', () => {
   beforeEach(async () => { fx = await buildApp(); });
 
   it('with tickets.manage → 204', async () => {
-    const area = await fx.areaRepo.create({ name: 'Soporte' });
+    const area = await fx.areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await asUser(request(fx.app).delete(`/api/tickets/areas/${area.id}`), fx.manageUserId);
     expect(res.status).toBe(204);
   });
@@ -317,7 +337,7 @@ describe('DELETE /api/tickets/areas/:id', () => {
   });
 
   it('returns 409 when area is in use', async () => {
-    const area = await fx.areaRepo.create({ name: 'Soporte' });
+    const area = await fx.areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     fx.areaRepo.ticketCounts[area.id] = 2;
     const res = await asUser(request(fx.app).delete(`/api/tickets/areas/${area.id}`), fx.manageUserId);
     expect(res.status).toBe(409);
@@ -325,7 +345,7 @@ describe('DELETE /api/tickets/areas/:id', () => {
   });
 
   it('without tickets.manage → 403', async () => {
-    const area = await fx.areaRepo.create({ name: 'Soporte' });
+    const area = await fx.areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await asUser(request(fx.app).delete(`/api/tickets/areas/${area.id}`), fx.readOnlyUserId);
     expect(res.status).toBe(403);
   });

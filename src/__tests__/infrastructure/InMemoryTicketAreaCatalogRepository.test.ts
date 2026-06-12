@@ -12,7 +12,7 @@ describe('InMemoryTicketAreaCatalogRepository', () => {
   });
 
   it('creates and retrieves by id', async () => {
-    const area = await repo.create({ name: 'Soporte' });
+    const area = await repo.create({ name: 'Soporte', color: '#6366f1' });
     expect(area.id).toBeTruthy();
     const found = await repo.getById(area.id);
     expect(found).not.toBeNull();
@@ -20,7 +20,7 @@ describe('InMemoryTicketAreaCatalogRepository', () => {
   });
 
   it('getByName is case-insensitive', async () => {
-    await repo.create({ name: 'Soporte' });
+    await repo.create({ name: 'Soporte', color: '#6366f1' });
     const found = await repo.getByName('soporte');
     expect(found).not.toBeNull();
     expect(found!.name).toBe('Soporte');
@@ -35,7 +35,7 @@ describe('InMemoryTicketAreaCatalogRepository', () => {
   });
 
   it('update changes the name', async () => {
-    const area = await repo.create({ name: 'Soporte' });
+    const area = await repo.create({ name: 'Soporte', color: '#6366f1' });
     const updated = await repo.update(area.id, { name: 'Soporte Técnico' });
     expect(updated).not.toBeNull();
     expect(updated!.name).toBe('Soporte Técnico');
@@ -46,7 +46,7 @@ describe('InMemoryTicketAreaCatalogRepository', () => {
   });
 
   it('delete removes the area', async () => {
-    const area = await repo.create({ name: 'Soporte' });
+    const area = await repo.create({ name: 'Soporte', color: '#6366f1' });
     const ok = await repo.delete(area.id);
     expect(ok).toBe(true);
     expect(await repo.getById(area.id)).toBeNull();
@@ -57,13 +57,13 @@ describe('InMemoryTicketAreaCatalogRepository', () => {
   });
 
   it('countInUse returns ticket count by area id', async () => {
-    const area = await repo.create({ name: 'Soporte' });
+    const area = await repo.create({ name: 'Soporte', color: '#6366f1' });
     repo.ticketCounts[area.id] = 5;
     expect(await repo.countInUse(area.id)).toBe(5);
   });
 
   it('countInUse returns 0 when no tickets', async () => {
-    const area = await repo.create({ name: 'Soporte' });
+    const area = await repo.create({ name: 'Soporte', color: '#6366f1' });
     expect(await repo.countInUse(area.id)).toBe(0);
   });
 });

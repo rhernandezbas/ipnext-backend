@@ -14,21 +14,26 @@ describe('CreateTicketArea', () => {
   });
 
   it('creates an area and returns it with an id', async () => {
-    const area = await createArea.execute({ name: 'Soporte' });
+    const area = await createArea.execute({ name: 'Soporte', color: '#6366f1' });
     expect(area.id).toBeTruthy();
     expect(area.name).toBe('Soporte');
   });
 
+  it('persists the color (#69)', async () => {
+    const area = await createArea.execute({ name: 'Soporte', color: '#6366f1' });
+    expect(area.color).toBe('#6366f1');
+  });
+
   it('throws TicketAreaNameConflictError (409) on duplicate name', async () => {
-    await createArea.execute({ name: 'Soporte' });
-    await expect(createArea.execute({ name: 'Soporte' })).rejects.toBeInstanceOf(
+    await createArea.execute({ name: 'Soporte', color: '#6366f1' });
+    await expect(createArea.execute({ name: 'Soporte', color: '#10b981' })).rejects.toBeInstanceOf(
       TicketAreaNameConflictError,
     );
   });
 
   it('name conflict check is case-insensitive', async () => {
-    await createArea.execute({ name: 'Soporte' });
-    await expect(createArea.execute({ name: 'soporte' })).rejects.toBeInstanceOf(
+    await createArea.execute({ name: 'Soporte', color: '#6366f1' });
+    await expect(createArea.execute({ name: 'soporte', color: '#10b981' })).rejects.toBeInstanceOf(
       TicketAreaNameConflictError,
     );
   });
