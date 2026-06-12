@@ -8,6 +8,8 @@
 
 export interface ContractSummaryDto {
   id: string;
+  /** #55 — external Gestión Real contract id (Contract.grContratoId). null for non-GR rows. */
+  code: string | null;
   clientId: string;
   clientName: string;
   plan: string;

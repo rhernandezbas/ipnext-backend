@@ -56,6 +56,7 @@ const NEW_FIELDS_DEFAULTS = {
   customerCity: null,
   customerPhone: null,
   customerCode: null,
+  contractCode: null,
   iclassOrderCode: null,
   grOrdenId: null,
   contractId: null,
@@ -345,6 +346,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       customerCity: null, // idem
       customerPhone: null, // idem
       customerCode: null, // idem (derived from grClienteId ?? splynxId ?? login)
+      contractCode: null, // #55 — derived from Contract.grContratoId (JOIN), not a create input
       iclassOrderCode: null,
       grOrdenId: data.grOrdenId ?? null,
       contractId: data.contractId ?? null,

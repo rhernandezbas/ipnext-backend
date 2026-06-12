@@ -27,6 +27,7 @@ export class ListContracts {
     return {
       data: result.data.map((s) => ({
         id: s.id,
+        code: s.code, // #55 — GR contract code
         clientId: s.clientId,
         clientName: s.clientName,
         plan: s.plan,

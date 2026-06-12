@@ -101,6 +101,7 @@ export class SplynxCustomerAdapter implements CustomerRepository {
     const data = Array.isArray(raw) ? raw : [];
     return data.map((s) => ({
       id: String(s.id),
+      code: null, // #55 — Splynx services carry no GR contract code
       type: s.service_type ?? 'Internet',
       plan: s.plan ?? '',
       ip: s.ip ?? '',

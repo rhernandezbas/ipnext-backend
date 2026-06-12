@@ -41,6 +41,9 @@ export interface ContractServiceItem {
 
 export interface Contract {
   id: string;
+  /** #55 — external Gestión Real contract id (Contract.grContratoId). Used as the IClass
+   * customerCode for tasks linked to this contract. null for non-GR contracts. */
+  code: string | null;
   type: string;
   plan: string;
   ip: string;
