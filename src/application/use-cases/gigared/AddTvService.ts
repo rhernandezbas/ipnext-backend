@@ -33,8 +33,9 @@ export class AddTvService {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
 
+    // #47k HIGH: el contrato debe PERTENECER al customer (un contractId ajeno → 404, sin leak).
     const contract = await this.contractLookup.findById(contractId);
-    if (!contract) throw new ContractNotFoundError(contractId);
+    if (!contract || contract.clientId !== customerId) throw new ContractNotFoundError(contractId);
 
     const tvCatalog = await this.catalogRepo.getByName('TV');
     if (!tvCatalog || !tvCatalog.active) throw new TvCatalogMissingError();

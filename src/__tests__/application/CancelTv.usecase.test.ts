@@ -1,0 +1,232 @@
+/**
+ * #47k — CancelTv: dar de baja TV por completo.
+ *
+ * Flujo: customer 404 → contract 404 → cuenta del cliente (use_internal_id);
+ * si no vinculada → TvNotLinkedError. Por cada servicio de la cuenta: DELETE en
+ * Gigared (incluido el base — libera cupo) → OTT disable (idempotente) → reconcile
+ * del ContractService TV con lista vacía (inactiva el ítem).
+ *
+ * Shape de respuesta: { removed: string[], failed: {id, detail}[], ottDisabled: bool,
+ * local: 'synced' | 'failed' }. Todo OK → router 200; algún DELETE falló o local
+ * falló → router 207. Re-run idempotente: los packs ya quitados no están en la cuenta.
+ */
+import { CancelTv } from '@application/use-cases/gigared/CancelTv';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
+import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
+import { GigaredNotFoundError, TvNotLinkedError } from '@domain/errors/gigared';
+import { ClientNotFoundError } from '@domain/errors';
+import { ContractNotFoundError } from '@domain/errors/contractServices';
+
+function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
+  return {
+    cic: '0000000001', gigaredId: '100', email: 'e@x.com', firstName: 'N', lastName: 'A',
+    registrationDate: '19/01/2026', services: [], internalId: 'cust-1', ott: null, ...over,
+  };
+}
+
+function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
+  return {
+    getSummary: jest.fn(),
+    listAccounts: jest.fn(),
+    getAccountByInternalId: jest.fn(async () => fakeAccount()),
+    getAccountByCic: jest.fn(async () => fakeAccount()),
+    register: jest.fn(), activate: jest.fn(), setInternalId: jest.fn(),
+    addService: jest.fn(async () => {}),
+    removeService: jest.fn(async () => {}),
+    setOtt: jest.fn(async () => {}),
+    ...over,
+  };
+}
+
+// Customer lookup: existence only.
+const lookup = (exists: boolean) => ({ findById: async (id: string) => (exists ? { id } : null) });
+// Contract lookup: carries ownership (clientId). Defaults the owner to 'cust-1' so the
+// existing tests (which act on 'cust-1') keep passing; pass a different owner to simulate
+// a contract that belongs to ANOTHER customer (the #47k HIGH).
+const contractLookup = (exists: boolean, ownerId = 'cust-1') => ({
+  findById: async (id: string) => (exists ? { id, clientId: ownerId } : null),
+});
+
+async function seedTvCatalog(catalog: InMemoryServiceCatalogRepository, cs: InMemoryContractServiceRepository, active = true) {
+  const cat = await catalog.create({ name: 'TV', label: 'TV', active, sortOrder: 0 });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (cs as any).catalog[cat.id] = { name: cat.name, label: cat.label };
+  return cat;
+}
+
+describe('CancelTv (#47k)', () => {
+  let cs: InMemoryContractServiceRepository;
+  let catalog: InMemoryServiceCatalogRepository;
+  beforeEach(() => {
+    cs = new InMemoryContractServiceRepository();
+    catalog = new InMemoryServiceCatalogRepository();
+  });
+
+  it('(a) happy: 2 packs → 2 DELETEs + ott disable + ítem local inactive → shape completo', async () => {
+    const cat = await seedTvCatalog(catalog, cs);
+    const row = await cs.add({ contractId: 'C1', serviceCatalogId: cat.id, notes: 'CIC 0000000001 · Gigared Play Full' });
+    const removeService = jest.fn(async () => {});
+    const setOtt = jest.fn(async () => {});
+    // 1ª llamada (loop): la cuenta tiene los 2 packs; 2ª (reconcile): ya vacía.
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [
+        { id: '129', name: 'Gigared Play Full' },
+        { id: '39', name: 'Pack Todo Futbol' },
+      ] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ removeService, setOtt, getAccountByInternalId });
+
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+
+    expect(removeService).toHaveBeenCalledTimes(2);
+    expect(removeService).toHaveBeenCalledWith('cust-1', '129');
+    expect(removeService).toHaveBeenCalledWith('cust-1', '39');
+    expect(setOtt).toHaveBeenCalledWith('cust-1', false);
+    expect(result.removed.sort()).toEqual(['129', '39']);
+    expect(result.failed).toEqual([]);
+    expect(result.ottDisabled).toBe(true);
+    expect(result.local).toBe('synced');
+    // ítem local inactivado (no borrado)
+    const after = await cs.getById(row.id);
+    expect(after).not.toBeNull();
+    expect(after!.status).toBe('inactive');
+  });
+
+  it('(b) cuenta sin vincular → TvNotLinkedError (router → 404 TV_NOT_LINKED)', async () => {
+    await seedTvCatalog(catalog, cs);
+    const port = fakePort({
+      getAccountByInternalId: jest.fn(async () => { throw new GigaredNotFoundError(); }),
+    });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    await expect(uc.execute('cust-1', { contractId: 'C1' }))
+      .rejects.toBeInstanceOf(TvNotLinkedError);
+    expect(port.removeService).not.toHaveBeenCalled();
+  });
+
+  it('(c) contractId inválido → ContractNotFoundError SIN tocar Gigared', async () => {
+    await seedTvCatalog(catalog, cs);
+    const port = fakePort();
+    const uc = new CancelTv(port, cs, catalog, contractLookup(false), lookup(true));
+    await expect(uc.execute('cust-1', { contractId: 'ghost' }))
+      .rejects.toBeInstanceOf(ContractNotFoundError);
+    expect(port.getAccountByInternalId).not.toHaveBeenCalled();
+    expect(port.removeService).not.toHaveBeenCalled();
+  });
+
+  it('(c2) #47k HIGH: contractId de OTRO cliente → ContractNotFoundError SIN tocar Gigared', async () => {
+    await seedTvCatalog(catalog, cs);
+    const port = fakePort();
+    // El contrato existe pero pertenece a 'cust-B' — el guard NO debe dejarlo pasar.
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true, 'cust-B'), lookup(true));
+    await expect(uc.execute('cust-1', { contractId: 'C-of-B' }))
+      .rejects.toBeInstanceOf(ContractNotFoundError);
+    // CERO llamadas a Gigared: no se lee la cuenta ni se borra ningún servicio.
+    expect(port.getAccountByInternalId).not.toHaveBeenCalled();
+    expect(port.removeService).not.toHaveBeenCalled();
+    expect(port.setOtt).not.toHaveBeenCalled();
+  });
+
+  it('customer inexistente → ClientNotFoundError', async () => {
+    await seedTvCatalog(catalog, cs);
+    const uc = new CancelTv(fakePort(), cs, catalog, contractLookup(true), lookup(false));
+    await expect(uc.execute('ghost', { contractId: 'C1' }))
+      .rejects.toBeInstanceOf(ClientNotFoundError);
+  });
+
+  it('(d) 2do DELETE falla → removed/failed correctos + OTT igual se intenta + local refleja', async () => {
+    const cat = await seedTvCatalog(catalog, cs);
+    await cs.add({ contractId: 'C1', serviceCatalogId: cat.id, notes: 'CIC 0000000001 · Gigared Play Full' });
+    const setOtt = jest.fn(async () => {});
+    const removeService = jest.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('upstream 500'));
+    // loop ve los 2 packs; reconcile ve que sólo queda el que falló (39).
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [
+        { id: '129', name: 'Gigared Play Full' },
+        { id: '39', name: 'Pack Todo Futbol' },
+      ] }))
+      .mockResolvedValue(fakeAccount({ services: [{ id: '39', name: 'Pack Todo Futbol' }] }));
+    const port = fakePort({ removeService, setOtt, getAccountByInternalId });
+
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+
+    expect(result.removed).toEqual(['129']);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.id).toBe('39');
+    expect(result.failed[0]!.detail).toContain('upstream 500');
+    // OTT se intenta igual aunque hubo fallo parcial
+    expect(setOtt).toHaveBeenCalledWith('cust-1', false);
+    expect(result.ottDisabled).toBe(true);
+    // sigue habiendo un pack en la cuenta → reconcile NO inactiva → local refleja sincronía
+    expect(result.local).toBe('synced');
+  });
+
+  it('(e) re-run tras (d) con el pack restante → solo 1 DELETE (idempotencia)', async () => {
+    const cat = await seedTvCatalog(catalog, cs);
+    await cs.add({ contractId: 'C1', serviceCatalogId: cat.id, notes: 'CIC 0000000001 · Pack Todo Futbol' });
+    const removeService = jest.fn(async () => {});
+    // sólo queda el pack que había fallado; reconcile lo ve vacío después.
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '39', name: 'Pack Todo Futbol' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ removeService, getAccountByInternalId });
+
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+
+    expect(removeService).toHaveBeenCalledTimes(1);
+    expect(removeService).toHaveBeenCalledWith('cust-1', '39');
+    expect(result.removed).toEqual(['39']);
+    expect(result.failed).toEqual([]);
+    expect(result.local).toBe('synced');
+  });
+
+  it('(f) cuenta vinculada SIN servicios → solo OTT disable + reconcile (removed=[])', async () => {
+    await seedTvCatalog(catalog, cs);
+    const removeService = jest.fn(async () => {});
+    const setOtt = jest.fn(async () => {});
+    const port = fakePort({
+      removeService, setOtt,
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ services: [] })),
+    });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+
+    expect(removeService).not.toHaveBeenCalled();
+    expect(setOtt).toHaveBeenCalledWith('cust-1', false);
+    expect(result.removed).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(result.ottDisabled).toBe(true);
+    expect(result.local).toBe('synced');
+  });
+
+  it('reconcile falla (csRepo throws) → local: "failed"', async () => {
+    const cat = await seedTvCatalog(catalog, cs);
+    await cs.add({ contractId: 'C1', serviceCatalogId: cat.id, notes: 'CIC 0000000001 · Gigared Play Full' });
+    jest.spyOn(cs, 'update').mockRejectedValue(new Error('db down'));
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+    expect(result.removed).toEqual(['129']);
+    expect(result.local).toBe('failed');
+  });
+
+  it('OTT disable falla (no es "ya deshabilitada") → ottDisabled: false, no rompe', async () => {
+    await seedTvCatalog(catalog, cs);
+    const setOtt = jest.fn(async () => { throw new Error('ott upstream down'); });
+    const port = fakePort({
+      setOtt,
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ services: [] })),
+    });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+    expect(result.ottDisabled).toBe(false);
+  });
+});

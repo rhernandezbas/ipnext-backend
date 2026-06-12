@@ -37,7 +37,13 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
   };
 }
 
+// Customer lookup: existence only.
 const lookup = (exists: boolean) => ({ findById: async (id: string) => (exists ? { id } : null) });
+// Contract lookup: carries ownership (clientId). Defaults the owner to 'cust-1' so the
+// existing tests keep passing; pass a different owner to simulate a foreign contract (#47k).
+const contractLookup = (exists: boolean, ownerId = 'cust-1') => ({
+  findById: async (id: string) => (exists ? { id, clientId: ownerId } : null),
+});
 
 async function seedTvCatalog(catalog: InMemoryServiceCatalogRepository, cs: InMemoryContractServiceRepository, active = true) {
   const cat = await catalog.create({ name: 'TV', label: 'TV', active, sortOrder: 0 });
@@ -62,7 +68,7 @@ describe('AddTvService (#47)', () => {
       getAccountByInternalId: jest.fn(async () =>
         fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] })),
     });
-    const uc = new AddTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new AddTvService(port, cs, catalog, contractLookup(true), lookup(true));
     const result = await uc.execute('cust-1', { contractId: 'C1', serviceId: '129' });
 
     expect(result).toMatchObject({ gigared: 'ok', local: 'ok' });
@@ -80,7 +86,7 @@ describe('AddTvService (#47)', () => {
           { id: '39', name: 'Pack Todo Futbol' },
         ] })),
     });
-    const uc = new AddTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new AddTvService(port, cs, catalog, contractLookup(true), lookup(true));
     // first add seeds the row
     const r1 = await uc.execute('cust-1', { contractId: 'C1', serviceId: '129' });
     const r2 = await uc.execute('cust-1', { contractId: 'C1', serviceId: '39' });
@@ -97,7 +103,7 @@ describe('AddTvService (#47)', () => {
       getAccountByInternalId: jest.fn(async () =>
         fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] })),
     });
-    const uc = new AddTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new AddTvService(port, cs, catalog, contractLookup(true), lookup(true));
     const result = await uc.execute('cust-1', { contractId: 'C1', serviceId: '129' });
     expect(result.gigared).toBe('ok');
     expect(result.local).toBe('ok');
@@ -109,7 +115,7 @@ describe('AddTvService (#47)', () => {
       addService: jest.fn(async () => { throw new GigaredRejectedError('Bad', 'invalid service'); }),
       getAccountByInternalId: jest.fn(async () => fakeAccount({ services: [] })),
     });
-    const uc = new AddTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new AddTvService(port, cs, catalog, contractLookup(true), lookup(true));
     await expect(uc.execute('cust-1', { contractId: 'C1', serviceId: '999' }))
       .rejects.toBeInstanceOf(GigaredRejectedError);
   });
@@ -121,7 +127,7 @@ describe('AddTvService (#47)', () => {
       getAccountByInternalId: jest.fn(async () =>
         fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] })),
     });
-    const uc = new AddTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new AddTvService(port, cs, catalog, contractLookup(true), lookup(true));
     const result = await uc.execute('cust-1', { contractId: 'C1', serviceId: '129' });
     expect(result.gigared).toBe('ok');
     expect(result.local).toBe('failed');
@@ -131,7 +137,7 @@ describe('AddTvService (#47)', () => {
   it('TV catalog missing/inactive → TvCatalogMissingError (before touching gigared)', async () => {
     await seedTvCatalog(catalog, cs, false); // inactive
     const port = fakePort();
-    const uc = new AddTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new AddTvService(port, cs, catalog, contractLookup(true), lookup(true));
     await expect(uc.execute('cust-1', { contractId: 'C1', serviceId: '129' }))
       .rejects.toBeInstanceOf(TvCatalogMissingError);
     expect(port.addService).not.toHaveBeenCalled();
@@ -139,16 +145,26 @@ describe('AddTvService (#47)', () => {
 
   it('unknown customer → ClientNotFoundError', async () => {
     await seedTvCatalog(catalog, cs);
-    const uc = new AddTvService(fakePort(), cs, catalog, lookup(true), lookup(false));
+    const uc = new AddTvService(fakePort(), cs, catalog, contractLookup(true), lookup(false));
     await expect(uc.execute('ghost', { contractId: 'C1', serviceId: '129' }))
       .rejects.toBeInstanceOf(ClientNotFoundError);
   });
 
   it('unknown contract → ContractNotFoundError', async () => {
     await seedTvCatalog(catalog, cs);
-    const uc = new AddTvService(fakePort(), cs, catalog, lookup(false), lookup(true));
+    const uc = new AddTvService(fakePort(), cs, catalog, contractLookup(false), lookup(true));
     await expect(uc.execute('cust-1', { contractId: 'ghost', serviceId: '129' }))
       .rejects.toBeInstanceOf(ContractNotFoundError);
+  });
+
+  it('#47k HIGH: contract belongs to ANOTHER customer → ContractNotFoundError, no Gigared call', async () => {
+    await seedTvCatalog(catalog, cs);
+    const port = fakePort();
+    const uc = new AddTvService(port, cs, catalog, contractLookup(true, 'cust-B'), lookup(true));
+    await expect(uc.execute('cust-1', { contractId: 'C-of-B', serviceId: '129' }))
+      .rejects.toBeInstanceOf(ContractNotFoundError);
+    expect(port.addService).not.toHaveBeenCalled();
+    expect(port.getAccountByInternalId).not.toHaveBeenCalled();
   });
 });
 
@@ -168,7 +184,7 @@ describe('RemoveTvService (#47)', () => {
       removeService: jest.fn(async () => {}),
       getAccountByInternalId: jest.fn(async () => fakeAccount({ services: [] })), // none left
     });
-    const uc = new RemoveTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new RemoveTvService(port, cs, catalog, contractLookup(true), lookup(true));
     const result = await uc.execute('cust-1', { contractId: 'C1', serviceId: '129' });
     expect(port.removeService).toHaveBeenCalledWith('cust-1', '129');
     expect(result.local).toBe('ok');
@@ -185,7 +201,7 @@ describe('RemoveTvService (#47)', () => {
     const port = fakePort({
       getAccountByInternalId: jest.fn(async () => fakeAccount({ services: [] })),
     });
-    const uc = new RemoveTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new RemoveTvService(port, cs, catalog, contractLookup(true), lookup(true));
     await uc.execute('cust-1', { contractId: 'C1', serviceId: '129' });
     const after = await cs.getById(manual.id);
     expect(after).not.toBeNull();
@@ -199,7 +215,7 @@ describe('RemoveTvService (#47)', () => {
     const port = fakePort({
       getAccountByInternalId: jest.fn(async () => fakeAccount({ services: [{ id: '39', name: 'Pack Todo Futbol' }] })),
     });
-    const uc = new AddTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new AddTvService(port, cs, catalog, contractLookup(true), lookup(true));
     await uc.execute('cust-1', { contractId: 'C1', serviceId: '39' });
     const after = await cs.getById(manual.id);
     // The manual row owns the (contract, TV) slot and is left alone — reconcile won't
@@ -214,11 +230,21 @@ describe('RemoveTvService (#47)', () => {
     const port = fakePort({
       getAccountByInternalId: jest.fn(async () => fakeAccount({ services: [{ id: '39', name: 'Pack Todo Futbol' }] })),
     });
-    const uc = new RemoveTvService(port, cs, catalog, lookup(true), lookup(true));
+    const uc = new RemoveTvService(port, cs, catalog, contractLookup(true), lookup(true));
     await uc.execute('cust-1', { contractId: 'C1', serviceId: '129' });
     const after = await cs.getById(row.id);
     expect(after!.notes).toBe('CIC 0000000001 · Pack Todo Futbol');
     expect(after!.status).toBe('active');
+  });
+
+  it('#47k HIGH: contract belongs to ANOTHER customer → ContractNotFoundError, no Gigared call', async () => {
+    await seedTvCatalog(catalog, cs);
+    const port = fakePort();
+    const uc = new RemoveTvService(port, cs, catalog, contractLookup(true, 'cust-B'), lookup(true));
+    await expect(uc.execute('cust-1', { contractId: 'C-of-B', serviceId: '129' }))
+      .rejects.toBeInstanceOf(ContractNotFoundError);
+    expect(port.removeService).not.toHaveBeenCalled();
+    expect(port.getAccountByInternalId).not.toHaveBeenCalled();
   });
 });
 

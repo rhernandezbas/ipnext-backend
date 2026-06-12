@@ -29,6 +29,7 @@ import { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterG
 import { AddTvService } from '@application/use-cases/gigared/AddTvService';
 import { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
 import { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
+import { CancelTv } from '@application/use-cases/gigared/CancelTv';
 
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import {
@@ -68,6 +69,8 @@ interface Opts {
   catalog?: InMemoryServiceCatalogRepository;
   contractExists?: boolean;
   customerExists?: boolean;
+  /** Owner (clientId) the contract lookup reports. Defaults to 'cust-1' (the test customer). */
+  contractOwner?: string;
 }
 
 async function buildApp(opts: Opts = {}) {
@@ -84,7 +87,10 @@ async function buildApp(opts: Opts = {}) {
   (csRepo as any).catalog[cat.id] = { name: cat.name, label: cat.label };
 
   const customerLookup = { findById: async (id: string) => (opts.customerExists === false ? null : { id }) };
-  const contractLookup = { findById: async (id: string) => (opts.contractExists === false ? null : { id }) };
+  const contractLookup = {
+    findById: async (id: string) =>
+      (opts.contractExists === false ? null : { id, clientId: opts.contractOwner ?? 'cust-1' }),
+  };
 
   const router = createGigaredRouter({
     getConfig: new GetGigaredConfig(cfg, flags),
@@ -97,6 +103,7 @@ async function buildApp(opts: Opts = {}) {
     addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus: new SetOttStatus(port, customerLookup),
+    cancelTv: new CancelTv(port, csRepo, catalog, contractLookup, customerLookup),
     requireRead: opts.perms?.read ?? pass,
     requireWrite: opts.perms?.write ?? pass,
     requireManage: opts.perms?.manage ?? pass,
@@ -255,6 +262,95 @@ describe('gigared.routes — happy + 207 (#47)', () => {
     const res = await request(app).put('/api/gigared/customers/cust-1/ott').send({ enabled: true });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
+  });
+});
+
+describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
+  it('happy (todo OK) → 200 { removed, failed:[], ottDisabled, local:"synced" }', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ getAccountByInternalId });
+    const app = await buildApp({ port, csRepo, catalog });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toEqual(['129']);
+    expect(res.body.failed).toEqual([]);
+    expect(res.body.ottDisabled).toBe(true);
+    expect(res.body.local).toBe('synced');
+  });
+
+  it('cuenta sin vincular → 404 TV_NOT_LINKED', async () => {
+    const port = fakePort({ getAccountByInternalId: jest.fn(async () => { throw new GigaredNotFoundError(); }) });
+    const app = await buildApp({ port });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('TV_NOT_LINKED');
+  });
+
+  it('contractId inválido → 404 CONTRACT_NOT_FOUND (antes de tocar Gigared)', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port, contractExists: false });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'ghost' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
+    expect(port.getAccountByInternalId).not.toHaveBeenCalled();
+  });
+
+  it('#47k HIGH: contractId de OTRO cliente → 404 CONTRACT_NOT_FOUND, Gigared intacto', async () => {
+    const port = fakePort();
+    // El contrato existe pero pertenece a 'cust-B': cust-1 NO puede cancelarlo.
+    const app = await buildApp({ port, contractOwner: 'cust-B' });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C-of-B' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
+    expect(port.getAccountByInternalId).not.toHaveBeenCalled();
+    expect(port.removeService).not.toHaveBeenCalled();
+    expect(port.setOtt).not.toHaveBeenCalled();
+  });
+
+  it('fallo parcial (un DELETE falla) → 207 { removed, failed }', async () => {
+    const removeService = jest.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('upstream 500'));
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [
+        { id: '129', name: 'Gigared Play Full' },
+        { id: '39', name: 'Pack Todo Futbol' },
+      ] }))
+      .mockResolvedValue(fakeAccount({ services: [{ id: '39', name: 'Pack Todo Futbol' }] }));
+    const port = fakePort({ removeService, getAccountByInternalId });
+    const app = await buildApp({ port });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(207);
+    expect(res.body.removed).toEqual(['129']);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].id).toBe('39');
+  });
+
+  it('local reconcile falla → 207 { local:"failed" }', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ getAccountByInternalId });
+    const app = await buildApp({ port, csRepo, catalog });
+    // seed a managed row, then make update throw
+    const cat = await catalog.getByName('TV');
+    await csRepo.add({ contractId: 'C1', serviceCatalogId: cat!.id, notes: 'CIC 0000000001 · Gigared Play Full' });
+    jest.spyOn(csRepo, 'update').mockRejectedValue(new Error('db down'));
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(207);
+    expect(res.body.local).toBe('failed');
+  });
+
+  it('no tv.write → 403', async () => {
+    const app = await buildApp({ perms: { write: deny } });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(403);
   });
 });
 

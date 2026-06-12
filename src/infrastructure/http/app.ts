@@ -339,6 +339,7 @@ import { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterG
 import { AddTvService } from '@application/use-cases/gigared/AddTvService';
 import { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
 import { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
+import { CancelTv } from '@application/use-cases/gigared/CancelTv';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
@@ -580,6 +581,13 @@ function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project'
     case 'Project':  return prisma.project.findUnique({ where: { id }, select: { id: true } });
     case 'Ticket':   return (prisma as any).ticket.findUnique({ where: { id }, select: { id: true } });
   }
+}
+
+// #47k — ownership-aware Contract lookup for the Gigared use cases. Returns clientId so each
+// destructive TV use case can assert the contract belongs to the target customer before any
+// Gigared write (a foreign contractId → 404, no cross-customer reconcile). One findUnique.
+function prismaContractOwnershipLookup(id: string): Promise<{ id: string; clientId: string } | null> {
+  return prisma.contract.findUnique({ where: { id }, select: { id: true, clientId: true } });
 }
 
 // #40 — ProjectKindLookup wiring: a single findUnique resolves both project
@@ -1670,17 +1678,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const gigaredConfigRepo = new PrismaGigaredConfigRepository();
   const gigaredClient = new GigaredClient({ configProvider: gigaredConfigRepo });
   const gigaredCustomerLookup = { findById: (id: string) => prismaClientLookup('Client', id) };
+  // #47k — ownership-aware contract lookup ({ id, clientId }) so the TV use cases reject a
+  // contractId that belongs to another customer (404, no cross-customer write).
+  const gigaredContractLookup = { findById: (id: string) => prismaContractOwnershipLookup(id) };
   app.use('/api/gigared', createAuthMiddleware(authAdapter, sessionRepo), createGigaredRouter({
     getConfig:          new GetGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     updateConfig:       new UpdateGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     getSummary:         new GetGigaredSummary(gigaredClient),
     listAccounts:       new ListGigaredAccounts(gigaredClient),
     getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup),
-    linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, contractLookup, contractServiceRepo, serviceCatalogRepo),
+    linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
     registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup),
-    addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, contractLookup, gigaredCustomerLookup),
-    removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, contractLookup, gigaredCustomerLookup),
+    addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
+    removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     setOttStatus:       new SetOttStatus(gigaredClient, gigaredCustomerLookup),
+    cancelTv:           new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     requireRead:        requirePerm('tv', 'read'),
     requireWrite:       requirePerm('tv', 'write'),
     requireManage:      requirePerm('tv', 'manage'),
