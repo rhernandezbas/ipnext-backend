@@ -61,6 +61,12 @@ export const KNOWN_ACTIONS = [
   // settings sub-actions
   'manage_api_tokens',
   'manage_backups',
+  // tv sub-actions (#50) — granular Gigared TV operations (replace generic tv.write)
+  'link',     // vincular/desvincular CIC (asociar internal_id)
+  'register', // registrar/activar cuentas nuevas en el CUA
+  'packs',    // agregar/quitar packs (servicios)
+  'ott',      // habilitar/deshabilitar OTT (incl. suspender/reactivar)
+  'cancel',   // dar de baja TV completa
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.
@@ -103,7 +109,7 @@ export const RBAC_MODULES = [
   'contracts',
   // UISP mirror module — read-only mirror of UISP NMS data
   'uisp',
-  // TV / Gigared integration module (#47) — uses base read/write/manage actions
+  // TV / Gigared integration module (#47) — read/manage base + granular ops (#50: link/register/packs/ott/cancel)
   'tv',
 ] as const;
 

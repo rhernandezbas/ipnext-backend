@@ -138,7 +138,12 @@ export interface GigaredRouterDeps {
   setOttStatus: SetOttStatus;
   cancelTv: CancelTv;
   requireRead: RequestHandler;
-  requireWrite: RequestHandler;
+  // #50 — granular TV permissions (replace the generic tv.write guard).
+  requireLink: RequestHandler;     // tv.link — vincular/desvincular CIC
+  requireRegister: RequestHandler; // tv.register — registrar cuentas nuevas
+  requirePacks: RequestHandler;    // tv.packs — agregar/quitar packs
+  requireOtt: RequestHandler;      // tv.ott — habilitar/deshabilitar OTT
+  requireCancel: RequestHandler;   // tv.cancel — dar de baja TV
   requireManage: RequestHandler;
   /** Key-required + flag-required — gates every non-probe, non-config route. */
   gigaredReady: RequestHandler;
@@ -148,7 +153,7 @@ export interface GigaredRouterDeps {
 
 /**
  * Gigared TV router (#47). Mount: app.use('/api/gigared', createAuthMiddleware(...), router).
- * Order (D2): /config (GET/PUT, tv.manage) → router.use(gigaredReady) → the rest (read/write).
+ * Order (D2): /config (GET/PUT, tv.manage) → router.use(gigaredReady) → the rest (read + granular ops #50).
  * Errors are caught BY INSTANCE here so each maps to its pinned status (pattern uisp.routes.ts).
  */
 export function createGigaredRouter(deps: GigaredRouterDeps): Router {
@@ -212,7 +217,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  router.post('/customers/:id/link', deps.requireWrite, async (req, res, next): Promise<void> => {
+  router.post('/customers/:id/link', deps.requireLink, async (req, res, next): Promise<void> => {
     try {
       const body = req.body as { cic?: unknown; contractId?: unknown };
       const cic = String(body.cic ?? '');
@@ -226,7 +231,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  router.post('/customers/:id/register', deps.requireWrite, async (req, res, next): Promise<void> => {
+  router.post('/customers/:id/register', deps.requireRegister, async (req, res, next): Promise<void> => {
     try {
       const b = req.body as {
         firstName: string; lastName: string; email: string; cic: string;
@@ -261,7 +266,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  router.post('/customers/:id/services', deps.requireWrite, async (req, res, next): Promise<void> => {
+  router.post('/customers/:id/services', deps.requirePacks, async (req, res, next): Promise<void> => {
     try {
       const b = req.body as { serviceId: string; contractId: string };
       const result = await deps.addTvService.execute(req.params['id'] as string, {
@@ -274,7 +279,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  router.delete('/customers/:id/services/:serviceId', deps.requireWrite, async (req, res, next): Promise<void> => {
+  router.delete('/customers/:id/services/:serviceId', deps.requirePacks, async (req, res, next): Promise<void> => {
     try {
       const contractId = String(req.query['contractId'] ?? '');
       const result = await deps.removeTvService.execute(req.params['id'] as string, {
@@ -287,7 +292,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  router.put('/customers/:id/ott', deps.requireWrite, async (req, res, next): Promise<void> => {
+  router.put('/customers/:id/ott', deps.requireOtt, async (req, res, next): Promise<void> => {
     try {
       const enabled = Boolean((req.body as { enabled?: unknown }).enabled);
       await deps.setOttStatus.execute(req.params['id'] as string, enabled);
@@ -297,9 +302,9 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  // #47k — dar de baja TV completa. Body { contractId }. tv.write requerido.
+  // #47k — dar de baja TV completa. Body { contractId }. tv.cancel requerido (#50).
   // 200 si removed sin fallos y local synced; 207 si algún DELETE falló o local falló.
-  router.post('/customers/:id/cancel', deps.requireWrite, async (req, res, next): Promise<void> => {
+  router.post('/customers/:id/cancel', deps.requireCancel, async (req, res, next): Promise<void> => {
     try {
       const contractId = String((req.body as { contractId?: unknown }).contractId ?? '');
       const result = await deps.cancelTv.execute(req.params['id'] as string, { contractId });

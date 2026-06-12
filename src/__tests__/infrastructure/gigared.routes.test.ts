@@ -64,7 +64,17 @@ interface Opts {
   port?: GigaredPort;
   flagOn?: boolean;
   apiKey?: string;
-  perms?: { read?: RequestHandler; write?: RequestHandler; manage?: RequestHandler };
+  perms?: {
+    read?: RequestHandler;
+    /** @deprecated use link/register/packs/ott/cancel instead — kept so old tests still compile */
+    write?: RequestHandler;
+    manage?: RequestHandler;
+    link?: RequestHandler;
+    register?: RequestHandler;
+    packs?: RequestHandler;
+    ott?: RequestHandler;
+    cancel?: RequestHandler;
+  };
   csRepo?: InMemoryContractServiceRepository;
   catalog?: InMemoryServiceCatalogRepository;
   contractExists?: boolean;
@@ -105,7 +115,11 @@ async function buildApp(opts: Opts = {}) {
     setOttStatus: new SetOttStatus(port, customerLookup),
     cancelTv: new CancelTv(port, csRepo, catalog, contractLookup, customerLookup),
     requireRead: opts.perms?.read ?? pass,
-    requireWrite: opts.perms?.write ?? pass,
+    requireLink: opts.perms?.link ?? opts.perms?.write ?? pass,
+    requireRegister: opts.perms?.register ?? opts.perms?.write ?? pass,
+    requirePacks: opts.perms?.packs ?? opts.perms?.write ?? pass,
+    requireOtt: opts.perms?.ott ?? opts.perms?.write ?? pass,
+    requireCancel: opts.perms?.cancel ?? opts.perms?.write ?? pass,
     requireManage: opts.perms?.manage ?? pass,
     gigaredReady: createGigaredReadyMiddleware(cfg, flags),
     gigaredProbeReady: createGigaredReadyMiddleware(cfg, flags, { requireFlag: false }),
@@ -196,8 +210,8 @@ describe('gigared.routes — RBAC by verb (#47)', () => {
     expect(res.status).toBe(403);
   });
 
-  it('no tv.write → 403 on POST /services', async () => {
-    const app = await buildApp({ perms: { write: deny } });
+  it('no tv.packs → 403 on POST /services (#50 granular)', async () => {
+    const app = await buildApp({ perms: { packs: deny } });
     const res = await request(app).post('/api/gigared/customers/cust-1/services').send({ serviceId: '129', contractId: 'C1' });
     expect(res.status).toBe(403);
   });
@@ -206,6 +220,86 @@ describe('gigared.routes — RBAC by verb (#47)', () => {
     const app = await buildApp({ perms: { manage: deny } });
     const res = await request(app).get('/api/gigared/config');
     expect(res.status).toBe(403);
+  });
+});
+
+describe('gigared.routes — granular TV RBAC guards (#50)', () => {
+  it('no tv.link → 403 on POST /customers/:id/link', async () => {
+    const app = await buildApp({ perms: { link: deny } });
+    const res = await request(app).post('/api/gigared/customers/cust-1/link').send({ cic: '0000001234' });
+    expect(res.status).toBe(403);
+  });
+
+  it('tv.link allowed → passes guard (200 or domain result)', async () => {
+    const app = await buildApp({ perms: { link: pass } });
+    const res = await request(app).post('/api/gigared/customers/cust-1/link').send({ cic: '0000001234' });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('no tv.register → 403 on POST /customers/:id/register', async () => {
+    const app = await buildApp({ perms: { register: deny } });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+    expect(res.status).toBe(403);
+  });
+
+  it('tv.register allowed → passes guard', async () => {
+    const app = await buildApp({ perms: { register: pass } });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('no tv.packs → 403 on POST /customers/:id/services', async () => {
+    const app = await buildApp({ perms: { packs: deny } });
+    const res = await request(app).post('/api/gigared/customers/cust-1/services').send({ serviceId: '129', contractId: 'C1' });
+    expect(res.status).toBe(403);
+  });
+
+  it('tv.packs allowed → passes guard on POST /services', async () => {
+    const app = await buildApp({ perms: { packs: pass } });
+    const res = await request(app).post('/api/gigared/customers/cust-1/services').send({ serviceId: '129', contractId: 'C1' });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('no tv.packs → 403 on DELETE /customers/:id/services/:serviceId', async () => {
+    const app = await buildApp({ perms: { packs: deny } });
+    const res = await request(app).delete('/api/gigared/customers/cust-1/services/129?contractId=C1');
+    expect(res.status).toBe(403);
+  });
+
+  it('no tv.ott → 403 on PUT /customers/:id/ott', async () => {
+    const app = await buildApp({ perms: { ott: deny } });
+    const res = await request(app).put('/api/gigared/customers/cust-1/ott').send({ enabled: true });
+    expect(res.status).toBe(403);
+  });
+
+  it('tv.ott allowed → passes guard', async () => {
+    const app = await buildApp({ perms: { ott: pass } });
+    const res = await request(app).put('/api/gigared/customers/cust-1/ott').send({ enabled: true });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('no tv.cancel → 403 on POST /customers/:id/cancel', async () => {
+    const app = await buildApp({ perms: { cancel: deny } });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(403);
+  });
+
+  it('tv.cancel allowed → passes guard', async () => {
+    const app = await buildApp({ perms: { cancel: pass } });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('each granular guard is INDEPENDENT: tv.packs deny blocks /services but not /link', async () => {
+    const app = await buildApp({ perms: { packs: deny, link: pass } });
+    const packRes = await request(app).post('/api/gigared/customers/cust-1/services').send({ serviceId: '129', contractId: 'C1' });
+    expect(packRes.status).toBe(403);
+    const linkRes = await request(app).post('/api/gigared/customers/cust-1/link').send({ cic: '0000001234' });
+    expect(linkRes.status).not.toBe(403);
   });
 });
 
@@ -347,8 +441,8 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     expect(res.body.local).toBe('failed');
   });
 
-  it('no tv.write → 403', async () => {
-    const app = await buildApp({ perms: { write: deny } });
+  it('no tv.cancel → 403 (#50 granular)', async () => {
+    const app = await buildApp({ perms: { cancel: deny } });
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
     expect(res.status).toBe(403);
   });
