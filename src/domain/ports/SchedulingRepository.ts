@@ -4,7 +4,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode'
 > {
   /** Discriminador de tipo de tarea. Por defecto 'customer' para retro-compatibilidad. */
   kind?: 'customer' | 'network';

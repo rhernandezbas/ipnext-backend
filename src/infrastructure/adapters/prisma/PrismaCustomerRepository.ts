@@ -57,6 +57,8 @@ export function toCustomer(row: any, balanceTtlMinutes = DEFAULT_BALANCE_TTL_MIN
 export function toService(row: any): Contract {
   return {
     id: row.id,
+    // #55 — expose the GR contract code so the FE contract card can show/use it.
+    code: row.grContratoId ?? null,
     type: row.type,
     plan: row.plan,
     ip: row.ip ?? '',

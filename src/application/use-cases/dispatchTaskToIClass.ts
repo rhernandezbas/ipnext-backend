@@ -115,9 +115,12 @@ export async function dispatchToIClass(
 
   // network-node-task (#29): sustitucion de campos para tareas de RED.
   const isNet = task.kind === 'network';
+  // #55 (iclass-contract-code): for CUSTOMER tasks the IClass customerCode must identify
+  // the CONTRACT when the task has one (task.contractCode = Contract.grContratoId), falling
+  // back to the client code otherwise. NETWORK path is untouched.
   const effectiveCustomerCode = isNet
     ? (networkSite?.iclassNodeCode ?? NETWORK_CUSTOMER_CODE)
-    : task.customerCode!;
+    : (firstNonBlank(task.contractCode, task.customerCode) ?? task.customerCode!);
   const effectiveCustomerName = isNet ? (task.networkSiteName ?? '') : task.customerName!;
   const effectivePhone        = isNet ? NETWORK_PHONE             : task.customerPhone!;
   // #53 (fix wave): honour task.address — the address #53 forces on create — when

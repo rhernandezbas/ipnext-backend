@@ -36,6 +36,15 @@ describe('toService — additive contract shape (#43)', () => {
     expect(toService(baseRow).name).toBeNull();
   });
 
+  // #55 — the contract code (Contract.grContratoId) is exposed for the FE contract card.
+  it('maps the GR contract code when present (#55)', () => {
+    expect(toService({ ...baseRow, grContratoId: 'CTR-204382' }).code).toBe('CTR-204382');
+  });
+
+  it('exposes code:null for a contract with no grContratoId (#55)', () => {
+    expect(toService(baseRow).code).toBeNull();
+  });
+
   it('adds services:[] when the contract has no services (CSV-4.2)', () => {
     const c = toService(baseRow);
     expect(c.services).toEqual([]);

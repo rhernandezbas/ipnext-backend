@@ -31,6 +31,9 @@ export function toTask(row: any): ScheduledTask {
   const customerCode: string | null = row.customer
     ? (row.customer.grClienteId ?? row.customer.splynxId ?? row.customer.login ?? null)
     : null;
+  // #55 — short contract code (Contract.grContratoId). Used as the IClass customerCode
+  // when present (contract-precedence in dispatchToIClass), null for tasks without a contract.
+  const contractCode: string | null = row.contract?.grContratoId ?? null;
 
   // Derive assigneeName / reporterName from JOIN only (no legacy fallback)
   const assigneeName: string | null = row.assignee?.name ?? null;
@@ -78,6 +81,7 @@ export function toTask(row: any): ScheduledTask {
     customerCity,
     customerPhone,
     customerCode,
+    contractCode,
     contractId: row.contractId ?? null,
     partnerId: row.partnerId ?? null,
     reporterId: row.reporterId ?? null,
@@ -149,7 +153,7 @@ const INCLUDE = {
   customer: { select: { id: true, name: true, city: true, phone: true, grClienteId: true, splynxId: true, login: true } },
   assignee: { select: { id: true, name: true } },
   reporter: { select: { id: true, name: true } },
-  contract: { select: { id: true } },
+  contract: { select: { id: true, grContratoId: true } },
   partnerRef: { select: { id: true } },
   watchers: true,
   checklist: { orderBy: { order: 'asc' } },

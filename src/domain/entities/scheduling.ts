@@ -39,6 +39,9 @@ export interface ScheduledTask {
   // The UUID customerId is NOT valid as an IClass code (exceeds its char limit → ICLERR_0045).
   customerCode: string | null;
   contractId: string | null;
+  // #55 (iclass-contract-code) — short contract code (Contract.grContratoId) used as the
+  // IClass customerCode when the task has a contract. Falls back to customerCode when null.
+  contractCode: string | null;
   partnerId: string | null;
   reporterId: string | null;
   reporterName: string | null;   // derived from RbacUser.name via JOIN

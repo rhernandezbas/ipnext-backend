@@ -6,6 +6,8 @@ import { PaginatedResult, PaginatedQuery } from '../../application/dto/paginatio
  */
 export interface ContractListItem {
   id: string;
+  /** #55 — external Gestión Real contract id (Contract.grContratoId). null for non-GR rows. */
+  code: string | null;
   /** Owning client's id — lets the contracts page deep-link to the customer detail (#56). */
   clientId: string;
   clientName: string;
