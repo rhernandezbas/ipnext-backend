@@ -12,9 +12,10 @@ import { TicketPriority } from '@domain/entities/ticket';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { TicketStatusRepository } from '@domain/ports/TicketStatusRepository';
+import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
-import { NoClosableStatusError } from '@domain/errors/tickets';
+import { NoClosableStatusError, TicketAreaRequiredError, TicketAreaNotFoundError } from '@domain/errors/tickets';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 
@@ -79,6 +80,9 @@ export function createTicketsRouter(
   createTaskFromTicket?: CreateTaskFromTicket,
   taskRepo?: SchedulingRepository,
   stageRepo?: StageRepository,
+  // #49 — used to validate areaId on create (required) and update (optional).
+  // Optional so legacy tests/wirings compiled before BATCH 2 still compile.
+  areaRepo?: TicketAreaCatalogRepository,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -97,7 +101,7 @@ export function createTicketsRouter(
   // GET / — list tickets, optional ?customerId filter
   router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
     try {
-      const { page, limit, search, status, priority, customerId, assignedTo, from, to } = req.query as Record<string, string>;
+      const { page, limit, search, status, priority, customerId, assignedTo, from, to, areaId } = req.query as Record<string, string>;
       const result = await listTickets.execute({
         page: page ? +page : 1,
         limit: limit ? +limit : 25,
@@ -108,6 +112,7 @@ export function createTicketsRouter(
         assigneeId: assignedTo || undefined, // #25 — FE manda `assignedTo`; el repo filtra por assigneeId
         from: from || undefined,
         to: to || undefined,
+        areaId: areaId || undefined,          // #49 — filtrar por área
       });
       res.json(result);
     } catch (err) {
@@ -177,12 +182,13 @@ export function createTicketsRouter(
   // fields (REQ-TICKET-UPDATE-2).
   router.patch('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const id = req.params['id'] as string;
-    const { subject, description, priority, assigneeId, status } = req.body as {
+    const { subject, description, priority, assigneeId, status, areaId } = req.body as {
       subject?: string;
       description?: string;
       priority?: string;
       assigneeId?: string | null;
       status?: string;
+      areaId?: string | null;
     };
 
     try {
@@ -201,6 +207,18 @@ export function createTicketsRouter(
         canonicalStatus = catalogEntry.name;
       }
 
+      // #49 — validate areaId when present. null = clear (valid); non-null = must exist.
+      if (areaId !== undefined && areaId !== null && areaRepo) {
+        const areaEntry = await areaRepo.getById(areaId);
+        if (!areaEntry) {
+          res.status(422).json({
+            error: `Area "${areaId}" not found`,
+            code: 'TICKET_AREA_NOT_FOUND',
+          });
+          return;
+        }
+      }
+
       const ticket = await updateTicket.execute(id, {
         ...(subject !== undefined && { subject }),
         ...(description !== undefined && { description }),
@@ -208,6 +226,7 @@ export function createTicketsRouter(
           VALID_PRIORITIES.includes(priority as TicketPriority) && { priority: priority as TicketPriority }),
         ...(assigneeId !== undefined && { assigneeId: assigneeId ?? null }),
         ...(canonicalStatus !== undefined && { status: canonicalStatus }),
+        ...(areaId !== undefined && { areaId: areaId ?? null }),           // #49
       });
       if (!ticket) {
         res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
@@ -317,13 +336,14 @@ export function createTicketsRouter(
 
   // POST / — create ticket
   router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
-    const { subject, description, customerId, priority, assigneeId, reporterId } = req.body as {
+    const { subject, description, customerId, priority, assigneeId, reporterId, areaId } = req.body as {
       subject?: string;
       description?: string;
       customerId?: string | null;
       priority?: string;
       assigneeId?: string | null;
       reporterId?: string | null;
+      areaId?: string;
     };
 
     if (!subject || !description) {
@@ -351,6 +371,26 @@ export function createTicketsRouter(
         }
       }
 
+      // #49 — areaId is required when an area catalog is wired. Mirrors how
+      // reporterId validation only runs when rbacUserRepo is provided.
+      if (areaRepo) {
+        if (!areaId) {
+          res.status(422).json({
+            error: 'Ticket area is required',
+            code: 'TICKET_AREA_REQUIRED',
+          });
+          return;
+        }
+        const areaEntry = await areaRepo.getById(areaId);
+        if (!areaEntry) {
+          res.status(422).json({
+            error: `Area "${areaId}" not found`,
+            code: 'TICKET_AREA_NOT_FOUND',
+          });
+          return;
+        }
+      }
+
       const ticket = await createTicket.execute({
         subject,
         description,
@@ -362,6 +402,7 @@ export function createTicketsRouter(
         // #48 — stamp the creator from the session when the body omits it.
         // Mirror of POST /:id/tasks. Explicit body value wins.
         reporterId: reporterId ?? req.user?.id ?? null,
+        areaId,  // #49 — already validated above
       });
       res.status(201).json(ticket);
     } catch (err) {

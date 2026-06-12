@@ -16,6 +16,7 @@ export class ListTickets {
       assigneeId: query.assigneeId, // #28 — el #25 los cableó en ruta y repo,
       from: query.from,             // pero este passthrough los descartaba y el
       to: query.to,                 // filtro nunca llegaba al where.
+      areaId: query.areaId,         // #49 — ídem; debe llegar al repo
     });
   }
 }

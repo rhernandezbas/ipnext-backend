@@ -13,6 +13,8 @@ const mockTicket: Ticket = {
   assigneeName: null,
   reporterId: null,
   reporterName: null,
+  areaId: null,      // #49
+  areaName: null,    // #49
   grCasoId: null,
   priority: 'high',
   status: 'open',

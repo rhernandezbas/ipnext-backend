@@ -10,6 +10,7 @@ export interface ListTicketsQuery extends PaginatedQuery {
   assigneeId?: string;            // #25 — filtrar por asignado (excluye no-asignados)
   from?: string;                  // #25 — createdAt >= from (ISO date YYYY-MM-DD)
   to?: string;                    // #25 — createdAt <= fin del día de to
+  areaId?: string;                // #49 — filtrar por área
 }
 
 export interface CreateTicketData {
@@ -19,6 +20,7 @@ export interface CreateTicketData {
   priority?: TicketPriority;
   assigneeId?: string | null;
   reporterId?: string | null;     // #48 — estampado desde la sesion (req.user.id) en el route
+  areaId?: string | null;         // #49 — required in route, optional in port (like reporterId)
 }
 
 export interface UpdateTicketData {
@@ -29,6 +31,7 @@ export interface UpdateTicketData {
   status?: TicketStatus;
   priority?: TicketPriority;
   assigneeId?: string | null;
+  areaId?: string | null;         // #49 — null = clear area; undefined = don't touch
 }
 
 export interface TicketRepository {

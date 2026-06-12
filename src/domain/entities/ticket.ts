@@ -21,6 +21,8 @@ export interface Ticket {
   // #48 — quien creo el ticket. reporterName es JOIN-derived (RbacUser.name), espejo de assigneeName.
   reporterId: string | null;
   reporterName: string | null;   // JOIN-derived (RbacUser.name)
+  areaId: string | null;          // #49 — FK to TicketAreaCatalog
+  areaName: string | null;        // #49 — JOIN-derived (TicketAreaCatalog.name)
   grCasoId: string | null;
   createdAt: string;             // ISO 8601
   updatedAt: string;             // ISO 8601

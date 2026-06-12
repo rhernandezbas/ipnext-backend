@@ -1,6 +1,8 @@
 import { Ticket, TicketStats, TicketPriority } from '@domain/entities/ticket';
 import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
+import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
 import { PaginatedResult } from '@application/dto/pagination';
+import { sequenceNumberClause } from '../search/sequenceNumberClause';
 
 // Minimal in-memory customer map for JOIN-derived customerName in tests
 export interface InMemoryCustomer {
@@ -25,6 +27,9 @@ export class InMemoryTicketRepository implements TicketRepository {
   private tickets: Ticket[] = [];
   private customers: Map<string, InMemoryCustomer> = new Map();
   private admins: Map<string, InMemoryAdmin> = new Map();
+  // #49 — area catalog reference for JOIN-derived areaName. Accepts the same
+  // InMemoryTicketAreaCatalogRepository used in tests so both repos share state.
+  private areaRepo: TicketAreaCatalogRepository | null = null;
 
   /** Seed customers so the repo can resolve customerName from JOIN */
   seedCustomers(customers: InMemoryCustomer[]): void {
@@ -38,6 +43,11 @@ export class InMemoryTicketRepository implements TicketRepository {
     for (const a of admins) {
       this.admins.set(a.id, a);
     }
+  }
+
+  /** #49 — link a shared TicketAreaCatalogRepository so areaName resolves via JOIN */
+  seedAreas(repo: TicketAreaCatalogRepository): void {
+    this.areaRepo = repo;
   }
 
   async list(query: ListTicketsQuery): Promise<PaginatedResult<Ticket>> {
@@ -64,12 +74,22 @@ export class InMemoryTicketRepository implements TicketRepository {
       const end = `${query.to}T23:59:59.999Z`;
       results = results.filter((t) => t.createdAt <= end);
     }
+    if (query.areaId) {
+      results = results.filter((t) => t.areaId === query.areaId);
+    }
     if (query.search) {
       const q = query.search.toLowerCase();
+      // #63 — LIKE over subject + customer.name + sequenceNumber (exact if numeric)
+      // Mirror the Prisma int4-overflow guard so the seam is faithful: a numeric
+      // term that overflows a signed 32-bit int never participates in the exact
+      // sequenceNumber match (the Prisma side skips that clause to avoid a 500).
+      // Same shared helper as PrismaTicketRepository — single source of truth.
+      const seqClause = sequenceNumberClause(query.search);
       results = results.filter(
         (t) =>
           t.subject.toLowerCase().includes(q) ||
-          t.description.toLowerCase().includes(q),
+          (t.customerName != null && t.customerName.toLowerCase().includes(q)) ||
+          (seqClause !== null && t.sequenceNumber === seqClause.sequenceNumber),
       );
     }
 
@@ -111,6 +131,13 @@ export class InMemoryTicketRepository implements TicketRepository {
     const reporterName = data.reporterId
       ? (this.admins.get(data.reporterId)?.name ?? null)
       : null;
+    // #49 — areaName resolved from the shared area catalog (JOIN-derived, like customerName).
+    const areaId = data.areaId ?? null;
+    let areaName: string | null = null;
+    if (areaId && this.areaRepo) {
+      const areaEntry = await this.areaRepo.getById(areaId);
+      areaName = areaEntry?.name ?? null;
+    }
 
     const ticket: Ticket = {
       id,
@@ -125,6 +152,8 @@ export class InMemoryTicketRepository implements TicketRepository {
       assigneeName,
       reporterId: data.reporterId ?? null,
       reporterName,
+      areaId,
+      areaName,
       grCasoId: null,
       createdAt: now,
       updatedAt: now,
@@ -143,6 +172,20 @@ export class InMemoryTicketRepository implements TicketRepository {
         ? (data.assigneeId ? (this.admins.get(data.assigneeId)?.name ?? null) : null)
         : existing.assigneeName;
 
+    // #49 — areaName resolved when areaId is explicitly set in the update.
+    // areaId === undefined → don't touch; areaId === null → clear; areaId = id → resolve name.
+    let areaId = existing.areaId;
+    let areaName = existing.areaName;
+    if (data.areaId !== undefined) {
+      areaId = data.areaId ?? null;
+      if (areaId && this.areaRepo) {
+        const areaEntry = await this.areaRepo.getById(areaId);
+        areaName = areaEntry?.name ?? null;
+      } else {
+        areaName = null;
+      }
+    }
+
     const updated: Ticket = {
       ...existing,
       ...(data.subject !== undefined && { subject: data.subject }),
@@ -150,6 +193,7 @@ export class InMemoryTicketRepository implements TicketRepository {
       ...(data.status !== undefined && { status: data.status }),
       ...(data.priority !== undefined && { priority: data.priority }),
       ...(data.assigneeId !== undefined && { assigneeId: data.assigneeId ?? null, assigneeName }),
+      ...(data.areaId !== undefined && { areaId, areaName }),
       updatedAt: nowIso(),
     };
     this.tickets[idx] = updated;

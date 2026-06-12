@@ -44,3 +44,72 @@ describe('ListTickets — forwards #25 filters to the repository (#28)', () => {
     expect(res.data[0]!.priority).toBe('high');
   });
 });
+
+// #63 — búsqueda LIKE: subject + customer.name + sequenceNumber exacto
+describe('ListTickets — search LIKE: subject + customer.name + sequenceNumber (#63)', () => {
+  function setup() {
+    const repo = new InMemoryTicketRepository();
+    repo.seedCustomers([
+      { id: 'c1', name: 'Alice García' },
+      { id: 'c2', name: 'Bob Martínez' },
+    ]);
+    return repo;
+  }
+
+  it('#63-search-subject: matches by subject (LIKE, case-insensitive)', async () => {
+    const repo = setup();
+    await repo.create({ subject: 'Sin señal en domicilio', description: 'D', customerId: 'c1' });
+    await repo.create({ subject: 'Problema de facturación', description: 'D', customerId: 'c2' });
+
+    const res = await new ListTickets(repo).execute({ search: 'señal' });
+
+    expect(res.total).toBe(1);
+    expect(res.data[0]!.subject).toBe('Sin señal en domicilio');
+  });
+
+  it('#63-search-customer-name: matches by customer name (LIKE, case-insensitive)', async () => {
+    const repo = setup();
+    // Subjects are neutral — match must come from customerName, not subject
+    await repo.create({ subject: 'Ticket 1', description: 'D', customerId: 'c1' });
+    await repo.create({ subject: 'Ticket 2', description: 'D', customerId: 'c2' });
+
+    const res = await new ListTickets(repo).execute({ search: 'alice' });
+
+    expect(res.total).toBe(1);
+    expect(res.data[0]!.customerName).toBe('Alice García');
+  });
+
+  it('#63-search-customer-name-partial: partial customer name match (case-insensitive)', async () => {
+    const repo = setup();
+    await repo.create({ subject: 'T1', description: 'D', customerId: 'c2' });
+    await repo.create({ subject: 'T2', description: 'D', customerId: 'c1' });
+
+    // 'martínez' should match Bob Martínez
+    const res = await new ListTickets(repo).execute({ search: 'mart' });
+
+    expect(res.total).toBe(1);
+    expect(res.data[0]!.customerName).toBe('Bob Martínez');
+  });
+
+  it('#63-search-sequence-number: exact match by sequenceNumber (numeric term)', async () => {
+    const repo = setup();
+    const t1 = await repo.create({ subject: 'Primer ticket', description: 'D' });
+    await repo.create({ subject: 'Segundo ticket', description: 'D' });
+
+    // Search by the exact sequenceNumber of the first ticket
+    const res = await new ListTickets(repo).execute({ search: String(t1.sequenceNumber) });
+
+    expect(res.total).toBe(1);
+    expect(res.data[0]!.sequenceNumber).toBe(t1.sequenceNumber);
+  });
+
+  it('#63-search-no-description: description-only text does NOT match (dropped)', async () => {
+    const repo = setup();
+    await repo.create({ subject: 'Asunto genérico', description: 'texto_unico_en_desc' });
+
+    // Search a term that only appears in description — must return 0 results
+    const res = await new ListTickets(repo).execute({ search: 'texto_unico_en_desc' });
+
+    expect(res.total).toBe(0);
+  });
+});

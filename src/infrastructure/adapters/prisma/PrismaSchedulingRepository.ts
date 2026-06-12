@@ -14,6 +14,7 @@ import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapp
 import { StageNotFoundError } from '@domain/errors/scheduling';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
+import { sequenceNumberClause } from '../search/sequenceNumberClause';
 import { prisma } from '../../database/prisma';
 
 export function toTask(row: any): ScheduledTask {
@@ -177,7 +178,12 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
         { customer: { is: { name: { contains: q, mode: 'insensitive' } } } },
         { address: { contains: q, mode: 'insensitive' } },
       ];
-      if (/^\d+$/.test(q)) or.push({ sequenceNumber: Number(q) });
+      // Same int4-overflow guard as the tickets search (this is the original
+      // pattern it was copied from): a phone/CUIT pasted into the box overflows
+      // PostgreSQL's int4 and makes Prisma throw → 500. The shared helper pushes
+      // the exact-seq clause only when the value fits a signed 32-bit int.
+      const seqClause = sequenceNumberClause(q);
+      if (seqClause) or.push(seqClause);
       where['OR'] = or;
     }
     if (filter?.from || filter?.to) {

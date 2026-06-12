@@ -14,6 +14,7 @@ import { Ticket, TicketStats } from '@domain/entities/ticket';
 import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
 import { PaginatedResult } from '@application/dto/pagination';
 import { TicketStatusUnknownError } from '@domain/errors/tickets';
+import { sequenceNumberClause } from '../search/sequenceNumberClause';
 import { prisma } from '../../database/prisma';
 
 const INCLUDE = {
@@ -21,6 +22,7 @@ const INCLUDE = {
   customer: { select: { id: true, name: true } },
   assignee: { select: { id: true, name: true } },
   reporter: { select: { id: true, name: true } },       // #48 — JOIN para reporterName (espejo de assignee)
+  area: { select: { id: true, name: true } },           // #49 — JOIN para areaName
 } as const;
 
 export function toTicket(row: any): Ticket {
@@ -42,6 +44,9 @@ export function toTicket(row: any): Ticket {
     // #48 — reporter denormalizado igual que assignee.
     reporterId: row.reporterId ?? null,
     reporterName: row.reporter?.name ?? null,
+    // #49 — área denormalizada igual que customer/assignee/reporter.
+    areaId: row.areaId ?? null,
+    areaName: row.area?.name ?? null,
     grCasoId: row.grCasoId ?? null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
@@ -90,11 +95,22 @@ export class PrismaTicketRepository implements TicketRepository {
     if (query.status) {
       where['status'] = { name: { equals: query.status, mode: 'insensitive' } };
     }
+    // #49 — filter by areaId (AND alongside any existing OR search clause)
+    if (query.areaId) where['areaId'] = query.areaId;
     if (query.search) {
-      where['OR'] = [
+      // #63 — LIKE over subject + customer.name + sequenceNumber (exact if numeric)
+      const or: unknown[] = [
         { subject: { contains: query.search, mode: 'insensitive' } },
-        { description: { contains: query.search, mode: 'insensitive' } },
+        { customer: { is: { name: { contains: query.search, mode: 'insensitive' } } } },
       ];
+      // Guard the numeric arm: a long digit string (phone / CUIT pasted into the
+      // search box) overflows PostgreSQL's int4 and makes Prisma throw a
+      // PrismaClientValidationError → 500. The shared helper returns the exact
+      // clause only when the value fits a signed 32-bit int (the sequenceNumber
+      // column type), and null otherwise. Unit-tested in isolation.
+      const seqClause = sequenceNumberClause(query.search);
+      if (seqClause) or.push(seqClause);
+      where['OR'] = or;
     }
 
     const page = query.page ?? 1;
@@ -166,6 +182,7 @@ export class PrismaTicketRepository implements TicketRepository {
         ...(data.customerId != null && { customerId: data.customerId }),
         ...(data.assigneeId != null && { assigneeId: data.assigneeId }),
         ...(data.reporterId != null && { reporterId: data.reporterId }),   // #48
+        ...(data.areaId != null && { areaId: data.areaId }),               // #49
       },
       include: INCLUDE,
     });
@@ -179,6 +196,8 @@ export class PrismaTicketRepository implements TicketRepository {
       if (data.description !== undefined) updateData['description'] = data.description;
       if (data.priority !== undefined) updateData['priority'] = data.priority;
       if (data.assigneeId !== undefined) updateData['assigneeId'] = data.assigneeId;
+      // #49 — areaId: null clears it, a string sets it, undefined skips.
+      if (data.areaId !== undefined) updateData['areaId'] = data.areaId ?? null;
       // Phase 2: resolve status name → id at the repo boundary.
       if (data.status !== undefined) {
         updateData['statusId'] = await resolveStatusId(data.status);

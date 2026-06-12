@@ -52,6 +52,8 @@ export class SplynxTicketAdapter implements TicketRepository {
         assigneeName: null,
         reporterId: null,    // Splynx legacy has no reporter concept (decabled)
         reporterName: null,
+        areaId: null,        // #49 — Splynx legacy has no area concept
+        areaName: null,
         grCasoId: null,
         createdAt: String(t['date_created'] ?? new Date().toISOString()),
         updatedAt: String(t['date_created'] ?? new Date().toISOString()),
@@ -103,6 +105,8 @@ export class SplynxTicketAdapter implements TicketRepository {
       assigneeName: null,
       reporterId: data.reporterId ?? null,    // #48
       reporterName: null,
+      areaId: null,           // #49 — Splynx legacy has no area concept
+      areaName: null,
       grCasoId: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
