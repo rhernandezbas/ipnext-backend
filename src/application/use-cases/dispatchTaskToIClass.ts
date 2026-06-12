@@ -27,6 +27,12 @@ import {
 export const NETWORK_PHONE          = '0000000000';
 export const NETWORK_CUSTOMER_CODE  = 'NETWORK';
 
+/** Primer valor NO-blank ('' cuenta como blank — NetworkSite.address es string, nunca null). */
+function firstNonBlank(...vals: Array<string | null | undefined>): string | null {
+  for (const v of vals) if (v != null && v.trim() !== '') return v;
+  return null;
+}
+
 /** Immutable business code for the "Registrado en IClass" stage. */
 const REGISTERED_IN_ICLASS_CODE = 'registered_in_iclass';
 
@@ -118,11 +124,11 @@ export async function dispatchToIClass(
   // the site has none, BEFORE falling back to the site name. Aligned with the
   // precedence in SendTaskToIClass's validation (networkSite.address ?? task.address).
   const effectiveAddress      = isNet
-    ? (networkSite?.address ?? task.address ?? task.networkSiteName ?? '')
+    ? (firstNonBlank(networkSite?.address, task.address, task.networkSiteName) ?? '')
     : task.address!;
   // #54 — dispatch precedence: task.iclassCityCode (snapshot) overrides site.city (fallback).
   // Existing tasks without a snapshot (iclassCityCode=null) fall back to site.city (back-compat).
-  const effectiveCity         = isNet ? (task.iclassCityCode ?? networkSite?.city ?? '') : task.customerCity!;
+  const effectiveCity         = isNet ? (firstNonBlank(task.iclassCityCode, networkSite?.city) ?? '') : task.customerCity!;
 
   try {
     const { orderCode } = await iclass.createServiceOrder({
