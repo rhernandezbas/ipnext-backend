@@ -41,8 +41,14 @@ export type RemoveTvServiceResult = AddTvServiceResult;
  *                 dejando al cliente "como si no tuviera TV" (getAccountByInternalId 404 después).
  *                 false si el renew falló (no hay newCic) o si el partner rechazó el internal_id vacío.
  *
- * Router maps: failed.length === 0 && local === 'synced' && renew !== null && unlinked → 200;
- * otherwise → 207 (parcial, retry idempotente).
+ * Router maps:
+ *   200 when failed.length === 0 && local === 'synced' && ottDisabled && (!renewAttempted || (renew !== null && unlinked))
+ *   207 otherwise (parcial, retry idempotente).
+ *
+ * `renewAttempted` guards the anti-re-renew logic (#64 H1): it is true only when there was
+ * something to tear down at the START of this run (services.length > 0 OR ott was 'enabled').
+ * When false (account already peeled), renewCic is NOT called and the 207 criterion skips
+ * renew/unlink checks to avoid a permanent 207 on an already-complete account.
  */
 export interface CancelTvResult {
   removed: string[];
@@ -51,6 +57,8 @@ export interface CancelTvResult {
   local: 'synced' | 'failed';
   renew: { oldCic: string; newCic: string } | null;
   unlinked: boolean;
+  /** #64 H1 — true if this run had something to tear down at start; false on a peeled-account no-op. */
+  renewAttempted: boolean;
 }
 
 /**

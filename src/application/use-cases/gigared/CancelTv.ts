@@ -33,11 +33,17 @@ import { reconcileTvContractService } from './reconcileTvContractService';
  *   account.internal_id. El ítem TV local se inactiva en el reconcile. Si en el futuro se
  *   re-vincula, el PATCH internal_id (LinkCustomerToCic) pisa el vínculo.
  *
- * Idempotente por diseño (retry = re-POST): los packs ya quitados no están en la cuenta
- * en la re-corrida → no se reintentan; el "ya deshabilitada" del OTT es éxito.
+ * #64 H1 — Guard anti re-renew: `renewAttempted` se computa AL INICIO (ANTES del loop) como
+ *   (account.services.length > 0) || (account.ott?.status === 'enabled').
+ *   Solo se llama a renewCic cuando renewAttempted es true. Un retry sobre una cuenta ya pelada
+ *   (servicios vacíos + OTT off) llegaría aquí solo si getAccountByInternalId no lanzó 404;
+ *   en ese caso renewAttempted=false → no renueva → la respuesta es 200 en lugar de 207 permanente.
+ *   Post-unlink exitoso la cuenta desaparece de Gigared (404), así que el siguiente retry
+ *   lanzará TvNotLinkedError ANTES de llegar acá.
  *
- * Shape: { removed, failed, ottDisabled, local, renew, unlinked }. El router responde 200 si
- * failed.length === 0 && local === 'synced' && renew !== null && unlinked; si no 207.
+ * Shape: { removed, failed, ottDisabled, local, renew, unlinked, renewAttempted }.
+ * El router responde 200 si failed.length===0 && local==='synced' && ottDisabled &&
+ * (!renewAttempted || (renew!==null && unlinked)); si no 207.
  */
 export class CancelTv {
   constructor(
@@ -66,6 +72,10 @@ export class CancelTv {
       if (e instanceof GigaredNotFoundError) throw new TvNotLinkedError(customerId);
       throw e;
     }
+
+    // #64 H1 — Guard anti re-renew: capturar ANTES de mutar la cuenta.
+    // Solo hay algo que renovar si había servicios o el OTT estaba habilitado al inicio de esta corrida.
+    const renewAttempted = account.services.length > 0 || account.ott?.status === 'enabled';
 
     // DELETE por servicio (base incluido — libera cupo). Cada uno es independiente.
     const removed: string[] = [];
@@ -107,22 +117,28 @@ export class CancelTv {
     // El renew genera un CIC nuevo; el partner reasigna nuestro internal_id a ese CIC, así que
     // sin el unlink el cliente seguiría apareciendo vinculado. Limpiamos el internal_id del
     // nuevo CIC para que getAccountByInternalId(customerId) responda 404 ("como si no tuviera TV").
+    //
+    // H1 — Guard anti re-renew: solo ejecutar cuando renewAttempted=true. Si la cuenta ya estaba
+    // pelada (services:[], ott disabled) al inicio de esta corrida, no hay nada que renovar; no
+    // llamar a renewCic evita generar un tercer CIC en un retry sobre una baja parcialmente hecha.
     let renew: { oldCic: string; newCic: string } | null = null;
     let unlinked = false;
-    try {
-      renew = await this.gigared.renewCic(customerId);
-    } catch {
-      renew = null;
-    }
-    if (renew) {
+    if (renewAttempted) {
       try {
-        await this.gigared.setInternalId(renew.newCic, '');
-        unlinked = true;
+        renew = await this.gigared.renewCic(customerId);
       } catch {
-        unlinked = false;
+        renew = null;
+      }
+      if (renew) {
+        try {
+          await this.gigared.setInternalId(renew.newCic, '');
+          unlinked = true;
+        } catch {
+          unlinked = false;
+        }
       }
     }
 
-    return { removed, failed, ottDisabled, local, renew, unlinked };
+    return { removed, failed, ottDisabled, local, renew, unlinked, renewAttempted };
   }
 }

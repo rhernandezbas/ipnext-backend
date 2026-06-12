@@ -465,6 +465,55 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
     expect(res.status).toBe(403);
   });
+
+  // ----- #64 fix wave: M2 207 criterion + H1 guard -----
+
+  it('L1: renew OK but unlink fails (packs removed) → 207 { unlinked:false, renewAttempted:true }', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const setInternalId = jest.fn(async () => { throw new Error('partner rejected empty internal_id'); });
+    const port = fakePort({ getAccountByInternalId, setInternalId });
+    const app = await buildApp({ port, csRepo, catalog });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(207);
+    expect(res.body.unlinked).toBe(false);
+    expect(res.body.renewAttempted).toBe(true);
+  });
+
+  it('L3: real OTT failure (setOtt throws) → 207 { ottDisabled:false }', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const setOtt = jest.fn(async () => { throw new Error('ott upstream down'); });
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ setOtt, getAccountByInternalId });
+    const app = await buildApp({ port, csRepo, catalog });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(207);
+    expect(res.body.ottDisabled).toBe(false);
+  });
+
+  it('fully-peeled account (services:[], ott disabled) still resolves → renewAttempted:false → 200 (not permanent 207)', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
+    const getAccountByInternalId = jest.fn(async () =>
+      fakeAccount({
+        services: [],
+        ott: { id: 'ott-1', stationaryLicenses: 2, mobileLicenses: 1, registeredDevices: 0, status: 'disabled' },
+      }),
+    );
+    const port = fakePort({ renewCic, getAccountByInternalId });
+    const app = await buildApp({ port, csRepo, catalog });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(200);
+    expect(res.body.renewAttempted).toBe(false);
+    expect(renewCic).not.toHaveBeenCalled();
+  });
 });
 
 describe('#47h POST /register — password policy (Gigared accepts only [a-z0-9])', () => {

@@ -262,12 +262,14 @@ describe('CancelTv (#47k)', () => {
     await seedTvCatalog(catalog, cs);
     const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
     const setInternalId = jest.fn(async () => { throw new Error('partner rejected empty internal_id'); });
-    const port = fakePort({
-      renewCic, setInternalId,
-      getAccountByInternalId: jest.fn(async () => fakeAccount({ services: [] })),
-    });
+    // Account has a service → renewAttempted=true → renewCic is called.
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ renewCic, setInternalId, getAccountByInternalId });
     const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
     const result = await uc.execute('cust-1', { contractId: 'C1' });
+    expect(result.renewAttempted).toBe(true);
     expect(result.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
     expect(setInternalId).toHaveBeenCalledWith('0000000002', '');
     expect(result.unlinked).toBe(false);
@@ -287,5 +289,111 @@ describe('CancelTv (#47k)', () => {
     const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
     await uc.execute('cust-1', { contractId: 'C1' });
     expect(calls).toEqual(['remove', 'ott', 'renew', 'unlink']);
+  });
+
+  // ----- #64 fix wave: H1 guard anti re-renew -----
+
+  it('(j) #64 H1: renewAttempted true en happy path (packs>0) → renewCic llamado, result.renewAttempted=true', async () => {
+    await seedTvCatalog(catalog, cs);
+    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ renewCic, getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+    expect(result.renewAttempted).toBe(true);
+    expect(renewCic).toHaveBeenCalledTimes(1);
+  });
+
+  it('(k) #64 H1: stateful retry — baja completa → 2da llamada lanza TvNotLinkedError (404), renewCic llamado UNA sola vez', async () => {
+    await seedTvCatalog(catalog, cs);
+
+    // Stateful fake port: tracks current state
+    const state = {
+      services: [{ id: '129', name: 'Gigared Play Full' }] as { id: string; name: string }[],
+      ott: { status: 'enabled' as 'enabled' | 'disabled' | null },
+      internalId: 'cust-1' as string,
+      unlinked: false,
+    };
+
+    let renewCicCallCount = 0;
+
+    const statefulPort: GigaredPort = {
+      getSummary: jest.fn(),
+      listAccounts: jest.fn(),
+      getAccountByInternalId: jest.fn(async (customerId: string) => {
+        // After unlink (state.unlinked), the account is gone from Gigared's perspective
+        if (state.unlinked) throw new GigaredNotFoundError();
+        return fakeAccount({ services: state.services, ott: { id: 'ott-1', stationaryLicenses: 2, mobileLicenses: 1, registeredDevices: 0, status: state.ott.status } });
+      }),
+      getAccountByCic: jest.fn(async () => fakeAccount()),
+      register: jest.fn(), activate: jest.fn(),
+      setInternalId: jest.fn(async (cic: string, internalId: string) => {
+        // Clearing internal_id means the account is unlinked
+        if (internalId === '') state.unlinked = true;
+      }),
+      addService: jest.fn(async () => {}),
+      removeService: jest.fn(async (_customerId: string, serviceId: string) => {
+        state.services = state.services.filter(s => s.id !== serviceId);
+      }),
+      setOtt: jest.fn(async (_customerId: string, enabled: boolean) => {
+        state.ott.status = enabled ? 'enabled' : 'disabled';
+      }),
+      renewCic: jest.fn(async () => {
+        renewCicCallCount++;
+        return { oldCic: '0000000001', newCic: '0000000002' };
+      }),
+    };
+
+    const uc = new CancelTv(statefulPort, cs, catalog, contractLookup(true), lookup(true));
+
+    // First run: full baja (packs removed, ott off, renew, unlink succeeds)
+    const result1 = await uc.execute('cust-1', { contractId: 'C1' });
+    expect(result1.renewAttempted).toBe(true);
+    expect(result1.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
+    expect(result1.unlinked).toBe(true);
+    expect(renewCicCallCount).toBe(1);
+
+    // Second run (retry): getAccountByInternalId now throws 404 → TvNotLinkedError
+    await expect(uc.execute('cust-1', { contractId: 'C1' }))
+      .rejects.toBeInstanceOf(TvNotLinkedError);
+
+    // renewCic must have been called exactly ONCE across both runs (no re-renew)
+    expect(renewCicCallCount).toBe(1);
+  });
+
+  it('(l) #64 H1: cuenta ya pelada (services:[], ott disabled) pero aún existe → renewAttempted false, renewCic NO llamado', async () => {
+    await seedTvCatalog(catalog, cs);
+    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
+    const port = fakePort({
+      renewCic,
+      getAccountByInternalId: jest.fn(async () => fakeAccount({
+        services: [],
+        ott: { id: 'ott-1', stationaryLicenses: 2, mobileLicenses: 1, registeredDevices: 0, status: 'disabled' },
+      })),
+    });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+    expect(result.renewAttempted).toBe(false);
+    expect(renewCic).not.toHaveBeenCalled();
+    expect(result.renew).toBeNull();
+    expect(result.unlinked).toBe(false);
+  });
+
+  it('(m) #64 H1: services vacío pero OTT enabled → renewAttempted true (ott teardown cuenta)', async () => {
+    await seedTvCatalog(catalog, cs);
+    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({
+        services: [],
+        ott: { id: 'ott-1', stationaryLicenses: 2, mobileLicenses: 1, registeredDevices: 0, status: 'enabled' },
+      }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ renewCic, getAccountByInternalId });
+    const uc = new CancelTv(port, cs, catalog, contractLookup(true), lookup(true));
+    const result = await uc.execute('cust-1', { contractId: 'C1' });
+    expect(result.renewAttempted).toBe(true);
+    expect(renewCic).toHaveBeenCalledTimes(1);
   });
 });
