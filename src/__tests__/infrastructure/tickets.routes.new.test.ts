@@ -7,6 +7,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import { InMemoryTicketRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketRepository';
 import { InMemoryTicketStatusRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketStatusRepository';
+import { InMemoryTicketAreaCatalogRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketAreaCatalogRepository';
 import { ListTickets } from '../../application/use-cases/ListTickets';
 import { GetTicketStats } from '../../application/use-cases/GetTicketStats';
 import { CreateTicket } from '../../application/use-cases/CreateTicket';
@@ -51,6 +52,10 @@ function buildApp() {
   // Status catalog — seeded with the legacy canonical set (open/pending/closed).
   const statusRepo = new InMemoryTicketStatusRepository();
 
+  // #49 — area catalog used to validate areaId on create/update
+  const areaRepo = new InMemoryTicketAreaCatalogRepository();
+  repo.seedAreas(areaRepo);
+
   const listTickets = new ListTickets(repo);
   const getStats = new GetTicketStats(repo);
   const createTicket = new CreateTicket(repo);
@@ -71,7 +76,7 @@ function buildApp() {
 
   app.use(
     '/api/tickets',
-    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicket, closeTicket, statusRepo, authProvider, rbacUserRepo),
+    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicket, closeTicket, statusRepo, authProvider, rbacUserRepo, undefined, undefined, undefined, areaRepo),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -79,7 +84,7 @@ function buildApp() {
     res.status(500).json({ error: 'Internal server error' });
   });
 
-  return { app, repo, statusRepo };
+  return { app, repo, statusRepo, areaRepo };
 }
 
 async function seedCanonicalStatuses(statusRepo: InMemoryTicketStatusRepository) {
@@ -94,13 +99,15 @@ function withAuth(req: request.Test) {
 
 describe('POST /api/tickets', () => {
   it('returns 201 and creates the ticket with customerId', async () => {
-    const { app } = buildApp();
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
     const res = await withAuth(
       request(app).post('/api/tickets').send({
         subject: 'Sin señal',
         description: 'No hay Internet',
         customerId: 'c1',
         priority: 'high',
+        areaId: area.id,
       }),
     );
 
@@ -113,8 +120,9 @@ describe('POST /api/tickets', () => {
   });
 
   it('#11: assigns a monotonic sequenceNumber (shown as #N in the list)', async () => {
-    const { app } = buildApp();
-    const mk = () => withAuth(request(app).post('/api/tickets').send({ subject: 'S', description: 'D' }));
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
+    const mk = () => withAuth(request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }));
     const a = await mk();
     const b = await mk();
     expect(b.body.sequenceNumber).toBeGreaterThan(a.body.sequenceNumber);
@@ -172,13 +180,14 @@ describe('GET /api/tickets', () => {
   });
 
   it('M2: filters by ?status= case-insensitively (protects Archive: closed vs Closed)', async () => {
-    const { app, repo, statusRepo } = buildApp();
+    const { app, repo, statusRepo, areaRepo } = buildApp();
     await seedCanonicalStatuses(statusRepo);
-    const created = await new CreateTicket(repo).execute({ subject: 'Closable', description: 'D' });
+    const area = await areaRepo.create({ name: 'Soporte' });
+    const created = await new CreateTicket(repo).execute({ subject: 'Closable', description: 'D', areaId: area.id });
     // Close it → ticket.status becomes the canonical catalog name 'closed'.
     await withAuth(request(app).delete(`/api/tickets/${created.id}`));
     // An extra open ticket that must NOT match the closed filter.
-    await new CreateTicket(repo).execute({ subject: 'Open', description: 'D' });
+    await new CreateTicket(repo).execute({ subject: 'Open', description: 'D', areaId: area.id });
 
     // Query with a different casing than the stored status.
     const res = await withAuth(request(app).get('/api/tickets?status=Closed'));
@@ -333,9 +342,10 @@ describe('PATCH /api/tickets/:id (update fields)', () => {
 // #48 — Reporter stamped on create from the authenticated session.
 describe('POST /api/tickets — reporter (#48)', () => {
   it('REQ-TICKET-CREATE-1: stamps reporterId from the session when body omits it', async () => {
-    const { app } = buildApp();
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D' }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }),
     );
     expect(res.status).toBe(201);
     // Auth stub returns session id '1'; seedAdmins maps '1' → 'Admin Uno'.
@@ -344,9 +354,10 @@ describe('POST /api/tickets — reporter (#48)', () => {
   });
 
   it('REQ-TICKET-CREATE-2: explicit reporterId in the body wins over the session default', async () => {
-    const { app } = buildApp();
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: '2' }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: '2', areaId: area.id }),
     );
     expect(res.status).toBe(201);
     expect(res.body.reporterId).toBe('2');
@@ -354,22 +365,24 @@ describe('POST /api/tickets — reporter (#48)', () => {
   });
 
   it('REQ-TICKET-CREATE-3: a body reporterId that is NOT a known user → 422 REPORTER_NOT_FOUND', async () => {
-    const { app } = buildApp();
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
     // An unknown reporterId would hit a Prisma FK violation (P2003) in prod and
     // surface as a 500. Validate existence up-front and reject with a clear 422.
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: 'ghost' }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: 'ghost', areaId: area.id }),
     );
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('REPORTER_NOT_FOUND');
   });
 
   it('REQ-TICKET-CREATE-1b: the session-default path (no body reporterId) is NOT validated and stays 201', async () => {
-    const { app } = buildApp();
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
     // The session user exists by definition; the default stamp must never be
     // re-validated nor blocked. Session id is '1' (Admin Uno).
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D' }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }),
     );
     expect(res.status).toBe(201);
     expect(res.body.reporterId).toBe('1');
@@ -539,6 +552,110 @@ describe('Authentication', () => {
     const { app } = buildApp();
     const res = await request(app).get('/api/tickets');
     expect(res.status).toBe(401);
+  });
+});
+
+// #49 — areaId required on create; PATCH accepts optional areaId; list ?areaId= filter
+describe('POST /api/tickets — areaId required (#49)', () => {
+  it('REQ-TICKET-AREA-1: missing areaId → 422 TICKET_AREA_REQUIRED', async () => {
+    const { app } = buildApp();
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D' }),
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TICKET_AREA_REQUIRED');
+  });
+
+  it('REQ-TICKET-AREA-2: unknown areaId → 422 TICKET_AREA_NOT_FOUND', async () => {
+    const { app } = buildApp();
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: 'non-existent-area' }),
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TICKET_AREA_NOT_FOUND');
+  });
+
+  it('REQ-TICKET-AREA-3: valid areaId → 201, DTO has areaId + areaName', async () => {
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
+
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }),
+    );
+    expect(res.status).toBe(201);
+    expect(res.body.areaId).toBe(area.id);
+    expect(res.body.areaName).toBe('Soporte');
+  });
+});
+
+describe('PATCH /api/tickets/:id — areaId (#49)', () => {
+  it('REQ-TICKET-AREA-4: PATCH with valid areaId updates the area', async () => {
+    const { app, repo, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Facturación' });
+    const created = await repo.create({ subject: 'T', description: 'D', areaId: area.id });
+
+    const area2 = await areaRepo.create({ name: 'Administración' });
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}`).send({ areaId: area2.id }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.areaId).toBe(area2.id);
+    expect(res.body.areaName).toBe('Administración');
+  });
+
+  it('REQ-TICKET-AREA-5: PATCH with null areaId clears the area', async () => {
+    const { app, repo, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
+    const created = await repo.create({ subject: 'T', description: 'D', areaId: area.id });
+
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}`).send({ areaId: null }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.areaId).toBeNull();
+    expect(res.body.areaName).toBeNull();
+  });
+
+  it('REQ-TICKET-AREA-6: PATCH with unknown areaId → 422 TICKET_AREA_NOT_FOUND', async () => {
+    const { app, repo, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
+    const created = await repo.create({ subject: 'T', description: 'D', areaId: area.id });
+
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}`).send({ areaId: 'ghost-area' }),
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TICKET_AREA_NOT_FOUND');
+  });
+
+  it('REQ-TICKET-AREA-7: PATCH without areaId field does not change area', async () => {
+    const { app, repo, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte' });
+    const created = await repo.create({ subject: 'T', description: 'D', areaId: area.id });
+
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}`).send({ subject: 'Updated' }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.subject).toBe('Updated');
+    expect(res.body.areaId).toBe(area.id);
+    expect(res.body.areaName).toBe('Soporte');
+  });
+});
+
+describe('GET /api/tickets?areaId= — filter by area (#49)', () => {
+  it('REQ-TICKET-AREA-8: ?areaId= filters tickets by area', async () => {
+    const { app, repo, areaRepo } = buildApp();
+    const areaA = await areaRepo.create({ name: 'Soporte' });
+    const areaB = await areaRepo.create({ name: 'Facturación' });
+    await repo.create({ subject: 'T1', description: 'D', areaId: areaA.id });
+    await repo.create({ subject: 'T2', description: 'D', areaId: areaA.id });
+    await repo.create({ subject: 'T3', description: 'D', areaId: areaB.id });
+
+    const res = await withAuth(request(app).get(`/api/tickets?areaId=${areaA.id}`));
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.data.every((t: { areaId: string }) => t.areaId === areaA.id)).toBe(true);
   });
 });
 

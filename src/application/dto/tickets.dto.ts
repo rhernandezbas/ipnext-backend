@@ -8,6 +8,7 @@ export interface ListTicketsQueryDto {
   status?: TicketStatus;
   priority?: TicketPriority;
   customerId?: string;
+  areaId?: string;               // #49
 }
 
 export interface CreateTicketDto {
@@ -17,6 +18,7 @@ export interface CreateTicketDto {
   priority?: TicketPriority;
   assigneeId?: string | null;
   reporterId?: string | null;   // #48 — opcional; el route defaultea a req.user.id
+  areaId?: string;              // #49 — required in route; optional in DTO (port mirrors reporterId)
 }
 
 export interface UpdateTicketDto {
@@ -25,6 +27,7 @@ export interface UpdateTicketDto {
   status?: TicketStatus;
   priority?: TicketPriority;
   assigneeId?: string | null;
+  areaId?: string | null;        // #49 — null clears; undefined = don't touch
 }
 
 /** Output DTO — never expose raw Prisma rows */
@@ -40,6 +43,8 @@ export interface TicketDto {
   assigneeName: string | null;
   reporterId: string | null;    // #48
   reporterName: string | null;  // #48 — JOIN-derived (RbacUser.name)
+  areaId: string | null;        // #49
+  areaName: string | null;      // #49 — JOIN-derived (TicketAreaCatalog.name)
   grCasoId: string | null;
   createdAt: string;
   updatedAt: string;
