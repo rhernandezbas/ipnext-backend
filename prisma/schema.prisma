@@ -1585,6 +1585,9 @@ model IpAssignment {
 
 model NetworkSite {
   id           String        @id @default(uuid())
+  // network-site-fixed-code (#51) — número estable por sitio, secuencia dedicada.
+  // El default `nextval(...)` y la secuencia se crean en la migración 20260706000000.
+  siteNumber   Int           @unique @default(dbgenerated("nextval('network_site_number_seq')"))
   name         String
   address      String?
   city         String?

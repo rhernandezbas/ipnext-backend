@@ -24,6 +24,8 @@ import type { NetworkSite } from '../../domain/entities/networkSite';
 function makeSite(id: string, overrides: Partial<NetworkSite> = {}): NetworkSite {
   return {
     id,
+    siteNumber: 1,
+    fixedCode: 'NODO 1',
     name: `Site ${id}`,
     address: 'Calle Test 123',
     city: 'Lujan',

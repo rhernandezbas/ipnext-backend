@@ -8,7 +8,10 @@ export interface NetworkSiteRepository {
    * Returns null when no site is linked to that uispId.
    */
   findByUispSiteId(uispSiteId: string): Promise<NetworkSite | null>;
-  create(data: Omit<NetworkSite, 'id'>): Promise<NetworkSite>;
+  /**
+   * `siteNumber` y `fixedCode` los asigna/deriva la DB (secuencia) — el caller los omite.
+   */
+  create(data: Omit<NetworkSite, 'id' | 'siteNumber' | 'fixedCode'>): Promise<NetworkSite>;
   update(id: string, data: Partial<NetworkSite>): Promise<NetworkSite | null>;
   delete(id: string): Promise<boolean>;
 }

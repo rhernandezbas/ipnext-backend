@@ -31,6 +31,7 @@ const mockPrisma = prisma as jest.Mocked<typeof prisma>;
 function makeRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'ns-1',
+    siteNumber: 1,
     name: 'Site A',
     address: null,
     city: null,

@@ -29,6 +29,8 @@ const DEFAULT_PROJECT_ID = 'proj-loc-1';
 
 function makeSite(overrides: Partial<NetworkSite> & { id: string; name: string }): NetworkSite {
   return {
+    siteNumber: 1,
+    fixedCode: 'NODO 1',
     address: 'Dirección por defecto 123',
     city: 'Mercedes',
     coordinates: null,

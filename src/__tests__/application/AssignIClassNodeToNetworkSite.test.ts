@@ -13,6 +13,8 @@ import { NetworkSite } from '../../domain/entities/networkSite';
 function baseSite(overrides: Partial<NetworkSite> = {}): NetworkSite {
   return {
     id: 'site-1',
+    siteNumber: 1,
+    fixedCode: 'NODO 1',
     name: 'Nodo',
     address: 'addr',
     city: 'Lujan',

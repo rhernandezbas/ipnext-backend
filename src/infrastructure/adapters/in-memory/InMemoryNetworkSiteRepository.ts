@@ -3,10 +3,20 @@ import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 
 let nextId = 6;
 
+/** network-site-fixed-code (#51) — código fijo derivado del siteNumber. */
+function fixedCodeFor(siteNumber: number): string {
+  return `NODO ${siteNumber}`;
+}
+
 export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
+  /** Secuencia in-memory que emula `network_site_number_seq`. */
+  private nextSiteNumber = 6;
+
   private sites: NetworkSite[] = [
     {
       id: '1',
+      siteNumber: 1,
+      fixedCode: 'NODO 1',
       name: 'Nodo Central',
       address: 'Av. Corrientes 1234',
       city: 'Buenos Aires',
@@ -23,6 +33,8 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
     },
     {
       id: '2',
+      siteNumber: 2,
+      fixedCode: 'NODO 2',
       name: 'POP Norte',
       address: 'Av. Cabildo 2500',
       city: 'Buenos Aires',
@@ -39,6 +51,8 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
     },
     {
       id: '3',
+      siteNumber: 3,
+      fixedCode: 'NODO 3',
       name: 'Torre Sur',
       address: 'Autopista Ricchieri km 12',
       city: 'Ezeiza',
@@ -55,6 +69,8 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
     },
     {
       id: '4',
+      siteNumber: 4,
+      fixedCode: 'NODO 4',
       name: 'Datacenter BA',
       address: 'Av. Del Libertador 5000',
       city: 'Buenos Aires',
@@ -71,6 +87,8 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
     },
     {
       id: '5',
+      siteNumber: 5,
+      fixedCode: 'NODO 5',
       name: 'Nodo Oeste',
       address: 'Av. San Martín 900',
       city: 'Morón',
@@ -93,6 +111,10 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
    */
   seedSites(sites: NetworkSite[]): void {
     this.sites = [...sites];
+    // Mantener la secuencia por delante del mayor siteNumber sembrado, para que
+    // create() no colisione con sitios sembrados explícitamente.
+    const maxSeeded = sites.reduce((m, s) => Math.max(m, s.siteNumber ?? 0), 0);
+    this.nextSiteNumber = Math.max(this.nextSiteNumber, maxSeeded + 1);
   }
 
   async findAll(): Promise<NetworkSite[]> {
@@ -107,8 +129,14 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
     return this.sites.find(s => s.uispSiteId === uispSiteId) ?? null;
   }
 
-  async create(data: Omit<NetworkSite, 'id'>): Promise<NetworkSite> {
-    const site: NetworkSite = { ...data, id: String(nextId++) };
+  async create(data: Omit<NetworkSite, 'id' | 'siteNumber' | 'fixedCode'>): Promise<NetworkSite> {
+    const siteNumber = this.nextSiteNumber++;
+    const site: NetworkSite = {
+      ...data,
+      id: String(nextId++),
+      siteNumber,
+      fixedCode: fixedCodeFor(siteNumber),
+    };
     this.sites.push(site);
     return site;
   }
@@ -116,7 +144,9 @@ export class InMemoryNetworkSiteRepository implements NetworkSiteRepository {
   async update(id: string, data: Partial<NetworkSite>): Promise<NetworkSite | null> {
     const index = this.sites.findIndex(s => s.id === id);
     if (index === -1) return null;
-    this.sites[index] = { ...this.sites[index], ...data };
+    // network-site-fixed-code (#51): siteNumber y fixedCode son inmutables — nunca se pisan.
+    const { siteNumber: _sn, fixedCode: _fc, ...mutableData } = data;
+    this.sites[index] = { ...this.sites[index], ...mutableData };
     return this.sites[index];
   }
 

@@ -15,6 +15,7 @@ jest.mock('../../infrastructure/database/prisma', () => ({
     networkSite: {
       create: jest.fn().mockResolvedValue({
         id: 'new-id',
+        siteNumber: 1,
         name: 'Test',
         address: null,
         city: null,
@@ -45,7 +46,7 @@ import type { NetworkSite } from '../../domain/entities/networkSite';
 
 const mockCreate = prisma.networkSite.create as jest.Mock;
 
-function makeData(overrides: Partial<Omit<NetworkSite, 'id'>> = {}): Omit<NetworkSite, 'id'> {
+function makeData(overrides: Partial<Omit<NetworkSite, 'id' | 'siteNumber' | 'fixedCode'>> = {}): Omit<NetworkSite, 'id' | 'siteNumber' | 'fixedCode'> {
   return {
     name: 'Nodo Test',
     address: '',

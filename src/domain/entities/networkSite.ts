@@ -1,5 +1,16 @@
 export interface NetworkSite {
   id: string;
+  /**
+   * network-site-fixed-code (#51) — número de sitio estable, asignado por la DB
+   * (secuencia `network_site_number_seq`). Identidad interna del sitio, no editable.
+   */
+  siteNumber: number;
+  /**
+   * network-site-fixed-code (#51) — código fijo derivado: `"NODO {siteNumber}"`.
+   * Read-only (computado en el mapper). NO es el código de localidad: ese sigue
+   * siendo `iclassNodeCode` y es lo que usa el dispatch a IClass.
+   */
+  fixedCode: string;
   name: string;
   address: string;
   city: string;
