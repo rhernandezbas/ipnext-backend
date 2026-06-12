@@ -50,6 +50,8 @@ export class SplynxTicketAdapter implements TicketRepository {
         status: mapTicketStatus(String(t['status'] ?? '')),
         assigneeId: t['admin_id'] ? String(t['admin_id']) : null,
         assigneeName: null,
+        reporterId: null,    // Splynx legacy has no reporter concept (decabled)
+        reporterName: null,
         grCasoId: null,
         createdAt: String(t['date_created'] ?? new Date().toISOString()),
         updatedAt: String(t['date_created'] ?? new Date().toISOString()),
@@ -99,6 +101,8 @@ export class SplynxTicketAdapter implements TicketRepository {
       status: 'open',
       assigneeId: data.assigneeId ?? null,
       assigneeName: null,
+      reporterId: data.reporterId ?? null,    // #48
+      reporterName: null,
       grCasoId: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

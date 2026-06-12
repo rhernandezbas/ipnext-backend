@@ -11,6 +11,8 @@ const mockTicket: Ticket = {
   customerName: 'Alice García',
   assigneeId: null,
   assigneeName: null,
+  reporterId: null,
+  reporterName: null,
   grCasoId: null,
   priority: 'high',
   status: 'open',

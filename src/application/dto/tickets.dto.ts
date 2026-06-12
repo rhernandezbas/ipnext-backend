@@ -16,6 +16,7 @@ export interface CreateTicketDto {
   customerId?: string | null;
   priority?: TicketPriority;
   assigneeId?: string | null;
+  reporterId?: string | null;   // #48 — opcional; el route defaultea a req.user.id
 }
 
 export interface UpdateTicketDto {
@@ -37,6 +38,8 @@ export interface TicketDto {
   customerName: string | null;
   assigneeId: string | null;
   assigneeName: string | null;
+  reporterId: string | null;    // #48
+  reporterName: string | null;  // #48 — JOIN-derived (RbacUser.name)
   grCasoId: string | null;
   createdAt: string;
   updatedAt: string;

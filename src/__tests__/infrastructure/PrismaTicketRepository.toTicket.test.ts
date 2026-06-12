@@ -12,6 +12,8 @@ const baseRow = {
   customer: { id: 'client-1', name: 'Alice García' },
   assigneeId: 'admin-1',
   assignee: { id: 'admin-1', name: 'Tech Support' },
+  reporterId: 'admin-2',
+  reporter: { id: 'admin-2', name: 'Reporter Person' },
   grCasoId: null,
   createdAt: new Date('2024-01-01T10:00:00Z'),
   updatedAt: new Date('2024-01-02T10:00:00Z'),
@@ -65,6 +67,18 @@ describe('toTicket mapper', () => {
     const ticket = toTicket({ ...baseRow, assigneeId: null, assignee: null });
     expect(ticket.assigneeId).toBeNull();
     expect(ticket.assigneeName).toBeNull();
+  });
+
+  it('#48: derives reporterName from JOIN only (mirror of assignee)', () => {
+    const ticket = toTicket(baseRow);
+    expect(ticket.reporterId).toBe('admin-2');
+    expect(ticket.reporterName).toBe('Reporter Person');
+  });
+
+  it('#48: returns reporterName=null when reporter relation is null', () => {
+    const ticket = toTicket({ ...baseRow, reporterId: null, reporter: null });
+    expect(ticket.reporterId).toBeNull();
+    expect(ticket.reporterName).toBeNull();
   });
 
   it('converts Date objects to ISO strings', () => {

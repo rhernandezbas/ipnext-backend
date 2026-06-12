@@ -27,6 +27,12 @@ function buildApp() {
     { id: 'c1', name: 'Alice García' },
     { id: 'c2', name: 'Bob Martínez' },
   ]);
+  // #48 — seed admins so reporterName/assigneeName resolve via JOIN.
+  // The auth stub below returns session id '1', so the stamped reporter is '1'.
+  repo.seedAdmins([
+    { id: '1', name: 'Admin Uno' },
+    { id: '2', name: 'Admin Dos' },
+  ]);
 
   // Status catalog — seeded with the legacy canonical set (open/pending/closed).
   const statusRepo = new InMemoryTicketStatusRepository();
@@ -303,6 +309,113 @@ describe('PATCH /api/tickets/:id (update fields)', () => {
     );
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('TICKET_NOT_FOUND');
+  });
+});
+
+// #48 — Reporter stamped on create from the authenticated session.
+describe('POST /api/tickets — reporter (#48)', () => {
+  it('REQ-TICKET-CREATE-1: stamps reporterId from the session when body omits it', async () => {
+    const { app } = buildApp();
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D' }),
+    );
+    expect(res.status).toBe(201);
+    // Auth stub returns session id '1'; seedAdmins maps '1' → 'Admin Uno'.
+    expect(res.body.reporterId).toBe('1');
+    expect(res.body.reporterName).toBe('Admin Uno');
+  });
+
+  it('REQ-TICKET-CREATE-2: explicit reporterId in the body wins over the session default', async () => {
+    const { app } = buildApp();
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: '2' }),
+    );
+    expect(res.status).toBe(201);
+    expect(res.body.reporterId).toBe('2');
+    expect(res.body.reporterName).toBe('Admin Dos');
+  });
+
+  it('REQ-TICKET-READ-2: a ticket created without a known reporter still exposes null fields', async () => {
+    const { app } = buildApp();
+    // Explicit null reporterId AND the session id is unknown to admins → reporterName null.
+    // (Here the session is '1' which IS known, so we assert the shape on an explicit unknown.)
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: 'ghost' }),
+    );
+    expect(res.status).toBe(201);
+    expect(res.body.reporterId).toBe('ghost');
+    expect(res.body.reporterName).toBeNull();
+  });
+});
+
+// #48 — Unified save: PATCH /:id accepts status alongside assigneeId/priority.
+describe('PATCH /api/tickets/:id — unified save with status (#48)', () => {
+  it('REQ-TICKET-UPDATE-1: persists assigneeId + status + priority in a single request', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(
+      request(app)
+        .patch(`/api/tickets/${created.id}`)
+        .send({ assigneeId: '2', status: 'pending', priority: 'high' }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('pending');
+    expect(res.body.assigneeId).toBe('2');
+    expect(res.body.assigneeName).toBe('Admin Dos');
+    expect(res.body.priority).toBe('high');
+
+    // Persisted via the port, not an in-memory override.
+    const fetched = await repo.getById(created.id);
+    expect(fetched?.status).toBe('pending');
+    expect(fetched?.assigneeId).toBe('2');
+    expect(fetched?.priority).toBe('high');
+  });
+
+  it('REQ-TICKET-UPDATE-1: persists the CANONICAL catalog name regardless of casing', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await statusRepo.create({ name: 'Cerrado', color: '#6b7280', weight: 5 });
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}`).send({ status: 'cerrado' }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('Cerrado'); // canonical, not the casing sent
+  });
+
+  it('REQ-TICKET-UPDATE-2: unknown status → 422 and NO partial write of the other fields', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(
+      request(app)
+        .patch(`/api/tickets/${created.id}`)
+        .send({ assigneeId: '2', status: 'archivado', priority: 'high' }),
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TICKET_STATUS_NOT_FOUND');
+
+    // The ticket must be untouched: no assignee, no priority change, status still open.
+    const fetched = await repo.getById(created.id);
+    expect(fetched?.status).toBe('open');
+    expect(fetched?.assigneeId).toBeNull();
+    expect(fetched?.priority).toBe('medium');
+  });
+
+  it('REQ-TICKET-UPDATE-3: without status behaves exactly as before (assign-only)', async () => {
+    const { app, repo, statusRepo } = buildApp();
+    await seedCanonicalStatuses(statusRepo);
+    const created = await new CreateTicket(repo).execute({ subject: 'T', description: 'D' });
+
+    const res = await withAuth(
+      request(app).patch(`/api/tickets/${created.id}`).send({ assigneeId: '1' }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.assigneeId).toBe('1');
+    expect(res.body.status).toBe('open'); // unchanged
   });
 });
 
