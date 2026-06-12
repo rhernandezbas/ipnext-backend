@@ -603,7 +603,7 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     expect(res.body.ottDisabled).toBe(false);
   });
 
-  it('#67 el caso real: SOLO el pack base 129, DELETE → 424 "no se puede dar de baja" → 200 { unremovable:[129], failed:[], renew, unlinked }', async () => {
+  it('#67 el caso real HONESTO: SOLO el pack base 129, DELETE → 424 "no se puede dar de baja"; el reconcile RELEE y el base SIGUE en la cuenta → la fila TV igual se inactiva + limpia → 200 { unremovable:[129], failed:[], renew, unlinked, local:"synced" }', async () => {
     // Verificado LIVE 2026-06-12 (CIC 0006230159): el pack base es irremovible por política del CUA.
     // El error NO bloquea la baja: va a unremovable, el flujo renueva y desvincula → 200, NO 207.
     const csRepo = new InMemoryContractServiceRepository();
@@ -611,11 +611,17 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     const removeService = jest.fn(async () => {
       throw new GigaredUnavailableError('Gigared external service (CUA) error', 'El servicio seleccionado no se puede dar de baja');
     });
-    const getAccountByInternalId = jest.fn()
-      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
-      .mockResolvedValue(fakeAccount({ services: [] }));
+    // HONESTO: el base 129 nunca se borró (su DELETE lanzó). La relectura del reconcile lo sigue viendo.
+    const getAccountByInternalId = jest.fn(async () =>
+      fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }));
     const port = fakePort({ removeService, getAccountByInternalId });
     const app = await buildApp({ port, csRepo, catalog });
+    // Fila TV viva con credenciales y notes del CIC viejo (lo que el reconcile excluyente debe inactivar).
+    const cat = await catalog.getByName('TV');
+    const row = await csRepo.add({
+      contractId: 'C1', serviceCatalogId: cat!.id,
+      notes: 'CIC 0000000001 · Gigared Play Full', tvLogin: 'GIGA129', tvPassword: 'old-secret',
+    });
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
     expect(res.status).toBe(200);
     expect(res.body.removed).toEqual([]);
@@ -624,6 +630,12 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     expect(res.body.unremovable[0].id).toBe('129');
     expect(res.body.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
     expect(res.body.unlinked).toBe(true);
+    // CRITICAL: el reconcile excluye el id irremovible → la fila local se inactiva + limpia (synced).
+    expect(res.body.local).toBe('synced');
+    const after = await csRepo.getById(row.id);
+    expect(after!.status).toBe('inactive');
+    expect(after!.tvLogin).toBeNull();
+    expect(after!.tvPassword).toBeNull();
   });
 
   it('fully-peeled account (services:[], ott disabled) still resolves → renewAttempted:false → 200 (not permanent 207)', async () => {

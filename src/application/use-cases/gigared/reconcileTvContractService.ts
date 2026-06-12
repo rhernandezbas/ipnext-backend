@@ -43,6 +43,13 @@ function cicFromNotes(notes: string | null | undefined): string | null {
  *     flag the empty-services + no-row case is a no-op (legacy behaviour, used by link/cancel).
  *   - `clearCredentialsOnInactive` (M6): when inactivating the managed row (services empty), also null
  *     out tvLogin/tvPassword — a baja must leave no zombie credentials. Used by CancelTv.
+ *   - `excludeServiceIds` (#67 re-review, CRITICAL): service ids that the baja could NOT remove because
+ *     the CUA marks them irremovable (the BASE pack "Gigared Play Full" → 424 "no se puede dar de baja").
+ *     Those ids are STILL present in the re-read account (their DELETE threw), so without this exclusion
+ *     reconcile would take the "services present" branch and leave the local TV row ACTIVE with the OLD
+ *     cic notes + stale credentials — and the following renew+unlink would make it irreparable. By
+ *     subtracting these ids from the account's service list BEFORE the empty/non-empty decision, an
+ *     account left with ONLY the base behaves as "empty": the row is INACTIVATED + credentials cleared.
  *
  * #65 fix wave M6 (always on): when the managed row is reactivated/upserted for a cic DIFFERENT from
  * the one recorded in its notes, stale tvLogin/tvPassword from the previous account are CLEARED — a
@@ -56,8 +63,9 @@ export async function reconcileTvContractService(deps: {
   contractId: string;
   ensureRow?: boolean;
   clearCredentialsOnInactive?: boolean;
+  excludeServiceIds?: string[];
 }): Promise<{ contractServiceId?: string }> {
-  const { gigared, csRepo, catalogRepo, customerId, contractId, ensureRow, clearCredentialsOnInactive } = deps;
+  const { gigared, csRepo, catalogRepo, customerId, contractId, ensureRow, clearCredentialsOnInactive, excludeServiceIds } = deps;
 
   const tvCatalog = await catalogRepo.getByName('TV');
   if (!tvCatalog || !tvCatalog.active) throw new TvCatalogMissingError();
@@ -70,7 +78,15 @@ export async function reconcileTvContractService(deps: {
     return {};
   }
 
-  if (account.services.length === 0) {
+  // #67 re-review (CRITICAL): an irremovable BASE pack is still present in the re-read account
+  // (its DELETE threw 424). Subtract the excluded ids BEFORE deciding empty/non-empty, so an
+  // account left with ONLY the base counts as "empty" → the row is inactivated, not reactivated.
+  const exclude = new Set(excludeServiceIds ?? []);
+  const services = exclude.size > 0
+    ? account.services.filter((s) => !exclude.has(s.id))
+    : account.services;
+
+  if (services.length === 0) {
     if (existing) {
       // H1: never delete — inactivate the managed row so history survives.
       // M6: a baja clears the credentials so the inactive row holds no zombie login/password.
@@ -95,7 +111,7 @@ export async function reconcileTvContractService(deps: {
     return {};
   }
 
-  const notes = `${GIGARED_NOTES_PREFIX}${account.cic} · ${account.services.map((s) => s.name).join(' · ')}`;
+  const notes = `${GIGARED_NOTES_PREFIX}${account.cic} · ${services.map((s) => s.name).join(' · ')}`;
 
   if (existing) {
     // M6: if the cic changed, the credentials of the OLD account must not survive the reactivation.
