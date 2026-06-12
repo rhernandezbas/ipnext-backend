@@ -28,10 +28,10 @@ import {
   TvNotLinkedError,
   CicNotFoundError,
   CicAlreadyLinkedError,
+  GrClientIdRequiredError,
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
-import { isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 
 /**
  * Readiness middleware (M1). Two gating levels, both built from the same repos:
@@ -122,6 +122,11 @@ function sendGigaredError(res: Response, err: unknown): boolean {
     return true;
   }
   if (err instanceof TvCatalogMissingError) {
+    res.status(422).json({ error: err.message, code: err.code });
+    return true;
+  }
+  // #70 — register sin grClienteId: no hay fuente para la password determinística → 422.
+  if (err instanceof GrClientIdRequiredError) {
     res.status(422).json({ error: err.message, code: err.code });
     return true;
   }
@@ -246,27 +251,12 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         firstName: string; lastName: string; email: string; cic: string;
         password?: unknown; sendActivationEmail?: boolean; contractId?: unknown;
       };
-      // #70 — la contraseña es OBLIGATORIA. Se elimina el fallback al generador random del #47h:
-      // el form (#65) la prefillea con la determinística `ip{grId}` y el operador la confirma.
-      // Si falta (undefined/null/'') → 400; si no cumple la política Gigared ([a-z0-9], 8..64)
-      // → 400. La password recibida se usa SIEMPRE (y desde #65 se persiste en la fila TV local
-      // tvLogin/tvPassword, legible sólo vía el endpoint guardado /tv-credentials).
-      let password: string;
-      if (b.password === undefined || b.password === null || b.password === '') {
-        res.status(400).json({
-          error: 'La contraseña es obligatoria',
-          code: 'VALIDATION_ERROR',
-        });
-        return;
-      } else if (typeof b.password === 'string' && isValidGigaredPassword(b.password)) {
-        password = b.password;
-      } else {
-        res.status(400).json({
-          error: 'La contraseña solo puede contener letras minúsculas y números (8 a 64)',
-          code: 'VALIDATION_ERROR',
-        });
-        return;
-      }
+      // #70 rework — el body YA NO acepta password. Se genera SERVER-SIDE en el use case a partir
+      // del grClienteId del cliente (helper determinístico `ip{grClienteId}` padded del #65). Si el
+      // FE viejo todavía manda `password`, se IGNORA acá con un strip silencioso (tolerancia durante
+      // la ventana de deploy: no rompemos su request, solo no la usamos). Sin grClienteId el use case
+      // sube GrClientIdRequiredError → 422 GR_CLIENT_ID_REQUIRED.
+      void b.password; // descartada a propósito: no se lee ni se reenvía a Gigared.
       // #65 — el correo del alta es ficticio: el checkbox de activación viene SIEMPRE inactivo
       // por default (no se envía email). El operador puede forzarlo a true explícitamente.
       const contractId =
@@ -276,7 +266,6 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         lastName: b.lastName,
         email: b.email,
         cic: b.cic,
-        password,
         sendActivationEmail: b.sendActivationEmail ?? false,
         ...(contractId ? { contractId } : {}),
       });

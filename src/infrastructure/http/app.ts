@@ -585,7 +585,9 @@ import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
 // Covers entity kinds used for FK validation in scheduling use cases.
 function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project' | 'Ticket', id: string): Promise<{ id: string } | null> {
   switch (model) {
-    case 'Client':   return prisma.client.findUnique({ where: { id }, select: { id: true } });
+    // #70 — Client carries grClienteId so RegisterGigaredAccount can derive the deterministic
+    // TV password server-side. Selecting it here is harmless for the existence-only callers.
+    case 'Client':   return prisma.client.findUnique({ where: { id }, select: { id: true, grClienteId: true } });
     case 'Contract': return prisma.contract.findUnique({ where: { id }, select: { id: true } });
     case 'Partner':  return prisma.partner.findUnique({ where: { id }, select: { id: true } });
     case 'Project':  return prisma.project.findUnique({ where: { id }, select: { id: true } });

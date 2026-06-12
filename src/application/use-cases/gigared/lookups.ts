@@ -3,7 +3,13 @@
  * Precedent: AddContractService.ContractLookup → prismaClientLookup('Client'|'Contract', id).
  */
 export interface CustomerLookup {
-  findById(id: string): Promise<{ id: string } | null>;
+  /**
+   * #70 — `grClienteId` (Gestión Real client id) travels back so RegisterGigaredAccount can
+   * derive the deterministic TV password (`ip{grClienteId}` padded, #65) server-side. Optional
+   * on the shape so the existing callers (link / cancel / packs) that only read `id` keep
+   * compiling; absent/null → the register raises GrClientIdRequiredError (422).
+   */
+  findById(id: string): Promise<{ id: string; grClienteId?: string | null } | null>;
 }
 
 /**

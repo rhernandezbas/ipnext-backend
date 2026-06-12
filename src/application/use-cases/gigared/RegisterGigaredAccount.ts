@@ -3,6 +3,8 @@ import type { ContractServiceRepository } from '@domain/ports/ContractServiceRep
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
+import { GrClientIdRequiredError } from '@domain/errors/gigared';
+import { deterministicTvPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from './lookups';
 import { reconcileTvContractService } from './reconcileTvContractService';
 
@@ -45,7 +47,6 @@ export class RegisterGigaredAccount {
       lastName: string;
       email: string;
       cic: string;
-      password: string;
       sendActivationEmail: boolean;
       /** #65 — owner contract for the local TV reconcile + credential persistence. */
       contractId?: string;
@@ -53,6 +54,14 @@ export class RegisterGigaredAccount {
   ): Promise<{ account: GigaredAccount; credentialsPersisted: boolean }> {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
+
+    // #70 — the register password is generated SERVER-SIDE from the customer's grClienteId
+    // (deterministic `ip{grClienteId}` padded, #65). The body no longer carries it. No
+    // grClienteId → no source for the password → 422 GR_CLIENT_ID_REQUIRED, Gigared untouched.
+    if (customer.grClienteId == null || customer.grClienteId === '') {
+      throw new GrClientIdRequiredError(customerId);
+    }
+    const password = deterministicTvPassword(customer.grClienteId);
 
     // #65 — validate ownership of the target contract BEFORE any Gigared write (mirror of
     // LinkCustomerToCic #47k). A foreign/absent contractId → 404, Gigared never touched.
@@ -66,7 +75,14 @@ export class RegisterGigaredAccount {
       }
     }
 
-    await this.gigared.register(input);
+    await this.gigared.register({
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+      cic: input.cic,
+      password,
+      sendActivationEmail: input.sendActivationEmail,
+    });
     await this.gigared.activate({ cic: input.cic, email: input.email });
     await this.gigared.setInternalId(input.cic, customerId);
     const account = await this.gigared.getAccountByInternalId(customerId);
@@ -90,7 +106,7 @@ export class RegisterGigaredAccount {
         if (contractServiceId) {
           await this.csRepo.update(contractServiceId, {
             tvLogin: tvLoginFromAccount(account),
-            tvPassword: input.password,
+            tvPassword: password,
           });
           credentialsPersisted = true;
         }
