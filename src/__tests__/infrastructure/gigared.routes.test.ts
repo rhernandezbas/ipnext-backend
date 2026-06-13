@@ -606,7 +606,12 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     expect(res.body.renewAttempted).toBe(true);
   });
 
-  it('L3: real OTT failure (setOtt throws) → 207 { ottDisabled:false }', async () => {
+  // #74 — EL FIX: el OTT no cuenta para el veredicto cuando el renew tuvo éxito.
+  // El paso OTT corre ANTES del renew, sobre el CIC VIEJO. Si el renew (posterior) reseteó la
+  // cuenta (CIC nuevo, login viejo muerto), un ottDisabled=false es un dato pre-renew STALE: la
+  // cuenta vieja ya no es accesible (403 cic-ownership LIVE) → la baja es COMPLETA. Caso real
+  // 0006717800 → 0006283226. ANTES daba 207; ahora 200.
+  it('#74 L3: OTT falla (setOtt throws) PERO renew OK → 200 (ottDisabled:false es moot post-renew)', async () => {
     const csRepo = new InMemoryContractServiceRepository();
     const catalog = new InMemoryServiceCatalogRepository();
     const setOtt = jest.fn(async () => { throw new Error('ott upstream down'); });
@@ -616,8 +621,52 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     const port = fakePort({ setOtt, getAccountByInternalId });
     const app = await buildApp({ port, csRepo, catalog });
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(200);
+    expect(res.body.ottDisabled).toBe(false);
+    // El renew reseteó la cuenta → la baja es efectiva pese al OTT pre-renew.
+    expect(res.body.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
+    expect(res.body.renewAttempted).toBe(true);
+  });
+
+  // #74 — OTT falla Y el renew falla → la cuenta vieja sigue viva con streaming → 207 (parcial real).
+  it('#74: OTT falla + renew falla (renew:null) → 207 (cuenta vieja sigue viva)', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const setOtt = jest.fn(async () => { throw new Error('ott upstream down'); });
+    const renewCic = jest.fn(async () => { throw new Error('renew upstream 500'); });
+    const getAccountByInternalId = jest.fn()
+      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
+      .mockResolvedValue(fakeAccount({ services: [] }));
+    const port = fakePort({ setOtt, renewCic, getAccountByInternalId });
+    const app = await buildApp({ port, csRepo, catalog });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
     expect(res.status).toBe(207);
     expect(res.body.ottDisabled).toBe(false);
+    expect(res.body.renew).toBeNull();
+  });
+
+  // #74 — caso #5 de la tabla de verdad: NO había nada que renovar (renewAttempted=false) y el
+  // OTT no se pudo apagar. Sin un renew que resetee la cuenta, el OTT viejo activo es un parcial
+  // REAL → 207. El !ottDisabled SOLO cuenta cuando el renew NO reseteó la cuenta.
+  it('#74: OTT falla + renewAttempted:false (cuenta ya pelada) → 207 (OTT viejo activo, sin renew que resetee)', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const setOtt = jest.fn(async () => { throw new Error('ott upstream down'); });
+    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
+    // services:[] Y ott NO enabled → renewAttempted=false → renew no se intenta.
+    const getAccountByInternalId = jest.fn(async () =>
+      fakeAccount({
+        services: [],
+        ott: { id: 'ott-1', stationaryLicenses: 2, mobileLicenses: 1, registeredDevices: 0, status: 'disabled' },
+      }),
+    );
+    const port = fakePort({ setOtt, renewCic, getAccountByInternalId });
+    const app = await buildApp({ port, csRepo, catalog });
+    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
+    expect(res.status).toBe(207);
+    expect(res.body.ottDisabled).toBe(false);
+    expect(res.body.renewAttempted).toBe(false);
+    expect(renewCic).not.toHaveBeenCalled();
   });
 
   it('#67 el caso real HONESTO: SOLO el pack base 129, DELETE → 424 "no se puede dar de baja"; el reconcile RELEE y el base SIGUE en la cuenta → la fila TV igual se inactiva + limpia → 200 { unremovable:[129], failed:[], renew, localCancelled:true, local:"synced" }', async () => {

@@ -47,9 +47,14 @@ export type RemoveTvServiceResult = AddTvServiceResult;
  *                       (failed.length === 0 → teardown completo → el panel mostrará "no vinculado"
  *                       aunque el partner siga resolviendo por internal_id). false si failed.length > 0.
  *
- * Router maps:
- *   200 when failed.length === 0 && local === 'synced' && ottDisabled && (!renewAttempted || renew !== null)
- *   207 otherwise (parcial, retry idempotente).
+ * Router maps (#74 — el OTT no cuenta cuando el renew tuvo éxito):
+ *   renewSucceeded = renewAttempted && renew !== null
+ *   207 when failed.length > 0 || local === 'failed' || (renewAttempted && renew === null)
+ *               || (!ottDisabled && !renewSucceeded)
+ *   200 otherwise.
+ *   #74 — el renew ES la baja efectiva: resetea la cuenta y deja el CIC viejo inaccesible. Cuando
+ *   renewSucceeded, un ottDisabled=false (paso OTT pre-renew sobre el CIC viejo) es un dato STALE
+ *   y NO marca parcial. El !ottDisabled sólo cuenta cuando el renew no reseteó la cuenta.
  *
  * `renewAttempted` guards the anti-re-renew logic (#64 H1): it is true only when there was
  * something to tear down at the START of this run (services.length > 0 OR ott was 'enabled').
