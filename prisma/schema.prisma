@@ -194,6 +194,8 @@ model Client {
   invoices         Invoice[]
   tasks            ScheduledTask[]
   tickets          Ticket[]
+  // #80 — Recaptación back-relation
+  recaptureLeads   RecaptureLead[]
 
   @@index([status])
   @@index([email])
@@ -2103,6 +2105,9 @@ model RbacUser {
   inventoryMovements InventoryMovement[] @relation("MovementTechnician")
   // EPIC #38 W5b — vehicles assigned to this technician
   assignedVehicles  Vehicle[]           @relation("AssignedVehicleTechnician")
+  // #80 — Recaptación back-relations
+  recaptureLeadsAssigned  RecaptureLead[]    @relation("RecaptureLeadAssignee")
+  recaptureContacts       RecaptureContact[] @relation("RecaptureContactActor")
 
   @@index([login])
 }
@@ -2268,4 +2273,77 @@ model GigaredConfig {
   apiKey    String   @default("")
   baseUrl   String   @default("https://partners.gigaredsa.com.ar/api/v1")
   updatedAt DateTime @updatedAt
+}
+
+// =============================================
+// RECAPTACIÓN (#80)
+// =============================================
+
+enum RecaptureLeadSource {
+  churned_client
+  csv
+}
+
+enum RecaptureLeadStatus {
+  nuevo
+  en_gestion
+  contactado
+  interesado
+  recuperado
+  descartado
+}
+
+enum RecaptureContactChannel {
+  llamada
+  whatsapp
+  email
+  sms
+  otro
+}
+
+enum RecaptureContactOutcome {
+  sin_respuesta
+  contactado
+  no_interesado
+  interesado
+  recuperado
+  numero_erroneo
+}
+
+model RecaptureLead {
+  id          String              @id @default(cuid())
+  source      RecaptureLeadSource
+  clientId    String?
+  client      Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  contactName String
+  phone       String?
+  email       String?
+  status      RecaptureLeadStatus @default(nuevo)
+  assigneeId  String?
+  assignee    RbacUser?           @relation("RecaptureLeadAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  claimedAt   DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  contacts    RecaptureContact[]
+
+  @@index([status])
+  @@index([assigneeId])
+  @@index([clientId])
+}
+
+model RecaptureContact {
+  id         String                  @id @default(cuid())
+  leadId     String
+  lead       RecaptureLead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  actorId    String
+  actor      RbacUser                @relation("RecaptureContactActor", fields: [actorId], references: [id])
+  channel    RecaptureContactChannel
+  outcome    RecaptureContactOutcome
+  proposal   String?
+  note       String?
+  nextStepAt DateTime?
+  createdAt  DateTime                @default(now())
+
+  @@index([leadId])
+  @@index([actorId])
 }

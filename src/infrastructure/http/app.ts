@@ -405,6 +405,17 @@ import { ListRadiusSessions } from '@application/use-cases/ListRadiusSessions';
 import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 import { createLeadsRouter } from './routes/leads.routes';
 import { PrismaLeadRepository } from '../adapters/prisma/PrismaLeadRepository';
+// #80 — Recaptación
+import { createRecaptureRouter } from './routes/recapture.routes';
+import { PrismaRecaptureRepository } from '../adapters/prisma/PrismaRecaptureRepository';
+import { ListRecaptureLeads } from '@application/use-cases/recapture/ListRecaptureLeads';
+import { GetRecaptureLead } from '@application/use-cases/recapture/GetRecaptureLead';
+import { ClaimRecaptureLead } from '@application/use-cases/recapture/ClaimRecaptureLead';
+import { ClaimNextRecaptureLead } from '@application/use-cases/recapture/ClaimNextRecaptureLead';
+import { ReleaseRecaptureLead } from '@application/use-cases/recapture/ReleaseRecaptureLead';
+import { UpdateRecaptureLeadStatus } from '@application/use-cases/recapture/UpdateRecaptureLeadStatus';
+import { AddRecaptureContact } from '@application/use-cases/recapture/AddRecaptureContact';
+import { IngestChurnedClients } from '@application/use-cases/recapture/IngestChurnedClients';
 import { ListLeads } from '@application/use-cases/ListLeads';
 import { GetLead } from '@application/use-cases/GetLead';
 import { CreateLead } from '@application/use-cases/CreateLead';
@@ -1756,6 +1767,24 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     gigaredReady:       createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo),
     gigaredProbeReady:  createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo, { requireFlag: false }),
   }));
+
+  // ─── #80 Recaptación ───────────────────────────────────────────────────────
+  const recaptureRepo = new PrismaRecaptureRepository();
+  app.use('/api/recapture', createRecaptureRouter(
+    new ListRecaptureLeads(recaptureRepo),
+    new GetRecaptureLead(recaptureRepo),
+    new ClaimRecaptureLead(recaptureRepo),
+    new ClaimNextRecaptureLead(recaptureRepo),
+    new ReleaseRecaptureLead(recaptureRepo),
+    new UpdateRecaptureLeadStatus(recaptureRepo),
+    new AddRecaptureContact(recaptureRepo),
+    new IngestChurnedClients(recaptureRepo, customerAdapter),
+    createAuthMiddleware(authAdapter, sessionRepo),
+    {
+      read:   requirePerm('recapture', 'read'),
+      manage: requirePerm('recapture', 'manage'),
+    },
+  ));
 
   // 404
   app.use((_req: Request, res: Response): void => {

@@ -111,6 +111,8 @@ export const RBAC_MODULES = [
   'uisp',
   // TV / Gigared integration module (#47) — read/manage base + granular ops (#50: link/register/packs/ott/cancel)
   'tv',
+  // Recaptación / churned-client recovery (#80)
+  'recapture',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];
