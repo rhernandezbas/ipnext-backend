@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TvEventType } from '@domain/ports/TvActivationEventRepository';
 
 /**
  * Gigared TV DTOs (#47).
@@ -92,3 +93,22 @@ export const updateGigaredConfigSchema = z.object({
 });
 
 export type UpdateGigaredConfigBody = z.infer<typeof updateGigaredConfigSchema>;
+
+/**
+ * #5 BE — TV activation history event DTO (wire contract).
+ * Returned by ListTvActivationHistory use case and the history routes.
+ * customerName is optional (best-effort — not always available).
+ */
+export interface TvActivationEventDto {
+  id: string;
+  clientId: string;
+  customerName?: string | null;
+  cic: string | null;
+  eventType: TvEventType;
+  actorId: string | null;
+  actorName: string;
+  internalId: string | null;
+  seq: number | null;
+  contractId: string | null;
+  createdAt: string; // ISO string
+}

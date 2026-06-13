@@ -207,6 +207,8 @@ model Client {
   tickets          Ticket[]
   // #80 — Recaptación back-relation
   recaptureLeads   RecaptureLead[]
+  // #5 BE — TV activation history back-relation
+  tvActivationEvents TvActivationEvent[]
 
   @@index([status])
   @@index([email])
@@ -2131,6 +2133,8 @@ model RbacUser {
   // #80 — Recaptación back-relations
   recaptureLeadsAssigned  RecaptureLead[]    @relation("RecaptureLeadAssignee")
   recaptureContacts       RecaptureContact[] @relation("RecaptureContactActor")
+  // #5 BE — TV activation history back-relation (soft FK, SetNull on delete)
+  tvActivationEvents      TvActivationEvent[] @relation("TvActivationEventActor")
 
   @@index([login])
 }
@@ -2369,4 +2373,34 @@ model RecaptureContact {
 
   @@index([leadId])
   @@index([actorId])
+}
+
+// =============================================
+// TV ACTIVATION HISTORY (#5 BE)
+// =============================================
+
+// Append-only log of every alta / baja / reactivacion TV event per client.
+// actorId is a SOFT FK to RbacUser (SetNull on delete): the actor name is
+// also snapshotted in actorName so history is readable even after user deletion.
+// GR sync NEVER writes this table.
+model TvActivationEvent {
+  id         String   @id @default(uuid())
+  clientId   String
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // Soft FK: SetNull when the actor user is deleted (history is still readable via actorName).
+  actorId    String?
+  actor      RbacUser? @relation("TvActivationEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  // Snapshot of the actor name at the time of the event (preserved after user deletion).
+  actorName  String
+  // 'alta' = first registration, 'reactivacion' = re-registration after baja, 'baja' = cancellation.
+  eventType  String
+  cic        String?
+  internalId String?
+  seq        Int?
+  contractId String?
+  createdAt  DateTime @default(now())
+
+  @@index([clientId, createdAt(sort: Desc)])
+  @@index([actorId])
+  @@map("tv_activation_events")
 }

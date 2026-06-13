@@ -363,6 +363,8 @@ import { PrismaClientTvCancellationRepository } from '../adapters/prisma/PrismaC
 import { PrismaClientTvActivationRepository } from '../adapters/prisma/PrismaClientTvActivationRepository';
 import { PrismaClientTvCancelStatusRepository } from '../adapters/prisma/PrismaClientTvCancelStatusRepository';
 import { CancelTvJobRunner } from '../scheduling/CancelTvJobRunner';
+import { ListTvActivationHistory } from '@application/use-cases/gigared/ListTvActivationHistory';
+import { PrismaTvActivationEventRepository } from '../adapters/prisma/PrismaTvActivationEventRepository';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
@@ -1760,8 +1762,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const gigaredTvActivation = new PrismaClientTvActivationRepository();
   // #10/#11 — async TV-cancel status repo (Client.tvCancelStatus/tvCancelResult/tvCancelStartedAt).
   const gigaredTvCancelStatus = new PrismaClientTvCancelStatusRepository();
+  // #5 BE — TV activation event repo (append-only log of alta/baja/reactivacion).
+  const gigaredTvActivationEventRepo = new PrismaTvActivationEventRepository();
   const gigaredCancelTv = new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvCancellation);
-  const gigaredCancelTvRunner = new CancelTvJobRunner(gigaredCancelTv, gigaredTvCancelStatus);
+  // #5 BE — pass eventRepo to runner so it records 'baja' on success (best-effort).
+  const gigaredCancelTvRunner = new CancelTvJobRunner(gigaredCancelTv, gigaredTvCancelStatus, gigaredTvActivationEventRepo);
   app.use('/api/gigared', createAuthMiddleware(authAdapter, sessionRepo), createGigaredRouter({
     getConfig:          new GetGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     updateConfig:       new UpdateGigaredConfig(gigaredConfigRepo, featureFlagRepo),
@@ -1769,7 +1774,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listAccounts:       new ListGigaredAccounts(gigaredClient),
     getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup, gigaredTvCancellation),
     linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
-    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, gigaredTvActivation),
+    // #5 BE — pass eventRepo so register records 'alta'/'reactivacion' best-effort.
+    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, gigaredTvActivation, gigaredTvActivationEventRepo),
     addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     setOttStatus:       new SetOttStatus(gigaredClient, gigaredCustomerLookup),
@@ -1792,6 +1798,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     cancelStatus:       gigaredTvCancelStatus,
     customerLookup:     gigaredCustomerLookup,
     contractLookup:     gigaredContractLookup,
+    // #5 BE — TV activation history query use case
+    listActivationHistory: new ListTvActivationHistory(gigaredTvActivationEventRepo),
   }));
 
   // ─── #80 Recaptación ───────────────────────────────────────────────────────

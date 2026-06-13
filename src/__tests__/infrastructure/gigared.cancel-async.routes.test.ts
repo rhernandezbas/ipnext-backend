@@ -42,6 +42,8 @@ import { CancelTv } from '@application/use-cases/gigared/CancelTv';
 import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
 import { CancelTvJobRunner } from '@infrastructure/scheduling/CancelTvJobRunner';
+import { InMemoryTvActivationEventRepository } from '@infrastructure/adapters/in-memory/InMemoryTvActivationEventRepository';
+import { ListTvActivationHistory } from '@application/use-cases/gigared/ListTvActivationHistory';
 
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import type { TvCredentials } from '@domain/ports/TvCredentialsReader';
@@ -158,6 +160,7 @@ async function buildApp(opts: Opts = {}) {
     cancelStatus,
     customerLookup,
     contractLookup,
+    listActivationHistory: new ListTvActivationHistory(new InMemoryTvActivationEventRepository()),
   });
 
   const app = express();

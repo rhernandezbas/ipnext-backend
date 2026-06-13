@@ -12,6 +12,7 @@ import type { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
 import type { CancelTv } from '@application/use-cases/gigared/CancelTv';
 import type { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import type { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
+import type { ListTvActivationHistory } from '@application/use-cases/gigared/ListTvActivationHistory';
 import type { GigaredConfigRepository } from '@domain/ports/GigaredConfigRepository';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import type { ListAccountsFilter } from '@domain/ports/GigaredPort';
@@ -189,6 +190,8 @@ export interface GigaredRouterDeps {
    */
   customerLookup: CustomerLookup;
   contractLookup: ContractLookup;
+  /** #5 BE — TV activation history query use case. */
+  listActivationHistory: ListTvActivationHistory;
 }
 
 /**
@@ -287,6 +290,8 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       // por default (no se envía email). El operador puede forzarlo a true explícitamente.
       const contractId =
         typeof b.contractId === 'string' && b.contractId !== '' ? b.contractId : undefined;
+      // #5 BE — thread actor from req.user for the TV activation event recording.
+      const actor = req.user ? { actorId: req.user.id, actorName: req.user.username } : { actorId: null, actorName: '' };
       const account = await deps.registerAccount.execute(req.params['id'] as string, {
         firstName: b.firstName,
         lastName: b.lastName,
@@ -294,6 +299,8 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         cic: b.cic,
         sendActivationEmail: b.sendActivationEmail ?? false,
         ...(contractId ? { contractId } : {}),
+        actorId:   actor.actorId,
+        actorName: actor.actorName,
       });
       res.status(201).json(account);
     } catch (err) {
@@ -373,6 +380,52 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
+  // #5 BE — TV activation history: global list with optional filters.
+  // Wire contract:
+  //   GET /api/gigared/customers/activation-history?actorId=&customerId=&from=&to=
+  //   → 200 TvActivationEventDto[] (newest first). Gate tv.read.
+  // NOTE: this route MUST be registered BEFORE /customers/:id routes to avoid `:id` capturing
+  // the literal segment "activation-history" as a customerId.
+  router.get('/customers/activation-history', deps.requireRead, async (req, res): Promise<void> => {
+    try {
+      const q = req.query;
+      const filter: {
+        actorId?: string;
+        customerId?: string;
+        from?: Date;
+        to?: Date;
+      } = {};
+      if (typeof q['actorId'] === 'string' && q['actorId'] !== '') filter.actorId = q['actorId'];
+      if (typeof q['customerId'] === 'string' && q['customerId'] !== '') filter.customerId = q['customerId'];
+      if (typeof q['from'] === 'string' && q['from'] !== '') {
+        const d = new Date(q['from']);
+        if (!isNaN(d.getTime())) filter.from = d;
+      }
+      if (typeof q['to'] === 'string' && q['to'] !== '') {
+        const d = new Date(q['to']);
+        if (!isNaN(d.getTime())) filter.to = d;
+      }
+      const events = await deps.listActivationHistory.execute(filter);
+      res.json(events);
+    } catch (err) {
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'activation-history:global');
+    }
+  });
+
+  // #5 BE — TV activation history: per-client list.
+  // Wire contract:
+  //   GET /api/gigared/customers/:id/activation-history → 200 TvActivationEventDto[] (newest first).
+  //   Gate tv.read.
+  router.get('/customers/:id/activation-history', deps.requireRead, async (req, res): Promise<void> => {
+    try {
+      const clientId = req.params['id'] as string;
+      const events = await deps.listActivationHistory.executeByClient(clientId);
+      res.json(events);
+    } catch (err) {
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'activation-history:client');
+    }
+  });
+
   // #10/#11 — dar de baja TV (async). Body { contractId }. tv.cancel (#50).
   // Wire contract (FROZEN):
   //   202 { status:'pending' }            — job queued, runner fires in background
@@ -403,9 +456,11 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       }
 
       // Queue: set pending, return 202, fire runner in background.
+      // #5 BE — capture actor from req.user BEFORE responding (response clears the req context).
+      const cancelActor = req.user ? { actorId: req.user.id, actorName: req.user.username } : undefined;
       await deps.cancelStatus.setStatus(customerId, { status: 'pending' });
       res.status(202).json({ status: 'pending' });
-      void deps.cancelTvRunner.run(customerId, contractId);
+      void deps.cancelTvRunner.run(customerId, contractId, cancelActor);
     } catch (err) {
       if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'cancel');
     }

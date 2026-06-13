@@ -21,6 +21,8 @@ import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-me
 import { InMemoryClientTvCancellationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository';
 import { InMemoryClientTvCancelStatusRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancelStatusRepository';
 import { CancelTvJobRunner } from '@infrastructure/scheduling/CancelTvJobRunner';
+import { InMemoryTvActivationEventRepository } from '@infrastructure/adapters/in-memory/InMemoryTvActivationEventRepository';
+import { ListTvActivationHistory } from '@application/use-cases/gigared/ListTvActivationHistory';
 
 import { GetGigaredConfig } from '@application/use-cases/gigared/GetGigaredConfig';
 import { UpdateGigaredConfig } from '@application/use-cases/gigared/UpdateGigaredConfig';
@@ -163,6 +165,7 @@ async function buildApp(opts: Opts = {}) {
     cancelStatus,
     customerLookup,
     contractLookup,
+    listActivationHistory: new ListTvActivationHistory(new InMemoryTvActivationEventRepository()),
   });
 
   const app = express();

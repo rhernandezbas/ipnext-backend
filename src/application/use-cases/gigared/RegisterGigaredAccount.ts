@@ -3,6 +3,7 @@ import type { ContractServiceRepository } from '@domain/ports/ContractServiceRep
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
 import type { ClientTvCancellationRepository } from '@domain/ports/ClientTvCancellationRepository';
 import type { ClientTvActivationRepository } from '@domain/ports/ClientTvActivationRepository';
+import type { TvActivationEventRepository } from '@domain/ports/TvActivationEventRepository';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { GrClientIdRequiredError } from '@domain/errors/gigared';
@@ -56,6 +57,8 @@ export class RegisterGigaredAccount {
     private readonly catalogRepo?: ServiceCatalogRepository,
     private readonly tvCancellation?: ClientTvCancellationRepository,
     private readonly activation?: ClientTvActivationRepository,
+    /** #5 BE — optional event recorder (best-effort: failure never aborts the register). */
+    private readonly eventRepo?: TvActivationEventRepository,
   ) {}
 
   async execute(
@@ -68,6 +71,9 @@ export class RegisterGigaredAccount {
       sendActivationEmail: boolean;
       /** #65 — owner contract for the local TV reconcile + credential persistence. */
       contractId?: string;
+      /** #5 BE — actor who triggered this registration (from req.user at the route layer). */
+      actorId?: string | null;
+      actorName?: string;
     },
   ): Promise<{ account: GigaredAccount; credentialsPersisted: boolean }> {
     const customer = await this.customerLookup.findById(customerId);
@@ -164,6 +170,26 @@ export class RegisterGigaredAccount {
         // eslint-disable-next-line no-console
         console.warn('[gigared] register: TV credential persistence failed (best-effort)', err);
         credentialsPersisted = false;
+      }
+    }
+
+    // #5 BE — record the 'alta' / 'reactivacion' event best-effort. A failure here must NEVER
+    // abort the already-completed Gigared register (same pattern as clearCancelled above).
+    if (this.eventRepo) {
+      try {
+        await this.eventRepo.record({
+          clientId:   customerId,
+          actorId:    input.actorId ?? null,
+          actorName:  input.actorName ?? '',
+          eventType:  seq === 0 ? 'alta' : 'reactivacion',
+          cic:        input.cic,
+          internalId,
+          seq,
+          contractId: input.contractId ?? null,
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[gigared] register: TV activation event record failed (best-effort)', err);
       }
     }
 
