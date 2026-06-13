@@ -100,6 +100,9 @@ export interface ScheduledTask {
   ticketId: string | null;
   ticketSubject: string | null;   // JOIN-derived from Ticket.subject — no N+1
 
+  // #86 — archive flag. Null = not archived. Set only when generalStatus is closed/dismissed.
+  archivedAt: string | null;
+
   // Timestamps — always present in API responses (ISO 8601 strings)
   createdAt: string;
   updatedAt: string;

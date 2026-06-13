@@ -1228,6 +1228,9 @@ model ScheduledTask {
   // Flag: task is closed (soft-close, not deleted). Derived from generalStatus; synced on write for ops tooling.
   isClosed Boolean @default(false)
 
+  // #86 — archive flag. Only closed/dismissed tasks can be archived. Null = not archived.
+  archivedAt DateTime?
+
   // RV — inventory team review flag
   reviewedByInventory       Boolean   @default(false)
   reviewedByInventoryAt     DateTime?
@@ -1300,6 +1303,7 @@ model ScheduledTask {
   @@index([reporterId])
   @@index([ticketId])
   @@index([networkSiteId])
+  @@index([archivedAt])
 }
 
 // task-activity-log — append-only audit feed. One row per change on a task
