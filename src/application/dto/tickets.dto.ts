@@ -48,6 +48,7 @@ export interface TicketDto {
   areaName: string | null;      // #49 — JOIN-derived (TicketAreaCatalog.name)
   areaColor: string | null;     // #69 — JOIN-derived (TicketAreaCatalog.color)
   grCasoId: string | null;
+  resolvedAt: string | null;     // #84 — ISO 8601; null until the ticket is closed
   createdAt: string;
   updatedAt: string;
 }

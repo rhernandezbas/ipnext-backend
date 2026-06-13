@@ -17,6 +17,7 @@ const baseRow = {
   areaId: 'area-1',                                       // #49
   area: { id: 'area-1', name: 'Soporte', color: '#6366f1' }, // #49 / #69
   grCasoId: null,
+  resolvedAt: null,
   createdAt: new Date('2024-01-01T10:00:00Z'),
   updatedAt: new Date('2024-01-02T10:00:00Z'),
 };
@@ -115,5 +116,20 @@ describe('toTicket mapper', () => {
     });
     expect(ticket.createdAt).toBe('2024-01-01T10:00:00.000Z');
     expect(ticket.updatedAt).toBe('2024-01-02T10:00:00.000Z');
+  });
+
+  it('#84: resolvedAt is null when row.resolvedAt is null', () => {
+    const ticket = toTicket({ ...baseRow, resolvedAt: null });
+    expect(ticket.resolvedAt).toBeNull();
+  });
+
+  it('#84: resolvedAt is ISO string when row.resolvedAt is a Date', () => {
+    const ticket = toTicket({ ...baseRow, resolvedAt: new Date('2024-01-03T15:00:00Z') });
+    expect(ticket.resolvedAt).toBe('2024-01-03T15:00:00.000Z');
+  });
+
+  it('#84: resolvedAt passes through ISO string unchanged', () => {
+    const ticket = toTicket({ ...baseRow, resolvedAt: '2024-01-03T15:00:00.000Z' });
+    expect(ticket.resolvedAt).toBe('2024-01-03T15:00:00.000Z');
   });
 });

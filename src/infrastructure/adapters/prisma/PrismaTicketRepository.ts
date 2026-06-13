@@ -49,6 +49,10 @@ export function toTicket(row: any): Ticket {
     areaName: row.area?.name ?? null,
     areaColor: row.area?.color ?? null,   // #69
     grCasoId: row.grCasoId ?? null,
+    // #84 — resolvedAt: stamped when the ticket is closed; null otherwise.
+    resolvedAt: row.resolvedAt instanceof Date
+      ? row.resolvedAt.toISOString()
+      : (row.resolvedAt ?? null),
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
     // #44 (D7) — related tasks only present when the query included them (getById).
@@ -219,6 +223,18 @@ export class PrismaTicketRepository implements TicketRepository {
 
   async close(id: string, statusName: string): Promise<Ticket | null> {
     // statusName is the canonical catalog name resolved by CloseTicket.
-    return this.update(id, { status: statusName });
+    // #84 — stamp resolvedAt at the persistence layer so the SLA timer can freeze.
+    try {
+      const statusId = await resolveStatusId(statusName);
+      const row = await (prisma as any).ticket.update({
+        where: { id },
+        data: { statusId, resolvedAt: new Date() },
+        include: INCLUDE,
+      });
+      return toTicket(row);
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null;
+      throw err;
+    }
   }
 }

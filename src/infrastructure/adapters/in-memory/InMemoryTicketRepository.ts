@@ -158,6 +158,7 @@ export class InMemoryTicketRepository implements TicketRepository {
       areaName,
       areaColor,
       grCasoId: null,
+      resolvedAt: null, // #84 — null until close() is called
       createdAt: now,
       updatedAt: now,
     };
@@ -207,6 +208,14 @@ export class InMemoryTicketRepository implements TicketRepository {
   }
 
   async close(id: string, statusName: string): Promise<Ticket | null> {
-    return this.update(id, { status: statusName });
+    // #84 — stamp resolvedAt when closing. update() does not set resolvedAt,
+    // so we patch the stored ticket directly after the status update.
+    const updated = await this.update(id, { status: statusName });
+    if (!updated) return null;
+    const idx = this.tickets.findIndex((t) => t.id === id);
+    if (idx === -1) return updated;
+    const stamped: Ticket = { ...this.tickets[idx]!, resolvedAt: nowIso() };
+    this.tickets[idx] = stamped;
+    return stamped;
   }
 }

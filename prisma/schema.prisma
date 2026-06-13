@@ -2021,6 +2021,10 @@ model Ticket {
   areaId String?
   area   TicketAreaCatalog? @relation(fields: [areaId], references: [id], onDelete: SetNull)
 
+  // #84 — stamped when the ticket transitions to a closed status; null while open/pending.
+  // Used by the FE SLA timer to freeze the elapsed display at the moment of closure.
+  resolvedAt DateTime?
+
   // Back-relation: tasks created from this ticket (tickets-actions-be)
   tasks ScheduledTask[]
 

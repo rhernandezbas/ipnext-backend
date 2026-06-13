@@ -17,6 +17,7 @@ const mockTicket: Ticket = {
   areaName: null,    // #49
   areaColor: null,   // #69
   grCasoId: null,
+  resolvedAt: null, // #84
   priority: 'high',
   status: 'open',
   createdAt: '2024-01-01T00:00:00Z',
