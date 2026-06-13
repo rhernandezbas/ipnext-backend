@@ -15,10 +15,15 @@ import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-me
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 
 function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
-  return {
+  const base: GigaredAccount = {
     cic: '0006230159', gigaredId: '100', email: 'e@x.com', firstName: 'N', lastName: 'A',
-    registrationDate: '19/01/2026', services: [], internalId: 'cust-1', ott: null, ...over,
+    registrationDate: '2026-01-19', services: [], internalId: 'cust-1', clientId: 'cust-1', ott: null,
   };
+  const merged = { ...base, ...over };
+  if (!('clientId' in over)) {
+    merged.clientId = merged.internalId ? merged.internalId.replace(/-\d+$/, '') : null;
+  }
+  return merged;
 }
 
 function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {

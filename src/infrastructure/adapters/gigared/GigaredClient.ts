@@ -81,6 +81,33 @@ interface Envelope<T> {
 }
 
 /**
+ * #2 — The partner sends registration_date as DD/MM/YYYY (e.g. "19/01/2026").
+ * Normalize to ISO YYYY-MM-DD so callers (FE, DB) get a standard date string.
+ * Null / empty / garbage → null. Already-ISO strings (YYYY-MM-DD) pass through.
+ */
+function normalizeRegistrationDate(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const s = String(raw).trim();
+  if (s === '') return null;
+  // Already ISO (YYYY-MM-DD): /^\d{4}-\d{2}-\d{2}$/
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // DD/MM/YYYY
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return null;
+}
+
+/**
+ * #3 — Derive the bare Client.id from internalId by stripping the trailing -\d+ suffix.
+ * The TV identity is {clientId}-{seq} (seq is a non-negative int, no hyphens). Bare UUIDs
+ * (no suffix) are returned unchanged. Null → null.
+ */
+function deriveClientId(internalId: string | null): string | null {
+  if (internalId === null) return null;
+  return internalId.replace(/-\d+$/, '');
+}
+
+/**
  * #47j — the LIVE Gigared API sends ott.status as Spanish free-text
  * ("habilitado"/"deshabilitado", also null) — NOT the docs' 'active'. Normalize to the
  * frozen tri-state 'enabled'|'disabled'|null so the FE never parses raw upstream text.
@@ -114,9 +141,10 @@ function mapAccount(raw: RawAccount): GigaredAccount {
     email: raw.crm.email,
     firstName: raw.crm.first_name,
     lastName: raw.crm.last_name,
-    registrationDate: raw.crm.registration_date,
+    registrationDate: normalizeRegistrationDate(raw.crm.registration_date),
     services: raw.crm.services ?? [],
     internalId: raw.internal_id,
+    clientId: deriveClientId(raw.internal_id),
     ott: mapOtt(raw.ott),
   };
 }

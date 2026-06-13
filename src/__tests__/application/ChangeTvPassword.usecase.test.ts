@@ -13,11 +13,16 @@ import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-m
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 
 function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
-  return {
+  const base: GigaredAccount = {
     cic: '0000001234', gigaredId: '2432', email: 'e@x.com', firstName: 'N', lastName: 'A',
-    registrationDate: '19/01/2026', services: [{ id: '129', name: 'Gigared Play Full' }],
-    internalId: 'cust-1', ott: null, ...over,
+    registrationDate: '2026-01-19', services: [{ id: '129', name: 'Gigared Play Full' }],
+    internalId: 'cust-1', clientId: 'cust-1', ott: null,
   };
+  const merged = { ...base, ...over };
+  if (!('clientId' in over)) {
+    merged.clientId = merged.internalId ? merged.internalId.replace(/-\d+$/, '') : null;
+  }
+  return merged;
 }
 function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
   return {

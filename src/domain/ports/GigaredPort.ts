@@ -35,6 +35,9 @@ export interface GigaredAccount {
   registrationDate: string | null;
   services: GigaredService[];
   internalId: string | null;
+  /** #3 — bare Client.id derived by stripping the trailing -{seq} from internalId.
+   *  Null when internalId is null. */
+  clientId: string | null;
   ott: GigaredOtt | null;
 }
 

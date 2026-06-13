@@ -46,11 +46,16 @@ const pass: RequestHandler = (_req, _res, next) => next();
 const deny: RequestHandler = (_req, res) => { res.status(403).json({ error: 'forbidden', code: 'FORBIDDEN' }); };
 
 function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
-  return {
+  const base: GigaredAccount = {
     cic: '0000000001', gigaredId: '100', email: 'e@x.com', firstName: 'N', lastName: 'A',
-    registrationDate: '19/01/2026', services: [{ id: '129', name: 'Gigared Play Full' }],
-    internalId: 'cust-1', ott: null, ...over,
+    registrationDate: '2026-01-19', services: [{ id: '129', name: 'Gigared Play Full' }],
+    internalId: 'cust-1', clientId: 'cust-1', ott: null,
   };
+  const merged = { ...base, ...over };
+  if (!('clientId' in over)) {
+    merged.clientId = merged.internalId ? merged.internalId.replace(/-\d+$/, '') : null;
+  }
+  return merged;
 }
 function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
   return {

@@ -170,7 +170,7 @@ describe('GigaredClient (#47)', () => {
       expect(a.cic).toBe('0000000001');
       expect(a.gigaredId).toBe('10000000100');
       expect(a.firstName).toBe('Nombre');
-      expect(a.registrationDate).toBe('19/01/2026');
+      expect(a.registrationDate).toBe('2026-01-19');
       expect(a.internalId).toBe('CLIENTE_001');
       expect(a.services).toEqual([{ id: '129', name: 'Gigared Play Full' }]);
       expect(a.ott).toEqual({
@@ -697,6 +697,119 @@ describe('GigaredClient (#47)', () => {
       const a = await client.getAccountByInternalId('CLIENTE_001');
       expect(a.ott!.status).toBeNull();
       expect(warn).toHaveBeenCalledWith('[gigared] unknown ott.status', 'raro');
+    });
+  });
+
+  // ---- #2 — normalizeRegistrationDate: DD/MM/YYYY → ISO YYYY-MM-DD --------
+  describe('#2 — normalizeRegistrationDate (DD/MM/YYYY → ISO)', () => {
+    const accountWithDate = (registration_date: string | null) => ({
+      message: 'Éxito',
+      detail: {
+        crm: {
+          cic: '0000000001', gigared_id: '10000000100', email: null,
+          first_name: null, last_name: null, registration_date,
+          services: [],
+        },
+        internal_id: 'CLIENTE_001',
+        ott: null,
+      },
+    });
+
+    it('"19/01/2026" → "2026-01-19"', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWithDate('19/01/2026') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.registrationDate).toBe('2026-01-19');
+    });
+
+    it('null → null', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWithDate(null) });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.registrationDate).toBeNull();
+    });
+
+    it('"" (empty string) → null', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWithDate('') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.registrationDate).toBeNull();
+    });
+
+    it('"garbage-date" → null', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWithDate('not-a-date') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.registrationDate).toBeNull();
+    });
+
+    it('already-ISO "2026-01-19" passes through unchanged', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWithDate('2026-01-19') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('CLIENTE_001');
+      expect(a.registrationDate).toBe('2026-01-19');
+    });
+  });
+
+  // ---- #3 — clientId: derived from internalId by stripping trailing -{seq} --------
+  describe('#3 — clientId derived from internalId', () => {
+    const accountWithInternalId = (internal_id: string | null) => ({
+      message: 'Éxito',
+      detail: {
+        crm: {
+          cic: '0000000001', gigared_id: '10000000100', email: null,
+          first_name: null, last_name: null, registration_date: null,
+          services: [],
+        },
+        internal_id,
+        ott: null,
+      },
+    });
+
+    it('"uuid-1" → clientId "uuid"', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWithInternalId('uuid-1') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('uuid-1');
+      expect(a.clientId).toBe('uuid');
+    });
+
+    it('bare "uuid" (no suffix) → clientId "uuid"', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWithInternalId('uuid') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('uuid');
+      expect(a.clientId).toBe('uuid');
+    });
+
+    it('null internalId → null clientId', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWithInternalId(null) });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('uuid');
+      expect(a.clientId).toBeNull();
+    });
+
+    it('"real-uuid-0" → clientId "real-uuid" (UUID with embedded hyphens)', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: accountWithInternalId('550e8400-e29b-41d4-a716-446655440000-2') });
+      const { client, ready } = makeClient(http);
+      await ready;
+      const a = await client.getAccountByInternalId('550e8400-e29b-41d4-a716-446655440000-2');
+      expect(a.clientId).toBe('550e8400-e29b-41d4-a716-446655440000');
     });
   });
 

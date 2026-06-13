@@ -32,9 +32,10 @@ describe('Gigared ports shape witnesses (#47)', () => {
       email: 'x@y.com',
       firstName: 'Nombre',
       lastName: 'Apellido',
-      registrationDate: '19/01/2026',
+      registrationDate: '2026-01-19',
       services: [svc],
       internalId: 'CLIENTE_001',
+      clientId: 'CLIENTE_001',
       ott,
     };
     expect(acc.services[0]!.name).toBe('Gigared Play Full');
