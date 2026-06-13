@@ -53,6 +53,10 @@ export function toTicket(row: any): Ticket {
     resolvedAt: row.resolvedAt instanceof Date
       ? row.resolvedAt.toISOString()
       : (row.resolvedAt ?? null),
+    // #85 — archivedAt: stamped when the ticket is archived; null otherwise.
+    archivedAt: row.archivedAt instanceof Date
+      ? row.archivedAt.toISOString()
+      : (row.archivedAt ?? null),
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
     // #44 (D7) — related tasks only present when the query included them (getById).
@@ -116,6 +120,13 @@ export class PrismaTicketRepository implements TicketRepository {
       const seqClause = sequenceNumberClause(query.search);
       if (seqClause) or.push(seqClause);
       where['OR'] = or;
+    }
+
+    // #85 — archived filter: default excludes archived; archived:true returns only archived
+    if (query.archived === true) {
+      where['archivedAt'] = { not: null };
+    } else {
+      where['archivedAt'] = null;
     }
 
     const page = query.page ?? 1;
@@ -234,6 +245,32 @@ export class PrismaTicketRepository implements TicketRepository {
       return toTicket(row);
     } catch (err: any) {
       if (err?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
+  async archive(id: string): Promise<Ticket | null> {
+    // #85 — stamp archivedAt. Caller (ArchiveTicket) validates the ticket is closed.
+    try {
+      const row = await (prisma as any).ticket.update({
+        where: { id },
+        data: { archivedAt: new Date() },
+        include: INCLUDE,
+      });
+      return toTicket(row);
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
+  async delete(id: string): Promise<boolean> {
+    // #85 — hard delete. Returns false if not found (P2025).
+    try {
+      await (prisma as any).ticket.delete({ where: { id } });
+      return true;
+    } catch (err: any) {
+      if (err?.code === 'P2025') return false;
       throw err;
     }
   }

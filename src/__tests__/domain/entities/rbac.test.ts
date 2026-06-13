@@ -94,8 +94,8 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 37 valid action codes (4 base + 28 prior sub-actions + 5 tv granular)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(37);
+  it('contains exactly 38 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(38);
   });
 
   it('includes all 4 base actions', () => {
@@ -142,6 +142,10 @@ describe('KNOWN_ACTIONS constant', () => {
     for (const action of tvGranular) {
       expect(KNOWN_ACTIONS).toContain(action);
     }
+  });
+
+  it('includes delete_hard (#85 — hard delete tickets requires explicit permission)', () => {
+    expect(KNOWN_ACTIONS).toContain('delete_hard');
   });
 
   it('tv granular actions resolve to dot-format wire keys (tv.<action>)', () => {

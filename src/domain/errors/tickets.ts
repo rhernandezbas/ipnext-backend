@@ -59,6 +59,17 @@ export class TicketAreaRequiredError extends DomainError {
 }
 
 /**
+ * #85 — Thrown by ArchiveTicket when the ticket is not in a closed-like status.
+ * Mapped to HTTP 422 — archiving requires closure first.
+ */
+export class TicketNotClosedError extends DomainError {
+  constructor() {
+    super('Ticket is not closed', 'TICKET_NOT_CLOSED');
+    this.name = 'TicketNotClosedError';
+  }
+}
+
+/**
  * Thrown by CloseTicket when the editable status catalog has no "closed-like"
  * entry (none of the known CLOSED slugs: 'closed', 'cerrado', case-insensitive).
  * Mapped to HTTP 422 — closing is impossible until a closed status is seeded,

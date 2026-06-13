@@ -132,4 +132,14 @@ describe('toTicket mapper', () => {
     const ticket = toTicket({ ...baseRow, resolvedAt: '2024-01-03T15:00:00.000Z' });
     expect(ticket.resolvedAt).toBe('2024-01-03T15:00:00.000Z');
   });
+
+  it('#85: archivedAt is null when row.archivedAt is null', () => {
+    const ticket = toTicket({ ...baseRow, archivedAt: null });
+    expect(ticket.archivedAt).toBeNull();
+  });
+
+  it('#85: archivedAt is ISO string when row.archivedAt is a Date', () => {
+    const ticket = toTicket({ ...baseRow, archivedAt: new Date('2026-01-15T10:00:00Z') });
+    expect(ticket.archivedAt).toBe('2026-01-15T10:00:00.000Z');
+  });
 });

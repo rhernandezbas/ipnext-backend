@@ -53,6 +53,13 @@ export class InMemoryTicketRepository implements TicketRepository {
   async list(query: ListTicketsQuery): Promise<PaginatedResult<Ticket>> {
     let results = [...this.tickets];
 
+    // #85 — archived filter: default excludes archived; archived:true returns only archived
+    if (query.archived === true) {
+      results = results.filter((t) => t.archivedAt != null);
+    } else {
+      results = results.filter((t) => t.archivedAt == null);
+    }
+
     if (query.customerId) {
       results = results.filter((t) => t.customerId === query.customerId);
     }
@@ -159,6 +166,7 @@ export class InMemoryTicketRepository implements TicketRepository {
       areaColor,
       grCasoId: null,
       resolvedAt: null, // #84 — null until close() is called
+      archivedAt: null, // #85 — null until archive() is called
       createdAt: now,
       updatedAt: now,
     };
@@ -217,5 +225,20 @@ export class InMemoryTicketRepository implements TicketRepository {
     const stamped: Ticket = { ...this.tickets[idx]!, resolvedAt: nowIso() };
     this.tickets[idx] = stamped;
     return stamped;
+  }
+
+  async archive(id: string): Promise<Ticket | null> {
+    const idx = this.tickets.findIndex((t) => t.id === id);
+    if (idx === -1) return null;
+    const stamped: Ticket = { ...this.tickets[idx]!, archivedAt: nowIso() };
+    this.tickets[idx] = stamped;
+    return stamped;
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const idx = this.tickets.findIndex((t) => t.id === id);
+    if (idx === -1) return false;
+    this.tickets.splice(idx, 1);
+    return true;
   }
 }
