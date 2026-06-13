@@ -351,6 +351,7 @@ import { CancelTv } from '@application/use-cases/gigared/CancelTv';
 import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
 import { PrismaTvCredentialsReader } from '../adapters/prisma/PrismaTvCredentialsReader';
+import { PrismaClientTvCancellationRepository } from '../adapters/prisma/PrismaClientTvCancellationRepository';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
@@ -1711,18 +1712,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // #47k — ownership-aware contract lookup ({ id, clientId }) so the TV use cases reject a
   // contractId that belongs to another customer (404, no cross-customer write).
   const gigaredContractLookup = { findById: (id: string) => prismaContractOwnershipLookup(id) };
+  // #72 — local TV-cancel flag repo (Client.tvCancelledAt). GR sync never touches it.
+  const gigaredTvCancellation = new PrismaClientTvCancellationRepository();
   app.use('/api/gigared', createAuthMiddleware(authAdapter, sessionRepo), createGigaredRouter({
     getConfig:          new GetGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     updateConfig:       new UpdateGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     getSummary:         new GetGigaredSummary(gigaredClient),
     listAccounts:       new ListGigaredAccounts(gigaredClient),
-    getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup),
-    linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
-    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
+    getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup, gigaredTvCancellation),
+    linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
+    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
     addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     setOttStatus:       new SetOttStatus(gigaredClient, gigaredCustomerLookup),
-    cancelTv:           new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
+    cancelTv:           new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvCancellation),
     changeTvPassword:   new ChangeTvPassword(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
     // #65 fix wave H3 — superficie dedicada para las credenciales (guard tv.register).
     getTvCredentials:   new GetTvCredentials(gigaredCustomerLookup, new PrismaTvCredentialsReader()),

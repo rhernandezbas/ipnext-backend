@@ -1,6 +1,7 @@
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import type { ContractServiceRepository } from '@domain/ports/ContractServiceRepository';
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
+import type { ClientTvCancellationRepository } from '@domain/ports/ClientTvCancellationRepository';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { GrClientIdRequiredError } from '@domain/errors/gigared';
@@ -20,7 +21,7 @@ export function tvLoginFromAccount(account: GigaredAccount): string | null {
 }
 
 /**
- * RegisterGigaredAccount (#47) — registers a brand-new Gigared account for a CIC,
+ * RegisterGigaredAccount (#47 / #72) — registers a brand-new Gigared account for a CIC,
  * activates it, binds internal_id = customerId, then returns the account.
  * The register password is TRANSIT-ONLY toward Gigared.
  *
@@ -30,6 +31,10 @@ export function tvLoginFromAccount(account: GigaredAccount): string | null {
  * The credentials are visible to the operator by explicit product decision. Persistence is
  * BEST-EFFORT: a failure never aborts the (already-done) Gigared register — the account is
  * still returned. Without a `contractId` the behavior is byte-for-byte the legacy register.
+ *
+ * #72 — after the register + link succeeds, calls tvCancellation.clearCancelled(customerId)
+ * best-effort so the local TV-cancel flag is cleared (the client got TV again). An error in
+ * the clear never aborts the already-done Gigared register.
  */
 export class RegisterGigaredAccount {
   constructor(
@@ -38,6 +43,7 @@ export class RegisterGigaredAccount {
     private readonly contractLookup?: ContractLookup,
     private readonly csRepo?: ContractServiceRepository,
     private readonly catalogRepo?: ServiceCatalogRepository,
+    private readonly tvCancellation?: ClientTvCancellationRepository,
   ) {}
 
   async execute(
@@ -91,6 +97,17 @@ export class RegisterGigaredAccount {
     await this.gigared.activate({ cic: input.cic, email: input.email });
     await this.gigared.setInternalId(input.cic, customerId);
     const account = await this.gigared.getAccountByInternalId(customerId);
+
+    // #72 — clearCancelled best-effort: el cliente volvió a tener TV (re-registro exitoso).
+    // Se intenta siempre que el register + link fue exitoso. Un error aquí NO aborta.
+    if (this.tvCancellation) {
+      try {
+        await this.tvCancellation.clearCancelled(customerId);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[gigared] register: TV cancellation flag clear failed (best-effort)', err);
+      }
+    }
 
     // #65 — persist credentials on the local TV slot. Best-effort: never abort the register.
     // H2/M8 fix: a fresh account comes back with services:[] → the reconcile would otherwise
