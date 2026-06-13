@@ -1,14 +1,14 @@
 -- Migration: 20260717000000_recapture_leads
 -- Creates RecaptureLead + RecaptureContact tables with 4 enums for the Recaptación feature (#80).
 -- Additive — no BEGIN/COMMIT (Prisma wraps each migration in its own transaction).
--- All DDL is idempotent (IF NOT EXISTS).
+-- All DDL is idempotent (IF NOT EXISTS for tables/indexes; DO-block guard for enums — CREATE TYPE no soporta IF NOT EXISTS).
 
 -- ─── Enums ───────────────────────────────────────────────────────────────────
 
-CREATE TYPE IF NOT EXISTS "RecaptureLeadSource" AS ENUM ('churned_client', 'csv');
-CREATE TYPE IF NOT EXISTS "RecaptureLeadStatus" AS ENUM ('nuevo', 'en_gestion', 'contactado', 'interesado', 'recuperado', 'descartado');
-CREATE TYPE IF NOT EXISTS "RecaptureContactChannel" AS ENUM ('llamada', 'whatsapp', 'email', 'sms', 'otro');
-CREATE TYPE IF NOT EXISTS "RecaptureContactOutcome" AS ENUM ('sin_respuesta', 'contactado', 'no_interesado', 'interesado', 'recuperado', 'numero_erroneo');
+DO $$ BEGIN CREATE TYPE "RecaptureLeadSource" AS ENUM ('churned_client', 'csv'); EXCEPTION WHEN duplicate_object THEN null; END $$;
+DO $$ BEGIN CREATE TYPE "RecaptureLeadStatus" AS ENUM ('nuevo', 'en_gestion', 'contactado', 'interesado', 'recuperado', 'descartado'); EXCEPTION WHEN duplicate_object THEN null; END $$;
+DO $$ BEGIN CREATE TYPE "RecaptureContactChannel" AS ENUM ('llamada', 'whatsapp', 'email', 'sms', 'otro'); EXCEPTION WHEN duplicate_object THEN null; END $$;
+DO $$ BEGIN CREATE TYPE "RecaptureContactOutcome" AS ENUM ('sin_respuesta', 'contactado', 'no_interesado', 'interesado', 'recuperado', 'numero_erroneo'); EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 -- ─── RecaptureLead ────────────────────────────────────────────────────────────
 
