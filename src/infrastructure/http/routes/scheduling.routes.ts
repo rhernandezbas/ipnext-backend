@@ -39,6 +39,7 @@ import {
 import {
   StageNotFoundError,
   TaskNotFoundError,
+  TaskNotClosedError,
   InvalidCursorError,
   InvalidGeneralStatusError,
   ReferenceNotFoundError,
@@ -55,6 +56,7 @@ import {
   OrderingError,
 } from '@domain/errors/checklist';
 import { RetireContractEquipment } from '@application/use-cases/RetireContractEquipment';
+import { ArchiveTask } from '@application/use-cases/ArchiveTask';
 import {
   TaskHasNoContractError,
   ProjectNotRetirementError,
@@ -114,11 +116,16 @@ export function createSchedulingRouter(
   setTaskGeneralStatus?: SetTaskGeneralStatus,
   /** #41 — granular guard for the general-status mutation (scheduling:write). Pass-through when omitted. */
   requireSchedulingWrite?: RequestHandler,
+  /** #86 — use case for archiving a task. Optional — POST /:id/archive only registered when provided. */
+  archiveTask?: ArchiveTask,
+  /** #86 — guard for DELETE /:id (scheduling:hard_delete → super_admin only). Pass-through when omitted. */
+  requireHardDelete?: RequestHandler,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
   const invWrite: RequestHandler = requireInventoryWrite ?? ((_req, _res, next) => next());
   const schedWrite: RequestHandler = requireSchedulingWrite ?? ((_req, _res, next) => next());
+  const hardDelete: RequestHandler = requireHardDelete ?? ((_req, _res, next) => next());
 
   // Actor for the activity log (#10), derived from the authenticated user.
   const actorOf = (req: Request): ActorContext => ({
@@ -151,6 +158,8 @@ export function createSchedulingRouter(
       isClosed:   req.query['isClosed'],
       kind:       req.query['kind'],
       status:     req.query['status'],
+      // #86 — archived filter. Omitted → exclude archived. true → only archived.
+      archived:   req.query['archived'],
     };
 
     const parsed = ListTasksFilterSchema.safeParse(rawQuery);
@@ -474,6 +483,30 @@ export function createSchedulingRouter(
 
   // ── End general status ────────────────────────────────────────────────────
 
+  // ── #86 — Archive task ────────────────────────────────────────────────────
+  // MUST be registered BEFORE GET /:id so the catch-all id route does not shadow it.
+  // Gated by auth + scheduling:write (schedWrite is pass-through when omitted).
+  if (archiveTask) {
+    router.post('/:id/archive', auth, schedWrite, async (req: Request, res: Response): Promise<void> => {
+      try {
+        const task = await archiveTask.execute(req.params['id'] as string);
+        res.status(200).json(task);
+      } catch (err) {
+        if (err instanceof TaskNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof TaskNotClosedError) {
+          res.status(422).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    });
+  }
+
+  // ── End archive ───────────────────────────────────────────────────────────
+
   router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const task = await getTask.execute(req.params['id'] as string);
     if (!task) {
@@ -666,7 +699,9 @@ export function createSchedulingRouter(
     }
   });
 
-  router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  // #86 — hard_delete guard: only super_admin (via requirePerm('scheduling','hard_delete')).
+  // hardDelete is a pass-through when omitted (back-compat for tests without guard wired).
+  router.delete('/:id', auth, hardDelete, async (req: Request, res: Response): Promise<void> => {
     const deleted = await deleteTask.execute(req.params['id'] as string);
     if (!deleted) {
       res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });

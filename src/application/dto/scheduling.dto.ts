@@ -191,5 +191,7 @@ export const ListTasksFilterSchema = z.object({
   kind:       z.enum(['customer', 'network']).optional(),
   // #41 — filter by generalStatus. Omitted ≡ all (back-compat). 'all' = explicit no-filter.
   status:     z.enum(['open', 'closed', 'dismissed', 'all']).optional(),
+  // #86 — archive filter. Omitted (default) → exclude archived tasks. true → only archived.
+  archived:   z.enum(['true', 'false']).transform(v => v === 'true').optional(),
 });
 export type TaskListFilter = z.infer<typeof ListTasksFilterSchema>;

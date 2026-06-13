@@ -37,6 +37,17 @@ export class TaskNotFoundError extends DomainError {
 }
 
 /**
+ * #86 — Raised by ArchiveTask when the task's generalStatus is 'open'.
+ * Only closed or dismissed tasks can be archived. Mapped to 422 TASK_NOT_CLOSED.
+ */
+export class TaskNotClosedError extends DomainError {
+  constructor(id: string) {
+    super(`Task ${id} must be closed or dismissed before archiving`, 'TASK_NOT_CLOSED');
+    this.name = 'TaskNotClosedError';
+  }
+}
+
+/**
  * #41 — Raised by SetTaskGeneralStatus when an unknown general-status value is
  * supplied (defensive validation in the use case; the zod body guard already
  * rejects bad values at the HTTP edge with 400). Mapped to 422 at the route.

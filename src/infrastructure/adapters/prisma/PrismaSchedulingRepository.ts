@@ -130,6 +130,10 @@ export function toTask(row: any): ScheduledTask {
       : [],
     // #39 — project allows equipment retirement (false when no project FK)
     projectAllowsRetirement: row.project?.allowsEquipmentRetirement ?? false,
+    // #86 — archive flag. Null = not archived.
+    archivedAt: row.archivedAt instanceof Date
+      ? row.archivedAt.toISOString()
+      : (row.archivedAt ?? null),
     // Task timestamps — the frontend type declares these non-nullable; the
     // Edad column in TasksTableView crashes with "NaN días" if they are missing.
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
@@ -208,6 +212,13 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     // #41 — explicit status filter wins (set last). 'all'/omitted ≡ no status filter.
     if (filter?.status && filter.status !== 'all') where['generalStatus'] = filter.status;
     if (filter?.kind) where['kind'] = filter.kind;
+    // #86 — archived filter. Omitted (default) → exclude archived. true → only archived.
+    if (filter?.archived === true) {
+      where['archivedAt'] = { not: null };
+    } else {
+      // Default: exclude archived tasks (archivedAt = null)
+      where['archivedAt'] = null;
+    }
 
     const rows = await (prisma.scheduledTask as any).findMany({
       where,
@@ -289,6 +300,20 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  // #86 — archive a task (set archivedAt = now). Returns null when not found.
+  async archiveTask(id: string): Promise<ScheduledTask | null> {
+    try {
+      const row = await (prisma.scheduledTask as any).update({
+        where: { id },
+        data: { archivedAt: new Date() },
+        include: INCLUDE,
+      });
+      return toTask(row);
+    } catch {
+      return null;
     }
   }
 

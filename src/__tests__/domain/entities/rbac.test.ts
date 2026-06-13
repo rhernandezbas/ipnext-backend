@@ -94,8 +94,12 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 38 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(38);
+  it('contains exactly 39 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(39);
+  });
+
+  it('includes scheduling.hard_delete (#86 — super_admin-only hard delete of tasks)', () => {
+    expect(KNOWN_ACTIONS).toContain('hard_delete');
   });
 
   it('includes all 4 base actions', () => {

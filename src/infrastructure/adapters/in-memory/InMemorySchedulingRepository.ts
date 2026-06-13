@@ -92,6 +92,8 @@ const NEW_FIELDS_DEFAULTS = {
   projectAllowsRetirement: false,
   // #54 — task-level locality snapshot (null for seeded tasks; back-compat via site.city)
   iclassCityCode: null as string | null,
+  // #86 — archive flag. null = not archived.
+  archivedAt: null as string | null,
 };
 
 export class InMemorySchedulingRepository implements SchedulingRepository {
@@ -311,6 +313,12 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (filter.isClosed !== undefined && !hasStatusFilter) tasks = tasks.filter(t => t.isClosed === filter.isClosed);
     if (filter.kind) tasks = tasks.filter(t => t.kind === filter.kind);
     if (hasStatusFilter) tasks = tasks.filter(t => t.generalStatus === filter.status);
+    // #86 — archived filter. Omitted (default) → exclude archived. true → only archived.
+    if (filter.archived === true) {
+      tasks = tasks.filter(t => t.archivedAt !== null);
+    } else if (filter.archived === false || filter.archived === undefined) {
+      tasks = tasks.filter(t => t.archivedAt === null);
+    }
     return tasks;
   }
 
@@ -389,6 +397,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       closureHasDeviceInventory: false,
       ticketId: data.ticketId ?? null,
       ticketSubject: (data.ticketId != null ? (this.ticketSubjects.get(data.ticketId) ?? null) : null),
+      // #86 — new tasks are never archived
+      archivedAt: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -597,6 +607,18 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     } as Omit<ScheduledTask, 'stageCategory' | 'createdAt' | 'updatedAt'> & { stageId: string });
     this.tasks.push(task);
     return { ...task };
+  }
+
+  // #86 — archive a task (set archivedAt = now). Returns null when not found.
+  async archiveTask(id: string): Promise<import('@domain/entities/scheduling').ScheduledTask | null> {
+    const index = this.tasks.findIndex(t => t.id === id);
+    if (index === -1) return null;
+    this.tasks[index] = {
+      ...this.tasks[index]!,
+      archivedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    return { ...this.tasks[index]! };
   }
 
   async deleteTask(id: string): Promise<boolean> {

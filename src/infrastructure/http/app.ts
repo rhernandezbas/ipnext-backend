@@ -125,6 +125,7 @@ import { buildIClassClient } from './iclass.factory';
 import { PrismaIClassDispatchAttemptRepository } from '../adapters/prisma/PrismaIClassDispatchAttemptRepository';
 import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryReview';
 import { SetTaskGeneralStatus } from '@application/use-cases/SetTaskGeneralStatus';
+import { ArchiveTask } from '@application/use-cases/ArchiveTask';
 import { AddTaskComment } from '@application/use-cases/AddTaskComment';
 import { ListTaskComments } from '@application/use-cases/ListTaskComments';
 import { DeleteTaskComment } from '@application/use-cases/DeleteTaskComment';
@@ -818,6 +819,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     taskActivityRecorder,
   );
   const deleteTask = new DeleteTask(schedulingRepo);
+  const archiveTask = new ArchiveTask(schedulingRepo);
   // IClass integration: moving a task to "Enviar a IClass" delegates the OS
   // creation. The on/off decision lives in the feature flag (default OFF).
   const featureFlagRepo = new PrismaFeatureFlagRepository();
@@ -1424,7 +1426,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listIClassNodes,
     resendTaskToIClassWithNode,
     requirePerm,
-  }, getTaskActivity, requirePerm('inventory', 'write'), retireContractEquipment, setTaskGeneralStatus, requirePerm('scheduling', 'write')));
+  }, getTaskActivity, requirePerm('inventory', 'write'), retireContractEquipment, setTaskGeneralStatus, requirePerm('scheduling', 'write'), archiveTask, requirePerm('scheduling', 'hard_delete')));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);

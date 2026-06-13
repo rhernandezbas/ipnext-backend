@@ -375,6 +375,18 @@ async function seedSchedulingFoundation() {
           })
           console.log('  Created RBAC permission: scheduling.iclass_manual_resend (no role grant — super_admin only via migration)')
         }
+        // #86 (hard_delete): ensure the permission exists in the catalog so the
+        // migration grant to super_admin can resolve it. Borrado total de tareas —
+        // ONLY super_admin receives this permission (NOT granted to administrador).
+        const existingHardDeletePerm = await (prisma as any).rbacPermission.findFirst({
+          where: { moduleId: schedulingModule.id, action: 'hard_delete' },
+        })
+        if (!existingHardDeletePerm) {
+          await (prisma as any).rbacPermission.create({
+            data: { moduleId: schedulingModule.id, action: 'hard_delete' },
+          })
+          console.log('  Created RBAC permission: scheduling.hard_delete (no role grant — super_admin only via migration)')
+        }
         for (const action of ['manage', 'read']) {
           let perm = await (prisma as any).rbacPermission.findFirst({
             where: { moduleId: schedulingModule.id, action },
