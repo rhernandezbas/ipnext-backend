@@ -27,6 +27,9 @@ function toRecaptureLeadDomain(row: any): RecaptureLead {
     email: row.email ?? null,
     status: row.status,
     assigneeId: row.assigneeId ?? null,
+    // Resolved when include: { assignee: { select: { id, name } } } is used.
+    // Falls back to null for raw rows (e.g. $queryRaw RETURNING *).
+    assigneeName: row.assignee?.name ?? null,
     claimedAt: row.claimedAt instanceof Date ? row.claimedAt.toISOString() : (row.claimedAt ?? null),
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
@@ -55,6 +58,7 @@ function toRecaptureContactDomain(row: any): RecaptureContact {
 export class PrismaRecaptureRepository implements RecaptureRepository {
   async list(query: ListRecaptureLeadsQuery): Promise<PaginatedResult<RecaptureLead>> {
     const where: Record<string, unknown> = {};
+    if (query.source) where['source'] = query.source;
     if (query.status) where['status'] = query.status;
     if (query.unassigned) {
       where['assigneeId'] = null;
@@ -72,6 +76,7 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
         skip,
         take: limit,
         orderBy: { createdAt: 'asc' },
+        include: { assignee: { select: { id: true, name: true } } },
       }),
       (prisma as any).recaptureLead.count({ where }),
     ]);
@@ -88,6 +93,7 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
     const row = await (prisma as any).recaptureLead.findUnique({
       where: { id },
       include: {
+        assignee: { select: { id: true, name: true } },
         contacts: {
           orderBy: { createdAt: 'asc' },
         },
@@ -132,7 +138,10 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
     });
     if (result.count === 0) return null;
 
-    const row = await (prisma as any).recaptureLead.findUnique({ where: { id: leadId } });
+    const row = await (prisma as any).recaptureLead.findUnique({
+      where: { id: leadId },
+      include: { assignee: { select: { id: true, name: true } } },
+    });
     return row ? toRecaptureLeadDomain(row) : null;
   }
 
@@ -178,7 +187,10 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
     });
     if (result.count === 0) return null;
 
-    const row = await (prisma as any).recaptureLead.findUnique({ where: { id: leadId } });
+    const row = await (prisma as any).recaptureLead.findUnique({
+      where: { id: leadId },
+      include: { assignee: { select: { id: true, name: true } } },
+    });
     return row ? toRecaptureLeadDomain(row) : null;
   }
 
@@ -189,7 +201,10 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
     });
     if (result.count === 0) return null;
 
-    const row = await (prisma as any).recaptureLead.findUnique({ where: { id: leadId } });
+    const row = await (prisma as any).recaptureLead.findUnique({
+      where: { id: leadId },
+      include: { assignee: { select: { id: true, name: true } } },
+    });
     return row ? toRecaptureLeadDomain(row) : null;
   }
 

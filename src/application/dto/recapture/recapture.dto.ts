@@ -12,6 +12,8 @@ export interface RecaptureLeadDto {
   email: string | null;
   status: string;
   assigneeId: string | null;
+  /** Display name of the assignee — null when unassigned. Resolved by the Prisma adapter via JOIN. */
+  assigneeName: string | null;
   claimedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -49,6 +51,7 @@ export function toRecaptureLeadDto(lead: RecaptureLead): RecaptureLeadDto {
     email: lead.email,
     status: lead.status,
     assigneeId: lead.assigneeId,
+    assigneeName: lead.assigneeName,
     claimedAt: lead.claimedAt,
     createdAt: lead.createdAt,
     updatedAt: lead.updatedAt,

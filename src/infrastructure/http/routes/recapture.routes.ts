@@ -9,7 +9,7 @@ import { AddRecaptureContact } from '@application/use-cases/recapture/AddRecaptu
 import { IngestChurnedClients } from '@application/use-cases/recapture/IngestChurnedClients';
 import { ImportCsvLeads } from '@application/use-cases/recapture/ImportCsvLeads';
 import { RecaptureLeadNotFoundError, RecaptureLeadAlreadyClaimedError } from '@domain/errors/recapture';
-import type { RecaptureLeadStatus, RecaptureContactChannel, RecaptureContactOutcome } from '@domain/entities/recaptureLead';
+import type { RecaptureLeadStatus, RecaptureLeadSource, RecaptureContactChannel, RecaptureContactOutcome } from '@domain/entities/recaptureLead';
 
 /** Per-route permission guards (recapture read/manage). */
 export interface RecaptureRoutePerms {
@@ -20,6 +20,8 @@ export interface RecaptureRoutePerms {
 const VALID_STATUSES: RecaptureLeadStatus[] = [
   'nuevo', 'en_gestion', 'contactado', 'interesado', 'recuperado', 'descartado',
 ];
+
+const VALID_SOURCES: RecaptureLeadSource[] = ['churned_client', 'csv'];
 
 const VALID_CHANNELS: RecaptureContactChannel[] = ['llamada', 'whatsapp', 'email', 'sms', 'otro'];
 
@@ -122,8 +124,9 @@ export function createRecaptureRouter(
     perms.read,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        const { status, assigneeId, unassigned, page, limit } = req.query as Record<string, string>;
+        const { status, assigneeId, unassigned, page, limit, source } = req.query as Record<string, string>;
         const result = await listLeads.execute({
+          source: VALID_SOURCES.includes(source as RecaptureLeadSource) ? (source as RecaptureLeadSource) : undefined,
           status: VALID_STATUSES.includes(status as RecaptureLeadStatus) ? (status as RecaptureLeadStatus) : undefined,
           assigneeId: assigneeId || undefined,
           unassigned: unassigned === 'true',

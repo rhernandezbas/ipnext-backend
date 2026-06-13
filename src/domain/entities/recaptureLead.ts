@@ -37,6 +37,8 @@ export interface RecaptureLead {
   status: RecaptureLeadStatus;
   /** FK to RbacUser — null means unassigned */
   assigneeId: string | null;
+  /** Display name of the assignee — resolved by the Prisma adapter via JOIN; null when unassigned or in-memory */
+  assigneeName: string | null;
   claimedAt: string | null; // ISO 8601
   createdAt: string;        // ISO 8601
   updatedAt: string;        // ISO 8601

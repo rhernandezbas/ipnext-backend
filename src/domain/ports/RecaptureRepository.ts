@@ -8,6 +8,8 @@ export interface ListRecaptureLeadsQuery extends PaginatedQuery {
   assigneeId?: string;
   /** true = only leads where assigneeId IS NULL */
   unassigned?: boolean;
+  /** Filter by origin source */
+  source?: 'churned_client' | 'csv';
 }
 
 // ─── Mutation inputs ──────────────────────────────────────────────────────────

@@ -46,6 +46,9 @@ export class InMemoryRecaptureRepository implements RecaptureRepository {
   async list(query: ListRecaptureLeadsQuery): Promise<PaginatedResult<RecaptureLead>> {
     let results = [...this.leads];
 
+    if (query.source) {
+      results = results.filter((l) => l.source === query.source);
+    }
     if (query.status) {
       results = results.filter((l) => l.status === query.status);
     }
@@ -86,6 +89,8 @@ export class InMemoryRecaptureRepository implements RecaptureRepository {
       email: data.email ?? null,
       status: 'nuevo',
       assigneeId: null,
+      // InMemory does not resolve user names — name resolution is a Prisma-projection concern.
+      assigneeName: null,
       claimedAt: null,
       createdAt: now,
       updatedAt: now,
@@ -114,6 +119,8 @@ export class InMemoryRecaptureRepository implements RecaptureRepository {
     const updated: RecaptureLead = {
       ...lead,
       assigneeId: actorId,
+      // InMemory does not resolve assigneeName — name resolution is Prisma-only.
+      assigneeName: null,
       claimedAt: now,
       status: 'en_gestion',
       updatedAt: now,
