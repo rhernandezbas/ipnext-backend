@@ -356,7 +356,8 @@ describe('gigared.routes — granular TV RBAC guards (#50)', () => {
     const app = await buildApp({ perms: { register: pass }, tvCredentials: { login: 'GIGA2432', password: 'ip243200' } });
     const res = await request(app).get('/api/gigared/customers/cust-1/tv-credentials');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ login: 'GIGA2432', password: 'ip243200' });
+    // #81 — el response gana `internalId` (identidad vigente; seq=0 → Client.id pelado).
+    expect(res.body).toEqual({ login: 'GIGA2432', password: 'ip243200', internalId: 'cust-1' });
   });
 
   it('#65 H3 GET /tv-credentials WITHOUT tv.register → 403 (same guard as password change)', async () => {

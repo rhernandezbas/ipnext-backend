@@ -4,6 +4,7 @@ import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepos
 import type { RemoveTvServiceResult } from '@application/dto/gigared.dto';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import type { CustomerLookup, ContractLookup } from './lookups';
 import { reconcileTvContractService } from './reconcileTvContractService';
 
@@ -33,7 +34,9 @@ export class RemoveTvService {
     const contract = await this.contractLookup.findById(contractId);
     if (!contract || contract.clientId !== customerId) throw new ContractNotFoundError(contractId);
 
-    await this.gigared.removeService(customerId, serviceId);
+    // #81 — internal_id vigente (seq=0 → id pelado, back-compat).
+    const internalId = currentTvInternalId(customerId, customer.tvActivationSeq ?? 0);
+    await this.gigared.removeService(internalId, serviceId);
 
     try {
       const { contractServiceId } = await reconcileTvContractService({
@@ -42,6 +45,7 @@ export class RemoveTvService {
         catalogRepo: this.catalogRepo,
         customerId,
         contractId,
+        internalId,
       });
       const result: RemoveTvServiceResult = { gigared: 'ok', local: 'ok' };
       if (contractServiceId) result.contractServiceId = contractServiceId;

@@ -187,6 +187,10 @@ model Client {
   // #72 — local TV-cancel flag. Set by CancelTv on teardown; cleared by Link/Register on re-link.
   // GR sync NEVER writes this — it's mirror-only state (the partner has no unlink primitive).
   tvCancelledAt    DateTime?
+  // #81 — contador de reactivaciones de TV POR CLIENTE. seq=0 = identidad de hoy (internal_id =
+  // Client.id crudo, mail sin sufijo). Se incrementa SOLO en re-alta para mintear un internal_id +
+  // mail frescos, nunca quemados en el partner. GR sync NUNCA escribe esta columna (mirror-only).
+  tvActivationSeq  Int             @default(0)
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   contracts        Contract[]

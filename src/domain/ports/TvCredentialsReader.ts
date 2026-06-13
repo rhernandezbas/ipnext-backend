@@ -9,6 +9,13 @@
 export interface TvCredentials {
   login: string | null;
   password: string | null;
+  /**
+   * #81 — el internal_id VIGENTE de la cuenta de TV del cliente (currentTvInternalId(id, seq)).
+   * Lo computa GetTvCredentials desde el seq del cliente, NO el reader. Opcional para no romper
+   * a los adapters/tests que sólo proveen login/password (back-compat). El FE lo muestra en
+   * Credenciales para que el operador vea la identidad actual (seq=0 → Client.id pelado).
+   */
+  internalId?: string | null;
 }
 
 export interface TvCredentialsReader {
