@@ -35,6 +35,7 @@ export class PrismaTvActivationEventRepository implements TvActivationEventRepos
     const rows = await (prisma as any).tvActivationEvent.findMany({
       where:   { clientId },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      include: { client: { select: { name: true } } },
     });
     return rows.map(toEvent);
   }
@@ -56,6 +57,7 @@ export class PrismaTvActivationEventRepository implements TvActivationEventRepos
     const rows = await (prisma as any).tvActivationEvent.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      include: { client: { select: { name: true } } },
     });
     return rows.map(toEvent);
   }
@@ -64,15 +66,16 @@ export class PrismaTvActivationEventRepository implements TvActivationEventRepos
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toEvent(row: any): TvActivationEvent {
   return {
-    id:         row.id,
-    clientId:   row.clientId,
-    actorId:    row.actorId ?? null,
-    actorName:  row.actorName,
-    eventType:  row.eventType as TvActivationEvent['eventType'],
-    cic:        row.cic ?? null,
-    internalId: row.internalId ?? null,
-    seq:        row.seq ?? null,
-    contractId: row.contractId ?? null,
-    createdAt:  row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+    id:           row.id,
+    clientId:     row.clientId,
+    customerName: row.client?.name ?? null,
+    actorId:      row.actorId ?? null,
+    actorName:    row.actorName,
+    eventType:    row.eventType as TvActivationEvent['eventType'],
+    cic:          row.cic ?? null,
+    internalId:   row.internalId ?? null,
+    seq:          row.seq ?? null,
+    contractId:   row.contractId ?? null,
+    createdAt:    row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
   };
 }

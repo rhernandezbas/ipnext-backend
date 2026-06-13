@@ -177,3 +177,42 @@ describe('ListTvActivationHistory — per-client list', () => {
     expect(result.every(e => e.clientId === 'c1')).toBe(true);
   });
 });
+
+// ─── #106 — customerName propagation ───────────────────────────────────────
+
+describe('customerName propagation (#106)', () => {
+  it('event with customerName flows through to DTO via execute()', async () => {
+    const repo = new InMemoryTvActivationEventRepository();
+    await repo.record({
+      clientId: 'c1', actorId: 'a1', actorName: 'Op',
+      eventType: 'alta', customerName: 'Juan Pérez',
+    });
+
+    const uc = new ListTvActivationHistory(repo);
+    const [dto] = await uc.execute({});
+    expect(dto!.customerName).toBe('Juan Pérez');
+  });
+
+  it('event with customerName flows through to DTO via executeByClient()', async () => {
+    const repo = new InMemoryTvActivationEventRepository();
+    await repo.record({
+      clientId: 'c1', actorId: null, actorName: 'Sys',
+      eventType: 'reactivacion', customerName: 'Ana López',
+    });
+
+    const uc = new ListTvActivationHistory(repo);
+    const [dto] = await uc.executeByClient('c1');
+    expect(dto!.customerName).toBe('Ana López');
+  });
+
+  it('event without customerName produces null in DTO', async () => {
+    const repo = new InMemoryTvActivationEventRepository();
+    await repo.record({
+      clientId: 'c1', actorId: null, actorName: 'Sys', eventType: 'baja',
+    });
+
+    const uc = new ListTvActivationHistory(repo);
+    const [dto] = await uc.execute({});
+    expect(dto!.customerName).toBeNull();
+  });
+});

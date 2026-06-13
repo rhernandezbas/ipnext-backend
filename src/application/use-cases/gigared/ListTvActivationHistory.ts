@@ -40,6 +40,7 @@ export class ListTvActivationHistory {
 function toDto(e: {
   id: string;
   clientId: string;
+  customerName: string | null;
   actorId: string | null;
   actorName: string;
   eventType: 'alta' | 'baja' | 'reactivacion';
@@ -50,15 +51,16 @@ function toDto(e: {
   createdAt: string;
 }): TvActivationEventDto {
   return {
-    id:          e.id,
-    clientId:    e.clientId,
-    actorId:     e.actorId,
-    actorName:   e.actorName,
-    eventType:   e.eventType,
-    cic:         e.cic,
-    internalId:  e.internalId,
-    seq:         e.seq,
-    contractId:  e.contractId,
-    createdAt:   e.createdAt,
+    id:           e.id,
+    clientId:     e.clientId,
+    customerName: e.customerName,
+    actorId:      e.actorId,
+    actorName:    e.actorName,
+    eventType:    e.eventType,
+    cic:          e.cic,
+    internalId:   e.internalId,
+    seq:          e.seq,
+    contractId:   e.contractId,
+    createdAt:    e.createdAt,
   };
 }

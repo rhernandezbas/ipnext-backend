@@ -22,16 +22,17 @@ export class InMemoryTvActivationEventRepository implements TvActivationEventRep
 
   async record(input: RecordTvActivationEventInput): Promise<TvActivationEvent> {
     const event: TvActivationEvent = {
-      id: randomUUID(),
-      clientId: input.clientId,
-      actorId: input.actorId,
-      actorName: input.actorName,
-      eventType: input.eventType,
-      cic: input.cic ?? null,
-      internalId: input.internalId ?? null,
-      seq: input.seq ?? null,
-      contractId: input.contractId ?? null,
-      createdAt: this.now().toISOString(),
+      id:           randomUUID(),
+      clientId:     input.clientId,
+      customerName: input.customerName ?? null,
+      actorId:      input.actorId,
+      actorName:    input.actorName,
+      eventType:    input.eventType,
+      cic:          input.cic ?? null,
+      internalId:   input.internalId ?? null,
+      seq:          input.seq ?? null,
+      contractId:   input.contractId ?? null,
+      createdAt:    this.now().toISOString(),
     };
     this.store.push(event);
     return { ...event };

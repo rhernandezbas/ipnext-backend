@@ -22,6 +22,8 @@ export interface RecordTvActivationEventInput {
   seq?: number | null;
   /** Contract ID tied to this activation (from the register body). */
   contractId?: string | null;
+  /** Human-readable client name resolved from the Client relation (best-effort). */
+  customerName?: string | null;
 }
 
 export interface ListTvActivationEventsFilter {
@@ -34,6 +36,8 @@ export interface ListTvActivationEventsFilter {
 export interface TvActivationEvent {
   id: string;
   clientId: string;
+  /** Human-readable client name resolved via JOIN on Client (best-effort, may be null). */
+  customerName: string | null;
   actorId: string | null;
   actorName: string;
   eventType: TvEventType;
