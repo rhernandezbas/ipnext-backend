@@ -77,9 +77,11 @@ function matchesUnremovableSignature(e: unknown): boolean {
  *   pendientes y, ya sin fallos, recién entonces renueva.
  *
  * Shape: { removed, failed, unremovable, ottDisabled, local, renew, localCancelled, renewAttempted }.
- * El router responde 200 si failed.length===0 && local==='synced' && ottDisabled &&
- * (!renewAttempted || renew!==null); si no 207. Con failed>0 ya es 207 por el
- * primer criterio, así que el retry queda habilitado.
+ * #74 — El router responde 207 si failed.length>0 || local==='failed' ||
+ * (renewAttempted && renew===null) || (!ottDisabled && !renewSucceeded), donde
+ * renewSucceeded = renewAttempted && renew!==null; si no 200. El OTT (paso pre-renew sobre el CIC
+ * viejo) NO cuenta para el veredicto cuando el renew tuvo éxito: el renew resetea la cuenta y deja
+ * el CIC viejo inaccesible, así que un ottDisabled=false es stale. Con failed>0 ya es 207.
  */
 export class CancelTv {
   constructor(

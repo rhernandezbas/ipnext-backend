@@ -347,25 +347,32 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  // #47k / #64 / #72 — dar de baja TV completa. Body { contractId }. tv.cancel (#50).
+  // #47k / #64 / #72 / #74 — dar de baja TV completa. Body { contractId }. tv.cancel (#50).
   // 200 si todo OK; 207 si algún paso falló — retry idempotente.
   // Criterio 207:
   //   - failed.length > 0: al menos un DELETE de pack falló
   //   - local === 'failed': el reconcile local no pudo sincronizar
-  //   - !ottDisabled: el OTT disable falló (falla REAL; el adapter ya absorbe "ya deshabilitada" como éxito)
-  //   - renewAttempted && renew === null: había algo que renovar pero el renew (best-effort) falló
-  //     Cuando renewAttempted=false (cuenta ya pelada), se omite este check → evita 207 permanente.
+  //   - renewAttempted && renew === null: había algo que renovar pero el renew (best-effort) falló.
+  //     El renew ES la baja efectiva (genera CIC nuevo, deja el login/mail viejo muerto y resetea la
+  //     cuenta). Si se intentó y falló, la cuenta vieja sigue viva → 207.
+  //   - !ottDisabled && !renewSucceeded: el OTT disable falló Y el renew NO reseteó la cuenta.
+  //     #74 — el paso OTT corre ANTES del renew, sobre el CIC VIEJO. Cuando el renew tuvo éxito
+  //     (renewSucceeded), la cuenta vieja queda inaccesible (403 cic-ownership LIVE) y la nueva
+  //     reseteada (ott.status=null): un ottDisabled=false es un dato pre-renew STALE y NO debe
+  //     marcar parcial. El !ottDisabled SOLO cuenta cuando el renew no reseteó la cuenta (renew
+  //     fallido o no intentado). Caso real 0006717800 → 0006283226 (verificado LIVE 2026-06-12).
   //   #72: `unlinked` ya no existe — el partner no tiene primitive de unlink (HTTP 400 siempre).
   //   El estado "sin TV" se persiste localmente (Client.tvCancelledAt). No factoriza en el 207.
   router.post('/customers/:id/cancel', deps.requireCancel, async (req, res, next): Promise<void> => {
     try {
       const contractId = String((req.body as { contractId?: unknown }).contractId ?? '');
       const result = await deps.cancelTv.execute(req.params['id'] as string, { contractId });
+      const renewSucceeded = result.renewAttempted && result.renew !== null;
       const partial =
         result.failed.length > 0 ||
         result.local === 'failed' ||
-        !result.ottDisabled ||
-        (result.renewAttempted && result.renew === null);
+        (result.renewAttempted && result.renew === null) ||
+        (!result.ottDisabled && !renewSucceeded);
       res.status(partial ? 207 : 200).json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) next(err);
