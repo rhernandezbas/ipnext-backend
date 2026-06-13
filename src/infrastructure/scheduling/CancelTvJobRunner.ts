@@ -51,14 +51,18 @@ export class CancelTvJobRunner {
       const result = await this.cancelTv.execute(customerId, { contractId });
       await this.cancelStatus.setStatus(customerId, { status: 'done', result, startedAt });
 
-      // #5 BE — record the 'baja' event best-effort (never abort the status write above).
+      // #5 BE / #5B — record the 'baja' event best-effort (never abort the status write above).
+      // #5B: pass result.cic (the CIC of the account at the time of the baja) and contractId
+      // so history shows which CIC and contract were involved in each baja.
       if (this.eventRepo) {
         try {
           await this.eventRepo.record({
-            clientId:  customerId,
-            actorId:   actor?.actorId ?? null,
-            actorName: actor?.actorName ?? '',
-            eventType: 'baja',
+            clientId:   customerId,
+            actorId:    actor?.actorId ?? null,
+            actorName:  actor?.actorName ?? '',
+            eventType:  'baja',
+            cic:        result.cic,
+            contractId: contractId,
           });
         } catch (evErr) {
           // eslint-disable-next-line no-console

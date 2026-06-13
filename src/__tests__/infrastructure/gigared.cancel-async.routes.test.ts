@@ -269,7 +269,7 @@ describe('POST cancel — concurrent guard (already-running → 409)', () => {
     const doneResult: CancelTvResult = {
       removed: ['129'], failed: [], unremovable: [], ottDisabled: true,
       local: 'synced', renew: { oldCic: '0000000001', newCic: '0000000002' },
-      localCancelled: true, renewAttempted: true,
+      localCancelled: true, renewAttempted: true, cic: '0000000001',
     };
     await cancelStatus.setStatus('cust-1', { status: 'done', result: doneResult, startedAt: new Date() });
     const { app } = await buildApp({ cancelStatus });
@@ -317,7 +317,7 @@ describe('GET /customers/:id/cancel/status (#10/#11 BE)', () => {
     const doneResult: CancelTvResult = {
       removed: ['129'], failed: [], unremovable: [], ottDisabled: true,
       local: 'synced', renew: { oldCic: '0000000001', newCic: '0000000002' },
-      localCancelled: true, renewAttempted: true,
+      localCancelled: true, renewAttempted: true, cic: '0000000001',
     };
     const startedAt = new Date('2026-07-20T10:00:00.000Z');
     await cancelStatus.setStatus('cust-1', { status: 'done', result: doneResult, startedAt });
@@ -368,7 +368,7 @@ describe('CancelTvJobRunner — unit (in-memory)', () => {
     const doneResult: CancelTvResult = {
       removed: ['129'], failed: [], unremovable: [], ottDisabled: true,
       local: 'synced', renew: { oldCic: '0000000001', newCic: '0000000002' },
-      localCancelled: true, renewAttempted: true,
+      localCancelled: true, renewAttempted: true, cic: '0000000001',
     };
     const cancelTv = makeCancelTv(doneResult);
     const cancelStatus = new InMemoryClientTvCancelStatusRepository();
@@ -396,7 +396,7 @@ describe('CancelTvJobRunner — unit (in-memory)', () => {
   it('run: sets startedAt when transitioning to running', async () => {
     const doneResult: CancelTvResult = {
       removed: [], failed: [], unremovable: [], ottDisabled: true,
-      local: 'synced', renew: null, localCancelled: true, renewAttempted: false,
+      local: 'synced', renew: null, localCancelled: true, renewAttempted: false, cic: '0000000001',
     };
     const cancelTv = makeCancelTv(doneResult);
     const cancelStatus = new InMemoryClientTvCancelStatusRepository();

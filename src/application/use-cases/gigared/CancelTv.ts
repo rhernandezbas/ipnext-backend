@@ -239,6 +239,10 @@ export class CancelTv {
       localCancelled = true;
     }
 
-    return { removed, failed, unremovable, ottDisabled, local, renew, localCancelled, renewAttempted };
+    // #5B — cic of the account at the time of this baja (captured before any mutation).
+    // Forwarded by CancelTvJobRunner to the baja TvActivationEvent record.
+    const cic = account.cic;
+
+    return { removed, failed, unremovable, ottDisabled, local, renew, localCancelled, renewAttempted, cic };
   }
 }

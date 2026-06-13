@@ -78,6 +78,12 @@ export interface CancelTvResult {
   localCancelled: boolean;
   /** #64 H1 — true if this run had something to tear down at start; false on a peeled-account no-op. */
   renewAttempted: boolean;
+  /**
+   * #5B — CIC of the account at the time of the baja (account.cic from the partner read).
+   * Forwarded to the TvActivationEvent record so history shows the CIC for each baja.
+   * Equals renew.oldCic when renew succeeded; otherwise the live account CIC.
+   */
+  cic: string;
 }
 
 /**

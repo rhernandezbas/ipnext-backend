@@ -159,7 +159,7 @@ describe('CancelTvJobRunner — records baja event on done', () => {
   const doneResult: CancelTvResult = {
     removed: ['129'], failed: [], unremovable: [], ottDisabled: true,
     local: 'synced', renew: { oldCic: '0000000001', newCic: '0000000002' },
-    localCancelled: true, renewAttempted: true,
+    localCancelled: true, renewAttempted: true, cic: '0000000001',
   };
 
   function makeCancelTv(result: CancelTvResult): CancelTv {
