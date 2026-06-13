@@ -1,12 +1,28 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +19 (#48–#66) +5 (#67–#71, mini-batch de la tarde: pack base CUA, coords, área con color, password autogenerada, link roto) → **69 totales — TODOS HECHOS** (jornada 2026-06-12 completa: 23 shippeados + #57 no-bug, BE PRs #118–#130 / FE PRs #97–#117, 8 migraciones 20260701–20260709).
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +19 (#48–#66) +5 (#67–#71) +2 (#72 baja local TV / #73 historial del contrato) → **71 totales — TODOS HECHOS** (jornada 2026-06-12 completa: 25 shippeados + #57 no-bug, BE PRs #118–#132 / FE PRs #97–#119, 10 migraciones 20260701–20260712). Único pendiente NO-código: escalamiento a Gigared (ver Pendientes).
 > **38 hechos (en prod, #39 incluido) · EPIC #38 COMPLETO (7/7 waves) · UISP V1 EN PROD (2026-06-10, BE #99 + FE #71 — flag `uisp-sync` OFF, rotar token post-activación).**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
 
 ---
 
 ## 📋 Pendientes
+
+> **Nada pendiente.** Toda la jornada 2026-06-12 (#48–#73) está en producción. Lo único abierto es ESCALAR A GIGARED (ver más abajo).
+
+### ⚠️ Escalamiento a Gigared (bloqueo del partner, NO es código)
+- El partner **no tiene primitiva de desvinculación**: PATCH internal_id '' → 400; el mapeo internal_id↔CIC es append-only (DELETE 405/404; renew arrastra los ids). Pedir un endpoint real de **desasociación/borrado de internal_id** o de baja de cuenta.
+- Pedir que **limpien los internal_ids basura** del abonado **204366** (HERNANDEZ RONALD), quedaron de las pruebas live del #72: `BAJA_1781312566206`, `BAJA204366X1`, `99999999`, `baja-test-uuid-1234`, y CICs quemados (0006230159 → 0006287299 → 0006332579 → 0006717800).
+
+---
+
+### #72 — Baja LOCAL de TV (el partner no desvincula) ✅ HECHO *(2026-06-12, BE PR #132 + FE PR #119, en prod)*
+> **Hallazgo live (divergencia #10 de Gigared)**: el unlink del #64 NUNCA funcionó — PATCH internal_id '' da 400 SIEMPRE, el mapeo es append-only, no hay DELETE. El "no se pudo desvincular" era permanente, no un edge. Fix: baja LOCAL honesta vía `Client.tvCancelledAt` (migración `20260712`, el sync GR no la pisa — allowlist verificada); `GetGigaredCustomerAccount` responde no-vinculado con el flag → panel limpio, se puede cargar TV nueva; link/register limpian el flag; el retry da 404 ANTES del partner (mata el acuñado de CICs); se quitó el paso unlink muerto (`localCancelled` reemplaza `unlinked`). Review CLEAN.
+
+### #73 — Historial de servicios del contrato ✅ HECHO *(2026-06-12, BE PR #131 + FE PR #118, en prod)*
+> `GET /api/contracts/:id/service-history` (clients.read) + `ContractService.deactivatedAt` (migración `20260711`, estampada centralizada en repo.update — fecha de baja REAL, el modelo no tenía updatedAt) SIN tvPassword (DTO whitelist). FE: botón Historial en la card → modal lightbox (Servicio·Estado·Datos·Contratado·Baja) + empty state + invalidación en mutations. Review CLEAN + fix wave. Limitación: filas inactivadas pre-migración → '—' (sin backfill posible).
+
+---
 
 > **Mini-batch 2026-06-12 (tarde) — #67–#71, COMPLETO.** SDD automático + híbrido, worktree por ítem. BE PRs #128–#130 / FE PRs #113–#117, migración 20260709.
 

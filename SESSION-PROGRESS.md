@@ -37,6 +37,12 @@
 | #69 | Área de tickets con color (catálogo + pill + picker, migración 20260709) | BE #128 + FE #114 |
 | #70 | Password del alta TV autogenerada server-side (campo fuera del form; cambio de pw sigue libre) | BE #130 + FE #116 |
 | #71 | Link al cliente del detalle de ticket: /admin/clients → /admin/customers/view | FE #117 |
+| #72 | Baja LOCAL de TV — el partner NO desvincula (divergencia #10); flag Client.tvCancelledAt | BE #132 + FE #119 |
+| #73 | Historial de servicios del contrato (deactivatedAt + modal) | BE #131 + FE #118 |
+
+### ⚠️ Escalamiento a Gigared (bloqueo del partner, NO código)
+- Pedir endpoint de desasociación/borrado de internal_id (no existe: PATCH ''=400, mapeo append-only, DELETE 405/404).
+- Pedir limpieza de internal_ids basura del abonado 204366 (de las pruebas live del #72).
 
 ## 2. Decisiones/hallazgos clave de la sesión
 
