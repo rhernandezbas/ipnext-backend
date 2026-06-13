@@ -44,6 +44,18 @@
 - Pedir endpoint de desasociación/borrado de internal_id (no existe: PATCH ''=400, mapeo append-only, DELETE 405/404).
 - Pedir limpieza de internal_ids basura del abonado 204366 (de las pruebas live del #72).
 
+
+## 1c. Mini-batch noche 2 (#74–#79, COMPLETO)
+
+| # | Qué | PRs |
+|---|---|---|
+| #74 | Baja TV: renew exitoso = baja completa (no parcial — el OTT viejo es moot tras el renew) | BE #133 + FE #120 |
+| #75 | Tickets list: columna Área en posición 2 por default (respeta orden guardado) | FE #122 |
+| #76 | Tickets list: nombre del cliente como link | FE #122 |
+| #77 | Ticket detail: tab Datos → comentario de apertura virtual + fecha legible | FE #121 |
+| #78 | Tickets list: columna Tipo eliminada (campo muerto, type no existe en BE) | FE #122 |
+| #79 | Tickets list: columna Timer SLA con color por umbrales configurables (migración 20260713) | BE #134 + FE #122 |
+
 ## 2. Decisiones/hallazgos clave de la sesión
 
 1. **#57/#60 verificados contra la API real** (SSH→container→node+pg): el summary es fiel; `qty_registered_devices` viene 0 en las 87 cuentas (roto upstream) y NO hay endpoint de devices (OpenAPI revisado). Divergencia #8 de Gigared.

@@ -1,14 +1,36 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +19 (#48–#66) +5 (#67–#71) +2 (#72 baja local TV / #73 historial del contrato) → **71 totales — TODOS HECHOS** (jornada 2026-06-12 completa: 25 shippeados + #57 no-bug, BE PRs #118–#132 / FE PRs #97–#119, 10 migraciones 20260701–20260712). Único pendiente NO-código: escalamiento a Gigared (ver Pendientes).
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +19 (#48–#66) +5 (#67–#71) +2 (#72/#73) +6 (#74–#79, noche 2: renew=baja completa + columnas de la lista de tickets: área pos2, timer SLA, link cliente, fuera Tipo, datos→comentario) → **79 totales — TODOS HECHOS** (jornada 2026-06-12/13: 31 shippeados + #57 no-bug, BE PRs #118–#134 / FE PRs #97–#122, 11 migraciones 20260701–20260713). Único pendiente NO-código: escalamiento a Gigared (ver Pendientes).
 > **38 hechos (en prod, #39 incluido) · EPIC #38 COMPLETO (7/7 waves) · UISP V1 EN PROD (2026-06-10, BE #99 + FE #71 — flag `uisp-sync` OFF, rotar token post-activación).**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
 
 ---
 
 ## 📋 Pendientes
 
-> **Nada pendiente.** Toda la jornada 2026-06-12 (#48–#73) está en producción. Lo único abierto es ESCALAR A GIGARED (ver más abajo).
+> **Nada pendiente de código.** Único abierto: ESCALAMIENTO A GIGARED (NO es código) — pendiente del #72 (endpoint de desasociación + limpieza de internal_ids basura del abonado 204366).
+
+---
+
+> **Mini-batch 2026-06-12/13 (noche 2) — #74–#79, COMPLETO.** BE PRs #133–#134 / FE PRs #120–#122, migración 20260713.
+
+### #74 — Baja TV: renew exitoso = baja COMPLETA ✅ HECHO *(BE PR #133 + FE PR #120, en prod)*
+> Confirmado por el usuario: el renew del CIC ES la baja efectiva (login/mail muerto, no entra más). Verificado live: el CIC nuevo queda con ott null/reseteado, el viejo da 403 (desvinculado) → el OTT viejo es moot. El "OTT sigue activo" del modal era stale (el apagado corre ANTES del renew). Criterio nuevo: 207 solo si `failed>0 || local failed || (renewAttempted && renew null) || (!ottDisabled && !renewSucceeded)`; único caso que cambia es renew-OK+ott-false → 200. Modal: "Cuenta reiniciada (CIC nuevo)". Review CLEAN.
+
+### #75 — Área en posición 2 por default ✅ HECHO *(FE PR #122, en prod)*
+> `areaName` a índice 1 en ALL_TICKET_COLUMNS; el orden guardado del usuario se respeta (solo cambia el default).
+
+### #76 — Nombre del cliente como link ✅ HECHO *(FE PR #122, en prod)*
+> customerName → Link /admin/customers/view/{customerId} (fallback texto plano).
+
+### #77 — Datos → comentario de apertura + fecha legible ✅ HECHO *(FE PR #121, en prod)*
+> El tab "Datos" (solo mostraba la descripción) se eliminó; la descripción aparece como comentario VIRTUAL al tope del feed, atribuido al reporter + fecha de creación (no persistido — la descripción ya vive en el ticket). Helper formatDate es-AR centralizado.
+
+### #78 — Columna "Tipo" eliminada ✅ HECHO *(FE PR #122, en prod)*
+> **Qué era**: campo muerto — `type` no existe en el BE (ni entity, ni DTO, ni Prisma, ni CreateTicket), renderizaba vacío para toda fila. Eliminada del catálogo.
+
+### #79 — Columna Timer SLA configurable (pos 3) ✅ HECHO *(BE PR #134 + FE PR #122, en prod)*
+> Minutos desde createdAt con color verde/amarillo/rojo por umbrales `TicketSlaConfig` singleton (warn=60, danger=240, configurables en /admin/tickets/settings → sección SLA, gate tickets.manage; 422 si danger<=warn). Congela gris en cerrados. Migración aditiva 20260713 (dry-run prod OK). Orden final de columnas: id · Área · Timer · Tema · Cliente(link) · Reporter · Prioridad · Estado · Asignado · Creado.
 
 ### ⚠️ Escalamiento a Gigared (bloqueo del partner, NO es código)
 - El partner **no tiene primitiva de desvinculación**: PATCH internal_id '' → 400; el mapeo internal_id↔CIC es append-only (DELETE 405/404; renew arrastra los ids). Pedir un endpoint real de **desasociación/borrado de internal_id** o de baja de cuenta.
