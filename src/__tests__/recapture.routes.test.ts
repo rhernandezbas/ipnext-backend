@@ -229,6 +229,32 @@ describe('POST /api/recapture/leads/claim-next', () => {
     expect(res.status).toBe(200);
     expect(res.body.assigneeId).toBe('user-test');
   });
+
+  // Seam test: claim-next must skip already-claimed leads and hand back the
+  // oldest *free* one. The REAL concurrency guarantee (two operators never get
+  // the same lead, and 204 only fires when none are free) lives in the Postgres
+  // adapter via `FOR UPDATE SKIP LOCKED` — not testable in-memory (single-threaded).
+  it('skips claimed leads and returns the oldest free one (204 only when none free)', async () => {
+    const { app, repo } = buildApp();
+    const first = await repo.create({ source: 'csv', contactName: 'First' });
+    const second = await repo.create({ source: 'csv', contactName: 'Second' });
+    // First lead already taken by another operator
+    await repo.claim(first.id, 'user-other');
+
+    // claim-next must hand back the second (oldest free), NOT 204
+    const res1 = await request(app)
+      .post('/api/recapture/leads/claim-next')
+      .set('Cookie', 'auth_token=tok');
+    expect(res1.status).toBe(200);
+    expect(res1.body.id).toBe(second.id);
+    expect(res1.body.assigneeId).toBe('user-test');
+
+    // Now everything is claimed → 204
+    const res2 = await request(app)
+      .post('/api/recapture/leads/claim-next')
+      .set('Cookie', 'auth_token=tok');
+    expect(res2.status).toBe(204);
+  });
 });
 
 // ─── Tests: POST /leads/:id/release ──────────────────────────────────────────

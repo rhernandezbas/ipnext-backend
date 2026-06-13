@@ -1,5 +1,6 @@
 import { RecaptureRepository } from '@domain/ports/RecaptureRepository';
 import { CustomerRepository } from '@domain/ports/CustomerRepository';
+import { CHURNED_CLIENT_STATUS } from '@domain/entities/customer';
 
 export interface IngestChurnedResult {
   created: number;
@@ -19,7 +20,7 @@ export class IngestChurnedClients {
    */
   async execute(): Promise<IngestChurnedResult> {
     // Fetch all baja clients (no pagination — operational endpoint, bounded in practice)
-    const result = await this.customerRepo.list({ status: 'baja', limit: 10000 });
+    const result = await this.customerRepo.list({ status: CHURNED_CLIENT_STATUS, limit: 10000 });
     const clients = result.data;
 
     const created = await this.recaptureRepo.ingestChurned(

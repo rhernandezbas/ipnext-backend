@@ -1,5 +1,12 @@
 export type CustomerStatus = 'active' | 'late' | 'blocked' | 'inactive' | 'baja';
 
+/**
+ * Status that marks a client as churned ("dado de baja").
+ * Typed against CustomerStatus so a rename of the union member breaks the
+ * churned-clients ingest at compile time instead of failing silently.
+ */
+export const CHURNED_CLIENT_STATUS: CustomerStatus = 'baja';
+
 export interface Customer {
   id: string;
   /** External Gestión Real client id, when this row came from the GR mirror. */
