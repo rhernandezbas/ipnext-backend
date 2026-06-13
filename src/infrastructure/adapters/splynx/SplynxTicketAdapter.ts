@@ -56,6 +56,8 @@ export class SplynxTicketAdapter implements TicketRepository {
         areaName: null,
         areaColor: null,
         grCasoId: null,
+        resolvedAt: null,    // #84 — Splynx legacy has no resolvedAt concept
+        archivedAt: null,    // #85 — Splynx legacy has no archivedAt concept
         createdAt: String(t['date_created'] ?? new Date().toISOString()),
         updatedAt: String(t['date_created'] ?? new Date().toISOString()),
       })),
@@ -110,6 +112,8 @@ export class SplynxTicketAdapter implements TicketRepository {
       areaName: null,
       areaColor: null,
       grCasoId: null,
+      resolvedAt: null,       // #84 — Splynx legacy has no resolvedAt concept
+      archivedAt: null,       // #85 — Splynx legacy has no archivedAt concept
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -123,5 +127,15 @@ export class SplynxTicketAdapter implements TicketRepository {
   async close(_id: string): Promise<Ticket | null> {
     // Stub — Splynx decabled
     return null;
+  }
+
+  async archive(_id: string): Promise<Ticket | null> {
+    // Stub — Splynx decabled
+    return null;
+  }
+
+  async delete(_id: string): Promise<boolean> {
+    // Stub — Splynx decabled
+    return false;
   }
 }

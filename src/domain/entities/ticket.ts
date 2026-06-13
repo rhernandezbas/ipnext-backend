@@ -25,6 +25,10 @@ export interface Ticket {
   areaName: string | null;        // #49 — JOIN-derived (TicketAreaCatalog.name)
   areaColor: string | null;       // #69 — JOIN-derived (TicketAreaCatalog.color), for the area pill
   grCasoId: string | null;
+  // #84 — set when the ticket transitions to a closed status; null while open/pending.
+  resolvedAt: string | null;     // ISO 8601
+  // #85 — set when the ticket is archived (must be closed first); null otherwise.
+  archivedAt: string | null;     // ISO 8601
   createdAt: string;             // ISO 8601
   updatedAt: string;             // ISO 8601
   // #44 (D7) — related tasks, enriched via PrismaTicketRepository.getById include.

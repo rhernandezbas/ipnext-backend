@@ -56,6 +56,8 @@ describe('CreateTicket use case', () => {
       create: jest.fn().mockRejectedValue(new Error('DB error')),
       update: jest.fn(),
       close: jest.fn(),
+      archive: jest.fn(),
+      delete: jest.fn(),
     };
     const createTicket = new CreateTicket(badRepo);
 

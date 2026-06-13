@@ -11,6 +11,8 @@ export interface ListTicketsQuery extends PaginatedQuery {
   from?: string;                  // #25 — createdAt >= from (ISO date YYYY-MM-DD)
   to?: string;                    // #25 — createdAt <= fin del día de to
   areaId?: string;                // #49 — filtrar por área
+  // #85 — when true returns ONLY archived tickets; default (false/absent) excludes them
+  archived?: boolean;
 }
 
 export interface CreateTicketData {
@@ -46,4 +48,13 @@ export interface TicketRepository {
    * it writes exactly the name it is given (catalog-aware, casing-safe).
    */
   close(id: string, statusName: string): Promise<Ticket | null>;
+  /**
+   * #85 — Archive a ticket (must be closed first; validated by ArchiveTicket use case).
+   * Sets archivedAt to now. Returns null if not found.
+   */
+  archive(id: string): Promise<Ticket | null>;
+  /**
+   * #85 — Hard-delete a ticket. Returns true if deleted, false if not found.
+   */
+  delete(id: string): Promise<boolean>;
 }

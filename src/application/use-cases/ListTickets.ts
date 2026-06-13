@@ -17,6 +17,7 @@ export class ListTickets {
       from: query.from,             // pero este passthrough los descartaba y el
       to: query.to,                 // filtro nunca llegaba al where.
       areaId: query.areaId,         // #49 — ídem; debe llegar al repo
+      archived: query.archived,     // #85 — pasar el flag de archivados
     });
   }
 }

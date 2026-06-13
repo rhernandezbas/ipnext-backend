@@ -24,6 +24,8 @@ import { GetTicket } from '@application/use-cases/GetTicket';
 import { UpdateTicketStatus } from '@application/use-cases/UpdateTicketStatus';
 import { UpdateTicket } from '@application/use-cases/UpdateTicket';
 import { CloseTicket } from '@application/use-cases/CloseTicket';
+import { ArchiveTicket } from '@application/use-cases/ArchiveTicket';
+import { DeleteTicketHard } from '@application/use-cases/DeleteTicketHard';
 import { PrismaTicketRepository } from '../adapters/prisma/PrismaTicketRepository';
 import { GetBillingSummary } from '@application/use-cases/GetBillingSummary';
 import { ListInvoices } from '@application/use-cases/ListInvoices';
@@ -1094,7 +1096,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     requirePerm,
     getTicketSlaConfig, updateTicketSlaConfig,
   ));
-  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, ticketStatusRepo, authAdapter, rbacUserRepo, createTaskFromTicket, schedulingRepo, stageRepo, ticketAreaRepo));
+  // #85 — archive + hard-delete use cases
+  const archiveTicket = new ArchiveTicket(ticketAdapter, ticketStatusRepo);
+  const deleteTicketHard = new DeleteTicketHard(ticketAdapter);
+  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, ticketStatusRepo, authAdapter, rbacUserRepo, createTaskFromTicket, schedulingRepo, stageRepo, ticketAreaRepo, archiveTicket, deleteTicketHard, rbacUserRepo));
   // #44 — persisted ticket comments. Mounted on /api/tickets; the tickets router has no
   // catch-all and /:id does not capture /:id/comments (distinct segments), so no collision.
   const ticketCommentRepo = new PrismaTicketCommentRepository();

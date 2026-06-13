@@ -7,6 +7,8 @@ import { GetTicket } from '@application/use-cases/GetTicket';
 import { UpdateTicketStatus } from '@application/use-cases/UpdateTicketStatus';
 import { UpdateTicket } from '@application/use-cases/UpdateTicket';
 import { CloseTicket } from '@application/use-cases/CloseTicket';
+import { ArchiveTicket } from '@application/use-cases/ArchiveTicket';
+import { DeleteTicketHard } from '@application/use-cases/DeleteTicketHard';
 import { CreateTaskFromTicket } from '@application/use-cases/CreateTaskFromTicket';
 import { TicketPriority } from '@domain/entities/ticket';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
@@ -15,8 +17,9 @@ import { TicketStatusRepository } from '@domain/ports/TicketStatusRepository';
 import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
-import { NoClosableStatusError, TicketAreaRequiredError, TicketAreaNotFoundError } from '@domain/errors/tickets';
+import { NoClosableStatusError, TicketAreaRequiredError, TicketAreaNotFoundError, TicketNotClosedError } from '@domain/errors/tickets';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import { requirePermission } from '../middleware/requirePermission';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 
 // Zod schema for POST /api/tickets/:id/tasks body
@@ -83,6 +86,12 @@ export function createTicketsRouter(
   // #49 — used to validate areaId on create (required) and update (optional).
   // Optional so legacy tests/wirings compiled before BATCH 2 still compile.
   areaRepo?: TicketAreaCatalogRepository,
+  // #85 — archive + hard-delete use cases (optional for backward compat).
+  archiveTicket?: ArchiveTicket,
+  deleteTicketHard?: DeleteTicketHard,
+  // #85 — rbac repo for requirePermission on archive/delete (optional).
+  // When absent the routes return 501 Not Implemented.
+  permissionUserRepo?: RbacUserRepository,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -101,7 +110,7 @@ export function createTicketsRouter(
   // GET / — list tickets, optional ?customerId filter
   router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
     try {
-      const { page, limit, search, status, priority, customerId, assignedTo, from, to, areaId } = req.query as Record<string, string>;
+      const { page, limit, search, status, priority, customerId, assignedTo, from, to, areaId, archived } = req.query as Record<string, string>;
       const result = await listTickets.execute({
         page: page ? +page : 1,
         limit: limit ? +limit : 25,
@@ -113,6 +122,7 @@ export function createTicketsRouter(
         from: from || undefined,
         to: to || undefined,
         areaId: areaId || undefined,          // #49 — filtrar por área
+        archived: archived === 'true',        // #85 — archived=true → solo archivados; default false
       });
       res.json(result);
     } catch (err) {
@@ -120,6 +130,72 @@ export function createTicketsRouter(
       res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }
   });
+
+  // POST /:id/archive — archive a closed ticket (#85). Guarded by tickets.manage.
+  // #85 re-review — was tickets.close, which is seeded ONLY to super_admin, so a
+  // normal administrador (who has tickets.manage, NOT tickets.close) got a 403.
+  // tickets.manage is the right gate: administrador holds it via migration
+  // 20260703000000_grant_tickets_manage. Mounted BEFORE /:id to avoid route capture.
+  router.post(
+    '/:id/archive',
+    auth,
+    // Inline permission gate: only installed when permissionUserRepo is provided
+    (req: Request, res: Response, next: import('express').NextFunction): void => {
+      if (!permissionUserRepo) { next(); return; }
+      requirePermission(permissionUserRepo, 'tickets', 'manage')(req, res, next);
+    },
+    async (req: Request, res: Response): Promise<void> => {
+      if (!archiveTicket) {
+        res.status(501).json({ error: 'Not implemented', code: 'NOT_IMPLEMENTED' });
+        return;
+      }
+      try {
+        const id = req.params['id'] as string;
+        const ticket = await archiveTicket.execute(id);
+        if (!ticket) {
+          res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
+          return;
+        }
+        res.json(ticket);
+      } catch (err) {
+        if (err instanceof TicketNotClosedError) {
+          res.status(422).json({ error: err.message, code: err.code });
+          return;
+        }
+        console.error('[tickets] archive error', err);
+        res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
+      }
+    },
+  );
+
+  // DELETE /:id/hard — hard-delete a ticket (#85). Guarded by tickets.delete_hard.
+  // Mounted BEFORE /:id to avoid route capture.
+  router.delete(
+    '/:id/hard',
+    auth,
+    (req: Request, res: Response, next: import('express').NextFunction): void => {
+      if (!permissionUserRepo) { next(); return; }
+      requirePermission(permissionUserRepo, 'tickets', 'delete_hard')(req, res, next);
+    },
+    async (req: Request, res: Response): Promise<void> => {
+      if (!deleteTicketHard) {
+        res.status(501).json({ error: 'Not implemented', code: 'NOT_IMPLEMENTED' });
+        return;
+      }
+      try {
+        const id = req.params['id'] as string;
+        const deleted = await deleteTicketHard.execute(id);
+        if (!deleted) {
+          res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
+          return;
+        }
+        res.status(204).send();
+      } catch (err) {
+        console.error('[tickets] hardDelete error', err);
+        res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
+      }
+    },
+  );
 
   // GET /:id — get a single ticket by id
   router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {

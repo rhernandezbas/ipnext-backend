@@ -1,4 +1,5 @@
 import { Ticket, TicketStats, TicketPriority } from '@domain/entities/ticket';
+import { isClosedStatus } from '@domain/entities/ticketStatus';
 import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
 import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
 import { PaginatedResult } from '@application/dto/pagination';
@@ -52,6 +53,13 @@ export class InMemoryTicketRepository implements TicketRepository {
 
   async list(query: ListTicketsQuery): Promise<PaginatedResult<Ticket>> {
     let results = [...this.tickets];
+
+    // #85 — archived filter: default excludes archived; archived:true returns only archived
+    if (query.archived === true) {
+      results = results.filter((t) => t.archivedAt != null);
+    } else {
+      results = results.filter((t) => t.archivedAt == null);
+    }
 
     if (query.customerId) {
       results = results.filter((t) => t.customerId === query.customerId);
@@ -158,6 +166,8 @@ export class InMemoryTicketRepository implements TicketRepository {
       areaName,
       areaColor,
       grCasoId: null,
+      resolvedAt: null, // #84 — null until close() is called
+      archivedAt: null, // #85 — null until archive() is called
       createdAt: now,
       updatedAt: now,
     };
@@ -192,11 +202,20 @@ export class InMemoryTicketRepository implements TicketRepository {
       }
     }
 
+    // #84 — keep resolvedAt consistent with the status transition. A status change
+    // to a closed-like status stamps resolvedAt; any other status clears it (reopen).
+    // Detection is catalog-aligned + case-insensitive (lección #46), never hardcoded
+    // to a single literal. When data.status is undefined we don't touch resolvedAt.
+    let resolvedAt = existing.resolvedAt;
+    if (data.status !== undefined) {
+      resolvedAt = isClosedStatus(data.status) ? nowIso() : null;
+    }
+
     const updated: Ticket = {
       ...existing,
       ...(data.subject !== undefined && { subject: data.subject }),
       ...(data.description !== undefined && { description: data.description }),
-      ...(data.status !== undefined && { status: data.status }),
+      ...(data.status !== undefined && { status: data.status, resolvedAt }),
       ...(data.priority !== undefined && { priority: data.priority }),
       ...(data.assigneeId !== undefined && { assigneeId: data.assigneeId ?? null, assigneeName }),
       ...(data.areaId !== undefined && { areaId, areaName, areaColor }),
@@ -207,6 +226,27 @@ export class InMemoryTicketRepository implements TicketRepository {
   }
 
   async close(id: string, statusName: string): Promise<Ticket | null> {
+    // #84 — close goes through update(); the stamping of resolvedAt is now unified
+    // there (a closed-like status stamps it). No extra patching needed.
     return this.update(id, { status: statusName });
+  }
+
+  async archive(id: string): Promise<Ticket | null> {
+    const idx = this.tickets.findIndex((t) => t.id === id);
+    if (idx === -1) return null;
+    // #85 re-review — idempotent: don't re-stamp archivedAt if already archived
+    // (mirror of PrismaTicketRepository.archive / ArchiveTask #86).
+    const current = this.tickets[idx]!;
+    if (current.archivedAt != null) return current;
+    const stamped: Ticket = { ...current, archivedAt: nowIso() };
+    this.tickets[idx] = stamped;
+    return stamped;
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const idx = this.tickets.findIndex((t) => t.id === id);
+    if (idx === -1) return false;
+    this.tickets.splice(idx, 1);
+    return true;
   }
 }

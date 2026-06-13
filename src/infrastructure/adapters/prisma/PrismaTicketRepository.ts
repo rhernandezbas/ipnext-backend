@@ -11,6 +11,7 @@
  *    Use cases and DTOs never see statusId.
  */
 import { Ticket, TicketStats } from '@domain/entities/ticket';
+import { isClosedStatus } from '@domain/entities/ticketStatus';
 import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
 import { PaginatedResult } from '@application/dto/pagination';
 import { TicketStatusUnknownError } from '@domain/errors/tickets';
@@ -49,6 +50,14 @@ export function toTicket(row: any): Ticket {
     areaName: row.area?.name ?? null,
     areaColor: row.area?.color ?? null,   // #69
     grCasoId: row.grCasoId ?? null,
+    // #84 — resolvedAt: stamped when the ticket is closed; null otherwise.
+    resolvedAt: row.resolvedAt instanceof Date
+      ? row.resolvedAt.toISOString()
+      : (row.resolvedAt ?? null),
+    // #85 — archivedAt: stamped when the ticket is archived; null otherwise.
+    archivedAt: row.archivedAt instanceof Date
+      ? row.archivedAt.toISOString()
+      : (row.archivedAt ?? null),
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
     // #44 (D7) — related tasks only present when the query included them (getById).
@@ -112,6 +121,13 @@ export class PrismaTicketRepository implements TicketRepository {
       const seqClause = sequenceNumberClause(query.search);
       if (seqClause) or.push(seqClause);
       where['OR'] = or;
+    }
+
+    // #85 — archived filter: default excludes archived; archived:true returns only archived
+    if (query.archived === true) {
+      where['archivedAt'] = { not: null };
+    } else {
+      where['archivedAt'] = null;
     }
 
     const page = query.page ?? 1;
@@ -202,6 +218,10 @@ export class PrismaTicketRepository implements TicketRepository {
       // Phase 2: resolve status name → id at the repo boundary.
       if (data.status !== undefined) {
         updateData['statusId'] = await resolveStatusId(data.status);
+        // #84 — keep resolvedAt consistent with the transition: a closed-like status
+        // stamps it; reopening to any other status clears it (null while open).
+        // Detection is catalog-aligned + case-insensitive (lección #46).
+        updateData['resolvedAt'] = isClosedStatus(data.status) ? new Date() : null;
       }
 
       const row = await (prisma as any).ticket.update({
@@ -219,6 +239,53 @@ export class PrismaTicketRepository implements TicketRepository {
 
   async close(id: string, statusName: string): Promise<Ticket | null> {
     // statusName is the canonical catalog name resolved by CloseTicket.
-    return this.update(id, { status: statusName });
+    // #84 — stamp resolvedAt at the persistence layer so the SLA timer can freeze.
+    try {
+      const statusId = await resolveStatusId(statusName);
+      const row = await (prisma as any).ticket.update({
+        where: { id },
+        data: { statusId, resolvedAt: new Date() },
+        include: INCLUDE,
+      });
+      return toTicket(row);
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
+  async archive(id: string): Promise<Ticket | null> {
+    // #85 — stamp archivedAt. Caller (ArchiveTicket) validates the ticket is closed.
+    // #85 re-review — idempotent: if the ticket is already archived, return it as-is
+    // without re-stamping archivedAt (same pattern as ArchiveTask, #86).
+    try {
+      const existing = await (prisma as any).ticket.findUnique({
+        where: { id },
+        include: INCLUDE,
+      });
+      if (!existing) return null;
+      if (existing.archivedAt != null) return toTicket(existing);
+
+      const row = await (prisma as any).ticket.update({
+        where: { id },
+        data: { archivedAt: new Date() },
+        include: INCLUDE,
+      });
+      return toTicket(row);
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
+  async delete(id: string): Promise<boolean> {
+    // #85 — hard delete. Returns false if not found (P2025).
+    try {
+      await (prisma as any).ticket.delete({ where: { id } });
+      return true;
+    } catch (err: any) {
+      if (err?.code === 'P2025') return false;
+      throw err;
+    }
   }
 }

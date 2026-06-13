@@ -67,6 +67,8 @@ export const KNOWN_ACTIONS = [
   'packs',    // agregar/quitar packs (servicios)
   'ott',      // habilitar/deshabilitar OTT (incl. suspender/reactivar)
   'cancel',   // dar de baja TV completa
+  // tickets sub-actions (#85) — hard delete requires explicit permission
+  'delete_hard',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.

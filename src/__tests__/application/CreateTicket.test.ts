@@ -17,6 +17,8 @@ const mockTicket: Ticket = {
   areaName: null,    // #49
   areaColor: null,   // #69
   grCasoId: null,
+  resolvedAt: null, // #84
+  archivedAt: null, // #85
   priority: 'high',
   status: 'open',
   createdAt: '2024-01-01T00:00:00Z',
@@ -31,6 +33,8 @@ function makeRepo(overrides?: Partial<TicketRepository>): TicketRepository {
     create: jest.fn().mockResolvedValue(mockTicket),
     update: jest.fn(),
     close: jest.fn(),
+    archive: jest.fn(),
+    delete: jest.fn(),
     ...overrides,
   };
 }

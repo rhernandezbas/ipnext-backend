@@ -10,6 +10,7 @@ export interface ListTicketsQueryDto {
   priority?: TicketPriority;
   customerId?: string;
   areaId?: string;               // #49
+  archived?: boolean;            // #85 — true = solo archivados; false/absent = excluye archivados
 }
 
 export interface CreateTicketDto {
@@ -48,6 +49,8 @@ export interface TicketDto {
   areaName: string | null;      // #49 — JOIN-derived (TicketAreaCatalog.name)
   areaColor: string | null;     // #69 — JOIN-derived (TicketAreaCatalog.color)
   grCasoId: string | null;
+  resolvedAt: string | null;     // #84 — ISO 8601; null until the ticket is closed
+  archivedAt: string | null;     // #85 — ISO 8601; null until the ticket is archived
   createdAt: string;
   updatedAt: string;
 }
