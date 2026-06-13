@@ -389,7 +389,13 @@ export class GigaredClient implements GigaredPort {
       // #47j — idempotent toggle: if the partner rejects because the account is ALREADY in
       // the desired state ("ya se encuentra (des)?habilitada"), that IS success — the FE's
       // desired state already holds. Any other rejection still propagates.
+      // #1 — the partner may send this as a 409/GigaredRejectedError (documented) OR as a
+      // 424 external-service-error/GigaredUnavailableError (observed live). Broaden the guard
+      // to catch both: swallow whenever the idempotency phrase appears in the detail.
       if (e instanceof GigaredRejectedError && /ya se encuentra (des)?habilitada/i.test(e.detail)) {
+        return;
+      }
+      if (e instanceof GigaredUnavailableError && /ya se encuentra (des)?habilitada/i.test(e.detail ?? '')) {
         return;
       }
       throw e;

@@ -754,5 +754,61 @@ describe('GigaredClient (#47)', () => {
         detail: 'No hay licencias OTT disponibles',
       });
     });
+
+    // #1 — 424 external-service-error "ya se encuentra (des)habilitada" must be idempotent.
+    // The partner returns 424 (external-service-error) for OTT state conflicts, NOT 409.
+    // mapError maps 424/external-service-error → GigaredUnavailableError(detail). The old guard
+    // only caught GigaredRejectedError, so this case fell through as an error. Fixed: broaden
+    // catch to also swallow GigaredUnavailableError when detail matches the idempotency phrase.
+    it('#1: setOtt(false) — partner sends 424 external-service-error "La cuenta OTT ya se encuentra deshabilitada" → resolves (idempotent success)', async () => {
+      const http = makeHttp();
+      http.put.mockRejectedValue(
+        axiosError(424, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/external-service-error',
+            title: 'Error en servicio externo',
+            status: 424,
+            detail: 'La cuenta OTT ya se encuentra deshabilitada',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.setOtt('CLIENTE_001', false)).resolves.toBeUndefined();
+    });
+
+    it('#1: setOtt(true) — partner sends 424 external-service-error "La cuenta OTT ya se encuentra habilitada" → resolves (idempotent success)', async () => {
+      const http = makeHttp();
+      http.put.mockRejectedValue(
+        axiosError(424, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/external-service-error',
+            title: 'Error en servicio externo',
+            status: 424,
+            detail: 'La cuenta OTT ya se encuentra habilitada',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.setOtt('CLIENTE_001', true)).resolves.toBeUndefined();
+    });
+
+    it('#1: 424 external-service-error with a DIFFERENT detail (genuine CUA outage) still throws GigaredUnavailableError', async () => {
+      const http = makeHttp();
+      http.put.mockRejectedValue(
+        axiosError(424, {
+          data: {
+            type: 'https://partners.gigaredsa.com.ar/errors/external-service-error',
+            title: 'Error en servicio externo',
+            status: 424,
+            detail: 'El servicio CUA no respondió a tiempo',
+          },
+        }),
+      );
+      const { client, ready } = makeClient(http);
+      await ready;
+      await expect(client.setOtt('CLIENTE_001', true)).rejects.toBeInstanceOf(GigaredUnavailableError);
+    });
   });
 });

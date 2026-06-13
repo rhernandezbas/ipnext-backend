@@ -939,6 +939,39 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
     expect(res.status).toBe(200);
     expect(res.body.local).toBeUndefined();
   });
+
+  // #4 — unhandled (raw/Prisma) error on link → structured 500 { error, code:'INTERNAL_ERROR' }
+  // The route handler itself must send the structured response AND log via console.error with the
+  // '[gigared] link: unhandled' prefix. Before the fix: handler called next(err) so the log came
+  // from the generic errorHandler ('[UNHANDLED ERROR]'), not from the route. The test pins the
+  // route-level logging as the distinguishing contract.
+  it('#4: link — use case throws an unrecognized error → 500 { code:"INTERNAL_ERROR" } logged as "[gigared] link: unhandled"', async () => {
+    const logSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const port = fakePort({
+        getAccountByCic: jest.fn(async () => {
+          // Simulates a raw/untyped error (e.g. Prisma or unexpected infrastructure failure)
+          // that sendGigaredError does not recognise → returns false.
+          const err = new Error('Unexpected database failure');
+          (err as Error & { code?: string }).code = 'P2025'; // Prisma-style code
+          throw err;
+        }),
+      });
+      const app = await buildApp({ port });
+      const res = await request(app).post('/api/gigared/customers/cust-1/link').send({ cic: '0000001234' });
+      expect(res.status).toBe(500);
+      expect(res.body.code).toBe('INTERNAL_ERROR');
+      expect(typeof res.body.error).toBe('string');
+      expect(res.body.error.length).toBeGreaterThan(0);
+      // The route handler must log with the gigared-specific prefix, NOT the generic errorHandler.
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[gigared]'),
+        expect.anything(),
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
 });
 
 // ----- #72: local TV-cancel flag integration (routes) -----

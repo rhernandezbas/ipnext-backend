@@ -73,6 +73,17 @@ export function createGigaredReadyMiddleware(
   };
 }
 
+/**
+ * #4 — fallback for errors that sendGigaredError does not recognise (e.g. raw Prisma errors,
+ * unexpected infrastructure failures). Logs the error with a gigared-scoped prefix for prod
+ * visibility and returns a structured 500 so the FE errorDetail/errorCode can read them.
+ * This replaces the old `next(err)` path that produced an opaque/empty 500 via errorHandler.
+ */
+function sendUnhandled(res: Response, err: unknown, route: string): void {
+  console.error(`[gigared] ${route}: unhandled`, err);
+  res.status(500).json({ error: 'Ha ocurrido un error inesperado en el servidor.', code: 'INTERNAL_ERROR' });
+}
+
 /** Map a Gigared/domain error to its FROZEN wire-contract HTTP status + body. Returns false if unhandled. */
 function sendGigaredError(res: Response, err: unknown): boolean {
   if (err instanceof GigaredNotConfiguredError) {
@@ -174,15 +185,15 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   const router = Router();
 
   // ---- /config — always accessible (no gigaredReady gate) ------------------
-  router.get('/config', deps.requireManage, async (_req, res, next): Promise<void> => {
+  router.get('/config', deps.requireManage, async (_req, res): Promise<void> => {
     try {
       res.json(await deps.getConfig.execute());
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'config:get');
     }
   });
 
-  router.put('/config', deps.requireManage, async (req, res, next): Promise<void> => {
+  router.put('/config', deps.requireManage, async (req, res): Promise<void> => {
     const parsed = updateGigaredConfigSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid config payload', code: 'VALIDATION_ERROR' });
@@ -191,24 +202,24 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     try {
       res.json(await deps.updateConfig.execute(parsed.data));
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'config:put');
     }
   });
 
   // ---- probe: GET /summary — key required, flag EXEMPT (M1) -----------------
   // Lets the operator validate the API key with the flag OFF ("test connection").
-  router.get('/summary', deps.gigaredProbeReady, deps.requireRead, async (_req, res, next): Promise<void> => {
+  router.get('/summary', deps.gigaredProbeReady, deps.requireRead, async (_req, res): Promise<void> => {
     try {
       res.json(await deps.getSummary.execute());
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'summary');
     }
   });
 
   // ---- everything below requires the integration to be fully ready (key + flag) ----
   router.use(deps.gigaredReady);
 
-  router.get('/accounts', deps.requireRead, async (req, res, next): Promise<void> => {
+  router.get('/accounts', deps.requireRead, async (req, res): Promise<void> => {
     try {
       const q = req.query;
       const filter: ListAccountsFilter = {};
@@ -219,19 +230,19 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       if (typeof q['pagination_offset'] === 'string') filter.paginationOffset = Number(q['pagination_offset']);
       res.json(await deps.listAccounts.execute(filter));
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'accounts:list');
     }
   });
 
-  router.get('/customers/:id/account', deps.requireRead, async (req, res, next): Promise<void> => {
+  router.get('/customers/:id/account', deps.requireRead, async (req, res): Promise<void> => {
     try {
       res.json(await deps.getCustomerAccount.execute(req.params['id'] as string));
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'account:get');
     }
   });
 
-  router.post('/customers/:id/link', deps.requireLink, async (req, res, next): Promise<void> => {
+  router.post('/customers/:id/link', deps.requireLink, async (req, res): Promise<void> => {
     try {
       const body = req.body as { cic?: unknown; contractId?: unknown };
       const cic = String(body.cic ?? '');
@@ -241,11 +252,11 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       // local:'failed' mirrors AddTvService → 207 (link kept, retry = re-POST). Else 200.
       res.status(result.local === 'failed' ? 207 : 200).json(result);
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'link');
     }
   });
 
-  router.post('/customers/:id/register', deps.requireRegister, async (req, res, next): Promise<void> => {
+  router.post('/customers/:id/register', deps.requireRegister, async (req, res): Promise<void> => {
     try {
       const b = req.body as {
         firstName: string; lastName: string; email: string; cic: string;
@@ -271,7 +282,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       });
       res.status(201).json(account);
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'register');
     }
   });
 
@@ -280,7 +291,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   // la cuenta de OTRO cliente. El use case resuelve la cuenta del cliente por use_internal_id y
   // usa SU cic (cuenta sin vincular → 404 TV_NOT_LINKED). Guard tv.register. El use case valida
   // CUA antes de tocar Gigared (400 VALIDATION_ERROR); un rechazo del partner sube RFC 9457 (#47g).
-  router.post('/customers/:id/tv-password', deps.requireRegister, async (req, res, next): Promise<void> => {
+  router.post('/customers/:id/tv-password', deps.requireRegister, async (req, res): Promise<void> => {
     try {
       const b = req.body as { contractId?: unknown; password?: unknown };
       const contractId = String(b.contractId ?? '');
@@ -295,23 +306,23 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       });
       res.json(result);
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'tv-password');
     }
   });
 
   // #65 fix wave H3 (SEGURIDAD) — superficie dedicada para las credenciales de Gigared Play.
   // Reemplaza la fuga donde tvPassword salía por GET /:id/contracts y por los responses de
   // add/update service. Guard tv.register (mismo que el cambio de password). Sin fila TV → 404.
-  router.get('/customers/:id/tv-credentials', deps.requireRegister, async (req, res, next): Promise<void> => {
+  router.get('/customers/:id/tv-credentials', deps.requireRegister, async (req, res): Promise<void> => {
     try {
       const result = await deps.getTvCredentials.execute(req.params['id'] as string);
       res.json(result);
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'tv-credentials');
     }
   });
 
-  router.post('/customers/:id/services', deps.requirePacks, async (req, res, next): Promise<void> => {
+  router.post('/customers/:id/services', deps.requirePacks, async (req, res): Promise<void> => {
     try {
       const b = req.body as { serviceId: string; contractId: string };
       const result = await deps.addTvService.execute(req.params['id'] as string, {
@@ -320,11 +331,11 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       });
       res.status(result.local === 'failed' ? 207 : 200).json(result);
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'addService');
     }
   });
 
-  router.delete('/customers/:id/services/:serviceId', deps.requirePacks, async (req, res, next): Promise<void> => {
+  router.delete('/customers/:id/services/:serviceId', deps.requirePacks, async (req, res): Promise<void> => {
     try {
       const contractId = String(req.query['contractId'] ?? '');
       const result = await deps.removeTvService.execute(req.params['id'] as string, {
@@ -333,17 +344,17 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       });
       res.status(result.local === 'failed' ? 207 : 200).json(result);
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'removeService');
     }
   });
 
-  router.put('/customers/:id/ott', deps.requireOtt, async (req, res, next): Promise<void> => {
+  router.put('/customers/:id/ott', deps.requireOtt, async (req, res): Promise<void> => {
     try {
       const enabled = Boolean((req.body as { enabled?: unknown }).enabled);
       await deps.setOttStatus.execute(req.params['id'] as string, enabled);
       res.json({ ok: true });
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'ott');
     }
   });
 
@@ -363,7 +374,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   //     fallido o no intentado). Caso real 0006717800 → 0006283226 (verificado LIVE 2026-06-12).
   //   #72: `unlinked` ya no existe — el partner no tiene primitive de unlink (HTTP 400 siempre).
   //   El estado "sin TV" se persiste localmente (Client.tvCancelledAt). No factoriza en el 207.
-  router.post('/customers/:id/cancel', deps.requireCancel, async (req, res, next): Promise<void> => {
+  router.post('/customers/:id/cancel', deps.requireCancel, async (req, res): Promise<void> => {
     try {
       const contractId = String((req.body as { contractId?: unknown }).contractId ?? '');
       const result = await deps.cancelTv.execute(req.params['id'] as string, { contractId });
@@ -375,7 +386,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         (!result.ottDisabled && !renewSucceeded);
       res.status(partial ? 207 : 200).json(result);
     } catch (err) {
-      if (!sendGigaredError(res, err)) next(err);
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'cancel');
     }
   });
 
