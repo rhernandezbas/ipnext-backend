@@ -463,6 +463,43 @@ async function seedSchedulingFoundation() {
   } catch (err) {
     console.warn('  RBAC seed: clients.manage assignment skipped (RBAC tables may not exist yet):', (err as any).message)
   }
+
+  // #80 — Recaptación: ensure recapture module + read/manage perms + grants to super_admin & administrador.
+  // Dev parity with migration 20260717000100_grant_recapture_permissions.
+  try {
+    // Ensure the module exists
+    let recaptureModule = await (prisma as any).rbacModule.findUnique({ where: { code: 'recapture' } })
+    if (!recaptureModule) {
+      recaptureModule = await (prisma as any).rbacModule.create({ data: { code: 'recapture', label: 'Recaptación' } })
+      console.log('  Created RBAC module: recapture')
+    }
+
+    for (const action of ['read', 'manage'] as const) {
+      let perm = await (prisma as any).rbacPermission.findFirst({
+        where: { moduleId: recaptureModule.id, action },
+      })
+      if (!perm) {
+        perm = await (prisma as any).rbacPermission.create({
+          data: { moduleId: recaptureModule.id, action },
+        })
+        console.log(`  Created RBAC permission: recapture.${action}`)
+      }
+
+      for (const roleCode of ['super_admin', 'administrador'] as const) {
+        const role = await (prisma as any).rbacRole.findUnique({ where: { code: roleCode } })
+        if (role) {
+          await (prisma as any).rbacRolePermission.upsert({
+            where: { roleId_permissionId: { roleId: role.id, permissionId: perm.id } },
+            update: {},
+            create: { roleId: role.id, permissionId: perm.id },
+          })
+          console.log(`  RBAC: ${roleCode} → recapture.${action} (upserted)`)
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('  RBAC seed: recapture grants skipped (RBAC tables may not exist yet):', (err as any).message)
+  }
 }
 
 /**
