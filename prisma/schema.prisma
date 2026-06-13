@@ -1939,6 +1939,17 @@ model IClassClosureConfig {
   updatedAt              DateTime @updatedAt
 }
 
+// #79 — Single-row SLA timer config for the tickets list "Timer" column.
+// warnMinutes (green→amber) and dangerMinutes (amber→red) drive the client-side
+// color of the elapsed-time pill. Application-level defaults (60 / 240); seeded
+// idempotently. dangerMinutes > warnMinutes is enforced in the use case.
+model TicketSlaConfig {
+  id            String   @id @default("singleton")
+  warnMinutes   Int      @default(60)
+  dangerMinutes Int      @default(240)
+  updatedAt     DateTime @updatedAt
+}
+
 // =============================================
 // SUPPORT DOMAIN
 // =============================================

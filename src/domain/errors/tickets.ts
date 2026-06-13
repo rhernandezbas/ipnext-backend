@@ -73,3 +73,16 @@ export class NoClosableStatusError extends DomainError {
     this.name = 'NoClosableStatusError';
   }
 }
+
+// ─── #79 SLA timer config error ──────────────────────────────────────────────
+
+/** Raised when the merged SLA config would have dangerMinutes <= warnMinutes. */
+export class TicketSlaThresholdOrderError extends DomainError {
+  constructor(warnMinutes: number, dangerMinutes: number) {
+    super(
+      `dangerMinutes (${dangerMinutes}) must be greater than warnMinutes (${warnMinutes})`,
+      'TICKET_SLA_THRESHOLD_ORDER',
+    );
+    this.name = 'TicketSlaThresholdOrderError';
+  }
+}
