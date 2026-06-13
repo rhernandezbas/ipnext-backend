@@ -1,10 +1,12 @@
 import { TicketRepository } from '@domain/ports/TicketRepository';
 import { TicketStatusRepository } from '@domain/ports/TicketStatusRepository';
 import { Ticket } from '@domain/entities/ticket';
+import { CLOSED_STATUS_SLUGS } from '@domain/entities/ticketStatus';
 import { TicketNotClosedError } from '@domain/errors/tickets';
 
-// Known "closed-like" slugs — same list as CloseTicket (case-insensitive).
-const CLOSED_SLUGS = ['closed', 'cerrado'] as const;
+// Known "closed-like" slugs — single source of truth shared with CloseTicket
+// and the repositories (case-insensitive).
+const CLOSED_SLUGS = CLOSED_STATUS_SLUGS;
 
 export class ArchiveTicket {
   constructor(

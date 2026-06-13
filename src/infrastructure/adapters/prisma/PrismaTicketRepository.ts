@@ -11,6 +11,7 @@
  *    Use cases and DTOs never see statusId.
  */
 import { Ticket, TicketStats } from '@domain/entities/ticket';
+import { isClosedStatus } from '@domain/entities/ticketStatus';
 import { TicketRepository, ListTicketsQuery, CreateTicketData, UpdateTicketData } from '@domain/ports/TicketRepository';
 import { PaginatedResult } from '@application/dto/pagination';
 import { TicketStatusUnknownError } from '@domain/errors/tickets';
@@ -217,6 +218,10 @@ export class PrismaTicketRepository implements TicketRepository {
       // Phase 2: resolve status name → id at the repo boundary.
       if (data.status !== undefined) {
         updateData['statusId'] = await resolveStatusId(data.status);
+        // #84 — keep resolvedAt consistent with the transition: a closed-like status
+        // stamps it; reopening to any other status clears it (null while open).
+        // Detection is catalog-aligned + case-insensitive (lección #46).
+        updateData['resolvedAt'] = isClosedStatus(data.status) ? new Date() : null;
       }
 
       const row = await (prisma as any).ticket.update({
@@ -251,7 +256,16 @@ export class PrismaTicketRepository implements TicketRepository {
 
   async archive(id: string): Promise<Ticket | null> {
     // #85 — stamp archivedAt. Caller (ArchiveTicket) validates the ticket is closed.
+    // #85 re-review — idempotent: if the ticket is already archived, return it as-is
+    // without re-stamping archivedAt (same pattern as ArchiveTask, #86).
     try {
+      const existing = await (prisma as any).ticket.findUnique({
+        where: { id },
+        include: INCLUDE,
+      });
+      if (!existing) return null;
+      if (existing.archivedAt != null) return toTicket(existing);
+
       const row = await (prisma as any).ticket.update({
         where: { id },
         data: { archivedAt: new Date() },

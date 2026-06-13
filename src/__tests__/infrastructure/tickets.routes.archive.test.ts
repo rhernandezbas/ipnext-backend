@@ -57,7 +57,9 @@ interface Fixture {
   repo: InMemoryTicketRepository;
   statusRepo: InMemoryTicketStatusRepository;
   areaRepo: InMemoryTicketAreaCatalogRepository;
-  closePermUserId: string;
+  // #85 re-review — archive is now gated by tickets.manage (administrador has it),
+  // NOT tickets.close (super_admin only). This user holds tickets.manage and can archive.
+  managePermUserId: string;
   deleteHardPermUserId: string;
   superAdminUserId: string;
   noPermUserId: string;
@@ -91,23 +93,25 @@ async function buildApp(): Promise<Fixture> {
   };
 
   // Roles
-  const closerRole = await roleRepo.create({ code: 'ticket_closer', label: 'Ticket Closer', isSystem: false });
+  // #85 re-review — the archive guard is tickets.manage (administrador's grant),
+  // so the "can archive" actor here holds tickets.manage, mirroring a normal admin.
+  const managerRole = await roleRepo.create({ code: 'ticket_manager', label: 'Ticket Manager', isSystem: false });
   const deleterRole = await roleRepo.create({ code: 'ticket_deleter', label: 'Ticket Deleter', isSystem: false });
   const superAdminRole = await roleRepo.create({ code: 'super_admin', label: 'Super Admin', isSystem: true });
 
   // Permissions
-  const closePerm = await permRepo.seed({ moduleCode: 'tickets', action: 'close' });
+  const managePerm = await permRepo.seed({ moduleCode: 'tickets', action: 'manage' });
   const deleteHardPerm = await permRepo.seed({ moduleCode: 'tickets', action: 'delete_hard' });
 
-  await rolePermRepo.grant(closerRole.id, closePerm.id);
+  await rolePermRepo.grant(managerRole.id, managePerm.id);
   await rolePermRepo.grant(deleterRole.id, deleteHardPerm.id);
 
   const pwHash = await hasher.hash('pw');
   const mkUser = (login: string) =>
     rbacUserRepo.create({ name: login, email: `${login}@x.com`, login, passwordHash: pwHash, status: 'active' });
 
-  const closePermUser = await mkUser('closer');
-  await userRoleRepo.assign(closePermUser.id, closerRole.id);
+  const managePermUser = await mkUser('manager');
+  await userRoleRepo.assign(managePermUser.id, managerRole.id);
 
   const deleteHardPermUser = await mkUser('deleter');
   await userRoleRepo.assign(deleteHardPermUser.id, deleterRole.id);
@@ -120,7 +124,7 @@ async function buildApp(): Promise<Fixture> {
   // Repos
   const repo = new InMemoryTicketRepository();
   repo.seedAdmins([
-    { id: closePermUser.id, name: 'Closer User' },
+    { id: managePermUser.id, name: 'Manager User' },
     { id: deleteHardPermUser.id, name: 'Deleter User' },
     { id: superAdminUser.id, name: 'Super Admin User' },
     { id: noPermUser.id, name: 'No Perm User' },
@@ -145,7 +149,7 @@ async function buildApp(): Promise<Fixture> {
 
   const authProvider = buildEchoAuthProvider();
   const ticketRbacUserRepo = buildRbacUserRepo([
-    closePermUser.id, deleteHardPermUser.id, superAdminUser.id, noPermUser.id,
+    managePermUser.id, deleteHardPermUser.id, superAdminUser.id, noPermUser.id,
   ]);
 
   const app = express();
@@ -185,7 +189,7 @@ async function buildApp(): Promise<Fixture> {
     repo,
     statusRepo,
     areaRepo,
-    closePermUserId: closePermUser.id,
+    managePermUserId: managePermUser.id,
     deleteHardPermUserId: deleteHardPermUser.id,
     superAdminUserId: superAdminUser.id,
     noPermUserId: noPermUser.id,
@@ -199,7 +203,7 @@ function asUser(req: request.Test, userId: string): request.Test {
 // ─── POST /api/tickets/:id/archive ────────────────────────────────────────────
 
 describe('POST /api/tickets/:id/archive (#85)', () => {
-  it('returns 200 with archivedAt set for a CLOSED ticket + tickets.close permission', async () => {
+  it('returns 200 with archivedAt set for a CLOSED ticket + tickets.manage permission', async () => {
     const fx = await buildApp();
     // Create and close a ticket
     const ticket = await fx.repo.create({ subject: 'T1', description: 'd1' });
@@ -207,7 +211,22 @@ describe('POST /api/tickets/:id/archive (#85)', () => {
 
     const res = await asUser(
       request(fx.app).post(`/api/tickets/${ticket.id}/archive`),
-      fx.closePermUserId,
+      fx.managePermUserId,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.archivedAt).not.toBeNull();
+  });
+
+  // #85 re-review — the guard must be tickets.manage (administrador's grant), so a
+  // normal admin holding tickets.manage (but NOT tickets.close) can archive.
+  it('a user with tickets.manage (no tickets.close) can archive → 200', async () => {
+    const fx = await buildApp();
+    const ticket = await fx.repo.create({ subject: 'T-mgr', description: 'd' });
+    await fx.repo.close(ticket.id, 'closed');
+
+    const res = await asUser(
+      request(fx.app).post(`/api/tickets/${ticket.id}/archive`),
+      fx.managePermUserId,
     );
     expect(res.status).toBe(200);
     expect(res.body.archivedAt).not.toBeNull();
@@ -219,13 +238,13 @@ describe('POST /api/tickets/:id/archive (#85)', () => {
 
     const res = await asUser(
       request(fx.app).post(`/api/tickets/${ticket.id}/archive`),
-      fx.closePermUserId,
+      fx.managePermUserId,
     );
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('TICKET_NOT_CLOSED');
   });
 
-  it('returns 403 PERMISSION_DENIED without tickets.close permission', async () => {
+  it('returns 403 PERMISSION_DENIED without tickets.manage permission', async () => {
     const fx = await buildApp();
     const ticket = await fx.repo.create({ subject: 'T3', description: 'd3' });
     await fx.repo.close(ticket.id, 'closed');
@@ -242,7 +261,7 @@ describe('POST /api/tickets/:id/archive (#85)', () => {
     const fx = await buildApp();
     const res = await asUser(
       request(fx.app).post('/api/tickets/nonexistent/archive'),
-      fx.closePermUserId,
+      fx.managePermUserId,
     );
     expect(res.status).toBe(404);
   });
@@ -258,7 +277,7 @@ describe('GET /api/tickets — archived filtering (#85)', () => {
     await fx.repo.close(t2.id, 'closed');
     await fx.repo.archive(t2.id);
 
-    const res = await asUser(request(fx.app).get('/api/tickets'), fx.closePermUserId);
+    const res = await asUser(request(fx.app).get('/api/tickets'), fx.managePermUserId);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.data[0].id).toBe(t1.id);
@@ -271,10 +290,33 @@ describe('GET /api/tickets — archived filtering (#85)', () => {
     await fx.repo.close(t2.id, 'closed');
     await fx.repo.archive(t2.id);
 
-    const res = await asUser(request(fx.app).get('/api/tickets?archived=true'), fx.closePermUserId);
+    const res = await asUser(request(fx.app).get('/api/tickets?archived=true'), fx.managePermUserId);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.data[0].id).toBe(t2.id);
+  });
+
+  // #85 re-review (BAJA) — combo: filtering by status=closed in the DEFAULT list
+  // (archived excluded) must NOT surface a closed-AND-archived ticket. The archived
+  // exclusion is AND-combined with the status filter through the whole seam.
+  it('status=closed (default, archived excluded) still hides closed+archived tickets', async () => {
+    const fx = await buildApp();
+    const closedVisible = await fx.repo.create({ subject: 'Closed visible', description: 'd' });
+    await fx.repo.close(closedVisible.id, 'closed');
+
+    const closedArchived = await fx.repo.create({ subject: 'Closed archived', description: 'd' });
+    await fx.repo.close(closedArchived.id, 'closed');
+    await fx.repo.archive(closedArchived.id);
+
+    const res = await asUser(
+      request(fx.app).get('/api/tickets?status=closed'),
+      fx.managePermUserId,
+    );
+    expect(res.status).toBe(200);
+    // Only the closed-but-not-archived ticket comes back.
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0].id).toBe(closedVisible.id);
+    expect(res.body.data.map((t: { id: string }) => t.id)).not.toContain(closedArchived.id);
   });
 });
 

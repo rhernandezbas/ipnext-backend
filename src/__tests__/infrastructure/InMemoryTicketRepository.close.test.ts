@@ -49,4 +49,61 @@ describe('InMemoryTicketRepository — resolvedAt (#84)', () => {
     const result = await repo.close('non-existent', 'Cerrado');
     expect(result).toBeNull();
   });
+
+  // #84 re-review — reopening via update(status) must CLEAR resolvedAt.
+  it('update() to a NON-closed status clears resolvedAt (reopen)', async () => {
+    const ticket = await repo.create({ subject: 'T5', description: 'd5' });
+    const closed = await repo.close(ticket.id, 'Cerrado');
+    expect(closed!.resolvedAt).not.toBeNull();
+
+    // Reopen via PATCH status path → update({ status })
+    const reopened = await repo.update(ticket.id, { status: 'open' });
+    expect(reopened!.resolvedAt).toBeNull();
+  });
+
+  it('update() to a NON-closed status (case-insensitive) clears resolvedAt', async () => {
+    const ticket = await repo.create({ subject: 'T6', description: 'd6' });
+    await repo.close(ticket.id, 'CLOSED');
+    const reopened = await repo.update(ticket.id, { status: 'Open' });
+    expect(reopened!.resolvedAt).toBeNull();
+  });
+
+  it('update() to a closed status (case-insensitive) stamps resolvedAt', async () => {
+    const ticket = await repo.create({ subject: 'T7', description: 'd7' });
+    expect(ticket.resolvedAt).toBeNull();
+    const before = new Date().toISOString();
+    const closed = await repo.update(ticket.id, { status: 'Cerrado' });
+    const after = new Date().toISOString();
+    expect(closed!.resolvedAt).not.toBeNull();
+    const ts = closed!.resolvedAt!;
+    expect(new Date(ts).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
+    expect(new Date(ts).getTime()).toBeLessThanOrEqual(new Date(after).getTime());
+  });
+
+  it('close → reopen → re-close yields a FRESH resolvedAt', async () => {
+    const ticket = await repo.create({ subject: 'T8', description: 'd8' });
+    const closed1 = await repo.close(ticket.id, 'Cerrado');
+    const firstResolvedAt = closed1!.resolvedAt;
+    expect(firstResolvedAt).not.toBeNull();
+
+    const reopened = await repo.update(ticket.id, { status: 'open' });
+    expect(reopened!.resolvedAt).toBeNull();
+
+    const closed2 = await repo.update(ticket.id, { status: 'closed' });
+    expect(closed2!.resolvedAt).not.toBeNull();
+    // It is a fresh stamp (>= the first; never the stale one re-used after a null gap)
+    expect(new Date(closed2!.resolvedAt!).getTime()).toBeGreaterThanOrEqual(
+      new Date(firstResolvedAt!).getTime(),
+    );
+  });
+
+  it('update() that does NOT touch status leaves resolvedAt untouched', async () => {
+    const ticket = await repo.create({ subject: 'T9', description: 'd9' });
+    const closed = await repo.close(ticket.id, 'closed');
+    const stamped = closed!.resolvedAt;
+    expect(stamped).not.toBeNull();
+    // Editing subject only — resolvedAt must survive
+    const edited = await repo.update(ticket.id, { subject: 'edited' });
+    expect(edited!.resolvedAt).toBe(stamped);
+  });
 });

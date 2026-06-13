@@ -38,6 +38,17 @@ describe('InMemoryTicketRepository — archivedAt (#85)', () => {
     expect(result).toBeNull();
   });
 
+  // #85 re-review — archive() is idempotent: a second call must NOT re-stamp archivedAt.
+  it('archive() is idempotent — re-archiving keeps the original archivedAt', async () => {
+    const ticket = await repo.create({ subject: 'T-idem', description: 'd' });
+    const first = await repo.archive(ticket.id);
+    const firstAt = first!.archivedAt;
+    expect(firstAt).not.toBeNull();
+
+    const second = await repo.archive(ticket.id);
+    expect(second!.archivedAt).toBe(firstAt);
+  });
+
   it('list() by default excludes archived tickets (archivedAt != null)', async () => {
     const t1 = await repo.create({ subject: 'Active', description: 'd1' });
     const t2 = await repo.create({ subject: 'To Archive', description: 'd2' });

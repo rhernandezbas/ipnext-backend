@@ -131,15 +131,18 @@ export function createTicketsRouter(
     }
   });
 
-  // POST /:id/archive — archive a closed ticket (#85). Guarded by tickets.close.
-  // Mounted BEFORE /:id to avoid route capture.
+  // POST /:id/archive — archive a closed ticket (#85). Guarded by tickets.manage.
+  // #85 re-review — was tickets.close, which is seeded ONLY to super_admin, so a
+  // normal administrador (who has tickets.manage, NOT tickets.close) got a 403.
+  // tickets.manage is the right gate: administrador holds it via migration
+  // 20260703000000_grant_tickets_manage. Mounted BEFORE /:id to avoid route capture.
   router.post(
     '/:id/archive',
     auth,
     // Inline permission gate: only installed when permissionUserRepo is provided
     (req: Request, res: Response, next: import('express').NextFunction): void => {
       if (!permissionUserRepo) { next(); return; }
-      requirePermission(permissionUserRepo, 'tickets', 'close')(req, res, next);
+      requirePermission(permissionUserRepo, 'tickets', 'manage')(req, res, next);
     },
     async (req: Request, res: Response): Promise<void> => {
       if (!archiveTicket) {
