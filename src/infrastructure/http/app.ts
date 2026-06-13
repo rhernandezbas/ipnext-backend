@@ -424,6 +424,7 @@ import { ReleaseRecaptureLead } from '@application/use-cases/recapture/ReleaseRe
 import { UpdateRecaptureLeadStatus } from '@application/use-cases/recapture/UpdateRecaptureLeadStatus';
 import { AddRecaptureContact } from '@application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '@application/use-cases/recapture/IngestChurnedClients';
+import { ImportCsvLeads } from '@application/use-cases/recapture/ImportCsvLeads';
 import { ListLeads } from '@application/use-cases/ListLeads';
 import { GetLead } from '@application/use-cases/GetLead';
 import { CreateLead } from '@application/use-cases/CreateLead';
@@ -1813,6 +1814,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new UpdateRecaptureLeadStatus(recaptureRepo),
     new AddRecaptureContact(recaptureRepo),
     new IngestChurnedClients(recaptureRepo, customerAdapter),
+    new ImportCsvLeads(recaptureRepo),
     createAuthMiddleware(authAdapter, sessionRepo),
     {
       read:   requirePerm('recapture', 'read'),

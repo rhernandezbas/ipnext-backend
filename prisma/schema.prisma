@@ -2338,20 +2338,26 @@ enum RecaptureContactOutcome {
 }
 
 model RecaptureLead {
-  id          String              @id @default(cuid())
-  source      RecaptureLeadSource
-  clientId    String?
-  client      Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  contactName String
-  phone       String?
-  email       String?
-  status      RecaptureLeadStatus @default(nuevo)
-  assigneeId  String?
-  assignee    RbacUser?           @relation("RecaptureLeadAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
-  claimedAt   DateTime?
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
-  contacts    RecaptureContact[]
+  id           String              @id @default(cuid())
+  source       RecaptureLeadSource
+  clientId     String?
+  client       Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  contactName  String
+  phone        String?
+  email        String?
+  status       RecaptureLeadStatus @default(nuevo)
+  assigneeId   String?
+  assignee     RbacUser?           @relation("RecaptureLeadAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  claimedAt    DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  contacts     RecaptureContact[]
+  /// Physical address — populated from CSV import
+  address      String?
+  /// Churn reason — populated from CSV import
+  churnReason  String?
+  /// Previous plan — populated from CSV import
+  previousPlan String?
 
   @@index([status])
   @@index([assigneeId])

@@ -16,6 +16,7 @@ import { ReleaseRecaptureLead } from '../application/use-cases/recapture/Release
 import { UpdateRecaptureLeadStatus } from '../application/use-cases/recapture/UpdateRecaptureLeadStatus';
 import { AddRecaptureContact } from '../application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '../application/use-cases/recapture/IngestChurnedClients';
+import { ImportCsvLeads } from '../application/use-cases/recapture/ImportCsvLeads';
 import type { CustomerRepository } from '../domain/ports/CustomerRepository';
 import type { JwtAuthAdapter } from '../infrastructure/adapters/jwt/JwtAuthAdapter';
 
@@ -69,6 +70,7 @@ function buildApp(opts: BuildAppOptions = {}) {
   const updateStatusUC = new UpdateRecaptureLeadStatus(repo);
   const addContactUC = new AddRecaptureContact(repo);
   const ingestUC = new IngestChurnedClients(repo, customerRepo);
+  const importCsvUC = new ImportCsvLeads(repo);
 
   const authProvider = {
     getSession: jest.fn().mockResolvedValue({ id: 'user-test', email: 'test@test.com', role: 'admin' }),
@@ -82,6 +84,7 @@ function buildApp(opts: BuildAppOptions = {}) {
     '/api/recapture',
     createRecaptureRouter(
       listUC, getUC, claimUC, claimNextUC, releaseUC, updateStatusUC, addContactUC, ingestUC,
+      importCsvUC,
       allowAuth,
       {
         read: opts.readPerm ?? allowPerm,

@@ -30,6 +30,9 @@ function toRecaptureLeadDomain(row: any): RecaptureLead {
     claimedAt: row.claimedAt instanceof Date ? row.claimedAt.toISOString() : (row.claimedAt ?? null),
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
+    address: row.address ?? null,
+    churnReason: row.churnReason ?? null,
+    previousPlan: row.previousPlan ?? null,
   };
 }
 
@@ -106,6 +109,9 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
         contactName: data.contactName,
         phone: data.phone ?? null,
         email: data.email ?? null,
+        address: data.address ?? null,
+        churnReason: data.churnReason ?? null,
+        previousPlan: data.previousPlan ?? null,
       },
     });
     return toRecaptureLeadDomain(row);

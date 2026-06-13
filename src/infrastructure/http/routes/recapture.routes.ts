@@ -7,6 +7,7 @@ import { ReleaseRecaptureLead } from '@application/use-cases/recapture/ReleaseRe
 import { UpdateRecaptureLeadStatus } from '@application/use-cases/recapture/UpdateRecaptureLeadStatus';
 import { AddRecaptureContact } from '@application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '@application/use-cases/recapture/IngestChurnedClients';
+import { ImportCsvLeads } from '@application/use-cases/recapture/ImportCsvLeads';
 import { RecaptureLeadNotFoundError, RecaptureLeadAlreadyClaimedError } from '@domain/errors/recapture';
 import type { RecaptureLeadStatus, RecaptureContactChannel, RecaptureContactOutcome } from '@domain/entities/recaptureLead';
 
@@ -35,6 +36,7 @@ export function createRecaptureRouter(
   updateStatus: UpdateRecaptureLeadStatus,
   addContact: AddRecaptureContact,
   ingestChurned: IngestChurnedClients,
+  importCsv: ImportCsvLeads,
   auth: RequestHandler,
   perms: RecaptureRoutePerms,
 ): Router {
@@ -49,6 +51,42 @@ export function createRecaptureRouter(
     async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const result = await ingestChurned.execute();
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /import-csv/template (read) ──────────────────────────────────────
+  // Mounted BEFORE /leads to avoid route shadowing
+  router.get(
+    '/import-csv/template',
+    auth,
+    perms.read,
+    (_req: Request, res: Response): void => {
+      const headers = 'nombre,telefono,email,direccion,motivo_baja,plan_anterior';
+      const example = 'Juan Pérez,1154321234,juan@correo.com,Av. Corrientes 1234,precio,plan_basico';
+      const body = `${headers}\n${example}\n`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="recaptacion-template.csv"');
+      res.status(200).send(body);
+    },
+  );
+
+  // ─── POST /import-csv (manage) ─────────────────────────────────────────────
+  router.post(
+    '/import-csv',
+    auth,
+    perms.manage,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const { csv } = req.body as { csv?: string };
+      if (!csv || typeof csv !== 'string') {
+        res.status(400).json({ error: 'Missing required field: csv', code: 'VALIDATION_ERROR' });
+        return;
+      }
+      try {
+        const result = await importCsv.execute(csv);
         res.json(result);
       } catch (err) {
         next(err);
