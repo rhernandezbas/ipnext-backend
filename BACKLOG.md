@@ -1,14 +1,39 @@
 # Backlog — IPNext (Prominense)
 
 > Backlog de trabajo sobre los dos repos (`ipnext-backend` + `ipnext-frontend`).
-> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +19 (#48–#66) +5 (#67–#71) +2 (#72/#73) +6 (#74–#79, noche 2: renew=baja completa + columnas de la lista de tickets: área pos2, timer SLA, link cliente, fuera Tipo, datos→comentario) → **79 totales — TODOS HECHOS** (jornada 2026-06-12/13: 31 shippeados + #57 no-bug, BE PRs #118–#134 / FE PRs #97–#122, 11 migraciones 20260701–20260713). Único pendiente NO-código: escalamiento a Gigared (ver Pendientes).
+> Arrancó el 2026-06-03 con 14 ítems; +2 (#15, #16) → 16; +1 (#17); +2 (#18, #19); +1 (#20); +2 (#21, #22); +2 (#23, #24); +2 (#25, #26); +1 (#27); +1 (#28) → 28; +9 (#29–#37, sesión 2026-06-08: cierre de OS async/resiliente + página de Reconciliar + observabilidad) → **37 totales**; +8 (#40–#47, sesión 2026-06-11: Tareas Nodos + estados generales + redesigns contratos/tickets + servicios x contrato + mapper ciudades + integración TV) → **45 totales**; +19 (#48–#66) +5 (#67–#71) +2 (#72/#73) +6 (#74–#79, noche 2: renew=baja completa + columnas de la lista de tickets: área pos2, timer SLA, link cliente, fuera Tipo, datos→comentario) → **87 totales — TODOS HECHOS** (jornada 2026-06-12/13: 31 shippeados + #57 no-bug, BE PRs #118–#134 / FE PRs #97–#122, 11 migraciones 20260701–20260713). Único pendiente NO-código: escalamiento a Gigared (ver Pendientes).
 > **38 hechos (en prod, #39 incluido) · EPIC #38 COMPLETO (7/7 waves) · UISP V1 EN PROD (2026-06-10, BE #99 + FE #71 — flag `uisp-sync` OFF, rotar token post-activación).**  (#17, #7, #22, #18, #14, #11, #12, #25, #20, #19, #23, #29, #31, #30, #32, #33, #34, #35, #36, #37 cerrados vía SDD.)
 
 ---
 
 ## 📋 Pendientes
 
-> **Nada pendiente de código.** Único abierto: ESCALAMIENTO A GIGARED (NO es código) — pendiente del #72 (endpoint de desasociación + limpieza de internal_ids basura del abonado 204366).
+> **Mini-batch 2026-06-13 (noche) — #80–#87, COMPLETO.** SDD automático + híbrido, worktree por surface. BE PRs #135–#138 / FE PRs #123–#128, migraciones 20260714–20260718.
+
+### #83 — Formato de fecha legible en toda la app ✅ HECHO *(FE PR #128, en prod)*
+> Sweep global: fechas crudas/ISO → `08 sep 2025 - 13:45` (o solo fecha). Helpers `formatDateTimeShort`/`formatDateShort` (deterministas con MONTHS_ES). 42 archivos barridos. La re-review cazó un bug de TZ (las fechas solo-fecha ISO-Z de medianoche mostraban el día anterior — Vigencia "07 sep" en vez de "08 sep") → fix tratando el ISO-Z midnight como UTC. Legacy formatRelative (#44)/timelines (#77) intactos. ⚠️ El builder no había commiteado el sweep (estaba en el working tree) — el orquestador lo cazó y lo commiteó.
+
+### #81 — TV: re-alta tras baja (identidad por cliente + secuencial) ✅ HECHO *(BE PR #135 + FE PR #123, en prod, migración 20260714)*
+> Modelo confirmado en vivo: el renew deja el CIC nuevo limpio pero el internal_id viejo (=Client.id) queda QUEMADO en el CIC muerto (append-only) → re-usar el crudo choca. `Client.tvActivationSeq` (identidad TV por cliente, compartida entre N contratos); re-alta = registro fresco con internal_id `{Client.id}-{seq}` + mail secuencial. Back-compat seq=0 (clientes/altas de hoy intactos). El cupo se recicla con el abonado, no se libera (Gigared). Review CLEAN.
+
+### #82 — Rediseño "Agregar SN al contrato" ✅ HECHO *(FE PR #124, en prod)*
+> El form inline crudo de agregar/editar equipo del contrato pasó a un modal dedicado (InstalledItemFormModal, portal+focus+Escape, normalización SN + validación MAC). Contrato API intacto. Review CLEAN.
+
+### #84 — Ticket Timer: para al cerrar + pos 3 ✅ HECHO *(BE PR #136 + FE PR #125, en prod, migración 20260715)*
+> `Ticket.resolvedAt` estampado al cerrar (limpiado al reabrir — la re-review cazó el stale); el timer congela en `resolvedAt-createdAt`, no sigue con el reloj. Columna en posición 3.
+
+### #85 — Tickets: archivar + eliminar super-admin + cerrados ocultos ✅ HECHO *(BE PR #136 + FE PR #125, en prod, migración 20260716)*
+> `Ticket.archivedAt` (ortogonal al status). Archivar exige cerrado primero (422), idempotente, gateado **tickets.manage** (la re-review cazó que tickets.close daba 403 a los admin). Page /admin/tickets/archived. Hard-delete `DELETE /:id/hard` solo super_admin (`tickets.delete_hard`, sin seedear). Lista principal solo abiertos; archivados excluidos server-side siempre.
+
+### #87 — Tickets: filtros como Tareas ✅ HECHO *(FE PR #125, en prod)*
+> Fuera el TicketFilterDisclosure colapsable → TicketFilterBar horizontal siempre visible (espejo de TaskFilterBar), con los 6 filtros propios de tickets intactos.
+
+### #80 — Page "Recaptación" (leads de clientes de baja) ✅ HECHO *(BE PR #137 + FE PR #126, en prod, migración 20260717)*
+> SDD `recaptacion-leads`. `RecaptureLead` (desacoplado del Client para el CSV futuro: source churned_client|csv) + `RecaptureContact` (bitácora) + **claim race-safe** (la re-review cazó que el "tomar siguiente" no era atómico → reescrito con `FOR UPDATE SKIP LOCKED`, N operadores sin pisarse) + pipeline de estados + permiso recapture.read/manage. Page /admin/customers/recaptacion (claim rápido + drawer con timeline + form de contacto). Review + fix wave CLEAN. **Futuro**: import CSV (modelo ya preparado).
+
+---
+
+> **Bloqueo externo (NO es código)**: ESCALAMIENTO A GIGARED — pendiente del #72/#81. (1) Pedir endpoint de desasociación/borrado de internal_id. (2) **Limpiar el abonado 204366** (HERNANDEZ RONALD), que de tanto testeo quedó CORRUPTO en el partner: internal_ids basura (`BAJA_*`, `99999999`, etc.) + **múltiples "activaciones pendientes"** (cada register fallido del #81 dejó una cuenta huérfana) → ya no se puede testear limpio con ese cliente. **Para probar el flujo real: usar un cliente NUEVO sin historial de TV.**
 
 ---
 
