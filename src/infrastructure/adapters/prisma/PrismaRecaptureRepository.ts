@@ -236,6 +236,29 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
     return toRecaptureContactDomain(contact);
   }
 
+  /**
+   * Unconditional assign — no assigneeId IS NULL guard.
+   * operatorId non-null: set assigneeId, claimedAt=now, status='en_gestion'.
+   * operatorId null:     clear assigneeId, claimedAt; reset status='nuevo'.
+   */
+  async assign(leadId: string, operatorId: string | null): Promise<RecaptureLead | null> {
+    const data: Record<string, unknown> = operatorId !== null
+      ? { assigneeId: operatorId, claimedAt: new Date(), status: 'en_gestion' }
+      : { assigneeId: null, claimedAt: null, status: 'nuevo' };
+
+    const result = await (prisma as any).recaptureLead.updateMany({
+      where: { id: leadId },
+      data,
+    });
+    if (result.count === 0) return null;
+
+    const row = await (prisma as any).recaptureLead.findUnique({
+      where: { id: leadId },
+      include: { assignee: { select: { id: true, name: true } } },
+    });
+    return row ? toRecaptureLeadDomain(row) : null;
+  }
+
   async ingestChurned(
     clients: Array<{ id: string; name: string; phone?: string | null; email?: string | null }>,
   ): Promise<number> {

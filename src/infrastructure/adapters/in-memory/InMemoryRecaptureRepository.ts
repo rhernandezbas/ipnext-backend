@@ -195,6 +195,38 @@ export class InMemoryRecaptureRepository implements RecaptureRepository {
     return contact;
   }
 
+  /**
+   * Unconditional assign — no assigneeId guard (unlike claim).
+   * operatorId non-null: set assigneeId, claimedAt, status='en_gestion'.
+   * operatorId null:     clear assigneeId/claimedAt, reset status='nuevo'.
+   */
+  async assign(leadId: string, operatorId: string | null): Promise<RecaptureLead | null> {
+    const idx = this.leads.findIndex((l) => l.id === leadId);
+    if (idx === -1) return null;
+
+    const now = nowIso();
+    const updated: RecaptureLead = operatorId !== null
+      ? {
+          ...this.leads[idx]!,
+          assigneeId: operatorId,
+          assigneeName: null, // InMemory does not resolve names
+          claimedAt: now,
+          status: 'en_gestion',
+          updatedAt: now,
+        }
+      : {
+          ...this.leads[idx]!,
+          assigneeId: null,
+          assigneeName: null,
+          claimedAt: null,
+          status: 'nuevo',
+          updatedAt: now,
+        };
+
+    this.leads[idx] = updated;
+    return updated;
+  }
+
   async ingestChurned(
     clients: Array<{ id: string; name: string; phone?: string | null; email?: string | null }>,
   ): Promise<number> {

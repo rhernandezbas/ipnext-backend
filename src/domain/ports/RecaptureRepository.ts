@@ -97,4 +97,15 @@ export interface RecaptureRepository {
    * Returns the number of new leads created.
    */
   ingestChurned(clients: Array<{ id: string; name: string; phone?: string | null; email?: string | null }>): Promise<number>;
+
+  /**
+   * Unconditional assign: set the lead's assigneeId to `operatorId`.
+   * Unlike `claim()`, there is NO guard — overwrites any current assignee.
+   *
+   * - operatorId non-null → assigneeId=operatorId, claimedAt=now, status='en_gestion'.
+   * - operatorId null      → assigneeId=null, claimedAt=null, status='nuevo' (release semantics).
+   *
+   * Returns the enriched lead (with assigneeName resolved), or null if the lead does not exist.
+   */
+  assign(leadId: string, operatorId: string | null): Promise<RecaptureLead | null>;
 }

@@ -16,6 +16,7 @@ import { UpdateRecaptureLeadStatus } from '../application/use-cases/recapture/Up
 import { AddRecaptureContact } from '../application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '../application/use-cases/recapture/IngestChurnedClients';
 import { ImportCsvLeads } from '../application/use-cases/recapture/ImportCsvLeads';
+import { AssignRecaptureLead } from '../application/use-cases/recapture/AssignRecaptureLead';
 import type { CustomerRepository } from '../domain/ports/CustomerRepository';
 import type { JwtAuthAdapter } from '../infrastructure/adapters/jwt/JwtAuthAdapter';
 
@@ -66,6 +67,7 @@ function buildApp(opts: BuildAppOptions = {}) {
   const addContactUC = new AddRecaptureContact(repo);
   const ingestUC = new IngestChurnedClients(repo, customerRepo);
   const importCsvUC = new ImportCsvLeads(repo);
+  const assignUC = new AssignRecaptureLead(repo, { findById: async (id) => ({ id }) });
 
   const app = express();
   app.use(express.json());
@@ -75,7 +77,7 @@ function buildApp(opts: BuildAppOptions = {}) {
     '/api/recapture',
     createRecaptureRouter(
       listUC, getUC, claimUC, claimNextUC, releaseUC, updateStatusUC, addContactUC, ingestUC,
-      importCsvUC,
+      importCsvUC, assignUC,
       allowAuth,
       {
         read: opts.readPerm ?? allowPerm,

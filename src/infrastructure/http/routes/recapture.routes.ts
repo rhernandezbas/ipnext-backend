@@ -8,7 +8,9 @@ import { UpdateRecaptureLeadStatus } from '@application/use-cases/recapture/Upda
 import { AddRecaptureContact } from '@application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '@application/use-cases/recapture/IngestChurnedClients';
 import { ImportCsvLeads } from '@application/use-cases/recapture/ImportCsvLeads';
+import { AssignRecaptureLead } from '@application/use-cases/recapture/AssignRecaptureLead';
 import { RecaptureLeadNotFoundError, RecaptureLeadAlreadyClaimedError } from '@domain/errors/recapture';
+import { ReferenceNotFoundError } from '@domain/errors/scheduling';
 import type { RecaptureLeadStatus, RecaptureLeadSource, RecaptureContactChannel, RecaptureContactOutcome } from '@domain/entities/recaptureLead';
 
 /** Per-route permission guards (recapture read/manage). */
@@ -39,6 +41,7 @@ export function createRecaptureRouter(
   addContact: AddRecaptureContact,
   ingestChurned: IngestChurnedClients,
   importCsv: ImportCsvLeads,
+  assignLead: AssignRecaptureLead,
   auth: RequestHandler,
   perms: RecaptureRoutePerms,
 ): Router {
@@ -287,6 +290,42 @@ export function createRecaptureRouter(
       } catch (err) {
         if (err instanceof RecaptureLeadNotFoundError) {
           res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        next(err);
+      }
+    },
+  );
+
+  // ─── PATCH /leads/:id/assign (manage) ─────────────────────────────────────
+  router.patch(
+    '/leads/:id/assign',
+    auth,
+    perms.manage,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      // operatorId must be present in the body (null is valid — means unassign)
+      if (!('operatorId' in req.body)) {
+        res.status(400).json({ error: 'Missing required field: operatorId', code: 'VALIDATION_ERROR' });
+        return;
+      }
+
+      const { operatorId } = req.body as { operatorId: string | null };
+
+      if (operatorId !== null && typeof operatorId !== 'string') {
+        res.status(400).json({ error: 'operatorId must be a string or null', code: 'VALIDATION_ERROR' });
+        return;
+      }
+
+      try {
+        const lead = await assignLead.execute(req.params['id'] as string, operatorId);
+        res.json(lead);
+      } catch (err) {
+        if (err instanceof RecaptureLeadNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof ReferenceNotFoundError) {
+          res.status(400).json({ error: err.message, code: 'REFERENCE_NOT_FOUND' });
           return;
         }
         next(err);
