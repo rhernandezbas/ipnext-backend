@@ -70,4 +70,19 @@ describe('#65 deterministicTvEmail', () => {
     const local = email.split('@')[0];
     expect(/^[a-z0-9]+$/.test(local)).toBe(true);
   });
+
+  // #81 — el seq se suma al local-part en re-altas para que el mail no esté quemado.
+  it('seq omitido o 0 → mail de hoy (back-compat, sin sufijo)', () => {
+    expect(deterministicTvEmail('Ronald', '2432')).toBe('ronald2432@gmail.com');
+    expect(deterministicTvEmail('Ronald', '2432', 0)).toBe('ronald2432@gmail.com');
+  });
+
+  it('seq > 0 → {apellido}{idGR}{seq}@gmail.com (mail fresco por reactivación)', () => {
+    expect(deterministicTvEmail('Ronald', '2432', 1)).toBe('ronald24321@gmail.com');
+    expect(deterministicTvEmail('Ronald', '2432', 2)).toBe('ronald24322@gmail.com');
+  });
+
+  it('seq > 0 con fallback de apellido vacío → cliente{idGR}{seq}@gmail.com', () => {
+    expect(deterministicTvEmail('', '9', 3)).toBe('cliente93@gmail.com');
+  });
 });

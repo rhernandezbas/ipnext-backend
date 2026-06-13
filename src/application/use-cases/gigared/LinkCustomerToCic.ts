@@ -9,6 +9,7 @@ import {
   CicNotFoundError,
   CicAlreadyLinkedError,
 } from '@domain/errors/gigared';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import type { CustomerLookup, ContractLookup } from './lookups';
 import { reconcileTvContractService } from './reconcileTvContractService';
 
@@ -80,16 +81,20 @@ export class LinkCustomerToCic {
 
     const linked = partner.internalId ?? '';
 
+    // #81 — internal_id VIGENTE del cliente (seq=0 → id pelado, back-compat). El link compara y
+    // bindea contra el id vigente, no contra el Client.id pelado cuando hay reactivaciones.
+    const internalId = currentTvInternalId(customerId, customer.tvActivationSeq ?? 0);
+
     // 2. Linked to a DIFFERENT customer → refuse (409), never steal the CIC.
-    if (linked !== '' && linked !== customerId) throw new CicAlreadyLinkedError(cic, linked);
+    if (linked !== '' && linked !== internalId) throw new CicAlreadyLinkedError(cic, linked);
 
     // 3 / 4. Already linked to THIS customer → idempotent (no re-set). Free CIC → bind it.
     let account: GigaredAccount;
-    if (linked === customerId) {
+    if (linked === internalId) {
       account = partner;
     } else {
-      await this.gigared.setInternalId(cic, customerId);
-      account = await this.gigared.getAccountByInternalId(customerId);
+      await this.gigared.setInternalId(cic, internalId);
+      account = await this.gigared.getAccountByInternalId(internalId);
     }
 
     // #72 — clearCancelled best-effort: el cliente volvió a tener TV (re-vinculación exitosa).
@@ -116,6 +121,7 @@ export class LinkCustomerToCic {
         catalogRepo: this.catalogRepo,
         customerId,
         contractId: contractId as string,
+        internalId,
       });
       return { account, local: 'synced' };
     } catch {

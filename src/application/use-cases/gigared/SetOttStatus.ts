@@ -1,5 +1,6 @@
 import type { GigaredPort } from '@domain/ports/GigaredPort';
 import { ClientNotFoundError } from '@domain/errors';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import type { CustomerLookup } from './lookups';
 
 /**
@@ -15,6 +16,8 @@ export class SetOttStatus {
   async execute(customerId: string, enabled: boolean): Promise<void> {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
-    await this.gigared.setOtt(customerId, enabled);
+    // #81 — internal_id vigente (seq=0 → id pelado, back-compat).
+    const internalId = currentTvInternalId(customerId, customer.tvActivationSeq ?? 0);
+    await this.gigared.setOtt(internalId, enabled);
   }
 }

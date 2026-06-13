@@ -14,6 +14,7 @@ import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { InMemoryClientTvCancellationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository';
+import { InMemoryClientTvActivationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvActivationRepository';
 
 function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
   return {
@@ -589,5 +590,138 @@ describe('RegisterGigaredAccount (#72 — clearCancelled on register)', () => {
       sendActivationEmail: false,
     });
     expect(result.account.cic).toBe('0000000001');
+  });
+});
+
+// ----- #81: identidad de TV secuencial por cliente (re-alta tras baja) -----
+
+/**
+ * Fake STATEFUL del partner para el seam del internal_id (#81): un Map internalId→cuenta.
+ * setInternalId QUEMA el internal_id (si ya está en el mapa, lanza como el partner real:
+ * "ID interno ya está en uso"). getAccountByInternalId lee del mapa (404 si no existe).
+ * Así el test prueba que la re-alta usa un internal_id NUEVO ({id}-{seq}) y nunca el quemado.
+ */
+function statefulFakePort(seeded: Record<string, GigaredAccount> = {}): GigaredPort {
+  const byInternalId = new Map<string, GigaredAccount>(Object.entries(seeded));
+  let lastCic = '0000009000';
+  const base = fakePort();
+  return {
+    ...base,
+    setInternalId: jest.fn(async (cic: string, internalId: string) => {
+      if (byInternalId.has(internalId)) {
+        throw new Error('El ID interno ya está en uso');
+      }
+      lastCic = cic;
+      byInternalId.set(internalId, fakeAccount({ cic, internalId, services: [{ id: '129', name: 'Gigared Play Full' }] }));
+    }),
+    getAccountByInternalId: jest.fn(async (internalId: string) => {
+      const acc = byInternalId.get(internalId);
+      if (!acc) throw new GigaredNotFoundError();
+      return acc;
+    }),
+    register: jest.fn(async () => { void lastCic; }),
+    activate: jest.fn(async () => {}),
+  };
+}
+
+describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
+  it('primera alta (no cancelado) → seq 0, internal_id = Client.id pelado (back-compat byte-for-byte)', async () => {
+    const port = statefulFakePort();
+    const activation = new InMemoryClientTvActivationRepository();
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    const uc = new RegisterGigaredAccount(
+      port, customerLookup(true), undefined, undefined, undefined, tvCancellation, activation,
+    );
+    const result = await uc.execute('cust-1', {
+      firstName: 'Juan', lastName: 'Pérez', email: 'perez243200@gmail.com', cic: '0000001234',
+      sendActivationEmail: false,
+    });
+    // seq NO avanza en la primera alta (cliente no venía de baja).
+    expect(await activation.getSeq('cust-1')).toBe(0);
+    expect(port.setInternalId).toHaveBeenCalledWith('0000001234', 'cust-1');
+    expect(result.account.internalId).toBe('cust-1');
+  });
+
+  it('re-alta (cliente venía de baja) → incrementa seq, usa internal_id {id}-1 NUEVO (no el quemado)', async () => {
+    // El internal_id viejo 'cust-1' ya está QUEMADO en el partner (CIC muerto).
+    const port = statefulFakePort({
+      'cust-1': fakeAccount({ cic: '0000000001', internalId: 'cust-1', services: [] }),
+    });
+    const activation = new InMemoryClientTvActivationRepository();
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1'); // el cliente venía de baja
+
+    const uc = new RegisterGigaredAccount(
+      port, customerLookup(true), undefined, undefined, undefined, tvCancellation, activation,
+    );
+    const result = await uc.execute('cust-1', {
+      firstName: 'Juan', lastName: 'Pérez', email: 'ignored@x.com', cic: '0000005678',
+      sendActivationEmail: false,
+    });
+
+    // seq avanzó a 1; el internal_id usado es 'cust-1-1' (fresco), nunca el quemado 'cust-1'.
+    expect(await activation.getSeq('cust-1')).toBe(1);
+    expect(port.setInternalId).toHaveBeenCalledWith('0000005678', 'cust-1-1');
+    expect(result.account.internalId).toBe('cust-1-1');
+    // el flag de baja se limpió (el cliente volvió a tener TV).
+    expect(await tvCancellation.isCancelled('cust-1')).toBe(false);
+  });
+
+  it('re-alta → el mail se genera server-side con el seq: {apellido}{grId}{seq}@gmail.com', async () => {
+    const port = statefulFakePort({
+      'cust-1': fakeAccount({ cic: '0000000001', internalId: 'cust-1' }),
+    });
+    const activation = new InMemoryClientTvActivationRepository();
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1');
+
+    const uc = new RegisterGigaredAccount(
+      port, customerLookup(true, '2432'), undefined, undefined, undefined, tvCancellation, activation,
+    );
+    await uc.execute('cust-1', {
+      firstName: 'Ronald', lastName: 'Hernández', email: 'whatever@x.com', cic: '0000005678',
+      sendActivationEmail: false,
+    });
+
+    // seq=1 → mail = hernandez24321@gmail.com (recuperable, determinístico).
+    expect((port.register as jest.Mock).mock.calls[0][0]).toMatchObject({ email: 'hernandez24321@gmail.com' });
+    expect((port.activate as jest.Mock).mock.calls[0][0]).toMatchObject({ email: 'hernandez24321@gmail.com' });
+  });
+
+  it('segunda re-alta → seq 2, internal_id {id}-2 (cada reactivación es fresca)', async () => {
+    const port = statefulFakePort({
+      'cust-1': fakeAccount({ internalId: 'cust-1' }),
+      'cust-1-1': fakeAccount({ internalId: 'cust-1-1' }),
+    });
+    const activation = new InMemoryClientTvActivationRepository();
+    activation.seedSeq('cust-1', 1); // ya hubo una reactivación
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1');
+
+    const uc = new RegisterGigaredAccount(
+      port, customerLookup(true), undefined, undefined, undefined, tvCancellation, activation,
+    );
+    const result = await uc.execute('cust-1', {
+      firstName: 'J', lastName: 'P', email: 'x@x.com', cic: '0000005678',
+      sendActivationEmail: false,
+    });
+    expect(await activation.getSeq('cust-1')).toBe(2);
+    expect(port.setInternalId).toHaveBeenCalledWith('0000005678', 'cust-1-2');
+    expect(result.account.internalId).toBe('cust-1-2');
+  });
+
+  it('back-compat: sin activation repo → comportamiento de hoy (seq 0, id pelado)', async () => {
+    const port = statefulFakePort();
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1'); // aun cancelado, sin repo no hay seq
+    const uc = new RegisterGigaredAccount(
+      port, customerLookup(true), undefined, undefined, undefined, tvCancellation,
+    );
+    const result = await uc.execute('cust-1', {
+      firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
+      sendActivationEmail: false,
+    });
+    expect(port.setInternalId).toHaveBeenCalledWith('0000001234', 'cust-1');
+    expect(result.account.internalId).toBe('cust-1');
   });
 });

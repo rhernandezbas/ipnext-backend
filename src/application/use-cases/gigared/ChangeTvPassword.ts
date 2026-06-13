@@ -10,6 +10,7 @@ import {
   TvNotLinkedError,
 } from '@domain/errors/gigared';
 import { isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import type { CustomerLookup, ContractLookup } from './lookups';
 
 /**
@@ -55,9 +56,11 @@ export class ChangeTvPassword {
     if (!contract || contract.clientId !== customerId) throw new ContractNotFoundError(input.contractId);
 
     // H1 — resolve the customer's OWN account; its cic is the ONLY cic we will ever change.
+    // #81 — por el internal_id VIGENTE (seq=0 → id pelado, back-compat).
+    const internalId = currentTvInternalId(customerId, customer.tvActivationSeq ?? 0);
     let account;
     try {
-      account = await this.gigared.getAccountByInternalId(customerId);
+      account = await this.gigared.getAccountByInternalId(internalId);
     } catch (e) {
       if (e instanceof GigaredNotFoundError) throw new TvNotLinkedError(customerId);
       throw e;

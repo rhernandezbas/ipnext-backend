@@ -8,8 +8,15 @@ export interface CustomerLookup {
    * derive the deterministic TV password (`ip{grClienteId}` padded, #65) server-side. Optional
    * on the shape so the existing callers (link / cancel / packs) that only read `id` keep
    * compiling; absent/null → the register raises GrClientIdRequiredError (422).
+   *
+   * #81 — `tvActivationSeq` (contador de reactivaciones de TV por cliente) viaja de vuelta para
+   * que TODOS los use cases resuelvan el internal_id VIGENTE vía currentTvInternalId(id, seq) en
+   * vez del Client.id pelado. Opcional → absent/null se trata como seq=0 (identidad de hoy,
+   * back-compat: los callers/tests que no lo proveen siguen compilando y comportándose igual).
    */
-  findById(id: string): Promise<{ id: string; grClienteId?: string | null } | null>;
+  findById(
+    id: string,
+  ): Promise<{ id: string; grClienteId?: string | null; tvActivationSeq?: number | null } | null>;
 }
 
 /**

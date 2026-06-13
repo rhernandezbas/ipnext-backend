@@ -61,16 +61,22 @@ export async function reconcileTvContractService(deps: {
   catalogRepo: ServiceCatalogRepository;
   customerId: string;
   contractId: string;
+  /**
+   * #81 — el internal_id VIGENTE con el que resolver la cuenta en el partner. Default = customerId
+   * (back-compat: con seq=0 el internal_id es el Client.id pelado). En re-altas (seq>0) el caller
+   * pasa `{customerId}-{seq}` para leer la cuenta nueva, no la vieja (quemada/muerta).
+   */
+  internalId?: string;
   ensureRow?: boolean;
   clearCredentialsOnInactive?: boolean;
   excludeServiceIds?: string[];
 }): Promise<{ contractServiceId?: string }> {
-  const { gigared, csRepo, catalogRepo, customerId, contractId, ensureRow, clearCredentialsOnInactive, excludeServiceIds } = deps;
+  const { gigared, csRepo, catalogRepo, customerId, contractId, internalId, ensureRow, clearCredentialsOnInactive, excludeServiceIds } = deps;
 
   const tvCatalog = await catalogRepo.getByName('TV');
   if (!tvCatalog || !tvCatalog.active) throw new TvCatalogMissingError();
 
-  const account = await gigared.getAccountByInternalId(customerId);
+  const account = await gigared.getAccountByInternalId(internalId ?? customerId);
   const existing = await csRepo.getByPair(contractId, tvCatalog.id);
 
   // H2: a row that exists but is NOT Gigared-managed is off-limits — leave it untouched.

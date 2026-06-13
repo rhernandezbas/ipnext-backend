@@ -6,6 +6,7 @@ import type { CancelTvResult } from '@application/dto/gigared.dto';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { GigaredNotFoundError, GigaredUnavailableError, TvNotLinkedError } from '@domain/errors/gigared';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import type { CustomerLookup, ContractLookup } from './lookups';
 import { reconcileTvContractService } from './reconcileTvContractService';
 
@@ -110,10 +111,14 @@ export class CancelTv {
     const contract = await this.contractLookup.findById(contractId);
     if (!contract || contract.clientId !== customerId) throw new ContractNotFoundError(contractId);
 
+    // #81 — internal_id VIGENTE de la cuenta de TV del cliente (seq=0 → id pelado, back-compat).
+    // La baja opera SIEMPRE sobre la cuenta vigente, no sobre los internal_ids viejos (quemados).
+    const internalId = currentTvInternalId(customerId, customer.tvActivationSeq ?? 0);
+
     // Cuenta del cliente — un 404 upstream significa "no vinculada".
     let account;
     try {
-      account = await this.gigared.getAccountByInternalId(customerId);
+      account = await this.gigared.getAccountByInternalId(internalId);
     } catch (e) {
       if (e instanceof GigaredNotFoundError) throw new TvNotLinkedError(customerId);
       throw e;
@@ -136,7 +141,7 @@ export class CancelTv {
     const unremovableCandidates: { id: string; detail: string }[] = [];
     for (const service of account.services) {
       try {
-        await this.gigared.removeService(customerId, service.id);
+        await this.gigared.removeService(internalId, service.id);
         removed.push(service.id);
       } catch (e) {
         const detail = e instanceof GigaredUnavailableError && e.detail ? e.detail : (e as Error).message;
@@ -170,7 +175,7 @@ export class CancelTv {
     // aun con fallos parciales en los DELETE. Un fallo acá no rompe la baja: ottDisabled=false.
     let ottDisabled = false;
     try {
-      await this.gigared.setOtt(customerId, false);
+      await this.gigared.setOtt(internalId, false);
       ottDisabled = true;
     } catch {
       ottDisabled = false;
@@ -190,6 +195,7 @@ export class CancelTv {
         catalogRepo: this.catalogRepo,
         customerId,
         contractId,
+        internalId,
         // #65 M6 — la baja LIMPIA las credenciales de la fila al inactivarla (sin zombies).
         clearCredentialsOnInactive: true,
         // #67 re-review — descontar el pack base irremovible de la decisión vacía/no-vacía.
@@ -216,7 +222,7 @@ export class CancelTv {
     let renew: { oldCic: string; newCic: string } | null = null;
     if (renewAttempted && failed.length === 0) {
       try {
-        renew = await this.gigared.renewCic(customerId);
+        renew = await this.gigared.renewCic(internalId);
       } catch {
         renew = null;
       }

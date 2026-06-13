@@ -1,6 +1,7 @@
 import type { TvCredentialsReader, TvCredentials } from '@domain/ports/TvCredentialsReader';
 import { ClientNotFoundError } from '@domain/errors';
 import { TvNotLinkedError } from '@domain/errors/gigared';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import type { CustomerLookup } from './lookups';
 
 /**
@@ -25,6 +26,9 @@ export class GetTvCredentials {
     const credentials = await this.reader.getByCustomer(customerId);
     if (!credentials) throw new TvNotLinkedError(customerId);
 
-    return credentials;
+    // #81 — el internal_id vigente lo computa el use case desde el seq del cliente (no el reader).
+    // seq=0 → Client.id pelado (identidad de hoy). El FE lo muestra en Credenciales.
+    const internalId = currentTvInternalId(customerId, customer.tvActivationSeq ?? 0);
+    return { ...credentials, internalId };
   }
 }

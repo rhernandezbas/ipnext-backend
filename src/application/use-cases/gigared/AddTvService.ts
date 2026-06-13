@@ -5,6 +5,7 @@ import type { AddTvServiceResult } from '@application/dto/gigared.dto';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { GigaredRejectedError, TvCatalogMissingError } from '@domain/errors/gigared';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import type { CustomerLookup, ContractLookup } from './lookups';
 import { reconcileTvContractService } from './reconcileTvContractService';
 
@@ -40,13 +41,16 @@ export class AddTvService {
     const tvCatalog = await this.catalogRepo.getByName('TV');
     if (!tvCatalog || !tvCatalog.active) throw new TvCatalogMissingError();
 
+    // #81 — internal_id vigente (seq=0 → id pelado, back-compat).
+    const internalId = currentTvInternalId(customerId, customer.tvActivationSeq ?? 0);
+
     // 1º Gigared
     try {
-      await this.gigared.addService(customerId, serviceId);
+      await this.gigared.addService(internalId, serviceId);
     } catch (e) {
       if (e instanceof GigaredRejectedError) {
         // D7: if the account already carries this service, the rejection is a no-op — continue.
-        const account = await this.gigared.getAccountByInternalId(customerId);
+        const account = await this.gigared.getAccountByInternalId(internalId);
         const alreadyHas = account.services.some((s) => s.id === serviceId);
         if (!alreadyHas) throw e;
       } else {
@@ -62,6 +66,7 @@ export class AddTvService {
         catalogRepo: this.catalogRepo,
         customerId,
         contractId,
+        internalId,
       });
       const result: AddTvServiceResult = { gigared: 'ok', local: 'ok' };
       if (contractServiceId) result.contractServiceId = contractServiceId;

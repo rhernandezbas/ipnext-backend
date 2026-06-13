@@ -357,6 +357,7 @@ import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPasswor
 import { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
 import { PrismaTvCredentialsReader } from '../adapters/prisma/PrismaTvCredentialsReader';
 import { PrismaClientTvCancellationRepository } from '../adapters/prisma/PrismaClientTvCancellationRepository';
+import { PrismaClientTvActivationRepository } from '../adapters/prisma/PrismaClientTvActivationRepository';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
@@ -592,11 +593,15 @@ import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
 // Covers entity kinds used for FK validation in scheduling use cases.
 // #70: the declared shape includes grClienteId so reverting the select below breaks the COMPILE,
 // not just runtime (RegisterGigaredAccount needs it to derive the deterministic password).
-function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project' | 'Ticket', id: string): Promise<{ id: string; grClienteId?: string | null } | null> {
+function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project' | 'Ticket', id: string): Promise<{ id: string; grClienteId?: string | null; tvActivationSeq?: number | null } | null> {
   switch (model) {
     // #70 — Client carries grClienteId so RegisterGigaredAccount can derive the deterministic
     // TV password server-side. Selecting it here is harmless for the existence-only callers.
-    case 'Client':   return prisma.client.findUnique({ where: { id }, select: { id: true, grClienteId: true } });
+    // #81 — also carries tvActivationSeq so every TV use case resolves the CURRENT internal_id
+    // (currentTvInternalId(id, seq)) instead of the bare Client.id. Cast keeps it compile-safe
+    // before the Prisma Client is regenerated with the new column (mirror of tvCancelledAt).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    case 'Client':   return (prisma as any).client.findUnique({ where: { id }, select: { id: true, grClienteId: true, tvActivationSeq: true } });
     case 'Contract': return prisma.contract.findUnique({ where: { id }, select: { id: true } });
     case 'Partner':  return prisma.partner.findUnique({ where: { id }, select: { id: true } });
     case 'Project':  return prisma.project.findUnique({ where: { id }, select: { id: true } });
@@ -1730,6 +1735,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const gigaredContractLookup = { findById: (id: string) => prismaContractOwnershipLookup(id) };
   // #72 — local TV-cancel flag repo (Client.tvCancelledAt). GR sync never touches it.
   const gigaredTvCancellation = new PrismaClientTvCancellationRepository();
+  // #81 — TV reactivation seq repo (Client.tvActivationSeq). RegisterGigaredAccount lo incrementa
+  // SOLO en re-alta para mintear un internal_id + mail frescos (nunca quemados). Mirror-only.
+  const gigaredTvActivation = new PrismaClientTvActivationRepository();
   app.use('/api/gigared', createAuthMiddleware(authAdapter, sessionRepo), createGigaredRouter({
     getConfig:          new GetGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     updateConfig:       new UpdateGigaredConfig(gigaredConfigRepo, featureFlagRepo),
@@ -1737,7 +1745,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listAccounts:       new ListGigaredAccounts(gigaredClient),
     getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup, gigaredTvCancellation),
     linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
-    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
+    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, gigaredTvActivation),
     addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     setOttStatus:       new SetOttStatus(gigaredClient, gigaredCustomerLookup),

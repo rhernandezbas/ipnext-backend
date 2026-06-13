@@ -51,10 +51,18 @@ function normalizeLastName(lastName: string): string {
  * #65 — deterministic TV account email: `{lastname}{grId}@gmail.com`.
  * The local-part is CUA-compliant [a-z0-9]; the domain is fixed @gmail.com.
  * A last name that normalizes to empty degrades to the `cliente` fallback.
+ *
+ * #81 — `seq` (default 0) suma el contador de reactivaciones al local-part cuando es > 0:
+ *   `{lastname}{grId}{seq}@gmail.com`. El mail repetido está QUEMADO en el partner
+ *   ("más de una activación pendiente"), así que cada re-alta necesita un mail fresco.
+ *   seq=0 (alta de hoy / primera alta) → mail sin sufijo (back-compat). El seq es un dígito
+ *   en [0-9], CUA-compliant, y el mail sigue siendo determinístico+recuperable (#65, visible
+ *   en Credenciales).
  */
-export function deterministicTvEmail(lastName: string, grId: string): string {
+export function deterministicTvEmail(lastName: string, grId: string, seq = 0): string {
   const slug = normalizeLastName(lastName) || EMAIL_FALLBACK;
-  return `${slug}${grId}@gmail.com`;
+  const suffix = seq > 0 ? String(seq) : '';
+  return `${slug}${grId}${suffix}@gmail.com`;
 }
 
 /**

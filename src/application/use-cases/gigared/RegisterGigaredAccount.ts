@@ -2,10 +2,12 @@ import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import type { ContractServiceRepository } from '@domain/ports/ContractServiceRepository';
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
 import type { ClientTvCancellationRepository } from '@domain/ports/ClientTvCancellationRepository';
+import type { ClientTvActivationRepository } from '@domain/ports/ClientTvActivationRepository';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { GrClientIdRequiredError } from '@domain/errors/gigared';
-import { deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
+import { deterministicTvEmail, deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from './lookups';
 import { reconcileTvContractService } from './reconcileTvContractService';
 
@@ -35,6 +37,15 @@ export function tvLoginFromAccount(account: GigaredAccount): string | null {
  * #72 — after the register + link succeeds, calls tvCancellation.clearCancelled(customerId)
  * best-effort so the local TV-cancel flag is cleared (the client got TV again). An error in
  * the clear never aborts the already-done Gigared register.
+ *
+ * #81 — identidad de TV SECUENCIAL por cliente. El partner QUEMA el internal_id y el mail al
+ * primer uso, así que una RE-ALTA (cliente que venía de baja) no puede reusar el Client.id pelado
+ * ni el mail de hoy. Cuando hay `activation` repo Y el cliente está cancelado (re-alta), se
+ * incrementa el seq y se mintea una identidad fresca:
+ *   - internal_id = currentTvInternalId(clientId, seq) → `{clientId}-{seq}` (nunca quemado)
+ *   - email       = deterministicTvEmail(lastName, grClienteId, seq) → `{apellido}{grId}{seq}@gmail.com`
+ * La primera alta (cliente no cancelado o sin activation repo) queda en seq=0 → identidad de hoy,
+ * comportamiento byte-for-byte (back-compat): internal_id = Client.id pelado, mail el que mandó el FE.
  */
 export class RegisterGigaredAccount {
   constructor(
@@ -44,6 +55,7 @@ export class RegisterGigaredAccount {
     private readonly csRepo?: ContractServiceRepository,
     private readonly catalogRepo?: ServiceCatalogRepository,
     private readonly tvCancellation?: ClientTvCancellationRepository,
+    private readonly activation?: ClientTvActivationRepository,
   ) {}
 
   async execute(
@@ -67,7 +79,8 @@ export class RegisterGigaredAccount {
     if (customer.grClienteId == null || customer.grClienteId === '') {
       throw new GrClientIdRequiredError(customerId);
     }
-    const password = deterministicTvPassword(customer.grClienteId);
+    const grClienteId: string = customer.grClienteId;
+    const password = deterministicTvPassword(grClienteId);
     // Re-review #70: a grClienteId with chars outside [a-z0-9] would yield a non-CUA
     // password and an opaque 400 from the partner — fail LOCAL with the clear 422 instead.
     if (!isValidGigaredPassword(password)) {
@@ -86,17 +99,30 @@ export class RegisterGigaredAccount {
       }
     }
 
+    // #81 — resolver el seq A USAR para esta alta. SOLO en re-alta (cliente que venía de baja y hay
+    // activation repo) se incrementa el seq → identidad fresca. La primera alta queda en seq=0
+    // (back-compat: internal_id pelado + el mail que mandó el FE). La señal honesta de "re-alta" es
+    // el flag local de baja (#72): si está seteado, el partner ya quemó la identidad anterior.
+    let seq = 0;
+    if (this.activation && this.tvCancellation && (await this.tvCancellation.isCancelled(customerId))) {
+      seq = await this.activation.incrementSeq(customerId);
+    }
+    const internalId = currentTvInternalId(customerId, seq);
+    // #81 — en re-alta (seq>0) el mail lo genera el server con el seq (determinístico+recuperable,
+    // visible en Credenciales #65). En la primera alta (seq=0) se respeta el mail del FE (back-compat).
+    const email = seq > 0 ? deterministicTvEmail(input.lastName, grClienteId, seq) : input.email;
+
     await this.gigared.register({
       firstName: input.firstName,
       lastName: input.lastName,
-      email: input.email,
+      email,
       cic: input.cic,
       password,
       sendActivationEmail: input.sendActivationEmail,
     });
-    await this.gigared.activate({ cic: input.cic, email: input.email });
-    await this.gigared.setInternalId(input.cic, customerId);
-    const account = await this.gigared.getAccountByInternalId(customerId);
+    await this.gigared.activate({ cic: input.cic, email });
+    await this.gigared.setInternalId(input.cic, internalId);
+    const account = await this.gigared.getAccountByInternalId(internalId);
 
     // #72 — clearCancelled best-effort: el cliente volvió a tener TV (re-registro exitoso).
     // Se intenta siempre que el register + link fue exitoso. Un error aquí NO aborta.
@@ -123,6 +149,7 @@ export class RegisterGigaredAccount {
           catalogRepo: this.catalogRepo,
           customerId,
           contractId: input.contractId as string,
+          internalId,
           ensureRow: true,
         });
         if (contractServiceId) {

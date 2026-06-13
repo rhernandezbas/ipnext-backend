@@ -2,6 +2,7 @@ import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import type { ClientTvCancellationRepository } from '@domain/ports/ClientTvCancellationRepository';
 import { GigaredNotFoundError } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import type { CustomerLookup } from './lookups';
 
 /**
@@ -32,7 +33,9 @@ export class GetGigaredCustomerAccount {
     }
 
     try {
-      const account = await this.gigared.getAccountByInternalId(customerId);
+      // #81 — resolver el internal_id VIGENTE (seq=0 → Client.id pelado, back-compat).
+      const internalId = currentTvInternalId(customerId, customer.tvActivationSeq ?? 0);
+      const account = await this.gigared.getAccountByInternalId(internalId);
       return { linked: true, account };
     } catch (e) {
       if (e instanceof GigaredNotFoundError) return { linked: false, account: null };
