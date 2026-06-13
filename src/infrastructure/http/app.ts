@@ -361,6 +361,8 @@ import { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredential
 import { PrismaTvCredentialsReader } from '../adapters/prisma/PrismaTvCredentialsReader';
 import { PrismaClientTvCancellationRepository } from '../adapters/prisma/PrismaClientTvCancellationRepository';
 import { PrismaClientTvActivationRepository } from '../adapters/prisma/PrismaClientTvActivationRepository';
+import { PrismaClientTvCancelStatusRepository } from '../adapters/prisma/PrismaClientTvCancelStatusRepository';
+import { CancelTvJobRunner } from '../scheduling/CancelTvJobRunner';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
 import { CreateNetworkSite } from '@application/use-cases/CreateNetworkSite';
 import { UpdateNetworkSite } from '@application/use-cases/UpdateNetworkSite';
@@ -1756,6 +1758,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // #81 — TV reactivation seq repo (Client.tvActivationSeq). RegisterGigaredAccount lo incrementa
   // SOLO en re-alta para mintear un internal_id + mail frescos (nunca quemados). Mirror-only.
   const gigaredTvActivation = new PrismaClientTvActivationRepository();
+  // #10/#11 — async TV-cancel status repo (Client.tvCancelStatus/tvCancelResult/tvCancelStartedAt).
+  const gigaredTvCancelStatus = new PrismaClientTvCancelStatusRepository();
+  const gigaredCancelTv = new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvCancellation);
+  const gigaredCancelTvRunner = new CancelTvJobRunner(gigaredCancelTv, gigaredTvCancelStatus);
   app.use('/api/gigared', createAuthMiddleware(authAdapter, sessionRepo), createGigaredRouter({
     getConfig:          new GetGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     updateConfig:       new UpdateGigaredConfig(gigaredConfigRepo, featureFlagRepo),
@@ -1767,7 +1773,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     setOttStatus:       new SetOttStatus(gigaredClient, gigaredCustomerLookup),
-    cancelTv:           new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvCancellation),
+    cancelTv:           gigaredCancelTv,
     changeTvPassword:   new ChangeTvPassword(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
     // #65 fix wave H3 — superficie dedicada para las credenciales (guard tv.register).
     getTvCredentials:   new GetTvCredentials(gigaredCustomerLookup, new PrismaTvCredentialsReader()),
@@ -1781,6 +1787,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     requireManage:      requirePerm('tv', 'manage'),
     gigaredReady:       createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo),
     gigaredProbeReady:  createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo, { requireFlag: false }),
+    // #10/#11 — async TV-cancel deps
+    cancelTvRunner:     gigaredCancelTvRunner,
+    cancelStatus:       gigaredTvCancelStatus,
+    customerLookup:     gigaredCustomerLookup,
+    contractLookup:     gigaredContractLookup,
   }));
 
   // ─── #80 Recaptación ───────────────────────────────────────────────────────

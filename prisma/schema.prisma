@@ -191,6 +191,13 @@ model Client {
   // Client.id crudo, mail sin sufijo). Se incrementa SOLO en re-alta para mintear un internal_id +
   // mail frescos, nunca quemados en el partner. GR sync NUNCA escribe esta columna (mirror-only).
   tvActivationSeq  Int             @default(0)
+  // #10/#11 — async TV-cancel status fields. Mirror-only; GR sync NEVER writes these.
+  // tvCancelStatus: 'pending' | 'running' | 'done' | 'failed' | null
+  // tvCancelResult: CancelTvResult JSON on done; {error} on failed
+  // tvCancelStartedAt: when the runner transitioned to 'running'
+  tvCancelStatus    String?
+  tvCancelResult    Json?
+  tvCancelStartedAt DateTime?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   contracts        Contract[]

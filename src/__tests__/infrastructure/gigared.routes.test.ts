@@ -19,6 +19,8 @@ import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memor
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { InMemoryClientTvCancellationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository';
+import { InMemoryClientTvCancelStatusRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancelStatusRepository';
+import { CancelTvJobRunner } from '@infrastructure/scheduling/CancelTvJobRunner';
 
 import { GetGigaredConfig } from '@application/use-cases/gigared/GetGigaredConfig';
 import { UpdateGigaredConfig } from '@application/use-cases/gigared/UpdateGigaredConfig';
@@ -126,6 +128,11 @@ async function buildApp(opts: Opts = {}) {
 
   // #72 — local TV-cancel flag repo (in-memory for tests). Caller may pass a pre-seeded one.
   const tvCancellation = opts.tvCancellation ?? new InMemoryClientTvCancellationRepository();
+  // #10/#11 — async cancel status repo (in-memory for tests).
+  const cancelStatus = new InMemoryClientTvCancelStatusRepository();
+
+  const cancelTv = new CancelTv(port, csRepo, catalog, contractLookup, customerLookup, tvCancellation);
+  const cancelTvRunner = new CancelTvJobRunner(cancelTv, cancelStatus);
 
   const router = createGigaredRouter({
     getConfig: new GetGigaredConfig(cfg, flags),
@@ -138,7 +145,7 @@ async function buildApp(opts: Opts = {}) {
     addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus: new SetOttStatus(port, customerLookup),
-    cancelTv: new CancelTv(port, csRepo, catalog, contractLookup, customerLookup, tvCancellation),
+    cancelTv,
     changeTvPassword: new ChangeTvPassword(port, customerLookup, contractLookup, csRepo, catalog),
     getTvCredentials: new GetTvCredentials(customerLookup, {
       getByCustomer: async () => (opts.tvCredentials === undefined ? { login: 'GIGA100', password: 'ip243200' } : opts.tvCredentials),
@@ -152,6 +159,10 @@ async function buildApp(opts: Opts = {}) {
     requireManage: opts.perms?.manage ?? pass,
     gigaredReady: createGigaredReadyMiddleware(cfg, flags),
     gigaredProbeReady: createGigaredReadyMiddleware(cfg, flags, { requireFlag: false }),
+    cancelTvRunner,
+    cancelStatus,
+    customerLookup,
+    contractLookup,
   });
 
   const app = express();
@@ -485,53 +496,19 @@ describe('gigared.routes — happy + 207 (#47)', () => {
   });
 });
 
-describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
-  it('happy (todo OK) → 200 { removed, failed:[], ottDisabled, local:"synced", localCancelled:true }', async () => {
-    const csRepo = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const getAccountByInternalId = jest.fn()
-      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
-      .mockResolvedValue(fakeAccount({ services: [] }));
-    const port = fakePort({ getAccountByInternalId });
-    const app = await buildApp({ port, csRepo, catalog });
+// #10/#11 — POST /cancel is now ASYNC (202). Detailed cancel scenarios (200/207 outcomes) are
+// tested via CancelTvJobRunner unit tests and gigared.cancel-async.routes.test.ts.
+// This describe block retains the pre-queue guard tests (404 errors that fire BEFORE queuing)
+// and the RBAC guard, plus a smoke test confirming the 202 wire contract.
+describe('#47k POST /customers/:id/cancel — async 202 (#10/#11)', () => {
+  it('happy path -> 202 { status:"pending" } (async, does not block)', async () => {
+    const app = await buildApp();
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(200);
-    expect(res.body.removed).toEqual(['129']);
-    expect(res.body.failed).toEqual([]);
-    expect(res.body.ottDisabled).toBe(true);
-    expect(res.body.local).toBe('synced');
-    // #64 — el body de la baja expone el renew (old/new CIC).
-    expect(res.body.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
-    // #72 — localCancelled: el flag local fue seteado. unlinked ya no existe.
-    expect(res.body.localCancelled).toBe(true);
-    expect(res.body.unlinked).toBeUndefined();
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'pending' });
   });
 
-  it('#64 renew falla → 207 { renew:null } (localCancelled aún true — renew es best-effort)', async () => {
-    const csRepo = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const getAccountByInternalId = jest.fn()
-      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
-      .mockResolvedValue(fakeAccount({ services: [] }));
-    const renewCic = jest.fn(async () => { throw new Error('renew upstream 500'); });
-    const port = fakePort({ getAccountByInternalId, renewCic });
-    const app = await buildApp({ port, csRepo, catalog });
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(207);
-    expect(res.body.renew).toBeNull();
-    // #72 — el flag local se setea aunque el renew falle (renew es best-effort)
-    expect(res.body.localCancelled).toBe(true);
-  });
-
-  it('cuenta sin vincular → 404 TV_NOT_LINKED', async () => {
-    const port = fakePort({ getAccountByInternalId: jest.fn(async () => { throw new GigaredNotFoundError(); }) });
-    const app = await buildApp({ port });
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('TV_NOT_LINKED');
-  });
-
-  it('contractId inválido → 404 CONTRACT_NOT_FOUND (antes de tocar Gigared)', async () => {
+  it('contractId invalido -> 404 CONTRACT_NOT_FOUND (antes de encolar - fast check)', async () => {
     const port = fakePort();
     const app = await buildApp({ port, contractExists: false });
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'ghost' });
@@ -540,9 +517,8 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     expect(port.getAccountByInternalId).not.toHaveBeenCalled();
   });
 
-  it('#47k HIGH: contractId de OTRO cliente → 404 CONTRACT_NOT_FOUND, Gigared intacto', async () => {
+  it('#47k HIGH: contractId de OTRO cliente -> 404 CONTRACT_NOT_FOUND, Gigared intacto', async () => {
     const port = fakePort();
-    // El contrato existe pero pertenece a 'cust-B': cust-1 NO puede cancelarlo.
     const app = await buildApp({ port, contractOwner: 'cust-B' });
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C-of-B' });
     expect(res.status).toBe(404);
@@ -552,182 +528,10 @@ describe('#47k POST /customers/:id/cancel — dar de baja TV', () => {
     expect(port.setOtt).not.toHaveBeenCalled();
   });
 
-  it('fallo parcial (un DELETE falla) → 207 { removed, failed }', async () => {
-    const removeService = jest.fn()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('upstream 500'));
-    const getAccountByInternalId = jest.fn()
-      .mockResolvedValueOnce(fakeAccount({ services: [
-        { id: '129', name: 'Gigared Play Full' },
-        { id: '39', name: 'Pack Todo Futbol' },
-      ] }))
-      .mockResolvedValue(fakeAccount({ services: [{ id: '39', name: 'Pack Todo Futbol' }] }));
-    const port = fakePort({ removeService, getAccountByInternalId });
-    const app = await buildApp({ port });
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(207);
-    expect(res.body.removed).toEqual(['129']);
-    expect(res.body.failed).toHaveLength(1);
-    expect(res.body.failed[0].id).toBe('39');
-  });
-
-  it('local reconcile falla → 207 { local:"failed" }', async () => {
-    const csRepo = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const getAccountByInternalId = jest.fn()
-      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
-      .mockResolvedValue(fakeAccount({ services: [] }));
-    const port = fakePort({ getAccountByInternalId });
-    const app = await buildApp({ port, csRepo, catalog });
-    // seed a managed row, then make update throw
-    const cat = await catalog.getByName('TV');
-    await csRepo.add({ contractId: 'C1', serviceCatalogId: cat!.id, notes: 'CIC 0000000001 · Gigared Play Full' });
-    jest.spyOn(csRepo, 'update').mockRejectedValue(new Error('db down'));
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(207);
-    expect(res.body.local).toBe('failed');
-  });
-
-  it('no tv.cancel → 403 (#50 granular)', async () => {
+  it('no tv.cancel -> 403 (#50 granular)', async () => {
     const app = await buildApp({ perms: { cancel: deny } });
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
     expect(res.status).toBe(403);
-  });
-
-  // ----- #64 fix wave: M2 207 criterion + H1 guard -----
-
-  it('L1: #72 renew OK, packs removed, flag local seteado → 200 { localCancelled:true, renewAttempted:true }', async () => {
-    // #72: setInternalId(newCic,'') ya no se llama — paso muerto eliminado.
-    // El criterio 207 ya no incluye unlinked. Con todo exitoso → 200.
-    const csRepo = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const getAccountByInternalId = jest.fn()
-      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
-      .mockResolvedValue(fakeAccount({ services: [] }));
-    const port = fakePort({ getAccountByInternalId });
-    const app = await buildApp({ port, csRepo, catalog });
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(200);
-    expect(res.body.localCancelled).toBe(true);
-    expect(res.body.renewAttempted).toBe(true);
-  });
-
-  // #74 — EL FIX: el OTT no cuenta para el veredicto cuando el renew tuvo éxito.
-  // El paso OTT corre ANTES del renew, sobre el CIC VIEJO. Si el renew (posterior) reseteó la
-  // cuenta (CIC nuevo, login viejo muerto), un ottDisabled=false es un dato pre-renew STALE: la
-  // cuenta vieja ya no es accesible (403 cic-ownership LIVE) → la baja es COMPLETA. Caso real
-  // 0006717800 → 0006283226. ANTES daba 207; ahora 200.
-  it('#74 L3: OTT falla (setOtt throws) PERO renew OK → 200 (ottDisabled:false es moot post-renew)', async () => {
-    const csRepo = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const setOtt = jest.fn(async () => { throw new Error('ott upstream down'); });
-    const getAccountByInternalId = jest.fn()
-      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
-      .mockResolvedValue(fakeAccount({ services: [] }));
-    const port = fakePort({ setOtt, getAccountByInternalId });
-    const app = await buildApp({ port, csRepo, catalog });
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(200);
-    expect(res.body.ottDisabled).toBe(false);
-    // El renew reseteó la cuenta → la baja es efectiva pese al OTT pre-renew.
-    expect(res.body.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
-    expect(res.body.renewAttempted).toBe(true);
-  });
-
-  // #74 — OTT falla Y el renew falla → la cuenta vieja sigue viva con streaming → 207 (parcial real).
-  it('#74: OTT falla + renew falla (renew:null) → 207 (cuenta vieja sigue viva)', async () => {
-    const csRepo = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const setOtt = jest.fn(async () => { throw new Error('ott upstream down'); });
-    const renewCic = jest.fn(async () => { throw new Error('renew upstream 500'); });
-    const getAccountByInternalId = jest.fn()
-      .mockResolvedValueOnce(fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }))
-      .mockResolvedValue(fakeAccount({ services: [] }));
-    const port = fakePort({ setOtt, renewCic, getAccountByInternalId });
-    const app = await buildApp({ port, csRepo, catalog });
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(207);
-    expect(res.body.ottDisabled).toBe(false);
-    expect(res.body.renew).toBeNull();
-  });
-
-  // #74 — caso #5 de la tabla de verdad: NO había nada que renovar (renewAttempted=false) y el
-  // OTT no se pudo apagar. Sin un renew que resetee la cuenta, el OTT viejo activo es un parcial
-  // REAL → 207. El !ottDisabled SOLO cuenta cuando el renew NO reseteó la cuenta.
-  it('#74: OTT falla + renewAttempted:false (cuenta ya pelada) → 207 (OTT viejo activo, sin renew que resetee)', async () => {
-    const csRepo = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const setOtt = jest.fn(async () => { throw new Error('ott upstream down'); });
-    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
-    // services:[] Y ott NO enabled → renewAttempted=false → renew no se intenta.
-    const getAccountByInternalId = jest.fn(async () =>
-      fakeAccount({
-        services: [],
-        ott: { id: 'ott-1', stationaryLicenses: 2, mobileLicenses: 1, registeredDevices: 0, status: 'disabled' },
-      }),
-    );
-    const port = fakePort({ setOtt, renewCic, getAccountByInternalId });
-    const app = await buildApp({ port, csRepo, catalog });
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(207);
-    expect(res.body.ottDisabled).toBe(false);
-    expect(res.body.renewAttempted).toBe(false);
-    expect(renewCic).not.toHaveBeenCalled();
-  });
-
-  it('#67 el caso real HONESTO: SOLO el pack base 129, DELETE → 424 "no se puede dar de baja"; el reconcile RELEE y el base SIGUE en la cuenta → la fila TV igual se inactiva + limpia → 200 { unremovable:[129], failed:[], renew, localCancelled:true, local:"synced" }', async () => {
-    // Verificado LIVE 2026-06-12 (CIC 0006230159): el pack base es irremovible por política del CUA.
-    // El error NO bloquea la baja: va a unremovable, el flujo renueva y setea el flag local → 200, NO 207.
-    const csRepo = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const removeService = jest.fn(async () => {
-      throw new GigaredUnavailableError('Gigared external service (CUA) error', 'El servicio seleccionado no se puede dar de baja');
-    });
-    // HONESTO: el base 129 nunca se borró (su DELETE lanzó). La relectura del reconcile lo sigue viendo.
-    const getAccountByInternalId = jest.fn(async () =>
-      fakeAccount({ services: [{ id: '129', name: 'Gigared Play Full' }] }));
-    const port = fakePort({ removeService, getAccountByInternalId });
-    const app = await buildApp({ port, csRepo, catalog });
-    // Fila TV viva con credenciales y notes del CIC viejo (lo que el reconcile excluyente debe inactivar).
-    const cat = await catalog.getByName('TV');
-    const row = await csRepo.add({
-      contractId: 'C1', serviceCatalogId: cat!.id,
-      notes: 'CIC 0000000001 · Gigared Play Full', tvLogin: 'GIGA129', tvPassword: 'old-secret',
-    });
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(200);
-    expect(res.body.removed).toEqual([]);
-    expect(res.body.failed).toEqual([]);
-    expect(res.body.unremovable).toHaveLength(1);
-    expect(res.body.unremovable[0].id).toBe('129');
-    expect(res.body.renew).toEqual({ oldCic: '0000000001', newCic: '0000000002' });
-    // #72 — localCancelled seteado; unlinked ya no existe.
-    expect(res.body.localCancelled).toBe(true);
-    expect(res.body.unlinked).toBeUndefined();
-    // CRITICAL: el reconcile excluye el id irremovible → la fila local se inactiva + limpia (synced).
-    expect(res.body.local).toBe('synced');
-    const after = await csRepo.getById(row.id);
-    expect(after!.status).toBe('inactive');
-    expect(after!.tvLogin).toBeNull();
-    expect(after!.tvPassword).toBeNull();
-  });
-
-  it('fully-peeled account (services:[], ott disabled) still resolves → renewAttempted:false → 200 (not permanent 207)', async () => {
-    const csRepo = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const renewCic = jest.fn(async () => ({ oldCic: '0000000001', newCic: '0000000002' }));
-    const getAccountByInternalId = jest.fn(async () =>
-      fakeAccount({
-        services: [],
-        ott: { id: 'ott-1', stationaryLicenses: 2, mobileLicenses: 1, registeredDevices: 0, status: 'disabled' },
-      }),
-    );
-    const port = fakePort({ renewCic, getAccountByInternalId });
-    const app = await buildApp({ port, csRepo, catalog });
-    const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(200);
-    expect(res.body.renewAttempted).toBe(false);
-    expect(renewCic).not.toHaveBeenCalled();
   });
 });
 
@@ -1005,19 +809,19 @@ describe('#72 GET /customers/:id/account — local TV-cancel flag', () => {
   });
 });
 
-describe('#72 POST /customers/:id/cancel — anti-coining guard (routes)', () => {
-  it('cancel en cliente ya dado de baja localmente → 404 TV_NOT_LINKED (sin tocar el partner)', async () => {
-    const port = fakePort();
+// #10/#11 — With async cancel, the anti-coining guard (tvCancelledAt) runs INSIDE the runner
+// (background), not in the route. The route returns 202 immediately; the runner writes
+// status:'failed' with the TvNotLinkedError. The FE polls GET /cancel/status to learn the outcome.
+// This is covered end-to-end in gigared.cancel-async.routes.test.ts (runner unit tests).
+describe('#72 POST /customers/:id/cancel — anti-coining (async — runner fails with TV_NOT_LINKED)', () => {
+  it('cancel en cliente ya dado de baja localmente → 202 inicial (anti-coining guard now runs in runner, not route)', async () => {
     const tvCancellation = new InMemoryClientTvCancellationRepository();
     tvCancellation.seedCancelled('cust-1');
 
-    const app = await buildApp({ port, tvCancellation });
+    const app = await buildApp({ tvCancellation });
+    // Route now returns 202 (queued) — the anti-coining check runs in the background runner.
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('TV_NOT_LINKED');
-    // Anti-coining: el partner no fue llamado
-    expect(port.getAccountByInternalId).not.toHaveBeenCalled();
-    expect(port.removeService).not.toHaveBeenCalled();
-    expect(port.renewCic).not.toHaveBeenCalled();
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'pending' });
   });
 });

@@ -15,6 +15,9 @@ import type { GetTvCredentials } from '@application/use-cases/gigared/GetTvCrede
 import type { GigaredConfigRepository } from '@domain/ports/GigaredConfigRepository';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import type { ListAccountsFilter } from '@domain/ports/GigaredPort';
+import type { ClientTvCancelStatusRepository } from '@domain/ports/ClientTvCancelStatusRepository';
+import type { CancelTvJobRunner } from '@infrastructure/scheduling/CancelTvJobRunner';
+import type { CustomerLookup, ContractLookup } from '@application/use-cases/gigared/lookups';
 import { GIGARED_FLAG } from '@application/use-cases/gigared/GetGigaredConfig';
 import { updateGigaredConfigSchema } from '@application/dto/gigared.dto';
 import {
@@ -174,6 +177,18 @@ export interface GigaredRouterDeps {
   gigaredReady: RequestHandler;
   /** Key-required only (flag exempt) — gates the GET /summary probe (M1). */
   gigaredProbeReady: RequestHandler;
+  // #10/#11 — async TV-cancel deps
+  /** Runner that executes CancelTv in the background (fire-and-forget). */
+  cancelTvRunner: CancelTvJobRunner;
+  /** Repository to read/write async cancel-job status on Client. */
+  cancelStatus: ClientTvCancelStatusRepository;
+  /**
+   * Customer + contract lookups shared with CancelTv for fast pre-queue validation.
+   * The route validates customer existence + contract ownership BEFORE queuing the job
+   * (no partner call). Must be the same instances injected into the CancelTv use case.
+   */
+  customerLookup: CustomerLookup;
+  contractLookup: ContractLookup;
 }
 
 /**
@@ -358,35 +373,68 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  // #47k / #64 / #72 / #74 — dar de baja TV completa. Body { contractId }. tv.cancel (#50).
-  // 200 si todo OK; 207 si algún paso falló — retry idempotente.
-  // Criterio 207:
-  //   - failed.length > 0: al menos un DELETE de pack falló
-  //   - local === 'failed': el reconcile local no pudo sincronizar
-  //   - renewAttempted && renew === null: había algo que renovar pero el renew (best-effort) falló.
-  //     El renew ES la baja efectiva (genera CIC nuevo, deja el login/mail viejo muerto y resetea la
-  //     cuenta). Si se intentó y falló, la cuenta vieja sigue viva → 207.
-  //   - !ottDisabled && !renewSucceeded: el OTT disable falló Y el renew NO reseteó la cuenta.
-  //     #74 — el paso OTT corre ANTES del renew, sobre el CIC VIEJO. Cuando el renew tuvo éxito
-  //     (renewSucceeded), la cuenta vieja queda inaccesible (403 cic-ownership LIVE) y la nueva
-  //     reseteada (ott.status=null): un ottDisabled=false es un dato pre-renew STALE y NO debe
-  //     marcar parcial. El !ottDisabled SOLO cuenta cuando el renew no reseteó la cuenta (renew
-  //     fallido o no intentado). Caso real 0006717800 → 0006283226 (verificado LIVE 2026-06-12).
-  //   #72: `unlinked` ya no existe — el partner no tiene primitive de unlink (HTTP 400 siempre).
-  //   El estado "sin TV" se persiste localmente (Client.tvCancelledAt). No factoriza en el 207.
+  // #10/#11 — dar de baja TV (async). Body { contractId }. tv.cancel (#50).
+  // Wire contract (FROZEN):
+  //   202 { status:'pending' }            — job queued, runner fires in background
+  //   409 { queued:false, reason:'already-running' } — concurrent run guard
+  //   404 CLIENT_NOT_FOUND / CONTRACT_NOT_FOUND   — fast pre-queue checks (no partner call)
+  //
+  // Pre-queue fast checks: validate customer + contract ownership (DB only, no Gigared call).
+  // Concurrent guard: if tvCancelStatus === 'pending' | 'running' → 409.
+  // Flow: setStatus('pending') → res 202 → void runner.run() (fire-and-forget).
+  // Runner transitions: pending → running → done|failed (writes result to cancelStatus).
   router.post('/customers/:id/cancel', deps.requireCancel, async (req, res): Promise<void> => {
+    const customerId = req.params['id'] as string;
+    const contractId = String((req.body as { contractId?: unknown }).contractId ?? '');
     try {
-      const contractId = String((req.body as { contractId?: unknown }).contractId ?? '');
-      const result = await deps.cancelTv.execute(req.params['id'] as string, { contractId });
-      const renewSucceeded = result.renewAttempted && result.renew !== null;
-      const partial =
-        result.failed.length > 0 ||
-        result.local === 'failed' ||
-        (result.renewAttempted && result.renew === null) ||
-        (!result.ottDisabled && !renewSucceeded);
-      res.status(partial ? 207 : 200).json(result);
+      // Fast pre-queue validation: customer existence + contract ownership (no Gigared call).
+      // Uses the same lookups injected into CancelTv — errors are consistent.
+      const customer = await deps.customerLookup.findById(customerId);
+      if (!customer) throw new ClientNotFoundError(customerId);
+
+      const contract = await deps.contractLookup.findById(contractId);
+      if (!contract || contract.clientId !== customerId) throw new ContractNotFoundError(contractId);
+
+      // Concurrent guard: pending|running → 409 (re-queue allowed for done|failed)
+      const existing = await deps.cancelStatus.getStatus(customerId);
+      if (existing?.status === 'pending' || existing?.status === 'running') {
+        res.status(409).json({ queued: false, reason: 'already-running' });
+        return;
+      }
+
+      // Queue: set pending, return 202, fire runner in background.
+      await deps.cancelStatus.setStatus(customerId, { status: 'pending' });
+      res.status(202).json({ status: 'pending' });
+      void deps.cancelTvRunner.run(customerId, contractId);
     } catch (err) {
       if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'cancel');
+    }
+  });
+
+  // #10/#11 — GET status of the async cancel job for a customer. tv.cancel guard.
+  // Wire contract:
+  //   200 { status:'pending'|'running'|'done'|'failed', result?: CancelTvResult|{error}, startedAt?: ISO }
+  //   404 CLIENT_NOT_FOUND — customer does not exist
+  router.get('/customers/:id/cancel/status', deps.requireCancel, async (req, res): Promise<void> => {
+    const customerId = req.params['id'] as string;
+    try {
+      // Validate customer exists
+      const customer = await deps.customerLookup.findById(customerId);
+      if (!customer) throw new ClientNotFoundError(customerId);
+
+      const row = await deps.cancelStatus.getStatus(customerId);
+      if (!row) {
+        // No job has been queued yet — report as pending (neutral starting state).
+        res.status(200).json({ status: 'pending' });
+        return;
+      }
+
+      const body: Record<string, unknown> = { status: row.status };
+      if (row.startedAt !== undefined) body['startedAt'] = row.startedAt.toISOString();
+      if (row.result !== undefined) body['result'] = row.result;
+      res.status(200).json(body);
+    } catch (err) {
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'cancel/status');
     }
   });
 
