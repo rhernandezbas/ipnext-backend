@@ -18,6 +18,12 @@ export interface CreateRecaptureLeadData {
   contactName: string;
   phone?: string | null;
   email?: string | null;
+  /** Physical address — from CSV import */
+  address?: string | null;
+  /** Why the client churned — from CSV import */
+  churnReason?: string | null;
+  /** Previous plan — from CSV import */
+  previousPlan?: string | null;
 }
 
 export interface AddContactData {

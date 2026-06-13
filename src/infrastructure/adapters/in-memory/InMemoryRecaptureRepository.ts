@@ -89,6 +89,9 @@ export class InMemoryRecaptureRepository implements RecaptureRepository {
       claimedAt: null,
       createdAt: now,
       updatedAt: now,
+      address: data.address ?? null,
+      churnReason: data.churnReason ?? null,
+      previousPlan: data.previousPlan ?? null,
     };
     this.leads.push(lead);
     return lead;

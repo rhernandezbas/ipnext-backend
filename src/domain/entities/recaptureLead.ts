@@ -40,6 +40,12 @@ export interface RecaptureLead {
   claimedAt: string | null; // ISO 8601
   createdAt: string;        // ISO 8601
   updatedAt: string;        // ISO 8601
+  /** Physical address of the lead — populated from CSV import */
+  address: string | null;
+  /** Why the client churned — populated from CSV import */
+  churnReason: string | null;
+  /** Previous plan the client was on — populated from CSV import */
+  previousPlan: string | null;
 }
 
 export interface RecaptureContact {
