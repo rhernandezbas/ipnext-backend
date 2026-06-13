@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TicketStatus, TicketPriority } from '@domain/entities/ticket';
+import { TicketSlaConfig } from '@domain/ports/TicketSlaConfigRepository';
 
 export interface ListTicketsQueryDto {
   page?: number;
@@ -76,3 +77,31 @@ export const CreateTicketStatusSchema = z.object({
 export const UpdateTicketStatusSchema = CreateTicketStatusSchema.partial();
 export type CreateTicketStatusInput = z.infer<typeof CreateTicketStatusSchema>;
 export type UpdateTicketStatusInput = z.infer<typeof UpdateTicketStatusSchema>;
+
+// ---------------------------------------------------------------------------
+// #79 — Ticket SLA timer config DTO (singleton; mirrors IClassClosureConfig)
+// ---------------------------------------------------------------------------
+
+/** API shape of the SLA timer thresholds (minutes). */
+export interface TicketSlaConfigDto {
+  warnMinutes: number;
+  dangerMinutes: number;
+}
+
+export function toTicketSlaConfigDto(config: TicketSlaConfig): TicketSlaConfigDto {
+  return { warnMinutes: config.warnMinutes, dangerMinutes: config.dangerMinutes };
+}
+
+/**
+ * Zod schema for PUT /tickets/sla-config. Positive integer minutes, partial so
+ * a single threshold can be patched. The cross-field invariant
+ * (dangerMinutes > warnMinutes) is enforced in the use case against the MERGED
+ * config — a partial body alone can't see the other side, so the route only
+ * validates shape here.
+ */
+export const UpdateTicketSlaConfigSchema = z.object({
+  warnMinutes: z.number().int().min(1),
+  dangerMinutes: z.number().int().min(1),
+}).partial().strict();
+
+export type UpdateTicketSlaConfigInput = z.infer<typeof UpdateTicketSlaConfigSchema>;

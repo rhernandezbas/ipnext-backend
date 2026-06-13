@@ -83,6 +83,8 @@ const statusMap: Record<string, number> = {
   NETWORK_TASK_ADDRESS_REQUIRED: 422,
   // #54 — network task requires a non-blank iclassCityCode (locality)
   NETWORK_TASK_LOCALITY_REQUIRED: 422,
+  // #79 — SLA timer thresholds must satisfy dangerMinutes > warnMinutes
+  TICKET_SLA_THRESHOLD_ORDER: 422,
 };
 
 /** Express global error-handling middleware. */

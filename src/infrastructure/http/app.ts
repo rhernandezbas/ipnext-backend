@@ -230,6 +230,11 @@ import { GetTicketArea } from '@application/use-cases/GetTicketArea';
 import { CreateTicketArea } from '@application/use-cases/CreateTicketArea';
 import { UpdateTicketArea } from '@application/use-cases/UpdateTicketArea';
 import { DeleteTicketArea } from '@application/use-cases/DeleteTicketArea';
+// #79 — Ticket SLA timer config (singleton)
+import { PrismaTicketSlaConfigRepository } from '../adapters/prisma/PrismaTicketSlaConfigRepository';
+import { createTicketSlaConfigRouter } from './routes/ticketSlaConfig.routes';
+import { GetTicketSlaConfig } from '@application/use-cases/GetTicketSlaConfig';
+import { UpdateTicketSlaConfig } from '@application/use-cases/UpdateTicketSlaConfig';
 import { ListProjectType } from '@application/use-cases/ListProjectType';
 import { GetProjectType } from '@application/use-cases/GetProjectType';
 import { CreateProjectType } from '@application/use-cases/CreateProjectType';
@@ -873,6 +878,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const updateTicketArea = new UpdateTicketArea(ticketAreaRepo);
   const deleteTicketArea = new DeleteTicketArea(ticketAreaRepo);
 
+  // #79 — Ticket SLA timer config (singleton)
+  const ticketSlaConfigRepo = new PrismaTicketSlaConfigRepository();
+  const getTicketSlaConfig = new GetTicketSlaConfig(ticketSlaConfigRepo);
+  const updateTicketSlaConfig = new UpdateTicketSlaConfig(ticketSlaConfigRepo);
+
   const listProjectType = new ListProjectType(projectTypeRepo);
   const getProjectType = new GetProjectType(projectTypeRepo);
   const createProjectType = new CreateProjectType(projectTypeRepo);
@@ -1072,6 +1082,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     authAdapter,
     requirePerm,
     listTicketAreas, getTicketArea, createTicketArea, updateTicketArea, deleteTicketArea,
+  ));
+  // #79 — SLA timer config — mounted BEFORE the tickets router so /:id doesn't swallow it
+  app.use('/api/tickets/sla-config', createTicketSlaConfigRouter(
+    authAdapter,
+    requirePerm,
+    getTicketSlaConfig, updateTicketSlaConfig,
   ));
   app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, ticketStatusRepo, authAdapter, rbacUserRepo, createTaskFromTicket, schedulingRepo, stageRepo, ticketAreaRepo));
   // #44 — persisted ticket comments. Mounted on /api/tickets; the tickets router has no

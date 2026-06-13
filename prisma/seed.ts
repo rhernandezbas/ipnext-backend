@@ -484,6 +484,23 @@ async function seedRemovalResultCodes() {
   }
 }
 
+/**
+ * #79 — Seed the singleton TicketSlaConfig row (warn 60 / danger 240).
+ * Idempotent: upsert keeps any value an operator already customized.
+ */
+async function seedTicketSlaConfig() {
+  try {
+    await (prisma as any).ticketSlaConfig.upsert({
+      where: { id: 'singleton' },
+      create: { id: 'singleton', warnMinutes: 60, dangerMinutes: 240 },
+      update: {},
+    })
+    console.log('  #79 seed: TicketSlaConfig singleton ensured (warn 60 / danger 240)')
+  } catch (err) {
+    console.warn('  #79 seed: TicketSlaConfig skipped (migration may not be applied yet):', (err as any).message)
+  }
+}
+
 async function main() {
   console.log('Starting seed...')
   await seedMockData()
@@ -493,6 +510,7 @@ async function main() {
     console.warn('  Could not seed scheduling foundation (migration may not be applied yet):', (err as any).message)
   }
   await seedRemovalResultCodes()
+  await seedTicketSlaConfig()
   await seedFromSplynx()
   console.log('Seed complete!')
 }
