@@ -16,6 +16,7 @@ function toView(row: any): ContractServiceView {
     tvLogin: row.tvLogin ?? null,
     tvPassword: row.tvPassword ?? null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+    deactivatedAt: row.deactivatedAt instanceof Date ? row.deactivatedAt.toISOString() : (row.deactivatedAt ?? null),
   };
 }
 
@@ -33,6 +34,15 @@ export class PrismaContractServiceRepository implements ContractServiceRepositor
       include: INCLUDE,
     });
     return row ? toView(row) : null;
+  }
+
+  async listByContract(contractId: string): Promise<ContractServiceView[]> {
+    const rows = await (prisma as any).contractService.findMany({
+      where: { contractId },
+      include: INCLUDE,
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map(toView);
   }
 
   async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView> {
@@ -65,8 +75,20 @@ export class PrismaContractServiceRepository implements ContractServiceRepositor
       // credentials written via update() (ChangeTvPassword persistence, register on an existing row,
       // M6 cleanup on baja) silently never reached the DB. Spread only the keys that are present so a
       // status/notes-only PATCH never clobbers the credentials.
+      // #73 — derive deactivatedAt from status transitions: inactive → set now(), active → null.
       const patch: Record<string, unknown> = {};
-      if (data.status !== undefined) patch['status'] = data.status;
+      if (data.status !== undefined) {
+        patch['status'] = data.status;
+        if (data.status === 'inactive') {
+          // Read current row to only stamp deactivatedAt when transitioning from active.
+          const current = await (prisma as any).contractService.findUnique({ where: { id }, select: { status: true } });
+          if (current && current.status !== 'inactive') {
+            patch['deactivatedAt'] = new Date();
+          }
+        } else if (data.status === 'active') {
+          patch['deactivatedAt'] = null;
+        }
+      }
       if (data.notes !== undefined) patch['notes'] = data.notes;
       if (data.tvLogin !== undefined) patch['tvLogin'] = data.tvLogin;
       if (data.tvPassword !== undefined) patch['tvPassword'] = data.tvPassword;

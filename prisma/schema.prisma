@@ -567,6 +567,7 @@ model ContractService {
   tvLogin          String?  // #65 Gigared Play login (GIGA{abonado}) — null para servicios no-TV
   tvPassword       String?  // #65 contraseña determinística del alta TV (visible al operador)
   createdAt        DateTime @default(now())
+  deactivatedAt    DateTime?  // #73 set when status transitions to inactive; null while active
 
   contract       Contract       @relation(fields: [contractId], references: [id], onDelete: Cascade)
   serviceCatalog ServiceCatalog @relation(fields: [serviceCatalogId], references: [id], onDelete: Restrict)

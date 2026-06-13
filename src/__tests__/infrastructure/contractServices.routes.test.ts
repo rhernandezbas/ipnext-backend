@@ -24,6 +24,7 @@ import { UpdateContractName } from '@application/use-cases/UpdateContractName';
 import { AddContractService } from '@application/use-cases/AddContractService';
 import { UpdateContractService } from '@application/use-cases/UpdateContractService';
 import { RemoveContractService } from '@application/use-cases/RemoveContractService';
+import { ListContractServiceHistory } from '@application/use-cases/ListContractServiceHistory';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -118,6 +119,7 @@ async function buildApp(): Promise<Fixture> {
     new AddContractService(csRepo, catalogRepo, contractLookup),
     new UpdateContractService(csRepo),
     new RemoveContractService(csRepo),
+    new ListContractServiceHistory(csRepo),
   ));
   app.use(errorHandler);
 

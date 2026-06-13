@@ -162,6 +162,7 @@ import { PrismaServiceCatalogRepository } from '../adapters/prisma/PrismaService
 import { PrismaContractServiceRepository } from '../adapters/prisma/PrismaContractServiceRepository';
 import { createServiceCatalogRouter } from './routes/serviceCatalog.routes';
 import { createContractServicesRouter } from './routes/contractServices.routes';
+import { ListContractServiceHistory } from '@application/use-cases/ListContractServiceHistory';
 import { ListServiceCatalog } from '@application/use-cases/ListServiceCatalog';
 import { CreateServiceCatalog } from '@application/use-cases/CreateServiceCatalog';
 import { UpdateServiceCatalog } from '@application/use-cases/UpdateServiceCatalog';
@@ -1132,6 +1133,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new AddContractService(contractServiceRepo, serviceCatalogRepo, contractLookup),
     new UpdateContractService(contractServiceRepo),
     new RemoveContractService(contractServiceRepo),
+    new ListContractServiceHistory(contractServiceRepo),
   ));
   // TaskPriority catalog — also before the scheduling catch-all router.
   app.use('/api/scheduling', createTaskPrioritiesRouter(
