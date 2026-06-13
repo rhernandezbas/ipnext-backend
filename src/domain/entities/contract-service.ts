@@ -16,4 +16,6 @@ export interface ContractServiceView {
   /** #65 deterministic TV password (visible to the operator). null for non-TV rows. */
   tvPassword: string | null;
   createdAt: string;       // ISO 8601
+  /** #73 ISO 8601 timestamp when the row transitioned to inactive; null while active. */
+  deactivatedAt: string | null;
 }

@@ -12,6 +12,7 @@ interface Row {
   tvLogin: string | null;
   tvPassword: string | null;
   createdAt: string;
+  deactivatedAt: string | null;
 }
 
 /**
@@ -37,6 +38,7 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
       tvLogin: row.tvLogin,
       tvPassword: row.tvPassword,
       createdAt: row.createdAt,
+      deactivatedAt: row.deactivatedAt,
     };
   }
 
@@ -48,6 +50,13 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
   async getByPair(contractId: string, serviceCatalogId: string): Promise<ContractServiceView | null> {
     const row = this.rows.find(r => r.contractId === contractId && r.serviceCatalogId === serviceCatalogId);
     return row ? this.toView(row) : null;
+  }
+
+  async listByContract(contractId: string): Promise<ContractServiceView[]> {
+    return this.rows
+      .filter(r => r.contractId === contractId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map(r => this.toView(r));
   }
 
   async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView> {
@@ -67,6 +76,7 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
       tvLogin: data.tvLogin ?? null,
       tvPassword: data.tvPassword ?? null,
       createdAt: new Date().toISOString(),
+      deactivatedAt: null,
     };
     this.rows.push(row);
     return this.toView(row);
@@ -75,7 +85,14 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
   async update(id: string, data: { status?: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView | null> {
     const row = this.rows.find(r => r.id === id);
     if (!row) return null;
-    if (data.status !== undefined) row.status = data.status;
+    if (data.status !== undefined) {
+      if (data.status === 'inactive' && row.status !== 'inactive') {
+        row.deactivatedAt = new Date().toISOString();
+      } else if (data.status === 'active') {
+        row.deactivatedAt = null;
+      }
+      row.status = data.status;
+    }
     if (data.notes !== undefined) row.notes = data.notes;
     if (data.tvLogin !== undefined) row.tvLogin = data.tvLogin;
     if (data.tvPassword !== undefined) row.tvPassword = data.tvPassword;

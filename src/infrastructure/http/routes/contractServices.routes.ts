@@ -6,6 +6,7 @@ import { UpdateContractName } from '@application/use-cases/UpdateContractName';
 import { AddContractService } from '@application/use-cases/AddContractService';
 import { UpdateContractService } from '@application/use-cases/UpdateContractService';
 import { RemoveContractService } from '@application/use-cases/RemoveContractService';
+import { ListContractServiceHistory } from '@application/use-cases/ListContractServiceHistory';
 import {
   UpdateContractNameSchema,
   AddContractServiceSchema,
@@ -30,10 +31,12 @@ export function createContractServicesRouter(
   addSvc: AddContractService,
   updateSvc: UpdateContractService,
   removeSvc: RemoveContractService,
+  listHistory: ListContractServiceHistory,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
   const writePerm = requirePerm('clients', 'write');
+  const readPerm  = requirePerm('clients', 'read');
 
   // ── PATCH /contracts/:id — set/clear the manual name ─────────────────────────
   router.patch('/contracts/:id', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
@@ -105,6 +108,12 @@ export function createContractServicesRouter(
   router.delete('/contracts/:contractId/services/:id', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
     await removeSvc.execute(req.params['id'] as string);
     res.status(204).send();
+  });
+
+  // ── GET /contracts/:contractId/service-history — full history (#73) ───────────
+  router.get('/contracts/:contractId/service-history', auth, readPerm, async (req: Request, res: Response): Promise<void> => {
+    const dtos = await listHistory.execute(req.params['contractId'] as string);
+    res.json(dtos);
   });
 
   return router;

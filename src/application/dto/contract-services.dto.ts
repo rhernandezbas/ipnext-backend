@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ContractServiceView } from '@domain/entities/contract-service';
 
 // ── ServiceCatalog ───────────────────────────────────────────────────────────
 
@@ -68,6 +69,37 @@ export function toContractServiceDto(view: {
     status: view.status,
     notes: view.notes,
     createdAt: view.createdAt,
+  };
+}
+
+// ── ContractService History (#73) ────────────────────────────────────────────
+
+/** Wire DTO for the service history endpoint. tvLogin IS exposed; tvPassword is NEVER exposed. */
+export interface ContractServiceHistoryItemDto {
+  id:               string;
+  contractId:       string;
+  serviceCatalogId: string;
+  name:             string;
+  label:            string | null;
+  status:           string;
+  notes:            string | null;
+  tvLogin:          string | null;
+  createdAt:        string;
+  deactivatedAt:    string | null;
+}
+
+export function toContractServiceHistoryItemDto(view: ContractServiceView): ContractServiceHistoryItemDto {
+  return {
+    id:               view.id,
+    contractId:       view.contractId,
+    serviceCatalogId: view.serviceCatalogId,
+    name:             view.name,
+    label:            view.label,
+    status:           view.status,
+    notes:            view.notes,
+    tvLogin:          view.tvLogin,
+    createdAt:        view.createdAt,
+    deactivatedAt:    view.deactivatedAt,
   };
 }
 
