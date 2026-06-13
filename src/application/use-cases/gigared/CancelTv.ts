@@ -1,6 +1,7 @@
 import type { GigaredPort } from '@domain/ports/GigaredPort';
 import type { ContractServiceRepository } from '@domain/ports/ContractServiceRepository';
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
+import type { ClientTvCancellationRepository } from '@domain/ports/ClientTvCancellationRepository';
 import type { CancelTvResult } from '@application/dto/gigared.dto';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
@@ -22,8 +23,8 @@ import { reconcileTvContractService } from './reconcileTvContractService';
  * dejaría ese add-on vivo en el CIC viejo y la baja se reportaría "completa". Por eso esta firma
  * sólo identifica al pack base cuando matchea UN ÚNICO servicio del lote (cardinalidad 1). Si ≥2
  * servicios devuelven la firma, es AMBIGUO (el partner pudo renombrar el base) → NO asumimos cuál
- * es el irremovible: TODOS van a `failed` (conservador; el guard #64 bloquea renew/unlink y el
- * retry re-procesa). NO hardcodeamos el nombre "Gigared Play Full" — el partner puede renombrarlo;
+ * es el irremovible: TODOS van a `failed` (conservador; el guard #64 bloquea renew y el retry
+ * re-procesa). NO hardcodeamos el nombre "Gigared Play Full" — el partner puede renombrarlo;
  * la cardinalidad 1 es la única señal robusta. Ver la resolución de dos pasos en execute().
  */
 function matchesUnremovableSignature(e: unknown): boolean {
@@ -35,63 +36,49 @@ function matchesUnremovableSignature(e: unknown): boolean {
 }
 
 /**
- * CancelTv (#47k) — dar de baja TV por completo para un cliente.
+ * CancelTv (#47k / #72) — dar de baja TV por completo para un cliente.
  *
- * Guard order (pinned): customer 404 → contract 404 (ANTES de tocar Gigared) →
- *   cuenta del cliente por use_internal_id; un 404 upstream (no vinculada) se mapea a
- *   TvNotLinkedError (router → 404 TV_NOT_LINKED).
+ * Guard order (pinned): customer 404 → anti-coining guard (tvCancelledAt ya seteado → TvNotLinkedError)
+ *   → contract 404 (ANTES de tocar Gigared) → cuenta del cliente por use_internal_id; un 404 upstream
+ *   (no vinculada) se mapea a TvNotLinkedError (router → 404 TV_NOT_LINKED).
  *
  * Luego, por cada servicio de la cuenta: DELETE en Gigared. Cada DELETE es independiente: si uno
  * falla, se registra y se sigue con el resto (nunca aborta el lote). #67 — el pack BASE no se
- * puede dar de baja por DELETE (424 "no se puede dar de baja"): ese fallo CONOCIDO va a
- * `unremovable` (informativo), NO a `failed`, así no bloquea el renew (la renovación del CIC
- * recicla el pack base). Cualquier otro fallo va a `failed` y bloquea renew+unlink (guard #64).
- * Después, OTT disable (idempotente: el adapter ya
- * tolera "ya deshabilitada" como éxito). Por último, reconcile del ContractService TV:
- * relee la cuenta y, si quedó vacía, INACTIVA el ítem local (helper existente, H1).
+ * puede dar de baja por DELETE (el CUA responde 424 "no se puede dar de baja"): ese fallo CONOCIDO
+ * va a `unremovable` (informativo), NO a `failed`: así failed.length queda en 0 y el guard #64 deja
+ * correr renew — la renovación del CIC recicla el pack base. Cualquier otro fallo va a `failed` y
+ * bloquea el renew (comportamiento #64).
+ * Después, OTT disable (idempotente: el adapter ya tolera "ya deshabilitada" como éxito).
+ * Por último, reconcile del ContractService TV: relee la cuenta y, si quedó vacía, INACTIVA el ítem
+ * local (helper existente, H1).
  *
- * #64 — "RENOVAR CIC": tras los pasos anteriores, renueva el CIC (genera uno nuevo) y
- * desvincula el internal_id del NUEVO CIC, de modo que el cliente quede "como si no tuviera
- * TV" (getAccountByInternalId(customerId) → 404 después → panel NO vinculado). Ambos pasos son
- * best-effort y se ejecutan DESPUÉS de packs+OTT+reconcile, SOLO si renewAttempted && failed.length===0
- * (ver re-review abajo):
- *   - renewCic(customerId) → { oldCic, newCic }. Si falla → renew=null, NO se intenta el unlink
- *     (sin newCic no sabemos qué CIC limpiar).
- *   - setInternalId(newCic, '') desata el vínculo en el partner → unlinked=true. Si el partner
- *     rechaza el internal_id vacío → unlinked=false (renew ya quedó hecho).
- *   NOTA: no existe un dato LOCAL Client↔CIC que limpiar — el vínculo vive sólo en Gigared como
- *   account.internal_id. El ítem TV local se inactiva en el reconcile. Si en el futuro se
- *   re-vincula, el PATCH internal_id (LinkCustomerToCic) pisa el vínculo.
+ * #64 — "RENOVAR CIC": tras los pasos anteriores, renueva el CIC (genera uno nuevo) SOLO si
+ * renewAttempted && failed.length === 0 (ver re-review abajo). Best-effort para reciclar el cupo
+ * del pack base (renew es lo que libera el pack base en el partner). Si falla → renew=null.
+ * Ya NO se llama setInternalId(newCic, '') — el partner rechaza siempre el internal_id vacío (#72).
+ * El estado "sin TV" se persiste LOCALMENTE (Client.tvCancelledAt). Cuando el teardown es exitoso
+ * (failed.length === 0), se llama tvCancellation.markCancelled(customerId) → localCancelled = true.
+ * Esto hace que el panel muestre "no vinculado" y bloquea el próximo retry (anti-coining).
+ *
+ * #72 — Guard anti-coining: si tvCancellation.isCancelled(customerId) es true AL INICIO de
+ * execute(), se lanza TvNotLinkedError INMEDIATAMENTE, sin llamar al partner. El flag localCancelled
+ * del run anterior garantiza que un retry no acuñe otro CIC.
  *
  * #64 H1 — Guard anti re-renew: `renewAttempted` se computa AL INICIO (ANTES del loop) como
  *   (account.services.length > 0) || (account.ott?.status === 'enabled').
  *   Solo se llama a renewCic cuando renewAttempted es true. Un retry sobre una cuenta ya pelada
- *   (servicios vacíos + OTT off) llegaría aquí solo si getAccountByInternalId no lanzó 404;
+ *   (servicios vacíos + OTT off) llegaría aquí sólo si getAccountByInternalId no lanzó 404;
  *   en ese caso renewAttempted=false → no renueva → la respuesta es 200 en lugar de 207 permanente.
- *   Post-unlink exitoso la cuenta desaparece de Gigared (404), así que el siguiente retry
- *   lanzará TvNotLinkedError ANTES de llegar acá.
  *
- * #64 re-review (BLOQUEANTE) — Guard anti-desmontaje-incompleto: renew+unlink corren SOLO si
- *   failed.length === 0 (todos los removes de packs OK). Con failed > 0 NI renew NI unlink: el
- *   renew movería el internal_id a un CIC nuevo y el unlink lo borraría, dejando la cuenta
- *   IRRESOLUBLE por internal_id (404) mientras packs fallidos siguen activos (cupo consumido) y
- *   el ítem local cuelga inactivo — el retry del 207 daría 404 y enmascararía una baja a medias.
- *   Preservando el vínculo (sin renew/unlink) la cuenta sigue resoluble: el "Reintentar baja"
- *   re-procesa los packs pendientes y, ya sin fallos, recién entonces renueva y desvincula.
+ * #64 re-review (BLOQUEANTE) — Guard anti-desmontaje-incompleto: renew corre SOLO si
+ *   failed.length === 0 (todos los removes de packs OK). Con failed > 0 NO se renueva: el renew
+ *   generaría un CIC nuevo, lo que dificultaría resolver la cuenta en un retry. Preservando el
+ *   vínculo (sin renew) la cuenta sigue resoluble: el "Reintentar baja" re-procesa los packs
+ *   pendientes y, ya sin fallos, recién entonces renueva.
  *
- * #67 re-review (LIMITACIÓN CONOCIDA — retry post renew-OK/unlink-FAIL): cuando la cuenta queda con
- *   SÓLO el pack base irremovible y el renew se hace pero el unlink falla (207), un retry NO puede
- *   distinguir de forma robusta "primera baja" de "re-intento": en ambos casos lee una cuenta con
- *   sólo el base (+ OTT off) y `renew` del run previo no es visible (no hay dato LOCAL Client↔CIC).
- *   Decisión del arquitecto: en ese caso RENOVAR IGUAL (la primera baja legítima necesita el renew
- *   para liberar el base; el base no se libera sin renew). Esto acepta que un retry sobre el caso
- *   solo-base+OTT-off pueda acuñar otro CIC — edge acotado porque el usuario controla los clicks y
- *   el 207 muestra qué falló. NO se complica el flujo para cubrirlo; el warn de [gigared] unremovable
- *   deja rastro. Si en el futuro hace falta, la solución correcta es persistir el CIC localmente.
- *
- * Shape: { removed, failed, ottDisabled, local, renew, unlinked, renewAttempted }.
+ * Shape: { removed, failed, unremovable, ottDisabled, local, renew, localCancelled, renewAttempted }.
  * El router responde 200 si failed.length===0 && local==='synced' && ottDisabled &&
- * (!renewAttempted || (renew!==null && unlinked)); si no 207. Con failed>0 ya es 207 por el
+ * (!renewAttempted || renew!==null); si no 207. Con failed>0 ya es 207 por el
  * primer criterio, así que el retry queda habilitado.
  */
 export class CancelTv {
@@ -101,11 +88,19 @@ export class CancelTv {
     private readonly catalogRepo: ServiceCatalogRepository,
     private readonly contractLookup: ContractLookup,
     private readonly customerLookup: CustomerLookup,
+    private readonly tvCancellation?: ClientTvCancellationRepository,
   ) {}
 
   async execute(customerId: string, { contractId }: { contractId: string }): Promise<CancelTvResult> {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
+
+    // #72 — Guard anti-coining: si la TV ya fue dada de baja localmente, el flag tvCancelledAt
+    // está seteado → lanzamos TvNotLinkedError inmediatamente SIN llamar al partner.
+    // Esto evita acuñar otro CIC en un retry (re-coining). El flag es el guard honesto.
+    if (this.tvCancellation && await this.tvCancellation.isCancelled(customerId)) {
+      throw new TvNotLinkedError(customerId);
+    }
 
     // #47k HIGH: el contrato debe PERTENECER al customer. Un contractId de otro cliente
     // se trata como inexistente (404) para no filtrar la existencia del contrato ajeno ni
@@ -129,7 +124,7 @@ export class CancelTv {
     // DELETE por servicio. Cada uno es independiente: un fallo nunca aborta el lote.
     // #67 — el pack BASE no se puede dar de baja por DELETE (el CUA responde 424 "no se puede dar
     // de baja"). Ese fallo CONOCIDO va a `unremovable` (informativo), NO a `failed`: así failed.length
-    // queda en 0 y el guard #64 deja correr renew+unlink — la renovación del CIC recicla el pack base.
+    // queda en 0 y el guard #64 deja correr renew — la renovación del CIC recicla el pack base.
     // Cualquier OTRO fallo (CUA caído, otro error) sí va a `failed` y bloquea el renew (comportamiento #64).
     const removed: string[] = [];
     const failed: { id: string; detail: string }[] = [];
@@ -183,7 +178,7 @@ export class CancelTv {
     // #67 re-review (CRITICAL): el pack base irremovible SIGUE en la cuenta al releer (su DELETE
     // lanzó), pero NO debe contar como "servicio vivo" para el reconcile — si contara, la rama
     // "services present" reactivaría la fila TV con el CIC viejo + credenciales intactas y el
-    // renew+unlink posterior la dejaría irreparable. Excluimos los ids derivados a `unremovable`
+    // renew posterior la dejaría irreparable. Excluimos los ids derivados a `unremovable`
     // para que una cuenta con SÓLO el base se reconcilie como "vacía" → inactiva + limpia (#65 M6).
     let local: 'synced' | 'failed' = 'synced';
     try {
@@ -202,41 +197,40 @@ export class CancelTv {
       local = 'failed';
     }
 
-    // #64 — RENOVAR CIC + desvincular. Best-effort, DESPUÉS de packs/OTT/reconcile.
-    // El renew genera un CIC nuevo; el partner reasigna nuestro internal_id a ese CIC, así que
-    // sin el unlink el cliente seguiría apareciendo vinculado. Limpiamos el internal_id del
-    // nuevo CIC para que getAccountByInternalId(customerId) responda 404 ("como si no tuviera TV").
+    // #64 — RENOVAR CIC. Best-effort, DESPUÉS de packs/OTT/reconcile.
+    // El renew genera un CIC nuevo; el partner reasigna el pack base al CIC nuevo, reciclando el cupo.
+    // Ya NO se llama setInternalId(newCic,'') — el partner siempre lo rechaza (HTTP 400, #72).
+    // El estado "sin TV" se persiste LOCALMENTE con tvCancellation.markCancelled() (ver abajo).
     //
     // H1 — Guard anti re-renew: solo ejecutar cuando renewAttempted=true. Si la cuenta ya estaba
     // pelada (services:[], ott disabled) al inicio de esta corrida, no hay nada que renovar; no
     // llamar a renewCic evita generar un tercer CIC en un retry sobre una baja parcialmente hecha.
     //
-    // #64 re-review (BLOQUEANTE) — Guard anti-desmontaje-incompleto: renew+unlink SOLO si
+    // #64 re-review (BLOQUEANTE) — Guard anti-desmontaje-incompleto: renew SOLO si
     // failed.length === 0. Si ALGÚN remove de pack falló, el renew NO debe correr: el renew
-    // genera un CIC nuevo, el partner mueve el internal_id a ese CIC y el unlink lo borra,
-    // dejando la cuenta IRRESOLUBLE por internal_id (404). Pero los packs fallidos siguen
-    // activos consumiendo cupo, y el ítem local ya quedó inactivado/colgado. El retry del 207
-    // daría 404 (cuenta desvinculada) enmascarando una baja a medias. Con failed>0 NO renovamos
-    // ni desvinculamos: la cuenta sigue resoluble por internal_id, así el "Reintentar baja"
-    // re-procesa los packs pendientes y, ya sin fallos, recién entonces renueva y desvincula.
+    // genera un CIC nuevo y el retry del 207 daría 404 (partner resuelve por CIC nuevo que
+    // tal vez tenga un internal_id diferente). Con failed>0 NO renovamos: la cuenta sigue
+    // resoluble por internal_id, así el "Reintentar baja" re-procesa los packs pendientes.
     let renew: { oldCic: string; newCic: string } | null = null;
-    let unlinked = false;
     if (renewAttempted && failed.length === 0) {
       try {
         renew = await this.gigared.renewCic(customerId);
       } catch {
         renew = null;
       }
-      if (renew) {
-        try {
-          await this.gigared.setInternalId(renew.newCic, '');
-          unlinked = true;
-        } catch {
-          unlinked = false;
-        }
-      }
     }
 
-    return { removed, failed, unremovable, ottDisabled, local, renew, unlinked, renewAttempted };
+    // #72 — Flag local: si el teardown fue exitoso (failed.length === 0), marcar el cliente como
+    // "TV dada de baja localmente". Esto hace que el panel muestre "no vinculado" y que el próximo
+    // retry lance TvNotLinkedError (anti-coining guard). Best-effort en relación al renew: aunque
+    // el renew falle (quota recycling), el estado honesto de la baja es que los packs se quitaron,
+    // así que el flag se setea igual.
+    let localCancelled = false;
+    if (failed.length === 0 && this.tvCancellation) {
+      await this.tvCancellation.markCancelled(customerId);
+      localCancelled = true;
+    }
+
+    return { removed, failed, unremovable, ottDisabled, local, renew, localCancelled, renewAttempted };
   }
 }

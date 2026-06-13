@@ -13,6 +13,7 @@ import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
+import { InMemoryClientTvCancellationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository';
 
 function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
   return {
@@ -482,5 +483,111 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
       sendActivationEmail: false,
     });
     expect(result.credentialsPersisted).toBe(false);
+  });
+});
+
+// ----- #72: local TV-cancel flag integration -----
+
+describe('GetGigaredCustomerAccount (#72 — local TV-cancel flag)', () => {
+  it('customer with tvCancelled → { linked:false, account:null } WITHOUT calling the partner', async () => {
+    const port = fakePort();
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1');
+
+    const uc = new GetGigaredCustomerAccount(port, customerLookup(true), tvCancellation);
+    const result = await uc.execute('cust-1');
+
+    expect(result.linked).toBe(false);
+    expect(result.account).toBeNull();
+    // El partner NO fue consultado (el flag local es suficiente)
+    expect(port.getAccountByInternalId).not.toHaveBeenCalled();
+  });
+
+  it('customer NOT cancelled → calls partner normally', async () => {
+    const port = fakePort();
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    // No seedCancelled → flag no seteado
+
+    const uc = new GetGigaredCustomerAccount(port, customerLookup(true), tvCancellation);
+    const result = await uc.execute('cust-1');
+
+    expect(result.linked).toBe(true);
+    expect(port.getAccountByInternalId).toHaveBeenCalledWith('cust-1');
+  });
+
+  it('without tvCancellation dep → calls partner normally (backward-compat)', async () => {
+    const port = fakePort();
+    const uc = new GetGigaredCustomerAccount(port, customerLookup(true));
+    const result = await uc.execute('cust-1');
+    expect(result.linked).toBe(true);
+  });
+});
+
+describe('LinkCustomerToCic (#72 — clearCancelled on link)', () => {
+  it('successful link → clearCancelled called (client gets TV back)', async () => {
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: '' })),
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: 'cust-1' })),
+    });
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1'); // pre-cancellado
+
+    const uc = new LinkCustomerToCic(port, customerLookup(true), undefined, undefined, undefined, tvCancellation);
+    await uc.execute('cust-1', '0000001234');
+
+    // El flag fue limpiado: el cliente volvió a tener TV
+    expect(await tvCancellation.isCancelled('cust-1')).toBe(false);
+  });
+
+  it('idempotent link (already linked) → clearCancelled still called', async () => {
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: 'cust-1' })),
+    });
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1');
+
+    const uc = new LinkCustomerToCic(port, customerLookup(true), undefined, undefined, undefined, tvCancellation);
+    await uc.execute('cust-1', '0000001234');
+
+    expect(await tvCancellation.isCancelled('cust-1')).toBe(false);
+  });
+
+  it('without tvCancellation dep → link works normally (backward-compat)', async () => {
+    const port = fakePort({
+      getAccountByCic: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: '' })),
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: 'cust-1' })),
+    });
+    const uc = new LinkCustomerToCic(port, customerLookup(true));
+    const result = await uc.execute('cust-1', '0000001234');
+    expect(result.account.cic).toBe('0000001234');
+  });
+});
+
+describe('RegisterGigaredAccount (#72 — clearCancelled on register)', () => {
+  it('successful register → clearCancelled called (client gets TV back)', async () => {
+    const port = fakePort({
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: 'cust-1' })),
+    });
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1'); // pre-cancellado
+
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), undefined, undefined, undefined, tvCancellation);
+    await uc.execute('cust-1', {
+      firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
+      sendActivationEmail: false,
+    });
+
+    // El flag fue limpiado: el cliente volvió a tener TV
+    expect(await tvCancellation.isCancelled('cust-1')).toBe(false);
+  });
+
+  it('without tvCancellation dep → register works normally (backward-compat)', async () => {
+    const port = fakePort();
+    const uc = new RegisterGigaredAccount(port, customerLookup(true));
+    const result = await uc.execute('cust-1', {
+      firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
+      sendActivationEmail: false,
+    });
+    expect(result.account.cic).toBe('0000000001');
   });
 });

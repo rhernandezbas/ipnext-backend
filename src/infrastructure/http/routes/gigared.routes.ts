@@ -347,14 +347,16 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  // #47k / #64 — dar de baja TV completa (RENOVAR CIC). Body { contractId }. tv.cancel (#50).
+  // #47k / #64 / #72 — dar de baja TV completa. Body { contractId }. tv.cancel (#50).
   // 200 si todo OK; 207 si algún paso falló — retry idempotente.
-  // Criterio 207 (#64 M2):
+  // Criterio 207:
   //   - failed.length > 0: al menos un DELETE de pack falló
   //   - local === 'failed': el reconcile local no pudo sincronizar
   //   - !ottDisabled: el OTT disable falló (falla REAL; el adapter ya absorbe "ya deshabilitada" como éxito)
-  //   - renewAttempted && (renew === null || !unlinked): había algo que renovar pero renew o unlink falló
+  //   - renewAttempted && renew === null: había algo que renovar pero el renew (best-effort) falló
   //     Cuando renewAttempted=false (cuenta ya pelada), se omite este check → evita 207 permanente.
+  //   #72: `unlinked` ya no existe — el partner no tiene primitive de unlink (HTTP 400 siempre).
+  //   El estado "sin TV" se persiste localmente (Client.tvCancelledAt). No factoriza en el 207.
   router.post('/customers/:id/cancel', deps.requireCancel, async (req, res, next): Promise<void> => {
     try {
       const contractId = String((req.body as { contractId?: unknown }).contractId ?? '');
@@ -363,7 +365,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         result.failed.length > 0 ||
         result.local === 'failed' ||
         !result.ottDisabled ||
-        (result.renewAttempted && (result.renew === null || !result.unlinked));
+        (result.renewAttempted && result.renew === null);
       res.status(partial ? 207 : 200).json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) next(err);

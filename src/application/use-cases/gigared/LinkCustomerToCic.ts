@@ -1,6 +1,7 @@
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import type { ContractServiceRepository } from '@domain/ports/ContractServiceRepository';
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
+import type { ClientTvCancellationRepository } from '@domain/ports/ClientTvCancellationRepository';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import {
@@ -25,12 +26,13 @@ export interface LinkCustomerResult {
 }
 
 /**
- * LinkCustomerToCic (#47 / C2 + #47f) — binds an existing Gigared CIC to our customer and,
+ * LinkCustomerToCic (#47 / C2 + #47f / #72) — binds an existing Gigared CIC to our customer and,
  * when a `contractId` is supplied, reconciles the local TV ContractService slot in THAT contract.
  *
- * Why 47f: linking a CIC that ALREADY carries active packs used to leave the contract with no
- * local TV chip — `reconcileTvContractService` was only ever called by Add/RemoveTvService. The
- * fix threads the same helper (same notes/ownership/upsert) through the link path.
+ * #72 — si el link fue exitoso, llama tvCancellation.clearCancelled(customerId) best-effort para
+ * limpiar el flag local "TV dada de baja" (el cliente volvió a tener TV). Esto aplica a AMBOS
+ * paths: idempotente (el CIC ya estaba vinculado) y la vinculación fresca. Un error en el clear
+ * NO aborta la operación ya hecha en Gigared — se logea como warn.
  *
  * Guard order (pinned):
  *   0. customer must exist locally               → ClientNotFoundError
@@ -40,6 +42,7 @@ export interface LinkCustomerResult {
  *   3. internal_id == customerId                 → idempotent OK (no re-set)
  *   4. internal_id empty                         → setInternalId, read back by internal_id
  *   5. if contractId supplied → reconcile the local TV slot (failure → local:'failed', link kept)
+ *   6. #72 — clearCancelled best-effort (never aborts the already-done Gigared op)
  *
  * Reconcile deps (csRepo/catalogRepo/contractLookup) are OPTIONAL: when absent (or no contractId),
  * the use case behaves exactly as the legacy link.
@@ -51,6 +54,7 @@ export class LinkCustomerToCic {
     private readonly contractLookup?: ContractLookup,
     private readonly csRepo?: ContractServiceRepository,
     private readonly catalogRepo?: ServiceCatalogRepository,
+    private readonly tvCancellation?: ClientTvCancellationRepository,
   ) {}
 
   async execute(customerId: string, cic: string, contractId?: string): Promise<LinkCustomerResult> {
@@ -86,6 +90,17 @@ export class LinkCustomerToCic {
     } else {
       await this.gigared.setInternalId(cic, customerId);
       account = await this.gigared.getAccountByInternalId(customerId);
+    }
+
+    // #72 — clearCancelled best-effort: el cliente volvió a tener TV (re-vinculación exitosa).
+    // Se intenta siempre que el link fue exitoso (paths 3 y 4). Un error aquí NO aborta.
+    if (this.tvCancellation) {
+      try {
+        await this.tvCancellation.clearCancelled(customerId);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[gigared] link: TV cancellation flag clear failed (best-effort)', err);
+      }
     }
 
     // 5. No contractId (or reconcile deps missing) → legacy response, untouched.

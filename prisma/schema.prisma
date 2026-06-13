@@ -184,6 +184,9 @@ model Client {
   balanceDue       Decimal?        @db.Decimal(12, 2)
   balanceCurrency  String?
   lastBalanceAt    DateTime?
+  // #72 — local TV-cancel flag. Set by CancelTv on teardown; cleared by Link/Register on re-link.
+  // GR sync NEVER writes this — it's mirror-only state (the partner has no unlink primitive).
+  tvCancelledAt    DateTime?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   contracts        Contract[]
