@@ -72,7 +72,20 @@ export function toContractServiceDto(view: {
   };
 }
 
-// ── ContractService History (#73) ────────────────────────────────────────────
+// ── ContractService History (#73, extended by #110) ─────────────────────────
+
+/**
+ * #110 — Wire DTO for a single service event (non-TV or TV, normalized shape).
+ * cic is ONLY non-null for TV events; null for non-TV events.
+ * FE wire contract: { id, eventType, occurredAt, actorName, cic }
+ */
+export interface ServiceEventDto {
+  id:         string;
+  eventType:  'activated' | 'deactivated' | 'reactivated';
+  occurredAt: string;  // ISO 8601
+  actorName:  string;
+  cic:        string | null;
+}
 
 /** Wire DTO for the service history endpoint. tvLogin IS exposed; tvPassword is NEVER exposed. */
 export interface ContractServiceHistoryItemDto {
@@ -86,9 +99,15 @@ export interface ContractServiceHistoryItemDto {
   tvLogin:          string | null;
   createdAt:        string;
   deactivatedAt:    string | null;
+  /** #110 — ordered chronologically ASC. Synthesized for legacy rows with no events. */
+  events:           ServiceEventDto[];
 }
 
-export function toContractServiceHistoryItemDto(view: ContractServiceView): ContractServiceHistoryItemDto {
+/** #110 — maps a ContractServiceView + its events array to the wire DTO. */
+export function toContractServiceHistoryItemDto(
+  view: ContractServiceView,
+  events: ServiceEventDto[],
+): ContractServiceHistoryItemDto {
   return {
     id:               view.id,
     contractId:       view.contractId,
@@ -100,6 +119,33 @@ export function toContractServiceHistoryItemDto(view: ContractServiceView): Cont
     tvLogin:          view.tvLogin,
     createdAt:        view.createdAt,
     deactivatedAt:    view.deactivatedAt,
+    events,
+  };
+}
+
+/**
+ * #110 — Map a TvActivationEvent to the normalized ServiceEventDto.
+ * TV event types: alta→activated, baja→deactivated, reactivacion→reactivated.
+ * The CIC is preserved; occurredAt = createdAt.
+ */
+export function tvEventToServiceEvent(tvEvent: {
+  id: string;
+  eventType: 'alta' | 'baja' | 'reactivacion';
+  cic: string | null;
+  actorName: string;
+  createdAt: string;
+}): ServiceEventDto {
+  const typeMap: Record<string, 'activated' | 'deactivated' | 'reactivated'> = {
+    alta:         'activated',
+    baja:         'deactivated',
+    reactivacion: 'reactivated',
+  };
+  return {
+    id:         tvEvent.id,
+    eventType:  typeMap[tvEvent.eventType] ?? 'activated',
+    occurredAt: tvEvent.createdAt,
+    actorName:  tvEvent.actorName,
+    cic:        tvEvent.cic,
   };
 }
 

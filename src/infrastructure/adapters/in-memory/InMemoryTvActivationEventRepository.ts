@@ -58,6 +58,14 @@ export class InMemoryTvActivationEventRepository implements TvActivationEventRep
       .map(e => ({ ...e }));
   }
 
+  /** #110 — List events for a contract, newest first. */
+  async listByContract(contractId: string): Promise<TvActivationEvent[]> {
+    return this.store
+      .filter(e => e.contractId === contractId)
+      .sort(newestFirst)
+      .map(e => ({ ...e }));
+  }
+
   /** For test assertions: expose all stored events (unfiltered). */
   all(): TvActivationEvent[] {
     return this.store.map(e => ({ ...e }));

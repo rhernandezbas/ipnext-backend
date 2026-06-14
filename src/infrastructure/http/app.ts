@@ -163,6 +163,7 @@ import { GetContractStats } from '@application/use-cases/GetContractStats';
 // #43 — ServiceCatalog ABM + ContractService CRUD + Contract name.
 import { PrismaServiceCatalogRepository } from '../adapters/prisma/PrismaServiceCatalogRepository';
 import { PrismaContractServiceRepository } from '../adapters/prisma/PrismaContractServiceRepository';
+import { PrismaContractServiceEventRepository } from '../adapters/prisma/PrismaContractServiceEventRepository';
 import { createServiceCatalogRouter } from './routes/serviceCatalog.routes';
 import { createContractServicesRouter } from './routes/contractServices.routes';
 import { ListContractServiceHistory } from '@application/use-cases/ListContractServiceHistory';
@@ -1161,8 +1162,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // Global contracts listing — mounted at /api root, before the catch-all.
   app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats));
   // #43 — ServiceCatalog ABM + ContractService CRUD + Contract name, mounted at /api root.
-  const serviceCatalogRepo  = new PrismaServiceCatalogRepository();
-  const contractServiceRepo = new PrismaContractServiceRepository();
+  const serviceCatalogRepo     = new PrismaServiceCatalogRepository();
+  const contractServiceRepo    = new PrismaContractServiceRepository();
+  // #110 — append-only ledger for non-TV contract service events.
+  const contractServiceEventRepo = new PrismaContractServiceEventRepository();
+  // #110 — TV activation event repo instantiated here (also reused by the Gigared router below).
+  // PrismaTvActivationEventRepository has no local deps — safe to instantiate early.
+  const contractServicesTvEventRepo = new PrismaTvActivationEventRepository();
   const contractLookup = { findById: (id: string) => prismaClientLookup('Contract', id) };
   app.use('/api', createServiceCatalogRouter(
     authAdapter,
@@ -1176,10 +1182,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     authAdapter,
     requirePerm,
     new UpdateContractName(contractRepo),
-    new AddContractService(contractServiceRepo, serviceCatalogRepo, contractLookup),
-    new UpdateContractService(contractServiceRepo),
-    new RemoveContractService(contractServiceRepo),
-    new ListContractServiceHistory(contractServiceRepo),
+    new AddContractService(contractServiceRepo, serviceCatalogRepo, contractLookup, contractServiceEventRepo),
+    new UpdateContractService(contractServiceRepo, contractServiceEventRepo),
+    new RemoveContractService(contractServiceRepo, contractServiceEventRepo),
+    // #110 — cross-source: non-TV from contractServiceEventRepo, TV from contractServicesTvEventRepo.
+    new ListContractServiceHistory(contractServiceRepo, contractServiceEventRepo, contractServicesTvEventRepo),
   ));
   // TaskPriority catalog — also before the scheduling catch-all router.
   app.use('/api/scheduling', createTaskPrioritiesRouter(

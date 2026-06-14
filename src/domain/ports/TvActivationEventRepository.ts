@@ -55,4 +55,6 @@ export interface TvActivationEventRepository {
   listByClient(clientId: string): Promise<TvActivationEvent[]>;
   /** List events with optional cross-client filters, newest first. */
   list(filters: ListTvActivationEventsFilter): Promise<TvActivationEvent[]>;
+  /** #110 — List events for a contract, newest first. Aditivo, no rompe call-sites existentes. */
+  listByContract(contractId: string): Promise<TvActivationEvent[]>;
 }
