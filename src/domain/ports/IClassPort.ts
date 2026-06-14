@@ -71,6 +71,60 @@ export interface CreateServiceOrderInput {
   nodeCode?: string;
 }
 
+// ── Ola A: OS action types ────────────────────────────────────────────────────
+
+/**
+ * Snapshot of a Service Order's current state in IClass.
+ * Reuses the shape already parsed by `parseServiceOrderSummary`.
+ * Used by the pre-check before any write action (close / assign).
+ */
+export interface ServiceOrderSnapshot {
+  iclassId: string;
+  iclassCodigo: string;
+  /** Terminal statusCode is '7'. */
+  statusCode: string;
+  statusDescription: string;
+}
+
+/**
+ * Input for closing a Service Order in IClass.
+ * The adapter formats the date and builds the payload; the use case resolves all values.
+ */
+export interface CloseServiceOrderInput {
+  /** The IClass OS code (= task.iclassOrderCode). */
+  serviceOrderCode: string;
+  /** Must be a valid code from the IClassResultCode catalog. */
+  resultCode: string;
+  /** Closure date. The adapter formats it to the IClass date format. */
+  closeDate: Date;
+  commentary: string;
+  /** Whether the close is visible to the customer on the portal. Default: true. */
+  visibleToCustomer?: boolean;
+}
+
+// ── Ola B: Team + update OS types ────────────────────────────────────────────
+
+/**
+ * A team descriptor from IClass (`GET /teams`).
+ * Used by the team catalog sync and the assign-team use case.
+ */
+export interface IClassTeamDescriptor {
+  login: string;
+  name: string;
+  thirdPartyCode: string | null;
+}
+
+/**
+ * Input for updating a Service Order in IClass (assign team).
+ * Only the requiredTeam field is set via this operation.
+ */
+export interface UpdateServiceOrderInput {
+  /** The IClass OS code (= task.iclassOrderCode). */
+  serviceOrderCode: string;
+  /** The team login to assign. */
+  requiredTeam: string;
+}
+
 /**
  * Upstream port for the IClass external API. The adapter owns auth, transport
  * and payload mapping; the application layer only sees this contract.
@@ -102,4 +156,34 @@ export interface IClassPort {
   getServiceOrderEquipmentEvents(iclassId: string): Promise<SoEquipmentEvent[]>;
   /** All result codes across SO types — for the result-code catalog sync. */
   listResultCodes(): Promise<IClassResultCodeDescriptor[]>;
+
+  // ── Ola A: OS write actions ───────────────────────────────────────────────
+
+  /**
+   * Fetch the current state of a Service Order from IClass for pre-check purposes.
+   * Returns null when IClass responds 404 or 204 (unknown OS).
+   * Passes through `withAuthRetry` (429-resilient).
+   */
+  getServiceOrder(iclassId: string): Promise<ServiceOrderSnapshot | null>;
+
+  /**
+   * Push a close action for a Service Order to IClass.
+   * The adapter translates responses to IClassRejectedError (erros) or
+   * IClassUnavailableError (5xx/timeout). Never returns on unexpected shapes.
+   */
+  closeServiceOrder(input: CloseServiceOrderInput): Promise<void>;
+
+  // ── Ola B: Team + update ─────────────────────────────────────────────────
+
+  /**
+   * Fetch the team catalog from IClass (`GET /teams` filtered by thirdPartyId).
+   * Maps each entry to IClassTeamDescriptor. Passes through `withAuthRetry`.
+   */
+  listTeams(): Promise<IClassTeamDescriptor[]>;
+
+  /**
+   * Push an update (assign team) for a Service Order to IClass.
+   * Same error mapping as closeServiceOrder.
+   */
+  updateServiceOrder(input: UpdateServiceOrderInput): Promise<void>;
 }

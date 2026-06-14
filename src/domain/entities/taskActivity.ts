@@ -40,7 +40,9 @@ export type ActivityType =
   | 'checklist_item_updated'
   | 'checklist_reordered'
   | 'checklist_template_assigned'
-  | 'checklist_cleared';
+  | 'checklist_cleared'
+  // IClass OS actions (Ola A + Ola B)
+  | 'iclass_team_assigned';
 
 export interface TaskActivity {
   id: string;

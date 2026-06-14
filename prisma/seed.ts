@@ -324,6 +324,22 @@ async function seedSchedulingFoundation() {
   })
   console.log('  Feature flag seeded: gestion-real-ingest (enabled: false)')
 
+  // iclass-os-actions (Ola A + B): feature flags for IClass OS close + assign actions.
+  // Default OFF until validated in live environment (see V1, V2 in tasks.md).
+  await (prisma as any).featureFlag.upsert({
+    where: { key: 'iclass-close-action' },
+    update: {},
+    create: { key: 'iclass-close-action', enabled: false },
+  })
+  console.log('  Feature flag seeded: iclass-close-action (enabled: false)')
+
+  await (prisma as any).featureFlag.upsert({
+    where: { key: 'iclass-assign-action' },
+    update: {},
+    create: { key: 'iclass-assign-action', enabled: false },
+  })
+  console.log('  Feature flag seeded: iclass-assign-action (enabled: false)')
+
   // ServiceTechnology catalog — canonical values (idempotent via skipDuplicates on unique name).
   await (prisma as any).serviceTechnology.createMany({
     data: [
@@ -386,6 +402,20 @@ async function seedSchedulingFoundation() {
             data: { moduleId: schedulingModule.id, action: 'hard_delete' },
           })
           console.log('  Created RBAC permission: scheduling.hard_delete (no role grant — super_admin only via migration)')
+        }
+        // iclass-os-actions (Ola A + B): ensure iclass_close + iclass_assign exist in catalog.
+        // Per design: ONLY super_admin receives these — NOT granted to administrador.
+        // The migration 20260726000000_iclass_actions_rbac_and_flags grants them to super_admin.
+        for (const action of ['iclass_close', 'iclass_assign']) {
+          const existingPerm = await (prisma as any).rbacPermission.findFirst({
+            where: { moduleId: schedulingModule.id, action },
+          })
+          if (!existingPerm) {
+            await (prisma as any).rbacPermission.create({
+              data: { moduleId: schedulingModule.id, action },
+            })
+            console.log(`  Created RBAC permission: scheduling.${action} (no role grant — super_admin only via migration)`)
+          }
         }
         for (const action of ['manage', 'read']) {
           let perm = await (prisma as any).rbacPermission.findFirst({

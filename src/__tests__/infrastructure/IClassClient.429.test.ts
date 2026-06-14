@@ -1,5 +1,14 @@
 /**
  * Tests for IClassClient HTTP 429 retry handling (REQ-429-RETRY-1).
+ * Also covers 429 on the new write methods (FIX 4, matrix A6):
+ *   - getServiceOrder (authedGetOrNull path)
+ *   - closeServiceOrder (authedPost / withAuthRetry path)
+ *   - updateServiceOrder (authedPost / withAuthRetry path)
+ *
+ * NOTE on write-method idempotency risk: a 429 retry on closeServiceOrder or
+ * updateServiceOrder could double-send if the first attempt *did* reach IClass
+ * before the 429 was returned. This is an IClass API limitation; the live
+ * validation (§10) should confirm whether the endpoints are idempotent.
  *
  * Strategy: inject a fake `http` axios instance that returns scripted
  * responses/errors. `subresourceBackoffMs: 0` and `maxRateLimitRetries`
@@ -40,6 +49,14 @@ function makeHttp(postQueue: Array<() => unknown>, getQueue: Array<() => unknown
       return result instanceof Error ? Promise.reject(result) : Promise.resolve({ data: result });
     }),
   };
+}
+
+/** Fake axios-style 500 error. */
+function serverError() {
+  return Object.assign(new Error('HTTP 500'), {
+    isAxiosError: true as const,
+    response: { status: 500, headers: {}, data: undefined },
+  });
 }
 
 const LOGIN_TOKEN = { access_token: 'TKN' };
@@ -190,5 +207,161 @@ describe('IClassClient — 429 retry (REQ-429-RETRY-1)', () => {
     expect(sleepSpy).toHaveBeenCalledTimes(1);
     // Crucially: no HTTP 429 error was ever thrown, so withAuthRetry's catch block
     // was never entered for rate-limiting → the 200-body path and the 429-status path are distinct.
+  });
+});
+
+// ── A6 matrix: 429 on getServiceOrder / closeServiceOrder / updateServiceOrder ──────────────────
+
+describe('IClassClient — 429 retry on write methods (A6)', () => {
+  const BASE_OPTS = {
+    baseUrl: 'http://test',
+    username: 'u',
+    password: 'p',
+    thirdPartyId: 'tp1',
+    subresourceBackoffMs: 0,
+    maxRateLimitRetries: 2,
+  };
+
+  const OS_OK = {
+    id: 'iclass-1',
+    codigo: 'OS-100',
+    status: { id: '1', descricao: 'Aberta' },
+    contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {}, criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
+  };
+
+  // A6-1: getServiceOrder → 429 on first attempt, succeeds on retry
+  it('A6-1: getServiceOrder 429 → retries and returns snapshot', async () => {
+    const sleepCalls: number[] = [];
+    const fakeSleep = (ms: number) => { sleepCalls.push(ms); return Promise.resolve(); };
+
+    const http = {
+      post: jest.fn(), // no login needed (token pre-set)
+      get: jest.fn()
+        .mockRejectedValueOnce(rateLimitError())
+        .mockResolvedValueOnce({ data: OS_OK }),
+    };
+
+    const client = new IClassClient({ ...BASE_OPTS, http: http as any, _sleep: fakeSleep });
+    (client as any).token = 'TKN';
+
+    const snapshot = await client.getServiceOrder('iclass-1');
+
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.iclassId).toBe('iclass-1');
+    expect(sleepCalls).toHaveLength(1);
+  });
+
+  // A6-2: getServiceOrder → always 429, exhausts retries → IClassUnavailableError
+  it('A6-2: getServiceOrder always 429 → IClassUnavailableError after retries', async () => {
+    const fakeSleep = jest.fn().mockResolvedValue(undefined);
+
+    const http = {
+      post: jest.fn(),
+      get: jest.fn()
+        .mockRejectedValueOnce(rateLimitError())
+        .mockRejectedValueOnce(rateLimitError())
+        .mockRejectedValueOnce(rateLimitError()),
+    };
+
+    const client = new IClassClient({ ...BASE_OPTS, http: http as any, _sleep: fakeSleep });
+    (client as any).token = 'TKN';
+
+    await expect(client.getServiceOrder('iclass-1')).rejects.toBeInstanceOf(IClassUnavailableError);
+    expect(fakeSleep).toHaveBeenCalledTimes(2); // maxRateLimitRetries=2
+  });
+
+  // A6-3: closeServiceOrder → 429 on first attempt, succeeds on retry
+  // IDEMPOTENCY NOTE: the retry may double-send if the first request reached IClass.
+  // The live validation (§10) must confirm whether /serviceorders/close is idempotent.
+  it('A6-3: closeServiceOrder 429 → retries and resolves void', async () => {
+    const sleepCalls: number[] = [];
+    const fakeSleep = (ms: number) => { sleepCalls.push(ms); return Promise.resolve(); };
+
+    const http = makeHttp(
+      [
+        () => rateLimitError(), // first POST attempt → 429
+        () => ({ erros: null }), // retry → success
+      ],
+      [],
+    );
+
+    const client = new IClassClient({ ...BASE_OPTS, http: http as any, _sleep: fakeSleep });
+    (client as any).token = 'TKN';
+
+    await expect(
+      client.closeServiceOrder({ serviceOrderCode: 'OS-100', resultCode: 'R', closeDate: new Date(), commentary: 'x' }),
+    ).resolves.toBeUndefined();
+
+    expect(sleepCalls).toHaveLength(1);
+  });
+
+  // A6-4: closeServiceOrder → always 429 → IClassUnavailableError
+  it('A6-4: closeServiceOrder always 429 → IClassUnavailableError after retries', async () => {
+    const fakeSleep = jest.fn().mockResolvedValue(undefined);
+
+    const http = makeHttp(
+      [
+        () => rateLimitError(),
+        () => rateLimitError(),
+        () => rateLimitError(),
+      ],
+      [],
+    );
+
+    const client = new IClassClient({ ...BASE_OPTS, http: http as any, _sleep: fakeSleep });
+    (client as any).token = 'TKN';
+
+    await expect(
+      client.closeServiceOrder({ serviceOrderCode: 'OS-100', resultCode: 'R', closeDate: new Date(), commentary: 'x' }),
+    ).rejects.toBeInstanceOf(IClassUnavailableError);
+
+    expect(fakeSleep).toHaveBeenCalledTimes(2);
+  });
+
+  // A6-5: updateServiceOrder → 429 on first attempt, succeeds on retry
+  // IDEMPOTENCY NOTE: same risk as closeServiceOrder (see A6-3).
+  it('A6-5: updateServiceOrder 429 → retries and resolves void', async () => {
+    const sleepCalls: number[] = [];
+    const fakeSleep = (ms: number) => { sleepCalls.push(ms); return Promise.resolve(); };
+
+    const http = makeHttp(
+      [
+        () => rateLimitError(),
+        () => ({ erros: null }),
+      ],
+      [],
+    );
+
+    const client = new IClassClient({ ...BASE_OPTS, http: http as any, _sleep: fakeSleep });
+    (client as any).token = 'TKN';
+
+    await expect(
+      client.updateServiceOrder({ serviceOrderCode: 'OS-100', requiredTeam: 'equipe-01' }),
+    ).resolves.toBeUndefined();
+
+    expect(sleepCalls).toHaveLength(1);
+  });
+
+  // A6-6: updateServiceOrder → always 429 → IClassUnavailableError
+  it('A6-6: updateServiceOrder always 429 → IClassUnavailableError after retries', async () => {
+    const fakeSleep = jest.fn().mockResolvedValue(undefined);
+
+    const http = makeHttp(
+      [
+        () => rateLimitError(),
+        () => rateLimitError(),
+        () => rateLimitError(),
+      ],
+      [],
+    );
+
+    const client = new IClassClient({ ...BASE_OPTS, http: http as any, _sleep: fakeSleep });
+    (client as any).token = 'TKN';
+
+    await expect(
+      client.updateServiceOrder({ serviceOrderCode: 'OS-100', requiredTeam: 'equipe-01' }),
+    ).rejects.toBeInstanceOf(IClassUnavailableError);
+
+    expect(fakeSleep).toHaveBeenCalledTimes(2);
   });
 });

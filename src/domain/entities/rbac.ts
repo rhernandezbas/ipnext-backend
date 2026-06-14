@@ -34,6 +34,8 @@ export const KNOWN_ACTIONS = [
   'move_stage',
   'manage_checklist',
   'iclass_manual_resend', // T-26: reenvio manual a IClass con override de nodo
+  'iclass_close',   // Ola A: cerrar OS de IClass desde Prominense
+  'iclass_assign',  // Ola B: asignar cuadrilla a OS de IClass
   'hard_delete', // #86: DELETE total de tarea (solo super_admin)
   // monitoring sub-actions
   'acknowledge_alert',

@@ -94,8 +94,8 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 39 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(39);
+  it('contains exactly 41 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(41);
   });
 
   it('includes scheduling.hard_delete (#86 — super_admin-only hard delete of tasks)', () => {
@@ -150,6 +150,11 @@ describe('KNOWN_ACTIONS constant', () => {
 
   it('includes delete_hard (#85 — hard delete tickets requires explicit permission)', () => {
     expect(KNOWN_ACTIONS).toContain('delete_hard');
+  });
+
+  it('includes iclass_close + iclass_assign (iclass-os-actions Ola A + B — super_admin only)', () => {
+    expect(KNOWN_ACTIONS).toContain('iclass_close');
+    expect(KNOWN_ACTIONS).toContain('iclass_assign');
   });
 
   it('tv granular actions resolve to dot-format wire keys (tv.<action>)', () => {

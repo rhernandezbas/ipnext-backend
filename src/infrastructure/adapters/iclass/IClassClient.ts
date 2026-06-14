@@ -6,6 +6,10 @@ import {
   IClassResultCodeDescriptor,
   CreateServiceOrderInput,
   ListServiceOrdersParams,
+  ServiceOrderSnapshot,
+  CloseServiceOrderInput,
+  IClassTeamDescriptor,
+  UpdateServiceOrderInput,
 } from '@domain/ports/IClassPort';
 import {
   ClosedServiceOrderSummary,
@@ -389,8 +393,171 @@ export class IClassClient implements IClassPort {
     throw this.mapError(new Error('withAuthRetry: loop exhausted unexpectedly'));
   }
 
+  // ── Ola A: getServiceOrder + closeServiceOrder ─────────────────────────────
+
+  /**
+   * Fetch the current state of a single Service Order for the live pre-check.
+   * Returns null when IClass responds 404 or 204 (OS unknown to IClass).
+   * Passes through withAuthRetry (429-resilient via authedGetOrNull).
+   * AD-5: reuses parseServiceOrderSummary — same shape as list endpoint.
+   *
+   * IMPORTANT: a rate-limit-200 ("Espere um pouco") must NEVER return null.
+   * Returning null would be interpreted as "OS not found" — a silent corruption.
+   * Instead, isRateLimited is checked first and throws IClassUnavailableError.
+   */
+  async getServiceOrder(iclassId: string): Promise<ServiceOrderSnapshot | null> {
+    // authedGetOrNull handles 404 → null and rate-limit-200 → IClassUnavailableError.
+    const raw = await this.authedGetOrNull(`/serviceorders/${iclassId}`);
+    if (!raw || typeof raw !== 'object') return null;
+    const summary = parseServiceOrderSummary(raw as Record<string, unknown>, this.clusterName);
+    return {
+      iclassId: summary.iclassId,
+      iclassCodigo: summary.iclassCodigo,
+      statusCode: summary.statusCode,
+      statusDescription: summary.statusDescription,
+    };
+  }
+
+  /**
+   * Push a close action to IClass via POST /serviceorders/close.
+   * AD-4: any unexpected response shape → IClassUnavailableError (never a silent success).
+   * AD-2: dumb transport — all inputs are pre-resolved by the use case.
+   *
+   * Success is only accepted when the body is a recognizable object with erros=null/undefined.
+   * Any other shape (string, null, HTML, {}) is rejected as IClassUnavailableError.
+   * // TODO: confirmar el token de éxito real en la prueba en vivo (§10)
+   */
+  async closeServiceOrder(input: CloseServiceOrderInput): Promise<void> {
+    const payload = {
+      serviceOrderCode: input.serviceOrderCode,
+      resultCode: input.resultCode,
+      closeDate: formatCloseDate(input.closeDate),
+      commentary: input.commentary,
+      visibleToCustomer: input.visibleToCustomer ?? true,
+    };
+    const data = await this.authedPost<unknown>('/serviceorders/close', payload);
+
+    // FIX 1: rate-limit-200 disguised as a successful response.
+    if (isRateLimited(data)) {
+      throw new IClassUnavailableError('IClass rate-limited (Espere um pouco) on close');
+    }
+    // FIX 2: AD-4 — only a recognizable object response is accepted as success.
+    // Strings, null, HTML, and empty {} lack the `erros` key that signals a proper response.
+    if (!data || typeof data !== 'object') {
+      throw new IClassUnavailableError('IClass close returned unexpected non-object body');
+    }
+    const typed = data as { erros?: unknown };
+    // `erros` key present (even if null) = proper IClass response shape.
+    if (!('erros' in typed)) {
+      throw new IClassUnavailableError('IClass close returned unrecognized response shape');
+    }
+    if (typed.erros !== null && typed.erros !== undefined) {
+      throw new IClassRejectedError(formatIClassErrors(typed.erros));
+    }
+    // erros === null → explicit success.
+  }
+
+  // ── Ola B: listTeams + updateServiceOrder ─────────────────────────────────
+
+  /**
+   * Fetch the team catalog from IClass (`GET /teams` with thirdPartyId filter).
+   * Maps each entry to IClassTeamDescriptor; filters empty login (same as node sync).
+   */
+  async listTeams(): Promise<IClassTeamDescriptor[]> {
+    const data = await this.authedGet<{
+      objects?: Array<{ login?: unknown; name?: unknown; thirdPartyCode?: unknown }>
+    }>(`/teams?thirdPartyId=${this.thirdPartyId}&pagesize=200`);
+    return (data.objects ?? [])
+      .map(o => ({
+        login: String(o.login ?? '').trim(),
+        name: String(o.name ?? '').trim(),
+        thirdPartyCode: o.thirdPartyCode != null ? String(o.thirdPartyCode).trim() : null,
+      }))
+      .filter(t => t.login.length > 0);
+  }
+
+  /**
+   * Update a Service Order in IClass (assign team).
+   * POST /serviceorders/update with { serviceOrderCode, requiredTeam }.
+   * Same error mapping as closeServiceOrder (AD-4 — no silent success).
+   * // TODO: confirmar el token de éxito real en la prueba en vivo (§10)
+   */
+  async updateServiceOrder(input: UpdateServiceOrderInput): Promise<void> {
+    const payload = {
+      serviceOrderCode: input.serviceOrderCode,
+      requiredTeam: input.requiredTeam,
+    };
+    const data = await this.authedPost<unknown>('/serviceorders/update', payload);
+
+    // FIX 1: rate-limit-200 disguised as a successful response.
+    if (isRateLimited(data)) {
+      throw new IClassUnavailableError('IClass rate-limited (Espere um pouco) on update');
+    }
+    // FIX 2: AD-4 — only a recognizable object response with `erros` key is accepted.
+    if (!data || typeof data !== 'object') {
+      throw new IClassUnavailableError('IClass update returned unexpected non-object body');
+    }
+    const typed = data as { erros?: unknown };
+    if (!('erros' in typed)) {
+      throw new IClassUnavailableError('IClass update returned unrecognized response shape');
+    }
+    if (typed.erros !== null && typed.erros !== undefined) {
+      throw new IClassRejectedError(formatIClassErrors(typed.erros));
+    }
+    // erros === null → explicit success.
+  }
+
   private authedGet<T>(url: string): Promise<T> {
     return this.withAuthRetry<T>(() => this.http.get(url, { headers: this.authHeaders() }));
+  }
+
+  /**
+   * Like authedGet but returns null instead of throwing when IClass responds 404.
+   * Used by getServiceOrder to map "unknown OS" to null without the 404 becoming
+   * IClassUnavailableError (which withAuthRetry's mapError would do).
+   *
+   * FIX 1: rate-limit-200 ("Espere um pouco") is detected BEFORE the null-return
+   * path. A rate-limit must NEVER be interpreted as "OS not found" — it throws
+   * IClassUnavailableError after exhausting backoff retries.
+   *
+   * FIX 4: unified 429/401 retry logic reused from withAuthRetry loop (no duplication).
+   */
+  private async authedGetOrNull(url: string): Promise<unknown | null> {
+    if (!this.token) await this.login();
+    for (let attempt = 0; attempt <= this.maxRateLimitRetries; attempt++) {
+      try {
+        const res = await this.http.get(url, { headers: this.authHeaders() });
+        const data = (res as { data?: unknown }).data ?? null;
+
+        // FIX 1: rate-limit disguised as HTTP 200 — retry with backoff.
+        if (isRateLimited(data)) {
+          if (attempt < this.maxRateLimitRetries) {
+            await this.sleep(this.subresourceBackoffMs * Math.pow(2, attempt));
+            continue;
+          }
+          throw new IClassUnavailableError('IClass rate-limited (Espere um pouco) on getServiceOrder');
+        }
+
+        return data;
+      } catch (e) {
+        if (e instanceof IClassUnavailableError) throw e;
+        // 404 → null (OS unknown to IClass)
+        if (isAxiosLikeError(e) && e.response?.status === 404) return null;
+        // 401 → re-login once
+        if (isAxiosLikeError(e) && e.response?.status === 401 && attempt === 0) {
+          await this.login();
+          continue;
+        }
+        // 429 → backoff retry (FIX 4: same logic as withAuthRetry, not duplicated inline)
+        if (isAxiosLikeError(e) && e.response?.status === 429 && attempt < this.maxRateLimitRetries) {
+          const ms = parseRetryAfterMs(e) ?? this.subresourceBackoffMs * Math.pow(2, attempt);
+          await this.sleep(ms);
+          continue;
+        }
+        throw this.mapError(e);
+      }
+    }
+    throw this.mapError(new Error('authedGetOrNull: loop exhausted'));
   }
 
   private authedPost<T>(url: string, body: unknown): Promise<T> {
@@ -589,4 +756,18 @@ export function parseResultCode(raw: Record<string, unknown>, soTypeId: string |
     code: String(raw.codigo ?? '').trim(),
     type: String(raw.tipo ?? '').trim(),
   };
+}
+
+// ── Ola A: OS Actions (getServiceOrder + closeServiceOrder) ────────────────────
+
+/**
+ * Date → "dd/MM/yyyy HH:mm:ss" (IClass closeDate format for POST /serviceorders/close).
+ * Using the most common IClass date format seen in the real API.
+ */
+export function formatCloseDate(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  );
 }

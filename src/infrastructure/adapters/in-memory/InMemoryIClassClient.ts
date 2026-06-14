@@ -5,6 +5,10 @@ import {
   IClassResultCodeDescriptor,
   CreateServiceOrderInput,
   ListServiceOrdersParams,
+  ServiceOrderSnapshot,
+  CloseServiceOrderInput,
+  IClassTeamDescriptor,
+  UpdateServiceOrderInput,
 } from '@domain/ports/IClassPort';
 import {
   ClosedServiceOrderSummary,
@@ -102,5 +106,94 @@ export class InMemoryIClassClient implements IClassPort {
   async listResultCodes(): Promise<IClassResultCodeDescriptor[]> {
     if (this.failureMode === 'unavailable') throw new IClassUnavailableError();
     return this.resultCodes.map(r => ({ ...r }));
+  }
+
+  // ── Ola A: getServiceOrder + closeServiceOrder ─────────────────────────────
+
+  /**
+   * Scripted snapshots keyed by serviceOrderCode.
+   * null = simulate 404 (IClass doesn't know this OS).
+   * undefined key = use failureMode for getServiceOrder.
+   */
+  private snapshotsByCode: Map<string, ServiceOrderSnapshot | null> = new Map();
+
+  /** Mode for closeServiceOrder: undefined = success, 'rejected' = IClassRejectedError, 'unavailable' = IClassUnavailableError */
+  private closeMode?: 'rejected' | 'unavailable';
+
+  /** Recorded calls to closeServiceOrder for assertions. */
+  private closeCalls: CloseServiceOrderInput[] = [];
+
+  /** Recorded calls to getServiceOrder for assertions. */
+  private getServiceOrderCalls: string[] = [];
+
+  /** Recorded calls to updateServiceOrder for assertions. */
+  private updateServiceOrderCalls: UpdateServiceOrderInput[] = [];
+
+  /** Configure snapshot returned by getServiceOrder for a given orderCode. */
+  setServiceOrderSnapshot(orderCode: string, snapshot: ServiceOrderSnapshot | null): void {
+    this.snapshotsByCode.set(orderCode, snapshot);
+  }
+
+  /** Configure how closeServiceOrder behaves. */
+  setCloseMode(mode: 'rejected' | 'unavailable' | undefined): void {
+    this.closeMode = mode;
+  }
+
+  getCloseCalls(): CloseServiceOrderInput[] {
+    return [...this.closeCalls];
+  }
+
+  getGetServiceOrderCalls(): string[] {
+    return [...this.getServiceOrderCalls];
+  }
+
+  getUpdateServiceOrderCalls(): UpdateServiceOrderInput[] {
+    return [...this.updateServiceOrderCalls];
+  }
+
+  async getServiceOrder(iclassId: string): Promise<ServiceOrderSnapshot | null> {
+    if (this.failureMode === 'unavailable') throw new IClassUnavailableError();
+    this.getServiceOrderCalls.push(iclassId);
+    if (this.snapshotsByCode.has(iclassId)) {
+      const snap = this.snapshotsByCode.get(iclassId)!;
+      return snap ? { ...snap } : null;
+    }
+    return null;
+  }
+
+  async closeServiceOrder(input: CloseServiceOrderInput): Promise<void> {
+    if (this.failureMode === 'unavailable' || this.closeMode === 'unavailable') throw new IClassUnavailableError();
+    if (this.closeMode === 'rejected') throw new IClassRejectedError('ICLERR_CLOSE: motivo rechazo de prueba');
+    this.closeCalls.push({ ...input });
+  }
+
+  // ── Ola B: listTeams + updateServiceOrder ─────────────────────────────────
+
+  /** Teams returned by listTeams(). */
+  teams: IClassTeamDescriptor[] = [];
+
+  /** Mode for updateServiceOrder. */
+  private updateMode?: 'rejected' | 'unavailable';
+
+  /** Mode for listTeams — isolated so we can test the use case without affecting other methods. */
+  private listTeamsMode?: 'unavailable';
+
+  setUpdateMode(mode: 'rejected' | 'unavailable' | undefined): void {
+    this.updateMode = mode;
+  }
+
+  setListTeamsMode(mode: 'unavailable' | undefined): void {
+    this.listTeamsMode = mode;
+  }
+
+  async listTeams(): Promise<IClassTeamDescriptor[]> {
+    if (this.failureMode === 'unavailable' || this.listTeamsMode === 'unavailable') throw new IClassUnavailableError();
+    return this.teams.map(t => ({ ...t }));
+  }
+
+  async updateServiceOrder(input: UpdateServiceOrderInput): Promise<void> {
+    if (this.failureMode === 'unavailable' || this.updateMode === 'unavailable') throw new IClassUnavailableError();
+    if (this.updateMode === 'rejected') throw new IClassRejectedError('ICLERR_UPDATE: rechazo de prueba');
+    this.updateServiceOrderCalls.push({ ...input });
   }
 }

@@ -79,6 +79,69 @@ export class IClassStatusNotFoundError extends DomainError {
   }
 }
 
+// ── Ola A: OS Actions errors ──────────────────────────────────────────────────
+
+/**
+ * Raised when an IClass write action is attempted but its feature flag is OFF.
+ * The action is globally disabled until an operator flips the flag after live validation.
+ */
+export class IClassActionDisabledError extends DomainError {
+  constructor(action = 'iclass-action') {
+    super(`IClass action "${action}" is disabled — enable the feature flag after live validation`, 'ICLASS_ACTION_DISABLED');
+    this.name = 'IClassActionDisabledError';
+  }
+}
+
+/**
+ * Raised when a close/assign action is attempted on a task whose generalStatus !== 'open'.
+ * The task must be in the open state to push an action to IClass.
+ */
+export class IClassTaskNotOpenError extends DomainError {
+  constructor(taskId: string) {
+    super(`Task "${taskId}" is not open — cannot close/assign a non-open task`, 'ICLASS_TASK_NOT_OPEN');
+    this.name = 'IClassTaskNotOpenError';
+  }
+}
+
+/**
+ * Raised when the pre-check confirms the OS is already in a terminal state in IClass
+ * (statusCode === '7'). The field technician already closed it.
+ */
+export class IClassAlreadyClosedError extends DomainError {
+  constructor(orderCode: string) {
+    super(`Service order "${orderCode}" is already closed in IClass (terminal status)`, 'ICLASS_ALREADY_CLOSED');
+    this.name = 'IClassAlreadyClosedError';
+  }
+}
+
+/**
+ * Raised when either: (a) the task has no iclassOrderCode (no OS created yet), or
+ * (b) the live pre-check returns null (IClass does not know this OS — 404).
+ */
+export class IClassNoServiceOrderError extends DomainError {
+  constructor(reason = 'no service order') {
+    super(`Cannot act on IClass: ${reason}`, 'ICLASS_NO_SERVICE_ORDER');
+    this.name = 'IClassNoServiceOrderError';
+  }
+}
+
+// ── Ola B: Team assignment errors ─────────────────────────────────────────────
+
+/**
+ * Raised when an assign-team action targets a team that is not assignable:
+ * it does not exist in the catalog, is inactive, or is a grouping team (selectable=false).
+ */
+export class IClassTeamNotAssignableError extends DomainError {
+  readonly teamLogin: string;
+  readonly reason: string;
+  constructor(login: string, reason: string) {
+    super(`IClass team "${login}" is not assignable: ${reason}`, 'ICLASS_TEAM_NOT_ASSIGNABLE');
+    this.name = 'IClassTeamNotAssignableError';
+    this.teamLogin = login;
+    this.reason = reason;
+  }
+}
+
 /** Raised when the IClass API is unreachable, errors out (5xx) or auth fails after a retry. */
 export class IClassUnavailableError extends DomainError {
   constructor(message = 'IClass API is unavailable') {

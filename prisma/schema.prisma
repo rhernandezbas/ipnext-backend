@@ -708,6 +708,22 @@ model IClassNode {
   @@index([active])
 }
 
+// iclass-os-actions (Ola B) — IClass team catalog (cuadrillas).
+// Keyed by `login` (unique stable identifier from IClass). Clone of IClassNode.
+model IClassTeam {
+  id             String   @id @default(uuid())
+  login          String   @unique
+  name           String
+  thirdPartyCode String?
+  active         Boolean  @default(true)
+  selectable     Boolean  @default(true)
+  lastSyncedAt   DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([active])
+}
+
 // ============================================================================
 // IClass closure loop — mirror of CLOSED service orders pulled back from IClass.
 // Join to local work: SO.codigo (iclass) == ScheduledTask.sequenceNumber (we send

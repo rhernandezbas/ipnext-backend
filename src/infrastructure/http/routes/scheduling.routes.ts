@@ -20,6 +20,9 @@ import { SetTaskInventoryReview } from '@application/use-cases/SetTaskInventoryR
 import { SetTaskGeneralStatus } from '@application/use-cases/SetTaskGeneralStatus';
 import { ListIClassNodes } from '@application/use-cases/ListIClassNodes';
 import { ResendTaskToIClassWithNode } from '@application/use-cases/ResendTaskToIClassWithNode';
+import { CloseIClassServiceOrder } from '@application/use-cases/CloseIClassServiceOrder';
+import { AssignIClassTeam } from '@application/use-cases/AssignIClassTeam';
+import { CloseActionSchema, AssignTeamSchema } from '@application/dto/iclassServiceOrderAction.dto';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
@@ -93,6 +96,17 @@ export interface ResendDeps {
   requirePerm: (m: RbacModuleCode, a: PermissionAction) => RequestHandler;
 }
 
+/**
+ * Ola A + B: IClass OS action use cases.
+ * Injected as an optional bag into createSchedulingRouter to avoid expanding the
+ * positional param list. Matches the same pattern as ResendDeps.
+ */
+export interface IClassActionDeps {
+  closeIClassServiceOrder: CloseIClassServiceOrder;
+  assignIClassTeam: AssignIClassTeam;
+  requirePerm: (m: RbacModuleCode, a: PermissionAction) => RequestHandler;
+}
+
 export function createSchedulingRouter(
   listTasks: ListTasks,
   getTask: GetTask,
@@ -120,6 +134,8 @@ export function createSchedulingRouter(
   archiveTask?: ArchiveTask,
   /** #86 — guard for DELETE /:id (scheduling:hard_delete → super_admin only). Pass-through when omitted. */
   requireHardDelete?: RequestHandler,
+  /** Ola A + B — IClass OS action use cases (close + assign-team). Optional — routes only registered when provided. */
+  iclassActionDeps?: IClassActionDeps,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -371,6 +387,57 @@ export function createSchedulingRouter(
   }
 
   // ── End iclass resend routes ──────────────────────────────────────────────
+
+  // ── IClass OS action routes (Ola A + B) ──────────────────────────────────
+  // MUST be registered BEFORE /:id to avoid route shadowing.
+  if (iclassActionDeps) {
+    const { closeIClassServiceOrder, assignIClassTeam, requirePerm: reqPerm } = iclassActionDeps;
+    const closePerm = reqPerm('scheduling', 'iclass_close');
+    const assignPerm = reqPerm('scheduling', 'iclass_assign');
+
+    // POST /api/scheduling/:id/iclass/close (R1-R7)
+    router.post('/:id/iclass/close', auth, closePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const parsed = CloseActionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const closeDate = parsed.data.closeDate ? new Date(parsed.data.closeDate) : undefined;
+        const task = await closeIClassServiceOrder.execute({
+          taskId: req.params['id'] as string,
+          resultCode: parsed.data.resultCode,
+          commentary: parsed.data.commentary,
+          closeDate,
+          actorId: req.user?.id ?? null,
+        });
+        res.status(200).json(task);
+      } catch (err) {
+        next(err);
+      }
+    });
+
+    // POST /api/scheduling/:id/iclass/assign-team (R8-R9)
+    router.post('/:id/iclass/assign-team', auth, assignPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const parsed = AssignTeamSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const task = await assignIClassTeam.execute({
+          taskId: req.params['id'] as string,
+          teamLogin: parsed.data.teamLogin,
+          actorId: req.user?.id ?? null,
+        });
+        res.status(200).json(task);
+      } catch (err) {
+        next(err);
+      }
+    });
+  }
+
+  // ── End iclass OS action routes ───────────────────────────────────────────
 
   // Activity feed (#10). MUST be registered BEFORE GET /:id so the extra
   // `/activity` segment is not shadowed by the catch-all id route.

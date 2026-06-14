@@ -491,6 +491,13 @@ import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCo
 import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
 import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
+// iclass-os-actions (Ola A + B)
+import { CloseIClassServiceOrder } from '@application/use-cases/CloseIClassServiceOrder';
+import { AssignIClassTeam } from '@application/use-cases/AssignIClassTeam';
+import { SyncIClassTeams } from '@application/use-cases/SyncIClassTeams';
+import { ListIClassTeams } from '@application/use-cases/ListIClassTeams';
+import { PrismaIClassTeamRepository } from '../adapters/prisma/PrismaIClassTeamRepository';
+import { createIClassTeamsRouter } from './routes/iclassTeams.routes';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { ListInFlightTasks } from '@application/use-cases/ListInFlightTasks';
 import { ReconcileTaskClosure } from '@application/use-cases/ReconcileTaskClosure';
@@ -1436,6 +1443,28 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     stageRepo,
   );
 
+  // iclass-os-actions (Ola A): CloseIClassServiceOrder — uses the already-built repos.
+  // iclassResultCodeRepo is declared here early so CloseIClassServiceOrder can reference it;
+  // the same instance is reused below in the closure loop (IClass admin routes).
+  const iclassResultCodeRepo = new PrismaIClassResultCodeRepository();
+  const closeIClassServiceOrder = new CloseIClassServiceOrder(
+    schedulingRepo,
+    buildIClassClient(),
+    iclassResultCodeRepo,
+    featureFlagRepo,
+    taskActivityRecorder,
+  );
+
+  // iclass-os-actions (Ola B): AssignIClassTeam + team catalog use cases.
+  const iclassTeamRepo = new PrismaIClassTeamRepository();
+  const assignIClassTeam = new AssignIClassTeam(
+    schedulingRepo,
+    buildIClassClient(),
+    iclassTeamRepo,
+    featureFlagRepo,
+    taskActivityRecorder,
+  );
+
   app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authAdapter, stageRepo, {
     addChecklistItem: addChecklistItemUC,
     toggleChecklistItem: toggleChecklistItemUC,
@@ -1448,7 +1477,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listIClassNodes,
     resendTaskToIClassWithNode,
     requirePerm,
-  }, getTaskActivity, requirePerm('inventory', 'write'), retireContractEquipment, setTaskGeneralStatus, requirePerm('scheduling', 'write'), archiveTask, requirePerm('scheduling', 'hard_delete')));
+  }, getTaskActivity, requirePerm('inventory', 'write'), retireContractEquipment, setTaskGeneralStatus, requirePerm('scheduling', 'write'), archiveTask, requirePerm('scheduling', 'hard_delete'), {
+    closeIClassServiceOrder,
+    assignIClassTeam,
+    requirePerm,
+  }));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);
@@ -1567,7 +1600,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter, syncIClassNodes, listIClassNodeCatalog));
 
   // IClass closure loop — result-code catalog + configurable result→stage mapping + status + backfill.
-  const iclassResultCodeRepo = new PrismaIClassResultCodeRepository();
+  // NOTE: iclassResultCodeRepo was declared earlier (before the scheduling router) so
+  // CloseIClassServiceOrder (Ola A) can use it. Reused here for the closure loop.
   const closedServiceOrderRepo = new PrismaClosedServiceOrderRepository();
   const closureIngest = new IngestClosedServiceOrders(
     buildIClassClient(),
@@ -1615,6 +1649,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new SyncIClassStatuses(buildIClassClient(), iclassStatusCatalogRepo),
     new ListIClassStatusCatalog(iclassStatusCatalogRepo),
     new UpdateIClassStatusCatalog(iclassStatusCatalogRepo),
+    authAdapter,
+    requirePerm('iclass', 'read'),
+    requirePerm('iclass', 'manage'),
+  ));
+
+  // iclass-os-actions (Ola B) — team catalog: GET /teams, POST /teams/sync
+  app.use('/api/admin/iclass', createIClassTeamsRouter(
+    new SyncIClassTeams(buildIClassClient(), iclassTeamRepo),
+    new ListIClassTeams(iclassTeamRepo),
     authAdapter,
     requirePerm('iclass', 'read'),
     requirePerm('iclass', 'manage'),
