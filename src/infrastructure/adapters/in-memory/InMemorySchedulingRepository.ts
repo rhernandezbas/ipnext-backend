@@ -7,6 +7,8 @@ import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checkl
 import { TaskTemplateRepository } from '@domain/ports/TaskTemplateRepository';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 import { sequenceNumberClause } from '../search/sequenceNumberClause';
+import { IClassStatusCatalogRepository } from '@domain/ports/IClassStatusCatalogRepository';
+import { IClassStatusCatalogEntry, effectiveLabel } from '@domain/entities/iclass-status-catalog';
 
 /** Minimal project shape needed for getTaskProjectMapping. */
 interface InMemoryProject {
@@ -94,6 +96,10 @@ const NEW_FIELDS_DEFAULTS = {
   iclassCityCode: null as string | null,
   // #86 — archive flag. null = not archived.
   archivedAt: null as string | null,
+  // iclass-status-sync
+  iclassStatusCode: null as string | null,
+  iclassStatusUpdatedAt: null as string | null,
+  iclassStatus: null as ScheduledTask['iclassStatus'],
 };
 
 export class InMemorySchedulingRepository implements SchedulingRepository {
@@ -102,6 +108,9 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
 
   // Optional template repo for assignTemplateToTask
   private templateRepo?: TaskTemplateRepository;
+
+  // Optional status catalog for iclassStatus resolution (iclass-status-sync)
+  private statusCatalog?: IClassStatusCatalogRepository;
 
   // Checklist storage keyed by taskId
   private checklist: Map<string, TaskChecklistItem[]> = new Map();
@@ -120,9 +129,26 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
   // reviewedByInventoryUserName from an actorId (in-memory cannot JOIN).
   private rbacUserNames: Map<string, string> = new Map();
 
-  constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository) {
+  constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository, statusCatalog?: IClassStatusCatalogRepository) {
     this.stageRepo = stageRepo;
     this.templateRepo = templateRepo;
+    this.statusCatalog = statusCatalog;
+  }
+
+  /**
+   * Resolve iclassStatus from the status catalog for a single task.
+   * Returns null when no code, no catalog, or no matching entry.
+   */
+  private async resolveIClassStatus(statusCode: string | null): Promise<ScheduledTask['iclassStatus']> {
+    if (!statusCode || !this.statusCatalog) return null;
+    const entry = await this.statusCatalog.getByStatusCode(statusCode);
+    if (!entry) return null;
+    return {
+      code: entry.statusCode,
+      label: effectiveLabel(entry),
+      color: entry.color,
+      tracked: entry.tracked,
+    };
   }
 
   /**
@@ -274,7 +300,21 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
 
   async listTasks(filter?: TaskListFilter): Promise<ScheduledTask[]> {
     let tasks = this.tasks.map(t => ({ ...t }));
-    if (!filter) return tasks;
+    if (!filter) {
+      // Still resolve iclassStatus even without filter (batch)
+      if (this.statusCatalog) {
+        const codes = [...new Set(tasks.map(t => t.iclassStatusCode).filter((c): c is string => c !== null))];
+        const entries = codes.length > 0 ? await this.statusCatalog.findManyByStatusCodes(codes) : [];
+        const byCode = new Map<string, IClassStatusCatalogEntry>(entries.map(e => [e.statusCode, e]));
+        tasks = tasks.map(t => {
+          if (!t.iclassStatusCode) return { ...t, iclassStatus: null };
+          const entry = byCode.get(t.iclassStatusCode);
+          if (!entry) return { ...t, iclassStatus: null };
+          return { ...t, iclassStatus: { code: entry.statusCode, label: effectiveLabel(entry), color: entry.color, tracked: entry.tracked } };
+        });
+      }
+      return tasks;
+    }
     if (filter.projectId) tasks = tasks.filter(t => t.projectId === filter.projectId);
     if (filter.stageIds?.length) tasks = tasks.filter(t => filter.stageIds!.includes(t.stageId));
     if (filter.customerId) tasks = tasks.filter(t => t.customerId === filter.customerId);
@@ -319,11 +359,36 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     } else if (filter.archived === false || filter.archived === undefined) {
       tasks = tasks.filter(t => t.archivedAt === null);
     }
+
+    // Resolve iclassStatus batch (avoid N+1 with findManyByStatusCodes)
+    if (this.statusCatalog) {
+      const codes = [...new Set(tasks.map(t => t.iclassStatusCode).filter((c): c is string => c !== null))];
+      const entries = codes.length > 0 ? await this.statusCatalog.findManyByStatusCodes(codes) : [];
+      const byCode = new Map<string, IClassStatusCatalogEntry>(entries.map(e => [e.statusCode, e]));
+      tasks = tasks.map(t => {
+        if (!t.iclassStatusCode) return { ...t, iclassStatus: null };
+        const entry = byCode.get(t.iclassStatusCode);
+        if (!entry) return { ...t, iclassStatus: null };
+        return {
+          ...t,
+          iclassStatus: {
+            code: entry.statusCode,
+            label: effectiveLabel(entry),
+            color: entry.color,
+            tracked: entry.tracked,
+          },
+        };
+      });
+    }
+
     return tasks;
   }
 
   async getTask(id: string): Promise<ScheduledTask | null> {
-    return this.tasks.find(t => t.id === id) ? { ...this.tasks.find(t => t.id === id)! } : null;
+    const task = this.tasks.find(t => t.id === id);
+    if (!task) return null;
+    const iclassStatus = await this.resolveIClassStatus(task.iclassStatusCode);
+    return { ...task, iclassStatus };
   }
 
   async markClosureCompleteness(
@@ -399,6 +464,10 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ticketSubject: (data.ticketId != null ? (this.ticketSubjects.get(data.ticketId) ?? null) : null),
       // #86 — new tasks are never archived
       archivedAt: null,
+      // iclass-status-sync — not set at task creation
+      iclassStatusCode: null,
+      iclassStatusUpdatedAt: null,
+      iclassStatus: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -552,6 +621,21 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (index === -1) return null;
     this.tasks[index] = { ...this.tasks[index]!, iclassOrderCode: code, updatedAt: new Date().toISOString() };
     return { ...this.tasks[index]! };
+  }
+
+  // ── IClass status tracking (iclass-status-sync) ──────────────────────────
+
+  async setIClassStatus(taskId: string, statusCode: string, at: Date): Promise<void> {
+    const index = this.tasks.findIndex(t => t.id === taskId);
+    if (index === -1) return; // no-op when task not found
+    const task = this.tasks[index]!;
+    if (task.iclassStatusCode === statusCode) return; // idempotent — code unchanged
+    this.tasks[index] = {
+      ...task,
+      iclassStatusCode: statusCode,
+      iclassStatusUpdatedAt: at.toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   // ── IClass closure loop ───────────────────────────────────────────────────

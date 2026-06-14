@@ -739,6 +739,23 @@ model IClassResultCode {
   @@index([mappedStageId])
 }
 
+// iclass-status-sync — auto-discovered catalog of IClass OS status codes.
+// statusCode is the opaque IClass id (status.id, e.g. "7", "3", "50").
+// Entries are auto-upserted on each ingest tick; operator configures displayLabel/color/tracked.
+model IClassStatusCatalog {
+  id           String   @id @default(uuid())
+  statusCode   String   @unique // IClass status.id (opaque string)
+  iclassLabel  String   // status.descricao (raw, refreshed on each upsert)
+  displayLabel String?  // Prominense editable label; NULL → use iclassLabel
+  color        String?  // hex color for the badge (e.g. "#FF5500"); NULL → no color
+  tracked      Boolean  @default(false) // opt-in: visible in FE badge/filter
+  lastSyncedAt DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([tracked])
+}
+
 model IClassServiceOrder {
   id                String  @id @default(cuid())
   iclassId          BigInt  @unique // numeric SO id from IClass
@@ -1279,6 +1296,11 @@ model ScheduledTask {
   // Stored free-text node name for fibra tasks (networkSiteId is NULL for fibra).
   // For red tasks the name is JOIN-derived from networkSite.name; this column stays NULL.
   networkSiteName String?
+
+  // iclass-status-sync — current IClass OS status code (opaque IClass id).
+  // Null until the scheduler first captures it. Label/color resolved by JOIN at read time.
+  iclassStatusCode      String?
+  iclassStatusUpdatedAt DateTime?
 
   // IClass closure loop — mirror of the closed SO, linked back by codigo↔sequenceNumber
   iclassClosedOrder IClassServiceOrder?

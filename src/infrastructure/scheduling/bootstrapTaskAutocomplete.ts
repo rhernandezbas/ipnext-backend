@@ -2,6 +2,7 @@ import { config } from '../config';
 import { IClassClient } from '../adapters/iclass/IClassClient';
 import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
 import { PrismaIClassResultCodeRepository } from '../adapters/prisma/PrismaIClassResultCodeRepository';
+import { PrismaIClassStatusCatalogRepository } from '../adapters/prisma/PrismaIClassStatusCatalogRepository';
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
@@ -30,15 +31,18 @@ export async function bootstrapTaskAutocomplete(intervalMs: number): Promise<Tas
     return null;
   }
 
+  // FIX 1 — inject statusCatalog so autocomplete ticks auto-populate the catalog and
+  // write iclassStatusCode. Mirrors the wiring in app.ts:785-1574.
+  const iclassStatusCatalogRepo = new PrismaIClassStatusCatalogRepository();
   const iclass = new IClassClient({ baseUrl, username, password, thirdPartyId });
   const closed = new PrismaClosedServiceOrderRepository();
   const ingest = new IngestClosedServiceOrders(
     iclass,
     closed,
     new PrismaIClassResultCodeRepository(),
-    new PrismaSchedulingRepository(),
+    new PrismaSchedulingRepository(iclassStatusCatalogRepo),
     new PrismaSyncStateRepository(),
-    buildClosureSideEffects(),
+    { ...buildClosureSideEffects(), statusCatalog: iclassStatusCatalogRepo },
   );
   const flags = new PrismaFeatureFlagRepository();
   const lock = new PgAdvisoryLock();

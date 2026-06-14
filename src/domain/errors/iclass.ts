@@ -71,6 +71,14 @@ export class IClassNodeNotFoundError extends DomainError {
   }
 }
 
+/** Raised when an IClass status code is not found in the catalog (status-sync). */
+export class IClassStatusNotFoundError extends DomainError {
+  constructor(statusCode: string) {
+    super(`IClass status with code "${statusCode}" not found`, 'ICLASS_STATUS_NOT_FOUND');
+    this.name = 'IClassStatusNotFoundError';
+  }
+}
+
 /** Raised when the IClass API is unreachable, errors out (5xx) or auth fails after a retry. */
 export class IClassUnavailableError extends DomainError {
   constructor(message = 'IClass API is unavailable') {

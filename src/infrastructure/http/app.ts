@@ -474,6 +474,11 @@ import { ListIClassNodeCatalog } from '@application/use-cases/ListIClassNodeCata
 import { AssignIClassNodeToNetworkSite } from '@application/use-cases/AssignIClassNodeToNetworkSite';
 import { createIClassAdminRouter } from './routes/iclass-admin.routes';
 import { createIClassClosureRouter } from './routes/iclass-closure.routes';
+import { createIClassStatusesRouter } from './routes/iclassStatuses.routes';
+import { PrismaIClassStatusCatalogRepository } from '../adapters/prisma/PrismaIClassStatusCatalogRepository';
+import { SyncIClassStatuses } from '@application/use-cases/SyncIClassStatuses';
+import { ListIClassStatusCatalog } from '@application/use-cases/ListIClassStatusCatalog';
+import { UpdateIClassStatusCatalog } from '@application/use-cases/UpdateIClassStatusCatalog';
 import { TaskAutocompleteScheduler } from '../scheduling/TaskAutocompleteScheduler';
 import { BackfillScheduler } from '../scheduling/BackfillScheduler';
 import { PrismaIClassClosureConfigRepository } from '../adapters/prisma/PrismaIClassClosureConfigRepository';
@@ -774,7 +779,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const getClientPortalSettings = new GetClientPortalSettings(settingsRepo);
   const updateClientPortalSettings = new UpdateClientPortalSettings(settingsRepo);
 
-  const schedulingRepo = new PrismaSchedulingRepository();
+  // iclass-status-sync — instantiated early so it can be passed to PrismaSchedulingRepository
+  // for the iclassStatus resolution on listTasks/getTask. Also referenced by the closure ingest
+  // (below) and the status routes.
+  const iclassStatusCatalogRepo = new PrismaIClassStatusCatalogRepository();
+  const schedulingRepo = new PrismaSchedulingRepository(iclassStatusCatalogRepo);
   const workflowRepo = new PrismaWorkflowRepository();
   const stageRepo = new PrismaStageRepository();
   const projectCategoryRepo = new PrismaProjectCategoryRepository();
@@ -1561,7 +1570,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new PrismaSyncStateRepository(),
     // #41 — pass the activity recorder so a closure into a `hecho` stage emits the
     // System `status_changed` alongside generalStatus='closed' (REQ-GS-ICLASS-CLOSEDBY-FLOW-1).
-    { ...buildClosureSideEffects(), recorder: taskActivityRecorder },
+    // iclass-status-sync — inject statusCatalog for auto-discovery on each ingest tick.
+    { ...buildClosureSideEffects(), recorder: taskActivityRecorder, statusCatalog: iclassStatusCatalogRepo },
   );
   // GetPendingSideEffectsCount — usa el mismo closedServiceOrderRepo construido arriba.
   const getPendingSideEffectsCount = new GetPendingSideEffectsCount(closedServiceOrderRepo);
@@ -1590,6 +1600,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     reconcileTaskClosure,
     requirePerm('iclass', 'manage'),
     authAdapter,
+  ));
+
+  // iclass-status-sync — status catalog: GET /statuses, POST /statuses/sync, PATCH /statuses/:statusCode
+  // Sub-resource routes are mounted BEFORE any catch-all to avoid route shadowing.
+  app.use('/api/admin/iclass', createIClassStatusesRouter(
+    new SyncIClassStatuses(buildIClassClient(), iclassStatusCatalogRepo),
+    new ListIClassStatusCatalog(iclassStatusCatalogRepo),
+    new UpdateIClassStatusCatalog(iclassStatusCatalogRepo),
+    authAdapter,
+    requirePerm('iclass', 'read'),
+    requirePerm('iclass', 'manage'),
   ));
 
   // Feature flags — runtime toggles persisted in DB.

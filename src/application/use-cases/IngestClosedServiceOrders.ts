@@ -1,5 +1,11 @@
 import { IClassPort } from '@domain/ports/IClassPort';
 import { IClassPortalPort } from '@domain/ports/IClassPortalPort';
+import { IClassStatusCatalogRepository } from '@domain/ports/IClassStatusCatalogRepository';
+// FIX 2 — int4-overflow guard: reuse the shared constant (sequenceNumber is Int/int4 in schema).
+// Importing from the infrastructure helper is intentional — INT4_MAX is a pure constant with
+// no runtime infrastructure dependency. The alternative (hardcoding the value) was explicitly
+// rejected in the review.
+import { INT4_MAX } from '@infrastructure/adapters/search/sequenceNumberClause';
 import { correlateChecklistPhotos } from '@application/services/correlateChecklistPhotos';
 import { classifyDeviceType, isSnMacDevicePhoto } from '@application/services/classifyDeviceType';
 import { dedupeStatusHistory } from '@application/services/dedupeStatusHistory';
@@ -100,6 +106,14 @@ export interface IngestClosedOptions {
    * write. Best-effort: a recorder that throws never aborts the already-committed move.
    */
   recorder?: TaskActivityRecorder;
+  /**
+   * iclass-status-sync — optional catalog for auto-discovery of IClass status codes.
+   * When present: upserts the statusCode into the catalog and conditionally updates
+   * the task's iclassStatusCode for EVERY SO seen (before the terminal-status guard).
+   * Absent → legacy behavior (no catalog writes, no status tracking). Opt-in so
+   * existing tests that don't inject it remain unaffected.
+   */
+  statusCatalog?: IClassStatusCatalogRepository;
 }
 
 /**
@@ -121,6 +135,7 @@ export class IngestClosedServiceOrders {
   private readonly stageReturns?: StageReturnSuggestions;
   private readonly featureFlags?: FeatureFlagRepository;
   private readonly recorder?: TaskActivityRecorder;
+  private readonly statusCatalog?: IClassStatusCatalogRepository;
 
   constructor(
     private readonly iclass: IClassPort,
@@ -143,6 +158,7 @@ export class IngestClosedServiceOrders {
     this.stageReturns = opts.stageReturns;
     this.featureFlags = opts.featureFlags;
     this.recorder = opts.recorder;
+    this.statusCatalog = opts.statusCatalog;
   }
 
   async execute(): Promise<IngestClosedCounts> {
@@ -195,6 +211,33 @@ export class IngestClosedServiceOrders {
    * configured result-code → stage mapping. Public so the backfill can reuse it.
    */
   async processSummary(s: ClosedServiceOrderSummary, counts: IngestClosedCounts): Promise<void> {
+    // ── iclass-status-sync: status capture BEFORE the terminal guard ─────────
+    // The lookup is moved here so we can capture the status for ALL OS states,
+    // not just the terminal '7'. The guard below is unchanged.
+    // When statusCatalog is absent (legacy callers / existing tests), this block
+    // is entirely skipped — no catalog writes, no setIClassStatus call.
+    const seq = Number(s.iclassCodigo);
+    // FIX 2 — int4-overflow guard: Number.isInteger alone does NOT bound to int4 range.
+    // Native IClass SOs have codigo in BigInt territory → PrismaClientValidationError.
+    // seq must be a positive integer that fits in PostgreSQL int4 (≤ INT4_MAX).
+    const seqInInt4Range = Number.isInteger(seq) && seq > 0 && seq <= INT4_MAX;
+    const taskForStatus = this.statusCatalog && seqInInt4Range
+      ? await this.scheduling.findTaskBySequenceNumber(seq)
+      : null;
+
+    if (this.statusCatalog && taskForStatus) {
+      // Auto-discovery: upsert the status code into the catalog (tracked=false default).
+      await this.statusCatalog.upsertByStatusCode({
+        statusCode: s.statusCode,
+        iclassLabel: s.statusDescription,
+      });
+      // Conditional write: only persists when the code changed (idempotent each tick).
+      if (taskForStatus.iclassStatusCode !== s.statusCode) {
+        await this.scheduling.setIClassStatus(taskForStatus.id, s.statusCode, new Date());
+      }
+    }
+    // ── end iclass-status-sync ───────────────────────────────────────────────
+
     if (s.statusCode !== TERMINAL_STATUS) {
       counts.skippedNotClosed++;
       return;
@@ -203,8 +246,9 @@ export class IngestClosedServiceOrders {
     // Join to our work: SO.codigo == ScheduledTask.sequenceNumber. SOs created
     // directly in IClass carry codigo == iclass id (huge / non-our-range) and have
     // no matching task → not ours.
-    const seq = Number(s.iclassCodigo);
-    const task = Number.isInteger(seq) ? await this.scheduling.findTaskBySequenceNumber(seq) : null;
+    // NOTE: taskForStatus (above) is the same lookup — reuse it when already fetched.
+    // FIX 2 — reuse seqInInt4Range guard (same bound as above) to prevent int4 overflow.
+    const task = taskForStatus ?? (seqInInt4Range ? await this.scheduling.findTaskBySequenceNumber(seq) : null);
     if (!task) {
       counts.skippedNotOurs++;
       return;

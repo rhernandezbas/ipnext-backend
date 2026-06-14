@@ -8,6 +8,7 @@
  * after the migration runs.
  */
 import { ScheduledTask, TaskGeneralStatus } from '@domain/entities/scheduling';
+import { IClassStatusCatalogRepository } from '@domain/ports/IClassStatusCatalogRepository';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory, Stage } from '@domain/entities/workflow';
 import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping } from '@domain/ports/SchedulingRepository';
@@ -116,6 +117,15 @@ export function toTask(row: any): ScheduledTask {
     networkSiteName: row.networkSite?.name ?? row.networkSiteName ?? null,
     // #54 — task-level locality snapshot
     iclassCityCode: row.iclassCityCode ?? null,
+    // iclass-status-sync — raw code stored; iclassStatus resolved via batch catalog lookup
+    // after the main query (there is no FK, so Prisma include is not available here).
+    // The _catalog map is injected by the calling method after the batch query.
+    iclassStatusCode: row.iclassStatusCode ?? null,
+    iclassStatusUpdatedAt: row.iclassStatusUpdatedAt instanceof Date
+      ? row.iclassStatusUpdatedAt.toISOString()
+      : (row.iclassStatusUpdatedAt ?? null),
+    // Resolved below by applyStatusCatalog() — starts as null; mutated after batch.
+    iclassStatus: null,
     checklist: Array.isArray(row.checklist)
       ? row.checklist.map((ci: any) => ({
           id: ci.id,
@@ -170,7 +180,41 @@ const INCLUDE = {
   networkSite: { select: { id: true, name: true } },
 } as const;
 
+// iclass-status-sync: lightweight JOIN to resolve iclassStatus from the catalog.
+// We do a raw sub-query approach: when iclassStatusCode is set, we join the catalog
+// by statusCode. Since Prisma doesn't support FK-less joins natively, we resolve
+// this at the application level using a second batch query in listTasks/getTask.
+// For single-task reads (getTask), we do a separate lookup.
+// The INCLUDE above is intentionally NOT extended to avoid schema changes for junction
+// tables — instead, PrismaSchedulingRepository holds an optional statusCatalog dep.
+
+
 export class PrismaSchedulingRepository implements SchedulingRepository {
+  constructor(private readonly statusCatalog?: IClassStatusCatalogRepository) {}
+
+  /**
+   * Batch-resolve iclassStatus for a list of tasks. Fetches all matching catalog
+   * entries in one query and mutates the tasks in-place (avoids N+1).
+   */
+  private async applyStatusCatalog(tasks: ScheduledTask[]): Promise<void> {
+    if (!this.statusCatalog) return;
+    const codes = [...new Set(tasks.map(t => t.iclassStatusCode).filter((c): c is string => c !== null))];
+    if (!codes.length) return;
+    const entries = await this.statusCatalog.findManyByStatusCodes(codes);
+    const byCode = new Map(entries.map(e => [e.statusCode, e]));
+    for (const task of tasks) {
+      if (!task.iclassStatusCode) continue;
+      const entry = byCode.get(task.iclassStatusCode);
+      if (!entry) continue;
+      task.iclassStatus = {
+        code: entry.statusCode,
+        label: entry.displayLabel ?? entry.iclassLabel,
+        color: entry.color,
+        tracked: entry.tracked,
+      };
+    }
+  }
+
   async listTasks(filter?: TaskListFilter): Promise<ScheduledTask[]> {
     const where: Record<string, unknown> = {};
     if (filter?.projectId) where['projectId'] = filter.projectId;
@@ -225,7 +269,9 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       orderBy: { createdAt: 'desc' },
       include: INCLUDE,
     });
-    return rows.map(toTask);
+    const tasks = rows.map(toTask);
+    await this.applyStatusCatalog(tasks);
+    return tasks;
   }
 
   async getTask(id: string): Promise<ScheduledTask | null> {
@@ -233,7 +279,10 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       where: { id },
       include: INCLUDE,
     });
-    return row ? toTask(row) : null;
+    if (!row) return null;
+    const task = toTask(row);
+    await this.applyStatusCatalog([task]);
+    return task;
   }
 
   async createTask(data: CreateTaskInput): Promise<ScheduledTask> {
@@ -723,6 +772,27 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     } catch {
       return null;
     }
+  }
+
+  // ── IClass status tracking (iclass-status-sync) ──────────────────────────
+
+  async setIClassStatus(taskId: string, statusCode: string, at: Date): Promise<void> {
+    // Conditional write: only persists if the code actually changed (idempotent).
+    // Uses updateMany with a WHERE clause to skip unchanged rows atomically.
+    await (prisma.scheduledTask as any).updateMany({
+      where: {
+        id: taskId,
+        // Only update when the code is null or different (skip when identical)
+        OR: [
+          { iclassStatusCode: null },
+          { iclassStatusCode: { not: statusCode } },
+        ],
+      },
+      data: {
+        iclassStatusCode: statusCode,
+        iclassStatusUpdatedAt: at,
+      },
+    });
   }
 
   // ── IClass closure loop ───────────────────────────────────────────────────

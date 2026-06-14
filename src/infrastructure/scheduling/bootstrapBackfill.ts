@@ -2,6 +2,7 @@ import { config } from '../config';
 import { IClassClient } from '../adapters/iclass/IClassClient';
 import { PrismaClosedServiceOrderRepository } from '../adapters/prisma/PrismaClosedServiceOrderRepository';
 import { PrismaIClassResultCodeRepository } from '../adapters/prisma/PrismaIClassResultCodeRepository';
+import { PrismaIClassStatusCatalogRepository } from '../adapters/prisma/PrismaIClassStatusCatalogRepository';
 import { PrismaSchedulingRepository } from '../adapters/prisma/PrismaSchedulingRepository';
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
@@ -22,17 +23,21 @@ export async function bootstrapBackfill(): Promise<BackfillScheduler | null> {
     return null;
   }
 
+  // FIX 1 — inject statusCatalog so backfill ticks auto-populate the catalog and
+  // write iclassStatusCode. Mirrors the wiring in app.ts:785-1574.
+  const iclassStatusCatalogRepo = new PrismaIClassStatusCatalogRepository();
   const iclass = new IClassClient({ baseUrl, username, password, thirdPartyId });
   const closed = new PrismaClosedServiceOrderRepository();
+  const schedulingRepo = new PrismaSchedulingRepository(iclassStatusCatalogRepo);
   const ingest = new IngestClosedServiceOrders(
     iclass,
     closed,
     new PrismaIClassResultCodeRepository(),
-    new PrismaSchedulingRepository(),
+    schedulingRepo,
     new PrismaSyncStateRepository(),
-    buildClosureSideEffects(),
+    { ...buildClosureSideEffects(), statusCatalog: iclassStatusCatalogRepo },
   );
-  const backfill = new BackfillClosedServiceOrders(iclass, new PrismaSchedulingRepository(), ingest);
+  const backfill = new BackfillClosedServiceOrders(iclass, schedulingRepo, ingest);
   const lock = new PgAdvisoryLock();
 
   return new BackfillScheduler(backfill, lock);

@@ -4,7 +4,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt' | 'iclassStatusCode' | 'iclassStatusUpdatedAt' | 'iclassStatus'
 > {
   /** Discriminador de tipo de tarea. Por defecto 'customer' para retro-compatibilidad. */
   kind?: 'customer' | 'network';
@@ -129,6 +129,14 @@ export interface SchedulingRepository {
    * Returns null if the task does not exist OR if the task has no projectId (AD-4).
    */
   getTaskProjectMapping(taskId: string): Promise<TaskProjectMapping | null>;
+
+  // IClass status tracking (iclass-status-sync)
+  /**
+   * Write the IClass status code on a task (conditional — only persists when the
+   * code actually changed, so repeated ticks are idempotent). Also sets iclassStatusUpdatedAt.
+   * No-op (does NOT throw) when the taskId does not exist — graceful degradation.
+   */
+  setIClassStatus(taskId: string, statusCode: string, at: Date): Promise<void>;
 
   // Checklist methods (change 5)
   getTaskWithChecklist(id: string): Promise<(ScheduledTask & { checklist: TaskChecklistItem[] }) | null>;

@@ -103,6 +103,20 @@ export interface ScheduledTask {
   // #86 — archive flag. Null = not archived. Set only when generalStatus is closed/dismissed.
   archivedAt: string | null;
 
+  // iclass-status-sync — current IClass OS status code (opaque IClass id, e.g. "7").
+  // Null until the scheduler first captures it. Only the code is stored; label/color
+  // are resolved by JOIN to IClassStatusCatalog at read time (avoids stale denorm).
+  iclassStatusCode: string | null;
+  iclassStatusUpdatedAt: string | null;   // ISO 8601 — when the code last changed
+
+  // Resolved at read-path (JOIN to IClassStatusCatalog). Null when no code or no entry.
+  iclassStatus: {
+    code: string;
+    label: string;     // effectiveLabel = displayLabel ?? iclassLabel
+    color: string | null;
+    tracked: boolean;
+  } | null;
+
   // Timestamps — always present in API responses (ISO 8601 strings)
   createdAt: string;
   updatedAt: string;
