@@ -24,6 +24,14 @@ import {
 /** Factory matching `requirePerm` exported from app.ts (DIP-clean injection). */
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
 
+/** Extract actor from req.user (set by authMiddleware). Matches pattern in scheduling.routes.ts */
+function actorOf(req: Request): { actorId: string | null; actorName: string } {
+  return {
+    actorId:   req.user?.id ?? null,
+    actorName: req.user?.username ?? '',
+  };
+}
+
 export function createContractServicesRouter(
   authProvider: AuthProvider,
   requirePerm: RequirePerm,
@@ -64,7 +72,12 @@ export function createContractServicesRouter(
       return;
     }
     try {
-      const result = await addSvc.execute(req.params['contractId'] as string, parsed.data);
+      // #110 — thread actor from req.user for event registration
+      const result = await addSvc.execute(
+        req.params['contractId'] as string,
+        parsed.data,
+        actorOf(req),
+      );
       // H3 — never leak the TV credentials on a contract-service response.
       res.status(201).json(toContractServiceDto(result));
     } catch (err) {
@@ -92,7 +105,12 @@ export function createContractServicesRouter(
       return;
     }
     try {
-      const updated = await updateSvc.execute(req.params['id'] as string, parsed.data);
+      // #110 — thread actor from req.user for event registration
+      const updated = await updateSvc.execute(
+        req.params['id'] as string,
+        parsed.data,
+        actorOf(req),
+      );
       // H3 — never leak the TV credentials on a contract-service response.
       res.json(toContractServiceDto(updated));
     } catch (err) {
@@ -106,11 +124,12 @@ export function createContractServicesRouter(
 
   // ── DELETE /contracts/:contractId/services/:id — idempotent remove ───────────
   router.delete('/contracts/:contractId/services/:id', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
-    await removeSvc.execute(req.params['id'] as string);
+    // #110 — thread actor from req.user for event registration
+    await removeSvc.execute(req.params['id'] as string, actorOf(req));
     res.status(204).send();
   });
 
-  // ── GET /contracts/:contractId/service-history — full history (#73) ───────────
+  // ── GET /contracts/:contractId/service-history — full history (#73, #110) ─────
   router.get('/contracts/:contractId/service-history', auth, readPerm, async (req: Request, res: Response): Promise<void> => {
     const dtos = await listHistory.execute(req.params['contractId'] as string);
     res.json(dtos);

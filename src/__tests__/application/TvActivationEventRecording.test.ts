@@ -141,6 +141,7 @@ describe('RegisterGigaredAccount — records alta event (seq=0)', () => {
       record: jest.fn(async () => { throw new Error('DB down'); }),
       listByClient: jest.fn(async () => []),
       list: jest.fn(async () => []),
+      listByContract: jest.fn(async () => []),
     };
 
     const uc = new RegisterGigaredAccount(
@@ -214,6 +215,7 @@ describe('CancelTvJobRunner — records baja event on done', () => {
       record: jest.fn(async () => { throw new Error('event DB down'); }),
       listByClient: jest.fn(async () => []),
       list: jest.fn(async () => []),
+      listByContract: jest.fn(async () => []),
     };
 
     const runner = new CancelTvJobRunner(cancelTv, cancelStatus, throwingEventRepo);

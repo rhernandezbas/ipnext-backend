@@ -61,6 +61,17 @@ export class PrismaTvActivationEventRepository implements TvActivationEventRepos
     });
     return rows.map(toEvent);
   }
+
+  /** #110 — List events for a contract, newest first. */
+  async listByContract(contractId: string): Promise<TvActivationEvent[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma as any).tvActivationEvent.findMany({
+      where:   { contractId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      include: { client: { select: { name: true } } },
+    });
+    return rows.map(toEvent);
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
