@@ -114,6 +114,17 @@ export class TvCatalogMissingError extends DomainError {
 }
 
 /**
+ * #109 — register: the CIC pool (unregistered accounts) is empty, so automatic CIC assignment
+ * cannot proceed → router 422 NO_CIC_AVAILABLE. The FE shows a modal "no hay CIC de TV disponible".
+ */
+export class NoCicAvailableError extends DomainError {
+  constructor(message = 'No hay CIC de TV disponible en el pool — contactá al administrador') {
+    super(message, 'NO_CIC_AVAILABLE');
+    this.name = 'NoCicAvailableError';
+  }
+}
+
+/**
  * C2 — link by CIC: the partner CIC does not exist upstream (GET /accounts/{cic} → 404).
  * Distinct from GIGARED_NOT_FOUND so the front-end can show a CIC-specific message → router 404.
  */

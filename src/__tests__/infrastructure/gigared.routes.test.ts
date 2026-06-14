@@ -42,7 +42,7 @@ import type { TvCredentials } from '@domain/ports/TvCredentialsReader';
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import {
   GigaredAuthError, GigaredNotFoundError, GigaredRejectedError, GigaredUnavailableError,
-  CicNotFoundError, CicAlreadyLinkedError,
+  CicNotFoundError, CicAlreadyLinkedError, NoCicAvailableError,
 } from '@domain/errors/gigared';
 
 const FLAG = 'gigared-integration';
@@ -783,6 +783,21 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  // #109 W1 — pool de CICs vacío en el register → 422 NO_CIC_AVAILABLE.
+  // Verifica que sendGigaredError mapea NoCicAvailableError al status 422 correcto.
+  it('#109 W1: POST /register con pool vacío → 422 NO_CIC_AVAILABLE', async () => {
+    // listAccounts devuelve [] → use case lanza NoCicAvailableError → ruta debe responder 422.
+    const port = fakePort({ listAccounts: jest.fn(async () => []) });
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com' });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NO_CIC_AVAILABLE');
+    // Gigared nunca debe recibir el register cuando el pool está vacío.
+    expect(port.register).not.toHaveBeenCalled();
   });
 });
 

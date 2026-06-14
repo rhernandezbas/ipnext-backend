@@ -113,7 +113,9 @@ describe('RegisterGigaredAccount — records alta event (seq=0)', () => {
     expect(events[0]!.seq).toBeGreaterThan(0);
   });
 
-  it('records cic and internalId from the registration input', async () => {
+  it('records cic (from pool) and internalId from the registration', async () => {
+    // #109 — el CIC ya no viene del input sino del pool (listAccounts unregistered).
+    // fakePort devuelve [fakeAccount()] con CIC '0000000001'.
     const port = fakePort();
     const eventRepo = new InMemoryTvActivationEventRepository();
 
@@ -123,12 +125,14 @@ describe('RegisterGigaredAccount — records alta event (seq=0)', () => {
     );
 
     await uc.execute('cust-1', {
-      firstName: 'A', lastName: 'B', email: 'a@b.com', cic: '0000000007',
+      firstName: 'A', lastName: 'B', email: 'a@b.com',
+      // cic omitido — #109: viene del pool automáticamente.
       sendActivationEmail: false, actorId: null, actorName: 'System',
     });
 
     const events = eventRepo.all();
-    expect(events[0]).toMatchObject({ cic: '0000000007', internalId: 'cust-1' });
+    // El CIC registrado es el del pool ('0000000001'), no el que antes enviaba el FE.
+    expect(events[0]).toMatchObject({ cic: '0000000001', internalId: 'cust-1' });
   });
 
   it('best-effort: recorder throws but register still succeeds', async () => {

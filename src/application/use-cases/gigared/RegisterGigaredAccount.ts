@@ -6,7 +6,7 @@ import type { ClientTvActivationRepository } from '@domain/ports/ClientTvActivat
 import type { TvActivationEventRepository } from '@domain/ports/TvActivationEventRepository';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
-import { GrClientIdRequiredError } from '@domain/errors/gigared';
+import { GrClientIdRequiredError, NoCicAvailableError } from '@domain/errors/gigared';
 import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import { deterministicTvEmail, deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from './lookups';
@@ -59,6 +59,12 @@ export class RegisterGigaredAccount {
     private readonly activation?: ClientTvActivationRepository,
     /** #5 BE — optional event recorder (best-effort: failure never aborts the register). */
     private readonly eventRepo?: TvActivationEventRepository,
+    /**
+     * #109 — CIC selector for testability. Receives the pool length and returns the index
+     * to use. Defaults to `Math.random()` weighted pick in production. Inject a deterministic
+     * function in tests so the chosen CIC is predictable.
+     */
+    private readonly pick?: (poolLength: number) => number,
   ) {}
 
   async execute(
@@ -67,7 +73,8 @@ export class RegisterGigaredAccount {
       firstName: string;
       lastName: string;
       email: string;
-      cic: string;
+      /** #109 — ignorado si se provee; el CIC se asigna automáticamente del pool. */
+      cic?: string;
       sendActivationEmail: boolean;
       /** #65 — owner contract for the local TV reconcile + credential persistence. */
       contractId?: string;
@@ -92,6 +99,17 @@ export class RegisterGigaredAccount {
     if (!isValidGigaredPassword(password)) {
       throw new GrClientIdRequiredError(customerId);
     }
+
+    // #109 — pick a CIC automatically from the unregistered pool. Pool empty → 422.
+    // The `pick` injector makes this testable without Math.random.
+    const pool = await this.gigared.listAccounts({ status: 'unregistered' });
+    if (pool.length === 0) throw new NoCicAvailableError();
+    const pickFn = this.pick ?? ((n: number) => Math.floor(Math.random() * n));
+    const poolEntry = pool[pickFn(pool.length)];
+    // FIX 1 / W2: guard cic falsy (cic === '' o undefined) y índice fuera de rango (poolEntry === undefined).
+    // En ambos casos el error de dominio es NoCicAvailableError, no un TypeError opaco.
+    if (!poolEntry?.cic) throw new NoCicAvailableError();
+    const cic = poolEntry.cic;
 
     // #65 — validate ownership of the target contract BEFORE any Gigared write (mirror of
     // LinkCustomerToCic #47k). A foreign/absent contractId → 404, Gigared never touched.
@@ -122,12 +140,12 @@ export class RegisterGigaredAccount {
       firstName: input.firstName,
       lastName: input.lastName,
       email,
-      cic: input.cic,
+      cic,
       password,
       sendActivationEmail: input.sendActivationEmail,
     });
-    await this.gigared.activate({ cic: input.cic, email });
-    await this.gigared.setInternalId(input.cic, internalId);
+    await this.gigared.activate({ cic, email });
+    await this.gigared.setInternalId(cic, internalId);
     const account = await this.gigared.getAccountByInternalId(internalId);
 
     // #72 — clearCancelled best-effort: el cliente volvió a tener TV (re-registro exitoso).
@@ -182,7 +200,7 @@ export class RegisterGigaredAccount {
           actorId:    input.actorId ?? null,
           actorName:  input.actorName ?? '',
           eventType:  seq === 0 ? 'alta' : 'reactivacion',
-          cic:        input.cic,
+          cic,
           internalId,
           seq,
           contractId: input.contractId ?? null,
