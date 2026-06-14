@@ -134,8 +134,11 @@ export const CreateTaskSchema = z
     // First layer of the seam; CreateTask repeats the check (defence in depth).
     // Surfaced via params.fibraTaskNoSite so the route can map it to 422 FIBRA_TASK_NO_SITE.
     if (v.kind === 'network' && v.networkType === 'fibra') {
-      const siteId = (v as { networkSiteId?: string | null }).networkSiteId;
-      if (siteId != null && (typeof siteId !== 'string' || siteId.trim() !== '')) {
+      const rawSiteId = (v as { networkSiteId?: string | null }).networkSiteId;
+      // Normalise whitespace-only siteId to null so '   ' is treated identically
+      // to null/absent (#tech-debt-4 — first seam layer: DTO validation).
+      const siteId = (typeof rawSiteId === 'string' ? rawSiteId.trim() : rawSiteId) || null;
+      if (siteId != null) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['networkSiteId'],

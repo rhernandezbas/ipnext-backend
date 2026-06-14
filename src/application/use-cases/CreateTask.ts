@@ -36,8 +36,15 @@ export class CreateTask {
         // #66 — Reject the hybrid fibra+site shape (second seam layer; the DTO
         // superRefine is the first). A fibra task must NOT carry a networkSiteId:
         // the JOIN would win over the free-text name, and a bad siteId → Prisma 500.
-        const siteId = (data as { networkSiteId?: string | null }).networkSiteId;
-        if (siteId != null && (typeof siteId !== 'string' || siteId.trim() !== '')) {
+        //
+        // Normalise whitespace-only siteId to null BEFORE the guard so that '   '
+        // is treated as absent (consistent with null/undefined). Without this, a
+        // whitespace-only string passes the null-check and persists as garbage (#tech-debt-4).
+        const rawSiteId = (data as { networkSiteId?: string | null }).networkSiteId;
+        const siteId = (typeof rawSiteId === 'string' ? rawSiteId.trim() : rawSiteId) || null;
+        // Write the normalised value back so the repo never receives the raw whitespace.
+        (data as { networkSiteId?: string | null }).networkSiteId = siteId;
+        if (siteId != null) {
           throw new FibraTaskNoSiteError();
         }
         const nodeName = data.networkSiteName;
