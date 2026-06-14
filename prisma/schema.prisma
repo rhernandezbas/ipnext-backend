@@ -242,7 +242,8 @@ model Contract {
   tasks          ScheduledTask[]
   installedItems ContractInstalledItem[]
   stockLocations StockLocation[]          @relation("ContractStockLocation")
-  contractServices ContractService[]
+  contractServices      ContractService[]
+  contractServiceEvents ContractServiceEvent[]
 
   @@index([clientId])
   @@index([status])
@@ -2157,6 +2158,8 @@ model RbacUser {
   recaptureContacts       RecaptureContact[] @relation("RecaptureContactActor")
   // #5 BE — TV activation history back-relation (soft FK, SetNull on delete)
   tvActivationEvents      TvActivationEvent[] @relation("TvActivationEventActor")
+  // #110 — Contract service event history back-relation (soft FK, SetNull on delete)
+  contractServiceEvents   ContractServiceEvent[] @relation("ContractServiceEventActor")
 
   @@index([login])
 }
@@ -2431,4 +2434,25 @@ model TvActivationEvent {
   @@index([clientId, createdAt(sort: Desc)])
   @@index([actorId])
   @@map("tv_activation_events")
+}
+
+// #110 — Append-only log of every status change of a NON-TV contract service.
+// actorId is a SOFT FK (SetNull on RbacUser delete) so history survives user deletion.
+// contractId cascades on Contract delete. GR sync NEVER writes this table.
+model ContractServiceEvent {
+  id               String    @id @default(uuid())
+  contractId       String
+  serviceCatalogId String
+  // 'activated' = alta inicial, 'deactivated' = baja, 'reactivated' = re-alta tras baja.
+  eventType        String
+  actorId          String?
+  actor            RbacUser? @relation("ContractServiceEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorName        String    @default("")  // snapshot, legible tras borrado del user
+  notes            String?
+  createdAt        DateTime  @default(now())
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([contractId, createdAt])
+  @@map("contract_service_events")
 }

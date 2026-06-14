@@ -116,6 +116,23 @@ describe('CreateTask — fibra tasks (#66)', () => {
     ).rejects.toBeInstanceOf(FibraTaskNoSiteError);
   });
 
+  it('REQ-FIBRA-CREATE-1b: fibra + networkSiteId whitespace-only → treated as null (not persisted as garbage)', async () => {
+    // Bug: '   '.trim() === '' so the old guard evaluated siteId as "absent", letting
+    // whitespace-only strings slip through and persist as garbage. After the fix,
+    // siteId is normalised to null before the guard → behaves identically to siteId=null.
+    const { useCase, repo } = buildUseCase();
+    const task = await useCase.execute({
+      ...FIBRA_BASE,
+      networkSiteId: '   ',  // whitespace-only — must be treated as null
+      networkSiteName: 'Nodo FO-1',
+      iclassCityCode: 'Mercedes',
+    } as never);
+    expect(task.id).toBeTruthy();
+    // The persisted task must carry null (not the whitespace string) as networkSiteId.
+    const persisted = await repo.getTask(task.id);
+    expect(persisted?.networkSiteId).toBeNull();
+  });
+
   it('REQ-FIBRA-CREATE-2: fibra + blank networkSiteName → NetworkTaskNodeNameRequiredError', async () => {
     const { useCase } = buildUseCase();
     await expect(

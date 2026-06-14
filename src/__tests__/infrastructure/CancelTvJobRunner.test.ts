@@ -130,12 +130,14 @@ describe('RegisterGigaredAccount (#5B regression) — alta/reactivacion still ca
     const { RegisterGigaredAccount } = await import('@application/use-cases/gigared/RegisterGigaredAccount');
     const eventRepo = new InMemoryTvActivationEventRepository();
 
+    // #109 — the pool (unregistered accounts) provides the CIC; the FE no longer sends one.
+    const poolCic = '0001234567';
     const fakePort = {
       register: jest.fn(async () => {}),
       activate: jest.fn(async () => {}),
       setInternalId: jest.fn(async () => {}),
       getAccountByInternalId: jest.fn(async () => ({
-        cic: '0001234567',
+        cic: poolCic,
         gigaredId: '100',
         email: 'e@x.com',
         firstName: 'N',
@@ -147,7 +149,8 @@ describe('RegisterGigaredAccount (#5B regression) — alta/reactivacion still ca
         ott: null,
       })),
       getSummary: jest.fn(),
-      listAccounts: jest.fn(),
+      // #109 — listAccounts must resolve the pool; a single-item pool → always picks index 0.
+      listAccounts: jest.fn(async () => [{ cic: poolCic, gigaredId: null, email: null, firstName: null, lastName: null, registrationDate: null, services: [], internalId: null, clientId: null, ott: null }]),
       getAccountByCic: jest.fn(),
       addService: jest.fn(),
       removeService: jest.fn(),
@@ -169,7 +172,7 @@ describe('RegisterGigaredAccount (#5B regression) — alta/reactivacion still ca
       firstName: 'Juan',
       lastName: 'Pérez',
       email: 'e@x.com',
-      cic: '0001234567',
+      // cic omitido — #109: viene del pool automáticamente.
       sendActivationEmail: false,
       actorId: 'user-1',
       actorName: 'Admin',

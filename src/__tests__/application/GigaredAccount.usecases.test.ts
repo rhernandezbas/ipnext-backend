@@ -357,7 +357,11 @@ describe('LinkCustomerToCic (#47f — reconcile TV ContractService on link)', ()
 describe('RegisterGigaredAccount (#47)', () => {
   it('calls register → activate → setInternalId in order, returns account', async () => {
     const calls: string[] = [];
+    // #109 — el pool (listAccounts con status:'unregistered') provee el CIC automáticamente.
+    // fakePort devuelve [fakeAccount()] cuyo CIC default es '0000000001'.
+    const pool = fakeAccount({ cic: '0000000001' });
     const port = fakePort({
+      listAccounts: jest.fn(async () => [pool]),
       register: jest.fn(async () => { calls.push('register'); }),
       activate: jest.fn(async () => { calls.push('activate'); }),
       setInternalId: jest.fn(async () => { calls.push('setInternalId'); }),
@@ -367,12 +371,14 @@ describe('RegisterGigaredAccount (#47)', () => {
     // a partir del grClienteId del cliente (default '243200' → ip243200).
     const uc = new RegisterGigaredAccount(port, customerLookup(true));
     const result = await uc.execute('cust-1', {
-      firstName: 'Juan', lastName: 'Pérez', email: 'e@x.com', cic: '0000001234',
+      firstName: 'Juan', lastName: 'Pérez', email: 'e@x.com',
+      // cic omitido — #109: viene del pool automáticamente.
       sendActivationEmail: true,
     });
     expect(calls).toEqual(['register', 'activate', 'setInternalId', 'get']);
-    expect(port.activate).toHaveBeenCalledWith({ cic: '0000001234', email: 'e@x.com' });
-    expect(port.setInternalId).toHaveBeenCalledWith('0000001234', 'cust-1');
+    // CIC usado: el del pool ('0000000001'), no el que mandaba el FE antes.
+    expect(port.activate).toHaveBeenCalledWith({ cic: '0000000001', email: 'e@x.com' });
+    expect(port.setInternalId).toHaveBeenCalledWith('0000000001', 'cust-1');
     expect(result.account.cic).toBe('0000000001');
     // #70 — la generada (ip243200) viaja a Gigared en el register.
     expect((port.register as jest.Mock).mock.calls[0][0]).toMatchObject({ password: 'ip243200' });
@@ -633,12 +639,22 @@ describe('RegisterGigaredAccount (#72 — clearCancelled on register)', () => {
  * "ID interno ya está en uso"). getAccountByInternalId lee del mapa (404 si no existe).
  * Así el test prueba que la re-alta usa un internal_id NUEVO ({id}-{seq}) y nunca el quemado.
  */
+/**
+ * Pool explícito usado por statefulFakePort. Una sola cuenta unregistered con CIC '0000000001'.
+ * Declarado como constante para que cada test que necesite un pool diferente lo override con
+ * (port.listAccounts as jest.Mock).mockResolvedValue([...]) de forma explícita y legible.
+ * W3 fix: antes se heredaba el listAccounts del fakePort base (pool de 1 implícito, accidental).
+ */
+const STATEFUL_DEFAULT_POOL: GigaredAccount[] = [fakeAccount({ cic: '0000000001' })];
+
 function statefulFakePort(seeded: Record<string, GigaredAccount> = {}): GigaredPort {
   const byInternalId = new Map<string, GigaredAccount>(Object.entries(seeded));
   let lastCic = '0000009000';
   const base = fakePort();
   return {
     ...base,
+    // W3 fix: override explícito — ya no dependemos del default accidental del base fakePort.
+    listAccounts: jest.fn(async () => [...STATEFUL_DEFAULT_POOL]),
     setInternalId: jest.fn(async (cic: string, internalId: string) => {
       if (byInternalId.has(internalId)) {
         throw new Error('El ID interno ya está en uso');
@@ -665,20 +681,27 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
       port, customerLookup(true), undefined, undefined, undefined, tvCancellation, activation,
     );
     const result = await uc.execute('cust-1', {
-      firstName: 'Juan', lastName: 'Pérez', email: 'perez243200@gmail.com', cic: '0000001234',
+      firstName: 'Juan', lastName: 'Pérez', email: 'perez243200@gmail.com',
+      // cic omitido — #109: viene del pool. fakePort provee [fakeAccount()] → CIC '0000000001'.
       sendActivationEmail: false,
     });
     // seq NO avanza en la primera alta (cliente no venía de baja).
     expect(await activation.getSeq('cust-1')).toBe(0);
-    expect(port.setInternalId).toHaveBeenCalledWith('0000001234', 'cust-1');
+    // CIC del pool, no del FE.
+    expect(port.setInternalId).toHaveBeenCalledWith('0000000001', 'cust-1');
     expect(result.account.internalId).toBe('cust-1');
   });
 
   it('re-alta (cliente venía de baja) → incrementa seq, usa internal_id {id}-1 NUEVO (no el quemado)', async () => {
     // El internal_id viejo 'cust-1' ya está QUEMADO en el partner (CIC muerto).
+    // El pool (#109) devuelve una cuenta con CIC '0000000002' (distinto al quemado).
+    const poolCic = '0000000002';
     const port = statefulFakePort({
       'cust-1': fakeAccount({ cic: '0000000001', internalId: 'cust-1', services: [] }),
     });
+    // Override listAccounts para que el pool tenga un CIC nuevo (el quemado ya está en seeded).
+    (port.listAccounts as jest.Mock).mockResolvedValue([fakeAccount({ cic: poolCic })]);
+
     const activation = new InMemoryClientTvActivationRepository();
     const tvCancellation = new InMemoryClientTvCancellationRepository();
     tvCancellation.seedCancelled('cust-1'); // el cliente venía de baja
@@ -687,13 +710,15 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
       port, customerLookup(true), undefined, undefined, undefined, tvCancellation, activation,
     );
     const result = await uc.execute('cust-1', {
-      firstName: 'Juan', lastName: 'Pérez', email: 'ignored@x.com', cic: '0000005678',
+      firstName: 'Juan', lastName: 'Pérez', email: 'ignored@x.com',
+      // cic omitido — #109: viene del pool.
       sendActivationEmail: false,
     });
 
     // seq avanzó a 1; el internal_id usado es 'cust-1-1' (fresco), nunca el quemado 'cust-1'.
     expect(await activation.getSeq('cust-1')).toBe(1);
-    expect(port.setInternalId).toHaveBeenCalledWith('0000005678', 'cust-1-1');
+    // CIC del pool nuevo, no el quemado ni el que antes mandaba el FE.
+    expect(port.setInternalId).toHaveBeenCalledWith(poolCic, 'cust-1-1');
     expect(result.account.internalId).toBe('cust-1-1');
     // el flag de baja se limpió (el cliente volvió a tener TV).
     expect(await tvCancellation.isCancelled('cust-1')).toBe(false);
@@ -721,10 +746,14 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
   });
 
   it('segunda re-alta → seq 2, internal_id {id}-2 (cada reactivación es fresca)', async () => {
+    const poolCic = '0000009999';
     const port = statefulFakePort({
       'cust-1': fakeAccount({ internalId: 'cust-1' }),
       'cust-1-1': fakeAccount({ internalId: 'cust-1-1' }),
     });
+    // Override listAccounts: pool tiene un CIC nuevo disponible.
+    (port.listAccounts as jest.Mock).mockResolvedValue([fakeAccount({ cic: poolCic })]);
+
     const activation = new InMemoryClientTvActivationRepository();
     activation.seedSeq('cust-1', 1); // ya hubo una reactivación
     const tvCancellation = new InMemoryClientTvCancellationRepository();
@@ -734,11 +763,12 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
       port, customerLookup(true), undefined, undefined, undefined, tvCancellation, activation,
     );
     const result = await uc.execute('cust-1', {
-      firstName: 'J', lastName: 'P', email: 'x@x.com', cic: '0000005678',
+      firstName: 'J', lastName: 'P', email: 'x@x.com',
+      // cic omitido — #109: viene del pool.
       sendActivationEmail: false,
     });
     expect(await activation.getSeq('cust-1')).toBe(2);
-    expect(port.setInternalId).toHaveBeenCalledWith('0000005678', 'cust-1-2');
+    expect(port.setInternalId).toHaveBeenCalledWith(poolCic, 'cust-1-2');
     expect(result.account.internalId).toBe('cust-1-2');
   });
 
@@ -750,10 +780,12 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
       port, customerLookup(true), undefined, undefined, undefined, tvCancellation,
     );
     const result = await uc.execute('cust-1', {
-      firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
+      firstName: 'J', lastName: 'P', email: 'e@x.com',
+      // cic omitido — #109: viene del pool. fakePort devuelve CIC '0000000001'.
       sendActivationEmail: false,
     });
-    expect(port.setInternalId).toHaveBeenCalledWith('0000001234', 'cust-1');
+    // CIC del pool.
+    expect(port.setInternalId).toHaveBeenCalledWith('0000000001', 'cust-1');
     expect(result.account.internalId).toBe('cust-1');
   });
 });

@@ -33,6 +33,7 @@ import {
   CicNotFoundError,
   CicAlreadyLinkedError,
   GrClientIdRequiredError,
+  NoCicAvailableError,
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
@@ -142,6 +143,11 @@ function sendGigaredError(res: Response, err: unknown): boolean {
   }
   // #70 — register sin grClienteId: no hay fuente para la password determinística → 422.
   if (err instanceof GrClientIdRequiredError) {
+    res.status(422).json({ error: err.message, code: err.code });
+    return true;
+  }
+  // #109 — pool de CICs agotado: no hay cuenta unregistered disponible → 422.
+  if (err instanceof NoCicAvailableError) {
     res.status(422).json({ error: err.message, code: err.code });
     return true;
   }
@@ -277,7 +283,10 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   router.post('/customers/:id/register', deps.requireRegister, async (req, res): Promise<void> => {
     try {
       const b = req.body as {
-        firstName: string; lastName: string; email: string; cic: string;
+        firstName: string; lastName: string; email: string;
+        // #109 — `cic` ya no se acepta del FE; el CIC se asigna automáticamente del pool.
+        // Se mantiene en el tipo para tolerancia de deploy (si el FE viejo lo manda, se ignora).
+        cic?: string;
         password?: unknown; sendActivationEmail?: boolean; contractId?: unknown;
       };
       // #70 rework — el body YA NO acepta password. Se genera SERVER-SIDE en el use case a partir
@@ -286,6 +295,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       // la ventana de deploy: no rompemos su request, solo no la usamos). Sin grClienteId el use case
       // sube GrClientIdRequiredError → 422 GR_CLIENT_ID_REQUIRED.
       void b.password; // descartada a propósito: no se lee ni se reenvía a Gigared.
+      void b.cic;      // #109 — descartada: el CIC viene del pool automático, no del FE.
       // #65 — el correo del alta es ficticio: el checkbox de activación viene SIEMPRE inactivo
       // por default (no se envía email). El operador puede forzarlo a true explícitamente.
       const contractId =
@@ -296,7 +306,6 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         firstName: b.firstName,
         lastName: b.lastName,
         email: b.email,
-        cic: b.cic,
         sendActivationEmail: b.sendActivationEmail ?? false,
         ...(contractId ? { contractId } : {}),
         actorId:   actor.actorId,
