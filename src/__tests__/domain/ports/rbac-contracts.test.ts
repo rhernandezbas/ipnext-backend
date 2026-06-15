@@ -67,6 +67,8 @@ describe('RbacUserRepository — interface contract', () => {
       update: async (_id: string, _patch: UpdateRbacUserInput) => makeUser(),
       delete: async (_id: string) => { /* void */ },
       countUsersWithRoleCode: async (_roleCode: string) => 0,
+      // iclass-ops-config: AD-4
+      listWithIClassTeam: async () => [],
     };
 
     // Verify the stub is a defined object (exercises the assignment above).
@@ -97,6 +99,7 @@ describe('RbacUserRepository — interface contract', () => {
       update: async () => makeUser(),
       delete: async () => { /* void */ },
       countUsersWithRoleCode: async () => 0,
+      listWithIClassTeam: async () => [],
     };
     const found = await stub.findById('u-1');
     const missing = await stub.findById('ghost');
@@ -118,6 +121,7 @@ describe('RbacUserRepository — interface contract', () => {
       update: async () => makeUser(),
       delete: async () => { /* void */ },
       countUsersWithRoleCode: async () => 0,
+      listWithIClassTeam: async () => [],
     };
     const found = await stub.findByLogin('jdoe');
     const missing = await stub.findByLogin('ghost');

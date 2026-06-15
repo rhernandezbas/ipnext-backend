@@ -42,7 +42,10 @@ export type ActivityType =
   | 'checklist_template_assigned'
   | 'checklist_cleared'
   // IClass OS actions (Ola A + Ola B)
-  | 'iclass_team_assigned';
+  | 'iclass_team_assigned'
+  // IClass auto-assign (Ola A — best-effort, triggered by UpdateTask)
+  | 'iclass_team_auto_assigned'
+  | 'iclass_team_auto_assign_failed';
 
 export interface TaskActivity {
   id: string;

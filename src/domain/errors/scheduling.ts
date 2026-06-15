@@ -1,6 +1,6 @@
 import { DomainError } from './index';
 
-export type ReferenceKind = 'customer' | 'contract' | 'partner' | 'project' | 'reporter' | 'assignee' | 'watcher' | 'ticket' | 'networkSite';
+export type ReferenceKind = 'customer' | 'contract' | 'partner' | 'project' | 'reporter' | 'assignee' | 'watcher' | 'ticket' | 'networkSite' | 'user';
 
 export class ReferenceNotFoundError extends Error {
   constructor(public readonly kind: ReferenceKind, public readonly id: string) {

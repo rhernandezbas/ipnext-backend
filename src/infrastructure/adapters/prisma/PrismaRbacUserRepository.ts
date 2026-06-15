@@ -11,6 +11,7 @@ import type {
   CreateRbacUserInput,
   UpdateRbacUserInput,
   RbacUserRepository,
+  RbacUserWithTeam,
 } from '@domain/ports/RbacUserRepository';
 
 type RbacUserRow = {
@@ -25,6 +26,8 @@ type RbacUserRow = {
   lastLoginAt: Date | null;
   failedLoginCount: number;
   lockedUntil: Date | null;
+  /** AD-1: nullable soft FK to IClassTeam.login. Added by migration 20260727000000. */
+  iclassTeamLogin?: string | null;
 };
 
 type RoleRow = {
@@ -51,6 +54,7 @@ function mapUser(row: RbacUserRow): RbacUser {
     email: row.email,
     login: row.login,
     status: (row.status === 'active' || row.status === 'disabled') ? row.status : 'active',
+    iclassTeamLogin: row.iclassTeamLogin ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     lastLoginAt: row.lastLoginAt ? row.lastLoginAt.toISOString() : null,
@@ -195,6 +199,7 @@ export class PrismaRbacUserRepository implements RbacUserRepository {
       if (patch.passwordHash !== undefined) data['passwordHash'] = patch.passwordHash;
       if (patch.failedLoginCount !== undefined) data['failedLoginCount'] = patch.failedLoginCount;
       if (patch.lockedUntil !== undefined) data['lockedUntil'] = patch.lockedUntil;
+      if ('iclassTeamLogin' in patch) data['iclassTeamLogin'] = patch.iclassTeamLogin ?? null;
 
       const row = await (this.db as any).rbacUser.update({
         where: { id },
@@ -224,6 +229,42 @@ export class PrismaRbacUserRepository implements RbacUserRepository {
       }
       throw err;
     }
+  }
+
+  /**
+   * AD-4: Returns all users with their resolved IClass team info.
+   * Join is done via LEFT JOIN on IClassTeam by iclassTeamLogin.
+   * iclassTeamLogin=null → teamName=null, teamActive=false.
+   */
+  async listWithIClassTeam(): Promise<RbacUserWithTeam[]> {
+    const rows = await (this.db as any).rbacUser.findMany({
+      orderBy: { createdAt: 'asc' },
+    }) as RbacUserRow[];
+
+    // Since there's no Prisma relation (soft FK, no FK constraint), we resolve the team
+    // via a separate query grouped by distinct iclassTeamLogin values.
+    const logins = [...new Set(rows.map((r: RbacUserRow) => r.iclassTeamLogin).filter((l: string | null | undefined): l is string => !!l))];
+    const teamMap = new Map<string, { name: string; active: boolean }>();
+    if (logins.length > 0) {
+      const teams = await (this.db as any).iClassTeam.findMany({
+        where: { login: { in: logins } },
+        select: { login: true, name: true, active: true },
+      }) as Array<{ login: string; name: string; active: boolean }>;
+      for (const t of teams) {
+        teamMap.set(t.login, { name: t.name, active: t.active });
+      }
+    }
+
+    return rows.map((row: RbacUserRow) => {
+      const login = row.iclassTeamLogin ?? null;
+      const team = login ? teamMap.get(login) : undefined;
+      return {
+        ...mapUser(row),
+        iclassTeamLogin: login,
+        teamName: team?.name ?? null,
+        teamActive: team?.active ?? false,
+      };
+    });
   }
 
   /**

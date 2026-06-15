@@ -4,9 +4,11 @@ import type {
   CreateRbacUserInput,
   UpdateRbacUserInput,
   RbacUserRepository,
+  RbacUserWithTeam,
 } from '@domain/ports/RbacUserRepository';
 import type { RbacUserRoleRepository } from '@domain/ports/RbacUserRoleRepository';
 import type { RbacRoleRepository } from '@domain/ports/RbacRoleRepository';
+import type { IClassTeamRepository } from '@domain/ports/IClassTeamRepository';
 
 interface StoredUser {
   user: RbacUser;
@@ -14,6 +16,7 @@ interface StoredUser {
   lastLoginAt: Date | null;
   failedLoginCount: number;
   lockedUntil: Date | null;
+  iclassTeamLogin: string | null;
 }
 
 /**
@@ -37,6 +40,8 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
   constructor(
     private readonly userRoleRepo?: RbacUserRoleRepository,
     private readonly roleRepo?: RbacRoleRepository,
+    /** Optional — required only for listWithIClassTeam. Tests that don't use it can omit. */
+    private readonly teamRepo?: IClassTeamRepository,
   ) {}
 
   async findById(id: string): Promise<RbacUser | null> {
@@ -44,6 +49,7 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
     if (!entry) return null;
     return {
       ...entry.user,
+      iclassTeamLogin: entry.iclassTeamLogin,
       lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
     };
   }
@@ -53,6 +59,7 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
       if (entry.user.login === login) {
         return {
           ...entry.user,
+          iclassTeamLogin: entry.iclassTeamLogin,
           lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
           passwordHash: entry.passwordHash,
           failedLoginCount: entry.failedLoginCount,
@@ -83,11 +90,12 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
       email: input.email,
       login: input.login,
       status: input.status ?? 'active',
+      iclassTeamLogin: null,
       createdAt: now,
       updatedAt: now,
       lastLoginAt: null,
     };
-    this.store.set(user.id, { user, passwordHash: input.passwordHash, lastLoginAt: null, failedLoginCount: 0, lockedUntil: null });
+    this.store.set(user.id, { user, passwordHash: input.passwordHash, lastLoginAt: null, failedLoginCount: 0, lockedUntil: null, iclassTeamLogin: null });
     return { ...user };
   }
 
@@ -112,8 +120,33 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
   async list(): Promise<RbacUser[]> {
     return Array.from(this.store.values()).map(entry => ({
       ...entry.user,
+      iclassTeamLogin: entry.iclassTeamLogin,
       lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
     }));
+  }
+
+  async listWithIClassTeam(): Promise<RbacUserWithTeam[]> {
+    const result: RbacUserWithTeam[] = [];
+    for (const entry of this.store.values()) {
+      const login = entry.iclassTeamLogin;
+      let teamName: string | null = null;
+      let teamActive = false;
+      if (login && this.teamRepo) {
+        const team = await this.teamRepo.getByLogin(login);
+        if (team) {
+          teamName = team.name;
+          teamActive = team.active;
+        }
+      }
+      result.push({
+        ...entry.user,
+        iclassTeamLogin: login,
+        lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
+        teamName,
+        teamActive,
+      });
+    }
+    return result;
   }
 
   async update(id: string, patch: UpdateRbacUserInput): Promise<RbacUser> {
@@ -139,8 +172,14 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
     if (patch.lockedUntil !== undefined) {
       entry.lockedUntil = patch.lockedUntil;
     }
+    // AD-1 — iclassTeamLogin (soft FK, nullable, undefined = no change)
+    if ('iclassTeamLogin' in patch) {
+      entry.iclassTeamLogin = patch.iclassTeamLogin ?? null;
+      entry.user.iclassTeamLogin = patch.iclassTeamLogin ?? null;
+    }
     return {
       ...entry.user,
+      iclassTeamLogin: entry.iclassTeamLogin,
       lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
     };
   }

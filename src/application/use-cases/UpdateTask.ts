@@ -4,6 +4,7 @@ import { EntityLookup } from '@domain/ports/EntityLookup';
 import { ProjectKindLookup } from '@domain/ports/ProjectKindLookup';
 import { ReferenceNotFoundError, ProjectKindMismatchError, NetworkTaskAddressRequiredError, NetworkTaskLocalityRequiredError, NetworkTaskNodeNameRequiredError, NetworkTypeImmutableError } from '@domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
+import { IClassAutoAssigner } from '@domain/ports/IClassAutoAssigner';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 
@@ -16,6 +17,13 @@ export class UpdateTask {
     private readonly adminLookup: EntityLookup,
     private readonly projectLookup: ProjectKindLookup,
     private readonly recorder?: TaskActivityRecorder,
+    /**
+     * AD-2: optional best-effort IClass auto-assigner collaborator.
+     * Injected by the composition root (app.ts). When present, UpdateTask
+     * invokes maybeAssign ONLY when assigneeId changes, inside a try/catch
+     * that NEVER propagates — the local update always completes.
+     */
+    private readonly autoAssigner?: IClassAutoAssigner,
   ) {}
 
   async execute(id: string, data: UpdateTaskInput, actor?: ActorContext): Promise<ScheduledTask | null> {
@@ -142,7 +150,9 @@ export class UpdateTask {
     }
 
     // Snapshot the prior state for the diff BEFORE mutating (#10 / D.2).
-    const prev = this.recorder ? await this.repo.getTask(id) : null;
+    // Also used by the auto-assigner guard (load when needed even if recorder is absent).
+    const needsPrev = !!(this.recorder || (this.autoAssigner && data.assigneeId !== undefined));
+    const prev = needsPrev ? await this.repo.getTask(id) : null;
 
     const updated = await this.repo.updateTask(id, data);
 
@@ -169,6 +179,25 @@ export class UpdateTask {
       const events = computeUpdateTaskActivities(prev, data, actor ?? SYSTEM_ACTOR, updated, watcherNames);
       if (events.length > 0) {
         await this.recorder.recordMany(id, events);
+      }
+    }
+
+    // AD-2: best-effort IClass auto-assign.
+    // Guard: ONLY if assigneeId is in the body AND changed from the prior value.
+    // The try/catch is a second safety net — maybeAssign itself NEVER throws,
+    // but we wrap it anyway to ensure the local update ALWAYS completes.
+    if (
+      this.autoAssigner &&
+      data.assigneeId !== undefined &&
+      updated &&
+      prev &&
+      updated.assigneeId !== prev.assigneeId
+    ) {
+      try {
+        await this.autoAssigner.maybeAssign(id, updated.assigneeId ?? null, actor);
+      } catch {
+        // Best-effort: swallow any unexpected error from the assigner.
+        // The local update already persisted — never abort it.
       }
     }
 

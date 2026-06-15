@@ -78,6 +78,8 @@ const REFERENCE_TO_CODE: Record<ReferenceKind, string> = {
   ticket:      'TICKET_NOT_FOUND',
   // network-node-task (#29): REQ-REF-NETWORK-1
   networkSite: 'NETWORK_SITE_NOT_FOUND',
+  // iclass-ops-config: SetTechnicianTeamMapping 404
+  user:        'USER_NOT_FOUND',
 };
 
 export interface ChecklistUseCases {

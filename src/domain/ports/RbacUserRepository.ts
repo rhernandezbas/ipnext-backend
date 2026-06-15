@@ -6,6 +6,16 @@
  */
 import type { RbacUser, RbacRole, RbacPermission } from '../entities/rbac';
 
+/**
+ * Extended view of RbacUser with its resolved IClass team info.
+ * Returned by listWithIClassTeam (join lógico, AD-4).
+ */
+export interface RbacUserWithTeam extends RbacUser {
+  iclassTeamLogin: string | null;
+  teamName: string | null;
+  teamActive: boolean;
+}
+
 export interface CreateRbacUserInput {
   name: string;
   email: string;
@@ -29,6 +39,8 @@ export interface UpdateRbacUserInput {
   // SDD #6a — account lockout (auth-internal, not exposed on RbacUser)
   failedLoginCount?: number;
   lockedUntil?: Date | null;
+  /** AD-1: soft FK to IClassTeam.login. null = desmapear. undefined = no change. */
+  iclassTeamLogin?: string | null;
 }
 
 /** Auth-internal fields returned only by findByLogin (like passwordHash). */
@@ -81,4 +93,12 @@ export interface RbacUserRepository {
    * role code. Used by the last-super_admin guard.
    */
   countUsersWithRoleCode(roleCode: string): Promise<number>;
+
+  /**
+   * AD-4: Returns all users with their resolved IClass team info (join lógico).
+   * teamName and teamActive come from the IClassTeam catalog joined by iclassTeamLogin.
+   * teamName=null / teamActive=false when no mapping or team degraded (AD-1).
+   * Uses IClassTeamRepository internally (injected in the adapter).
+   */
+  listWithIClassTeam(): Promise<RbacUserWithTeam[]>;
 }

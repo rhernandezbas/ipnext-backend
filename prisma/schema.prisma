@@ -2153,6 +2153,8 @@ model RbacUser {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   lastLoginAt     DateTime?
+  /// AD-1: Soft FK to IClassTeam.login — 1 técnico → 0..1 cuadrilla. No FK física.
+  iclassTeamLogin String?
   roles           RbacUserRole[]
   tasksReported          ScheduledTask[] @relation("TaskReporter")
   tasksAssigned          ScheduledTask[] @relation("TaskAssignee")
@@ -2178,6 +2180,7 @@ model RbacUser {
   contractServiceEvents   ContractServiceEvent[] @relation("ContractServiceEventActor")
 
   @@index([login])
+  @@index([iclassTeamLogin])
 }
 
 // SDD #5 sessions-management: real login sessions tied to RbacUser. tokenHash =

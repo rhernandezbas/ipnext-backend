@@ -498,6 +498,13 @@ import { SyncIClassTeams } from '@application/use-cases/SyncIClassTeams';
 import { ListIClassTeams } from '@application/use-cases/ListIClassTeams';
 import { PrismaIClassTeamRepository } from '../adapters/prisma/PrismaIClassTeamRepository';
 import { createIClassTeamsRouter } from './routes/iclassTeams.routes';
+// iclass-ops-config (Ola A: mapeo técnico↔cuadrilla + auto-asignar; Ola C: dispatch preview)
+import { SetTechnicianTeamMapping } from '@application/use-cases/SetTechnicianTeamMapping';
+import { ListTechnicianTeamMappings } from '@application/use-cases/ListTechnicianTeamMappings';
+import { AutoAssignIClassTeamOnTaskUpdate } from '@application/use-cases/AutoAssignIClassTeamOnTaskUpdate';
+import { GetIClassDispatchPreview } from '@application/use-cases/GetIClassDispatchPreview';
+import { createIClassTechnicianTeamsRouter } from './routes/iclassTechnicianTeams.routes';
+import { createIClassDispatchPreviewRouter } from './routes/iclassDispatchPreview.routes';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { ListInFlightTasks } from '@application/use-cases/ListInFlightTasks';
 import { ReconcileTaskClosure } from '@application/use-cases/ReconcileTaskClosure';
@@ -830,17 +837,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     networkSiteRepoForCreateTask,
   );
   const createTaskFromTicket = new CreateTaskFromTicket(createTask, schedulingRepo);
-  const updateTask = new UpdateTask(
-    schedulingRepo,
-    { findById: (id: string) => prismaClientLookup('Client', id) },
-    { findById: (id: string) => prismaClientLookup('Contract', id) },
-    { findById: (id: string) => prismaClientLookup('Partner', id) },
-    userLookupForScheduling,
-    // #40 — project slot uses the kind-aware lookup (existence + isNetworkProject),
-    // so the symmetric project↔kind guard runs on update too.
-    { findById: (id: string) => prismaProjectKindLookup(id) },
-    taskActivityRecorder,
-  );
+  // updateTask is instantiated below (after iclassTeamRepo + autoAssigner are ready)
+  // to inject the optional IClassAutoAssigner collaborator (AD-2).
+  let updateTask: UpdateTask;
   const deleteTask = new DeleteTask(schedulingRepo);
   const archiveTask = new ArchiveTask(schedulingRepo);
   // IClass integration: moving a task to "Enviar a IClass" delegates the OS
@@ -1465,6 +1464,35 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     taskActivityRecorder,
   );
 
+  // iclass-ops-config (Ola A): auto-assigner + UpdateTask with optional collaborator.
+  // AutoAssignIClassTeamOnTaskUpdate implements IClassAutoAssigner (AD-2).
+  const autoAssignIClassTeam = new AutoAssignIClassTeamOnTaskUpdate(
+    schedulingRepo,
+    buildIClassClient(),
+    iclassTeamRepo,
+    featureFlagRepo,
+    rbacUserRepo,
+    taskActivityRecorder,
+  );
+  // Instantiate updateTask HERE (after autoAssigner is ready) with the collaborator.
+  // UpdateTask receives it as the 8th optional arg (AD-2: DIP + best-effort).
+  updateTask = new UpdateTask(
+    schedulingRepo,
+    { findById: (id: string) => prismaClientLookup('Client', id) },
+    { findById: (id: string) => prismaClientLookup('Contract', id) },
+    { findById: (id: string) => prismaClientLookup('Partner', id) },
+    userLookupForScheduling,
+    // #40 — project slot uses the kind-aware lookup (existence + isNetworkProject),
+    // so the symmetric project↔kind guard runs on update too.
+    { findById: (id: string) => prismaProjectKindLookup(id) },
+    taskActivityRecorder,
+    autoAssignIClassTeam, // AD-2: optional best-effort IClass auto-assigner
+  );
+
+  // iclass-ops-config (Ola A): Technician↔Team mapping use cases + router
+  const setTechnicianTeamMapping = new SetTechnicianTeamMapping(rbacUserRepo, iclassTeamRepo);
+  const listTechnicianTeamMappings = new ListTechnicianTeamMappings(rbacUserRepo);
+
   app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authAdapter, stageRepo, {
     addChecklistItem: addChecklistItemUC,
     toggleChecklistItem: toggleChecklistItemUC,
@@ -1661,6 +1689,24 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     authAdapter,
     requirePerm('iclass', 'read'),
     requirePerm('iclass', 'manage'),
+  ));
+
+  // iclass-ops-config (Ola A) — technician↔team mapping: GET /technician-teams, PATCH /technician-teams/:userId
+  app.use('/api/admin/iclass', createIClassTechnicianTeamsRouter(
+    listTechnicianTeamMappings,
+    setTechnicianTeamMapping,
+    authAdapter,
+    requirePerm('iclass', 'read'),
+    requirePerm('iclass', 'manage'),
+  ));
+
+  // iclass-ops-config (Ola C) — dispatch preview: GET /dispatch-preview (read-only)
+  // Needs projectRepo — declared after the IClass wiring so we use a lazy reference.
+  // projectRepo is used in Ola C only; it is declared earlier in the function.
+  app.use('/api/admin/iclass', createIClassDispatchPreviewRouter(
+    new GetIClassDispatchPreview(projectRepo),
+    authAdapter,
+    requirePerm('iclass', 'read'),
   ));
 
   // Feature flags — runtime toggles persisted in DB.

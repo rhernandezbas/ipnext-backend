@@ -151,6 +151,11 @@ export interface RbacUser {
   email: string;
   login: string;
   status: 'active' | 'disabled';
+  /**
+   * Soft FK to IClassTeam.login — persisted in RbacUser.iclassTeamLogin (AD-1).
+   * Null = no cuadrilla mapeada. Set/cleared via SetTechnicianTeamMapping.
+   */
+  iclassTeamLogin?: string | null;
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
