@@ -121,6 +121,10 @@ Reglas operativas del loop:
 
 ## Reglas para agentes / asistentes de IA
 
+- **SIEMPRE worktree, NUNCA sobre `main` directo (INNEGOCIABLE).** Todo trabajo de **código** (feature, fix, refactor) se hace en un **worktree dedicado por cambio**, jamás editando/implementando sobre el working tree de `main`. El `main` local queda limpio y solo avanza por merge/pull. *(Única excepción: los docs de proceso — este archivo, `BACKLOG.md`, `DEUDAS-PENDIENTES.md` — se editan directo en `main`.)*
+  - **Un worktree por cosa**, en el repo que corresponde: `<repo>/.claude/worktrees/<name>-<be|fe>`, branch `feat/<name>` o `fix/<name>` derivado de `main`, con **junction de `node_modules`** (`New-Item -ItemType Junction` en PowerShell — instantáneo, reusa el del repo principal).
+  - **Crear el worktree con path ABSOLUTO** (no relativo: el cwd persistido del shell los anida mal) y **branchear desde el SHA explícito de `main`** (`MAIN=$(git -C <repo> rev-parse main)`), NO desde el nombre `main`: hay sesiones en PARALELO moviendo `main`, y un `worktree add … main` puede agarrar un commit en flujo (cazado el 2026-06-14 — el worktree quedó en un merge de otra branch).
+  - **Verificar SIEMPRE el HEAD recién creado**: `git -C <worktree> rev-parse HEAD` == el SHA de `main` esperado. Si quedó mal: `git -C <worktree> reset --hard $MAIN` (NO borres el worktree — un `rm -rf` que sigue el junction de `node_modules` puede borrar el `node_modules` REAL del repo principal).
 - **`git add` por PATH explícito, SIEMPRE.** Nunca `git add -A`, `git add .` ni `commit -am`. Un agente con `git add` amplio barrió trabajo ajeno del working tree y lo enterró en commits que no le correspondían — costó una remediación entera desenredarlo.
 - Antes de commitear: `git status` y confirmar que **solo** los archivos de la feature están staged. Ignorar artefactos sueltos (`.playwright-mcp/`, `*.png`, snapshots).
 - **No pushear** (el push lo decide el usuario).

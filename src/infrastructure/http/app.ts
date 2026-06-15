@@ -652,8 +652,10 @@ function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project'
 // #47k — ownership-aware Contract lookup for the Gigared use cases. Returns clientId so each
 // destructive TV use case can assert the contract belongs to the target customer before any
 // Gigared write (a foreign contractId → 404, no cross-customer reconcile). One findUnique.
-function prismaContractOwnershipLookup(id: string): Promise<{ id: string; clientId: string } | null> {
-  return prisma.contract.findUnique({ where: { id }, select: { id: true, clientId: true } });
+// #115 — grContratoId added to the select so RegisterGigaredAccount can derive the deterministic
+// TV identity (email + password) from the contract's grContratoId without a second query (no N+1).
+function prismaContractOwnershipLookup(id: string): Promise<{ id: string; clientId: string; grContratoId: string | null } | null> {
+  return prisma.contract.findUnique({ where: { id }, select: { id: true, clientId: true, grContratoId: true } });
 }
 
 // #40 — ProjectKindLookup wiring: a single findUnique resolves both project

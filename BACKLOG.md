@@ -8,6 +8,46 @@
 
 ## 📋 Pendientes
 
+> **Nuevos ítems 2026-06-14 (pedido del usuario) — #115–#117. ✅ HECHOS Y EN PROD (2026-06-15).** SDD híbrido + automático (worktree por ítem) + strict TDD + gate por el orquestador + deploy verde en `gh`. Deploys: **BE `a6771fee` (#115+#117 — runs 27531817617 / 27530291209) · FE `78364d4` (#116 — run 27530294547)**. Sin migraciones nuevas. Verificación pre-deploy clave del #115: `useRegisterAccount` tiene un solo caller (`GigaredPanel`) que SIEMPRE manda `contractId` → el BE exigiéndolo no rompe el alta.
+
+### #115 — Alta de TV por CONTRATO del cliente (ID del contrato de GR, no ID GR del cliente) ✅ HECHO *(BE `a6771fee`, en prod 2026-06-15)*
+> Implementado: `RegisterGigaredAccount` deriva mail+password desde `Contract.grContratoId`; `contractId` requerido; error nuevo `GrContractIdRequiredError` (422 `GR_CONTRACT_ID_REQUIRED`) si el contrato no tiene grContratoId. Sin migración. Follow-up FE no-bloqueante: pulir el mensaje del 422 (hoy cae en error genérico — degradación elegante).
+- Creación de TV ahora en vez de usar cliente, usar el patrón de "Contrato del cliente". Antes usábamos ID GR, ahora sería el ID del contrato de GR.
+- Hoy `RegisterGigaredAccount` deriva mail+password de TV desde `customer.grClienteId` (ID del cliente); debe pasar a usar `Contract.grContratoId` (ID del contrato). SDD/worktree: `feat/tv-register-by-contract` (BE).
+
+### #116 — Columna "ID de GR" visible en la page de contratos ✅ HECHO *(FE `78364d4`, en prod 2026-06-15)*
+- El ID de GR debe ser visible en la page de contratos: agregar la columna.
+- "ID de GR" = ID del contrato (`grContratoId`), que el BE YA expone en el DTO como `code` (`contract.dto.ts:11`) → columna FE-pura, sin cambios de backend. SDD/worktree: `feat/contracts-gr-id-column` (FE, en `ipnext-frontend`).
+
+### #117 — Operador vacío en el historial de servicios del contrato ✅ HECHO *(BE `c44f2321`, en prod 2026-06-15)*
+> Implementado: fix read-side (patrón #106) — adapters Prisma resuelven el operador con `actorName || actor?.login || ''` (JOIN a RbacUser). Sin migración. ⚠️ Limitación: los eventos sintéticos legacy (sin fila, ej. la fila del screenshot del 11-jun) quedan en blanco — sin back-fill posible.
+- En el historial del contrato (modal con columnas TIPO [Alta/Baja] y OPERADOR), el OPERADOR sale EN BLANCO. Screenshot del usuario: "Contratado: 11 jun 2026 · Baja: 14 jun 2026 · CIC 0006870063 · Gigared Play Full" con TIPO Alta/Baja pero OPERADOR vacío.
+- Investigar por qué no se puebla/muestra: el DTO ya expone `actorName` (`contract-services.dto.ts:86`, mapeado en `:147`) y los use cases (`AddContractService`, register/cancel TV) aceptan `actor` pero defaultean a `''` si la ruta no lo pasa. Causa probable: las rutas no threadean `req.user`, o falta resolver el nombre vía JOIN a RbacUser AL LEER (patrón del #106 que arregló "Cliente: —"). SDD/worktree: `feat/contract-history-operator` (BE).
+
+> **Batch 2026-06-14 — #109–#114 + 4 deudas, COMPLETO y EN PROD.** SDD auto+híbrido, **worktree por cosa con junction de `node_modules`** (instantáneo vía `New-Item -ItemType Junction` en PowerShell; los frentes que NO cambian schema reusan el prisma client del principal; los que sí, usan `(prisma as any)` sin `prisma generate`). Verify integrado BE 4270/0 + tsc · FE 3088/0 + tsc, 9 branches mergeadas sin conflicto. Deploy a `main`: **BE `80a52835` / FE `e647681`**, migraciones aditivas `20260722` (contract_service_event) + `20260723` (drop tv.write). Review adversarial + fix wave por ítem (cazaron: CIC vacío del pool, síntesis legacy TV, asimetría no-TV, z-index/CSS de portales, fallback de localidad anti-borrado).
+
+### #109 — CIC aleatorio del pool al registrar TV ✅ HECHO *(BE+FE, en prod)*
+> El CIC ya no se elige: `RegisterGigaredAccount` toma uno al azar del pool `listAccounts({status:'unregistered'})` (pick inyectable para testear); pool vacío o CIC vacío → `NoCicAvailableError` (422 `NO_CIC_AVAILABLE`) → el FE muestra un **modal**. Form sin select, mensaje "el CIC se asignará de forma aleatoria". Deuda anotada: `gigaredPassword` en `@infrastructure` importado desde application (DIP, pre-existente).
+
+### #110 — Historial de servicios = ledger append-only ✅ HECHO *(BE+FE, en prod, migración 20260722)*
+> Tabla `contract_service_events` (activated/deactivated/reactivated, registro best-effort en Add/Update/Remove) que el `ServiceHistoryModal` muestra como **secuencia temporal por servicio**. TV se CRUZA en lectura desde `tv_activation_events` (discrimina por `tvLogin`; supuesto 1-TV-por-contrato documentado + síntesis legacy del alta). DTO `events[]` aditivo (no rompe el contrato). Limitación: sin backfill del histórico pre-migración.
+
+### #111 — Quitar card de cupos de la página TV ✅ HECHO *(FE)*
+### #112 — Ordenar por columna ID en la lista de tickets ✅ HECHO *(FE — sort client-side por `sequenceNumber`, toggle asc/desc; deuda: solo la página visible)*
+### #113 — "Creado" + formato de fecha consistente en tickets ✅ HECHO *(FE — reusa `formatDateTimeShort` del #83)*
+### #114 — Localidad en Tareas Nodos cae a iclassCityCode ✅ HECHO *(FE — 1 línea: `customerCity || iclassCityCode || '—'`; el tipo ya exponía el campo)*
+
+### Deudas técnicas saldadas ✅ *(en prod)*
+> **#1** permiso huérfano `tv.write` eliminado (migración 20260723, FK cascade) · **#4** `siteId` whitespace→null en tareas fibra · **#3** localidad (`iclassCityCode`) editable en el detalle de la tarea (con **opción-fallback anti-borrado** para nodos desactivados) · **#5** dropdowns de `CustomerDetailPage`/`CustomersListPage` portalizados (`createPortal`, z-index 1000, `position: fixed`). **#2** (`PATCH /feature-flags` sin guard) ya estaba **SALDADA** (`requirePerm('admin','flags')`).
+
+### ✅ IClass status sync (Approach 3) — HECHO Y EN PROD *(BE `dc93815f` / FE `9f4969d`, migración 20260724)*
+> SDD `iclass-status-sync` Fase 1: catálogo configurable `IClassStatusCatalog` (auto-discovery, opt-in `tracked`) + estado de la OS en la tarea, **sin llamadas nuevas a IClass** (se captura del `listServiceOrders` que el scheduler ya corre, ANTES del guard terminal `'7'` — el cierre legacy quedó intacto). FE: sub-tab "Estados de IClass" (junto al mapeo de result-codes) + badge en la tarea, visible SOLO si `tracked`. **Review opus cazó 2 FIX-FIRST que el verify (4281 verde) NO vio**: (1) **feature MUERTA en prod** — captura cableada en `app.ts` pero NO en los 3 bootstraps del cron (idéntico al bug W6 del EPIC #38) → fix cableó los 3 + composition test que lo pinea; (2) int4-overflow en el lookup (OS nativas de IClass con `codigo` gigante desbordan `sequenceNumber`) → guard `INT4_MAX`. + drift de URL FE (`/admin/iclass/statuses`) + color-picker onBlur + gate `iclass.read`. Re-verify mergeado con el batch: **4331/0**. **Post-deploy (usuario)**: Config → Estados de IClass → "Sincronizar" (auto-puebla los códigos reales) → editar etiqueta/color → prender `tracked` de los que querés seguir. Investigación en `INVESTIGACION-ICLASS-ESTADOS.md` + engram.
+
+### ✅ IClass — operar la OS desde Prominense (Fases 2+3) — EN PROD con FLAGS OFF *(BE `389dbf31` / FE `e538b71`, migraciones 20260725 teams + 20260726 rbac/flags)*
+> SDD `iclass-os-actions`, 2 olas. **Fase 2** (cerrar/validar): `POST /serviceorders/close` + use case `CloseIClassServiceOrder` con **pre-check EN VIVO** (`getServiceOrder`: OS ya cerrada→409, inexistente→404) + guard tarea `open`; botón "Cerrar OS" + modal (result-code + comentario + fecha). **Fase 3** (asignar cuadrilla): `POST /serviceorders/update` (requiredTeam) + catálogo `IClassTeam` (clon de `IClassNode`, sync desde `GET /teams`); selector de cuadrilla + página admin de teams. **Candados**: flags `iclass-close-action`/`iclass-assign-action` **OFF por default** (código inerte) + permisos `scheduling.iclass_close`/`iclass_assign` solo super_admin + errores con `reason` visible. **El review opus cazó el bug más peligroso**: las escrituras NO chequeaban el rate-limit de IClass (que viene como **HTTP 200** con texto "Espere um pouco") → habrían marcado la tarea cerrada en Prominense con la OS ABIERTA en IClass (silent-success destructivo) → fix: `isRateLimited` + validación de shape estricta → `IClassUnavailableError`. **PENDIENTE — prueba en vivo (§10)**: flippear el flag con una OS de PRUEBA para capturar el shape real de la respuesta de IClass (endpoints no-probados; la API ya mintió 3 veces) ANTES de habilitar; ajustar los parsers si hace falta (hay un `TODO` en `IClassClient.closeServiceOrder/updateServiceOrder`).
+
+---
+
 > **Refinamientos 2026-06-13 — #101–#108, COMPLETO.** Follow-ups del batch #88–#100 sobre uso real (el usuario testeando en vivo). SDD auto+híbrido, worktree por cosa, **gate FULL antes de cada deploy**. Deploys directos a `main`: refine #101–#105 (BE `8c70cf32` / FE `5da6829`), #106–#107 (BE `23f1e8bc` / FE `b1dc767`), #108 (BE `91f83b22` / FE `28769fc`). **SIN migraciones nuevas** (todo sobre columnas/relaciones existentes).
 
 ### #101 — Archivar: los tickets archivados quedan visibles ✅ HECHO *(FE `cd686e1`, en prod)*

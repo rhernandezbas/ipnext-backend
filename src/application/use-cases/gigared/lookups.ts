@@ -27,5 +27,11 @@ export interface CustomerLookup {
  * so the foreign contract's existence is never leaked.
  */
 export interface ContractLookup {
-  findById(id: string): Promise<{ id: string; clientId: string } | null>;
+  /**
+   * #115 — grContratoId is now included so RegisterGigaredAccount can derive the deterministic
+   * TV identity (email + password) from the contract, not the customer's grClienteId.
+   * Optional on the shape so existing callers (link / cancel / packs / change-password) that
+   * only read `id` / `clientId` keep compiling without changes.
+   */
+  findById(id: string): Promise<{ id: string; clientId: string; grContratoId?: string | null } | null>;
 }
