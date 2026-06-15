@@ -160,11 +160,14 @@ describe('RegisterGigaredAccount (#5B regression) — alta/reactivacion still ca
     };
 
     const customerLookup = { findById: async (id: string) => ({ id, grClienteId: '243200' }) };
+    // #115 — contractLookup requerido; grContratoId='243200' → ip243200 (CUA-valid)
+    const contractLookup = { findById: async (id: string) => ({ id, clientId: 'cust-1', grContratoId: '243200' }) };
     const uc = new RegisterGigaredAccount(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       fakePort as any,
       customerLookup,
-      undefined, undefined, undefined, undefined, undefined,
+      contractLookup,
+      undefined, undefined, undefined, undefined,
       eventRepo,
     );
 
@@ -174,6 +177,8 @@ describe('RegisterGigaredAccount (#5B regression) — alta/reactivacion still ca
       email: 'e@x.com',
       // cic omitido — #109: viene del pool automáticamente.
       sendActivationEmail: false,
+      // #115 — contractId requerido
+      contractId: 'C1',
       actorId: 'user-1',
       actorName: 'Admin',
     });

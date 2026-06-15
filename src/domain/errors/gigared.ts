@@ -114,6 +114,21 @@ export class TvCatalogMissingError extends DomainError {
 }
 
 /**
+ * #115 — register: the target contract exists and belongs to the client but its grContratoId is
+ * null or produces a non-CUA password → the deterministic TV identity cannot be derived.
+ * Router 422 GR_CONTRACT_ID_REQUIRED. Gigared is never touched.
+ */
+export class GrContractIdRequiredError extends DomainError {
+  constructor(
+    public readonly contractId: string,
+    message = 'El contrato no tiene ID de Gestión Real — no se puede generar la identidad de TV',
+  ) {
+    super(message, 'GR_CONTRACT_ID_REQUIRED');
+    this.name = 'GrContractIdRequiredError';
+  }
+}
+
+/**
  * #109 — register: the CIC pool (unregistered accounts) is empty, so automatic CIC assignment
  * cannot proceed → router 422 NO_CIC_AVAILABLE. The FE shows a modal "no hay CIC de TV disponible".
  */

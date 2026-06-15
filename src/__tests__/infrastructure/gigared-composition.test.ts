@@ -55,10 +55,12 @@ describe('Gigared composition root (#47)', () => {
     expect(m![1]).toMatch(/gigaredContractLookup/);
   });
 
-  it('(g) #47k: the Gigared TV use cases use an ownership-aware contract lookup (clientId)', () => {
-    // The dedicated lookup must select clientId so the use cases can assert ownership.
+  it('(g) #47k/#115: the Gigared TV use cases use an ownership-aware contract lookup (clientId + grContratoId)', () => {
+    // The dedicated lookup must select clientId so the use cases can assert ownership,
+    // and grContratoId so RegisterGigaredAccount can derive the deterministic TV identity (#115).
     expect(appSrc).toMatch(/prismaContractOwnershipLookup/);
-    expect(appSrc).toMatch(/select:\s*\{\s*id:\s*true,\s*clientId:\s*true\s*\}/);
+    // #115 — grContratoId is now also selected (alongside id and clientId).
+    expect(appSrc).toMatch(/select:\s*\{\s*id:\s*true,\s*clientId:\s*true,\s*grContratoId:\s*true\s*\}/);
     // Add/Remove TV are wired with the ownership lookup too — not the existence-only one.
     const add = appSrc.match(/new AddTvService\(([^)]*)\)/);
     expect(add![1]).toMatch(/gigaredContractLookup/);

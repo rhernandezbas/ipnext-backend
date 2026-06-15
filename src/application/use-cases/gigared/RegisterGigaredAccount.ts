@@ -6,7 +6,7 @@ import type { ClientTvActivationRepository } from '@domain/ports/ClientTvActivat
 import type { TvActivationEventRepository } from '@domain/ports/TvActivationEventRepository';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
-import { GrClientIdRequiredError, NoCicAvailableError } from '@domain/errors/gigared';
+import { GrContractIdRequiredError, NoCicAvailableError } from '@domain/errors/gigared';
 import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import { deterministicTvEmail, deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from './lookups';
@@ -76,8 +76,12 @@ export class RegisterGigaredAccount {
       /** #109 — ignorado si se provee; el CIC se asigna automáticamente del pool. */
       cic?: string;
       sendActivationEmail: boolean;
-      /** #65 — owner contract for the local TV reconcile + credential persistence. */
-      contractId?: string;
+      /**
+       * #115 — REQUERIDO para el alta (ya no opcional). La ruta valida 400 si falta.
+       * El use case valida ownership del contrato SIEMPRE antes de tocar Gigared.
+       * La identidad determinística (email + password) deriva del grContratoId del contrato.
+       */
+      contractId: string;
       /** #5 BE — actor who triggered this registration (from req.user at the route layer). */
       actorId?: string | null;
       actorName?: string;
@@ -86,18 +90,22 @@ export class RegisterGigaredAccount {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
 
-    // #70 — the register password is generated SERVER-SIDE from the customer's grClienteId
-    // (deterministic `ip{grClienteId}` padded, #65). The body no longer carries it. No
-    // grClienteId → no source for the password → 422 GR_CLIENT_ID_REQUIRED, Gigared untouched.
-    if (customer.grClienteId == null || customer.grClienteId === '') {
-      throw new GrClientIdRequiredError(customerId);
+    // #115 — validate ownership of the target contract ALWAYS before any Gigared write.
+    // A foreign/absent contractId → ContractNotFoundError (404), Gigared never touched.
+    // Then derive the TV identity (password + email) from grContratoId (not grClienteId).
+    const contract = await this.contractLookup!.findById(input.contractId);
+    if (!contract || contract.clientId !== customerId) {
+      throw new ContractNotFoundError(input.contractId);
     }
-    const grClienteId: string = customer.grClienteId;
-    const password = deterministicTvPassword(grClienteId);
-    // Re-review #70: a grClienteId with chars outside [a-z0-9] would yield a non-CUA
-    // password and an opaque 400 from the partner — fail LOCAL with the clear 422 instead.
+    const grContratoId = contract.grContratoId;
+    if (grContratoId == null || grContratoId === '') {
+      throw new GrContractIdRequiredError(input.contractId);
+    }
+    const password = deterministicTvPassword(grContratoId);
+    // Guard CUA: a grContratoId with chars outside [a-z0-9] yields a non-CUA password.
+    // Fail local with the clear 422 instead of an opaque rejection from the partner.
     if (!isValidGigaredPassword(password)) {
-      throw new GrClientIdRequiredError(customerId);
+      throw new GrContractIdRequiredError(input.contractId);
     }
 
     // #109 — pick a CIC automatically from the unregistered pool. Pool empty → 422.
@@ -111,18 +119,6 @@ export class RegisterGigaredAccount {
     if (!poolEntry?.cic) throw new NoCicAvailableError();
     const cic = poolEntry.cic;
 
-    // #65 — validate ownership of the target contract BEFORE any Gigared write (mirror of
-    // LinkCustomerToCic #47k). A foreign/absent contractId → 404, Gigared never touched.
-    const wantsPersist =
-      typeof input.contractId === 'string' && input.contractId !== '' &&
-      !!this.csRepo && !!this.catalogRepo;
-    if (wantsPersist && this.contractLookup) {
-      const contract = await this.contractLookup.findById(input.contractId as string);
-      if (!contract || contract.clientId !== customerId) {
-        throw new ContractNotFoundError(input.contractId as string);
-      }
-    }
-
     // #81 — resolver el seq A USAR para esta alta. SOLO en re-alta (cliente que venía de baja y hay
     // activation repo) se incrementa el seq → identidad fresca. La primera alta queda en seq=0
     // (back-compat: internal_id pelado + el mail que mandó el FE). La señal honesta de "re-alta" es
@@ -132,9 +128,13 @@ export class RegisterGigaredAccount {
       seq = await this.activation.incrementSeq(customerId);
     }
     const internalId = currentTvInternalId(customerId, seq);
-    // #81 — en re-alta (seq>0) el mail lo genera el server con el seq (determinístico+recuperable,
-    // visible en Credenciales #65). En la primera alta (seq=0) se respeta el mail del FE (back-compat).
-    const email = seq > 0 ? deterministicTvEmail(input.lastName, grClienteId, seq) : input.email;
+    // #81 / #115 — en re-alta (seq>0) el mail lo genera el server derivado del grContratoId.
+    // En la primera alta (seq=0) se respeta el mail del FE (back-compat).
+    const email = seq > 0 ? deterministicTvEmail(input.lastName, grContratoId, seq) : input.email;
+
+    // #115 — wantsPersist: el contrato YA está validado arriba (ownership siempre chequeado).
+    // La condición de persistencia se reduce a la presencia de los repos locales.
+    const wantsPersist = !!this.csRepo && !!this.catalogRepo;
 
     await this.gigared.register({
       firstName: input.firstName,
@@ -172,7 +172,7 @@ export class RegisterGigaredAccount {
           csRepo: this.csRepo,
           catalogRepo: this.catalogRepo,
           customerId,
-          contractId: input.contractId as string,
+          contractId: input.contractId,
           internalId,
           ensureRow: true,
         });
@@ -203,7 +203,7 @@ export class RegisterGigaredAccount {
           cic,
           internalId,
           seq,
-          contractId: input.contractId ?? null,
+          contractId: input.contractId,
         });
       } catch (err) {
         // eslint-disable-next-line no-console

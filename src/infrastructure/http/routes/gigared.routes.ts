@@ -33,6 +33,7 @@ import {
   CicNotFoundError,
   CicAlreadyLinkedError,
   GrClientIdRequiredError,
+  GrContractIdRequiredError,
   NoCicAvailableError,
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
@@ -143,6 +144,11 @@ function sendGigaredError(res: Response, err: unknown): boolean {
   }
   // #70 — register sin grClienteId: no hay fuente para la password determinística → 422.
   if (err instanceof GrClientIdRequiredError) {
+    res.status(422).json({ error: err.message, code: err.code });
+    return true;
+  }
+  // #115 — register: el contrato no tiene grContratoId o produce una password fuera de CUA → 422.
+  if (err instanceof GrContractIdRequiredError) {
     res.status(422).json({ error: err.message, code: err.code });
     return true;
   }
@@ -290,16 +296,19 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         password?: unknown; sendActivationEmail?: boolean; contractId?: unknown;
       };
       // #70 rework — el body YA NO acepta password. Se genera SERVER-SIDE en el use case a partir
-      // del grClienteId del cliente (helper determinístico `ip{grClienteId}` padded del #65). Si el
-      // FE viejo todavía manda `password`, se IGNORA acá con un strip silencioso (tolerancia durante
-      // la ventana de deploy: no rompemos su request, solo no la usamos). Sin grClienteId el use case
-      // sube GrClientIdRequiredError → 422 GR_CLIENT_ID_REQUIRED.
+      // del grContratoId del contrato (#115). Si el FE viejo todavía manda `password`, se IGNORA
+      // acá con un strip silencioso (tolerancia durante la ventana de deploy).
       void b.password; // descartada a propósito: no se lee ni se reenvía a Gigared.
       void b.cic;      // #109 — descartada: el CIC viene del pool automático, no del FE.
-      // #65 — el correo del alta es ficticio: el checkbox de activación viene SIEMPRE inactivo
-      // por default (no se envía email). El operador puede forzarlo a true explícitamente.
-      const contractId =
-        typeof b.contractId === 'string' && b.contractId !== '' ? b.contractId : undefined;
+
+      // #115 — contractId REQUERIDO: la identidad determinística de TV deriva del grContratoId del
+      // contrato (no del grClienteId del cliente). Sin contractId → 400 antes de llamar al use case.
+      const contractId = typeof b.contractId === 'string' && b.contractId !== '' ? b.contractId : '';
+      if (contractId === '') {
+        res.status(400).json({ error: 'contractId es obligatorio', code: 'VALIDATION_ERROR' });
+        return;
+      }
+
       // #5 BE — thread actor from req.user for the TV activation event recording.
       const actor = req.user ? { actorId: req.user.id, actorName: req.user.username } : { actorId: null, actorName: '' };
       const account = await deps.registerAccount.execute(req.params['id'] as string, {
@@ -307,7 +316,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         lastName: b.lastName,
         email: b.email,
         sendActivationEmail: b.sendActivationEmail ?? false,
-        ...(contractId ? { contractId } : {}),
+        contractId,
         actorId:   actor.actorId,
         actorName: actor.actorName,
       });

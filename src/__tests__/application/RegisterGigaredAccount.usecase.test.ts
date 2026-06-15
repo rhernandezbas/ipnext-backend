@@ -5,11 +5,21 @@
  * (a) Pool vacío → NoCicAvailableError (antes de tocar Gigared).
  * (b) Pool con N cuentas unregistered → registra/activa con el CIC elegido por el selector.
  *     Con el `pick` inyectado el test es determinístico.
+ *
+ * #115 — la identidad determinística de TV (password + email) deriva del grContratoId del
+ * CONTRATO, no del grClienteId del cliente. contractId es REQUERIDO para el alta.
  */
 import { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterGigaredAccount';
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
-import { NoCicAvailableError, GrClientIdRequiredError } from '@domain/errors/gigared';
+import {
+  NoCicAvailableError,
+  GrClientIdRequiredError,
+  GrContractIdRequiredError,
+} from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
+import { ContractNotFoundError } from '@domain/errors/contractServices';
+import { deterministicTvPassword, deterministicTvEmail } from '@infrastructure/security/gigaredPassword';
+import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -42,27 +52,50 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
 }
 
 /**
- * Customer lookup minimal — solo necesita id y grClienteId.
- * El grClienteId por default es '123456' → deterministicTvPassword produce 'ip123456'
- * que pasa el check CUA [a-z0-9] 8 chars. 'GR0001' tiene mayúsculas y fallaría.
+ * Customer lookup minimal — grClienteId puede existir pero ya NO se usa para el alta TV.
+ * Lo mantenemos en el shape (otros use cases lo usan); el alta lo ignora.
  */
-function fakeCustomerLookup(found = true, grClienteId = '123456') {
+function fakeCustomerLookup(found = true, grClienteId = '999999') {
   return {
     findById: async (id: string) =>
       found ? { id, grClienteId } : null,
   };
 }
 
-/** Input mínimo para el use case (ya sin `cic`). */
-const minInput = () => ({
+/**
+ * Contract lookup in-memory. Por defecto el contrato pertenece a 'cust-1' con grContratoId='204382'.
+ */
+function fakeContractLookup(opts: {
+  found?: boolean;
+  clientId?: string;
+  grContratoId?: string | null;
+} = {}) {
+  const { found = true, clientId = 'cust-1', grContratoId = '204382' } = opts;
+  return {
+    findById: async (id: string) =>
+      found ? { id, clientId, grContratoId } : null,
+  };
+}
+
+/** Pick determinístico: siempre devuelve el índice 0. */
+const pickFirst = (_n: number) => 0;
+
+/** Input mínimo para el use case — contractId REQUERIDO en el nuevo diseño. */
+const minInput = (contractId = 'contract-1') => ({
   firstName: 'Juan',
   lastName: 'Pérez',
   email: 'juan@example.com',
   sendActivationEmail: false,
+  contractId,
 });
 
+/** Pool de una cuenta para que el use case no falle en NoCicAvailableError. */
+function poolOf(cic: string) {
+  return jest.fn(async () => [fakeAccount({ cic })]);
+}
+
 // ---------------------------------------------------------------------------
-// Tests
+// Tests heredados #109 (ajustados: pasan contractId + contractLookup)
 // ---------------------------------------------------------------------------
 
 describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
@@ -71,7 +104,7 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
     const port = fakePort({
       listAccounts: jest.fn(async () => []),
     });
-    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup());
+    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup());
 
     await expect(uc.execute('cust-1', minInput()))
       .rejects.toBeInstanceOf(NoCicAvailableError);
@@ -82,7 +115,7 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
 
   it('(a) pool vacío → error con code NO_CIC_AVAILABLE', async () => {
     const port = fakePort({ listAccounts: jest.fn(async () => []) });
-    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup());
+    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup());
 
     const err = await uc.execute('cust-1', minInput()).catch(e => e);
     expect((err as NoCicAvailableError).code).toBe('NO_CIC_AVAILABLE');
@@ -98,21 +131,15 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
       listAccounts: jest.fn(async () => poolAccounts),
       getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'B' })),
     });
-    // selector inyectado: siempre elige índice 1 (determinístico)
     const pick = (_n: number) => 1;
 
-    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), undefined, undefined, undefined, undefined, undefined, undefined, pick);
+    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup(), undefined, undefined, undefined, undefined, undefined, pick);
     const result = await uc.execute('cust-1', minInput());
 
-    // listAccounts llamado con { status: 'unregistered' }
     expect(port.listAccounts).toHaveBeenCalledWith({ status: 'unregistered' });
-
-    // register y activate recibieron el CIC del pool elegido
     expect(port.register).toHaveBeenCalledWith(expect.objectContaining({ cic: 'B' }));
     expect(port.activate).toHaveBeenCalledWith(expect.objectContaining({ cic: 'B' }));
     expect(port.setInternalId).toHaveBeenCalledWith('B', expect.any(String));
-
-    // resultado existe y tiene account
     expect(result).toHaveProperty('account');
   });
 
@@ -124,7 +151,7 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
     });
     const pick = (_n: number) => 0;
 
-    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), undefined, undefined, undefined, undefined, undefined, undefined, pick);
+    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup(), undefined, undefined, undefined, undefined, undefined, pick);
     await uc.execute('cust-1', minInput());
 
     expect(port.register).toHaveBeenCalledWith(expect.objectContaining({ cic: 'ONLY1' }));
@@ -133,20 +160,10 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
 
   it('cliente inexistente → ClientNotFoundError (sin tocar el pool)', async () => {
     const port = fakePort();
-    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(false));
+    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(false), fakeContractLookup());
 
     await expect(uc.execute('ghost', minInput()))
       .rejects.toBeInstanceOf(ClientNotFoundError);
-
-    expect(port.listAccounts).not.toHaveBeenCalled();
-  });
-
-  it('cliente sin grClienteId → GrClientIdRequiredError (sin tocar el pool)', async () => {
-    const port = fakePort();
-    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(true, ''));
-
-    await expect(uc.execute('cust-1', minInput()))
-      .rejects.toBeInstanceOf(GrClientIdRequiredError);
 
     expect(port.listAccounts).not.toHaveBeenCalled();
   });
@@ -163,14 +180,12 @@ describe('RegisterGigaredAccount — FIX 1 + W2: guard cic falsy / índice fuera
     const port = fakePort({
       listAccounts: jest.fn(async () => [fakeAccount({ cic: '' })]),
     });
-    // pick inyectado: siempre elige índice 0 (la única cuenta del pool)
     const pick = (_n: number) => 0;
-    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), undefined, undefined, undefined, undefined, undefined, undefined, pick);
+    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup(), undefined, undefined, undefined, undefined, undefined, pick);
 
     await expect(uc.execute('cust-1', minInput()))
       .rejects.toBeInstanceOf(NoCicAvailableError);
 
-    // Gigared jamás debe tocarse
     expect(port.register).not.toHaveBeenCalled();
     expect(port.activate).not.toHaveBeenCalled();
   });
@@ -180,7 +195,7 @@ describe('RegisterGigaredAccount — FIX 1 + W2: guard cic falsy / índice fuera
       listAccounts: jest.fn(async () => [fakeAccount({ cic: '' })]),
     });
     const pick = (_n: number) => 0;
-    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), undefined, undefined, undefined, undefined, undefined, undefined, pick);
+    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup(), undefined, undefined, undefined, undefined, undefined, pick);
 
     const err = await uc.execute('cust-1', minInput()).catch(e => e);
     expect(err).toBeInstanceOf(NoCicAvailableError);
@@ -192,13 +207,151 @@ describe('RegisterGigaredAccount — FIX 1 + W2: guard cic falsy / índice fuera
     const port = fakePort({
       listAccounts: jest.fn(async () => pool),
     });
-    // off-by-one: índice === pool.length → undefined en el array
-    const pick = (n: number) => n; // pick(2) para pool de 2 → out-of-bounds
-    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), undefined, undefined, undefined, undefined, undefined, undefined, pick);
+    const pick = (n: number) => n;
+    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup(), undefined, undefined, undefined, undefined, undefined, pick);
 
     await expect(uc.execute('cust-1', minInput()))
       .rejects.toBeInstanceOf(NoCicAvailableError);
 
     expect(port.register).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #115 — Nueva conducta: identidad deriva del grContratoId (NO del grClienteId)
+// ---------------------------------------------------------------------------
+
+describe('RegisterGigaredAccount #115 — identidad TV deriva del grContratoId del contrato', () => {
+
+  it('alta primera vez: password derivada de grContratoId (NO de grClienteId)', async () => {
+    // Cliente con grClienteId='999999'; contrato con grContratoId='204382'
+    // → password debe ser deterministicTvPassword('204382'), no 'ip999999'
+    const register = jest.fn(async () => {});
+    const port = fakePort({
+      listAccounts: poolOf('CIC01'),
+      register,
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC01' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(true, '999999'),
+      fakeContractLookup({ grContratoId: '204382' }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    await uc.execute('cust-1', minInput('contract-1'));
+
+    const callArg = (register.mock.calls[0] as unknown[])[0] as { password: string };
+    expect(callArg.password).toBe(deterministicTvPassword('204382'));
+    // Asegurar que NO se usó el grClienteId del cliente
+    expect(callArg.password).not.toBe(deterministicTvPassword('999999'));
+  });
+
+  it('re-alta (seq=1): email deriva de grContratoId, no de grClienteId', async () => {
+    const { InMemoryClientTvCancellationRepository } = await import(
+      '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository'
+    );
+    const { InMemoryClientTvActivationRepository } = await import(
+      '@infrastructure/adapters/in-memory/InMemoryClientTvActivationRepository'
+    );
+    const register = jest.fn(async () => {});
+    const port = fakePort({
+      listAccounts: poolOf('CIC02'),
+      register,
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC02' })),
+    });
+
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1');
+    const activation = new InMemoryClientTvActivationRepository();
+
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(true, '999999'),
+      fakeContractLookup({ grContratoId: '204382' }),
+      undefined, undefined,
+      tvCancellation,
+      activation,
+      undefined, pickFirst,
+    );
+
+    await uc.execute('cust-1', { ...minInput('contract-1'), lastName: 'López' });
+
+    const callArg = (register.mock.calls[0] as unknown[])[0] as { email: string };
+    // seq=1 → email = deterministicTvEmail('López', '204382', 1)
+    expect(callArg.email).toBe(deterministicTvEmail('López', '204382', 1));
+    // NO el derivado del grClienteId
+    expect(callArg.email).not.toBe(deterministicTvEmail('López', '999999', 1));
+  });
+
+  it('contrato sin grContratoId (null) → GrContractIdRequiredError, Gigared no tocado', async () => {
+    const port = fakePort({ listAccounts: poolOf('CIC03') });
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(),
+      fakeContractLookup({ grContratoId: null }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const err = await uc.execute('cust-1', minInput()).catch(e => e);
+
+    expect(err).toBeInstanceOf(GrContractIdRequiredError);
+    expect((err as GrContractIdRequiredError).code).toBe('GR_CONTRACT_ID_REQUIRED');
+    expect(port.register).not.toHaveBeenCalled();
+    expect(port.activate).not.toHaveBeenCalled();
+    expect(port.setInternalId).not.toHaveBeenCalled();
+  });
+
+  it('grContratoId con chars fuera de CUA → GrContractIdRequiredError, Gigared no tocado', async () => {
+    // 'GR-ABCD' genera 'ipGR-ABCD' que tiene guión y mayúsculas → fuera de [a-z0-9]
+    const port = fakePort({ listAccounts: poolOf('CIC04') });
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(),
+      fakeContractLookup({ grContratoId: 'GR-ABCD' }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const err = await uc.execute('cust-1', minInput()).catch(e => e);
+
+    expect(err).toBeInstanceOf(GrContractIdRequiredError);
+    expect((err as GrContractIdRequiredError).code).toBe('GR_CONTRACT_ID_REQUIRED');
+    expect(port.register).not.toHaveBeenCalled();
+  });
+
+  it('contrato ajeno (clientId != customerId) → ContractNotFoundError, Gigared no tocado (validación SIEMPRE)', async () => {
+    const port = fakePort({ listAccounts: poolOf('CIC05') });
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(),
+      fakeContractLookup({ clientId: 'otro-cliente', grContratoId: '204382' }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const err = await uc.execute('cust-1', minInput()).catch(e => e);
+
+    expect(err).toBeInstanceOf(ContractNotFoundError);
+    expect(port.register).not.toHaveBeenCalled();
+    expect(port.activate).not.toHaveBeenCalled();
+  });
+
+  it('internal_id sigue siendo currentTvInternalId(customerId, seq) — NO cambia', async () => {
+    const setInternalId = jest.fn(async () => {});
+    const port = fakePort({
+      listAccounts: poolOf('CIC06'),
+      setInternalId,
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC06' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(true, '999999'),
+      fakeContractLookup({ grContratoId: '204382' }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    await uc.execute('cust-1', minInput('contract-1'));
+
+    // seq=0 (primera alta, sin repos de activation/cancellation) → internal_id = 'cust-1'
+    expect(setInternalId).toHaveBeenCalledWith('CIC06', currentTvInternalId('cust-1', 0));
   });
 });

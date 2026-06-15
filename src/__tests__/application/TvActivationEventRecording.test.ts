@@ -49,8 +49,9 @@ const customerLookup = (exists: boolean, grClienteId = '243200') => ({
   findById: async (id: string) => (exists ? { id, grClienteId } : null),
 });
 
-const contractLookup = (owner = 'cust-1') => ({
-  findById: async (id: string) => ({ id, clientId: owner }),
+// #115 — contractLookup must include grContratoId so RegisterGigaredAccount can derive the TV identity.
+const contractLookup = (owner = 'cust-1', grContratoId: string | null = '243200') => ({
+  findById: async (id: string) => ({ id, clientId: owner, grContratoId }),
 });
 
 // ─── RegisterGigaredAccount event recording ─────────────────────────────────
@@ -69,7 +70,8 @@ describe('RegisterGigaredAccount — records alta event (seq=0)', () => {
 
     await uc.execute('cust-1', {
       firstName: 'John', lastName: 'Doe', email: 'j@x.com', cic: '0000000001',
-      sendActivationEmail: false, contractId: undefined,
+      // #115 — contractId es requerido; contractLookup por defecto devuelve grContratoId='243200'
+      sendActivationEmail: false, contractId: 'C1',
       actorId: 'actor-1', actorName: 'Operator One',
     });
 
@@ -99,7 +101,7 @@ describe('RegisterGigaredAccount — records alta event (seq=0)', () => {
 
     await uc.execute('cust-1', {
       firstName: 'John', lastName: 'Doe', email: 'j@x.com', cic: '0000000001',
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
       actorId: 'actor-2', actorName: 'Operator Two',
     });
 
@@ -119,15 +121,16 @@ describe('RegisterGigaredAccount — records alta event (seq=0)', () => {
     const port = fakePort();
     const eventRepo = new InMemoryTvActivationEventRepository();
 
+    // #115 — contractLookup requerido
     const uc = new RegisterGigaredAccount(
-      port, customerLookup(true), undefined, undefined, undefined,
+      port, customerLookup(true), contractLookup(), undefined, undefined,
       undefined, undefined, eventRepo,
     );
 
     await uc.execute('cust-1', {
       firstName: 'A', lastName: 'B', email: 'a@b.com',
       // cic omitido — #109: viene del pool automáticamente.
-      sendActivationEmail: false, actorId: null, actorName: 'System',
+      sendActivationEmail: false, contractId: 'C1', actorId: null, actorName: 'System',
     });
 
     const events = eventRepo.all();
@@ -144,14 +147,15 @@ describe('RegisterGigaredAccount — records alta event (seq=0)', () => {
       listByContract: jest.fn(async () => []),
     };
 
+    // #115 — contractLookup requerido
     const uc = new RegisterGigaredAccount(
-      port, customerLookup(true), undefined, undefined, undefined,
+      port, customerLookup(true), contractLookup(), undefined, undefined,
       undefined, undefined, throwingRepo,
     );
 
     await expect(uc.execute('cust-1', {
       firstName: 'A', lastName: 'B', email: 'a@b.com', cic: '0000000001',
-      sendActivationEmail: false, actorId: null, actorName: 'S',
+      sendActivationEmail: false, contractId: 'C1', actorId: null, actorName: 'S',
     })).resolves.toBeDefined(); // does not throw
 
     expect(port.register).toHaveBeenCalled();

@@ -8,7 +8,7 @@ import { GetGigaredCustomerAccount } from '@application/use-cases/gigared/GetGig
 import { LinkCustomerToCic } from '@application/use-cases/gigared/LinkCustomerToCic';
 import { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterGigaredAccount';
 import type { GigaredPort, GigaredAccount, GigaredSummary } from '@domain/ports/GigaredPort';
-import { GigaredNotFoundError, CicNotFoundError, CicAlreadyLinkedError, GrClientIdRequiredError } from '@domain/errors/gigared';
+import { GigaredNotFoundError, CicNotFoundError, CicAlreadyLinkedError } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
@@ -49,11 +49,25 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
   };
 }
 
-// #70 — the lookup now also reports grClienteId so RegisterGigaredAccount can derive the
-// deterministic password server-side (`ip{grClienteId}` padded). Defaults to '243200', which
-// yields `ip243200` and keeps the #65 persistence assertions byte-for-byte.
+// #70 — the lookup also reports grClienteId (kept for back-compat; #115 already migrated
+// the register identity to grContratoId, but other use cases may still read it).
 const customerLookup = (exists: boolean, grClienteId: string | null = '243200') => ({
   findById: async (id: string) => (exists ? { id, grClienteId } : null),
+});
+
+/**
+ * #115 — contract lookup stub used by RegisterGigaredAccount tests.
+ * Includes grContratoId so the use case can derive the deterministic TV identity.
+ * Defaults: grContratoId='243200' → ip243200 (same value as the old grClienteId default,
+ * so the #65 persistence assertions remain byte-for-byte: tvPassword='ip243200').
+ */
+const contractLookupWithGr = (
+  exists: boolean,
+  ownerId = 'cust-1',
+  grContratoId: string | null = '243200',
+) => ({
+  findById: async (id: string) =>
+    exists ? { id, clientId: ownerId, grContratoId } : null,
 });
 
 describe('GetGigaredSummary (#47)', () => {
@@ -367,63 +381,51 @@ describe('RegisterGigaredAccount (#47)', () => {
       setInternalId: jest.fn(async () => { calls.push('setInternalId'); }),
       getAccountByInternalId: jest.fn(async () => { calls.push('get'); return fakeAccount(); }),
     });
-    // #70 — la password ya NO viaja en el input: el use case la genera server-side
-    // a partir del grClienteId del cliente (default '243200' → ip243200).
-    const uc = new RegisterGigaredAccount(port, customerLookup(true));
+    // #115 — contractId REQUERIDO; la password se genera desde grContratoId='243200' → ip243200.
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupWithGr(true));
     const result = await uc.execute('cust-1', {
       firstName: 'Juan', lastName: 'Pérez', email: 'e@x.com',
       // cic omitido — #109: viene del pool automáticamente.
       sendActivationEmail: true,
+      contractId: 'C1',
     });
     expect(calls).toEqual(['register', 'activate', 'setInternalId', 'get']);
     // CIC usado: el del pool ('0000000001'), no el que mandaba el FE antes.
     expect(port.activate).toHaveBeenCalledWith({ cic: '0000000001', email: 'e@x.com' });
     expect(port.setInternalId).toHaveBeenCalledWith('0000000001', 'cust-1');
     expect(result.account.cic).toBe('0000000001');
-    // #70 — la generada (ip243200) viaja a Gigared en el register.
+    // #115 — la password se genera desde grContratoId='243200' → ip243200.
     expect((port.register as jest.Mock).mock.calls[0][0]).toMatchObject({ password: 'ip243200' });
   });
 
-  // #70 — la password la genera el use case con el helper determinístico del #65.
-  it('#70 generates the password SERVER-SIDE from grClienteId (ip{grClienteId} padded)', async () => {
+  // #115 — la password la genera el use case desde grContratoId (antes grClienteId del cliente).
+  it('#115 generates the password SERVER-SIDE from grContratoId (ip{grContratoId} padded)', async () => {
     const port = fakePort();
-    const uc = new RegisterGigaredAccount(port, customerLookup(true, '12'));
+    // grContratoId='12' → ip12 < 8 chars → padded to ip120000
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupWithGr(true, 'cust-1', '12'));
     await uc.execute('cust-1', {
       firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
     // ip12 < 8 → padded with '0' → ip120000
     expect((port.register as jest.Mock).mock.calls[0][0]).toMatchObject({ password: 'ip120000' });
   });
 
-  // #70 — sin grClienteId no se puede derivar la password → 422 GR_CLIENT_ID_REQUIRED, Gigared intacto.
-  it('#70 customer WITHOUT grClienteId → GrClientIdRequiredError, Gigared never touched', async () => {
+  it('back-compat: contractId present but no csRepo/catalogRepo → no persistence (credentialsPersisted:false)', async () => {
     const port = fakePort();
-    const uc = new RegisterGigaredAccount(port, customerLookup(true, null));
-    await expect(uc.execute('cust-1', {
-      firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
-      sendActivationEmail: false,
-    })).rejects.toBeInstanceOf(GrClientIdRequiredError);
-    expect(port.register).not.toHaveBeenCalled();
-  });
-
-  it('back-compat: WITHOUT contractId never touches contracts', async () => {
-    const cs = new InMemoryContractServiceRepository();
-    const catalog = new InMemoryServiceCatalogRepository();
-    const addSpy = jest.spyOn(cs, 'add');
-    const port = fakePort();
-    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
-    await uc.execute('cust-1', {
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupWithGr(true));
+    const result = await uc.execute('cust-1', {
       firstName: 'Juan', lastName: 'Pérez', email: 'e@x.com', cic: '0000001234',
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
-    expect(addSpy).not.toHaveBeenCalled();
+    expect(result.credentialsPersisted).toBe(false);
   });
 });
 
-// #65 — register persists the deterministic credentials on the TV ContractService.
-const contractLookupReg = (exists: boolean, ownerId = 'cust-1') => ({
-  findById: async (id: string) => (exists ? { id, clientId: ownerId } : null),
+// #65 / #115 — register persists the deterministic credentials on the TV ContractService.
+// grContratoId defaults to '243200' → ip243200 password (keeps the #65 asserts byte-for-byte).
+const contractLookupReg = (exists: boolean, ownerId = 'cust-1', grContratoId: string | null = '243200') => ({
+  findById: async (id: string) => (exists ? { id, clientId: ownerId, grContratoId } : null),
 });
 
 describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
@@ -514,14 +516,18 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
     expect(result.credentialsPersisted).toBe(false);
   });
 
-  it('M7 — back-compat: WITHOUT contractId there is no persistence target → credentialsPersisted:false', async () => {
-    const port = fakePort();
+  it('M7 — #115: with contractId + csRepo + catalogRepo → credentials are persisted (credentialsPersisted:true)', async () => {
+    await seedTvCatalog();
+    const port = fakePort({
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ cic: '0000001234', gigaredId: '2432', internalId: 'cust-1', services: [] })),
+    });
     const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupReg(true), cs, catalog);
     const result = await uc.execute('cust-1', {
       firstName: 'R', lastName: 'H', email: 'e@x.com', cic: '0000001234',
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
-    expect(result.credentialsPersisted).toBe(false);
+    expect(result.credentialsPersisted).toBe(true);
   });
 });
 
@@ -610,10 +616,11 @@ describe('RegisterGigaredAccount (#72 — clearCancelled on register)', () => {
     const tvCancellation = new InMemoryClientTvCancellationRepository();
     tvCancellation.seedCancelled('cust-1'); // pre-cancellado
 
-    const uc = new RegisterGigaredAccount(port, customerLookup(true), undefined, undefined, undefined, tvCancellation);
+    // #115 — contractLookup requerido (contractId es ahora obligatorio)
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupWithGr(true), undefined, undefined, tvCancellation);
     await uc.execute('cust-1', {
       firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
 
     // El flag fue limpiado: el cliente volvió a tener TV
@@ -622,10 +629,11 @@ describe('RegisterGigaredAccount (#72 — clearCancelled on register)', () => {
 
   it('without tvCancellation dep → register works normally (backward-compat)', async () => {
     const port = fakePort();
-    const uc = new RegisterGigaredAccount(port, customerLookup(true));
+    // #115 — contractLookup requerido
+    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupWithGr(true));
     const result = await uc.execute('cust-1', {
       firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234',
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
     expect(result.account.cic).toBe('0000000001');
   });
@@ -673,17 +681,20 @@ function statefulFakePort(seeded: Record<string, GigaredAccount> = {}): GigaredP
 }
 
 describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
+  // contractLookup stub common to #81 tests — grContratoId='243200' (CUA-valid)
+  const cl81 = contractLookupWithGr(true, 'cust-1', '243200');
+
   it('primera alta (no cancelado) → seq 0, internal_id = Client.id pelado (back-compat byte-for-byte)', async () => {
     const port = statefulFakePort();
     const activation = new InMemoryClientTvActivationRepository();
     const tvCancellation = new InMemoryClientTvCancellationRepository();
     const uc = new RegisterGigaredAccount(
-      port, customerLookup(true), undefined, undefined, undefined, tvCancellation, activation,
+      port, customerLookup(true), cl81, undefined, undefined, tvCancellation, activation,
     );
     const result = await uc.execute('cust-1', {
       firstName: 'Juan', lastName: 'Pérez', email: 'perez243200@gmail.com',
       // cic omitido — #109: viene del pool. fakePort provee [fakeAccount()] → CIC '0000000001'.
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
     // seq NO avanza en la primera alta (cliente no venía de baja).
     expect(await activation.getSeq('cust-1')).toBe(0);
@@ -707,12 +718,12 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
     tvCancellation.seedCancelled('cust-1'); // el cliente venía de baja
 
     const uc = new RegisterGigaredAccount(
-      port, customerLookup(true), undefined, undefined, undefined, tvCancellation, activation,
+      port, customerLookup(true), cl81, undefined, undefined, tvCancellation, activation,
     );
     const result = await uc.execute('cust-1', {
       firstName: 'Juan', lastName: 'Pérez', email: 'ignored@x.com',
       // cic omitido — #109: viene del pool.
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
 
     // seq avanzó a 1; el internal_id usado es 'cust-1-1' (fresco), nunca el quemado 'cust-1'.
@@ -724,7 +735,7 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
     expect(await tvCancellation.isCancelled('cust-1')).toBe(false);
   });
 
-  it('re-alta → el mail se genera server-side con el seq: {apellido}{grId}{seq}@gmail.com', async () => {
+  it('re-alta → el mail se genera server-side con el seq: {apellido}{grContratoId}{seq}@gmail.com', async () => {
     const port = statefulFakePort({
       'cust-1': fakeAccount({ cic: '0000000001', internalId: 'cust-1' }),
     });
@@ -732,15 +743,17 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
     const tvCancellation = new InMemoryClientTvCancellationRepository();
     tvCancellation.seedCancelled('cust-1');
 
+    // grContratoId='2432' → re-alta mail = hernandez24321@gmail.com
     const uc = new RegisterGigaredAccount(
-      port, customerLookup(true, '2432'), undefined, undefined, undefined, tvCancellation, activation,
+      port, customerLookup(true, '999'), contractLookupWithGr(true, 'cust-1', '2432'),
+      undefined, undefined, tvCancellation, activation,
     );
     await uc.execute('cust-1', {
       firstName: 'Ronald', lastName: 'Hernández', email: 'whatever@x.com', cic: '0000005678',
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
 
-    // seq=1 → mail = hernandez24321@gmail.com (recuperable, determinístico).
+    // seq=1 → mail = hernandez24321@gmail.com (derivado de grContratoId='2432', recuperable, determinístico).
     expect((port.register as jest.Mock).mock.calls[0][0]).toMatchObject({ email: 'hernandez24321@gmail.com' });
     expect((port.activate as jest.Mock).mock.calls[0][0]).toMatchObject({ email: 'hernandez24321@gmail.com' });
   });
@@ -760,12 +773,12 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
     tvCancellation.seedCancelled('cust-1');
 
     const uc = new RegisterGigaredAccount(
-      port, customerLookup(true), undefined, undefined, undefined, tvCancellation, activation,
+      port, customerLookup(true), cl81, undefined, undefined, tvCancellation, activation,
     );
     const result = await uc.execute('cust-1', {
       firstName: 'J', lastName: 'P', email: 'x@x.com',
       // cic omitido — #109: viene del pool.
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
     expect(await activation.getSeq('cust-1')).toBe(2);
     expect(port.setInternalId).toHaveBeenCalledWith(poolCic, 'cust-1-2');
@@ -777,12 +790,12 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
     const tvCancellation = new InMemoryClientTvCancellationRepository();
     tvCancellation.seedCancelled('cust-1'); // aun cancelado, sin repo no hay seq
     const uc = new RegisterGigaredAccount(
-      port, customerLookup(true), undefined, undefined, undefined, tvCancellation,
+      port, customerLookup(true), cl81, undefined, undefined, tvCancellation,
     );
     const result = await uc.execute('cust-1', {
       firstName: 'J', lastName: 'P', email: 'e@x.com',
       // cic omitido — #109: viene del pool. fakePort devuelve CIC '0000000001'.
-      sendActivationEmail: false,
+      sendActivationEmail: false, contractId: 'C1',
     });
     // CIC del pool.
     expect(port.setInternalId).toHaveBeenCalledWith('0000000001', 'cust-1');

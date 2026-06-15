@@ -98,6 +98,13 @@ interface Opts {
   grClienteId?: string | null;
   /** Owner (clientId) the contract lookup reports. Defaults to 'cust-1' (the test customer). */
   contractOwner?: string;
+  /**
+   * #115 — grContratoId the contract lookup reports.
+   * Defaults to '204382' (a CUA-valid grContratoId so the register can proceed).
+   * Pass null to simulate a contract without grContratoId → 422 GR_CONTRACT_ID_REQUIRED.
+   * Pass undefined to use the default.
+   */
+  grContratoId?: string | null;
   /** #65 H3 — what the TV credentials reader returns for the customer (null = no TV row → 404). */
   tvCredentials?: TvCredentials | null;
   /** #72 — pre-seeded TV cancellation repo (if omitted, an empty one is created). */
@@ -125,7 +132,13 @@ async function buildApp(opts: Opts = {}) {
   };
   const contractLookup = {
     findById: async (id: string) =>
-      (opts.contractExists === false ? null : { id, clientId: opts.contractOwner ?? 'cust-1' }),
+      opts.contractExists === false
+        ? null
+        : {
+            id,
+            clientId: opts.contractOwner ?? 'cust-1',
+            grContratoId: opts.grContratoId === undefined ? '204382' : opts.grContratoId,
+          },
   };
 
   // #72 — local TV-cancel flag repo (in-memory for tests). Caller may pass a pre-seeded one.
@@ -291,7 +304,8 @@ describe('gigared.routes — granular TV RBAC guards (#50)', () => {
     const app = await buildApp({ perms: { register: pass } });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+      // #115 — contractId es requerido ahora; sin él la ruta devuelve 400 (no 403)
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
     expect(res.status).not.toBe(403);
   });
 
@@ -300,7 +314,8 @@ describe('gigared.routes — granular TV RBAC guards (#50)', () => {
     const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200' });
+      // #115 — contractId requerido
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', contractId: 'C1' });
     expect(res.status).toBe(201);
     const [, body] = (port.register as jest.Mock).mock.calls[0];
     expect((port.register as jest.Mock).mock.calls[0][0].sendActivationEmail).toBe(false);
@@ -486,7 +501,8 @@ describe('gigared.routes — happy + 207 (#47)', () => {
     const app = await buildApp();
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true });
+      // #115 — contractId requerido
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true, contractId: 'C1' });
     expect(res.status).toBe(201);
     expect(res.body.account.cic).toBe('0000000001');
   });
@@ -538,65 +554,66 @@ describe('#47k POST /customers/:id/cancel — async 202 (#10/#11)', () => {
   });
 });
 
-// #70 rework — la password del registro se GENERA SERVER-SIDE a partir del grClienteId
-// del cliente (helper determinístico del #65: `ip{grClienteId}` paddeado a 8). El body del
-// register YA NO acepta password: si viene, se ignora (strip silencioso para tolerar el FE
-// viejo en la ventana de deploy). Sin grClienteId → 422 GR_CLIENT_ID_REQUIRED, Gigared intacto.
-describe('#70 POST /register — password generada server-side (el body ya no la acepta)', () => {
-  it('register SIN password en el body → 201 con la determinística ip{grClienteId} reenviada a Gigared', async () => {
+// #70 / #115 — la password del registro se GENERA SERVER-SIDE a partir del grContratoId del
+// contrato (#115, antes era grClienteId del cliente #70). El body del register YA NO acepta
+// password: si viene, se ignora (strip silencioso para tolerar el FE viejo en la ventana de
+// deploy). Sin grContratoId → 422 GR_CONTRACT_ID_REQUIRED, Gigared intacto.
+describe('#70/#115 POST /register — password generada server-side desde grContratoId del contrato', () => {
+  it('register SIN password en el body → 201 con la determinística ip{grContratoId} reenviada a Gigared', async () => {
     const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }), grClienteId: '243200' });
+    // grContratoId='204382' → password='ip204382' (8 chars, no padding needed)
+    const app = await buildApp({ port: fakePort({ register }), grContratoId: '204382' });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
     expect(res.status).toBe(201);
     expect(register).toHaveBeenCalledTimes(1);
-    // ip243200 ya cumple la longitud mínima (8) → sin padding.
-    expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip243200' });
+    // ip204382 ya cumple la longitud mínima (8) → sin padding.
+    expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip204382' });
   });
 
-  it('grClienteId corto → la determinística se paddea a 8 (ip12 → ip120000)', async () => {
+  it('grContratoId corto → la determinística se paddea a 8 (ip12 → ip120000)', async () => {
     const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }), grClienteId: '12' });
+    const app = await buildApp({ port: fakePort({ register }), grContratoId: '12' });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
     expect(res.status).toBe(201);
     expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip120000' });
   });
 
-  it('body CON password → se IGNORA: se usa SIEMPRE la determinística (tolera FE viejo)', async () => {
+  it('body CON password → se IGNORA: se usa SIEMPRE la determinística desde el contrato (tolera FE viejo)', async () => {
     const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }), grClienteId: '243200' });
+    const app = await buildApp({ port: fakePort({ register }), grContratoId: '204382' });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'otracosa99' });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'otracosa99', contractId: 'C1' });
     expect(res.status).toBe(201);
     expect(register).toHaveBeenCalledTimes(1);
-    // la del body NO viaja; viaja la generada server-side.
-    expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip243200' });
+    // la del body NO viaja; viaja la generada server-side desde el grContratoId del contrato.
+    expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip204382' });
     expect((register.mock.calls[0] as unknown[])[0]).not.toMatchObject({ password: 'otracosa99' });
   });
 
-  it('cliente SIN grClienteId → 422 GR_CLIENT_ID_REQUIRED, Gigared NUNCA tocado', async () => {
+  it('contrato SIN grContratoId (null) → 422 GR_CONTRACT_ID_REQUIRED, Gigared NUNCA tocado', async () => {
     const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }), grClienteId: null });
+    const app = await buildApp({ port: fakePort({ register }), grContratoId: null });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
     expect(res.status).toBe(422);
-    expect(res.body.code).toBe('GR_CLIENT_ID_REQUIRED');
+    expect(res.body.code).toBe('GR_CONTRACT_ID_REQUIRED');
     expect(res.body.error).toMatch(/Gestión Real/i);
     expect(register).not.toHaveBeenCalled();
   });
 
   it('e) the password NEVER appears in the endpoint response body', async () => {
-    const app = await buildApp({ grClienteId: '243200' });
+    const app = await buildApp({ grContratoId: '204382' });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234' });
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
     expect(res.status).toBe(201);
-    expect(JSON.stringify(res.body)).not.toContain('ip243200');
+    expect(JSON.stringify(res.body)).not.toContain('ip204382');
     expect(JSON.stringify(res.body).toLowerCase()).not.toContain('password');
   });
 });
@@ -625,7 +642,8 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
     const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true });
+      // #115 — contractId requerido
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true, contractId: 'C1' });
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('GIGARED_UNAVAILABLE');
     expect(res.body.detail).toBe('CUA no respondió a tiempo');
@@ -793,7 +811,8 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
     const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
-      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com' });
+      // #115 — contractId requerido
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('NO_CIC_AVAILABLE');
     // Gigared nunca debe recibir el register cuando el pool está vacío.
@@ -841,5 +860,64 @@ describe('#72 POST /customers/:id/cancel — anti-coining (async — runner fail
     const res = await request(app).post('/api/gigared/customers/cust-1/cancel').send({ contractId: 'C1' });
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ status: 'pending' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #115 — POST /register: contractId REQUERIDO + grContratoId + error mapping
+// ---------------------------------------------------------------------------
+
+describe('#115 POST /register — contractId requerido + identidad deriva del contrato', () => {
+  it('sin contractId en el body → 400 VALIDATION_ERROR (Gigared no tocado)', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(port.register).not.toHaveBeenCalled();
+  });
+
+  it('contractId vacío ("") en el body → 400 VALIDATION_ERROR', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(port.register).not.toHaveBeenCalled();
+  });
+
+  it('contrato con grContratoId null → 422 GR_CONTRACT_ID_REQUIRED, Gigared no tocado', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port, grContratoId: null });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('GR_CONTRACT_ID_REQUIRED');
+    expect(port.register).not.toHaveBeenCalled();
+  });
+
+  it('contrato ajeno (contractOwner distinto) → 404 CONTRACT_NOT_FOUND, Gigared no tocado', async () => {
+    const port = fakePort();
+    const app = await buildApp({ port, contractOwner: 'cust-B' });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C-of-B' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
+    expect(port.register).not.toHaveBeenCalled();
+  });
+
+  it('happy path: contractId válido con grContratoId CUA-válido → 201', async () => {
+    const app = await buildApp({ grContratoId: '204382' });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(201);
+    expect(res.body.account).toBeDefined();
   });
 });
