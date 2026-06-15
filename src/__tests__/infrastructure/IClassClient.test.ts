@@ -479,15 +479,25 @@ describe('IClassClient', () => {
   });
 
   // ── A9: closeDate formatted to IClass format ──────────────────────────────
+  // FIX closeDate — IClass devuelve HTTP 417 "Index 2 out of bounds for length 2"
+  // cuando el closeDate viene con solo 2 tokens ("dd/MM/yyyy HH:mm:ss"). El parser
+  // de IClass hace split por espacio y espera el offset de zona como 3er token.
+  // El formato CORRECTO es "yyyy-MM-dd HH:mm:ss -0000" (3 tokens, en UTC con offset).
 
-  it('A9: formatCloseDate formats date correctly as dd/MM/yyyy HH:mm:ss', () => {
-    const d = new Date(2026, 6, 25, 10, 30, 45); // July 25, 2026 10:30:45
-    expect(formatCloseDate(d)).toBe('25/07/2026 10:30:45');
+  it('A9: formatCloseDate formats date as "yyyy-MM-dd HH:mm:ss -0000" (3 tokens, UTC)', () => {
+    const d = new Date('2026-07-25T10:30:45.000Z'); // UTC explícito
+    expect(formatCloseDate(d)).toBe('2026-07-25 10:30:45 -0000');
   });
 
-  it('A9b: formatCloseDate zero-pads single-digit values', () => {
-    const d = new Date(2026, 0, 5, 9, 5, 3); // Jan 5, 2026 09:05:03
-    expect(formatCloseDate(d)).toBe('05/01/2026 09:05:03');
+  it('A9b: formatCloseDate zero-pads single-digit values (UTC)', () => {
+    const d = new Date('2026-01-05T09:05:03.000Z'); // UTC explícito
+    expect(formatCloseDate(d)).toBe('2026-01-05 09:05:03 -0000');
+  });
+
+  it('A9c: formatCloseDate output splits into exactly 3 space-separated tokens', () => {
+    // Regresión directa del bug: el viejo formato producía 2 tokens → 417.
+    const d = new Date('2026-07-25T10:30:45.000Z');
+    expect(formatCloseDate(d).split(' ')).toHaveLength(3);
   });
 
   // ── A7: listTeams → maps login/name/thirdPartyCode, filters empty login ──

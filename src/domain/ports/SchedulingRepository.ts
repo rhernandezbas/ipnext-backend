@@ -70,6 +70,19 @@ export interface SchedulingRepository {
    */
   archiveTask(id: string): Promise<ScheduledTask | null>;
   moveTaskToStage(id: string, stageId: string): Promise<ScheduledTask | null>;
+  /**
+   * iclass-intermediate-states — forward-only stage move for the IClass status auto-mapping.
+   *
+   * Moves the task to `targetStageId` ONLY when the target stage's `order` is >= the task's
+   * current stage `order` (Stage HAS an `order` column). This implements the "solo avanza"
+   * policy: the cron never retreats a task to an earlier column, so an operator's manual
+   * advance is respected. The order comparison lives here (the adapter owns Stage data).
+   *
+   * Returns `{ moved: true }` when it moved, `{ moved: false }` when it was a no-op
+   * (task/stage missing, same stage, or target order < current order). Best-effort by
+   * contract: the caller swallows failures so a bad move never breaks the status capture.
+   */
+  moveTaskToStageIfForward(taskId: string, targetStageId: string): Promise<{ moved: boolean }>;
 
   // RV — Revisado por Inventario (change 6, F3 traceability)
   setInventoryReview(taskId: string, reviewed: boolean, actorId: string | null): Promise<ScheduledTask | null>;

@@ -20,6 +20,7 @@ function toEntity(row: any): IClassStatusCatalogEntry {
     displayLabel: row.displayLabel ?? null,
     color: row.color ?? null,
     tracked: row.tracked ?? false,
+    prominenseStageId: row.prominenseStageId ?? null,
     lastSyncedAt: row.lastSyncedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -57,10 +58,12 @@ export class PrismaIClassStatusCatalogRepository implements IClassStatusCatalogR
         displayLabel: null,
         color: null,
         tracked: false,
+        prominenseStageId: null,
         lastSyncedAt: now,
       },
       update: {
-        // PRESERVE displayLabel / color / tracked — only refresh raw label + timestamp.
+        // PRESERVE displayLabel / color / tracked / prominenseStageId (operator config) —
+        // the update block omits them, so the upsert never overwrites the stage mapping.
         iclassLabel: input.iclassLabel,
         lastSyncedAt: now,
       },
@@ -78,6 +81,7 @@ export class PrismaIClassStatusCatalogRepository implements IClassStatusCatalogR
       if ('displayLabel' in patch) data['displayLabel'] = patch.displayLabel ?? null;
       if ('color' in patch) data['color'] = patch.color ?? null;
       if ('tracked' in patch && patch.tracked !== undefined) data['tracked'] = patch.tracked;
+      if ('prominenseStageId' in patch) data['prominenseStageId'] = patch.prominenseStageId ?? null;
 
       const row = await (prisma as any).iClassStatusCatalog.update({
         where: { statusCode },

@@ -37,6 +37,7 @@ export class InMemoryIClassStatusCatalogRepository implements IClassStatusCatalo
       displayLabel: null,
       color: null,
       tracked: false,
+      prominenseStageId: null,
       lastSyncedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -52,6 +53,7 @@ export class InMemoryIClassStatusCatalogRepository implements IClassStatusCatalo
     if ('displayLabel' in patch) existing.displayLabel = patch.displayLabel ?? null;
     if ('color' in patch) existing.color = patch.color ?? null;
     if ('tracked' in patch && patch.tracked !== undefined) existing.tracked = patch.tracked;
+    if ('prominenseStageId' in patch) existing.prominenseStageId = patch.prominenseStageId ?? null;
 
     existing.updatedAt = new Date();
     return { ...existing };

@@ -196,6 +196,34 @@ describe('PATCH /api/admin/iclass/statuses/:statusCode', () => {
     expect(res.body.effectiveLabel).toBe('En análisis');
   });
 
+  // iclass-intermediate-states — the PATCH endpoint maps an IClass status to a Prominense Stage.
+  it('200 — sets and exposes prominenseStageId (additive field)', async () => {
+    const { app, catalogRepo } = buildApp();
+    await catalogRepo.upsertByStatusCode({ statusCode: '12', iclassLabel: 'Em Análise' });
+
+    const res = await request(app)
+      .patch('/api/admin/iclass/statuses/12')
+      .set('Cookie', 'auth_token=fake')
+      .send({ prominenseStageId: '10000000-0000-4000-a000-000000000002' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.prominenseStageId).toBe('10000000-0000-4000-a000-000000000002');
+  });
+
+  it('200 — clears prominenseStageId with null', async () => {
+    const { app, catalogRepo } = buildApp();
+    await catalogRepo.upsertByStatusCode({ statusCode: '12', iclassLabel: 'Em Análise' });
+    await catalogRepo.update('12', { prominenseStageId: 'stage-x' });
+
+    const res = await request(app)
+      .patch('/api/admin/iclass/statuses/12')
+      .set('Cookie', 'auth_token=fake')
+      .send({ prominenseStageId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.prominenseStageId).toBeNull();
+  });
+
   it('404 — unknown statusCode', async () => {
     const { app } = buildApp();
     const res = await request(app)

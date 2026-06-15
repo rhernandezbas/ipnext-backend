@@ -7,6 +7,7 @@ const base: IClassStatusCatalogEntry = {
   displayLabel: null,
   color: null,
   tracked: false,
+  prominenseStageId: null,
   lastSyncedAt: new Date(),
   createdAt: new Date(),
   updatedAt: new Date(),

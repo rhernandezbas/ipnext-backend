@@ -396,6 +396,47 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     }
   }
 
+  async moveTaskToStageIfForward(taskId: string, targetStageId: string): Promise<{ moved: boolean }> {
+    // iclass-intermediate-states — forward-only auto-move. We compare the current vs target
+    // stage `order` (Stage HAS an `order` column) and move ONLY when target order >= current.
+    // Never retreats → a manual advance by the operator is respected. Best-effort: the caller
+    // swallows exceptions, but we also guard the obvious no-ops here.
+    const task = await (prisma.scheduledTask as any).findUnique({
+      where: { id: taskId },
+      select: {
+        stageId: true,
+        stage: { select: { order: true, workflowId: true } },
+        // Fallback workflow source when the task has no resolvable stage workflow.
+        project: { select: { workflowId: true } },
+      },
+    });
+    if (!task || task.stageId === targetStageId) return { moved: false };
+
+    const targetStage = await prisma.stage.findUnique({
+      where: { id: targetStageId },
+      select: { order: true, workflowId: true },
+    });
+    if (!targetStage) return { moved: false };
+
+    // WORKFLOW GUARD (before the order check): `Stage.order` is per-workflow (each workflow
+    // seeds order from 0), but the mapped prominenseStageId is global per statusCode. If the
+    // target stage lives in a DIFFERENT workflow than the task, comparing `order` is
+    // meaningless AND moving would point the task at another workflow's stage (the
+    // ScheduledTask→Stage FK does NOT validate workflow). Resolve the task's workflow via its
+    // current stage (stageId is a required FK) and fall back to the task's project workflow.
+    // No-op when the workflows differ or cannot be determined with confidence.
+    const taskWorkflowId: string | null =
+      task.stage?.workflowId ?? task.project?.workflowId ?? null;
+    if (!taskWorkflowId || taskWorkflowId !== targetStage.workflowId) return { moved: false };
+
+    const currentOrder = task.stage?.order;
+    if (typeof currentOrder !== 'number') return { moved: false };
+    if (targetStage.order < currentOrder) return { moved: false }; // would retreat → ignore
+
+    await this.moveTaskToStage(taskId, targetStageId);
+    return { moved: true };
+  }
+
   async reconcileStuckTaskStage(taskId: string, mappedStageId: string, inFlightStageCode: string): Promise<boolean> {
     const task = await (prisma.scheduledTask as any).findUnique({
       where: { id: taskId },

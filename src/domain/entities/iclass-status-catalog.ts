@@ -20,6 +20,13 @@ export interface IClassStatusCatalogEntry {
   color: string | null;
   /** Opt-in flag: whether this status is visible in the FE. Default false. */
   tracked: boolean;
+  /**
+   * iclass-intermediate-states — operator-configured mapping to a Prominense Stage
+   * (kanban column). When set, the scheduler auto-moves a matched task to this stage
+   * whenever the captured IClass status changes (forward-only). NULL → no auto-move.
+   * Preserved by upsertByStatusCode (operator config, like displayLabel/color/tracked).
+   */
+  prominenseStageId: string | null;
   /** Last time this entry was seen/synced from IClass. */
   lastSyncedAt: Date;
   createdAt: Date;

@@ -495,6 +495,9 @@ model Stage {
   // IClass closure loop — result codes that move a task to THIS stage on closure
   iclassResultCodes IClassResultCode[] @relation("ResultCodeMappedStage")
 
+  // iclass-intermediate-states — IClass status codes mapped to THIS stage (auto-move target)
+  iclassStatusCatalogs IClassStatusCatalog[] @relation("StatusCatalogProminenseStage")
+
   @@unique([workflowId, code])
   @@index([workflowId, order])
 }
@@ -766,11 +769,17 @@ model IClassStatusCatalog {
   displayLabel String?  // Prominense editable label; NULL → use iclassLabel
   color        String?  // hex color for the badge (e.g. "#FF5500"); NULL → no color
   tracked      Boolean  @default(false) // opt-in: visible in FE badge/filter
+  // iclass-intermediate-states — operator-mapped Prominense Stage (kanban column).
+  // When set, the scheduler auto-moves a matched task to this stage on a status change
+  // (forward-only). NULL = no auto-move. Preserved by the auto-discovery upsert.
+  prominenseStageId String?
+  prominenseStage   Stage?  @relation("StatusCatalogProminenseStage", fields: [prominenseStageId], references: [id], onDelete: SetNull)
   lastSyncedAt DateTime
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   @@index([tracked])
+  @@index([prominenseStageId])
 }
 
 model IClassServiceOrder {

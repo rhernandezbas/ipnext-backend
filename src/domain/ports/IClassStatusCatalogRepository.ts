@@ -9,6 +9,11 @@ export interface UpdateStatusInput {
   displayLabel?: string | null;
   color?: string | null;
   tracked?: boolean;
+  /**
+   * iclass-intermediate-states — FK to a Prominense Stage. Set to map this IClass status
+   * to a kanban column (auto-move on status change); null clears the mapping. Omitted → preserve.
+   */
+  prominenseStageId?: string | null;
 }
 
 /**
@@ -25,8 +30,8 @@ export interface IClassStatusCatalogRepository {
 
   /**
    * Upsert by statusCode:
-   * - New entry: created with tracked=false, displayLabel=null, color=null.
-   * - Existing entry: refreshes iclassLabel + lastSyncedAt; PRESERVES displayLabel/color/tracked.
+   * - New entry: created with tracked=false, displayLabel=null, color=null, prominenseStageId=null.
+   * - Existing entry: refreshes iclassLabel + lastSyncedAt; PRESERVES displayLabel/color/tracked/prominenseStageId.
    * Returns whether the entry was created or updated.
    */
   upsertByStatusCode(input: UpsertStatusInput): Promise<{ status: 'created' | 'updated' }>;

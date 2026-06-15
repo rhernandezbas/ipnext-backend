@@ -232,8 +232,33 @@ export class IngestClosedServiceOrders {
         iclassLabel: s.statusDescription,
       });
       // Conditional write: only persists when the code changed (idempotent each tick).
-      if (taskForStatus.iclassStatusCode !== s.statusCode) {
+      const statusChanged = taskForStatus.iclassStatusCode !== s.statusCode;
+      if (statusChanged) {
         await this.scheduling.setIClassStatus(taskForStatus.id, s.statusCode, new Date());
+
+        // iclass-intermediate-states — auto-move the task to the Stage the operator mapped
+        // to this status (prominenseStageId on the catalog row). Fires ONLY when the status
+        // actually CHANGED (not on every tick), and is FORWARD-ONLY: moveTaskToStageIfForward
+        // never retreats a task to an earlier column, so a manual advance is respected
+        // (Stage HAS an `order` column — the repo owns the comparison). The repo also guards
+        // against cross-workflow moves (order is per-workflow, so the mapped stage must belong
+        // to the task's workflow). Best-effort: a failure here must NEVER break the status
+        // capture nor the terminal-closure flow.
+        //
+        // ACCEPTED behaviour: if the operator manually RETREATS the stage and a DIFFERENT
+        // status change then arrives, the forward-only auto-move may re-advance the task. This
+        // is intentional — the cron follows IClass as the source of truth. The solo-avanza
+        // policy protects against the CRON itself retreating a task; it does NOT protect
+        // against overwriting a deliberate manual retreat that precedes a fresh status change.
+        try {
+          const entry = await this.statusCatalog.getByStatusCode(s.statusCode);
+          if (entry?.prominenseStageId) {
+            const { moved } = await this.scheduling.moveTaskToStageIfForward(taskForStatus.id, entry.prominenseStageId);
+            if (moved) counts.transitioned++;
+          }
+        } catch (e) {
+          console.error(`[iclass-status-sync] auto-move task ${taskForStatus.id} → status ${s.statusCode} failed (non-fatal): ${(e as Error).message}`);
+        }
       }
     }
     // ── end iclass-status-sync ───────────────────────────────────────────────

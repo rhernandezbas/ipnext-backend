@@ -712,6 +712,30 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return true;
   }
 
+  async moveTaskToStageIfForward(taskId: string, targetStageId: string): Promise<{ moved: boolean }> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (!task) return { moved: false };
+    if (task.stageId === targetStageId) return { moved: false }; // already there
+    // Forward-only policy needs the stage `order`. Without a stage repo we cannot
+    // compare → do not move (conservative; never retreat).
+    if (!this.stageRepo) return { moved: false };
+    const current = await this.stageRepo.getById(task.stageId);
+    const target = await this.stageRepo.getById(targetStageId);
+    if (!current || !target) return { moved: false };
+    // WORKFLOW GUARD (before the order check): `Stage.order` is per-workflow (each workflow
+    // seeds order from 0), but the mapped prominenseStageId is global per statusCode. If the
+    // target stage lives in a DIFFERENT workflow than the task, comparing `order` is
+    // meaningless AND moving would point the task at another workflow's stage (the FK does
+    // not validate workflow). Resolve the task workflow via its current stage; mirror the
+    // Prisma adapter, which also falls back to the task's project workflow. No-op when they
+    // differ or cannot be determined.
+    const taskWorkflowId = current.workflowId;
+    if (!taskWorkflowId || taskWorkflowId !== target.workflowId) return { moved: false };
+    if (target.order < current.order) return { moved: false }; // would retreat → ignore
+    await this.moveTaskToStage(taskId, targetStageId);
+    return { moved: true };
+  }
+
   async moveTaskToStage(id: string, stageId: string): Promise<ScheduledTask | null> {
     const index = this.tasks.findIndex(t => t.id === id);
     if (index === -1) return null;

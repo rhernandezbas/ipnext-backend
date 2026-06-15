@@ -761,13 +761,19 @@ export function parseResultCode(raw: Record<string, unknown>, soTypeId: string |
 // ── Ola A: OS Actions (getServiceOrder + closeServiceOrder) ────────────────────
 
 /**
- * Date → "dd/MM/yyyy HH:mm:ss" (IClass closeDate format for POST /serviceorders/close).
- * Using the most common IClass date format seen in the real API.
+ * Date → "yyyy-MM-dd HH:mm:ss -0000" (IClass closeDate format for POST /serviceorders/close).
+ *
+ * FIX closeDate — el formato anterior ("dd/MM/yyyy HH:mm:ss", 2 tokens separados por
+ * espacio) hacía que IClass respondiera HTTP 417 "Index 2 out of bounds for length 2":
+ * su parser hace split por espacio y espera el offset de zona como TERCER token. El
+ * formato correcto tiene 3 tokens: fecha, hora y offset. Emitimos en UTC con offset
+ * fijo "-0000" para que los valores de pared (wall-clock) coincidan con el offset
+ * declarado (de ahí los getters UTC, no los locales).
  */
 export function formatCloseDate(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return (
-    `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ` +
-    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+    `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
+    `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} -0000`
   );
 }

@@ -42,6 +42,27 @@ describe('InMemoryIClassStatusCatalogRepository', () => {
       // lastSyncedAt updated
       expect(entry!.lastSyncedAt.getTime()).toBeGreaterThanOrEqual(t0.getTime());
     });
+
+    // iclass-intermediate-states — prominenseStageId is operator config: the upsert
+    // (auto-discovery on each cron tick) MUST preserve it, exactly like displayLabel/color/tracked.
+    it('new entry has prominenseStageId=null by default', async () => {
+      const repo = makeRepo();
+      await repo.upsertByStatusCode({ statusCode: '12', iclassLabel: 'Em Análise' });
+      const entry = await repo.getByStatusCode('12');
+      expect(entry!.prominenseStageId).toBeNull();
+    });
+
+    it('PRESERVES prominenseStageId across re-upsert (auto-discovery never clobbers the mapping)', async () => {
+      const repo = makeRepo();
+      await repo.upsertByStatusCode({ statusCode: '12', iclassLabel: 'Em Análise' });
+      await repo.update('12', { prominenseStageId: 'stage-abc' });
+
+      await repo.upsertByStatusCode({ statusCode: '12', iclassLabel: 'Em Análise (alt)' });
+
+      const entry = await repo.getByStatusCode('12');
+      expect(entry!.iclassLabel).toBe('Em Análise (alt)');
+      expect(entry!.prominenseStageId).toBe('stage-abc'); // preserved
+    });
   });
 
   describe('update (partial patch)', () => {
@@ -77,6 +98,25 @@ describe('InMemoryIClassStatusCatalogRepository', () => {
       await repo.update('3', { displayLabel: 'Programada' });
       const updated = await repo.update('3', { displayLabel: null });
       expect(updated!.displayLabel).toBeNull();
+    });
+
+    // iclass-intermediate-states — update can set and clear the stage mapping.
+    it('sets prominenseStageId without affecting other fields', async () => {
+      const repo = makeRepo();
+      await repo.upsertByStatusCode({ statusCode: '3', iclassLabel: 'Agendada' });
+      await repo.update('3', { tracked: true, displayLabel: 'Programada' });
+      const updated = await repo.update('3', { prominenseStageId: 'stage-xyz' });
+      expect(updated!.prominenseStageId).toBe('stage-xyz');
+      expect(updated!.tracked).toBe(true);
+      expect(updated!.displayLabel).toBe('Programada');
+    });
+
+    it('can clear prominenseStageId by passing null', async () => {
+      const repo = makeRepo();
+      await repo.upsertByStatusCode({ statusCode: '3', iclassLabel: 'Agendada' });
+      await repo.update('3', { prominenseStageId: 'stage-xyz' });
+      const updated = await repo.update('3', { prominenseStageId: null });
+      expect(updated!.prominenseStageId).toBeNull();
     });
   });
 

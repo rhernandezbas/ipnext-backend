@@ -12,6 +12,11 @@ export interface IClassStatusCatalogDTO {
   /** Hex color for badge. Null when not configured. */
   color: string | null;
   tracked: boolean;
+  /**
+   * iclass-intermediate-states — FK to the Prominense Stage this IClass status maps to.
+   * Null when unmapped (no auto-move). Additive field; the FE may ignore it safely.
+   */
+  prominenseStageId: string | null;
   lastSyncedAt: string; // ISO 8601
 }
 
@@ -24,6 +29,7 @@ export function toStatusCatalogDTO(entry: IClassStatusCatalogEntry): IClassStatu
     effectiveLabel: effectiveLabel(entry),
     color: entry.color,
     tracked: entry.tracked,
+    prominenseStageId: entry.prominenseStageId,
     lastSyncedAt: entry.lastSyncedAt instanceof Date
       ? entry.lastSyncedAt.toISOString()
       : entry.lastSyncedAt,
@@ -36,6 +42,12 @@ export const UpdateStatusSchema = z.object({
   /** Hex color #RRGGBB. Null clears the color. */
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(),
   tracked: z.boolean().optional(),
+  /**
+   * iclass-intermediate-states — FK to a Prominense Stage. A non-empty string maps the
+   * status to that stage (enables forward-only auto-move); null clears the mapping.
+   * Existence of the stage is enforced by the DB FK (ON DELETE SET NULL).
+   */
+  prominenseStageId: z.string().nullable().optional(),
 });
 
 export type UpdateStatusInput = z.infer<typeof UpdateStatusSchema>;
