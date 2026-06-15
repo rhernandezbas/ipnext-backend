@@ -44,9 +44,9 @@ export function tvLoginFromAccount(account: GigaredAccount): string | null {
  * ni el mail de hoy. Cuando hay `activation` repo Y el cliente está cancelado (re-alta), se
  * incrementa el seq y se mintea una identidad fresca:
  *   - internal_id = currentTvInternalId(clientId, seq) → `{clientId}-{seq}` (nunca quemado)
- *   - email       = deterministicTvEmail(lastName, grClienteId, seq) → `{apellido}{grId}{seq}@gmail.com`
- * La primera alta (cliente no cancelado o sin activation repo) queda en seq=0 → identidad de hoy,
- * comportamiento byte-for-byte (back-compat): internal_id = Client.id pelado, mail el que mandó el FE.
+ *   - email       = deterministicTvEmail(lastName, grContratoId, seq) → `{apellido}{grId}{seq}@gmail.com`
+ * #118 — la primera alta (seq=0) también deriva el email server-side del grContratoId.
+ * El input.email del FE se ignora: la fuente única de identidad TV es grContratoId (email + password).
  */
 export class RegisterGigaredAccount {
   constructor(
@@ -128,9 +128,12 @@ export class RegisterGigaredAccount {
       seq = await this.activation.incrementSeq(customerId);
     }
     const internalId = currentTvInternalId(customerId, seq);
-    // #81 / #115 — en re-alta (seq>0) el mail lo genera el server derivado del grContratoId.
-    // En la primera alta (seq=0) se respeta el mail del FE (back-compat).
-    const email = seq > 0 ? deterministicTvEmail(input.lastName, grContratoId, seq) : input.email;
+    // #81 / #115 / #118 — el email siempre deriva server-side del grContratoId, para ambos casos
+    // (seq=0 alta nueva y seq>0 re-alta). El input.email del FE se ignora: antes (pre-#118)
+    // la primera alta usaba el email que mandaba el FE, que era derivado del grClienteId, lo que
+    // generaba una inconsistencia con la clave (que ya derivaba del grContratoId desde el #115).
+    // Ahora la fuente única de la identidad TV es grContratoId: email + password determinísticos.
+    const email = deterministicTvEmail(input.lastName, grContratoId, seq);
 
     // #115 — wantsPersist: el contrato YA está validado arriba (ownership siempre chequeado).
     // La condición de persistencia se reduce a la presencia de los repos locales.
