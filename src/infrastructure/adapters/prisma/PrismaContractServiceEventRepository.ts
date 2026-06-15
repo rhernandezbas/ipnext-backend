@@ -36,6 +36,8 @@ export class PrismaContractServiceEventRepository implements ContractServiceEven
     const rows = await (prisma as any).contractServiceEvent.findMany({
       where:   { contractId },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      // #117 — JOIN al operador: resuelve actorName vacío vía actor.login (patrón #106)
+      include: { actor: { select: { login: true } } },
     });
     return rows.map(toEvent);
   }
@@ -49,7 +51,8 @@ function toEvent(row: any): ContractServiceEvent {
     serviceCatalogId: row.serviceCatalogId,
     eventType:        row.eventType as ContractServiceEvent['eventType'],
     actorId:          row.actorId ?? null,
-    actorName:        row.actorName,
+    // #117 — 3-branch fallback: snapshot (sobrevive rename/delete) || JOIN actor.login (eventos viejos sin snapshot) || ''
+    actorName:        row.actorName || row.actor?.login || '',
     notes:            row.notes ?? null,
     createdAt:        row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
   };

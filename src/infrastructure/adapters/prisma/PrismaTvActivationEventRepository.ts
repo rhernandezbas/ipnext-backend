@@ -35,7 +35,8 @@ export class PrismaTvActivationEventRepository implements TvActivationEventRepos
     const rows = await (prisma as any).tvActivationEvent.findMany({
       where:   { clientId },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      include: { client: { select: { name: true } } },
+      // #117 — JOIN al operador (patrón #106: mismo include que customer)
+      include: { client: { select: { name: true } }, actor: { select: { login: true } } },
     });
     return rows.map(toEvent);
   }
@@ -57,7 +58,8 @@ export class PrismaTvActivationEventRepository implements TvActivationEventRepos
     const rows = await (prisma as any).tvActivationEvent.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      include: { client: { select: { name: true } } },
+      // #117 — JOIN al operador (patrón #106)
+      include: { client: { select: { name: true } }, actor: { select: { login: true } } },
     });
     return rows.map(toEvent);
   }
@@ -68,7 +70,8 @@ export class PrismaTvActivationEventRepository implements TvActivationEventRepos
     const rows = await (prisma as any).tvActivationEvent.findMany({
       where:   { contractId },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      include: { client: { select: { name: true } } },
+      // #117 — JOIN al operador (patrón #106)
+      include: { client: { select: { name: true } }, actor: { select: { login: true } } },
     });
     return rows.map(toEvent);
   }
@@ -81,7 +84,8 @@ function toEvent(row: any): TvActivationEvent {
     clientId:     row.clientId,
     customerName: row.client?.name ?? null,
     actorId:      row.actorId ?? null,
-    actorName:    row.actorName,
+    // #117 — 3-branch fallback: snapshot (sobrevive rename/delete) || JOIN actor.login (eventos viejos sin snapshot) || ''
+    actorName:    row.actorName || row.actor?.login || '',
     eventType:    row.eventType as TvActivationEvent['eventType'],
     cic:          row.cic ?? null,
     internalId:   row.internalId ?? null,
