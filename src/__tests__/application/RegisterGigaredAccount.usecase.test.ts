@@ -355,3 +355,63 @@ describe('RegisterGigaredAccount #115 — identidad TV deriva del grContratoId d
     expect(setInternalId).toHaveBeenCalledWith('CIC06', currentTvInternalId('cust-1', 0));
   });
 });
+
+// ---------------------------------------------------------------------------
+// #118 — Alta nueva (seq=0): email debe derivar server-side del grContratoId
+//         igual que la clave y que la re-alta — no del input.email del FE
+// ---------------------------------------------------------------------------
+
+describe('RegisterGigaredAccount #118 — alta nueva (seq=0): email server-side del grContratoId', () => {
+
+  it('alta nueva (seq=0): email enviado a Gigared = deterministicTvEmail(lastName, grContratoId, 0), NO input.email del FE', async () => {
+    // El FE manda un input.email derivado del grClienteId (ej: 'perez999999@gmail.com')
+    // El server debe ignorarlo y derivar el email del grContratoId='204382' server-side
+    const register = jest.fn(async () => {});
+    const port = fakePort({
+      listAccounts: poolOf('CIC10'),
+      register,
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC10' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(true, '999999'),
+      fakeContractLookup({ grContratoId: '204382' }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    // input.email simula lo que manda el FE (derivado del grClienteId, NO del grContratoId)
+    const inputEmailFromFe = 'perez999999@gmail.com';
+    await uc.execute('cust-1', { ...minInput('contract-1'), lastName: 'Pérez', email: inputEmailFromFe });
+
+    const callArg = (register.mock.calls[0] as unknown[])[0] as { email: string };
+    // Debe ser el email server-side derivado del grContratoId, seq=0
+    expect(callArg.email).toBe(deterministicTvEmail('Pérez', '204382', 0));
+    // NO el email del FE (que viene del grClienteId)
+    expect(callArg.email).not.toBe(inputEmailFromFe);
+  });
+
+  it('#118: email (seq=0) y password derivan del MISMO grContratoId — fuente única', async () => {
+    // Ambos deben venir de '204382', no de '999999' (grClienteId)
+    const register = jest.fn(async () => {});
+    const port = fakePort({
+      listAccounts: poolOf('CIC11'),
+      register,
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC11' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(true, '999999'),
+      fakeContractLookup({ grContratoId: '204382' }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    await uc.execute('cust-1', { ...minInput('contract-1'), lastName: 'García' });
+
+    const callArg = (register.mock.calls[0] as unknown[])[0] as { email: string; password: string };
+    expect(callArg.email).toBe(deterministicTvEmail('García', '204382', 0));
+    expect(callArg.password).toBe(deterministicTvPassword('204382'));
+    // Confirmar que NINGUNO deriva del grClienteId
+    expect(callArg.email).not.toContain('999999');
+    expect(callArg.password).not.toContain('999999');
+  });
+});

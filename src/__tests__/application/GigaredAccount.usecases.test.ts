@@ -391,7 +391,9 @@ describe('RegisterGigaredAccount (#47)', () => {
     });
     expect(calls).toEqual(['register', 'activate', 'setInternalId', 'get']);
     // CIC usado: el del pool ('0000000001'), no el que mandaba el FE antes.
-    expect(port.activate).toHaveBeenCalledWith({ cic: '0000000001', email: 'e@x.com' });
+    // #118 — email deriva server-side del grContratoId='243200' y lastName='Pérez' → 'perez243200@gmail.com'.
+    // El input.email del FE ('e@x.com') se ignora: fuente única es grContratoId.
+    expect(port.activate).toHaveBeenCalledWith({ cic: '0000000001', email: 'perez243200@gmail.com' });
     expect(port.setInternalId).toHaveBeenCalledWith('0000000001', 'cust-1');
     expect(result.account.cic).toBe('0000000001');
     // #115 — la password se genera desde grContratoId='243200' → ip243200.
