@@ -244,6 +244,7 @@ model Contract {
   stockLocations StockLocation[]          @relation("ContractStockLocation")
   contractServices      ContractService[]
   contractServiceEvents ContractServiceEvent[]
+  pppoeServices         PppoeService[]
 
   @@index([clientId])
   @@index([status])
@@ -1716,6 +1717,26 @@ model NasServer {
   clientCount  Int       @default(0)
   description  String?
   createdAt    DateTime  @default(now())
+  pppoeServices PppoeService[]
+}
+
+model PppoeService {
+  id            String    @id @default(uuid())
+  username      String    @unique
+  password      String
+  profile       String?
+  remoteAddress String?
+  status        String    @default("enabled")
+  nasId         String
+  contractId    String?
+  matchMethod   String?
+  importedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  nas           NasServer @relation(fields: [nasId], references: [id])
+  contract      Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
+
+  @@index([nasId])
+  @@index([contractId])
 }
 
 model RadiusConfig {
