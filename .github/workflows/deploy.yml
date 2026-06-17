@@ -83,6 +83,9 @@ jobs:
             -e AUDIT_MODEL="qwen2.5vl:7b" \
             -e UISP_BASE_URL="${{ secrets.UISP_BASE_URL }}" \
             -e UISP_TOKEN="${{ secrets.UISP_TOKEN }}" \
+            -e ROUTER_API_USER="${{ secrets.ROUTER_API_USER }}" \
+            -e ROUTER_API_PASSWORD="${{ secrets.ROUTER_API_PASSWORD }}" \
+            -e ROUTER_REDUCED_PROFILE="IP-REDUCCION" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
