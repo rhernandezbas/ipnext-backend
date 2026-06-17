@@ -304,15 +304,20 @@ export class IClassClient implements IClassPort {
 
   /** Build the ServiceOrderV1In payload. nodeCode = city, NO scheduledDate (REQ-OS-1, AD-5). */
   private buildServiceOrderPayload(input: CreateServiceOrderInput) {
-    // soCode/addressCode carry the task sequenceNumber: short, unique per task, and
-    // lets us correlate the IClass OS back to the backend task. IClass enforces a char
-    // limit on these codes (ICLERR_0050); the sequenceNumber stays well within it.
+    // #121 — soCode and addressCode are now DISTINCT keys:
+    //   - soCode      = input.soCode (task sequenceNumber): UNIQUE PER OS, the closure
+    //                   matching key (SO.codigo == sequenceNumber).
+    //   - addressCode = input.addressCode (contract / node code): STABLE across OS of
+    //                   the same contract/node, so N OS share ONE IClass address instead
+    //                   of creating a new address per OS.
+    // IClass enforces a char limit on these codes (ICLERR_0050); both stay within it.
     const soCode = input.soCode;
+    const addressCode = input.addressCode;
     return {
       serviceOrder: {
         soCode,
         customerCode: input.customerCode,
-        addressCode: soCode,
+        addressCode,
         typeSOSummary: input.soType,
         openedDate: formatOpenedDate(this.now()),
         observation: input.description,
@@ -323,7 +328,7 @@ export class IClassClient implements IClassPort {
         mobile: input.phone,
       },
       address: {
-        addressCode: soCode,
+        addressCode,
         customerCode: input.customerCode,
         address: input.address,
         number: '',

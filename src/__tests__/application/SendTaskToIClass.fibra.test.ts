@@ -102,6 +102,9 @@ describe('SendTaskToIClass — fibra task dispatch (#66)', () => {
     expect(order.nodeCode).toBe('Mercedes');
     expect(order.customerCode).toBe('Mercedes');
     expect(order.city).toBe('Mercedes');
+    // #121 — addressCode = the city/node code (stable), NOT the unique soCode.
+    expect(order.addressCode).toBe('Mercedes');
+    expect(order.addressCode).not.toBe(order.soCode);
   });
 
   it('REQ-FIBRA-DISPATCH-3: customerName = networkSiteName', async () => {

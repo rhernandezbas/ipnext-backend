@@ -42,7 +42,7 @@ describe('MoveTaskToStage — IClass hook', () => {
   it('moving to "Enviar a IClass" delegates to SendTaskToIClass (creates OS, advances to Registrado)', async () => {
     const { tasks, iclass, useCase } = setup(true);
     tasks.seedTask({
-      id: 't1', stageId: OTHER_STAGE.id, customerId: 'c1',
+      id: 't1', stageId: OTHER_STAGE.id, customerId: 'c1', customerCode: 'CLI-1',
       customerName: 'Juan', customerPhone: '341', customerCity: 'Rosario',
       address: 'Calle 1', description: 'desc',
       projectId: DEFAULT_PROJECT.id, // required: project mapping guard
@@ -111,7 +111,7 @@ describe('MoveTaskToStage — IClass hook', () => {
     const useCase = new MoveTaskToStage(tasks, stages, sendToIClass);
 
     tasks.seedTask({
-      id: 't1', stageId: OTHER_STAGE.id, customerId: 'c1',
+      id: 't1', stageId: OTHER_STAGE.id, customerId: 'c1', customerCode: 'CLI-1',
       customerName: 'Juan', customerPhone: '341', customerCity: 'Rosario',
       address: 'Calle 1', description: 'desc',
       projectId: DEFAULT_PROJECT.id,

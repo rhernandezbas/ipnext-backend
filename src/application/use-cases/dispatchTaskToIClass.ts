@@ -16,7 +16,11 @@ import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { IClassPort } from '@domain/ports/IClassPort';
 import { IClassDispatchAttemptRepository } from '@domain/ports/IClassDispatchAttemptRepository';
 import { RecordDispatchAttemptInput } from '@domain/entities/iclass-dispatch-attempt';
-import { StageNotFoundError, TaskNotFoundError } from '@domain/errors/scheduling';
+import {
+  StageNotFoundError,
+  TaskNotFoundError,
+  MissingRequiredFieldsError,
+} from '@domain/errors/scheduling';
 import {
   IClassNodeNotFoundError,
   IClassRejectedError,
@@ -27,9 +31,14 @@ import {
 export const NETWORK_PHONE          = '0000000000';
 export const NETWORK_CUSTOMER_CODE  = 'NETWORK';
 
+/** '' / whitespace / null / undefined cuentan como blank. */
+function isBlank(v: string | null | undefined): boolean {
+  return v == null || v.trim() === '';
+}
+
 /** Primer valor NO-blank ('' cuenta como blank — NetworkSite.address es string, nunca null). */
 function firstNonBlank(...vals: Array<string | null | undefined>): string | null {
-  for (const v of vals) if (v != null && v.trim() !== '') return v;
+  for (const v of vals) if (!isBlank(v)) return v!;
   return null;
 }
 
@@ -118,13 +127,22 @@ export async function dispatchToIClass(
   // #66 — fibra branch: networkType === 'fibra' uses locality + free-text node name only.
   const isFibra = isNet && task.networkType === 'fibra';
 
-  // #55 (iclass-contract-code): for CUSTOMER tasks the IClass customerCode must identify
-  // the CONTRACT when the task has one (task.contractCode = Contract.grContratoId), falling
-  // back to the client code otherwise. NETWORK path: red uses site.iclassNodeCode; fibra uses iclassCityCode.
+  // #121 (revisa #55) — modelo cliente=customer / contrato=dirección:
+  //   - customerCode (IClass) = el CLIENTE  → task.customerCode (CUSTOMER tasks).
+  //   - addressCode  (IClass) = el CONTRATO → firstNonBlank(task.contractCode, task.customerCode),
+  //     ESTABLE: agrupa N OS del mismo contrato bajo UNA dirección (nunca el soCode único).
+  // NETWORK path: red usa site.iclassNodeCode; fibra usa iclassCityCode — ambos como
+  // customerCode Y como addressCode (el código de nodo/ciudad es estable y agrupa las
+  // OS del nodo en una sola dirección).
   const effectiveCustomerCode = isNet
     ? (isFibra
         ? (task.iclassCityCode ?? NETWORK_CUSTOMER_CODE)
         : (networkSite?.iclassNodeCode ?? NETWORK_CUSTOMER_CODE))
+    : task.customerCode!;
+  // addressCode estable: contrato (fallback cliente) en CUSTOMER; mismo código de
+  // nodo/ciudad (= customerCode) en NETWORK. NUNCA el soCode (sequenceNumber, único por OS).
+  const effectiveAddressCode = isNet
+    ? effectiveCustomerCode
     : (firstNonBlank(task.contractCode, task.customerCode) ?? task.customerCode!);
   // fibra: node name; red: site name (JOIN-derived).
   const effectiveCustomerName = isNet ? (task.networkSiteName ?? '') : task.customerName!;
@@ -143,9 +161,20 @@ export async function dispatchToIClass(
     : task.customerCity!;
 
   try {
+    // #121 WARNING #1 — guard: para tareas de CLIENTE, customerCode (= cliente) y
+    // addressCode (= contrato, fallback cliente) DERIVAN de task.customerCode/contractCode.
+    // Si AMBOS son null/blank, los `!` de arriba serian null en runtime y mandariamos
+    // null a IClass → rechazo silencioso (ICLERR). Fallamos explicito ANTES de la llamada.
+    // El catch de abajo registra el attempt (best-effort, AD-6) como cualquier otro fallo.
+    // NETWORK path nunca cae aca: siempre tiene `?? NETWORK_CUSTOMER_CODE`.
+    if (!isNet && isBlank(effectiveCustomerCode) && isBlank(effectiveAddressCode)) {
+      throw new MissingRequiredFieldsError(['customerCode', 'contractCode']);
+    }
+
     const { orderCode } = await iclass.createServiceOrder({
       soCode: String(task.sequenceNumber),
       customerCode: effectiveCustomerCode,
+      addressCode: effectiveAddressCode,
       customerName: effectiveCustomerName,
       phone: effectivePhone,
       address: effectiveAddress,

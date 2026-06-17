@@ -75,6 +75,11 @@ export interface ClosedServiceOrderSummary {
   soTypeId: string | null;
   soTypeDescription: string | null;
 
+  /**
+   * customerCode ingestado: para OS creadas desde #121 es el CLIENTE (grClienteId);
+   * para OS viejas (#55) es el CONTRATO. Campo inerte (no-unique, sin FK) — no usar
+   * para linkear sin tener en cuenta la fecha de creación de la OS.
+   */
   customerCode: string | null;
   customerName: string | null;
   addressCode: string | null;

@@ -1299,7 +1299,7 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
     const { app, repo, iclass } = buildIClassApp({ flagEnabled: true, nodeCity: 'Cordoba' });
     iclass.nextOrderCode = 'OS-777';
     const task = repo.seedTask({
-      id: 'iclass-3', stageId: DEFAULT_STAGE_ID_PENDING,
+      id: 'iclass-3', stageId: DEFAULT_STAGE_ID_PENDING, customerCode: 'CLI-CBA',
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
       address: 'Calle 1', description: 'Instalar',
       projectId: ICLASS_DEFAULT_PROJECT.id,
@@ -1339,9 +1339,9 @@ describe('PATCH /:id/stage → "Enviar a IClass" (Fase 4)', () => {
   it('flag ON + IClass rejects (ICLERR_0045) → 422 ICLASS_REJECTED with reason, task stays put', async () => {
     const { app, repo } = buildIClassApp({ flagEnabled: true, nodeCity: 'Cordoba', iclassRejects: true });
     const task = repo.seedTask({
-      id: 'iclass-rej', stageId: DEFAULT_STAGE_ID_PENDING,
+      id: 'iclass-rej', stageId: DEFAULT_STAGE_ID_PENDING, customerCode: 'GR-1',
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
-      customerCode: 'GR-1', address: 'Calle 1', description: 'Instalar',
+      address: 'Calle 1', description: 'Instalar',
       projectId: ICLASS_DEFAULT_PROJECT.id,
     });
 
@@ -1418,7 +1418,7 @@ describe('POST /api/scheduling/bulk/stage (Fase 2)', () => {
     const { app, repo } = buildBulkApp();
     // t1: valid data → moves to IClass OK.
     repo.seedTask({
-      id: 't1', stageId: DEFAULT_STAGE_ID_PENDING,
+      id: 't1', stageId: DEFAULT_STAGE_ID_PENDING, customerCode: 'CLI-CBA',
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
       address: 'Calle 1', description: 'Instalar',
       projectId: ICLASS_DEFAULT_PROJECT.id,
@@ -1576,7 +1576,7 @@ describe('PATCH /:id/stage — FASE 4: IClass mapping errors (flag ON)', () => {
     const { app, repo, iclass } = buildIClassApp({ flagEnabled: true, nodeCity: 'Cordoba' });
     iclass.nextOrderCode = 'OS-FASE4';
     const task = repo.seedTask({
-      id: 'fase4-happy', stageId: DEFAULT_STAGE_ID_PENDING,
+      id: 'fase4-happy', stageId: DEFAULT_STAGE_ID_PENDING, customerCode: 'CLI-CBA',
       customerId: 'cust-1', customerName: 'Juan', customerCity: 'Cordoba', customerPhone: '111',
       address: 'Calle 1', description: 'Instalar',
       projectId: ICLASS_DEFAULT_PROJECT.id,

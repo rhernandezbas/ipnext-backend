@@ -135,6 +135,28 @@ describe('SendTaskToIClass — network task dispatch (REQ-NODE-DISPATCH-1)', () 
     expect(order.customerCode).toBe('NETWORK');
     expect(order.nodeCode).toBe('NETWORK');
   });
+
+  it('#121 — red task: addressCode = node code (stable), NOT the soCode → OS of a node share one address', async () => {
+    const { tasks, iclass, useCase } = setup({
+      siteOverrides: { iclassNodeCode: 'TN-001', address: 'Ruta 7 km 5', city: 'Mercedes' },
+    });
+    // Two OS on the SAME node — they must share ONE address in IClass.
+    seedNetworkTask(tasks, { id: 'task-net-a', networkSiteName: 'Torre Norte' });
+    seedNetworkTask(tasks, { id: 'task-net-b', networkSiteName: 'Torre Norte' });
+
+    await useCase.execute('task-net-a', ENVIAR_STAGE.id, WF);
+    await useCase.execute('task-net-b', ENVIAR_STAGE.id, WF);
+
+    expect(iclass.createdOrders).toHaveLength(2);
+    const [a, b] = iclass.createdOrders.map(o => o.input);
+    // addressCode = the node/customer code (TN-001), stable across OS of the node.
+    expect(a.addressCode).toBe('TN-001');
+    expect(a.addressCode).toBe(a.customerCode);
+    expect(a.addressCode).toBe(b.addressCode);
+    // soCode still unique per OS (= sequenceNumber).
+    expect(a.soCode).not.toBe(b.soCode);
+    expect(a.addressCode).not.toBe(a.soCode);
+  });
 });
 
 describe('SendTaskToIClass — customer task regression (REQ-NODE-DISPATCH-1)', () => {

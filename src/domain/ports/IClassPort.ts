@@ -46,10 +46,21 @@ export interface ListServiceOrdersParams {
  */
 export interface CreateServiceOrderInput {
   /**
-   * Short, unique code for the OS used as soCode/addressCode in IClass. Carries the
-   * task sequenceNumber so the IClass OS can be correlated back to the backend task.
+   * Short, unique code for the OS used as `soCode` in IClass. Carries the task
+   * sequenceNumber — UNIQUE PER OS — so the IClass OS can be correlated back to the
+   * backend task. This is the MATCHING KEY for the closure loop (SO.codigo ==
+   * sequenceNumber). Do NOT reuse it as the address key (#121).
    */
   soCode: string;
+  /**
+   * Stable code that groups Service Orders under ONE IClass address (#121).
+   * For CUSTOMER tasks this is the CONTRACT (Contract.grContratoId), falling back
+   * to the client code; for NETWORK tasks it is the node/city code. It must be
+   * STABLE across OS of the same contract/node — never the per-OS soCode — so that
+   * N OS of one contract/node share a single address in IClass instead of creating
+   * one new address per OS.
+   */
+  addressCode: string;
   /** Backend client id (upsert inline in IClass as customerCode). */
   customerCode: string;
   customerName: string;

@@ -5,6 +5,9 @@ import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/icla
 const baseInput: CreateServiceOrderInput = {
   soCode: '4274',
   customerCode: 'C1',
+  // #121 — addressCode is now a distinct field (the contract / stable address key),
+  // independent from soCode (the per-OS matching key = sequenceNumber).
+  addressCode: 'CTR-1',
   customerName: 'Juan Perez',
   phone: '099111222',
   address: 'Calle Falsa 123',
@@ -111,10 +114,11 @@ describe('IClassClient', () => {
     expect(body.customer.name).toBe('Juan Perez');
     // Customer phone is forwarded to IClass as customer.mobile (CustomerIn schema).
     expect(body.customer.mobile).toBe('099111222');
-    // soCode/addressCode all carry input.soCode (the task sequenceNumber).
+    // #121 — soCode carries input.soCode (sequenceNumber, matching key);
+    // addressCode carries input.addressCode (contract, stable per-address key).
     expect(body.serviceOrder.soCode).toBe('4274');
-    expect(body.serviceOrder.addressCode).toBe('4274');
-    expect(body.address.addressCode).toBe('4274');
+    expect(body.serviceOrder.addressCode).toBe('CTR-1');
+    expect(body.address.addressCode).toBe('CTR-1');
   });
 
   it('maps listNodes codigo/descricao to code/description', async () => {
@@ -167,24 +171,26 @@ describe('IClassClient', () => {
     await expect(client.listNodes()).rejects.toBeInstanceOf(IClassUnavailableError);
   });
 
-  it('soCode/addressCode come from input.soCode (NOT the customerCode), customerCode passed through', async () => {
+  it('#121 — soCode comes from input.soCode; addressCode from input.addressCode (independent), customerCode passed through', async () => {
     const longCustomer = '76e8b565-74e3-44c3-b57d-22f791d1d09e';
     const { http, calls } = makeHttp({ post: [LOGIN_OK, CREATE_OK], get: [] });
     const client = new IClassClient({ ...opts, http: http as never });
 
-    await client.createServiceOrder({ ...baseInput, soCode: '4274', customerCode: longCustomer });
+    await client.createServiceOrder({ ...baseInput, soCode: '4274', addressCode: 'CTR-204382', customerCode: longCustomer });
 
     const create = calls.find(c => c.url === '/serviceorders')!;
     const body = create.body as Record<string, Record<string, unknown>>;
     const soCode = body.serviceOrder.soCode as string;
     const addressCode = body.address.addressCode as string;
-    // soCode comes from input.soCode (task sequenceNumber), not derived from the customerCode.
+    // soCode comes from input.soCode (task sequenceNumber); NOT derived from the customerCode.
     expect(soCode).toBe('4274');
-    expect(addressCode).toBe('4274');
-    expect(body.serviceOrder.addressCode).toBe('4274');
+    // addressCode comes from input.addressCode (the contract); independent of soCode.
+    expect(addressCode).toBe('CTR-204382');
+    expect(body.serviceOrder.addressCode).toBe('CTR-204382');
     expect(soCode).not.toContain(longCustomer);
     expect(addressCode).not.toContain(longCustomer);
-    expect(soCode).toBe(addressCode);
+    // #121 — soCode and addressCode are now distinct keys.
+    expect(soCode).not.toBe(addressCode);
     expect(body.serviceOrder.customerCode).toBe(longCustomer);
   });
 

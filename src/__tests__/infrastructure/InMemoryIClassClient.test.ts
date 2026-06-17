@@ -5,6 +5,8 @@ import { IClassUnavailableError } from '@domain/errors/iclass';
 const baseInput: CreateServiceOrderInput = {
   soCode: '4274',
   customerCode: 'C1',
+  // #121 — addressCode is a distinct field (contract / stable address key).
+  addressCode: 'CTR-1',
   customerName: 'Juan Perez',
   phone: '099111222',
   address: 'Calle Falsa 123',
