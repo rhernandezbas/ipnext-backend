@@ -25,6 +25,13 @@ export class InMemoryRouterGateway implements PppoeRouterGateway {
     if (this.unreachable.has(nas.ipAddress)) throw new RouterUnreachableError(nas.ipAddress);
   }
 
+  /** Test seam: siembra una sesión activa en un router (para verificar el kick de Fase C). */
+  seedSession(ipAddress: string, session: ActiveSession): void {
+    const list = this.sessions.get(ipAddress) ?? [];
+    list.push({ ...session });
+    this.sessions.set(ipAddress, list);
+  }
+
   private bucket(nas: NasTarget): RouterSecret[] {
     let b = this.secrets.get(nas.ipAddress);
     if (!b) {

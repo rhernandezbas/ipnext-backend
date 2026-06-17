@@ -66,4 +66,29 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
   it('(e) DeactivatePppoeService está wired', () => {
     expect(appSrc).toMatch(/new DeactivatePppoeService\(/);
   });
+
+  // ── Fase C — enforcement (cortes) ──────────────────────────────────────────
+  it('(f) EnforcePppoeService está wired con el reducedProfile de config', () => {
+    expect(appSrc).toMatch(/new EnforcePppoeService\([^)]*config\.router\.reducedProfile/s);
+  });
+
+  it('(f) PreviewEnforcement está wired', () => {
+    expect(appSrc).toMatch(/new PreviewEnforcement\(/);
+  });
+
+  it('(f) RunBulkEnforcement está wired', () => {
+    expect(appSrc).toMatch(/new RunBulkEnforcement\(/);
+  });
+
+  it('(f) ServiceCutRunner está wired con PgAdvisoryLock', () => {
+    expect(appSrc).toMatch(/new ServiceCutRunner\([^)]*new PgAdvisoryLock\(\)/s);
+  });
+
+  it('(f) PrismaServiceCutBatchRepository está instanciado', () => {
+    expect(appSrc).toMatch(/new PrismaServiceCutBatchRepository\(\)/);
+  });
+
+  it('(g) createPppoeRouter recibe sessionRepo (auth STATEFUL — sesión revocada no puede cortar)', () => {
+    expect(appSrc).toMatch(/createPppoeRouter\(\s*authAdapter,\s*sessionRepo/);
+  });
 });

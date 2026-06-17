@@ -21,6 +21,8 @@ import { requirePermission } from '@infrastructure/http/middleware/requirePermis
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryServiceCutBatchRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCutBatchRepository';
+import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
 import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
@@ -33,6 +35,10 @@ import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
 import { UpdatePppoeService } from '@application/use-cases/UpdatePppoeService';
 import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServiceToRouter';
 import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeService';
+import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
+import { PreviewEnforcement } from '@application/use-cases/PreviewEnforcement';
+import { RunBulkEnforcement } from '@application/use-cases/RunBulkEnforcement';
+import { ServiceCutRunner } from '@infrastructure/scheduling/ServiceCutRunner';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -133,14 +139,26 @@ async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> 
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
+  const batchRepo = new InMemoryServiceCutBatchRepository();
+  const lock = new InMemoryDistributedLock();
+  const enforce = new EnforcePppoeService(pppoeRepo, routerGw, nasRepo, 'IP-REDUCCION');
+  const preview = new PreviewEnforcement(pppoeRepo);
+  const bulk = new RunBulkEnforcement(pppoeRepo, enforce, batchRepo, { throttleMs: 0 });
+  const runner = new ServiceCutRunner(bulk, batchRepo, lock);
+
   app.use('/api', createPppoeRouter(
     new EchoAuthProvider(),
+    undefined, // sessionRepo: stateless en tests
     requirePerm,
     new ListPppoeByContract(pppoeRepo),
     new CreatePppoeService(pppoeRepo, routerGw, nasRepo),
     new UpdatePppoeService(pppoeRepo, routerGw, nasRepo),
     new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepo),
     new DeactivatePppoeService(pppoeRepo, routerGw, nasRepo),
+    enforce,
+    preview,
+    runner,
+    batchRepo,
   ));
   app.use(errorHandler);
 

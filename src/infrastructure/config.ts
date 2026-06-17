@@ -128,5 +128,18 @@ export const config = {
   router: {
     apiUser: process.env.ROUTER_API_USER ?? '',
     apiPassword: process.env.ROUTER_API_PASSWORD ?? '',
+    /**
+     * Profile de REDUCCIÓN para el corte de deudores (Fase C). El secret PPPoE pasa a este
+     * profile al `reduce`; el comercial se conserva en la DB para restaurar. Confirmado en Phase 0:
+     * `IP-REDUCCION` ya existe en los routers. Configurable por si cambia el nombre.
+     */
+    reducedProfile: process.env.ROUTER_REDUCED_PROFILE ?? 'IP-REDUCCION',
+    /**
+     * Corte masivo (Fase C). Calibrables sin recompilar (decisión: arrancar conservador).
+     * - bulkThrottleMs: pausa entre ops del MISMO router (1 carril por maestro) — resiliencia > velocidad.
+     * - bulkConcurrency: cuántos routers procesar en paralelo.
+     */
+    bulkThrottleMs: parseInt(process.env.ROUTER_BULK_THROTTLE_MS || '300', 10),
+    bulkConcurrency: parseInt(process.env.ROUTER_BULK_CONCURRENCY || '8', 10),
   },
 };
