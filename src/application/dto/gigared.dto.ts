@@ -116,5 +116,6 @@ export interface TvActivationEventDto {
   internalId: string | null;
   seq: number | null;
   contractId: string | null;
+  reason: string | null;
   createdAt: string; // ISO string
 }
