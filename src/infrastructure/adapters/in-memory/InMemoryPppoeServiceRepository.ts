@@ -44,6 +44,11 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     return this.store.map(s => ({ ...s }));
   }
 
+  async findById(id: string): Promise<PppoeService | null> {
+    const found = this.store.find(s => s.id === id);
+    return found ? { ...found } : null;
+  }
+
   async findByUsername(username: string): Promise<PppoeService | null> {
     const found = this.store.find(s => s.username === username);
     return found ? { ...found } : null;

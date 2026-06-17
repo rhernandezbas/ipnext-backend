@@ -1,9 +1,9 @@
 import { PppoeService } from '@domain/entities/pppoeService';
-import { NasServer } from '@domain/entities/nas';
 import { PppoeServiceRepository, PppoeServiceUpsert } from '@domain/ports/PppoeServiceRepository';
-import { NasTarget, PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
+import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { NasNotFoundError, PppoeUsernameTakenError } from '@domain/errors/pppoe';
+import { toNasTarget } from './nasTarget';
 
 export interface CreatePppoeServiceInput {
   contractId: string | null;
@@ -54,8 +54,4 @@ export class CreatePppoeService {
     });
     return this.repo.upsertByUsername({ ...base, status: 'enabled' });
   }
-}
-
-function toNasTarget(nas: NasServer): NasTarget {
-  return { ipAddress: nas.ipAddress, apiPort: nas.apiPort ?? 8728 };
 }

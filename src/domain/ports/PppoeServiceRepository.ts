@@ -14,6 +14,7 @@ export interface PppoeServiceRepository {
   /** Idempotente por `username`: crea o actualiza la fila existente. */
   upsertByUsername(data: PppoeServiceUpsert): Promise<PppoeService>;
   list(): Promise<PppoeService[]>;
+  findById(id: string): Promise<PppoeService | null>;
   findByUsername(username: string): Promise<PppoeService | null>;
   findByContract(contractId: string): Promise<PppoeService[]>;
 }

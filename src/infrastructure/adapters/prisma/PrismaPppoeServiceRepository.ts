@@ -36,6 +36,11 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     return rows.map(toEntity);
   }
 
+  async findById(id: string): Promise<PppoeService | null> {
+    const row = await this.model.findUnique({ where: { id } });
+    return row ? toEntity(row) : null;
+  }
+
   async findByUsername(username: string): Promise<PppoeService | null> {
     const row = await this.model.findUnique({ where: { username } });
     return row ? toEntity(row) : null;
