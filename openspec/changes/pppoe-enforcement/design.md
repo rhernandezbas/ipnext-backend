@@ -56,6 +56,14 @@ GET  /api/pppoe/enforce/bulk/:id                                                
 ```
 Permiso `pppoe.cut` (writes de corte) en todas. `PppoeServiceDto` gana `enforcedState` (sigue SIN `password`).
 
+## Limitaciones conocidas (cazadas en el review adversarial, aceptadas para v1)
+
+1. **Drift router/DB**: si el router se cambia POR FUERA de Prominense (admin manual, reboot que recarga un export viejo), la DB sigue siendo la fuente de verdad. El no-op idempotente (`enforcedState===target → return`) NO re-aplica en ese caso. Aceptable para v1 (DB autoritativa); un `force` para reconciliar queda como mejora futura.
+2. **Batch huérfano tras reinicio**: si el container muere a mitad del bulk, el `PgAdvisoryLock` se libera solo (Postgres lo suelta al cerrarse la conexión → NO bloquea cortes futuros), pero la fila `ServiceCutBatch` queda en `running` con `finishedAt=null`. NO hay auto-resume ni reaper en v1. Re-correr el batch es SEGURO (idempotencia: los ya-hechos son no-op), pero lo dispara el operador manualmente (coherente con "todo on-demand"). Un reaper-at-boot queda como mejora.
+3. **`PgAdvisoryLock` — ventana de reconexión**: el adapter compartido documenta una ventana <60s donde, si la conexión PG dedicada se cae y reconecta, el lock de la sesión vieja ya lo soltó Postgres. Pre-existente (lo usan otros features); fuera del scope de Fase C.
+4. **`restore` con `profile` comercial null**: no manda profile vacío al router (lo deja como está). Caso de borde teórico — los PPPoE reales tienen profile comercial. Documentado.
+5. **`doneCount` cuenta no-ops como done**: si un pppoe cambió de estado entre el preview y el bulk, `EnforcePppoeService` lo trata como no-op idempotente (ok=true). El `doneCount` cuenta "no requería trabajo" como done. Correcto por diseño.
+
 ## Open questions (para apply)
 
 1. `reduce` vs `block`: confirmar el mapeo de estados GR → acción (deudor `late` → `reduce`; baja/incobrable `baja`/`blocked` → `block`). El `target:'debtors'` arranca con `status='late'`.
