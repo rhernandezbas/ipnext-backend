@@ -16,6 +16,12 @@ import { config } from '@infrastructure/config';
  * - Una conexión efímera por operación (connect → write → close).
  * - Fallo de conexión (red/timeout/auth) → `RouterUnreachableError` (la ruta lo mapea a 502).
  * - `(rows as any)`: node-routeros tipa el retorno como `any[]`; el shape de `/ppp` es estable.
+ *
+ * GOTCHA `!empty` (cazado en el dry-run de Fase C contra Canepa): un `/print` con filtro
+ * (`?name=`) que NO matchea ninguna fila hace que RouterOS responda `!empty`, y node-routeros
+ * lo tira como excepción DENTRO del handler del socket → **NO capturable** con try/catch (crashea
+ * el proceso). Pasa SIEMPRE en el kick de un usuario OFFLINE. Solución: NUNCA usar `?name=`;
+ * hacer `print` COMPLETO (que sobre menú vacío devuelve `!done` → `[]`) y filtrar por `name` en JS.
  */
 export class RouterOsGateway implements PppoeRouterGateway {
   private async withConn<T>(nas: NasTarget, fn: (conn: RouterOSAPI) => Promise<T>): Promise<T> {
@@ -42,10 +48,15 @@ export class RouterOsGateway implements PppoeRouterGateway {
     }
   }
 
-  /** Resuelve el `.id` interno de RouterOS de un secret/sesión por su `name`. */
+  /**
+   * Resuelve el `.id` interno de RouterOS de un secret/sesión por su `name`.
+   * Print COMPLETO + filtro en JS (ver GOTCHA `!empty` arriba: un `?name=` sin match crashea
+   * el proceso de forma no capturable; esto pasa en cada kick de un usuario offline).
+   */
   private async findId(conn: RouterOSAPI, menu: string, username: string): Promise<string | null> {
-    const rows = (await conn.write(`${menu}/print`, [`?name=${username}`, '=.proplist=.id'])) as any[];
-    return rows[0]?.['.id'] ?? null;
+    const rows = (await conn.write(`${menu}/print`, ['=.proplist=.id,name'])) as any[];
+    const row = rows.find((r) => r.name === username);
+    return row?.['.id'] ?? null;
   }
 
   async listSecrets(nas: NasTarget): Promise<RouterSecret[]> {
