@@ -118,4 +118,15 @@ export const config = {
     baseUrl: process.env.UISP_BASE_URL ?? '',
     token: process.env.UISP_TOKEN ?? '',
   },
+
+  /**
+   * RouterOS API — PPPoE management (épico pppoe-service, Fase B). El mismo usuario para los 13
+   * routers; la IP/puerto salen del `NasServer`. Server-side: NUNCA viaja al browser.
+   * Opt-in (NO fail-fast, patrón iclass/uisp): si faltan, el RouterOsGateway falla al conectar
+   * con un error claro, pero el resto de la app arranca igual.
+   */
+  router: {
+    apiUser: process.env.ROUTER_API_USER ?? '',
+    apiPassword: process.env.ROUTER_API_PASSWORD ?? '',
+  },
 };
