@@ -605,6 +605,15 @@ import { AssignRoleToUser } from '@application/use-cases/rbac/AssignRoleToUser';
 import { RemoveRoleFromUser } from '@application/use-cases/rbac/RemoveRoleFromUser';
 import { createRbacUserRouter } from './routes/rbacUser.routes';
 import { toRbacRoleDto } from '@application/dto/rbacUser.dto';
+// PPPoE management (#pppoe-service Fase B)
+import { createPppoeRouter } from './routes/pppoe.routes';
+import { PrismaPppoeServiceRepository } from '../adapters/prisma/PrismaPppoeServiceRepository';
+import { RouterOsGateway } from '../adapters/routeros/RouterOsGateway';
+import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract';
+import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
+import { UpdatePppoeService } from '@application/use-cases/UpdatePppoeService';
+import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServiceToRouter';
+import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeService';
 // SDD #3 Phase 1a — ResolveUserPermissions use case
 import { ResolveUserPermissions } from '@application/use-cases/rbac/ResolveUserPermissions';
 // SDD #3 Phase 4a — role-permissions use cases + routes
@@ -1922,6 +1931,22 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // #5 BE — TV activation history query use case
     listActivationHistory: new ListTvActivationHistory(gigaredTvActivationEventRepo),
   }));
+
+  // ─── PPPoE management (#pppoe-service Fase B) ────────────────────────────────
+  {
+    const pppoeRepo   = new PrismaPppoeServiceRepository();
+    const nasRepoForPppoe = new PrismaNasRepository();
+    const routerGw    = new RouterOsGateway();
+    app.use('/api', createPppoeRouter(
+      authAdapter,
+      requirePerm,
+      new ListPppoeByContract(pppoeRepo),
+      new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe),
+      new UpdatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe),
+      new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepoForPppoe),
+      new DeactivatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe),
+    ));
+  }
 
   // ─── #80 Recaptación ───────────────────────────────────────────────────────
   const recaptureRepo = new PrismaRecaptureRepository();
