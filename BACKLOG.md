@@ -40,6 +40,9 @@
 ### 🎨 FE — Página de cortes PPPoE (futuro, tras Fase C) — PENDIENTE
 > UI **on-demand** para disparar cortes individuales y masivos: selección de deudores (o lista), **preview/confirmación** antes de ejecutar (cuántos / qué routers), y seguimiento del **progreso del batch** (pending/running/done/failed por item). Seguir el **patrón de las páginas existentes** del front (`ipnext-frontend`) + usar la skill **`impeccable`** para el diseño/UX. Gateada por `pppoe.read`/`pppoe.cut`. Consume los endpoints de la Fase C (`POST /api/pppoe/:id/enforce`, `POST /api/pppoe/enforce/bulk`, `GET .../bulk/:jobId`).
 
+### 🎨 FE — Página de cortes PPPoE (futuro, tras Fase C) — PENDIENTE
+> UI **on-demand** para disparar cortes individuales y masivos: selección de deudores (o lista), **preview/confirmación** antes de ejecutar (cuántos / qué routers), y seguimiento del **progreso del batch** (pending/running/done/failed por item). Seguir el **patrón de las páginas existentes** del front (`ipnext-frontend`) + usar la skill **`impeccable`** para el diseño/UX. Gateada por `pppoe.read`/`pppoe.cut`. Consume los endpoints de la Fase C (`POST /api/pppoe/:id/enforce`, `POST /api/pppoe/enforce/bulk`, `GET .../bulk/:jobId`).
+
 ### Cosa 1 — Auto-aprobar la OS desde Prominense — ❌ DESCARTADA *(2026-06-15)*
 > Investigada a fondo en 3 capas (OpenAPI REST + test de escritura en vivo sobre OS 4888 + login real al web `fs2`): **no es viable por integración limpia.** La API REST no tiene endpoint approve; `close` está bloqueado por una **pesquisa (encuesta) obligatoria** que `CloseSOIn` no puede enviar; y el "aprobar" del web es un **postback JSF/Seam stateful** (ViewState), no un endpoint reusable. **Único camino: escalar a IClass** para un endpoint REST de approve/responder-pesquisa en `api-v2`. Detalle completo en engram (sondas + §10 + verificación web).
 
