@@ -59,11 +59,11 @@ export class ListContractServiceHistory {
     // Pre-fetch TV events for the contract (only if at least one TV service).
     // ASSUMPTION: a contract has at most 1 TV service (Gigared TV is 1 per contract/client, #81).
     // tv_activation_events has no serviceCatalogId column, so we filter only by contractId and
-    // assign the same event list to every row where tvLogin !== null. If a contract ever had >1
+    // assign the same event list to every row where isTvRow. If a contract ever had >1
     // TV service, both rows would show the same events -- accepted per #81 constraint; do NOT
     // change the schema to add serviceCatalogId without revisiting this cross-source strategy.
     let tvEvents: ServiceEventDto[] = [];
-    const hasTV = views.some(v => v.tvLogin !== null);
+    const hasTV = views.some(isTvRow);
     if (hasTV && this.tvEventRepo) {
       const raw = await this.tvEventRepo.listByContract(contractId);
       tvEvents = raw.map(tvEventToServiceEvent);
@@ -72,7 +72,7 @@ export class ListContractServiceHistory {
     return views.map(view => {
       let events: ServiceEventDto[];
 
-      if (view.tvLogin !== null) {
+      if (isTvRow(view)) {
         // TV service (#131): merge events from BOTH sources:
         //   a) tv_activation_events (pre-fetched above as tvEvents)
         //   b) contract_service_events by (contractId, serviceCatalogId) -- e.g. baja via RemoveContractService
@@ -80,7 +80,7 @@ export class ListContractServiceHistory {
         // in contract_service_events instead of tv_activation_events.
         const cseEvents = cseByService.get(view.serviceCatalogId) ?? [];
         // INVARIANT: tv_activation_events and contract_service_events are disjoint for any
-        // given TV row — the two tables record different operations and never produce the same
+        // given TV row -- the two tables record different operations and never produce the same
         // event for the same row at the same moment. No deduplication is needed; if that
         // assumption ever changes, add dedup here keyed on (eventType, occurredAt).
         const merged = [...tvEvents, ...cseEvents];
@@ -105,6 +105,19 @@ export class ListContractServiceHistory {
       return toContractServiceHistoryItemDto(view, events);
     });
   }
+}
+
+/**
+ * #135 rev -- Detects whether a ContractService row belongs to a TV service.
+ * Uses structural signals only: tvLogin (set while active) or catalog name === 'TV'.
+ * After CancelTv, tvLogin is cleared to null, but name='TV' is the stable catalog identity
+ * and covers inactive TV rows without relying on free-text notes.
+ *
+ * Supersedes the notes.startsWith('CIC ') approach which caused false positives when
+ * non-TV rows (e.g. name='Internet') had notes starting with 'CIC '.
+ */
+function isTvRow(view: { tvLogin: string | null; name: string }): boolean {
+  return view.tvLogin !== null || view.name === 'TV';
 }
 
 /** Sort events chronologically ascending by occurredAt. */
