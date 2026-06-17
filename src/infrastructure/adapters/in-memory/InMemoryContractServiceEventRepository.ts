@@ -28,6 +28,7 @@ export class InMemoryContractServiceEventRepository implements ContractServiceEv
       actorId:          input.actorId ?? null,
       actorName:        input.actorName ?? '',
       notes:            input.notes ?? null,
+      reason:           input.reason ?? null,
       createdAt:        this.now().toISOString(),
     };
     this.store.push(event);

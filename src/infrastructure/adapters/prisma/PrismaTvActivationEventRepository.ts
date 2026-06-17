@@ -25,6 +25,7 @@ export class PrismaTvActivationEventRepository implements TvActivationEventRepos
         internalId: input.internalId ?? null,
         seq:        input.seq ?? null,
         contractId: input.contractId ?? null,
+        reason:     input.reason ?? null,
       },
     });
     return toEvent(row);
@@ -91,6 +92,7 @@ function toEvent(row: any): TvActivationEvent {
     internalId:   row.internalId ?? null,
     seq:          row.seq ?? null,
     contractId:   row.contractId ?? null,
+    reason:       row.reason ?? null,
     createdAt:    row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
   };
 }

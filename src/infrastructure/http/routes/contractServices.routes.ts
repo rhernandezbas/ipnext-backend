@@ -1,4 +1,5 @@
 import { Router, Request, Response, RequestHandler } from 'express';
+import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -110,6 +111,7 @@ export function createContractServicesRouter(
         req.params['id'] as string,
         parsed.data,
         actorOf(req),
+        parsed.data.reason ?? undefined,
       );
       // H3 — never leak the TV credentials on a contract-service response.
       res.json(toContractServiceDto(updated));
@@ -125,7 +127,10 @@ export function createContractServicesRouter(
   // ── DELETE /contracts/:contractId/services/:id — idempotent remove ───────────
   router.delete('/contracts/:contractId/services/:id', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
     // #110 — thread actor from req.user for event registration
-    await removeSvc.execute(req.params['id'] as string, actorOf(req));
+    // #127 - parse optional reason from JSON body
+    const _delBody = (req.body && typeof req.body === 'object') ? (req.body as Record<string, unknown>) : {};
+    const deleteReason = typeof _delBody['reason'] === 'string' ? _delBody['reason'] : undefined;
+    await removeSvc.execute(req.params['id'] as string, actorOf(req), deleteReason);
     res.status(204).send();
   });
 

@@ -19,6 +19,7 @@ export class UpdateContractService {
     id: string,
     data: { status?: string; notes?: string | null },
     actor?: ActorInput,
+    reason?: string,
   ): Promise<ContractServiceView> {
     // #110 — read previous status BEFORE update to detect transitions
     let prevStatus: string | undefined;
@@ -48,6 +49,7 @@ export class UpdateContractService {
             eventType,
             actorId:          actor?.actorId ?? null,
             actorName:        actor?.actorName ?? '',
+            reason:           reason ?? null,
           });
         } catch (err) {
           console.warn('[UpdateContractService] Failed to record status-change event (best-effort):', err);

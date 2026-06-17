@@ -26,6 +26,7 @@ export class PrismaContractServiceEventRepository implements ContractServiceEven
         actorId:          input.actorId ?? null,
         actorName:        input.actorName ?? '',
         notes:            input.notes ?? null,
+        reason:           input.reason ?? null,
       },
     });
     return toEvent(row);
@@ -54,6 +55,7 @@ function toEvent(row: any): ContractServiceEvent {
     // #117 — 3-branch fallback: snapshot (sobrevive rename/delete) || JOIN actor.login (eventos viejos sin snapshot) || ''
     actorName:        row.actorName || row.actor?.login || '',
     notes:            row.notes ?? null,
+    reason:           row.reason ?? null,
     createdAt:        row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
   };
 }

@@ -413,3 +413,98 @@ describe('CancelTvJobRunner — unit (in-memory)', () => {
     expect(startedAt.getTime()).toBeLessThanOrEqual(after.getTime());
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /customers/:id/cancel -- reason field persists to baja event (#127)
+// ---------------------------------------------------------------------------
+
+
+describe('POST /customers/:id/cancel -- reason field persists to baja event (#127)', () => {
+  it('B: reason in body -> baja event records reason (HTTP seam)', async () => {
+    // Build with an eventRepo injected into the CancelTvJobRunner
+    const tvEventRepo = new InMemoryTvActivationEventRepository();
+    const cancelStatus = new InMemoryClientTvCancelStatusRepository();
+
+    // Use a port that immediately resolves with empty services (cancel succeeds fast)
+    const port = fakePort({
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ services: [] })),
+    });
+
+    // Build CancelTv + runner manually so we can inject eventRepo
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const cat = await catalog.create({ name: 'TV', label: 'TV', active: true, sortOrder: 0 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (csRepo as any).catalog[cat.id] = { name: cat.name, label: cat.label };
+
+    const customerLookup = {
+      findById: async (id: string) => ({ id, grClienteId: '243200' }),
+    };
+    const contractLookup = {
+      findById: async (id: string) => ({ id, clientId: 'cust-1' }),
+    };
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+
+    const cancelTv = new CancelTv(port, csRepo, catalog, contractLookup, customerLookup, tvCancellation);
+    const runner = new CancelTvJobRunner(cancelTv, cancelStatus, tvEventRepo);
+
+    // Build a minimal app with this runner
+    const cfg = new InMemoryGigaredConfigRepository();
+    await cfg.update({ apiKey: 'secret1234' });
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed(FLAG, true);
+
+    const router = createGigaredRouter({
+      getConfig: new GetGigaredConfig(cfg, flags),
+      updateConfig: new UpdateGigaredConfig(cfg, flags),
+      getSummary: new GetGigaredSummary(port),
+      listAccounts: new ListGigaredAccounts(port),
+      getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
+      linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+      registerAccount: new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+      addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
+      removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
+      setOttStatus: new SetOttStatus(port, customerLookup),
+      cancelTv,
+      changeTvPassword: new ChangeTvPassword(port, customerLookup, contractLookup, csRepo, catalog),
+      getTvCredentials: new GetTvCredentials(customerLookup, {
+        getByCustomer: async () => ({ login: 'GIGA100', password: 'ip243200' }),
+      }),
+      requireRead: pass,
+      requireLink: pass,
+      requireRegister: pass,
+      requirePacks: pass,
+      requireOtt: pass,
+      requireCancel: pass,
+      requireManage: pass,
+      gigaredReady: createGigaredReadyMiddleware(cfg, flags),
+      gigaredProbeReady: createGigaredReadyMiddleware(cfg, flags, { requireFlag: false }),
+      cancelTvRunner: runner,
+      cancelStatus,
+      customerLookup,
+      contractLookup,
+      listActivationHistory: new ListTvActivationHistory(new InMemoryTvActivationEventRepository()),
+    });
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api/gigared', router);
+    app.use(errorHandler);
+
+    // Fire the cancel with a reason
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/cancel')
+      .send({ contractId: 'C1', reason: 'no usa' });
+
+    expect(res.status).toBe(202);
+
+    // Wait for background runner to complete
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    // The baja event must carry the reason from the HTTP body
+    const events = tvEventRepo.all();
+    const baja = events.find(e => e.eventType === 'baja');
+    expect(baja).toBeDefined();
+    expect(baja!.reason).toBe('no usa');
+  });
+});

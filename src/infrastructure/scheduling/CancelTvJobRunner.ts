@@ -42,7 +42,7 @@ export class CancelTvJobRunner {
    * @param actor — optional actor info threaded from the cancel route (req.user). Defaults to
    *               null actorId + empty actorName when not provided (system-initiated or legacy).
    */
-  async run(customerId: string, contractId: string, actor?: CancelTvActor): Promise<void> {
+  async run(customerId: string, contractId: string, actor?: CancelTvActor, reason?: string): Promise<void> {
     const startedAt = new Date();
     // Transition: pending → running
     await this.cancelStatus.setStatus(customerId, { status: 'running', startedAt });
@@ -63,6 +63,7 @@ export class CancelTvJobRunner {
             eventType:  'baja',
             cic:        result.cic,
             contractId: contractId,
+            reason:     reason ?? null,
           });
         } catch (evErr) {
           // eslint-disable-next-line no-console

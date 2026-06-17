@@ -16,6 +16,8 @@ export interface RecordContractServiceEventInput {
   actorId?: string | null;
   actorName?: string;
   notes?: string | null;
+  // #127 - optional cancellation reason.
+  reason?: string | null;
 }
 
 export interface ContractServiceEvent {
@@ -26,6 +28,8 @@ export interface ContractServiceEvent {
   actorId: string | null;
   actorName: string;
   notes: string | null;
+  // #127 - optional cancellation reason; null for legacy events.
+  reason: string | null;
   createdAt: string; // ISO string
 }
 

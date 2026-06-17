@@ -24,6 +24,8 @@ export interface RecordTvActivationEventInput {
   contractId?: string | null;
   /** Human-readable client name resolved from the Client relation (best-effort). */
   customerName?: string | null;
+  /** #127 - optional cancellation reason. */
+  reason?: string | null;
 }
 
 export interface ListTvActivationEventsFilter {
@@ -45,6 +47,8 @@ export interface TvActivationEvent {
   internalId: string | null;
   seq: number | null;
   contractId: string | null;
+  // #127 - optional cancellation reason; null for legacy events.
+  reason: string | null;
   createdAt: string; // ISO string
 }
 

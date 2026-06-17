@@ -457,6 +457,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   router.post('/customers/:id/cancel', deps.requireCancel, async (req, res): Promise<void> => {
     const customerId = req.params['id'] as string;
     const contractId = String((req.body as { contractId?: unknown }).contractId ?? '');
+    const cancelReason = typeof (req.body as { reason?: unknown }).reason === 'string' ? (req.body as { reason: string }).reason : undefined;
     try {
       // Fast pre-queue validation: customer existence + contract ownership (no Gigared call).
       // Uses the same lookups injected into CancelTv — errors are consistent.
@@ -478,7 +479,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       const cancelActor = req.user ? { actorId: req.user.id, actorName: req.user.username } : undefined;
       await deps.cancelStatus.setStatus(customerId, { status: 'pending' });
       res.status(202).json({ status: 'pending' });
-      void deps.cancelTvRunner.run(customerId, contractId, cancelActor);
+      void deps.cancelTvRunner.run(customerId, contractId, cancelActor, cancelReason);
     } catch (err) {
       if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'cancel');
     }

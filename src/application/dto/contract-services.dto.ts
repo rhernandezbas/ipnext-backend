@@ -34,6 +34,8 @@ export const AddContractServiceSchema = z.object({
 export const UpdateContractServiceSchema = z.object({
   status: z.enum(['active', 'inactive']).optional(),
   notes:  z.string().nullish(),
+  // #127 - optional cancellation reason (required by FE modal but optional in BE)
+  reason: z.string().nullish(),
 });
 
 export type AddContractServiceInput = z.infer<typeof AddContractServiceSchema>;
@@ -85,6 +87,8 @@ export interface ServiceEventDto {
   occurredAt: string;  // ISO 8601
   actorName:  string;
   cic:        string | null;
+  // #127 - optional cancellation reason; null for legacy events.
+  reason:     string | null;
 }
 
 /** Wire DTO for the service history endpoint. tvLogin IS exposed; tvPassword is NEVER exposed. */
@@ -134,6 +138,7 @@ export function tvEventToServiceEvent(tvEvent: {
   cic: string | null;
   actorName: string;
   createdAt: string;
+  reason?: string | null;
 }): ServiceEventDto {
   const typeMap: Record<string, 'activated' | 'deactivated' | 'reactivated'> = {
     alta:         'activated',
@@ -146,6 +151,7 @@ export function tvEventToServiceEvent(tvEvent: {
     occurredAt: tvEvent.createdAt,
     actorName:  tvEvent.actorName,
     cic:        tvEvent.cic,
+    reason:     tvEvent.reason ?? null,
   };
 }
 

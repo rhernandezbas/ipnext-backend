@@ -32,6 +32,7 @@ export class InMemoryTvActivationEventRepository implements TvActivationEventRep
       internalId:   input.internalId ?? null,
       seq:          input.seq ?? null,
       contractId:   input.contractId ?? null,
+      reason:       input.reason ?? null,
       createdAt:    this.now().toISOString(),
     };
     this.store.push(event);

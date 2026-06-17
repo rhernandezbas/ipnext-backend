@@ -14,7 +14,7 @@ export class RemoveContractService {
   ) {}
 
   /** Idempotent: a missing id is a no-op (route returns 204 either way, spec CSV-3.2). */
-  async execute(id: string, actor?: ActorInput): Promise<void> {
+  async execute(id: string, actor?: ActorInput, reason?: string): Promise<void> {
     // #110 — read the row before deletion to capture contractId, serviceCatalogId, and status
     let snapshotForEvent: { contractId: string; serviceCatalogId: string } | undefined;
     if (this.eventRepo) {
@@ -39,6 +39,7 @@ export class RemoveContractService {
           eventType:        'deactivated',
           actorId:          actor?.actorId ?? null,
           actorName:        actor?.actorName ?? '',
+          reason:           reason ?? null,
         });
       } catch (err) {
         console.warn('[RemoveContractService] Failed to record deactivated event (best-effort):', err);

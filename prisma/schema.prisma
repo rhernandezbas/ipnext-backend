@@ -2457,6 +2457,8 @@ model TvActivationEvent {
   internalId String?
   seq        Int?
   contractId String?
+  // #127 - optional cancellation reason threaded from the FE cancel modal.
+  reason     String?
   createdAt  DateTime @default(now())
 
   @@index([clientId, createdAt(sort: Desc)])
@@ -2477,6 +2479,8 @@ model ContractServiceEvent {
   actor            RbacUser? @relation("ContractServiceEventActor", fields: [actorId], references: [id], onDelete: SetNull)
   actorName        String    @default("")  // snapshot, legible tras borrado del user
   notes            String?
+  // #127 - optional cancellation reason threaded from the FE cancel modal.
+  reason           String?
   createdAt        DateTime  @default(now())
 
   contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)

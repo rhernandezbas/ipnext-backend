@@ -48,6 +48,7 @@ export class ListContractServiceHistory {
           occurredAt: ev.createdAt,
           actorName:  ev.actorName,
           cic:        null,
+          reason:     ev.reason ?? null,
         });
       }
     }
@@ -113,6 +114,7 @@ function synthesizeLegacyEvents(createdAt: string, deactivatedAt: string | null)
       occurredAt: createdAt,
       actorName:  '',
       cic:        null,
+      reason:     null,
     },
   ];
   if (deactivatedAt) {
@@ -122,6 +124,7 @@ function synthesizeLegacyEvents(createdAt: string, deactivatedAt: string | null)
       occurredAt: deactivatedAt,
       actorName:  '',
       cic:        null,
+      reason:     null,
     });
   }
   return events;
