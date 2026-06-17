@@ -512,10 +512,12 @@ describe('IClassClient', () => {
     const TEAMS_OK = {
       ok: {
         data: {
+          // IClass returns the team name in `nome` (Portuguese), NOT `name` (#128) — the
+          // fixture must be faithful to the live API or the bug stays hidden.
           objects: [
-            { login: 'equipe-01', name: 'Equipe Alpha', thirdPartyCode: '6808841' },
-            { login: '  ', name: 'Empty login team', thirdPartyCode: null }, // filtered
-            { login: 'equipe-02', name: 'Equipe Beta', thirdPartyCode: null },
+            { login: 'equipe-01', nome: 'Equipe Alpha', thirdPartyCode: '6808841' },
+            { login: '  ', nome: 'Empty login team', thirdPartyCode: null }, // filtered
+            { login: 'equipe-02', nome: 'Equipe Beta', thirdPartyCode: null },
           ],
           hasMoreElements: false,
         },

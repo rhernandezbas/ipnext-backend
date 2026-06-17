@@ -470,12 +470,13 @@ export class IClassClient implements IClassPort {
    */
   async listTeams(): Promise<IClassTeamDescriptor[]> {
     const data = await this.authedGet<{
-      objects?: Array<{ login?: unknown; name?: unknown; thirdPartyCode?: unknown }>
+      // IClass returns the team name in `nome` (Portuguese); keep `name` as fallback (#128).
+      objects?: Array<{ login?: unknown; nome?: unknown; name?: unknown; thirdPartyCode?: unknown }>
     }>(`/teams?thirdPartyId=${this.thirdPartyId}&pagesize=200`);
     return (data.objects ?? [])
       .map(o => ({
         login: String(o.login ?? '').trim(),
-        name: String(o.name ?? '').trim(),
+        name: String(o.nome ?? o.name ?? '').trim(),
         thirdPartyCode: o.thirdPartyCode != null ? String(o.thirdPartyCode).trim() : null,
       }))
       .filter(t => t.login.length > 0);
