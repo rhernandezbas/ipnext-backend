@@ -3,7 +3,8 @@ import { ClientMirrorRepository } from '@domain/ports/ClientMirrorRepository';
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 
 const SYNC_ENTITY = 'gr-debtor-balances';
-const DEBTOR_STATUS_CODE = '2';
+/** Estados GR que requieren balance: Deudor (2), Inactivo (3), Baja (6). */
+const DEBTOR_LIKE_STATUSES = ['2', '3', '6'] as const;
 const DEFAULT_PAGE_SIZE = 100;
 
 export interface RefreshDebtorBalancesResult {
@@ -18,14 +19,20 @@ export interface RefreshDebtorBalancesOptions {
 }
 
 /**
- * Batch use case: fetch the outstanding balance for every debtor (estado=2)
- * and persist it via ClientMirrorRepository.updateClientBalance.
+ * Batch use case: fetch the outstanding balance for every debtor (estado=2),
+ * inactive (estado=3) and baja (estado=6) client, and persist it via
+ * ClientMirrorRepository.updateClientBalance.
  *
- * Bounded to ~167 GR calls (only debtors), never the full ~5589.
- * One debtor failure logs and continues — the batch never aborts mid-loop.
+ * Iterates all three status buckets sequentially; deduplicates client ids
+ * via a Set before fetching balances.
+ * One client failure logs and continues — the batch never aborts mid-loop.
  * Wholesale failure (e.g. GR unreachable when enumerating) is caught,
  * recorded in SyncState (same pattern as SyncGestionRealClients), and
  * returned as an error result (never re-thrown).
+ *
+ * ⚠️  Volume note: estado=3 (Inactivos) may be a large set and increase
+ * GR API call count substantially. Add throttling/rate-limit handling if
+ * GR starts returning 429s.
  */
 export class RefreshDebtorBalances {
   private readonly now: () => Date;
@@ -47,55 +54,73 @@ export class RefreshDebtorBalances {
     let errors = 0;
     const at = this.now();
 
-    try {
-      // Enumerate all debtors via paginated clientes_consulta with estado=2
-      const debtorIds: string[] = [];
+    // Enumerate debtors, inactives and bajas via paginated clientes_consulta.
+    // Each status bucket is isolated: if fetchClients fails for one estado, we
+    // log the error, count it, and continue with the next estado. Clients already
+    // enumerated from prior estados are still refreshed.
+    // Use a Set to deduplicate in case a client appears in more than one bucket
+    // (defensive against dirty data / race conditions — not a structural concern).
+    const clientIdSet = new Set<string>();
+
+    for (const estado of DEBTOR_LIKE_STATUSES) {
       let offset = 0;
+      let countForStatus = 0;
 
-      while (true) {
-        const { total, clients } = await this.gr.fetchClients({
-          cantidad: this.pageSize,
-          offset,
-          estado: DEBTOR_STATUS_CODE,
-        });
-        for (const c of clients) {
-          debtorIds.push(c.grClienteId);
+      try {
+        while (true) {
+          const { total, clients } = await this.gr.fetchClients({
+            cantidad: this.pageSize,
+            offset,
+            estado,
+          });
+          for (const c of clients) {
+            clientIdSet.add(c.grClienteId);
+            countForStatus++;
+          }
+          offset += this.pageSize;
+          if (clients.length === 0 || offset >= total) break;
         }
-        offset += this.pageSize;
-        if (clients.length === 0 || offset >= total) break;
-      }
 
-      // Fetch and store balance for each debtor, one at a time
-      for (const grClienteId of debtorIds) {
-        try {
-          const balance = await this.gr.fetchClientBalance(grClienteId);
-          await this.mirror.updateClientBalance(grClienteId, balance.amount, balance.currency, at);
-          refreshed++;
-        } catch (err) {
-          console.error(`[gr-balance] Error refreshing debtor ${grClienteId}:`, (err as Error).message);
-          errors++;
-        }
+        console.log(`[gr-balance] Estado ${estado}: ${countForStatus} cliente(s) enumerado(s)`);
+      } catch (err) {
+        console.error(`[gr-balance] Enumeration failure for estado ${estado}:`, (err as Error).message);
+        errors++;
+        // Continue with the next estado — do not abort the whole batch
       }
-
-      await this.state.save({
-        entity: SYNC_ENTITY,
-        cursor: null,
-        lastRunAt: at,
-        lastResult: 'ok',
-        itemsSynced: refreshed,
-      });
-    } catch (err) {
-      const message = (err as Error).message;
-      console.error('[gr-balance] Wholesale failure:', message);
-      errors++;
-      await this.state.save({
-        entity: SYNC_ENTITY,
-        cursor: null,
-        lastRunAt: at,
-        lastResult: `error: ${message}`,
-        itemsSynced: refreshed,
-      });
     }
+
+    console.log(`[gr-balance] Total únicos a refrescar: ${clientIdSet.size}`);
+
+    // Fetch and store balance for each unique client, one at a time
+    for (const grClienteId of clientIdSet) {
+      try {
+        const balance = await this.gr.fetchClientBalance(grClienteId);
+        await this.mirror.updateClientBalance(grClienteId, balance.amount, balance.currency, at);
+        refreshed++;
+      } catch (err) {
+        console.error(`[gr-balance] Error refreshing debtor ${grClienteId}:`, (err as Error).message);
+        errors++;
+      }
+    }
+
+    // lastResult:
+    //   'ok'       — at least one client was refreshed, or there was nothing to do
+    //                (no enumeration/balance errors).
+    //   'error: …' — there were errors (enumeration AND/OR balance) and NOTHING was
+    //                refreshed. Covers both "GR unreachable during enumeration" and
+    //                "enumeration ok but the balance endpoint is fully down".
+    const lastResult =
+      errors > 0 && refreshed === 0
+        ? `error: ${errors} failure(s), no clients refreshed`
+        : 'ok';
+
+    await this.state.save({
+      entity: SYNC_ENTITY,
+      cursor: null,
+      lastRunAt: at,
+      lastResult,
+      itemsSynced: refreshed,
+    });
 
     return { refreshed, skipped, errors };
   }
