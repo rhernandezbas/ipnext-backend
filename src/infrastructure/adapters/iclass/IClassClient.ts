@@ -27,6 +27,11 @@ const SUBRESOURCE_BACKOFF_MS = 400;
 /** Window (days) scanned over recent SOs to discover active soType ids for the
  * result-code catalog sync. Under the IClass 30-day list cap. */
 const RESULT_CODE_DISCOVERY_DAYS = 28;
+/** Window (days) used by getServiceOrder to find the OS via the list endpoint.
+ * IClass caps the updatedDate range at 30 days; we use 29 to stay safely under.
+ * A Prominense-created OS that was last updated more than 29 days ago won't be
+ * found by the pre-check — acceptable since assign/close act on recent OS. */
+const SERVICE_ORDER_LOOKUP_DAYS = 29;
 /** Máximo de reintentos ante un HTTP 429 (rate-limit de estado). */
 const MAX_RATE_LIMIT_RETRIES = 4;
 
@@ -279,7 +284,10 @@ export class IClassClient implements IClassPort {
   /**
    * GET a paginated IClass list resource, following pages while hasMoreElements.
    * Treats 204 (empty body) as an empty list and retries once on the textual
-   * "Espere um pouco" rate-limit response.
+   * "Espere um pouco" rate-limit response. If the retry also returns a rate-limit,
+   * throws IClassUnavailableError — a persistent rate-limit must never be silently
+   * treated as an empty list (that would cause getServiceOrder to return null,
+   * which callers interpret as "OS not found" — a silent corruption).
    */
   private async fetchAllPages(path: string, params: URLSearchParams): Promise<Record<string, unknown>[]> {
     const out: Record<string, unknown>[] = [];
@@ -291,8 +299,12 @@ export class IClassClient implements IClassPort {
       if (isRateLimited(data)) {
         await this.sleep(this.subresourceBackoffMs * 2);
         data = await this.authedGet<unknown>(`${path}?${params.toString()}`);
+        // If still rate-limited after the retry, throw — must not return empty list.
+        if (isRateLimited(data)) {
+          throw new IClassUnavailableError('IClass rate-limited (Espere um pouco) on list');
+        }
       }
-      if (!data || typeof data !== 'object') break; // 204 / empty / rate-limited text
+      if (!data || typeof data !== 'object') break; // 204 / empty body
       const body = data as { objects?: unknown[]; hasMoreElements?: boolean };
       const objects = Array.isArray(body.objects) ? body.objects : [];
       for (const o of objects) if (o && typeof o === 'object') out.push(o as Record<string, unknown>);
@@ -401,25 +413,43 @@ export class IClassClient implements IClassPort {
   // ── Ola A: getServiceOrder + closeServiceOrder ─────────────────────────────
 
   /**
-   * Fetch the current state of a single Service Order for the live pre-check.
-   * Returns null when IClass responds 404 or 204 (OS unknown to IClass).
-   * Passes through withAuthRetry (429-resilient via authedGetOrNull).
-   * AD-5: reuses parseServiceOrderSummary — same shape as list endpoint.
+   * Fetch the current state of a Service Order by its CODE (e.g. "4949") for
+   * the live pre-check before assign/close actions.
    *
-   * IMPORTANT: a rate-limit-200 ("Espere um pouco") must NEVER return null.
-   * Returning null would be interpreted as "OS not found" — a silent corruption.
-   * Instead, isRateLimited is checked first and throws IClassUnavailableError.
+   * WHY via list: callers pass `task.iclassOrderCode` (the OS code returned by
+   * createServiceOrder as `codigoOS`). The endpoint `GET /serviceorders/{id}`
+   * expects IClass's INTERNAL numeric id — passing the code returns HTTP 204
+   * (no OS with that internal id). The list endpoint accepts a `serviceOrderCode`
+   * filter and returns the full summary shape, so we resolve the OS via the list
+   * and return the first exact-code match.
+   *
+   * Lookback window: IClass caps the updatedDate range at 30 days; we use 29
+   * (SERVICE_ORDER_LOOKUP_DAYS). An OS last updated more than 29 days ago won't
+   * be found — acceptable since assign/close act on recently-created OS.
+   *
+   * Exact-match guard: the IClass filter may behave as a LIKE/prefix match, so
+   * we require `String(m.iclassCodigo) === String(code)` — not just matches[0].
+   *
+   * Rate-limit safety: fetchAllPages throws IClassUnavailableError when a
+   * rate-limit ("Espere um pouco") persists after one retry, so a rate-limit is
+   * never silently returned as an empty list (which getServiceOrder would map to
+   * null = "OS not found"). A true HTTP 429 also propagates as IClassUnavailableError.
    */
-  async getServiceOrder(iclassId: string): Promise<ServiceOrderSnapshot | null> {
-    // authedGetOrNull handles 404 → null and rate-limit-200 → IClassUnavailableError.
-    const raw = await this.authedGetOrNull(`/serviceorders/${iclassId}`);
-    if (!raw || typeof raw !== 'object') return null;
-    const summary = parseServiceOrderSummary(raw as Record<string, unknown>, this.clusterName);
+  async getServiceOrder(code: string): Promise<ServiceOrderSnapshot | null> {
+    const now = this.now();
+    const begin = new Date(now.getTime() - SERVICE_ORDER_LOOKUP_DAYS * 24 * 60 * 60 * 1000);
+    const matches = await this.listServiceOrders({
+      serviceOrderCode: code,
+      updatedDateBegin: begin,
+      updatedDateEnd: now,
+    });
+    const m = matches.find(s => String(s.iclassCodigo) === String(code)) ?? null;
+    if (!m) return null;
     return {
-      iclassId: summary.iclassId,
-      iclassCodigo: summary.iclassCodigo,
-      statusCode: summary.statusCode,
-      statusDescription: summary.statusDescription,
+      iclassId: m.iclassId,
+      iclassCodigo: m.iclassCodigo,
+      statusCode: m.statusCode,
+      statusDescription: m.statusDescription,
     };
   }
 

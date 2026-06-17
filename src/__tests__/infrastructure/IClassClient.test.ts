@@ -376,51 +376,170 @@ describe('IClassClient', () => {
     expect(body.address.nodeCode).toBe('Mercedes');
   });
 
-  // ── A1: getServiceOrder 200 → parsea snapshot ─────────────────────────────
+  // ── A1: getServiceOrder resolves by code via listServiceOrders (not GET-by-id) ──
+  // Bug fix: callers pass iclassOrderCode (e.g. "4949"), NOT the internal numeric id.
+  // GET /serviceorders/4949 → 204 (internal id 4949 doesn't exist). Fix: use
+  // listServiceOrders with serviceOrderCode filter, then exact-match on codigo.
 
-  it('A1: getServiceOrder 200 → returns snapshot with statusCode/statusDescription', async () => {
-    const GET_OS_OK = {
+  it('A1: getServiceOrder resolves code "4949" via list — NOT GET /serviceorders/4949', async () => {
+    // The list response — paginator shape required by fetchAllPages
+    const LIST_PAGE = {
       ok: {
         data: {
-          id: 'iclass-42',
-          codigo: 'OS-100',
-          status: { id: '1', descricao: 'Aberta' },
-          contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {}, criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
+          objects: [
+            {
+              id: '101040557001',
+              codigo: '4949',
+              status: { id: '1', descricao: 'Aberta' },
+              contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {},
+              criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
+            },
+          ],
+          hasMoreElements: false,
         },
       },
     };
-    const { http, calls } = makeHttp({ post: [LOGIN_OK], get: [GET_OS_OK] });
-    const client = new IClassClient({ ...opts, http: http as never });
-    (client as any).token = 'TKN1'; // skip login
-
-    const snapshot = await client.getServiceOrder('iclass-42');
-
-    expect(snapshot).not.toBeNull();
-    expect(snapshot!.iclassId).toBe('iclass-42');
-    expect(snapshot!.iclassCodigo).toBe('OS-100');
-    expect(snapshot!.statusCode).toBe('1');
-    expect(snapshot!.statusDescription).toBe('Aberta');
-    const getCall = calls.find(c => c.method === 'GET' && c.url.includes('/serviceorders/iclass-42'));
-    expect(getCall).toBeTruthy();
-  });
-
-  // ── A2: getServiceOrder 404/204 → null ───────────────────────────────────
-
-  it('A2: getServiceOrder 404 → null (OS unknown to IClass)', async () => {
-    const { http } = makeHttp({ post: [], get: [{ err: axiosError(404) }] });
+    const { http, calls } = makeHttp({ post: [], get: [LIST_PAGE] });
     const client = new IClassClient({ ...opts, http: http as never });
     (client as any).token = 'TKN1';
 
-    const result = await client.getServiceOrder('unknown-id');
+    const snapshot = await client.getServiceOrder('4949');
+
+    // Must resolve to the OS with the real internal id, not null
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.iclassId).toBe('101040557001');
+    expect(snapshot!.iclassCodigo).toBe('4949');
+    expect(snapshot!.statusCode).toBe('1');
+    expect(snapshot!.statusDescription).toBe('Aberta');
+
+    // Must have called GET /serviceorders?... (the list endpoint), NOT GET /serviceorders/4949
+    const getCall = calls.find(c => c.method === 'GET')!;
+    expect(getCall).toBeTruthy();
+    expect(getCall.url).toContain('/serviceorders?');
+    expect(getCall.url).toContain('serviceOrderCode=4949');
+    // The old buggy path would hit /serviceorders/4949 — assert it didn't
+    expect(getCall.url).not.toMatch(/\/serviceorders\/4949($|\?)/);
+  });
+
+  it('A1b: getServiceOrder returns iclassId + statusCode from list result', async () => {
+    // Verifies the 4 snapshot fields come from parseServiceOrderSummary on the list item
+    const LIST_PAGE = {
+      ok: {
+        data: {
+          objects: [
+            {
+              id: '999888777',
+              codigo: 'OS-777',
+              status: { id: '7', descricao: 'Encerrada' },
+              contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {},
+              criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
+            },
+          ],
+          hasMoreElements: false,
+        },
+      },
+    };
+    const { http } = makeHttp({ post: [], get: [LIST_PAGE] });
+    const client = new IClassClient({ ...opts, http: http as never });
+    (client as any).token = 'TKN1';
+
+    const snapshot = await client.getServiceOrder('OS-777');
+
+    expect(snapshot!.iclassId).toBe('999888777');
+    expect(snapshot!.iclassCodigo).toBe('OS-777');
+    expect(snapshot!.statusCode).toBe('7');
+    expect(snapshot!.statusDescription).toBe('Encerrada');
+  });
+
+  // ── A2: getServiceOrder → null when list returns empty ────────────────────
+
+  it('A2: getServiceOrder → null when list returns empty objects (OS not found)', async () => {
+    const EMPTY_LIST = {
+      ok: {
+        data: { objects: [], hasMoreElements: false },
+      },
+    };
+    const { http } = makeHttp({ post: [], get: [EMPTY_LIST] });
+    const client = new IClassClient({ ...opts, http: http as never });
+    (client as any).token = 'TKN1';
+
+    const result = await client.getServiceOrder('unknown-code');
     expect(result).toBeNull();
   });
 
-  it('A2b: getServiceOrder empty body (204-style) → null', async () => {
+  it('A2b: getServiceOrder → null when list returns empty body (204-style)', async () => {
     const { http } = makeHttp({ post: [], get: [{ ok: { data: null } }] });
     const client = new IClassClient({ ...opts, http: http as never });
     (client as any).token = 'TKN1';
 
-    const result = await client.getServiceOrder('any-id');
+    const result = await client.getServiceOrder('any-code');
+    expect(result).toBeNull();
+  });
+
+  // ── A1c: exact-match guard — LIKE noise from IClass filter ────────────────
+  // IClass serviceOrderCode filter may behave as a LIKE (prefix/substring match).
+  // getServiceOrder must pick the entry whose codigo === code exactly, not just [0].
+
+  it('A1c: exact-match — list returns two entries, only one matches the code exactly', async () => {
+    const LIST_WITH_NOISE = {
+      ok: {
+        data: {
+          objects: [
+            {
+              // Noise: IClass LIKE matched "49490" as a prefix of "4949" — different code
+              id: '111000111',
+              codigo: '49490',
+              status: { id: '2', descricao: 'Pendente' },
+              contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {},
+              criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
+            },
+            {
+              // Exact match
+              id: '101040557001',
+              codigo: '4949',
+              status: { id: '1', descricao: 'Aberta' },
+              contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {},
+              criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
+            },
+          ],
+          hasMoreElements: false,
+        },
+      },
+    };
+    const { http } = makeHttp({ post: [], get: [LIST_WITH_NOISE] });
+    const client = new IClassClient({ ...opts, http: http as never });
+    (client as any).token = 'TKN1';
+
+    const snapshot = await client.getServiceOrder('4949');
+
+    // Must pick the exact-match entry, NOT the first (noise) entry
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.iclassId).toBe('101040557001');
+    expect(snapshot!.iclassCodigo).toBe('4949');
+  });
+
+  it('A1d: exact-match — no entry matches code exactly → null (even if LIKE returned results)', async () => {
+    const LIST_WITH_ONLY_NOISE = {
+      ok: {
+        data: {
+          objects: [
+            {
+              id: '111000111',
+              codigo: '49490',  // different code — not an exact match for "4949"
+              status: { id: '2', descricao: 'Pendente' },
+              contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {},
+              criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
+            },
+          ],
+          hasMoreElements: false,
+        },
+      },
+    };
+    const { http } = makeHttp({ post: [], get: [LIST_WITH_ONLY_NOISE] });
+    const client = new IClassClient({ ...opts, http: http as never });
+    (client as any).token = 'TKN1';
+
+    const result = await client.getServiceOrder('4949');
     expect(result).toBeNull();
   });
 
@@ -660,10 +779,13 @@ describe('IClassClient', () => {
   });
 
   it('RL-3: getServiceOrder rate-limit-200 → IClassUnavailableError (never null — AD-5)', async () => {
-    // A rate-limit on getServiceOrder must NOT return null (which would be
+    // A rate-limit on the list endpoint must NOT return null (which would be
     // interpreted as "OS not found") — it must throw IClassUnavailableError.
+    // fetchAllPages retries a rate-limit once; with maxRateLimitRetries=0 the
+    // second attempt still hits rate-limit → IClassUnavailableError.
+    // We provide two RATE_LIMIT_200 so the retry also fails.
     const RATE_LIMIT_200 = { ok: { data: 'Espere um pouco, por favor' } };
-    const { http } = makeHttp({ post: [], get: [RATE_LIMIT_200] });
+    const { http } = makeHttp({ post: [], get: [RATE_LIMIT_200, RATE_LIMIT_200] });
     const client = new IClassClient({
       ...opts,
       http: http as never,
@@ -673,7 +795,7 @@ describe('IClassClient', () => {
     (client as any).token = 'TKN1'; // skip login
 
     await expect(
-      client.getServiceOrder('iclass-42'),
+      client.getServiceOrder('4949'),
     ).rejects.toBeInstanceOf(IClassUnavailableError);
   });
 

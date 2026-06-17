@@ -222,29 +222,40 @@ describe('IClassClient — 429 retry on write methods (A6)', () => {
     maxRateLimitRetries: 2,
   };
 
-  const OS_OK = {
-    id: 'iclass-1',
-    codigo: 'OS-100',
-    status: { id: '1', descricao: 'Aberta' },
-    contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {}, criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
-  };
-
   // A6-1: getServiceOrder → 429 on first attempt, succeeds on retry
+  // NOTE: getServiceOrder now resolves via listServiceOrders (list endpoint), not
+  // GET /serviceorders/{id}. The 429 is an HTTP 429 thrown by authedGet (inside
+  // withAuthRetry). The retry returns a paginator-shaped list with the matching OS.
   it('A6-1: getServiceOrder 429 → retries and returns snapshot', async () => {
     const sleepCalls: number[] = [];
     const fakeSleep = (ms: number) => { sleepCalls.push(ms); return Promise.resolve(); };
 
+    // Paginator response — fetchAllPages expects { objects: [...], hasMoreElements }
+    const LIST_OK = {
+      objects: [
+        {
+          id: 'iclass-1',
+          codigo: 'OS-100',
+          status: { id: '1', descricao: 'Aberta' },
+          contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {},
+          criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
+        },
+      ],
+      hasMoreElements: false,
+    };
+
     const http = {
       post: jest.fn(), // no login needed (token pre-set)
       get: jest.fn()
-        .mockRejectedValueOnce(rateLimitError())
-        .mockResolvedValueOnce({ data: OS_OK }),
+        .mockRejectedValueOnce(rateLimitError())   // first GET → HTTP 429
+        .mockResolvedValueOnce({ data: LIST_OK }), // retry → list with OS
     };
 
     const client = new IClassClient({ ...BASE_OPTS, http: http as any, _sleep: fakeSleep });
     (client as any).token = 'TKN';
 
-    const snapshot = await client.getServiceOrder('iclass-1');
+    // Pass the code (codigo), NOT iclass-1 (the internal id)
+    const snapshot = await client.getServiceOrder('OS-100');
 
     expect(snapshot).not.toBeNull();
     expect(snapshot!.iclassId).toBe('iclass-1');
