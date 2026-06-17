@@ -1,4 +1,4 @@
-import { PppoeMatchMethod, PppoeService } from '../entities/pppoeService';
+import { PppoeService } from '../entities/pppoeService';
 
 export interface PppoeServiceUpsert {
   username: string;
@@ -8,7 +8,6 @@ export interface PppoeServiceUpsert {
   status?: string;
   nasId: string;
   contractId?: string | null;
-  matchMethod?: PppoeMatchMethod | null;
 }
 
 export interface PppoeServiceRepository {

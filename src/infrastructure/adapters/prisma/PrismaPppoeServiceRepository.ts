@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { PppoeMatchMethod, PppoeService } from '@domain/entities/pppoeService';
+import { PppoeService } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert } from '@domain/ports/PppoeServiceRepository';
 
 /**
@@ -22,8 +22,6 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
       status: data.status ?? 'enabled',
       nasId: data.nasId,
       contractId: data.contractId ?? null,
-      matchMethod: data.matchMethod ?? null,
-      importedAt: new Date(),
     };
     const row = await this.model.upsert({
       where: { username: data.username },
@@ -59,8 +57,6 @@ function toEntity(row: any): PppoeService {
     status: row.status,
     nasId: row.nasId,
     contractId: row.contractId ?? null,
-    matchMethod: (row.matchMethod ?? null) as PppoeMatchMethod | null,
-    importedAt: row.importedAt ? new Date(row.importedAt).toISOString() : null,
     createdAt: new Date(row.createdAt).toISOString(),
   };
 }

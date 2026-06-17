@@ -1,6 +1,6 @@
 /**
  * pppoe-foundation — InMemoryPppoeServiceRepository unit tests.
- * Cubre spec pppoe-inventory: upsert idempotente por username, huérfanos (contractId null),
+ * Cubre: upsert idempotente por username, registros sin contrato (contractId null),
  * findByContract multi-contrato, defaults.
  */
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
@@ -20,31 +20,27 @@ describe('InMemoryPppoeServiceRepository', () => {
     expect(s.profile).toBeNull();
     expect(s.remoteAddress).toBeNull();
     expect(s.contractId).toBeNull();
-    expect(s.matchMethod).toBeNull();
     expect(typeof s.createdAt).toBe('string');
   });
 
   it('upsert es idempotente por username: actualiza, NO duplica', async () => {
     await repo.upsertByUsername({ username: 'u1', password: 'p1', nasId: 'nas1', profile: 'IP-Air-30-10' });
     const updated = await repo.upsertByUsername({
-      username: 'u1', password: 'p2', nasId: 'nas1',
-      profile: 'IP-REDUCCION', contractId: 'C1', matchMethod: 'username',
+      username: 'u1', password: 'p2', nasId: 'nas1', profile: 'IP-REDUCCION', contractId: 'C1',
     });
     const all = await repo.list();
     expect(all).toHaveLength(1);
     expect(updated.password).toBe('p2');
     expect(updated.profile).toBe('IP-REDUCCION');
     expect(updated.contractId).toBe('C1');
-    expect(updated.matchMethod).toBe('username');
   });
 
-  it('persiste huérfano (contractId null, matchMethod orphan)', async () => {
+  it('persiste registro sin contrato (contractId null)', async () => {
     const s = await repo.upsertByUsername({
-      username: 'agote-x', password: 'p', nasId: 'nas1', contractId: null, matchMethod: 'orphan',
+      username: 'sin-contrato', password: 'p', nasId: 'nas1', contractId: null,
     });
     expect(s.contractId).toBeNull();
-    expect(s.matchMethod).toBe('orphan');
-    expect(await repo.findByUsername('agote-x')).not.toBeNull();
+    expect(await repo.findByUsername('sin-contrato')).not.toBeNull();
   });
 
   it('findByContract devuelve todas las filas del contrato (multi-contrato seguro)', async () => {

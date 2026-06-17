@@ -15,7 +15,6 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
   }
 
   async upsertByUsername(data: PppoeServiceUpsert): Promise<PppoeService> {
-    const ts = this.now().toISOString();
     const existing = this.store.find(s => s.username === data.username);
     if (existing) {
       existing.password = data.password;
@@ -24,8 +23,6 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       existing.status = data.status ?? 'enabled';
       existing.nasId = data.nasId;
       existing.contractId = data.contractId ?? null;
-      existing.matchMethod = data.matchMethod ?? null;
-      existing.importedAt = ts;
       return { ...existing };
     }
     const created: PppoeService = {
@@ -37,9 +34,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       status: data.status ?? 'enabled',
       nasId: data.nasId,
       contractId: data.contractId ?? null,
-      matchMethod: data.matchMethod ?? null,
-      importedAt: ts,
-      createdAt: ts,
+      createdAt: this.now().toISOString(),
     };
     this.store.push(created);
     return { ...created };

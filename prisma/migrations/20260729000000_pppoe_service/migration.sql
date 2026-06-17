@@ -8,8 +8,6 @@ CREATE TABLE "PppoeService" (
     "status" TEXT NOT NULL DEFAULT 'enabled',
     "nasId" TEXT NOT NULL,
     "contractId" TEXT,
-    "matchMethod" TEXT,
-    "importedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "PppoeService_pkey" PRIMARY KEY ("id")
 );
