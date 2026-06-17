@@ -109,6 +109,10 @@ interface Opts {
   tvCredentials?: TvCredentials | null;
   /** #72 — pre-seeded TV cancellation repo (if omitted, an empty one is created). */
   tvCancellation?: InMemoryClientTvCancellationRepository;
+  /** #131 PARTE B — tvEventRepo for AddTvService; when provided, reactivacion events are recorded. */
+  tvEventRepo?: InMemoryTvActivationEventRepository;
+  /** #131 PARTE B — inject req.user before the gigared router (simulates authenticated operator). */
+  user?: { id: string; username: string };
 }
 
 async function buildApp(opts: Opts = {}) {
@@ -157,7 +161,7 @@ async function buildApp(opts: Opts = {}) {
     getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
     linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
     registerAccount: new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
-    addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
+    addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup, opts.tvEventRepo),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus: new SetOttStatus(port, customerLookup),
     cancelTv,
@@ -183,6 +187,11 @@ async function buildApp(opts: Opts = {}) {
 
   const app = express();
   app.use(express.json());
+  // #131 PARTE B — inject req.user for tests that need an authenticated operator context.
+  if (opts.user) {
+    const injectedUser = opts.user;
+    app.use((_req, _res, next) => { (_req as express.Request).user = { id: injectedUser.id, username: injectedUser.username, email: 'op@test.local' }; next(); });
+  }
   app.use('/api/gigared', router);
   app.use(errorHandler);
   return app;
@@ -919,5 +928,59 @@ describe('#115 POST /register — contractId requerido + identidad deriva del co
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
     expect(res.status).toBe(201);
     expect(res.body.account).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #131 PARTE B — W2: seam test — actor threaded from req.user to tvEventRepo
+// POST /customers/:id/services for a re-alta (inactive TV row) records 'reactivacion'
+// with the operator's actorName. Verifies the route→use-case→reconcile→tvEventRepo seam.
+// ---------------------------------------------------------------------------
+describe('#131 W2 POST /services — actor seam: req.user.username threaded to tvEventRepo', () => {
+  it('re-alta de servicio TV inactivo: registra evento "reactivacion" con actorName del operador', async () => {
+    // Pre-condition: an existing inactive Gigared-managed TV row for contract C1.
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const tvCat = await catalog.create({ name: 'TV', label: 'TV', active: true, sortOrder: 0 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (csRepo as any).catalog[tvCat.id] = { name: tvCat.name, label: tvCat.label };
+    // Create the inactive Gigared-managed row (notes prefixed "CIC " marks it as Gigared-managed).
+    const existingRow = await csRepo.add({ contractId: 'C1', serviceCatalogId: tvCat.id, notes: 'CIC 0000000001' });
+    await csRepo.update(existingRow.id, { status: 'inactive' });
+
+    // Gigared returns an account WITH a service → reconcile takes the "services present" branch
+    // → wasInactive=true → records 'reactivacion'.
+    const port = fakePort({
+      addService: jest.fn(async () => {}),
+      getAccountByInternalId: jest.fn(async () =>
+        fakeAccount({ internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
+    });
+
+    const tvEventRepo = new InMemoryTvActivationEventRepository();
+
+    // Build app with an authenticated operator injected via req.user.
+    const app = await buildApp({
+      port,
+      csRepo,
+      catalog,
+      tvEventRepo,
+      user: { id: 'op-007', username: 'operador.gonzalez' },
+    });
+
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/services')
+      .send({ serviceId: '129', contractId: 'C1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ gigared: 'ok', local: 'ok' });
+
+    // THE SEAM: the 'reactivacion' event must have been recorded with the operator's actorName.
+    const events = tvEventRepo.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.eventType).toBe('reactivacion');
+    // Ensures req.user.username was correctly threaded — not swapped with req.user.id and not empty.
+    expect(events[0]!.actorName).toBe('operador.gonzalez');
+    expect(events[0]!.actorId).toBe('op-007');
+    expect(events[0]!.contractId).toBe('C1');
   });
 });

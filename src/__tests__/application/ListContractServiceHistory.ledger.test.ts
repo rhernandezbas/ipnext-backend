@@ -52,35 +52,41 @@ describe('ListContractServiceHistory — #110 ledger extension', () => {
     expect(item.events[0]!.cic).toBeNull();
   });
 
-  // R1.2 — TV service reads tv_activation_events, NOT the generic CSE repo
-  it('R1.2 TV: crosses tv_activation_events by contractId, cic preserved', async () => {
-    const { csRepo, cseRepo, catId } = await makeRepos();
+  // R1.2 — TV service merges tv_activation_events + CSE events for its serviceCatalogId (#131)
+  it('R1.2 TV: merges tv_activation_events + CSE events (both for catTV), sorted ASC (#131)', async () => {
+    const { csRepo, catId } = await makeRepos();
     // Add TV service with tvLogin set
     csRepo.catalog['catTV'] = { name: 'TV', label: 'TV' };
     const tvSvc = await csRepo.add({ contractId: 'C', serviceCatalogId: 'catTV', tvLogin: 'GIGA001', tvPassword: 'secret' });
 
-    // Add events in tvEventRepo for this contractId
-    const t0 = new Date('2026-07-01T08:00:00Z');
-    const t1 = new Date('2026-07-02T08:00:00Z');
-    let tick = 0;
-    const tvRepo = new InMemoryTvActivationEventRepository({ now: () => [t0, t1][tick++]! });
+    // All three timestamps are FIXED — deterministic ordering regardless of when the test runs.
+    const tCse = new Date('2026-06-01T08:00:00Z'); // CSE event: BEFORE the TV events
+    const t0   = new Date('2026-07-01T08:00:00Z'); // TV alta
+    const t1   = new Date('2026-07-02T08:00:00Z'); // TV baja
+
+    // CSE event with injectable clock — records at tCse (before t0/t1).
+    const cseRepoFixed = new InMemoryContractServiceEventRepository({ now: () => tCse });
+    await cseRepoFixed.record({ contractId: 'C', serviceCatalogId: 'catTV', eventType: 'activated' });
+
+    // TV activation events with injectable clock — t0 then t1.
+    let tvTick = 0;
+    const tvRepo = new InMemoryTvActivationEventRepository({ now: () => [t0, t1][tvTick++]! });
     await tvRepo.record({ clientId: 'CLI', contractId: 'C', actorId: null, actorName: 'sys', eventType: 'alta',  cic: 'CIC001' });
     await tvRepo.record({ clientId: 'CLI', contractId: 'C', actorId: null, actorName: 'sys', eventType: 'baja',  cic: 'CIC001' });
 
-    // Add a stray generic event in cseRepo — must NOT appear in TV item
-    await cseRepo.record({ contractId: 'C', serviceCatalogId: 'catTV', eventType: 'activated' });
-
-    const uc = new ListContractServiceHistory(csRepo, cseRepo, tvRepo);
+    const uc = new ListContractServiceHistory(csRepo, cseRepoFixed, tvRepo);
     const result = await uc.execute('C');
     expect(result).toHaveLength(1);
     const item = result[0]!;
     expect(item.id).toBe(tvSvc.id);
-    expect(item.events).toHaveLength(2);
-    // alta → activated; baja → deactivated; order ASC
-    expect(item.events[0]!.eventType).toBe('activated');
-    expect(item.events[1]!.eventType).toBe('deactivated');
-    expect(item.events[0]!.cic).toBe('CIC001');
+    // #131: 3 events total. CSE 'activated' at tCse (before t0), then tv alta at t0, tv baja at t1.
+    expect(item.events).toHaveLength(3);
+    // CSE event has no cic (null); tv events have CIC001.
+    expect(item.events[0]!.cic).toBeNull();              // CSE 'activated' at tCse (earliest)
+    expect(item.events[1]!.eventType).toBe('activated');  // tv alta at t0
     expect(item.events[1]!.cic).toBe('CIC001');
+    expect(item.events[2]!.eventType).toBe('deactivated'); // tv baja at t1
+    expect(item.events[2]!.cic).toBe('CIC001');
   });
 
   // R1.3 — legacy: service with no events synthesizes activated + optional deactivated
