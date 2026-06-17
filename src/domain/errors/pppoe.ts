@@ -32,3 +32,11 @@ export class PppoeServiceNotFoundError extends DomainError {
     this.name = 'PppoeServiceNotFoundError';
   }
 }
+
+/** No existe el NasServer (router) referenciado por `nasId`. */
+export class NasNotFoundError extends DomainError {
+  constructor(public readonly id: string) {
+    super(`NasServer ${id} not found`, 'NAS_NOT_FOUND');
+    this.name = 'NasNotFoundError';
+  }
+}
