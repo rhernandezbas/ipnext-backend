@@ -327,7 +327,7 @@ describe('IClassClient — 429 retry on write methods (A6)', () => {
     const http = makeHttp(
       [
         () => rateLimitError(),
-        () => ({ erros: null }),
+        () => ({ errors: [], success: true, result: {} }),
       ],
       [],
     );
@@ -336,7 +336,12 @@ describe('IClassClient — 429 retry on write methods (A6)', () => {
     (client as any).token = 'TKN';
 
     await expect(
-      client.updateServiceOrder({ serviceOrderCode: 'OS-100', requiredTeam: 'equipe-01' }),
+      client.updateServiceOrder({
+        serviceOrderCode: 'OS-100',
+        requiredTeam: 'equipe-01',
+        scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+        scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+      }),
     ).resolves.toBeUndefined();
 
     expect(sleepCalls).toHaveLength(1);
@@ -359,7 +364,12 @@ describe('IClassClient — 429 retry on write methods (A6)', () => {
     (client as any).token = 'TKN';
 
     await expect(
-      client.updateServiceOrder({ serviceOrderCode: 'OS-100', requiredTeam: 'equipe-01' }),
+      client.updateServiceOrder({
+        serviceOrderCode: 'OS-100',
+        requiredTeam: 'equipe-01',
+        scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+        scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+      }),
     ).rejects.toBeInstanceOf(IClassUnavailableError);
 
     expect(fakeSleep).toHaveBeenCalledTimes(2);

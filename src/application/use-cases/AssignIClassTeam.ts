@@ -4,7 +4,7 @@ import { IClassTeamRepository } from '@domain/ports/IClassTeamRepository';
 import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { ScheduledTask } from '@domain/entities/scheduling';
-import { TaskNotFoundError } from '@domain/errors/scheduling';
+import { TaskNotFoundError, MissingRequiredFieldsError } from '@domain/errors/scheduling';
 import {
   IClassActionDisabledError,
   IClassTaskNotOpenError,
@@ -88,10 +88,15 @@ export class AssignIClassTeam {
       throw new IClassAlreadyClosedError(task.iclassOrderCode);
     }
 
-    // Step 7: Push team assignment to IClass
+    // Step 7: Push team assignment to IClass (requires schedule window from task)
+    if (!task.startDate || !task.endDate) {
+      throw new MissingRequiredFieldsError(['startDate', 'endDate']);
+    }
     await this.iclass.updateServiceOrder({
       serviceOrderCode: task.iclassOrderCode,
       requiredTeam: team.login,
+      scheduleStart: new Date(task.startDate),
+      scheduleEnd: new Date(task.endDate),
     });
 
     // Step 8: Record activity (assign doesn't change local generalStatus)

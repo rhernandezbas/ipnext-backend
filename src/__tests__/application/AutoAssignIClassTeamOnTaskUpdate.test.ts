@@ -33,8 +33,15 @@ async function makeRepos() {
   const tech = await userRepo.create({ name: 'Tech One', email: 'tech1@test.com', login: 'tech1', passwordHash: 'h' });
   await userRepo.update(tech.id, { iclassTeamLogin: TEAM_LOGIN });
 
-  // Seed task with iclassOrderCode and open
-  schedulingRepo.seedTask({ id: TASK_ID, iclassOrderCode: ORDER_CODE, generalStatus: 'open', title: 'Task Auto' });
+  // Seed task with iclassOrderCode, open, and schedule window
+  schedulingRepo.seedTask({
+    id: TASK_ID,
+    iclassOrderCode: ORDER_CODE,
+    generalStatus: 'open',
+    title: 'Task Auto',
+    startDate: '2026-06-18T11:00:00.000Z',
+    endDate: '2026-06-18T15:00:00.000Z',
+  });
 
   // Seed OS snapshot (non-terminal)
   iclass.setServiceOrderSnapshot(ORDER_CODE, { iclassId: 'iclass-auto-1', iclassCodigo: ORDER_CODE, statusCode: '1', statusDescription: 'Aberta' });
@@ -62,6 +69,11 @@ describe('AutoAssignIClassTeamOnTaskUpdate', () => {
     expect(updateCalls).toHaveLength(1);
     expect(updateCalls[0]!.requiredTeam).toBe(TEAM_LOGIN);
     expect(updateCalls[0]!.serviceOrderCode).toBe(ORDER_CODE);
+    // Schedule window must be passed to updateServiceOrder
+    expect(updateCalls[0]!.scheduleStart).toBeInstanceOf(Date);
+    expect(updateCalls[0]!.scheduleEnd).toBeInstanceOf(Date);
+    expect(updateCalls[0]!.scheduleStart.toISOString()).toBe('2026-06-18T11:00:00.000Z');
+    expect(updateCalls[0]!.scheduleEnd.toISOString()).toBe('2026-06-18T15:00:00.000Z');
     expect(activityLog).toHaveLength(1);
     expect(activityLog[0]!.type).toBe('iclass_team_auto_assigned');
   });
@@ -150,6 +162,29 @@ describe('AutoAssignIClassTeamOnTaskUpdate', () => {
 
     expect(result.outcome).toBe('skipped');
     expect(result.reason).toBe('order-closed');
+    expect(iclass.getUpdateServiceOrderCalls()).toHaveLength(0);
+  });
+
+  // B8b: task has no startDate/endDate → skipped: no-schedule
+  it('B8b: task has no schedule window (startDate/endDate null) → skipped: no-schedule', async () => {
+    const { schedulingRepo, iclass, teamRepo, flagRepo, userRepo, techId } = await makeRepos();
+    // Seed a task without dates
+    schedulingRepo.seedTask({
+      id: 'task-no-sched',
+      iclassOrderCode: ORDER_CODE,
+      generalStatus: 'open',
+      title: 'No Schedule',
+      startDate: null,
+      endDate: null,
+    });
+    // Snapshot must exist (non-terminal) so we reach the schedule check
+    iclass.setServiceOrderSnapshot(ORDER_CODE, { iclassId: 'iclass-1', iclassCodigo: ORDER_CODE, statusCode: '1', statusDescription: 'Aberta' });
+
+    const uc = new AutoAssignIClassTeamOnTaskUpdate(schedulingRepo, iclass, teamRepo, flagRepo, userRepo);
+    const result = await uc.maybeAssign('task-no-sched', techId, ACTOR);
+
+    expect(result.outcome).toBe('skipped');
+    expect(result.reason).toBe('no-schedule');
     expect(iclass.getUpdateServiceOrderCalls()).toHaveLength(0);
   });
 

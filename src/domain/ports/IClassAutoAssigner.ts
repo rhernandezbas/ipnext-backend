@@ -15,7 +15,8 @@ export type AutoAssignSkipReason =
   | 'no-mapping'
   | 'team-inactive'
   | 'order-closed'
-  | 'not-open';
+  | 'not-open'
+  | 'no-schedule';
 
 export type AutoAssignFailReason = 'rejected' | 'unavailable';
 

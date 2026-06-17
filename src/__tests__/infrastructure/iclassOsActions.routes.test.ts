@@ -158,8 +158,15 @@ async function buildApp(): Promise<AppFixture> {
   // Seed team
   await teamRepo.upsertByLogin({ login: TEAM_LOGIN, name: 'Equipe Alpha', thirdPartyCode: null, active: true, selectable: true });
 
-  // Seed task
-  tasks.seedTask({ id: TASK_ID, iclassOrderCode: ORDER_CODE, generalStatus: 'open', title: 'Test action task' });
+  // Seed task — startDate/endDate required for the assign-team flow (#130: schedule window).
+  tasks.seedTask({
+    id: TASK_ID,
+    iclassOrderCode: ORDER_CODE,
+    generalStatus: 'open',
+    title: 'Test action task',
+    startDate: '2026-06-18T13:00:00.000Z',
+    endDate: '2026-06-18T14:00:00.000Z',
+  });
 
   // Seed OS snapshot (non-terminal)
   iclass.setServiceOrderSnapshot(ORDER_CODE, { iclassId: 'iclass-1', iclassCodigo: ORDER_CODE, statusCode: '1', statusDescription: 'Aberta' });

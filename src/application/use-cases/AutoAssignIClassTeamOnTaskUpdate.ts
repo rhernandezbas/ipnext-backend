@@ -98,11 +98,18 @@ export class AutoAssignIClassTeamOnTaskUpdate implements IClassAutoAssigner {
       return { outcome: 'skipped', reason: 'order-closed' };
     }
 
+    // Step 8b: task must have a schedule window (required for the update payload)
+    if (!task.startDate || !task.endDate) {
+      return { outcome: 'skipped', reason: 'no-schedule' };
+    }
+
     // Step 9: push team assignment to IClass
     try {
       await this.iclass.updateServiceOrder({
         serviceOrderCode: task.iclassOrderCode,
         requiredTeam: teamLogin,
+        scheduleStart: new Date(task.startDate),
+        scheduleEnd: new Date(task.endDate),
       });
 
       if (this.recorder) {

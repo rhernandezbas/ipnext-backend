@@ -126,14 +126,18 @@ export interface IClassTeamDescriptor {
 }
 
 /**
- * Input for updating a Service Order in IClass (assign team).
- * Only the requiredTeam field is set via this operation.
+ * Input for updating a Service Order in IClass (assign team + schedule window).
+ * The adapter builds the full nested soScheduleUpdateIn payload from these fields.
  */
 export interface UpdateServiceOrderInput {
   /** The IClass OS code (= task.iclassOrderCode). */
   serviceOrderCode: string;
   /** The team login to assign. */
   requiredTeam: string;
+  /** Schedule window start (from task.startDate). Formatted to Argentina wall-clock by the adapter. */
+  scheduleStart: Date;
+  /** Schedule window end (from task.endDate). Formatted to Argentina wall-clock by the adapter. */
+  scheduleEnd: Date;
 }
 
 /**

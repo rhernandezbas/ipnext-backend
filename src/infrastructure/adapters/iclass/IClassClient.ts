@@ -483,15 +483,33 @@ export class IClassClient implements IClassPort {
   }
 
   /**
-   * Update a Service Order in IClass (assign team).
-   * POST /serviceorders/update with { serviceOrderCode, requiredTeam }.
-   * Same error mapping as closeServiceOrder (AD-4 — no silent success).
-   * // TODO: confirmar el token de éxito real en la prueba en vivo (§10)
+   * Update a Service Order in IClass (assign team + schedule window).
+   * POST /serviceorders/update with nested soScheduleUpdateIn payload.
+   *
+   * Verified live 2026-06-18: the flat requiredTeam at the root is silently
+   * ignored by IClass. The ONLY way to assign a cuadrilla is via the nested
+   * soScheduleUpdateIn shape with scheduleDetails.requiredTeamLogins.
+   *
+   * The UPDATE endpoint returns ENGLISH keys (success/errors), NOT Portuguese
+   * (sucesso/erros) like the close endpoint. These are distinct response shapes.
    */
   async updateServiceOrder(input: UpdateServiceOrderInput): Promise<void> {
+    const scheduleDate = formatScheduleDate(input.scheduleStart);
+    const finishDate = formatScheduleDate(input.scheduleEnd);
     const payload = {
       serviceOrderCode: input.serviceOrderCode,
-      requiredTeam: input.requiredTeam,
+      soScheduleUpdateIn: {
+        soCode: input.serviceOrderCode,
+        scheduleDate,
+        requiredTeam: [input.requiredTeam],
+        scheduleDetails: {
+          requiredTeamLogins: [input.requiredTeam],
+          scheduleLimits: {
+            start: scheduleDate,
+            finish: finishDate,
+          },
+        },
+      },
     };
     const data = await this.authedPost<unknown>('/serviceorders/update', payload);
 
@@ -499,18 +517,21 @@ export class IClassClient implements IClassPort {
     if (isRateLimited(data)) {
       throw new IClassUnavailableError('IClass rate-limited (Espere um pouco) on update');
     }
-    // FIX 2: AD-4 — only a recognizable object response with `erros` key is accepted.
+    // The UPDATE endpoint uses ENGLISH keys: { success: boolean, errors: [...] }
+    // (the CLOSE endpoint uses Portuguese erros — do NOT change close).
     if (!data || typeof data !== 'object') {
       throw new IClassUnavailableError('IClass update returned unexpected non-object body');
     }
-    const typed = data as { erros?: unknown };
-    if (!('erros' in typed)) {
-      throw new IClassUnavailableError('IClass update returned unrecognized response shape');
+    const typed = data as { success?: unknown; errors?: unknown };
+    if (typed.success === true) {
+      // Explicit success.
+      return;
     }
-    if (typed.erros !== null && typed.erros !== undefined) {
-      throw new IClassRejectedError(formatIClassErrors(typed.erros));
+    if (Array.isArray(typed.errors) && typed.errors.length > 0) {
+      throw new IClassRejectedError(formatIClassErrors(typed.errors));
     }
-    // erros === null → explicit success.
+    // Neither success:true nor errors array — unrecognized shape (AD-4).
+    throw new IClassUnavailableError('IClass update returned unrecognized response shape');
   }
 
   private authedGet<T>(url: string): Promise<T> {
@@ -782,4 +803,36 @@ export function formatCloseDate(d: Date): string {
     `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
     `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} -0000`
   );
+}
+
+/**
+ * Date → "yyyy-MM-dd HH:mm:ss -0000" in ARGENTINA wall-clock for IClass schedule fields.
+ *
+ * IClass reads the HH:mm literally as its local time (Argentina, UTC-3). The prod
+ * container runs in UTC, so we MUST convert to Argentina wall-clock before formatting.
+ * The offset token stays "-0000" (IClass ignores it; only the HH:mm matters).
+ * Uses Intl.DateTimeFormat with timeZone 'America/Argentina/Buenos_Aires' to handle
+ * DST correctly (Argentina observes no DST but this is the correct IANA key).
+ */
+export function formatScheduleDate(d: Date): string {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  // en-CA gives "yyyy-MM-dd, HH:mm:ss" — we need "yyyy-MM-dd HH:mm:ss -0000"
+  const parts = fmt.formatToParts(d);
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? '00';
+  const yyyy = get('year');
+  const MM = get('month');
+  const dd = get('day');
+  const hh = get('hour');
+  const mi = get('minute');
+  const ss = get('second');
+  return `${yyyy}-${MM}-${dd} ${hh}:${mi}:${ss} -0000`;
 }

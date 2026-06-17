@@ -1,4 +1,4 @@
-import { IClassClient, formatCloseDate } from '@infrastructure/adapters/iclass/IClassClient';
+import { IClassClient, formatCloseDate, formatScheduleDate } from '@infrastructure/adapters/iclass/IClassClient';
 import { CreateServiceOrderInput } from '@domain/ports/IClassPort';
 import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/iclass';
 
@@ -537,20 +537,86 @@ describe('IClassClient', () => {
     expect(getCall!.url).toContain(opts.thirdPartyId);
   });
 
-  // ── A8: updateServiceOrder → sends requiredTeam payload ──────────────────
+  // ── A8: updateServiceOrder → sends nested soScheduleUpdateIn payload ───────
+  // Verified live 2026-06-18: the flat requiredTeam is silently ignored by IClass.
+  // The correct payload uses soScheduleUpdateIn with nested scheduleDetails.
 
-  it('A8: updateServiceOrder sends correct payload with requiredTeam', async () => {
-    const UPDATE_OK = { ok: { data: { erros: null } } };
+  it('A8: updateServiceOrder sends nested soScheduleUpdateIn payload with team + schedule window', async () => {
+    // English success shape verified live 2026-06-18
+    const UPDATE_OK = { ok: { data: { errors: [], success: true, result: {} } } };
     const { http, calls } = makeHttp({ post: [LOGIN_OK, UPDATE_OK], get: [] });
+    const scheduleStart = new Date('2026-06-18T11:00:00.000Z'); // 08:00 AR (-03)
+    const scheduleEnd = new Date('2026-06-18T15:00:00.000Z');   // 12:00 AR (-03)
     const client = new IClassClient({ ...opts, http: http as never });
 
-    await client.updateServiceOrder({ serviceOrderCode: 'OS-100', requiredTeam: 'equipe-01' });
+    await client.updateServiceOrder({
+      serviceOrderCode: 'OS-100',
+      requiredTeam: 'IPNXEMAV',
+      scheduleStart,
+      scheduleEnd,
+    });
 
     const updateCall = calls.find(c => c.url === '/serviceorders/update')!;
     expect(updateCall).toBeTruthy();
     const body = updateCall.body as Record<string, unknown>;
+    // Top-level serviceOrderCode
     expect(body['serviceOrderCode']).toBe('OS-100');
-    expect(body['requiredTeam']).toBe('equipe-01');
+    // soScheduleUpdateIn must be present (NOT flat requiredTeam at top level)
+    const sched = body['soScheduleUpdateIn'] as Record<string, unknown>;
+    expect(sched).toBeDefined();
+    expect(sched['soCode']).toBe('OS-100');
+    // scheduleDate = 3 space-separated tokens
+    const scheduleDate = sched['scheduleDate'] as string;
+    expect(scheduleDate.split(' ')).toHaveLength(3);
+    expect(scheduleDate.endsWith('-0000')).toBe(true);
+    // Top-level requiredTeam in soScheduleUpdateIn
+    expect(sched['requiredTeam']).toEqual(['IPNXEMAV']);
+    // scheduleDetails
+    const details = sched['scheduleDetails'] as Record<string, unknown>;
+    expect(details['requiredTeamLogins']).toEqual(['IPNXEMAV']);
+    const limits = details['scheduleLimits'] as Record<string, unknown>;
+    const startStr = limits['start'] as string;
+    const finishStr = limits['finish'] as string;
+    expect(startStr.split(' ')).toHaveLength(3);
+    expect(finishStr.split(' ')).toHaveLength(3);
+    // scheduleDate and limits.start should equal the formatted scheduleStart
+    expect(scheduleDate).toBe(startStr);
+    expect(finishStr).not.toBe(startStr);
+  });
+
+  it('A8b: updateServiceOrder failure (English errors array) → IClassRejectedError', async () => {
+    const UPDATE_REJECTED = {
+      ok: {
+        data: {
+          errors: [{ code: 'ICLERR_0208', description: 'OS não encontrada' }],
+          success: false,
+        },
+      },
+    };
+    const { http } = makeHttp({ post: [LOGIN_OK, UPDATE_REJECTED], get: [] });
+    const scheduleStart = new Date('2026-06-18T11:00:00.000Z');
+    const scheduleEnd = new Date('2026-06-18T15:00:00.000Z');
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.updateServiceOrder({
+      serviceOrderCode: 'OS-100',
+      requiredTeam: 'IPNXEMAV',
+      scheduleStart,
+      scheduleEnd,
+    }).catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).toContain('ICLERR_0208');
+    expect(err.detail).toContain('OS não encontrada');
+  });
+
+  it('A8c: formatScheduleDate reflects Argentina wall-clock for a known UTC instant', () => {
+    // 2026-06-18T16:00:00Z = 13:00 in AR (UTC-3)
+    const d = new Date('2026-06-18T16:00:00.000Z');
+    const formatted = formatScheduleDate(d);
+    // Should be 13:00 Argentina time
+    expect(formatted).toBe('2026-06-18 13:00:00 -0000');
+    expect(formatted.split(' ')).toHaveLength(3);
   });
 
   // ── FIX 1: rate-limit-200 ("Espere um pouco") in write methods → IClassUnavailableError ──
@@ -584,7 +650,12 @@ describe('IClassClient', () => {
     });
 
     await expect(
-      client.updateServiceOrder({ serviceOrderCode: 'OS-100', requiredTeam: 'equipe-01' }),
+      client.updateServiceOrder({
+        serviceOrderCode: 'OS-100',
+        requiredTeam: 'equipe-01',
+        scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+        scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+      }),
     ).rejects.toBeInstanceOf(IClassUnavailableError);
   });
 
@@ -646,7 +717,12 @@ describe('IClassClient', () => {
     const client = new IClassClient({ ...opts, http: http as never });
 
     await expect(
-      client.updateServiceOrder({ serviceOrderCode: 'OS-100', requiredTeam: 'equipe-01' }),
+      client.updateServiceOrder({
+        serviceOrderCode: 'OS-100',
+        requiredTeam: 'equipe-01',
+        scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+        scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+      }),
     ).rejects.toBeInstanceOf(IClassUnavailableError);
   });
 
@@ -662,13 +738,18 @@ describe('IClassClient', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('FIX2-REG2: updateServiceOrder 200 {erros:null} → still resolves void', async () => {
-    const UPDATE_OK = { ok: { data: { erros: null } } };
+  it('FIX2-REG2: updateServiceOrder 200 {success:true, errors:[]} → resolves void (English success shape)', async () => {
+    const UPDATE_OK = { ok: { data: { errors: [], success: true, result: {} } } };
     const { http } = makeHttp({ post: [LOGIN_OK, UPDATE_OK], get: [] });
     const client = new IClassClient({ ...opts, http: http as never });
 
     await expect(
-      client.updateServiceOrder({ serviceOrderCode: 'OS-100', requiredTeam: 'equipe-01' }),
+      client.updateServiceOrder({
+        serviceOrderCode: 'OS-100',
+        requiredTeam: 'equipe-01',
+        scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+        scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+      }),
     ).resolves.toBeUndefined();
   });
 });

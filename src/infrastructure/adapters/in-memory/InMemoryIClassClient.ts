@@ -194,6 +194,11 @@ export class InMemoryIClassClient implements IClassPort {
   async updateServiceOrder(input: UpdateServiceOrderInput): Promise<void> {
     if (this.failureMode === 'unavailable' || this.updateMode === 'unavailable') throw new IClassUnavailableError();
     if (this.updateMode === 'rejected') throw new IClassRejectedError('ICLERR_UPDATE: rechazo de prueba');
-    this.updateServiceOrderCalls.push({ ...input });
+    this.updateServiceOrderCalls.push({
+      serviceOrderCode: input.serviceOrderCode,
+      requiredTeam: input.requiredTeam,
+      scheduleStart: input.scheduleStart,
+      scheduleEnd: input.scheduleEnd,
+    });
   }
 }
