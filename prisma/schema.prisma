@@ -244,6 +244,7 @@ model Contract {
   stockLocations StockLocation[]          @relation("ContractStockLocation")
   contractServices      ContractService[]
   contractServiceEvents ContractServiceEvent[]
+  pppoeServices         PppoeService[]
 
   @@index([clientId])
   @@index([status])
@@ -1716,6 +1717,41 @@ model NasServer {
   clientCount  Int       @default(0)
   description  String?
   createdAt    DateTime  @default(now())
+  pppoeServices PppoeService[]
+}
+
+model PppoeService {
+  id            String    @id @default(uuid())
+  username      String    @unique
+  password      String
+  profile       String?
+  remoteAddress String?
+  status        String    @default("enabled")
+  // Fase C — estado del CORTE (separado del profile comercial): active | reduced | blocked
+  enforcedState String    @default("active")
+  nasId         String
+  contractId    String?
+  createdAt     DateTime  @default(now())
+  nas           NasServer @relation(fields: [nasId], references: [id])
+  contract      Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
+
+  @@index([nasId])
+  @@index([contractId])
+}
+
+// Fase C — estado de un job de corte MASIVO on-demand (progreso poleable + resultado por-item).
+model ServiceCutBatch {
+  id          String    @id @default(uuid())
+  action      String    // reduce | block | restore
+  status      String    @default("pending") // pending | running | done | failed
+  total       Int       @default(0)
+  doneCount   Int       @default(0)
+  failedCount Int       @default(0)
+  result      Json      @default("[]") // [{pppoeId, ok, error?}]
+  createdAt   DateTime  @default(now())
+  finishedAt  DateTime?
+
+  @@index([status])
 }
 
 model RadiusConfig {

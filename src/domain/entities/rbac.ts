@@ -72,6 +72,8 @@ export const KNOWN_ACTIONS = [
   'cancel',   // dar de baja TV completa
   // tickets sub-actions (#85) — hard delete requires explicit permission
   'delete_hard',
+  // pppoe sub-actions (Fase C) — corte de servicio (reduce/block/restore), separado de pppoe.manage
+  'cut',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.
@@ -118,6 +120,8 @@ export const RBAC_MODULES = [
   'tv',
   // Recaptación / churned-client recovery (#80)
   'recapture',
+  // PPPoE provisioning via RouterOS (#pppoe-service)
+  'pppoe',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];
