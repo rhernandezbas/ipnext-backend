@@ -806,13 +806,14 @@ export function formatCloseDate(d: Date): string {
 }
 
 /**
- * Date → "yyyy-MM-dd HH:mm:ss -0000" in ARGENTINA wall-clock for IClass schedule fields.
+ * Date → "yyyy-MM-dd HH:mm:ss -0300" in ARGENTINA wall-clock for IClass schedule fields.
  *
- * IClass reads the HH:mm literally as its local time (Argentina, UTC-3). The prod
- * container runs in UTC, so we MUST convert to Argentina wall-clock before formatting.
- * The offset token stays "-0000" (IClass ignores it; only the HH:mm matters).
- * Uses Intl.DateTimeFormat with timeZone 'America/Argentina/Buenos_Aires' to handle
- * DST correctly (Argentina observes no DST but this is the correct IANA key).
+ * VERIFIED LIVE 2026-06-18: IClass INTERPRETS the offset token (it does NOT ignore it).
+ * So the offset MUST match the wall-clock. We emit Argentina time (UTC-3) with offset
+ * "-0300". Sending Argentina HH:mm tagged "-0000" makes IClass read it as UTC and shift
+ * the appointment 3h earlier (observed: 13:00 became 10:00). The prod container runs in
+ * UTC, so we convert the instant to Argentina wall-clock via Intl. Argentina observes no
+ * DST, so -0300 is constant year-round.
  */
 export function formatScheduleDate(d: Date): string {
   const fmt = new Intl.DateTimeFormat('en-CA', {
@@ -834,5 +835,6 @@ export function formatScheduleDate(d: Date): string {
   const hh = get('hour');
   const mi = get('minute');
   const ss = get('second');
-  return `${yyyy}-${MM}-${dd} ${hh}:${mi}:${ss} -0000`;
+  // -0300 (Argentina): IClass interprets the offset, so it MUST match the wall-clock.
+  return `${yyyy}-${MM}-${dd} ${hh}:${mi}:${ss} -0300`;
 }

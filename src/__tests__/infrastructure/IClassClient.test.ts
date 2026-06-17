@@ -568,7 +568,7 @@ describe('IClassClient', () => {
     // scheduleDate = 3 space-separated tokens
     const scheduleDate = sched['scheduleDate'] as string;
     expect(scheduleDate.split(' ')).toHaveLength(3);
-    expect(scheduleDate.endsWith('-0000')).toBe(true);
+    expect(scheduleDate.endsWith('-0300')).toBe(true);
     // Top-level requiredTeam in soScheduleUpdateIn
     expect(sched['requiredTeam']).toEqual(['IPNXEMAV']);
     // scheduleDetails
@@ -614,8 +614,8 @@ describe('IClassClient', () => {
     // 2026-06-18T16:00:00Z = 13:00 in AR (UTC-3)
     const d = new Date('2026-06-18T16:00:00.000Z');
     const formatted = formatScheduleDate(d);
-    // Should be 13:00 Argentina time
-    expect(formatted).toBe('2026-06-18 13:00:00 -0000');
+    // Should be 13:00 Argentina time, with the matching -0300 offset (IClass reads the offset).
+    expect(formatted).toBe('2026-06-18 13:00:00 -0300');
     expect(formatted.split(' ')).toHaveLength(3);
   });
 
