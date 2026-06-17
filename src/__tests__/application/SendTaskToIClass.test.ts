@@ -19,6 +19,7 @@ import {
 import { Stage } from '../../domain/entities/workflow';
 import { TaskActivityRecorder } from '../../domain/ports/TaskActivityRecorder';
 import { FakeTaskActivityRecorder } from '../helpers/FakeTaskActivityRecorder';
+import { IClassAutoAssigner, AutoAssignOutcome } from '../../domain/ports/IClassAutoAssigner';
 
 const FLAG_KEY = 'iclass-integration';
 const WF = 'wf-1';
@@ -597,5 +598,137 @@ describe('SendTaskToIClass', () => {
 
     // The IClassNodeNotFoundError (domain error) must propagate, NOT the audit 'db down' error
     await expect(useCaseWithFaultyAudit.execute('t-audit-5', ENVIAR_STAGE.id, WF)).rejects.toBeInstanceOf(IClassNodeNotFoundError);
+  });
+});
+
+// ── #130 — assign-at-register: autoAssigner hooked into dispatchToIClass ────────
+
+/** Minimal fake IClassAutoAssigner for testing. Records calls, returns configurable outcome. */
+class FakeAutoAssigner implements IClassAutoAssigner {
+  calls: Array<{ taskId: string; assigneeId: string | null; actor: unknown }> = [];
+  nextOutcome: AutoAssignOutcome = { outcome: 'assigned', teamLogin: 'cuadrilla-1' };
+
+  async maybeAssign(
+    taskId: string,
+    assigneeId: string | null,
+    actor?: unknown,
+  ): Promise<AutoAssignOutcome> {
+    this.calls.push({ taskId, assigneeId, actor });
+    return this.nextOutcome;
+  }
+}
+
+/** Fake that throws to verify best-effort behaviour. */
+class ThrowingAutoAssigner implements IClassAutoAssigner {
+  async maybeAssign(): Promise<AutoAssignOutcome> {
+    throw new Error('assign exploded');
+  }
+}
+
+describe('SendTaskToIClass — assign-at-register (#130)', () => {
+  function setupWithAssigner(opts?: {
+    autoAssigner?: IClassAutoAssigner;
+    assigneeId?: string | null;
+  }) {
+    const stages = new InMemoryStageRepository();
+    stages.addDirect(ENVIAR_STAGE);
+    stages.addDirect(REGISTRADO_STAGE);
+
+    const tasks = new InMemorySchedulingRepository(stages);
+    tasks.seedProject({ id: DEFAULT_PROJECT_ID, title: 'P', iclassSoType: DEFAULT_SO_TYPE });
+
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed(FLAG_KEY, true);
+
+    const iclass = new InMemoryIClassClient();
+    iclass.nodes = [{ nodeId: 1000, code: 'Rosario', description: 'Rosario' }];
+
+    // 7th positional param = autoAssigner
+    const useCase = new SendTaskToIClass(
+      tasks,
+      flags,
+      iclass,
+      undefined,
+      undefined,
+      undefined,
+      opts?.autoAssigner,
+    );
+
+    tasks.seedTask({
+      id: 'ta1',
+      stageId: ENVIAR_STAGE.id,
+      customerId: 'c1',
+      customerCode: 'GR-001',
+      customerName: 'María García',
+      customerPhone: '341000001',
+      customerCity: 'Rosario',
+      address: 'Av. Pellegrini 1',
+      description: 'Instalación',
+      projectId: DEFAULT_PROJECT_ID,
+      // Use explicit undefined-check so null assigneeId is preserved (null ?? 'fallback' gives 'fallback')
+      assigneeId: opts !== undefined && 'assigneeId' in opts ? opts.assigneeId : 'u-tech-1',
+    });
+
+    return { tasks, iclass, useCase };
+  }
+
+  it('task with assignee + autoAssigner injected → maybeAssign called with taskId and assigneeId (AD-2 at register)', async () => {
+    const assigner = new FakeAutoAssigner();
+    const { useCase } = setupWithAssigner({ autoAssigner: assigner, assigneeId: 'u-tech-1' });
+
+    const result = await useCase.execute('ta1', ENVIAR_STAGE.id, WF, 'actor-99');
+
+    // Dispatch must still succeed
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+    expect(result.iclassOrderCode).not.toBeNull();
+
+    // maybeAssign must have been called once with the right ids
+    expect(assigner.calls).toHaveLength(1);
+    expect(assigner.calls[0].taskId).toBe('ta1');
+    expect(assigner.calls[0].assigneeId).toBe('u-tech-1');
+  });
+
+  it('autoAssigner absent → dispatch still succeeds (best-effort wiring is optional)', async () => {
+    // No autoAssigner passed → 7th param omitted
+    const { useCase, iclass } = setupWithAssigner({ assigneeId: 'u-tech-1' });
+
+    const result = await useCase.execute('ta1', ENVIAR_STAGE.id, WF);
+
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+    expect(iclass.createdOrders).toHaveLength(1);
+  });
+
+  it('task has no assignee → maybeAssign NOT called even when autoAssigner is injected', async () => {
+    const assigner = new FakeAutoAssigner();
+    const { useCase } = setupWithAssigner({ autoAssigner: assigner, assigneeId: null });
+
+    const result = await useCase.execute('ta1', ENVIAR_STAGE.id, WF);
+
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+    expect(assigner.calls).toHaveLength(0);
+  });
+
+  it('autoAssigner.maybeAssign throws → dispatch still succeeds (best-effort, never fatal)', async () => {
+    const { useCase, iclass } = setupWithAssigner({
+      autoAssigner: new ThrowingAutoAssigner(),
+      assigneeId: 'u-tech-1',
+    });
+
+    // Must NOT throw — best-effort means errors are swallowed
+    const result = await useCase.execute('ta1', ENVIAR_STAGE.id, WF);
+
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+    expect(iclass.createdOrders).toHaveLength(1);
+  });
+
+  it('autoAssigner.maybeAssign returns skipped → dispatch still succeeds', async () => {
+    const assigner = new FakeAutoAssigner();
+    assigner.nextOutcome = { outcome: 'skipped', reason: 'flag-off' };
+    const { useCase } = setupWithAssigner({ autoAssigner: assigner, assigneeId: 'u-tech-1' });
+
+    const result = await useCase.execute('ta1', ENVIAR_STAGE.id, WF);
+
+    expect(result.stageId).toBe(REGISTRADO_STAGE.id);
+    expect(assigner.calls).toHaveLength(1);
   });
 });

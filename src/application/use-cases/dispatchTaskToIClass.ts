@@ -15,6 +15,7 @@ import { NetworkSite } from '@domain/entities/networkSite';
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
 import { IClassPort } from '@domain/ports/IClassPort';
 import { IClassDispatchAttemptRepository } from '@domain/ports/IClassDispatchAttemptRepository';
+import { IClassAutoAssigner } from '@domain/ports/IClassAutoAssigner';
 import { RecordDispatchAttemptInput } from '@domain/entities/iclass-dispatch-attempt';
 import {
   StageNotFoundError,
@@ -50,6 +51,14 @@ export interface DispatchDeps {
   iclass: IClassPort;
   /** Opcional. Best-effort — si no se provee, no se registran attempts. */
   attempts?: IClassDispatchAttemptRepository;
+  /**
+   * #130 — assign-at-register: best-effort auto-assigner.
+   * When provided and the task has an assignee, maybeAssign is called AFTER
+   * setIClassOrderCode (so the order code is already persisted when the assigner
+   * re-reads the task) and BEFORE moveTaskToStage.
+   * Errors are swallowed — the dispatch ALWAYS succeeds regardless.
+   */
+  autoAssigner?: IClassAutoAssigner;
 }
 
 export interface DispatchOpts {
@@ -119,7 +128,7 @@ export async function dispatchToIClass(
   nodeCode: string,
   opts: DispatchOpts,
 ): Promise<ScheduledTask> {
-  const { tasks, iclass, attempts } = deps;
+  const { tasks, iclass, attempts, autoAssigner } = deps;
   const { actorId, workflowId, networkSite } = opts;
 
   // network-node-task (#29): sustitucion de campos para tareas de RED/FIBRA.
@@ -186,6 +195,19 @@ export async function dispatchToIClass(
 
     // Persist orderCode
     await tasks.setIClassOrderCode(task.id, orderCode);
+
+    // #130 — assign-at-register: best-effort cuadrilla assignment.
+    // Called AFTER setIClassOrderCode so the order code is already persisted when
+    // the assigner re-reads the task (it skips on 'no-order-code' otherwise).
+    // Called BEFORE moveTaskToStage so the stage is still meaningful for the assigner.
+    // Errors are swallowed — the dispatch ALWAYS completes (best-effort, AD-2 pattern).
+    if (autoAssigner && task.assigneeId) {
+      try {
+        await autoAssigner.maybeAssign(task.id, task.assigneeId);
+      } catch (e) {
+        console.error('[iclass-dispatch-assign] best-effort assign failed', e);
+      }
+    }
 
     // Advance to registered_in_iclass
     const registeredStage = await tasks.getStageByCode(REGISTERED_IN_ICLASS_CODE, workflowId);

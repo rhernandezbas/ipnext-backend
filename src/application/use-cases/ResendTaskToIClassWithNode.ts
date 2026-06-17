@@ -22,6 +22,7 @@ import {
   MissingIClassMappingError,
 } from '@domain/errors/iclass';
 import { dispatchToIClass, recordAttempt } from './dispatchTaskToIClass';
+import { IClassAutoAssigner } from '@domain/ports/IClassAutoAssigner';
 
 const FLAG_KEY = 'iclass-integration';
 const REGISTERED_IN_ICLASS_CODE = 'registered_in_iclass';
@@ -51,6 +52,8 @@ export class ResendTaskToIClassWithNode {
     private readonly iclass: IClassPort,
     private readonly attempts: IClassDispatchAttemptRepository,
     private readonly stageRepo: StageRepository,
+    /** #130 — assign-at-register: best-effort auto-assigner. Optional. */
+    private readonly autoAssigner?: IClassAutoAssigner,
   ) {}
 
   async execute(
@@ -127,7 +130,7 @@ export class ResendTaskToIClassWithNode {
     //    On success, we record the attempt ourselves below.
     try {
       const result = await dispatchToIClass(
-        { tasks: this.tasks, iclass: this.iclass, attempts: undefined }, // attempts handled here
+        { tasks: this.tasks, iclass: this.iclass, attempts: undefined, autoAssigner: this.autoAssigner }, // attempts handled here
         task,
         mapping.iclassSoType.code,
         resolvedNode.code,

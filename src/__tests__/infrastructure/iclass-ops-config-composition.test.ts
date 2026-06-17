@@ -50,4 +50,20 @@ describe('iclass-ops-config composition root (AD-2 auto-assign wiring)', () => {
     // If this arg is removed, the feature is silently disabled — this is the guard.
     expect(argsWithoutComments).toContain('autoAssignIClassTeam');
   });
+
+  // ── #130: Wired into SendTaskToIClass + ResendTaskToIClassWithNode (assign-at-register) ──
+
+  it('new SendTaskToIClass(...) includes autoAssignIClassTeam as an effective argument (#130)', () => {
+    const match = appSrc.match(/new SendTaskToIClass\(([\s\S]*?)\)\s*;/);
+    expect(match).not.toBeNull();
+    const argsWithoutComments = match![1].replace(/\/\/[^\n]*/g, '');
+    expect(argsWithoutComments).toContain('autoAssignIClassTeam');
+  });
+
+  it('new ResendTaskToIClassWithNode(...) includes autoAssignIClassTeam as an effective argument (#130)', () => {
+    const match = appSrc.match(/new ResendTaskToIClassWithNode\(([\s\S]*?)\)\s*;/);
+    expect(match).not.toBeNull();
+    const argsWithoutComments = match![1].replace(/\/\/[^\n]*/g, '');
+    expect(argsWithoutComments).toContain('autoAssignIClassTeam');
+  });
 });

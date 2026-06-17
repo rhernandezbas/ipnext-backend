@@ -15,6 +15,7 @@ import {
 import { dispatchToIClass, recordAttempt, NETWORK_PHONE, NETWORK_CUSTOMER_CODE } from './dispatchTaskToIClass';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
+import { IClassAutoAssigner } from '@domain/ports/IClassAutoAssigner';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 
 const FLAG_KEY = 'iclass-integration';
@@ -71,6 +72,8 @@ export class SendTaskToIClass {
     private readonly recorder?: TaskActivityRecorder,
     /** network-node-task (#29): necesario para tareas de RED. */
     private readonly networkSiteRepo?: NetworkSiteRepository,
+    /** #130 — assign-at-register: best-effort auto-assigner. Optional. */
+    private readonly autoAssigner?: IClassAutoAssigner,
   ) {}
 
   /**
@@ -157,7 +160,7 @@ export class SendTaskToIClass {
       // 6+7. Crear OS con campos sustituidos y avanzar de stage.
       try {
         const dispatched = await dispatchToIClass(
-          { tasks: this.tasks, iclass: this.iclass, attempts: undefined },
+          { tasks: this.tasks, iclass: this.iclass, attempts: undefined, autoAssigner: this.autoAssigner },
           task,
           mapping.iclassSoType.code,
           resolvedNodeCode,
@@ -233,7 +236,7 @@ export class SendTaskToIClass {
     //      SUCCESS is NOT audited (AD-7).
     try {
       const dispatched = await dispatchToIClass(
-        { tasks: this.tasks, iclass: this.iclass, attempts: undefined },
+        { tasks: this.tasks, iclass: this.iclass, attempts: undefined, autoAssigner: this.autoAssigner },
         task,
         mapping.iclassSoType.code, // resolved from project mapping (REQ-SCHED-4)
         node.code,

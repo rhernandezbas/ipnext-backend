@@ -864,10 +864,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const featureFlagRepo = new PrismaFeatureFlagRepository();
   // Audit repo for IClass dispatch attempts — injected as 4th arg (AD-6: optional on SendTaskToIClass).
   const iclassDispatchAttemptRepo = new PrismaIClassDispatchAttemptRepository();
-  const sendTaskToIClass = new SendTaskToIClass(schedulingRepo, featureFlagRepo, buildIClassClient(), iclassDispatchAttemptRepo, taskActivityRecorder, networkSiteRepoForCreateTask);
-  const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo, sendTaskToIClass, taskActivityRecorder);
-
-  const bulkMoveTasksToStage = new BulkMoveTasksToStage(moveTaskToStage);
+  // sendTaskToIClass + moveTaskToStage + bulkMoveTasksToStage are declared after autoAssignIClassTeam
+  // (iclass-ops-config block) so autoAssignIClassTeam can be passed as the 7th arg (#130).
   const setTaskInventoryReview = new SetTaskInventoryReview(schedulingRepo, taskActivityRecorder);
   // #41 — general status (open / closed / dismissed) writer.
   const setTaskGeneralStatus = new SetTaskGeneralStatus(schedulingRepo, taskActivityRecorder);
@@ -1451,13 +1449,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
 
   // IClass manual resend use cases
   const listIClassNodes = new ListIClassNodes(buildIClassClient());
-  const resendTaskToIClassWithNode = new ResendTaskToIClassWithNode(
-    schedulingRepo,
-    featureFlagRepo,
-    buildIClassClient(),
-    iclassDispatchAttemptRepo,
-    stageRepo,
-  );
+  // resendTaskToIClassWithNode declared after autoAssignIClassTeam (iclass-ops-config block) — #130.
 
   // iclass-os-actions (Ola A): CloseIClassServiceOrder — uses the already-built repos.
   // iclassResultCodeRepo is declared here early so CloseIClassServiceOrder can reference it;
@@ -1504,6 +1496,29 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     { findById: (id: string) => prismaProjectKindLookup(id) },
     taskActivityRecorder,
     autoAssignIClassTeam, // AD-2: optional best-effort IClass auto-assigner
+  );
+
+  // #130 — assign-at-register: sendTaskToIClass declared here (after autoAssignIClassTeam)
+  // so autoAssignIClassTeam can be passed as the 7th optional arg.
+  const sendTaskToIClass = new SendTaskToIClass(
+    schedulingRepo,
+    featureFlagRepo,
+    buildIClassClient(),
+    iclassDispatchAttemptRepo,
+    taskActivityRecorder,
+    networkSiteRepoForCreateTask,
+    autoAssignIClassTeam, // #130: best-effort assign at register time
+  );
+  const moveTaskToStage = new MoveTaskToStage(schedulingRepo, stageRepo, sendTaskToIClass, taskActivityRecorder);
+  const bulkMoveTasksToStage = new BulkMoveTasksToStage(moveTaskToStage);
+  // #130: resend also wires autoAssignIClassTeam so re-dispatch assigns the cuadrilla too.
+  const resendTaskToIClassWithNode = new ResendTaskToIClassWithNode(
+    schedulingRepo,
+    featureFlagRepo,
+    buildIClassClient(),
+    iclassDispatchAttemptRepo,
+    stageRepo,
+    autoAssignIClassTeam, // #130: best-effort assign at register time
   );
 
   // iclass-ops-config (Ola A): Technician↔Team mapping use cases + router
