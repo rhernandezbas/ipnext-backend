@@ -48,6 +48,7 @@ function toDto(e: {
   internalId: string | null;
   seq: number | null;
   contractId: string | null;
+  reason: string | null;
   createdAt: string;
 }): TvActivationEventDto {
   return {
@@ -61,6 +62,7 @@ function toDto(e: {
     internalId:   e.internalId,
     seq:          e.seq,
     contractId:   e.contractId,
+    reason:       e.reason ?? null,
     createdAt:    e.createdAt,
   };
 }
