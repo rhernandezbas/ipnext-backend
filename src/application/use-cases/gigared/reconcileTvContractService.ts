@@ -1,6 +1,7 @@
 import type { GigaredPort } from '@domain/ports/GigaredPort';
 import type { ContractServiceRepository } from '@domain/ports/ContractServiceRepository';
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
+import type { TvActivationEventRepository } from '@domain/ports/TvActivationEventRepository';
 import { TvCatalogMissingError } from '@domain/errors/gigared';
 
 /**
@@ -70,8 +71,12 @@ export async function reconcileTvContractService(deps: {
   ensureRow?: boolean;
   clearCredentialsOnInactive?: boolean;
   excludeServiceIds?: string[];
+  /** #131 PARTE B -- actor to record reactivacion event when an inactive row is reactivated. */
+  actor?: { actorId: string | null; actorName: string };
+  /** #131 PARTE B -- optional event repo; records reactivacion best-effort. */
+  tvEventRepo?: TvActivationEventRepository;
 }): Promise<{ contractServiceId?: string }> {
-  const { gigared, csRepo, catalogRepo, customerId, contractId, internalId, ensureRow, clearCredentialsOnInactive, excludeServiceIds } = deps;
+  const { gigared, csRepo, catalogRepo, customerId, contractId, internalId, ensureRow, clearCredentialsOnInactive, excludeServiceIds, actor, tvEventRepo } = deps;
 
   const tvCatalog = await catalogRepo.getByName('TV');
   if (!tvCatalog || !tvCatalog.active) throw new TvCatalogMissingError();
@@ -122,11 +127,30 @@ export async function reconcileTvContractService(deps: {
   if (existing) {
     // M6: if the cic changed, the credentials of the OLD account must not survive the reactivation.
     const cicChanged = cicFromNotes(existing.notes) !== account.cic;
+    const wasInactive = existing.status === 'inactive';
     await csRepo.update(existing.id, {
       status: 'active',
       notes,
       ...(cicChanged ? { tvLogin: null, tvPassword: null } : {}),
     });
+
+    // #131 PARTE B: record 'reactivacion' when an inactive row is reactivated (best-effort).
+    if (wasInactive && tvEventRepo && actor) {
+      try {
+        await tvEventRepo.record({
+          clientId:   customerId,
+          contractId,
+          actorId:    actor.actorId,
+          actorName:  actor.actorName,
+          eventType:  'reactivacion',
+          cic:        account.cic,
+          internalId: internalId ?? customerId,
+        });
+      } catch {
+        // Best-effort: recorder failure must never abort the reconcile.
+      }
+    }
+
     return { contractServiceId: existing.id };
   }
   const created = await csRepo.add({ contractId, serviceCatalogId: tvCatalog.id, notes });

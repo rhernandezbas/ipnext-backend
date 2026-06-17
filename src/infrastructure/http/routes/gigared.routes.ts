@@ -365,9 +365,13 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   router.post('/customers/:id/services', deps.requirePacks, async (req, res): Promise<void> => {
     try {
       const b = req.body as { serviceId: string; contractId: string };
+      // #131 PARTE B -- thread actor so reconcile can record 'reactivacion' best-effort.
+      const addActor = req.user ? { actorId: req.user.id, actorName: req.user.username } : { actorId: null, actorName: '' };
       const result = await deps.addTvService.execute(req.params['id'] as string, {
         serviceId: b.serviceId,
         contractId: b.contractId,
+        actorId:   addActor.actorId,
+        actorName: addActor.actorName,
       });
       res.status(result.local === 'failed' ? 207 : 200).json(result);
     } catch (err) {

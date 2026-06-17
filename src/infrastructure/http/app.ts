@@ -1927,7 +1927,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
     // #5 BE — pass eventRepo so register records 'alta'/'reactivacion' best-effort.
     registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, gigaredTvActivation, gigaredTvActivationEventRepo),
-    addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
+    // #131 PARTE B -- pass gigaredTvActivationEventRepo so AddTvService can record 'reactivacion' on row reuse.
+    addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvActivationEventRepo),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
     setOttStatus:       new SetOttStatus(gigaredClient, gigaredCustomerLookup),
     cancelTv:           gigaredCancelTv,

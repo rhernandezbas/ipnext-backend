@@ -1,25 +1,28 @@
-import { ContractServiceRepository } from '@domain/ports/ContractServiceRepository';
-import { ContractServiceEventRepository } from '@domain/ports/ContractServiceEventRepository';
-import { TvActivationEventRepository } from '@domain/ports/TvActivationEventRepository';
+import { ContractServiceRepository } from "@domain/ports/ContractServiceRepository";
+import { ContractServiceEventRepository } from "@domain/ports/ContractServiceEventRepository";
+import { TvActivationEventRepository } from "@domain/ports/TvActivationEventRepository";
 import {
   ContractServiceHistoryItemDto,
   ServiceEventDto,
   toContractServiceHistoryItemDto,
   tvEventToServiceEvent,
-} from '@application/dto/contract-services.dto';
+} from "@application/dto/contract-services.dto";
 
 /**
- * #73 / #110 — Returns the FULL service history (active + inactive ContractService rows)
+ * #73 / #110 -- Returns the FULL service history (active + inactive ContractService rows)
  * for a given contract, each item enriched with its chronological event sequence.
  *
- * Cross-source strategy (Decisión 2):
- *   - TV service (tvLogin !== null) → events from TvActivationEventRepository by contractId
- *   - Non-TV service                → events from ContractServiceEventRepository by (contractId, serviceCatalogId)
+ * Cross-source strategy:
+ *   - Non-TV service  -> events from ContractServiceEventRepository by (contractId, serviceCatalogId)
+ *   - TV service      -> events MERGED from BOTH:
+ *       a) TvActivationEventRepository by contractId  (alta/baja/reactivacion)
+ *       b) ContractServiceEventRepository by (contractId, serviceCatalogId) (e.g. baja via RemoveContractService)
+ *     Combined list sorted ASC. synthesizeLegacyEvents only when BOTH sources are empty. (#131)
  *
- * Legacy degradation (Decisión 3): if a non-TV service has no events (pre-migration row),
- * synthesize a minimal sequence from createdAt / deactivatedAt.
+ * Legacy degradation: if a service has no events (pre-migration row), synthesize a minimal
+ * sequence from createdAt / deactivatedAt.
  *
- * tvPassword is NEVER present in the returned DTOs — the mapper strips it at the boundary.
+ * tvPassword is NEVER present in the returned DTOs -- the mapper strips it at the boundary.
  *
  * The cseRepo and tvEventRepo are OPTIONAL for backward-compat with existing tests that
  * were written before #110. When absent, legacy synthesis is used for all services.
@@ -57,7 +60,7 @@ export class ListContractServiceHistory {
     // ASSUMPTION: a contract has at most 1 TV service (Gigared TV is 1 per contract/client, #81).
     // tv_activation_events has no serviceCatalogId column, so we filter only by contractId and
     // assign the same event list to every row where tvLogin !== null. If a contract ever had >1
-    // TV service, both rows would show the same events — accepted per #81 constraint; do NOT
+    // TV service, both rows would show the same events -- accepted per #81 constraint; do NOT
     // change the schema to add serviceCatalogId without revisiting this cross-source strategy.
     let tvEvents: ServiceEventDto[] = [];
     const hasTV = views.some(v => v.tvLogin !== null);
@@ -70,13 +73,22 @@ export class ListContractServiceHistory {
       let events: ServiceEventDto[];
 
       if (view.tvLogin !== null) {
-        // TV service: use TV events ordered ASC.
-        // If no tv_activation_events exist (legacy row created before the table was introduced —
-        // migration 20260721000000), fall back to legacy synthesis from createdAt / deactivatedAt,
-        // matching the non-TV branch. Spec R1.3: the modal ALWAYS shows at least the alta.
-        if (tvEvents.length > 0) {
-          events = [...tvEvents].sort(byOccurredAtAsc);
+        // TV service (#131): merge events from BOTH sources:
+        //   a) tv_activation_events (pre-fetched above as tvEvents)
+        //   b) contract_service_events by (contractId, serviceCatalogId) -- e.g. baja via RemoveContractService
+        // This fixes BUG A (operador vacio) and BUG B (fecha vieja) when the baja event landed
+        // in contract_service_events instead of tv_activation_events.
+        const cseEvents = cseByService.get(view.serviceCatalogId) ?? [];
+        // INVARIANT: tv_activation_events and contract_service_events are disjoint for any
+        // given TV row — the two tables record different operations and never produce the same
+        // event for the same row at the same moment. No deduplication is needed; if that
+        // assumption ever changes, add dedup here keyed on (eventType, occurredAt).
+        const merged = [...tvEvents, ...cseEvents];
+        if (merged.length > 0) {
+          events = [...merged].sort(byOccurredAtAsc);
         } else {
+          // Both sources empty: fall back to legacy synthesis from createdAt / deactivatedAt.
+          // Spec R1.3: the modal ALWAYS shows at least the alta.
           events = synthesizeLegacyEvents(view.createdAt, view.deactivatedAt);
         }
       } else {
