@@ -40,3 +40,17 @@ export class NasNotFoundError extends DomainError {
     this.name = 'NasNotFoundError';
   }
 }
+
+/**
+ * El radius-orchestrator no respondió (timeout / red / 5xx). El corte por RADIUS no se confirma.
+ * Code → HTTP: ORCHESTRATOR_UNREACHABLE → 502 (mismo trato que ROUTER_UNREACHABLE).
+ */
+export class OrchestratorUnreachableError extends DomainError {
+  constructor(
+    public readonly target: string,
+    message = `No se pudo conectar al radius-orchestrator (${target})`,
+  ) {
+    super(message, 'ORCHESTRATOR_UNREACHABLE');
+    this.name = 'OrchestratorUnreachableError';
+  }
+}

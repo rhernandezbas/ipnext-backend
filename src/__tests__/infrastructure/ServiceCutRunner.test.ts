@@ -3,6 +3,7 @@ import { RunBulkEnforcement } from '@application/use-cases/RunBulkEnforcement';
 import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryServiceCutBatchRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCutBatchRepository';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
@@ -12,7 +13,7 @@ function build() {
   const router = new InMemoryRouterGateway();
   const nasRepo = new InMemoryNasRepository();
   const batchRepo = new InMemoryServiceCutBatchRepository();
-  const enforce = new EnforcePppoeService(repo, router, nasRepo, 'IP-REDUCCION');
+  const enforce = new EnforcePppoeService(repo, new RouterOsEnforcementAdapter(router, 'IP-REDUCCION'), nasRepo);
   const bulk = new RunBulkEnforcement(repo, enforce, batchRepo, { throttleMs: 0 });
   const lock = new InMemoryDistributedLock();
   const runner = new ServiceCutRunner(bulk, batchRepo, lock);

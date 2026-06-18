@@ -609,6 +609,10 @@ import { toRbacRoleDto } from '@application/dto/rbacUser.dto';
 import { createPppoeRouter } from './routes/pppoe.routes';
 import { PrismaPppoeServiceRepository } from '../adapters/prisma/PrismaPppoeServiceRepository';
 import { RouterOsGateway } from '../adapters/routeros/RouterOsGateway';
+import { RouterOsEnforcementAdapter } from '../adapters/routeros/RouterOsEnforcementAdapter';
+import { HttpRadiusOrchestratorGateway } from '../adapters/orchestrator/HttpRadiusOrchestratorGateway';
+import { OrchestratorEnforcementAdapter } from '../adapters/orchestrator/OrchestratorEnforcementAdapter';
+import { PerNasEnforcementGateway } from '../adapters/enforcement/PerNasEnforcementGateway';
 import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract';
 import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
 import { UpdatePppoeService } from '@application/use-cases/UpdatePppoeService';
@@ -1966,8 +1970,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     const nasRepoForPppoe = new PrismaNasRepository();
     const routerGw    = new RouterOsGateway();
     const cutBatchRepo = new PrismaServiceCutBatchRepository();
-    // Fase C: corte individual + preview + runner masivo (fire-and-forget + lock distribuido).
-    const enforcePppoe = new EnforcePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, config.router.reducedProfile);
+    // Fase C — enforcement detrás del EnforcementGateway, RUTEADO per-NAS por `nas.type`:
+    //   'mikrotik_radius' → RADIUS (orchestrator + CoA);  resto → MK-directo (/ppp secret + kick).
+    // Hoy el ~97% de la red corta por MK-directo (cutover RADIUS ~nil); un NAS pasa a RADIUS
+    // marcándose 'mikrotik_radius', sin big-bang. El orchestrator es opt-in (config.orchestrator):
+    // si no está configurado, los NAS mikrotik_radius fallan al cortar con 502 claro, el resto sigue.
+    const mkEnforcement = new RouterOsEnforcementAdapter(routerGw, config.router.reducedProfile);
+    const orchestrator = new HttpRadiusOrchestratorGateway({
+      baseUrl: config.orchestrator.baseUrl,
+      token: config.orchestrator.token,
+      timeoutMs: config.orchestrator.timeoutMs,
+    });
+    const radiusEnforcement = new OrchestratorEnforcementAdapter(orchestrator, config.router.reducedProfile);
+    const enforcementGw = new PerNasEnforcementGateway(mkEnforcement, radiusEnforcement);
+    const enforcePppoe = new EnforcePppoeService(pppoeRepo, enforcementGw, nasRepoForPppoe);
     const previewEnforcement = new PreviewEnforcement(pppoeRepo);
     const bulkEnforcement = new RunBulkEnforcement(pppoeRepo, enforcePppoe, cutBatchRepo, {
       throttleMs: config.router.bulkThrottleMs,

@@ -142,4 +142,16 @@ export const config = {
     bulkThrottleMs: parseInt(process.env.ROUTER_BULK_THROTTLE_MS || '300', 10),
     bulkConcurrency: parseInt(process.env.ROUTER_BULK_CONCURRENCY || '8', 10),
   },
+
+  /**
+   * radius-orchestrator (FreeRADIUS HA, p.ej. http://10.75.0.20:8080) — corte por RADIUS para los
+   * NAS ya cutoveados al HA (`nas.type='mikrotik_radius'`). Opt-in (NO fail-fast, patrón router/uisp):
+   * si falta `baseUrl`, el HttpRadiusOrchestratorGateway falla al USARSE con error claro, pero la app
+   * arranca igual y los NAS MK-directo siguen cortando. El bearer token es SERVER-SIDE: nunca al browser.
+   */
+  orchestrator: {
+    baseUrl: process.env.ORCHESTRATOR_BASE_URL ?? '',
+    token: process.env.ORCHESTRATOR_API_TOKEN ?? '',
+    timeoutMs: parseInt(process.env.ORCHESTRATOR_TIMEOUT_MS || '6000', 10),
+  },
 };

@@ -15,6 +15,7 @@ import { requirePermission } from '@infrastructure/http/middleware/requirePermis
 
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryServiceCutBatchRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCutBatchRepository';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
@@ -113,7 +114,7 @@ async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> 
   const batchRepo = new InMemoryServiceCutBatchRepository();
   const lock      = new InMemoryDistributedLock();
 
-  const enforce = new EnforcePppoeService(pppoeRepo, router, nasRepo, 'IP-REDUCCION');
+  const enforce = new EnforcePppoeService(pppoeRepo, new RouterOsEnforcementAdapter(router, 'IP-REDUCCION'), nasRepo);
   const preview = new PreviewEnforcement(pppoeRepo);
   const bulk    = new RunBulkEnforcement(pppoeRepo, enforce, batchRepo, { throttleMs: 0 });
   const runner  = new ServiceCutRunner(bulk, batchRepo, lock);

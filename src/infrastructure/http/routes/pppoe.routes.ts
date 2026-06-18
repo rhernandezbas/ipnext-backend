@@ -47,6 +47,7 @@ import {
 } from '@application/dto/pppoe.dto';
 import {
   RouterUnreachableError,
+  OrchestratorUnreachableError,
   PppoeUsernameTakenError,
   PppoeServiceNotFoundError,
   NasNotFoundError,
@@ -198,7 +199,8 @@ export function createPppoeRouter(
         });
         res.json(toPppoeServiceDto(service));
       } catch (err) {
-        if (err instanceof RouterUnreachableError) {
+        // Backend de corte inalcanzable (MK-directo o RADIUS/orchestrator) → 502.
+        if (err instanceof RouterUnreachableError || err instanceof OrchestratorUnreachableError) {
           res.status(502).json({ code: err.code, error: err.message });
           return;
         }

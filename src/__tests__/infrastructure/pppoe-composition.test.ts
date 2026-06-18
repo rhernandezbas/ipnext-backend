@@ -68,8 +68,24 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
   });
 
   // ── Fase C — enforcement (cortes) ──────────────────────────────────────────
-  it('(f) EnforcePppoeService está wired con el reducedProfile de config', () => {
-    expect(appSrc).toMatch(/new EnforcePppoeService\([^)]*config\.router\.reducedProfile/s);
+  it('(f) RouterOsEnforcementAdapter está wired con el reducedProfile de config', () => {
+    expect(appSrc).toMatch(/new RouterOsEnforcementAdapter\([^)]*config\.router\.reducedProfile/s);
+  });
+
+  it('(f) EnforcePppoeService está wired con el EnforcementGateway', () => {
+    expect(appSrc).toMatch(/new EnforcePppoeService\(/);
+  });
+
+  it('(f) PerNasEnforcementGateway rutea el enforcement (MK-directo + RADIUS)', () => {
+    expect(appSrc).toMatch(/new PerNasEnforcementGateway\(/);
+  });
+
+  it('(f) OrchestratorEnforcementAdapter está wired (camino RADIUS)', () => {
+    expect(appSrc).toMatch(/new OrchestratorEnforcementAdapter\(/);
+  });
+
+  it('(f) HttpRadiusOrchestratorGateway está wired con config.orchestrator', () => {
+    expect(appSrc).toMatch(/new HttpRadiusOrchestratorGateway\([^)]*config\.orchestrator/s);
   });
 
   it('(f) PreviewEnforcement está wired', () => {

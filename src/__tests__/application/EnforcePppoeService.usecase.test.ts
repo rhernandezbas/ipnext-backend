@@ -1,6 +1,7 @@
 import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import {
   RouterUnreachableError,
@@ -17,7 +18,7 @@ async function setup(opts?: { unreachable?: string[] }) {
   const repo = new InMemoryPppoeServiceRepository();
   const router = new InMemoryRouterGateway({ unreachable: opts?.unreachable ?? [] });
   const nasRepo = new InMemoryNasRepository();
-  const enforce = new EnforcePppoeService(repo, router, nasRepo, REDUCED);
+  const enforce = new EnforcePppoeService(repo, new RouterOsEnforcementAdapter(router, REDUCED), nasRepo);
   return { repo, router, nasRepo, enforce };
 }
 

@@ -2,6 +2,7 @@ import { RunBulkEnforcement } from '@application/use-cases/RunBulkEnforcement';
 import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryServiceCutBatchRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCutBatchRepository';
 
@@ -15,7 +16,7 @@ async function setup(opts?: { unreachable?: string[]; sleep?: (ms: number) => Pr
   const router = new InMemoryRouterGateway({ unreachable: opts?.unreachable ?? [] });
   const nasRepo = new InMemoryNasRepository();
   const batchRepo = new InMemoryServiceCutBatchRepository();
-  const enforce = new EnforcePppoeService(repo, router, nasRepo, REDUCED);
+  const enforce = new EnforcePppoeService(repo, new RouterOsEnforcementAdapter(router, REDUCED), nasRepo);
   const bulk = new RunBulkEnforcement(repo, enforce, batchRepo, {
     sleep: opts?.sleep ?? (async () => {}),
     throttleMs: opts?.throttleMs ?? 0,
@@ -119,7 +120,7 @@ describe('RunBulkEnforcement (Fase C — corte masivo por batch)', () => {
         return inner.update(id, patch);
       },
     });
-    const enforce = new EnforcePppoeService(repo, router, nasRepo, REDUCED);
+    const enforce = new EnforcePppoeService(repo, new RouterOsEnforcementAdapter(router, REDUCED), nasRepo);
     const bulk = new RunBulkEnforcement(repo, enforce, flaky as any, { throttleMs: 0 });
     const d1 = await seedPppoe(repo, 'd1', NAS_A);
     const d2 = await seedPppoe(repo, 'd2', NAS_A);
