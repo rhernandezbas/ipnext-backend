@@ -1595,6 +1595,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listNetworkDevices, getNetworkDevice, createNetworkDevice, updateNetworkDevice, deleteNetworkDevice,
   ));
   app.use('/api', createIpNetworkRouter(
+    authAdapter,
+    sessionRepo,
+    requirePerm,
     listIpNetworks, createIpNetwork, deleteIpNetwork,
     listIpPools, createIpPool, listIpAssignments,
     deleteIpPool, listIpv6Networks, createIpv6Network,
@@ -1617,8 +1620,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listHardwareAssets, createHardwareAsset, updateHardwareAsset, deleteHardwareAsset,
   ));
   app.use('/api/gpon', createGponRouter(listOlts, getOlt, listOnus, getOnu, listOnusByOlt, createOlt, createOnu, updateOnuStatus));
-  app.use('/api/radius', createRadiusRouter(listRadiusSessions, disconnectSession));
+  app.use('/api/radius', createRadiusRouter(authAdapter, sessionRepo, requirePerm, listRadiusSessions, disconnectSession));
   app.use('/api', createNasRouter(
+    authAdapter,
+    sessionRepo,
+    requirePerm,
     listNasServers, getNasServer, createNasServer, updateNasServer, deleteNasServer,
     getRadiusConfig, updateRadiusConfig,
   ));

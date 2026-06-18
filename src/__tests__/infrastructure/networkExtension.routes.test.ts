@@ -1,5 +1,6 @@
 import request from 'supertest';
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction, RequestHandler } from 'express';
+import cookieParser from 'cookie-parser';
 import { InMemoryNetworkSiteRepository } from '../../infrastructure/adapters/in-memory/InMemoryNetworkSiteRepository';
 import { ListNetworkSites } from '../../application/use-cases/ListNetworkSites';
 import { GetNetworkSite } from '../../application/use-cases/GetNetworkSite';
@@ -41,10 +42,35 @@ import { createHardwareRouter } from '../../infrastructure/http/routes/hardware.
 import { UpdateTr069Profile } from '../../application/use-cases/UpdateTr069Profile';
 import { DeleteTr069Profile } from '../../application/use-cases/DeleteTr069Profile';
 import { DeleteTr069Device } from '../../application/use-cases/DeleteTr069Device';
+import { createAuthMiddleware } from '../../infrastructure/http/middleware/authMiddleware';
+import type { AuthProvider } from '../../domain/ports/AuthProvider';
+import type { User } from '../../domain/entities/auth';
+import type { RbacModuleCode, PermissionAction } from '../../domain/entities/rbac';
+
+class EchoAuthProvider implements AuthProvider {
+  async login() {
+    return {
+      user: { id: 'x', username: 't', email: 't@t.com', role: 'admin' as const },
+      cookieValue: 'x',
+      cookieOptions: { httpOnly: true, secure: false, sameSite: 'lax' as const, maxAge: 3600, path: '/' },
+    };
+  }
+  logout() {
+    return { cookieOptions: { httpOnly: true, secure: false, sameSite: 'lax' as const, maxAge: 0, path: '/' } };
+  }
+  async getSession(token: string): Promise<User> {
+    return { id: token, username: 'test', email: 'test@test.com', role: 'admin' };
+  }
+}
+
+// Este test cubre la FUNCIONALIDAD de las rutas ipv6 (no su guard de permiso — eso vive en
+// ipNetwork.routes.test.ts). El router ip-network ahora exige auth; usamos un requirePerm permissivo.
+const allowAll = (_m: RbacModuleCode, _a: PermissionAction): RequestHandler => (_req, _res, next) => next();
 
 function buildApp() {
   const app = express();
   app.use(express.json());
+  app.use(cookieParser());
 
   const networkSiteRepo = new InMemoryNetworkSiteRepository();
   app.use('/api/network-sites', createNetworkSiteRouter(
@@ -78,6 +104,9 @@ function buildApp() {
 
   const ipRepo = new InMemoryIpNetworkRepository();
   app.use('/api', createIpNetworkRouter(
+    new EchoAuthProvider(),
+    undefined,
+    allowAll,
     new ListIpNetworks(ipRepo),
     new CreateIpNetwork(ipRepo),
     new DeleteIpNetwork(ipRepo),
@@ -104,6 +133,9 @@ function buildApp() {
 
   return app;
 }
+
+// auth_token cookie para las rutas ip-network (ahora con auth); el requirePerm es permissivo.
+const AUTH = 'auth_token=u1';
 
 // Module 1: Network Sites routes
 describe('GET /api/network-sites', () => {
@@ -181,11 +213,11 @@ describe('GET /api/tr069/devices', () => {
   });
 });
 
-// Module 4: IPv6 routes
+// Module 4: IPv6 routes (router ip-network ahora con auth → mandar cookie)
 describe('GET /api/ipv6-networks', () => {
   it('returns 200 with 2 IPv6 networks', async () => {
     const app = buildApp();
-    const res = await request(app).get('/api/ipv6-networks');
+    const res = await request(app).get('/api/ipv6-networks').set('Cookie', AUTH);
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
@@ -198,6 +230,7 @@ describe('POST /api/ipv6-networks', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/ipv6-networks')
+      .set('Cookie', AUTH)
       .send({
         network: '2001:db8:cafe::/48',
         description: 'Test IPv6',

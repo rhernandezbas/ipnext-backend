@@ -1,58 +1,206 @@
+/**
+ * nas.routes.test.ts — supertest para las rutas NAS + su guard de seguridad.
+ *
+ * Las rutas NAS estaban montadas en /api SIN auth ni permiso (agujero; fix `network-routes-guard`).
+ * Cubre:
+ *   - GET /nas-servers (con auth) → 200 con los 3 NAS seed; PUT /radius-config (con manage) actualiza
+ *   - 401 sin auth (todas)
+ *   - GET /nas-servers con auth pero SIN network.manage → 200 (reads auth-only; el dropdown de
+ *     routers del InternetPanel lo consumen usuarios pppoe.manage que no tienen network.read)
+ *   - POST/PUT/DELETE /nas-servers + PUT /radius-config sin network.manage → 403
+ *   - ...con network.manage → OK (incluye el FLIP del cutover: type → mikrotik_radius)
+ *
+ * Patrón espejo de pppoe.routes.test.ts (EchoAuthProvider + cookie token = userId + RBAC in-memory).
+ */
 import request from 'supertest';
-import express, { Request, Response, NextFunction } from 'express';
-import { InMemoryNasRepository } from '../../infrastructure/adapters/in-memory/InMemoryNasRepository';
-import { ListNasServers } from '../../application/use-cases/ListNasServers';
-import { GetNasServer } from '../../application/use-cases/GetNasServer';
-import { CreateNasServer } from '../../application/use-cases/CreateNasServer';
-import { UpdateNasServer } from '../../application/use-cases/UpdateNasServer';
-import { DeleteNasServer } from '../../application/use-cases/DeleteNasServer';
-import { GetRadiusConfig } from '../../application/use-cases/GetRadiusConfig';
-import { UpdateRadiusConfig } from '../../application/use-cases/UpdateRadiusConfig';
-import { createNasRouter } from '../../infrastructure/http/routes/nas.routes';
+import express from 'express';
+import cookieParser from 'cookie-parser';
 
-function buildApp() {
-  const app = express();
-  app.use(express.json());
+import { createNasRouter } from '@infrastructure/http/routes/nas.routes';
+import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
+import { requirePermission } from '@infrastructure/http/middleware/requirePermission';
 
-  const repo = new InMemoryNasRepository();
+import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
+import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
+import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
+import { InMemoryRbacPermissionRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacPermissionRepository';
+import { InMemoryRbacRolePermissionRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRolePermissionRepository';
+import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMemoryPasswordHasher';
 
-  const router = createNasRouter(
-    new ListNasServers(repo),
-    new GetNasServer(repo),
-    new CreateNasServer(repo),
-    new UpdateNasServer(repo),
-    new DeleteNasServer(repo),
-    new GetRadiusConfig(repo),
-    new UpdateRadiusConfig(repo),
-  );
-  app.use('/api', router);
+import { ListNasServers } from '@application/use-cases/ListNasServers';
+import { GetNasServer } from '@application/use-cases/GetNasServer';
+import { CreateNasServer } from '@application/use-cases/CreateNasServer';
+import { UpdateNasServer } from '@application/use-cases/UpdateNasServer';
+import { DeleteNasServer } from '@application/use-cases/DeleteNasServer';
+import { GetRadiusConfig } from '@application/use-cases/GetRadiusConfig';
+import { UpdateRadiusConfig } from '@application/use-cases/UpdateRadiusConfig';
 
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
-    console.error(err);
-    res.status(500).json({ error: 'Internal server error' });
-  });
+import { AuthProvider } from '@domain/ports/AuthProvider';
+import { User } from '@domain/entities/auth';
+import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 
-  return app;
+class EchoAuthProvider implements AuthProvider {
+  async login() {
+    return {
+      user: { id: 'x', username: 't', email: 't@t.com', role: 'admin' as const },
+      cookieValue: 'x',
+      cookieOptions: { httpOnly: true, secure: false, sameSite: 'lax' as const, maxAge: 3600, path: '/' },
+    };
+  }
+  logout() {
+    return { cookieOptions: { httpOnly: true, secure: false, sameSite: 'lax' as const, maxAge: 0, path: '/' } };
+  }
+  async getSession(token: string): Promise<User> {
+    return { id: token, username: 'test', email: 'test@test.com', role: 'admin' };
+  }
 }
 
-describe('GET /api/nas-servers', () => {
-  it('returns 200 with array of 3 NAS servers', async () => {
-    const app = buildApp();
-    const res = await request(app).get('/api/nas-servers');
+interface Fixture {
+  app: express.Express;
+  nasRepo: InMemoryNasRepository;
+  manageUserId: string;
+  noPermUserId: string;
+}
 
+async function buildApp(): Promise<Fixture> {
+  const roleRepo     = new InMemoryRbacRoleRepository();
+  const userRoleRepo = new InMemoryRbacUserRoleRepository();
+  const permRepo     = new InMemoryRbacPermissionRepository();
+  const rolePermRepo = new InMemoryRbacRolePermissionRepository();
+  const hasher       = new InMemoryPasswordHasher();
+  const userRepo     = new InMemoryRbacUserRepository(userRoleRepo, roleRepo);
+
+  userRepo.listRolesForUser = async (userId: string) => {
+    const roleIds = await userRoleRepo.listForUser(userId);
+    const roles = await Promise.all(roleIds.map((id) => roleRepo.findById(id)));
+    return roles.filter((r): r is NonNullable<typeof r> => r !== null);
+  };
+  userRepo.listPermissionsForUser = async (userId: string) => {
+    const roleIds = await userRoleRepo.listForUser(userId);
+    const perms: import('@domain/entities/rbac').RbacPermission[] = [];
+    const allPerms = await permRepo.listAll();
+    for (const roleId of roleIds) {
+      const permIds = await rolePermRepo.listForRole(roleId);
+      for (const permId of permIds) {
+        const p = allPerms.find((ap) => ap.id === permId);
+        if (p) perms.push(p);
+      }
+    }
+    return perms;
+  };
+
+  const managerRole = await roleRepo.create({ code: 'network_manager', label: 'Network Manager', isSystem: false });
+  const managePerm  = await permRepo.seed({ moduleCode: 'network', action: 'manage' });
+  await rolePermRepo.grant(managerRole.id, managePerm.id);
+
+  const pwHash = await hasher.hash('pw');
+  const mkUser = (login: string) =>
+    userRepo.create({ name: login, email: `${login}@x.com`, login, passwordHash: pwHash, status: 'active' });
+
+  const manageUser = await mkUser('manager');
+  const noPermUser = await mkUser('noperm');
+  await userRoleRepo.assign(manageUser.id, managerRole.id);
+  // noPermUser: sin roles → autenticado pero SIN network.manage
+
+  const nasRepo = new InMemoryNasRepository();
+  const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
+
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+  app.use('/api', createNasRouter(
+    new EchoAuthProvider(),
+    undefined, // sessionRepo: stateless en tests
+    requirePerm,
+    new ListNasServers(nasRepo),
+    new GetNasServer(nasRepo),
+    new CreateNasServer(nasRepo),
+    new UpdateNasServer(nasRepo),
+    new DeleteNasServer(nasRepo),
+    new GetRadiusConfig(nasRepo),
+    new UpdateRadiusConfig(nasRepo),
+  ));
+  app.use(errorHandler);
+
+  return { app, nasRepo, manageUserId: manageUser.id, noPermUserId: noPermUser.id };
+}
+
+function asUser(req: request.Test, userId: string): request.Test {
+  return req.set('Cookie', `auth_token=${userId}`);
+}
+
+describe('nas.routes — funcionalidad + security guard (auth + network.manage)', () => {
+  // ── 401 sin auth ──────────────────────────────────────────────────────────
+  it('GET /api/nas-servers sin auth → 401', async () => {
+    const { app } = await buildApp();
+    expect((await request(app).get('/api/nas-servers')).status).toBe(401);
+  });
+  it('PUT /api/nas-servers/:id sin auth → 401', async () => {
+    const { app } = await buildApp();
+    expect((await request(app).put('/api/nas-servers/1').send({ type: 'mikrotik_radius' })).status).toBe(401);
+  });
+  it('POST /api/nas-servers sin auth → 401', async () => {
+    const { app } = await buildApp();
+    expect((await request(app).post('/api/nas-servers').send({})).status).toBe(401);
+  });
+  it('DELETE /api/nas-servers/:id sin auth → 401', async () => {
+    const { app } = await buildApp();
+    expect((await request(app).delete('/api/nas-servers/1')).status).toBe(401);
+  });
+  it('PUT /api/radius-config sin auth → 401', async () => {
+    const { app } = await buildApp();
+    expect((await request(app).put('/api/radius-config').send({})).status).toBe(401);
+  });
+
+  // ── GET = auth-only (reads NO requieren network.manage) ─────────────────────
+  it('GET /api/nas-servers con auth pero sin network.manage → 200 con los 3 NAS seed', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/nas-servers'), noPermUserId);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body).toHaveLength(3);
   });
-});
 
-describe('PUT /api/radius-config', () => {
-  it('returns 200 with updated config', async () => {
-    const app = buildApp();
-    const res = await request(app)
-      .put('/api/radius-config')
-      .send({ sessionTimeout: 7200 });
+  // ── writes requieren network.manage → 403 sin permiso ───────────────────────
+  it('PUT /api/nas-servers/:id sin network.manage → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).put('/api/nas-servers/1'), noPermUserId).send({ type: 'mikrotik_radius' });
+    expect(res.status).toBe(403);
+  });
+  it('POST /api/nas-servers sin network.manage → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).post('/api/nas-servers'), noPermUserId).send({ name: 'x' });
+    expect(res.status).toBe(403);
+  });
+  it('DELETE /api/nas-servers/:id sin network.manage → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).delete('/api/nas-servers/1'), noPermUserId);
+    expect(res.status).toBe(403);
+  });
+  it('PUT /api/radius-config sin network.manage → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).put('/api/radius-config'), noPermUserId).send({ authPort: 1812 });
+    expect(res.status).toBe(403);
+  });
 
+  // ── writes con network.manage → OK (incluye el FLIP del cutover) ────────────
+  it('PUT /api/nas-servers/:id con network.manage flipea el type (cutover) → 200', async () => {
+    const { app, manageUserId, nasRepo } = await buildApp();
+    const res = await asUser(request(app).put('/api/nas-servers/1'), manageUserId).send({ type: 'mikrotik_radius' });
+    expect(res.status).toBe(200);
+    expect(res.body.type).toBe('mikrotik_radius');
+    const updated = await nasRepo.findNasServerById('1');
+    expect(updated?.type).toBe('mikrotik_radius');
+  });
+  it('DELETE /api/nas-servers/:id con network.manage → 204', async () => {
+    const { app, manageUserId } = await buildApp();
+    const res = await asUser(request(app).delete('/api/nas-servers/2'), manageUserId);
+    expect(res.status).toBe(204);
+  });
+  it('PUT /api/radius-config con network.manage → 200 con la config actualizada', async () => {
+    const { app, manageUserId } = await buildApp();
+    const res = await asUser(request(app).put('/api/radius-config'), manageUserId).send({ sessionTimeout: 7200 });
     expect(res.status).toBe(200);
     expect(res.body.sessionTimeout).toBe(7200);
     expect(res.body.authPort).toBe(1812);
