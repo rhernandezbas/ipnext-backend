@@ -17,6 +17,7 @@ interface StoredUser {
   failedLoginCount: number;
   lockedUntil: Date | null;
   iclassTeamLogin: string | null;
+  grVendedorName: string | null;
 }
 
 /**
@@ -50,6 +51,7 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
     return {
       ...entry.user,
       iclassTeamLogin: entry.iclassTeamLogin,
+      grVendedorName: entry.grVendedorName,
       lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
     };
   }
@@ -60,6 +62,7 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
         return {
           ...entry.user,
           iclassTeamLogin: entry.iclassTeamLogin,
+          grVendedorName: entry.grVendedorName,
           lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
           passwordHash: entry.passwordHash,
           failedLoginCount: entry.failedLoginCount,
@@ -91,11 +94,12 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
       login: input.login,
       status: input.status ?? 'active',
       iclassTeamLogin: null,
+      grVendedorName: null,
       createdAt: now,
       updatedAt: now,
       lastLoginAt: null,
     };
-    this.store.set(user.id, { user, passwordHash: input.passwordHash, lastLoginAt: null, failedLoginCount: 0, lockedUntil: null, iclassTeamLogin: null });
+    this.store.set(user.id, { user, passwordHash: input.passwordHash, lastLoginAt: null, failedLoginCount: 0, lockedUntil: null, iclassTeamLogin: null, grVendedorName: null });
     return { ...user };
   }
 
@@ -121,6 +125,7 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
     return Array.from(this.store.values()).map(entry => ({
       ...entry.user,
       iclassTeamLogin: entry.iclassTeamLogin,
+      grVendedorName: entry.grVendedorName,
       lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
     }));
   }
@@ -141,6 +146,7 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
       result.push({
         ...entry.user,
         iclassTeamLogin: login,
+        grVendedorName: entry.grVendedorName,
         lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
         teamName,
         teamActive,
@@ -177,9 +183,15 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
       entry.iclassTeamLogin = patch.iclassTeamLogin ?? null;
       entry.user.iclassTeamLogin = patch.iclassTeamLogin ?? null;
     }
+    // Mis clientes (Fase 2) — grVendedorName (soft mapping, nullable, undefined = no change)
+    if ('grVendedorName' in patch) {
+      entry.grVendedorName = patch.grVendedorName ?? null;
+      entry.user.grVendedorName = patch.grVendedorName ?? null;
+    }
     return {
       ...entry.user,
       iclassTeamLogin: entry.iclassTeamLogin,
+      grVendedorName: entry.grVendedorName,
       lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
     };
   }

@@ -259,6 +259,14 @@ describe('PATCH /admin/rbac/users/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.user.name).toBe('Updated Name');
   });
+
+  it('200 persists grVendedorName from the body', async () => {
+    const { app, superAdminUser: sa } = await buildTestApp();
+    const res = await authed(request(app).patch(`/admin/rbac/users/${sa.id}`), sa.id)
+      .send({ grVendedorName: 'JUAN PEREZ' });
+    expect(res.status).toBe(200);
+    expect(res.body.user.grVendedorName).toBe('JUAN PEREZ');
+  });
 });
 
 describe('DELETE /admin/rbac/users/:id', () => {

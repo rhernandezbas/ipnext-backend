@@ -25,6 +25,8 @@ export interface RbacUserDto {
   email: string;
   login: string;
   status: 'active' | 'disabled';
+  /** Mis clientes (Fase 2): nombre del vendedor en Gestión Real. null = sin mapear. */
+  grVendedorName: string | null;
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
@@ -60,6 +62,13 @@ export interface UpdateRbacUserDto {
    * - Non-empty string → validated (>= 8 chars) and hashed.
    */
   password?: string;
+  /**
+   * Mis clientes (Fase 2): nombre del vendedor en GR.
+   * - undefined → no change.
+   * - null → clears the mapping.
+   * - string → sets the mapping.
+   */
+  grVendedorName?: string | null;
 }
 
 export interface ChangeRbacUserPasswordDto {
@@ -83,6 +92,7 @@ export function toRbacUserDto(u: {
   email: string;
   login: string;
   status: 'active' | 'disabled';
+  grVendedorName?: string | null;
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
@@ -93,6 +103,7 @@ export function toRbacUserDto(u: {
     email: u.email,
     login: u.login,
     status: u.status,
+    grVendedorName: u.grVendedorName ?? null,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
     lastLoginAt: u.lastLoginAt,

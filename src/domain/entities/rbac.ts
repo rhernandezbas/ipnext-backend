@@ -162,6 +162,11 @@ export interface RbacUser {
    * Null = no cuadrilla mapeada. Set/cleared via SetTechnicianTeamMapping.
    */
   iclassTeamLogin?: string | null;
+  /**
+   * Mis clientes (Fase 2): nombre del vendedor en Gestión Real.
+   * Soft mapping, nullable, sin FK física. Set/cleared via UpdateRbacUser.
+   */
+  grVendedorName?: string | null;
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;

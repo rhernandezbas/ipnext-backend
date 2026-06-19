@@ -229,6 +229,30 @@ export function runRbacUserContractTests(
       const repo = makeRepo();
       await expect(repo.update('nonexistent-id', { name: 'X' })).rejects.toBeTruthy();
     });
+
+    it('sets and clears grVendedorName (soft FK, nullable)', async () => {
+      const repo = makeRepo();
+      const user = await repo.create(makeInput());
+      // create defaults to null
+      expect(user.grVendedorName ?? null).toBeNull();
+
+      const set = await repo.update(user.id, { grVendedorName: 'JUAN PEREZ' });
+      expect(set.grVendedorName).toBe('JUAN PEREZ');
+      const afterSet = await repo.findById(user.id);
+      expect(afterSet!.grVendedorName).toBe('JUAN PEREZ');
+
+      const cleared = await repo.update(user.id, { grVendedorName: null });
+      expect(cleared.grVendedorName).toBeNull();
+    });
+
+    it('leaves grVendedorName untouched when omitted from patch', async () => {
+      const repo = makeRepo();
+      const user = await repo.create(makeInput());
+      await repo.update(user.id, { grVendedorName: 'MARIA LOPEZ' });
+      const updated = await repo.update(user.id, { name: 'Renamed' });
+      expect(updated.name).toBe('Renamed');
+      expect(updated.grVendedorName).toBe('MARIA LOPEZ');
+    });
   });
 
   describe('delete', () => {

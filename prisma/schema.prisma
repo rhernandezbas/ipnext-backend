@@ -2215,6 +2215,8 @@ model RbacUser {
   lastLoginAt     DateTime?
   /// AD-1: Soft FK to IClassTeam.login — 1 técnico → 0..1 cuadrilla. No FK física.
   iclassTeamLogin String?
+  /// Mis clientes (Fase 2): nombre del vendedor en Gestión Real. Soft, nullable, sin FK física.
+  grVendedorName  String?
   roles           RbacUserRole[]
   tasksReported          ScheduledTask[] @relation("TaskReporter")
   tasksAssigned          ScheduledTask[] @relation("TaskAssignee")

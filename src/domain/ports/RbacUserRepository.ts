@@ -41,6 +41,8 @@ export interface UpdateRbacUserInput {
   lockedUntil?: Date | null;
   /** AD-1: soft FK to IClassTeam.login. null = desmapear. undefined = no change. */
   iclassTeamLogin?: string | null;
+  /** Mis clientes (Fase 2): nombre del vendedor en GR. null = desmapear. undefined = no change. */
+  grVendedorName?: string | null;
 }
 
 /** Auth-internal fields returned only by findByLogin (like passwordHash). */

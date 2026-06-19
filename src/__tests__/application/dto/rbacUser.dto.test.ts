@@ -14,6 +14,7 @@ describe('toRbacUserDto', () => {
     email: 'alice@example.com',
     login: 'alice',
     status: 'active' as const,
+    grVendedorName: 'JUAN PEREZ',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     lastLoginAt: null,
@@ -26,9 +27,16 @@ describe('toRbacUserDto', () => {
     expect(dto.email).toBe('alice@example.com');
     expect(dto.login).toBe('alice');
     expect(dto.status).toBe('active');
+    expect(dto.grVendedorName).toBe('JUAN PEREZ');
     expect(dto.createdAt).toBe('2026-01-01T00:00:00.000Z');
     expect(dto.updatedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(dto.lastLoginAt).toBeNull();
+  });
+
+  it('should map grVendedorName as null when absent', () => {
+    const { grVendedorName: _omit, ...withoutGr } = userEntity;
+    const dto = toRbacUserDto(withoutGr);
+    expect(dto.grVendedorName).toBeNull();
   });
 
   it('should NOT include passwordHash in serialized output', () => {

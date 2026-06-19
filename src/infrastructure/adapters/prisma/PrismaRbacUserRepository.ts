@@ -28,6 +28,8 @@ type RbacUserRow = {
   lockedUntil: Date | null;
   /** AD-1: nullable soft FK to IClassTeam.login. Added by migration 20260727000000. */
   iclassTeamLogin?: string | null;
+  /** Mis clientes (Fase 2): nombre del vendedor en GR. Added by migration 20260801002000. */
+  grVendedorName?: string | null;
 };
 
 type RoleRow = {
@@ -55,6 +57,7 @@ function mapUser(row: RbacUserRow): RbacUser {
     login: row.login,
     status: (row.status === 'active' || row.status === 'disabled') ? row.status : 'active',
     iclassTeamLogin: row.iclassTeamLogin ?? null,
+    grVendedorName: row.grVendedorName ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     lastLoginAt: row.lastLoginAt ? row.lastLoginAt.toISOString() : null,
@@ -200,6 +203,7 @@ export class PrismaRbacUserRepository implements RbacUserRepository {
       if (patch.failedLoginCount !== undefined) data['failedLoginCount'] = patch.failedLoginCount;
       if (patch.lockedUntil !== undefined) data['lockedUntil'] = patch.lockedUntil;
       if ('iclassTeamLogin' in patch) data['iclassTeamLogin'] = patch.iclassTeamLogin ?? null;
+      if ('grVendedorName' in patch) data['grVendedorName'] = patch.grVendedorName ?? null;
 
       const row = await (this.db as any).rbacUser.update({
         where: { id },
