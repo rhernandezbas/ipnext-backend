@@ -41,4 +41,9 @@ export interface PppoeRouterGateway {
   // --- Fase C (enforcement): declarados aquí, se implementan en los cortes ---
   listActiveSessions(nas: NasTarget): Promise<ActiveSession[]>;
   removeActiveSession(nas: NasTarget, username: string): Promise<void>;
+  /**
+   * IPs actualmente asignadas en el router: los `remote-address` NO vacíos de `/ppp secret`.
+   * Lo usa el allocator (FindFreeIp) como fuente de verdad VIVA de IPs ocupadas.
+   */
+  listAssignedIps(nas: NasTarget): Promise<string[]>;
 }

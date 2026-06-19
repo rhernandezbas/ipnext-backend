@@ -1,4 +1,4 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { SessionRepository } from '@domain/ports/SessionRepository';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
@@ -10,6 +10,8 @@ import { UpdateNasServer } from '@application/use-cases/UpdateNasServer';
 import { DeleteNasServer } from '@application/use-cases/DeleteNasServer';
 import { GetRadiusConfig } from '@application/use-cases/GetRadiusConfig';
 import { UpdateRadiusConfig } from '@application/use-cases/UpdateRadiusConfig';
+import { FindFreeIp } from '@application/use-cases/FindFreeIp';
+import type { IpKind } from '@domain/entities/network';
 
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
 
@@ -32,9 +34,11 @@ export function createNasRouter(
   deleteNasServer: DeleteNasServer,
   getRadiusConfig: GetRadiusConfig,
   updateRadiusConfig: UpdateRadiusConfig,
+  findFreeIp?: FindFreeIp,
 ): Router {
   const router = Router();
   const auth      = createAuthMiddleware(authProvider, sessionRepo);
+  const canRead   = requirePerm('network', 'read');
   const canManage = requirePerm('network', 'manage');
 
   // NAS Servers
@@ -84,6 +88,25 @@ export function createNasRouter(
   router.put('/radius-config', auth, canManage, async (req: Request, res: Response): Promise<void> => {
     const config = await updateRadiusConfig.execute(req.body);
     res.json(config);
+  });
+
+  // IP allocator (ip-allocator / FindFreeIp): primer IP libre de un NAS para `cgnat|public`.
+  // `network.read` — misma lectura que GET /ip-pools. Errores de dominio (NAS/pool inexistente,
+  // pool agotado) los mapea el errorHandler vía DomainError.code.
+  router.get('/nas/:nasId/next-free-ip', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    if (!findFreeIp) { res.status(501).json({ error: 'Not implemented', code: 'NOT_IMPLEMENTED' }); return; }
+    const type = req.query['type'];
+    if (type !== 'cgnat' && type !== 'public') {
+      res.status(400).json({ error: "query 'type' debe ser 'cgnat' o 'public'", code: 'INVALID_IP_TYPE' });
+      return;
+    }
+    try {
+      const ip = await findFreeIp.execute({ nasId: req.params['nasId'] as string, type: type as IpKind });
+      res.json({ ip });
+    } catch (err) {
+      // Errores de dominio (NAS/pool inexistente, pool agotado) → errorHandler global vía code.
+      next(err);
+    }
   });
 
   return router;

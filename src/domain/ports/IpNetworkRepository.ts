@@ -8,6 +8,8 @@ export interface IpNetworkRepository {
 
   findAllPools(): Promise<IpPool[]>;
   findPoolById(id: string): Promise<IpPool | null>;
+  /** Pools ligados a un NAS (vía IpPool.nasId). Lo usa el allocator FindFreeIp. */
+  findPoolsByNas(nasId: string): Promise<IpPool[]>;
   createPool(data: Omit<IpPool, 'id'>): Promise<IpPool>;
   deletePool(id: string): Promise<boolean>;
 

@@ -80,6 +80,13 @@ export class InMemoryRouterGateway implements PppoeRouterGateway {
     if (i >= 0) b.splice(i, 1);
   }
 
+  async listAssignedIps(nas: NasTarget): Promise<string[]> {
+    this.guard(nas);
+    return this.bucket(nas)
+      .map(s => s.remoteAddress)
+      .filter((addr): addr is string => !!addr);
+  }
+
   async listActiveSessions(nas: NasTarget): Promise<ActiveSession[]> {
     this.guard(nas);
     return (this.sessions.get(nas.ipAddress) ?? []).map(s => ({ ...s }));

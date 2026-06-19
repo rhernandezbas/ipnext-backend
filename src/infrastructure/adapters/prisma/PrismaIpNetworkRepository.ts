@@ -54,7 +54,8 @@ function toPool(row: any): IpPool {
     type: 'dynamic',
     assignedCount: 0,
     totalCount: 0,
-    nasId: null,
+    nasId: row.nasId ?? null,
+    ipKind: row.ipKind ?? null,
   };
 }
 
@@ -117,6 +118,11 @@ export class PrismaIpNetworkRepository implements IpNetworkRepository {
     return row ? toPool(row) : null;
   }
 
+  async findPoolsByNas(nasId: string): Promise<IpPool[]> {
+    const rows = await prisma.ipPool.findMany({ where: { nasId } });
+    return rows.map(toPool);
+  }
+
   async createPool(data: Omit<IpPool, 'id'>): Promise<IpPool> {
     const row = await prisma.ipPool.create({
       data: {
@@ -125,6 +131,8 @@ export class PrismaIpNetworkRepository implements IpNetworkRepository {
         rangeStart: data.rangeStart,
         rangeEnd: data.rangeEnd,
         status: 'active',
+        nasId: data.nasId ?? null,
+        ipKind: data.ipKind ?? null,
       },
     });
     return toPool(row);

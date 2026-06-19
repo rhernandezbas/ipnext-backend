@@ -50,6 +50,15 @@ describe('InMemoryRouterGateway', () => {
     expect(await gw.listSecrets({ ipAddress: 'B', apiPort: 8728 })).toHaveLength(1);
   });
 
+  it('listAssignedIps devuelve los remote-address no vacíos (allocator)', async () => {
+    const gw = new InMemoryRouterGateway();
+    await gw.createSecret(nas, { username: 'u1', password: 'p', remoteAddress: '100.64.10.2' });
+    await gw.createSecret(nas, { username: 'u2', password: 'p', remoteAddress: '100.64.10.3' });
+    await gw.createSecret(nas, { username: 'u3', password: 'p' }); // sin remote-address → no cuenta
+    const ips = await gw.listAssignedIps(nas);
+    expect(ips.sort()).toEqual(['100.64.10.2', '100.64.10.3']);
+  });
+
   it('removeActiveSession y listActiveSessions disponibles (para Fase C)', async () => {
     const gw = new InMemoryRouterGateway();
     expect(await gw.listActiveSessions(nas)).toEqual([]);

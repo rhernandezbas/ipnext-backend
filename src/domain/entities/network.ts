@@ -12,6 +12,9 @@ export interface IpNetwork {
   freeIps: number;
 }
 
+/** Clase de direccionamiento del pool — eje ORTOGONAL a `type` (static/dynamic). */
+export type IpKind = 'cgnat' | 'public';
+
 export interface IpPool {
   id: string;
   name: string;
@@ -22,6 +25,12 @@ export interface IpPool {
   assignedCount: number;
   totalCount: number;
   nasId: string | null;
+  /**
+   * Clase de IP del pool, usada por el allocator (FindFreeIp) para resolver
+   * el pool de un NAS dado un `type` cgnat|public. `null` en pools legacy
+   * que no participan del allocator.
+   */
+  ipKind: IpKind | null;
 }
 
 export interface IpAssignment {

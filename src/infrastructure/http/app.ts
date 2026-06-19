@@ -297,6 +297,7 @@ import { DeleteIpPool } from '@application/use-cases/DeleteIpPool';
 import { ListIpAssignments } from '@application/use-cases/ListIpAssignments';
 import { createNasRouter } from './routes/nas.routes';
 import { PrismaNasRepository } from '../adapters/prisma/PrismaNasRepository';
+import { FindFreeIp } from '@application/use-cases/FindFreeIp';
 import { createDashboardRouter } from './routes/dashboard.routes';
 import { PrismaDashboardRepository } from '../adapters/prisma/PrismaDashboardRepository';
 import { GetDashboardStats } from '@application/use-cases/GetDashboardStats';
@@ -1066,6 +1067,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const deleteNasServer = new DeleteNasServer(nasRepo);
   const getRadiusConfig = new GetRadiusConfig(nasRepo);
   const updateRadiusConfig = new UpdateRadiusConfig(nasRepo);
+  // ip-allocator (FindFreeIp): primer IP libre = rango del pool − IPs vivas del router.
+  // Reusa ipNetworkRepo (pools) + nasRepo (target) + RouterOsGateway (/ppp secret).
+  const findFreeIp = new FindFreeIp(ipNetworkRepo, nasRepo, new RouterOsGateway());
 
   const networkSiteRepo = new PrismaNetworkSiteRepository();
   const listNetworkSites = new ListNetworkSites(networkSiteRepo);
@@ -1638,6 +1642,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     requirePerm,
     listNasServers, getNasServer, createNasServer, updateNasServer, deleteNasServer,
     getRadiusConfig, updateRadiusConfig,
+    findFreeIp,
   ));
   app.use(
     '/api/settings',

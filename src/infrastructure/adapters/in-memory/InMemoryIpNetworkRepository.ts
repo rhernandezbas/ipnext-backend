@@ -47,6 +47,7 @@ export class InMemoryIpNetworkRepository implements IpNetworkRepository {
       assignedCount: 50,
       totalCount: 191,
       nasId: '1',
+      ipKind: null,
     },
     {
       id: '2',
@@ -58,6 +59,7 @@ export class InMemoryIpNetworkRepository implements IpNetworkRepository {
       assignedCount: 0,
       totalCount: 50,
       nasId: null,
+      ipKind: null,
     },
     {
       id: '3',
@@ -69,6 +71,7 @@ export class InMemoryIpNetworkRepository implements IpNetworkRepository {
       assignedCount: 5,
       totalCount: 91,
       nasId: null,
+      ipKind: null,
     },
   ];
 
@@ -170,6 +173,20 @@ export class InMemoryIpNetworkRepository implements IpNetworkRepository {
 
   async findPoolById(id: string): Promise<IpPool | null> {
     return this.pools.find(p => p.id === id) ?? null;
+  }
+
+  async findPoolsByNas(nasId: string): Promise<IpPool[]> {
+    return this.pools.filter(p => p.nasId === nasId);
+  }
+
+  /** Test seam: siembra una red (allocator). No forma parte del port. */
+  seedNetwork(network: IpNetwork): void {
+    this.networks.push({ ...network });
+  }
+
+  /** Test seam: siembra un pool (allocator). No forma parte del port. */
+  seedPool(pool: IpPool): void {
+    this.pools.push({ ...pool });
   }
 
   async createPool(data: Omit<IpPool, 'id'>): Promise<IpPool> {

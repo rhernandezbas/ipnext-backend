@@ -83,6 +83,7 @@ describe('CreateIpPool', () => {
       assignedCount: 0,
       totalCount: 11,
       nasId: null,
+      ipKind: null,
     });
 
     expect(result.id).toBeTruthy();

@@ -73,6 +73,17 @@ export class RouterOsGateway implements PppoeRouterGateway {
     });
   }
 
+  async listAssignedIps(nas: NasTarget): Promise<string[]> {
+    return this.withConn(nas, async (conn) => {
+      const rows = (await conn.write('/ppp/secret/print', [
+        '=.proplist=remote-address',
+      ])) as any[];
+      return rows
+        .map((r) => r['remote-address'])
+        .filter((addr): addr is string => typeof addr === 'string' && addr.length > 0);
+    });
+  }
+
   async createSecret(nas: NasTarget, input: SecretInput): Promise<void> {
     return this.withConn(nas, async (conn) => {
       const params = [`=name=${input.username}`, `=password=${input.password}`, '=service=pppoe'];

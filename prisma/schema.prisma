@@ -1646,9 +1646,14 @@ model IpPool {
   rangeStart  String
   rangeEnd    String
   status      String         @default("active")
+  // ip-allocator: liga el pool a un NAS y a su clase de IP (cgnat|public).
+  // Nullable: los pools legacy no participan del allocator.
+  nasId       String?
+  ipKind      String?
   assignments IpAssignment[]
 
   @@index([networkId])
+  @@index([nasId])
 }
 
 model IpAssignment {

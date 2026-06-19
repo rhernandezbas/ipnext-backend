@@ -40,6 +40,10 @@ const statusMap: Record<string, number> = {
   // PPPoE enforcement (Fase C): backend de corte inalcanzable.
   ROUTER_UNREACHABLE: 502,
   ORCHESTRATOR_UNREACHABLE: 502,
+  // ip-allocator (FindFreeIp)
+  NAS_NOT_FOUND: 404,
+  NO_POOL_FOR_NAS_TYPE: 404,
+  NO_FREE_IP: 422,
   WORKFLOW_NAME_CONFLICT: 409,
   DEFAULT_WORKFLOW_PROTECTED: 409,
   WORKFLOW_IN_USE: 409,
