@@ -84,6 +84,7 @@ const CONTRACTS_RESPONSE = {
         cantidad_conexiones: 1,
       },
       modificado: '27-04-2026 11:01:27',
+      vendedor: 'CAROLINA ROSALES',
     },
   ],
 };
@@ -174,6 +175,7 @@ describe('GestionRealClient parsing', () => {
     expect(k.startDate).toBe('01-05-2023');
     expect(k.pppoeUsername).toBe('RaulAranMercFibra');
     expect(k.modificado).toBe('27-04-2026 11:01:27');
+    expect(k.vendedor).toBe('CAROLINA ROSALES');
   });
 
   it('captures lat/lng as numbers when GR provides non-empty strings', () => {

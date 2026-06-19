@@ -66,6 +66,8 @@ export interface Contract {
   technology: string | null;
   /** #43 manual-only identifier. null for GR-synced contracts with no manual name. */
   name: string | null;
+  /** Vendedor/agente que dio de alta el contrato (de GR). Base de la cartera "Mis clientes". null para no-GR. */
+  vendedor: string | null;
   /** #43 eager-loaded services for this contract. Empty array when none. */
   services: ContractServiceItem[];
 }

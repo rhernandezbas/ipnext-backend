@@ -25,7 +25,7 @@ describe('upsertContract data block pinning (#43)', () => {
 
   it('contains exactly the GR-owned keys', () => {
     const keys = (dataBlock.match(/^\s*(\w+)\s*:/gm) ?? []).map(k => k.trim().replace(/:$/, ''));
-    expect(new Set(keys)).toEqual(new Set(['type', 'plan', 'status', 'startDate', 'address', 'lat', 'lng']));
+    expect(new Set(keys)).toEqual(new Set(['type', 'plan', 'status', 'startDate', 'address', 'lat', 'lng', 'vendedor']));
   });
 
   it('pins address as GR-wins (address: k.address)', () => {

@@ -225,6 +225,7 @@ export function parseContractsResponse(data: unknown, grClienteId: string): GrCo
     lng: numOrNull(c.lng),
     pppoeUsername: firstPppoeUser(c.conexiones),
     modificado: str(c.modificado),
+    vendedor: str(c.vendedor),
     raw: c,
   }));
 }

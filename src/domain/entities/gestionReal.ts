@@ -68,6 +68,9 @@ export interface GrContract {
   pppoeUsername: string | null;
   /** Raw GR modification timestamp "DD-MM-YYYY HH:MM:SS". */
   modificado: string | null;
+  /** Nombre del vendedor/agente que dio de alta el contrato (GR field `vendedor`).
+   * Nombre crudo, sin normalizar (ej. "CAROLINA ROSALES", "julietapalilla"). */
+  vendedor: string | null;
   raw: Record<string, unknown>;
 }
 

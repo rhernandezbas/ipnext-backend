@@ -15,6 +15,7 @@ function makeContract(id: string, cli: string, overrides: Partial<GrContract> = 
     lng: null,
     pppoeUsername: `user${id}`,
     modificado: '27-04-2026 11:01:27',
+    vendedor: null,
     raw: { id },
     ...overrides,
   };

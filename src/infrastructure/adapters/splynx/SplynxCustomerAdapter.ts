@@ -113,6 +113,7 @@ export class SplynxCustomerAdapter implements CustomerRepository {
       lng: null,
       technology: null,
       name: null,
+      vendedor: null, // Splynx services carry no GR vendedor
       services: [],
     }));
   }

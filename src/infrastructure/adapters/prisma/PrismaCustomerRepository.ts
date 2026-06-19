@@ -74,6 +74,8 @@ export function toService(row: any): Contract {
     technology: row.technology ?? null,
     // #43 — manual name (null for GR-synced contracts) + eager-loaded services.
     name: row.name ?? null,
+    // vendedor/agente que dio de alta (de GR). Base de la cartera "Mis clientes" por agente.
+    vendedor: row.vendedor ?? null,
     // #65 fix wave H3 — tvLogin/tvPassword are deliberately NOT mapped here. The credentials
     // never travel on the contracts list; they are served by the dedicated /tv-credentials endpoint.
     services: (row.contractServices ?? []).map((cs: any) => ({

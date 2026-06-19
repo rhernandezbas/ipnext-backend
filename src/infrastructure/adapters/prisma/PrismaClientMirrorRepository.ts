@@ -101,6 +101,8 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       address: k.address ?? null,
       lat: k.lat ?? null,
       lng: k.lng ?? null,
+      // GR-owned: el vendedor/agente que dio de alta. NO es user-managed → GR-wins en cada sync.
+      vendedor: k.vendedor ?? null,
     };
 
     if (existing) {
