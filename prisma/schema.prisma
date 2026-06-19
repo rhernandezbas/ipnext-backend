@@ -1740,6 +1740,20 @@ model PppoeService {
 }
 
 // Fase C — estado de un job de corte MASIVO on-demand (progreso poleable + resultado por-item).
+model Plan {
+  id           String   @id @default(uuid())
+  code         String   @unique
+  name         String
+  category     String
+  downloadKbps Int
+  uploadKbps   Int
+  status       String   @default("enabled")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status, category])
+}
+
 model ServiceCutBatch {
   id          String    @id @default(uuid())
   action      String    // reduce | block | restore

@@ -642,6 +642,13 @@ import { ListSessionHistory } from '@application/use-cases/sessions/ListSessionH
 // SDD #3 Phase 4b — role catalog mutation use cases
 import { CreateRbacRole } from '@application/use-cases/rbac/CreateRbacRole';
 import { DeleteRbacRole } from '@application/use-cases/rbac/DeleteRbacRole';
+// Plan catalog (plan-catalog)
+import { createPlanRouter } from './routes/plan.routes';
+import { PrismaPlanRepository } from '../adapters/prisma/PrismaPlanRepository';
+import { ListPlans } from '@application/use-cases/ListPlans';
+import { CreatePlan } from '@application/use-cases/CreatePlan';
+import { UpdatePlan } from '@application/use-cases/UpdatePlan';
+import { DeletePlan } from '@application/use-cases/DeletePlan';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -1964,6 +1971,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listActivationHistory: new ListTvActivationHistory(gigaredTvActivationEventRepo),
   }));
 
+  // ─── radius-orchestrator singleton — compartido por PPPoE (enforcement) y Plan catalog (sync) ───
+  // Opt-in: si ORCHESTRATOR_BASE_URL no está configurado, los métodos fallan al USARSE con error
+  // claro (OrchestratorUnreachableError → 502). El resto de la app arranca igual. SERVER-SIDE.
+  const orchestrator = new HttpRadiusOrchestratorGateway({
+    baseUrl: config.orchestrator.baseUrl,
+    token: config.orchestrator.token,
+    timeoutMs: config.orchestrator.timeoutMs,
+  });
+
   // ─── PPPoE management (#pppoe-service Fase B) + enforcement/cortes (Fase C) ───
   {
     const pppoeRepo   = new PrismaPppoeServiceRepository();
@@ -1976,11 +1992,6 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // marcándose 'mikrotik_radius', sin big-bang. El orchestrator es opt-in (config.orchestrator):
     // si no está configurado, los NAS mikrotik_radius fallan al cortar con 502 claro, el resto sigue.
     const mkEnforcement = new RouterOsEnforcementAdapter(routerGw, config.router.reducedProfile);
-    const orchestrator = new HttpRadiusOrchestratorGateway({
-      baseUrl: config.orchestrator.baseUrl,
-      token: config.orchestrator.token,
-      timeoutMs: config.orchestrator.timeoutMs,
-    });
     const radiusEnforcement = new OrchestratorEnforcementAdapter(orchestrator, config.router.reducedProfile);
     const enforcementGw = new PerNasEnforcementGateway(mkEnforcement, radiusEnforcement);
     const enforcePppoe = new EnforcePppoeService(pppoeRepo, enforcementGw, nasRepoForPppoe);
@@ -2025,6 +2036,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       manage: requirePerm('recapture', 'manage'),
     },
   ));
+
+  // Plan catalog (plan-catalog) — usa el mismo singleton `orchestrator` para sincronizar radgroupreply.
+  {
+    const planRepo = new PrismaPlanRepository();
+    app.use('/api', createPlanRouter(
+      authAdapter,
+      sessionRepo,
+      requirePerm,
+      new ListPlans(planRepo),
+      new CreatePlan(planRepo, orchestrator),
+      new UpdatePlan(planRepo, orchestrator),
+      new DeletePlan(planRepo, orchestrator),
+    ));
+  }
 
   // 404
   app.use((_req: Request, res: Response): void => {

@@ -20,8 +20,8 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 30 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe)', () => {
-    expect(RBAC_MODULES).toHaveLength(30);
+  it('contains exactly 31 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan)', () => {
+    expect(RBAC_MODULES).toHaveLength(31);
   });
 
   it('includes all 14 original module codes', () => {
@@ -59,6 +59,10 @@ describe('RBAC_MODULES constant', () => {
 
   it('includes the pppoe module (#pppoe-service Fase B)', () => {
     expect(RBAC_MODULES).toContain('pppoe');
+  });
+
+  it('includes the plan module (plan-catalog)', () => {
+    expect(RBAC_MODULES).toContain('plan');
   });
 
   it('is readonly (as const)', () => {

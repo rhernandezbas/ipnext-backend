@@ -1,6 +1,7 @@
+import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import { HttpRadiusOrchestratorGateway } from '@infrastructure/adapters/orchestrator/HttpRadiusOrchestratorGateway';
-import { OrchestratorUnreachableError } from '@domain/errors/pppoe';
+import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
 function fakeHttp(over?: Partial<Record<'post' | 'get' | 'delete', jest.Mock>>) {
   const http = {
@@ -56,5 +57,102 @@ describe('HttpRadiusOrchestratorGateway (Inc3b — cliente HTTP real, espeja la 
   it('error de red/HTTP → OrchestratorUnreachableError', async () => {
     const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
     await expect(gw.reactivate('u')).rejects.toBeInstanceOf(OrchestratorUnreachableError);
+  });
+});
+
+describe('HttpRadiusOrchestratorGateway — W2 4xx vs 5xx/red distinction', () => {
+  function make4xxError(status: number, data: unknown) {
+    const err = Object.assign(new Error(`Request failed with status code ${status}`), {
+      isAxiosError: true,
+      response: { status, data },
+    });
+    return err;
+  }
+
+  function fakeHttpRejecting(status: number, data: unknown) {
+    const err = make4xxError(status, data);
+    const http = {
+      post:   jest.fn().mockRejectedValue(err),
+      get:    jest.fn().mockRejectedValue(err),
+      delete: jest.fn().mockRejectedValue(err),
+      put:    jest.fn().mockRejectedValue(err),
+    };
+    const gw = new HttpRadiusOrchestratorGateway({
+      baseUrl: 'http://orch:8080',
+      token: 't',
+      http: http as unknown as AxiosInstance,
+    });
+    return { http, gw };
+  }
+
+  it('syncPlan: orchestrator 403 → OrchestratorRejectedError (NO OrchestratorUnreachableError)', async () => {
+    const { gw } = fakeHttpRejecting(403, { detail: 'plan code _BLOCKED is reserved' });
+    await expect(gw.syncPlan('_BLOCKED', 10000, 5000))
+      .rejects.toBeInstanceOf(OrchestratorRejectedError);
+  });
+
+  it('syncPlan: orchestrator 400 → OrchestratorRejectedError con status=400', async () => {
+    const { gw } = fakeHttpRejecting(400, { detail: 'download_kbps out of range' });
+    const err = await gw.syncPlan('IP-Bad', 9999999, 5000).catch(e => e);
+    expect(err).toBeInstanceOf(OrchestratorRejectedError);
+    expect((err as OrchestratorRejectedError).upstreamStatus).toBe(400);
+  });
+
+  it('syncPlan: orchestrator 409 → OrchestratorRejectedError con status=409', async () => {
+    const { gw } = fakeHttpRejecting(409, { detail: 'code conflict' });
+    const err = await gw.syncPlan('IP-Dup', 10000, 5000).catch(e => e);
+    expect(err).toBeInstanceOf(OrchestratorRejectedError);
+    expect((err as OrchestratorRejectedError).upstreamStatus).toBe(409);
+  });
+
+  it('syncPlan: orchestrator 403 → OrchestratorRejectedError preserva el mensaje del body', async () => {
+    const { gw } = fakeHttpRejecting(403, { detail: 'plan code _BLOCKED is reserved' });
+    const err = await gw.syncPlan('_BLOCKED', 10000, 5000).catch(e => e);
+    expect((err as OrchestratorRejectedError).message).toContain('_BLOCKED is reserved');
+  });
+
+  it('deletePlan: orchestrator 404 → OrchestratorRejectedError (NO 502)', async () => {
+    const { gw } = fakeHttpRejecting(404, { detail: 'plan not found in RADIUS' });
+    await expect(gw.deletePlan('IP-Gone'))
+      .rejects.toBeInstanceOf(OrchestratorRejectedError);
+  });
+
+  it('deletePlan: orchestrator 404 → OrchestratorRejectedError con status=404', async () => {
+    const { gw } = fakeHttpRejecting(404, { detail: 'plan not found' });
+    const err = await gw.deletePlan('IP-Gone').catch(e => e);
+    expect((err as OrchestratorRejectedError).upstreamStatus).toBe(404);
+  });
+
+  it('red caída / timeout → sigue siendo OrchestratorUnreachableError (502)', async () => {
+    const { gw } = fakeHttpRejecting(0, null); // sin response = red caída
+    // Reemplazamos el error por uno sin .response para simular error de red real
+    const httpNoResponse = {
+      put: jest.fn().mockRejectedValue(Object.assign(new Error('ECONNREFUSED'), { isAxiosError: true })),
+    };
+    const gwNet = new HttpRadiusOrchestratorGateway({
+      baseUrl: 'http://orch:8080',
+      token: 't',
+      http: httpNoResponse as unknown as AxiosInstance,
+    });
+    await expect(gwNet.syncPlan('IP-Air', 10000, 5000))
+      .rejects.toBeInstanceOf(OrchestratorUnreachableError);
+  });
+
+  it('5xx del orchestrator → OrchestratorUnreachableError (502)', async () => {
+    const http5xx = {
+      put: jest.fn().mockRejectedValue(
+        Object.assign(new Error('Internal Server Error'), {
+          isAxiosError: true,
+          response: { status: 503, data: { detail: 'service unavailable' } },
+        }),
+      ),
+    };
+    const gw5xx = new HttpRadiusOrchestratorGateway({
+      baseUrl: 'http://orch:8080',
+      token: 't',
+      http: http5xx as unknown as AxiosInstance,
+    });
+    await expect(gw5xx.syncPlan('IP-Air', 10000, 5000))
+      .rejects.toBeInstanceOf(OrchestratorUnreachableError);
   });
 });

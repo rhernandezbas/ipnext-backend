@@ -1,11 +1,11 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, isAxiosError } from 'axios';
 import {
   RadiusOrchestratorGateway,
   OrchestratorSession,
   ChangePlanOptions,
   SuspendOptions,
 } from '@domain/ports/RadiusOrchestratorGateway';
-import { OrchestratorUnreachableError } from '@domain/errors/pppoe';
+import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
 export interface HttpRadiusOrchestratorGatewayOptions {
   baseUrl: string;
@@ -44,6 +44,12 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     try {
       return await fn();
     } catch (err) {
+      // 4xx del orchestrator = petición RECHAZADA deliberadamente (validación, conflicto, etc.)
+      // No es un fallo de red; el upstream status + motivo deben llegar al cliente.
+      if (isAxiosError(err) && err.response !== undefined && err.response.status >= 400 && err.response.status < 500) {
+        throw new OrchestratorRejectedError(err.response.status, err.response.data);
+      }
+      // Red caída, timeout, 5xx → el orchestrator no respondió correctamente → 502
       throw new OrchestratorUnreachableError(this.target, err instanceof Error ? err.message : String(err));
     }
   }
@@ -75,6 +81,20 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
 
   async disconnectSessions(username: string): Promise<void> {
     await this.call(() => this.http.delete(this.path(username, '/sessions')));
+  }
+
+  async syncPlan(code: string, downloadKbps: number, uploadKbps: number, pool?: string | null): Promise<void> {
+    await this.call(() =>
+      this.http.put(`/plans/${encodeURIComponent(code)}`, {
+        download_kbps: downloadKbps,
+        upload_kbps: uploadKbps,
+        pool: pool ?? null,
+      }),
+    );
+  }
+
+  async deletePlan(code: string): Promise<void> {
+    await this.call(() => this.http.delete(`/plans/${encodeURIComponent(code)}`));
   }
 }
 

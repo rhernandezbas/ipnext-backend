@@ -40,4 +40,17 @@ export interface RadiusOrchestratorGateway {
   reactivate(username: string): Promise<void>;
   listSessions(username: string): Promise<OrchestratorSession[]>;
   disconnectSessions(username: string): Promise<void>;
+
+  /**
+   * Sincroniza (crea o actualiza) el plan en el radgroupreply del RADIUS.
+   * Escribe `Mikrotik-Rate-Limit` (calculado de kbps) y `Framed-Pool` si `pool` está presente.
+   * Corresponde a `PUT /plans/{code}` en el radius-orchestrator.
+   */
+  syncPlan(code: string, downloadKbps: number, uploadKbps: number, pool?: string | null): Promise<void>;
+
+  /**
+   * Elimina el plan del radgroupreply del RADIUS.
+   * Corresponde a `DELETE /plans/{code}` en el radius-orchestrator.
+   */
+  deletePlan(code: string): Promise<void>;
 }

@@ -54,3 +54,27 @@ export class OrchestratorUnreachableError extends DomainError {
     this.name = 'OrchestratorUnreachableError';
   }
 }
+
+/**
+ * El radius-orchestrator RECHAZÓ la petición con un error 4xx (400/403/404/409/422…).
+ * Indica que la petición fue inválida o fue deliberadamente denegada — NO es un fallo de red.
+ * Code → HTTP: ORCHESTRATOR_REJECTED → se reenvía el `upstreamStatus` (ej. 403, 400, 409).
+ * El errorHandler mapea ORCHESTRATOR_REJECTED a 422 como fallback si el upstreamStatus no aplica.
+ */
+export class OrchestratorRejectedError extends DomainError {
+  constructor(
+    public readonly upstreamStatus: number,
+    public readonly upstreamBody: unknown,
+    message?: string,
+  ) {
+    const detail =
+      message ??
+      (typeof upstreamBody === 'object' &&
+      upstreamBody !== null &&
+      'detail' in (upstreamBody as Record<string, unknown>)
+        ? String((upstreamBody as Record<string, unknown>).detail)
+        : `El orchestrator rechazó la petición con ${upstreamStatus}`);
+    super(detail, 'ORCHESTRATOR_REJECTED');
+    this.name = 'OrchestratorRejectedError';
+  }
+}

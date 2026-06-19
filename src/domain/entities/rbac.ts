@@ -122,6 +122,8 @@ export const RBAC_MODULES = [
   'recapture',
   // PPPoE provisioning via RouterOS (#pppoe-service)
   'pppoe',
+  // Internet speed plan catalog (plan-catalog)
+  'plan',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

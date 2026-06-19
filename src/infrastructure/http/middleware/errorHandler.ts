@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { DomainError } from '@domain/errors';
+import { OrchestratorRejectedError } from '@domain/errors/pppoe';
 import { domainErrorToCode } from '@application/util/domainErrorToCode';
 
 /**
@@ -107,7 +108,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     return;
   }
   if (err instanceof DomainError) {
-    const status = statusMap[err.code] ?? 400;
+    // OrchestratorRejectedError re-envía el status HTTP que devolvió el orchestrator (4xx).
+    // El statusMap no puede manejarlo estáticamente porque el status es dinámico.
+    const status = err instanceof OrchestratorRejectedError
+      ? err.upstreamStatus
+      : (statusMap[err.code] ?? 400);
     const mapped = domainErrorToCode(err);
     const body: Record<string, unknown> = { error: err.message, code: err.code };
     // Surface the missing field names so the front-end can drive its modal.
