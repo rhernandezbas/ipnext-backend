@@ -661,7 +661,7 @@ describe('POST /api/nas/:id/ingest-pppoe (pppoe.manage)', () => {
     const fx = await buildApp({ usersInventory: INVENTORY });
     const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ created: 2, skipped: 0 });
+    expect(res.body).toEqual({ created: 2, skipped: 0, excluded: 0 });
     const orphans = await fx.pppoeRepo.findUnassigned();
     expect(orphans.map(s => s.username).sort()).toEqual(['juanperez', 'mariam']);
   });
@@ -671,7 +671,7 @@ describe('POST /api/nas/:id/ingest-pppoe (pppoe.manage)', () => {
     await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
     const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ created: 0, skipped: 2 });
+    expect(res.body).toEqual({ created: 0, skipped: 2, excluded: 0 });
   });
 
   it('NAS mikrotik_api → 422 PPPOE_INGEST_NOT_SUPPORTED', async () => {

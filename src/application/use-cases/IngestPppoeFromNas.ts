@@ -8,6 +8,8 @@ export interface IngestPppoeResult {
   created: number;
   /** Cuántos se omitieron por existir ya (NUNCA se pisan: pueden estar asociados). */
   skipped: number;
+  /** Cuántos se descartaron porque el username matcheó un exclusionPattern (placeholder interno). */
+  excluded: number;
 }
 
 /**
@@ -28,6 +30,13 @@ export class IngestPppoeFromNas {
     private readonly repo: PppoeServiceRepository,
     private readonly nasRepo: NasRepository,
     private readonly orchestrator: RadiusOrchestratorGateway,
+    /**
+     * Patrones de exclusión para usernames placeholder (e.g. /^accesosur\d+$/i).
+     * Los usernames que matcheen alguno de estos patrones se descartan sin persistir.
+     * Separado de `skipped` (existentes) — son contadores independientes.
+     * Default: [] (sin exclusiones = comportamiento original BC).
+     */
+    private readonly exclusionPatterns: RegExp[] = [],
   ) {}
 
   async execute(nasId: string): Promise<IngestPppoeResult> {
@@ -42,7 +51,14 @@ export class IngestPppoeFromNas {
 
     let created = 0;
     let skipped = 0;
+    let excluded = 0;
     for (const item of inventory) {
+      // Filtro de exclusión (placeholders internos como accesosurN)
+      if (this.exclusionPatterns.some(re => re.test(item.username))) {
+        excluded += 1;
+        continue;
+      }
+
       const existing = await this.repo.findByUsername(item.username);
       if (existing) {
         skipped += 1;
@@ -60,6 +76,6 @@ export class IngestPppoeFromNas {
       created += 1;
     }
 
-    return { created, skipped };
+    return { created, skipped, excluded };
   }
 }
