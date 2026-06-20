@@ -33,3 +33,18 @@ export interface PortfolioDto {
   summary: PortfolioSummaryDto;
   unmapped: boolean;
 }
+
+/** A portfolio item carrying its owning vendedor (admin "all agents" view). */
+export interface PortfolioItemWithVendedorDto extends PortfolioItemDto {
+  vendedor: string;
+}
+
+/**
+ * Output contract for GET /api/portfolio/all (admin — ALL agents).
+ * One item per (client, vendedor); `summary` is GLOBAL (across all vendedores).
+ * No `unmapped` — the view spans every mapped vendedor by definition.
+ */
+export interface AllPortfoliosDto {
+  items: PortfolioItemWithVendedorDto[];
+  summary: PortfolioSummaryDto;
+}

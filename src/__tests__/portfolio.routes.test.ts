@@ -1,6 +1,6 @@
 /**
  * Route integration tests for /api/portfolio.
- * Uses real GetMyPortfolio with in-memory adapters — no Prisma.
+ * Uses real use cases with in-memory adapters — no Prisma.
  * Auth is bypassed with an allowAuth middleware that stamps req.user.
  */
 import request from 'supertest';
@@ -8,6 +8,8 @@ import express, { Request, Response, NextFunction, RequestHandler } from 'expres
 import cookieParser from 'cookie-parser';
 import { createPortfolioRouter } from '../infrastructure/http/routes/portfolio.routes';
 import { GetMyPortfolio } from '../application/use-cases/portfolio/GetMyPortfolio';
+import { GetPortfolioByVendedor } from '../application/use-cases/portfolio/GetPortfolioByVendedor';
+import { GetAllPortfolios } from '../application/use-cases/portfolio/GetAllPortfolios';
 import { InMemoryRbacUserRepository } from '../infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryPortfolioReadRepository } from '../infrastructure/adapters/in-memory/InMemoryPortfolioReadRepository';
 import { InMemoryTicketRepository } from '../infrastructure/adapters/in-memory/InMemoryTicketRepository';
@@ -32,6 +34,7 @@ const allowPerm: RequestHandler = (_req, _res, next) => next();
 
 interface BuildAppOptions {
   readPerm?: RequestHandler;
+  managePerm?: RequestHandler;
   vendedor?: string | null;
   seedPortfolio?: (repo: InMemoryPortfolioReadRepository) => void;
 }
@@ -57,14 +60,17 @@ async function buildApp(opts: BuildAppOptions = {}) {
   if (opts.seedPortfolio) opts.seedPortfolio(portfolio);
 
   const getMyPortfolio = new GetMyPortfolio(rbacProxy, portfolio, tickets);
+  const getPortfolioByVendedor = new GetPortfolioByVendedor(portfolio, tickets);
+  const getAllPortfolios = new GetAllPortfolios(portfolio, tickets);
 
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
   app.use(
     '/api/portfolio',
-    createPortfolioRouter(getMyPortfolio, allowAuth, {
+    createPortfolioRouter(getMyPortfolio, getPortfolioByVendedor, getAllPortfolios, allowAuth, {
       read: opts.readPerm ?? allowPerm,
+      manage: opts.managePerm ?? allowPerm,
     }),
   );
 
@@ -118,5 +124,57 @@ describe('GET /api/portfolio/mine — mapped', () => {
     });
     expect(item).toHaveProperty('ageBucket');
     expect(item).toHaveProperty('oldestStartDate');
+  });
+});
+
+// ─── Admin views (recapture.manage) ───────────────────────────────────────────
+
+const seedTwoVendedores = (repo: InMemoryPortfolioReadRepository) => {
+  repo.seed({ clientId: 'c1', clientName: 'Alice', status: 'active', balanceDue: 100, balanceCurrency: 'ARS', vendedor: 'VENDEDOR_A', startDate: '2026-05-01T00:00:00.000Z' });
+  repo.seed({ clientId: 'c2', clientName: 'Bob', status: 'active', balanceDue: 0, balanceCurrency: 'ARS', vendedor: 'VENDEDOR_B', startDate: '2026-04-01T00:00:00.000Z' });
+};
+
+describe('GET /api/portfolio/by-vendedor — RBAC', () => {
+  it('a user with only recapture.read cannot access by-vendedor (403)', async () => {
+    // read passes, manage denied → simulates a read-only agent.
+    const { app } = await buildApp({ readPerm: allowPerm, managePerm: denyPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+    const res = await request(app).get('/api/portfolio/by-vendedor?vendedor=VENDEDOR_A').set('Cookie', 'auth_token=tok');
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 200 with the vendedor portfolio when manage granted', async () => {
+    const { app } = await buildApp({ managePerm: allowPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+    const res = await request(app).get('/api/portfolio/by-vendedor?vendedor=VENDEDOR_A').set('Cookie', 'auth_token=tok');
+    expect(res.status).toBe(200);
+    expect(res.body.unmapped).toBe(false);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].clientId).toBe('c1');
+    expect(res.body.summary.total).toBe(1);
+  });
+
+  it('returns 400 when the vendedor query param is missing', async () => {
+    const { app } = await buildApp({ managePerm: allowPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+    const res = await request(app).get('/api/portfolio/by-vendedor').set('Cookie', 'auth_token=tok');
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/portfolio/all — RBAC', () => {
+  it('a user with only recapture.read cannot access all (403)', async () => {
+    const { app } = await buildApp({ readPerm: allowPerm, managePerm: denyPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+    const res = await request(app).get('/api/portfolio/all').set('Cookie', 'auth_token=tok');
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 200 with all items (each tagged with vendedor) + global summary when manage granted', async () => {
+    const { app } = await buildApp({ managePerm: allowPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+    const res = await request(app).get('/api/portfolio/all').set('Cookie', 'auth_token=tok');
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.summary.total).toBe(2);
+    const a = res.body.items.find((i: { clientId: string }) => i.clientId === 'c1');
+    const b = res.body.items.find((i: { clientId: string }) => i.clientId === 'c2');
+    expect(a.vendedor).toBe('VENDEDOR_A');
+    expect(b.vendedor).toBe('VENDEDOR_B');
   });
 });

@@ -26,7 +26,25 @@ export interface PortfolioClientRow {
   contractsCount: number;
 }
 
+/**
+ * A portfolio row that also carries its owning vendedor — used by the admin
+ * "all agents" view. Grouped by (client, vendedor): a single client with
+ * contracts under two vendedores yields TWO rows.
+ */
+export interface PortfolioClientRowWithVendedor extends PortfolioClientRow {
+  vendedor: string;
+}
+
 export interface PortfolioReadRepository {
   /** Clients (deduplicated) who have >=1 contract with the given vendedor. */
   listClientsByVendedor(vendedor: string): Promise<PortfolioClientRow[]>;
+
+  /**
+   * ALL clients that have >=1 contract with a non-null vendedor, grouped by
+   * (client, vendedor). One row per combination — a client with contracts under
+   * multiple vendedores appears once per vendedor. oldestStartDate = MIN(startDate)
+   * within the (client, vendedor) group; contractsCount = contracts in that group.
+   * Single round trip (no N+1).
+   */
+  listAllClientsWithVendedor(): Promise<PortfolioClientRowWithVendedor[]>;
 }

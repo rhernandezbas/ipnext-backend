@@ -10,6 +10,7 @@
 import type {
   PortfolioReadRepository,
   PortfolioClientRow,
+  PortfolioClientRowWithVendedor,
 } from '@domain/ports/PortfolioReadRepository';
 import { prisma } from '../../database/prisma';
 
@@ -74,6 +75,64 @@ export class PrismaPortfolioReadRepository implements PortfolioReadRepository {
     // Deterministic order — sort by clientName asc (mirrors the in-memory adapter).
     return Array.from(byClient.values()).sort((a, b) =>
       a.clientName.localeCompare(b.clientName),
+    );
+  }
+
+  async listAllClientsWithVendedor(): Promise<PortfolioClientRowWithVendedor[]> {
+    // SINGLE query: every contract that HAS a vendedor + the client fields we
+    // need. Grouping by (clientId, vendedor) is done in JS (one pass) — one round
+    // trip, NO N+1. Empty-string vendedores are dropped in the loop (the DB-side
+    // `not: null` filter doesn't catch '').
+    const contracts: any[] = await (prisma as any).contract.findMany({
+      where: { vendedor: { not: null } },
+      select: {
+        clientId: true,
+        vendedor: true,
+        startDate: true,
+        client: {
+          select: {
+            id: true,
+            name: true,
+            status: true,
+            balanceDue: true,
+            balanceCurrency: true,
+          },
+        },
+      },
+    });
+
+    const byKey = new Map<string, PortfolioClientRowWithVendedor>();
+    for (const c of contracts) {
+      const vendedor: string = c.vendedor ?? '';
+      if (vendedor.trim() === '') continue; // guard against '' / whitespace
+      const startIso =
+        c.startDate instanceof Date ? c.startDate.toISOString() : String(c.startDate);
+      const key = `${c.clientId} ${vendedor}`;
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, {
+          clientId: c.clientId,
+          clientName: c.client?.name ?? '',
+          status: c.client?.status ?? 'active',
+          balanceDue: toNumberOrNull(c.client?.balanceDue),
+          balanceCurrency: c.client?.balanceCurrency ?? null,
+          oldestStartDate: startIso,
+          contractsCount: 1,
+          vendedor,
+        });
+      } else {
+        existing.contractsCount += 1;
+        if (startIso < existing.oldestStartDate) {
+          existing.oldestStartDate = startIso; // MIN(startDate)
+        }
+      }
+    }
+
+    // Deterministic order — by clientName, then vendedor (mirrors in-memory).
+    return Array.from(byKey.values()).sort(
+      (a, b) =>
+        a.clientName.localeCompare(b.clientName) ||
+        a.vendedor.localeCompare(b.vendedor),
     );
   }
 }

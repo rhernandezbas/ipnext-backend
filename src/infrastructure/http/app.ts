@@ -431,6 +431,8 @@ import { AssignRecaptureLead } from '@application/use-cases/recapture/AssignReca
 import { createPortfolioRouter } from './routes/portfolio.routes';
 import { PrismaPortfolioReadRepository } from '../adapters/prisma/PrismaPortfolioReadRepository';
 import { GetMyPortfolio } from '@application/use-cases/portfolio/GetMyPortfolio';
+import { GetPortfolioByVendedor } from '@application/use-cases/portfolio/GetPortfolioByVendedor';
+import { GetAllPortfolios } from '@application/use-cases/portfolio/GetAllPortfolios';
 import { ListLeads } from '@application/use-cases/ListLeads';
 import { GetLead } from '@application/use-cases/GetLead';
 import { CreateLead } from '@application/use-cases/CreateLead';
@@ -2065,12 +2067,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     },
   ));
 
-  // ─── Mis clientes (Fase 3) — cartera del agente ─────────────────────────────
+  // ─── Mis clientes (Fase 3) — cartera del agente + vista super admin ─────────
   const portfolioReadRepo = new PrismaPortfolioReadRepository();
   app.use('/api/portfolio', createPortfolioRouter(
     new GetMyPortfolio(rbacUserRepo, portfolioReadRepo, ticketAdapter),
+    new GetPortfolioByVendedor(portfolioReadRepo, ticketAdapter),
+    new GetAllPortfolios(portfolioReadRepo, ticketAdapter),
     createAuthMiddleware(authAdapter, sessionRepo),
-    { read: requirePerm('recapture', 'read') },
+    {
+      read:   requirePerm('recapture', 'read'),
+      manage: requirePerm('recapture', 'manage'),
+    },
   ));
 
   // Plan catalog (plan-catalog) — usa el mismo singleton `orchestrator` para sincronizar radgroupreply.
