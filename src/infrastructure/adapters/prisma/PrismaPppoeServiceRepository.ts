@@ -68,6 +68,42 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     return rows.map(toEntity);
   }
 
+  async findAssignedPaginated(params: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    nasId?: string;
+  }): Promise<{ data: PppoeService[]; total: number }> {
+    const { page, pageSize, search, nasId } = params;
+    const skip = (page - 1) * pageSize;
+
+    const baseWhere: Record<string, unknown> = {
+      contractId:    { not: null },
+      remoteAddress: { not: null },
+      status:        'enabled',
+    };
+    if (nasId) baseWhere['nasId'] = nasId;
+    if (search) {
+      baseWhere['OR'] = [
+        { username:      { contains: search, mode: 'insensitive' } },
+        { remoteAddress: { contains: search, mode: 'insensitive' } },
+        { contractId:    { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [rows, total] = await Promise.all([
+      model().findMany({
+        where:   baseWhere,
+        orderBy: { username: 'asc' },
+        skip,
+        take: pageSize,
+      }),
+      model().count({ where: baseWhere }),
+    ]);
+
+    return { data: rows.map(toEntity), total };
+  }
+
   async setContractId(id: string, contractId: string): Promise<PppoeService | null> {
     try {
       const row = await model().update({ where: { id }, data: { contractId } });

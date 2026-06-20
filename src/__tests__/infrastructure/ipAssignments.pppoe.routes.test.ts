@@ -146,11 +146,11 @@ describe('GET /api/ip-assignments — Bug 3: datos de PppoeService (Asignaciones
     expect((await asUser(request(app).get('/api/ip-assignments'), noPermUserId)).status).toBe(403);
   });
 
-  it('lista vacía cuando no hay asignados → 200 []', async () => {
+  it('lista vacía cuando no hay asignados → 200 { data: [], total: 0, page: 1, pageSize: 25 }', async () => {
     const { app, readUserId } = await buildApp();
     const res = await asUser(request(app).get('/api/ip-assignments'), readUserId);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.body).toEqual({ data: [], total: 0, page: 1, pageSize: 25 });
   });
 
   it('retorna solo asignados (contractId+IP+enabled) en forma de PppoeAssignmentDto', async () => {
@@ -181,9 +181,10 @@ describe('GET /api/ip-assignments — Bug 3: datos de PppoeService (Asignaciones
 
     const res = await asUser(request(app).get('/api/ip-assignments'), readUserId);
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data).toHaveLength(1);
 
-    const dto = res.body[0];
+    const dto = res.body.data[0];
     // Shape exacto del contrato FE
     expect(dto.id).toBe(s.id);
     expect(dto.ip).toBe('100.64.10.10');
@@ -198,12 +199,13 @@ describe('GET /api/ip-assignments — Bug 3: datos de PppoeService (Asignaciones
     expect(dto.password).toBeUndefined();
   });
 
-  it('múltiples asignados → todos aparecen', async () => {
+  it('múltiples asignados → todos aparecen en data', async () => {
     const { app, pppoeRepo, readUserId } = await buildApp();
     await pppoeRepo.upsertByUsername({ username: 'u1', password: 'p', nasId: NAS_ID, contractId: 'C1', remoteAddress: '10.0.0.1', status: 'enabled' });
     await pppoeRepo.upsertByUsername({ username: 'u2', password: 'p', nasId: NAS_ID, contractId: 'C2', remoteAddress: '10.0.0.2', status: 'enabled' });
     const res = await asUser(request(app).get('/api/ip-assignments'), readUserId);
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
+    expect(res.body.total).toBe(2);
+    expect(res.body.data).toHaveLength(2);
   });
 });

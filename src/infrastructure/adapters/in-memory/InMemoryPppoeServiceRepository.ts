@@ -80,6 +80,37 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       .map(s => ({ ...s }));
   }
 
+  async findAssignedPaginated(params: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    nasId?: string;
+  }): Promise<{ data: PppoeService[]; total: number }> {
+    const { page, pageSize, search, nasId } = params;
+    const searchLower = search ? search.toLowerCase() : undefined;
+
+    const filtered = this.store.filter(s => {
+      if (s.contractId === null || s.remoteAddress === null || s.status !== 'enabled') return false;
+      if (nasId && s.nasId !== nasId) return false;
+      if (searchLower) {
+        const matchUsername    = s.username.toLowerCase().includes(searchLower);
+        const matchIp          = s.remoteAddress.toLowerCase().includes(searchLower);
+        const matchContractId  = s.contractId.toLowerCase().includes(searchLower);
+        if (!matchUsername && !matchIp && !matchContractId) return false;
+      }
+      return true;
+    });
+
+    // Stable order: username asc
+    const sorted = [...filtered].sort((a, b) => a.username.localeCompare(b.username));
+
+    const total = sorted.length;
+    const skip  = (page - 1) * pageSize;
+    const data  = sorted.slice(skip, skip + pageSize).map(s => ({ ...s }));
+
+    return { data, total };
+  }
+
   async setContractId(id: string, contractId: string): Promise<PppoeService | null> {
     const found = this.store.find(s => s.id === id);
     if (!found) return null;
