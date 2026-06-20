@@ -91,6 +91,21 @@ describe('HttpRadiusOrchestratorGateway (Inc3b — cliente HTTP real, espeja la 
     const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
     await expect(gw.reactivate('u')).rejects.toBeInstanceOf(OrchestratorUnreachableError);
   });
+
+  it('listAssignedIps → GET /assigned-ips y devuelve body.ips', async () => {
+    const { http, gw } = fakeHttp({
+      get: jest.fn().mockResolvedValue({ data: { ips: ['100.64.10.42', '100.64.10.43'] } }),
+    });
+    const ips = await gw.listAssignedIps();
+    expect(http.get).toHaveBeenCalledWith('/assigned-ips');
+    expect(ips).toEqual(['100.64.10.42', '100.64.10.43']);
+  });
+
+  it('listAssignedIps → sin ips en el body devuelve []', async () => {
+    const { gw } = fakeHttp({ get: jest.fn().mockResolvedValue({ data: {} }) });
+    const ips = await gw.listAssignedIps();
+    expect(ips).toEqual([]);
+  });
 });
 
 describe('HttpRadiusOrchestratorGateway — W2 4xx vs 5xx/red distinction', () => {

@@ -69,4 +69,13 @@ export interface RadiusOrchestratorGateway {
    * Corresponde a `DELETE /plans/{code}` en el radius-orchestrator.
    */
   deletePlan(code: string): Promise<void>;
+
+  /**
+   * Lista las IPs ASIGNADAS en el RADIUS (radreply Framed-IP-Address de todos los usuarios).
+   * Corresponde a `GET /assigned-ips` → body `{ ips: ["100.64.10.42", ...] }`.
+   *
+   * Para un NAS `mikrotik_radius` el RADIUS —no el router— es la fuente de verdad de las IPs
+   * tomadas: el allocator excluye ESTA lista al buscar un IP libre (evita el 409 al crear).
+   */
+  listAssignedIps(): Promise<string[]>;
 }

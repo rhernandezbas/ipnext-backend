@@ -108,6 +108,12 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
   async deletePlan(code: string): Promise<void> {
     await this.call(() => this.http.delete(`/plans/${encodeURIComponent(code)}`));
   }
+
+  async listAssignedIps(): Promise<string[]> {
+    const { data } = await this.call(() => this.http.get('/assigned-ips'));
+    const ips: unknown = (data as { ips?: unknown } | null)?.ips;
+    return Array.isArray(ips) ? (ips as string[]) : [];
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

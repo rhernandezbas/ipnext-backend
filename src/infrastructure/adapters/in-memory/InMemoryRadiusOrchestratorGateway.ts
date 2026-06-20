@@ -65,6 +65,8 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   private readonly failForPlanCode: Set<string>;
   private readonly rejectPlanCode: Map<string, PlanRejectionSeed>;
   private readonly onSyncPlanCb: (() => void) | undefined;
+  /** IPs asignadas en el RADIUS (radreply Framed-IP) que devuelve listAssignedIps. */
+  private readonly assignedIps: string[];
 
   public readonly calls: UserCallLog[] = [];
   public readonly planCalls: PlanCallLog[] = [];
@@ -81,11 +83,14 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     rejectPlanCode?: PlanRejectionSeed[];
     /** Callback llamado justo antes de registrar una syncPlan exitosa (para tests de orden). */
     onSyncPlan?: () => void;
+    /** IPs asignadas que devolverá listAssignedIps (radreply Framed-IP). Default: []. */
+    assignedIps?: string[];
   }) {
     this.unreachable = new Set(opts?.unreachable ?? []);
     this.failForPlanCode = new Set(opts?.failForPlanCode ?? []);
     this.rejectPlanCode = new Map((opts?.rejectPlanCode ?? []).map(r => [r.code, r]));
     this.onSyncPlanCb = opts?.onSyncPlan;
+    this.assignedIps = [...(opts?.assignedIps ?? [])];
     for (const u of opts?.seed ?? []) {
       this.state.set(u.username, { plan: u.plan ?? '', suspended: u.suspended ?? false });
       if (u.sessions) this.sessions.set(u.username, u.sessions);
@@ -172,6 +177,10 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   async deletePlan(code: string): Promise<void> {
     this.guardPlan(code);
     this.planCalls.push({ op: 'deletePlan', code });
+  }
+
+  async listAssignedIps(): Promise<string[]> {
+    return [...this.assignedIps];
   }
 
   // ── Helpers de test ────────────────────────────────────────────────────────

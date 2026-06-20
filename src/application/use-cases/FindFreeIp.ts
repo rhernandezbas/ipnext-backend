@@ -1,7 +1,8 @@
 import { IpKind, IpNetwork, IpPool } from '@domain/entities/network';
 import { IpNetworkRepository } from '@domain/ports/IpNetworkRepository';
 import { NasRepository } from '@domain/ports/NasRepository';
-import { PppoeRouterGateway, NasTarget } from '@domain/ports/PppoeRouterGateway';
+import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
+import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { NasNotFoundError } from '@domain/errors/pppoe';
 import { NoFreeIpError, NoPoolForNasTypeError } from '@domain/errors/network';
 
@@ -53,17 +54,24 @@ function networkEdges(cidr: string): { network: number; broadcast: number } | nu
  * FindFreeIp — primer IP libre de un NAS para una clase (cgnat|public).
  *
  * Rango del pool (rangeStart..rangeEnd) MENOS:
- *   - los `remote-address` vivos del router (`/ppp secret`, fuente de verdad VIVA),
+ *   - las IPs ASIGNADAS, ruteadas por `nas.type`:
+ *       · `mikrotik_radius` → el RADIUS (radreply Framed-IP, `orchestrator.listAssignedIps`),
+ *          que es la fuente de verdad de las IPs tomadas para este NAS,
+ *       · resto → los `remote-address` vivos del router (`/ppp secret`),
  *   - el gateway de la red,
  *   - el network address y el broadcast del CIDR de la red.
  *
- * Depende SÓLO de puertos (pool repo, nas repo, gateway). Nada de infra/Prisma.
+ * El ruteo por tipo evita que el allocator ofrezca un IP libre-en-router pero
+ * tomado-en-RADIUS (el create del orchestrator devolvería 409).
+ *
+ * Depende SÓLO de puertos (pool repo, nas repo, router, orchestrator). Nada de infra/Prisma.
  */
 export class FindFreeIp {
   constructor(
     private readonly networkRepo: IpNetworkRepository,
     private readonly nasRepo: NasRepository,
     private readonly router: PppoeRouterGateway,
+    private readonly orchestrator: RadiusOrchestratorGateway,
   ) {}
 
   async execute(input: FindFreeIpInput): Promise<string> {
@@ -76,8 +84,12 @@ export class FindFreeIp {
 
     const network = await this.networkRepo.findNetworkById(pool.networkId);
 
-    const target: NasTarget = { ipAddress: nas.ipAddress, apiPort: nas.apiPort ?? 8728 };
-    const assignedIps = await this.router.listAssignedIps(target);
+    // Fuente de IPs asignadas ruteada por tipo de NAS: para `mikrotik_radius` la verdad
+    // vive en el RADIUS (radreply), no en el router.
+    const assignedIps =
+      nas.type === 'mikrotik_radius'
+        ? await this.orchestrator.listAssignedIps()
+        : await this.router.listAssignedIps({ ipAddress: nas.ipAddress, apiPort: nas.apiPort ?? 8728 });
 
     const ip = this.firstFree(pool, network, assignedIps);
     if (!ip) throw new NoFreeIpError(pool.id);

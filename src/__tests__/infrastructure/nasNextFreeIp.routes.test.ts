@@ -9,6 +9,7 @@ import { requirePermission } from '@infrastructure/http/middleware/requirePermis
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
 import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
@@ -109,6 +110,7 @@ async function buildApp(): Promise<Fixture> {
     nasId: '1', ipKind: 'cgnat',
   });
   const router = new InMemoryRouterGateway();
+  const orchestrator = new InMemoryRadiusOrchestratorGateway();
 
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
@@ -126,7 +128,7 @@ async function buildApp(): Promise<Fixture> {
     new DeleteNasServer(nasRepo),
     new GetRadiusConfig(nasRepo),
     new UpdateRadiusConfig(nasRepo),
-    new FindFreeIp(ipRepo, nasRepo, router),
+    new FindFreeIp(ipRepo, nasRepo, router, orchestrator),
   ));
   app.use(errorHandler);
 

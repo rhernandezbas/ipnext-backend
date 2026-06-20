@@ -1075,9 +1075,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const deleteNasServer = new DeleteNasServer(nasRepo);
   const getRadiusConfig = new GetRadiusConfig(nasRepo);
   const updateRadiusConfig = new UpdateRadiusConfig(nasRepo);
-  // ip-allocator (FindFreeIp): primer IP libre = rango del pool − IPs vivas del router.
-  // Reusa ipNetworkRepo (pools) + nasRepo (target) + RouterOsGateway (/ppp secret).
-  const findFreeIp = new FindFreeIp(ipNetworkRepo, nasRepo, new RouterOsGateway());
+
+  // ─── radius-orchestrator singleton — compartido por PPPoE (enforcement), Plan catalog (sync)
+  //     e IP allocator (assigned-ips por RADIUS). Creado acá (temprano) porque FindFreeIp lo necesita.
+  // Opt-in: si ORCHESTRATOR_BASE_URL no está configurado, los métodos fallan al USARSE con error
+  // claro (OrchestratorUnreachableError → 502). El resto de la app arranca igual. SERVER-SIDE.
+  const orchestrator = new HttpRadiusOrchestratorGateway({
+    baseUrl: config.orchestrator.baseUrl,
+    token: config.orchestrator.token,
+    timeoutMs: config.orchestrator.timeoutMs,
+  });
+
+  // ip-allocator (FindFreeIp): primer IP libre = rango del pool − IPs asignadas, ruteadas por nas.type:
+  //   'mikrotik_radius' → RADIUS (orchestrator.listAssignedIps, radreply Framed-IP);
+  //   resto            → router (/ppp secret, remote-address vivos).
+  const findFreeIp = new FindFreeIp(ipNetworkRepo, nasRepo, new RouterOsGateway(), orchestrator);
 
   const networkSiteRepo = new PrismaNetworkSiteRepository();
   const listNetworkSites = new ListNetworkSites(networkSiteRepo);
@@ -1995,16 +2007,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listActivationHistory: new ListTvActivationHistory(gigaredTvActivationEventRepo),
   }));
 
-  // ─── radius-orchestrator singleton — compartido por PPPoE (enforcement) y Plan catalog (sync) ───
-  // Opt-in: si ORCHESTRATOR_BASE_URL no está configurado, los métodos fallan al USARSE con error
-  // claro (OrchestratorUnreachableError → 502). El resto de la app arranca igual. SERVER-SIDE.
-  const orchestrator = new HttpRadiusOrchestratorGateway({
-    baseUrl: config.orchestrator.baseUrl,
-    token: config.orchestrator.token,
-    timeoutMs: config.orchestrator.timeoutMs,
-  });
-
   // ─── PPPoE management (#pppoe-service Fase B) + enforcement/cortes (Fase C) ───
+  // El singleton `orchestrator` se crea más arriba (lo comparte el IP allocator / FindFreeIp).
   {
     const pppoeRepo   = new PrismaPppoeServiceRepository();
     const nasRepoForPppoe = new PrismaNasRepository();
