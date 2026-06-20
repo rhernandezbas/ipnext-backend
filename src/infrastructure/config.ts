@@ -165,4 +165,19 @@ export const config = {
     token: process.env.ORCHESTRATOR_API_TOKEN ?? '',
     timeoutMs: parseInt(process.env.ORCHESTRATOR_TIMEOUT_MS || '6000', 10),
   },
+
+  /**
+   * PPPoE ingest — patrones de exclusión de usernames placeholder.
+   * Los usernames del RADIUS que matcheen alguno de estos patrones se descartan durante el
+   * ingest (IngestPppoeFromNas) y se filtran del listado de huérfanos (ListUnassignedPppoe).
+   * Formato: comma-separated list de patrones regex. Case-insensitive.
+   * Default: `^accesosur\d+$` (usuarios internos del ISP que no son clientes reales).
+   */
+  pppoe: {
+    ingestExcludePatterns: (process.env.PPPOE_INGEST_EXCLUDE_PATTERN ?? '^accesosur\\d+$')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .map(p => new RegExp(p, 'i')),
+  },
 };

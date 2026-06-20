@@ -57,6 +57,17 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     return rows.map(toEntity);
   }
 
+  async findAssigned(): Promise<PppoeService[]> {
+    const rows = await model().findMany({
+      where: {
+        contractId: { not: null },
+        remoteAddress: { not: null },
+        status: 'enabled',
+      },
+    });
+    return rows.map(toEntity);
+  }
+
   async setContractId(id: string, contractId: string): Promise<PppoeService | null> {
     try {
       const row = await model().update({ where: { id }, data: { contractId } });

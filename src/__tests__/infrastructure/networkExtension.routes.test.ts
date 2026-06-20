@@ -31,7 +31,8 @@ import { CreateIpNetwork } from '../../application/use-cases/CreateIpNetwork';
 import { DeleteIpNetwork } from '../../application/use-cases/DeleteIpNetwork';
 import { ListIpPools } from '../../application/use-cases/ListIpPools';
 import { CreateIpPool } from '../../application/use-cases/CreateIpPool';
-import { ListIpAssignments } from '../../application/use-cases/ListIpAssignments';
+import { ListPppoeAssignments } from '../../application/use-cases/ListPppoeAssignments';
+import { InMemoryPppoeServiceRepository } from '../../infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { ListIpv6Networks } from '../../application/use-cases/ListIpv6Networks';
 import { CreateIpv6Network } from '../../application/use-cases/CreateIpv6Network';
 import { DeleteIpPool } from '../../application/use-cases/DeleteIpPool';
@@ -118,7 +119,7 @@ function buildApp() {
     new DeleteIpNetwork(ipRepo),
     new ListIpPools(ipRepo, ipNasRepo, ipRouter, ipOrchestrator),
     new CreateIpPool(ipRepo),
-    new ListIpAssignments(ipRepo),
+    new ListPppoeAssignments(new InMemoryPppoeServiceRepository()),
     new DeleteIpPool(ipRepo),
     new ListIpv6Networks(ipRepo),
     new CreateIpv6Network(ipRepo),

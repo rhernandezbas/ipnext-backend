@@ -74,6 +74,12 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     return this.store.filter(s => s.contractId === null).map(s => ({ ...s }));
   }
 
+  async findAssigned(): Promise<PppoeService[]> {
+    return this.store
+      .filter(s => s.contractId !== null && s.remoteAddress !== null && s.status === 'enabled')
+      .map(s => ({ ...s }));
+  }
+
   async setContractId(id: string, contractId: string): Promise<PppoeService | null> {
     const found = this.store.find(s => s.id === id);
     if (!found) return null;

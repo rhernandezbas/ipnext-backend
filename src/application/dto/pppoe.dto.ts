@@ -51,6 +51,46 @@ export function toPppoeServiceDto(s: {
   };
 }
 
+// ── PppoeAssignmentDto — Asignaciones tab (Bug 3) ────────────────────────────
+
+/**
+ * DTO de la tab Asignaciones. Wire contract BE↔FE (campo por campo, NO cambiar sin sync FE).
+ * `ip` = remoteAddress (alias para la UI de redes).
+ * `password` NUNCA incluida — frontera de seguridad.
+ */
+export interface PppoeAssignmentDto {
+  id: string;
+  ip: string;          // = remoteAddress (siempre non-null: filterado por findAssigned)
+  username: string;
+  contractId: string;  // siempre non-null: filterado por findAssigned
+  profile: string | null;
+  nasId: string;
+  status: string;
+  createdAt: string;
+}
+
+export function toPppoeAssignmentDto(s: {
+  id: string;
+  remoteAddress: string;
+  username: string;
+  contractId: string;
+  profile: string | null;
+  nasId: string;
+  status: string;
+  createdAt: string;
+}): PppoeAssignmentDto {
+  return {
+    id:         s.id,
+    ip:         s.remoteAddress,
+    username:   s.username,
+    contractId: s.contractId,
+    profile:    s.profile,
+    nasId:      s.nasId,
+    status:     s.status,
+    createdAt:  s.createdAt,
+  };
+}
+
 // ── Body schemas (Zod) ──────────────────────────────────────────────────────
 
 export const CreatePppoeBodySchema = z.object({

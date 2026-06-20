@@ -41,7 +41,7 @@ describe('IngestPppoeFromNas', () => {
 
     const result = await uc.execute(RADIUS_NAS);
 
-    expect(result).toEqual({ created: 2, skipped: 0 });
+    expect(result).toEqual({ created: 2, skipped: 0, excluded: 0 });
     const juan = await repo.findByUsername('juanperez');
     expect(juan).not.toBeNull();
     expect(juan!.password).toBe('pass1234');         // password sembrado (verdad técnica)
@@ -64,7 +64,7 @@ describe('IngestPppoeFromNas', () => {
 
     const result = await uc.execute(RADIUS_NAS);
 
-    expect(result).toEqual({ created: 1, skipped: 1 }); // mariam created, juanperez skipped
+    expect(result).toEqual({ created: 1, skipped: 1, excluded: 0 }); // mariam created, juanperez skipped
     const juan = await repo.findByUsername('juanperez');
     expect(juan!.password).toBe('NO-CLOBBER');   // ← intacto
     expect(juan!.contractId).toBe('C1');         // ← asociación intacta
@@ -87,12 +87,12 @@ describe('IngestPppoeFromNas', () => {
     await expect(uc.execute(MK_NAS)).rejects.toBeInstanceOf(PppoeIngestNotSupportedError);
   });
 
-  it('inventario vacío → {created:0, skipped:0}', async () => {
+  it('inventario vacío → {created:0, skipped:0, excluded:0}', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     const nasRepo = new InMemoryNasRepository();
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: [] });
     const uc = new IngestPppoeFromNas(repo, nasRepo, orch);
-    expect(await uc.execute(RADIUS_NAS)).toEqual({ created: 0, skipped: 0 });
+    expect(await uc.execute(RADIUS_NAS)).toEqual({ created: 0, skipped: 0, excluded: 0 });
   });
 });
 

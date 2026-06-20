@@ -21,6 +21,11 @@ export interface PppoeServiceRepository {
   /** PPPoE HUÉRFANOS: sin contrato asociado (contractId=null). El inventario por adoptar. */
   findUnassigned(): Promise<PppoeService[]>;
   /**
+   * PPPoE ASIGNADOS: con contractId != null AND remoteAddress != null AND status = 'enabled'.
+   * Fuente de datos para la tab Asignaciones (GET /api/ip-assignments).
+   */
+  findAssigned(): Promise<PppoeService[]>;
+  /**
    * Asocia un PPPoE a un contrato seteando SOLO su `contractId` (no toca password/profile/etc.).
    * Devuelve la entidad actualizada, o null si el PPPoE no existe.
    */

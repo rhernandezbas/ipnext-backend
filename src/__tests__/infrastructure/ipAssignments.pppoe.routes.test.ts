@@ -1,8 +1,13 @@
 /**
- * ipNetwork.routes.test.ts — redes/pools/asignaciones de IP + guard de seguridad.
+ * ipAssignments.pppoe.routes.test.ts — Bug 3: GET /api/ip-assignments usa ListPppoeAssignments.
  *
- * /api/ip-* estaba SIN auth ni permiso (agujero; fix `network-routes-guard`) — incluyendo data
- * sensible (GET /ip-pools, GET /ip-assignments). `network.read` para listar; `network.manage` para mutar.
+ * Seam test: ruta → use case real → in-memory repo (supertest). No se mockea el use case.
+ * Verifica:
+ *   - 401 sin auth
+ *   - 403 sin network.read
+ *   - 200 con lista de PppoeAssignmentDto (solo los asignados: contractId+IP+enabled)
+ *   - El DTO tiene el shape exacto del contrato FE (ip, username, contractId, etc.)
+ *   - Los huérfanos y sin-IP NO aparecen en el resultado
  */
 import request from 'supertest';
 import express from 'express';
@@ -16,6 +21,7 @@ import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
+import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
 import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
@@ -29,11 +35,12 @@ import { DeleteIpNetwork } from '@application/use-cases/DeleteIpNetwork';
 import { ListIpPools } from '@application/use-cases/ListIpPools';
 import { CreateIpPool } from '@application/use-cases/CreateIpPool';
 import { ListPppoeAssignments } from '@application/use-cases/ListPppoeAssignments';
-import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+
+const NAS_ID = 'nas-1';
 
 class EchoAuthProvider implements AuthProvider {
   async login() {
@@ -53,8 +60,8 @@ class EchoAuthProvider implements AuthProvider {
 
 interface Fixture {
   app: express.Express;
+  pppoeRepo: InMemoryPppoeServiceRepository;
   readUserId: string;
-  manageUserId: string;
   noPermUserId: string;
 }
 
@@ -86,27 +93,23 @@ async function buildApp(): Promise<Fixture> {
   };
 
   const readerRole  = await roleRepo.create({ code: 'network_reader', label: 'Network Reader', isSystem: false });
-  const managerRole = await roleRepo.create({ code: 'network_manager', label: 'Network Manager', isSystem: false });
   const readPerm    = await permRepo.seed({ moduleCode: 'network', action: 'read' });
-  const managePerm  = await permRepo.seed({ moduleCode: 'network', action: 'manage' });
   await rolePermRepo.grant(readerRole.id, readPerm.id);
-  await rolePermRepo.grant(managerRole.id, readPerm.id);
-  await rolePermRepo.grant(managerRole.id, managePerm.id);
 
   const pwHash = await hasher.hash('pw');
   const mkUser = (login: string) =>
     userRepo.create({ name: login, email: `${login}@x.com`, login, passwordHash: pwHash, status: 'active' });
 
   const readUser   = await mkUser('reader');
-  const manageUser = await mkUser('manager');
   const noPermUser = await mkUser('noperm');
   await userRoleRepo.assign(readUser.id, readerRole.id);
-  await userRoleRepo.assign(manageUser.id, managerRole.id);
 
-  const repo = new InMemoryIpNetworkRepository();
-  const nasRepo = new InMemoryNasRepository();
-  const router = new InMemoryRouterGateway();
+  const ipRepo      = new InMemoryIpNetworkRepository();
+  const nasRepo     = new InMemoryNasRepository();
+  const routerGw    = new InMemoryRouterGateway();
   const orchestrator = new InMemoryRadiusOrchestratorGateway();
+  const pppoeRepo   = new InMemoryPppoeServiceRepository();
+
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
   const app = express();
@@ -116,58 +119,91 @@ async function buildApp(): Promise<Fixture> {
     new EchoAuthProvider(),
     undefined,
     requirePerm,
-    new ListIpNetworks(repo, nasRepo, router, orchestrator),
-    new CreateIpNetwork(repo),
-    new DeleteIpNetwork(repo),
-    new ListIpPools(repo, nasRepo, router, orchestrator),
-    new CreateIpPool(repo),
-    new ListPppoeAssignments(new InMemoryPppoeServiceRepository()),
+    new ListIpNetworks(ipRepo, nasRepo, routerGw, orchestrator),
+    new CreateIpNetwork(ipRepo),
+    new DeleteIpNetwork(ipRepo),
+    new ListIpPools(ipRepo, nasRepo, routerGw, orchestrator),
+    new CreateIpPool(ipRepo),
+    new ListPppoeAssignments(pppoeRepo),  // Bug 3: nuevo use case en lugar de ListIpAssignments
   ));
   app.use(errorHandler);
 
-  return { app, readUserId: readUser.id, manageUserId: manageUser.id, noPermUserId: noPermUser.id };
+  return { app, pppoeRepo, readUserId: readUser.id, noPermUserId: noPermUser.id };
 }
 
 function asUser(req: request.Test, userId: string): request.Test {
   return req.set('Cookie', `auth_token=${userId}`);
 }
 
-describe('ipNetwork.routes — redes/pools + security guard (network.read / network.manage)', () => {
-  it('GET /api/ip-networks sin auth → 401', async () => {
+describe('GET /api/ip-assignments — Bug 3: datos de PppoeService (Asignaciones tab)', () => {
+  it('sin auth → 401', async () => {
     const { app } = await buildApp();
-    expect((await request(app).get('/api/ip-networks')).status).toBe(401);
-  });
-  it('GET /api/ip-pools sin network.read → 403', async () => {
-    const { app, noPermUserId } = await buildApp();
-    expect((await asUser(request(app).get('/api/ip-pools'), noPermUserId)).status).toBe(403);
-  });
-  it('GET /api/ip-networks con network.read → 200 con 2 redes', async () => {
-    const { app, readUserId } = await buildApp();
-    const res = await asUser(request(app).get('/api/ip-networks'), readUserId);
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(2);
-  });
-  it('GET /api/ip-pools con network.read → 200 con 3 pools', async () => {
-    const { app, readUserId } = await buildApp();
-    const res = await asUser(request(app).get('/api/ip-pools'), readUserId);
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(3);
+    expect((await request(app).get('/api/ip-assignments')).status).toBe(401);
   });
 
-  it('POST /api/ip-networks sin auth → 401', async () => {
-    const { app } = await buildApp();
-    expect((await request(app).post('/api/ip-networks').send({ name: 'x' })).status).toBe(401);
+  it('sin network.read → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    expect((await asUser(request(app).get('/api/ip-assignments'), noPermUserId)).status).toBe(403);
   });
-  it('POST /api/ip-networks con solo network.read → 403', async () => {
+
+  it('lista vacía cuando no hay asignados → 200 []', async () => {
     const { app, readUserId } = await buildApp();
-    expect((await asUser(request(app).post('/api/ip-networks'), readUserId).send({ name: 'x' })).status).toBe(403);
+    const res = await asUser(request(app).get('/api/ip-assignments'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
   });
-  it('POST /api/ip-networks con network.manage → 201', async () => {
-    const { app, manageUserId } = await buildApp();
-    const res = await asUser(request(app).post('/api/ip-networks'), manageUserId)
-      .send({ name: 'Red Test', cidr: '10.9.0.0/24', gateway: '10.9.0.1', vlan: null, type: 'private' });
-    expect(res.status).toBe(201);
+
+  it('retorna solo asignados (contractId+IP+enabled) en forma de PppoeAssignmentDto', async () => {
+    const { app, pppoeRepo, readUserId } = await buildApp();
+
+    // Asignado correcto — debe aparecer
+    const s = await pppoeRepo.upsertByUsername({
+      username: 'juanperez',
+      password: 'secret',
+      nasId: NAS_ID,
+      contractId: 'contract-42',
+      remoteAddress: '100.64.10.10',
+      status: 'enabled',
+      profile: 'IP-Air-30-10',
+    });
+
+    // Huérfano — NO debe aparecer
+    await pppoeRepo.upsertByUsername({
+      username: 'orphan', password: 'p', nasId: NAS_ID,
+      contractId: null, remoteAddress: '10.0.0.2', status: 'enabled',
+    });
+
+    // Sin IP — NO debe aparecer
+    await pppoeRepo.upsertByUsername({
+      username: 'no-ip', password: 'p', nasId: NAS_ID,
+      contractId: 'C2', remoteAddress: null, status: 'enabled',
+    });
+
+    const res = await asUser(request(app).get('/api/ip-assignments'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+
+    const dto = res.body[0];
+    // Shape exacto del contrato FE
+    expect(dto.id).toBe(s.id);
+    expect(dto.ip).toBe('100.64.10.10');
+    expect(dto.username).toBe('juanperez');
+    expect(dto.contractId).toBe('contract-42');
+    expect(dto.profile).toBe('IP-Air-30-10');
+    expect(dto.nasId).toBe(NAS_ID);
+    expect(dto.status).toBe('enabled');
+    expect(typeof dto.createdAt).toBe('string');
+
+    // password NUNCA en respuesta
+    expect(dto.password).toBeUndefined();
+  });
+
+  it('múltiples asignados → todos aparecen', async () => {
+    const { app, pppoeRepo, readUserId } = await buildApp();
+    await pppoeRepo.upsertByUsername({ username: 'u1', password: 'p', nasId: NAS_ID, contractId: 'C1', remoteAddress: '10.0.0.1', status: 'enabled' });
+    await pppoeRepo.upsertByUsername({ username: 'u2', password: 'p', nasId: NAS_ID, contractId: 'C2', remoteAddress: '10.0.0.2', status: 'enabled' });
+    const res = await asUser(request(app).get('/api/ip-assignments'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
   });
 });

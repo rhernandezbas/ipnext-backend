@@ -8,7 +8,7 @@ import { CreateIpNetwork } from '@application/use-cases/CreateIpNetwork';
 import { DeleteIpNetwork } from '@application/use-cases/DeleteIpNetwork';
 import { ListIpPools } from '@application/use-cases/ListIpPools';
 import { CreateIpPool } from '@application/use-cases/CreateIpPool';
-import { ListIpAssignments } from '@application/use-cases/ListIpAssignments';
+import { ListPppoeAssignments } from '@application/use-cases/ListPppoeAssignments';
 import { DeleteIpPool } from '@application/use-cases/DeleteIpPool';
 import { ListIpv6Networks } from '@application/use-cases/ListIpv6Networks';
 import { CreateIpv6Network } from '@application/use-cases/CreateIpv6Network';
@@ -19,6 +19,10 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
  * Redes / pools / asignaciones de IP. Estaban montadas en /api SIN auth ni permiso (agujero;
  * fix `network-routes-guard`) — incluyendo data sensible (GET /ip-pools, GET /ip-assignments).
  * `network.read` para listar; `network.manage` para las mutaciones.
+ *
+ * Bug 3: GET /ip-assignments ahora llama `ListPppoeAssignments` (datos reales de PppoeService)
+ * en lugar del legacy `ListIpAssignments` (datos del modelo IP estático). El endpoint, path y
+ * guards se mantienen intactos — solo cambia la fuente de datos.
  */
 export function createIpNetworkRouter(
   authProvider: AuthProvider,
@@ -29,7 +33,7 @@ export function createIpNetworkRouter(
   deleteIpNetwork: DeleteIpNetwork,
   listIpPools: ListIpPools,
   createIpPool: CreateIpPool,
-  listIpAssignments: ListIpAssignments,
+  listPppoeAssignments: ListPppoeAssignments,
   deleteIpPool?: DeleteIpPool,
   listIpv6Networks?: ListIpv6Networks,
   createIpv6Network?: CreateIpv6Network,
@@ -80,9 +84,9 @@ export function createIpNetworkRouter(
     res.status(204).send();
   });
 
-  // IP Assignments
+  // IP Assignments — Bug 3: fuente = PppoeService (asignados: contractId+IP+enabled)
   router.get('/ip-assignments', auth, canRead, async (_req: Request, res: Response): Promise<void> => {
-    const assignments = await listIpAssignments.execute();
+    const assignments = await listPppoeAssignments.execute();
     res.json(assignments);
   });
 

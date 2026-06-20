@@ -294,7 +294,6 @@ import { DeleteIpNetwork } from '@application/use-cases/DeleteIpNetwork';
 import { ListIpPools } from '@application/use-cases/ListIpPools';
 import { CreateIpPool } from '@application/use-cases/CreateIpPool';
 import { DeleteIpPool } from '@application/use-cases/DeleteIpPool';
-import { ListIpAssignments } from '@application/use-cases/ListIpAssignments';
 import { createNasRouter } from './routes/nas.routes';
 import { PrismaNasRepository } from '../adapters/prisma/PrismaNasRepository';
 import { FindFreeIp } from '@application/use-cases/FindFreeIp';
@@ -636,6 +635,7 @@ import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
 import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
 import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
+import { ListPppoeAssignments } from '@application/use-cases/ListPppoeAssignments';
 import { ServiceCutRunner } from '../scheduling/ServiceCutRunner';
 import { PrismaServiceCutBatchRepository } from '../adapters/prisma/PrismaServiceCutBatchRepository';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
@@ -1030,7 +1030,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const deleteIpNetwork = new DeleteIpNetwork(ipNetworkRepo);
   const createIpPool = new CreateIpPool(ipNetworkRepo);
   const deleteIpPool = new DeleteIpPool(ipNetworkRepo);
-  const listIpAssignments = new ListIpAssignments(ipNetworkRepo);
+  // Bug 3: GET /api/ip-assignments ahora usa PppoeService como fuente de datos
+  // (ListPppoeAssignments). El ListIpAssignments legacy ya no se usa en rutas.
+  const listPppoeAssignmentsForIpRoute = new ListPppoeAssignments(new PrismaPppoeServiceRepository());
 
   const dashboardRepo = new PrismaDashboardRepository();
   const getDashboardStats = new GetDashboardStats(dashboardRepo);
@@ -1653,7 +1655,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     sessionRepo,
     requirePerm,
     listIpNetworks, createIpNetwork, deleteIpNetwork,
-    listIpPools, createIpPool, listIpAssignments,
+    listIpPools, createIpPool, listPppoeAssignmentsForIpRoute,
     deleteIpPool, listIpv6Networks, createIpv6Network,
   ));
   // FIX-5: /api/network-sites was unauthenticated — all CRUD was open including the
@@ -2062,10 +2064,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       serviceCutRunner,
       cutBatchRepo,
       // Adopción del inventario — comparte el singleton `orchestrator` (listUsers vía GET /users).
-      new IngestPppoeFromNas(pppoeRepo, nasRepoForPppoe, orchestrator),
+      // exclusionPatterns filtra usernames placeholder (accesosurN) del ingest y del listado.
+      new IngestPppoeFromNas(pppoeRepo, nasRepoForPppoe, orchestrator, config.pppoe.ingestExcludePatterns),
       new AssociatePppoeToContract(pppoeRepo),
       new GetPppoeCredentials(pppoeRepo),
-      new ListUnassignedPppoe(pppoeRepo),
+      new ListUnassignedPppoe(pppoeRepo, config.pppoe.ingestExcludePatterns),
     ));
   }
 
