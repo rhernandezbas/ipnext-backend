@@ -19,7 +19,9 @@
 > - **F2** mapeo agente↔vendedor: `RbacUser.grVendedorName` (BE `9ac9bd9e`, migr `20260801002000`) + sub-page AISLADA (BE `04af270a` `/api/admin/gr/vendedor-mappings` + `/vendedores` distinct; FE tab "Vendedores GR" en **Clientes → Configuración** `49df96d`/`c0b48f5`, perms `recapture.read/manage`). Aislada a propósito (GR se deprecará). Nombres de vendedor sucios (`CAROLINA ROSALES` vs `julietapalilla`), mapeo 1→1.
 > - **F3** (BE `49b93b7c`): endpoint `GET /api/portfolio/mine` (`GetMyPortfolio`: vendedor del user logueado → clientes dedup + estado + deuda [balanceDue>0 o late] + reclamos [tickets abiertos resolvedAt+archivedAt null, sin N+1] + antigüedad bucket 0-3/3-6/6-12/12+). `unmapped:true` si el user no tiene vendedor.
 > - **F4** (FE `49df96d`): página `/admin/customers/mis-clientes` (sidebar bajo Clientes, `recapture.read`) — cards de resumen + clientes agrupados por antigüedad + StatusBadge/chips de deuda/reclamos + estados unmapped/vacío/loading/error.
-> **Pendiente** *(en curso)*: vista de **super admin** para ver la cartera de TODOS los agentes (no solo la propia). Verificación Playwright en vivo de la página "Mis clientes".
+> **(6) Vista super admin** ✅ EN PROD (BE `84ee3abf` + FE `7154698`): selector en "Mis clientes" (gate `recapture.manage`) → Mi cartera / un agente / Todos los agentes (con columna Agente). Endpoints `/api/portfolio/by-vendedor` + `/all` (perm manage; un `read` da 403).
+> **(7) Redesign "Mis clientes"** ✅ EN PROD (FE `e4f3574`): la lista de 1000+ clientes agrupada era un muro ilegible → ahora **resumen** (KPIs + breakdown de antigüedad clickeable) + **filtros** client-side (buscador por nombre, **filtro por estado**, toggles con deuda/con reclamos, limpiar) + **tabla paginada 25/pág** (solo renderiza la página actual) + no-results. Escala de 10 a 5.000 clientes. Skill `ui-ux-pro-max`.
+> **Pendiente menor**: verificación Playwright en vivo de la página "Mis clientes".
 
 ### Wave 3 + catálogo de planes + redesign Gestión de Red — ✅ EN PROD *(sesión 2026-06-20)*
 > Jornada larga (voz/remote). **Todo deployado + verificado en vivo.** Scopeado a **Acceso Sur** (único NAS `mikrotik_radius`, RouterOS 7.22.1).
