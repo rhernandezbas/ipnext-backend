@@ -9,8 +9,11 @@
 |------|-----------|--------|--------|
 | **Backend** | `C:\Users\ronald\projects\ipnext\ipnext-backend` | `github.com/rhernandezbas/ipnext-backend` | Node + TS + Express + Prisma + PostgreSQL (hexagonal) |
 | **Frontend** | `C:\Users\ronald\projects\ipnext\ipnext-frontend` | `github.com/rhernandezbas/ipnext-frontend` | React 18 + Vite + TanStack Query + CSS Modules |
+| **RADIUS Orchestrator** | `C:\Users\ronald\projects\ipnext\freeradius-orchestrator` | `github.com/rhernandezbas/freeradius-orchestrator` (**PRIVADO**) | Python 3.11 + FastAPI + SQLAlchemy async (hexagonal) sobre FreeRADIUS HA. Importado a git el **2026-06-18** (antes vivía untracked en `/tmp` de radius-1). Lo consume el **Backend** por REST (`HttpRadiusOrchestratorGateway` → VIP `10.75.0.20:8080`). |
 
-Los dos viven uno al lado del otro bajo `C:\Users\ronald\projects\ipnext\`.
+Los tres viven uno al lado del otro bajo `C:\Users\ronald\projects\ipnext\`.
+
+> **El RADIUS Orchestrator YA sigue el modelo `push = deploy` de BE/FE (desde 2026-06-18).** Es Python y corre en las VMs de **VLAN 75** (radius-1 `10.75.0.10` + radius-2 `10.75.0.11`, master-master, VIP `10.75.0.20:8080`) — **NO** en el host `.37`. **CI/CD montado (2026-06-18)**: runner self-hosted `asterisk-orch` en `.37` (`/opt/actions-runner-freeradius-orchestrator`) + `.github/workflows/deploy.yml` con job `test` (`pytest` en venv reusable `/home/ronald/orch-ci-venv`, `pip install -e '.[dev]'`) → job `deploy` (`needs: test`, rolling r1→r2 con healthcheck vía `deploy/deploy-to-vms.sh`; SSH key `/home/ronald/.ssh/orch_deploy` pasada por path absoluto en `env: ORCH_DEPLOY_KEY` porque el runner systemd NO setea HOME; sudoers acotado en r1/r2 a pip del venv + `systemctl restart radius-orchestrator`). El servicio corre del venv (`/opt/radius-orchestrator/venv/bin/radius-orchestrator`, systemd `radius-orchestrator`). **Acceso manual** (debug): hub por `.37` → `claude@10.75.0.1{0,1}` (creds en engram, NO acá). **Gate de seguridad**: como deploya a AAA en prod, **el push se confirma explícitamente** igual que BE/FE. El gate de `pytest` (deploy `needs: test`) ya cazó un bug pre-existente (pool_size/sqlite). Hoy el HA NO sirve routers en prod (todos en `/ppp secret` local o RADIUS legacy) → un restart tiene blast radius ~0.
 
 **Regla base**: cada repo es independiente. **Commits independientes por repo**, nunca commits que crucen los dos. Cada feature que toca BE y FE se trabaja como dos cambios coordinados (uno por repo), con su par de commits.
 
@@ -128,6 +131,7 @@ Reglas operativas del loop:
 - **`git add` por PATH explícito, SIEMPRE.** Nunca `git add -A`, `git add .` ni `commit -am`. Un agente con `git add` amplio barrió trabajo ajeno del working tree y lo enterró en commits que no le correspondían — costó una remediación entera desenredarlo.
 - Antes de commitear: `git status` y confirmar que **solo** los archivos de la feature están staged. Ignorar artefactos sueltos (`.playwright-mcp/`, `*.png`, snapshots).
 - **No pushear** (el push lo decide el usuario).
+- **UI/UX en el frontend -> usar SIEMPRE la skill `ui-ux-pro-max`** (vive en `ipnext-frontend/.claude/skills/ui-ux-pro-max`). Para TODO trabajo de UI/UX (disenar, construir, redisenar, revisar, mejorar paginas o componentes) correr primero `python .claude/skills/ui-ux-pro-max/scripts/search.py "<contexto>" --design-system` para anclar paleta/tipografia/jerarquia/estados, y aplicar sus reglas priorizadas (accesibilidad y touch CRITICAS: contraste >= 4.5:1, touch targets >= 44px, focus visibles, sin emojis como iconos, transiciones 150-300ms, loading/empty states). **OJO de stack**: el proyecto es React + Vite + CSS Modules con tokens `var(--color-*)`, NO Tailwind -> la skill da el QUE (diseno), el COMO se implementa con CSS Modules y los tokens existentes; jamas pegar clases Tailwind crudas. **Patron unico**: el design system se persiste con `--persist` y se reusa en toda la app para consistencia (mismos botones, spacing, colores en cada page).
 - Conventional commits, sin atribución de IA / `Co-Authored-By`.
 - TDD estricto (BE: Jest + adapters in-memory; FE: Vitest). Test primero.
 - No romper el **contrato del API** que el FE ya consume en prod (ej.: tras pasar `Ticket.status` a FK, el DTO sigue exponiendo `status` como string — la traducción name↔id vive en el repositorio, no se filtra al DTO).
@@ -138,6 +142,13 @@ Reglas operativas del loop:
   - Si el permiso todavía no existe: agregarlo al **catálogo RBAC del backend** Y exponerlo para que el front lo reciba — **cambio coordinado en ambos repos**. Nunca dejar una page/ruta nueva sin permiso por default ni inventar una clave; **documentar en el PR la clave usada**.
   - ~~Deuda: rutas de inventario por servicio solo autenticadas~~ **SALDADA** (#8 + auditoría 2026-06-09: `contractInventory.routes.ts` tiene guard granular en TODAS las rutas — scheduling.* para sugerencias, inventory.* para contrato/materiales; `/api/services/:serviceId/inventory` ya no existe).
   - Deuda VIGENTE (auditoría 2026-06-09): `PATCH /api/admin/feature-flags/:key` está solo-autenticado — cualquier usuario logueado puede flipear CUALQUIER flag por API directa (la UI sí gatea por módulo: `iclass.manage` / `inventory.manage`). Cerrarla requiere decidir la política: un permiso `admin.flags` global, o guard por namespace del flag.
+
+## Gestion Real (GR) — EN DEPRECACION (planificada)
+
+> **GR se va a DEJAR DE USAR** (Prominense lo reemplaza). **REGLA INNEGOCIABLE**: toda feature/config/integracion NUEVA que dependa de GR debe construirse pensando en su futura remocion:
+> - **Aislar, NO acoplar al nucleo**: las integraciones GR van en su propia sub-page + use case DEDICADO (estilo el mapeo tecnico<->cuadrilla de IClass: `SetTechnicianTeamMapping` + sub-page de Config), NUNCA como campos en modelos/DTOs/modales CORE. Asi, el dia que GR se vaya, se borra la pieza sin tocar el nucleo. (Ej: el mapeo agente<->vendedor GR de la cartera "Mis clientes" se hizo asi a proposito.)
+> - **No expandir la superficie GR**: clientes/contratos YA estan acoplados por necesidad (el sync espeja GR), pero las features NUEVAS deben MINIMIZAR la dependencia de datos/endpoints de GR.
+> - **Marcar como deuda**: todo lo que dependa de GR se documenta como deuda a revisar cuando se planifique el reemplazo. Datos derivados de GR (ej. `Contract.vendedor`, el sync de clientes/contratos, el ingest de OS, el password diario) deben poder migrarse o sobrevivir sin GR.
 
 ## Gotchas conocidos
 
