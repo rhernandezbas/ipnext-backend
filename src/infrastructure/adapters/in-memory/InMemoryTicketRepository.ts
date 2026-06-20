@@ -249,4 +249,23 @@ export class InMemoryTicketRepository implements TicketRepository {
     this.tickets.splice(idx, 1);
     return true;
   }
+
+  async countOpenByClientIds(clientIds: string[]): Promise<Map<string, number>> {
+    // Portfolio (Fase 3) — single-pass tally of OPEN tickets per client.
+    // "Open" = resolvedAt null AND archivedAt null (terminal signal, casing-safe).
+    const result = new Map<string, number>();
+    if (clientIds.length === 0) return result;
+    const wanted = new Set(clientIds);
+    for (const t of this.tickets) {
+      if (
+        t.customerId != null &&
+        wanted.has(t.customerId) &&
+        t.resolvedAt == null &&
+        t.archivedAt == null
+      ) {
+        result.set(t.customerId, (result.get(t.customerId) ?? 0) + 1);
+      }
+    }
+    return result;
+  }
 }

@@ -35,6 +35,7 @@ function makeRepo(overrides?: Partial<TicketRepository>): TicketRepository {
     close: jest.fn(),
     archive: jest.fn(),
     delete: jest.fn(),
+    countOpenByClientIds: jest.fn(),
     ...overrides,
   };
 }

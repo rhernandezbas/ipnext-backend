@@ -57,4 +57,10 @@ export interface TicketRepository {
    * #85 — Hard-delete a ticket. Returns true if deleted, false if not found.
    */
   delete(id: string): Promise<boolean>;
+  /**
+   * Portfolio (Fase 3) — count OPEN tickets per client for a set of clientIds,
+   * in a SINGLE aggregated query (no N+1). "Open" = resolvedAt IS NULL AND archivedAt IS NULL.
+   * Returns a Map keyed by clientId; clientIds with zero open tickets MAY be absent (caller defaults to 0).
+   */
+  countOpenByClientIds(clientIds: string[]): Promise<Map<string, number>>;
 }

@@ -288,4 +288,23 @@ export class PrismaTicketRepository implements TicketRepository {
       throw err;
     }
   }
+
+  async countOpenByClientIds(clientIds: string[]): Promise<Map<string, number>> {
+    // Portfolio (Fase 3) — open tickets per client in a SINGLE aggregated query.
+    // "Open" = resolvedAt null AND archivedAt null (the casing-safe terminal
+    // signal — resolvedAt is unified-stamped on close regardless of catalog
+    // casing; archived tickets are not "open" either). No N+1.
+    const result = new Map<string, number>();
+    if (clientIds.length === 0) return result; // skip the query entirely
+    const rows: any[] = await (prisma as any).ticket.groupBy({
+      by: ['customerId'],
+      where: { customerId: { in: clientIds }, resolvedAt: null, archivedAt: null },
+      _count: { _all: true },
+    });
+    for (const row of rows) {
+      if (row.customerId == null) continue;
+      result.set(row.customerId, row._count?._all ?? 0);
+    }
+    return result;
+  }
 }

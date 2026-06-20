@@ -138,4 +138,9 @@ export class SplynxTicketAdapter implements TicketRepository {
     // Stub — Splynx decabled
     return false;
   }
+
+  async countOpenByClientIds(_clientIds: string[]): Promise<Map<string, number>> {
+    // Stub — Splynx decabled (portfolio Fase 3 is Prisma-only).
+    return new Map();
+  }
 }
