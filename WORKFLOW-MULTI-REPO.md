@@ -1,7 +1,7 @@
 # Workflow multi-repo — IPNext (Prominense)
 
 > Cómo se trabaja sobre los dos repositorios del sistema. Documenta el flujo real,
-> verificado en producción. Última actualización: 2026-05-27.
+> verificado en producción. Última actualización: 2026-06-20.
 
 ## Repos
 

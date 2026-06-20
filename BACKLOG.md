@@ -8,6 +8,19 @@
 
 ## 📋 Pendientes
 
+### Cartera "Mis clientes" + rediseño Recaptación + fix RBAC — ✅ COMPLETO Y EN PROD *(sesión 2026-06-19/20)*
+> Jornada larga (voz/remote, ~13 deploys verdes). Las 4 cosas pedidas, todas en prod. Patrón nuevo: TODO botón usa el atom `<Button>` compartido (cero hex mágicos); skill `ui-ux-pro-max` obligatoria para UI/UX; integraciones GR aisladas porque **GR se va a deprecar** (reglas en WORKFLOW).
+> **(1) Fix modal RBAC** (FE `f867a8c`): el modal de usuario tragaba el error del backend y mostraba un genérico ante `PASSWORD_POLICY` (código no mapeado en `mapServerError`) → ahora prioriza `response.data.error` del backend + sincroniza la validación client-side a la política real (10 chars + letra + número; antes decía 8).
+> **(2) Design system / Button compartido** (FE `bd6ffd2`+`d8f849e`): atom `<Button>` endurecido (tokens en vez de hex mágicos `#4f46e5`/`#0b5ed7`, variant `icon`, touch 44px en `pointer:coarse`) + Recaptación 100% migrada (header/tabla/drawer) + CSS tokenizado, CSS muerto borrado.
+> **(3) Mini-modal de contratos del cliente** (FE `08e21f8`, `ContractHistoryModal`): en el drawer del lead, botón "Ver contratos" → modal con historial de contratos (código GR, plan, estado, alta/baja, **domicilio** con fallback honesto, tecnología, IP). FE-puro (reusa `useClientContracts`). Solo si el lead tiene `clientId`.
+> **(4) Persistencia de leads investigada**: ¿se pierde la data del lead al reactivar el cliente? **NO** — FK `onDelete:SetNull` + ingesta idempotente + sin job de borrado. No hay bug.
+> **(5) Cartera "Mis clientes" — feature COMPLETA (4 fases, BE+FE):**
+> - **F1** (BE `41efdb2b`, migr `20260801001000`): `Contract.vendedor` traído del sync de GR (GR expone el vendedor a nivel CONTRATO; `cliente.creado_por` es siempre "admin" → inútil). Backfill armado (`UPDATE "SyncState" SET cursor='0' WHERE entity='gr-contracts-backfill'`) → **99.9% poblado** (11850/11866; 16 sin vendedor en GR, esperable).
+> - **F2** mapeo agente↔vendedor: `RbacUser.grVendedorName` (BE `9ac9bd9e`, migr `20260801002000`) + sub-page AISLADA (BE `04af270a` `/api/admin/gr/vendedor-mappings` + `/vendedores` distinct; FE tab "Vendedores GR" en **Clientes → Configuración** `49df96d`/`c0b48f5`, perms `recapture.read/manage`). Aislada a propósito (GR se deprecará). Nombres de vendedor sucios (`CAROLINA ROSALES` vs `julietapalilla`), mapeo 1→1.
+> - **F3** (BE `49b93b7c`): endpoint `GET /api/portfolio/mine` (`GetMyPortfolio`: vendedor del user logueado → clientes dedup + estado + deuda [balanceDue>0 o late] + reclamos [tickets abiertos resolvedAt+archivedAt null, sin N+1] + antigüedad bucket 0-3/3-6/6-12/12+). `unmapped:true` si el user no tiene vendedor.
+> - **F4** (FE `49df96d`): página `/admin/customers/mis-clientes` (sidebar bajo Clientes, `recapture.read`) — cards de resumen + clientes agrupados por antigüedad + StatusBadge/chips de deuda/reclamos + estados unmapped/vacío/loading/error.
+> **Pendiente** *(en curso)*: vista de **super admin** para ver la cartera de TODOS los agentes (no solo la propia). Verificación Playwright en vivo de la página "Mis clientes".
+
 ### Wave 3 + catálogo de planes + redesign Gestión de Red — ✅ EN PROD *(sesión 2026-06-20)*
 > Jornada larga (voz/remote). **Todo deployado + verificado en vivo.** Scopeado a **Acceso Sur** (único NAS `mikrotik_radius`, RouterOS 7.22.1).
 > **(1) Catálogo de planes ("Camino A")**: 21 planes centralizados en `radgroupreply` (Mikrotik-Rate-Limit); página de planes (KPI fix `status==='enabled'`). El `syncPlan` (editar plan→orchestrator `PUT /plans/:code`) estaba muerto por el bug del env (punto 7) — revivido.
