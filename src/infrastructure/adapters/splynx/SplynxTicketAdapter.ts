@@ -46,6 +46,7 @@ export class SplynxTicketAdapter implements TicketRepository {
         description: String(t['message'] ?? ''),
         customerId: t['customer_id'] ? String(t['customer_id']) : null,
         customerName: t['customer_name'] ? String(t['customer_name']) : null,
+        contractId: null,    // Splynx legacy has no contract FK on tickets
         priority: mapPriority(String(t['priority'] ?? '')),
         status: mapTicketStatus(String(t['status'] ?? '')),
         assigneeId: t['admin_id'] ? String(t['admin_id']) : null,
@@ -102,6 +103,7 @@ export class SplynxTicketAdapter implements TicketRepository {
       description: data.description,
       customerId: data.customerId ?? null,
       customerName: null,
+      contractId: data.contractId ?? null,
       priority: data.priority ?? 'medium',
       status: 'open',
       assigneeId: data.assigneeId ?? null,

@@ -10,6 +10,25 @@ export class ReferenceNotFoundError extends Error {
 }
 
 /**
+ * Raised when a contract does NOT belong to the target customer (the ticket's
+ * customerId). Prevents creating a ticket that pairs a customer with another
+ * customer's contract. Domain code: CONTRACT_CUSTOMER_MISMATCH; HTTP layer maps
+ * it to 422.
+ */
+export class ContractCustomerMismatchError extends DomainError {
+  constructor(
+    public readonly contractId: string,
+    public readonly customerId: string,
+  ) {
+    super(
+      `Contract ${contractId} does not belong to customer ${customerId}`,
+      'CONTRACT_CUSTOMER_MISMATCH',
+    );
+    this.name = 'ContractCustomerMismatchError';
+  }
+}
+
+/**
  * #40 — Raised when a task's kind does not match the kind of the project it is
  * being attached to (network task → non-network project, or vice versa).
  *

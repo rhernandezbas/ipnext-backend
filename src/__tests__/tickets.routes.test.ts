@@ -217,6 +217,7 @@ describe('POST /api/tickets', () => {
         subject: 'Nuevo ticket',
         description: 'Descripción',
         customerId: 'c1',
+        contractId: 'ct1',
       }),
     );
 

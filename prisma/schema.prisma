@@ -241,6 +241,7 @@ model Contract {
   createdAt    DateTime        @default(now())
   client         Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   tasks          ScheduledTask[]
+  tickets        Ticket[]
   installedItems ContractInstalledItem[]
   stockLocations StockLocation[]          @relation("ContractStockLocation")
   contractServices      ContractService[]
@@ -2128,6 +2129,12 @@ model Ticket {
   customerId String?
   customer   Client? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
+  // FK al contrato del cliente. Requerido en el flujo de creacion (route + use case),
+  // pero nullable en DB: los tickets viejos no tienen contrato. SetNull al borrar el
+  // contrato (espejo de customer).
+  contractId String?
+  contract   Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
+
   // Asignacion opcional a un RbacUser — espejo de ScheduledTask.assigneeId
   assigneeId String?
   assignee   RbacUser? @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
@@ -2161,6 +2168,7 @@ model Ticket {
   updatedAt DateTime @updatedAt
 
   @@index([customerId])
+  @@index([contractId])
   @@index([statusId])
   @@index([assigneeId])
   @@index([reporterId])

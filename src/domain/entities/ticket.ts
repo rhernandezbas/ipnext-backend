@@ -16,6 +16,7 @@ export interface Ticket {
   priority: TicketPriority;
   customerId: string | null;
   customerName: string | null;   // JOIN-derived (Client.name) — NOT free text
+  contractId: string | null;     // FK to Contract (nullable: old tickets have none)
   assigneeId: string | null;
   assigneeName: string | null;   // JOIN-derived (Admin.name)
   // #48 — quien creo el ticket. reporterName es JOIN-derived (RbacUser.name), espejo de assigneeName.

@@ -791,7 +791,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const deleteCustomer = new DeleteCustomer(customerAdapter);
   const listTickets = new ListTickets(ticketAdapter);
   const getStats = new GetTicketStats(ticketAdapter);
-  const createTicket = new CreateTicket(ticketAdapter);
+  // CreateTicket enforces the contract requirement: customer must exist, contract
+  // must exist, and the contract must belong to the customer (422 otherwise).
+  // customerLookup = existence; contractLookup = ownership-aware (returns clientId).
+  const createTicket = new CreateTicket(
+    ticketAdapter,
+    { findById: (id: string) => prismaClientLookup('Client', id) },
+    { findById: (id: string) => prismaContractOwnershipLookup(id) },
+  );
   const getTicket = new GetTicket(ticketAdapter);
   const updateTicketStatus = new UpdateTicketStatus(ticketAdapter);
   const updateTicket = new UpdateTicket(ticketAdapter);

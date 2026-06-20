@@ -40,6 +40,7 @@ export function toTicket(row: any): Ticket {
     priority: row.priority,
     customerId: row.customerId ?? null,
     customerName: row.customer?.name ?? null,
+    contractId: row.contractId ?? null,
     assigneeId: row.assigneeId ?? null,
     assigneeName: row.assignee?.name ?? null,
     // #48 — reporter denormalizado igual que assignee.
@@ -197,6 +198,7 @@ export class PrismaTicketRepository implements TicketRepository {
         priority: data.priority ?? 'medium',
         statusId,
         ...(data.customerId != null && { customerId: data.customerId }),
+        ...(data.contractId != null && { contractId: data.contractId }),
         ...(data.assigneeId != null && { assigneeId: data.assigneeId }),
         ...(data.reporterId != null && { reporterId: data.reporterId }),   // #48
         ...(data.areaId != null && { areaId: data.areaId }),               // #49

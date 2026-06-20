@@ -227,8 +227,8 @@ describe('GET /api/tickets?status= (pass-through filter, AD-5)', () => {
     await statusRepo.create({ name: 'Resuelto', color: '#3b82f6', weight: 3 });
 
     // Create two tickets; move one to "Resuelto" via the status route
-    const a = await withAuth2(request(app).post('/api/tickets').send({ subject: 'A', description: 'D' }));
-    await withAuth2(request(app).post('/api/tickets').send({ subject: 'B', description: 'D' }));
+    const a = await withAuth2(request(app).post('/api/tickets').send({ subject: 'A', description: 'D', customerId: CUSTOMER_ID, contractId: CONTRACT_ID }));
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'B', description: 'D', customerId: CUSTOMER_ID, contractId: CONTRACT_ID }));
     await withAuth2(request(app).patch(`/api/tickets/${a.body.id}/status`).send({ status: 'Resuelto' }));
 
     const res = await withAuth2(request(app).get('/api/tickets?status=Resuelto'));
@@ -239,8 +239,8 @@ describe('GET /api/tickets?status= (pass-through filter, AD-5)', () => {
 
   it('returns an empty list for a status no ticket has (filter applied, not ignored)', async () => {
     const { app } = buildApp();
-    await withAuth2(request(app).post('/api/tickets').send({ subject: 'A', description: 'D' }));
-    await withAuth2(request(app).post('/api/tickets').send({ subject: 'B', description: 'D' }));
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'A', description: 'D', customerId: CUSTOMER_ID, contractId: CONTRACT_ID }));
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'B', description: 'D', customerId: CUSTOMER_ID, contractId: CONTRACT_ID }));
 
     const res = await withAuth2(request(app).get('/api/tickets?status=nope'));
     expect(res.status).toBe(200);
@@ -250,8 +250,8 @@ describe('GET /api/tickets?status= (pass-through filter, AD-5)', () => {
 
   it('without status, returns the unfiltered list (regresión)', async () => {
     const { app } = buildApp();
-    await withAuth2(request(app).post('/api/tickets').send({ subject: 'A', description: 'D' }));
-    await withAuth2(request(app).post('/api/tickets').send({ subject: 'B', description: 'D' }));
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'A', description: 'D', customerId: CUSTOMER_ID, contractId: CONTRACT_ID }));
+    await withAuth2(request(app).post('/api/tickets').send({ subject: 'B', description: 'D', customerId: CUSTOMER_ID, contractId: CONTRACT_ID }));
 
     const res = await withAuth2(request(app).get('/api/tickets'));
     expect(res.status).toBe(200);

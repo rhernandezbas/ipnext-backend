@@ -16,7 +16,7 @@ import { StageRepository } from '@domain/ports/StageRepository';
 import { TicketStatusRepository } from '@domain/ports/TicketStatusRepository';
 import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
-import { ReferenceNotFoundError } from '@domain/errors/scheduling';
+import { ReferenceNotFoundError, ContractCustomerMismatchError } from '@domain/errors/scheduling';
 import { NoClosableStatusError, TicketAreaRequiredError, TicketAreaNotFoundError, TicketNotClosedError } from '@domain/errors/tickets';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/requirePermission';
@@ -412,10 +412,11 @@ export function createTicketsRouter(
 
   // POST / — create ticket
   router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
-    const { subject, description, customerId, priority, assigneeId, reporterId, areaId } = req.body as {
+    const { subject, description, customerId, contractId, priority, assigneeId, reporterId, areaId } = req.body as {
       subject?: string;
       description?: string;
       customerId?: string | null;
+      contractId?: string | null;
       priority?: string;
       assigneeId?: string | null;
       reporterId?: string | null;
@@ -425,6 +426,17 @@ export function createTicketsRouter(
     if (!subject || !description) {
       res.status(400).json({
         error: 'Missing required fields: subject, description',
+        code: 'VALIDATION_ERROR',
+      });
+      return;
+    }
+
+    // A ticket is always opened against a client contract. Both are required at
+    // the form (400 shape gate). Existence + ownership (the contract belongs to
+    // the customer) is enforced by the CreateTicket use case → 422 below.
+    if (!customerId || !contractId) {
+      res.status(400).json({
+        error: 'Missing required fields: customerId, contractId',
         code: 'VALIDATION_ERROR',
       });
       return;
@@ -470,7 +482,8 @@ export function createTicketsRouter(
       const ticket = await createTicket.execute({
         subject,
         description,
-        customerId: customerId ?? null,
+        customerId,
+        contractId,
         priority: VALID_PRIORITIES.includes(priority as TicketPriority)
           ? (priority as TicketPriority)
           : 'medium',
@@ -482,6 +495,17 @@ export function createTicketsRouter(
       });
       res.status(201).json(ticket);
     } catch (err) {
+      // FK existence (customer/contract not found) → 422. Mirrors POST /:id/tasks.
+      if (err instanceof ReferenceNotFoundError) {
+        const code = REFERENCE_TO_CODE[err.kind] ?? 'REFERENCE_NOT_FOUND';
+        res.status(422).json({ error: err.message, code });
+        return;
+      }
+      // Contract does not belong to the customer → 422.
+      if (err instanceof ContractCustomerMismatchError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
       console.error('[tickets] create error', err);
       res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }

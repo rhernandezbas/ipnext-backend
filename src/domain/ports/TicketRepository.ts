@@ -19,6 +19,11 @@ export interface CreateTicketData {
   subject: string;
   description: string;
   customerId?: string | null;     // FK (replaces clientId texto libre)
+  // FK to Contract. Required on the create FLOW (route + CreateTicket use case
+  // enforce it), but OPTIONAL on the port type so the many direct repo.create()
+  // test fixtures and old tickets (nullable in DB) keep working. The use case is
+  // the enforcement seam when its customer/contract lookups are wired.
+  contractId?: string | null;
   priority?: TicketPriority;
   assigneeId?: string | null;
   reporterId?: string | null;     // #48 — estampado desde la sesion (req.user.id) en el route

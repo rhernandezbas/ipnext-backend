@@ -11,6 +11,12 @@ export interface InMemoryCustomer {
   name: string;
 }
 
+// Minimal in-memory contract map for the ownership lookup (clientId) in tests
+export interface InMemoryContract {
+  id: string;
+  clientId: string;
+}
+
 // Minimal in-memory admin map for JOIN-derived assigneeName in tests
 export interface InMemoryAdmin {
   id: string;
@@ -27,6 +33,7 @@ function nowIso(): string {
 export class InMemoryTicketRepository implements TicketRepository {
   private tickets: Ticket[] = [];
   private customers: Map<string, InMemoryCustomer> = new Map();
+  private contracts: Map<string, InMemoryContract> = new Map();
   private admins: Map<string, InMemoryAdmin> = new Map();
   // #49 — area catalog reference for JOIN-derived areaName. Accepts the same
   // InMemoryTicketAreaCatalogRepository used in tests so both repos share state.
@@ -37,6 +44,42 @@ export class InMemoryTicketRepository implements TicketRepository {
     for (const c of customers) {
       this.customers.set(c.id, c);
     }
+  }
+
+  /**
+   * Seed contracts so a CreateTicket contract-ownership lookup can resolve
+   * clientId. Returns a lookup-shaped accessor via contractLookup() below.
+   */
+  seedContracts(contracts: InMemoryContract[]): void {
+    for (const c of contracts) {
+      this.contracts.set(c.id, c);
+    }
+  }
+
+  /**
+   * Contract ownership lookup over the seeded contracts. Satisfies the
+   * CreateTicket TicketContractLookup port ({ id, clientId } | null).
+   */
+  contractLookup(): { findById(id: string): Promise<{ id: string; clientId: string } | null> } {
+    return {
+      findById: async (id: string) => {
+        const c = this.contracts.get(id);
+        return c ? { id: c.id, clientId: c.clientId } : null;
+      },
+    };
+  }
+
+  /**
+   * Customer existence lookup over the seeded customers. Satisfies the
+   * EntityLookup port ({ id, name? } | null).
+   */
+  customerLookup(): { findById(id: string): Promise<{ id: string; name?: string } | null> } {
+    return {
+      findById: async (id: string) => {
+        const c = this.customers.get(id);
+        return c ? { id: c.id, name: c.name } : null;
+      },
+    };
   }
 
   /** Seed admins so the repo can resolve assigneeName from JOIN */
@@ -158,6 +201,7 @@ export class InMemoryTicketRepository implements TicketRepository {
       priority: data.priority ?? 'medium',
       customerId: data.customerId ?? null,
       customerName,
+      contractId: data.contractId ?? null,
       assigneeId: data.assigneeId ?? null,
       assigneeName,
       reporterId: data.reporterId ?? null,

@@ -42,6 +42,11 @@ function buildApp() {
     { id: 'c1', name: 'Alice García' },
     { id: 'c2', name: 'Bob Martínez' },
   ]);
+  // Contracts for the ticket contract requirement: ct1 → c1, ct2 → c2.
+  repo.seedContracts([
+    { id: 'ct1', clientId: 'c1' },
+    { id: 'ct2', clientId: 'c2' },
+  ]);
   // #48 — seed admins so reporterName/assigneeName resolve via JOIN.
   // The auth stub below returns session id '1', so the stamped reporter is '1'.
   repo.seedAdmins([
@@ -58,7 +63,8 @@ function buildApp() {
 
   const listTickets = new ListTickets(repo);
   const getStats = new GetTicketStats(repo);
-  const createTicket = new CreateTicket(repo);
+  // Wire the contract requirement lookups so the route enforces FK + ownership.
+  const createTicket = new CreateTicket(repo, repo.customerLookup(), repo.contractLookup());
   const getTicket = new GetTicket(repo);
   const updateStatus = new UpdateTicketStatus(repo);
   const updateTicket = new UpdateTicket(repo);
@@ -106,6 +112,7 @@ describe('POST /api/tickets', () => {
         subject: 'Sin señal',
         description: 'No hay Internet',
         customerId: 'c1',
+        contractId: 'ct1',
         priority: 'high',
         areaId: area.id,
       }),
@@ -114,6 +121,7 @@ describe('POST /api/tickets', () => {
     expect(res.status).toBe(201);
     expect(res.body.customerId).toBe('c1');
     expect(res.body.customerName).toBe('Alice García');
+    expect(res.body.contractId).toBe('ct1');
     expect(res.body.status).toBe('open');
     expect(res.body.id).toBeTruthy();
     expect(typeof res.body.sequenceNumber).toBe('number'); // #11 — display number
@@ -122,7 +130,7 @@ describe('POST /api/tickets', () => {
   it('#11: assigns a monotonic sequenceNumber (shown as #N in the list)', async () => {
     const { app, areaRepo } = buildApp();
     const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
-    const mk = () => withAuth(request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }));
+    const mk = () => withAuth(request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct1', areaId: area.id }));
     const a = await mk();
     const b = await mk();
     expect(b.body.sequenceNumber).toBeGreaterThan(a.body.sequenceNumber);
@@ -144,6 +152,71 @@ describe('POST /api/tickets', () => {
     );
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+// Contract requirement: a ticket is always opened against a client contract.
+describe('POST /api/tickets — contract requirement', () => {
+  it('returns 400 VALIDATION_ERROR when contractId is missing', async () => {
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', areaId: area.id }),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns 400 VALIDATION_ERROR when customerId is missing', async () => {
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', contractId: 'ct1', areaId: area.id }),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns 422 CONTRACT_NOT_FOUND when the contract does not exist', async () => {
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ghost', areaId: area.id }),
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
+  });
+
+  it('returns 422 CUSTOMER_NOT_FOUND when the customer does not exist', async () => {
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'ghost', contractId: 'ct1', areaId: area.id }),
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('CUSTOMER_NOT_FOUND');
+  });
+
+  it('returns 422 CONTRACT_CUSTOMER_MISMATCH when the contract belongs to another customer', async () => {
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
+    // ct2 belongs to c2, not c1.
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct2', areaId: area.id }),
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('CONTRACT_CUSTOMER_MISMATCH');
+  });
+
+  it('returns 201 and exposes contractId when customer + contract + ownership are valid', async () => {
+    const { app, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
+    const res = await withAuth(
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct1', areaId: area.id }),
+    );
+    expect(res.status).toBe(201);
+    expect(res.body.contractId).toBe('ct1');
+    expect(res.body.customerId).toBe('c1');
   });
 });
 
@@ -345,7 +418,7 @@ describe('POST /api/tickets — reporter (#48)', () => {
     const { app, areaRepo } = buildApp();
     const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct1', areaId: area.id }),
     );
     expect(res.status).toBe(201);
     // Auth stub returns session id '1'; seedAdmins maps '1' → 'Admin Uno'.
@@ -357,7 +430,7 @@ describe('POST /api/tickets — reporter (#48)', () => {
     const { app, areaRepo } = buildApp();
     const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: '2', areaId: area.id }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct1', reporterId: '2', areaId: area.id }),
     );
     expect(res.status).toBe(201);
     expect(res.body.reporterId).toBe('2');
@@ -370,7 +443,7 @@ describe('POST /api/tickets — reporter (#48)', () => {
     // An unknown reporterId would hit a Prisma FK violation (P2003) in prod and
     // surface as a 500. Validate existence up-front and reject with a clear 422.
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', reporterId: 'ghost', areaId: area.id }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct1', reporterId: 'ghost', areaId: area.id }),
     );
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('REPORTER_NOT_FOUND');
@@ -382,7 +455,7 @@ describe('POST /api/tickets — reporter (#48)', () => {
     // The session user exists by definition; the default stamp must never be
     // re-validated nor blocked. Session id is '1' (Admin Uno).
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct1', areaId: area.id }),
     );
     expect(res.status).toBe(201);
     expect(res.body.reporterId).toBe('1');
@@ -560,7 +633,7 @@ describe('POST /api/tickets — areaId required (#49)', () => {
   it('REQ-TICKET-AREA-1: missing areaId → 422 TICKET_AREA_REQUIRED', async () => {
     const { app } = buildApp();
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D' }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct1' }),
     );
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('TICKET_AREA_REQUIRED');
@@ -569,7 +642,7 @@ describe('POST /api/tickets — areaId required (#49)', () => {
   it('REQ-TICKET-AREA-2: unknown areaId → 422 TICKET_AREA_NOT_FOUND', async () => {
     const { app } = buildApp();
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: 'non-existent-area' }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct1', areaId: 'non-existent-area' }),
     );
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('TICKET_AREA_NOT_FOUND');
@@ -580,7 +653,7 @@ describe('POST /api/tickets — areaId required (#49)', () => {
     const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
 
     const res = await withAuth(
-      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', areaId: area.id }),
+      request(app).post('/api/tickets').send({ subject: 'S', description: 'D', customerId: 'c1', contractId: 'ct1', areaId: area.id }),
     );
     expect(res.status).toBe(201);
     expect(res.body.areaId).toBe(area.id);

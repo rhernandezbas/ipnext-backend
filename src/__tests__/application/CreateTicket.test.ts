@@ -9,6 +9,7 @@ const mockTicket: Ticket = {
   description: 'No hay señal.',
   customerId: 'c42',
   customerName: 'Alice García',
+  contractId: null,
   assigneeId: null,
   assigneeName: null,
   reporterId: null,

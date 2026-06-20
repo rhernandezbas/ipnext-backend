@@ -17,6 +17,7 @@ export interface CreateTicketDto {
   subject: string;
   description: string;
   customerId?: string | null;
+  contractId?: string | null;   // FK to Contract — required in the route form
   priority?: TicketPriority;
   assigneeId?: string | null;
   reporterId?: string | null;   // #48 — opcional; el route defaultea a req.user.id
@@ -41,6 +42,7 @@ export interface TicketDto {
   priority: TicketPriority;
   customerId: string | null;
   customerName: string | null;
+  contractId: string | null;    // FK to Contract (nullable: old tickets have none)
   assigneeId: string | null;
   assigneeName: string | null;
   reporterId: string | null;    // #48
