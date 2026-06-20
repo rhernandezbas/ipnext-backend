@@ -33,6 +33,20 @@ export class PppoeServiceNotFoundError extends DomainError {
   }
 }
 
+/**
+ * Alta en un NAS RADIUS (`mikrotik_radius`) sin `profile`. Un usuario RADIUS NECESITA su grupo/plan
+ * (radusergroup) — no hay default. Code → HTTP: PPPOE_PROFILE_REQUIRED → 422.
+ */
+export class PppoeProfileRequiredError extends DomainError {
+  constructor(public readonly username: string) {
+    super(
+      `El PPPoE '${username}' va a un NAS RADIUS y requiere un 'profile' (plan/grupo del RADIUS)`,
+      'PPPOE_PROFILE_REQUIRED',
+    );
+    this.name = 'PppoeProfileRequiredError';
+  }
+}
+
 /** No existe el NasServer (router) referenciado por `nasId`. */
 export class NasNotFoundError extends DomainError {
   constructor(public readonly id: string) {

@@ -2027,7 +2027,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       sessionRepo,
       requirePerm,
       new ListPppoeByContract(pppoeRepo),
-      new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe),
+      new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator),
       new UpdatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe),
       new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepoForPppoe),
       new DeactivatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe),

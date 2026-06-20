@@ -48,7 +48,9 @@ import {
 import {
   RouterUnreachableError,
   OrchestratorUnreachableError,
+  OrchestratorRejectedError,
   PppoeUsernameTakenError,
+  PppoeProfileRequiredError,
   PppoeServiceNotFoundError,
   NasNotFoundError,
 } from '@domain/errors/pppoe';
@@ -106,12 +108,23 @@ export function createPppoeRouter(
         });
         res.status(201).json(toPppoeServiceDto(service));
       } catch (err) {
-        if (err instanceof RouterUnreachableError) {
+        // NAS RADIUS caído (red/timeout/5xx) → mismo trato que el router caído.
+        if (err instanceof RouterUnreachableError || err instanceof OrchestratorUnreachableError) {
           res.status(502).json({ code: err.code, error: err.message });
+          return;
+        }
+        // El orchestrator RECHAZÓ el alta (4xx) — p.ej. usuario duplicado (409). Reenviamos su status.
+        if (err instanceof OrchestratorRejectedError) {
+          res.status(err.upstreamStatus).json({ code: err.code, error: err.message });
           return;
         }
         if (err instanceof PppoeUsernameTakenError) {
           res.status(409).json({ code: err.code, error: err.message });
+          return;
+        }
+        // Alta en NAS RADIUS sin profile → el plan/grupo es obligatorio.
+        if (err instanceof PppoeProfileRequiredError) {
+          res.status(422).json({ code: err.code, error: err.message });
           return;
         }
         if (err instanceof NasNotFoundError) {

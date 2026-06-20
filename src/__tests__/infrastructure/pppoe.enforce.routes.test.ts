@@ -17,6 +17,7 @@ import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memo
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
 import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { InMemoryServiceCutBatchRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCutBatchRepository';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
@@ -129,7 +130,7 @@ async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> 
     undefined, // sessionRepo: stateless en tests
     requirePerm,
     new ListPppoeByContract(pppoeRepo),
-    new CreatePppoeService(pppoeRepo, router, nasRepo),
+    new CreatePppoeService(pppoeRepo, router, nasRepo, new InMemoryRadiusOrchestratorGateway()),
     new UpdatePppoeService(pppoeRepo, router, nasRepo),
     new MovePppoeServiceToRouter(pppoeRepo, router, nasRepo),
     new DeactivatePppoeService(pppoeRepo, router, nasRepo),

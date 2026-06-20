@@ -14,6 +14,39 @@ function fakeHttp(over?: Partial<Record<'post' | 'get' | 'delete', jest.Mock>>) 
 }
 
 describe('HttpRadiusOrchestratorGateway (Inc3b — cliente HTTP real, espeja la API v0.1.0)', () => {
+  it('createUser → POST /users con {username, password, plan, framed_ip}', async () => {
+    const { http, gw } = fakeHttp();
+    await gw.createUser({ username: 'juanperez', password: 'pass1234', plan: 'IP-Air-30-10', framedIp: '100.64.10.10' });
+    expect(http.post).toHaveBeenCalledWith('/users', {
+      username: 'juanperez',
+      password: 'pass1234',
+      plan: 'IP-Air-30-10',
+      framed_ip: '100.64.10.10',
+    });
+  });
+
+  it('createUser sin framedIp → framed_ip: null', async () => {
+    const { http, gw } = fakeHttp();
+    await gw.createUser({ username: 'juanperez', password: 'pass1234', plan: 'IP-Air-30-10' });
+    expect(http.post).toHaveBeenCalledWith('/users', {
+      username: 'juanperez',
+      password: 'pass1234',
+      plan: 'IP-Air-30-10',
+      framed_ip: null,
+    });
+  });
+
+  it('createUser: usuario duplicado (orchestrator 409) → OrchestratorRejectedError', async () => {
+    const err = Object.assign(new Error('Request failed with status code 409'), {
+      isAxiosError: true,
+      response: { status: 409, data: { detail: 'user already exists' } },
+    });
+    const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(err) });
+    const caught = await gw.createUser({ username: 'dup', password: 'p', plan: 'IP-Air-30-10' }).catch(e => e);
+    expect(caught).toBeInstanceOf(OrchestratorRejectedError);
+    expect((caught as OrchestratorRejectedError).upstreamStatus).toBe(409);
+  });
+
   it('changePlan → POST /users/{u}/plan con {plan, apply_in_session}', async () => {
     const { http, gw } = fakeHttp();
     await gw.changePlan('JoseMassaMerc', 'IP-REDUCCION', { applyInSession: true });

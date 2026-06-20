@@ -3,6 +3,7 @@ import {
   OrchestratorSession,
   ChangePlanOptions,
   SuspendOptions,
+  CreateRadiusUserInput,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -19,9 +20,17 @@ export interface InMemoryOrchestratorSeed {
 }
 
 interface UserCallLog {
-  op: 'changePlan' | 'suspend' | 'reactivate' | 'disconnectSessions';
+  op: 'createUser' | 'changePlan' | 'suspend' | 'reactivate' | 'disconnectSessions';
   username: string;
   arg?: unknown;
+}
+
+/** Snapshot del `createUser` registrado (normalizado: framedIp siempre presente, default null). */
+export interface CreatedRadiusUser {
+  username: string;
+  password: string;
+  plan: string;
+  framedIp: string | null;
 }
 
 export interface PlanCallLog {
@@ -51,6 +60,7 @@ export interface PlanRejectionSeed {
 export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGateway {
   private readonly state = new Map<string, UserState>();
   private readonly sessions = new Map<string, OrchestratorSession[]>();
+  private readonly createdUsers = new Map<string, CreatedRadiusUser>();
   private readonly unreachable: Set<string>;
   private readonly failForPlanCode: Set<string>;
   private readonly rejectPlanCode: Map<string, PlanRejectionSeed>;
@@ -106,6 +116,23 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     return s;
   }
 
+  async createUser(input: CreateRadiusUserInput): Promise<void> {
+    this.guardUser(input.username);
+    // Usuario duplicado → el orchestrator real devuelve 409 → OrchestratorRejectedError.
+    if (this.createdUsers.has(input.username)) {
+      throw new OrchestratorRejectedError(409, { detail: `user ${input.username} already exists` });
+    }
+    const record: CreatedRadiusUser = {
+      username: input.username,
+      password: input.password,
+      plan: input.plan,
+      framedIp: input.framedIp ?? null,
+    };
+    this.createdUsers.set(input.username, record);
+    this.calls.push({ op: 'createUser', username: input.username, arg: record });
+    this.upsert(input.username).plan = input.plan;
+  }
+
   async changePlan(username: string, plan: string, opts?: ChangePlanOptions): Promise<void> {
     this.guardUser(username);
     this.calls.push({ op: 'changePlan', username, arg: { plan, ...opts } });
@@ -148,6 +175,14 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   }
 
   // ── Helpers de test ────────────────────────────────────────────────────────
+  /** El snapshot del `createUser` registrado para `username` (o undefined si no se creó). */
+  createdUser(username: string): CreatedRadiusUser | undefined {
+    return this.createdUsers.get(username);
+  }
+  /** Las ops `createUser` registradas para `username` (vacío si no hubo alta RADIUS). */
+  opsForCreate(username: string): string[] {
+    return this.calls.filter((c) => c.username === username && c.op === 'createUser').map((c) => c.op);
+  }
   planOf(username: string): string | undefined {
     return this.state.get(username)?.plan;
   }

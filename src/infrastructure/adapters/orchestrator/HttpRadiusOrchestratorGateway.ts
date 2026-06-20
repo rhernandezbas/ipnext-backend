@@ -4,6 +4,7 @@ import {
   OrchestratorSession,
   ChangePlanOptions,
   SuspendOptions,
+  CreateRadiusUserInput,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -52,6 +53,17 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
       // Red caída, timeout, 5xx → el orchestrator no respondió correctamente → 502
       throw new OrchestratorUnreachableError(this.target, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  async createUser(input: CreateRadiusUserInput): Promise<void> {
+    await this.call(() =>
+      this.http.post('/users', {
+        username: input.username,
+        password: input.password,
+        plan: input.plan,
+        framed_ip: input.framedIp ?? null,
+      }),
+    );
   }
 
   async changePlan(username: string, plan: string, opts?: ChangePlanOptions): Promise<void> {

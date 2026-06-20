@@ -34,7 +34,23 @@ export interface SuspendOptions {
   reason?: string;
 }
 
+/** Alta de un usuario en el RADIUS. Corresponde a `POST /users` del orchestrator. */
+export interface CreateRadiusUserInput {
+  username: string;
+  password: string;
+  /** Grupo/plan del RADIUS (radusergroup). Obligatorio: un usuario RADIUS necesita su grupo. */
+  plan: string;
+  /** IP fija opcional (radreply Framed-IP-Address). `null`/ausente → IP del pool. */
+  framedIp?: string | null;
+}
+
 export interface RadiusOrchestratorGateway {
+  /**
+   * Crea el usuario en el RADIUS (radcheck + radusergroup + radreply Framed-IP-Address).
+   * Corresponde a `POST /users` con body `{ username, password, plan, framed_ip }`.
+   * Usuario duplicado (orchestrator 409) → `OrchestratorRejectedError` (la ruta → 409).
+   */
+  createUser(input: CreateRadiusUserInput): Promise<void>;
   changePlan(username: string, plan: string, opts?: ChangePlanOptions): Promise<void>;
   suspend(username: string, opts?: SuspendOptions): Promise<void>;
   reactivate(username: string): Promise<void>;
