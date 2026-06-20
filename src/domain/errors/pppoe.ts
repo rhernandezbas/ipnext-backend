@@ -103,6 +103,23 @@ export class OrchestratorUnreachableError extends DomainError {
 }
 
 /**
+ * El contrato ya tiene un PPPoE activo (status='enabled'). Asociar un segundo requiere
+ * primero desasociar el existente. Code → HTTP: PPPOE_CONTRACT_ALREADY_HAS_SERVICE → 409.
+ */
+export class PppoeContractAlreadyHasServiceError extends DomainError {
+  constructor(
+    public readonly contractId: string,
+    public readonly existingPppoeId: string,
+  ) {
+    super(
+      `El contrato ${contractId} ya tiene un PPPoE activo (${existingPppoeId}). Desasociá el existente antes de asociar otro.`,
+      'PPPOE_CONTRACT_ALREADY_HAS_SERVICE',
+    );
+    this.name = 'PppoeContractAlreadyHasServiceError';
+  }
+}
+
+/**
  * El radius-orchestrator RECHAZÓ la petición con un error 4xx (400/403/404/409/422…).
  * Indica que la petición fue inválida o fue deliberadamente denegada — NO es un fallo de red.
  * Code → HTTP: ORCHESTRATOR_REJECTED → se reenvía el `upstreamStatus` (ej. 403, 400, 409).

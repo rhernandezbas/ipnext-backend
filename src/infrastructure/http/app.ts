@@ -635,6 +635,8 @@ import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
 import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
 import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
+import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
 import { ListPppoeAssignments } from '@application/use-cases/ListPppoeAssignments';
 import { ServiceCutRunner } from '../scheduling/ServiceCutRunner';
 import { PrismaServiceCutBatchRepository } from '../adapters/prisma/PrismaServiceCutBatchRepository';
@@ -2050,15 +2052,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       routerConcurrency: config.router.bulkConcurrency,
     });
     const serviceCutRunner = new ServiceCutRunner(bulkEnforcement, cutBatchRepo, new PgAdvisoryLock());
+    // pppoe-contract-integrity: helper de reconcile de la línea INTERNET (best-effort).
+    const ensureInternet = new EnsureInternetContractService(
+      new PrismaContractServiceRepository(),
+      new PrismaServiceCatalogRepository(),
+    );
     app.use('/api', createPppoeRouter(
       authAdapter,
       sessionRepo,
       requirePerm,
       new ListPppoeByContract(pppoeRepo),
-      new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator),
+      new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet),
       new UpdatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator),
       new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepoForPppoe),
-      new DeactivatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator),
+      new DeactivatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet),
       enforcePppoe,
       previewEnforcement,
       serviceCutRunner,
@@ -2066,9 +2073,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // Adopción del inventario — comparte el singleton `orchestrator` (listUsers vía GET /users).
       // exclusionPatterns filtra usernames placeholder (accesosurN) del ingest y del listado.
       new IngestPppoeFromNas(pppoeRepo, nasRepoForPppoe, orchestrator, config.pppoe.ingestExcludePatterns),
-      new AssociatePppoeToContract(pppoeRepo),
+      new AssociatePppoeToContract(pppoeRepo, ensureInternet),
       new GetPppoeCredentials(pppoeRepo),
       new ListUnassignedPppoe(pppoeRepo, config.pppoe.ingestExcludePatterns),
+      new DeassociatePppoeFromContract(pppoeRepo, ensureInternet),
     ));
   }
 

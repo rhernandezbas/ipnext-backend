@@ -11,6 +11,9 @@ import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemo
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { PppoeServiceNotFoundError, RouterUnreachableError, NasNotFoundError } from '@domain/errors/pppoe';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 
 const NAS1 = { ipAddress: '192.168.1.1', apiPort: 8728 }; // seed id '1'
 const NAS3 = { ipAddress: '10.0.0.5', apiPort: 8728 };    // seed id '3' (apiPort null → 8728)
@@ -59,7 +62,8 @@ describe('PPPoE management use cases', () => {
     it('baja soft: disabled en el router + status disabled en DB', async () => {
       const s = await seed();
       await router.createSecret(NAS1, { username: 'juan', password: 'p' });
-      const uc = new DeactivatePppoeService(repo, router, nasRepo, orchestrator);
+      const ensure = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+      const uc = new DeactivatePppoeService(repo, router, nasRepo, orchestrator, ensure);
       const r = await uc.execute(s.id);
       expect(r.status).toBe('disabled');
       expect((await router.listSecrets(NAS1))[0]!.disabled).toBe(true);

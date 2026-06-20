@@ -4,6 +4,7 @@ import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { NasNotFoundError, PppoeServiceNotFoundError } from '@domain/errors/pppoe';
+import { EnsureInternetContractService } from './EnsureInternetContractService';
 import { toNasTarget } from './nasTarget';
 
 /**
@@ -14,6 +15,9 @@ import { toNasTarget } from './nasTarget';
  *   - `mikrotik_radius` → `orchestrator.suspend` (el API del router RouterOS 7.x CUELGA;
  *     el RADIUS es la fuente de verdad).
  *   - resto (`mikrotik_api`, …) → `router.updateSecret({disabled:true})` (`/ppp secret`), como siempre.
+ *
+ * Post-baja: si el PPPoE tenía contractId, llama ensureInternet(contractId, false) best-effort
+ * para inactivar la línea INTERNET del contrato.
  */
 export class DeactivatePppoeService {
   constructor(
@@ -21,6 +25,7 @@ export class DeactivatePppoeService {
     private readonly router: PppoeRouterGateway,
     private readonly nasRepo: NasRepository,
     private readonly orchestrator: RadiusOrchestratorGateway,
+    private readonly ensureInternet: EnsureInternetContractService,
   ) {}
 
   async execute(id: string): Promise<PppoeService> {
@@ -35,7 +40,7 @@ export class DeactivatePppoeService {
       await this.router.updateSecret(toNasTarget(nas), s.username, { disabled: true });
     }
 
-    return this.repo.upsertByUsername({
+    const result = await this.repo.upsertByUsername({
       username: s.username,
       password: s.password,
       profile: s.profile,
@@ -44,5 +49,16 @@ export class DeactivatePppoeService {
       nasId: s.nasId,
       contractId: s.contractId,
     });
+
+    // Best-effort: inactivar la línea INTERNET si el PPPoE tenía un contrato.
+    if (s.contractId != null) {
+      try {
+        await this.ensureInternet.execute(s.contractId, false);
+      } catch (err) {
+        console.warn('[DeactivatePppoeService] ensureInternet(false) falló (best-effort):', err);
+      }
+    }
+
+    return result;
   }
 }
