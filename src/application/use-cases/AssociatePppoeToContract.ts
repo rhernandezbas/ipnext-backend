@@ -1,18 +1,23 @@
 import { PppoeService } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository } from '@domain/ports/PppoeServiceRepository';
-import { PppoeServiceNotFoundError, PppoeAlreadyAssociatedError } from '@domain/errors/pppoe';
+import { PppoeServiceNotFoundError, PppoeAlreadyAssociatedError, PppoeContractAlreadyHasServiceError } from '@domain/errors/pppoe';
+import { EnsureInternetContractService } from './EnsureInternetContractService';
 
 /**
  * AssociatePppoeToContract — asocia un PPPoE huérfano (adoptado del inventario) a un contrato.
  *
- * Comportamiento ante un PPPoE YA asociado (decisión del proposal):
- *   - mismo contractId  → idempotente: devuelve la fila sin cambios (re-asociar no es un error).
- *   - OTRO contractId   → `PppoeAlreadyAssociatedError` (→ 409). NO robamos el PPPoE en silencio;
- *     mover requiere desasociar primero (operación explícita, futura).
- *   - sin contrato      → setea el contractId.
+ * Orden de guardas (pinned por el design):
+ *   1. findById → 404 si no existe.
+ *   2. Si pppoe.contractId === contractId → idempotente, return (re-asociar el mismo no es error).
+ *   3. Si pppoe.contractId !== null (otro contrato) → PppoeAlreadyAssociatedError (→ 409).
+ *   4. findByContract(contractId) → si hay uno con status='enabled' → PppoeContractAlreadyHasServiceError (→ 409).
+ *   5. setContractId + ensureInternet(true) best-effort.
  */
 export class AssociatePppoeToContract {
-  constructor(private readonly repo: PppoeServiceRepository) {}
+  constructor(
+    private readonly repo: PppoeServiceRepository,
+    private readonly ensureInternet: EnsureInternetContractService,
+  ) {}
 
   async execute(pppoeId: string, contractId: string): Promise<PppoeService> {
     const pppoe = await this.repo.findById(pppoeId);
@@ -23,9 +28,24 @@ export class AssociatePppoeToContract {
       throw new PppoeAlreadyAssociatedError(pppoeId, pppoe.contractId);
     }
 
+    // Guard #4: ¿el contrato ya tiene un PPPoE activo?
+    const existing = await this.repo.findByContract(contractId);
+    const activeExisting = existing.find(p => p.status === 'enabled');
+    if (activeExisting) {
+      throw new PppoeContractAlreadyHasServiceError(contractId, activeExisting.id);
+    }
+
     const updated = await this.repo.setContractId(pppoeId, contractId);
     // setContractId solo devuelve null si la fila desapareció entre el findById y el update (carrera).
     if (!updated) throw new PppoeServiceNotFoundError(pppoeId);
+
+    // Best-effort: la línea INTERNET del contrato queda active.
+    try {
+      await this.ensureInternet.execute(contractId, true);
+    } catch (err) {
+      console.warn('[AssociatePppoeToContract] ensureInternet(true) falló (best-effort):', err);
+    }
+
     return updated;
   }
 }

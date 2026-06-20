@@ -45,6 +45,10 @@ import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
 import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
 import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
+import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -143,6 +147,9 @@ async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: Rad
   const pppoeRepo = new InMemoryPppoeServiceRepository();
   const routerGw  = new InMemoryRouterGateway({ unreachable: opts?.unreachableNas });
   const nasRepo   = new InMemoryNasRepository();
+  const csRepo    = new InMemoryContractServiceRepository();
+  const catalogRepo = new InMemoryServiceCatalogRepository();
+  const ensure    = new EnsureInternetContractService(csRepo, catalogRepo);
 
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
@@ -162,18 +169,19 @@ async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: Rad
     undefined, // sessionRepo: stateless en tests
     requirePerm,
     new ListPppoeByContract(pppoeRepo),
-    new CreatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator),
+    new CreatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator, ensure),
     new UpdatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator),
     new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepo),
-    new DeactivatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator),
+    new DeactivatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator, ensure),
     enforce,
     preview,
     runner,
     batchRepo,
     new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator),
-    new AssociatePppoeToContract(pppoeRepo),
+    new AssociatePppoeToContract(pppoeRepo, ensure),
     new GetPppoeCredentials(pppoeRepo),
     new ListUnassignedPppoe(pppoeRepo),
+    new DeassociatePppoeFromContract(pppoeRepo, ensure),
   ));
   app.use(errorHandler);
 

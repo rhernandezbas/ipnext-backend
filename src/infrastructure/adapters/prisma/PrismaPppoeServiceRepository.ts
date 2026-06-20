@@ -78,6 +78,16 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     }
   }
 
+  async clearContractId(id: string): Promise<PppoeService | null> {
+    try {
+      const row = await model().update({ where: { id }, data: { contractId: null } });
+      return toEntity(row);
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
   async setEnforcedState(id: string, state: EnforcedState): Promise<PppoeService | null> {
     try {
       const row = await model().update({ where: { id }, data: { enforcedState: state } });

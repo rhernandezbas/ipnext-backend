@@ -22,6 +22,10 @@ import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
 import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
 import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
+import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { InMemoryServiceCutBatchRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCutBatchRepository';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
@@ -118,6 +122,7 @@ async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> 
   const nasRepo   = new InMemoryNasRepository();
   const batchRepo = new InMemoryServiceCutBatchRepository();
   const lock      = new InMemoryDistributedLock();
+  const ensure    = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
 
   const enforce = new EnforcePppoeService(pppoeRepo, new RouterOsEnforcementAdapter(router, 'IP-REDUCCION'), nasRepo);
   const preview = new PreviewEnforcement(pppoeRepo);
@@ -134,18 +139,19 @@ async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> 
     undefined, // sessionRepo: stateless en tests
     requirePerm,
     new ListPppoeByContract(pppoeRepo),
-    new CreatePppoeService(pppoeRepo, router, nasRepo, new InMemoryRadiusOrchestratorGateway()),
+    new CreatePppoeService(pppoeRepo, router, nasRepo, new InMemoryRadiusOrchestratorGateway(), ensure),
     new UpdatePppoeService(pppoeRepo, router, nasRepo, new InMemoryRadiusOrchestratorGateway()),
     new MovePppoeServiceToRouter(pppoeRepo, router, nasRepo),
-    new DeactivatePppoeService(pppoeRepo, router, nasRepo, new InMemoryRadiusOrchestratorGateway()),
+    new DeactivatePppoeService(pppoeRepo, router, nasRepo, new InMemoryRadiusOrchestratorGateway(), ensure),
     enforce,
     preview,
     runner,
     batchRepo,
     new IngestPppoeFromNas(pppoeRepo, nasRepo, new InMemoryRadiusOrchestratorGateway()),
-    new AssociatePppoeToContract(pppoeRepo),
+    new AssociatePppoeToContract(pppoeRepo, ensure),
     new GetPppoeCredentials(pppoeRepo),
     new ListUnassignedPppoe(pppoeRepo),
+    new DeassociatePppoeFromContract(pppoeRepo, ensure),
   ));
   app.use(errorHandler);
 

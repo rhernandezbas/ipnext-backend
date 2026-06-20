@@ -3,7 +3,8 @@ import { PppoeServiceRepository, PppoeServiceUpsert } from '@domain/ports/PppoeS
 import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
-import { NasNotFoundError, PppoeUsernameTakenError, PppoeProfileRequiredError } from '@domain/errors/pppoe';
+import { NasNotFoundError, PppoeUsernameTakenError, PppoeProfileRequiredError, PppoeContractAlreadyHasServiceError } from '@domain/errors/pppoe';
+import { EnsureInternetContractService } from './EnsureInternetContractService';
 import { toNasTarget } from './nasTarget';
 
 export interface CreatePppoeServiceInput {
@@ -24,6 +25,11 @@ export interface CreatePppoeServiceInput {
  *   - `mikrotik_radius` (NAS migrado a RADIUS) → `orchestrator.createUser` (POST /users:
  *     radcheck + radusergroup + radreply Framed-IP-Address). El `profile` ES el plan/grupo RADIUS.
  *   - resto (`mikrotik_api`, …) → `router.createSecret` (RouterOS `/ppp secret`), como siempre.
+ *
+ * Guard #4 (pppoe-contract-integrity): cuando `contractId != null`, antes de tocar la DB,
+ * verifica que el contrato no tenga ya un PPPoE 'enabled' → PppoeContractAlreadyHasServiceError.
+ *
+ * Post-alta: llama ensureInternet(contractId, true) best-effort cuando hay contractId.
  */
 export class CreatePppoeService {
   constructor(
@@ -31,6 +37,7 @@ export class CreatePppoeService {
     private readonly router: PppoeRouterGateway,
     private readonly nasRepo: NasRepository,
     private readonly orchestrator: RadiusOrchestratorGateway,
+    private readonly ensureInternet: EnsureInternetContractService,
   ) {}
 
   async execute(input: CreatePppoeServiceInput): Promise<PppoeService> {
@@ -49,6 +56,15 @@ export class CreatePppoeService {
     // 2b. Un usuario RADIUS NECESITA su grupo/plan (radusergroup): sin `profile` no hay alta.
     //     Validar ANTES de tocar la DB → no dejamos filas `pending` huérfanas por un input inválido.
     if (isRadius && !profile) throw new PppoeProfileRequiredError(input.username);
+
+    // 2c. Guard #4: si el contrato tiene ya un PPPoE enabled, rechazar ANTES de tocar la DB.
+    if (input.contractId != null) {
+      const existing = await this.repo.findByContract(input.contractId);
+      const activeExisting = existing.find(p => p.status === 'enabled');
+      if (activeExisting) {
+        throw new PppoeContractAlreadyHasServiceError(input.contractId, activeExisting.id);
+      }
+    }
 
     const base: PppoeServiceUpsert = {
       username: input.username,
@@ -77,6 +93,17 @@ export class CreatePppoeService {
         remoteAddress,
       });
     }
-    return this.repo.upsertByUsername({ ...base, status: 'enabled' });
+    const result = await this.repo.upsertByUsername({ ...base, status: 'enabled' });
+
+    // 4. Best-effort: la línea INTERNET del contrato queda active.
+    if (input.contractId != null) {
+      try {
+        await this.ensureInternet.execute(input.contractId, true);
+      } catch (err) {
+        console.warn('[CreatePppoeService] ensureInternet(true) falló (best-effort):', err);
+      }
+    }
+
+    return result;
   }
 }

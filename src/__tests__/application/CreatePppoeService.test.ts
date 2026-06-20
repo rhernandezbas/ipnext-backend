@@ -9,6 +9,9 @@ import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemo
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { PppoeUsernameTakenError, RouterUnreachableError, NasNotFoundError, PppoeProfileRequiredError } from '@domain/errors/pppoe';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 
 // nasId '1' del seed in-memory → ipAddress 192.168.1.1, apiPort 8728 (mikrotik_api → router directo)
 const NAS1 = { ipAddress: '192.168.1.1', apiPort: 8728 };
@@ -26,7 +29,8 @@ describe('CreatePppoeService', () => {
     router = new InMemoryRouterGateway();
     nasRepo = new InMemoryNasRepository();
     orchestrator = new InMemoryRadiusOrchestratorGateway();
-    uc = new CreatePppoeService(repo, router, nasRepo, orchestrator);
+    const ensure = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+    uc = new CreatePppoeService(repo, router, nasRepo, orchestrator, ensure);
   });
 
   it('alta exitosa: PppoeService enabled + secret en el router', async () => {
@@ -42,7 +46,8 @@ describe('CreatePppoeService', () => {
 
   it('router caído: la fila queda pending + RouterUnreachableError (sin "OK" mentiroso)', async () => {
     router = new InMemoryRouterGateway({ unreachable: ['192.168.1.1'] });
-    uc = new CreatePppoeService(repo, router, nasRepo, orchestrator);
+    const ensure = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+    uc = new CreatePppoeService(repo, router, nasRepo, orchestrator, ensure);
     await expect(uc.execute({ contractId: 'C1', username: 'juanperez', password: 'p', nasId: '1' }))
       .rejects.toBeInstanceOf(RouterUnreachableError);
     const row = await repo.findByUsername('juanperez');
@@ -83,7 +88,8 @@ describe('CreatePppoeService', () => {
 
   it('mikrotik_radius orchestrator caído: la fila queda pending + error propaga', async () => {
     orchestrator = new InMemoryRadiusOrchestratorGateway({ unreachable: ['juanperez'] });
-    uc = new CreatePppoeService(repo, router, nasRepo, orchestrator);
+    const ensure2 = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+    uc = new CreatePppoeService(repo, router, nasRepo, orchestrator, ensure2);
     await expect(uc.execute({ contractId: 'C1', username: 'juanperez', password: 'p', profile: 'IP-Air-30-10', nasId: '3' }))
       .rejects.toThrow();
     const row = await repo.findByUsername('juanperez');

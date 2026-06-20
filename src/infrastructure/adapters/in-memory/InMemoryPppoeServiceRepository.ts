@@ -87,6 +87,13 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     return { ...found };
   }
 
+  async clearContractId(id: string): Promise<PppoeService | null> {
+    const found = this.store.find(s => s.id === id);
+    if (!found) return null;
+    found.contractId = null;
+    return { ...found };
+  }
+
   async setEnforcedState(id: string, state: EnforcedState): Promise<PppoeService | null> {
     const found = this.store.find(s => s.id === id);
     if (!found) return null;

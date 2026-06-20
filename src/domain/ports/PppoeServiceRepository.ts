@@ -30,6 +30,12 @@ export interface PppoeServiceRepository {
    * Devuelve la entidad actualizada, o null si el PPPoE no existe.
    */
   setContractId(id: string, contractId: string): Promise<PppoeService | null>;
+  /**
+   * Desasocia un PPPoE de su contrato seteando `contractId=null`. NO toca el `status` ni el
+   * secret RADIUS (el PPPoE sigue 'enabled', vuelve a ser huérfano re-asociable).
+   * Devuelve la entidad actualizada, o null si el PPPoE no existe.
+   */
+  clearContractId(id: string): Promise<PppoeService | null>;
 
   // ── Fase C (enforcement) ───────────────────────────────────────────────────
   /**

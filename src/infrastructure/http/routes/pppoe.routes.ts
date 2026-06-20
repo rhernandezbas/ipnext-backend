@@ -11,6 +11,7 @@
  *   GET    /api/pppoe/unassigned                  pppoe.read    (huérfanos, sin password)
  *   POST   /api/nas/:id/ingest-pppoe              pppoe.manage  (adopta el inventario del NAS)
  *   POST   /api/pppoe/:id/associate              pppoe.manage  (asocia a un contrato)
+ *   DELETE /api/contracts/:contractId/pppoe/:pppoeId  pppoe.manage  (desasocia: contractId=null, sin baja)
  *   GET    /api/pppoe/:id/credentials            pppoe.manage  (revela {username, password})
  *   --- Fase C (cortes) ---
  *   POST   /api/pppoe/enforce/preview            pppoe.cut   (impacto, sin ejecutar)
@@ -43,6 +44,7 @@ import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
 import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
 import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
+import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
 import type { ServiceCutRunner } from '@infrastructure/scheduling/ServiceCutRunner';
 import type { ServiceCutBatchRepository } from '@domain/ports/ServiceCutBatchRepository';
 import {
@@ -63,6 +65,7 @@ import {
   PppoeProfileRequiredError,
   PppoeServiceNotFoundError,
   PppoeAlreadyAssociatedError,
+  PppoeContractAlreadyHasServiceError,
   PppoeIngestNotSupportedError,
   NasNotFoundError,
 } from '@domain/errors/pppoe';
@@ -86,6 +89,7 @@ export function createPppoeRouter(
   associatePppoeToContract: AssociatePppoeToContract,
   getPppoeCredentials: GetPppoeCredentials,
   listUnassignedPppoe: ListUnassignedPppoe,
+  deassociatePppoeFromContract: DeassociatePppoeFromContract,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -135,6 +139,11 @@ export function createPppoeRouter(
           return;
         }
         if (err instanceof PppoeUsernameTakenError) {
+          res.status(409).json({ code: err.code, error: err.message });
+          return;
+        }
+        // El contrato ya tiene un PPPoE activo → 409.
+        if (err instanceof PppoeContractAlreadyHasServiceError) {
           res.status(409).json({ code: err.code, error: err.message });
           return;
         }
@@ -219,6 +228,33 @@ export function createPppoeRouter(
         // Ya asociado a OTRO contrato → 409 (mover requiere desasociar primero).
         if (err instanceof PppoeAlreadyAssociatedError) {
           res.status(409).json({ code: err.code, error: err.message });
+          return;
+        }
+        // El contrato ya tiene un PPPoE activo → 409.
+        if (err instanceof PppoeContractAlreadyHasServiceError) {
+          res.status(409).json({ code: err.code, error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  // ── DELETE /contracts/:contractId/pppoe/:pppoeId — desasocia sin tocar el secret ─
+  router.delete(
+    '/contracts/:contractId/pppoe/:pppoeId',
+    auth,
+    canManage,
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const service = await deassociatePppoeFromContract.execute(
+          req.params['pppoeId'] as string,
+          req.params['contractId'] as string,
+        );
+        res.json(toPppoeServiceDto(service));
+      } catch (err) {
+        if (err instanceof PppoeServiceNotFoundError) {
+          res.status(404).json({ code: err.code, error: err.message });
           return;
         }
         throw err;

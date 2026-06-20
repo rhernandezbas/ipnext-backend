@@ -107,4 +107,13 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
   it('(g) createPppoeRouter recibe sessionRepo (auth STATEFUL — sesión revocada no puede cortar)', () => {
     expect(appSrc).toMatch(/createPppoeRouter\(\s*authAdapter,\s*sessionRepo/);
   });
+
+  // ── pppoe-contract-integrity (#1/#2/#4) ────────────────────────────────────
+  it('(h) EnsureInternetContractService está wired (helper de reconcile INTERNET)', () => {
+    expect(appSrc).toMatch(/new EnsureInternetContractService\(/);
+  });
+
+  it('(h) DeassociatePppoeFromContract está wired', () => {
+    expect(appSrc).toMatch(/new DeassociatePppoeFromContract\(/);
+  });
 });

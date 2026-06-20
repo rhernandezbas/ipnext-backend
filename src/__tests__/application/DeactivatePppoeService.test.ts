@@ -11,6 +11,9 @@ import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemo
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { PppoeServiceNotFoundError, NasNotFoundError } from '@domain/errors/pppoe';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 
 const NAS1 = { ipAddress: '192.168.1.1', apiPort: 8728 };
 const NAS3 = { ipAddress: '10.0.0.5', apiPort: 8728 };
@@ -27,7 +30,8 @@ describe('DeactivatePppoeService', () => {
     router = new InMemoryRouterGateway();
     nasRepo = new InMemoryNasRepository();
     orchestrator = new InMemoryRadiusOrchestratorGateway();
-    uc = new DeactivatePppoeService(repo, router, nasRepo, orchestrator);
+    const ensure = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+    uc = new DeactivatePppoeService(repo, router, nasRepo, orchestrator, ensure);
   });
 
   it('mikrotik_radius: orchestrator.suspend y NO toca el router; DB status=disabled', async () => {

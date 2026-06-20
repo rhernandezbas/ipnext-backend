@@ -11,10 +11,13 @@ import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
 import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
 import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
 
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 
 import {
   NasNotFoundError,
@@ -100,7 +103,8 @@ describe('AssociatePppoeToContract', () => {
   it('setea el contractId de un PPPoE huérfano', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     const orphan = await repo.upsertByUsername({ username: 'u1', password: 'p', nasId: RADIUS_NAS, contractId: null });
-    const uc = new AssociatePppoeToContract(repo);
+    const ensure = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+    const uc = new AssociatePppoeToContract(repo, ensure);
 
     const updated = await uc.execute(orphan.id, 'C42');
 
@@ -110,21 +114,24 @@ describe('AssociatePppoeToContract', () => {
 
   it('PPPoE inexistente → PppoeServiceNotFoundError', async () => {
     const repo = new InMemoryPppoeServiceRepository();
-    const uc = new AssociatePppoeToContract(repo);
+    const ensure = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+    const uc = new AssociatePppoeToContract(repo, ensure);
     await expect(uc.execute('no-existe', 'C1')).rejects.toBeInstanceOf(PppoeServiceNotFoundError);
   });
 
   it('ya asociado a OTRO contrato → PppoeAlreadyAssociatedError (409)', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     const s = await repo.upsertByUsername({ username: 'u1', password: 'p', nasId: RADIUS_NAS, contractId: 'C1' });
-    const uc = new AssociatePppoeToContract(repo);
+    const ensure = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+    const uc = new AssociatePppoeToContract(repo, ensure);
     await expect(uc.execute(s.id, 'C2')).rejects.toBeInstanceOf(PppoeAlreadyAssociatedError);
   });
 
   it('re-asociar al MISMO contrato es idempotente (no lanza)', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     const s = await repo.upsertByUsername({ username: 'u1', password: 'p', nasId: RADIUS_NAS, contractId: 'C1' });
-    const uc = new AssociatePppoeToContract(repo);
+    const ensure = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+    const uc = new AssociatePppoeToContract(repo, ensure);
     const updated = await uc.execute(s.id, 'C1');
     expect(updated.contractId).toBe('C1');
   });
