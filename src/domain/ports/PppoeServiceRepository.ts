@@ -26,6 +26,19 @@ export interface PppoeServiceRepository {
    */
   findAssigned(): Promise<PppoeService[]>;
   /**
+   * PPPoE ASIGNADOS paginados. Misma condición base que `findAssigned` más filtros opcionales.
+   * - `search`: coincidencia parcial case-insensitive sobre username, remoteAddress o contractId.
+   * - `nasId`: filtro exacto por nasId.
+   * - Orden estable: username asc.
+   * - `total` = count con el MISMO where (sin skip/take), para el paginador del FE.
+   */
+  findAssignedPaginated(params: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    nasId?: string;
+  }): Promise<{ data: PppoeService[]; total: number }>;
+  /**
    * Asocia un PPPoE a un contrato seteando SOLO su `contractId` (no toca password/profile/etc.).
    * Devuelve la entidad actualizada, o null si el PPPoE no existe.
    */

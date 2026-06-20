@@ -84,10 +84,18 @@ export function createIpNetworkRouter(
     res.status(204).send();
   });
 
-  // IP Assignments — Bug 3: fuente = PppoeService (asignados: contractId+IP+enabled)
-  router.get('/ip-assignments', auth, canRead, async (_req: Request, res: Response): Promise<void> => {
-    const assignments = await listPppoeAssignments.execute();
-    res.json(assignments);
+  // IP Assignments — fuente = PppoeService (asignados: contractId+IP+enabled). Paginado.
+  router.get('/ip-assignments', auth, canRead, async (req: Request, res: Response): Promise<void> => {
+    const rawPage     = parseInt(String(req.query['page']     ?? '1'),  10);
+    const rawPageSize = parseInt(String(req.query['pageSize'] ?? '25'), 10);
+    const search      = req.query['search'] ? String(req.query['search'])  : undefined;
+    const nasId       = req.query['nasId']  ? String(req.query['nasId'])   : undefined;
+
+    const page     = Math.max(1,   isNaN(rawPage)     ? 1  : rawPage);
+    const pageSize = Math.min(200, Math.max(1, isNaN(rawPageSize) ? 25 : rawPageSize));
+
+    const result = await listPppoeAssignments.execute({ page, pageSize, search, nasId });
+    res.json(result);
   });
 
   // IPv6 Networks

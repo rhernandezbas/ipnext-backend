@@ -59,7 +59,9 @@ describe('InMemoryPppoeServiceRepository.findAssigned()', () => {
   });
 });
 
-describe('ListPppoeAssignments — DTO shape (Bug 3)', () => {
+const DEFAULT_PARAMS = { page: 1, pageSize: 100 };
+
+describe('ListPppoeAssignments — DTO shape (Bug 3) + paginación', () => {
   it('mapea a PppoeAssignmentDto con shape exacto del contrato FE', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     const s = await repo.upsertByUsername({
@@ -73,10 +75,11 @@ describe('ListPppoeAssignments — DTO shape (Bug 3)', () => {
     });
 
     const uc = new ListPppoeAssignments(repo);
-    const result = await uc.execute();
+    const result = await uc.execute(DEFAULT_PARAMS);
 
-    expect(result).toHaveLength(1);
-    const dto = result[0];
+    expect(result.total).toBe(1);
+    expect(result.data).toHaveLength(1);
+    const dto = result.data[0];
 
     // Contrato FE: { id, ip, username, contractId, profile, nasId, status, createdAt }
     expect(dto.id).toBe(s.id);
@@ -92,6 +95,16 @@ describe('ListPppoeAssignments — DTO shape (Bug 3)', () => {
     expect((dto as any).password).toBeUndefined();
   });
 
+  it('propaga page y pageSize en el resultado', async () => {
+    const repo = new InMemoryPppoeServiceRepository();
+    const uc = new ListPppoeAssignments(repo);
+    const result = await uc.execute({ page: 3, pageSize: 10 });
+    expect(result.page).toBe(3);
+    expect(result.pageSize).toBe(10);
+    expect(result.total).toBe(0);
+    expect(result.data).toHaveLength(0);
+  });
+
   it('profile null se preserva como null en el DTO', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     await repo.upsertByUsername({
@@ -100,9 +113,9 @@ describe('ListPppoeAssignments — DTO shape (Bug 3)', () => {
     });
 
     const uc = new ListPppoeAssignments(repo);
-    const result = await uc.execute();
+    const result = await uc.execute(DEFAULT_PARAMS);
 
-    expect(result[0].profile).toBeNull();
+    expect(result.data[0].profile).toBeNull();
   });
 
   it('excluye huérfanos y sin-IP del resultado del use case', async () => {
@@ -115,9 +128,9 @@ describe('ListPppoeAssignments — DTO shape (Bug 3)', () => {
     await repo.upsertByUsername({ username: 'no-ip', password: 'p', nasId: NAS_ID, contractId: 'C2', remoteAddress: null, status: 'enabled' });
 
     const uc = new ListPppoeAssignments(repo);
-    const result = await uc.execute();
+    const result = await uc.execute(DEFAULT_PARAMS);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].username).toBe('good');
+    expect(result.total).toBe(1);
+    expect(result.data[0].username).toBe('good');
   });
 });
