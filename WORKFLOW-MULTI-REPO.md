@@ -52,7 +52,7 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 
 ## Proceso — SDD OBLIGATORIO (siempre)
 
-> **TODO cambio pasa por SDD** (decision del usuario, 2026-06-20), grande o chico — NUNCA el "flujo directo" (codear sin specs). Flujo: **explore -> proposal -> specs -> design -> tasks -> apply -> `sdd-verify` -> archive**, con artefactos en `openspec/`. El plan (proposal/specs/design/tasks) se hace y se CONFIRMA con el usuario ANTES de implementar; `sdd-apply` produce el codigo; `sdd-verify` (matriz de spec-compliance: cada scenario con su test verde) corre ANTES del push; `sdd-archive` al cerrar. **SDD Init Guard**: antes de arrancar cualquier change, verificar que `sdd-init` se corrio para el proyecto (si no, correrlo). Esto ELEVA a regla universal las menciones condicionales de SDD ("en cambios SDD...") que aparecen mas abajo: ya no es condicional, es para todo cambio.
+> **TODO cambio pasa por SDD** (decision del usuario, 2026-06-20), grande o chico — NUNCA el "flujo directo" (codear sin specs). Flujo: **explore -> proposal -> specs -> design -> tasks -> apply -> `sdd-verify` -> archive**, con artefactos en `openspec/`. El plan (proposal/specs/design/tasks) se hace y se CONFIRMA con el usuario ANTES de implementar; `sdd-apply` produce el codigo; `sdd-verify` (matriz de spec-compliance: cada scenario con su test verde) corre ANTES del push; `sdd-archive` al cerrar. **SDD Init Guard**: antes de arrancar cualquier change, verificar que `sdd-init` se corrio para el proyecto (si no, correrlo). Esto ELEVA a regla universal las menciones condicionales de SDD ("en cambios SDD...") que aparecen mas abajo: ya no es condicional, es para todo cambio. Y el **review adversarial** (sección "El loop fix→review", abajo) tambien es OBLIGATORIO para TODO cambio, no solo los riesgosos: lo que escala por riesgo es el TAMAÑO del review, nunca el SI.
 
 ## Verificación
 
@@ -94,7 +94,7 @@ codear → verify (suite + tsc, corrido POR EL ORQUESTADOR, no confiar en el rep
        → CLEAN → commit → dry-run rolled-back de la migración vs prod → deploy
 ```
 
-Calibración del tamaño del review por riesgo: **4 revisores** con focos separados (migración/staging ·
+**El review adversarial es OBLIGATORIO para TODO cambio** (decision del usuario, 2026-06-20): lo que se calibra por riesgo es el TAMAÑO, no el SI — el piso es **1 revisor focalizado SIEMPRE** (incluso FE puro / aditivos / docs). Para cambios riesgosos, **4 revisores** con focos separados (migración/staging ·
 mutación/concurrencia · tests · wiring/contrato) para waves que mutan stock (W4, W6); **1 revisor
 focalizado** para waves aditivas/clones (W5a, W5b); el loop corre las veces que haga falta (la W1
 necesitó 5 olas de fix + 3 análisis hasta IMPECABLE).
