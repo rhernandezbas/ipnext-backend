@@ -89,6 +89,8 @@ jobs:
             -e ROUTER_SSH_USER="prominense-be" \
             -e ROUTER_SSH_PORT="2026" \
             -e ROUTER_REDUCED_PROFILE="IP-REDUCCION" \
+            -e ORCHESTRATOR_BASE_URL="${{ secrets.ORCHESTRATOR_BASE_URL }}" \
+            -e ORCHESTRATOR_API_TOKEN="${{ secrets.ORCHESTRATOR_API_TOKEN }}" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
