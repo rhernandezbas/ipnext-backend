@@ -72,6 +72,14 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     );
   }
 
+  async changePassword(username: string, password: string): Promise<void> {
+    await this.call(() => this.http.post(this.path(username, '/password'), { password }));
+  }
+
+  async changeFramedIp(username: string, framedIp: string | null): Promise<void> {
+    await this.call(() => this.http.post(this.path(username, '/framed-ip'), { framed_ip: framedIp }));
+  }
+
   async suspend(username: string, opts?: SuspendOptions): Promise<void> {
     await this.call(() =>
       this.http.post(this.path(username, '/suspend'), {

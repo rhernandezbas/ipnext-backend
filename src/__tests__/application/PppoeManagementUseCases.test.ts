@@ -9,6 +9,7 @@ import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract'
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { PppoeServiceNotFoundError, RouterUnreachableError, NasNotFoundError } from '@domain/errors/pppoe';
 
 const NAS1 = { ipAddress: '192.168.1.1', apiPort: 8728 }; // seed id '1'
@@ -18,11 +19,13 @@ describe('PPPoE management use cases', () => {
   let repo: InMemoryPppoeServiceRepository;
   let router: InMemoryRouterGateway;
   let nasRepo: InMemoryNasRepository;
+  let orchestrator: InMemoryRadiusOrchestratorGateway;
 
   beforeEach(() => {
     repo = new InMemoryPppoeServiceRepository();
     router = new InMemoryRouterGateway();
     nasRepo = new InMemoryNasRepository();
+    orchestrator = new InMemoryRadiusOrchestratorGateway();
   });
 
   const seed = (over: Partial<{ username: string; contractId: string | null; status: string }> = {}) =>
@@ -32,7 +35,7 @@ describe('PPPoE management use cases', () => {
     it('edita el profile en el router y en la DB', async () => {
       const s = await seed();
       await router.createSecret(NAS1, { username: 'juan', password: 'p', profile: 'IP-Air-30-10' });
-      const uc = new UpdatePppoeService(repo, router, nasRepo);
+      const uc = new UpdatePppoeService(repo, router, nasRepo, orchestrator);
       const updated = await uc.execute({ id: s.id, profile: 'IP-Air-50-50' });
       expect(updated.profile).toBe('IP-Air-50-50');
       expect((await router.listSecrets(NAS1))[0]!.profile).toBe('IP-Air-50-50');
@@ -41,13 +44,13 @@ describe('PPPoE management use cases', () => {
     it('router caído → la DB NO cambia', async () => {
       const s = await seed();
       const down = new InMemoryRouterGateway({ unreachable: ['192.168.1.1'] });
-      const uc = new UpdatePppoeService(repo, down, nasRepo);
+      const uc = new UpdatePppoeService(repo, down, nasRepo, orchestrator);
       await expect(uc.execute({ id: s.id, profile: 'X' })).rejects.toBeInstanceOf(RouterUnreachableError);
       expect((await repo.findById(s.id))!.profile).toBe('IP-Air-30-10');
     });
 
     it('inexistente → PppoeServiceNotFoundError', async () => {
-      const uc = new UpdatePppoeService(repo, router, nasRepo);
+      const uc = new UpdatePppoeService(repo, router, nasRepo, orchestrator);
       await expect(uc.execute({ id: 'nope', profile: 'X' })).rejects.toBeInstanceOf(PppoeServiceNotFoundError);
     });
   });
@@ -56,7 +59,7 @@ describe('PPPoE management use cases', () => {
     it('baja soft: disabled en el router + status disabled en DB', async () => {
       const s = await seed();
       await router.createSecret(NAS1, { username: 'juan', password: 'p' });
-      const uc = new DeactivatePppoeService(repo, router, nasRepo);
+      const uc = new DeactivatePppoeService(repo, router, nasRepo, orchestrator);
       const r = await uc.execute(s.id);
       expect(r.status).toBe('disabled');
       expect((await router.listSecrets(NAS1))[0]!.disabled).toBe(true);

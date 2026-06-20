@@ -65,6 +65,24 @@ describe('HttpRadiusOrchestratorGateway (Inc3b — cliente HTTP real, espeja la 
     expect(http.post).toHaveBeenCalledWith('/users/JoseMassaMerc/reactivate', {});
   });
 
+  it('changePassword → POST /users/{u}/password con {password}', async () => {
+    const { http, gw } = fakeHttp();
+    await gw.changePassword('JoseMassaMerc', 'nuevaPass123');
+    expect(http.post).toHaveBeenCalledWith('/users/JoseMassaMerc/password', { password: 'nuevaPass123' });
+  });
+
+  it('changeFramedIp → POST /users/{u}/framed-ip con {framed_ip}', async () => {
+    const { http, gw } = fakeHttp();
+    await gw.changeFramedIp('JoseMassaMerc', '100.64.10.20');
+    expect(http.post).toHaveBeenCalledWith('/users/JoseMassaMerc/framed-ip', { framed_ip: '100.64.10.20' });
+  });
+
+  it('changeFramedIp con null → POST /users/{u}/framed-ip con {framed_ip: null} (IP del pool)', async () => {
+    const { http, gw } = fakeHttp();
+    await gw.changeFramedIp('JoseMassaMerc', null);
+    expect(http.post).toHaveBeenCalledWith('/users/JoseMassaMerc/framed-ip', { framed_ip: null });
+  });
+
   it('listSessions → GET /users/{u}/sessions y mapea snake_case → camelCase', async () => {
     const { gw } = fakeHttp({
       get: jest.fn().mockResolvedValue({

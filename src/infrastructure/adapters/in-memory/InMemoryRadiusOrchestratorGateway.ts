@@ -10,6 +10,8 @@ import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain
 interface UserState {
   plan: string;
   suspended: boolean;
+  password?: string;
+  framedIp?: string | null;
 }
 
 export interface InMemoryOrchestratorSeed {
@@ -20,7 +22,7 @@ export interface InMemoryOrchestratorSeed {
 }
 
 interface UserCallLog {
-  op: 'createUser' | 'changePlan' | 'suspend' | 'reactivate' | 'disconnectSessions';
+  op: 'createUser' | 'changePlan' | 'changePassword' | 'changeFramedIp' | 'suspend' | 'reactivate' | 'disconnectSessions';
   username: string;
   arg?: unknown;
 }
@@ -144,6 +146,18 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     this.upsert(username).plan = plan;
   }
 
+  async changePassword(username: string, password: string): Promise<void> {
+    this.guardUser(username);
+    this.calls.push({ op: 'changePassword', username, arg: { password } });
+    this.upsert(username).password = password;
+  }
+
+  async changeFramedIp(username: string, framedIp: string | null): Promise<void> {
+    this.guardUser(username);
+    this.calls.push({ op: 'changeFramedIp', username, arg: { framedIp } });
+    this.upsert(username).framedIp = framedIp;
+  }
+
   async suspend(username: string, opts?: SuspendOptions): Promise<void> {
     this.guardUser(username);
     this.calls.push({ op: 'suspend', username, arg: opts });
@@ -194,6 +208,12 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   }
   planOf(username: string): string | undefined {
     return this.state.get(username)?.plan;
+  }
+  passwordOf(username: string): string | undefined {
+    return this.state.get(username)?.password;
+  }
+  framedIpOf(username: string): string | null | undefined {
+    return this.state.get(username)?.framedIp;
   }
   isSuspended(username: string): boolean {
     return this.state.get(username)?.suspended ?? false;

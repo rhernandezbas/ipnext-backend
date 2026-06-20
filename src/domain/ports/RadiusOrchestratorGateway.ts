@@ -3,6 +3,8 @@
  * `10.75.0.20:8080`). Espeja FIEL la API REAL del orchestrator (v0.1.0, verificada en vivo):
  *
  *   POST   /users/{username}/plan         → changePlan(username, plan, {applyInSession})
+ *   POST   /users/{username}/password     → changePassword(username, password)
+ *   POST   /users/{username}/framed-ip    → changeFramedIp(username, framedIp)
  *   POST   /users/{username}/suspend      → suspend(username, {disconnectActiveSessions, reason})
  *   POST   /users/{username}/reactivate   → reactivate(username)
  *   GET    /users/{username}/sessions     → listSessions(username)
@@ -52,6 +54,17 @@ export interface RadiusOrchestratorGateway {
    */
   createUser(input: CreateRadiusUserInput): Promise<void>;
   changePlan(username: string, plan: string, opts?: ChangePlanOptions): Promise<void>;
+  /**
+   * Cambia la contraseña del usuario en el RADIUS (radcheck Cleartext-Password).
+   * Corresponde a `POST /users/{username}/password` con body `{ password }`.
+   */
+  changePassword(username: string, password: string): Promise<void>;
+  /**
+   * Cambia la IP fija del usuario en el RADIUS (radreply Framed-IP-Address).
+   * `null` → libera la IP fija y el usuario toma IP del pool.
+   * Corresponde a `POST /users/{username}/framed-ip` con body `{ framed_ip }`.
+   */
+  changeFramedIp(username: string, framedIp: string | null): Promise<void>;
   suspend(username: string, opts?: SuspendOptions): Promise<void>;
   reactivate(username: string): Promise<void>;
   listSessions(username: string): Promise<OrchestratorSession[]>;
