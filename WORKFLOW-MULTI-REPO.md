@@ -50,6 +50,10 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
    ```
    (patrón `ON CONFLICT (columna) DO NOTHING`, nunca `ON CONFLICT ON CONSTRAINT <indice>`).
 
+## Proceso — SDD OBLIGATORIO (siempre)
+
+> **TODO cambio pasa por SDD** (decision del usuario, 2026-06-20), grande o chico — NUNCA el "flujo directo" (codear sin specs). Flujo: **explore -> proposal -> specs -> design -> tasks -> apply -> `sdd-verify` -> archive**, con artefactos en `openspec/`. El plan (proposal/specs/design/tasks) se hace y se CONFIRMA con el usuario ANTES de implementar; `sdd-apply` produce el codigo; `sdd-verify` (matriz de spec-compliance: cada scenario con su test verde) corre ANTES del push; `sdd-archive` al cerrar. **SDD Init Guard**: antes de arrancar cualquier change, verificar que `sdd-init` se corrio para el proyecto (si no, correrlo). Esto ELEVA a regla universal las menciones condicionales de SDD ("en cambios SDD...") que aparecen mas abajo: ya no es condicional, es para todo cambio.
+
 ## Verificación
 
 > **REGLA DE ORO — INNEGOCIABLE: VERIFY ANTES DE DEPLOY.** Nunca pushear/mergear a `main` (= producción)
