@@ -141,6 +141,17 @@ export const config = {
      */
     bulkThrottleMs: parseInt(process.env.ROUTER_BULK_THROTTLE_MS || '300', 10),
     bulkConcurrency: parseInt(process.env.ROUTER_BULK_CONCURRENCY || '8', 10),
+    /**
+     * SSH al router para LEER las IPs asignadas (allocator / FindFreeIp). La API node-routeros
+     * (8728) CUELGA contra RouterOS 7.x al hacer `/ppp secret print`; SSH responde al instante.
+     * Opt-in (NO fail-fast, patrón apiUser/uisp): si falta la key, `listAssignedIps` falla al
+     * conectar con RouterUnreachableError (la ruta lo mapea a 502), pero la app arranca igual.
+     * - sshKey: PEM completo de la private key (ROUTER_SSH_KEY). undefined si no está seteada.
+     * - sshUser/sshPort: mismas credenciales para los 13 routers; el host sale del NasServer.
+     */
+    sshKey: process.env.ROUTER_SSH_KEY || undefined,
+    sshUser: process.env.ROUTER_SSH_USER || 'ronald',
+    sshPort: parseInt(process.env.ROUTER_SSH_PORT || '2026', 10),
   },
 
   /**

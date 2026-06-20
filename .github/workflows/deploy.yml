@@ -85,6 +85,9 @@ jobs:
             -e UISP_TOKEN="${{ secrets.UISP_TOKEN }}" \
             -e ROUTER_API_USER="${{ secrets.ROUTER_API_USER }}" \
             -e ROUTER_API_PASSWORD="${{ secrets.ROUTER_API_PASSWORD }}" \
+            -e ROUTER_SSH_KEY="${{ secrets.ROUTER_SSH_KEY }}" \
+            -e ROUTER_SSH_USER="prominense-be" \
+            -e ROUTER_SSH_PORT="2026" \
             -e ROUTER_REDUCED_PROFILE="IP-REDUCCION" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend

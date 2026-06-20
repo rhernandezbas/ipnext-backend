@@ -1,4 +1,5 @@
 import { RouterOSAPI } from 'node-routeros';
+import { Client } from 'ssh2';
 import {
   ActiveSession,
   NasTarget,
@@ -8,6 +9,33 @@ import {
 } from '@domain/ports/PppoeRouterGateway';
 import { RouterUnreachableError } from '@domain/errors/pppoe';
 import { config } from '@infrastructure/config';
+
+/** Timeout duro (ms) para toda la operación SSH de lectura de IPs. */
+const SSH_TIMEOUT_MS = 15_000;
+
+/**
+ * Parser PURO de la salida de `/ppp secret print terse without-paging` (RouterOS).
+ * Devuelve la lista de `remote-address` NO vacíos, uno por secret.
+ *
+ * Formato `terse`: una fila por secret, tokens `clave=valor` separados por espacios, con un
+ * prefijo de índice + flags (ej. ` 0   ` / ` 0 X `). Un secret con IP dinámica del pool NO trae
+ * el token `remote-address` → se omite. `remote-address=""` o vacío también se omite.
+ *
+ * Exportado para testear sin abrir ninguna conexión (los tests del allocator usan el in-memory).
+ */
+export function parsePppSecretRemoteAddresses(output: string): string[] {
+  const result: string[] = [];
+  for (const rawLine of output.split('\n')) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
+    // remote-address=<valor>, donde <valor> va hasta el próximo espacio (terse no escapa IPs).
+    const match = /(?:^|\s)remote-address=("?)([^"\s]*)\1/.exec(line);
+    if (!match) continue;
+    const ip = match[2];
+    if (ip.length > 0) result.push(ip);
+  }
+  return result;
+}
 
 /**
  * RouterOsGateway — adapter real del PppoeRouterGateway sobre RouterOS API (node-routeros).
@@ -73,14 +101,76 @@ export class RouterOsGateway implements PppoeRouterGateway {
     });
   }
 
+  /**
+   * IPs asignadas en el router vía SSH (NO node-routeros): lee los `remote-address` de
+   * `/ppp secret`. La API 8728 CUELGA contra RouterOS 7.x al hacer este print; SSH responde al
+   * instante. Cualquier error/timeout → RouterUnreachableError (la ruta lo mapea a 502).
+   *
+   * Credenciales server-side (`config.router.sshUser/sshPort/sshKey`); el host sale del NasTarget.
+   * host-key checking permisivo: la key del router NO está pineada acá (red interna de gestión).
+   */
   async listAssignedIps(nas: NasTarget): Promise<string[]> {
-    return this.withConn(nas, async (conn) => {
-      const rows = (await conn.write('/ppp/secret/print', [
-        '=.proplist=remote-address',
-      ])) as any[];
-      return rows
-        .map((r) => r['remote-address'])
-        .filter((addr): addr is string => typeof addr === 'string' && addr.length > 0);
+    const { sshKey, sshUser, sshPort } = config.router;
+    if (!sshKey) throw new RouterUnreachableError(nas.ipAddress);
+
+    return new Promise<string[]>((resolve, reject) => {
+      const conn = new Client();
+      let settled = false;
+
+      const fail = () => {
+        if (settled) return;
+        settled = true;
+        try {
+          conn.end();
+        } catch {
+          /* swallow */
+        }
+        reject(new RouterUnreachableError(nas.ipAddress));
+      };
+
+      const hardTimeout = setTimeout(fail, SSH_TIMEOUT_MS);
+
+      conn.on('ready', () => {
+        conn.exec('/ppp secret print terse without-paging', (err, stream) => {
+          if (err) {
+            clearTimeout(hardTimeout);
+            return fail();
+          }
+          let stdout = '';
+          stream
+            .on('close', () => {
+              clearTimeout(hardTimeout);
+              if (settled) return;
+              settled = true;
+              try {
+                conn.end();
+              } catch {
+                /* swallow */
+              }
+              resolve(parsePppSecretRemoteAddresses(stdout));
+            })
+            .on('data', (chunk: Buffer) => {
+              stdout += chunk.toString('utf8');
+            })
+            // stderr de RouterOS no rompe el print; lo descartamos.
+            .stderr.on('data', () => {
+              /* swallow */
+            });
+        });
+      });
+
+      conn.on('error', () => {
+        clearTimeout(hardTimeout);
+        fail();
+      });
+
+      conn.connect({
+        host: nas.ipAddress,
+        port: sshPort,
+        username: sshUser,
+        privateKey: sshKey,
+        readyTimeout: SSH_TIMEOUT_MS,
+      });
     });
   }
 
