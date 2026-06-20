@@ -102,8 +102,8 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 42 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions + 1 pppoe.cut Fase C)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(42);
+  it('contains exactly 43 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions + 1 pppoe.cut Fase C + 1 recapture.assign)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(43);
   });
 
   it('includes scheduling.hard_delete (#86 — super_admin-only hard delete of tasks)', () => {
@@ -112,6 +112,10 @@ describe('KNOWN_ACTIONS constant', () => {
 
   it('includes pppoe.cut (Fase C — corte de servicio)', () => {
     expect(KNOWN_ACTIONS).toContain('cut');
+  });
+
+  it('includes recapture.assign (bulk assignment permission)', () => {
+    expect(KNOWN_ACTIONS).toContain('assign');
   });
 
   it('includes all 4 base actions', () => {

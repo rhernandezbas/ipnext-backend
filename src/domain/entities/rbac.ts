@@ -74,6 +74,8 @@ export const KNOWN_ACTIONS = [
   'delete_hard',
   // pppoe sub-actions (Fase C) — corte de servicio (reduce/block/restore), separado de pppoe.manage
   'cut',
+  // recapture sub-actions — bulk assignment (separate from recapture.manage)
+  'assign',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.

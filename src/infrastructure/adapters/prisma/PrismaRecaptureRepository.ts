@@ -145,55 +145,6 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
     return row ? toRecaptureLeadDomain(row) : null;
   }
 
-  /**
-   * Atomic claim-next: claims the oldest free lead in a SINGLE statement.
-   *
-   * Concurrency is the whole point here. The naive "findFirst then claim"
-   * has a race window between the SELECT and the UPDATE: N concurrent operators
-   * all read the SAME oldest lead, one wins and the rest get a false 204
-   * ("no free leads") even though other free leads exist.
-   *
-   * `FOR UPDATE SKIP LOCKED LIMIT 1` is what fixes it: each transaction locks
-   * and skips rows already locked by a concurrent claim, so N operators take
-   * N DISTINCT leads without colliding and without false 204s. The inner
-   * SELECT picks+locks one free row; the outer UPDATE claims exactly that row
-   * and RETURNS it. No app-level read-then-write window.
-   */
-  async claimNext(actorId: string): Promise<RecaptureLead | null> {
-    const rows = await (prisma as any).$queryRaw`
-      UPDATE "RecaptureLead"
-      SET "assigneeId" = ${actorId},
-          "claimedAt" = now(),
-          "status" = 'en_gestion',
-          "updatedAt" = now()
-      WHERE "id" = (
-        SELECT "id" FROM "RecaptureLead"
-        WHERE "status" = 'nuevo' AND "assigneeId" IS NULL
-        ORDER BY "createdAt" ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT 1
-      )
-      RETURNING *;
-    `;
-
-    const row = Array.isArray(rows) ? rows[0] : null;
-    return row ? toRecaptureLeadDomain(row) : null;
-  }
-
-  async release(leadId: string): Promise<RecaptureLead | null> {
-    const result = await (prisma as any).recaptureLead.updateMany({
-      where: { id: leadId },
-      data: { assigneeId: null, claimedAt: null, status: 'nuevo' },
-    });
-    if (result.count === 0) return null;
-
-    const row = await (prisma as any).recaptureLead.findUnique({
-      where: { id: leadId },
-      include: { assignee: { select: { id: true, name: true } } },
-    });
-    return row ? toRecaptureLeadDomain(row) : null;
-  }
-
   async updateStatus(leadId: string, status: RecaptureLeadStatus): Promise<RecaptureLead | null> {
     const result = await (prisma as any).recaptureLead.updateMany({
       where: { id: leadId },

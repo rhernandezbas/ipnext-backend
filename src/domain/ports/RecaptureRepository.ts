@@ -64,18 +64,6 @@ export interface RecaptureRepository {
    */
   claim(leadId: string, actorId: string): Promise<RecaptureLead | null>;
 
-  /**
-   * Atomic claim-next: select the oldest lead with status='nuevo' and
-   * assigneeId IS NULL, then claim it for `actorId`.
-   * Returns the claimed lead, or null if no free leads remain.
-   */
-  claimNext(actorId: string): Promise<RecaptureLead | null>;
-
-  /**
-   * Release: clear assigneeId and claimedAt, reset status to 'nuevo'.
-   * Returns the updated lead, or null if the lead does not exist.
-   */
-  release(leadId: string): Promise<RecaptureLead | null>;
 
   /**
    * Update the lead status.

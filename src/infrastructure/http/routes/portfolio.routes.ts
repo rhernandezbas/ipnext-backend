@@ -6,11 +6,15 @@ import { GetAllPortfolios } from '@application/use-cases/portfolio/GetAllPortfol
 /**
  * Per-route permission guards.
  *  - read   → recapture.read   (agente: su propia cartera /mine)
- *  - manage → recapture.manage (super admin: cualquier agente o todos)
+ *  - assign → recapture.assign (ADMIN marker: cross-agent — cualquier agente o todos)
+ *
+ * SECURITY: las vistas cross-agent (/by-vendedor, /all) van gateadas en `assign`,
+ * NO en `manage`. El agente tiene `manage` (gestiona sus leads), así que gatear en
+ * manage filtraría la cartera de otros agentes.
  */
 export interface PortfolioRoutePerms {
   read: RequestHandler;
-  manage: RequestHandler;
+  assign: RequestHandler;
 }
 
 export function createPortfolioRouter(
@@ -37,11 +41,11 @@ export function createPortfolioRouter(
     },
   );
 
-  // ─── GET /by-vendedor?vendedor=<nombre> (manage) — cartera de UN agente ──────
+  // ─── GET /by-vendedor?vendedor=<nombre> (assign) — cartera de UN agente ──────
   router.get(
     '/by-vendedor',
     auth,
-    perms.manage,
+    perms.assign,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const raw = req.query.vendedor;
@@ -61,11 +65,11 @@ export function createPortfolioRouter(
     },
   );
 
-  // ─── GET /all (manage) — cartera de TODOS los agentes ───────────────────────
+  // ─── GET /all (assign) — cartera de TODOS los agentes ───────────────────────
   router.get(
     '/all',
     auth,
-    perms.manage,
+    perms.assign,
     async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         res.json(await getAllPortfolios.execute());

@@ -419,9 +419,7 @@ import { createRecaptureRouter } from './routes/recapture.routes';
 import { PrismaRecaptureRepository } from '../adapters/prisma/PrismaRecaptureRepository';
 import { ListRecaptureLeads } from '@application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '@application/use-cases/recapture/GetRecaptureLead';
-import { ClaimRecaptureLead } from '@application/use-cases/recapture/ClaimRecaptureLead';
-import { ClaimNextRecaptureLead } from '@application/use-cases/recapture/ClaimNextRecaptureLead';
-import { ReleaseRecaptureLead } from '@application/use-cases/recapture/ReleaseRecaptureLead';
+import { AssignRecaptureLeadsBulk } from '@application/use-cases/recapture/AssignRecaptureLeadsBulk';
 import { UpdateRecaptureLeadStatus } from '@application/use-cases/recapture/UpdateRecaptureLeadStatus';
 import { AddRecaptureContact } from '@application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '@application/use-cases/recapture/IngestChurnedClients';
@@ -1797,15 +1795,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     requirePerm('iclass', 'manage'),
   ));
 
-  // Mis clientes (Fase 2b) — agente↔vendedor (GR) mapping. Isolated sub-page (recapture perms).
+  // Mis clientes (Fase 2b) — agente↔vendedor (GR) mapping. Cross-agent admin surface.
   // GET /vendedor-mappings, PATCH /vendedor-mappings/:userId, GET /vendedores
+  // Gated on recapture.assign (admin marker): el agente tiene manage, así que esta
+  // superficie cross-agent NO puede gatearse en read/manage.
   app.use('/api/admin/gr', createGrVendedorMappingsRouter(
     new ListVendedorMappings(rbacUserRepo),
     new SetVendedorMapping(rbacUserRepo),
     new ListDistinctVendedores(contractRepo),
     authAdapter,
-    requirePerm('recapture', 'read'),
-    requirePerm('recapture', 'manage'),
+    requirePerm('recapture', 'assign'),
   ));
 
   // iclass-ops-config (Ola C) — dispatch preview: GET /dispatch-preview (read-only)
@@ -2082,21 +2081,28 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
 
   // ─── #80 Recaptación ───────────────────────────────────────────────────────
   const recaptureRepo = new PrismaRecaptureRepository();
+  const hasRecaptureAssign = async (userId: string): Promise<boolean> => {
+    if (!userId) return false; // fail-closed: Prisma trata undefined como "sin filtro" y devolveria perms de todos
+    const roles = await rbacUserRepo.listRolesForUser(userId);
+    if (roles.some((r) => r.code === 'super_admin')) return true;
+    const perms = await rbacUserRepo.listPermissionsForUser(userId);
+    return perms.some((p) => p.moduleCode === 'recapture' && p.action === 'assign');
+  };
   app.use('/api/recapture', createRecaptureRouter(
     new ListRecaptureLeads(recaptureRepo),
     new GetRecaptureLead(recaptureRepo),
-    new ClaimRecaptureLead(recaptureRepo),
-    new ClaimNextRecaptureLead(recaptureRepo),
-    new ReleaseRecaptureLead(recaptureRepo),
     new UpdateRecaptureLeadStatus(recaptureRepo),
     new AddRecaptureContact(recaptureRepo),
     new IngestChurnedClients(recaptureRepo, customerAdapter),
     new ImportCsvLeads(recaptureRepo),
     new AssignRecaptureLead(recaptureRepo, userLookupForScheduling),
+    new AssignRecaptureLeadsBulk(recaptureRepo, userLookupForScheduling),
+    hasRecaptureAssign,
     createAuthMiddleware(authAdapter, sessionRepo),
     {
       read:   requirePerm('recapture', 'read'),
       manage: requirePerm('recapture', 'manage'),
+      assign: requirePerm('recapture', 'assign'),
     },
   ));
 
@@ -2109,7 +2115,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     createAuthMiddleware(authAdapter, sessionRepo),
     {
       read:   requirePerm('recapture', 'read'),
-      manage: requirePerm('recapture', 'manage'),
+      assign: requirePerm('recapture', 'assign'),
     },
   ));
 

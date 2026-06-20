@@ -516,7 +516,7 @@ async function seedSchedulingFoundation() {
       console.log('  Created RBAC module: recapture')
     }
 
-    for (const action of ['read', 'manage'] as const) {
+    for (const action of ['read', 'manage', 'assign'] as const) {
       let perm = await (prisma as any).rbacPermission.findFirst({
         where: { moduleId: recaptureModule.id, action },
       })

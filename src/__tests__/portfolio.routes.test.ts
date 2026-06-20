@@ -34,7 +34,7 @@ const allowPerm: RequestHandler = (_req, _res, next) => next();
 
 interface BuildAppOptions {
   readPerm?: RequestHandler;
-  managePerm?: RequestHandler;
+  assignPerm?: RequestHandler;
   vendedor?: string | null;
   seedPortfolio?: (repo: InMemoryPortfolioReadRepository) => void;
 }
@@ -70,7 +70,7 @@ async function buildApp(opts: BuildAppOptions = {}) {
     '/api/portfolio',
     createPortfolioRouter(getMyPortfolio, getPortfolioByVendedor, getAllPortfolios, allowAuth, {
       read: opts.readPerm ?? allowPerm,
-      manage: opts.managePerm ?? allowPerm,
+      assign: opts.assignPerm ?? allowPerm,
     }),
   );
 
@@ -127,7 +127,7 @@ describe('GET /api/portfolio/mine — mapped', () => {
   });
 });
 
-// ─── Admin views (recapture.manage) ───────────────────────────────────────────
+// ─── Admin views (recapture.assign) ───────────────────────────────────────────
 
 const seedTwoVendedores = (repo: InMemoryPortfolioReadRepository) => {
   repo.seed({ clientId: 'c1', clientName: 'Alice', status: 'active', balanceDue: 100, balanceCurrency: 'ARS', vendedor: 'VENDEDOR_A', startDate: '2026-05-01T00:00:00.000Z' });
@@ -135,15 +135,16 @@ const seedTwoVendedores = (repo: InMemoryPortfolioReadRepository) => {
 };
 
 describe('GET /api/portfolio/by-vendedor — RBAC', () => {
-  it('a user with only recapture.read cannot access by-vendedor (403)', async () => {
-    // read passes, manage denied → simulates a read-only agent.
-    const { app } = await buildApp({ readPerm: allowPerm, managePerm: denyPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+  it('an agent with recapture.manage but WITHOUT recapture.assign cannot access by-vendedor (403)', async () => {
+    // read passes (agent), assign denied → modeled like an agent that ALSO has manage.
+    // The cross-agent view must be gated on assign (admin marker), not manage.
+    const { app } = await buildApp({ readPerm: allowPerm, assignPerm: denyPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
     const res = await request(app).get('/api/portfolio/by-vendedor?vendedor=VENDEDOR_A').set('Cookie', 'auth_token=tok');
     expect(res.status).toBe(403);
   });
 
-  it('returns 200 with the vendedor portfolio when manage granted', async () => {
-    const { app } = await buildApp({ managePerm: allowPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+  it('returns 200 with the vendedor portfolio when assign granted (admin)', async () => {
+    const { app } = await buildApp({ assignPerm: allowPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
     const res = await request(app).get('/api/portfolio/by-vendedor?vendedor=VENDEDOR_A').set('Cookie', 'auth_token=tok');
     expect(res.status).toBe(200);
     expect(res.body.unmapped).toBe(false);
@@ -153,21 +154,21 @@ describe('GET /api/portfolio/by-vendedor — RBAC', () => {
   });
 
   it('returns 400 when the vendedor query param is missing', async () => {
-    const { app } = await buildApp({ managePerm: allowPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+    const { app } = await buildApp({ assignPerm: allowPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
     const res = await request(app).get('/api/portfolio/by-vendedor').set('Cookie', 'auth_token=tok');
     expect(res.status).toBe(400);
   });
 });
 
 describe('GET /api/portfolio/all — RBAC', () => {
-  it('a user with only recapture.read cannot access all (403)', async () => {
-    const { app } = await buildApp({ readPerm: allowPerm, managePerm: denyPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+  it('an agent with recapture.manage but WITHOUT recapture.assign cannot access all (403)', async () => {
+    const { app } = await buildApp({ readPerm: allowPerm, assignPerm: denyPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
     const res = await request(app).get('/api/portfolio/all').set('Cookie', 'auth_token=tok');
     expect(res.status).toBe(403);
   });
 
-  it('returns 200 with all items (each tagged with vendedor) + global summary when manage granted', async () => {
-    const { app } = await buildApp({ managePerm: allowPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
+  it('returns 200 with all items (each tagged with vendedor) + global summary when assign granted (admin)', async () => {
+    const { app } = await buildApp({ assignPerm: allowPerm, vendedor: 'V', seedPortfolio: seedTwoVendedores });
     const res = await request(app).get('/api/portfolio/all').set('Cookie', 'auth_token=tok');
     expect(res.status).toBe(200);
     expect(res.body.items).toHaveLength(2);
@@ -176,5 +177,22 @@ describe('GET /api/portfolio/all — RBAC', () => {
     const b = res.body.items.find((i: { clientId: string }) => i.clientId === 'c2');
     expect(a.vendedor).toBe('VENDEDOR_A');
     expect(b.vendedor).toBe('VENDEDOR_B');
+  });
+});
+
+describe('GET /api/portfolio/mine — agent (manage without assign) still allowed', () => {
+  it('returns 200 on /mine even when assign is denied (agent reads own cartera)', async () => {
+    const { app } = await buildApp({
+      readPerm: allowPerm,
+      assignPerm: denyPerm,
+      vendedor: 'V',
+      seedPortfolio: (repo) => {
+        repo.seed({ clientId: 'c1', clientName: 'Alice', status: 'active', balanceDue: 100, balanceCurrency: 'ARS', vendedor: 'V', startDate: '2026-05-01T00:00:00.000Z' });
+      },
+    });
+    const res = await request(app).get('/api/portfolio/mine').set('Cookie', 'auth_token=tok');
+    expect(res.status).toBe(200);
+    expect(res.body.unmapped).toBe(false);
+    expect(res.body.items).toHaveLength(1);
   });
 });

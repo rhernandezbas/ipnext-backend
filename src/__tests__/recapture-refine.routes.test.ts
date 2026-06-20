@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Route integration tests for recapture-refine changes.
  * #3b: assigneeName in GET /leads and GET /leads/:id
  * #4: source filter in GET /leads
@@ -11,19 +11,16 @@ import { createRecaptureRouter } from '../infrastructure/http/routes/recapture.r
 import { InMemoryRecaptureRepository } from '../infrastructure/adapters/in-memory/InMemoryRecaptureRepository';
 import { ListRecaptureLeads } from '../application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '../application/use-cases/recapture/GetRecaptureLead';
-import { ClaimRecaptureLead } from '../application/use-cases/recapture/ClaimRecaptureLead';
-import { ClaimNextRecaptureLead } from '../application/use-cases/recapture/ClaimNextRecaptureLead';
-import { ReleaseRecaptureLead } from '../application/use-cases/recapture/ReleaseRecaptureLead';
 import { UpdateRecaptureLeadStatus } from '../application/use-cases/recapture/UpdateRecaptureLeadStatus';
 import { AddRecaptureContact } from '../application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '../application/use-cases/recapture/IngestChurnedClients';
 import { ImportCsvLeads } from '../application/use-cases/recapture/ImportCsvLeads';
 import { AssignRecaptureLead } from '../application/use-cases/recapture/AssignRecaptureLead';
+import { AssignRecaptureLeadsBulk } from '../application/use-cases/recapture/AssignRecaptureLeadsBulk';
 import type { CustomerRepository } from '../domain/ports/CustomerRepository';
-import type { JwtAuthAdapter } from '../infrastructure/adapters/jwt/JwtAuthAdapter';
 import type { RecaptureLead } from '../domain/entities/recaptureLead';
 
-// ─── Auth + RBAC mock helpers ─────────────────────────────────────────────────
+// â”€â”€â”€ Auth + RBAC mock helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const allowAuth = (req: Request, _res: Response, next: NextFunction) => {
   (req as any).user = { id: 'user-test', email: 'test@test.com' };
@@ -49,14 +46,12 @@ function buildApp(repo?: InMemoryRecaptureRepository) {
 
   const listUC = new ListRecaptureLeads(r);
   const getUC = new GetRecaptureLead(r);
-  const claimUC = new ClaimRecaptureLead(r);
-  const claimNextUC = new ClaimNextRecaptureLead(r);
-  const releaseUC = new ReleaseRecaptureLead(r);
   const updateStatusUC = new UpdateRecaptureLeadStatus(r);
   const addContactUC = new AddRecaptureContact(r);
   const ingestUC = new IngestChurnedClients(r, makeCustomerRepo());
   const importCsvUC = new ImportCsvLeads(r);
   const assignUC = new AssignRecaptureLead(r, { findById: async (id) => ({ id }) });
+  const assignBulkUC = new AssignRecaptureLeadsBulk(r, { findById: async (id) => ({ id }) });
 
   const app = express();
   app.use(express.json());
@@ -64,19 +59,20 @@ function buildApp(repo?: InMemoryRecaptureRepository) {
   app.use(
     '/api/recapture',
     createRecaptureRouter(
-      listUC, getUC, claimUC, claimNextUC, releaseUC, updateStatusUC,
-      addContactUC, ingestUC, importCsvUC, assignUC,
+      listUC, getUC, updateStatusUC,
+      addContactUC, ingestUC, importCsvUC, assignUC, assignBulkUC,
+      async () => true, // admin â€” sees all
       allowAuth,
-      { read: allowPerm, manage: allowPerm },
+      { read: allowPerm, manage: allowPerm, assign: allowPerm },
     ),
   );
 
   return { app, repo: r };
 }
 
-// ─── #3b: assigneeName in list + detail ──────────────────────────────────────
+// â”€â”€â”€ #3b: assigneeName in list + detail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('#3b — assigneeName in route responses', () => {
+describe('#3b â€” assigneeName in route responses', () => {
   it('GET /leads returns assigneeName=null for unassigned lead', async () => {
     const { app, repo } = buildApp();
     await repo.create({ source: 'csv', contactName: 'Unassigned' });
@@ -124,7 +120,7 @@ describe('#3b — assigneeName in route responses', () => {
       email: null,
       status: 'en_gestion',
       assigneeId: 'user-8',
-      assigneeName: 'Ana Gómez',
+      assigneeName: 'Ana GÃ³mez',
       claimedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -137,13 +133,13 @@ describe('#3b — assigneeName in route responses', () => {
       .get(`/api/recapture/leads/${lead.id}`)
       .set('Cookie', 'auth_token=tok');
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ assigneeName: 'Ana Gómez' });
+    expect(res.body).toMatchObject({ assigneeName: 'Ana GÃ³mez' });
   });
 });
 
-// ─── #4: source filter via query string ──────────────────────────────────────
+// â”€â”€â”€ #4: source filter via query string â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('#4 — GET /leads?source= route filter', () => {
+describe('#4 â€” GET /leads?source= route filter', () => {
   async function seedMixed(repo: InMemoryRecaptureRepository) {
     await repo.create({ source: 'churned_client', clientId: 'c-1', contactName: 'Churned A' });
     await repo.create({ source: 'churned_client', clientId: 'c-2', contactName: 'Churned B' });
@@ -182,21 +178,21 @@ describe('#4 — GET /leads?source= route filter', () => {
     expect(res.body.total).toBe(3);
   });
 
-  it('invalid source value is ignored → returns all leads', async () => {
+  it('invalid source value is ignored â†’ returns all leads', async () => {
     const { app, repo } = buildApp();
     await seedMixed(repo);
     const res = await request(app)
       .get('/api/recapture/leads?source=foobar')
       .set('Cookie', 'auth_token=tok');
     expect(res.status).toBe(200);
-    // invalid value ignored → all leads returned
+    // invalid value ignored â†’ all leads returned
     expect(res.body.total).toBe(3);
   });
 });
 
-// ─── advanceStatus: string contract ──────────────────────────────────────────
+// â”€â”€â”€ advanceStatus: string contract â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('advanceStatus — route contract', () => {
+describe('advanceStatus â€” route contract', () => {
   it('POST /leads/:id/contacts with advanceStatus=contactado advances lead status', async () => {
     const { app, repo } = buildApp();
     const lead = await repo.create({ source: 'csv', contactName: 'Advance Test' });
@@ -220,14 +216,14 @@ describe('advanceStatus — route contract', () => {
   it('POST /leads/:id/contacts with boolean advanceStatus=true is ignored (not a valid status)', async () => {
     const { app, repo } = buildApp();
     const lead = await repo.create({ source: 'csv', contactName: 'Boolean Test' });
-    // FE (old bug) sends boolean true — route must ignore it (treat as undefined)
+    // FE (old bug) sends boolean true â€” route must ignore it (treat as undefined)
     const res = await request(app)
       .post(`/api/recapture/leads/${lead.id}/contacts`)
       .set('Cookie', 'auth_token=tok')
       .send({
         channel: 'llamada',
         outcome: 'contactado',
-        advanceStatus: true, // boolean — NOT a valid RecaptureLeadStatus string
+        advanceStatus: true, // boolean â€” NOT a valid RecaptureLeadStatus string
       });
     expect(res.status).toBe(201); // contact is still created
 
@@ -256,3 +252,4 @@ describe('advanceStatus — route contract', () => {
     expect(detail.body.status).toBe('recuperado');
   });
 });
+

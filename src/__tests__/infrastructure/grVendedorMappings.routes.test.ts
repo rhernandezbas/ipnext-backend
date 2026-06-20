@@ -2,9 +2,13 @@
  * Route tests for /api/admin/gr/* (GR vendedor mapping — Fase 2b).
  * STRICT TDD — tests before router implementation.
  *
- * GET   /vendedor-mappings          → list users + grVendedorName (recapture.read)
- * PATCH /vendedor-mappings/:userId  → set/clear mapping (recapture.manage)
- * GET   /vendedores                 → distinct GR vendedor catalog (recapture.read)
+ * GET   /vendedor-mappings          → list users + grVendedorName (recapture.assign)
+ * PATCH /vendedor-mappings/:userId  → set/clear mapping (recapture.assign)
+ * GET   /vendedores                 → distinct GR vendedor catalog (recapture.assign)
+ *
+ * SECURITY: this is an administration surface (cross-agent). All three routes are
+ * gated on recapture.assign (the admin marker). An agente with recapture.manage
+ * but WITHOUT recapture.assign must NOT reach any of them.
  */
 import request from 'supertest';
 import express, { Request, Response, NextFunction, RequestHandler } from 'express';
@@ -40,7 +44,7 @@ const DENY: RequestHandler = (_req: Request, res: Response, _next: NextFunction)
   res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
 };
 
-async function buildApp(opts: { denyRead?: boolean; denyManage?: boolean } = {}) {
+async function buildApp(opts: { denyAssign?: boolean } = {}) {
   const userRepo = new InMemoryRbacUserRepository();
   const contractRepo = new InMemoryContractRepository();
 
@@ -62,8 +66,8 @@ async function buildApp(opts: { denyRead?: boolean; denyManage?: boolean } = {})
       setMapping,
       listVendedores,
       new FakeAuthProvider(),
-      opts.denyRead ? DENY : ALLOW,
-      opts.denyManage ? DENY : ALLOW,
+      // Single guard for the whole admin surface: recapture.assign.
+      opts.denyAssign ? DENY : ALLOW,
     ),
   );
   app.use(errorHandler);
@@ -88,13 +92,33 @@ describe('GET /api/admin/gr/vendedor-mappings', () => {
     expect(item).toHaveProperty('grVendedorName');
   });
 
-  it('403 without recapture.read permission', async () => {
-    const { app } = await buildApp({ denyRead: true });
+  it('403 without recapture.assign permission', async () => {
+    const { app } = await buildApp({ denyAssign: true });
     const res = await request(app)
       .get('/api/admin/gr/vendedor-mappings')
       .set('Cookie', 'auth_token=fake');
 
     expect(res.status).toBe(403);
+  });
+
+  it('403 for an agente with recapture.manage but WITHOUT recapture.assign', async () => {
+    // The agente now has recapture.manage; this admin surface must stay gated on
+    // assign. denyAssign models "manage granted, assign denied".
+    const { app } = await buildApp({ denyAssign: true });
+    const res = await request(app)
+      .get('/api/admin/gr/vendedor-mappings')
+      .set('Cookie', 'auth_token=fake');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('200 for an admin (recapture.assign granted)', async () => {
+    const { app } = await buildApp();
+    const res = await request(app)
+      .get('/api/admin/gr/vendedor-mappings')
+      .set('Cookie', 'auth_token=fake');
+
+    expect(res.status).toBe(200);
   });
 });
 
@@ -142,8 +166,19 @@ describe('PATCH /api/admin/gr/vendedor-mappings/:userId', () => {
     expect(res.status).toBe(404);
   });
 
-  it('403 without recapture.manage permission', async () => {
-    const { app, userId } = await buildApp({ denyManage: true });
+  it('403 without recapture.assign permission', async () => {
+    const { app, userId } = await buildApp({ denyAssign: true });
+    const res = await request(app)
+      .patch(`/api/admin/gr/vendedor-mappings/${userId}`)
+      .set('Cookie', 'auth_token=fake')
+      .send({ grVendedorName: 'JUAN PEREZ' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('403 for an agente with recapture.manage but WITHOUT recapture.assign', async () => {
+    // PATCH mutates ANY user's mapping → must be assign-gated, not manage.
+    const { app, userId } = await buildApp({ denyAssign: true });
     const res = await request(app)
       .patch(`/api/admin/gr/vendedor-mappings/${userId}`)
       .set('Cookie', 'auth_token=fake')
@@ -165,8 +200,17 @@ describe('GET /api/admin/gr/vendedores', () => {
     expect(res.body.items).toEqual(['ANA GOMEZ', 'JUAN PEREZ']);
   });
 
-  it('403 without recapture.read permission', async () => {
-    const { app } = await buildApp({ denyRead: true });
+  it('403 without recapture.assign permission', async () => {
+    const { app } = await buildApp({ denyAssign: true });
+    const res = await request(app)
+      .get('/api/admin/gr/vendedores')
+      .set('Cookie', 'auth_token=fake');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('403 for an agente with recapture.manage but WITHOUT recapture.assign', async () => {
+    const { app } = await buildApp({ denyAssign: true });
     const res = await request(app)
       .get('/api/admin/gr/vendedores')
       .set('Cookie', 'auth_token=fake');

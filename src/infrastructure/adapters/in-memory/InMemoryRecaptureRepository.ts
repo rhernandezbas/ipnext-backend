@@ -129,36 +129,6 @@ export class InMemoryRecaptureRepository implements RecaptureRepository {
     return updated;
   }
 
-  /**
-   * Claim the oldest free lead (status='nuevo', assigneeId IS NULL, ordered by createdAt asc).
-   * Returns the claimed lead or null if none is available.
-   */
-  async claimNext(actorId: string): Promise<RecaptureLead | null> {
-    const free = this.leads
-      .filter((l) => l.status === 'nuevo' && l.assigneeId === null)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-
-    if (free.length === 0) return null;
-
-    return this.claim(free[0]!.id, actorId);
-  }
-
-  async release(leadId: string): Promise<RecaptureLead | null> {
-    const idx = this.leads.findIndex((l) => l.id === leadId);
-    if (idx === -1) return null;
-
-    const now = nowIso();
-    const updated: RecaptureLead = {
-      ...this.leads[idx]!,
-      assigneeId: null,
-      claimedAt: null,
-      status: 'nuevo',
-      updatedAt: now,
-    };
-    this.leads[idx] = updated;
-    return updated;
-  }
-
   async updateStatus(leadId: string, status: RecaptureLeadStatus): Promise<RecaptureLead | null> {
     const idx = this.leads.findIndex((l) => l.id === leadId);
     if (idx === -1) return null;

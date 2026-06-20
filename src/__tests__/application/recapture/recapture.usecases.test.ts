@@ -3,12 +3,10 @@
  * No Prisma mocking. Each describe block covers one use-case.
  */
 import { InMemoryRecaptureRepository } from '../../../infrastructure/adapters/in-memory/InMemoryRecaptureRepository';
-import { RecaptureLeadNotFoundError, RecaptureLeadAlreadyClaimedError } from '../../../domain/errors/recapture';
+import { RecaptureLeadNotFoundError } from '../../../domain/errors/recapture';
 import { ListRecaptureLeads } from '../../../application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '../../../application/use-cases/recapture/GetRecaptureLead';
-import { ClaimRecaptureLead } from '../../../application/use-cases/recapture/ClaimRecaptureLead';
-import { ClaimNextRecaptureLead } from '../../../application/use-cases/recapture/ClaimNextRecaptureLead';
-import { ReleaseRecaptureLead } from '../../../application/use-cases/recapture/ReleaseRecaptureLead';
+
 import { UpdateRecaptureLeadStatus } from '../../../application/use-cases/recapture/UpdateRecaptureLeadStatus';
 import { AddRecaptureContact } from '../../../application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '../../../application/use-cases/recapture/IngestChurnedClients';
@@ -138,90 +136,6 @@ describe('GetRecaptureLead', () => {
     const repo = makeRepo();
     const uc = new GetRecaptureLead(repo);
     await expect(uc.execute('nonexistent')).rejects.toThrow(RecaptureLeadNotFoundError);
-  });
-});
-
-// ─── ClaimRecaptureLead ───────────────────────────────────────────────────────
-
-describe('ClaimRecaptureLead', () => {
-  it('claims a free lead and returns DTO with assigneeId', async () => {
-    const repo = makeRepo();
-    const lead = await seedFreeLead(repo);
-    const uc = new ClaimRecaptureLead(repo);
-    const dto = await uc.execute(lead.id, 'user-A');
-    expect(dto.assigneeId).toBe('user-A');
-    expect(dto.status).toBe('en_gestion');
-    expect(dto.claimedAt).not.toBeNull();
-  });
-
-  it('throws AlreadyClaimed when a second user tries to claim', async () => {
-    const repo = makeRepo();
-    const lead = await seedFreeLead(repo);
-    const uc = new ClaimRecaptureLead(repo);
-    await uc.execute(lead.id, 'user-A');
-    await expect(uc.execute(lead.id, 'user-B')).rejects.toThrow(RecaptureLeadAlreadyClaimedError);
-  });
-
-  it('throws NotFound when lead id does not exist', async () => {
-    const repo = makeRepo();
-    const uc = new ClaimRecaptureLead(repo);
-    await expect(uc.execute('ghost', 'user-A')).rejects.toThrow(RecaptureLeadNotFoundError);
-  });
-});
-
-// ─── ClaimNextRecaptureLead ───────────────────────────────────────────────────
-
-describe('ClaimNextRecaptureLead', () => {
-  it('returns null when no free leads exist', async () => {
-    const repo = makeRepo();
-    const uc = new ClaimNextRecaptureLead(repo);
-    const result = await uc.execute('user-A');
-    expect(result).toBeNull();
-  });
-
-  it('claims the oldest free lead', async () => {
-    const repo = makeRepo();
-    // Seed two leads — first one should be claimed
-    const first = await seedFreeLead(repo);
-    await repo.create({ source: 'csv', contactName: 'Second Lead' });
-    const uc = new ClaimNextRecaptureLead(repo);
-    const dto = await uc.execute('user-A');
-    expect(dto).not.toBeNull();
-    expect(dto!.id).toBe(first.id);
-    expect(dto!.assigneeId).toBe('user-A');
-  });
-
-  it('skips already-claimed leads', async () => {
-    const repo = makeRepo();
-    const first = await seedFreeLead(repo);
-    await repo.create({ source: 'csv', contactName: 'Second Lead' });
-    // Claim first
-    await repo.claim(first.id, 'user-X');
-    const uc = new ClaimNextRecaptureLead(repo);
-    const dto = await uc.execute('user-A');
-    expect(dto).not.toBeNull();
-    expect(dto!.contactName).toBe('Second Lead');
-  });
-});
-
-// ─── ReleaseRecaptureLead ─────────────────────────────────────────────────────
-
-describe('ReleaseRecaptureLead', () => {
-  it('releases a claimed lead back to nuevo/unassigned', async () => {
-    const repo = makeRepo();
-    const lead = await seedFreeLead(repo);
-    await repo.claim(lead.id, 'user-A');
-    const uc = new ReleaseRecaptureLead(repo);
-    const dto = await uc.execute(lead.id);
-    expect(dto.assigneeId).toBeNull();
-    expect(dto.claimedAt).toBeNull();
-    expect(dto.status).toBe('nuevo');
-  });
-
-  it('throws NotFound when id does not exist', async () => {
-    const repo = makeRepo();
-    const uc = new ReleaseRecaptureLead(repo);
-    await expect(uc.execute('ghost')).rejects.toThrow(RecaptureLeadNotFoundError);
   });
 });
 

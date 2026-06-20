@@ -1,22 +1,21 @@
-import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
+﻿import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { ListRecaptureLeads } from '@application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '@application/use-cases/recapture/GetRecaptureLead';
-import { ClaimRecaptureLead } from '@application/use-cases/recapture/ClaimRecaptureLead';
-import { ClaimNextRecaptureLead } from '@application/use-cases/recapture/ClaimNextRecaptureLead';
-import { ReleaseRecaptureLead } from '@application/use-cases/recapture/ReleaseRecaptureLead';
 import { UpdateRecaptureLeadStatus } from '@application/use-cases/recapture/UpdateRecaptureLeadStatus';
 import { AddRecaptureContact } from '@application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '@application/use-cases/recapture/IngestChurnedClients';
 import { ImportCsvLeads } from '@application/use-cases/recapture/ImportCsvLeads';
 import { AssignRecaptureLead } from '@application/use-cases/recapture/AssignRecaptureLead';
-import { RecaptureLeadNotFoundError, RecaptureLeadAlreadyClaimedError } from '@domain/errors/recapture';
+import { AssignRecaptureLeadsBulk } from '@application/use-cases/recapture/AssignRecaptureLeadsBulk';
+import { RecaptureLeadNotFoundError } from '@domain/errors/recapture';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
 import type { RecaptureLeadStatus, RecaptureLeadSource, RecaptureContactChannel, RecaptureContactOutcome } from '@domain/entities/recaptureLead';
 
-/** Per-route permission guards (recapture read/manage). */
+/** Per-route permission guards (recapture read/manage/assign). */
 export interface RecaptureRoutePerms {
   read: RequestHandler;
   manage: RequestHandler;
+  assign: RequestHandler;
 }
 
 const VALID_STATUSES: RecaptureLeadStatus[] = [
@@ -34,25 +33,24 @@ const VALID_OUTCOMES: RecaptureContactOutcome[] = [
 export function createRecaptureRouter(
   listLeads: ListRecaptureLeads,
   getLead: GetRecaptureLead,
-  claimLead: ClaimRecaptureLead,
-  claimNextLead: ClaimNextRecaptureLead,
-  releaseLead: ReleaseRecaptureLead,
   updateStatus: UpdateRecaptureLeadStatus,
   addContact: AddRecaptureContact,
   ingestChurned: IngestChurnedClients,
   importCsv: ImportCsvLeads,
   assignLead: AssignRecaptureLead,
+  assignBulk: AssignRecaptureLeadsBulk,
+  hasAssignPerm: (userId: string) => Promise<boolean>,
   auth: RequestHandler,
   perms: RecaptureRoutePerms,
 ): Router {
   const router = Router();
 
-  // ─── POST /ingest-churned (manage) ─────────────────────────────────────────
+  // â”€â”€â”€ POST /ingest-churned (assign) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Mounted BEFORE /leads to avoid /:id capture
   router.post(
     '/ingest-churned',
     auth,
-    perms.manage,
+    perms.assign,
     async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const result = await ingestChurned.execute();
@@ -63,7 +61,7 @@ export function createRecaptureRouter(
     },
   );
 
-  // ─── GET /import-csv/template (read) ──────────────────────────────────────
+  // â”€â”€â”€ GET /import-csv/template (read) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Mounted BEFORE /leads to avoid route shadowing
   router.get(
     '/import-csv/template',
@@ -71,7 +69,7 @@ export function createRecaptureRouter(
     perms.read,
     (_req: Request, res: Response): void => {
       const headers = 'nombre,telefono,email,direccion,motivo_baja,plan_anterior';
-      const example = 'Juan Pérez,1154321234,juan@correo.com,Av. Corrientes 1234,precio,plan_basico';
+      const example = 'Juan PÃ©rez,1154321234,juan@correo.com,Av. Corrientes 1234,precio,plan_basico';
       const body = `${headers}\n${example}\n`;
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename="recaptacion-template.csv"');
@@ -79,11 +77,11 @@ export function createRecaptureRouter(
     },
   );
 
-  // ─── POST /import-csv (manage) ─────────────────────────────────────────────
+  // â”€â”€â”€ POST /import-csv (assign) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post(
     '/import-csv',
     auth,
-    perms.manage,
+    perms.assign,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const { csv } = req.body as { csv?: string };
       if (!csv || typeof csv !== 'string') {
@@ -99,40 +97,80 @@ export function createRecaptureRouter(
     },
   );
 
-  // ─── POST /leads/claim-next (manage) ───────────────────────────────────────
+  // â”€â”€â”€ PATCH /leads/assign-bulk (assign) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Mounted BEFORE /leads/:id to avoid /:id capture
-  router.post(
-    '/leads/claim-next',
+  router.patch(
+    '/leads/assign-bulk',
     auth,
-    perms.manage,
+    perms.assign,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const { leadIds, operatorId } = req.body as { leadIds?: unknown; operatorId?: unknown };
+
+      // leadIds must be a non-empty array of strings
+      if (
+        !Array.isArray(leadIds) ||
+        leadIds.length === 0 ||
+        !leadIds.every((id) => typeof id === 'string')
+      ) {
+        res.status(400).json({
+          error: 'leadIds must be a non-empty array of strings',
+          code: 'VALIDATION_ERROR',
+        });
+        return;
+      }
+
+      // operatorId must be explicitly present (null is valid â€” means unassign)
+      if (!('operatorId' in req.body)) {
+        res.status(400).json({ error: 'Missing required field: operatorId', code: 'VALIDATION_ERROR' });
+        return;
+      }
+
+      if (operatorId !== null && typeof operatorId !== 'string') {
+        res.status(400).json({ error: 'operatorId must be a string or null', code: 'VALIDATION_ERROR' });
+        return;
+      }
+
       try {
-        const actorId = (req as any).user?.id as string;
-        const lead = await claimNextLead.execute(actorId);
-        if (!lead) {
-          res.status(204).end();
+        const result = await assignBulk.execute(leadIds as string[], operatorId as string | null);
+        res.json(result);
+      } catch (err) {
+        if (err instanceof ReferenceNotFoundError) {
+          res.status(400).json({ error: err.message, code: 'REFERENCE_NOT_FOUND' });
           return;
         }
-        res.json(lead);
-      } catch (err) {
         next(err);
       }
     },
   );
 
-  // ─── GET /leads (read) ──────────────────────────────────────────────────────
+  // â”€â”€â”€ GET /leads (read) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.get(
     '/leads',
     auth,
     perms.read,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
+        const actorId = (req as any).user?.id as string;
+        const isAdmin = await hasAssignPerm(actorId);
+
+        // Fail-closed (defense in depth): a non-admin without a resolvable actorId
+        // would otherwise get an unscoped assignee filter and see EVERY lead.
+        if (!isAdmin && !actorId) {
+          res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+          return;
+        }
+
         const { status, assigneeId, unassigned, page, limit, source } = req.query as Record<string, string>;
+
+        // Non-admin agents can only see their own leads
+        const effectiveAssigneeId = isAdmin ? (assigneeId || undefined) : actorId;
+        const effectiveUnassigned = isAdmin ? unassigned === 'true' : false;
+
         const result = await listLeads.execute({
           source: VALID_SOURCES.includes(source as RecaptureLeadSource) ? (source as RecaptureLeadSource) : undefined,
           status: VALID_STATUSES.includes(status as RecaptureLeadStatus) ? (status as RecaptureLeadStatus) : undefined,
-          assigneeId: assigneeId || undefined,
-          unassigned: unassigned === 'true',
+          assigneeId: effectiveAssigneeId,
+          unassigned: effectiveUnassigned,
           page: page ? +page : 1,
           limit: limit ? +limit : 25,
         });
@@ -143,57 +181,23 @@ export function createRecaptureRouter(
     },
   );
 
-  // ─── GET /leads/:id (read) ──────────────────────────────────────────────────
+  // â”€â”€â”€ GET /leads/:id (read) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.get(
     '/leads/:id',
     auth,
     perms.read,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        const lead = await getLead.execute(req.params['id'] as string);
-        res.json(lead);
-      } catch (err) {
-        if (err instanceof RecaptureLeadNotFoundError) {
-          res.status(404).json({ error: err.message, code: err.code });
-          return;
-        }
-        next(err);
-      }
-    },
-  );
-
-  // ─── POST /leads/:id/claim (manage) ────────────────────────────────────────
-  router.post(
-    '/leads/:id/claim',
-    auth,
-    perms.manage,
-    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-      try {
         const actorId = (req as any).user?.id as string;
-        const lead = await claimLead.execute(req.params['id'] as string, actorId);
-        res.json(lead);
-      } catch (err) {
-        if (err instanceof RecaptureLeadNotFoundError) {
-          res.status(404).json({ error: err.message, code: err.code });
-          return;
-        }
-        if (err instanceof RecaptureLeadAlreadyClaimedError) {
-          res.status(409).json({ error: err.message, code: err.code });
-          return;
-        }
-        next(err);
-      }
-    },
-  );
+        const isAdmin = await hasAssignPerm(actorId);
+        const lead = await getLead.execute(req.params['id'] as string);
 
-  // ─── POST /leads/:id/release (manage) ──────────────────────────────────────
-  router.post(
-    '/leads/:id/release',
-    auth,
-    perms.manage,
-    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-      try {
-        const lead = await releaseLead.execute(req.params['id'] as string);
+        // Non-admin agents can only see their own leads
+        if (!isAdmin && lead.assigneeId !== actorId) {
+          res.status(404).json({ error: 'Recapture lead not found', code: 'RECAPTURE_LEAD_NOT_FOUND' });
+          return;
+        }
+
         res.json(lead);
       } catch (err) {
         if (err instanceof RecaptureLeadNotFoundError) {
@@ -205,12 +209,33 @@ export function createRecaptureRouter(
     },
   );
 
-  // ─── PATCH /leads/:id (manage) ─────────────────────────────────────────────
+  // â”€â”€â”€ PATCH /leads/:id (manage) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.patch(
     '/leads/:id',
     auth,
     perms.manage,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const actorId = (req as any).user?.id as string;
+      const isAdmin = await hasAssignPerm(actorId);
+
+      // Non-admin agents can only mutate their own leads â€” check ownership first
+      if (!isAdmin) {
+        try {
+          const existing = await getLead.execute(req.params['id'] as string);
+          if (existing.assigneeId !== actorId) {
+            res.status(404).json({ error: 'Recapture lead not found', code: 'RECAPTURE_LEAD_NOT_FOUND' });
+            return;
+          }
+        } catch (err) {
+          if (err instanceof RecaptureLeadNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          next(err);
+          return;
+        }
+      }
+
       const { status } = req.body as { status?: string };
 
       if (!status) {
@@ -239,12 +264,33 @@ export function createRecaptureRouter(
     },
   );
 
-  // ─── POST /leads/:id/contacts (manage) ────────────────────────────────────
+  // â”€â”€â”€ POST /leads/:id/contacts (manage) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post(
     '/leads/:id/contacts',
     auth,
     perms.manage,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const actorId = (req as any).user?.id as string;
+      const isAdmin = await hasAssignPerm(actorId);
+
+      // Non-admin agents can only mutate their own leads â€” check ownership first
+      if (!isAdmin) {
+        try {
+          const existing = await getLead.execute(req.params['id'] as string);
+          if (existing.assigneeId !== actorId) {
+            res.status(404).json({ error: 'Recapture lead not found', code: 'RECAPTURE_LEAD_NOT_FOUND' });
+            return;
+          }
+        } catch (err) {
+          if (err instanceof RecaptureLeadNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          next(err);
+          return;
+        }
+      }
+
       const { channel, outcome, proposal, note, nextStepAt, advanceStatus } = req.body as {
         channel?: string;
         outcome?: string;
@@ -273,7 +319,6 @@ export function createRecaptureRouter(
       }
 
       try {
-        const actorId = (req as any).user?.id as string;
         const contact = await addContact.execute({
           leadId: req.params['id'] as string,
           actorId,
@@ -297,13 +342,13 @@ export function createRecaptureRouter(
     },
   );
 
-  // ─── PATCH /leads/:id/assign (manage) ─────────────────────────────────────
+  // â”€â”€â”€ PATCH /leads/:id/assign (assign) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.patch(
     '/leads/:id/assign',
     auth,
-    perms.manage,
+    perms.assign,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-      // operatorId must be present in the body (null is valid — means unassign)
+      // operatorId must be present in the body (null is valid â€” means unassign)
       if (!('operatorId' in req.body)) {
         res.status(400).json({ error: 'Missing required field: operatorId', code: 'VALIDATION_ERROR' });
         return;
@@ -335,3 +380,4 @@ export function createRecaptureRouter(
 
   return router;
 }
+

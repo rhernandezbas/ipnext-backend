@@ -1,6 +1,6 @@
-/**
+﻿/**
  * Route integration tests for the CSV-import endpoints on /api/recapture.
- * Uses InMemoryRecaptureRepository — no Prisma.
+ * Uses InMemoryRecaptureRepository â€” no Prisma.
  */
 import request from 'supertest';
 import express, { Request, Response, NextFunction, RequestHandler } from 'express';
@@ -9,18 +9,16 @@ import { createRecaptureRouter } from '../infrastructure/http/routes/recapture.r
 import { InMemoryRecaptureRepository } from '../infrastructure/adapters/in-memory/InMemoryRecaptureRepository';
 import { ListRecaptureLeads } from '../application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '../application/use-cases/recapture/GetRecaptureLead';
-import { ClaimRecaptureLead } from '../application/use-cases/recapture/ClaimRecaptureLead';
-import { ClaimNextRecaptureLead } from '../application/use-cases/recapture/ClaimNextRecaptureLead';
-import { ReleaseRecaptureLead } from '../application/use-cases/recapture/ReleaseRecaptureLead';
 import { UpdateRecaptureLeadStatus } from '../application/use-cases/recapture/UpdateRecaptureLeadStatus';
 import { AddRecaptureContact } from '../application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '../application/use-cases/recapture/IngestChurnedClients';
 import { ImportCsvLeads } from '../application/use-cases/recapture/ImportCsvLeads';
 import { AssignRecaptureLead } from '../application/use-cases/recapture/AssignRecaptureLead';
+import { AssignRecaptureLeadsBulk } from '../application/use-cases/recapture/AssignRecaptureLeadsBulk';
 import type { CustomerRepository } from '../domain/ports/CustomerRepository';
-import type { JwtAuthAdapter } from '../infrastructure/adapters/jwt/JwtAuthAdapter';
+import type { EntityLookup } from '../domain/ports/EntityLookup';
 
-// ─── Auth + RBAC mock helpers ─────────────────────────────────────────────────
+// â”€â”€â”€ Auth + RBAC mock helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const allowAuth = (req: Request, _res: Response, next: NextFunction) => {
   (req as any).user = { id: 'user-test', email: 'test@test.com' };
@@ -46,11 +44,12 @@ function makeCustomerRepo(): CustomerRepository {
   } as unknown as CustomerRepository;
 }
 
-// ─── App factory ──────────────────────────────────────────────────────────────
+// â”€â”€â”€ App factory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface BuildAppOptions {
   readPerm?: RequestHandler;
   managePerm?: RequestHandler;
+  assignPerm?: RequestHandler;
   repo?: InMemoryRecaptureRepository;
 }
 
@@ -58,16 +57,12 @@ function buildApp(opts: BuildAppOptions = {}) {
   const repo = opts.repo ?? new InMemoryRecaptureRepository();
   const customerRepo = makeCustomerRepo();
 
-  const listUC = new ListRecaptureLeads(repo);
-  const getUC = new GetRecaptureLead(repo);
-  const claimUC = new ClaimRecaptureLead(repo);
-  const claimNextUC = new ClaimNextRecaptureLead(repo);
-  const releaseUC = new ReleaseRecaptureLead(repo);
-  const updateStatusUC = new UpdateRecaptureLeadStatus(repo);
-  const addContactUC = new AddRecaptureContact(repo);
-  const ingestUC = new IngestChurnedClients(repo, customerRepo);
-  const importCsvUC = new ImportCsvLeads(repo);
-  const assignUC = new AssignRecaptureLead(repo, { findById: async (id) => ({ id }) });
+  const userLookup: EntityLookup = {
+    findById: async (id: string) => ({ id, name: `Operator ${id}` }),
+  };
+
+  const assignUC = new AssignRecaptureLead(repo, userLookup);
+  const assignBulkUC = new AssignRecaptureLeadsBulk(repo, userLookup);
 
   const app = express();
   app.use(express.json());
@@ -76,12 +71,20 @@ function buildApp(opts: BuildAppOptions = {}) {
   app.use(
     '/api/recapture',
     createRecaptureRouter(
-      listUC, getUC, claimUC, claimNextUC, releaseUC, updateStatusUC, addContactUC, ingestUC,
-      importCsvUC, assignUC,
+      new ListRecaptureLeads(repo),
+      new GetRecaptureLead(repo),
+      new UpdateRecaptureLeadStatus(repo),
+      new AddRecaptureContact(repo),
+      new IngestChurnedClients(repo, customerRepo),
+      new ImportCsvLeads(repo),
+      assignUC,
+      assignBulkUC,
+      async () => true,
       allowAuth,
       {
         read: opts.readPerm ?? allowPerm,
         manage: opts.managePerm ?? allowPerm,
+        assign: opts.assignPerm ?? allowPerm,
       },
     ),
   );
@@ -89,7 +92,7 @@ function buildApp(opts: BuildAppOptions = {}) {
   return { app, repo };
 }
 
-// ─── Tests: POST /import-csv ──────────────────────────────────────────────────
+// â”€â”€â”€ Tests: POST /import-csv â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe('POST /api/recapture/import-csv', () => {
   it('creates leads and returns { created, errors }', async () => {
@@ -110,8 +113,8 @@ describe('POST /api/recapture/import-csv', () => {
     expect(res.body.errors).toHaveLength(0);
   });
 
-  it('returns 403 when manage perm denied', async () => {
-    const { app } = buildApp({ managePerm: denyPerm });
+  it('returns 403 when assign perm is denied', async () => {
+    const { app } = buildApp({ assignPerm: denyPerm });
     const res = await request(app)
       .post('/api/recapture/import-csv')
       .set('Cookie', 'auth_token=tok')
@@ -134,7 +137,7 @@ describe('POST /api/recapture/import-csv', () => {
     const { app } = buildApp();
     const csv = [
       'nombre,telefono,email,direccion,motivo_baja,plan_anterior',
-      ',111,a@test.com,Av. 1,precio,basico',       // missing nombre — error
+      ',111,a@test.com,Av. 1,precio,basico',       // missing nombre â€” error
       'Bob,222,b@test.com,Av. 2,velocidad,premium', // valid
     ].join('\n');
 
@@ -149,7 +152,7 @@ describe('POST /api/recapture/import-csv', () => {
   });
 });
 
-// ─── Tests: GET /import-csv/template ─────────────────────────────────────────
+// â”€â”€â”€ Tests: GET /import-csv/template â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe('GET /api/recapture/import-csv/template', () => {
   it('returns text/csv with correct headers', async () => {
@@ -191,3 +194,4 @@ describe('GET /api/recapture/import-csv/template', () => {
     expect(lines.length).toBeGreaterThanOrEqual(2);
   });
 });
+
