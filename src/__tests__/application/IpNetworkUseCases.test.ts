@@ -1,4 +1,7 @@
 import { InMemoryIpNetworkRepository } from '../../infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
+import { InMemoryNasRepository } from '../../infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryRouterGateway } from '../../infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { InMemoryRadiusOrchestratorGateway } from '../../infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { ListIpNetworks } from '../../application/use-cases/ListIpNetworks';
 import { CreateIpNetwork } from '../../application/use-cases/CreateIpNetwork';
 import { ListIpPools } from '../../application/use-cases/ListIpPools';
@@ -9,10 +12,21 @@ function makeRepo() {
   return new InMemoryIpNetworkRepository();
 }
 
+// Deps de los counts (ruteo por nas.type). En los seeds default no hay IPs asignadas en
+// el router/RADIUS, así que assignedCount/usedIps quedan en 0 y total sale del rango/CIDR.
+function makeCountDeps() {
+  return {
+    nasRepo: new InMemoryNasRepository(),
+    router: new InMemoryRouterGateway(),
+    orchestrator: new InMemoryRadiusOrchestratorGateway(),
+  };
+}
+
 describe('ListIpNetworks', () => {
   it('returns 2 seeded networks', async () => {
     const repo = makeRepo();
-    const uc = new ListIpNetworks(repo);
+    const { nasRepo, router, orchestrator } = makeCountDeps();
+    const uc = new ListIpNetworks(repo, nasRepo, router, orchestrator);
 
     const result = await uc.execute();
 
@@ -23,7 +37,8 @@ describe('ListIpNetworks', () => {
 
   it('IpNetwork totalIps is 254 for /24', async () => {
     const repo = makeRepo();
-    const uc = new ListIpNetworks(repo);
+    const { nasRepo, router, orchestrator } = makeCountDeps();
+    const uc = new ListIpNetworks(repo, nasRepo, router, orchestrator);
 
     const result = await uc.execute();
     const cidr24 = result.find(n => n.network === '192.168.1.0/24');
@@ -60,7 +75,8 @@ describe('CreateIpNetwork', () => {
 describe('ListIpPools', () => {
   it('returns 3 seeded pools', async () => {
     const repo = makeRepo();
-    const uc = new ListIpPools(repo);
+    const { nasRepo, router, orchestrator } = makeCountDeps();
+    const uc = new ListIpPools(repo, nasRepo, router, orchestrator);
 
     const result = await uc.execute();
 

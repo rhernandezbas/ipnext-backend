@@ -23,6 +23,9 @@ import { ListTr069Devices } from '../../application/use-cases/ListTr069Devices';
 import { ProvisionDevice } from '../../application/use-cases/ProvisionDevice';
 import { createTr069Router } from '../../infrastructure/http/routes/tr069.routes';
 import { InMemoryIpNetworkRepository } from '../../infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
+import { InMemoryNasRepository } from '../../infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryRouterGateway } from '../../infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { InMemoryRadiusOrchestratorGateway } from '../../infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { ListIpNetworks } from '../../application/use-cases/ListIpNetworks';
 import { CreateIpNetwork } from '../../application/use-cases/CreateIpNetwork';
 import { DeleteIpNetwork } from '../../application/use-cases/DeleteIpNetwork';
@@ -103,14 +106,17 @@ function buildApp() {
   ));
 
   const ipRepo = new InMemoryIpNetworkRepository();
+  const ipNasRepo = new InMemoryNasRepository();
+  const ipRouter = new InMemoryRouterGateway();
+  const ipOrchestrator = new InMemoryRadiusOrchestratorGateway();
   app.use('/api', createIpNetworkRouter(
     new EchoAuthProvider(),
     undefined,
     allowAll,
-    new ListIpNetworks(ipRepo),
+    new ListIpNetworks(ipRepo, ipNasRepo, ipRouter, ipOrchestrator),
     new CreateIpNetwork(ipRepo),
     new DeleteIpNetwork(ipRepo),
-    new ListIpPools(ipRepo),
+    new ListIpPools(ipRepo, ipNasRepo, ipRouter, ipOrchestrator),
     new CreateIpPool(ipRepo),
     new ListIpAssignments(ipRepo),
     new DeleteIpPool(ipRepo),

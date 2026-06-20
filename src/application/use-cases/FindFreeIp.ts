@@ -5,49 +5,11 @@ import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { NasNotFoundError } from '@domain/errors/pppoe';
 import { NoFreeIpError, NoPoolForNasTypeError } from '@domain/errors/network';
+import { ipToInt, intToIp, networkEdges } from '@domain/services/ipMath';
 
 export interface FindFreeIpInput {
   nasId: string;
   type: IpKind;
-}
-
-/** IPv4 dotted-quad → entero sin signo de 32 bits. */
-function ipToInt(ip: string): number {
-  const parts = ip.trim().split('.');
-  if (parts.length !== 4) throw new Error(`IPv4 inválida: ${ip}`);
-  let acc = 0;
-  for (const part of parts) {
-    const octet = Number(part);
-    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
-      throw new Error(`IPv4 inválida: ${ip}`);
-    }
-    acc = acc * 256 + octet;
-  }
-  return acc >>> 0;
-}
-
-/** Entero de 32 bits → IPv4 dotted-quad. */
-function intToIp(n: number): string {
-  return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join('.');
-}
-
-/** Network + broadcast de un CIDR "a.b.c.d/p". null si el CIDR no es parseable. */
-function networkEdges(cidr: string): { network: number; broadcast: number } | null {
-  const [base, prefixStr] = cidr.split('/');
-  if (!base || prefixStr === undefined) return null;
-  const prefix = Number(prefixStr);
-  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
-  let baseInt: number;
-  try {
-    baseInt = ipToInt(base);
-  } catch {
-    return null;
-  }
-  // mask de `prefix` bits. /0 → 0; /32 → 0xffffffff.
-  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
-  const network = (baseInt & mask) >>> 0;
-  const broadcast = (network | (~mask >>> 0)) >>> 0;
-  return { network, broadcast };
 }
 
 /**

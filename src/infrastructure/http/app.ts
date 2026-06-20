@@ -1017,10 +1017,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const disable2FA = new Disable2FA(adminRepo);
 
   const ipNetworkRepo = new PrismaIpNetworkRepository();
-  const listIpNetworks = new ListIpNetworks(ipNetworkRepo);
+  // listIpNetworks / listIpPools se construyen más abajo: necesitan nasRepo + router + orchestrator
+  // (los counts se calculan de las IPs REALMENTE asignadas, ruteadas por nas.type, como FindFreeIp).
   const createIpNetwork = new CreateIpNetwork(ipNetworkRepo);
   const deleteIpNetwork = new DeleteIpNetwork(ipNetworkRepo);
-  const listIpPools = new ListIpPools(ipNetworkRepo);
   const createIpPool = new CreateIpPool(ipNetworkRepo);
   const deleteIpPool = new DeleteIpPool(ipNetworkRepo);
   const listIpAssignments = new ListIpAssignments(ipNetworkRepo);
@@ -1096,6 +1096,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   //   'mikrotik_radius' → RADIUS (orchestrator.listAssignedIps, radreply Framed-IP);
   //   resto            → router (/ppp secret, remote-address vivos).
   const findFreeIp = new FindFreeIp(ipNetworkRepo, nasRepo, new RouterOsGateway(), orchestrator);
+
+  // Gestión de Red IP — counts REALES: la verdad de las IPs asignadas vive en el RADIUS
+  // (mikrotik_radius → orchestrator) o el router (resto), no en la tabla IpAssignment (vacía en prod).
+  // Mismo ruteo por nas.type que el allocator. Degrada por pool/red si el NAS está caído (no 500).
+  const listIpNetworks = new ListIpNetworks(ipNetworkRepo, nasRepo, new RouterOsGateway(), orchestrator);
+  const listIpPools = new ListIpPools(ipNetworkRepo, nasRepo, new RouterOsGateway(), orchestrator);
 
   const networkSiteRepo = new PrismaNetworkSiteRepository();
   const listNetworkSites = new ListNetworkSites(networkSiteRepo);

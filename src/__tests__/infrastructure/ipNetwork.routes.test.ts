@@ -13,6 +13,9 @@ import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
 import { requirePermission } from '@infrastructure/http/middleware/requirePermission';
 
 import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
+import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
 import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
@@ -100,6 +103,9 @@ async function buildApp(): Promise<Fixture> {
   await userRoleRepo.assign(manageUser.id, managerRole.id);
 
   const repo = new InMemoryIpNetworkRepository();
+  const nasRepo = new InMemoryNasRepository();
+  const router = new InMemoryRouterGateway();
+  const orchestrator = new InMemoryRadiusOrchestratorGateway();
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
   const app = express();
@@ -109,10 +115,10 @@ async function buildApp(): Promise<Fixture> {
     new EchoAuthProvider(),
     undefined,
     requirePerm,
-    new ListIpNetworks(repo),
+    new ListIpNetworks(repo, nasRepo, router, orchestrator),
     new CreateIpNetwork(repo),
     new DeleteIpNetwork(repo),
-    new ListIpPools(repo),
+    new ListIpPools(repo, nasRepo, router, orchestrator),
     new CreateIpPool(repo),
     new ListIpAssignments(repo),
   ));
