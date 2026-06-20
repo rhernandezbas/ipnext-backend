@@ -36,6 +36,18 @@ export interface SuspendOptions {
   reason?: string;
 }
 
+/**
+ * Item del INVENTARIO de usuarios del RADIUS (`GET /users`). Es la verdad técnica del FreeRADIUS:
+ * incluye la `password` (cleartext) porque el objetivo es ADOPTAR el inventario existente
+ * (cargar los PPPoE reales como filas huérfanas con su clave). `framedIp`/`plan` pueden faltar.
+ */
+export interface RadiusUserInventoryItem {
+  username: string;
+  password: string;
+  plan: string | null;
+  framedIp: string | null;
+}
+
 /** Alta de un usuario en el RADIUS. Corresponde a `POST /users` del orchestrator. */
 export interface CreateRadiusUserInput {
   username: string;
@@ -53,6 +65,13 @@ export interface RadiusOrchestratorGateway {
    * Usuario duplicado (orchestrator 409) → `OrchestratorRejectedError` (la ruta → 409).
    */
   createUser(input: CreateRadiusUserInput): Promise<void>;
+
+  /**
+   * Lista el INVENTARIO completo de usuarios del RADIUS (con su password cleartext).
+   * Corresponde a `GET /users` → `[{username, password, plan, framed_ip}]` (verificado en vivo).
+   * Es la fuente para ADOPTAR el inventario PPPoE existente (cargarlo como filas huérfanas).
+   */
+  listUsers(): Promise<RadiusUserInventoryItem[]>;
   changePlan(username: string, plan: string, opts?: ChangePlanOptions): Promise<void>;
   /**
    * Cambia la contraseña del usuario en el RADIUS (radcheck Cleartext-Password).

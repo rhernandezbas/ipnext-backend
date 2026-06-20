@@ -55,4 +55,12 @@ describe('InMemoryPppoeServiceRepository', () => {
   it('findByUsername devuelve null si no existe', async () => {
     expect(await repo.findByUsername('nope')).toBeNull();
   });
+
+  it('findUnassigned devuelve SOLO los huérfanos (contractId null)', async () => {
+    await repo.upsertByUsername({ username: 'orphan1', password: 'p', nasId: 'n1', contractId: null });
+    await repo.upsertByUsername({ username: 'orphan2', password: 'p', nasId: 'n1' }); // default null
+    await repo.upsertByUsername({ username: 'asociado', password: 'p', nasId: 'n1', contractId: 'C1' });
+    const orphans = await repo.findUnassigned();
+    expect(orphans.map(s => s.username).sort()).toEqual(['orphan1', 'orphan2']);
+  });
 });

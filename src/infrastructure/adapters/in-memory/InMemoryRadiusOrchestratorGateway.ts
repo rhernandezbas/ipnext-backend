@@ -4,6 +4,7 @@ import {
   ChangePlanOptions,
   SuspendOptions,
   CreateRadiusUserInput,
+  RadiusUserInventoryItem,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -69,6 +70,8 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   private readonly onSyncPlanCb: (() => void) | undefined;
   /** IPs asignadas en el RADIUS (radreply Framed-IP) que devuelve listAssignedIps. */
   private readonly assignedIps: string[];
+  /** Inventario que devuelve listUsers (GET /users). Sembrable para tests de ingest/adopción. */
+  private readonly usersInventory: RadiusUserInventoryItem[];
 
   public readonly calls: UserCallLog[] = [];
   public readonly planCalls: PlanCallLog[] = [];
@@ -87,12 +90,15 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     onSyncPlan?: () => void;
     /** IPs asignadas que devolverá listAssignedIps (radreply Framed-IP). Default: []. */
     assignedIps?: string[];
+    /** Inventario que devolverá listUsers (GET /users). Default: []. */
+    usersInventory?: RadiusUserInventoryItem[];
   }) {
     this.unreachable = new Set(opts?.unreachable ?? []);
     this.failForPlanCode = new Set(opts?.failForPlanCode ?? []);
     this.rejectPlanCode = new Map((opts?.rejectPlanCode ?? []).map(r => [r.code, r]));
     this.onSyncPlanCb = opts?.onSyncPlan;
     this.assignedIps = [...(opts?.assignedIps ?? [])];
+    this.usersInventory = [...(opts?.usersInventory ?? [])];
     for (const u of opts?.seed ?? []) {
       this.state.set(u.username, { plan: u.plan ?? '', suspended: u.suspended ?? false });
       if (u.sessions) this.sessions.set(u.username, u.sessions);
@@ -138,6 +144,10 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     this.createdUsers.set(input.username, record);
     this.calls.push({ op: 'createUser', username: input.username, arg: record });
     this.upsert(input.username).plan = input.plan;
+  }
+
+  async listUsers(): Promise<RadiusUserInventoryItem[]> {
+    return this.usersInventory.map(u => ({ ...u }));
   }
 
   async changePlan(username: string, plan: string, opts?: ChangePlanOptions): Promise<void> {

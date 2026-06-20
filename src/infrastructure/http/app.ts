@@ -632,6 +632,10 @@ import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeSe
 import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
 import { PreviewEnforcement } from '@application/use-cases/PreviewEnforcement';
 import { RunBulkEnforcement } from '@application/use-cases/RunBulkEnforcement';
+import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
+import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
+import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
+import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
 import { ServiceCutRunner } from '../scheduling/ServiceCutRunner';
 import { PrismaServiceCutBatchRepository } from '../adapters/prisma/PrismaServiceCutBatchRepository';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
@@ -2044,6 +2048,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       previewEnforcement,
       serviceCutRunner,
       cutBatchRepo,
+      // Adopción del inventario — comparte el singleton `orchestrator` (listUsers vía GET /users).
+      new IngestPppoeFromNas(pppoeRepo, nasRepoForPppoe, orchestrator),
+      new AssociatePppoeToContract(pppoeRepo),
+      new GetPppoeCredentials(pppoeRepo),
+      new ListUnassignedPppoe(pppoeRepo),
     ));
   }
 

@@ -41,6 +41,10 @@ import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService'
 import { PreviewEnforcement } from '@application/use-cases/PreviewEnforcement';
 import { RunBulkEnforcement } from '@application/use-cases/RunBulkEnforcement';
 import { ServiceCutRunner } from '@infrastructure/scheduling/ServiceCutRunner';
+import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
+import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
+import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
+import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -80,7 +84,11 @@ interface Fixture {
   noPermUserId: string;
 }
 
-async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> {
+type RadiusInventory = ConstructorParameters<typeof InMemoryRadiusOrchestratorGateway>[0] extends infer O
+  ? O extends { usersInventory?: infer U } ? U : never
+  : never;
+
+async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: RadiusInventory }): Promise<Fixture> {
   // RBAC plumbing
   const roleRepo     = new InMemoryRbacRoleRepository();
   const userRoleRepo = new InMemoryRbacUserRoleRepository();
@@ -143,6 +151,7 @@ async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> 
   app.use(express.json());
   const batchRepo = new InMemoryServiceCutBatchRepository();
   const lock = new InMemoryDistributedLock();
+  const orchestrator = new InMemoryRadiusOrchestratorGateway({ usersInventory: opts?.usersInventory });
   const enforce = new EnforcePppoeService(pppoeRepo, new RouterOsEnforcementAdapter(routerGw, 'IP-REDUCCION'), nasRepo);
   const preview = new PreviewEnforcement(pppoeRepo);
   const bulk = new RunBulkEnforcement(pppoeRepo, enforce, batchRepo, { throttleMs: 0 });
@@ -153,14 +162,18 @@ async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> 
     undefined, // sessionRepo: stateless en tests
     requirePerm,
     new ListPppoeByContract(pppoeRepo),
-    new CreatePppoeService(pppoeRepo, routerGw, nasRepo, new InMemoryRadiusOrchestratorGateway()),
-    new UpdatePppoeService(pppoeRepo, routerGw, nasRepo, new InMemoryRadiusOrchestratorGateway()),
+    new CreatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator),
+    new UpdatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator),
     new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepo),
-    new DeactivatePppoeService(pppoeRepo, routerGw, nasRepo, new InMemoryRadiusOrchestratorGateway()),
+    new DeactivatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator),
     enforce,
     preview,
     runner,
     batchRepo,
+    new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator),
+    new AssociatePppoeToContract(pppoeRepo),
+    new GetPppoeCredentials(pppoeRepo),
+    new ListUnassignedPppoe(pppoeRepo),
   ));
   app.use(errorHandler);
 
@@ -618,5 +631,171 @@ describe('DELETE /api/pppoe/:id', () => {
     );
     expect(res.status).toBe(502);
     expect(res.body.code).toBe('ROUTER_UNREACHABLE');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Adopción del inventario — ingest / associate / credentials / unassigned
+// ════════════════════════════════════════════════════════════════════════════════
+
+// NAS id '3' del InMemoryNasRepository = mikrotik_radius; '1' = mikrotik_api
+const RADIUS_NAS = '3';
+const INVENTORY = [
+  { username: 'juanperez', password: 'pass1234', plan: 'IP-Air-30-10', framedIp: '100.64.10.10' },
+  { username: 'mariam',    password: 'otra',     plan: null,           framedIp: null },
+];
+
+describe('POST /api/nas/:id/ingest-pppoe (pppoe.manage)', () => {
+  it('401 sin auth', async () => {
+    const { app } = await buildApp();
+    expect((await request(app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`)).status).toBe(401);
+  });
+
+  it('403 con pppoe.read solo', async () => {
+    const fx = await buildApp({ usersInventory: INVENTORY });
+    const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.readUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('mikrotik_radius → 200 {created, skipped} y crea huérfanos', async () => {
+    const fx = await buildApp({ usersInventory: INVENTORY });
+    const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ created: 2, skipped: 0 });
+    const orphans = await fx.pppoeRepo.findUnassigned();
+    expect(orphans.map(s => s.username).sort()).toEqual(['juanperez', 'mariam']);
+  });
+
+  it('segundo ingest → skip de existentes (no clobber)', async () => {
+    const fx = await buildApp({ usersInventory: INVENTORY });
+    await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
+    const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ created: 0, skipped: 2 });
+  });
+
+  it('NAS mikrotik_api → 422 PPPOE_INGEST_NOT_SUPPORTED', async () => {
+    const fx = await buildApp({ usersInventory: INVENTORY });
+    const res = await asUser(request(fx.app).post(`/api/nas/1/ingest-pppoe`), fx.manageUserId);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('PPPOE_INGEST_NOT_SUPPORTED');
+  });
+
+  it('NAS inexistente → 404 NAS_NOT_FOUND', async () => {
+    const fx = await buildApp({ usersInventory: INVENTORY });
+    const res = await asUser(request(fx.app).post(`/api/nas/nas-99/ingest-pppoe`), fx.manageUserId);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NAS_NOT_FOUND');
+  });
+});
+
+describe('POST /api/pppoe/:id/associate (pppoe.manage)', () => {
+  async function seedOrphan(fx: Fixture, username = 'orphan') {
+    return fx.pppoeRepo.upsertByUsername({ username, password: 'p', nasId: RADIUS_NAS, contractId: null });
+  }
+
+  it('401 sin auth', async () => {
+    const { app } = await buildApp();
+    expect((await request(app).post('/api/pppoe/x/associate').send({ contractId: 'C1' })).status).toBe(401);
+  });
+
+  it('403 con pppoe.read solo', async () => {
+    const fx = await buildApp();
+    const s = await seedOrphan(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/associate`).send({ contractId: 'C1' }), fx.readUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('asocia un huérfano → 200 con contractId', async () => {
+    const fx = await buildApp();
+    const s = await seedOrphan(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/associate`).send({ contractId: 'C42' }), fx.manageUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.contractId).toBe('C42');
+    expect(res.body.password).toBeUndefined();
+  });
+
+  it('PPPoE inexistente → 404 PPPOE_NOT_FOUND', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).post('/api/pppoe/no-existe/associate').send({ contractId: 'C1' }), fx.manageUserId);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PPPOE_NOT_FOUND');
+  });
+
+  it('ya asociado a OTRO contrato → 409 PPPOE_ALREADY_ASSOCIATED', async () => {
+    const fx = await buildApp();
+    const s = await fx.pppoeRepo.upsertByUsername({ username: 'asoc', password: 'p', nasId: RADIUS_NAS, contractId: 'C1' });
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/associate`).send({ contractId: 'C2' }), fx.manageUserId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PPPOE_ALREADY_ASSOCIATED');
+  });
+
+  it('body sin contractId → 422 VALIDATION_ERROR', async () => {
+    const fx = await buildApp();
+    const s = await seedOrphan(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/associate`).send({}), fx.manageUserId);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('GET /api/pppoe/:id/credentials (pppoe.manage)', () => {
+  it('401 sin auth', async () => {
+    const { app } = await buildApp();
+    expect((await request(app).get('/api/pppoe/x/credentials')).status).toBe(401);
+  });
+
+  it('403 con pppoe.read solo (la clave es pppoe.manage)', async () => {
+    const fx = await buildApp();
+    const s = await fx.pppoeRepo.upsertByUsername({ username: 'u', password: 'secret', nasId: RADIUS_NAS });
+    const res = await asUser(request(fx.app).get(`/api/pppoe/${s.id}/credentials`), fx.readUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('revela {username, password} → 200', async () => {
+    const fx = await buildApp();
+    const s = await fx.pppoeRepo.upsertByUsername({ username: 'juanperez', password: 'pass1234', nasId: RADIUS_NAS });
+    const res = await asUser(request(fx.app).get(`/api/pppoe/${s.id}/credentials`), fx.manageUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ username: 'juanperez', password: 'pass1234' });
+  });
+
+  it('PPPoE inexistente → 404 PPPOE_NOT_FOUND', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).get('/api/pppoe/no-existe/credentials'), fx.manageUserId);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PPPOE_NOT_FOUND');
+  });
+});
+
+describe('GET /api/pppoe/unassigned (pppoe.read)', () => {
+  it('401 sin auth', async () => {
+    const { app } = await buildApp();
+    expect((await request(app).get('/api/pppoe/unassigned')).status).toBe(401);
+  });
+
+  it('403 sin ningún permiso', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).get('/api/pppoe/unassigned'), fx.noPermUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('lista solo huérfanos SIN password → 200', async () => {
+    const fx = await buildApp();
+    await fx.pppoeRepo.upsertByUsername({ username: 'orphan1', password: 'p', nasId: RADIUS_NAS, contractId: null });
+    await fx.pppoeRepo.upsertByUsername({ username: 'asociado', password: 'p', nasId: RADIUS_NAS, contractId: 'C1' });
+    const res = await asUser(request(fx.app).get('/api/pppoe/unassigned'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].username).toBe('orphan1');
+    expect(res.body[0].password).toBeUndefined();   // frontera de seguridad
+    expect(res.body[0].contractId).toBeNull();
+  });
+
+  it('pppoe.read NO debe poder asociar ni revelar (gating diferenciado) — happy via manage', async () => {
+    const fx = await buildApp();
+    await fx.pppoeRepo.upsertByUsername({ username: 'o', password: 'p', nasId: RADIUS_NAS, contractId: null });
+    const res = await asUser(request(fx.app).get('/api/pppoe/unassigned'), fx.manageUserId);
+    expect(res.status).toBe(200); // manage también incluye read en este fixture
   });
 });

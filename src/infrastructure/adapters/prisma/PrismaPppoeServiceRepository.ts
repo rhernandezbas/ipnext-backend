@@ -52,6 +52,21 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     return rows.map(toEntity);
   }
 
+  async findUnassigned(): Promise<PppoeService[]> {
+    const rows = await model().findMany({ where: { contractId: null } });
+    return rows.map(toEntity);
+  }
+
+  async setContractId(id: string, contractId: string): Promise<PppoeService | null> {
+    try {
+      const row = await model().update({ where: { id }, data: { contractId } });
+      return toEntity(row);
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null; // fila inexistente → null; el resto PROPAGA
+      throw err;
+    }
+  }
+
   async setEnforcedState(id: string, state: EnforcedState): Promise<PppoeService | null> {
     try {
       const row = await model().update({ where: { id }, data: { enforcedState: state } });

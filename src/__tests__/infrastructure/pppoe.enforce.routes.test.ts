@@ -18,6 +18,10 @@ import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemo
 import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
+import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
+import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
+import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
+import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
 import { InMemoryServiceCutBatchRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCutBatchRepository';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
@@ -138,6 +142,10 @@ async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> 
     preview,
     runner,
     batchRepo,
+    new IngestPppoeFromNas(pppoeRepo, nasRepo, new InMemoryRadiusOrchestratorGateway()),
+    new AssociatePppoeToContract(pppoeRepo),
+    new GetPppoeCredentials(pppoeRepo),
+    new ListUnassignedPppoe(pppoeRepo),
   ));
   app.use(errorHandler);
 

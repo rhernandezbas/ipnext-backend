@@ -70,6 +70,17 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     return this.store.filter(s => s.contractId === contractId).map(s => ({ ...s }));
   }
 
+  async findUnassigned(): Promise<PppoeService[]> {
+    return this.store.filter(s => s.contractId === null).map(s => ({ ...s }));
+  }
+
+  async setContractId(id: string, contractId: string): Promise<PppoeService | null> {
+    const found = this.store.find(s => s.id === id);
+    if (!found) return null;
+    found.contractId = contractId;
+    return { ...found };
+  }
+
   async setEnforcedState(id: string, state: EnforcedState): Promise<PppoeService | null> {
     const found = this.store.find(s => s.id === id);
     if (!found) return null;

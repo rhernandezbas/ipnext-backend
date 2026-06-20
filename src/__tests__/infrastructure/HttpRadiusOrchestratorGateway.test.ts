@@ -124,6 +124,29 @@ describe('HttpRadiusOrchestratorGateway (Inc3b — cliente HTTP real, espeja la 
     const ips = await gw.listAssignedIps();
     expect(ips).toEqual([]);
   });
+
+  it('listUsers → GET /users y mapea framed_ip → framedIp (con password)', async () => {
+    const { http, gw } = fakeHttp({
+      get: jest.fn().mockResolvedValue({
+        data: [
+          { username: 'juanperez', password: 'pass1234', plan: 'IP-Air-30-10', framed_ip: '100.64.10.10' },
+          { username: 'mariam',    password: 'otra',     plan: null,           framed_ip: null },
+        ],
+      }),
+    });
+    const users = await gw.listUsers();
+    expect(http.get).toHaveBeenCalledWith('/users');
+    expect(users).toEqual([
+      { username: 'juanperez', password: 'pass1234', plan: 'IP-Air-30-10', framedIp: '100.64.10.10' },
+      { username: 'mariam',    password: 'otra',     plan: null,           framedIp: null },
+    ]);
+  });
+
+  it('listUsers → body no-array devuelve []', async () => {
+    const { gw } = fakeHttp({ get: jest.fn().mockResolvedValue({ data: {} }) });
+    const users = await gw.listUsers();
+    expect(users).toEqual([]);
+  });
 });
 
 describe('HttpRadiusOrchestratorGateway — W2 4xx vs 5xx/red distinction', () => {

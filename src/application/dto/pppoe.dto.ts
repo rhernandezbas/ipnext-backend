@@ -81,6 +81,13 @@ export const MovePppoeBodySchema = z.object({
 
 export type MovePppoeBody = z.infer<typeof MovePppoeBodySchema>;
 
+/** Body de POST /pppoe/:id/associate — asocia un PPPoE huérfano a un contrato. */
+export const AssociatePppoeBodySchema = z.object({
+  contractId: z.string().min(1),
+});
+
+export type AssociatePppoeBody = z.infer<typeof AssociatePppoeBodySchema>;
+
 // ── Fase C — enforcement (cortes) ────────────────────────────────────────────
 
 const EnforcementActionSchema = z.enum(['reduce', 'block', 'restore']);

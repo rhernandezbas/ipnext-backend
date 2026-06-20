@@ -5,6 +5,7 @@ import {
   ChangePlanOptions,
   SuspendOptions,
   CreateRadiusUserInput,
+  RadiusUserInventoryItem,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -66,6 +67,12 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     );
   }
 
+  async listUsers(): Promise<RadiusUserInventoryItem[]> {
+    const { data } = await this.call(() => this.http.get('/users'));
+    const rows: unknown = data;
+    return (Array.isArray(rows) ? rows : []).map(toInventoryItem);
+  }
+
   async changePlan(username: string, plan: string, opts?: ChangePlanOptions): Promise<void> {
     await this.call(() =>
       this.http.post(this.path(username, '/plan'), { plan, apply_in_session: opts?.applyInSession ?? false }),
@@ -122,6 +129,16 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     const ips: unknown = (data as { ips?: unknown } | null)?.ips;
     return Array.isArray(ips) ? (ips as string[]) : [];
   }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toInventoryItem(r: any): RadiusUserInventoryItem {
+  return {
+    username: r.username,
+    password: r.password,
+    plan: r.plan ?? null,
+    framedIp: r.framed_ip ?? null,
+  };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

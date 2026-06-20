@@ -34,6 +34,24 @@ export class PppoeServiceNotFoundError extends DomainError {
 }
 
 /**
+ * El PPPoE ya está asociado a OTRO contrato. Asociarlo de nuevo a uno distinto requeriría
+ * primero desasociarlo: rechazamos para no robar silenciosamente un PPPoE de su contrato.
+ * Re-asociar al MISMO contrato es idempotente (no lanza). Code → HTTP: PPPOE_ALREADY_ASSOCIATED → 409.
+ */
+export class PppoeAlreadyAssociatedError extends DomainError {
+  constructor(
+    public readonly pppoeId: string,
+    public readonly currentContractId: string,
+  ) {
+    super(
+      `El PPPoE ${pppoeId} ya está asociado al contrato ${currentContractId}`,
+      'PPPOE_ALREADY_ASSOCIATED',
+    );
+    this.name = 'PppoeAlreadyAssociatedError';
+  }
+}
+
+/**
  * Alta en un NAS RADIUS (`mikrotik_radius`) sin `profile`. Un usuario RADIUS NECESITA su grupo/plan
  * (radusergroup) — no hay default. Code → HTTP: PPPOE_PROFILE_REQUIRED → 422.
  */
@@ -44,6 +62,21 @@ export class PppoeProfileRequiredError extends DomainError {
       'PPPOE_PROFILE_REQUIRED',
     );
     this.name = 'PppoeProfileRequiredError';
+  }
+}
+
+/**
+ * El NAS no soporta la ADOPCIÓN del inventario PPPoE (ingest). Hoy SOLO `mikrotik_radius`
+ * expone `GET /users` con passwords vía el orchestrator; el resto (`mikrotik_api`, …) no.
+ * Code → HTTP: PPPOE_INGEST_NOT_SUPPORTED → 422.
+ */
+export class PppoeIngestNotSupportedError extends DomainError {
+  constructor(public readonly nasType: string) {
+    super(
+      `La adopción de inventario PPPoE no está soportada para el tipo de NAS '${nasType}' todavía (solo 'mikrotik_radius')`,
+      'PPPOE_INGEST_NOT_SUPPORTED',
+    );
+    this.name = 'PppoeIngestNotSupportedError';
   }
 }
 

@@ -7,6 +7,11 @@
  *   PATCH  /api/pppoe/:id                         pppoe.manage
  *   POST   /api/pppoe/:id/move                    pppoe.manage
  *   DELETE /api/pppoe/:id                         pppoe.manage  (baja soft)
+ *   --- Adopción del inventario ---
+ *   GET    /api/pppoe/unassigned                  pppoe.read    (huérfanos, sin password)
+ *   POST   /api/nas/:id/ingest-pppoe              pppoe.manage  (adopta el inventario del NAS)
+ *   POST   /api/pppoe/:id/associate              pppoe.manage  (asocia a un contrato)
+ *   GET    /api/pppoe/:id/credentials            pppoe.manage  (revela {username, password})
  *   --- Fase C (cortes) ---
  *   POST   /api/pppoe/enforce/preview            pppoe.cut   (impacto, sin ejecutar)
  *   POST   /api/pppoe/enforce/bulk               pppoe.cut   (202 + jobId; 409 si hay uno en curso)
@@ -34,12 +39,17 @@ import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServic
 import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeService';
 import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
 import { PreviewEnforcement } from '@application/use-cases/PreviewEnforcement';
+import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
+import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
+import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
+import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
 import type { ServiceCutRunner } from '@infrastructure/scheduling/ServiceCutRunner';
 import type { ServiceCutBatchRepository } from '@domain/ports/ServiceCutBatchRepository';
 import {
   CreatePppoeBodySchema,
   UpdatePppoeBodySchema,
   MovePppoeBodySchema,
+  AssociatePppoeBodySchema,
   EnforcePppoeBodySchema,
   EnforceBulkBodySchema,
   toPppoeServiceDto,
@@ -52,6 +62,8 @@ import {
   PppoeUsernameTakenError,
   PppoeProfileRequiredError,
   PppoeServiceNotFoundError,
+  PppoeAlreadyAssociatedError,
+  PppoeIngestNotSupportedError,
   NasNotFoundError,
 } from '@domain/errors/pppoe';
 
@@ -70,6 +82,10 @@ export function createPppoeRouter(
   previewEnforcement: PreviewEnforcement,
   serviceCutRunner: ServiceCutRunner,
   serviceCutBatchRepo: ServiceCutBatchRepository,
+  ingestPppoeFromNas: IngestPppoeFromNas,
+  associatePppoeToContract: AssociatePppoeToContract,
+  getPppoeCredentials: GetPppoeCredentials,
+  listUnassignedPppoe: ListUnassignedPppoe,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -128,6 +144,101 @@ export function createPppoeRouter(
           return;
         }
         if (err instanceof NasNotFoundError) {
+          res.status(404).json({ code: err.code, error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Adopción del inventario PPPoE — ingest + associate + reveal + unassigned.
+  // /pppoe/unassigned (literal) va ANTES de cualquier /pppoe/:id para no ser sombreada.
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── GET /pppoe/unassigned — huérfanos (contractId=null), DTO SIN password ────
+  router.get(
+    '/pppoe/unassigned',
+    auth,
+    canRead,
+    async (_req: Request, res: Response): Promise<void> => {
+      const orphans = await listUnassignedPppoe.execute();
+      res.json(orphans.map(toPppoeServiceDto));
+    },
+  );
+
+  // ── POST /nas/:id/ingest-pppoe — adopta el inventario del NAS (huérfanos) ─────
+  router.post(
+    '/nas/:id/ingest-pppoe',
+    auth,
+    canManage,
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const result = await ingestPppoeFromNas.execute(req.params['id'] as string);
+        res.json(result);
+      } catch (err) {
+        // RADIUS/orchestrator inalcanzable (red/timeout/5xx) → 502.
+        if (err instanceof OrchestratorUnreachableError) {
+          res.status(502).json({ code: err.code, error: err.message });
+          return;
+        }
+        if (err instanceof NasNotFoundError) {
+          res.status(404).json({ code: err.code, error: err.message });
+          return;
+        }
+        // Tipo de NAS sin soporte de adopción todavía (no es mikrotik_radius).
+        if (err instanceof PppoeIngestNotSupportedError) {
+          res.status(422).json({ code: err.code, error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  // ── POST /pppoe/:id/associate — asocia un huérfano a un contrato ─────────────
+  router.post(
+    '/pppoe/:id/associate',
+    auth,
+    canManage,
+    async (req: Request, res: Response): Promise<void> => {
+      const parsed = AssociatePppoeBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const service = await associatePppoeToContract.execute(req.params['id'] as string, parsed.data.contractId);
+        res.json(toPppoeServiceDto(service));
+      } catch (err) {
+        if (err instanceof PppoeServiceNotFoundError) {
+          res.status(404).json({ code: err.code, error: err.message });
+          return;
+        }
+        // Ya asociado a OTRO contrato → 409 (mover requiere desasociar primero).
+        if (err instanceof PppoeAlreadyAssociatedError) {
+          res.status(409).json({ code: err.code, error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  // ── GET /pppoe/:id/credentials — revela {username, password} (pppoe.manage) ──
+  // Superficie DEDICADA y gated; espeja el patrón de /customers/:id/tv-credentials.
+  // El PppoeServiceDto NUNCA expone password: la clave SOLO sale por acá.
+  router.get(
+    '/pppoe/:id/credentials',
+    auth,
+    canManage,
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const creds = await getPppoeCredentials.execute(req.params['id'] as string);
+        res.json(creds);
+      } catch (err) {
+        if (err instanceof PppoeServiceNotFoundError) {
           res.status(404).json({ code: err.code, error: err.message });
           return;
         }

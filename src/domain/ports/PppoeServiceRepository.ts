@@ -18,6 +18,13 @@ export interface PppoeServiceRepository {
   findById(id: string): Promise<PppoeService | null>;
   findByUsername(username: string): Promise<PppoeService | null>;
   findByContract(contractId: string): Promise<PppoeService[]>;
+  /** PPPoE HUÉRFANOS: sin contrato asociado (contractId=null). El inventario por adoptar. */
+  findUnassigned(): Promise<PppoeService[]>;
+  /**
+   * Asocia un PPPoE a un contrato seteando SOLO su `contractId` (no toca password/profile/etc.).
+   * Devuelve la entidad actualizada, o null si el PPPoE no existe.
+   */
+  setContractId(id: string, contractId: string): Promise<PppoeService | null>;
 
   // ── Fase C (enforcement) ───────────────────────────────────────────────────
   /**
