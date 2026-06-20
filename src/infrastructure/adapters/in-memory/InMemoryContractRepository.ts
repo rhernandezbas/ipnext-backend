@@ -16,9 +16,15 @@ export class InMemoryContractRepository implements ContractRepository {
   private items: ContractListItem[] = [];
   /** #43 — manual `name` per contract id, exercised by updateName. */
   public names: Record<string, string | null> = {};
+  /**
+   * Fase 2b — GR `Contract.vendedor` per seeded contract. Not part of the wire
+   * DTO (ContractListItem); kept as a parallel list so listDistinctVendedores
+   * can mirror the Prisma adapter without leaking vendedor into the listing.
+   */
+  private vendedores: (string | null)[] = [];
 
   /** Test seam: seed a contract list item. Returns the generated id. */
-  seed(data: Partial<ContractListItem> & { clientName: string; plan: string }): ContractListItem {
+  seed(data: Partial<ContractListItem> & { clientName: string; plan: string; vendedor?: string | null }): ContractListItem {
     const item: ContractListItem = {
       id: data.id ?? randomUUID(),
       code: data.code ?? null,
@@ -30,6 +36,7 @@ export class InMemoryContractRepository implements ContractRepository {
       startDate: data.startDate ?? new Date().toISOString(),
     };
     this.items.push(item);
+    this.vendedores.push(data.vendedor ?? null);
     if (!(item.id in this.names)) this.names[item.id] = null;
     return item;
   }
@@ -77,5 +84,13 @@ export class InMemoryContractRepository implements ContractRepository {
     // W-3 — undefined is a no-op: leave the stored name untouched.
     if (name !== undefined) this.names[id] = name;
     return { id, name: this.names[id] };
+  }
+
+  async listDistinctVendedores(): Promise<string[]> {
+    const distinct = new Set<string>();
+    for (const v of this.vendedores) {
+      if (v !== null && v !== '') distinct.add(v);
+    }
+    return Array.from(distinct).sort((a, b) => a.localeCompare(b));
   }
 }

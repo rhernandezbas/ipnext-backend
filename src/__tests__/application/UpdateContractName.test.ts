@@ -12,6 +12,7 @@ class StubContractRepo implements ContractRepository {
     if (name !== undefined) this.store[id] = name;
     return { id, name: this.store[id] };
   }
+  async listDistinctVendedores(): Promise<string[]> { throw new Error('not used'); }
 }
 
 describe('UpdateContractName', () => {

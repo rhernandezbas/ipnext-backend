@@ -80,4 +80,16 @@ export class PrismaContractRepository implements ContractRepository {
       throw err;
     }
   }
+
+  async listDistinctVendedores(): Promise<string[]> {
+    const rows = await prisma.contract.findMany({
+      where: { vendedor: { not: null } },
+      distinct: ['vendedor'],
+      select: { vendedor: true },
+      orderBy: { vendedor: 'asc' },
+    });
+    return rows
+      .map((r) => r.vendedor)
+      .filter((v): v is string => v !== null && v !== '');
+  }
 }

@@ -45,4 +45,10 @@ export interface ContractRepository {
    * `{ id, name }` is returned (still `null` when the contract does not exist).
    */
   updateName(id: string, name?: string | null): Promise<{ id: string; name: string | null } | null>;
+
+  /**
+   * Mis clientes (Fase 2b) — distinct GR `Contract.vendedor` values, non-null,
+   * alphabetically ordered. Feeds the FE dropdown for the agente↔vendedor mapping.
+   */
+  listDistinctVendedores(): Promise<string[]>;
 }

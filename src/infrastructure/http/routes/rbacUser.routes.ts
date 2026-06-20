@@ -154,15 +154,14 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
   // PATCH /:id — update user (partial)
   router.patch('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { name, email, login, status, password, grVendedorName } = req.body as {
+      const { name, email, login, status, password } = req.body as {
         name?: string;
         email?: string;
         login?: string;
         status?: 'active' | 'disabled';
         password?: string;
-        grVendedorName?: string | null;
       };
-      const user = await deps.updateUser.execute(req.params['id'] as string, { name, email, login, status, password, grVendedorName });
+      const user = await deps.updateUser.execute(req.params['id'] as string, { name, email, login, status, password });
       res.json({ user });
     } catch (err) {
       next(err);

@@ -260,12 +260,14 @@ describe('PATCH /admin/rbac/users/:id', () => {
     expect(res.body.user.name).toBe('Updated Name');
   });
 
-  it('200 persists grVendedorName from the body', async () => {
+  // Fase 2b — the generic user PATCH no longer accepts/exposes grVendedorName.
+  // The agente↔vendedor mapping has its own isolated sub-page (/api/admin/gr).
+  it('200 but ignores grVendedorName in the generic user PATCH body', async () => {
     const { app, superAdminUser: sa } = await buildTestApp();
     const res = await authed(request(app).patch(`/admin/rbac/users/${sa.id}`), sa.id)
       .send({ grVendedorName: 'JUAN PEREZ' });
     expect(res.status).toBe(200);
-    expect(res.body.user.grVendedorName).toBe('JUAN PEREZ');
+    expect('grVendedorName' in res.body.user).toBe(false);
   });
 });
 

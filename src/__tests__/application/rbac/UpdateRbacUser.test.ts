@@ -71,40 +71,17 @@ describe('UpdateRbacUser', () => {
     await expect(uc.execute('non-existent', { name: 'Test' })).rejects.toThrow(UserNotFoundError);
   });
 
-  it('grVendedorName set should persist and be returned in the DTO', async () => {
+  // Fase 2b — grVendedorName is no longer handled by the generic UpdateRbacUser
+  // use case. The agente↔vendedor mapping lives in SetVendedorMapping (isolated).
+  it('does NOT persist grVendedorName even if it leaks into the DTO', async () => {
     const { userRepo, hasher } = makeRepos();
     const user = await userRepo.create({ name: 'Alice', email: 'alice@test.com', login: 'alice', passwordHash: 'h1' });
 
     const uc = new UpdateRbacUser(userRepo, hasher);
-    const result = await uc.execute(user.id, { grVendedorName: 'JUAN PEREZ' });
+    // Cast: grVendedorName is no longer part of UpdateRbacUserDto; the use case must ignore it.
+    await uc.execute(user.id, { name: 'Alice 2', grVendedorName: 'JUAN PEREZ' } as Parameters<typeof uc.execute>[1]);
 
-    expect(result.grVendedorName).toBe('JUAN PEREZ');
-    // Re-read to confirm persistence
     const stored = await userRepo.findById(user.id);
-    expect(stored!.grVendedorName).toBe('JUAN PEREZ');
-  });
-
-  it('grVendedorName=null should clear the mapping', async () => {
-    const { userRepo, hasher } = makeRepos();
-    const user = await userRepo.create({ name: 'Alice', email: 'alice@test.com', login: 'alice', passwordHash: 'h1' });
-
-    const uc = new UpdateRbacUser(userRepo, hasher);
-    await uc.execute(user.id, { grVendedorName: 'JUAN PEREZ' });
-    const cleared = await uc.execute(user.id, { grVendedorName: null });
-
-    expect(cleared.grVendedorName).toBeNull();
-  });
-
-  it('grVendedorName undefined should NOT touch the existing value', async () => {
-    const { userRepo, hasher } = makeRepos();
-    const user = await userRepo.create({ name: 'Alice', email: 'alice@test.com', login: 'alice', passwordHash: 'h1' });
-
-    const uc = new UpdateRbacUser(userRepo, hasher);
-    await uc.execute(user.id, { grVendedorName: 'MARIA LOPEZ' });
-    // Update an unrelated field, leaving grVendedorName undefined
-    const result = await uc.execute(user.id, { name: 'Alice 2' });
-
-    expect(result.name).toBe('Alice 2');
-    expect(result.grVendedorName).toBe('MARIA LOPEZ');
+    expect(stored!.grVendedorName ?? null).toBeNull();
   });
 });

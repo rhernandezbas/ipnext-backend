@@ -506,6 +506,11 @@ import { AutoAssignIClassTeamOnTaskUpdate } from '@application/use-cases/AutoAss
 import { GetIClassDispatchPreview } from '@application/use-cases/GetIClassDispatchPreview';
 import { createIClassTechnicianTeamsRouter } from './routes/iclassTechnicianTeams.routes';
 import { createIClassDispatchPreviewRouter } from './routes/iclassDispatchPreview.routes';
+// Mis clientes (Fase 2b) — agente↔vendedor (GR) mapping, isolated from the core user model.
+import { SetVendedorMapping } from '@application/use-cases/SetVendedorMapping';
+import { ListVendedorMappings } from '@application/use-cases/ListVendedorMappings';
+import { ListDistinctVendedores } from '@application/use-cases/ListDistinctVendedores';
+import { createGrVendedorMappingsRouter } from './routes/grVendedorMappings.routes';
 import { BackfillClosedServiceOrders } from '@application/use-cases/BackfillClosedServiceOrders';
 import { ListInFlightTasks } from '@application/use-cases/ListInFlightTasks';
 import { ReconcileTaskClosure } from '@application/use-cases/ReconcileTaskClosure';
@@ -1752,6 +1757,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     authAdapter,
     requirePerm('iclass', 'read'),
     requirePerm('iclass', 'manage'),
+  ));
+
+  // Mis clientes (Fase 2b) — agente↔vendedor (GR) mapping. Isolated sub-page (recapture perms).
+  // GET /vendedor-mappings, PATCH /vendedor-mappings/:userId, GET /vendedores
+  app.use('/api/admin/gr', createGrVendedorMappingsRouter(
+    new ListVendedorMappings(rbacUserRepo),
+    new SetVendedorMapping(rbacUserRepo),
+    new ListDistinctVendedores(contractRepo),
+    authAdapter,
+    requirePerm('recapture', 'read'),
+    requirePerm('recapture', 'manage'),
   ));
 
   // iclass-ops-config (Ola C) — dispatch preview: GET /dispatch-preview (read-only)

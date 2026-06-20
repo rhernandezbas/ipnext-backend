@@ -24,7 +24,6 @@ export class UpdateRbacUser {
     if (dto.name !== undefined) patch.name = dto.name;
     if (dto.email !== undefined) patch.email = dto.email;
     if (dto.status !== undefined) patch.status = dto.status;
-    if (dto.grVendedorName !== undefined) patch.grVendedorName = dto.grVendedorName;
 
     // Login update: check for conflicts
     if (dto.login !== undefined && dto.login !== existing.login) {

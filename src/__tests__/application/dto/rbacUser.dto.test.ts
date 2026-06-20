@@ -14,7 +14,6 @@ describe('toRbacUserDto', () => {
     email: 'alice@example.com',
     login: 'alice',
     status: 'active' as const,
-    grVendedorName: 'JUAN PEREZ',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     lastLoginAt: null,
@@ -27,16 +26,9 @@ describe('toRbacUserDto', () => {
     expect(dto.email).toBe('alice@example.com');
     expect(dto.login).toBe('alice');
     expect(dto.status).toBe('active');
-    expect(dto.grVendedorName).toBe('JUAN PEREZ');
     expect(dto.createdAt).toBe('2026-01-01T00:00:00.000Z');
     expect(dto.updatedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(dto.lastLoginAt).toBeNull();
-  });
-
-  it('should map grVendedorName as null when absent', () => {
-    const { grVendedorName: _omit, ...withoutGr } = userEntity;
-    const dto = toRbacUserDto(withoutGr);
-    expect(dto.grVendedorName).toBeNull();
   });
 
   it('should NOT include passwordHash in serialized output', () => {
@@ -44,6 +36,12 @@ describe('toRbacUserDto', () => {
     const json = JSON.stringify(dto);
     expect(json).not.toContain('passwordHash');
     expect('passwordHash' in dto).toBe(false);
+  });
+
+  // Fase 2b — GR vendedor mapping moved out of the generic user DTO (isolated sub-page).
+  it('should NOT expose grVendedorName in the generic user DTO', () => {
+    const dto = toRbacUserDto({ ...userEntity, grVendedorName: 'JUAN PEREZ' } as Parameters<typeof toRbacUserDto>[0]);
+    expect('grVendedorName' in dto).toBe(false);
   });
 });
 
