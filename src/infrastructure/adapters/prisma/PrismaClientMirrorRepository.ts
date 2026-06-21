@@ -36,6 +36,10 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       select: { id: true },
     });
 
+    // GUARD: `lat`, `lng`, and `plusCode` are intentionally EXCLUDED from this data object.
+    // These are client-geolocation (Prominense-owned GPS) — user-managed fields.
+    // The GR sync must NEVER overwrite them; adding them here would silently reset
+    // operator-entered GPS data on every sync cycle.
     const data = {
       name: c.name || `Cliente ${c.grClienteId}`,
       email: c.email ?? '',
@@ -88,11 +92,15 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       select: { id: true },
     });
 
-    // GUARD: `technology` AND `name` are intentionally EXCLUDED from this data object.
-    // Both are user-managed fields: `technology` is backed by the ContractTechnology catalog,
-    // and `name` (#43) is a manual-only identifier. The GR sync must NEVER overwrite either —
-    // adding them here would silently reset them to null on every sync cycle (spec CN-3.1/3.2).
+    // GUARD: `technology`, `name`, `gpsLat`, `gpsLng`, and `gpsPlusCode` are intentionally
+    // EXCLUDED from this data object.
+    // - `technology` is backed by the ContractTechnology catalog (user-managed).
+    // - `name` (#43) is a manual-only identifier (user-managed).
+    // - `gpsLat`, `gpsLng`, `gpsPlusCode` are client-geolocation (Prominense-owned GPS).
+    // The GR sync must NEVER overwrite any of these — adding them here would silently reset
+    // operator-entered data on every sync cycle (spec CN-3.1/3.2 + client-geolocation).
     // If you add new GR fields, double-check they are not user-owned.
+    // NOTE: `lat` and `lng` below ARE GR-owned (install address coords) and ARE synced.
     const data = {
       type: 'internet',
       plan: k.plan ?? 'Sin plan',

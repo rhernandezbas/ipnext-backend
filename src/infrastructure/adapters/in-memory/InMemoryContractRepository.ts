@@ -5,6 +5,8 @@ import {
   ListContractsQuery,
   ContractListItem,
   ContractStats,
+  UpdateContractLocationInput,
+  ContractLocationResult,
 } from '@domain/ports/ContractRepository';
 
 /**
@@ -22,6 +24,8 @@ export class InMemoryContractRepository implements ContractRepository {
    * can mirror the Prisma adapter without leaking vendedor into the listing.
    */
   private vendedores: (string | null)[] = [];
+  /** client-geolocation — Prominense-owned GPS per contract id. */
+  public locations: Record<string, ContractLocationResult> = {};
 
   /** Test seam: seed a contract list item. Returns the generated id. */
   seed(data: Partial<ContractListItem> & { clientName: string; plan: string; vendedor?: string | null }): ContractListItem {
@@ -38,6 +42,9 @@ export class InMemoryContractRepository implements ContractRepository {
     this.items.push(item);
     this.vendedores.push(data.vendedor ?? null);
     if (!(item.id in this.names)) this.names[item.id] = null;
+    if (!(item.id in this.locations)) {
+      this.locations[item.id] = { id: item.id, gpsLat: null, gpsLng: null, gpsPlusCode: null };
+    }
     return item;
   }
 
@@ -92,5 +99,17 @@ export class InMemoryContractRepository implements ContractRepository {
       if (v !== null && v !== '') distinct.add(v);
     }
     return Array.from(distinct).sort((a, b) => a.localeCompare(b));
+  }
+
+  async updateLocation(id: string, data: UpdateContractLocationInput): Promise<ContractLocationResult | null> {
+    if (!(id in this.locations)) return null;
+    const current = this.locations[id];
+    this.locations[id] = {
+      id,
+      gpsLat: data.gpsLat !== undefined ? data.gpsLat : current.gpsLat,
+      gpsLng: data.gpsLng !== undefined ? data.gpsLng : current.gpsLng,
+      gpsPlusCode: data.gpsPlusCode !== undefined ? data.gpsPlusCode : current.gpsPlusCode,
+    };
+    return { ...this.locations[id] };
   }
 }

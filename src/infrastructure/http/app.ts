@@ -14,6 +14,8 @@ import { GetClientDetail } from '@application/use-cases/GetClientDetail';
 import { CreateCustomer } from '@application/use-cases/CreateCustomer';
 import { GetClientStats } from '@application/use-cases/GetClientStats';
 import { DeleteCustomer } from '@application/use-cases/DeleteCustomer';
+import { UpdateClientLocation } from '@application/use-cases/UpdateClientLocation';
+import { UpdateContractLocation } from '@application/use-cases/UpdateContractLocation';
 import { GetClientContracts } from '@application/use-cases/GetClientContracts';
 import { GetClientInvoices } from '@application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '@application/use-cases/GetClientLogs';
@@ -956,6 +958,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const contractRepo = new PrismaContractRepository();
   const listContracts = new ListContracts(contractRepo);
   const getContractStats = new GetContractStats(contractRepo);
+  // client-geolocation — Prominense-owned GPS update use cases.
+  const updateClientLocation = new UpdateClientLocation(customerAdapter);
+  const updateContractLocation = new UpdateContractLocation(contractRepo);
 
   const taskPriorityRepo = new PrismaTaskPriorityRepository();
   const listTaskPriority = new ListTaskPriority(taskPriorityRepo);
@@ -1201,7 +1206,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/dashboard', createDashboardRouter(getDashboardStats, getDashboardShortcuts, getRecentActivity));
   app.use('/api/messages', createMessagesRouter(listMessages, getMessage, createMessage, markMessageAsRead, deleteMessage));
   app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions, sessionRepo, createLoginRateLimiter()));
-  app.use('/api/clients', createClientsRouter(listClients, getDetail, getContracts, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer));
+  app.use('/api/clients', createClientsRouter(listClients, getDetail, getContracts, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer, updateClientLocation, requirePerm));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
   // TicketStatus catalog — mounted BEFORE the tickets router to avoid /:id catch-all swallowing /statuses.
   app.use('/api/tickets/statuses', createTicketStatusesRouter(
@@ -1264,7 +1269,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     updateContractTechnology, deleteContractTechnology,
   ));
   // Global contracts listing — mounted at /api root, before the catch-all.
-  app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats));
+  app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats, updateContractLocation, requirePerm));
   // #43 — ServiceCatalog ABM + ContractService CRUD + Contract name, mounted at /api root.
   const serviceCatalogRepo     = new PrismaServiceCatalogRepository();
   const contractServiceRepo    = new PrismaContractServiceRepository();

@@ -30,6 +30,10 @@ export interface Customer {
   lastBalanceAt?: string | null;
   /** True when the balance is older than the TTL or has never been fetched (and client is a debtor). */
   balanceStale?: boolean;
+  // client-geolocation — Prominense-owned GPS (NOT from GR). GR sync NEVER writes these.
+  lat?: number | null;
+  lng?: number | null;
+  plusCode?: string | null;
 }
 
 /**
@@ -60,8 +64,13 @@ export interface Contract {
   startDate: string;
   endDate: string;
   address: string | null;
+  /** GR-owned install address coordinates. Read-only. GR sync writes these. */
   lat: number | null;
   lng: number | null;
+  // client-geolocation — Prominense-owned GPS, separate from GR lat/lng. GR sync NEVER writes these.
+  gpsLat?: number | null;
+  gpsLng?: number | null;
+  gpsPlusCode?: string | null;
   /** #42 free-text technology name (from the ContractTechnology catalog). null when unset. */
   technology: string | null;
   /** #43 manual-only identifier. null for GR-synced contracts with no manual name. */

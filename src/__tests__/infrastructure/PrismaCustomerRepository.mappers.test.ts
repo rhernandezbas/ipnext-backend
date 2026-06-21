@@ -41,6 +41,10 @@ describe('PrismaCustomerRepository mappers', () => {
         balanceCurrency: null,
         lastBalanceAt: null,
         balanceStale: false,
+        // client-geolocation: Prominense-owned GPS (null cuando el row no los trae)
+        lat: null,
+        lng: null,
+        plusCode: null,
       });
     });
 

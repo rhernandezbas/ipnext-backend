@@ -25,6 +25,7 @@ function makeRepo(overrides?: Partial<CustomerRepository>): CustomerRepository {
     listContracts: jest.fn(),
     listInvoices: jest.fn(),
     listLogs: jest.fn(),
+    updateLocation: jest.fn(),
     ...overrides,
   };
 }
