@@ -102,12 +102,13 @@ describe('EnsureInternetContractService', () => {
   // ── best-effort / catálogo faltante ────────────────────────────────────────
 
   it('catálogo INTERNET no existe → no lanza (best-effort)', async () => {
-    // catalogRepo vacío
-    await expect(uc.execute('C1', true)).resolves.toBeUndefined();
+    // catalogRepo vacío — returns false (no transition) and does not throw.
+    await expect(uc.execute('C1', true)).resolves.toBe(false);
   });
 
   it('catálogo INTERNET existe pero inactive → no lanza (best-effort)', async () => {
     await seedInternetCatalog(catalogRepo, false); // active=false
-    await expect(uc.execute('C1', true)).resolves.toBeUndefined();
+    // Returns false (no transition) and does not throw.
+    await expect(uc.execute('C1', true)).resolves.toBe(false);
   });
 });

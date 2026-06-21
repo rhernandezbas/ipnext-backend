@@ -33,11 +33,20 @@ export class EnsureInternetContractService {
     private readonly eventRepo?: ContractServiceEventRepository,
   ) {}
 
-  async execute(contractId: string, active: boolean, opts?: EnsureInternetOpts): Promise<void> {
+  /**
+   * Returns `true` if a transition occurred and an 'activated'/'deactivated' event was
+   * recorded (or attempted). Returns `false` when the line was already in the desired
+   * state (no-op).
+   *
+   * Callers that need to record an 'activated' event WITH actor even in the already-active
+   * case (e.g. CreatePppoeService, AssociatePppoeToContract when fix-operador is needed)
+   * can check the return value and record the event themselves.
+   */
+  async execute(contractId: string, active: boolean, opts?: EnsureInternetOpts): Promise<boolean> {
     const catalog = await this.catalogRepo.getByName('INTERNET');
     if (!catalog || !catalog.active) {
       console.warn(`[EnsureInternetContractService] catálogo INTERNET no disponible (contractId=${contractId})`);
-      return;
+      return false;
     }
 
     const existing = await this.csRepo.getByPair(contractId, catalog.id);
@@ -46,17 +55,22 @@ export class EnsureInternetContractService {
       if (!existing) {
         await this.csRepo.add({ contractId, serviceCatalogId: catalog.id, notes: null });
         await this.recordEvent(contractId, catalog.id, 'activated', opts);
+        return true;
       } else if (existing.status !== 'active') {
         await this.csRepo.update(existing.id, { status: 'active' });
         await this.recordEvent(contractId, catalog.id, 'activated', opts);
+        return true;
       }
       // else: ya active → no-op, no evento
+      return false;
     } else {
       if (existing && existing.status === 'active') {
         await this.csRepo.update(existing.id, { status: 'inactive' });
         await this.recordEvent(contractId, catalog.id, 'deactivated', opts);
+        return true;
       }
       // else: no existe o ya inactive → no-op, no evento
+      return false;
     }
   }
 

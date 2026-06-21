@@ -86,11 +86,11 @@ describe('HttpRadiusOrchestratorGateway (Inc3b — cliente HTTP real, espeja la 
   it('listSessions → GET /users/{u}/sessions y mapea snake_case → camelCase', async () => {
     const { gw } = fakeHttp({
       get: jest.fn().mockResolvedValue({
-        data: [{ session_id: 's1', username: 'u', nas_ip: '10.60.0.38', framed_ip: '100.64.10.10', started_at: 'T', bytes_in: 10, bytes_out: 20 }],
+        data: [{ session_id: 's1', username: 'u', nas_ip: '10.60.0.38', framed_ip: '100.64.10.10', started_at: 'T', bytes_in: 10, bytes_out: 20, caller_id: '78:8A:20:96:6A:AE' }],
       }),
     });
     const sessions = await gw.listSessions('u');
-    expect(sessions).toEqual([{ sessionId: 's1', username: 'u', nasIp: '10.60.0.38', framedIp: '100.64.10.10', startedAt: 'T', bytesIn: 10, bytesOut: 20 }]);
+    expect(sessions).toEqual([{ sessionId: 's1', username: 'u', nasIp: '10.60.0.38', framedIp: '100.64.10.10', startedAt: 'T', bytesIn: 10, bytesOut: 20, callerId: '78:8A:20:96:6A:AE' }]);
   });
 
   it('disconnectSessions → DELETE /users/{u}/sessions (CoA)', async () => {
