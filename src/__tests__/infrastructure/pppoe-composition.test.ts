@@ -116,4 +116,13 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
   it('(h) DeassociatePppoeFromContract está wired', () => {
     expect(appSrc).toMatch(/new DeassociatePppoeFromContract\(/);
   });
+
+  // ── pppoe-baja-motivo ──────────────────────────────────────────────────────
+  it('(i) PrismaContractServiceEventRepository wired en EnsureInternetContractService (pppoe-baja-motivo)', () => {
+    // Verificar que el eventRepo está en el bloque PPPoE (junto con EnsureInternetContractService)
+    const pppoeBlockStart = appSrc.indexOf('pppoe-contract-integrity');
+    const pppoeBlockEnd   = appSrc.indexOf('// ─── #80 Recaptación');
+    const pppoeBlock = appSrc.slice(pppoeBlockStart, pppoeBlockEnd);
+    expect(pppoeBlock).toMatch(/new PrismaContractServiceEventRepository\(\)/);
+  });
 });
