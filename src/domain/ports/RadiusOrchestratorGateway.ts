@@ -23,6 +23,8 @@ export interface OrchestratorSession {
   startedAt: string;
   bytesIn: number;
   bytesOut: number;
+  /** MAC address del CPE (caller-id del NAS). `null` si el orchestrator no lo expone. */
+  callerId: string | null;
 }
 
 export interface ChangePlanOptions {
@@ -88,6 +90,14 @@ export interface RadiusOrchestratorGateway {
   reactivate(username: string): Promise<void>;
   listSessions(username: string): Promise<OrchestratorSession[]>;
   disconnectSessions(username: string): Promise<void>;
+
+  /**
+   * Elimina el usuario del RADIUS (radcheck + radusergroup + radreply).
+   * Libera la Framed-IP-Address asignada y borra el acceso completamente.
+   * Corresponde a `DELETE /users/{username}` → 204 del orchestrator.
+   * Fallo de red/5xx → `OrchestratorUnreachableError` (la ruta → 502).
+   */
+  deleteUser(username: string): Promise<void>;
 
   /**
    * Sincroniza (crea o actualiza) el plan en el radgroupreply del RADIUS.

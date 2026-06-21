@@ -110,6 +110,10 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     await this.call(() => this.http.delete(this.path(username, '/sessions')));
   }
 
+  async deleteUser(username: string): Promise<void> {
+    await this.call(() => this.http.delete(this.path(username, '')));
+  }
+
   async syncPlan(code: string, downloadKbps: number, uploadKbps: number, pool?: string | null): Promise<void> {
     await this.call(() =>
       this.http.put(`/plans/${encodeURIComponent(code)}`, {
@@ -151,5 +155,6 @@ function toSession(r: any): OrchestratorSession {
     startedAt: r.started_at,
     bytesIn: r.bytes_in ?? 0,
     bytesOut: r.bytes_out ?? 0,
+    callerId: r.caller_id ?? null,
   };
 }

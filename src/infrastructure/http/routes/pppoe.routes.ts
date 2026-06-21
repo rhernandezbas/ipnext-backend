@@ -38,6 +38,8 @@ import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
 import { UpdatePppoeService } from '@application/use-cases/UpdatePppoeService';
 import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServiceToRouter';
 import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeService';
+import { TerminatePppoeService } from '@application/use-cases/TerminatePppoeService';
+import { GetPppoeCallerId } from '@application/use-cases/GetPppoeCallerId';
 import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
 import { PreviewEnforcement } from '@application/use-cases/PreviewEnforcement';
 import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
@@ -102,6 +104,8 @@ export function createPppoeRouter(
   getPppoeCredentials: GetPppoeCredentials,
   listUnassignedPppoe: ListUnassignedPppoe,
   deassociatePppoeFromContract: DeassociatePppoeFromContract,
+  terminatePppoeService?: TerminatePppoeService,
+  getPppoeCallerId?: GetPppoeCallerId,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -466,7 +470,9 @@ export function createPppoeRouter(
     },
   );
 
-  // ── DELETE /pppoe/:id ───────────────────────────────────────────────────────
+  // ── DELETE /pppoe/:id — baja HARD (terminate): borra del RADIUS, libera IP ──
+  // Usa TerminatePppoeService si está wired (pppoe-terminate-callerid); cae a
+  // DeactivatePppoeService por back-compat si no está inyectado.
   router.delete(
     '/pppoe/:id',
     auth,
@@ -475,11 +481,12 @@ export function createPppoeRouter(
       const body = BajaBodySchema.safeParse(req.body);
       const reason = body.success ? (body.data?.reason ?? null) : null;
       const { actorId, actorName } = actorOf(req);
+      const handler = terminatePppoeService ?? deactivatePppoeService;
       try {
-        await deactivatePppoeService.execute(req.params['id'] as string, { reason, actorId, actorName });
+        await handler.execute(req.params['id'] as string, { reason, actorId, actorName });
         res.status(204).send();
       } catch (err) {
-        if (err instanceof RouterUnreachableError) {
+        if (err instanceof RouterUnreachableError || err instanceof OrchestratorUnreachableError) {
           res.status(502).json({ code: err.code, error: err.message });
           return;
         }
@@ -495,6 +502,30 @@ export function createPppoeRouter(
       }
     },
   );
+
+  // ── GET /pppoe/:id/caller-id — MAC del CPE desde la sesión RADIUS activa ───
+  // Gated pppoe.read. Llama orchestrator.listSessions y extrae el callerId.
+  // GET /pppoe/:id/caller-id y DELETE /pppoe/:id no se pisan (distinto verbo); para GET, Express
+  // matchea el path literal más largo primero.
+  if (getPppoeCallerId) {
+    router.get(
+      '/pppoe/:id/caller-id',
+      auth,
+      canRead,
+      async (req: Request, res: Response): Promise<void> => {
+        try {
+          const callerId = await getPppoeCallerId.execute(req.params['id'] as string);
+          res.json({ callerId });
+        } catch (err) {
+          if (err instanceof PppoeServiceNotFoundError) {
+            res.status(404).json({ code: err.code, error: err.message });
+            return;
+          }
+          throw err;
+        }
+      },
+    );
+  }
 
   return router;
 }

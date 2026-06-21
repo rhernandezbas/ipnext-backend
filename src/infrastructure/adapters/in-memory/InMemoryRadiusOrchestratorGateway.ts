@@ -23,7 +23,7 @@ export interface InMemoryOrchestratorSeed {
 }
 
 interface UserCallLog {
-  op: 'createUser' | 'changePlan' | 'changePassword' | 'changeFramedIp' | 'suspend' | 'reactivate' | 'disconnectSessions';
+  op: 'createUser' | 'changePlan' | 'changePassword' | 'changeFramedIp' | 'suspend' | 'reactivate' | 'disconnectSessions' | 'deleteUser';
   username: string;
   arg?: unknown;
 }
@@ -190,6 +190,14 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     this.guardUser(username);
     this.calls.push({ op: 'disconnectSessions', username });
     this.sessions.set(username, []);
+  }
+
+  async deleteUser(username: string): Promise<void> {
+    this.guardUser(username);
+    this.calls.push({ op: 'deleteUser', username });
+    this.state.delete(username);
+    this.sessions.delete(username);
+    this.createdUsers.delete(username);
   }
 
   async syncPlan(code: string, downloadKbps: number, uploadKbps: number, pool?: string | null): Promise<void> {
