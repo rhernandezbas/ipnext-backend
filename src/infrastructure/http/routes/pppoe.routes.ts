@@ -67,7 +67,6 @@ function actorOf(req: Request): { actorId: string | null; actorName: string } {
   };
 }
 
-const BajaBodySchema = z.object({ reason: z.string().nullish() }).optional();
 import {
   RouterUnreachableError,
   OrchestratorUnreachableError,
@@ -80,6 +79,8 @@ import {
   PppoeIngestNotSupportedError,
   NasNotFoundError,
 } from '@domain/errors/pppoe';
+
+const BajaBodySchema = z.object({ reason: z.string().nullish() }).optional();
 
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
 
@@ -136,7 +137,7 @@ export function createPppoeRouter(
         const service = await createPppoeService.execute({
           contractId: req.params['contractId'] as string,
           ...parsed.data,
-        });
+        }, actorOf(req));
         res.status(201).json(toPppoeServiceDto(service));
       } catch (err) {
         // NAS RADIUS caído (red/timeout/5xx) → mismo trato que el router caído.
@@ -229,7 +230,7 @@ export function createPppoeRouter(
         return;
       }
       try {
-        const service = await associatePppoeToContract.execute(req.params['id'] as string, parsed.data.contractId);
+        const service = await associatePppoeToContract.execute(req.params['id'] as string, parsed.data.contractId, actorOf(req));
         res.json(toPppoeServiceDto(service));
       } catch (err) {
         if (err instanceof PppoeServiceNotFoundError) {
