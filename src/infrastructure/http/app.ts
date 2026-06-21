@@ -2075,8 +2075,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       sessionRepo,
       requirePerm,
       new ListPppoeByContract(pppoeRepo),
-      new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet),
-      new UpdatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator),
+      new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository()),
+      new UpdatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository()),
       new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepoForPppoe),
       new DeactivatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet),
       enforcePppoe,
@@ -2086,7 +2086,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // Adopción del inventario — comparte el singleton `orchestrator` (listUsers vía GET /users).
       // exclusionPatterns filtra usernames placeholder (accesosurN) del ingest y del listado.
       new IngestPppoeFromNas(pppoeRepo, nasRepoForPppoe, orchestrator, config.pppoe.ingestExcludePatterns),
-      new AssociatePppoeToContract(pppoeRepo, ensureInternet),
+      new AssociatePppoeToContract(pppoeRepo, ensureInternet, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository()),
       new GetPppoeCredentials(pppoeRepo),
       new ListUnassignedPppoe(pppoeRepo, config.pppoe.ingestExcludePatterns),
       new DeassociatePppoeFromContract(pppoeRepo, ensureInternet),

@@ -108,8 +108,10 @@ export const UpdatePppoeBodySchema = z.object({
   password:      z.string().min(1).optional(),
   remoteAddress: z.string().nullable().optional(),
   status:        z.enum(['enabled', 'disabled']).optional(),
+  // pppoe-plan-change-history: optional reason for the plan-change event.
+  reason:        z.string().nullish(),
 }).refine(
-  (data) => Object.keys(data).length > 0,
+  (data) => Object.keys(data).filter(k => k !== 'reason').some(k => (data as Record<string, unknown>)[k] !== undefined),
   { message: 'At least one field must be provided' },
 );
 

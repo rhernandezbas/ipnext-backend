@@ -145,7 +145,8 @@ describe('EnsureInternetContractService — eventos (pppoe-baja-motivo)', () => 
     };
 
     const uc = new EnsureInternetContractService(csRepo, catalogRepo, failingEventRepo);
-    await expect(uc.execute('C1', false, { reason: 'motivo' })).resolves.toBeUndefined();
+    // Returns true (transition occurred) even when event recording fails — does not throw.
+    await expect(uc.execute('C1', false, { reason: 'motivo' })).resolves.toBe(true);
   });
 
   // ── backward compat: sin eventRepo ───────────────────────────────────────
@@ -156,7 +157,8 @@ describe('EnsureInternetContractService — eventos (pppoe-baja-motivo)', () => 
     await csRepo.add({ contractId: 'C1', serviceCatalogId: catalog.id });
 
     const uc = new EnsureInternetContractService(csRepo, catalogRepo); // sin eventRepo
-    await expect(uc.execute('C1', false, { reason: 'motivo' })).resolves.toBeUndefined();
+    // Returns true (transition occurred), does not throw.
+    await expect(uc.execute('C1', false, { reason: 'motivo' })).resolves.toBe(true);
   });
 
   it('sin opts → funciona normal, sin eventos', async () => {

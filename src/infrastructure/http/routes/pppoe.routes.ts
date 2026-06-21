@@ -414,6 +414,7 @@ export function createPppoeRouter(
         const service = await updatePppoeService.execute({
           id: req.params['id'] as string,
           ...parsed.data,
+          ...actorOf(req),
         });
         res.json(toPppoeServiceDto(service));
       } catch (err) {

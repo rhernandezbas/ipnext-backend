@@ -84,7 +84,8 @@ export function toContractServiceDto(view: {
 export interface ServiceEventDto {
   id:         string;
   // pppoe-corte-individual: union extended with enforcement event types.
-  eventType:  'activated' | 'deactivated' | 'reactivated' | 'reduced' | 'blocked' | 'restored';
+  // pppoe-plan-change-history: 'modified' added for plan-change events.
+  eventType:  'activated' | 'deactivated' | 'reactivated' | 'reduced' | 'blocked' | 'restored' | 'modified';
   occurredAt: string;  // ISO 8601
   actorName:  string;
   cic:        string | null;
