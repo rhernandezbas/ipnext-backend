@@ -635,6 +635,7 @@ import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials'
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
 import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
 import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+import { RecordPppoeEnforceEvent } from '@application/use-cases/RecordPppoeEnforceEvent';
 import { ListPppoeAssignments } from '@application/use-cases/ListPppoeAssignments';
 import { ServiceCutRunner } from '../scheduling/ServiceCutRunner';
 import { PrismaServiceCutBatchRepository } from '../adapters/prisma/PrismaServiceCutBatchRepository';
@@ -2044,7 +2045,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     const mkEnforcement = new RouterOsEnforcementAdapter(routerGw, config.router.reducedProfile);
     const radiusEnforcement = new OrchestratorEnforcementAdapter(orchestrator, config.router.reducedProfile);
     const enforcementGw = new PerNasEnforcementGateway(mkEnforcement, radiusEnforcement);
-    const enforcePppoe = new EnforcePppoeService(pppoeRepo, enforcementGw, nasRepoForPppoe);
+    // pppoe-corte-individual: RecordPppoeEnforceEvent logs reduced/blocked/restored events (best-effort).
+    // Reuses the same PrismaServiceCatalogRepository and PrismaContractServiceEventRepository
+    // already instantiated for ensureInternet (constructed below in the pppoe-contract-integrity block).
+    // We construct it after ensureInternet to share the same repos — but enforce needs it first.
+    // Solution: construct record-event inline here with dedicated repo instances (same Prisma model).
+    const recordEnforceEvent = new RecordPppoeEnforceEvent(
+      new PrismaServiceCatalogRepository(),
+      new PrismaContractServiceEventRepository(),
+    );
+    const enforcePppoe = new EnforcePppoeService(pppoeRepo, enforcementGw, nasRepoForPppoe, recordEnforceEvent);
     const previewEnforcement = new PreviewEnforcement(pppoeRepo);
     const bulkEnforcement = new RunBulkEnforcement(pppoeRepo, enforcePppoe, cutBatchRepo, {
       throttleMs: config.router.bulkThrottleMs,

@@ -135,6 +135,8 @@ const EnforcementActionSchema = z.enum(['reduce', 'block', 'restore']);
 /** Body del corte INDIVIDUAL: POST /api/pppoe/:id/enforce */
 export const EnforcePppoeBodySchema = z.object({
   action: EnforcementActionSchema,
+  // pppoe-corte-individual: optional reason forwarded to the event log.
+  reason: z.string().nullish(),
 });
 export type EnforcePppoeBody = z.infer<typeof EnforcePppoeBodySchema>;
 
