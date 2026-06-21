@@ -9,6 +9,9 @@ import { domainErrorToCode } from '@application/util/domainErrorToCode';
  * exercise THIS handler so the mapping cannot drift out from under the tests.
  */
 const statusMap: Record<string, number> = {
+  // zones (customer-zones-map)
+  ZONE_NOT_FOUND: 404,
+  INVALID_POLYGON: 422,
   CLIENT_NOT_FOUND: 404,
   TICKET_NOT_FOUND: 404,
   TASK_NOT_FOUND: 404,

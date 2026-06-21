@@ -1761,6 +1761,19 @@ model Plan {
   @@index([status, category])
 }
 
+// ── Visual zones (customer-zones-map) ──────────────────────────────────────────
+// Persists polygons drawn on the Leaflet customer map.
+// `points` is JSONB (ordered array of {lat, lng}); no PostGIS needed (visual only).
+model Zone {
+  id          String   @id @default(uuid())
+  name        String
+  color       String
+  points      Json
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 model ServiceCutBatch {
   id          String    @id @default(uuid())
   action      String    // reduce | block | restore

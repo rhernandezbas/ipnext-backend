@@ -667,6 +667,14 @@ import { ListPlans } from '@application/use-cases/ListPlans';
 import { CreatePlan } from '@application/use-cases/CreatePlan';
 import { UpdatePlan } from '@application/use-cases/UpdatePlan';
 import { DeletePlan } from '@application/use-cases/DeletePlan';
+// ── Zonas visuales (customer-zones-map) ──────────────────────────────────────
+import { createZonesRouter } from './routes/zones.routes';
+import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
+import { ListZones } from '@application/use-cases/ListZones';
+import { CreateZone } from '@application/use-cases/CreateZone';
+import { GetZone } from '@application/use-cases/GetZone';
+import { UpdateZone } from '@application/use-cases/UpdateZone';
+import { DeleteZone } from '@application/use-cases/DeleteZone';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -2147,6 +2155,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new CreatePlan(planRepo, orchestrator),
       new UpdatePlan(planRepo, orchestrator),
       new DeletePlan(planRepo, orchestrator),
+    ));
+  }
+
+  // ── Zonas visuales (customer-zones-map) ─────────────────────────────────────
+  {
+    const zoneRepo = new PrismaZoneRepository();
+    app.use('/api', createZonesRouter(
+      authAdapter,
+      sessionRepo,
+      requirePerm,
+      new ListZones(zoneRepo),
+      new CreateZone(zoneRepo),
+      new GetZone(zoneRepo),
+      new UpdateZone(zoneRepo),
+      new DeleteZone(zoneRepo),
     ));
   }
 

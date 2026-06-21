@@ -20,8 +20,8 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 31 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan)', () => {
-    expect(RBAC_MODULES).toHaveLength(31);
+  it('contains exactly 32 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones)', () => {
+    expect(RBAC_MODULES).toHaveLength(32);
   });
 
   it('includes all 14 original module codes', () => {

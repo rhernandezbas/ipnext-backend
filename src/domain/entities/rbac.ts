@@ -126,6 +126,8 @@ export const RBAC_MODULES = [
   'pppoe',
   // Internet speed plan catalog (plan-catalog)
   'plan',
+  // Visual zones on the customer map (customer-zones-map)
+  'zones',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];
