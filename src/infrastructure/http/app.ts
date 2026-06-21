@@ -638,6 +638,10 @@ import { EnsureInternetContractService } from '@application/use-cases/EnsureInte
 import { TerminatePppoeService } from '@application/use-cases/TerminatePppoeService';
 import { GetPppoeCallerId } from '@application/use-cases/GetPppoeCallerId';
 import { RecordPppoeEnforceEvent } from '@application/use-cases/RecordPppoeEnforceEvent';
+// add-by-pppoe — inspección SSH de antena airOS para detección de equipos del contrato
+import { InspectPppoeDevices } from '@application/use-cases/InspectPppoeDevices';
+import { Ssh2AirOsGateway } from '../adapters/airos/Ssh2AirOsGateway';
+import { createInspectPppoeDevicesRouter } from './routes/inspectPppoeDevices.routes';
 import { ListPppoeAssignments } from '@application/use-cases/ListPppoeAssignments';
 import { ServiceCutRunner } from '../scheduling/ServiceCutRunner';
 import { PrismaServiceCutBatchRepository } from '../adapters/prisma/PrismaServiceCutBatchRepository';
@@ -2101,6 +2105,24 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // pppoe-terminate-callerid: baja HARD (deleteUser RADIUS) + caller-id desde sesión activa.
       new TerminatePppoeService(pppoeRepo, orchestrator, routerGw, nasRepoForPppoe, ensureInternet),
       new GetPppoeCallerId(pppoeRepo, orchestrator),
+    ));
+  }
+
+  // ─── add-by-pppoe — inspección SSH de antena airOS ────────────────────────
+  // Monta GET /api/contracts/:contractId/inspect-pppoe-devices (inventory.write).
+  // best-effort: si la antena está offline o las credenciales fallan, retorna 200 + warnings.
+  // El singleton `orchestrator` ya está instanciado arriba (shared con PPPoE).
+  {
+    const airOsGateway = new Ssh2AirOsGateway({
+      user: config.airos.user,
+      passwords: config.airos.passwords,
+    });
+    const pppoeRepoForInspect = new PrismaPppoeServiceRepository();
+    app.use('/api', createInspectPppoeDevicesRouter(
+      new InspectPppoeDevices(pppoeRepoForInspect, orchestrator, airOsGateway),
+      authAdapter,
+      sessionRepo,
+      requirePerm,
     ));
   }
 

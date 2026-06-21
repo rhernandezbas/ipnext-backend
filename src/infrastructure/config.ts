@@ -167,6 +167,24 @@ export const config = {
   },
 
   /**
+   * airOS SSH — inspección de antenas Ubiquiti airOS para detección de equipos del cliente.
+   * Opt-in (NO fail-fast): si faltan credenciales, el gateway falla al USARSE con
+   * AirOsUnreachableError (200 con warning), pero el resto de la app arranca igual.
+   *
+   * - AIROS_SSH_USER: usuario SSH de la antena (default 'ubnt').
+   * - AIROS_SSH_PASSWORDS: contraseñas a probar (comma-separated). En producción se
+   *   leen de variables de entorno — NO hardcodear credenciales en el código.
+   *   Si está vacío, se intentará con 'ubnt' como única contraseña.
+   */
+  airos: {
+    user: process.env.AIROS_SSH_USER ?? 'ubnt',
+    passwords: (process.env.AIROS_SSH_PASSWORDS ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean),
+  },
+
+  /**
    * PPPoE ingest — patrones de exclusión de usernames placeholder.
    * Los usernames del RADIUS que matcheen alguno de estos patrones se descartan durante el
    * ingest (IngestPppoeFromNas) y se filtran del listado de huérfanos (ListUnassignedPppoe).
