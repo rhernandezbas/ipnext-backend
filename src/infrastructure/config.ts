@@ -198,4 +198,13 @@ export const config = {
       .filter(Boolean)
       .map(p => new RegExp(p, 'i')),
   },
+
+  /**
+   * External API v1 — machine-to-machine, API-key auth. Opt-in (NO fail-fast at boot).
+   * If EXTERNAL_API_KEY is not set (or empty), the external API is closed — middleware
+   * returns 401 for all requests. Pattern: iclass/uisp (process.env.X ?? '').
+   */
+  externalApi: {
+    apiKey: process.env.EXTERNAL_API_KEY ?? '',
+  },
 };
