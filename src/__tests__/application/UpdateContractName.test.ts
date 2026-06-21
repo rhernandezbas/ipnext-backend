@@ -13,6 +13,7 @@ class StubContractRepo implements ContractRepository {
     return { id, name: this.store[id] };
   }
   async listDistinctVendedores(): Promise<string[]> { throw new Error('not used'); }
+  async updateLocation(): Promise<never> { throw new Error('not used'); }
 }
 
 describe('UpdateContractName', () => {

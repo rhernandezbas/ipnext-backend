@@ -1,4 +1,4 @@
-import { CustomerRepository, ListClientsQuery, ListLogsQuery, CreateCustomerInput, ClientStats } from '@domain/ports/CustomerRepository';
+import { CustomerRepository, ListClientsQuery, ListLogsQuery, CreateCustomerInput, ClientStats, UpdateClientLocationInput } from '@domain/ports/CustomerRepository';
 import { Customer, CustomerStatus, Contract, ClientLog } from '@domain/entities/customer';
 import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
 import { PaginatedResult } from '@application/dto/pagination';
@@ -51,6 +51,10 @@ export function toCustomer(row: any, balanceTtlMinutes = DEFAULT_BALANCE_TTL_MIN
     balanceCurrency: isDebtor ? (row.balanceCurrency ?? null) : null,
     lastBalanceAt: lastBalanceAt ? lastBalanceAt.toISOString() : null,
     balanceStale: isBalanceStale(status, lastBalanceAt, balanceTtlMinutes),
+    // client-geolocation — Prominense-owned GPS fields (GR sync NEVER writes these)
+    lat: row.lat ?? null,
+    lng: row.lng ?? null,
+    plusCode: row.plusCode ?? null,
   };
 }
 
@@ -70,6 +74,10 @@ export function toService(row: any): Contract {
     address: row.address ?? null,
     lat: row.lat ?? null,
     lng: row.lng ?? null,
+    // client-geolocation — Prominense-owned GPS on Contract (GR sync NEVER writes gps*)
+    gpsLat: row.gpsLat ?? null,
+    gpsLng: row.gpsLng ?? null,
+    gpsPlusCode: row.gpsPlusCode ?? null,
     // #42 — free-text technology name from the ContractTechnology catalog.
     technology: row.technology ?? null,
     // #43 — manual name (null for GR-synced contracts) + eager-loaded services.
@@ -250,5 +258,25 @@ export class PrismaCustomerRepository implements CustomerRepository {
       prisma.clientLog.count({ where }),
     ]);
     return { data: rows.map(toClientLog), total, page, limit };
+  }
+
+  async updateLocation(id: string, data: UpdateClientLocationInput): Promise<Customer | null> {
+    try {
+      // Whitelist: ONLY update lat, lng, plusCode (Prominense-owned GPS).
+      // GR fields (name, email, phone, address, city, country, status, etc.) are NEVER in this data object.
+      const row = await prisma.client.update({
+        where: { id },
+        data: {
+          lat: data.lat,
+          lng: data.lng,
+          plusCode: data.plusCode,
+        },
+      });
+      return toCustomer(row, this.ttl);
+    } catch (err: unknown) {
+      // P2025 — record to update not found
+      if ((err as { code?: string })?.code === 'P2025') return null;
+      throw err;
+    }
   }
 }

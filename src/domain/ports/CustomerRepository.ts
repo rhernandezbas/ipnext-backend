@@ -32,6 +32,12 @@ export interface ClientStats {
   baja: number;
 }
 
+export interface UpdateClientLocationInput {
+  lat?: number | null;
+  lng?: number | null;
+  plusCode?: string | null;
+}
+
 export interface CustomerRepository {
   list(query: ListClientsQuery): Promise<PaginatedResult<Customer>>;
   findById(id: string): Promise<Customer>;
@@ -42,4 +48,10 @@ export interface CustomerRepository {
   listContracts(clientId: string): Promise<Contract[]>;
   listInvoices(clientId: string): Promise<import('../entities/billing').Invoice[]>;
   listLogs(query: ListLogsQuery): Promise<PaginatedResult<ClientLog>>;
+  /**
+   * client-geolocation — update ONLY the Prominense-owned GPS fields.
+   * Whitelist: lat, lng, plusCode. GR fields are NEVER touched.
+   * Returns the updated Customer, or null if the id does not exist.
+   */
+  updateLocation(id: string, data: UpdateClientLocationInput): Promise<Customer | null>;
 }

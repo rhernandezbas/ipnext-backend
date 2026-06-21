@@ -111,6 +111,9 @@ export class SplynxCustomerAdapter implements CustomerRepository {
       address: null,
       lat: null,
       lng: null,
+      gpsLat: null,
+      gpsLng: null,
+      gpsPlusCode: null,
       technology: null,
       name: null,
       vendedor: null, // Splynx services carry no GR vendedor
@@ -138,6 +141,10 @@ export class SplynxCustomerAdapter implements CustomerRepository {
         lineItems: [] as import('@domain/entities/billing').LineItem[],
       };
     });
+  }
+
+  async updateLocation(): Promise<never> {
+    throw new Error('SplynxCustomerAdapter.updateLocation is not implemented — location updates go through PrismaCustomerRepository');
   }
 
   async listLogs(query: ListLogsQuery): Promise<PaginatedResult<ClientLog>> {

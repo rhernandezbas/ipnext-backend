@@ -4,6 +4,8 @@ import {
   ListContractsQuery,
   ContractListItem,
   ContractStats,
+  UpdateContractLocationInput,
+  ContractLocationResult,
 } from '@domain/ports/ContractRepository';
 import { prisma } from '../../database/prisma';
 
@@ -91,5 +93,31 @@ export class PrismaContractRepository implements ContractRepository {
     return rows
       .map((r) => r.vendedor)
       .filter((v): v is string => v !== null && v !== '');
+  }
+
+  async updateLocation(id: string, data: UpdateContractLocationInput): Promise<ContractLocationResult | null> {
+    try {
+      // Whitelist: ONLY update gpsLat, gpsLng, gpsPlusCode (Prominense-owned GPS).
+      // GR lat/lng are NEVER touched — they remain as-is and continue to sync from GR.
+      const row = await (prisma as any).contract.update({
+        where: { id },
+        data: {
+          gpsLat: data.gpsLat,
+          gpsLng: data.gpsLng,
+          gpsPlusCode: data.gpsPlusCode,
+        },
+        select: { id: true, gpsLat: true, gpsLng: true, gpsPlusCode: true },
+      });
+      return {
+        id: row.id,
+        gpsLat: row.gpsLat ?? null,
+        gpsLng: row.gpsLng ?? null,
+        gpsPlusCode: row.gpsPlusCode ?? null,
+      };
+    } catch (err: unknown) {
+      // P2025 — record to update not found
+      if ((err as { code?: string })?.code === 'P2025') return null;
+      throw err;
+    }
   }
 }

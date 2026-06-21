@@ -1,4 +1,5 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, RequestHandler } from 'express';
+import { z } from 'zod';
 import { ListClients } from '@application/use-cases/ListClients';
 import { GetClientDetail } from '@application/use-cases/GetClientDetail';
 import { GetClientContracts } from '@application/use-cases/GetClientContracts';
@@ -7,10 +8,23 @@ import { GetClientLogs } from '@application/use-cases/GetClientLogs';
 import { CreateCustomer } from '@application/use-cases/CreateCustomer';
 import { GetClientStats } from '@application/use-cases/GetClientStats';
 import { DeleteCustomer } from '@application/use-cases/DeleteCustomer';
+import { UpdateClientLocation } from '@application/use-cases/UpdateClientLocation';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { ClientNotFoundError, SplynxUnavailableError } from '@domain/errors';
+import { InvalidLocationError } from '@domain/errors/geolocation';
+import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { incrementClients, decrementClients } from '../../adapters/in-memory/shared-stores';
+
+/** Factory matching `requirePerm` exported from app.ts (DIP-clean injection). */
+type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
+
+/** Zod schema for PATCH /clients/:id — whitelist ONLY Prominense-owned GPS fields. */
+const UpdateClientLocationSchema = z.object({
+  lat: z.number().min(-90).max(90).nullable().optional(),
+  lng: z.number().min(-180).max(180).nullable().optional(),
+  plusCode: z.string().nullable().optional(),
+});
 
 // Module-level online sessions store
 interface OnlineSession {
@@ -95,9 +109,12 @@ export function createClientsRouter(
   createCustomer: CreateCustomer,
   getClientStats: GetClientStats,
   deleteCustomer: DeleteCustomer,
+  updateClientLocation?: UpdateClientLocation,
+  requirePerm?: RequirePerm,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
+  const writePerm: RequestHandler = requirePerm ? requirePerm('clients', 'write') : (_req, _res, next) => next();
 
   // IMPORTANT: /stats MUST be declared before /:id so the catch-all does not
   // swallow it (Express matches in declaration order).
@@ -255,31 +272,40 @@ export function createClientsRouter(
     }
   });
 
-  router.patch('/:id', auth, async (req: Request, res: Response): Promise<void> => {
-    const id = parseInt(req.params['id'] as string);
-    const { firstName, lastName, email, phone, address } = req.body as {
-      firstName?: string;
-      lastName?: string;
-      email?: string;
-      phone?: string;
-      address?: string;
-    };
-
-    const existing = newClientsStore.find((c) => parseInt(c.id) === id);
-    if (existing) {
-      if (firstName !== undefined) existing.firstName = firstName;
-      if (lastName !== undefined) existing.lastName = lastName;
-      if (email !== undefined) existing.email = email;
-      if (phone !== undefined) existing.phone = phone;
-      if (address !== undefined) existing.address = address;
-      if (firstName !== undefined || lastName !== undefined) {
-        existing.name = `${existing.firstName} ${existing.lastName}`;
-      }
-      res.json(existing);
+  /**
+   * PATCH /clients/:id — update Prominense-owned GPS location.
+   * Whitelisted body: lat, lng, plusCode. Any other fields are ignored by Zod.
+   * Gate: clients.write.
+   */
+  router.patch('/:id', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
+    if (!updateClientLocation) {
+      res.status(501).json({ error: 'Not implemented', code: 'NOT_IMPLEMENTED' });
       return;
     }
-
-    res.status(404).json({ error: 'Client not found', code: 'CLIENT_NOT_FOUND' });
+    const parsed = UpdateClientLocationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+      return;
+    }
+    try {
+      const customer = await updateClientLocation.execute({
+        id: req.params['id'] as string,
+        lat: parsed.data.lat,
+        lng: parsed.data.lng,
+        plusCode: parsed.data.plusCode,
+      });
+      res.json(customer);
+    } catch (err) {
+      if (err instanceof ClientNotFoundError) {
+        res.status(404).json({ error: err.message, code: err.code });
+        return;
+      }
+      if (err instanceof InvalidLocationError) {
+        res.status(422).json({ error: err.message, code: err.code });
+        return;
+      }
+      throw err;
+    }
   });
 
   router.get('/:id/documents', auth, async (req: Request, res: Response): Promise<void> => {

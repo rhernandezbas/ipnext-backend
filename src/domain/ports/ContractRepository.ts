@@ -31,6 +31,19 @@ export interface ContractStats {
   byStatus: Record<string, number>;
 }
 
+export interface UpdateContractLocationInput {
+  gpsLat?: number | null;
+  gpsLng?: number | null;
+  gpsPlusCode?: string | null;
+}
+
+export interface ContractLocationResult {
+  id: string;
+  gpsLat: number | null;
+  gpsLng: number | null;
+  gpsPlusCode: string | null;
+}
+
 export interface ContractRepository {
   /** Global paginated listing across all clients, with optional filters. */
   list(query: ListContractsQuery): Promise<PaginatedResult<ContractListItem>>;
@@ -51,4 +64,11 @@ export interface ContractRepository {
    * alphabetically ordered. Feeds the FE dropdown for the agente↔vendedor mapping.
    */
   listDistinctVendedores(): Promise<string[]>;
+
+  /**
+   * client-geolocation — update ONLY the Prominense-owned GPS fields on a contract.
+   * Whitelist: gpsLat, gpsLng, gpsPlusCode. GR lat/lng are NEVER touched.
+   * Returns the updated location result, or null when the contract does not exist.
+   */
+  updateLocation(id: string, data: UpdateContractLocationInput): Promise<ContractLocationResult | null>;
 }
