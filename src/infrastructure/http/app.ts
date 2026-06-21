@@ -673,6 +673,9 @@ import { UpdatePlan } from '@application/use-cases/UpdatePlan';
 import { DeletePlan } from '@application/use-cases/DeletePlan';
 // ── Zonas visuales (customer-zones-map) ──────────────────────────────────────
 import { createZonesRouter } from './routes/zones.routes';
+// ── External API v1 — API-key auth, read-only, machine-to-machine ────────────
+import { createExternalV1Router } from './routes/externalV1.routes';
+import { createApiKeyMiddleware } from './middleware/apiKeyMiddleware';
 import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
 import { ListZones } from '@application/use-cases/ListZones';
 import { CreateZone } from '@application/use-cases/CreateZone';
@@ -2194,6 +2197,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new DeleteZone(zoneRepo),
     ));
   }
+
+  // External API v1 — API-key auth, read-only (listClients + getDetail reused from above)
+  app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail));
 
   // 404
   app.use((_req: Request, res: Response): void => {
