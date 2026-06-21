@@ -19,7 +19,11 @@ export class AssociatePppoeToContract {
     private readonly ensureInternet: EnsureInternetContractService,
   ) {}
 
-  async execute(pppoeId: string, contractId: string): Promise<PppoeService> {
+  async execute(
+    pppoeId: string,
+    contractId: string,
+    actor?: { actorId?: string | null; actorName?: string },
+  ): Promise<PppoeService> {
     const pppoe = await this.repo.findById(pppoeId);
     if (!pppoe) throw new PppoeServiceNotFoundError(pppoeId);
 
@@ -41,7 +45,7 @@ export class AssociatePppoeToContract {
 
     // Best-effort: la línea INTERNET del contrato queda active.
     try {
-      await this.ensureInternet.execute(contractId, true);
+      await this.ensureInternet.execute(contractId, true, actor ? { actorId: actor.actorId ?? null, actorName: actor.actorName } : undefined);
     } catch (err) {
       console.warn('[AssociatePppoeToContract] ensureInternet(true) falló (best-effort):', err);
     }

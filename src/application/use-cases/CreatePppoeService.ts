@@ -40,7 +40,10 @@ export class CreatePppoeService {
     private readonly ensureInternet: EnsureInternetContractService,
   ) {}
 
-  async execute(input: CreatePppoeServiceInput): Promise<PppoeService> {
+  async execute(
+    input: CreatePppoeServiceInput,
+    actor?: { actorId?: string | null; actorName?: string },
+  ): Promise<PppoeService> {
     // 1. `username` es @unique global (un PPPoE no vive en dos routers)
     const dup = await this.repo.findByUsername(input.username);
     if (dup) throw new PppoeUsernameTakenError(input.username);
@@ -98,7 +101,7 @@ export class CreatePppoeService {
     // 4. Best-effort: la línea INTERNET del contrato queda active.
     if (input.contractId != null) {
       try {
-        await this.ensureInternet.execute(input.contractId, true);
+        await this.ensureInternet.execute(input.contractId, true, actor ? { actorId: actor.actorId ?? null, actorName: actor.actorName } : undefined);
       } catch (err) {
         console.warn('[CreatePppoeService] ensureInternet(true) falló (best-effort):', err);
       }
