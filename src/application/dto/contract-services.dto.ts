@@ -91,6 +91,8 @@ export interface ServiceEventDto {
   cic:        string | null;
   // #127 - optional cancellation reason; null for legacy events.
   reason:     string | null;
+  // pppoe-plan-change-history: detalle del evento (ej. "IP-Air-40-40 → IP-Air-30-10"). null si no aplica.
+  notes:      string | null;
 }
 
 /** Wire DTO for the service history endpoint. tvLogin IS exposed; tvPassword is NEVER exposed. */
@@ -154,6 +156,7 @@ export function tvEventToServiceEvent(tvEvent: {
     actorName:  tvEvent.actorName,
     cic:        tvEvent.cic,
     reason:     tvEvent.reason ?? null,
+    notes:      null,
   };
 }
 

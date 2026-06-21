@@ -52,6 +52,7 @@ export class ListContractServiceHistory {
           actorName:  ev.actorName,
           cic:        null,
           reason:     ev.reason ?? null,
+          notes:      ev.notes ?? null,
         });
       }
     }
@@ -140,6 +141,7 @@ function synthesizeLegacyEvents(createdAt: string, deactivatedAt: string | null)
       actorName:  '',
       cic:        null,
       reason:     null,
+      notes:      null,
     },
   ];
   if (deactivatedAt) {
@@ -150,6 +152,7 @@ function synthesizeLegacyEvents(createdAt: string, deactivatedAt: string | null)
       actorName:  '',
       cic:        null,
       reason:     null,
+      notes:      null,
     });
   }
   return events;
