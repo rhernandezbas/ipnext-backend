@@ -8,8 +8,8 @@
 
 ## 📋 Pendientes
 
-### 🐛 [BUG] Recaptación: cambiar de estado en el drawer no refresca el modal — PENDIENTE *(2026-06-21, pedido del usuario — RESOLVER PRÓXIMO)*
-> En el drawer de detalle de lead (`LeadDetailDrawer`), al cambiar el `Estado` (select Interesado/Recuperado/…) el cambio SE GUARDA pero el modal NO refleja el nuevo estado hasta cerrar y reabrir. En la LISTA sí se actualiza al instante. **Causa probable:** la mutation invalida la query de la lista (`['recaptacion']`) pero el drawer renderiza desde el `selectedLead` que es un snapshot en el estado de la page (no re-lee del cache tras invalidar). **Fix:** que el drawer derive el lead del cache/query actualizado (o re-fetch del lead, o que `onUpdateStatus` actualice el `selectedLead` local con la respuesta). FE-puro. Bajo SDD + review.
+### 🐛 [BUG] Recaptación: cambiar de estado en el drawer no refresca el modal — ✅ HECHO Y EN PROD *(2026-06-21, FE `880eabe`)*
+> En el drawer de detalle de lead (`LeadDetailDrawer`), al cambiar el `Estado` el cambio se guardaba pero el modal no lo reflejaba hasta cerrar/reabrir (la lista sí). **Causa real:** el drawer renderizaba desde el prop `lead` (snapshot de `selectedLead`), no desde `detail` (`useRecaptacionLead`, que SÍ se re-fetchea — `useUpdateLeadStatus` ya invalidaba el detalle). Era 100% de render, no de invalidación. **Fix:** `const view = detail ?? lead`; todos los campos de display renderizan desde `view`, la id/mutations/guard quedan en `lead`. De yapa refresca también al cambiar el operador. Change SDD `recapture-drawer-live` (archivado), review adversarial CLEAN.
 
 ### 🐛 [BUG menor/cosmético] Sidebar: "Informes" visible sin permiso — PENDIENTE *(2026-06-21, hallazgo del review)*
 > El link directo "Informes" (`Sidebar.tsx` ~220) NO tiene `requiredPermission` → se muestra a TODOS los roles (incl. agente de ventas). Pre-existente; la RUTA está protegida (`reports.read`, App.tsx) → al hacer click no entra (solo inconsistencia visual, no leak). **Fix:** agregar `requiredPermission: 'reports.read'` a la entrada Informes. Quedó más expuesto tras el fix de navegación por permisos (#recapture-ventas-access) que endureció todo lo demás.
