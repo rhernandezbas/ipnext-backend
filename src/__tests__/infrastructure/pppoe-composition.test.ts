@@ -133,4 +133,13 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
     // ...Y se inyecta en EnforcePppoeService (no basta con construirlo: si no se pasa, el log se pierde en silencio).
     expect(appSrc).toMatch(/new EnforcePppoeService\([^)]*recordEnforceEvent\s*\)/s);
   });
+
+  // ── pppoe-terminate-callerid ───────────────────────────────────────────────
+  it('(k) TerminatePppoeService wired en createPppoeRouter (pppoe-terminate-callerid)', () => {
+    expect(appSrc).toMatch(/new TerminatePppoeService\(/);
+  });
+
+  it('(k) GetPppoeCallerId wired en createPppoeRouter (pppoe-terminate-callerid)', () => {
+    expect(appSrc).toMatch(/new GetPppoeCallerId\(/);
+  });
 });

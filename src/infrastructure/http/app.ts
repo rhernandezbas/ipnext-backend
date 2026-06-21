@@ -635,6 +635,8 @@ import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials'
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
 import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
 import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+import { TerminatePppoeService } from '@application/use-cases/TerminatePppoeService';
+import { GetPppoeCallerId } from '@application/use-cases/GetPppoeCallerId';
 import { RecordPppoeEnforceEvent } from '@application/use-cases/RecordPppoeEnforceEvent';
 import { ListPppoeAssignments } from '@application/use-cases/ListPppoeAssignments';
 import { ServiceCutRunner } from '../scheduling/ServiceCutRunner';
@@ -2088,6 +2090,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new GetPppoeCredentials(pppoeRepo),
       new ListUnassignedPppoe(pppoeRepo, config.pppoe.ingestExcludePatterns),
       new DeassociatePppoeFromContract(pppoeRepo, ensureInternet),
+      // pppoe-terminate-callerid: baja HARD (deleteUser RADIUS) + caller-id desde sesión activa.
+      new TerminatePppoeService(pppoeRepo, orchestrator, routerGw, nasRepoForPppoe, ensureInternet),
+      new GetPppoeCallerId(pppoeRepo, orchestrator),
     ));
   }
 

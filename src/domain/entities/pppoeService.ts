@@ -26,7 +26,7 @@ export interface PppoeService {
   password: string;            // verdad técnica del router
   profile: string | null;     // /ppp profile COMERCIAL (IP-Air-* / *-PUB) — NO se pisa al cortar
   remoteAddress: string | null; // IP fija (remote-address): CGNAT o pública
-  status: string;             // enabled | disabled (del secret)
+  status: string;             // enabled | disabled (del secret) | terminated (baja HARD: user borrado del RADIUS, IP liberada)
   nasId: string;              // router donde vive (FK NasServer)
   contractId: string | null; // FK Contract — null = sin contrato asociado aún
   enforcedState: EnforcedState; // Fase C: estado del corte (default 'active')
