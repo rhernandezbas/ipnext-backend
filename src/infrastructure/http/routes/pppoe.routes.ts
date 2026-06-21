@@ -57,6 +57,17 @@ import {
   toPppoeServiceDto,
   toServiceCutBatchDto,
 } from '@application/dto/pppoe.dto';
+import { z } from 'zod';
+
+/** Extrae actor del request autenticado (seteado por authMiddleware). */
+function actorOf(req: Request): { actorId: string | null; actorName: string } {
+  return {
+    actorId:   req.user?.id ?? null,
+    actorName: req.user?.username ?? '',
+  };
+}
+
+const BajaBodySchema = z.object({ reason: z.string().nullish() }).optional();
 import {
   RouterUnreachableError,
   OrchestratorUnreachableError,
@@ -246,10 +257,14 @@ export function createPppoeRouter(
     auth,
     canManage,
     async (req: Request, res: Response): Promise<void> => {
+      const body = BajaBodySchema.safeParse(req.body);
+      const reason = body.success ? (body.data?.reason ?? null) : null;
+      const { actorId, actorName } = actorOf(req);
       try {
         const service = await deassociatePppoeFromContract.execute(
           req.params['pppoeId'] as string,
           req.params['contractId'] as string,
+          { reason, actorId, actorName },
         );
         res.json(toPppoeServiceDto(service));
       } catch (err) {
@@ -454,8 +469,11 @@ export function createPppoeRouter(
     auth,
     canManage,
     async (req: Request, res: Response): Promise<void> => {
+      const body = BajaBodySchema.safeParse(req.body);
+      const reason = body.success ? (body.data?.reason ?? null) : null;
+      const { actorId, actorName } = actorOf(req);
       try {
-        await deactivatePppoeService.execute(req.params['id'] as string);
+        await deactivatePppoeService.execute(req.params['id'] as string, { reason, actorId, actorName });
         res.status(204).send();
       } catch (err) {
         if (err instanceof RouterUnreachableError) {

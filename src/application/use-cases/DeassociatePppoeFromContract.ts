@@ -1,7 +1,7 @@
 import { PppoeService } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository } from '@domain/ports/PppoeServiceRepository';
 import { PppoeServiceNotFoundError } from '@domain/errors/pppoe';
-import { EnsureInternetContractService } from './EnsureInternetContractService';
+import { EnsureInternetContractService, EnsureInternetOpts } from './EnsureInternetContractService';
 
 /**
  * DeassociatePppoeFromContract (#2) — desvincula un PPPoE de su contrato.
@@ -21,7 +21,7 @@ export class DeassociatePppoeFromContract {
     private readonly ensureInternet: EnsureInternetContractService,
   ) {}
 
-  async execute(pppoeId: string, contractId: string): Promise<PppoeService> {
+  async execute(pppoeId: string, contractId: string, opts?: EnsureInternetOpts): Promise<PppoeService> {
     const pppoe = await this.repo.findById(pppoeId);
     if (!pppoe) throw new PppoeServiceNotFoundError(pppoeId);
 
@@ -36,7 +36,7 @@ export class DeassociatePppoeFromContract {
 
     // Best-effort: la línea INTERNET del contrato queda inactive.
     try {
-      await this.ensureInternet.execute(contractId, false);
+      await this.ensureInternet.execute(contractId, false, opts);
     } catch (err) {
       console.warn('[DeassociatePppoeFromContract] ensureInternet(false) falló (best-effort):', err);
     }

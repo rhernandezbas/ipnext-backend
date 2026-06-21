@@ -2052,9 +2052,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     });
     const serviceCutRunner = new ServiceCutRunner(bulkEnforcement, cutBatchRepo, new PgAdvisoryLock());
     // pppoe-contract-integrity: helper de reconcile de la línea INTERNET (best-effort).
+    // pppoe-baja-motivo: PrismaContractServiceEventRepository wired so baja/desasociar record the reason.
     const ensureInternet = new EnsureInternetContractService(
       new PrismaContractServiceRepository(),
       new PrismaServiceCatalogRepository(),
+      new PrismaContractServiceEventRepository(),
     );
     app.use('/api', createPppoeRouter(
       authAdapter,

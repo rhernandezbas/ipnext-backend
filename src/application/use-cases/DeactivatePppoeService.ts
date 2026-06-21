@@ -4,7 +4,7 @@ import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { NasNotFoundError, PppoeServiceNotFoundError } from '@domain/errors/pppoe';
-import { EnsureInternetContractService } from './EnsureInternetContractService';
+import { EnsureInternetContractService, EnsureInternetOpts } from './EnsureInternetContractService';
 import { toNasTarget } from './nasTarget';
 
 /**
@@ -28,7 +28,7 @@ export class DeactivatePppoeService {
     private readonly ensureInternet: EnsureInternetContractService,
   ) {}
 
-  async execute(id: string): Promise<PppoeService> {
+  async execute(id: string, opts?: EnsureInternetOpts): Promise<PppoeService> {
     const s = await this.repo.findById(id);
     if (!s) throw new PppoeServiceNotFoundError(id);
     const nas = await this.nasRepo.findNasServerById(s.nasId);
@@ -53,7 +53,7 @@ export class DeactivatePppoeService {
     // Best-effort: inactivar la línea INTERNET si el PPPoE tenía un contrato.
     if (s.contractId != null) {
       try {
-        await this.ensureInternet.execute(s.contractId, false);
+        await this.ensureInternet.execute(s.contractId, false, opts);
       } catch (err) {
         console.warn('[DeactivatePppoeService] ensureInternet(false) falló (best-effort):', err);
       }
