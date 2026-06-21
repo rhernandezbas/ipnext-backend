@@ -370,8 +370,10 @@ export function createPppoeRouter(
       }
       try {
         const service = await enforcePppoeService.execute({
-          id: req.params['id'] as string,
+          id:     req.params['id'] as string,
           action: parsed.data.action,
+          reason: parsed.data.reason ?? null,
+          ...actorOf(req),
         });
         res.json(toPppoeServiceDto(service));
       } catch (err) {

@@ -125,4 +125,12 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
     const pppoeBlock = appSrc.slice(pppoeBlockStart, pppoeBlockEnd);
     expect(pppoeBlock).toMatch(/new PrismaContractServiceEventRepository\(\)/);
   });
+
+  // ── pppoe-corte-individual ─────────────────────────────────────────────────
+  it('(j) RecordPppoeEnforceEvent wired e INYECTADO como arg de EnforcePppoeService (pppoe-corte-individual)', () => {
+    // Se construye...
+    expect(appSrc).toMatch(/const recordEnforceEvent = new RecordPppoeEnforceEvent\(/);
+    // ...Y se inyecta en EnforcePppoeService (no basta con construirlo: si no se pasa, el log se pierde en silencio).
+    expect(appSrc).toMatch(/new EnforcePppoeService\([^)]*recordEnforceEvent\s*\)/s);
+  });
 });

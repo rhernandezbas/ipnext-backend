@@ -7,7 +7,7 @@
  * Lives in the domain layer. Zero imports from @infrastructure/* or Prisma.
  */
 
-export type ServiceEventType = 'activated' | 'deactivated' | 'reactivated';
+export type ServiceEventType = 'activated' | 'deactivated' | 'reactivated' | 'reduced' | 'blocked' | 'restored';
 
 export interface RecordContractServiceEventInput {
   contractId: string;
