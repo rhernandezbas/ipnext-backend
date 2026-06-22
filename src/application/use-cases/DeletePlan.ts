@@ -1,6 +1,7 @@
 import { PlanRepository } from '@domain/ports/PlanRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { PlanNotFoundError } from '@domain/errors/plan';
+import { isEnforcementPlan } from '@domain/entities/plan';
 
 /**
  * DeletePlan — elimina un plan de la DB de Prominense y del radgroupreply del RADIUS.
@@ -24,7 +25,10 @@ export class DeletePlan {
     if (!existing) throw new PlanNotFoundError(id);
 
     // Orchestrator PRIMERO — si falla, la excepción sube y no se toca la DB.
-    await this.gateway.deletePlan(existing.code);
+    // EXCEPCIÓN: los planes de enforcement (códigos reservados) los POSEE el orchestrator → NO se borran del RADIUS.
+    if (!isEnforcementPlan(existing.code)) {
+      await this.gateway.deletePlan(existing.code);
+    }
 
     await this.repo.delete(id);
   }

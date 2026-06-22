@@ -1,4 +1,4 @@
-import { Plan } from '@domain/entities/plan';
+import { Plan, isEnforcementPlan } from '@domain/entities/plan';
 import { PlanRepository } from '@domain/ports/PlanRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { PlanCodeTakenError } from '@domain/errors/plan';
@@ -34,7 +34,10 @@ export class CreatePlan {
     if (dup) throw new PlanCodeTakenError(input.code);
 
     // Orchestrator PRIMERO — si falla, la excepción sube y no se toca la DB.
-    await this.gateway.syncPlan(input.code, input.downloadKbps, input.uploadKbps, input.pool ?? null);
+    // EXCEPCIÓN: los planes de enforcement (códigos reservados) los POSEE el orchestrator → NO se sincronizan.
+    if (!isEnforcementPlan(input.code)) {
+      await this.gateway.syncPlan(input.code, input.downloadKbps, input.uploadKbps, input.pool ?? null);
+    }
 
     return this.repo.upsertByCode(input);
   }
