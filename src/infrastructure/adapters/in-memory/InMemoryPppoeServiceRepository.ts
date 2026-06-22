@@ -46,6 +46,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       nasId: data.nasId,
       contractId: data.contractId ?? null,
       enforcedState: data.enforcedState ?? 'active',
+      callerId: null,
       createdAt: this.now().toISOString(),
     };
     this.store.push(created);
@@ -130,6 +131,11 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     if (!found) return null;
     found.enforcedState = state;
     return { ...found };
+  }
+
+  async setCallerId(id: string, callerId: string): Promise<void> {
+    const found = this.store.find(s => s.id === id);
+    if (found) found.callerId = callerId;
   }
 
   async listByClientStatus(status: string): Promise<PppoeService[]> {

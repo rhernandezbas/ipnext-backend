@@ -30,5 +30,6 @@ export interface PppoeService {
   nasId: string;              // router donde vive (FK NasServer)
   contractId: string | null; // FK Contract — null = sin contrato asociado aún
   enforcedState: EnforcedState; // Fase C: estado del corte (default 'active')
+  callerId: string | null;    // MAC del CPE (persistida de la última sesión vista — sobrevive a la desconexión)
   createdAt: string;
 }

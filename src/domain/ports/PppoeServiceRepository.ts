@@ -56,6 +56,8 @@ export interface PppoeServiceRepository {
    * Devuelve la entidad actualizada, o null si no existe.
    */
   setEnforcedState(id: string, state: EnforcedState): Promise<PppoeService | null>;
+  /** persist-caller-id: guarda la MAC del CPE (última sesión vista) para que sobreviva a la desconexión. */
+  setCallerId(id: string, callerId: string): Promise<void>;
   /**
    * PPPoE de clientes con un `Client.status` dado (cruza pppoe→contract→client).
    * Es el resolver de `target='debtors'` (status='late') sin depender de RADIUS.
