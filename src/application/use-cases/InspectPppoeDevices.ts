@@ -20,6 +20,8 @@ export interface InspectPppoeDevicesResult {
   router: {
     mac: string;
     brand: string | null;
+    /** Modelo del router leído del DHCP lease de la antena (hostname). `null` si no hay lease. */
+    model: string | null;
   } | null;
   /** Mensajes informativos/advertencias para el operador (vacío si todo salió bien). */
   warnings: string[];
@@ -100,7 +102,10 @@ export class InspectPppoeDevices {
 
       let router: InspectPppoeDevicesResult['router'] = null;
       if (routerMac) {
-        router = { mac: routerMac, brand: vendorFromMac(routerMac) };
+        // Modelo del router desde el DHCP lease de la antena (cruce por MAC). Best-effort: null si no hay.
+        const leases = airosResult.leases ?? {};
+        const model = leases[routerMac.toLowerCase()] ?? null;
+        router = { mac: routerMac, brand: vendorFromMac(routerMac), model };
       } else {
         warnings.push('No se encontró router del cliente en la antena (ARP vacío)');
       }

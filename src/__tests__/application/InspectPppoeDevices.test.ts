@@ -159,4 +159,46 @@ describe('InspectPppoeDevices', () => {
     expect(result.router?.mac).toBe('00:00:00:01:02:03');
     expect(result.router?.brand).toBeNull();
   });
+
+  it('router.model viene del DHCP lease de la antena (cruce por MAC)', async () => {
+    const pppoeRepo = await buildRepoWithPppoe();
+    const orchestrator = new InMemoryRadiusOrchestratorGateway({
+      seed: [{ username: PPP_USERNAME, sessions: [makeSession(PPP_USERNAME)] }],
+    });
+    const airos = new InMemoryAirOsGateway({
+      result: {
+        model: 'LiteBeam 5AC Gen2',
+        ownMac: '78:8A:20:96:6A:AE',
+        lanMacs: ['c0:c9:e3:34:33:75'],
+        leases: { 'c0:c9:e3:34:33:75': 'TL-WR820N' },
+      },
+    });
+
+    const uc = new InspectPppoeDevices(pppoeRepo, orchestrator, airos);
+    const result = await uc.execute(CONTRACT_ID);
+
+    expect(result.router?.mac).toBe('c0:c9:e3:34:33:75');
+    expect(result.router?.model).toBe('TL-WR820N');
+  });
+
+  it('router.model null si no hay lease para esa MAC (best-effort)', async () => {
+    const pppoeRepo = await buildRepoWithPppoe();
+    const orchestrator = new InMemoryRadiusOrchestratorGateway({
+      seed: [{ username: PPP_USERNAME, sessions: [makeSession(PPP_USERNAME)] }],
+    });
+    const airos = new InMemoryAirOsGateway({
+      result: {
+        model: 'LiteBeam 5AC Gen2',
+        ownMac: '78:8A:20:96:6A:AE',
+        lanMacs: ['c0:c9:e3:34:33:75'],
+        leases: {},
+      },
+    });
+
+    const uc = new InspectPppoeDevices(pppoeRepo, orchestrator, airos);
+    const result = await uc.execute(CONTRACT_ID);
+
+    expect(result.router?.mac).toBe('c0:c9:e3:34:33:75');
+    expect(result.router?.model).toBeNull();
+  });
 });
