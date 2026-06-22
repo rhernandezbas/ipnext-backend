@@ -19,6 +19,12 @@ export interface AirOsInspectResult {
   ownMac: string | null;
   /** MACs de los dispositivos en la red LAN (ARP table, iface eth0, flags 0x2, sin la propia). */
   lanMacs: string[];
+  /**
+   * MAC (lowercase) → hostname del DHCP lease de la antena (dnsmasq, `/tmp/dhcpd.leases`).
+   * El hostname suele ser el MODELO del router del cliente (ej. `TL-WR820N`). Opcional: ausente/vacío
+   * si la antena no hace DHCP (modo bridge). Se usa para resolver `router.model` en InspectPppoeDevices.
+   */
+  leases?: Record<string, string>;
 }
 
 export interface AirOsGateway {

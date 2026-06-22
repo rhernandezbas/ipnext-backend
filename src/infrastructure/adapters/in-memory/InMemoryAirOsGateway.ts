@@ -18,6 +18,6 @@ export class InMemoryAirOsGateway implements AirOsGateway {
 
   async inspect(_ip: string): Promise<AirOsInspectResult> {
     if (this._throws) throw this._throws;
-    return this._result ?? { model: null, ownMac: null, lanMacs: [] };
+    return this._result ?? { model: null, ownMac: null, lanMacs: [], leases: {} };
   }
 }

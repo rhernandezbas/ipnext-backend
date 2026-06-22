@@ -70,6 +70,65 @@ export function parseArpLan(text: string, ownMac: string | null): string[] {
 }
 
 /**
+ * Parser PURO del lease file de dnsmasq de airOS (`/tmp/dhcpd.leases`).
+ * Retorna un mapa MAC (lowercase) → hostname. El hostname es lo que el router del cliente reporta en
+ * el DHCP request (opción 12) — en la práctica, su MODELO (ej. `TL-WR820N`).
+ *
+ * Exportado para testeo unitario sin abrir ninguna conexión SSH.
+ *
+ * Formato de cada línea (dnsmasq):
+ *   `<expiry-epoch> <mac> <ip> <hostname> <client-id>`
+ *
+ * Ignora líneas inválidas y `hostname = '*'` (router que no reportó nombre).
+ */
+export function parseDhcpLeases(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  const macRe = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i;
+
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const cols = line.split(/\s+/);
+    if (cols.length < 4) continue;
+
+    const mac = cols[1];
+    const hostname = cols[3];
+    if (!macRe.test(mac)) continue;
+    if (!hostname || hostname === '*') continue;
+
+    result[mac.toLowerCase()] = hostname;
+  }
+
+  return result;
+}
+
+/**
+ * Separa la salida combinada de `inspect()` en sus tres secciones (mca-status, ARP, leases).
+ *
+ * Los marcadores se reconocen como LÍNEAS EXACTAS (`---ARP---`, `---LEASES---`), NO como substrings:
+ * así un `deviceName`/campo de mca-status o ARP que contenga `---ARP---` embebido en una línea de
+ * contenido NO cambia de sección. Exportado para test unitario sin SSH.
+ */
+export function splitAirOsSections(raw: string): { mca: string; arp: string; leases: string } {
+  const mca: string[] = [];
+  const arp: string[] = [];
+  const leases: string[] = [];
+  let section: 'mca' | 'arp' | 'leases' = 'mca';
+
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (t === '---ARP---') { section = 'arp'; continue; }
+    if (t === '---LEASES---') { section = 'leases'; continue; }
+    if (section === 'mca') mca.push(line);
+    else if (section === 'arp') arp.push(line);
+    else leases.push(line);
+  }
+
+  return { mca: mca.join('\n'), arp: arp.join('\n'), leases: leases.join('\n') };
+}
+
+/**
  * Ssh2AirOsGateway — implementación real de AirOsGateway con `ssh2`.
  *
  * Conecta a las antenas airOS usando los algoritmos legacy que soportan
@@ -187,26 +246,30 @@ export class Ssh2AirOsGateway implements AirOsGateway {
   }
 
   async inspect(ip: string): Promise<AirOsInspectResult> {
-    // Necesitamos ejecutar dos comandos. Para minimizar conexiones (y el costo de
-    // auth/algoritmos legacy), ejecutamos ambos en una sola sesión SSH encadenados.
+    // Tres comandos en una sola sesión SSH (minimiza el costo de auth con algos legacy):
+    //   mca-status        → modelo + MAC de la antena
+    //   /proc/net/arp     → MAC del router del cliente
+    //   /tmp/dhcpd.leases → hostname (modelo) del router, si la antena hace DHCP (dnsmasq)
     // Si la conexión falla del todo → AirOsUnreachableError.
     let rawOutput: string;
     try {
-      rawOutput = await this.execWithFallback(ip, 'mca-status; echo "---ARP---"; cat /proc/net/arp');
+      rawOutput = await this.execWithFallback(
+        ip,
+        'mca-status; echo "---ARP---"; cat /proc/net/arp; echo "---LEASES---"; cat /tmp/dhcpd.leases 2>/dev/null',
+      );
     } catch (err) {
       if (err instanceof AirOsUnreachableError) throw err;
       throw new AirOsUnreachableError(ip);
     }
 
-    // Separar salida de mca-status y ARP
-    const separator = '---ARP---';
-    const sepIdx = rawOutput.indexOf(separator);
-    const mcaText = sepIdx >= 0 ? rawOutput.slice(0, sepIdx) : rawOutput;
-    const arpText = sepIdx >= 0 ? rawOutput.slice(sepIdx + separator.length) : '';
+    // Separar las tres secciones por sus líneas-marcador (robusto a marcadores embebidos en el
+    // contenido — ver splitAirOsSections).
+    const { mca, arp, leases: leaseText } = splitAirOsSections(rawOutput);
 
-    const { model, ownMac } = parseMcaStatus(mcaText);
-    const lanMacs = parseArpLan(arpText, ownMac);
+    const { model, ownMac } = parseMcaStatus(mca);
+    const lanMacs = parseArpLan(arp, ownMac);
+    const leases = parseDhcpLeases(leaseText);
 
-    return { model, ownMac, lanMacs };
+    return { model, ownMac, lanMacs, leases };
   }
 }
