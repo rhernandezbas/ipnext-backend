@@ -5,7 +5,7 @@ import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfir
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { ListClientEquipment } from '@application/use-cases/ListClientEquipment';
-import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
+import { AddContractEquipment } from '@application/use-cases/AddContractEquipment';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
 import { RecordMaterialConsumption } from '@application/use-cases/RecordMaterialConsumption';
@@ -22,6 +22,8 @@ import {
   SuggestionNotConfirmedError,
   NotADeviceError,
   SuggestionNotLinkedError,
+  SameTypeNeedsDecisionError,
+  AssetNotRevivableError,
 } from '@domain/errors/inventory';
 import { DomainError } from '@domain/errors/index';
 import { z } from 'zod';
@@ -64,7 +66,7 @@ export function createContractInventoryRouter(
   correctType: CorrectConfirmedDeviceType,
   listInstalled: ListContractInstalledItems,
   listClientEquipment: ListClientEquipment,
-  addManual: AddInstalledItemManually,
+  addEquipment: AddContractEquipment,
   updateItem: UpdateInstalledItem,
   removeItem: RemoveInstalledItem,
   recordConsumption: RecordMaterialConsumption,
@@ -266,25 +268,58 @@ export function createContractInventoryRouter(
     } catch (e) { next(e); }
   });
 
+  // Dedup-aware add (Cambio A). `completeItemId`/`force` resolve a same_type
+  // decision (operator-in-the-loop). Type validity is still the route's boundary.
+  const AddEquipmentSchema = z.object({
+    type: z.string().optional(),
+    serialNumber: z.string().nullish(),
+    mac: z.string().nullish(),
+    model: z.string().nullish(),
+    notes: z.string().nullish(),
+    completeItemId: z.string().optional(),
+    force: z.boolean().optional(),
+  });
+
   router.post('/contracts/:contractId/inventory', auth, perms.contractWrite, async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const body = (req.body ?? {}) as Record<string, unknown>;
-      const rawType = body.type as string | undefined;
+      const parsed = AddEquipmentSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      const rawType = parsed.data.type;
       if (!(await deviceTypes.isValid(rawType))) {
         res.status(422).json({ error: 'Invalid or missing item type', code: 'INVALID_ITEM_TYPE' });
         return;
       }
-      const item = await addManual.execute({
+      const result = await addEquipment.execute({
         contractId: req.params.contractId,
         type: rawType!,
-        serialNumber: (body.serialNumber as string) ?? null,
-        mac: (body.mac as string) ?? null,
-        model: (body.model as string) ?? null,
-        notes: (body.notes as string) ?? null,
+        serialNumber: parsed.data.serialNumber ?? null,
+        mac: parsed.data.mac ?? null,
+        model: parsed.data.model ?? null,
+        notes: parsed.data.notes ?? null,
         addedByUserId: userId(req),
+        completeItemId: parsed.data.completeItemId ?? null,
+        force: parsed.data.force ?? false,
       });
-      res.status(201).json(item);
-    } catch (e) { next(e); }
+      // created → 201 (new row); enrich/revive → 200 (existing row).
+      res.status(result.created ? 201 : 200).json(result.item);
+    } catch (e) {
+      if (e instanceof SameTypeNeedsDecisionError) {
+        res.status(409).json({ error: e.message, code: e.code, candidates: e.candidates });
+        return;
+      }
+      if (e instanceof AssetNotRevivableError) {
+        res.status(409).json({ error: e.message, code: e.code });
+        return;
+      }
+      if (e instanceof InstalledItemNotFoundError) {
+        res.status(404).json({ error: e.message, code: e.code });
+        return;
+      }
+      next(e);
+    }
   });
 
   router.patch('/contracts/:contractId/inventory/:itemId', auth, perms.contractWrite, async (req: Request, res: Response, next: NextFunction) => {

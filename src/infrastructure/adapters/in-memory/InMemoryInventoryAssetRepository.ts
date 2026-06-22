@@ -98,4 +98,26 @@ export class InMemoryInventoryAssetRepository implements InventoryAssetRepositor
     this.store.set(id, updated);
     return { ...updated };
   }
+
+  async updateMac(id: string, mac: string): Promise<InventoryAsset | null> {
+    const existing = this.store.get(id);
+    if (!existing) return null;
+    // Mirror create()'s mac partial-unique: a non-null mac must be unique across
+    // OTHER assets (normalized compare). Throws a P2002-shaped error on collision.
+    const macNorm = canonicalizeMac(mac);
+    if (macNorm != null) {
+      const dup = Array.from(this.store.values()).some(
+        (x) => x.id !== id && x.mac != null && canonicalizeMac(x.mac) === macNorm,
+      );
+      if (dup) {
+        throw Object.assign(
+          new Error(`Unique constraint failed on the fields: (\`mac\`)`),
+          { code: 'P2002', meta: { target: ['mac'] } },
+        );
+      }
+    }
+    const updated = { ...existing, mac };
+    this.store.set(id, updated);
+    return { ...updated };
+  }
 }

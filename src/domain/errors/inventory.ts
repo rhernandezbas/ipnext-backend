@@ -159,6 +159,32 @@ export class NoReplaceTargetError extends DomainError {
   }
 }
 
+/**
+ * Cambio A — a direct add (PPPoE / manual) matched an existing item of the SAME
+ * type but with a DIFFERENT (or absent) physical identity. We refuse to create
+ * silently or merge silently: the operator must decide. Carries the candidate
+ * item(s) so the FE modal can offer "complete this one" vs "add new". Maps to 409
+ * SAME_TYPE_NEEDS_DECISION. Resolvable by re-POSTing with `completeItemId` (enrich)
+ * or `force: true` (create new).
+ */
+export interface SameTypeCandidate {
+  id: string;
+  type: string;
+  serialNumber: string | null;
+  mac: string | null;
+  model: string | null;
+}
+
+export class SameTypeNeedsDecisionError extends DomainError {
+  constructor(public readonly candidates: SameTypeCandidate[]) {
+    super(
+      `An item of the same type already exists on the contract; operator decision required`,
+      'SAME_TYPE_NEEDS_DECISION',
+    );
+    this.name = 'SameTypeNeedsDecisionError';
+  }
+}
+
 export class IncompleteSuggestionError extends DomainError {
   constructor(id: string, reason: string) {
     super(`Inventory suggestion ${id} is incomplete: ${reason}`, 'SUGGESTION_INCOMPLETE');
@@ -270,6 +296,26 @@ export class AssetInstalledElsewhereError extends DomainError {
       'ASSET_INSTALLED_ELSEWHERE',
     );
     this.name = 'AssetInstalledElsewhereError';
+  }
+}
+
+/**
+ * Enrich/revive review fix: an enrich tried to bring an asset back to `installed`
+ * but the asset is `damaged` or `retired` — terminal states that the lifecycle map
+ * does NOT allow to reach `installed`. Reviving such an asset would be a data lie
+ * (a broken/retired device cannot silently become installed), so we refuse with a
+ * clear, typed error instead of the cryptic InvalidStatusTransitionError. Maps to 409.
+ */
+export class AssetNotRevivableError extends DomainError {
+  constructor(
+    public readonly serialNumber: string,
+    public readonly status: string,
+  ) {
+    super(
+      `Asset "${serialNumber}" is ${status} and cannot be revived/installed`,
+      'ASSET_NOT_REVIVABLE',
+    );
+    this.name = 'AssetNotRevivableError';
   }
 }
 

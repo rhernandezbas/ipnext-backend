@@ -135,4 +135,17 @@ export class PrismaInventoryAssetRepository implements InventoryAssetRepository 
     const row = await this.db.inventoryAsset.update({ where: { id }, data: { status } });
     return toEntity(row);
   }
+
+  async updateMac(id: string, mac: string): Promise<InventoryAsset | null> {
+    const existing = await this.db.inventoryAsset.findUnique({ where: { id } });
+    if (!existing) return null;
+    // Store the canonical MAC form (mirrors the canonical-storage requirement the
+    // mac partial-unique relies on). A collision surfaces as P2002 from the DB.
+    const canonical = canonicalizeMac(mac) ?? mac;
+    const row = await this.db.inventoryAsset.update({
+      where: { id },
+      data: { mac: canonical },
+    });
+    return toEntity(row);
+  }
 }

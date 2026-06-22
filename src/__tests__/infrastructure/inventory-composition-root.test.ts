@@ -154,6 +154,25 @@ describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', 
     expect(args).toContain('retireContractEquipment');
   });
 
+  // Cambio A — the dedup-aware contract add must run with dual-write wired.
+  it('Cambio A: app.ts instantiates AddContractEquipment with the dual-write deps', () => {
+    const callIdx = appSrc.indexOf('new AddContractEquipment(');
+    expect(callIdx).toBeGreaterThan(-1);
+    // Bounded window over the constructor arg block (robust to formatting).
+    const callWindow = appSrc.slice(callIdx, callIdx + 260);
+    expect(callWindow).toContain('contractInventoryRepo');
+    expect(callWindow).toContain('deviceTypeCatalogRepo');
+    expect(callWindow).toContain('stockLocationRepo');
+    expect(callWindow).toContain('inventoryAssetRepo');
+    expect(callWindow).toContain('inventoryMovementRepo');
+    expect(callWindow).toContain('inventoryUow');
+    expect(callWindow).toContain('installContractAsset');
+  });
+
+  it('Cambio A: app.ts no longer references AddInstalledItemManually', () => {
+    expect(appSrc).not.toContain('AddInstalledItemManually');
+  });
+
   // FIX 1 (#39 security) — createProjectsRouter must receive requirePerm('inventory','manage') as last arg
   it('#39 FIX-1: app.ts passes requirePerm(inventory,manage) into createProjectsRouter', () => {
     // Find the line (or block) containing the createProjectsRouter call.

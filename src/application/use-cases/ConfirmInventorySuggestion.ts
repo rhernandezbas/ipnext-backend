@@ -12,8 +12,6 @@ import {
   DuplicateInstalledItemError,
   NoReplaceTargetError,
   NotADeviceError,
-  AssetInstalledElsewhereError,
-  UnresolvableDeviceTypeError,
 } from '@domain/errors/inventory';
 import { randomUUID } from 'crypto';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
@@ -26,8 +24,9 @@ import { StockLocationRepository } from '@domain/ports/StockLocationRepository';
 import { InventoryAssetRepository } from '@domain/ports/InventoryAssetRepository';
 import { InventoryMovementRepository } from '@domain/ports/InventoryMovementRepository';
 import { ResolveClientLocation } from '@application/use-cases/ResolveClientLocation';
-import { createInventoryAsset, nextStatus } from '@domain/entities/inventory-asset';
+import { nextStatus } from '@domain/entities/inventory-asset';
 import { UnitOfWork, TransactionalRepos } from '@domain/ports/UnitOfWork';
+import { InstallContractAsset } from '@application/services/InstallContractAsset';
 
 export type SuggestionResolution = 'add' | 'replace' | 'link_existing';
 
@@ -53,6 +52,8 @@ export type ConfirmResult =
 export class ConfirmInventorySuggestion {
   /** Lazily built from the locations repo; resolves/creates the contract's CLIENTE location. */
   private readonly resolveClientLocation?: ResolveClientLocation;
+  /** Shared install/dual-write service (design Decisión 2). Built from `catalog`. */
+  private readonly install: InstallContractAsset;
 
   constructor(
     private readonly suggestions: InventorySuggestionRepository,
@@ -77,6 +78,7 @@ export class ConfirmInventorySuggestion {
     private readonly stageMaterialDeduction?: StageMaterialDeduction | null,
   ) {
     if (locations) this.resolveClientLocation = new ResolveClientLocation(locations);
+    this.install = new InstallContractAsset(catalog);
   }
 
   /** True when the full dual-write wiring is present. */
@@ -145,72 +147,10 @@ export class ConfirmInventorySuggestion {
       technicianId: string | null;
     },
   ): Promise<string | null> {
-    if (!b.resolveClientLocation || !b.assets || !b.movements) return null;
-
-    const loc = await b.resolveClientLocation.execute(args.contractId);
-
-    // Fix #5: resolve deviceTypeId by catalog NAME (UPPERCASE), OTROS fallback.
-    // Never fall back to the raw NAME as the FK id.
-    const byName = await this.catalog.getByName(args.type);
-    const fallback = byName ? null : await this.catalog.getByName('OTROS');
-    const resolvedType = byName ?? fallback;
-    if (!resolvedType) throw new UnresolvableDeviceTypeError(args.type);
-    const deviceTypeId = resolvedType.id;
-
-    // Synthesize a stable serial when the device has none (MAC-only devices),
-    // so the asset UNIQUE(serialNumber) holds.
-    const hasMeaningfulSerial = !!(args.serialNumber && args.serialNumber.trim());
-    const serial = hasMeaningfulSerial
-      ? args.serialNumber!
-      : `CII-${randomUUID()}`;
-
-    // FIX A: use normalized serial lookup (any status/location) so OCR/manual drift
-    // (case, dashes, spaces: "sn-001 " vs "SN001") doesn't create a silent duplicate.
-    // Fall back to MAC lookup when there is no meaningful serial.
-    let asset = hasMeaningfulSerial
-      ? await b.assets.findByNormalizedSerialAny(serial)
-      : (args.mac ? await b.assets.findByMac(args.mac) : null);
-
-    // Fix #2 (scoped idempotent reuse): reuse only when the asset is `available`
-    // OR already at THIS contract's CLIENTE location; otherwise it is installed
-    // elsewhere and reusing it would relocate someone else's device → refuse.
-    let fromLocationId: string | undefined;
-    if (asset) {
-      const reusable =
-        asset.status === 'available' || asset.currentLocationId === loc.id;
-      if (!reusable) {
-        throw new AssetInstalledElsewhereError(serial, asset.currentLocationId);
-      }
-      // Capture the asset's current location so the INSTALL movement records depot→client.
-      if (asset.currentLocationId && asset.currentLocationId !== loc.id) {
-        fromLocationId = asset.currentLocationId;
-      }
-    } else {
-      asset = await b.assets.create(
-        createInventoryAsset({
-          id: randomUUID(),
-          serialNumber: serial,
-          mac: args.mac,
-          deviceTypeId,
-          status: 'installed',
-          currentLocationId: loc.id,
-          source: args.source,
-          sourceTaskId: args.sourceTaskId,
-        }),
-      );
-    }
-
-    await b.movements.record({
-      type: 'INSTALL',
-      assetId: asset.id,
-      fromLocationId,
-      toLocationId: loc.id,
-      taskId: args.taskId,
-      technicianId: args.technicianId ?? undefined,
-      source: args.source,
-    });
-
-    return asset.id;
+    // Design Decisión 2: delegate to the shared InstallContractAsset service. The
+    // tx-scoped bag already exposes resolveClientLocation/assets/movements, which is
+    // exactly the InstallBag shape. Behavior is identical to the previous inline impl.
+    return this.install.installNew(b, args);
   }
 
   /**
