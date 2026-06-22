@@ -1,7 +1,7 @@
 import { ContractInstalledItem } from '@domain/entities/contract-installed-item';
 import { TaskInventorySuggestion } from '@domain/entities/task-inventory-suggestion';
 import { SuggestionMatch } from '@application/dto/TaskInventorySuggestionDto';
-import { normalizeSerial } from '@domain/entities/return-suggestion';
+import { matchEquipment } from '@application/services/matchEquipment';
 
 /**
  * SN: trim + uppercase ONLY. Used for type/device-type comparison where dashes ARE
@@ -39,26 +39,13 @@ export function matchInstalledItem(
 ): MatchResult {
   if (s.kind !== 'DEVICE') return { status: null, item: null };
 
-  // W1: use normalizeSerial (strips ALL non-alphanumeric) for physical SN identity so
-  // 'SN-001' and 'SN001' are the same device. normSn (trim+upper only) is kept only
-  // for device-type label comparison where dashes are part of the name.
-  const sn = normalizeSerial(s.serialNumber);
-  const mac = normMac(s.mac);
-  const type = normSn(s.deviceType); // trim + uppercase only — type labels keep dashes
-
-  // 1) same_device: physical identity — SN or MAC coincides
-  const byIdentity = activeItems.find(
-    (i) =>
-      (sn != null && normalizeSerial(i.serialNumber) === sn) ||
-      (mac != null && normMac(i.mac) === mac),
+  // Delegate to the generalized core (design Decisión 3). The caller passes ONLY
+  // active items, so the removed-aware precedence collapses to same_device(active)
+  // → same_type(active) → null — identical to the previous inline behavior.
+  return matchEquipment(
+    { type: s.deviceType, serialNumber: s.serialNumber, mac: s.mac },
+    activeItems,
   );
-  if (byIdentity) return { status: 'same_device', item: byIdentity };
-
-  // 2) same_type: same device type, different physical identity
-  const byType = type != null ? activeItems.find((i) => normSn(i.type) === type) : undefined;
-  if (byType) return { status: 'same_type', item: byType };
-
-  return { status: null, item: null };
 }
 
 /** Adapter for the listing DTO: maps MatchResult → SuggestionMatch | null. */
