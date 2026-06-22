@@ -126,6 +126,14 @@ Reglas operativas del loop:
    (en W6 el fix de `updateStatus` dejó `return updated!` que no tiraba; lo cazó la re-review).
 4. **CLEAN es el único estado que habilita el commit.** "Casi clean" no existe.
 
+### `judgment-day` — review adversarial de cierre de feature (OBLIGATORIO)
+
+> **Al FINALIZAR un feature, ANTES del commit/push, se corre la skill `judgment-day`** (decisión del usuario, 2026-06-22). Es la implementación canónica del "review adversarial OBLIGATORIO para TODO cambio": lanza **dos jueces ciegos en paralelo** sobre el mismo target, sintetiza los hallazgos, aplica los fixes y **re-juzga hasta que AMBOS pasen** (o escala tras 2 iteraciones). Se dispara con "judgment day" / "que lo juzguen" / "review adversarial".
+
+- **Cuándo**: una vez que la feature está codeada y el verify técnico (suite completa + tsc/typecheck, corrido POR EL ORQUESTADOR) está en VERDE — los jueces revisan código que ya compila y pasa tests. NUNCA después del push.
+- **Encaja en el loop**: `codear → verify (verde) → judgment-day (2 jueces ciegos → fix → re-juzga hasta CLEAN) → commit → push/deploy → confirmar run en gh`. `judgment-day` REEMPLAZA el paso manual "review adversarial (1-4 agentes)" del loop de arriba: ya orquesta el fan-out, la síntesis, el fix y el re-review focalizado.
+- **CLEAN es el único estado que habilita el commit** (sigue valiendo): si los jueces escalan tras 2 iteraciones, se reporta al usuario y NO se commitea.
+
 ## Reglas para agentes / asistentes de IA
 
 - **SIEMPRE worktree, NUNCA sobre `main` directo (INNEGOCIABLE).** Todo trabajo de **código** (feature, fix, refactor) se hace en un **worktree dedicado por cambio**, jamás editando/implementando sobre el working tree de `main`. El `main` local queda limpio y solo avanza por merge/pull. *(Única excepción: los docs de proceso — este archivo, `BACKLOG.md`, `DEUDAS-PENDIENTES.md` — se editan directo en `main`.)*
