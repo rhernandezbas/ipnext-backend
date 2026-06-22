@@ -13,6 +13,7 @@ import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { ClientNotFoundError, SplynxUnavailableError } from '@domain/errors';
 import { InvalidLocationError } from '@domain/errors/geolocation';
+import { deriveTechnology } from '@application/use-cases/deriveTechnology';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { incrementClients, decrementClients } from '../../adapters/in-memory/shared-stores';
 
@@ -206,7 +207,13 @@ export function createClientsRouter(
 
   router.get('/:id/contracts', auth, async (req: Request, res: Response): Promise<void> => {
     const contracts = await getContracts.execute(req.params['id'] as string);
-    res.json(contracts);
+    // Apply deriveTechnology at the output layer: manual value wins, else derived from plan.
+    // The raw stored technology value on the entity is NOT mutated.
+    const mapped = contracts.map((c) => ({
+      ...c,
+      technology: deriveTechnology(c.technology, c.plan),
+    }));
+    res.json(mapped);
   });
 
   router.get('/:id/invoices', auth, async (req: Request, res: Response): Promise<void> => {

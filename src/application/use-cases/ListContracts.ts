@@ -1,5 +1,6 @@
 import { ContractRepository, ListContractsQuery } from '@domain/ports/ContractRepository';
 import { PaginatedContractsDto } from '../dto/contract.dto';
+import { deriveTechnology } from './deriveTechnology';
 
 /**
  * Global paginated listing of contracts for the contracts page.
@@ -32,7 +33,7 @@ export class ListContracts {
         clientName: s.clientName,
         plan: s.plan,
         status: s.status,
-        technology: s.technology,
+        technology: deriveTechnology(s.technology, s.plan),
         startDate: s.startDate,
       })),
       total: result.total,
