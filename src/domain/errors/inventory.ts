@@ -524,6 +524,46 @@ export class RetireAlreadyDoneError extends DomainError {
   }
 }
 
+// ── Retire with destination (Cambio B) ───────────────────────────────────────
+
+/**
+ * A retire-with-destination chose `disposition='TECNICO'` but did not supply a
+ * `technicianId`. The technician is required to resolve the destination TECNICO
+ * location. Maps to 400 VALIDATION_ERROR (the route's zod refine catches it first;
+ * this is the use-case-level defense for direct callers).
+ */
+export class TechnicianRequiredError extends DomainError {
+  constructor() {
+    super(
+      'technicianId is required when disposition is TECNICO',
+      'TECHNICIAN_REQUIRED',
+    );
+    this.name = 'TechnicianRequiredError';
+  }
+}
+
+/**
+ * Drifted-asset guard: a retire-with-destination targeted an `active` CII whose
+ * linked InventoryAsset has DRIFTED out of `installed` (another flow already moved
+ * it to `available`/`removed`/`retired`/`damaged`). Routing from a non-installed
+ * origin would either throw the cryptic InvalidStatusTransitionError (a bare 400 the
+ * FE can't interpret) or — for a same-status target like DEPOSITO over an `available`
+ * asset — silently "succeed" with a wrong relocation. We refuse early with this typed
+ * error instead. It still rolls back since it's raised inside the UoW. Maps to 409.
+ */
+export class AssetNotInstalledError extends DomainError {
+  constructor(
+    public readonly serialNumber: string,
+    public readonly status: string,
+  ) {
+    super(
+      `Asset "${serialNumber}" is ${status}, not installed — it cannot be retired with destination`,
+      'ASSET_NOT_INSTALLED',
+    );
+    this.name = 'AssetNotInstalledError';
+  }
+}
+
 // ── Depot Stock Entry (EPIC #38 follow-up) ───────────────────────────────────
 
 /**
