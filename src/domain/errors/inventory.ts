@@ -524,6 +524,24 @@ export class RetireAlreadyDoneError extends DomainError {
   }
 }
 
+// ── Retire with destination (Cambio B) ───────────────────────────────────────
+
+/**
+ * A retire-with-destination chose `disposition='TECNICO'` but did not supply a
+ * `technicianId`. The technician is required to resolve the destination TECNICO
+ * location. Maps to 400 VALIDATION_ERROR (the route's zod refine catches it first;
+ * this is the use-case-level defense for direct callers).
+ */
+export class TechnicianRequiredError extends DomainError {
+  constructor() {
+    super(
+      'technicianId is required when disposition is TECNICO',
+      'TECHNICIAN_REQUIRED',
+    );
+    this.name = 'TechnicianRequiredError';
+  }
+}
+
 // ── Depot Stock Entry (EPIC #38 follow-up) ───────────────────────────────────
 
 /**
