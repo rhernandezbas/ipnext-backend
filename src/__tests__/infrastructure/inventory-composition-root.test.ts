@@ -173,6 +173,31 @@ describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', 
     expect(appSrc).not.toContain('AddInstalledItemManually');
   });
 
+  // Cambio B — the retire-with-destination must run with the routing service +
+  // dual-write deps (assets/movements/uow) wired, else the asset never moves.
+  it('Cambio B: app.ts instantiates RetireInstalledItem with RouteAssetToDisposition + dual-write deps', () => {
+    const callIdx = appSrc.indexOf('new RetireInstalledItem(');
+    expect(callIdx).toBeGreaterThan(-1);
+    // Bounded window over the constructor arg block (robust to formatting). The
+    // inlined RouteAssetToDisposition makes the arg block long, so the window
+    // spans it fully to reach the dual-write deps.
+    const callWindow = appSrc.slice(callIdx, callIdx + 520);
+    expect(callWindow).toContain('contractInventoryRepo');
+    expect(callWindow).toContain('RouteAssetToDisposition');
+    expect(callWindow).toContain('inventoryAssetRepo');
+    expect(callWindow).toContain('inventoryMovementRepo');
+    expect(callWindow).toContain('inventoryUow');
+  });
+
+  it('Cambio B: app.ts constructs RouteAssetToDisposition with the three location resolvers', () => {
+    const callIdx = appSrc.indexOf('new RouteAssetToDisposition(');
+    expect(callIdx).toBeGreaterThan(-1);
+    const callWindow = appSrc.slice(callIdx, callIdx + 260);
+    expect(callWindow).toContain('ResolveDepotLocation');
+    expect(callWindow).toContain('ResolveTechnicianLocation');
+    expect(callWindow).toContain('ResolveClientLocation');
+  });
+
   // FIX 1 (#39 security) — createProjectsRouter must receive requirePerm('inventory','manage') as last arg
   it('#39 FIX-1: app.ts passes requirePerm(inventory,manage) into createProjectsRouter', () => {
     // Find the line (or block) containing the createProjectsRouter call.

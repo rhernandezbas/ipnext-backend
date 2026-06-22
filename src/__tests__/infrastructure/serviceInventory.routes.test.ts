@@ -26,6 +26,12 @@ import { ListClientEquipment } from '@application/use-cases/ListClientEquipment'
 import { AddContractEquipment } from '@application/use-cases/AddContractEquipment';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
+import { RetireInstalledItem } from '@application/use-cases/RetireInstalledItem';
+import { RouteAssetToDisposition } from '@application/services/RouteAssetToDisposition';
+import { ResolveDepotLocation } from '@application/use-cases/ResolveDepotLocation';
+import { ResolveTechnicianLocation } from '@application/use-cases/ResolveTechnicianLocation';
+import { ResolveClientLocation } from '@application/use-cases/ResolveClientLocation';
+import { createInventoryAsset } from '@domain/entities/inventory-asset';
 import { RecordMaterialConsumption } from '@application/use-cases/RecordMaterialConsumption';
 import { ListTaskMaterialConsumptions } from '@application/use-cases/ListTaskMaterialConsumptions';
 import { DeleteMaterialConsumption } from '@application/use-cases/DeleteMaterialConsumption';
@@ -98,6 +104,17 @@ async function buildApp() {
     new AddContractEquipment(inventory, catalogRepo, locationRepo, assetRepo, movementRepo, uow),
     new UpdateInstalledItem(inventory),
     new RemoveInstalledItem(inventory),
+    new RetireInstalledItem(
+      inventory,
+      new RouteAssetToDisposition(
+        new ResolveDepotLocation(locationRepo),
+        new ResolveTechnicianLocation(locationRepo),
+        new ResolveClientLocation(locationRepo),
+      ),
+      uow,
+      assetRepo,
+      movementRepo,
+    ),
     new RecordMaterialConsumption(consumptionRepo, materialRepo),
     new ListTaskMaterialConsumptions(consumptionRepo, users),
     new DeleteMaterialConsumption(consumptionRepo),
@@ -146,6 +163,14 @@ async function buildAppWithPerms(perms: {
     new AddContractEquipment(inventory, catalogRepo),
     new UpdateInstalledItem(inventory),
     new RemoveInstalledItem(inventory),
+    new RetireInstalledItem(
+      inventory,
+      new RouteAssetToDisposition(
+        new ResolveDepotLocation(new InMemoryStockLocationRepository()),
+        new ResolveTechnicianLocation(new InMemoryStockLocationRepository()),
+        new ResolveClientLocation(new InMemoryStockLocationRepository()),
+      ),
+    ),
     new RecordMaterialConsumption(consumptionRepo, materialRepo),
     new ListTaskMaterialConsumptions(consumptionRepo, users),
     new DeleteMaterialConsumption(consumptionRepo),
@@ -438,6 +463,168 @@ describe('DELETE /contracts/:contractId/inventory/:itemId', () => {
     const { app, inventory } = await buildAppWithPerms({ contractWrite: false });
     await inventory.create(makeItem({ id: 'i1', status: 'active' }));
     const res = await request(app).delete('/api/contracts/svc1/inventory/i1');
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /contracts/:contractId/inventory/:itemId/retire (Cambio B — quitar con destino)', () => {
+  /**
+   * Seed an `installed` asset @ the contract's CLIENTE location plus a CII linked
+   * to it, through the route harness's repos so the POST routes a real asset.
+   */
+  async function seedInstalled(
+    inventory: InMemoryContractInventoryRepository,
+    locationRepo: import('@infrastructure/adapters/in-memory/InMemoryStockLocationRepository').InMemoryStockLocationRepository,
+    assetRepo: import('@infrastructure/adapters/in-memory/InMemoryInventoryAssetRepository').InMemoryInventoryAssetRepository,
+    over: Partial<ContractInstalledItem> = {},
+  ): Promise<{ itemId: string; assetId: string }> {
+    const cliente = await new ResolveClientLocation(locationRepo).execute(over.contractId ?? 'svc1');
+    const assetId = `asset-${over.id ?? 'i1'}`;
+    await assetRepo.create(
+      createInventoryAsset({
+        id: assetId,
+        serialNumber: `SN-${over.id ?? 'i1'}`,
+        mac: null,
+        deviceTypeId: 'dt',
+        status: 'installed',
+        currentLocationId: cliente.id,
+        source: 'MANUAL',
+      }),
+    );
+    const item = await inventory.create(makeItem({ ...over, assetId, status: over.status ?? 'active' }));
+    return { itemId: item.id, assetId };
+  }
+
+  it('DEPOSITO → 200 item removed; asset available @ DEPOSITO + RETURN movement', async () => {
+    const { app, inventory, assetRepo, movementRepo, locationRepo } = await buildApp();
+    const { itemId, assetId } = await seedInstalled(inventory, locationRepo, assetRepo);
+
+    const res = await request(app)
+      .post(`/api/contracts/svc1/inventory/${itemId}/retire`)
+      .send({ disposition: 'DEPOSITO' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('removed');
+    const depot = await locationRepo.findByCode('DEPOSITO');
+    const asset = await assetRepo.findById(assetId);
+    expect(asset!.status).toBe('available');
+    expect(asset!.currentLocationId).toBe(depot!.id);
+    const moves = await movementRepo.listByAsset(assetId);
+    expect(moves).toHaveLength(1);
+    expect(moves[0].type).toBe('RETURN');
+  });
+
+  it('TECNICO with technicianId → 200; asset available @ technician + TRANSFER', async () => {
+    const { app, inventory, assetRepo, movementRepo, locationRepo } = await buildApp();
+    const { itemId, assetId } = await seedInstalled(inventory, locationRepo, assetRepo);
+
+    const res = await request(app)
+      .post(`/api/contracts/svc1/inventory/${itemId}/retire`)
+      .send({ disposition: 'TECNICO', technicianId: 'tech-9' });
+
+    expect(res.status).toBe(200);
+    const techLoc = await locationRepo.findByTypeAndTechnician('TECNICO', 'tech-9');
+    const asset = await assetRepo.findById(assetId);
+    expect(asset!.currentLocationId).toBe(techLoc!.id);
+    const moves = await movementRepo.listByAsset(assetId);
+    expect(moves[0].type).toBe('TRANSFER');
+    expect(moves[0].technicianId).toBe('tech-9');
+  });
+
+  it('CLIENTE → 200; asset retired, stays @ CLIENTE + ADJUST', async () => {
+    const { app, inventory, assetRepo, movementRepo, locationRepo } = await buildApp();
+    const { itemId, assetId } = await seedInstalled(inventory, locationRepo, assetRepo);
+
+    const res = await request(app)
+      .post(`/api/contracts/svc1/inventory/${itemId}/retire`)
+      .send({ disposition: 'CLIENTE' });
+
+    expect(res.status).toBe(200);
+    const asset = await assetRepo.findById(assetId);
+    expect(asset!.status).toBe('retired');
+    const moves = await movementRepo.listByAsset(assetId);
+    expect(moves[0].type).toBe('ADJUST');
+    expect(moves[0].status).toBe('retired');
+  });
+
+  it('DAMAGED → 200; asset damaged @ DEPOSITO + ADJUST', async () => {
+    const { app, inventory, assetRepo, movementRepo, locationRepo } = await buildApp();
+    const { itemId, assetId } = await seedInstalled(inventory, locationRepo, assetRepo);
+
+    const res = await request(app)
+      .post(`/api/contracts/svc1/inventory/${itemId}/retire`)
+      .send({ disposition: 'DAMAGED' });
+
+    expect(res.status).toBe(200);
+    const asset = await assetRepo.findById(assetId);
+    expect(asset!.status).toBe('damaged');
+    const moves = await movementRepo.listByAsset(assetId);
+    expect(moves[0].status).toBe('damaged');
+  });
+
+  it('RETIRED with note → 200; asset retired @ DEPOSITO + ADJUST carries the note', async () => {
+    const { app, inventory, assetRepo, movementRepo, locationRepo } = await buildApp();
+    const { itemId, assetId } = await seedInstalled(inventory, locationRepo, assetRepo);
+
+    const res = await request(app)
+      .post(`/api/contracts/svc1/inventory/${itemId}/retire`)
+      .send({ disposition: 'RETIRED', note: 'se cambió por upgrade' });
+
+    expect(res.status).toBe(200);
+    const asset = await assetRepo.findById(assetId);
+    expect(asset!.status).toBe('retired');
+    const moves = await movementRepo.listByAsset(assetId);
+    expect(moves[0].note).toBe('se cambió por upgrade');
+  });
+
+  it('missing disposition → 400 (zod)', async () => {
+    const { app, inventory, assetRepo, locationRepo } = await buildApp();
+    const { itemId } = await seedInstalled(inventory, locationRepo, assetRepo);
+    const res = await request(app).post(`/api/contracts/svc1/inventory/${itemId}/retire`).send({});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('invalid disposition → 400 (zod enum)', async () => {
+    const { app, inventory, assetRepo, locationRepo } = await buildApp();
+    const { itemId } = await seedInstalled(inventory, locationRepo, assetRepo);
+    const res = await request(app)
+      .post(`/api/contracts/svc1/inventory/${itemId}/retire`)
+      .send({ disposition: 'XX' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('TECNICO without technicianId → 400 (refine)', async () => {
+    const { app, inventory, assetRepo, locationRepo } = await buildApp();
+    const { itemId } = await seedInstalled(inventory, locationRepo, assetRepo);
+    const res = await request(app)
+      .post(`/api/contracts/svc1/inventory/${itemId}/retire`)
+      .send({ disposition: 'TECNICO' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('item from another contract → 404', async () => {
+    const { app, inventory, assetRepo, locationRepo } = await buildApp();
+    // Item lives under contract "other", but POST targets svc1.
+    const { itemId } = await seedInstalled(inventory, locationRepo, assetRepo, {
+      id: 'foreign',
+      contractId: 'other',
+    });
+    const res = await request(app)
+      .post(`/api/contracts/svc1/inventory/${itemId}/retire`)
+      .send({ disposition: 'DEPOSITO' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('INSTALLED_ITEM_NOT_FOUND');
+  });
+
+  it('requires contractWrite guard (403 without it)', async () => {
+    const { app, inventory } = await buildAppWithPerms({ contractWrite: false });
+    await inventory.create(makeItem({ id: 'i1', status: 'active' }));
+    const res = await request(app)
+      .post('/api/contracts/svc1/inventory/i1/retire')
+      .send({ disposition: 'DEPOSITO' });
     expect(res.status).toBe(403);
   });
 });

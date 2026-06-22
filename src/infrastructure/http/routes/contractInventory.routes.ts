@@ -8,6 +8,7 @@ import { ListClientEquipment } from '@application/use-cases/ListClientEquipment'
 import { AddContractEquipment } from '@application/use-cases/AddContractEquipment';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
+import { RetireInstalledItem } from '@application/use-cases/RetireInstalledItem';
 import { RecordMaterialConsumption } from '@application/use-cases/RecordMaterialConsumption';
 import { ListTaskMaterialConsumptions } from '@application/use-cases/ListTaskMaterialConsumptions';
 import { DeleteMaterialConsumption } from '@application/use-cases/DeleteMaterialConsumption';
@@ -24,6 +25,7 @@ import {
   SuggestionNotLinkedError,
   SameTypeNeedsDecisionError,
   AssetNotRevivableError,
+  TechnicianRequiredError,
 } from '@domain/errors/inventory';
 import { DomainError } from '@domain/errors/index';
 import { z } from 'zod';
@@ -69,6 +71,7 @@ export function createContractInventoryRouter(
   addEquipment: AddContractEquipment,
   updateItem: UpdateInstalledItem,
   removeItem: RemoveInstalledItem,
+  retireItem: RetireInstalledItem,
   recordConsumption: RecordMaterialConsumption,
   listConsumptions: ListTaskMaterialConsumptions,
   deleteConsumption: DeleteMaterialConsumption,
@@ -348,6 +351,50 @@ export function createContractInventoryRouter(
     } catch (e) {
       if (e instanceof InstalledItemNotFoundError) {
         (res as Response).status(404).json({ error: (e as InstalledItemNotFoundError).message, code: (e as InstalledItemNotFoundError).code });
+        return;
+      }
+      next(e);
+    }
+  });
+
+  // ── Retire with destination (Cambio B) ──────────────────────────────────────
+  // "Quitar con destino": soft-deletes the CII AND routes the linked asset to the
+  // chosen destination (status/location/movement) atomically. technicianId is
+  // required iff disposition==='TECNICO' (refine → 400, mirrored by the FE).
+  const RetireSchema = z
+    .object({
+      disposition: z.enum(['DEPOSITO', 'TECNICO', 'CLIENTE', 'DAMAGED', 'RETIRED']),
+      technicianId: z.string().min(1).optional(),
+      note: z.string().optional(),
+    })
+    .refine((d) => d.disposition !== 'TECNICO' || !!d.technicianId, {
+      message: 'technicianId is required when disposition is TECNICO',
+      path: ['technicianId'],
+    });
+
+  router.post('/contracts/:contractId/inventory/:itemId/retire', auth, perms.contractWrite, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = RetireSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      const removed = await retireItem.execute({
+        contractId: req.params.contractId,
+        itemId: req.params.itemId,
+        disposition: parsed.data.disposition,
+        technicianId: parsed.data.technicianId ?? null,
+        note: parsed.data.note ?? null,
+        actor: userId(req),
+      });
+      res.json(removed);
+    } catch (e) {
+      if (e instanceof TechnicianRequiredError) {
+        res.status(400).json({ error: e.message, code: e.code });
+        return;
+      }
+      if (e instanceof InstalledItemNotFoundError) {
+        res.status(404).json({ error: e.message, code: e.code });
         return;
       }
       next(e);

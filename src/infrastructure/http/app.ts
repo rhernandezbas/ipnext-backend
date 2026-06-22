@@ -558,6 +558,9 @@ import { ListPendingReturns } from '@application/use-cases/ListPendingReturns';
 import { ConfirmAssetReturn } from '@application/use-cases/ConfirmAssetReturn';
 import { RetireContractEquipment } from '@application/use-cases/RetireContractEquipment';
 import { ResolveDepotLocation } from '@application/use-cases/ResolveDepotLocation';
+import { ResolveClientLocation } from '@application/use-cases/ResolveClientLocation';
+import { RouteAssetToDisposition } from '@application/services/RouteAssetToDisposition';
+import { RetireInstalledItem } from '@application/use-cases/RetireInstalledItem';
 import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
 import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfirmedDeviceType';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
@@ -1416,6 +1419,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     ),
     new UpdateInstalledItem(contractInventoryRepo),
     new RemoveInstalledItem(contractInventoryRepo),
+    new RetireInstalledItem(
+      contractInventoryRepo,
+      new RouteAssetToDisposition(
+        new ResolveDepotLocation(stockLocationRepo),
+        new ResolveTechnicianLocation(stockLocationRepo),
+        new ResolveClientLocation(stockLocationRepo),
+      ),
+      inventoryUow,
+      inventoryAssetRepo,
+      inventoryMovementRepo,
+    ),
     new RecordMaterialConsumption(taskMaterialConsumptionRepo, materialCatalogRepo, {
       stage: stageMaterialDeduction,
       scheduling: schedulingRepo,
