@@ -1,9 +1,23 @@
 import { NasRepository } from '@domain/ports/NasRepository';
+import { IpNetworkRepository } from '@domain/ports/IpNetworkRepository';
+import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
+import { NasLiveStatsProvider, NasServerDto } from '@application/services/NasLiveStatsProvider';
 
 export class GetNasServer {
-  constructor(private readonly repo: NasRepository) {}
+  constructor(
+    private readonly repo: NasRepository,
+    private readonly ipNetworkRepo?: IpNetworkRepository,
+    private readonly orchestrator?: RadiusOrchestratorGateway,
+  ) {}
 
-  async execute(id: string) {
-    return this.repo.findNasServerById(id);
+  async execute(id: string): Promise<NasServerDto | null> {
+    const server = await this.repo.findNasServerById(id);
+    if (!server) return null;
+    if (!this.ipNetworkRepo || !this.orchestrator) {
+      return { ...server, displayType: server.type };
+    }
+    // #1: provider creado por request (fresh instance -> cachedSessions no congela)
+    const liveStats = new NasLiveStatsProvider(this.ipNetworkRepo, this.orchestrator);
+    return liveStats.enrich(server);
   }
 }

@@ -112,6 +112,33 @@ export function countAssignedInRange(assigned: string[], rangeStart: string, ran
 }
 
 /**
+ * Verifica si una IP cae dentro de alguno de los rangos [rangeStart, rangeEnd] dados.
+ * Cada rango es un objeto `{ rangeStart, rangeEnd }`. Ignora silenciosamente rangos con IPs
+ * no parseables (degrada a false para ese rango). Devuelve `false` si `ip` no es parseable.
+ */
+export function ipInAnyRange(
+  ip: string,
+  ranges: ReadonlyArray<{ rangeStart: string; rangeEnd: string }>,
+): boolean {
+  let ipInt: number;
+  try {
+    ipInt = ipToInt(ip);
+  } catch {
+    return false;
+  }
+  for (const range of ranges) {
+    try {
+      const start = ipToInt(range.rangeStart);
+      const end = ipToInt(range.rangeEnd);
+      if (ipInt >= start && ipInt <= end) return true;
+    } catch {
+      /* rango basura → ignorar */
+    }
+  }
+  return false;
+}
+
+/**
  * Cuántas de las IPs `assigned` caen dentro del CIDR, EXCLUYENDO network y broadcast
  * (coherente con `usableIpsInCidr`, que tampoco los cuenta). CIDR basura → 0.
  */

@@ -15,6 +15,9 @@
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
+import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
+import type { IpPool } from '@domain/entities/network';
 
 import { createNasRouter } from '@infrastructure/http/routes/nas.routes';
 import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
@@ -204,5 +207,120 @@ describe('nas.routes — funcionalidad + security guard (auth + network.manage)'
     expect(res.status).toBe(200);
     expect(res.body.sessionTimeout).toBe(7200);
     expect(res.body.authPort).toBe(1812);
+  });
+});
+
+// --- HTTP SEAM: NAS live counters via GET /api/nas-servers + GET /api/nas-servers/:id ---
+
+interface LiveFixture { app: express.Express; manageUserId: string; noPermUserId: string; }
+
+async function buildAppWithLive(): Promise<LiveFixture> {
+  const roleRepo = new InMemoryRbacRoleRepository();
+  const userRoleRepo = new InMemoryRbacUserRoleRepository();
+  const permRepo = new InMemoryRbacPermissionRepository();
+  const rolePermRepo = new InMemoryRbacRolePermissionRepository();
+  const hasher = new InMemoryPasswordHasher();
+  const userRepo = new InMemoryRbacUserRepository(userRoleRepo, roleRepo);
+
+  userRepo.listRolesForUser = async (userId: string) => {
+    const roleIds = await userRoleRepo.listForUser(userId);
+    const roles = await Promise.all(roleIds.map((id) => roleRepo.findById(id)));
+    return roles.filter((r): r is NonNullable<typeof r> => r !== null);
+  };
+  userRepo.listPermissionsForUser = async (userId: string) => {
+    const roleIds = await userRoleRepo.listForUser(userId);
+    const perms: import('@domain/entities/rbac').RbacPermission[] = [];
+    const allPerms = await permRepo.listAll();
+    for (const roleId of roleIds) {
+      const permIds = await rolePermRepo.listForRole(roleId);
+      for (const permId of permIds) {
+        const px = allPerms.find((ap) => ap.id === permId);
+        if (px) perms.push(px);
+      }
+    }
+    return perms;
+  };
+
+  const managerRole = await roleRepo.create({ code: 'net_mgr_live', label: 'NM', isSystem: false });
+  const managePerm = await permRepo.seed({ moduleCode: 'network', action: 'manage' });
+  await rolePermRepo.grant(managerRole.id, managePerm.id);
+
+  const pwHash = await hasher.hash('pw');
+  const mkUser = (login: string) =>
+    userRepo.create({ name: login, email: login + '@x.com', login, passwordHash: pwHash, status: 'active' });
+
+  const manageUser = await mkUser('mgr-live');
+  const noPermUser = await mkUser('np-live');
+  await userRoleRepo.assign(manageUser.id, managerRole.id);
+
+  // NAS seed: id=1 mikrotik_api, id=2 ubiquiti, id=3 mikrotik_radius (default InMemoryNasRepository)
+  const nasRepo = new InMemoryNasRepository();
+
+  // IP pool for NAS id=3 (mikrotik_radius)
+  const ipNetworkRepo = new InMemoryIpNetworkRepository();
+  (ipNetworkRepo as unknown as { pools: IpPool[] }).pools = [];
+  ipNetworkRepo.seedPool({
+    id: 'pool-seam', name: 'seam', networkId: 'n1',
+    rangeStart: '10.10.0.1', rangeEnd: '10.10.0.100',
+    type: 'dynamic', assignedCount: 0, totalCount: 100, nasId: '3', ipKind: null,
+  });
+
+  // 2 sessions in pool, 1 outside
+  const orchestrator = new InMemoryRadiusOrchestratorGateway({
+    globalSessions: [
+      { sessionId: 'seam-1', username: 'c1', nasIp: '10.0.0.5', framedIp: '10.10.0.10', startedAt: '2026-06-20T12:00:00Z', bytesIn: 100, bytesOut: 200, callerId: null },
+      { sessionId: 'seam-2', username: 'c2', nasIp: '10.0.0.5', framedIp: '10.10.0.20', startedAt: '2026-06-21T08:00:00Z', bytesIn: 100, bytesOut: 200, callerId: null },
+      { sessionId: 'seam-3', username: 'c3', nasIp: '10.0.0.5', framedIp: '10.10.1.99', startedAt: '2026-06-01T00:00:00Z', bytesIn: 100, bytesOut: 200, callerId: null },
+    ],
+  });
+
+  const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
+
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+  app.use('/api', createNasRouter(
+    new EchoAuthProvider(),
+    undefined,
+    requirePerm,
+    new ListNasServers(nasRepo, ipNetworkRepo, orchestrator),
+    new GetNasServer(nasRepo, ipNetworkRepo, orchestrator),
+    new CreateNasServer(nasRepo),
+    new UpdateNasServer(nasRepo),
+    new DeleteNasServer(nasRepo),
+    new GetRadiusConfig(nasRepo),
+    new UpdateRadiusConfig(nasRepo),
+  ));
+  app.use(errorHandler);
+
+  return { app, manageUserId: manageUser.id, noPermUserId: noPermUser.id };
+}
+
+describe('nas.routes — live counters HTTP seam', () => {
+  it('GET /api/nas-servers: NAS id=3 (mikrotik_radius) => displayType=BRAS RADIUS, clientCount=2', async () => {
+    const { app, noPermUserId } = await buildAppWithLive();
+    const res = await asUser(request(app).get('/api/nas-servers'), noPermUserId);
+    expect(res.status).toBe(200);
+    const radiusNas = res.body.find((n: { id: string }) => n.id === '3');
+    expect(radiusNas).toBeDefined();
+    expect(radiusNas.displayType).toBe('BRAS RADIUS');
+    expect(radiusNas.clientCount).toBe(2);
+  });
+
+  it('GET /api/nas-servers/3 (mikrotik_radius): live clientCount + displayType', async () => {
+    const { app, noPermUserId } = await buildAppWithLive();
+    const res = await asUser(request(app).get('/api/nas-servers/3'), noPermUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.displayType).toBe('BRAS RADIUS');
+    expect(res.body.clientCount).toBe(2);
+  });
+
+  it('GET /api/nas-servers: NAS id=1 (mikrotik_api) => displayType=mikrotik_api (not BRAS RADIUS)', async () => {
+    const { app, noPermUserId } = await buildAppWithLive();
+    const res = await asUser(request(app).get('/api/nas-servers'), noPermUserId);
+    expect(res.status).toBe(200);
+    const legacyNas = res.body.find((n: { id: string }) => n.id === '1');
+    expect(legacyNas).toBeDefined();
+    expect(legacyNas.displayType).toBe('mikrotik_api');
   });
 });
