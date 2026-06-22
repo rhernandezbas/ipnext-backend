@@ -4,7 +4,7 @@ import { InventoryAssetRepository } from '@domain/ports/InventoryAssetRepository
 import { InventoryMovementRepository } from '@domain/ports/InventoryMovementRepository';
 import { DeviceTypeCatalogRepository } from '@domain/ports/DeviceTypeCatalogRepository';
 import { ResolveClientLocation } from '@application/use-cases/ResolveClientLocation';
-import { createInventoryAsset } from '@domain/entities/inventory-asset';
+import { createInventoryAsset, nextStatus } from '@domain/entities/inventory-asset';
 import {
   AssetInstalledElsewhereError,
   UnresolvableDeviceTypeError,
@@ -24,6 +24,19 @@ export interface InstallBag {
 }
 
 export interface InstallNewArgs {
+  contractId: string;
+  type: string;
+  serialNumber: string | null;
+  mac: string | null;
+  source: string;
+  sourceTaskId: string | null;
+  taskId: string | null;
+  technicianId: string | null;
+}
+
+export interface ReconcileForEnrichArgs {
+  /** The enriched item's existing assetId (null = legacy item → create one). */
+  assetId: string | null;
   contractId: string;
   type: string;
   serialNumber: string | null;
@@ -126,5 +139,98 @@ export class InstallContractAsset {
     });
 
     return asset.id;
+  }
+
+  /**
+   * Enrich-time asset reconciliation (design Decisión 4). For an item being
+   * enriched/revived:
+   *  - No asset yet (legacy item, or the stamped id is gone) → delegate to
+   *    `installNew` so the enriched equipment also becomes traceable.
+   *  - Has an asset already installed at THIS contract → no-op revive; only backfill
+   *    a null MAC.
+   *  - Has an asset installed ELSEWHERE → refuse (AssetInstalledElsewhereError).
+   *  - Has an asset that is `removed`/`available`/`damaged` → bring it to `installed`
+   *    via the validated state machine (`removed → available → installed`, since
+   *    `removed → installed` is illegal), move it to the CLIENTE location, backfill a
+   *    null MAC, and record the INSTALL movement.
+   *
+   * Returns the resolved asset id (to stamp onto the CII), or null when dual-write
+   * is not wired.
+   */
+  async reconcileForEnrich(b: InstallBag, args: ReconcileForEnrichArgs): Promise<string | null> {
+    if (!b.resolveClientLocation || !b.assets || !b.movements) return null;
+
+    const installArgs: InstallNewArgs = {
+      contractId: args.contractId,
+      type: args.type,
+      serialNumber: args.serialNumber,
+      mac: args.mac,
+      source: args.source,
+      sourceTaskId: args.sourceTaskId,
+      taskId: args.taskId,
+      technicianId: args.technicianId,
+    };
+
+    // Legacy item with no asset → materialize one (so enriched equipment is traceable).
+    if (!args.assetId) return this.installNew(b, installArgs);
+
+    const asset = await b.assets.findById(args.assetId);
+    // Stamped id points at a vanished row → treat as legacy, create anew.
+    if (!asset) return this.installNew(b, installArgs);
+
+    const loc = await b.resolveClientLocation.execute(args.contractId);
+
+    // Already installed here → only backfill a null MAC; no movement/transition.
+    if (asset.status === 'installed' && asset.currentLocationId === loc.id) {
+      await this.backfillMac(b, asset.id, asset.mac, args.mac);
+      return asset.id;
+    }
+
+    // Installed elsewhere → refuse (do not relocate someone else's device).
+    if (asset.status === 'installed') {
+      throw new AssetInstalledElsewhereError(asset.serialNumber, asset.currentLocationId);
+    }
+
+    // Bring the asset to `installed` via the validated state machine. `removed` can
+    // only reach `installed` through `available` (TRANSITIONS), so step through it.
+    if (asset.status === 'removed') {
+      await b.assets.updateStatus(asset.id, nextStatus('removed', 'available'));
+      await b.assets.updateStatus(asset.id, nextStatus('available', 'installed'));
+    } else {
+      // available/damaged → installed (nextStatus throws on an illegal transition).
+      await b.assets.updateStatus(asset.id, nextStatus(asset.status, 'installed'));
+    }
+
+    const fromLocationId =
+      asset.currentLocationId && asset.currentLocationId !== loc.id ? asset.currentLocationId : undefined;
+    if (asset.currentLocationId !== loc.id) {
+      await b.assets.updateLocation(asset.id, loc.id);
+    }
+
+    await this.backfillMac(b, asset.id, asset.mac, args.mac);
+
+    await b.movements.record({
+      type: 'INSTALL',
+      assetId: asset.id,
+      fromLocationId,
+      toLocationId: loc.id,
+      taskId: args.taskId ?? undefined,
+      technicianId: args.technicianId ?? undefined,
+      source: args.source,
+    });
+
+    return asset.id;
+  }
+
+  /** COALESCE-style: set asset.mac only when it was null and the input carries one. */
+  private async backfillMac(
+    b: InstallBag,
+    assetId: string,
+    currentMac: string | null,
+    incomingMac: string | null,
+  ): Promise<void> {
+    if (currentMac == null && incomingMac != null && b.assets) {
+      await b.assets.updateMac(assetId, incomingMac);
+    }
   }
 }

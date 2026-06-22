@@ -159,6 +159,32 @@ export class NoReplaceTargetError extends DomainError {
   }
 }
 
+/**
+ * Cambio A — a direct add (PPPoE / manual) matched an existing item of the SAME
+ * type but with a DIFFERENT (or absent) physical identity. We refuse to create
+ * silently or merge silently: the operator must decide. Carries the candidate
+ * item(s) so the FE modal can offer "complete this one" vs "add new". Maps to 409
+ * SAME_TYPE_NEEDS_DECISION. Resolvable by re-POSTing with `completeItemId` (enrich)
+ * or `force: true` (create new).
+ */
+export interface SameTypeCandidate {
+  id: string;
+  type: string;
+  serialNumber: string | null;
+  mac: string | null;
+  model: string | null;
+}
+
+export class SameTypeNeedsDecisionError extends DomainError {
+  constructor(public readonly candidates: SameTypeCandidate[]) {
+    super(
+      `An item of the same type already exists on the contract; operator decision required`,
+      'SAME_TYPE_NEEDS_DECISION',
+    );
+    this.name = 'SameTypeNeedsDecisionError';
+  }
+}
+
 export class IncompleteSuggestionError extends DomainError {
   constructor(id: string, reason: string) {
     super(`Inventory suggestion ${id} is incomplete: ${reason}`, 'SUGGESTION_INCOMPLETE');

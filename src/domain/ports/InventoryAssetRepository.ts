@@ -33,4 +33,11 @@ export interface InventoryAssetRepository {
   create(asset: InventoryAsset): Promise<InventoryAsset>;
   updateLocation(id: string, locationId: string): Promise<InventoryAsset | null>;
   updateStatus(id: string, status: AssetStatus): Promise<InventoryAsset | null>;
+  /**
+   * Set the asset's `mac`. Used by the enrich/revive path (Cambio A) to backfill a
+   * MAC onto an existing asset that had none — so a PPPoE add that matches an
+   * SN-only asset records the MAC without creating a duplicate. Returns the updated
+   * asset, or null if not found. Honors the same mac partial-unique as `create`.
+   */
+  updateMac(id: string, mac: string): Promise<InventoryAsset | null>;
 }
