@@ -125,4 +125,42 @@ describe('matchEquipment', () => {
     const r = matchEquipment(cand({ type: 'ANTENA', mac: 'AA:BB:CC:DD:EE:FF' }), items);
     expect(r.status).toBeNull();
   });
+
+  // ── Review edge guards ──────────────────────────────────────────────────────
+  it('null SN AND null MAC on BOTH sides is NEVER a false same_device (falls to same_type)', () => {
+    // Both candidate identity fields null, item identity fields null, same type.
+    // Identity must not "coincide on null" — that would silently capture the wrong
+    // device. Only the type matches → same_type (operator decides), never same_device.
+    const items = [item({ id: 'a1', type: 'ANTENA', serialNumber: null, mac: null })];
+    const r = matchEquipment(cand({ type: 'ANTENA', serialNumber: null, mac: null }), items);
+    expect(r.status).toBe('same_type');
+    expect(r.status).not.toBe('same_device');
+  });
+
+  it('null/null candidate vs null/null item of a DIFFERENT type → null (no match at all)', () => {
+    const items = [item({ id: 'a1', type: 'ROUTER', serialNumber: null, mac: null })];
+    const r = matchEquipment(cand({ type: 'ANTENA', serialNumber: null, mac: null }), items);
+    expect(r.status).toBeNull();
+  });
+
+  it('same_device on a REMOVED item shadows a same_type ACTIVE item (precedence)', () => {
+    // The removed item shares the candidate MAC (physical identity) → revive it,
+    // even though there is an ACTIVE item of the same type. Identity beats type.
+    const items = [
+      item({ id: 'activeType', type: 'ANTENA', serialNumber: 'SN-OTHER', mac: null, status: 'active' }),
+      item({ id: 'removedDevice', type: 'ANTENA', mac: 'AA:BB:CC:DD:EE:FF', status: 'removed' }),
+    ];
+    const r = matchEquipment(cand({ type: 'ANTENA', mac: 'aabbccddeeff' }), items);
+    expect(r.status).toBe('same_device');
+    expect(r.item!.id).toBe('removedDevice');
+  });
+
+  it('whitespace-only serial is treated as null (no false same_device by blank SN)', () => {
+    // A candidate SN of '   ' normalizes to null; an item SN of '  ' likewise. They
+    // must NOT collide as the same device on a blank serial. Type still matches.
+    const items = [item({ id: 'a1', type: 'ANTENA', serialNumber: '  ', mac: null })];
+    const r = matchEquipment(cand({ type: 'ANTENA', serialNumber: '   ', mac: null }), items);
+    expect(r.status).toBe('same_type');
+    expect(r.status).not.toBe('same_device');
+  });
 });

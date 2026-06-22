@@ -300,6 +300,26 @@ export class AssetInstalledElsewhereError extends DomainError {
 }
 
 /**
+ * Enrich/revive review fix: an enrich tried to bring an asset back to `installed`
+ * but the asset is `damaged` or `retired` — terminal states that the lifecycle map
+ * does NOT allow to reach `installed`. Reviving such an asset would be a data lie
+ * (a broken/retired device cannot silently become installed), so we refuse with a
+ * clear, typed error instead of the cryptic InvalidStatusTransitionError. Maps to 409.
+ */
+export class AssetNotRevivableError extends DomainError {
+  constructor(
+    public readonly serialNumber: string,
+    public readonly status: string,
+  ) {
+    super(
+      `Asset "${serialNumber}" is ${status} and cannot be revived/installed`,
+      'ASSET_NOT_REVIVABLE',
+    );
+    this.name = 'AssetNotRevivableError';
+  }
+}
+
+/**
  * Fix #5: a DEVICE confirm could not resolve its deviceType NAME to a catalog
  * row and OTROS was not present either. We refuse rather than write the raw
  * NAME into the deviceTypeId FK column (a corrupt-FK footgun).

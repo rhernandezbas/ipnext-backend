@@ -17,7 +17,11 @@ export const ASSET_STATUSES: readonly AssetStatus[] = [
 const TRANSITIONS: Record<AssetStatus, readonly AssetStatus[]> = {
   available: ['installed', 'damaged', 'retired'],
   installed: ['available', 'removed', 'damaged', 'retired'],
-  removed: ['damaged', 'retired'],
+  // `removed → available`: un activo retirado de servicio puede reacondicionarse
+  // y volver al stock para re-instalarse (revive). Sin esta arista, revivir un
+  // equipo removido (p. ej. "Agregar por PPPoE" con la misma MAC) reventaba con
+  // InvalidStatusTransitionError y la transacción de alta se revertía (400).
+  removed: ['available', 'damaged', 'retired'],
   damaged: ['retired'],
   retired: [],
 };

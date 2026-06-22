@@ -7,6 +7,7 @@ import { ResolveClientLocation } from '@application/use-cases/ResolveClientLocat
 import { createInventoryAsset, nextStatus } from '@domain/entities/inventory-asset';
 import {
   AssetInstalledElsewhereError,
+  AssetNotRevivableError,
   UnresolvableDeviceTypeError,
 } from '@domain/errors/inventory';
 
@@ -149,10 +150,12 @@ export class InstallContractAsset {
    *  - Has an asset already installed at THIS contract → no-op revive; only backfill
    *    a null MAC.
    *  - Has an asset installed ELSEWHERE → refuse (AssetInstalledElsewhereError).
-   *  - Has an asset that is `removed`/`available`/`damaged` → bring it to `installed`
-   *    via the validated state machine (`removed → available → installed`, since
+   *  - Has an asset that is `removed`/`available` → bring it to `installed` via the
+   *    validated state machine (`removed → available → installed`, since
    *    `removed → installed` is illegal), move it to the CLIENTE location, backfill a
    *    null MAC, and record the INSTALL movement.
+   *  - Has an asset that is `damaged`/`retired` → refuse (AssetNotRevivableError): a
+   *    terminal asset cannot be silently re-installed.
    *
    * Returns the resolved asset id (to stamp onto the CII), or null when dual-write
    * is not wired.
@@ -191,14 +194,22 @@ export class InstallContractAsset {
       throw new AssetInstalledElsewhereError(asset.serialNumber, asset.currentLocationId);
     }
 
-    // Bring the asset to `installed` via the validated state machine. `removed` can
-    // only reach `installed` through `available` (TRANSITIONS), so step through it.
+    // Bring the asset to `installed` via the validated state machine.
+    //  - `removed`: legal revive, but ONLY through `available` (`removed → installed`
+    //    is illegal by design), so step `removed → available → installed`. Both edges
+    //    are now legal in TRANSITIONS.
+    //  - `available`: a single legal `available → installed`.
+    //  - `damaged`/`retired`: terminal — they CANNOT reach `installed`. Refuse with a
+    //    clear domain error (AssetNotRevivableError → 409) instead of letting
+    //    nextStatus throw the cryptic InvalidStatusTransitionError.
     if (asset.status === 'removed') {
       await b.assets.updateStatus(asset.id, nextStatus('removed', 'available'));
       await b.assets.updateStatus(asset.id, nextStatus('available', 'installed'));
+    } else if (asset.status === 'available') {
+      await b.assets.updateStatus(asset.id, nextStatus('available', 'installed'));
     } else {
-      // available/damaged → installed (nextStatus throws on an illegal transition).
-      await b.assets.updateStatus(asset.id, nextStatus(asset.status, 'installed'));
+      // damaged / retired → not revivable.
+      throw new AssetNotRevivableError(asset.serialNumber, asset.status);
     }
 
     const fromLocationId =

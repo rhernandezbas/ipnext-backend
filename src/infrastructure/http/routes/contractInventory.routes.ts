@@ -23,6 +23,7 @@ import {
   NotADeviceError,
   SuggestionNotLinkedError,
   SameTypeNeedsDecisionError,
+  AssetNotRevivableError,
 } from '@domain/errors/inventory';
 import { DomainError } from '@domain/errors/index';
 import { z } from 'zod';
@@ -307,6 +308,10 @@ export function createContractInventoryRouter(
     } catch (e) {
       if (e instanceof SameTypeNeedsDecisionError) {
         res.status(409).json({ error: e.message, code: e.code, candidates: e.candidates });
+        return;
+      }
+      if (e instanceof AssetNotRevivableError) {
+        res.status(409).json({ error: e.message, code: e.code });
         return;
       }
       if (e instanceof InstalledItemNotFoundError) {
