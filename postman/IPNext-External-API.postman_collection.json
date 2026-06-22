@@ -1,0 +1,89 @@
+{
+  "info": {
+    "name": "IPNext — API Externa v1",
+    "description": "API externa (read-only) de Prominense para terceros.\n\n**Base:** `{{base_url}}/api/external/v1`\n**Auth:** API-key en el header `X-API-Key: {{api_key}}` (o `Authorization: Bearer {{api_key}}`).\n\nSin key o key inválida → `401`. Si no hay key configurada en el servidor, la API está cerrada (todo 401).\n\nConfigurá las variables `base_url` y `api_key` en la pestaña Variables de la colección.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://190.7.234.37:7778", "type": "string" },
+    { "key": "api_key", "value": "", "type": "string" }
+  ],
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-API-Key", "type": "string" },
+      { "key": "value", "value": "{{api_key}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Clientes",
+      "item": [
+        {
+          "name": "Listar clientes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/external/v1/clients?page=1&limit=25&search=&status=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "external", "v1", "clients"],
+              "query": [
+                { "key": "page", "value": "1", "description": "Página (default 1)." },
+                { "key": "limit", "value": "25", "description": "Tamaño de página (default 25, máximo 100)." },
+                { "key": "search", "value": "", "description": "Busca en nombre/email/login (opcional)." },
+                { "key": "status", "value": "", "description": "Filtra por estado exacto: active | late | blocked | inactive | baja (opcional)." }
+              ]
+            },
+            "description": "Lista paginada de clientes.\n\n**Respuesta:** `{ data: ClienteDto[], total, page, limit, totalPages }`.\n\n**ClienteDto:** `{ id, name, email, phone, status, address, city, country, createdAt }`. No incluye datos internos/sensibles."
+          },
+          "response": []
+        },
+        {
+          "name": "Detalle de cliente",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/external/v1/clients/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "external", "v1", "clients", ":id"],
+              "variable": [
+                { "key": "id", "value": "98be95dd-516c-49bc-a6a7-8217ce5ea9e9", "description": "UUID del cliente." }
+              ]
+            },
+            "description": "Un cliente por id (UUID). `404` si no existe.\n\n**Respuesta:** ClienteDto."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Contratos",
+      "item": [
+        {
+          "name": "Listar contratos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/external/v1/contracts?page=1&limit=25&search=&status=&technology=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "external", "v1", "contracts"],
+              "query": [
+                { "key": "page", "value": "1", "description": "Página (default 1)." },
+                { "key": "limit", "value": "25", "description": "Tamaño de página (default 25, máximo 100)." },
+                { "key": "search", "value": "", "description": "Busca por código/cliente (opcional)." },
+                { "key": "status", "value": "", "description": "Filtra por estado del contrato (opcional)." },
+                { "key": "technology", "value": "", "description": "Filtra por tecnología guardada: Fiber | Wireless | DOCSIS | FTTH | HFC | Radio (opcional)." }
+              ]
+            },
+            "description": "Lista paginada de contratos.\n\n**Respuesta:** `{ data: ContratoDto[], total, page, limit, totalPages }`.\n\n**ContratoDto:** `{ id, code, clientId, plan, status, technology, startDate }`.\n\n- `technology` es el efectivo: si el operador la cargó a mano gana esa; si no, se deriva del plan (`< 100 Mbps → Wireless`, `>= 100 → Fiber`).\n- No incluye datos internos/sensibles (ip, vendedor, name, services, etc.)."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

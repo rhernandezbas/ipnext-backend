@@ -2203,8 +2203,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     ));
   }
 
-  // External API v1 — API-key auth, read-only (listClients + getDetail reused from above)
-  app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail));
+  // External API v1 — API-key auth, read-only (listClients + getDetail + listContracts reused from above)
+  app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail, listContracts));
 
   // 404
   app.use((_req: Request, res: Response): void => {
