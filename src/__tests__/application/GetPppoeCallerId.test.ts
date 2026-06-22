@@ -71,4 +71,42 @@ describe('GetPppoeCallerId', () => {
 
     await expect(uc.execute('non-existent-id')).rejects.toThrow(PppoeServiceNotFoundError);
   });
+
+  it('write-through: persiste la MAC viva en el repo', async () => {
+    const repo = new InMemoryPppoeServiceRepository();
+    const orchestrator = new InMemoryRadiusOrchestratorGateway({
+      seed: [{ username: 'user1', sessions: [makeSession()] }],
+    });
+    const uc = new GetPppoeCallerId(repo, orchestrator);
+    const row = await repo.upsertByUsername({ username: 'user1', password: 'pwd', nasId: '3', status: 'enabled' });
+
+    await uc.execute(row.id);
+
+    const persisted = await repo.findById(row.id);
+    expect(persisted!.callerId).toBe('AA:BB:CC:DD:EE:FF');
+  });
+
+  it('offline (sin sesión): devuelve la última MAC guardada, no null', async () => {
+    const repo = new InMemoryPppoeServiceRepository();
+    const orchestrator = new InMemoryRadiusOrchestratorGateway(); // sin sesiones
+    const uc = new GetPppoeCallerId(repo, orchestrator);
+    const row = await repo.upsertByUsername({ username: 'user4', password: 'pwd', nasId: '3', status: 'enabled' });
+    await repo.setCallerId(row.id, '11:22:33:44:55:66'); // última vista (persistida antes)
+
+    const result = await uc.execute(row.id);
+    expect(result).toBe('11:22:33:44:55:66');
+  });
+
+  it('best-effort: si setCallerId falla, igual devuelve la MAC viva', async () => {
+    const repo = new InMemoryPppoeServiceRepository();
+    const orchestrator = new InMemoryRadiusOrchestratorGateway({
+      seed: [{ username: 'user5', sessions: [makeSession({ username: 'user5' })] }],
+    });
+    const uc = new GetPppoeCallerId(repo, orchestrator);
+    const row = await repo.upsertByUsername({ username: 'user5', password: 'pwd', nasId: '3', status: 'enabled' });
+    repo.setCallerId = async () => { throw new Error('boom'); };
+
+    const result = await uc.execute(row.id);
+    expect(result).toBe('AA:BB:CC:DD:EE:FF');
+  });
 });

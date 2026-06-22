@@ -1746,6 +1746,7 @@ model PppoeService {
   enforcedState String    @default("active")
   nasId         String
   contractId    String?
+  callerId      String?   // MAC del CPE (persistida de la última sesión vista — sobrevive a la desconexión)
   createdAt     DateTime  @default(now())
   nas           NasServer @relation(fields: [nasId], references: [id])
   contract      Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)

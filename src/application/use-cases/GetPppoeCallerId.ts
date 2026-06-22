@@ -21,8 +21,18 @@ export class GetPppoeCallerId {
     if (!s) throw new PppoeServiceNotFoundError(id);
 
     const sessions = await this.orchestrator.listSessions(s.username);
-    if (sessions.length === 0) return null;
+    const live = sessions[0]?.callerId ?? null;
 
-    return sessions[0]!.callerId;
+    // write-through: si vemos una MAC viva nueva, la persistimos (best-effort; no rompe la respuesta).
+    if (live && live !== s.callerId) {
+      try {
+        await this.repo.setCallerId(s.id, live);
+      } catch {
+        /* best-effort: persistir es secundario, devolvemos la MAC igual */
+      }
+    }
+
+    // viva si está online; si no, la última guardada (sobrevive a la desconexión).
+    return live ?? s.callerId;
   }
 }

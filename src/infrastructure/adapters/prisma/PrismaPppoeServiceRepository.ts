@@ -21,6 +21,8 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
       status: data.status ?? 'enabled',
       nasId: data.nasId,
       contractId: data.contractId ?? null,
+      // GUARD: callerId NO se incluye acá a propósito. Es Prominense-owned (la MAC de la última
+      // sesión vista) y se persiste aparte vía setCallerId() — el ingest desde GET /users NUNCA lo pisa.
     };
     // enforcedState: solo se escribe si viene (en create cae al default 'active' del schema).
     if (data.enforcedState !== undefined) fields['enforcedState'] = data.enforcedState;
@@ -124,6 +126,10 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     }
   }
 
+  async setCallerId(id: string, callerId: string): Promise<void> {
+    await model().update({ where: { id }, data: { callerId } });
+  }
+
   async setEnforcedState(id: string, state: EnforcedState): Promise<PppoeService | null> {
     try {
       const row = await model().update({ where: { id }, data: { enforcedState: state } });
@@ -156,6 +162,7 @@ function toEntity(row: any): PppoeService {
     enforcedState: (row.enforcedState ?? 'active') as EnforcedState,
     nasId: row.nasId,
     contractId: row.contractId ?? null,
+    callerId: row.callerId ?? null,
     createdAt: new Date(row.createdAt).toISOString(),
   };
 }
