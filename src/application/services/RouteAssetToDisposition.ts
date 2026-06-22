@@ -5,6 +5,7 @@ import { AssetStatus, nextStatus } from '@domain/entities/inventory-asset';
 import { ResolveDepotLocation } from '@application/use-cases/ResolveDepotLocation';
 import { ResolveTechnicianLocation } from '@application/use-cases/ResolveTechnicianLocation';
 import { ResolveClientLocation } from '@application/use-cases/ResolveClientLocation';
+import { AssetNotInstalledError } from '@domain/errors/inventory';
 
 /** Destinos posibles de un retiro con destino (Cambio B). */
 export type RetireDisposition = 'DEPOSITO' | 'TECNICO' | 'CLIENTE' | 'DAMAGED' | 'RETIRED';
@@ -73,6 +74,15 @@ export class RouteAssetToDisposition {
   async execute(b: RouteAssetBag, input: RouteAssetInput): Promise<void> {
     const asset = await b.assets.findById(input.assetId);
     if (!asset) return; // nothing to route (defensive — caller guards this)
+
+    // Drifted-asset guard: the asset MUST be `installed` to be retired with a
+    // destination. If it already drifted (e.g. `available`/`removed`/`retired`),
+    // refuse with a clear, typed error BEFORE touching status/location/ledger —
+    // never the cryptic InvalidStatusTransitionError (and never a silent
+    // same-status "success" like routing an already-`available` asset to DEPOSITO).
+    if (asset.status !== 'installed') {
+      throw new AssetNotInstalledError(asset.serialNumber, asset.status);
+    }
 
     const plan = ROUTING[input.disposition];
     const from = asset.currentLocationId;

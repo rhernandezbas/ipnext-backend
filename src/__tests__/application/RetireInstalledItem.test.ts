@@ -12,7 +12,7 @@ import { InMemoryInventorySuggestionRepository } from '@infrastructure/adapters/
 import { InMemoryUnitOfWork } from '@infrastructure/adapters/in-memory/InMemoryUnitOfWork';
 import { createInventoryAsset } from '@domain/entities/inventory-asset';
 import { ContractInstalledItem } from '@domain/entities/contract-installed-item';
-import { InstalledItemNotFoundError, TechnicianRequiredError } from '@domain/errors/inventory';
+import { InstalledItemNotFoundError, TechnicianRequiredError, AssetNotInstalledError } from '@domain/errors/inventory';
 import {
   InventoryMovementRepository,
   RecordMovementInput,
@@ -264,6 +264,32 @@ describe('RetireInstalledItem', () => {
     expect(result.status).toBe('removed');
     // No asset routing happened at all — the ledger is empty.
     expect(innerMovements.movements).toHaveLength(0);
+  });
+
+  // ── drifted asset (active CII, asset ≠ installed) → typed 409 + full rollback ─
+  // The CII is `active` but its linked asset already drifted OUT of `installed`
+  // (e.g. moved to `available` by another flow). Retiring must throw the typed
+  // AssetNotInstalledError — NOT the cryptic InvalidStatusTransitionError — and the
+  // UoW must roll back: the CII stays `active`, the asset stays untouched, no ledger.
+  it('active CII but drifted (non-installed) asset → AssetNotInstalledError; rolls back', async () => {
+    const { retire, inventory, assets, innerMovements, resolveClient } = await setup();
+    const { itemId, assetId, clienteId } = await seedItemWithAsset(inventory, resolveClient, assets);
+    // Drift the asset out of `installed` before the retire runs.
+    await assets.updateStatus(assetId, 'available');
+
+    await expect(
+      retire.execute({ contractId: CONTRACT_ID, itemId, disposition: 'DEPOSITO' }),
+    ).rejects.toBeInstanceOf(AssetNotInstalledError);
+
+    // CII NOT removed — the b.inventory.remove() was rolled back.
+    const item = await inventory.getById(itemId);
+    expect(item!.status).toBe('active');
+    // Asset unchanged — still available @ its CLIENTE location (no status/location flip).
+    const asset = await assets.findById(assetId);
+    expect(asset!.status).toBe('available');
+    expect(asset!.currentLocationId).toBe(clienteId);
+    // No ledger row.
+    expect(await innerMovements.listByAsset(assetId)).toHaveLength(0);
   });
 
   // ── atomicity rollback ──────────────────────────────────────────────────────

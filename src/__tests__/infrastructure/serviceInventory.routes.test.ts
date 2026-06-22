@@ -627,6 +627,31 @@ describe('POST /contracts/:contractId/inventory/:itemId/retire (Cambio B — qui
       .send({ disposition: 'DEPOSITO' });
     expect(res.status).toBe(403);
   });
+
+  // Drifted-asset guard: the CII is `active` but its asset already drifted OUT of
+  // `installed`. The route must surface a typed 409 ASSET_NOT_INSTALLED (so the FE
+  // can tell what happened) instead of a bare/undifferentiated 400 from the cryptic
+  // InvalidStatusTransitionError. The transaction still rolls back cleanly.
+  it('active CII but drifted (non-installed) asset → 409 ASSET_NOT_INSTALLED; nothing mutated', async () => {
+    const { app, inventory, assetRepo, movementRepo, locationRepo } = await buildApp();
+    const { itemId, assetId } = await seedInstalled(inventory, locationRepo, assetRepo);
+    // Drift the asset out of `installed` before the retire.
+    await assetRepo.updateStatus(assetId, 'available');
+
+    const res = await request(app)
+      .post(`/api/contracts/svc1/inventory/${itemId}/retire`)
+      .send({ disposition: 'DEPOSITO' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ASSET_NOT_INSTALLED');
+
+    // Rolled back: CII still active, asset untouched, no ledger row.
+    const item = await inventory.getById(itemId);
+    expect(item!.status).toBe('active');
+    const asset = await assetRepo.findById(assetId);
+    expect(asset!.status).toBe('available');
+    expect(await movementRepo.listByAsset(assetId)).toHaveLength(0);
+  });
 });
 
 describe('Material consumption routes', () => {

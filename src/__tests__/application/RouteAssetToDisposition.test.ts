@@ -7,6 +7,7 @@ import { InMemoryInventoryAssetRepository } from '@infrastructure/adapters/in-me
 import { InMemoryMaterialStockRepository } from '@infrastructure/adapters/in-memory/InMemoryMaterialStockRepository';
 import { InMemoryInventoryMovementRepository } from '@infrastructure/adapters/in-memory/InMemoryInventoryMovementRepository';
 import { createInventoryAsset } from '@domain/entities/inventory-asset';
+import { AssetNotInstalledError } from '@domain/errors/inventory';
 
 /**
  * RouteAssetToDisposition — the tx-scoped routing service (Cambio B, Commit 1).
@@ -166,5 +167,28 @@ describe('RouteAssetToDisposition', () => {
     const moves = await movements.listByAsset('asset-1');
     expect(moves).toHaveLength(1);
     expect(moves[0].note).toBe('se cambió por upgrade');
+  });
+
+  // ── drifted asset (status ≠ installed) → typed guard, no mutation ─────────────
+  // The CII is `active` but its linked asset already drifted OUT of `installed`
+  // (e.g. another flow already moved it to `available`). Routing must refuse with a
+  // clear, typed AssetNotInstalledError BEFORE touching status/location/ledger —
+  // never the cryptic InvalidStatusTransitionError (which maps to a bare 400).
+  it('asset NOT installed (drifted) → AssetNotInstalledError; nothing mutated', async () => {
+    const { route, bag, assets, movements, cliente } = await setup();
+    // Drift the seeded asset out of `installed` (simulates another flow that
+    // already moved it to the depot).
+    await assets.updateStatus('asset-1', 'available');
+
+    await expect(
+      route.execute(bag, { assetId: 'asset-1', disposition: 'DEPOSITO', contractId: CONTRACT_ID }),
+    ).rejects.toBeInstanceOf(AssetNotInstalledError);
+
+    // Asset is untouched (still available @ its original CLIENTE location).
+    const asset = await assets.findById('asset-1');
+    expect(asset!.status).toBe('available');
+    expect(asset!.currentLocationId).toBe(cliente.id);
+    // No ledger row written.
+    expect(await movements.listByAsset('asset-1')).toHaveLength(0);
   });
 });

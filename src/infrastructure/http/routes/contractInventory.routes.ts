@@ -26,6 +26,7 @@ import {
   SameTypeNeedsDecisionError,
   AssetNotRevivableError,
   TechnicianRequiredError,
+  AssetNotInstalledError,
 } from '@domain/errors/inventory';
 import { DomainError } from '@domain/errors/index';
 import { z } from 'zod';
@@ -391,6 +392,10 @@ export function createContractInventoryRouter(
     } catch (e) {
       if (e instanceof TechnicianRequiredError) {
         res.status(400).json({ error: e.message, code: e.code });
+        return;
+      }
+      if (e instanceof AssetNotInstalledError) {
+        res.status(409).json({ error: e.message, code: e.code });
         return;
       }
       if (e instanceof InstalledItemNotFoundError) {
