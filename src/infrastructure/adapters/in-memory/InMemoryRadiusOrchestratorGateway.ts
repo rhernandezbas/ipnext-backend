@@ -72,6 +72,10 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   private readonly assignedIps: string[];
   /** Inventario que devuelve listUsers (GET /users). Sembrable para tests de ingest/adopción. */
   private readonly usersInventory: RadiusUserInventoryItem[];
+  /** Sesiones globales que devuelve listActiveSessions (GET /sessions). */
+  private readonly globalSessionsList: OrchestratorSession[];
+  /** Si true, listActiveSessions lanza OrchestratorUnreachableError (simula orchestrator caído). */
+  private readonly globalSessionsUnreachable: boolean;
 
   public readonly calls: UserCallLog[] = [];
   public readonly planCalls: PlanCallLog[] = [];
@@ -92,6 +96,10 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     assignedIps?: string[];
     /** Inventario que devolverá listUsers (GET /users). Default: []. */
     usersInventory?: RadiusUserInventoryItem[];
+    /** Sesiones globales que devolverá listActiveSessions (GET /sessions). Default: []. */
+    globalSessions?: OrchestratorSession[];
+    /** Si true, listActiveSessions lanza OrchestratorUnreachableError. Default: false. */
+    globalSessionsUnreachable?: boolean;
   }) {
     this.unreachable = new Set(opts?.unreachable ?? []);
     this.failForPlanCode = new Set(opts?.failForPlanCode ?? []);
@@ -99,6 +107,8 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     this.onSyncPlanCb = opts?.onSyncPlan;
     this.assignedIps = [...(opts?.assignedIps ?? [])];
     this.usersInventory = [...(opts?.usersInventory ?? [])];
+    this.globalSessionsList = [...(opts?.globalSessions ?? [])];
+    this.globalSessionsUnreachable = opts?.globalSessionsUnreachable ?? false;
     for (const u of opts?.seed ?? []) {
       this.state.set(u.username, { plan: u.plan ?? '', suspended: u.suspended ?? false });
       if (u.sessions) this.sessions.set(u.username, u.sessions);
@@ -213,6 +223,11 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
 
   async listAssignedIps(): Promise<string[]> {
     return [...this.assignedIps];
+  }
+
+  async listActiveSessions(offset = 0, limit = 10000): Promise<OrchestratorSession[]> {
+    if (this.globalSessionsUnreachable) throw new OrchestratorUnreachableError('in-memory');
+    return [...this.globalSessionsList].slice(offset, offset + limit);
   }
 
   // ── Helpers de test ────────────────────────────────────────────────────────

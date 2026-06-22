@@ -120,4 +120,12 @@ export interface RadiusOrchestratorGateway {
    * tomadas: el allocator excluye ESTA lista al buscar un IP libre (evita el 409 al crear).
    */
   listAssignedIps(): Promise<string[]>;
+
+  /**
+   * Lista TODAS las sesiones PPPoE activas del RADIUS (todas las cuentas en el NAS RADIUS).
+   * Corresponde a `GET /sessions?offset={offset}&limit={limit}` del orchestrator.
+   * Parsea 1:1 igual que `listSessions(username)` pero sin filtrar por usuario.
+   * Fallo de red/5xx → `OrchestratorUnreachableError`.
+   */
+  listActiveSessions(offset?: number, limit?: number): Promise<OrchestratorSession[]>;
 }

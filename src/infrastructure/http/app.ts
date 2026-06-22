@@ -1110,8 +1110,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const listFinanceHistory = new ListFinanceHistory(financeHistoryRepo);
 
   const nasRepo = new PrismaNasRepository();
-  const listNasServers = new ListNasServers(nasRepo);
-  const getNasServer = new GetNasServer(nasRepo);
+  // NAS live-counters: se construye después del orchestrator (singleton compartido creado abajo)
+  // Para evitar forward-reference, se construye en diferido justo antes de los use cases NAS.
   const createNasServer = new CreateNasServer(nasRepo);
   const updateNasServer = new UpdateNasServer(nasRepo);
   const deleteNasServer = new DeleteNasServer(nasRepo);
@@ -1138,6 +1138,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // Mismo ruteo por nas.type que el allocator. Degrada por pool/red si el NAS está caído (no 500).
   const listIpNetworks = new ListIpNetworks(ipNetworkRepo, nasRepo, new RouterOsGateway(), orchestrator);
   const listIpPools = new ListIpPools(ipNetworkRepo, nasRepo, new RouterOsGateway(), orchestrator);
+
+  // NAS live-counters: clientCount/lastSeen en vivo para mikrotik_radius via orchestrator.
+  // #1: ipNetworkRepo y orchestrator se inyectan directo a los use cases — cada request
+  // crea su propio NasLiveStatsProvider fresco (evita cache singleton entre requests).
+  const listNasServers = new ListNasServers(nasRepo, ipNetworkRepo, orchestrator);
+  const getNasServer = new GetNasServer(nasRepo, ipNetworkRepo, orchestrator);
 
   const networkSiteRepo = new PrismaNetworkSiteRepository();
   const listNetworkSites = new ListNetworkSites(networkSiteRepo);

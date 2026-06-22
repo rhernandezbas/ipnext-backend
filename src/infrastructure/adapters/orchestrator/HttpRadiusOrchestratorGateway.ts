@@ -133,6 +133,14 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     const ips: unknown = (data as { ips?: unknown } | null)?.ips;
     return Array.isArray(ips) ? (ips as string[]) : [];
   }
+
+  async listActiveSessions(offset = 0, limit = 10000): Promise<OrchestratorSession[]> {
+    const { data } = await this.call(() =>
+      this.http.get('/sessions', { params: { offset, limit } }),
+    );
+    const rows: unknown = data;
+    return (Array.isArray(rows) ? rows : []).map(toSession);
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
