@@ -23,7 +23,7 @@ import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfir
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { ListClientEquipment } from '@application/use-cases/ListClientEquipment';
-import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
+import { AddContractEquipment } from '@application/use-cases/AddContractEquipment';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
 import { RecordMaterialConsumption } from '@application/use-cases/RecordMaterialConsumption';
@@ -95,7 +95,7 @@ async function buildApp() {
     new CorrectConfirmedDeviceType(suggestions, inventory),
     new ListContractInstalledItems(inventory, users),
     new ListClientEquipment(inventory),
-    new AddInstalledItemManually(inventory),
+    new AddContractEquipment(inventory, catalogRepo, locationRepo, assetRepo, movementRepo, uow),
     new UpdateInstalledItem(inventory),
     new RemoveInstalledItem(inventory),
     new RecordMaterialConsumption(consumptionRepo, materialRepo),
@@ -143,7 +143,7 @@ async function buildAppWithPerms(perms: {
     new CorrectConfirmedDeviceType(suggestions, inventory),
     new ListContractInstalledItems(inventory, users),
     new ListClientEquipment(inventory),
-    new AddInstalledItemManually(inventory),
+    new AddContractEquipment(inventory, catalogRepo),
     new UpdateInstalledItem(inventory),
     new RemoveInstalledItem(inventory),
     new RecordMaterialConsumption(consumptionRepo, materialRepo),
@@ -308,6 +308,76 @@ describe('contractInventory routes', () => {
     const res = await request(app).post('/api/contracts/svc1/inventory').send({ type: 'LASER' });
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('INVALID_ITEM_TYPE');
+  });
+
+  // ── Cambio A: dedup-aware add (200 enrich / 409 same_type / completeItemId / force) ──
+  it('POST add new equipment (no match) → 201 + dual-write (assetId set, INSTALL movement)', async () => {
+    const { app, inventory, assetRepo, movementRepo } = await buildApp();
+    const res = await request(app)
+      .post('/api/contracts/svc1/inventory')
+      .send({ type: 'ROUTER', serialNumber: 'ABC123', mac: 'c0:c9:e3:34:33:75', model: 'TP-Link' });
+    expect(res.status).toBe(201);
+    expect(res.body.assetId).not.toBeNull();
+    const asset = await assetRepo.findBySerialNumber('ABC123');
+    expect(asset!.status).toBe('installed');
+    expect(await movementRepo.listByAsset(asset!.id)).toHaveLength(1);
+    expect(await inventory.listByContract('svc1')).toHaveLength(1);
+  });
+
+  it('POST add whose MAC already exists (same_device) → 200 enrich, no new row', async () => {
+    const { app, inventory } = await buildApp();
+    await inventory.create(makeItem({ id: 'a1', type: 'ANTENA', mac: '78:8A:20:96:6A:AE', model: null }));
+    const res = await request(app)
+      .post('/api/contracts/svc1/inventory')
+      .send({ type: 'ANTENA', mac: '78:8a:20:96:6a:ae', model: 'LiteBeam 5AC Gen2' });
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe('a1');
+    expect(res.body.model).toBe('LiteBeam 5AC Gen2');
+    expect(await inventory.listByContract('svc1')).toHaveLength(1);
+  });
+
+  it('POST add same type, different identity → 409 SAME_TYPE_NEEDS_DECISION with candidates', async () => {
+    const { app, inventory } = await buildApp();
+    await inventory.create(makeItem({ id: 'ant', type: 'ANTENA', serialNumber: 'SN-001', mac: null }));
+    const res = await request(app)
+      .post('/api/contracts/svc1/inventory')
+      .send({ type: 'ANTENA', mac: '78:8A:20:96:6A:AE' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SAME_TYPE_NEEDS_DECISION');
+    expect(res.body.candidates).toHaveLength(1);
+    expect(res.body.candidates[0]).toMatchObject({ id: 'ant', type: 'ANTENA', serialNumber: 'SN-001', mac: null });
+  });
+
+  it('POST add with completeItemId → 200 enrich the chosen item', async () => {
+    const { app, inventory } = await buildApp();
+    await inventory.create(makeItem({ id: 'ant', type: 'ANTENA', serialNumber: 'SN-001', mac: null }));
+    const res = await request(app)
+      .post('/api/contracts/svc1/inventory')
+      .send({ type: 'ANTENA', mac: '78:8A:20:96:6A:AE', completeItemId: 'ant' });
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe('ant');
+    expect(res.body.mac).toBe('78:8A:20:96:6A:AE');
+    expect(await inventory.listByContract('svc1')).toHaveLength(1);
+  });
+
+  it('POST add with force → 201 second item of the same type', async () => {
+    const { app, inventory } = await buildApp();
+    await inventory.create(makeItem({ id: 'ant', type: 'ANTENA', serialNumber: 'SN-001', mac: null }));
+    const res = await request(app)
+      .post('/api/contracts/svc1/inventory')
+      .send({ type: 'ANTENA', mac: '78:8A:20:96:6A:AE', force: true });
+    expect(res.status).toBe(201);
+    const all = await inventory.listByContract('svc1');
+    expect(all.filter((i) => i.type === 'ANTENA')).toHaveLength(2);
+  });
+
+  it('POST add with completeItemId pointing at a missing item → 404', async () => {
+    const { app } = await buildApp();
+    const res = await request(app)
+      .post('/api/contracts/svc1/inventory')
+      .send({ type: 'ANTENA', mac: '78:8A:20:96:6A:AE', completeItemId: 'ghost' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('INSTALLED_ITEM_NOT_FOUND');
   });
 
   it('PATCH installed item → 200 updated; unknown → 404', async () => {

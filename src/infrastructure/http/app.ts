@@ -563,7 +563,8 @@ import { CorrectConfirmedDeviceType } from '@application/use-cases/CorrectConfir
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { ListClientEquipment } from '@application/use-cases/ListClientEquipment';
-import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
+import { AddContractEquipment } from '@application/use-cases/AddContractEquipment';
+import { InstallContractAsset } from '@application/services/InstallContractAsset';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
 import { RecordMaterialConsumption } from '@application/use-cases/RecordMaterialConsumption';
@@ -1384,6 +1385,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // Inventory Foundation (W2 Fix #1/#3) — single transaction boundary for the
   // confirm/replace dual-write (asset + INSTALL movement + CII + setStatus).
   const inventoryUow = new PrismaUnitOfWork();
+  // Cambio A — shared install/dual-write service for the dedup-aware contract add.
+  const installContractAsset = new InstallContractAsset(deviceTypeCatalogRepo);
   const correctConfirmedDeviceType = new CorrectConfirmedDeviceType(inventorySuggestionRepo, contractInventoryRepo);
   // EPIC #38 W6 — material-deduction staging hook, injected into BOTH consumption
   // channels (RecordMaterialConsumption + ConfirmInventorySuggestion.handleMaterial).
@@ -1406,7 +1409,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     correctConfirmedDeviceType,
     new ListContractInstalledItems(contractInventoryRepo, rbacUserRepo),
     new ListClientEquipment(contractInventoryRepo),
-    new AddInstalledItemManually(contractInventoryRepo),
+    new AddContractEquipment(
+      contractInventoryRepo, deviceTypeCatalogRepo,
+      stockLocationRepo, inventoryAssetRepo, inventoryMovementRepo, inventoryUow,
+      installContractAsset,
+    ),
     new UpdateInstalledItem(contractInventoryRepo),
     new RemoveInstalledItem(contractInventoryRepo),
     new RecordMaterialConsumption(taskMaterialConsumptionRepo, materialCatalogRepo, {

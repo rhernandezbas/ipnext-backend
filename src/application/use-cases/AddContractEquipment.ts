@@ -37,8 +37,8 @@ export interface AddContractEquipmentResult {
 }
 
 /**
- * Dedup-aware contract equipment add (Cambio A). Replaces AddInstalledItemManually
- * — the bug there was an unconditional INSERT (assetId null, no dedup, no tx). This
+ * Dedup-aware contract equipment add (Cambio A). Replaces the old direct-add use
+ * case whose bug was an unconditional INSERT (assetId null, no dedup, no tx). This
  * use case wires the direct add ("Agregar por PPPoE" + "+ Agregar SN") into the same
  * dedup (`matchEquipment`) + dual-write (`InstallContractAsset`) + atomic (`UnitOfWork`)
  * machinery the task-suggestion confirm already uses.

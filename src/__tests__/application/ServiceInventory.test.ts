@@ -1,6 +1,5 @@
 import { ConfirmInventorySuggestion } from '@application/use-cases/ConfirmInventorySuggestion';
 import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
-import { AddInstalledItemManually } from '@application/use-cases/AddInstalledItemManually';
 import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInventorySuggestion';
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { InMemoryInventorySuggestionRepository } from '@infrastructure/adapters/in-memory/InMemoryInventorySuggestionRepository';
@@ -57,10 +56,9 @@ async function setup() {
     locationRepo, assetRepo, movementRepo, uow,
   );
   const listItems = new ListContractInstalledItems(inventory, users);
-  const addManual = new AddInstalledItemManually(inventory);
   const discard = new DiscardInventorySuggestion(suggestions);
   return {
-    suggestions, inventory, scheduling, users, confirm, listItems, addManual, discard,
+    suggestions, inventory, scheduling, users, confirm, listItems, discard,
     materialRepo, consumptionRepo, locationRepo, assetRepo, movementRepo, materialStockRepo, uow,
   };
 }
@@ -603,23 +601,6 @@ describe('ConfirmInventorySuggestion — dual-write (W1 HIGH-CARE)', () => {
 
     await expect(confirm.execute({ suggestionId: 's1' })).rejects.toMatchObject({ code: 'TASK_HAS_NO_CONTRACT' });
     expect(assetRepo.store.size).toBe(0);
-  });
-});
-
-describe('AddInstalledItemManually', () => {
-  it('SCEN-MI-1: a manual 2nd router coexists with confirmed items', async () => {
-    const { inventory, scheduling, confirm, suggestions, addManual } = await setup();
-    scheduling.seedTask({ id: 't1', contractId: 'svc1' });
-    await suggestions.upsert(sug({ id: 's1', serialNumber: 'R1' }));
-    await confirm.execute({ suggestionId: 's1' });
-
-    const manual = await addManual.execute({ contractId: 'svc1', type: 'ROUTER', serialNumber: 'R2', addedByUserId: 'u9' });
-
-    expect(manual.source).toBe('MANUAL');
-    expect(manual.sourceTaskId).toBeNull();
-    const items = await inventory.listByContract('svc1');
-    expect(items).toHaveLength(2);
-    expect(items.map(i => i.serialNumber).sort()).toEqual(['R1', 'R2']);
   });
 });
 
