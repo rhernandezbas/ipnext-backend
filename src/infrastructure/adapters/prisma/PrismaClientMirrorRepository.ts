@@ -1,5 +1,6 @@
 import { ClientMirrorRepository, UpsertResult } from '@domain/ports/ClientMirrorRepository';
 import { GrClient, GrContract } from '@domain/entities/gestionReal';
+import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 import { prisma } from '../../database/prisma';
 
 type ClientStatus = 'active' | 'late' | 'blocked' | 'inactive' | 'baja';
@@ -104,7 +105,10 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
     const data = {
       type: 'internet',
       plan: k.plan ?? 'Sin plan',
-      status: k.status ?? 'active',
+      // Canonicalize the raw GR estado ("Vigente"/"Baja"/…) → FE enum, symmetric with
+      // the client mapStatus above. Keeps NEW mirror rows canonical; computed-on-read
+      // (ListContracts/clients route/external) still covers any legacy raw rows.
+      status: mapContractStatus(k.status),
       startDate: parseGrDate(k.startDate) ?? new Date(),
       address: k.address ?? null,
       lat: k.lat ?? null,

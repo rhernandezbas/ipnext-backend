@@ -276,6 +276,40 @@ describe('POST /api/clients/:id/documents', () => {
 });
 
 describe('GET /api/clients/:id/contracts', () => {
+  it('maps raw GR status ("Vigente" → "active", "Baja" → "baja") to the canonical enum', async () => {
+    const contracts = [
+      { id: 'svc-1', type: 'internet', plan: '300MB', ip: '', status: 'Vigente', startDate: '2024-01-01T00:00:00.000Z', endDate: '', address: null, lat: null, lng: null, technology: null },
+      { id: 'svc-2', type: 'internet', plan: '50MB', ip: '', status: 'Baja', startDate: '2024-02-01T00:00:00.000Z', endDate: '', address: null, lat: null, lng: null, technology: null },
+    ];
+
+    const app = (() => {
+      const a = express();
+      a.use(express.json());
+      a.use(cookieParser());
+
+      const listClients = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as ListClients;
+      const getDetail = { execute: jest.fn().mockResolvedValue({ id: '1', name: 'Alice', email: 'a@b.com', phone: '1', status: 'active', address: '', city: '', country: '', login: 'a', createdAt: '' }) } as unknown as GetClientDetail;
+      const getContracts = { execute: jest.fn().mockResolvedValue(contracts) } as unknown as GetClientContracts;
+      const getInvoices = { execute: jest.fn().mockResolvedValue([]) } as unknown as GetClientInvoices;
+      const getLogs = { execute: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }) } as unknown as GetClientLogs;
+      const authProvider = { getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }) } as unknown as JwtAuthAdapter;
+      const createCustomer = { execute: jest.fn() };
+
+      a.use('/api/clients', createClientsRouter(
+        listClients, getDetail, getContracts, getInvoices, getLogs, authProvider,
+        createCustomer as never,
+        { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
+        { execute: jest.fn().mockResolvedValue(true) } as never,
+      ));
+      return a;
+    })();
+
+    const res = await withAuth(request(app).get('/api/clients/1/contracts'));
+    expect(res.status).toBe(200);
+    expect(res.body[0].status).toBe('active');
+    expect(res.body[1].status).toBe('baja');
+  });
+
   it('returns address, lat, lng on each service item', async () => {
     const serviceWithLocation = {
       id: 'svc-1',

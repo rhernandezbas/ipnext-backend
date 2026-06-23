@@ -1,6 +1,7 @@
 import { ContractRepository, ListContractsQuery } from '@domain/ports/ContractRepository';
 import { PaginatedContractsDto } from '../dto/contract.dto';
 import { deriveTechnology } from './deriveTechnology';
+import { mapContractStatus } from './mapContractStatus';
 
 /**
  * Global paginated listing of contracts for the contracts page.
@@ -32,7 +33,9 @@ export class ListContracts {
         clientId: s.clientId,
         clientName: s.clientName,
         plan: s.plan,
-        status: s.status,
+        // Map raw GR estado ("Vigente"/"Baja"/…) → canonical enum the FE understands.
+        // Computed-on-read (same convention as deriveTechnology); idempotent for canonical values.
+        status: mapContractStatus(s.status),
         technology: deriveTechnology(s.technology, s.plan),
         startDate: s.startDate,
       })),

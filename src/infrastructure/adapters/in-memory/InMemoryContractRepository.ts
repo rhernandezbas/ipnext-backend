@@ -8,6 +8,7 @@ import {
   UpdateContractLocationInput,
   ContractLocationResult,
 } from '@domain/ports/ContractRepository';
+import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 
 /**
  * In-memory ContractRepository for use-case and route tests.
@@ -79,9 +80,14 @@ export class InMemoryContractRepository implements ContractRepository {
   }
 
   async stats(): Promise<ContractStats> {
+    // Canonicalize each status before bucketing so legacy raw rows ('Vigente') and
+    // new canonical rows ('active') COLLAPSE into the same bucket (defense-in-depth,
+    // covers the deploy window + any residual non-canonical rows). Mirrors the
+    // Prisma adapter's stats().
     const byStatus: Record<string, number> = {};
     for (const item of this.items) {
-      byStatus[item.status] = (byStatus[item.status] ?? 0) + 1;
+      const canonical = mapContractStatus(item.status);
+      byStatus[canonical] = (byStatus[canonical] ?? 0) + 1;
     }
     return { total: this.items.length, byStatus };
   }

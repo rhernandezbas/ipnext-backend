@@ -72,7 +72,7 @@ describe('GET /api/contracts/stats', () => {
     expect(res.body).toEqual({ total: 0, byStatus: {} });
   });
 
-  it('returns correct total and byStatus aggregation', async () => {
+  it('returns correct total and byStatus aggregation (canonicalized)', async () => {
     const { app, repo } = buildApp();
     repo.seed({ clientName: 'A', plan: 'P1', status: 'Vigente' });
     repo.seed({ clientName: 'B', plan: 'P2', status: 'Vigente' });
@@ -80,7 +80,8 @@ describe('GET /api/contracts/stats', () => {
     const res = await request(app).get('/api/contracts/stats').set('Cookie', AUTH_COOKIE);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(3);
-    expect(res.body.byStatus).toEqual({ Vigente: 2, Baja: 1 });
+    // Raw GR statuses are canonicalized before bucketing: Vigente→active, Baja→baja.
+    expect(res.body.byStatus).toEqual({ active: 2, baja: 1 });
   });
 
   it('response shape matches { total: number, byStatus: object }', async () => {

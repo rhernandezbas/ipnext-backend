@@ -6,6 +6,7 @@ import { GetClientDetail } from '@application/use-cases/GetClientDetail';
 import { ListContracts } from '@application/use-cases/ListContracts';
 import { ContractSummaryDto } from '@application/dto/contract.dto';
 import { deriveTechnology } from '@application/use-cases/deriveTechnology';
+import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 
 /**
  * Curated external DTO — only safe, non-sensitive fields.
@@ -68,7 +69,9 @@ export function toExternalContractDto(c: ContractSummaryDto): ExternalContractDt
     code: c.code,
     clientId: c.clientId,
     plan: c.plan,
-    status: c.status,
+    // Defense-in-depth at the external seam: map raw GR estado → canonical enum.
+    // Idempotent — a value already canonicalized by ListContracts passes through.
+    status: mapContractStatus(c.status),
     technology: deriveTechnology(c.technology, c.plan),
     startDate: c.startDate,
   };

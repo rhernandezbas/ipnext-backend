@@ -7,6 +7,7 @@ import {
   UpdateContractLocationInput,
   ContractLocationResult,
 } from '@domain/ports/ContractRepository';
+import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 import { prisma } from '../../database/prisma';
 
 function toContractListItem(row: any): ContractListItem {
@@ -56,10 +57,15 @@ export class PrismaContractRepository implements ContractRepository {
       by: ['status'],
       _count: { _all: true },
     });
+    // Canonicalize each grouped status before bucketing so legacy raw rows ('Vigente')
+    // and new canonical rows ('active') COLLAPSE into the same bucket (defense-in-depth:
+    // covers the deploy window + any residual non-canonical rows the backfill missed).
+    // Use += so two raw forms that map to the same canonical value sum together.
     const byStatus: Record<string, number> = {};
     let total = 0;
     for (const g of groups) {
-      byStatus[g.status] = g._count._all;
+      const canonical = mapContractStatus(g.status);
+      byStatus[canonical] = (byStatus[canonical] ?? 0) + g._count._all;
       total += g._count._all;
     }
     return { total, byStatus };

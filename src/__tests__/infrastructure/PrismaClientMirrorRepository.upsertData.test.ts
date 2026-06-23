@@ -39,4 +39,11 @@ describe('upsertContract data block pinning (#43)', () => {
   it('does NOT contain a technology: key (user-owned)', () => {
     expect(dataBlock).not.toMatch(/(^|\s)technology\s*:/);
   });
+
+  it('canonicalizes status via mapContractStatus (symmetric with client mapStatus)', () => {
+    // The NEW data must store the canonical enum, not the raw GR estado.
+    expect(dataBlock).toMatch(/status:\s*mapContractStatus\(k\.status\)/);
+    // The old raw passthrough default must be gone.
+    expect(dataBlock).not.toMatch(/status:\s*k\.status\s*\?\?/);
+  });
 });

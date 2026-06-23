@@ -161,6 +161,42 @@ describe('GET /api/external/v1/contracts — technology derivation', () => {
   });
 });
 
+// ─── Status mapping (defense-in-depth at the external seam) ────────────────
+
+describe('GET /api/external/v1/contracts — status mapping', () => {
+  it('maps a raw GR status "Vigente" → "active" at the external projection', async () => {
+    const rawStatus: ContractSummaryDto = { ...FULL_CONTRACT_SUMMARY, status: 'Vigente' };
+    const app = buildApp(makeListContracts([rawStatus]));
+    const res = await request(app)
+      .get('/api/external/v1/contracts')
+      .set('X-API-Key', TEST_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].status).toBe('active');
+  });
+
+  it('maps a raw GR status "Baja" → "baja" at the external projection', async () => {
+    const rawStatus: ContractSummaryDto = { ...FULL_CONTRACT_SUMMARY, status: 'Baja' };
+    const app = buildApp(makeListContracts([rawStatus]));
+    const res = await request(app)
+      .get('/api/external/v1/contracts')
+      .set('X-API-Key', TEST_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].status).toBe('baja');
+  });
+
+  it('passes through an already-canonical "active"', async () => {
+    const app = buildApp(makeListContracts([FULL_CONTRACT_SUMMARY]));
+    const res = await request(app)
+      .get('/api/external/v1/contracts')
+      .set('X-API-Key', TEST_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].status).toBe('active');
+  });
+});
+
 // ─── DTO hygiene ─────────────────────────────────────────────────────────
 
 describe('GET /api/external/v1/contracts — DTO hygiene', () => {

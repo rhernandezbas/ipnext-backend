@@ -14,6 +14,7 @@ import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { ClientNotFoundError, SplynxUnavailableError } from '@domain/errors';
 import { InvalidLocationError } from '@domain/errors/geolocation';
 import { deriveTechnology } from '@application/use-cases/deriveTechnology';
+import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { incrementClients, decrementClients } from '../../adapters/in-memory/shared-stores';
 
@@ -207,10 +208,14 @@ export function createClientsRouter(
 
   router.get('/:id/contracts', auth, async (req: Request, res: Response): Promise<void> => {
     const contracts = await getContracts.execute(req.params['id'] as string);
-    // Apply deriveTechnology at the output layer: manual value wins, else derived from plan.
-    // The raw stored technology value on the entity is NOT mutated.
+    // Apply deriveTechnology + mapContractStatus at the output layer.
+    // - technology: manual value wins, else derived from plan.
+    // - status: raw GR estado ("Vigente"/"Baja"/…) → canonical enum the FE understands
+    //   (idempotent for already-canonical values; same computed-on-read convention).
+    // The raw stored values on the entity are NOT mutated.
     const mapped = contracts.map((c) => ({
       ...c,
+      status: mapContractStatus(c.status),
       technology: deriveTechnology(c.technology, c.plan),
     }));
     res.json(mapped);
