@@ -47,6 +47,11 @@ export class PrismaNasRepository implements NasRepository {
     return row ? toNasServer(row) : null;
   }
 
+  async findNasServerByNasIp(nasIpAddress: string): Promise<NasServer | null> {
+    const row = await prisma.nasServer.findFirst({ where: { nasIpAddress } });
+    return row ? toNasServer(row) : null;
+  }
+
   async createNasServer(data: Omit<NasServer, 'id'>): Promise<NasServer> {
     const row = await prisma.nasServer.create({
       data: {

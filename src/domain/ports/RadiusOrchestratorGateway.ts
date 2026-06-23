@@ -60,6 +60,76 @@ export interface CreateRadiusUserInput {
   framedIp?: string | null;
 }
 
+// ── Accounting / radacct types (design.md § "Gateway port addition") ──────────────────────────
+
+/**
+ * Filtros para GET /accounting del radius-orchestrator.
+ * Los parámetros se mapean a query params en snake_case por HttpRadiusOrchestratorGateway.
+ *
+ * FIX2: el cursor y la ventana ahora son sobre acctupdatetime (sinceUpdate/untilUpdate).
+ * Esto permite detectar sesiones que cierran dias despues de conectarse (el startedAt viejo
+ * quedaba fuera de la ventana, el acctupdatetime al cerrar queda DENTRO).
+ * El orchestrator expone since_update/until_update en el GET /accounting.
+ */
+export interface ListAccountingFilters {
+  /**
+   * ISO 8601 — ingest cursor: WHERE acctupdatetime >= sinceUpdate.
+   * FIX2: reemplaza sinceStart para detectar sesiones cuyo cierre es reciente
+   * aunque el startedAt sea antiguo (sesiones de dias de duracion).
+   */
+  sinceUpdate?: string;
+  /** ISO 8601 — upper bound (backfill) sobre acctupdatetime */
+  untilUpdate?: string;
+  /** exact username filter */
+  username?: string;
+  /** exact nasipaddress filter */
+  nasIpAddress?: string;
+  /** 1-based page number (default 1) */
+  page?: number;
+  /** rows per page (orchestrator default 500, max 1000) */
+  pageSize?: number;
+}
+
+/**
+ * Un evento de accounting (una fila de radacct) tal como lo devuelve el orchestrator,
+ * ya mapeado a camelCase. Octets ya parseados a bigint.
+ *
+ * FIX2: se agrega `lastUpdate` (acctupdatetime del radacct). Este campo se actualiza
+ * cuando la sesion cierra (acctstoptime se llena). Usarlo como cursor permite detectar
+ * sesiones cuyo startedAt es antiguo pero que cerraron recientemente.
+ */
+export interface AccountingEventRow {
+  uniqueId: string;
+  username: string;
+  nasIpAddress: string;
+  framedIp: string | null;
+  macAddress: string | null;
+  /** VLAN parseado del nasportid por el orchestrator (null si no aplica). */
+  vlan: number | null;
+  startedAt: string;       // ISO 8601
+  stoppedAt: string | null;
+  sessionTime: number | null;
+  inOctets: bigint;
+  outOctets: bigint;
+  /**
+   * acctupdatetime del radacct — se actualiza al cerrar la sesion.
+   * FIX2: cursor del ingest. null si el orchestrator no lo expone (fallback a startedAt).
+   */
+  lastUpdate: string | null;
+}
+
+/**
+ * Respuesta paginada de GET /accounting.
+ * El orchestrator usa paginación 1-based con next_page=null en la última página.
+ */
+export interface AccountingPage {
+  items: AccountingEventRow[];
+  page: number;
+  pageSize: number;
+  /** null cuando es la última página */
+  nextPage: number | null;
+}
+
 export interface RadiusOrchestratorGateway {
   /**
    * Crea el usuario en el RADIUS (radcheck + radusergroup + radreply Framed-IP-Address).
@@ -128,4 +198,11 @@ export interface RadiusOrchestratorGateway {
    * Fallo de red/5xx → `OrchestratorUnreachableError`.
    */
   listActiveSessions(offset?: number, limit?: number): Promise<OrchestratorSession[]>;
+
+  /**
+   * Consulta el histórico de accounting (`radacct`) via el radius-orchestrator.
+   * Corresponde a `GET /accounting` con paginación 1-based.
+   * Usado por el ingest scheduler para llenar `RadiusEvent`.
+   */
+  listAccounting(filters: ListAccountingFilters): Promise<AccountingPage>;
 }

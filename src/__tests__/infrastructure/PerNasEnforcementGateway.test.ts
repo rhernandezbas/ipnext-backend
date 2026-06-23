@@ -49,7 +49,7 @@ describe('PerNasEnforcementGateway (Inc2 — routeo por nas.type)', () => {
   });
 
   it('cualquier otro type cae al DEFAULT SEGURO (MK-directo), nunca a RADIUS', async () => {
-    for (const t of ['other', 'ubiquiti', 'cisco', 'cambium'] as NasType[]) {
+    for (const t of ['other', 'ubiquiti', 'cisco', 'cambium', 'huawei_radius'] as NasType[]) {
       const { mkDirect, radius, gw } = setup();
       await gw.apply(pppoe(), nasOfType(t), 'restore');
       expect(mkDirect.calls).toHaveLength(1);

@@ -414,6 +414,10 @@ import { createRadiusRouter } from './routes/radius.routes';
 import { PrismaRadiusSessionRepository } from '../adapters/prisma/PrismaRadiusSessionRepository';
 import { ListRadiusSessions } from '@application/use-cases/ListRadiusSessions';
 import { DisconnectSession } from '@application/use-cases/DisconnectSession';
+// === RADIUS accounting / network audit ===
+import { PrismaRadiusEventRepository } from '../adapters/prisma/PrismaRadiusEventRepository';
+import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
+import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
 import { createLeadsRouter } from './routes/leads.routes';
 import { PrismaLeadRepository } from '../adapters/prisma/PrismaLeadRepository';
 // #80 — Recaptación
@@ -1197,6 +1201,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const radiusRepo = new PrismaRadiusSessionRepository();
   const listRadiusSessions = new ListRadiusSessions(radiusRepo);
   const disconnectSession = new DisconnectSession(radiusRepo);
+  // === RADIUS accounting / network audit ===
+  const radiusEventRepo = new PrismaRadiusEventRepository();
+  const listRadiusEvents = new ListRadiusEvents(radiusEventRepo);
+  const listNe8000Audit = new ListNe8000PppoeAudit(new PrismaPppoeServiceRepository(), radiusEventRepo, nasRepo, config.networkAudit.ne8000NasIp);
 
   const monitoringRepo = new PrismaMonitoringRepository();
   const getMonitoringStats = new GetMonitoringStats(monitoringRepo);
@@ -1726,7 +1734,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listHardwareAssets, createHardwareAsset, updateHardwareAsset, deleteHardwareAsset,
   ));
   app.use('/api/gpon', createGponRouter(listOlts, getOlt, listOnus, getOnu, listOnusByOlt, createOlt, createOnu, updateOnuStatus));
-  app.use('/api/radius', createRadiusRouter(authAdapter, sessionRepo, requirePerm, listRadiusSessions, disconnectSession));
+  app.use('/api/radius', createRadiusRouter(authAdapter, sessionRepo, requirePerm, listRadiusSessions, disconnectSession, listRadiusEvents, listNe8000Audit));
   app.use('/api', createNasRouter(
     authAdapter,
     sessionRepo,

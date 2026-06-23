@@ -68,6 +68,10 @@ export class InMemoryNasRepository implements NasRepository {
     return [...this.nasServers];
   }
 
+  async findNasServerByNasIp(nasIpAddress: string): Promise<NasServer | null> {
+    return this.nasServers.find(n => n.nasIpAddress === nasIpAddress) ?? null;
+  }
+
   async findNasServerById(id: string): Promise<NasServer | null> {
     return this.nasServers.find(n => n.id === id) ?? null;
   }

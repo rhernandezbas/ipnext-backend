@@ -1733,6 +1733,39 @@ model NasServer {
   description  String?
   createdAt    DateTime  @default(now())
   pppoeServices PppoeService[]
+  radiusEvents  RadiusEvent[]
+}
+
+model RadiusEvent {
+  id             String    @id @default(uuid())
+  /// = radacct.acctuniqueid — THE idempotency key. Upsert target.
+  sourceUniqueId String    @unique
+  username       String
+  nasIpAddress   String
+  nasId          String?
+  framedIp       String?
+  macAddress     String?
+  vlanId         Int?
+  startedAt      DateTime
+  stoppedAt      DateTime?
+  sessionTime    Int?
+  bytesIn        BigInt    @default(0)
+  bytesOut       BigInt    @default(0)
+  eventType      String                    // 'start' | 'stop' | 'interim'
+  status         String                    // 'online' | 'closed' — denormalized for indexed filter
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  nas            NasServer? @relation(fields: [nasId], references: [id], onDelete: SetNull)
+
+  @@index([username])
+  @@index([nasId])
+  @@index([nasIpAddress])
+  @@index([vlanId])
+  @@index([startedAt])
+  @@index([stoppedAt])
+  @@index([status])
+  @@index([username, startedAt])
 }
 
 model PppoeService {

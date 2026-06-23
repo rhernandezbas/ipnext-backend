@@ -70,6 +70,35 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     return rows.map(toEntity);
   }
 
+  async findByNasIdPaginated(params: {
+    nasId: string;
+    page: number;
+    pageSize: number;
+    username?: string;
+    status?: string;
+    enforcedState?: string;
+  }): Promise<{ data: PppoeService[]; total: number }> {
+    const { nasId, page, pageSize, username, status, enforcedState } = params;
+    const skip = (page - 1) * pageSize;
+
+    const where: Record<string, unknown> = { nasId };
+    if (username) where['username'] = { contains: username, mode: 'insensitive' };
+    if (status)        where['status']        = status;
+    if (enforcedState) where['enforcedState'] = enforcedState;
+
+    const [rows, total] = await Promise.all([
+      model().findMany({
+        where,
+        orderBy: { username: 'asc' },
+        skip,
+        take: pageSize,
+      }),
+      model().count({ where }),
+    ]);
+
+    return { data: rows.map(toEntity), total };
+  }
+
   async findAssignedPaginated(params: {
     page: number;
     pageSize: number;

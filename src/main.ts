@@ -7,6 +7,7 @@ import { bootstrapIClassClosure } from './infrastructure/scheduling/bootstrapICl
 import { bootstrapTaskAutocomplete } from './infrastructure/scheduling/bootstrapTaskAutocomplete';
 import { bootstrapBackfill } from './infrastructure/scheduling/bootstrapBackfill';
 import { bootstrapUispSync } from './infrastructure/scheduling/bootstrapUispSync';
+import { bootstrapRadiusAccountingIngest } from './infrastructure/scheduling/bootstrapRadiusAccountingIngest';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
@@ -54,6 +55,10 @@ void (async () => {
   void bootstrapGestionRealIngest()
     .then((grIngest) => grIngest?.start())
     .catch((err) => console.error('[gr-ingest] bootstrap failed (server kept alive):', (err as Error).message));
+  // RADIUS accounting ingest — opt-in, fire-and-forget after listen.
+  void bootstrapRadiusAccountingIngest()
+    .then((scheduler) => scheduler?.start())
+    .catch((err) => console.error('[radius-ingest] bootstrap failed (server kept alive):', (err as Error).message));
 
   // Start schedulers — both start dormant (gated by feature flags).
   iclassClosure?.start();

@@ -26,6 +26,19 @@ export interface PppoeServiceRepository {
    */
   findAssigned(): Promise<PppoeService[]>;
   /**
+   * PPPoE del NE8000 Audit: servicios filtrados por nasId con paginación y filtros opcionales.
+   * Orden: username ASC.
+   */
+  findByNasIdPaginated(params: {
+    nasId: string;
+    page: number;
+    pageSize: number;
+    username?: string;
+    status?: string;
+    enforcedState?: string;
+  }): Promise<{ data: PppoeService[]; total: number }>;
+
+  /**
    * PPPoE ASIGNADOS paginados. Misma condición base que `findAssigned` más filtros opcionales.
    * - `search`: coincidencia parcial case-insensitive sobre username, remoteAddress o contractId.
    * - `nasId`: filtro exacto por nasId.

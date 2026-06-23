@@ -6,6 +6,9 @@ import {
   SuspendOptions,
   CreateRadiusUserInput,
   RadiusUserInventoryItem,
+  ListAccountingFilters,
+  AccountingPage,
+  AccountingEventRow,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -141,6 +144,21 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     const rows: unknown = data;
     return (Array.isArray(rows) ? rows : []).map(toSession);
   }
+
+  async listAccounting(filters: ListAccountingFilters): Promise<AccountingPage> {
+    // Build query params — omit undefined values so they don't pollute the query string
+    // FIX2: usar since_update/until_update (acctupdatetime) en lugar de since_start/until_start
+    const params: Record<string, string | number> = {};
+    if (filters.sinceUpdate  !== undefined) params['since_update'] = filters.sinceUpdate;
+    if (filters.untilUpdate  !== undefined) params['until_update'] = filters.untilUpdate;
+    if (filters.username     !== undefined) params['username']     = filters.username;
+    if (filters.nasIpAddress !== undefined) params['nasipaddress'] = filters.nasIpAddress;
+    if (filters.page         !== undefined) params['page']         = filters.page;
+    if (filters.pageSize     !== undefined) params['page_size']    = filters.pageSize;
+
+    const { data } = await this.call(() => this.http.get('/accounting', { params }));
+    return toAccountingPage(data);
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -164,5 +182,35 @@ function toSession(r: any): OrchestratorSession {
     bytesIn: r.bytes_in ?? 0,
     bytesOut: r.bytes_out ?? 0,
     callerId: r.caller_id ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toAccountingRow(r: any): AccountingEventRow {
+  return {
+    uniqueId:     r.unique_id,
+    username:     r.username,
+    nasIpAddress: r.nasipaddress,
+    framedIp:     r.framedipaddress ?? null,
+    macAddress:   r.callingstationid ?? null,
+    vlan:         r.vlan ?? null,
+    startedAt:    r.acctstarttime,
+    stoppedAt:    r.acctstoptime ?? null,
+    sessionTime:  r.acctsessiontime ?? null,
+    inOctets:     BigInt(r.acctinputoctets ?? '0'),
+    outOctets:    BigInt(r.acctoutputoctets ?? '0'),
+    // FIX2: acctupdatetime se actualiza al cerrar la sesion → cursor del ingest
+    lastUpdate:   r.acctupdatetime ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toAccountingPage(data: any): AccountingPage {
+  const items = Array.isArray(data?.items) ? (data.items as unknown[]).map(toAccountingRow) : [];
+  return {
+    items,
+    page:     data?.page     ?? 1,
+    pageSize: data?.page_size ?? 0,
+    nextPage: data?.next_page ?? null,
   };
 }

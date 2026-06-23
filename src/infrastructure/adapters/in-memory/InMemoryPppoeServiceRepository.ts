@@ -81,6 +81,34 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       .map(s => ({ ...s }));
   }
 
+  async findByNasIdPaginated(params: {
+    nasId: string;
+    page: number;
+    pageSize: number;
+    username?: string;
+    status?: string;
+    enforcedState?: string;
+  }): Promise<{ data: PppoeService[]; total: number }> {
+    const { nasId, page, pageSize, username, status, enforcedState } = params;
+    const usernameLower = username ? username.toLowerCase() : undefined;
+
+    const filtered = this.store.filter(s => {
+      if (s.nasId !== nasId) return false;
+      if (usernameLower && !s.username.toLowerCase().includes(usernameLower)) return false;
+      if (status && s.status !== status) return false;
+      if (enforcedState && s.enforcedState !== enforcedState) return false;
+      return true;
+    });
+
+    const sorted = [...filtered].sort((a, b) => a.username.localeCompare(b.username));
+
+    const total = sorted.length;
+    const skip  = (page - 1) * pageSize;
+    const data  = sorted.slice(skip, skip + pageSize).map(s => ({ ...s }));
+
+    return { data, total };
+  }
+
   async findAssignedPaginated(params: {
     page: number;
     pageSize: number;

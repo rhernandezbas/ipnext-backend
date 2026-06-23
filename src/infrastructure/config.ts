@@ -207,4 +207,14 @@ export const config = {
   externalApi: {
     apiKey: process.env.EXTERNAL_API_KEY ?? '',
   },
+
+  /**
+   * Network audit — BRAS NE8000 configuration.
+   * FIX8: IP del NE8000 inyectable via env var (NE8000_NAS_IP) en lugar de hardcodeada
+   * en el use case (application layer). Se inyecta al construir ListNe8000PppoeAudit en app.ts.
+   * Default '10.75.0.30' confirmado en Phase 0 (2026-06-22).
+   */
+  networkAudit: {
+    ne8000NasIp: process.env.NE8000_NAS_IP ?? '10.75.0.30',
+  },
 };

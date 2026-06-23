@@ -5,6 +5,9 @@ import {
   SuspendOptions,
   CreateRadiusUserInput,
   RadiusUserInventoryItem,
+  ListAccountingFilters,
+  AccountingPage,
+  AccountingEventRow,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -21,6 +24,9 @@ export interface InMemoryOrchestratorSeed {
   suspended?: boolean;
   sessions?: OrchestratorSession[];
 }
+
+/** Seed de accounting para tests del ingest scheduler. */
+export interface AccountingEventSeed extends AccountingEventRow {}
 
 interface UserCallLog {
   op: 'createUser' | 'changePlan' | 'changePassword' | 'changeFramedIp' | 'suspend' | 'reactivate' | 'disconnectSessions' | 'deleteUser';
@@ -76,6 +82,8 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   private readonly globalSessionsList: OrchestratorSession[];
   /** Si true, listActiveSessions lanza OrchestratorUnreachableError (simula orchestrator caído). */
   private readonly globalSessionsUnreachable: boolean;
+  /** Eventos de accounting que devuelve listAccounting. Sembrable para tests del scheduler. */
+  private readonly accountingEvents: AccountingEventRow[];
 
   public readonly calls: UserCallLog[] = [];
   public readonly planCalls: PlanCallLog[] = [];
@@ -100,6 +108,12 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     globalSessions?: OrchestratorSession[];
     /** Si true, listActiveSessions lanza OrchestratorUnreachableError. Default: false. */
     globalSessionsUnreachable?: boolean;
+    /**
+     * Eventos de accounting que devolverá listAccounting (semilla para tests del scheduler).
+     * listAccounting aplica filtros de `username` y `status` si la semilla los contiene.
+     * Default: [].
+     */
+    accountingEvents?: AccountingEventRow[];
   }) {
     this.unreachable = new Set(opts?.unreachable ?? []);
     this.failForPlanCode = new Set(opts?.failForPlanCode ?? []);
@@ -109,6 +123,7 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     this.usersInventory = [...(opts?.usersInventory ?? [])];
     this.globalSessionsList = [...(opts?.globalSessions ?? [])];
     this.globalSessionsUnreachable = opts?.globalSessionsUnreachable ?? false;
+    this.accountingEvents = [...(opts?.accountingEvents ?? [])];
     for (const u of opts?.seed ?? []) {
       this.state.set(u.username, { plan: u.plan ?? '', suspended: u.suspended ?? false });
       if (u.sessions) this.sessions.set(u.username, u.sessions);
@@ -228,6 +243,52 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   async listActiveSessions(offset = 0, limit = 10000): Promise<OrchestratorSession[]> {
     if (this.globalSessionsUnreachable) throw new OrchestratorUnreachableError('in-memory');
     return [...this.globalSessionsList].slice(offset, offset + limit);
+  }
+
+  /**
+   * Implementación in-memory de listAccounting.
+   * - Aplica filtros `username`, `sinceUpdate`/`untilUpdate` (FIX2) si se sembraron datos.
+   * - Respeta `page` y `pageSize` para paginación.
+   * - No hace llamadas HTTP.
+   *
+   * FIX2: filtra por lastUpdate (acctupdatetime) en lugar de startedAt para que sesiones
+   * con startedAt antiguo pero lastUpdate reciente (recién cerradas) entren en la ventana.
+   */
+  async listAccounting(filters: ListAccountingFilters): Promise<AccountingPage> {
+    let items = [...this.accountingEvents];
+
+    // Filtros simples que el orchestrator apoyaría
+    if (filters.username) {
+      items = items.filter((e) => e.username === filters.username);
+    }
+    // FIX2: filtrar por lastUpdate (acctupdatetime), no por startedAt
+    if (filters.sinceUpdate) {
+      const since = filters.sinceUpdate;
+      items = items.filter((e) => {
+        const ts = e.lastUpdate ?? e.startedAt; // fallback si lastUpdate no está seteado
+        return ts >= since;
+      });
+    }
+    if (filters.untilUpdate) {
+      const until = filters.untilUpdate;
+      items = items.filter((e) => {
+        const ts = e.lastUpdate ?? e.startedAt;
+        return ts <= until;
+      });
+    }
+
+    const page     = filters.page     ?? 1;
+    const pageSize = filters.pageSize ?? 500;
+    const skip     = (page - 1) * pageSize;
+    const pageItems = items.slice(skip, skip + pageSize);
+    const hasMore   = skip + pageSize < items.length;
+
+    return {
+      items:    pageItems,
+      page,
+      pageSize,
+      nextPage: hasMore ? page + 1 : null,
+    };
   }
 
   // ── Helpers de test ────────────────────────────────────────────────────────
