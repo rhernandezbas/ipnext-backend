@@ -411,7 +411,7 @@ import { ListOnusByOlt } from '@application/use-cases/ListOnusByOlt';
 import { CreateOnu } from '@application/use-cases/CreateOnu';
 import { UpdateOnuStatus } from '@application/use-cases/UpdateOnuStatus';
 import { createRadiusRouter } from './routes/radius.routes';
-import { PrismaRadiusSessionRepository } from '../adapters/prisma/PrismaRadiusSessionRepository';
+import { OrchestratorRadiusSessionRepository } from '../adapters/orchestrator/OrchestratorRadiusSessionRepository';
 import { ListRadiusSessions } from '@application/use-cases/ListRadiusSessions';
 import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 // === RADIUS accounting / network audit ===
@@ -1202,9 +1202,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const createOnu = new CreateOnu(gponRepo);
   const updateOnuStatus = new UpdateOnuStatus(gponRepo);
 
-  const radiusRepo = new PrismaRadiusSessionRepository();
-  // gestion-red-sessions — el use case cruza cada sesión a su contrato (pppoe→contract→client)
-  // por username en BATCH (findByUsernames). Reusa el repo Prisma de PppoeService.
+  // gestion-red-sessions — las sesiones del tab "Sesiones activas" salen del radius-orchestrator
+  // EN VIVO (GET /sessions), NO de la tabla LOCAL `radiusSession` (que nunca se popula → siempre 0).
+  // LÍMITE CONOCIDO (no bug): el orchestrator HA solo termina Acceso Sur/NE8000; las sesiones de
+  // MikroTik legacy NO están en GET /sessions. El use case cruza cada sesión a su contrato
+  // (pppoe→contract→client) por username en BATCH (findByUsernames).
+  const radiusRepo = new OrchestratorRadiusSessionRepository(orchestrator);
   const listRadiusSessions = new ListRadiusSessions(radiusRepo, new PrismaPppoeServiceRepository());
   const disconnectSession = new DisconnectSession(radiusRepo);
   // === RADIUS accounting / network audit ===

@@ -16,6 +16,8 @@ import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
 import { requirePermission } from '@infrastructure/http/middleware/requirePermission';
 
 import { InMemoryRadiusSessionRepository } from '@infrastructure/adapters/in-memory/InMemoryRadiusSessionRepository';
+import { OrchestratorRadiusSessionRepository } from '@infrastructure/adapters/orchestrator/OrchestratorRadiusSessionRepository';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
 import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
@@ -195,6 +197,116 @@ describe('radius.routes — sesiones + security guard (network.read / network.ma
     const res = await asUser(request(app).delete('/api/radius/sessions/session-1'), manageUserId);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+});
+
+// ─── seam: GET /sessions servido por el ORCHESTRATOR (no la tabla local) ───────
+// Prueba el bug fix end-to-end: ruta → ListRadiusSessions → OrchestratorRadiusSessionRepository
+// → gateway in-memory (GET /sessions) + cruce a contrato por username.
+
+interface OrchFixture {
+  app: express.Express;
+  readUserId: string;
+  pppoeRepo: InMemoryPppoeServiceRepository;
+}
+
+async function buildOrchSessionsApp(gateway: InMemoryRadiusOrchestratorGateway): Promise<OrchFixture> {
+  const roleRepo     = new InMemoryRbacRoleRepository();
+  const userRoleRepo = new InMemoryRbacUserRoleRepository();
+  const permRepo     = new InMemoryRbacPermissionRepository();
+  const rolePermRepo = new InMemoryRbacRolePermissionRepository();
+  const hasher       = new InMemoryPasswordHasher();
+  const userRepo     = new InMemoryRbacUserRepository(userRoleRepo, roleRepo);
+
+  userRepo.listRolesForUser = async (userId: string) => {
+    const roleIds = await userRoleRepo.listForUser(userId);
+    const roles = await Promise.all(roleIds.map((id) => roleRepo.findById(id)));
+    return roles.filter((r): r is NonNullable<typeof r> => r !== null);
+  };
+  userRepo.listPermissionsForUser = async (userId: string) => {
+    const roleIds = await userRoleRepo.listForUser(userId);
+    const perms: import('@domain/entities/rbac').RbacPermission[] = [];
+    const allPerms = await permRepo.listAll();
+    for (const roleId of roleIds) {
+      const permIds = await rolePermRepo.listForRole(roleId);
+      for (const permId of permIds) {
+        const p = allPerms.find((ap) => ap.id === permId);
+        if (p) perms.push(p);
+      }
+    }
+    return perms;
+  };
+
+  const readerRole = await roleRepo.create({ code: 'network_reader3', label: 'Network Reader 3', isSystem: false });
+  const readPerm   = await permRepo.seed({ moduleCode: 'network', action: 'read' });
+  await rolePermRepo.grant(readerRole.id, readPerm.id);
+
+  const pwHash = await hasher.hash('pw');
+  const readUser = await userRepo.create({ name: 'reader3', email: 'reader3@x.com', login: 'reader3', passwordHash: pwHash, status: 'active' });
+  await userRoleRepo.assign(readUser.id, readerRole.id);
+
+  const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
+
+  const radiusEventRepo     = new InMemoryRadiusEventRepository();
+  const radiusAuthEventRepo = new InMemoryRadiusAuthEventRepository();
+  const pppoeRepo           = new InMemoryPppoeServiceRepository();
+  const nasRepo             = new InMemoryNasRepository();
+
+  // El repo de sesiones sale del ORCHESTRATOR (gateway in-memory), NO de la tabla local.
+  const radiusRepo = new OrchestratorRadiusSessionRepository(gateway);
+
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+  app.use('/api/radius', createRadiusRouter(
+    new EchoAuthProvider(),
+    undefined,
+    requirePerm,
+    new ListRadiusSessions(radiusRepo, pppoeRepo),
+    new DisconnectSession(radiusRepo),
+    new ListRadiusEvents(radiusEventRepo),
+    new ListNe8000PppoeAudit(pppoeRepo, radiusEventRepo, nasRepo),
+    new ListRadiusAuthFailures(radiusAuthEventRepo),
+  ));
+  app.use(errorHandler);
+
+  return { app, readUserId: readUser.id, pppoeRepo };
+}
+
+describe('radius.routes — GET /sessions servido por el orchestrator (bug fix)', () => {
+  it('devuelve las sesiones VIVAS del orchestrator (no la tabla local mock)', async () => {
+    const gateway = new InMemoryRadiusOrchestratorGateway({
+      globalSessions: [
+        { sessionId: 's1', username: 'a@ipnext.com.ar', nasIp: '10.60.0.38', framedIp: '100.64.0.1', startedAt: '2026-06-23T10:00:00Z', bytesIn: 1, bytesOut: 2, callerId: null },
+        { sessionId: 's2', username: 'b@ipnext.com.ar', nasIp: '10.60.0.38', framedIp: '100.64.0.2', startedAt: '2026-06-23T10:01:00Z', bytesIn: 3, bytesOut: 4, callerId: 'AA:BB:CC:DD:EE:FF' },
+      ],
+    });
+    const { app, readUserId } = await buildOrchSessionsApp(gateway);
+
+    const res = await asUser(request(app).get('/api/radius/sessions'), readUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body.map((s: any) => s.username).sort()).toEqual(['a@ipnext.com.ar', 'b@ipnext.com.ar']);
+  });
+
+  it('cruza la sesión del orchestrator a su contrato por username (pppoe→contract→client)', async () => {
+    const gateway = new InMemoryRadiusOrchestratorGateway({
+      globalSessions: [
+        { sessionId: 's1', username: 'juan@ipnext.com.ar', nasIp: '10.60.0.38', framedIp: '100.64.0.1', startedAt: '2026-06-23T10:00:00Z', bytesIn: 1, bytesOut: 2, callerId: null },
+      ],
+    });
+    const { app, readUserId, pppoeRepo } = await buildOrchSessionsApp(gateway);
+    await pppoeRepo.upsertByUsername({ username: 'juan@ipnext.com.ar', password: 'p', nasId: 'nas-1', contractId: 'contract-1' });
+    pppoeRepo.setContractClient('contract-1', 'client-1', 'Juan Pérez');
+
+    const res = await asUser(request(app).get('/api/radius/sessions'), readUserId);
+
+    expect(res.status).toBe(200);
+    const s1 = res.body.find((s: any) => s.username === 'juan@ipnext.com.ar');
+    expect(s1.contractId).toBe('contract-1');
+    expect(s1.clientId).toBe('client-1');
+    expect(s1.customerName).toBe('Juan Pérez');
   });
 });
 

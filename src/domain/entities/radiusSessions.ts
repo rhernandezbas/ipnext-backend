@@ -2,10 +2,12 @@ export interface RadiusSession {
   id: string;
   sessionId: string;
   clientName: string;
-  nasId: string;
-  nasName: string;
-  ipAddress: string;
-  macAddress: string;
+  // El orchestrator (GET /sessions) solo expone nasIp; framedIp/callerId pueden venir null.
+  // Por eso estos 4 son nullable: la fuente real puede no tenerlos.
+  nasId: string | null;
+  nasName: string | null;
+  ipAddress: string | null;
+  macAddress: string | null;
   startedAt: string;
   duration: number;
   downloadBytes: number;
