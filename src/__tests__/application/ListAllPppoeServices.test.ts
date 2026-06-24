@@ -92,7 +92,7 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
   it('DTO status is the computed BUSINESS status, not the raw RADIUS status', async () => {
     const { useCase, pppoeRepo } = await setup();
     // reduced enforcement on an enabled secret → business 'reduced' (not 'enabled')
-    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced' });
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced', contractId: 'ct-a' });
 
     const res = await useCase.execute({});
     expect(res.data[0]!.status).toBe('reduced');
@@ -100,9 +100,9 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
 
   it("filters by business status 'blocked' (status=disabled OR enforcedState=blocked) in the WHERE, not post-pagination", async () => {
     const { useCase, pppoeRepo } = await setup();
-    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
-    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'disabled', enforcedState: 'active' });
-    await pppoeRepo.upsertByUsername({ username: 'c', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'blocked' });
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active', contractId: 'ct-a' });
+    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'disabled', enforcedState: 'active', contractId: 'ct-b' });
+    await pppoeRepo.upsertByUsername({ username: 'c', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'blocked', contractId: 'ct-c' });
 
     const res = await useCase.execute({ status: 'blocked' });
     expect(res.total).toBe(2);
@@ -112,8 +112,8 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
 
   it("filters by business status 'reduced' → only enforcedState=reduced", async () => {
     const { useCase, pppoeRepo } = await setup();
-    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
-    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced' });
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active', contractId: 'ct-a' });
+    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced', contractId: 'ct-b' });
 
     const res = await useCase.execute({ status: 'reduced' });
     expect(res.total).toBe(1);
@@ -123,9 +123,9 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
 
   it("filters by business status 'active' → status=enabled AND enforcedState=active", async () => {
     const { useCase, pppoeRepo } = await setup();
-    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
-    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced' });
-    await pppoeRepo.upsertByUsername({ username: 'c', password: 'x', nasId: 'nas-1', status: 'disabled', enforcedState: 'active' });
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active', contractId: 'ct-a' });
+    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced', contractId: 'ct-b' });
+    await pppoeRepo.upsertByUsername({ username: 'c', password: 'x', nasId: 'nas-1', status: 'disabled', enforcedState: 'active', contractId: 'ct-c' });
 
     const res = await useCase.execute({ status: 'active' });
     expect(res.total).toBe(1);
@@ -135,8 +135,8 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
 
   it("filters by business status 'baja' → only status=terminated", async () => {
     const { useCase, pppoeRepo } = await setup();
-    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
-    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'terminated', enforcedState: 'active' });
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active', contractId: 'ct-a' });
+    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'terminated', enforcedState: 'active', contractId: 'ct-b' });
 
     const res = await useCase.execute({ status: 'baja' });
     expect(res.total).toBe(1);
@@ -147,10 +147,10 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
   it("status filter does NOT break pagination (WHERE-level, total reflects filtered set)", async () => {
     const { useCase, pppoeRepo } = await setup();
     for (let i = 0; i < 3; i++) {
-      await pppoeRepo.upsertByUsername({ username: `red${i}`, password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced' });
+      await pppoeRepo.upsertByUsername({ username: `red${i}`, password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced', contractId: `ct-red${i}` });
     }
     for (let i = 0; i < 5; i++) {
-      await pppoeRepo.upsertByUsername({ username: `act${i}`, password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
+      await pppoeRepo.upsertByUsername({ username: `act${i}`, password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active', contractId: `ct-act${i}` });
     }
     const res = await useCase.execute({ status: 'reduced', page: 1, limit: 2 });
     expect(res.total).toBe(3); // total = filtered set, NOT the unfiltered 8
@@ -160,8 +160,8 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
 
   it('filters by nasId', async () => {
     const { useCase, pppoeRepo } = await setup();
-    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1' });
-    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-2' });
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', contractId: 'ct-a' });
+    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-2', contractId: 'ct-b' });
 
     const res = await useCase.execute({ nasId: 'nas-2' });
     expect(res.total).toBe(1);
@@ -193,7 +193,7 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
   it('paginates with page/limit and reports total', async () => {
     const { useCase, pppoeRepo } = await setup();
     for (let i = 0; i < 5; i++) {
-      await pppoeRepo.upsertByUsername({ username: `user${i}`, password: 'x', nasId: 'nas-1' });
+      await pppoeRepo.upsertByUsername({ username: `user${i}`, password: 'x', nasId: 'nas-1', contractId: `ct-${i}` });
     }
     const res = await useCase.execute({ page: 2, limit: 2 });
     expect(res.total).toBe(5);
@@ -214,6 +214,21 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
     const res = await useCase.execute({});
     expect(res.page).toBe(1);
     expect(res.limit).toBe(20);
+  });
+
+  it('lists ONLY services WITH a contract — orphan ingest rows (contractId=null) are excluded from data AND total', async () => {
+    const { useCase, pppoeRepo } = await setup();
+    // Orphan ingest row: no contract associated. Must NOT appear in the clients' internet page.
+    await pppoeRepo.upsertByUsername({ username: 'orphan', password: 'x', nasId: 'nas-1', contractId: null });
+    // Real client service: has a contract.
+    await pppoeRepo.upsertByUsername({ username: 'cliente', password: 'x', nasId: 'nas-1', contractId: 'ct-1', remoteAddress: '10.0.0.1' });
+    pppoeRepo.setContractClient('ct-1', 'client-1', 'Cliente Real');
+
+    const res = await useCase.execute({});
+    expect(res.total).toBe(1); // total counts ONLY the with-contract row, not the orphan
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0]!.username).toBe('cliente');
+    expect(res.data.some(d => d.username === 'orphan')).toBe(false);
   });
 
   it('the repo list projection does NOT carry the password (defense in depth)', async () => {

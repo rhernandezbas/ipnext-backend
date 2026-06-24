@@ -63,4 +63,13 @@ describe('InMemoryPppoeServiceRepository', () => {
     const orphans = await repo.findUnassigned();
     expect(orphans.map(s => s.username).sort()).toEqual(['orphan1', 'orphan2']);
   });
+
+  it('listAllPaginated EXCLUYE huérfanos (contractId null): data y total cuentan SOLO los con contrato', async () => {
+    await repo.upsertByUsername({ username: 'orphan', password: 'p', nasId: 'n1', contractId: null });
+    await repo.upsertByUsername({ username: 'cliente', password: 'p', nasId: 'n1', contractId: 'C1' });
+    const { data, total } = await repo.listAllPaginated({ page: 1, pageSize: 10 });
+    expect(total).toBe(1);
+    expect(data).toHaveLength(1);
+    expect(data[0]!.username).toBe('cliente');
+  });
 });

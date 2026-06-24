@@ -199,6 +199,9 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     // collide on the same key. Each entry is its own where-fragment.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const and: Record<string, any>[] = [];
+    // FIXED filter: esta es la página de servicios de CLIENTES — solo PPPoE CON contrato.
+    // Los huérfanos del ingest (contractId=null) NUNCA aparecen, ni cuentan para el total.
+    and.push({ contractId: { not: null } });
     if (nasId) and.push({ nasId });
     if (search) {
       // search matches username OR the contract's client name (JOIN through the relation).

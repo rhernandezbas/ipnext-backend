@@ -201,6 +201,9 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     };
 
     const filtered = this.store.map(withClient).filter(s => {
+      // FIXED filter: esta es la página de servicios de CLIENTES — solo PPPoE CON contrato.
+      // Los huérfanos del ingest (contractId=null) NUNCA aparecen, ni cuentan para el total.
+      if (s.contractId === null) return false;
       // BUSINESS-status filter: compute each row's display status and compare. Mirrors the Prisma
       // WHERE translation and stays consistent with the DTO (same precedence, single source of truth).
       if (displayStatus && pppoeDisplayStatus(s.status, s.enforcedState) !== displayStatus) return false;
