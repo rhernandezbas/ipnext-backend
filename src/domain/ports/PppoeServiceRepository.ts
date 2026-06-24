@@ -1,4 +1,4 @@
-import { PppoeService, EnforcedState } from '../entities/pppoeService';
+import { PppoeService, EnforcedState, PppoeDisplayStatus } from '../entities/pppoeService';
 
 export interface PppoeServiceUpsert {
   username: string;
@@ -71,7 +71,13 @@ export interface PppoeServiceRepository {
    * internet-history — TODOS los PPPoE (la vista GLOBAL de internet, espejo de la página de TV),
    * enriquecidos con su cliente (clientId + customerName via JOIN pppoe→contract→client).
    * - `search`: coincidencia parcial case-insensitive sobre username o el nombre del cliente.
-   * - `status`: filtro exacto por status del secret (enabled/disabled/terminated).
+   * - `displayStatus`: filtro por estado de NEGOCIO (active|reduced|blocked|baja|inactive). El adapter
+   *   lo TRADUCE a su condición sobre (status crudo + enforcedState) en el WHERE — nunca post-paginación:
+   *     active   → status='enabled' AND enforcedState='active'
+   *     reduced  → enforcedState='reduced'
+   *     blocked  → status='disabled' OR enforcedState='blocked'
+   *     baja     → status='terminated'
+   *     inactive → el resto (negación de todos los anteriores)
    * - `nasId`: filtro exacto por router.
    * - Orden estable: username asc.
    * - `total` = count con el MISMO where (sin skip/take) para el paginador del FE.
@@ -80,7 +86,7 @@ export interface PppoeServiceRepository {
     page: number;
     pageSize: number;
     search?: string;
-    status?: string;
+    displayStatus?: PppoeDisplayStatus;
     nasId?: string;
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }>;
   /**

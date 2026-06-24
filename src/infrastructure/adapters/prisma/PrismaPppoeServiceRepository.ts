@@ -1,6 +1,33 @@
-import { PppoeService, EnforcedState } from '@domain/entities/pppoeService';
+import { PppoeService, EnforcedState, PppoeDisplayStatus } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 import { prisma } from '../../database/prisma';
+
+/**
+ * internet-history — traduce el estado de NEGOCIO a su predicado Prisma sobre (status crudo + enforcedState).
+ * MISMA precedencia que pppoeDisplayStatus (domain). Va siempre en el WHERE (nunca post-paginación).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function displayStatusWhere(s: PppoeDisplayStatus): Record<string, any> {
+  switch (s) {
+    case 'baja':    return { status: 'terminated' };
+    case 'blocked': return { status: { not: 'terminated' }, OR: [{ status: 'disabled' }, { enforcedState: 'blocked' }] };
+    // reduced wins only AFTER baja/blocked are ruled out: not terminated, not disabled, not blocked-enforced.
+    case 'reduced': return { status: { notIn: ['terminated', 'disabled'] }, enforcedState: 'reduced' };
+    case 'active':  return { status: 'enabled', enforcedState: 'active' };
+    // 'inactive' = la negación de todos los buckets conocidos: no terminated, no disabled, no blocked,
+    // no reduced, y no (enabled+active). En la práctica: status NOT IN (terminated,disabled,enabled)
+    // con enforcedState active, o cualquier combinación residual.
+    case 'inactive': return {
+      NOT: [
+        { status: 'terminated' },
+        { status: 'disabled' },
+        { enforcedState: 'blocked' },
+        { enforcedState: 'reduced' },
+        { status: 'enabled', enforcedState: 'active' },
+      ],
+    };
+  }
+}
 
 /**
  * PrismaPppoeServiceRepository — adapter de persistencia (pppoe-foundation + Fase C).
@@ -139,22 +166,29 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     page: number;
     pageSize: number;
     search?: string;
-    status?: string;
+    displayStatus?: PppoeDisplayStatus;
     nasId?: string;
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }> {
-    const { page, pageSize, search, status, nasId } = params;
+    const { page, pageSize, search, displayStatus, nasId } = params;
     const skip = (page - 1) * pageSize;
 
-    const where: Record<string, unknown> = {};
-    if (status) where['status'] = status;
-    if (nasId)  where['nasId']  = nasId;
+    // Combine independent predicates with AND so two separate OR-clauses (search vs. blocked) never
+    // collide on the same key. Each entry is its own where-fragment.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const and: Record<string, any>[] = [];
+    if (nasId) and.push({ nasId });
     if (search) {
       // search matches username OR the contract's client name (JOIN through the relation).
-      where['OR'] = [
+      and.push({ OR: [
         { username: { contains: search, mode: 'insensitive' } },
         { contract: { is: { client: { is: { name: { contains: search, mode: 'insensitive' } } } } } },
-      ];
+      ] });
     }
+    // BUSINESS-status → WHERE translation (same precedence as pppoeDisplayStatus). Always in the WHERE,
+    // so pagination and total stay correct. 'inactive' = the negation of all the known buckets.
+    if (displayStatus) and.push(displayStatusWhere(displayStatus));
+
+    const where: Record<string, unknown> = and.length > 0 ? { AND: and } : {};
 
     const [rows, total] = await Promise.all([
       model().findMany({

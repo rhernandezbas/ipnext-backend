@@ -103,7 +103,12 @@ export interface PppoeServiceListItemDto {
   id: string;
   username: string;
   profile: string | null;
+  /**
+   * Estado de NEGOCIO computado (NO el crudo de RADIUS): 'active' | 'reduced' | 'blocked' | 'baja' | 'inactive'.
+   * Computed via pppoeDisplayStatus(status, enforcedState). Wire contract acordado con el FE.
+   */
   status: string;
+  /** enforcedState crudo (active|reduced|blocked) — el FE NO lo usa; queda por compatibilidad/diagnóstico. */
   enforcedState: string;
   nasId: string;
   contractId: string | null;

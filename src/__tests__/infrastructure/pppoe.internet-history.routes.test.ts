@@ -207,15 +207,16 @@ describe('GET /api/pppoe — global internet services list (internet-history)', 
     expect(JSON.stringify(res.body)).not.toContain('SECRET');
   });
 
-  it('200 aplica filtros status y nasId', async () => {
+  it('200 aplica filtros status (vocabulario de NEGOCIO) y nasId', async () => {
     const fx = await buildApp();
-    await fx.pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled' });
-    await fx.pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-2', status: 'disabled' });
+    await fx.pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
+    await fx.pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-2', status: 'disabled', enforcedState: 'active' });
 
-    const res = await asUser(request(fx.app).get('/api/pppoe?status=disabled&nasId=nas-2'), fx.readUserId);
+    const res = await asUser(request(fx.app).get('/api/pppoe?status=blocked&nasId=nas-2'), fx.readUserId);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.data[0].username).toBe('b');
+    expect(res.body.data[0].status).toBe('blocked');
   });
 
   it('200 pagina con page/limit', async () => {

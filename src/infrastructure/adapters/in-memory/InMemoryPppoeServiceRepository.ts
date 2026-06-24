@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { PppoeService, EnforcedState } from '@domain/entities/pppoeService';
+import { PppoeService, EnforcedState, PppoeDisplayStatus, pppoeDisplayStatus } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 
 /**
@@ -150,10 +150,10 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     page: number;
     pageSize: number;
     search?: string;
-    status?: string;
+    displayStatus?: PppoeDisplayStatus;
     nasId?: string;
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }> {
-    const { page, pageSize, search, status, nasId } = params;
+    const { page, pageSize, search, displayStatus, nasId } = params;
     const searchLower = search ? search.toLowerCase() : undefined;
 
     // SECURITY: build the projection explicitly WITHOUT `password` (mirrors the Prisma `select`).
@@ -177,7 +177,9 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     };
 
     const filtered = this.store.map(withClient).filter(s => {
-      if (status && s.status !== status) return false;
+      // BUSINESS-status filter: compute each row's display status and compare. Mirrors the Prisma
+      // WHERE translation and stays consistent with the DTO (same precedence, single source of truth).
+      if (displayStatus && pppoeDisplayStatus(s.status, s.enforcedState) !== displayStatus) return false;
       if (nasId && s.nasId !== nasId) return false;
       if (searchLower) {
         const matchUsername = s.username.toLowerCase().includes(searchLower);

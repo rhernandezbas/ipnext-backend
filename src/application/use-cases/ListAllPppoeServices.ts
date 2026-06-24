@@ -1,6 +1,7 @@
 import type { PppoeServiceRepository, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 import type { ContractServiceEventRepository } from '@domain/ports/ContractServiceEventRepository';
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
+import { pppoeDisplayStatus, type PppoeDisplayStatus } from '@domain/entities/pppoeService';
 import type { PppoeServiceListItemDto, PppoeServiceListPageDto } from '@application/dto/pppoe.dto';
 
 export interface ListAllPppoeServicesFilter {
@@ -39,11 +40,14 @@ export class ListAllPppoeServices {
     const page = Math.max(1, filters.page ?? 1);
     const limit = Math.min(MAX_LIMIT, Math.max(1, filters.limit ?? DEFAULT_LIMIT));
 
+    // The `status` filter arrives in BUSINESS vocabulary; ignore unknown values (fail-open: no filter).
+    const displayStatus = isDisplayStatus(filters.status) ? filters.status : undefined;
+
     const { data, total } = await this.pppoeRepo.listAllPaginated({
       page,
       pageSize: limit,
       ...(filters.search ? { search: filters.search } : {}),
-      ...(filters.status ? { status: filters.status } : {}),
+      ...(displayStatus ? { displayStatus } : {}),
       ...(filters.nasId ? { nasId: filters.nasId } : {}),
     });
 
@@ -88,12 +92,19 @@ export class ListAllPppoeServices {
   }
 }
 
+const DISPLAY_STATUSES: readonly PppoeDisplayStatus[] = ['active', 'reduced', 'blocked', 'baja', 'inactive'];
+
+function isDisplayStatus(v: string | undefined): v is PppoeDisplayStatus {
+  return v !== undefined && (DISPLAY_STATUSES as readonly string[]).includes(v);
+}
+
 function toDto(s: PppoeServiceWithClient, createdBy: string | null): PppoeServiceListItemDto {
   return {
     id:            s.id,
     username:      s.username,
     profile:       s.profile,
-    status:        s.status,
+    // BUSINESS status (active|reduced|blocked|baja|inactive), NOT the raw RADIUS status.
+    status:        pppoeDisplayStatus(s.status, s.enforcedState),
     enforcedState: s.enforcedState,
     nasId:         s.nasId,
     contractId:    s.contractId,

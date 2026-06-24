@@ -45,7 +45,7 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
     expect(item.username).toBe('juan');
     expect(item.clientId).toBe('client-1');
     expect(item.customerName).toBe('Juan Perez');
-    expect(item.status).toBe('enabled');
+    expect(item.status).toBe('active'); // business status (enabled + active enforcement)
     expect(item.nasId).toBe('nas-1');
     expect((item as unknown as Record<string, unknown>)['password']).toBeUndefined();
   });
@@ -89,14 +89,73 @@ describe('ListAllPppoeServices — global internet services list (internet-histo
     expect(lastFilter!.serviceCatalogId).toBe(internet.id);
   });
 
-  it('filters by status', async () => {
+  it('DTO status is the computed BUSINESS status, not the raw RADIUS status', async () => {
     const { useCase, pppoeRepo } = await setup();
-    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled' });
-    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'disabled' });
+    // reduced enforcement on an enabled secret → business 'reduced' (not 'enabled')
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced' });
 
-    const res = await useCase.execute({ status: 'disabled' });
+    const res = await useCase.execute({});
+    expect(res.data[0]!.status).toBe('reduced');
+  });
+
+  it("filters by business status 'blocked' (status=disabled OR enforcedState=blocked) in the WHERE, not post-pagination", async () => {
+    const { useCase, pppoeRepo } = await setup();
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
+    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'disabled', enforcedState: 'active' });
+    await pppoeRepo.upsertByUsername({ username: 'c', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'blocked' });
+
+    const res = await useCase.execute({ status: 'blocked' });
+    expect(res.total).toBe(2);
+    expect(res.data.map(d => d.username).sort()).toEqual(['b', 'c']);
+    expect(res.data.every(d => d.status === 'blocked')).toBe(true);
+  });
+
+  it("filters by business status 'reduced' → only enforcedState=reduced", async () => {
+    const { useCase, pppoeRepo } = await setup();
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
+    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced' });
+
+    const res = await useCase.execute({ status: 'reduced' });
     expect(res.total).toBe(1);
     expect(res.data[0]!.username).toBe('b');
+    expect(res.data[0]!.status).toBe('reduced');
+  });
+
+  it("filters by business status 'active' → status=enabled AND enforcedState=active", async () => {
+    const { useCase, pppoeRepo } = await setup();
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
+    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced' });
+    await pppoeRepo.upsertByUsername({ username: 'c', password: 'x', nasId: 'nas-1', status: 'disabled', enforcedState: 'active' });
+
+    const res = await useCase.execute({ status: 'active' });
+    expect(res.total).toBe(1);
+    expect(res.data[0]!.username).toBe('a');
+    expect(res.data[0]!.status).toBe('active');
+  });
+
+  it("filters by business status 'baja' → only status=terminated", async () => {
+    const { useCase, pppoeRepo } = await setup();
+    await pppoeRepo.upsertByUsername({ username: 'a', password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
+    await pppoeRepo.upsertByUsername({ username: 'b', password: 'x', nasId: 'nas-1', status: 'terminated', enforcedState: 'active' });
+
+    const res = await useCase.execute({ status: 'baja' });
+    expect(res.total).toBe(1);
+    expect(res.data[0]!.username).toBe('b');
+    expect(res.data[0]!.status).toBe('baja');
+  });
+
+  it("status filter does NOT break pagination (WHERE-level, total reflects filtered set)", async () => {
+    const { useCase, pppoeRepo } = await setup();
+    for (let i = 0; i < 3; i++) {
+      await pppoeRepo.upsertByUsername({ username: `red${i}`, password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced' });
+    }
+    for (let i = 0; i < 5; i++) {
+      await pppoeRepo.upsertByUsername({ username: `act${i}`, password: 'x', nasId: 'nas-1', status: 'enabled', enforcedState: 'active' });
+    }
+    const res = await useCase.execute({ status: 'reduced', page: 1, limit: 2 });
+    expect(res.total).toBe(3); // total = filtered set, NOT the unfiltered 8
+    expect(res.data).toHaveLength(2);
+    expect(res.data.every(d => d.status === 'reduced')).toBe(true);
   });
 
   it('filters by nasId', async () => {

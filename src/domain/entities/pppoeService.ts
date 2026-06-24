@@ -20,6 +20,27 @@ export function enforcedStateForAction(action: EnforcementAction): EnforcedState
   }
 }
 
+/**
+ * internet-history — estado de NEGOCIO de un PPPoE para la UI, computado del `status` crudo del
+ * secret (RADIUS: enabled|disabled|terminated) + el `enforcedState` del corte (active|reduced|blocked).
+ * El crudo no es presentable: 'enabled' con enforcedState 'reduced' es un DEUDOR, no "activo".
+ * Conocimiento puro de dominio. Precedencia EXACTA (de arriba hacia abajo, el primero que matchea gana):
+ *   1. status terminated                        → 'baja'
+ *   2. status disabled OR enforcedState blocked → 'blocked'
+ *   3. enforcedState reduced                    → 'reduced'
+ *   4. status enabled AND enforcedState active  → 'active'
+ *   5. default (defensivo)                      → 'inactive'
+ */
+export type PppoeDisplayStatus = 'active' | 'reduced' | 'blocked' | 'baja' | 'inactive';
+
+export function pppoeDisplayStatus(status: string, enforcedState: EnforcedState): PppoeDisplayStatus {
+  if (status === 'terminated') return 'baja';
+  if (status === 'disabled' || enforcedState === 'blocked') return 'blocked';
+  if (enforcedState === 'reduced') return 'reduced';
+  if (status === 'enabled' && enforcedState === 'active') return 'active';
+  return 'inactive';
+}
+
 export interface PppoeService {
   id: string;
   username: string;            // name del /ppp secret — clave de upsert
