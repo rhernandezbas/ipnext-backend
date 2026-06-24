@@ -32,6 +32,8 @@ import { ListRadiusSessions } from '@application/use-cases/ListRadiusSessions';
 import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
 import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
+import { ListRadiusAuthFailures } from '@application/use-cases/ListRadiusAuthFailures';
+import { InMemoryRadiusAuthEventRepository } from '@infrastructure/adapters/in-memory/InMemoryRadiusAuthEventRepository';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -118,6 +120,7 @@ async function buildApp(): Promise<Fixture> {
   const disconnectSession  = new DisconnectSession(sessionRepo);
   const listRadiusEvents   = new ListRadiusEvents(radiusRepo);
   const listNe8000Audit    = new ListNe8000PppoeAudit(pppoeRepo, radiusRepo, nasRepo);
+  const listRadiusAuthFailures = new ListRadiusAuthFailures(new InMemoryRadiusAuthEventRepository());
 
   const app = express();
   app.use(cookieParser());
@@ -130,6 +133,7 @@ async function buildApp(): Promise<Fixture> {
     disconnectSession,
     listRadiusEvents,
     listNe8000Audit,
+    listRadiusAuthFailures,
   ));
   app.use(errorHandler);
 

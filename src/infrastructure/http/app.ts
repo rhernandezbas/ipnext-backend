@@ -417,6 +417,8 @@ import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 // === RADIUS accounting / network audit ===
 import { PrismaRadiusEventRepository } from '../adapters/prisma/PrismaRadiusEventRepository';
 import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
+import { PrismaRadiusAuthEventRepository } from '../adapters/prisma/PrismaRadiusAuthEventRepository';
+import { ListRadiusAuthFailures } from '@application/use-cases/ListRadiusAuthFailures';
 import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
 import { createLeadsRouter } from './routes/leads.routes';
 import { PrismaLeadRepository } from '../adapters/prisma/PrismaLeadRepository';
@@ -1209,6 +1211,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const radiusEventRepo = new PrismaRadiusEventRepository();
   const listRadiusEvents = new ListRadiusEvents(radiusEventRepo);
   const listNe8000Audit = new ListNe8000PppoeAudit(new PrismaPppoeServiceRepository(), radiusEventRepo, nasRepo, config.networkAudit.ne8000NasIp);
+  // RADIUS auth events (radpostauth) — read-only para el FE.
+  const radiusAuthEventRepo = new PrismaRadiusAuthEventRepository();
+  const listRadiusAuthFailures = new ListRadiusAuthFailures(radiusAuthEventRepo);
 
   const monitoringRepo = new PrismaMonitoringRepository();
   const getMonitoringStats = new GetMonitoringStats(monitoringRepo);
@@ -1738,7 +1743,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listHardwareAssets, createHardwareAsset, updateHardwareAsset, deleteHardwareAsset,
   ));
   app.use('/api/gpon', createGponRouter(listOlts, getOlt, listOnus, getOnu, listOnusByOlt, createOlt, createOnu, updateOnuStatus));
-  app.use('/api/radius', createRadiusRouter(authAdapter, sessionRepo, requirePerm, listRadiusSessions, disconnectSession, listRadiusEvents, listNe8000Audit));
+  app.use('/api/radius', createRadiusRouter(authAdapter, sessionRepo, requirePerm, listRadiusSessions, disconnectSession, listRadiusEvents, listNe8000Audit, listRadiusAuthFailures));
   app.use('/api', createNasRouter(
     authAdapter,
     sessionRepo,

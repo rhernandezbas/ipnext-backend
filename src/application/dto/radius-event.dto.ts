@@ -61,3 +61,26 @@ export interface PaginatedNe8000AuditDto {
   limit: number;
   hasNext: boolean;
 }
+
+// ── RadiusAuthEventDto ─────────────────────────────────────────────────────────
+
+/**
+ * Evento de autenticación RADIUS (radpostauth) expuesto al FE.
+ * - sourceUniqueId NUNCA se expone (clave interna de idempotencia).
+ * - No incluye `pass` (el orchestrator no lo expone).
+ */
+export interface RadiusAuthEventDto {
+  id: string;
+  username: string;
+  reply: 'Access-Accept' | 'Access-Reject';
+  authdate: string;        // ISO 8601
+  class: string | null;
+}
+
+export interface PaginatedRadiusAuthEventsDto {
+  data: RadiusAuthEventDto[];
+  total: number;
+  page: number;
+  limit: number;
+  hasNext: boolean;
+}

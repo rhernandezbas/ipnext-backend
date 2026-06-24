@@ -8,6 +8,9 @@ import {
   ListAccountingFilters,
   AccountingPage,
   AccountingEventRow,
+  ListPostauthFilters,
+  PostauthPage,
+  AuthEventRow,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -27,6 +30,9 @@ export interface InMemoryOrchestratorSeed {
 
 /** Seed de accounting para tests del ingest scheduler. */
 export interface AccountingEventSeed extends AccountingEventRow {}
+
+/** Seed de postauth (auth events) para tests del ingest scheduler. */
+export interface AuthEventSeed extends AuthEventRow {}
 
 interface UserCallLog {
   op: 'createUser' | 'changePlan' | 'changePassword' | 'changeFramedIp' | 'suspend' | 'reactivate' | 'disconnectSessions' | 'deleteUser';
@@ -84,6 +90,8 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   private readonly globalSessionsUnreachable: boolean;
   /** Eventos de accounting que devuelve listAccounting. Sembrable para tests del scheduler. */
   private readonly accountingEvents: AccountingEventRow[];
+  /** Eventos de auth (postauth) que devuelve listPostauth. Sembrable para tests del scheduler. */
+  private readonly authEvents: AuthEventRow[];
 
   public readonly calls: UserCallLog[] = [];
   public readonly planCalls: PlanCallLog[] = [];
@@ -114,6 +122,12 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
      * Default: [].
      */
     accountingEvents?: AccountingEventRow[];
+    /**
+     * Eventos de auth (postauth) que devolverá listPostauth (semilla para tests del scheduler).
+     * listPostauth aplica filtros de `username`, `reply` y `sinceAuthdate`/`untilAuthdate`.
+     * Default: [].
+     */
+    authEvents?: AuthEventRow[];
   }) {
     this.unreachable = new Set(opts?.unreachable ?? []);
     this.failForPlanCode = new Set(opts?.failForPlanCode ?? []);
@@ -124,6 +138,7 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     this.globalSessionsList = [...(opts?.globalSessions ?? [])];
     this.globalSessionsUnreachable = opts?.globalSessionsUnreachable ?? false;
     this.accountingEvents = [...(opts?.accountingEvents ?? [])];
+    this.authEvents = [...(opts?.authEvents ?? [])];
     for (const u of opts?.seed ?? []) {
       this.state.set(u.username, { plan: u.plan ?? '', suspended: u.suspended ?? false });
       if (u.sessions) this.sessions.set(u.username, u.sessions);
@@ -275,6 +290,43 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
         const ts = e.lastUpdate ?? e.startedAt;
         return ts <= until;
       });
+    }
+
+    const page     = filters.page     ?? 1;
+    const pageSize = filters.pageSize ?? 500;
+    const skip     = (page - 1) * pageSize;
+    const pageItems = items.slice(skip, skip + pageSize);
+    const hasMore   = skip + pageSize < items.length;
+
+    return {
+      items:    pageItems,
+      page,
+      pageSize,
+      nextPage: hasMore ? page + 1 : null,
+    };
+  }
+
+  /**
+   * Implementación in-memory de listPostauth (espejo de listAccounting).
+   * - Aplica filtros `username`, `reply`, `sinceAuthdate`/`untilAuthdate` si se sembraron datos.
+   * - Respeta `page` y `pageSize` para paginación.
+   */
+  async listPostauth(filters: ListPostauthFilters): Promise<PostauthPage> {
+    let items = [...this.authEvents];
+
+    if (filters.username) {
+      items = items.filter((e) => e.username === filters.username);
+    }
+    if (filters.reply) {
+      items = items.filter((e) => e.reply === filters.reply);
+    }
+    if (filters.sinceAuthdate) {
+      const since = filters.sinceAuthdate;
+      items = items.filter((e) => e.authdate >= since);
+    }
+    if (filters.untilAuthdate) {
+      const until = filters.untilAuthdate;
+      items = items.filter((e) => e.authdate <= until);
     }
 
     const page     = filters.page     ?? 1;

@@ -130,6 +130,54 @@ export interface AccountingPage {
   nextPage: number | null;
 }
 
+// ── Postauth / auth events types (espejo de accounting) ───────────────────────────────────────
+
+/**
+ * Filtros para GET /postauth del radius-orchestrator (eventos de autenticación: radpostauth).
+ * Los parámetros se mapean a query params snake_case por HttpRadiusOrchestratorGateway.
+ *
+ * El cursor del ingest es authdate (since_authdate). NO hay nasipaddress en postauth.
+ */
+export interface ListPostauthFilters {
+  /** ISO 8601 — ingest cursor: WHERE authdate >= sinceAuthdate. */
+  sinceAuthdate?: string;
+  /** ISO 8601 — upper bound (backfill) sobre authdate. */
+  untilAuthdate?: string;
+  /** exact username filter */
+  username?: string;
+  /** exact reply filter: 'Access-Accept' | 'Access-Reject' */
+  reply?: string;
+  /** 1-based page number (default 1) */
+  page?: number;
+  /** rows per page (orchestrator default 500, max 1000) */
+  pageSize?: number;
+}
+
+/**
+ * Un evento de auth (una fila de radpostauth) tal como lo devuelve el orchestrator,
+ * ya mapeado a camelCase. El `pass` NO viene — el orchestrator no lo expone.
+ */
+export interface AuthEventRow {
+  sourceId: string;
+  username: string;
+  /** 'Access-Accept' | 'Access-Reject' */
+  reply: string;
+  authdate: string;        // ISO 8601
+  class: string | null;
+}
+
+/**
+ * Respuesta paginada de GET /postauth.
+ * El orchestrator usa paginación 1-based con next_page=null en la última página.
+ */
+export interface PostauthPage {
+  items: AuthEventRow[];
+  page: number;
+  pageSize: number;
+  /** null cuando es la última página */
+  nextPage: number | null;
+}
+
 export interface RadiusOrchestratorGateway {
   /**
    * Crea el usuario en el RADIUS (radcheck + radusergroup + radreply Framed-IP-Address).
@@ -205,4 +253,11 @@ export interface RadiusOrchestratorGateway {
    * Usado por el ingest scheduler para llenar `RadiusEvent`.
    */
   listAccounting(filters: ListAccountingFilters): Promise<AccountingPage>;
+
+  /**
+   * Consulta el histórico de autenticación (`radpostauth`) via el radius-orchestrator.
+   * Corresponde a `GET /postauth` con paginación 1-based (orden authdate ASC).
+   * Usado por el ingest scheduler para llenar `RadiusAuthEvent`.
+   */
+  listPostauth(filters: ListPostauthFilters): Promise<PostauthPage>;
 }

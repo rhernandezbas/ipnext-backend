@@ -1768,6 +1768,25 @@ model RadiusEvent {
   @@index([username, startedAt])
 }
 
+/// Espejo de eventos de AUTENTICACIÓN RADIUS (radpostauth), ingestados desde el
+/// radius-orchestrator (GET /postauth). Permite ver intentos de auth (Access-Accept/Reject).
+model RadiusAuthEvent {
+  id             String   @id @default(uuid())
+  /// = radpostauth source id — THE idempotency key. Upsert target.
+  sourceUniqueId String   @unique
+  username       String
+  reply          String                   // 'Access-Accept' | 'Access-Reject'
+  authdate       DateTime
+  class          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([username])
+  @@index([reply])
+  @@index([authdate])
+  @@index([reply, authdate])
+}
+
 model PppoeService {
   id            String    @id @default(uuid())
   username      String    @unique

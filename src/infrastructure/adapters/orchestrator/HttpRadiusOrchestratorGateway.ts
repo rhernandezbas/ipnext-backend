@@ -9,6 +9,9 @@ import {
   ListAccountingFilters,
   AccountingPage,
   AccountingEventRow,
+  ListPostauthFilters,
+  PostauthPage,
+  AuthEventRow,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -159,6 +162,20 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     const { data } = await this.call(() => this.http.get('/accounting', { params }));
     return toAccountingPage(data);
   }
+
+  async listPostauth(filters: ListPostauthFilters): Promise<PostauthPage> {
+    // Build query params — omit undefined values so they don't pollute the query string.
+    const params: Record<string, string | number> = {};
+    if (filters.sinceAuthdate !== undefined) params['since_authdate'] = filters.sinceAuthdate;
+    if (filters.untilAuthdate !== undefined) params['until_authdate'] = filters.untilAuthdate;
+    if (filters.username      !== undefined) params['username']       = filters.username;
+    if (filters.reply         !== undefined) params['reply']          = filters.reply;
+    if (filters.page          !== undefined) params['page']           = filters.page;
+    if (filters.pageSize      !== undefined) params['page_size']      = filters.pageSize;
+
+    const { data } = await this.call(() => this.http.get('/postauth', { params }));
+    return toPostauthPage(data);
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -207,6 +224,28 @@ function toAccountingRow(r: any): AccountingEventRow {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toAccountingPage(data: any): AccountingPage {
   const items = Array.isArray(data?.items) ? (data.items as unknown[]).map(toAccountingRow) : [];
+  return {
+    items,
+    page:     data?.page     ?? 1,
+    pageSize: data?.page_size ?? 0,
+    nextPage: data?.next_page ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toAuthEventRow(r: any): AuthEventRow {
+  return {
+    sourceId: r.source_id,
+    username: r.username,
+    reply:    r.reply,
+    authdate: r.authdate,
+    class:    r.class ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toPostauthPage(data: any): PostauthPage {
+  const items = Array.isArray(data?.items) ? (data.items as unknown[]).map(toAuthEventRow) : [];
   return {
     items,
     page:     data?.page     ?? 1,

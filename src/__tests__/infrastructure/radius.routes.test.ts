@@ -23,6 +23,7 @@ import { InMemoryRbacPermissionRepository } from '@infrastructure/adapters/in-me
 import { InMemoryRbacRolePermissionRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRolePermissionRepository';
 import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMemoryPasswordHasher';
 import { InMemoryRadiusEventRepository } from '@infrastructure/adapters/in-memory/InMemoryRadiusEventRepository';
+import { InMemoryRadiusAuthEventRepository } from '@infrastructure/adapters/in-memory/InMemoryRadiusAuthEventRepository';
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 
@@ -30,6 +31,7 @@ import { ListRadiusSessions } from '@application/use-cases/ListRadiusSessions';
 import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
 import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
+import { ListRadiusAuthFailures } from '@application/use-cases/ListRadiusAuthFailures';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -108,9 +110,10 @@ async function buildApp(): Promise<Fixture> {
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
   // FIX4: listRadiusEvents y listNe8000Audit ahora son REQUERIDOS
-  const radiusEventRepo = new InMemoryRadiusEventRepository();
-  const pppoeRepo       = new InMemoryPppoeServiceRepository();
-  const nasRepo         = new InMemoryNasRepository();
+  const radiusEventRepo     = new InMemoryRadiusEventRepository();
+  const radiusAuthEventRepo = new InMemoryRadiusAuthEventRepository();
+  const pppoeRepo           = new InMemoryPppoeServiceRepository();
+  const nasRepo             = new InMemoryNasRepository();
 
   const app = express();
   app.use(cookieParser());
@@ -123,6 +126,7 @@ async function buildApp(): Promise<Fixture> {
     new DisconnectSession(repo),
     new ListRadiusEvents(radiusEventRepo),
     new ListNe8000PppoeAudit(pppoeRepo, radiusEventRepo, nasRepo),
+    new ListRadiusAuthFailures(radiusAuthEventRepo),
   ));
   app.use(errorHandler);
 
@@ -196,7 +200,7 @@ describe('radius.routes — sesiones + security guard (network.read / network.ma
 
 // ─── radius events + audit routes ─────────────────────────────────────────────
 
-async function buildAuditApp(): Promise<{ app: express.Express; readUserId: string; noPermUserId: string }> {
+async function buildAuditApp(): Promise<{ app: express.Express; readUserId: string; noPermUserId: string; authEventRepo: InMemoryRadiusAuthEventRepository }> {
   const roleRepo     = new InMemoryRbacRoleRepository();
   const userRoleRepo = new InMemoryRbacUserRoleRepository();
   const permRepo     = new InMemoryRbacPermissionRepository();
@@ -235,9 +239,10 @@ async function buildAuditApp(): Promise<{ app: express.Express; readUserId: stri
   const noPermUser = await mkUser('noperm2');
   await userRoleRepo.assign(readUser.id, readerRole.id);
 
-  const radiusEventRepo = new InMemoryRadiusEventRepository();
-  const pppoeRepo       = new InMemoryPppoeServiceRepository();
-  const nasRepo         = new InMemoryNasRepository();
+  const radiusEventRepo     = new InMemoryRadiusEventRepository();
+  const radiusAuthEventRepo = new InMemoryRadiusAuthEventRepository();
+  const pppoeRepo           = new InMemoryPppoeServiceRepository();
+  const nasRepo             = new InMemoryNasRepository();
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
   const app = express();
@@ -251,10 +256,11 @@ async function buildAuditApp(): Promise<{ app: express.Express; readUserId: stri
     new DisconnectSession(new InMemoryRadiusSessionRepository()),
     new ListRadiusEvents(radiusEventRepo),
     new ListNe8000PppoeAudit(pppoeRepo, radiusEventRepo, nasRepo),
+    new ListRadiusAuthFailures(radiusAuthEventRepo),
   ));
   app.use(errorHandler);
 
-  return { app, readUserId: readUser.id, noPermUserId: noPermUser.id };
+  return { app, readUserId: readUser.id, noPermUserId: noPermUser.id, authEventRepo: radiusAuthEventRepo };
 }
 
 describe('radius.routes — /events + /ne8000/audit (network audit)', () => {
@@ -356,6 +362,81 @@ describe('radius.routes — /events + /ne8000/audit (network audit)', () => {
   it('FIX5: GET /events con params válidos → 200', async () => {
     const { app, readUserId } = await buildAuditApp();
     const res = await asUser(request(app).get('/api/radius/events?page=1&limit=10&vlanId=3713&from=2026-06-01T00:00:00Z&to=2026-06-22T00:00:00Z'), readUserId);
+    expect(res.status).toBe(200);
+  });
+});
+
+// ─── radius auth-failures route (radpostauth) ──────────────────────────────────
+
+describe('radius.routes — /auth-failures (network audit)', () => {
+  it('GET /api/radius/auth-failures sin auth → 401', async () => {
+    const { app } = await buildAuditApp();
+    expect((await request(app).get('/api/radius/auth-failures')).status).toBe(401);
+  });
+
+  it('GET /api/radius/auth-failures sin network.read → 403', async () => {
+    const { app, noPermUserId } = await buildAuditApp();
+    expect((await asUser(request(app).get('/api/radius/auth-failures'), noPermUserId)).status).toBe(403);
+  });
+
+  it('GET /api/radius/auth-failures con network.read → 200 (lista vacia)', async () => {
+    const { app, readUserId } = await buildAuditApp();
+    const res = await asUser(request(app).get('/api/radius/auth-failures'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('data');
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('GET /auth-failures devuelve eventos sembrados ordenados authdate DESC (seam ruta + use case real + repo in-memory)', async () => {
+    const { app, readUserId, authEventRepo } = await buildAuditApp();
+    await authEventRepo.upsertMany([
+      { sourceUniqueId: 'pa-1', username: 'c001', reply: 'Access-Reject', authdate: new Date('2026-06-01T10:00:00Z'), class: null },
+      { sourceUniqueId: 'pa-2', username: 'c002', reply: 'Access-Accept', authdate: new Date('2026-06-20T10:00:00Z'), class: 'X' },
+    ]);
+    const res = await asUser(request(app).get('/api/radius/auth-failures'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.data[0].username).toBe('c002'); // más reciente primero
+    expect(res.body.data[0].reply).toBe('Access-Accept');
+    expect(res.body.data[0]).not.toHaveProperty('sourceUniqueId');
+  });
+
+  it('GET /auth-failures?reply=Access-Reject filtra (seam ruta + use case real)', async () => {
+    const { app, readUserId, authEventRepo } = await buildAuditApp();
+    await authEventRepo.upsertMany([
+      { sourceUniqueId: 'pa-1', username: 'c001', reply: 'Access-Reject', authdate: new Date('2026-06-01T10:00:00Z'), class: null },
+      { sourceUniqueId: 'pa-2', username: 'c002', reply: 'Access-Accept', authdate: new Date('2026-06-20T10:00:00Z'), class: null },
+    ]);
+    const res = await asUser(request(app).get('/api/radius/auth-failures?reply=Access-Reject'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0].reply).toBe('Access-Reject');
+  });
+
+  it('GET /auth-failures?reply=invalid → 400 VALIDATION_ERROR', async () => {
+    const { app, readUserId } = await buildAuditApp();
+    const res = await asUser(request(app).get('/api/radius/auth-failures?reply=Nope'), readUserId);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('GET /auth-failures?page=abc → 400 VALIDATION_ERROR', async () => {
+    const { app, readUserId } = await buildAuditApp();
+    const res = await asUser(request(app).get('/api/radius/auth-failures?page=abc'), readUserId);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('GET /auth-failures?from=notadate → 400 VALIDATION_ERROR', async () => {
+    const { app, readUserId } = await buildAuditApp();
+    const res = await asUser(request(app).get('/api/radius/auth-failures?from=notadate'), readUserId);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('GET /auth-failures con params válidos → 200', async () => {
+    const { app, readUserId } = await buildAuditApp();
+    const res = await asUser(request(app).get('/api/radius/auth-failures?page=1&limit=10&reply=Access-Reject&from=2026-06-01T00:00:00Z&to=2026-06-22T00:00:00Z'), readUserId);
     expect(res.status).toBe(200);
   });
 });

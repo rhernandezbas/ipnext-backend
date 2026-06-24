@@ -7,6 +7,8 @@ import { ListRadiusSessions } from '@application/use-cases/ListRadiusSessions';
 import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
 import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
+import { ListRadiusAuthFailures } from '@application/use-cases/ListRadiusAuthFailures';
+import type { RadiusAuthReply } from '@domain/entities/radius-auth-event';
 
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
 
@@ -14,6 +16,7 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
 const VALID_EVENT_TYPES    = new Set(['start', 'stop', 'interim']);
 const VALID_PPPOE_STATUSES = new Set(['enabled', 'disabled']);
 const VALID_ENFORCED       = new Set(['active', 'reduced', 'blocked']);
+const VALID_AUTH_REPLIES   = new Set(['Access-Accept', 'Access-Reject']);
 
 /**
  * FIX5: parseIntPositive — devuelve el número si es un entero positivo válido; NaN si no.
@@ -50,7 +53,7 @@ function parseDate(s: string | undefined): string | undefined | 'invalid' {
 /**
  * Sesiones RADIUS + Auditoría de red.
  *
- * `network.read`:   GET /sessions, GET /events, GET /ne8000/audit
+ * `network.read`:   GET /sessions, GET /events, GET /ne8000/audit, GET /auth-failures
  * `network.manage`: DELETE /sessions/:id
  */
 export function createRadiusRouter(
@@ -61,6 +64,7 @@ export function createRadiusRouter(
   disconnectSession: DisconnectSession,
   listRadiusEvents: ListRadiusEvents,
   listNe8000Audit: ListNe8000PppoeAudit,
+  listRadiusAuthFailures: ListRadiusAuthFailures,
 ): Router {
   const router = Router();
   const auth      = createAuthMiddleware(authProvider, sessionRepo);
@@ -159,6 +163,41 @@ export function createRadiusRouter(
       status:        q['status']        as string | undefined,
       enforcedState: q['enforcedState'] as string | undefined,
       online,
+      page,
+      limit,
+    });
+
+    res.json(result);
+  });
+
+  // ── GET /auth-failures — eventos de autenticación RADIUS (radpostauth) ───────
+  // Espejo de /events: gate network.read + validación de inputs.
+  router.get('/auth-failures', auth, canRead, async (req: Request, res: Response): Promise<void> => {
+    const q = req.query;
+
+    // Validar reply (opcional): Access-Accept | Access-Reject
+    if (q['reply'] !== undefined && !VALID_AUTH_REPLIES.has(q['reply'] as string)) {
+      res.status(400).json({ code: 'VALIDATION_ERROR', message: 'reply must be Access-Accept | Access-Reject' });
+      return;
+    }
+
+    // Validar page y limit (enteros positivos)
+    const page  = parseIntPositive(q['page']  as string | undefined);
+    const limit = parseIntPositive(q['limit'] as string | undefined);
+    if (page  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'page must be a positive integer' }); return; }
+    if (limit === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'limit must be a positive integer' }); return; }
+
+    // Validar from/to (fechas parseables)
+    const from = parseDate(q['from'] as string | undefined);
+    const to   = parseDate(q['to']   as string | undefined);
+    if (from === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'from must be a valid ISO 8601 date' }); return; }
+    if (to   === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'to must be a valid ISO 8601 date' }); return; }
+
+    const result = await listRadiusAuthFailures.execute({
+      username: q['username'] as string | undefined,
+      reply:    q['reply']    as RadiusAuthReply | undefined,
+      from,
+      to,
       page,
       limit,
     });
