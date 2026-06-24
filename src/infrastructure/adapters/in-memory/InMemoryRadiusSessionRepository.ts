@@ -20,7 +20,6 @@ function makeSessions(): RadiusSession[] {
     sessions.push({
       id: `session-${i}`,
       sessionId: `ACCT${String(i).padStart(10, '0')}`,
-      clientId: `client-${i}`,
       clientName: `Cliente ${i}`,
       nasId: nasEntry.id,
       nasName: nasEntry.name,
@@ -34,6 +33,11 @@ function makeSessions(): RadiusSession[] {
       uploadMbps: isIdle ? 0 : Math.random() * 10,
       status: isIdle ? 'idle' : 'active',
       username: `user${i}@ipnext.com.ar`,
+      // gestion-red-sessions — el cruce a contrato lo resuelve el use case (ListRadiusSessions)
+      // vía findByUsernames; el seed los deja en null (sin contrato asociado).
+      contractId: null,
+      clientId: null,
+      customerName: null,
     });
   }
 

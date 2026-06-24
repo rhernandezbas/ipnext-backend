@@ -73,6 +73,30 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     return found ? { ...found } : null;
   }
 
+  async findByUsernames(usernames: string[]): Promise<PppoeServiceWithClient[]> {
+    const set = new Set(usernames);
+    // SECURITY: explicit projection WITHOUT `password` (mirrors the Prisma `select`).
+    return this.store
+      .filter(s => set.has(s.username))
+      .map(s => {
+        const client = s.contractId ? this.contractClient.get(s.contractId) : undefined;
+        return {
+          id:            s.id,
+          username:      s.username,
+          profile:       s.profile,
+          remoteAddress: s.remoteAddress,
+          status:        s.status,
+          enforcedState: s.enforcedState,
+          nasId:         s.nasId,
+          contractId:    s.contractId,
+          callerId:      s.callerId,
+          createdAt:     s.createdAt,
+          clientId:      client?.clientId ?? null,
+          customerName:  client?.customerName ?? null,
+        };
+      });
+  }
+
   async findByContract(contractId: string): Promise<PppoeService[]> {
     return this.store.filter(s => s.contractId === contractId).map(s => ({ ...s }));
   }

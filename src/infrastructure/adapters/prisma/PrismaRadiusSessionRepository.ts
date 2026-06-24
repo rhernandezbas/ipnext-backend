@@ -6,7 +6,6 @@ function toSession(row: any): RadiusSession {
   return {
     id: row.id,
     sessionId: row.sessionId,
-    clientId: row.clientId,
     clientName: row.clientName,
     nasId: row.nasId ?? null,
     nasName: row.nasName ?? null,
@@ -25,6 +24,11 @@ function toSession(row: any): RadiusSession {
     uploadMbps: row.uploadMbps,
     status: row.status,
     username: row.username ?? null,
+    // gestion-red-sessions — el cruce a contrato (pppoe→contract→client) lo hace el use case
+    // (ListRadiusSessions) vía findByUsernames en BATCH. El repo de sesiones los deja en null.
+    contractId: null,
+    clientId: null,
+    customerName: null,
   };
 }
 

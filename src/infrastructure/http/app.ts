@@ -1201,7 +1201,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const updateOnuStatus = new UpdateOnuStatus(gponRepo);
 
   const radiusRepo = new PrismaRadiusSessionRepository();
-  const listRadiusSessions = new ListRadiusSessions(radiusRepo);
+  // gestion-red-sessions — el use case cruza cada sesión a su contrato (pppoe→contract→client)
+  // por username en BATCH (findByUsernames). Reusa el repo Prisma de PppoeService.
+  const listRadiusSessions = new ListRadiusSessions(radiusRepo, new PrismaPppoeServiceRepository());
   const disconnectSession = new DisconnectSession(radiusRepo);
   // === RADIUS accounting / network audit ===
   const radiusEventRepo = new PrismaRadiusEventRepository();

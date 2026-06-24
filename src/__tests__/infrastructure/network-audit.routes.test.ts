@@ -114,7 +114,7 @@ async function buildApp(): Promise<Fixture> {
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
   // use cases
-  const listRadiusSessions = new ListRadiusSessions(sessionRepo);
+  const listRadiusSessions = new ListRadiusSessions(sessionRepo, pppoeRepo);
   const disconnectSession  = new DisconnectSession(sessionRepo);
   const listRadiusEvents   = new ListRadiusEvents(radiusRepo);
   const listNe8000Audit    = new ListNe8000PppoeAudit(pppoeRepo, radiusRepo, nasRepo);

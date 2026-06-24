@@ -56,6 +56,7 @@ interface Fixture {
   readUserId: string;
   manageUserId: string;
   noPermUserId: string;
+  pppoeRepo: InMemoryPppoeServiceRepository;
 }
 
 async function buildApp(): Promise<Fixture> {
@@ -118,14 +119,14 @@ async function buildApp(): Promise<Fixture> {
     new EchoAuthProvider(),
     undefined,
     requirePerm,
-    new ListRadiusSessions(repo),
+    new ListRadiusSessions(repo, pppoeRepo),
     new DisconnectSession(repo),
     new ListRadiusEvents(radiusEventRepo),
     new ListNe8000PppoeAudit(pppoeRepo, radiusEventRepo, nasRepo),
   ));
   app.use(errorHandler);
 
-  return { app, readUserId: readUser.id, manageUserId: manageUser.id, noPermUserId: noPermUser.id };
+  return { app, readUserId: readUser.id, manageUserId: manageUser.id, noPermUserId: noPermUser.id, pppoeRepo };
 }
 
 function asUser(req: request.Test, userId: string): request.Test {
@@ -147,6 +148,34 @@ describe('radius.routes — sesiones + security guard (network.read / network.ma
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body).toHaveLength(15);
+  });
+
+  it('GET /api/radius/sessions → sesión con PPPoE+contrato trae contractId/clientId/customerName; sin PPPoE → null (seam ruta + use case real)', async () => {
+    const { app, readUserId, pppoeRepo } = await buildApp();
+    // El seed in-memory de sesiones usa user1@ipnext.com.ar (session-1) y user2@ipnext.com.ar (session-2).
+    await pppoeRepo.upsertByUsername({
+      username: 'user1@ipnext.com.ar',
+      password: 'secret',
+      nasId: 'nas-1',
+      contractId: 'contract-1',
+    });
+    pppoeRepo.setContractClient('contract-1', 'client-1', 'Juan Pérez');
+
+    const res = await asUser(request(app).get('/api/radius/sessions'), readUserId);
+    expect(res.status).toBe(200);
+
+    const s1 = res.body.find((s: any) => s.username === 'user1@ipnext.com.ar');
+    expect(s1).toBeDefined();
+    expect(s1.contractId).toBe('contract-1');
+    expect(s1.clientId).toBe('client-1');
+    expect(s1.customerName).toBe('Juan Pérez');
+
+    // user2 no tiene PppoeService sembrado → los 3 en null (FE muestra ⚠).
+    const s2 = res.body.find((s: any) => s.username === 'user2@ipnext.com.ar');
+    expect(s2).toBeDefined();
+    expect(s2.contractId).toBeNull();
+    expect(s2.clientId).toBeNull();
+    expect(s2.customerName).toBeNull();
   });
 
   it('DELETE /api/radius/sessions/:id sin auth → 401', async () => {
@@ -218,7 +247,7 @@ async function buildAuditApp(): Promise<{ app: express.Express; readUserId: stri
     new EchoAuthProvider(),
     undefined,
     requirePerm,
-    new ListRadiusSessions(new InMemoryRadiusSessionRepository()),
+    new ListRadiusSessions(new InMemoryRadiusSessionRepository(), pppoeRepo),
     new DisconnectSession(new InMemoryRadiusSessionRepository()),
     new ListRadiusEvents(radiusEventRepo),
     new ListNe8000PppoeAudit(pppoeRepo, radiusEventRepo, nasRepo),

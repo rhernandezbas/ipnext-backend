@@ -32,6 +32,14 @@ export interface PppoeServiceRepository {
   list(): Promise<PppoeService[]>;
   findById(id: string): Promise<PppoeService | null>;
   findByUsername(username: string): Promise<PppoeService | null>;
+  /**
+   * gestion-red-sessions — BATCH lookup por username, enriquecido con su cliente
+   * (clientId + customerName via JOIN pppoe→contract→client). Resuelve el cruce de las
+   * sesiones RADIUS activas en UNA sola query (`username IN (...)`), NUNCA N+1.
+   * Solo devuelve filas que matchean algún username; el caller mapea por `username`
+   * y deja en null las sesiones sin PppoeService. NUNCA expone el password (proyección WithClient).
+   */
+  findByUsernames(usernames: string[]): Promise<PppoeServiceWithClient[]>;
   findByContract(contractId: string): Promise<PppoeService[]>;
   /** PPPoE HUÉRFANOS: sin contrato asociado (contractId=null). El inventario por adoptar. */
   findUnassigned(): Promise<PppoeService[]>;

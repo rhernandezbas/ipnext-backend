@@ -76,6 +76,29 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     return row ? toEntity(row) : null;
   }
 
+  async findByUsernames(usernames: string[]): Promise<PppoeServiceWithClient[]> {
+    if (usernames.length === 0) return [];
+    const rows = await model().findMany({
+      where: { username: { in: usernames } },
+      // SECURITY: explicit `select` (NOT `include`) — the PPPoE `password` is NEVER read into memory.
+      // Includes the JOIN pppoe → contract → client for clientId + customerName, same as listAllPaginated.
+      select: {
+        id: true,
+        username: true,
+        profile: true,
+        remoteAddress: true,
+        status: true,
+        enforcedState: true,
+        nasId: true,
+        contractId: true,
+        callerId: true,
+        createdAt: true,
+        contract: { select: { clientId: true, client: { select: { name: true } } } },
+      },
+    });
+    return rows.map(toEntityWithClient);
+  }
+
   async findByContract(contractId: string): Promise<PppoeService[]> {
     const rows = await model().findMany({ where: { contractId } });
     return rows.map(toEntity);
