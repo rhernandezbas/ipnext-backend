@@ -1,5 +1,5 @@
 import { PppoeService, EnforcedState } from '@domain/entities/pppoeService';
-import { PppoeServiceRepository, PppoeServiceUpsert } from '@domain/ports/PppoeServiceRepository';
+import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 import { prisma } from '../../database/prisma';
 
 /**
@@ -135,6 +135,56 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     return { data: rows.map(toEntity), total };
   }
 
+  async listAllPaginated(params: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    status?: string;
+    nasId?: string;
+  }): Promise<{ data: PppoeServiceWithClient[]; total: number }> {
+    const { page, pageSize, search, status, nasId } = params;
+    const skip = (page - 1) * pageSize;
+
+    const where: Record<string, unknown> = {};
+    if (status) where['status'] = status;
+    if (nasId)  where['nasId']  = nasId;
+    if (search) {
+      // search matches username OR the contract's client name (JOIN through the relation).
+      where['OR'] = [
+        { username: { contains: search, mode: 'insensitive' } },
+        { contract: { is: { client: { is: { name: { contains: search, mode: 'insensitive' } } } } } },
+      ];
+    }
+
+    const [rows, total] = await Promise.all([
+      model().findMany({
+        where,
+        orderBy: { username: 'asc' },
+        skip,
+        take: pageSize,
+        // SECURITY: explicit `select` (NOT `include`) so the PPPoE `password` is NEVER read into
+        // memory for the list — defense in depth. Lists only the fields toEntityWithClient needs
+        // + the JOIN pppoe → contract → client for clientId + customerName.
+        select: {
+          id: true,
+          username: true,
+          profile: true,
+          remoteAddress: true,
+          status: true,
+          enforcedState: true,
+          nasId: true,
+          contractId: true,
+          callerId: true,
+          createdAt: true,
+          contract: { select: { clientId: true, client: { select: { name: true } } } },
+        },
+      }),
+      model().count({ where }),
+    ]);
+
+    return { data: rows.map(toEntityWithClient), total };
+  }
+
   async setContractId(id: string, contractId: string): Promise<PppoeService | null> {
     try {
       const row = await model().update({ where: { id }, data: { contractId } });
@@ -193,5 +243,25 @@ function toEntity(row: any): PppoeService {
     contractId: row.contractId ?? null,
     callerId: row.callerId ?? null,
     createdAt: new Date(row.createdAt).toISOString(),
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toEntityWithClient(row: any): PppoeServiceWithClient {
+  // SECURITY: built field-by-field WITHOUT `password` — the list `select` never fetched it.
+  // Do NOT spread toEntity(row) here: that would re-introduce a `password` key (as undefined).
+  return {
+    id:            row.id,
+    username:      row.username,
+    profile:       row.profile ?? null,
+    remoteAddress: row.remoteAddress ?? null,
+    status:        row.status,
+    enforcedState: (row.enforcedState ?? 'active') as EnforcedState,
+    nasId:         row.nasId,
+    contractId:    row.contractId ?? null,
+    callerId:      row.callerId ?? null,
+    createdAt:     new Date(row.createdAt).toISOString(),
+    clientId:      row.contract?.clientId ?? null,
+    customerName:  row.contract?.client?.name ?? null,
   };
 }

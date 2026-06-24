@@ -91,6 +91,55 @@ export function toPppoeAssignmentDto(s: {
   };
 }
 
+// ── internet-history — vista GLOBAL de servicios de internet (espejo de TV) ──
+
+/**
+ * DTO de un item de la lista GLOBAL de servicios de internet (GET /api/pppoe).
+ * Curado para la página espejo de TV: cruza al cliente (clientId/customerName) y expone
+ * quién creó el servicio (createdBy = actorName del evento 'activated' de internet, si está).
+ * NUNCA expone `password` — frontera de seguridad (igual que PppoeServiceDto).
+ */
+export interface PppoeServiceListItemDto {
+  id: string;
+  username: string;
+  profile: string | null;
+  status: string;
+  enforcedState: string;
+  nasId: string;
+  contractId: string | null;
+  clientId: string | null;
+  customerName: string | null;
+  /** actorName del evento 'activated' del servicio de internet de ese contrato (best-effort, null si no se registró). */
+  createdBy: string | null;
+  createdAt: string;
+}
+
+/** DTO paginado de la lista GLOBAL de servicios de internet. */
+export interface PppoeServiceListPageDto {
+  data: PppoeServiceListItemDto[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+/**
+ * #internet-history — Evento del historial GLOBAL de servicios de INTERNET (wire contract).
+ * Espejo de TvActivationEventDto: mismo shape de cruce-a-cliente + actor + reason.
+ * Devuelto por ListInternetServiceHistory. NUNCA contiene password.
+ */
+export interface InternetServiceEventDto {
+  id: string;
+  contractId: string;
+  clientId: string | null;
+  customerName: string | null;
+  serviceCatalogId: string;
+  eventType: string; // activated | deactivated | reactivated | reduced | blocked | restored | modified
+  actorId: string | null;
+  actorName: string;
+  reason: string | null;
+  createdAt: string; // ISO string
+}
+
 // ── Body schemas (Zod) ──────────────────────────────────────────────────────
 
 export const CreatePppoeBodySchema = z.object({

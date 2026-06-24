@@ -647,6 +647,8 @@ import { DeassociatePppoeFromContract } from '@application/use-cases/Deassociate
 import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
 import { TerminatePppoeService } from '@application/use-cases/TerminatePppoeService';
 import { GetPppoeCallerId } from '@application/use-cases/GetPppoeCallerId';
+import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
+import { ListInternetServiceHistory } from '@application/use-cases/ListInternetServiceHistory';
 import { RecordPppoeEnforceEvent } from '@application/use-cases/RecordPppoeEnforceEvent';
 // add-by-pppoe — inspección SSH de antena airOS para detección de equipos del contrato
 import { InspectPppoeDevices } from '@application/use-cases/InspectPppoeDevices';
@@ -2148,6 +2150,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // pppoe-terminate-callerid: baja HARD (deleteUser RADIUS) + caller-id desde sesión activa.
       new TerminatePppoeService(pppoeRepo, orchestrator, routerGw, nasRepoForPppoe, ensureInternet),
       new GetPppoeCallerId(pppoeRepo, orchestrator),
+      // internet-history — vista GLOBAL de servicios de internet (espejo de la página de TV).
+      new ListAllPppoeServices(pppoeRepo, new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
+      new ListInternetServiceHistory(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
     ));
   }
 

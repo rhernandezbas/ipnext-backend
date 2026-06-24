@@ -1,7 +1,9 @@
 import { prisma } from '@infrastructure/database/prisma';
 import type {
   ContractServiceEvent,
+  ContractServiceEventWithClient,
   ContractServiceEventRepository,
+  ListContractServiceEventsFilter,
   RecordContractServiceEventInput,
 } from '@domain/ports/ContractServiceEventRepository';
 
@@ -42,6 +44,48 @@ export class PrismaContractServiceEventRepository implements ContractServiceEven
     });
     return rows.map(toEvent);
   }
+
+  async list(filters: ListContractServiceEventsFilter): Promise<ContractServiceEventWithClient[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const where: Record<string, any> = {};
+    if (filters.serviceCatalogId) where['serviceCatalogId'] = filters.serviceCatalogId;
+    // push-down: `contractIds` scopes to the page's contracts (SQL `contractId IN (...)`) so the
+    // createdBy enrichment is bounded by the page, NOT by the full historical event count.
+    // A single `contractId` filter takes precedence (it's the narrower predicate).
+    if (filters.contractId)       where['contractId']       = filters.contractId;
+    else if (filters.contractIds) where['contractId']       = { in: filters.contractIds };
+    if (filters.actorId)          where['actorId']          = filters.actorId;
+    // clientId lives on Contract — filter through the relation.
+    if (filters.clientId) where['contract'] = { clientId: filters.clientId };
+    if (filters.from || filters.to) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const createdAt: Record<string, any> = {};
+      if (filters.from) createdAt['gte'] = filters.from;
+      if (filters.to)   createdAt['lte'] = filters.to;
+      where['createdAt'] = createdAt;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma as any).contractServiceEvent.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      // JOIN al operador (actorName fallback) + JOIN contract→client (clientId + customerName).
+      include: {
+        actor: { select: { login: true } },
+        contract: { select: { clientId: true, client: { select: { name: true } } } },
+      },
+    });
+    return rows.map(toEventWithClient);
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toEventWithClient(row: any): ContractServiceEventWithClient {
+  return {
+    ...toEvent(row),
+    clientId:     row.contract?.clientId ?? null,
+    customerName: row.contract?.client?.name ?? null,
+  };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

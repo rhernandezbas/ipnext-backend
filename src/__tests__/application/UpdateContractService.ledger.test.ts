@@ -72,6 +72,7 @@ describe('UpdateContractService — #110 ledger wiring', () => {
     const brokenEventRepo: ContractServiceEventRepository = {
       record: async () => { throw new Error('DB down'); },
       listByContract: async () => [],
+      list: async () => [],
     };
     const uc = makeUc(brokenEventRepo);
     const result = await uc.execute(svc.id, { status: 'inactive' });

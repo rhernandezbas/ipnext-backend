@@ -11,6 +11,21 @@ export interface PppoeServiceUpsert {
   enforcedState?: EnforcedState; // Fase C — default 'active' si se omite
 }
 
+/**
+ * internet-history — PPPoE row enriched with the contract's client (resolved via JOIN
+ * pppoe → Contract → Client). Used by the GLOBAL internet services list so the use case
+ * never re-queries per row. clientId/customerName are best-effort (null for orphan rows
+ * without a contract, or when the client was deleted).
+ *
+ * SECURITY: this projection OMITS `password` at the TYPE level (Omit<PppoeService,'password'>).
+ * The list adapters never SELECT the secret into memory, so even a future `res.json(rawRepoOutput)`
+ * can't leak it — defense in depth, not just a DTO-boundary strip.
+ */
+export interface PppoeServiceWithClient extends Omit<PppoeService, 'password'> {
+  clientId: string | null;
+  customerName: string | null;
+}
+
 export interface PppoeServiceRepository {
   /** Idempotente por `username`: crea o actualiza la fila existente. */
   upsertByUsername(data: PppoeServiceUpsert): Promise<PppoeService>;
@@ -51,6 +66,23 @@ export interface PppoeServiceRepository {
     search?: string;
     nasId?: string;
   }): Promise<{ data: PppoeService[]; total: number }>;
+
+  /**
+   * internet-history — TODOS los PPPoE (la vista GLOBAL de internet, espejo de la página de TV),
+   * enriquecidos con su cliente (clientId + customerName via JOIN pppoe→contract→client).
+   * - `search`: coincidencia parcial case-insensitive sobre username o el nombre del cliente.
+   * - `status`: filtro exacto por status del secret (enabled/disabled/terminated).
+   * - `nasId`: filtro exacto por router.
+   * - Orden estable: username asc.
+   * - `total` = count con el MISMO where (sin skip/take) para el paginador del FE.
+   */
+  listAllPaginated(params: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    status?: string;
+    nasId?: string;
+  }): Promise<{ data: PppoeServiceWithClient[]; total: number }>;
   /**
    * Asocia un PPPoE a un contrato seteando SOLO su `contractId` (no toca password/profile/etc.).
    * Devuelve la entidad actualizada, o null si el PPPoE no existe.

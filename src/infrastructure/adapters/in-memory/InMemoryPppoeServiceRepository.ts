@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { PppoeService, EnforcedState } from '@domain/entities/pppoeService';
-import { PppoeServiceRepository, PppoeServiceUpsert } from '@domain/ports/PppoeServiceRepository';
+import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 
 /**
  * InMemoryPppoeServiceRepository — test seam para PppoeServiceRepository (pppoe-foundation + Fase C).
@@ -13,6 +13,7 @@ import { PppoeServiceRepository, PppoeServiceUpsert } from '@domain/ports/PppoeS
 export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
   private readonly store: PppoeService[] = [];
   private readonly contractClientStatus = new Map<string, string>();
+  private readonly contractClient = new Map<string, { clientId: string | null; customerName: string | null }>();
   private readonly now: () => Date;
 
   constructor(opts?: { now?: () => Date }) {
@@ -22,6 +23,11 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
   /** Test seam: asocia un contractId con el status de su cliente (para listByClientStatus). */
   setContractClientStatus(contractId: string, status: string): void {
     this.contractClientStatus.set(contractId, status);
+  }
+
+  /** Test seam: asocia un contractId con su cliente (clientId+customerName) para listAllPaginated. */
+  setContractClient(contractId: string, clientId: string | null, customerName: string | null): void {
+    this.contractClient.set(contractId, { clientId, customerName });
   }
 
   async upsertByUsername(data: PppoeServiceUpsert): Promise<PppoeService> {
@@ -136,6 +142,56 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     const total = sorted.length;
     const skip  = (page - 1) * pageSize;
     const data  = sorted.slice(skip, skip + pageSize).map(s => ({ ...s }));
+
+    return { data, total };
+  }
+
+  async listAllPaginated(params: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    status?: string;
+    nasId?: string;
+  }): Promise<{ data: PppoeServiceWithClient[]; total: number }> {
+    const { page, pageSize, search, status, nasId } = params;
+    const searchLower = search ? search.toLowerCase() : undefined;
+
+    // SECURITY: build the projection explicitly WITHOUT `password` (mirrors the Prisma `select`).
+    // `{ ...s }` would copy the secret into the list object at runtime even though the type omits it.
+    const withClient = (s: PppoeService): PppoeServiceWithClient => {
+      const client = s.contractId ? this.contractClient.get(s.contractId) : undefined;
+      return {
+        id:            s.id,
+        username:      s.username,
+        profile:       s.profile,
+        remoteAddress: s.remoteAddress,
+        status:        s.status,
+        enforcedState: s.enforcedState,
+        nasId:         s.nasId,
+        contractId:    s.contractId,
+        callerId:      s.callerId,
+        createdAt:     s.createdAt,
+        clientId:      client?.clientId ?? null,
+        customerName:  client?.customerName ?? null,
+      };
+    };
+
+    const filtered = this.store.map(withClient).filter(s => {
+      if (status && s.status !== status) return false;
+      if (nasId && s.nasId !== nasId) return false;
+      if (searchLower) {
+        const matchUsername = s.username.toLowerCase().includes(searchLower);
+        const matchClient = (s.customerName ?? '').toLowerCase().includes(searchLower);
+        if (!matchUsername && !matchClient) return false;
+      }
+      return true;
+    });
+
+    const sorted = [...filtered].sort((a, b) => a.username.localeCompare(b.username));
+
+    const total = sorted.length;
+    const skip = (page - 1) * pageSize;
+    const data = sorted.slice(skip, skip + pageSize).map(s => ({ ...s }));
 
     return { data, total };
   }

@@ -47,6 +47,8 @@ import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeT
 import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
 import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
+import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
+import { ListInternetServiceHistory } from '@application/use-cases/ListInternetServiceHistory';
 import type { ServiceCutRunner } from '@infrastructure/scheduling/ServiceCutRunner';
 import type { ServiceCutBatchRepository } from '@domain/ports/ServiceCutBatchRepository';
 import {
@@ -106,6 +108,8 @@ export function createPppoeRouter(
   deassociatePppoeFromContract: DeassociatePppoeFromContract,
   terminatePppoeService?: TerminatePppoeService,
   getPppoeCallerId?: GetPppoeCallerId,
+  listAllPppoeServices?: ListAllPppoeServices,
+  listInternetServiceHistory?: ListInternetServiceHistory,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -192,6 +196,66 @@ export function createPppoeRouter(
       res.json(orphans.map(toPppoeServiceDto));
     },
   );
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // internet-history — vista GLOBAL de servicios de internet (espejo de la página de TV).
+  // Rutas LITERALES /pppoe y /pppoe/activation-history montadas ANTES de cualquier
+  // /pppoe/:id para que el catch-all no las sombree.
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── GET /pppoe/activation-history — historial GLOBAL de eventos de INTERNET ──
+  // Espejo de GET /api/gigared/customers/activation-history. Filtros: actorId, customerId/clientId, from, to.
+  if (listInternetServiceHistory) {
+    router.get(
+      '/pppoe/activation-history',
+      auth,
+      canRead,
+      async (req: Request, res: Response): Promise<void> => {
+        const q = req.query;
+        const filter: { actorId?: string; customerId?: string; clientId?: string; from?: Date; to?: Date } = {};
+        if (typeof q['actorId'] === 'string' && q['actorId'] !== '') filter.actorId = q['actorId'];
+        if (typeof q['customerId'] === 'string' && q['customerId'] !== '') filter.customerId = q['customerId'];
+        if (typeof q['clientId'] === 'string' && q['clientId'] !== '') filter.clientId = q['clientId'];
+        if (typeof q['from'] === 'string' && q['from'] !== '') {
+          const d = new Date(q['from']);
+          if (!isNaN(d.getTime())) filter.from = d;
+        }
+        if (typeof q['to'] === 'string' && q['to'] !== '') {
+          const d = new Date(q['to']);
+          if (!isNaN(d.getTime())) filter.to = d;
+        }
+        const events = await listInternetServiceHistory.execute(filter);
+        res.json(events);
+      },
+    );
+  }
+
+  // ── GET /pppoe — lista GLOBAL paginada de servicios de internet (DTO SIN password) ──
+  // Filtros: search (cliente o username), status, nasId. Paginación: page/limit (limit≤100).
+  if (listAllPppoeServices) {
+    router.get(
+      '/pppoe',
+      auth,
+      canRead,
+      async (req: Request, res: Response): Promise<void> => {
+        const q = req.query;
+        const filter: { search?: string; status?: string; nasId?: string; page?: number; limit?: number } = {};
+        if (typeof q['search'] === 'string' && q['search'] !== '') filter.search = q['search'];
+        if (typeof q['status'] === 'string' && q['status'] !== '') filter.status = q['status'];
+        if (typeof q['nasId']  === 'string' && q['nasId']  !== '') filter.nasId  = q['nasId'];
+        if (typeof q['page']   === 'string' && q['page']   !== '') {
+          const n = parseInt(q['page'], 10);
+          if (!isNaN(n) && n > 0) filter.page = n;
+        }
+        if (typeof q['limit'] === 'string' && q['limit'] !== '') {
+          const n = parseInt(q['limit'], 10);
+          if (!isNaN(n) && n > 0) filter.limit = n;
+        }
+        const page = await listAllPppoeServices.execute(filter);
+        res.json(page);
+      },
+    );
+  }
 
   // ── POST /nas/:id/ingest-pppoe — adopta el inventario del NAS (huérfanos) ─────
   router.post(
