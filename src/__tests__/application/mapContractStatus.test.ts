@@ -26,6 +26,18 @@ describe('mapContractStatus', () => {
     expect(mapContractStatus('Bloqueado')).toBe('blocked');
   });
 
+  it('maps "Pendiente de Instalación" → "new" (real GR value caught by the backfill guard)', () => {
+    expect(mapContractStatus('Pendiente de Instalación')).toBe('new');
+  });
+
+  it('maps "Pendiente de Instalacion" (sin tilde) → "new"', () => {
+    expect(mapContractStatus('Pendiente de Instalacion')).toBe('new');
+  });
+
+  it('maps "Pendiente" → "new"', () => {
+    expect(mapContractStatus('Pendiente')).toBe('new');
+  });
+
   // Normalization: case-insensitive + trimmed ────────────────────────────────
   it('is case-insensitive ("VIGENTE" → "active")', () => {
     expect(mapContractStatus('VIGENTE')).toBe('active');

@@ -65,6 +65,9 @@ export function mapContractStatus(grEstado: string | null | undefined): Contract
     case 'bloqueado':
     case 'blocked':
       return 'blocked';
+    case 'pendiente de instalacion':
+    case 'pendiente':
+    case 'nuevo':
     case 'new':
       return 'new';
     default:

@@ -21,7 +21,7 @@ jobs:
             --network easypanel-bd_owners \
             -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             prominense-be:latest \
-            npx prisma migrate deploy
+            sh -c 'npx prisma migrate deploy || (echo ">> one-time recovery: marcando 20260813000000 rolled-back y reintentando"; npx prisma migrate resolve --rolled-back 20260813000000_backfill_contract_status && npx prisma migrate deploy)'
 
       - name: Bootstrap RBAC super_admin (idempotent)
         # Secrets are forwarded via env: block (NOT inline ${{ }} inside the shell)

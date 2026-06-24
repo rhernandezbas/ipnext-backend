@@ -1,5 +1,5 @@
 -- Backfill: canonizar Contract.status de los valores crudos de Gestión Real al enum canónico.
--- Valores reales en GR (muestra 2026-06-23 cruzando los 5 estados de cliente): 'Vigente', 'Baja'.
+-- Valores reales en GR: 'Vigente'(->active), 'Baja'(->baja), 'Pendiente de Instalación'(->new, cazado por el guard en el 1er deploy 2026-06-24).
 -- Variantes anticipadas incluidas por robustez. Guard fail-fast: si tras el backfill queda
 -- CUALQUIER valor no canónico, aborta (RAISE EXCEPTION => rollback total, prod intacto).
 
@@ -14,6 +14,9 @@ UPDATE "Contract" SET status = 'inactive'
 
 UPDATE "Contract" SET status = 'blocked'
   WHERE lower(btrim(status)) IN ('suspendido','suspendida','bloqueado','bloqueada','blocked');
+
+UPDATE "Contract" SET status = 'new'
+  WHERE lower(btrim(status)) IN ('pendiente de instalación','pendiente de instalacion','pendiente','nuevo','new');
 
 DO $$
 DECLARE rogue text; cnt int;
