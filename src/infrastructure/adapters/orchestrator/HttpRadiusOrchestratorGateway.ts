@@ -235,7 +235,11 @@ function toAccountingPage(data: any): AccountingPage {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toAuthEventRow(r: any): AuthEventRow {
   return {
-    sourceId: r.source_id,
+    // El orchestrator devuelve source_id como NUMBER (radpostauth.id int auto_increment),
+    // pero RadiusAuthEvent.sourceUniqueId es String en Prisma. Normalizamos en el BORDE
+    // (boundary del JSON externo): sin String() el upsert revienta con
+    // "Expected String, provided Int" y la tabla queda en 0.
+    sourceId: String(r.source_id),
     username: r.username,
     reply:    r.reply,
     authdate: r.authdate,

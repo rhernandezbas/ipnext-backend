@@ -86,6 +86,20 @@ describe('HttpRadiusOrchestratorGateway.listPostauth', () => {
     expect(ev.class).toBe('CLASS-XYZ');
   });
 
+  it('BUG-PROD: source_id viene como NUMBER (radpostauth.id int) → sourceId DEBE ser string', async () => {
+    // El orchestrator real devuelve source_id como número (id auto_increment de radpostauth).
+    // RadiusAuthEvent.sourceUniqueId es String en Prisma → si no se stringifica acá,
+    // el upsert revienta ("Expected String, provided Int") y la tabla queda en 0.
+    const { gw } = fakeHttpGet({
+      items: [{ source_id: 1, username: 'test-user', reply: 'Access-Reject', authdate: '2026-06-22T13:04:11Z', class: null }],
+      page: 1, page_size: 500, next_page: null,
+    });
+    const page = await gw.listPostauth({});
+    const ev = page.items[0];
+    expect(ev.sourceId).toBe('1');
+    expect(typeof ev.sourceId).toBe('string');
+  });
+
   it('class ausente → null', async () => {
     const { gw } = fakeHttpGet({
       items: [{ source_id: 'x1', username: 'u', reply: 'Access-Accept', authdate: '2026-06-22T00:00:00Z' }],
