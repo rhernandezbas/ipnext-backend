@@ -26,6 +26,25 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 
 **Gate de seguridad (innegociable)**: como el push deploya a prod, **el push se confirma explícitamente cada vez**. Se preparan y commitean los cambios localmente, pero el `git push` requiere OK del usuario, change por change.
 
+### Sincronizar el `main` local tras cada cambio (INNEGOCIABLE)
+
+> **Cada card del `BACKLOG` que llega a `origin/main` DEBE terminar dejando el `main` LOCAL de AMBOS repos (BE + FE) sincronizado con `origin/main`.** El cambio NO está cerrado hasta que el local quedó actualizado.
+>
+> **Por qué (incidente real, 2026-06-25):** el push se hace desde un **worktree** o con `git push origin <sha>:main` (técnica usada p.ej. en el EPIC NasType para no tocar el checkout sucio). Eso avanza `origin/main` pero **NO mueve el ref `main` del checkout local** → el `main` local quedó **STALE 22 commits atrás**: el código del feature (RadiusAuthEvent, ingest, endpoint) **ni existía localmente**, y una exploración arrancó leyendo versiones viejas y grepeando archivos que ya no estaban donde el código creía. Se perdió tiempo y casi se trabaja sobre código ya superado en prod.
+>
+> **Cómo (al cerrar cada card, en BE y FE):**
+> ```
+> git fetch origin
+> git checkout main
+> git merge --ff-only origin/main        # fast-forward si el local no diverge
+> # si el main local trae commits de worktree YA superseded en origin (no es ancestro):
+> #   git reset --hard origin/main        # SOLO tras verificar que son superseded (backup primero)
+> git rev-parse main == origin/main      # verificar que quedaron iguales
+> ```
+> **Regla:** antes de explorar/codear cualquier cosa nueva, confirmar `main local == origin/main` (`git rev-list --count main..origin/main` == 0) en los dos repos. Si difiere, sincronizar PRIMERO. **El local stale es una fuente silenciosa de bugs: se explora y se "arregla" código que en prod ya cambió.**
+>
+> **Doc-only en `main` → se PUSHEA, no se acumula local (decisión del usuario, 2026-06-25).** Los cambios doc-only que se editan directo en `main` (`BACKLOG.md`, `WORKFLOW-MULTI-REPO.md`, `DEUDAS-PENDIENTES.md`, `.gitignore`) NO se dejan commiteados solo-local: se **pushean** para que `origin` quede como fuente de verdad y el `main` local no diverja. Un commit local-ahead es la otra cara del problema de staleness — el `BACKLOG`/`WORKFLOW` "vive en origin"; si queda solo local, la próxima sesión no lo ve (o lo pierde en un sync). Sí, el push del BE dispara un deploy, pero doc-only = **blast radius ~0** (rebuild + `migrate deploy` no-op + swap de container, sin cambio de runtime). El push igual se confirma con el usuario (gate), pero para doc-only el default es **pushear ya** y dejar `main local == origin`.
+
 ## Base de datos
 
 - La DB de prod vive en una **red Docker interna de EasyPanel** (`easypanel-bd_owners`, host interno `bd_owners_splynx-repli:5432`, base `test`). **NO es accesible desde afuera** (un intento directo a la IP pública da `P1001`). Por eso no se necesita —ni se puede— conexión directa: las migraciones llegan vía deploy.
