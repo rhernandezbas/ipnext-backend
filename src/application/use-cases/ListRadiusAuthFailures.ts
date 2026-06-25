@@ -67,5 +67,6 @@ function toDto(e: RadiusAuthEvent): RadiusAuthEventDto {
     reply:    e.reply,
     authdate: e.authdate,
     class:    e.class,
+    reason:   e.reason,
   };
 }

@@ -156,6 +156,7 @@ export class IngestRadiusAuth {
       reply:          item.reply as RadiusAuthReply,
       authdate:       new Date(item.authdate),
       class:          item.class,
+      reason:         item.reason,
     };
   }
 

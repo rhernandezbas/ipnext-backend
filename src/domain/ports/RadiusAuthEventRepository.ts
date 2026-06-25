@@ -16,6 +16,8 @@ export interface RadiusAuthEventUpsert {
   reply: RadiusAuthReply;
   authdate: Date;
   class: string | null;
+  /** Motivo del rechazo. Se persiste UNA VEZ en el create; el update NO lo pisa (congelado). */
+  reason: string | null;
 }
 
 export interface PaginatedResult<T> {

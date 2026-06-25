@@ -40,7 +40,7 @@ describe('RadiusAuthIngestScheduler', () => {
 
   it('upsert idempotente: re-correr no duplica registros', async () => {
     const gateway = new InMemoryRadiusOrchestratorGateway({
-      authEvents: [{ sourceId: 'pa-01', username: 'u1', reply: 'Access-Reject', authdate: '2026-06-22T10:00:00Z', class: null }],
+      authEvents: [{ sourceId: 'pa-01', username: 'u1', reply: 'Access-Reject', authdate: '2026-06-22T10:00:00Z', class: null, reason: null }],
     });
     const eventRepo = new InMemoryRadiusAuthEventRepository();
     const stateRepo = new InMemorySyncStateRepository();

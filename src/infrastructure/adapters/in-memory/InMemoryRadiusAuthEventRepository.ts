@@ -31,6 +31,8 @@ export class InMemoryRadiusAuthEventRepository implements RadiusAuthEventReposit
             reply:          existing.reply,
             authdate:       existing.authdate,
             class:          row.class,
+            // reason congelado: el update NO lo pisa (espejo del Prisma, igual que authdate).
+            reason:         existing.reason,
             createdAt:      existing.createdAt,
             updatedAt:      new Date().toISOString(),
           }
@@ -41,6 +43,8 @@ export class InMemoryRadiusAuthEventRepository implements RadiusAuthEventReposit
             reply:          row.reply,
             authdate:       row.authdate.toISOString(),
             class:          row.class,
+            // reason se guarda en el create (cerca del evento).
+            reason:         row.reason,
             createdAt:      new Date().toISOString(),
             updatedAt:      new Date().toISOString(),
           };

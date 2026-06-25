@@ -38,9 +38,12 @@ export class PrismaRadiusAuthEventRepository implements RadiusAuthEventRepositor
             reply:          row.reply,
             authdate:       row.authdate,
             class:          row.class,
+            // reason se congela en el create (cerca del evento). El update NO lo recomputa.
+            reason:         row.reason,
           },
           update: {
             // Un evento de auth es inmutable; solo class podría llegar resuelto en un tick posterior.
+            // reason NO se pisa: queda congelado al valor del primer ingest (igual que authdate).
             class: row.class,
           },
         }),
@@ -122,6 +125,7 @@ function toEntity(row: any): RadiusAuthEvent {
     reply:          row.reply as RadiusAuthReply,
     authdate:       row.authdate instanceof Date ? row.authdate.toISOString() : String(row.authdate),
     class:          row.class ?? null,
+    reason:         row.reason ?? null,
     createdAt:      row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
     updatedAt:      row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
   };

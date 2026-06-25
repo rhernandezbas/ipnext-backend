@@ -25,6 +25,7 @@ const sampleResponse = {
       reply:     'Access-Reject',
       authdate:  '2026-06-22T13:04:11Z',
       class:     'CLASS-XYZ',
+      reason:    'user_not_found',
     },
   ],
   page: 1,
@@ -84,6 +85,16 @@ describe('HttpRadiusOrchestratorGateway.listPostauth', () => {
     expect(ev.reply).toBe('Access-Reject');
     expect(ev.authdate).toBe('2026-06-22T13:04:11Z');
     expect(ev.class).toBe('CLASS-XYZ');
+    expect(ev.reason).toBe('user_not_found');
+  });
+
+  it('reason ausente → null (Fase 1: el orchestrator devuelve reason solo en rechazos)', async () => {
+    const { gw } = fakeHttpGet({
+      items: [{ source_id: 'x1', username: 'u', reply: 'Access-Accept', authdate: '2026-06-22T00:00:00Z', class: null }],
+      page: 1, page_size: 500, next_page: null,
+    });
+    const page = await gw.listPostauth({});
+    expect(page.items[0].reason).toBeNull();
   });
 
   it('BUG-PROD: source_id viene como NUMBER (radpostauth.id int) → sourceId DEBE ser string', async () => {

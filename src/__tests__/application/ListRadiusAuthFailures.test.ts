@@ -14,6 +14,7 @@ async function seedEvents(
     reply: RadiusAuthReply;
     authdate: string;
     class: string | null;
+    reason: string | null;
   }>>,
 ): Promise<void> {
   await repo.upsertMany(
@@ -23,6 +24,7 @@ async function seedEvents(
       reply:          o.reply ?? 'Access-Reject',
       authdate:       new Date(o.authdate ?? `2026-06-${String(i + 1).padStart(2, '0')}T10:00:00Z`),
       class:          o.class ?? null,
+      reason:         o.reason ?? null,
     })),
   );
 }
@@ -112,6 +114,26 @@ describe('ListRadiusAuthFailures', () => {
     const result = await uc.execute({});
 
     expect(result).toEqual({ data: [], total: 0, page: 1, limit: 50, hasNext: false });
+  });
+
+  it('expone el reason en el DTO', async () => {
+    const repo = makeRepo();
+    await seedEvents(repo, [{ username: 'c001', reason: 'session_stuck' }]);
+    const uc = new ListRadiusAuthFailures(repo);
+
+    const result = await uc.execute({ username: 'c001' });
+
+    expect(result.data[0].reason).toBe('session_stuck');
+  });
+
+  it('reason null (histórico viejo) se expone como null en el DTO', async () => {
+    const repo = makeRepo();
+    await seedEvents(repo, [{ username: 'c002', reason: null }]);
+    const uc = new ListRadiusAuthFailures(repo);
+
+    const result = await uc.execute({ username: 'c002' });
+
+    expect(result.data[0].reason).toBeNull();
   });
 
   it('sourceUniqueId no aparece en el DTO', async () => {

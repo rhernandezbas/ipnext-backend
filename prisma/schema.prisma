@@ -1778,6 +1778,9 @@ model RadiusAuthEvent {
   reply          String                   // 'Access-Accept' | 'Access-Reject'
   authdate       DateTime
   class          String?
+  /// Motivo del rechazo congelado al ingestar (orchestrator GET /postauth):
+  /// 'user_not_found' | 'session_stuck' | 'other'. null para Access-Accept o históricos viejos.
+  reason         String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

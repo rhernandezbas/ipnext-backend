@@ -244,6 +244,8 @@ function toAuthEventRow(r: any): AuthEventRow {
     reply:    r.reply,
     authdate: r.authdate,
     class:    r.class ?? null,
+    // Fase 1: el orchestrator devuelve `reason` en rechazos. Ausente (Access-Accept) → null.
+    reason:   r.reason ?? null,
   };
 }
 

@@ -75,6 +75,8 @@ export interface RadiusAuthEventDto {
   reply: 'Access-Accept' | 'Access-Reject';
   authdate: string;        // ISO 8601
   class: string | null;
+  /** Motivo del rechazo: 'user_not_found' | 'session_stuck' | 'other'. null para Access-Accept o históricos viejos. */
+  reason: string | null;
 }
 
 export interface PaginatedRadiusAuthEventsDto {

@@ -13,6 +13,7 @@ function makeEvent(overrides: Partial<AuthEventRow> = {}): AuthEventRow {
     reply:    'Access-Reject',
     authdate: '2026-06-22T10:00:00Z',
     class:    null,
+    reason:   null,
     ...overrides,
   };
 }
@@ -35,6 +36,13 @@ describe('IngestRadiusAuth', () => {
     expect(stored.total).toBe(1);
     expect(stored.data[0].username).toBe('u1');
     expect(stored.data[0].reply).toBe('Access-Reject');
+  });
+
+  it('persiste el reason del gateway en el upsert', async () => {
+    const { ingest, eventRepo } = makeUseCase([makeEvent({ reason: 'user_not_found' })]);
+    await ingest.run();
+    const stored = await eventRepo.list({ page: 1, pageSize: 10 });
+    expect(stored.data[0].reason).toBe('user_not_found');
   });
 
   it('avanza cursor al max authdate', async () => {
@@ -88,8 +96,8 @@ describe('IngestRadiusAuth', () => {
   it('purga filas con authdate < (now - retentionMonths)', async () => {
     const eventRepo = new InMemoryRadiusAuthEventRepository();
     await eventRepo.upsertMany([
-      { sourceUniqueId: 'old',   username: 'u', reply: 'Access-Reject', authdate: new Date('2025-06-21T00:00:00Z'), class: null },
-      { sourceUniqueId: 'fresh', username: 'u', reply: 'Access-Reject', authdate: new Date('2026-01-01T00:00:00Z'), class: null },
+      { sourceUniqueId: 'old',   username: 'u', reply: 'Access-Reject', authdate: new Date('2025-06-21T00:00:00Z'), class: null, reason: null },
+      { sourceUniqueId: 'fresh', username: 'u', reply: 'Access-Reject', authdate: new Date('2026-01-01T00:00:00Z'), class: null, reason: null },
     ]);
     const gateway = new InMemoryRadiusOrchestratorGateway({ authEvents: [makeEvent({ sourceId: 'fresh', authdate: '2026-01-01T00:00:00Z' })] });
     const ingest  = new IngestRadiusAuth(gateway, eventRepo, new InMemorySyncStateRepository(), { now: () => NOW, retentionMonths: 12 });
@@ -140,7 +148,7 @@ describe('IngestRadiusAuth', () => {
       Array.from({ length: 5 }, (_, i) => ({
         sourceUniqueId: `old-${i}`,
         username: 'u', reply: 'Access-Reject' as const,
-        authdate: new Date('2020-01-01T00:00:00Z'), class: null,
+        authdate: new Date('2020-01-01T00:00:00Z'), class: null, reason: null,
       })),
     );
     const ingest = new IngestRadiusAuth(

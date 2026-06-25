@@ -8,6 +8,7 @@ function row(overrides: Partial<RadiusAuthEventUpsert> = {}): RadiusAuthEventUps
     reply:         'Access-Reject',
     authdate:      new Date('2026-06-22T10:00:00Z'),
     class:         null,
+    reason:        null,
     ...overrides,
   };
 }
@@ -39,6 +40,32 @@ describe('InMemoryRadiusAuthEventRepository', () => {
     await repo.upsertMany([row()]);
     const after = (await repo.list({ page: 1, pageSize: 10 })).data[0].id;
     expect(after).toBe(before);
+  });
+
+  it('create guarda el reason del evento', async () => {
+    const repo = new InMemoryRadiusAuthEventRepository();
+    await repo.upsertMany([row({ reason: 'user_not_found' })]);
+    const stored = await repo.list({ page: 1, pageSize: 10 });
+    expect(stored.data[0].reason).toBe('user_not_found');
+  });
+
+  it('update NO pisa el reason original (congelado cerca del evento)', async () => {
+    const repo = new InMemoryRadiusAuthEventRepository();
+    // create: reason original 'user_not_found'
+    await repo.upsertMany([row({ reason: 'user_not_found' })]);
+    // re-ingest del MISMO sourceUniqueId con otro reason → NO debe pisar
+    await repo.upsertMany([row({ reason: 'session_stuck', class: 'NEW-CLASS' })]);
+    const stored = await repo.list({ page: 1, pageSize: 10 });
+    expect(stored.total).toBe(1);
+    expect(stored.data[0].reason).toBe('user_not_found'); // congelado
+    expect(stored.data[0].class).toBe('NEW-CLASS');        // class sí se refresca
+  });
+
+  it('reason null en create → null (históricos viejos)', async () => {
+    const repo = new InMemoryRadiusAuthEventRepository();
+    await repo.upsertMany([row({ reason: null })]);
+    const stored = await repo.list({ page: 1, pageSize: 10 });
+    expect(stored.data[0].reason).toBeNull();
   });
 
   it('list filtra por reply', async () => {

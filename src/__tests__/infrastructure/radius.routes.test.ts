@@ -502,8 +502,8 @@ describe('radius.routes — /auth-failures (network audit)', () => {
   it('GET /auth-failures devuelve eventos sembrados ordenados authdate DESC (seam ruta + use case real + repo in-memory)', async () => {
     const { app, readUserId, authEventRepo } = await buildAuditApp();
     await authEventRepo.upsertMany([
-      { sourceUniqueId: 'pa-1', username: 'c001', reply: 'Access-Reject', authdate: new Date('2026-06-01T10:00:00Z'), class: null },
-      { sourceUniqueId: 'pa-2', username: 'c002', reply: 'Access-Accept', authdate: new Date('2026-06-20T10:00:00Z'), class: 'X' },
+      { sourceUniqueId: 'pa-1', username: 'c001', reply: 'Access-Reject', authdate: new Date('2026-06-01T10:00:00Z'), class: null, reason: 'user_not_found' },
+      { sourceUniqueId: 'pa-2', username: 'c002', reply: 'Access-Accept', authdate: new Date('2026-06-20T10:00:00Z'), class: 'X', reason: null },
     ]);
     const res = await asUser(request(app).get('/api/radius/auth-failures'), readUserId);
     expect(res.status).toBe(200);
@@ -516,8 +516,8 @@ describe('radius.routes — /auth-failures (network audit)', () => {
   it('GET /auth-failures?reply=Access-Reject filtra (seam ruta + use case real)', async () => {
     const { app, readUserId, authEventRepo } = await buildAuditApp();
     await authEventRepo.upsertMany([
-      { sourceUniqueId: 'pa-1', username: 'c001', reply: 'Access-Reject', authdate: new Date('2026-06-01T10:00:00Z'), class: null },
-      { sourceUniqueId: 'pa-2', username: 'c002', reply: 'Access-Accept', authdate: new Date('2026-06-20T10:00:00Z'), class: null },
+      { sourceUniqueId: 'pa-1', username: 'c001', reply: 'Access-Reject', authdate: new Date('2026-06-01T10:00:00Z'), class: null, reason: 'session_stuck' },
+      { sourceUniqueId: 'pa-2', username: 'c002', reply: 'Access-Accept', authdate: new Date('2026-06-20T10:00:00Z'), class: null, reason: null },
     ]);
     const res = await asUser(request(app).get('/api/radius/auth-failures?reply=Access-Reject'), readUserId);
     expect(res.status).toBe(200);

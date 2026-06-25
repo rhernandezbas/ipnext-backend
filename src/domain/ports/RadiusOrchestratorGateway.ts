@@ -164,6 +164,11 @@ export interface AuthEventRow {
   reply: string;
   authdate: string;        // ISO 8601
   class: string | null;
+  /**
+   * Motivo del rechazo expuesto por el orchestrator (Fase 1):
+   * 'user_not_found' | 'session_stuck' | 'other'. null para Access-Accept o si el orchestrator no lo expone.
+   */
+  reason: string | null;
 }
 
 /**
