@@ -34,9 +34,9 @@ describe('PerNasEnforcementGateway (Inc2 — routeo por nas.type)', () => {
     return { mkDirect, radius, gw };
   }
 
-  it("nas.type='mikrotik_radius' → corta por el adapter RADIUS", async () => {
+  it("nas.type='radius_orchestrator' → corta por el adapter RADIUS", async () => {
     const { mkDirect, radius, gw } = setup();
-    await gw.apply(pppoe(), nasOfType('mikrotik_radius'), 'reduce');
+    await gw.apply(pppoe(), nasOfType('radius_orchestrator'), 'reduce');
     expect(radius.calls).toHaveLength(1);
     expect(mkDirect.calls).toHaveLength(0);
   });
@@ -49,7 +49,7 @@ describe('PerNasEnforcementGateway (Inc2 — routeo por nas.type)', () => {
   });
 
   it('cualquier otro type cae al DEFAULT SEGURO (MK-directo), nunca a RADIUS', async () => {
-    for (const t of ['other', 'ubiquiti', 'cisco', 'cambium', 'huawei_radius'] as NasType[]) {
+    for (const t of ['other', 'ubiquiti', 'cisco', 'cambium'] as NasType[]) {
       const { mkDirect, radius, gw } = setup();
       await gw.apply(pppoe(), nasOfType(t), 'restore');
       expect(mkDirect.calls).toHaveLength(1);
@@ -59,7 +59,7 @@ describe('PerNasEnforcementGateway (Inc2 — routeo por nas.type)', () => {
 
   it('propaga la acción y el pppoe tal cual al adapter elegido', async () => {
     const { radius, gw } = setup();
-    await gw.apply(pppoe(), nasOfType('mikrotik_radius'), 'block');
-    expect(radius.calls[0]).toEqual({ username: 'cli', nasType: 'mikrotik_radius', action: 'block' });
+    await gw.apply(pppoe(), nasOfType('radius_orchestrator'), 'block');
+    expect(radius.calls[0]).toEqual({ username: 'cli', nasType: 'radius_orchestrator', action: 'block' });
   });
 });

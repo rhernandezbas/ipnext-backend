@@ -1,7 +1,7 @@
 /**
  * pppoe-management — UpdatePppoeService.
  * Verifica el RUTEO por `nas.type`:
- *   - mikrotik_radius → cada campo provisto va a la llamada del orchestrator correcta
+ *   - radius_orchestrator → cada campo provisto va a la llamada del orchestrator correcta
  *     (profile→changePlan, password→changePassword, remoteAddress→changeFramedIp,
  *      status→suspend/reactivate). NUNCA toca el router (RouterOS 7.x cuelga).
  *   - mikrotik_api → router.updateSecret (como siempre).
@@ -16,7 +16,7 @@ import { PppoeServiceNotFoundError, NasNotFoundError } from '@domain/errors/pppo
 
 // nasId '1' del seed in-memory → 192.168.1.1, mikrotik_api (router directo)
 const NAS1 = { ipAddress: '192.168.1.1', apiPort: 8728 };
-// nasId '3' del seed in-memory → type 'mikrotik_radius' → orchestrator
+// nasId '3' del seed in-memory → type 'radius_orchestrator' → orchestrator
 const NAS3 = { ipAddress: '10.0.0.5', apiPort: 8728 };
 
 describe('UpdatePppoeService', () => {
@@ -64,8 +64,8 @@ describe('UpdatePppoeService', () => {
     return row.id;
   }
 
-  // ── mikrotik_radius: rutea CADA campo a la llamada del orchestrator correcta ──
-  it('mikrotik_radius: profile → orchestrator.changePlan y NO toca el router', async () => {
+  // ── radius_orchestrator: rutea CADA campo a la llamada del orchestrator correcta ──
+  it('radius_orchestrator: profile → orchestrator.changePlan y NO toca el router', async () => {
     const id = await seedRadius();
     await uc.execute({ id, profile: 'IP-REDUCCION' });
     expect(orchestrator.opsFor('juanperez')).toEqual(['changePlan']);
@@ -74,21 +74,21 @@ describe('UpdatePppoeService', () => {
     expect(secrets).toHaveLength(0);
   });
 
-  it('mikrotik_radius: password → orchestrator.changePassword', async () => {
+  it('radius_orchestrator: password → orchestrator.changePassword', async () => {
     const id = await seedRadius();
     await uc.execute({ id, password: 'nuevaPass123' });
     expect(orchestrator.opsFor('juanperez')).toEqual(['changePassword']);
     expect(orchestrator.passwordOf('juanperez')).toBe('nuevaPass123');
   });
 
-  it('mikrotik_radius: remoteAddress → orchestrator.changeFramedIp', async () => {
+  it('radius_orchestrator: remoteAddress → orchestrator.changeFramedIp', async () => {
     const id = await seedRadius();
     await uc.execute({ id, remoteAddress: '100.64.10.99' });
     expect(orchestrator.opsFor('juanperez')).toEqual(['changeFramedIp']);
     expect(orchestrator.framedIpOf('juanperez')).toBe('100.64.10.99');
   });
 
-  it('mikrotik_radius: status disabled → orchestrator.suspend', async () => {
+  it('radius_orchestrator: status disabled → orchestrator.suspend', async () => {
     const id = await seedRadius();
     await uc.execute({ id, status: 'disabled' });
     expect(orchestrator.opsFor('juanperez')).toEqual(['suspend']);
@@ -97,14 +97,14 @@ describe('UpdatePppoeService', () => {
     expect(row!.status).toBe('disabled');
   });
 
-  it('mikrotik_radius: status enabled → orchestrator.reactivate', async () => {
+  it('radius_orchestrator: status enabled → orchestrator.reactivate', async () => {
     const id = await seedRadius();
     await uc.execute({ id, status: 'enabled' });
     expect(orchestrator.opsFor('juanperez')).toEqual(['reactivate']);
     expect(orchestrator.isSuspended('juanperez')).toBe(false);
   });
 
-  it('mikrotik_radius: SÓLO los campos provistos se rutean (no toca lo no provisto)', async () => {
+  it('radius_orchestrator: SÓLO los campos provistos se rutean (no toca lo no provisto)', async () => {
     const id = await seedRadius();
     await uc.execute({ id, profile: 'IP-NUEVO', password: 'pw2' });
     expect(orchestrator.opsFor('juanperez').sort()).toEqual(['changePassword', 'changePlan']);
@@ -112,7 +112,7 @@ describe('UpdatePppoeService', () => {
     expect(orchestrator.passwordOf('juanperez')).toBe('pw2');
   });
 
-  it('mikrotik_radius: confirma el upsert en la DB con los campos editados', async () => {
+  it('radius_orchestrator: confirma el upsert en la DB con los campos editados', async () => {
     const id = await seedRadius();
     const out = await uc.execute({ id, profile: 'IP-REDUCCION', password: 'pw2', remoteAddress: '100.64.10.99' });
     expect(out.profile).toBe('IP-REDUCCION');

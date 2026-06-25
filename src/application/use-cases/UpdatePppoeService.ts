@@ -26,7 +26,7 @@ export interface UpdatePppoeServiceInput {
  * Si el plano de control falla, la DB no cambia (502, reintentable). Solo se tocan los campos provistos.
  *
  * El destino se RUTEA por `nas.type` (igual que CreatePppoeService):
- *   - `mikrotik_radius` → el orchestrator es la fuente de verdad y el API del router (RouterOS 7.x)
+ *   - `radius_orchestrator` → el orchestrator es la fuente de verdad y el API del router (RouterOS 7.x)
  *     CUELGA. Cada campo provisto va a su endpoint: profile→changePlan, password→changePassword,
  *     remoteAddress→changeFramedIp, status→suspend/reactivate.
  *   - resto (`mikrotik_api`, …) → `router.updateSecret` (RouterOS `/ppp secret`), como siempre.

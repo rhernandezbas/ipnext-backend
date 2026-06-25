@@ -1,7 +1,7 @@
 /**
  * pppoe-management — DeactivatePppoeService.
  * Baja SOFT ruteada por `nas.type`:
- *   - mikrotik_radius → orchestrator.suspend (RouterOS 7.x cuelga el API; el RADIUS es la verdad).
+ *   - radius_orchestrator → orchestrator.suspend (RouterOS 7.x cuelga el API; el RADIUS es la verdad).
  *   - mikrotik_api    → router.updateSecret({disabled:true}) (como siempre).
  * En ambos casos marca status='disabled' en la DB (no borra la fila).
  */
@@ -34,7 +34,7 @@ describe('DeactivatePppoeService', () => {
     uc = new DeactivatePppoeService(repo, router, nasRepo, orchestrator, ensure);
   });
 
-  it('mikrotik_radius: orchestrator.suspend y NO toca el router; DB status=disabled', async () => {
+  it('radius_orchestrator: orchestrator.suspend y NO toca el router; DB status=disabled', async () => {
     const row = await repo.upsertByUsername({
       username: 'juanperez', password: 'p', profile: 'IP-Air-30-10', remoteAddress: '100.64.10.10',
       nasId: '3', status: 'enabled',

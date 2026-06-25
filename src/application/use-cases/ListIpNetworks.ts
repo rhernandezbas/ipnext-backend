@@ -13,7 +13,7 @@ import { AssignedIpsProvider } from '@application/services/AssignedIpsProvider';
  *   - `freeIps`  = total − used.
  *
  * Las IPs asignadas se descubren por los pools de la red (cada pool conoce su `nasId`) y la
- * fuente se rutea por `nas.type` (mikrotik_radius → RADIUS; resto → router), igual que el allocator.
+ * fuente se rutea por `nas.type` (radius_orchestrator → RADIUS; resto → router), igual que el allocator.
  * La tabla IpAssignment está vacía en prod: no se usa para contar.
  *
  * Degrada por red: si algún NAS está caído, sus IPs cuentan 0 y la lista sigue (nunca 500).

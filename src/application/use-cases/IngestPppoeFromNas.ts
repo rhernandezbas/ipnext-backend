@@ -19,7 +19,7 @@ export interface IngestPppoeResult {
  * las asocie a contratos una por una y revele la clave.
  *
  * Routing por `nas.type`:
- *   - `mikrotik_radius` → `orchestrator.listUsers()` (GET /users: username, password, plan, framed_ip).
+ *   - `radius_orchestrator` → `orchestrator.listUsers()` (GET /users: username, password, plan, framed_ip).
  *   - resto            → `PppoeIngestNotSupportedError` (no hay fuente de inventario con password aún).
  *
  * SKIP de existentes (NO clobber): si el `username` YA está en la DB, se OMITE — jamás se pisa una

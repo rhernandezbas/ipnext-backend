@@ -14,7 +14,7 @@ import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memo
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 
-// NAS seed del InMemoryNasRepository: id '3' = mikrotik_radius
+// NAS seed del InMemoryNasRepository: id '3' = radius_orchestrator
 const RADIUS_NAS = '3';
 
 const MIXED_INVENTORY = [

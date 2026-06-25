@@ -276,7 +276,7 @@ export function createPppoeRouter(
           res.status(404).json({ code: err.code, error: err.message });
           return;
         }
-        // Tipo de NAS sin soporte de adopción todavía (no es mikrotik_radius).
+        // Tipo de NAS sin soporte de adopción todavía (no es radius_orchestrator).
         if (err instanceof PppoeIngestNotSupportedError) {
           res.status(422).json({ code: err.code, error: err.message });
           return;

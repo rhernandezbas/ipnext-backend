@@ -156,7 +156,7 @@ export const config = {
 
   /**
    * radius-orchestrator (FreeRADIUS HA, p.ej. http://10.75.0.20:8080) — corte por RADIUS para los
-   * NAS ya cutoveados al HA (`nas.type='mikrotik_radius'`). Opt-in (NO fail-fast, patrón router/uisp):
+   * NAS ya cutoveados al HA (`nas.type='radius_orchestrator'`). Opt-in (NO fail-fast, patrón router/uisp):
    * si falta `baseUrl`, el HttpRadiusOrchestratorGateway falla al USARSE con error claro, pero la app
    * arranca igual y los NAS MK-directo siguen cortando. El bearer token es SERVER-SIDE: nunca al browser.
    */

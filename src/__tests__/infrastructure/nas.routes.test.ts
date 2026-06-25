@@ -8,7 +8,7 @@
  *   - GET /nas-servers con auth pero SIN network.manage → 200 (reads auth-only; el dropdown de
  *     routers del InternetPanel lo consumen usuarios pppoe.manage que no tienen network.read)
  *   - POST/PUT/DELETE /nas-servers + PUT /radius-config sin network.manage → 403
- *   - ...con network.manage → OK (incluye el FLIP del cutover: type → mikrotik_radius)
+ *   - ...con network.manage → OK (incluye el FLIP del cutover: type → radius_orchestrator)
  *
  * Patrón espejo de pppoe.routes.test.ts (EchoAuthProvider + cookie token = userId + RBAC in-memory).
  */
@@ -141,7 +141,7 @@ describe('nas.routes — funcionalidad + security guard (auth + network.manage)'
   });
   it('PUT /api/nas-servers/:id sin auth → 401', async () => {
     const { app } = await buildApp();
-    expect((await request(app).put('/api/nas-servers/1').send({ type: 'mikrotik_radius' })).status).toBe(401);
+    expect((await request(app).put('/api/nas-servers/1').send({ type: 'radius_orchestrator' })).status).toBe(401);
   });
   it('POST /api/nas-servers sin auth → 401', async () => {
     const { app } = await buildApp();
@@ -168,7 +168,7 @@ describe('nas.routes — funcionalidad + security guard (auth + network.manage)'
   // ── writes requieren network.manage → 403 sin permiso ───────────────────────
   it('PUT /api/nas-servers/:id sin network.manage → 403', async () => {
     const { app, noPermUserId } = await buildApp();
-    const res = await asUser(request(app).put('/api/nas-servers/1'), noPermUserId).send({ type: 'mikrotik_radius' });
+    const res = await asUser(request(app).put('/api/nas-servers/1'), noPermUserId).send({ type: 'radius_orchestrator' });
     expect(res.status).toBe(403);
   });
   it('POST /api/nas-servers sin network.manage → 403', async () => {
@@ -190,11 +190,11 @@ describe('nas.routes — funcionalidad + security guard (auth + network.manage)'
   // ── writes con network.manage → OK (incluye el FLIP del cutover) ────────────
   it('PUT /api/nas-servers/:id con network.manage flipea el type (cutover) → 200', async () => {
     const { app, manageUserId, nasRepo } = await buildApp();
-    const res = await asUser(request(app).put('/api/nas-servers/1'), manageUserId).send({ type: 'mikrotik_radius' });
+    const res = await asUser(request(app).put('/api/nas-servers/1'), manageUserId).send({ type: 'radius_orchestrator' });
     expect(res.status).toBe(200);
-    expect(res.body.type).toBe('mikrotik_radius');
+    expect(res.body.type).toBe('radius_orchestrator');
     const updated = await nasRepo.findNasServerById('1');
-    expect(updated?.type).toBe('mikrotik_radius');
+    expect(updated?.type).toBe('radius_orchestrator');
   });
   it('DELETE /api/nas-servers/:id con network.manage → 204', async () => {
     const { app, manageUserId } = await buildApp();
@@ -253,10 +253,10 @@ async function buildAppWithLive(): Promise<LiveFixture> {
   const noPermUser = await mkUser('np-live');
   await userRoleRepo.assign(manageUser.id, managerRole.id);
 
-  // NAS seed: id=1 mikrotik_api, id=2 ubiquiti, id=3 mikrotik_radius (default InMemoryNasRepository)
+  // NAS seed: id=1 mikrotik_api, id=2 ubiquiti, id=3 radius_orchestrator (default InMemoryNasRepository)
   const nasRepo = new InMemoryNasRepository();
 
-  // IP pool for NAS id=3 (mikrotik_radius)
+  // IP pool for NAS id=3 (radius_orchestrator)
   const ipNetworkRepo = new InMemoryIpNetworkRepository();
   (ipNetworkRepo as unknown as { pools: IpPool[] }).pools = [];
   ipNetworkRepo.seedPool({
@@ -297,7 +297,7 @@ async function buildAppWithLive(): Promise<LiveFixture> {
 }
 
 describe('nas.routes — live counters HTTP seam', () => {
-  it('GET /api/nas-servers: NAS id=3 (mikrotik_radius) => displayType=BRAS RADIUS, clientCount=2', async () => {
+  it('GET /api/nas-servers: NAS id=3 (radius_orchestrator) => displayType=BRAS RADIUS, clientCount=2', async () => {
     const { app, noPermUserId } = await buildAppWithLive();
     const res = await asUser(request(app).get('/api/nas-servers'), noPermUserId);
     expect(res.status).toBe(200);
@@ -307,7 +307,7 @@ describe('nas.routes — live counters HTTP seam', () => {
     expect(radiusNas.clientCount).toBe(2);
   });
 
-  it('GET /api/nas-servers/3 (mikrotik_radius): live clientCount + displayType', async () => {
+  it('GET /api/nas-servers/3 (radius_orchestrator): live clientCount + displayType', async () => {
     const { app, noPermUserId } = await buildAppWithLive();
     const res = await asUser(request(app).get('/api/nas-servers/3'), noPermUserId);
     expect(res.status).toBe(200);

@@ -14,7 +14,7 @@ import { toNasTarget } from './nasTarget';
  * crear de nuevo.
  *
  * Ruteado por `nas.type`:
- *   - `mikrotik_radius` → `orchestrator.deleteUser` (borra radcheck + radusergroup + radreply
+ *   - `radius_orchestrator` → `orchestrator.deleteUser` (borra radcheck + radusergroup + radreply
  *     Framed-IP). Después, best-effort `orchestrator.disconnectSessions` (kick de la sesión viva).
  *   - resto (`mikrotik_api`, …) → `router.removeSecret` (`/ppp secret remove`), como siempre.
  *

@@ -26,7 +26,7 @@ import {
   PppoeAlreadyAssociatedError,
 } from '@domain/errors/pppoe';
 
-// NAS seed del InMemoryNasRepository: id '1' = mikrotik_api, id '3' = mikrotik_radius
+// NAS seed del InMemoryNasRepository: id '1' = mikrotik_api, id '3' = radius_orchestrator
 const RADIUS_NAS = '3';
 const MK_NAS = '1';
 
@@ -36,7 +36,7 @@ const INVENTORY = [
 ];
 
 describe('IngestPppoeFromNas', () => {
-  it('mikrotik_radius → crea PPPoE huérfanos con password/profile/remoteAddress y status enabled', async () => {
+  it('radius_orchestrator → crea PPPoE huérfanos con password/profile/remoteAddress y status enabled', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     const nasRepo = new InMemoryNasRepository();
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: INVENTORY });

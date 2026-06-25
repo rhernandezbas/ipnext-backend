@@ -4,7 +4,7 @@
  * TDD: escritos ANTES de la implementación.
  *
  * Escenarios:
- *   1. changePlan llamado con { applyInSession: true } en path mikrotik_radius.
+ *   1. changePlan llamado con { applyInSession: true } en path radius_orchestrator.
  *   2. Evento 'modified' registrado con reason+actor+notes(old→new) cuando contractId presente
  *      y el profile CAMBIA.
  *   3. Sin evento cuando el profile no cambia.
@@ -20,7 +20,7 @@ import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-m
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { InMemoryContractServiceEventRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceEventRepository';
 
-// nasId '3' from InMemoryNasRepository seed → mikrotik_radius
+// nasId '3' from InMemoryNasRepository seed → radius_orchestrator
 const RADIUS_NAS_ID = '3';
 const CONTRACT_ID = 'C1';
 
@@ -59,7 +59,7 @@ describe('UpdatePppoeService — pppoe-plan-change-history', () => {
   }
 
   // ── 1. applyInSession: true ─────────────────────────────────────────────────
-  it('changePlan es llamado con { applyInSession: true } en mikrotik_radius', async () => {
+  it('changePlan es llamado con { applyInSession: true } en radius_orchestrator', async () => {
     const uc = new UpdatePppoeService(repo, router, nasRepo, orchestrator, catalogRepo, eventRepo);
     const id = await seedRadiusWithContract();
     await seedCatalog(catalogRepo);

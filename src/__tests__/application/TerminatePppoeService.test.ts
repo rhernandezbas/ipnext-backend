@@ -2,10 +2,10 @@
  * TerminatePppoeService.test.ts — TDD (red → green → refactor)
  *
  * Cubre:
- *   - mikrotik_radius: llama orchestrator.deleteUser + sets status='terminated' + remoteAddress=null
- *   - mikrotik_radius: registra evento con reason via ensureInternet
- *   - mikrotik_radius: deleteUser lanza 502 → DB NO se modifica (atomicidad)
- *   - mikrotik_radius: kickea sesión live best-effort (disconnectSessions)
+ *   - radius_orchestrator: llama orchestrator.deleteUser + sets status='terminated' + remoteAddress=null
+ *   - radius_orchestrator: registra evento con reason via ensureInternet
+ *   - radius_orchestrator: deleteUser lanza 502 → DB NO se modifica (atomicidad)
+ *   - radius_orchestrator: kickea sesión live best-effort (disconnectSessions)
  *   - non-radius: llama router.removeSecret (en lugar de deleteUser)
  *   - PPPoE no encontrado → 404
  */
@@ -20,7 +20,7 @@ import { InMemoryContractServiceEventRepository } from '@infrastructure/adapters
 import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
 import { PppoeServiceNotFoundError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
-const NAS_RADIUS_ID = '3';   // type='mikrotik_radius' (seeded en InMemoryNasRepository)
+const NAS_RADIUS_ID = '3';   // type='radius_orchestrator' (seeded en InMemoryNasRepository)
 const NAS_API_ID    = '1';   // type='mikrotik_api'
 const CONTRACT_ID   = 'contract-abc';
 
@@ -51,7 +51,7 @@ async function seedInternetLine(
   await csRepo.add({ contractId, serviceCatalogId: catalog.id });
 }
 
-describe('TerminatePppoeService — mikrotik_radius path', () => {
+describe('TerminatePppoeService — radius_orchestrator path', () => {
   it('llama orchestrator.deleteUser y establece status=terminated + remoteAddress=null', async () => {
     const { pppoeRepo, orchestrator, svc } = buildDeps();
     const row = await pppoeRepo.upsertByUsername({

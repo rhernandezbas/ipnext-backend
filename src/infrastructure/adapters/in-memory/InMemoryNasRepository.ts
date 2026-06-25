@@ -38,7 +38,7 @@ export class InMemoryNasRepository implements NasRepository {
     {
       id: '3',
       name: 'MikroTik sucursal',
-      type: 'mikrotik_radius',
+      type: 'radius_orchestrator',
       ipAddress: '10.0.0.5',
       radiusSecret: '••••••••',
       nasIpAddress: '10.0.0.5',

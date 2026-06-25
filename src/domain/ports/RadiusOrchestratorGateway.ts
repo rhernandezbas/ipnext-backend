@@ -234,7 +234,7 @@ export interface RadiusOrchestratorGateway {
    * Lista las IPs ASIGNADAS en el RADIUS (radreply Framed-IP-Address de todos los usuarios).
    * Corresponde a `GET /assigned-ips` → body `{ ips: ["100.64.10.42", ...] }`.
    *
-   * Para un NAS `mikrotik_radius` el RADIUS —no el router— es la fuente de verdad de las IPs
+   * Para un NAS `radius_orchestrator` el RADIUS —no el router— es la fuente de verdad de las IPs
    * tomadas: el allocator excluye ESTA lista al buscar un IP libre (evita el 409 al crear).
    */
   listAssignedIps(): Promise<string[]>;

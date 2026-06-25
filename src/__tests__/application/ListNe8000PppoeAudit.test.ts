@@ -33,7 +33,7 @@ async function buildFixture() {
   // Crear el NAS NE8000 en el in-memory
   const ne8000 = await nasRepo.createNasServer({
     name:         'NE8000-1',
-    type:         'huawei_radius',
+    type:         'radius_orchestrator',
     ipAddress:    NE8000_IP,
     radiusSecret: 'secret',
     nasIpAddress: NE8000_IP,
@@ -336,7 +336,7 @@ describe('ListNe8000PppoeAudit', () => {
     const customIp = '10.99.0.1';
     const ne8000Custom = await nasRepo.createNasServer({
       name:         'NE8000-custom',
-      type:         'huawei_radius',
+      type:         'radius_orchestrator',
       ipAddress:    customIp,
       radiusSecret: 'secret',
       nasIpAddress: customIp,

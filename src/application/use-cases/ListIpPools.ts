@@ -10,7 +10,7 @@ import { AssignedIpsProvider } from '@application/services/AssignedIpsProvider';
  * Lista los pools con sus contadores REALES:
  *   - `totalCount`  = IPs usables del rango [rangeStart, rangeEnd],
  *   - `assignedCount` = cuántas de las IPs ASIGNADAS del NAS del pool caen en ese rango,
- *      ruteando la fuente por `nas.type` (mikrotik_radius → RADIUS; resto → router).
+ *      ruteando la fuente por `nas.type` (radius_orchestrator → RADIUS; resto → router).
  *
  * La tabla IpAssignment está vacía en prod: la verdad de lo asignado vive en el RADIUS/router.
  * Degrada por pool: si el NAS está caído, ese pool sale con `assignedCount: 0` y la lista sigue.

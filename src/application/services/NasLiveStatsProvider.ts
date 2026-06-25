@@ -1,4 +1,4 @@
-import { NasServer } from '@domain/entities/nas';
+import { NasServer, routesViaOrchestrator } from '@domain/entities/nas';
 import { IpNetworkRepository } from '@domain/ports/IpNetworkRepository';
 import { RadiusOrchestratorGateway, OrchestratorSession } from '@domain/ports/RadiusOrchestratorGateway';
 import { ipInAnyRange } from '@domain/services/ipMath';
@@ -8,7 +8,7 @@ import { ipInAnyRange } from '@domain/services/ipMath';
  * un campo ADITIVO solo en la capa de presentacion (no se persiste, no modifica nas.type).
  */
 export interface NasServerDto extends NasServer {
-  /** BRAS RADIUS para mikrotik_radius. Para el resto = type crudo. */
+  /** BRAS RADIUS para radius_orchestrator. Para el resto = type crudo. */
   displayType: string;
 }
 
@@ -16,7 +16,7 @@ export interface NasServerDto extends NasServer {
 const PAGE_SIZE = 100;
 
 /**
- * NasLiveStatsProvider — resuelve EN VIVO clientCount y lastSeen para NAS mikrotik_radius
+ * NasLiveStatsProvider — resuelve EN VIVO clientCount y lastSeen para NAS radius_orchestrator
  * consultando el orchestrator. Los NAS legacy mantienen los valores stored.
  *
  * - Paginacion: carga todas las sesiones via loop (PAGE_SIZE=100) para manejar grandes volumenes.
@@ -53,14 +53,14 @@ export class NasLiveStatsProvider {
   }
 
   /**
-   * Enriquece un NasServer con clientCount/lastSeen en vivo (si es mikrotik_radius)
+   * Enriquece un NasServer con clientCount/lastSeen en vivo (si es radius_orchestrator)
    * y anade displayType (aditivo). Nunca lanza: cualquier fallo cae al stored.
    */
   async enrich(nas: NasServer): Promise<NasServerDto> {
     // #6: displayType se calcula ANTES del try — NUNCA degrada
-    const displayType = nas.type === 'mikrotik_radius' ? 'BRAS RADIUS' : nas.type;
+    const displayType = routesViaOrchestrator(nas.type) ? 'BRAS RADIUS' : nas.type;
 
-    if (nas.type !== 'mikrotik_radius') {
+    if (!routesViaOrchestrator(nas.type)) {
       return { ...nas, displayType };
     }
 

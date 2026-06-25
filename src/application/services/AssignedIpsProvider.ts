@@ -5,7 +5,7 @@ import { routesViaOrchestrator } from '@domain/entities/nas';
 
 /**
  * Resuelve las IPs ASIGNADAS de un NAS, ruteando por `nas.type` igual que el allocator (FindFreeIp):
- *   - `mikrotik_radius` → RADIUS (orchestrator.listAssignedIps, radreply Framed-IP),
+ *   - `radius_orchestrator` → RADIUS (orchestrator.listAssignedIps, radreply Framed-IP),
  *   - resto            → router (/ppp secret, remote-address vivos).
  *
  * Pensado para los CONTADORES de Gestión de Red IP (ListIpPools / ListIpNetworks):

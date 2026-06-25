@@ -15,7 +15,7 @@ import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-me
 
 // nasId '1' del seed in-memory → ipAddress 192.168.1.1, apiPort 8728 (mikrotik_api → router directo)
 const NAS1 = { ipAddress: '192.168.1.1', apiPort: 8728 };
-// nasId '3' del seed in-memory → type 'mikrotik_radius' → RADIUS vía orchestrator
+// nasId '3' del seed in-memory → type 'radius_orchestrator' → RADIUS vía orchestrator
 
 describe('CreatePppoeService', () => {
   let repo: InMemoryPppoeServiceRepository;
@@ -61,7 +61,7 @@ describe('CreatePppoeService', () => {
     expect(await router.listSecrets(NAS1)).toHaveLength(1);
   });
 
-  it('mikrotik_radius: crea el user en el RADIUS (orchestrator.createUser) y NO toca el router', async () => {
+  it('radius_orchestrator: crea el user en el RADIUS (orchestrator.createUser) y NO toca el router', async () => {
     const s = await uc.execute({
       contractId: 'C1',
       username: 'juanperez',
@@ -81,12 +81,12 @@ describe('CreatePppoeService', () => {
     expect(await router.listSecrets({ ipAddress: '10.0.0.5', apiPort: 8728 })).toHaveLength(0);
   });
 
-  it('mikrotik_radius sin remoteAddress: framedIp null (IP del pool)', async () => {
+  it('radius_orchestrator sin remoteAddress: framedIp null (IP del pool)', async () => {
     await uc.execute({ contractId: 'C1', username: 'juanperez', password: 'pass1234', profile: 'IP-Air-30-10', nasId: '3' });
     expect(orchestrator.createdUser('juanperez')!.framedIp).toBeNull();
   });
 
-  it('mikrotik_radius orchestrator caído: la fila queda pending + error propaga', async () => {
+  it('radius_orchestrator orchestrator caído: la fila queda pending + error propaga', async () => {
     orchestrator = new InMemoryRadiusOrchestratorGateway({ unreachable: ['juanperez'] });
     const ensure2 = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
     uc = new CreatePppoeService(repo, router, nasRepo, orchestrator, ensure2);
@@ -97,7 +97,7 @@ describe('CreatePppoeService', () => {
     expect(row!.status).toBe('pending');
   });
 
-  it('mikrotik_radius sin profile: PppoeProfileRequiredError (un user RADIUS necesita plan/grupo)', async () => {
+  it('radius_orchestrator sin profile: PppoeProfileRequiredError (un user RADIUS necesita plan/grupo)', async () => {
     await expect(uc.execute({ contractId: 'C1', username: 'juanperez', password: 'p', nasId: '3' }))
       .rejects.toBeInstanceOf(PppoeProfileRequiredError);
     expect(orchestrator.opsForCreate('juanperez')).toHaveLength(0);

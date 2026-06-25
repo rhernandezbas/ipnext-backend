@@ -55,7 +55,7 @@ import { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import type { OrchestratorSession } from '@domain/ports/RadiusOrchestratorGateway';
 
-const NAS_RADIUS_ID = '3';  // mikrotik_radius (InMemoryNasRepository seed)
+const NAS_RADIUS_ID = '3';  // radius_orchestrator (InMemoryNasRepository seed)
 const CONTRACT_ID   = 'contract-term';
 
 class EchoAuthProvider implements AuthProvider {

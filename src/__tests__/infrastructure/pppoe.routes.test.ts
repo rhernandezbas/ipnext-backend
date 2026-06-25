@@ -646,7 +646,7 @@ describe('DELETE /api/pppoe/:id', () => {
 // Adopción del inventario — ingest / associate / credentials / unassigned
 // ════════════════════════════════════════════════════════════════════════════════
 
-// NAS id '3' del InMemoryNasRepository = mikrotik_radius; '1' = mikrotik_api
+// NAS id '3' del InMemoryNasRepository = radius_orchestrator; '1' = mikrotik_api
 const RADIUS_NAS = '3';
 const INVENTORY = [
   { username: 'juanperez', password: 'pass1234', plan: 'IP-Air-30-10', framedIp: '100.64.10.10' },
@@ -665,7 +665,7 @@ describe('POST /api/nas/:id/ingest-pppoe (pppoe.manage)', () => {
     expect(res.status).toBe(403);
   });
 
-  it('mikrotik_radius → 200 {created, skipped} y crea huérfanos', async () => {
+  it('radius_orchestrator → 200 {created, skipped} y crea huérfanos', async () => {
     const fx = await buildApp({ usersInventory: INVENTORY });
     const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
     expect(res.status).toBe(200);

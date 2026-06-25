@@ -332,7 +332,7 @@ describe('GET /api/radius/ne8000/audit', () => {
     const { app, readUserId, pppoeRepo, nasRepo } = await buildApp();
 
     const ne8000 = await nasRepo.createNasServer({
-      name: 'NE8000-1', type: 'huawei_radius',
+      name: 'NE8000-1', type: 'radius_orchestrator',
       ipAddress: NE8000_IP, radiusSecret: 'sec',
       nasIpAddress: NE8000_IP, apiPort: null,
       apiLogin: null, apiPassword: null,
@@ -360,7 +360,7 @@ describe('GET /api/radius/ne8000/audit', () => {
     const { app, readUserId, pppoeRepo, nasRepo } = await buildApp();
 
     const ne8000 = await nasRepo.createNasServer({
-      name: 'NE8000-1', type: 'huawei_radius',
+      name: 'NE8000-1', type: 'radius_orchestrator',
       ipAddress: NE8000_IP, radiusSecret: 'sec',
       nasIpAddress: NE8000_IP, apiPort: null,
       apiLogin: null, apiPassword: null,

@@ -10,17 +10,17 @@ import { NasServer } from '@domain/entities/nas';
 /**
  * Contadores en vivo de NAS servers.
  *
- * Para NAS mikrotik_radius: clientCount = nº sesiones activas DISTINTAS con framedIp en algún
+ * Para NAS radius_orchestrator: clientCount = nº sesiones activas DISTINTAS con framedIp en algún
  * pool del NAS (atribuidas por POOLS, no por nasIp). lastSeen = max(startedAt) entre ellas.
  * Para NAS legacy: clientCount y lastSeen se mantienen como stored.
  * Si el orchestrator tira: cae al stored (never 500, best-effort).
- * displayType: "BRAS RADIUS" para mikrotik_radius, type crudo para el resto.
+ * displayType: "BRAS RADIUS" para radius_orchestrator, type crudo para el resto.
  */
 
 const NAS_RADIUS: NasServer = {
   id: 'nas-radius',
   name: 'NE8000 BRAS',
-  type: 'mikrotik_radius',
+  type: 'radius_orchestrator',
   ipAddress: '10.75.0.1',
   radiusSecret: '••••••••',
   nasIpAddress: '10.75.0.1',
@@ -96,7 +96,7 @@ function makeNasRepo(servers: NasServer[]): InMemoryNasRepository {
 // ─── ListNasServers con live counters ───────────────────────────────────────
 
 describe('ListNasServers — NAS live counters', () => {
-  it('mikrotik_radius: clientCount = nº sesiones con framedIp en pool del NAS', async () => {
+  it('radius_orchestrator: clientCount = nº sesiones con framedIp en pool del NAS', async () => {
     const nasRepo = makeNasRepo([NAS_RADIUS, NAS_LEGACY]);
     const ipNetworkRepo = makeIpNetworkRepo([POOL_RADIUS]);
     const orchestrator = new InMemoryRadiusOrchestratorGateway({
@@ -115,7 +115,7 @@ describe('ListNasServers — NAS live counters', () => {
     expect(radiusNas.displayType).toBe('BRAS RADIUS');
   });
 
-  it('mikrotik_radius: lastSeen = max(startedAt) de las sesiones en el pool', async () => {
+  it('radius_orchestrator: lastSeen = max(startedAt) de las sesiones en el pool', async () => {
     const nasRepo = makeNasRepo([NAS_RADIUS]);
     const ipNetworkRepo = makeIpNetworkRepo([POOL_RADIUS]);
     const orchestrator = new InMemoryRadiusOrchestratorGateway({
@@ -132,7 +132,7 @@ describe('ListNasServers — NAS live counters', () => {
     expect(radiusNas.lastSeen).toBe('2026-06-22T15:30:00.000Z');
   });
 
-  it('mikrotik_radius: 0 sesiones en pool → clientCount=0 (real), lastSeen stored', async () => {
+  it('radius_orchestrator: 0 sesiones en pool → clientCount=0 (real), lastSeen stored', async () => {
     const nasRepo = makeNasRepo([NAS_RADIUS]);
     const ipNetworkRepo = makeIpNetworkRepo([POOL_RADIUS]);
     const orchestrator = new InMemoryRadiusOrchestratorGateway({
@@ -177,7 +177,7 @@ describe('ListNasServers — NAS live counters', () => {
     expect(radiusNas.displayType).toBe('BRAS RADIUS');           // displayType NUNCA degrada
   });
 
-  it('UNA sola llamada global al orchestrator para múltiples NAS mikrotik_radius', async () => {
+  it('UNA sola llamada global al orchestrator para múltiples NAS radius_orchestrator', async () => {
     const nasRadius2: NasServer = {
       ...NAS_RADIUS,
       id: 'nas-radius-2',
@@ -236,7 +236,7 @@ describe('ListNasServers — NAS live counters', () => {
 // ─── GetNasServer con live counters ─────────────────────────────────────────
 
 describe('GetNasServer — NAS live counters', () => {
-  it('mikrotik_radius: clientCount en vivo + displayType = BRAS RADIUS', async () => {
+  it('radius_orchestrator: clientCount en vivo + displayType = BRAS RADIUS', async () => {
     const nasRepo = makeNasRepo([NAS_RADIUS]);
     const ipNetworkRepo = makeIpNetworkRepo([POOL_RADIUS]);
     const orchestrator = new InMemoryRadiusOrchestratorGateway({

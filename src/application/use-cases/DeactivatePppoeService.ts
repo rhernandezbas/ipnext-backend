@@ -13,7 +13,7 @@ import { toNasTarget } from './nasTarget';
  * (inventario conservado, reactivable). Plano de control primero, luego DB.
  *
  * El destino se RUTEA por `nas.type`:
- *   - `mikrotik_radius` → `orchestrator.suspend` (el API del router RouterOS 7.x CUELGA;
+ *   - `radius_orchestrator` → `orchestrator.suspend` (el API del router RouterOS 7.x CUELGA;
  *     el RADIUS es la fuente de verdad).
  *   - resto (`mikrotik_api`, …) → `router.updateSecret({disabled:true})` (`/ppp secret`), como siempre.
  *

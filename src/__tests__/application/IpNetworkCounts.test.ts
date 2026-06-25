@@ -8,11 +8,11 @@ import { IpNetwork, IpPool } from '@domain/entities/network';
 
 /**
  * Counts de Gestión de Red IP. La verdad de las IPs asignadas vive en el RADIUS
- * (mikrotik_radius → orchestrator.listAssignedIps) o en el router (resto). La tabla
+ * (radius_orchestrator → orchestrator.listAssignedIps) o en el router (resto). La tabla
  * IpAssignment está vacía en prod: NO se usa para contar.
  *
  * Fixture: red CGNAT 100.64.10.0/24 con un pool .2-.5 ligado al NAS '1' (mikrotik_api),
- * y red RADIUS 100.64.30.0/24 con un pool .2-.5 ligado al NAS '3' (mikrotik_radius).
+ * y red RADIUS 100.64.30.0/24 con un pool .2-.5 ligado al NAS '3' (radius_orchestrator).
  */
 const NET_API: IpNetwork = {
   id: 'net-api',
@@ -77,11 +77,11 @@ describe('ListIpPools — counts ruteados por nas.type', () => {
     expect(pool.assignedCount).toBe(2);  // .3 .4 en rango; .99 fuera
   });
 
-  it('mikrotik_radius pool: assignedCount viene del RADIUS (orchestrator), NO del router', async () => {
+  it('radius_orchestrator pool: assignedCount viene del RADIUS (orchestrator), NO del router', async () => {
     repo.seedNetwork(NET_RADIUS);
     repo.seedPool(POOL_RADIUS);
     orchestrator = new InMemoryRadiusOrchestratorGateway({ assignedIps: ['100.64.30.2', '100.64.30.3'] });
-    // El router tiene una IP en rango que NO debe contar para un mikrotik_radius.
+    // El router tiene una IP en rango que NO debe contar para un radius_orchestrator.
     await router.createSecret({ ipAddress: '10.0.0.5', apiPort: 8728 }, { username: 'mk', password: 'p', remoteAddress: '100.64.30.5' });
 
     const uc = new ListIpPools(repo, nasRepo, router, orchestrator);
@@ -167,7 +167,7 @@ describe('ListIpNetworks — counts ruteados por nas.type', () => {
   });
 
   it('cuenta asignadas de TODOS los NAS cuyos pools cuelgan de la red (sin duplicar)', async () => {
-    // Red con dos pools de NAS distintos: uno mikrotik_api (router) y otro mikrotik_radius.
+    // Red con dos pools de NAS distintos: uno mikrotik_api (router) y otro radius_orchestrator.
     const sharedNet: IpNetwork = { ...NET_API, id: 'net-shared' };
     repo.seedNetwork(sharedNet);
     repo.seedPool({ ...POOL_API, id: 'p-api', networkId: 'net-shared', nasId: '1', rangeStart: '100.64.10.2', rangeEnd: '100.64.10.10' });

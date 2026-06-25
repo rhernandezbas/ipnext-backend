@@ -67,7 +67,7 @@ function buildRepo(): InMemoryIpNetworkRepository {
     nasId: '1',
     ipKind: 'public',
   });
-  // Red + pool para el NAS '3' (mikrotik_radius): la fuente de IPs asignadas es el RADIUS,
+  // Red + pool para el NAS '3' (radius_orchestrator): la fuente de IPs asignadas es el RADIUS,
   // no el router. Mismo rango acotado para asserts deterministas.
   repo.seedNetwork({
     id: 'net-radius',
@@ -181,7 +181,7 @@ describe('FindFreeIp', () => {
   });
 
   describe('fuente de IPs asignadas ruteada por nas.type', () => {
-    it('mikrotik_radius: usa el RADIUS (orchestrator.listAssignedIps), NO el router', async () => {
+    it('radius_orchestrator: usa el RADIUS (orchestrator.listAssignedIps), NO el router', async () => {
       // El router NO sabe de estas IPs; sólo el RADIUS (radreply Framed-IP) las tiene.
       // .2 y .3 asignadas en RADIUS → el primer libre debe ser .4.
       orchestrator = new InMemoryRadiusOrchestratorGateway({ assignedIps: ['100.64.30.2', '100.64.30.3'] });
@@ -193,8 +193,8 @@ describe('FindFreeIp', () => {
       expect(ip).toBe('100.64.30.4'); // libre en RADIUS aunque el router lo tenga
     });
 
-    it('mikrotik_radius con RADIUS vacío: primer IP del rango (el router se ignora)', async () => {
-      // El router tiene .2 ocupado, pero para mikrotik_radius el router NO es la fuente.
+    it('radius_orchestrator con RADIUS vacío: primer IP del rango (el router se ignora)', async () => {
+      // El router tiene .2 ocupado, pero para radius_orchestrator el router NO es la fuente.
       await router.createSecret(NAS3, { username: 'mk', password: 'p', remoteAddress: '100.64.30.2' });
       uc = new FindFreeIp(repo, nasRepo, router, orchestrator); // orchestrator default → []
 

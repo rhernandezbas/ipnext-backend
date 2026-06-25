@@ -1137,17 +1137,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   });
 
   // ip-allocator (FindFreeIp): primer IP libre = rango del pool − IPs asignadas, ruteadas por nas.type:
-  //   'mikrotik_radius' → RADIUS (orchestrator.listAssignedIps, radreply Framed-IP);
-  //   resto            → router (/ppp secret, remote-address vivos).
+  //   'radius_orchestrator' → RADIUS (orchestrator.listAssignedIps, radreply Framed-IP);
+  //   resto                → router (/ppp secret, remote-address vivos).
   const findFreeIp = new FindFreeIp(ipNetworkRepo, nasRepo, new RouterOsGateway(), orchestrator);
 
   // Gestión de Red IP — counts REALES: la verdad de las IPs asignadas vive en el RADIUS
-  // (mikrotik_radius → orchestrator) o el router (resto), no en la tabla IpAssignment (vacía en prod).
+  // (radius_orchestrator → orchestrator) o el router (resto), no en la tabla IpAssignment (vacía en prod).
   // Mismo ruteo por nas.type que el allocator. Degrada por pool/red si el NAS está caído (no 500).
   const listIpNetworks = new ListIpNetworks(ipNetworkRepo, nasRepo, new RouterOsGateway(), orchestrator);
   const listIpPools = new ListIpPools(ipNetworkRepo, nasRepo, new RouterOsGateway(), orchestrator);
 
-  // NAS live-counters: clientCount/lastSeen en vivo para mikrotik_radius via orchestrator.
+  // NAS live-counters: clientCount/lastSeen en vivo para radius_orchestrator via orchestrator.
   // #1: ipNetworkRepo y orchestrator se inyectan directo a los use cases — cada request
   // crea su propio NasLiveStatsProvider fresco (evita cache singleton entre requests).
   const listNasServers = new ListNasServers(nasRepo, ipNetworkRepo, orchestrator);
@@ -2107,10 +2107,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     const routerGw    = new RouterOsGateway();
     const cutBatchRepo = new PrismaServiceCutBatchRepository();
     // Fase C — enforcement detrás del EnforcementGateway, RUTEADO per-NAS por `nas.type`:
-    //   'mikrotik_radius' → RADIUS (orchestrator + CoA);  resto → MK-directo (/ppp secret + kick).
+    //   'radius_orchestrator' → RADIUS (orchestrator + CoA);  resto → MK-directo (/ppp secret + kick).
     // Hoy el ~97% de la red corta por MK-directo (cutover RADIUS ~nil); un NAS pasa a RADIUS
-    // marcándose 'mikrotik_radius', sin big-bang. El orchestrator es opt-in (config.orchestrator):
-    // si no está configurado, los NAS mikrotik_radius fallan al cortar con 502 claro, el resto sigue.
+    // marcándose 'radius_orchestrator', sin big-bang. El orchestrator es opt-in (config.orchestrator):
+    // si no está configurado, los NAS radius_orchestrator fallan al cortar con 502 claro, el resto sigue.
     const mkEnforcement = new RouterOsEnforcementAdapter(routerGw, config.router.reducedProfile);
     const radiusEnforcement = new OrchestratorEnforcementAdapter(orchestrator, config.router.reducedProfile);
     const enforcementGw = new PerNasEnforcementGateway(mkEnforcement, radiusEnforcement);

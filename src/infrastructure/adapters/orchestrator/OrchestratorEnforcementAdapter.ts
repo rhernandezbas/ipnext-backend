@@ -6,7 +6,7 @@ import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGatew
 /**
  * OrchestratorEnforcementAdapter — corte vía RADIUS detrás del `EnforcementGateway`.
  *
- * Para los NAS ya cutoveados al RADIUS HA (`nas.type === 'mikrotik_radius'`). Traduce la acción de
+ * Para los NAS ya cutoveados al RADIUS HA (`nas.type === 'radius_orchestrator'`). Traduce la acción de
  * corte a las llamadas del radius-orchestrator (que internamente hace el modelo de grupos GR + CoA):
  *
  *   reduce  → changePlan(reducedPlan, applyInSession)   (DEUDORES → IP-REDUCCION; capado, sigue online)

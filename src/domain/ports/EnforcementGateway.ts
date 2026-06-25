@@ -12,7 +12,7 @@ import { NasServer } from '@domain/entities/nas';
  *     radius-orchestrator. Para los NAS ya cutoveados al HA.
  *
  * El routeo entre ambos (Inc2) lo hace `PerNasEnforcementGateway` según `nas.type`
- * (`mikrotik_radius` → orchestrator; el resto → MK-directo).
+ * (`radius_orchestrator` → orchestrator; el resto → MK-directo).
  */
 export interface EnforcementGateway {
   /**

@@ -25,7 +25,7 @@ export interface CreatePppoeServiceInput {
  * queda `pending` (visible, reintentable) y el error se propaga — nunca un "OK" mentiroso.
  *
  * El destino se RUTEA por `nas.type`:
- *   - `mikrotik_radius` (NAS migrado a RADIUS) → `orchestrator.createUser` (POST /users:
+ *   - `radius_orchestrator` (NAS migrado a RADIUS) → `orchestrator.createUser` (POST /users:
  *     radcheck + radusergroup + radreply Framed-IP-Address). El `profile` ES el plan/grupo RADIUS.
  *   - resto (`mikrotik_api`, …) → `router.createSecret` (RouterOS `/ppp secret`), como siempre.
  *

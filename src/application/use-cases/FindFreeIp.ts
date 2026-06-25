@@ -18,7 +18,7 @@ export interface FindFreeIpInput {
  *
  * Rango del pool (rangeStart..rangeEnd) MENOS:
  *   - las IPs ASIGNADAS, ruteadas por `nas.type`:
- *       · `mikrotik_radius` → el RADIUS (radreply Framed-IP, `orchestrator.listAssignedIps`),
+ *       · `radius_orchestrator` → el RADIUS (radreply Framed-IP, `orchestrator.listAssignedIps`),
  *          que es la fuente de verdad de las IPs tomadas para este NAS,
  *       · resto → los `remote-address` vivos del router (`/ppp secret`),
  *   - el gateway de la red,
@@ -47,7 +47,7 @@ export class FindFreeIp {
 
     const network = await this.networkRepo.findNetworkById(pool.networkId);
 
-    // Fuente de IPs asignadas ruteada por tipo de NAS: para `mikrotik_radius` la verdad
+    // Fuente de IPs asignadas ruteada por tipo de NAS: para `radius_orchestrator` la verdad
     // vive en el RADIUS (radreply), no en el router.
     const assignedIps =
       routesViaOrchestrator(nas.type)

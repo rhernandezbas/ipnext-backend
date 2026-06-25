@@ -9,7 +9,7 @@ const COMMERCIAL = 'IP-Air-30-10';
 const USER = 'MarianoCabreraMerc';
 
 const nas: NasServer = {
-  id: '6', name: 'AccesoSur', type: 'mikrotik_radius', ipAddress: '10.60.0.38',
+  id: '6', name: 'AccesoSur', type: 'radius_orchestrator', ipAddress: '10.60.0.38',
   radiusSecret: '', nasIpAddress: '', apiPort: 8728, apiLogin: null, apiPassword: null,
   status: 'active', lastSeen: null, clientCount: 0, description: '',
 };
