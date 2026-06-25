@@ -4,6 +4,7 @@ import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { NasNotFoundError, PppoeUsernameTakenError, PppoeProfileRequiredError, PppoeContractAlreadyHasServiceError } from '@domain/errors/pppoe';
+import { routesViaOrchestrator } from '@domain/entities/nas';
 import { EnsureInternetContractService } from './EnsureInternetContractService';
 import { toNasTarget } from './nasTarget';
 import { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
@@ -59,7 +60,7 @@ export class CreatePppoeService {
 
     const profile = input.profile ?? null;
     const remoteAddress = input.remoteAddress ?? null;
-    const isRadius = nas.type === 'mikrotik_radius';
+    const isRadius = routesViaOrchestrator(nas.type);
 
     // 2b. Un usuario RADIUS NECESITA su grupo/plan (radusergroup): sin `profile` no hay alta.
     //     Validar ANTES de tocar la DB → no dejamos filas `pending` huérfanas por un input inválido.

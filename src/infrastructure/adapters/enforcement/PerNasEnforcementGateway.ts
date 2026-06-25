@@ -1,6 +1,6 @@
 import { EnforcementGateway } from '@domain/ports/EnforcementGateway';
 import { PppoeService, EnforcementAction } from '@domain/entities/pppoeService';
-import { NasServer } from '@domain/entities/nas';
+import { NasServer, routesViaOrchestrator } from '@domain/entities/nas';
 
 /**
  * PerNasEnforcementGateway — routea el corte SEGÚN el NAS.
@@ -20,7 +20,7 @@ export class PerNasEnforcementGateway implements EnforcementGateway {
   ) {}
 
   async apply(pppoe: PppoeService, nas: NasServer, action: EnforcementAction): Promise<void> {
-    const gateway = nas.type === 'mikrotik_radius' ? this.radius : this.mkDirect;
+    const gateway = routesViaOrchestrator(nas.type) ? this.radius : this.mkDirect;
     await gateway.apply(pppoe, nas, action);
   }
 }

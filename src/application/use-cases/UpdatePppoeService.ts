@@ -4,6 +4,7 @@ import { PppoeRouterGateway, SecretInput } from '@domain/ports/PppoeRouterGatewa
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { NasNotFoundError, PppoeServiceNotFoundError } from '@domain/errors/pppoe';
+import { routesViaOrchestrator } from '@domain/entities/nas';
 import { toNasTarget } from './nasTarget';
 import { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
 import { ContractServiceEventRepository } from '@domain/ports/ContractServiceEventRepository';
@@ -52,7 +53,7 @@ export class UpdatePppoeService {
     const nas = await this.nasRepo.findNasServerById(s.nasId);
     if (!nas) throw new NasNotFoundError(s.nasId);
 
-    if (nas.type === 'mikrotik_radius') {
+    if (routesViaOrchestrator(nas.type)) {
       // SÓLO los campos provistos. Un `profile` vacío/null no es un plan RADIUS válido → se omite.
       // pppoe-plan-change-history: applyInSession:true → CoA updates the live session's rate;
       // no-op if no session, does NOT drop the session.

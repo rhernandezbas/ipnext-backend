@@ -2,6 +2,7 @@ import { PppoeServiceRepository } from '@domain/ports/PppoeServiceRepository';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { NasNotFoundError, PppoeIngestNotSupportedError } from '@domain/errors/pppoe';
+import { routesViaOrchestrator } from '@domain/entities/nas';
 
 export interface IngestPppoeResult {
   /** Cuántos PPPoE huérfanos se crearon (usernames nuevos). */
@@ -43,7 +44,7 @@ export class IngestPppoeFromNas {
     const nas = await this.nasRepo.findNasServerById(nasId);
     if (!nas) throw new NasNotFoundError(nasId);
 
-    if (nas.type !== 'mikrotik_radius') {
+    if (!routesViaOrchestrator(nas.type)) {
       throw new PppoeIngestNotSupportedError(nas.type);
     }
 

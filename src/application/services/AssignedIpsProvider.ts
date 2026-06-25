@@ -1,6 +1,7 @@
 import { NasRepository } from '@domain/ports/NasRepository';
 import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
+import { routesViaOrchestrator } from '@domain/entities/nas';
 
 /**
  * Resuelve las IPs ASIGNADAS de un NAS, ruteando por `nas.type` igual que el allocator (FindFreeIp):
@@ -33,12 +34,12 @@ export class AssignedIpsProvider {
     const nas = await this.nasRepo.findNasServerById(nasId);
     if (!nas) return [];
 
-    const cacheKey = nas.type === 'mikrotik_radius' ? AssignedIpsProvider.RADIUS_KEY : `nas:${nas.id}`;
+    const cacheKey = routesViaOrchestrator(nas.type) ? AssignedIpsProvider.RADIUS_KEY : `nas:${nas.id}`;
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
     const fetch =
-      nas.type === 'mikrotik_radius'
+      routesViaOrchestrator(nas.type)
         ? this.orchestrator.listAssignedIps()
         : this.router.listAssignedIps({ ipAddress: nas.ipAddress, apiPort: nas.apiPort ?? 8728 });
 

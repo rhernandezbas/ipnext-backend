@@ -6,6 +6,7 @@ import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGatew
 import { NasNotFoundError } from '@domain/errors/pppoe';
 import { NoFreeIpError, NoPoolForNasTypeError } from '@domain/errors/network';
 import { ipToInt, intToIp, networkEdges } from '@domain/services/ipMath';
+import { routesViaOrchestrator } from '@domain/entities/nas';
 
 export interface FindFreeIpInput {
   nasId: string;
@@ -49,7 +50,7 @@ export class FindFreeIp {
     // Fuente de IPs asignadas ruteada por tipo de NAS: para `mikrotik_radius` la verdad
     // vive en el RADIUS (radreply), no en el router.
     const assignedIps =
-      nas.type === 'mikrotik_radius'
+      routesViaOrchestrator(nas.type)
         ? await this.orchestrator.listAssignedIps()
         : await this.router.listAssignedIps({ ipAddress: nas.ipAddress, apiPort: nas.apiPort ?? 8728 });
 

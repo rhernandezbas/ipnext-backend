@@ -4,6 +4,7 @@ import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import { NasNotFoundError, PppoeServiceNotFoundError } from '@domain/errors/pppoe';
+import { routesViaOrchestrator } from '@domain/entities/nas';
 import { EnsureInternetContractService, EnsureInternetOpts } from './EnsureInternetContractService';
 import { toNasTarget } from './nasTarget';
 
@@ -34,7 +35,7 @@ export class DeactivatePppoeService {
     const nas = await this.nasRepo.findNasServerById(s.nasId);
     if (!nas) throw new NasNotFoundError(s.nasId);
 
-    if (nas.type === 'mikrotik_radius') {
+    if (routesViaOrchestrator(nas.type)) {
       await this.orchestrator.suspend(s.username);
     } else {
       await this.router.updateSecret(toNasTarget(nas), s.username, { disabled: true });
