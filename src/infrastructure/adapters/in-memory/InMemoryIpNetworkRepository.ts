@@ -176,7 +176,9 @@ export class InMemoryIpNetworkRepository implements IpNetworkRepository {
   }
 
   async findPoolsByNas(nasId: string): Promise<IpPool[]> {
-    return this.pools.filter(p => p.nasId === nasId);
+    // Orden por name → asignación determinística: FindFreeIp drena los pools en orden estable
+    // (paridad con el orderBy del repo Prisma).
+    return this.pools.filter(p => p.nasId === nasId).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Test seam: siembra una red (allocator). No forma parte del port. */

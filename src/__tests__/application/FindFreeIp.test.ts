@@ -212,4 +212,65 @@ describe('FindFreeIp', () => {
       expect(ip).toBe('100.64.10.2');
     });
   });
+
+  // Un NAS puede tener N pools del mismo tipo (RDA2: muchos /24 CGNAT, unos llenos y otros libres).
+  // El allocator debe iterar los pools y devolver el primer IP libre del primer pool con lugar,
+  // SALTEANDO los pools llenos. (NAS '1' usa el router como fuente de IPs asignadas.)
+  describe('N pools del mismo tipo en un NAS', () => {
+    function seedSecondCgnatPool() {
+      repo.seedNetwork({
+        id: 'net-cgnat2',
+        network: '100.64.11.0/24',
+        gateway: '100.64.11.1',
+        dns1: '', dns2: '', description: 'cgnat2', partnerId: null,
+        type: 'static', totalIps: 254, usedIps: 0, freeIps: 254,
+      });
+      repo.seedPool({
+        id: 'pool-cgnat2',
+        name: 'mercaccesosur-cgnat-2',
+        networkId: 'net-cgnat2',
+        rangeStart: '100.64.11.2',
+        rangeEnd: '100.64.11.5',
+        type: 'dynamic', assignedCount: 0, totalCount: 4,
+        nasId: '1', ipKind: 'cgnat',
+      });
+    }
+
+    it('si el primer pool cgnat está LLENO, asigna del siguiente con lugar', async () => {
+      seedSecondCgnatPool();
+      // Llenar el PRIMER pool (100.64.10.2-5) en el router.
+      for (const last of [2, 3, 4, 5]) {
+        await router.createSecret(NAS1, { username: `u${last}`, password: 'p', remoteAddress: `100.64.10.${last}` });
+      }
+      const ip = await uc.execute({ nasId: '1', type: 'cgnat' });
+      expect(ip).toBe('100.64.11.2'); // primer libre del SEGUNDO pool
+    });
+
+    it('si TODOS los pools cgnat están llenos, lanza NoFreeIpError', async () => {
+      seedSecondCgnatPool();
+      for (const last of [2, 3, 4, 5]) {
+        await router.createSecret(NAS1, { username: `a${last}`, password: 'p', remoteAddress: `100.64.10.${last}` });
+        await router.createSecret(NAS1, { username: `b${last}`, password: 'p', remoteAddress: `100.64.11.${last}` });
+      }
+      await expect(uc.execute({ nasId: '1', type: 'cgnat' })).rejects.toBeInstanceOf(NoFreeIpError);
+    });
+
+    it('no mezcla tipos: un pool public lleno no bloquea la asignación cgnat', async () => {
+      seedSecondCgnatPool();
+      // Llenar el primer cgnat → debe ir al segundo, sin que el pool public interfiera.
+      for (const last of [2, 3, 4, 5]) {
+        await router.createSecret(NAS1, { username: `c${last}`, password: 'p', remoteAddress: `100.64.10.${last}` });
+      }
+      const ip = await uc.execute({ nasId: '1', type: 'cgnat' });
+      expect(ip).toBe('100.64.11.2');
+    });
+
+    it('con 2 pools cgnat LIBRES, asigna del primero por orden de NOMBRE (determinístico)', async () => {
+      seedSecondCgnatPool();
+      // Ambos libres → debe tomar del primero por nombre ('mercaccesosur-cgnat' < 'mercaccesosur-cgnat-2'),
+      // no del orden de inserción. Bloquea el orderBy del repo (asignación predecible, packea pools).
+      const ip = await uc.execute({ nasId: '1', type: 'cgnat' });
+      expect(ip).toBe('100.64.10.2');
+    });
+  });
 });

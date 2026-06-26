@@ -42,21 +42,24 @@ export class FindFreeIp {
     if (!nas) throw new NasNotFoundError(input.nasId);
 
     const pools = await this.networkRepo.findPoolsByNas(input.nasId);
-    const pool = pools.find((p) => p.ipKind === input.type);
-    if (!pool) throw new NoPoolForNasTypeError(input.nasId, input.type);
-
-    const network = await this.networkRepo.findNetworkById(pool.networkId);
+    const candidates = pools.filter((p) => p.ipKind === input.type);
+    if (candidates.length === 0) throw new NoPoolForNasTypeError(input.nasId, input.type);
 
     // Fuente de IPs asignadas ruteada por tipo de NAS: para `radius_orchestrator` la verdad
-    // vive en el RADIUS (radreply), no en el router.
+    // vive en el RADIUS (radreply), no en el router. Una sola consulta sirve para todos los pools.
     const assignedIps =
       routesViaOrchestrator(nas.type)
         ? await this.orchestrator.listAssignedIps()
         : await this.router.listAssignedIps({ ipAddress: nas.ipAddress, apiPort: nas.apiPort ?? 8728 });
 
-    const ip = this.firstFree(pool, network, assignedIps);
-    if (!ip) throw new NoFreeIpError(pool.id);
-    return ip;
+    // Un NAS puede tener N pools del mismo tipo (ej. varios /24 CGNAT, unos llenos y otros
+    // libres): recorrer todos y devolver la primera IP libre del primer pool con lugar.
+    for (const pool of candidates) {
+      const network = await this.networkRepo.findNetworkById(pool.networkId);
+      const ip = this.firstFree(pool, network, assignedIps);
+      if (ip) return ip;
+    }
+    throw new NoFreeIpError(candidates[0].id);
   }
 
   /** Recorre el rango y devuelve el primer IP libre, o null si no hay. */

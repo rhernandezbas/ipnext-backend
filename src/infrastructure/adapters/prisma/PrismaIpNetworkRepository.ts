@@ -119,7 +119,9 @@ export class PrismaIpNetworkRepository implements IpNetworkRepository {
   }
 
   async findPoolsByNas(nasId: string): Promise<IpPool[]> {
-    const rows = await prisma.ipPool.findMany({ where: { nasId } });
+    // orderBy name → asignación determinística: FindFreeIp itera N pools del NAS en orden estable
+    // (sin esto el orden es heap-order de Postgres y la asignación salta entre pools impredecible).
+    const rows = await prisma.ipPool.findMany({ where: { nasId }, orderBy: { name: 'asc' } });
     return rows.map(toPool);
   }
 
