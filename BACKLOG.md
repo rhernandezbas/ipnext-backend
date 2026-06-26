@@ -8,6 +8,12 @@
 
 ## 📋 Pendientes
 
+### ✨ [FEAT] `FindFreeIp` allocator multi-pool (N pools por NAS) — ✅ CÓDIGO LISTO, PENDIENTE PUSH *(2026-06-26)*
+> **Problema:** el allocator hacía `pools.find(ipKind)` → agarraba SOLO el primer pool del NAS; si ese estaba lleno, el alta fallaba con `NoFreeIpError` aunque otros pools tuvieran IPs libres. Un NAS puede tener N pools del mismo tipo (ej. RDA2 con varios /24 CGNAT). Observación del usuario: *"los NAS tienen más de 1 pool, debería elegir entre los N el que tenga lugar"*.
+> **Fix:** filtrar los pools del tipo e ITERAR todos, devolviendo la primera IP libre del primer pool con lugar. `assignedIps` se consulta UNA vez (set global router/RADIUS, vale para todos). Cada pool usa su propia red para excluir gateway/network/broadcast. + `orderBy name` en `findPoolsByNas` (Prisma + in-memory) → asignación determinística (drena pools en orden estable). Single-pool sin cambios.
+> **Verificación:** TDD (primer pool lleno→segundo; todos llenos→NoFreeIpError; no mezcla tipos; 2 libres→primero por nombre). 14/14 FindFreeIp + suite completa verde (658 suites, 0 fail) + tsc limpio. Review adversarial CLEAN. Worktree `findfreeip-multipool-be`, commit `9724e314`, rebasado sobre origin actual (sin revertir el `reason`). **NO push sin OK.**
+> **Pendiente relacionado:** cargar los pools reales de RDA2 en Prominense (habilita alta-desde-Prominense con IP auto en multi-pool).
+
 ### 🐛 [BUG] Fechas en TZ del navegador, no en hora Argentina (toda la app) — el formateador canónico usa hora local — ✅ HECHO Y EN PROD *(2026-06-25, pedido del usuario)*
 > **Síntoma:** la columna FECHA del tab "Errores de auth" (y Logs RADIUS / NE8000, y potencialmente TODA la app) muestra hora UTC en vez de hora Argentina — ej. "25 jun 2026 - 02:07" cuando en AR eran las 23:07 del 24.
 > **Causa raíz VERIFICADA (los 3 repos, file:line):** el dato viaja PERFECTO — `radpostauth` es naive-UTC (el RADIUS corre en UTC), el orchestrator (`postauth.py`, `_dt_to_utc_z`) serializa ISO 8601 con sufijo `Z`, el BE ingesta con `new Date()` en container UTC (instante correcto) y lo lee con `.toISOString()` (con `Z`). El bug es **100% de display**: `formatDateTimeShort`/`formatDateShort` (`ipnext-frontend/src/utils/formatDate.ts`) extraen las partes con `d.getHours()`/`getDate()` = **TZ del navegador**, no una zona fija → en un entorno UTC se ve UTC.
