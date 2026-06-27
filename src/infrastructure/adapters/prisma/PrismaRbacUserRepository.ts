@@ -236,13 +236,21 @@ export class PrismaRbacUserRepository implements RbacUserRepository {
   }
 
   /**
-   * AD-4: Returns all users with their resolved IClass team info.
+   * AD-4: Returns users with rol 'tecnico' and their resolved IClass team info.
+   * Filters at DB level — only users who have at least one role with code 'tecnico'.
    * Join is done via LEFT JOIN on IClassTeam by iclassTeamLogin.
    * iclassTeamLogin=null → teamName=null, teamActive=false.
    */
   async listWithIClassTeam(): Promise<RbacUserWithTeam[]> {
     const rows = await (this.db as any).rbacUser.findMany({
       orderBy: { createdAt: 'asc' },
+      where: {
+        roles: {
+          some: {
+            role: { code: 'tecnico' },
+          },
+        },
+      },
     }) as RbacUserRow[];
 
     // Since there's no Prisma relation (soft FK, no FK constraint), we resolve the team

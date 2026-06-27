@@ -133,6 +133,22 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
   async listWithIClassTeam(): Promise<RbacUserWithTeam[]> {
     const result: RbacUserWithTeam[] = [];
     for (const entry of this.store.values()) {
+      // Role filter: only include users with 'tecnico' role.
+      // Requires userRoleRepo + roleRepo to be injected (same deps as countUsersWithRoleCode).
+      // When repos are not injected, skip the filter (backward-compat for callers that don't need it).
+      if (this.userRoleRepo && this.roleRepo) {
+        const roleIds = await this.userRoleRepo.listForUser(entry.user.id);
+        let isTecnico = false;
+        for (const roleId of roleIds) {
+          const role = await this.roleRepo.findById(roleId);
+          if (role?.code === 'tecnico') {
+            isTecnico = true;
+            break;
+          }
+        }
+        if (!isTecnico) continue;
+      }
+
       const login = entry.iclassTeamLogin;
       let teamName: string | null = null;
       let teamActive = false;

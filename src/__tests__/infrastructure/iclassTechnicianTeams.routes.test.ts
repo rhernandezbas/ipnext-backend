@@ -12,6 +12,8 @@ import express, { Request, Response, NextFunction, RequestHandler } from 'expres
 import cookieParser from 'cookie-parser';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryIClassTeamRepository } from '@infrastructure/adapters/in-memory/InMemoryIClassTeamRepository';
+import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
+import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
 import { SetTechnicianTeamMapping } from '@application/use-cases/SetTechnicianTeamMapping';
 import { ListTechnicianTeamMappings } from '@application/use-cases/ListTechnicianTeamMappings';
 import { createIClassTechnicianTeamsRouter } from '@infrastructure/http/routes/iclassTechnicianTeams.routes';
@@ -41,15 +43,21 @@ const DENY: RequestHandler = (_req: Request, res: Response, _next: NextFunction)
 };
 
 async function buildApp(opts: { denyRead?: boolean; denyManage?: boolean } = {}) {
+  const roleRepo = new InMemoryRbacRoleRepository();
+  const userRoleRepo = new InMemoryRbacUserRoleRepository(roleRepo);
   const teamRepo = new InMemoryIClassTeamRepository();
-  const userRepo = new InMemoryRbacUserRepository(undefined, undefined, teamRepo);
+  const userRepo = new InMemoryRbacUserRepository(userRoleRepo, roleRepo, teamRepo);
+
+  // Seed role
+  const tecnicoRole = await roleRepo.create({ code: 'tecnico', label: 'Técnico', isSystem: true });
 
   // Seed team
   await teamRepo.upsertByLogin({ login: 'equipe-01', name: 'Equipe 01', thirdPartyCode: null, active: true, selectable: true });
   await teamRepo.upsertByLogin({ login: 'equipe-inactiva', name: 'Inactiva', thirdPartyCode: null, active: false, selectable: true });
 
-  // Seed user
+  // Seed user with tecnico role so it appears in the listing
   const user = await userRepo.create({ name: 'Tech Uno', email: 'tech@test.com', login: 'tech1', passwordHash: 'h' });
+  await userRoleRepo.assign(user.id, tecnicoRole.id);
 
   const listUC = new ListTechnicianTeamMappings(userRepo);
   const setUC = new SetTechnicianTeamMapping(userRepo, teamRepo);
