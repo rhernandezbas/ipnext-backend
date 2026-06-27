@@ -2,6 +2,7 @@ import { RadiusAuthEvent, RadiusAuthReply } from '@domain/entities/radius-auth-e
 import {
   RadiusAuthEventRepository,
   RadiusAuthEventFilters,
+  RadiusAuthBaseFilters,
   RadiusAuthEventUpsert,
   PaginatedResult,
 } from '@domain/ports/RadiusAuthEventRepository';
@@ -75,6 +76,24 @@ export class PrismaRadiusAuthEventRepository implements RadiusAuthEventRepositor
     };
   }
 
+  async countByReason(filters: RadiusAuthBaseFilters): Promise<Record<string, number>> {
+    const where = buildBaseWhere(filters);
+    // groupBy reason, excluyendo filas con reason=null
+    const groups = await model().groupBy({
+      by: ['reason'],
+      where: { ...where, reason: { not: null } },
+      _count: { _all: true },
+    });
+
+    const result: Record<string, number> = {};
+    for (const g of (groups as Array<{ reason: string | null; _count: { _all: number } }>)) {
+      if (g.reason !== null) {
+        result[g.reason] = g._count._all;
+      }
+    }
+    return result;
+  }
+
   async deleteOlderThan(cutoff: Date, batchSize: number): Promise<number> {
     let totalDeleted = 0;
 
@@ -100,7 +119,8 @@ export class PrismaRadiusAuthEventRepository implements RadiusAuthEventRepositor
 
 // ── Mappers ─────────────────────────────────────────────────────────────────
 
-function buildWhere(filters: RadiusAuthEventFilters): Record<string, unknown> {
+/** Filtros base (username / reply / from / to) — usados tanto en `list` como en `countByReason`. */
+function buildBaseWhere(filters: RadiusAuthBaseFilters): Record<string, unknown> {
   const where: Record<string, unknown> = {};
 
   if (filters.username !== undefined) where['username'] = filters.username;
@@ -113,6 +133,13 @@ function buildWhere(filters: RadiusAuthEventFilters): Record<string, unknown> {
     where['authdate'] = authdate;
   }
 
+  return where;
+}
+
+/** Filtros completos para `list` (base + reason opcional). */
+function buildWhere(filters: RadiusAuthEventFilters): Record<string, unknown> {
+  const where = buildBaseWhere(filters);
+  if (filters.reason !== undefined) where['reason'] = filters.reason;
   return where;
 }
 

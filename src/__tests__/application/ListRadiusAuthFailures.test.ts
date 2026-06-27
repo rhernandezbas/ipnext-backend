@@ -113,7 +113,14 @@ describe('ListRadiusAuthFailures', () => {
 
     const result = await uc.execute({});
 
-    expect(result).toEqual({ data: [], total: 0, page: 1, limit: 50, hasNext: false });
+    expect(result).toEqual({
+      data:    [],
+      total:   0,
+      page:    1,
+      limit:   50,
+      hasNext: false,
+      countsByReason: { session_stuck: 0, user_not_found: 0, other: 0 },
+    });
   });
 
   it('expone el reason en el DTO', async () => {
@@ -134,6 +141,104 @@ describe('ListRadiusAuthFailures', () => {
     const result = await uc.execute({ username: 'c002' });
 
     expect(result.data[0].reason).toBeNull();
+  });
+
+  // ── Ola 2: countsByReason ────────────────────────────────────────────────────
+
+  it('countsByReason: desglose completo con 3 reasons (incl. 0 para ausente)', async () => {
+    const repo = makeRepo();
+    await seedEvents(repo, [
+      { reply: 'Access-Reject', reason: 'session_stuck' },
+      { reply: 'Access-Reject', reason: 'session_stuck' },
+      { reply: 'Access-Reject', reason: 'user_not_found' },
+      { reply: 'Access-Accept', reason: null },  // Access-Accept: reason null
+    ]);
+    const uc = new ListRadiusAuthFailures(repo);
+
+    const result = await uc.execute({});
+
+    expect(result.countsByReason).toEqual({
+      session_stuck:  2,
+      user_not_found: 1,
+      other:          0,   // ningún evento con reason='other'
+    });
+  });
+
+  it('countsByReason NO cambia cuando se filtra por reason (ignora el reason-filter)', async () => {
+    const repo = makeRepo();
+    await seedEvents(repo, [
+      { reply: 'Access-Reject', reason: 'session_stuck' },
+      { reply: 'Access-Reject', reason: 'user_not_found' },
+      { reply: 'Access-Reject', reason: 'other' },
+    ]);
+    const uc = new ListRadiusAuthFailures(repo);
+
+    const withoutFilter = await uc.execute({});
+    const withFilter    = await uc.execute({ reason: 'session_stuck' });
+
+    // La lista data sí se filtra
+    expect(withFilter.data).toHaveLength(1);
+    expect(withFilter.data[0].reason).toBe('session_stuck');
+
+    // Pero countsByReason es idéntico en ambos casos
+    expect(withFilter.countsByReason).toEqual(withoutFilter.countsByReason);
+    expect(withFilter.countsByReason).toEqual({
+      session_stuck:  1,
+      user_not_found: 1,
+      other:          1,
+    });
+  });
+
+  it('countsByReason: 3 claves presentes aunque no haya ningún evento (todo 0)', async () => {
+    const repo = makeRepo();
+    const uc = new ListRadiusAuthFailures(repo);
+
+    const result = await uc.execute({});
+
+    expect(result.countsByReason).toEqual({
+      session_stuck:  0,
+      user_not_found: 0,
+      other:          0,
+    });
+  });
+
+  it('countsByReason: events con reason=null (históricos o Access-Accept) NO cuentan', async () => {
+    const repo = makeRepo();
+    await seedEvents(repo, [
+      { reply: 'Access-Accept', reason: null },
+      { reply: 'Access-Reject', reason: null },
+      { reply: 'Access-Reject', reason: 'other' },
+    ]);
+    const uc = new ListRadiusAuthFailures(repo);
+
+    const result = await uc.execute({});
+
+    expect(result.countsByReason).toEqual({
+      session_stuck:  0,
+      user_not_found: 0,
+      other:          1,
+    });
+  });
+
+  it('filtro reason filtra data pero hasNext/total/countsByReason son del scope completo', async () => {
+    const repo = makeRepo();
+    await seedEvents(repo, [
+      { reply: 'Access-Reject', reason: 'session_stuck',  authdate: '2026-06-01T00:00:00Z' },
+      { reply: 'Access-Reject', reason: 'user_not_found', authdate: '2026-06-02T00:00:00Z' },
+      { reply: 'Access-Reject', reason: 'session_stuck',  authdate: '2026-06-03T00:00:00Z' },
+    ]);
+    const uc = new ListRadiusAuthFailures(repo);
+
+    const result = await uc.execute({ reason: 'session_stuck' });
+
+    // data filtrada a solo session_stuck
+    expect(result.data).toHaveLength(2);
+    result.data.forEach(d => expect(d.reason).toBe('session_stuck'));
+
+    // countsByReason incluye user_not_found aunque no esté en data
+    expect(result.countsByReason.user_not_found).toBe(1);
+    expect(result.countsByReason.session_stuck).toBe(2);
+    expect(result.countsByReason.other).toBe(0);
   });
 
   it('sourceUniqueId no aparece en el DTO', async () => {

@@ -17,6 +17,7 @@ const VALID_EVENT_TYPES    = new Set(['start', 'stop', 'interim']);
 const VALID_PPPOE_STATUSES = new Set(['enabled', 'disabled']);
 const VALID_ENFORCED       = new Set(['active', 'reduced', 'blocked']);
 const VALID_AUTH_REPLIES   = new Set(['Access-Accept', 'Access-Reject']);
+const VALID_AUTH_REASONS   = new Set(['session_stuck', 'user_not_found', 'other']);
 
 /**
  * FIX5: parseIntPositive — devuelve el número si es un entero positivo válido; NaN si no.
@@ -181,6 +182,12 @@ export function createRadiusRouter(
       return;
     }
 
+    // Validar reason (opcional): session_stuck | user_not_found | other
+    if (q['reason'] !== undefined && !VALID_AUTH_REASONS.has(q['reason'] as string)) {
+      res.status(400).json({ code: 'VALIDATION_ERROR', message: 'reason must be session_stuck | user_not_found | other' });
+      return;
+    }
+
     // Validar page y limit (enteros positivos)
     const page  = parseIntPositive(q['page']  as string | undefined);
     const limit = parseIntPositive(q['limit'] as string | undefined);
@@ -196,6 +203,7 @@ export function createRadiusRouter(
     const result = await listRadiusAuthFailures.execute({
       username: q['username'] as string | undefined,
       reply:    q['reply']    as RadiusAuthReply | undefined,
+      reason:   q['reason']   as string | undefined,
       from,
       to,
       page,

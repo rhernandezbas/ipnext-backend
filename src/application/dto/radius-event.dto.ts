@@ -85,4 +85,15 @@ export interface PaginatedRadiusAuthEventsDto {
   page: number;
   limit: number;
   hasNext: boolean;
+  /**
+   * Conteo de rechazos agrupados por motivo, calculado sobre username/reply/from/to
+   * IGNORANDO el filtro `reason`. Permite al FE mostrar chips con el desglose completo
+   * sin importar qué motivo esté seleccionado.
+   * Siempre incluye las 3 claves (defaultea a 0 si no hay filas).
+   */
+  countsByReason: {
+    session_stuck:  number;
+    user_not_found: number;
+    other:          number;
+  };
 }

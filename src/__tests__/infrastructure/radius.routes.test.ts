@@ -551,4 +551,57 @@ describe('radius.routes — /auth-failures (network audit)', () => {
     const res = await asUser(request(app).get('/api/radius/auth-failures?page=1&limit=10&reply=Access-Reject&from=2026-06-01T00:00:00Z&to=2026-06-22T00:00:00Z'), readUserId);
     expect(res.status).toBe(200);
   });
+
+  // ── Ola 2: filtro reason + countsByReason ─────────────────────────────────────
+
+  it('GET /auth-failures → respuesta incluye countsByReason con 3 claves', async () => {
+    const { app, readUserId } = await buildAuditApp();
+    const res = await asUser(request(app).get('/api/radius/auth-failures'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('countsByReason');
+    expect(res.body.countsByReason).toHaveProperty('session_stuck');
+    expect(res.body.countsByReason).toHaveProperty('user_not_found');
+    expect(res.body.countsByReason).toHaveProperty('other');
+  });
+
+  it('GET /auth-failures?reason=session_stuck filtra data y countsByReason es completo (seam ruta+uc+repo)', async () => {
+    const { app, readUserId, authEventRepo } = await buildAuditApp();
+    await authEventRepo.upsertMany([
+      { sourceUniqueId: 'pa-10', username: 'c001', reply: 'Access-Reject', authdate: new Date('2026-06-01T10:00:00Z'), class: null, reason: 'session_stuck' },
+      { sourceUniqueId: 'pa-11', username: 'c002', reply: 'Access-Reject', authdate: new Date('2026-06-02T10:00:00Z'), class: null, reason: 'user_not_found' },
+      { sourceUniqueId: 'pa-12', username: 'c003', reply: 'Access-Reject', authdate: new Date('2026-06-03T10:00:00Z'), class: null, reason: 'other' },
+    ]);
+
+    const res = await asUser(request(app).get('/api/radius/auth-failures?reason=session_stuck'), readUserId);
+
+    expect(res.status).toBe(200);
+    // data filtrada: solo el session_stuck
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].reason).toBe('session_stuck');
+    // countsByReason incluye los 3 (ignora el filtro reason)
+    expect(res.body.countsByReason).toEqual({
+      session_stuck:  1,
+      user_not_found: 1,
+      other:          1,
+    });
+  });
+
+  it('GET /auth-failures?reason=invalid → 400 VALIDATION_ERROR', async () => {
+    const { app, readUserId } = await buildAuditApp();
+    const res = await asUser(request(app).get('/api/radius/auth-failures?reason=unknown_reason'), readUserId);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('GET /auth-failures?reason=user_not_found → 200 (valor válido, no rechazado)', async () => {
+    const { app, readUserId } = await buildAuditApp();
+    const res = await asUser(request(app).get('/api/radius/auth-failures?reason=user_not_found'), readUserId);
+    expect(res.status).toBe(200);
+  });
+
+  it('GET /auth-failures?reason=other → 200 (valor válido, no rechazado)', async () => {
+    const { app, readUserId } = await buildAuditApp();
+    const res = await asUser(request(app).get('/api/radius/auth-failures?reason=other'), readUserId);
+    expect(res.status).toBe(200);
+  });
 });

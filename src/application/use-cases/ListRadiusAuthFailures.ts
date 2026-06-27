@@ -22,6 +22,8 @@ export interface ListRadiusAuthFailuresInput {
   from?: string;
   /** ISO 8601 — authdate <= to */
   to?: string;
+  /** Motivo de rechazo: 'session_stuck' | 'user_not_found' | 'other'. Filtra sólo `data`. */
+  reason?: string;
   page?: number;
   limit?: number;
 }
@@ -38,16 +40,33 @@ export class ListRadiusAuthFailures {
     const limit    = Math.min(MAX_LIMIT, Math.max(1, input.limit ?? DEFAULT_LIMIT));
     const pageSize = limit;
 
+    // Filtros base (sin reason) — usados tanto para `list` como para `countByReason`.
+    const fromDate = input.from ? new Date(input.from) : undefined;
+    const toDate   = input.to   ? new Date(input.to)   : undefined;
+
     const filters: RadiusAuthEventFilters = {
       username: input.username,
       reply:    input.reply,
-      from:     input.from ? new Date(input.from) : undefined,
-      to:       input.to   ? new Date(input.to)   : undefined,
+      from:     fromDate,
+      to:       toDate,
+      reason:   input.reason,
       page,
       pageSize,
     };
 
-    const result = await this.repo.list(filters);
+    // 2 consultas paralelas:
+    //   - list: filtra por todos los filtros incluyendo reason
+    //   - countByReason: ignora reason → desglose completo para los chips del FE
+    const [result, rawCounts] = await Promise.all([
+      this.repo.list(filters),
+      this.repo.countByReason({ username: input.username, reply: input.reply, from: fromDate, to: toDate }),
+    ]);
+
+    const countsByReason = {
+      session_stuck:  rawCounts['session_stuck']  ?? 0,
+      user_not_found: rawCounts['user_not_found'] ?? 0,
+      other:          rawCounts['other']          ?? 0,
+    };
 
     // El repo garantiza ORDER BY authdate DESC. NO re-ordenar aquí (rompería cross-página).
     return {
@@ -56,6 +75,7 @@ export class ListRadiusAuthFailures {
       page:    result.page,
       limit,
       hasNext: result.page * pageSize < result.total,
+      countsByReason,
     };
   }
 }

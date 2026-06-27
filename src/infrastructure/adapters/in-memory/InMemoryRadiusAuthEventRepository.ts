@@ -3,6 +3,7 @@ import { RadiusAuthEvent } from '@domain/entities/radius-auth-event';
 import {
   RadiusAuthEventRepository,
   RadiusAuthEventFilters,
+  RadiusAuthBaseFilters,
   RadiusAuthEventUpsert,
   PaginatedResult,
 } from '@domain/ports/RadiusAuthEventRepository';
@@ -62,6 +63,9 @@ export class InMemoryRadiusAuthEventRepository implements RadiusAuthEventReposit
     if (filters.reply !== undefined) {
       items = items.filter((e) => e.reply === filters.reply);
     }
+    if (filters.reason !== undefined) {
+      items = items.filter((e) => e.reason === filters.reason);
+    }
     if (filters.from !== undefined) {
       const fromMs = filters.from.getTime();
       items = items.filter((e) => new Date(e.authdate).getTime() >= fromMs);
@@ -84,6 +88,35 @@ export class InMemoryRadiusAuthEventRepository implements RadiusAuthEventReposit
     const data  = items.slice(skip, skip + pageSize).map((e) => ({ ...e }));
 
     return { data, total, page, pageSize };
+  }
+
+  async countByReason(filters: RadiusAuthBaseFilters): Promise<Record<string, number>> {
+    let items = [...this.store.values()];
+
+    // Aplica los filtros base (sin reason, sin paginación)
+    if (filters.username !== undefined) {
+      items = items.filter((e) => e.username === filters.username);
+    }
+    if (filters.reply !== undefined) {
+      items = items.filter((e) => e.reply === filters.reply);
+    }
+    if (filters.from !== undefined) {
+      const fromMs = filters.from.getTime();
+      items = items.filter((e) => new Date(e.authdate).getTime() >= fromMs);
+    }
+    if (filters.to !== undefined) {
+      const toMs = filters.to.getTime();
+      items = items.filter((e) => new Date(e.authdate).getTime() <= toMs);
+    }
+
+    // Agrupa por reason (solo filas con reason NOT NULL)
+    const counts: Record<string, number> = {};
+    for (const item of items) {
+      if (item.reason !== null) {
+        counts[item.reason] = (counts[item.reason] ?? 0) + 1;
+      }
+    }
+    return counts;
   }
 
   async deleteOlderThan(cutoff: Date, batchSize: number): Promise<number> {
