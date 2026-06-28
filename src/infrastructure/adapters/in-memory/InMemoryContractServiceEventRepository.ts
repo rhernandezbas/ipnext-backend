@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import type {
   ContractServiceEvent,
   ContractServiceEventWithClient,
+  ContractServiceEventOperator,
   ContractServiceEventRepository,
   ListContractServiceEventsFilter,
   RecordContractServiceEventInput,
@@ -87,6 +88,23 @@ export class InMemoryContractServiceEventRepository implements ContractServiceEv
       })
       .sort(newestFirst)
       .map(enrich);
+  }
+
+  async listDistinctOperators(filters: { serviceCatalogId?: string }): Promise<ContractServiceEventOperator[]> {
+    // Dedup por actorId quedándose con el actorName NO vacío más RECIENTE (espeja al Prisma:
+    // DISTINCT ON (actorId) ORDER BY createdAt desc + descarte de nombres vacíos). Un operador
+    // cuyos eventos tienen TODOS actorName vacío queda fuera acá (el fallback a actor.login del
+    // nombre es Prisma-only; el in-memory no modela el JOIN al actor).
+    const best = new Map<string, { name: string; at: string }>();
+    for (const e of this.store) {
+      if (filters.serviceCatalogId && e.serviceCatalogId !== filters.serviceCatalogId) continue;
+      if (!e.actorId || !e.actorName) continue;
+      const cur = best.get(e.actorId);
+      if (!cur || e.createdAt > cur.at) best.set(e.actorId, { name: e.actorName, at: e.createdAt });
+    }
+    return [...best.entries()]
+      .map(([actorId, v]) => ({ actorId, actorName: v.name }))
+      .sort((a, b) => a.actorName.localeCompare(b.actorName, 'es'));
   }
 
   /** For test assertions: expose all stored events (unfiltered). */

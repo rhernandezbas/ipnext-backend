@@ -61,6 +61,7 @@ describe('RemoveContractService — #110 ledger wiring', () => {
       record: async () => { throw new Error('DB down'); },
       listByContract: async () => [],
       list: async () => [],
+      listDistinctOperators: async () => [],
     };
     const uc = makeUc(brokenEventRepo);
     await uc.execute(svc.id);

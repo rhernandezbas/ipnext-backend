@@ -55,6 +55,7 @@ import { DeassociatePppoeFromContract } from '@application/use-cases/Deassociate
 import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
 import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
 import { ListInternetServiceHistory } from '@application/use-cases/ListInternetServiceHistory';
+import { ListInternetActivationOperators } from '@application/use-cases/ListInternetActivationOperators';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -167,6 +168,7 @@ async function buildApp(): Promise<Fixture> {
     undefined,
     new ListAllPppoeServices(pppoeRepo, eventRepo, catalogRepo),
     new ListInternetServiceHistory(eventRepo, catalogRepo),
+    new ListInternetActivationOperators(eventRepo, catalogRepo),
   ));
   app.use(errorHandler);
 
@@ -293,5 +295,56 @@ describe('GET /api/pppoe/activation-history — global internet history (interne
     const fx = await buildApp();
     const res = await asUser(request(fx.app).get('/api/pppoe/activation-history'), fx.noPermUserId);
     expect(res.status).toBe(403);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// GET /api/pppoe/activation-history/operators — operadores DISTINCT de internet
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('GET /api/pppoe/activation-history/operators — distinct operators (internet-history)', () => {
+  it('200 con array vacío cuando no hay eventos', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).get('/api/pppoe/activation-history/operators'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('200 devuelve operadores DISTINCT {actorId, actorName} ordenados por actorName — NO sombreada por /:id', async () => {
+    const fx = await buildApp();
+    await fx.eventRepo.record({ contractId: 'ct-1', serviceCatalogId: fx.internetId, eventType: 'activated', actorId: 'a2', actorName: 'Zulema' });
+    await fx.eventRepo.record({ contractId: 'ct-2', serviceCatalogId: fx.internetId, eventType: 'deactivated', actorId: 'a2', actorName: 'Zulema' });
+    await fx.eventRepo.record({ contractId: 'ct-3', serviceCatalogId: fx.internetId, eventType: 'activated', actorId: 'a1', actorName: 'Ana' });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/activation-history/operators'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      { actorId: 'a1', actorName: 'Ana' },
+      { actorId: 'a2', actorName: 'Zulema' },
+    ]);
+  });
+
+  it('200 excluye operadores de TV/otros servicios y eventos sin actorId', async () => {
+    const fx = await buildApp();
+    const tv = await fx.catalogRepo.create({ name: 'TV', label: 'TV', sortOrder: 1 });
+    await fx.eventRepo.record({ contractId: 'ct-1', serviceCatalogId: fx.internetId, eventType: 'activated', actorId: 'a1', actorName: 'OpInternet' });
+    await fx.eventRepo.record({ contractId: 'ct-2', serviceCatalogId: tv.id, eventType: 'activated', actorId: 'a2', actorName: 'OpTv' });
+    await fx.eventRepo.record({ contractId: 'ct-3', serviceCatalogId: fx.internetId, eventType: 'activated', actorName: 'SinId' });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/activation-history/operators'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ actorId: 'a1', actorName: 'OpInternet' }]);
+  });
+
+  it('403 sin pppoe.read', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).get('/api/pppoe/activation-history/operators'), fx.noPermUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('401 sin auth', async () => {
+    const fx = await buildApp();
+    const res = await request(fx.app).get('/api/pppoe/activation-history/operators');
+    expect(res.status).toBe(401);
   });
 });

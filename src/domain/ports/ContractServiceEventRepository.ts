@@ -63,6 +63,15 @@ export interface ListContractServiceEventsFilter {
   to?: Date;
 }
 
+/**
+ * internet-history — operador (actorId + actorName) que produjo eventos de servicio. Es el
+ * item del <select> de operadores del historial. Shape mínimo, wire-friendly.
+ */
+export interface ContractServiceEventOperator {
+  actorId: string;
+  actorName: string;
+}
+
 export interface ContractServiceEventRepository {
   /** Append a new event. Best-effort callers wrap in try/catch. */
   record(input: RecordContractServiceEventInput): Promise<ContractServiceEvent>;
@@ -74,4 +83,10 @@ export interface ContractServiceEventRepository {
    * TvActivationEventRepository.list() shape so the internet history page mirrors TV.
    */
   list(filters: ListContractServiceEventsFilter): Promise<ContractServiceEventWithClient[]>;
+  /**
+   * internet-history — operadores DISTINCT (actorId + actorName) que produjeron eventos de un
+   * servicio (ej. INTERNET). Excluye eventos con actorId null. Orden por actorName asc. Habilita
+   * el <select> de operadores con gate pppoe.read (sin admin/rbac).
+   */
+  listDistinctOperators(filters: { serviceCatalogId?: string }): Promise<ContractServiceEventOperator[]>;
 }

@@ -145,6 +145,15 @@ export interface InternetServiceEventDto {
   createdAt: string; // ISO string
 }
 
+/**
+ * #internet-history — Operador del <select> del historial de INTERNET (wire contract).
+ * DISTINCT por actorId. Devuelto por ListInternetActivationOperators. Gate pppoe.read.
+ */
+export interface InternetActivationOperatorDto {
+  actorId: string;
+  actorName: string;
+}
+
 // ── Body schemas (Zod) ──────────────────────────────────────────────────────
 
 export const CreatePppoeBodySchema = z.object({

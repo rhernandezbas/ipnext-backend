@@ -49,6 +49,7 @@ import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe'
 import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
 import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
 import { ListInternetServiceHistory } from '@application/use-cases/ListInternetServiceHistory';
+import { ListInternetActivationOperators } from '@application/use-cases/ListInternetActivationOperators';
 import type { ServiceCutRunner } from '@infrastructure/scheduling/ServiceCutRunner';
 import type { ServiceCutBatchRepository } from '@domain/ports/ServiceCutBatchRepository';
 import {
@@ -110,6 +111,7 @@ export function createPppoeRouter(
   getPppoeCallerId?: GetPppoeCallerId,
   listAllPppoeServices?: ListAllPppoeServices,
   listInternetServiceHistory?: ListInternetServiceHistory,
+  listInternetActivationOperators?: ListInternetActivationOperators,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -228,6 +230,15 @@ export function createPppoeRouter(
         res.json(events);
       },
     );
+  }
+
+  // ── GET /pppoe/activation-history/operators — operadores DISTINCT de eventos INTERNET ──
+  // Para el <select> de operadores del historial (gate pppoe.read, sin admin/rbac).
+  if (listInternetActivationOperators) {
+    router.get('/pppoe/activation-history/operators', auth, canRead, async (_req, res) => {
+      const operators = await listInternetActivationOperators.execute();
+      res.json(operators);
+    });
   }
 
   // ── GET /pppoe — lista GLOBAL paginada de servicios de internet (DTO SIN password) ──

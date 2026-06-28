@@ -2,6 +2,7 @@ import { prisma } from '@infrastructure/database/prisma';
 import type {
   ContractServiceEvent,
   ContractServiceEventWithClient,
+  ContractServiceEventOperator,
   ContractServiceEventRepository,
   ListContractServiceEventsFilter,
   RecordContractServiceEventInput,
@@ -76,6 +77,31 @@ export class PrismaContractServiceEventRepository implements ContractServiceEven
       },
     });
     return rows.map(toEventWithClient);
+  }
+
+  async listDistinctOperators(filters: { serviceCatalogId?: string }): Promise<ContractServiceEventOperator[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const where: Record<string, any> = { actorId: { not: null } };
+    if (filters.serviceCatalogId) where['serviceCatalogId'] = filters.serviceCatalogId;
+    // `distinct: ['actorId']` → `DISTINCT ON (actorId)` en Postgres: el ORDER BY DEBE arrancar por
+    // actorId. Le sumamos `createdAt desc` como 2do criterio → DISTINCT ON se queda con la fila del
+    // evento MÁS RECIENTE por operador (DETERMINISTA). Sin orderBy el actorName era arbitrario y,
+    // como el schema declara actorName @default(""), podía surgir EN BLANCO. El nombre se resuelve
+    // igual que toEvent (snapshot `actorName` || JOIN `actor.login`) y se descartan los sin nombre
+    // resoluble. El orden final por nombre se hace en JS (no se puede en Prisma: el ORDER BY ya
+    // quedó atado a actorId por el DISTINCT ON).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma as any).contractServiceEvent.findMany({
+      where,
+      distinct: ['actorId'],
+      orderBy: [{ actorId: 'asc' }, { createdAt: 'desc' }],
+      select: { actorId: true, actorName: true, actor: { select: { login: true } } },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return rows
+      .map((r: any) => ({ actorId: r.actorId as string, actorName: (r.actorName || r.actor?.login || '') as string }))
+      .filter((o: ContractServiceEventOperator) => o.actorId && o.actorName !== '')
+      .sort((a: ContractServiceEventOperator, b: ContractServiceEventOperator) => a.actorName.localeCompare(b.actorName, 'es'));
   }
 }
 

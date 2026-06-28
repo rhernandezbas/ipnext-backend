@@ -143,6 +143,7 @@ describe('EnsureInternetContractService — eventos (pppoe-baja-motivo)', () => 
       record: async () => { throw new Error('DB down'); },
       listByContract: async () => [],
       list: async () => [],
+      listDistinctOperators: async () => [],
     };
 
     const uc = new EnsureInternetContractService(csRepo, catalogRepo, failingEventRepo);
