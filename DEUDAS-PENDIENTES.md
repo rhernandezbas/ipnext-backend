@@ -1,6 +1,6 @@
 # Deudas pendientes — Prominense
 
-> Última actualización: 2026-05-27
+> Última actualización: 2026-06-27
 > Repos: `ipnext-backend` (BE) · `ipnext-frontend` (FE)
 > Estado: lo que está hecho **no** figura acá. Esto es solo lo que QUEDA.
 
@@ -20,6 +20,11 @@
 ---
 
 ## 🔴 Funcionales pendientes
+
+- [ ] **sqlippool Fase 1 — GO-LIVE (VENTANA de mantenimiento, AAA prod).** **[infra FreeRADIUS + go-live]**
+  TODO el código (BE+FE) está EN PROD **DORMANT** (ningún NAS con `poolName` → cero cambio de comportamiento). Falta SOLO la infra + activación, que toca el FreeRADIUS HA vivo (r1/r2) que sirve la fibra de **Acceso Sur** → **ventana de bajo tráfico, usuario presente, rollback listo** (el restart es el único paso de riesgo: si la config está mal, deja sin internet a la fibra; no hay staging). Config ya validada con `freeradius -XC` en una COPIA (cero impacto, 2026-06-27).
+  **Runbook ejecutable paso a paso:** `Documents/IPNext/Operaciones/Runbooks/sqlippool - go-live Fase 1.md`. Resumen: (1) backup (`mysqldump` + `cp` config); (2) poblar `radippool` excluyendo los **179 fijos** del CIDR `100.64.10.x` (Decisión 8); (3) agregar a la config viva el bloque unlang de selección `Pool-Name`/bypass (`if NAS-IP==10.75.0.30 && !reply:Framed-IP → Pool-Name:=asur-cgnat`); (4) gate `freeradius -XC` + `-X` con usuario de **PRUEBA** (nunca cliente real); (5) restart rolling r1→r2 + healthcheck + rollback; (6) marcar Acceso Sur pool-mode (`POST /api/nas-servers/:id/pool-mode`) + validación LIVE con usuario de PRUEBA.
+  **Prereqs de código (antes del go-live pleno):** task 8.0 — `PinPppoeIp` validar **rango gestionado** (IpNetwork; hoy solo formato + no-tomada); refinamiento FE — ocultar el toggle "IP fija" hasta que el NAS sea pool-mode (hoy es visible y da 409 graceful en NAS sin pool). Plan completo: `openspec/changes/pppoe-pool-ip/`. Card: BACKLOG "[FEAT] IP automática del pool del NAS (sqlippool)".
 
 - [ ] **Sincronizar facturas de Gestión Real** (candidato SDD `gr-invoices-sync`). **[BE+FE]**
   El tab Facturación ("Saldo pendiente") suma la tabla `Invoice` local, que está en **0** porque
