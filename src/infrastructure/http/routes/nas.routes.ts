@@ -11,9 +11,15 @@ import { DeleteNasServer } from '@application/use-cases/DeleteNasServer';
 import { GetRadiusConfig } from '@application/use-cases/GetRadiusConfig';
 import { UpdateRadiusConfig } from '@application/use-cases/UpdateRadiusConfig';
 import { FindFreeIp } from '@application/use-cases/FindFreeIp';
+import { SetNasPoolMode } from '@application/use-cases/SetNasPoolMode';
 import type { IpKind } from '@domain/entities/network';
+import { NasNotFoundError, RadiusPoolEmptyError, OrchestratorUnreachableError } from '@domain/errors/pppoe';
+import { z } from 'zod';
 
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
+
+/** pppoe-pool-ip: body de POST /nas-servers/:id/pool-mode. `poolName` no nulo = marcar pool-mode; null = desactivar. */
+const PoolModeBodySchema = z.object({ poolName: z.string().min(1).nullable() });
 
 /**
  * NAS / RADIUS-config routes.
@@ -35,6 +41,7 @@ export function createNasRouter(
   getRadiusConfig: GetRadiusConfig,
   updateRadiusConfig: UpdateRadiusConfig,
   findFreeIp?: FindFreeIp,
+  setNasPoolMode?: SetNasPoolMode,
 ): Router {
   const router = Router();
   const auth      = createAuthMiddleware(authProvider, sessionRepo);
@@ -78,6 +85,41 @@ export function createNasRouter(
     }
     res.status(204).send();
   });
+
+  // pppoe-pool-ip (Decisión 3): marca/desmarca el NAS en modo pool. `network.manage`.
+  // Pre-check: poolName no nulo exige que el pool exista y tenga IPs libres en el RADIUS.
+  // Errores: NAS inexistente → 404; pool vacío/inexistente → 409; orchestrator caído → 502.
+  if (setNasPoolMode) {
+    router.post('/nas-servers/:id/pool-mode', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+      const parsed = PoolModeBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const nas = await setNasPoolMode.execute({ nasId: req.params['id'] as string, poolName: parsed.data.poolName });
+        // Frontera de seguridad: NUNCA devolver radiusSecret/apiPassword crudos. El use case
+        // retorna la entidad cruda del repo (el Prisma repo trae el secreto real); enmascarar
+        // acá con la convención del codebase ('••••••••'). (Deuda pre-existente: ListNasServers/
+        // GetNasServer NO enmascaran en prod — el in-memory seedea enmascarado y oculta el leak.)
+        res.json({ ...nas, radiusSecret: '••••••••', apiPassword: nas.apiPassword == null ? null : '••••••••' });
+      } catch (err) {
+        if (err instanceof NasNotFoundError) {
+          res.status(404).json({ code: err.code, error: err.message });
+          return;
+        }
+        if (err instanceof RadiusPoolEmptyError) {
+          res.status(409).json({ code: err.code, error: err.message });
+          return;
+        }
+        if (err instanceof OrchestratorUnreachableError) {
+          res.status(502).json({ code: err.code, error: err.message });
+          return;
+        }
+        throw err;
+      }
+    });
+  }
 
   // Radius Config
   router.get('/radius-config', auth, async (_req: Request, res: Response): Promise<void> => {

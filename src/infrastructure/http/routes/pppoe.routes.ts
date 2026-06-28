@@ -40,6 +40,8 @@ import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServic
 import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeService';
 import { TerminatePppoeService } from '@application/use-cases/TerminatePppoeService';
 import { GetPppoeCallerId } from '@application/use-cases/GetPppoeCallerId';
+import { PinPppoeIp } from '@application/use-cases/PinPppoeIp';
+import { UnpinPppoeIp } from '@application/use-cases/UnpinPppoeIp';
 import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
 import { PreviewEnforcement } from '@application/use-cases/PreviewEnforcement';
 import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
@@ -83,9 +85,14 @@ import {
   PppoeContractAlreadyHasServiceError,
   PppoeIngestNotSupportedError,
   NasNotFoundError,
+  InvalidIpFormatError,
+  IpAlreadyTakenError,
+  NasNoPoolError,
 } from '@domain/errors/pppoe';
 
 const BajaBodySchema = z.object({ reason: z.string().nullish() }).optional();
+/** pppoe-pool-ip: body de POST /pppoe/:id/pin-ip — la IP fija a pinear. */
+const PinIpBodySchema = z.object({ ip: z.string().min(1) });
 
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
 
@@ -112,6 +119,8 @@ export function createPppoeRouter(
   listAllPppoeServices?: ListAllPppoeServices,
   listInternetServiceHistory?: ListInternetServiceHistory,
   listInternetActivationOperators?: ListInternetActivationOperators,
+  pinPppoeIp?: PinPppoeIp,
+  unpinPppoeIp?: UnpinPppoeIp,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -595,6 +604,75 @@ export function createPppoeRouter(
         } catch (err) {
           if (err instanceof PppoeServiceNotFoundError) {
             res.status(404).json({ code: err.code, error: err.message });
+            return;
+          }
+          throw err;
+        }
+      },
+    );
+  }
+
+  // ── POST /pppoe/:id/pin-ip — pinea una IP fija (bypass del pool) (pppoe-pool-ip) ──
+  if (pinPppoeIp) {
+    router.post(
+      '/pppoe/:id/pin-ip',
+      auth,
+      canManage,
+      async (req: Request, res: Response): Promise<void> => {
+        const parsed = PinIpBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          const service = await pinPppoeIp.execute({ pppoeId: req.params['id'] as string, ip: parsed.data.ip });
+          res.json(toPppoeServiceDto(service));
+        } catch (err) {
+          if (err instanceof InvalidIpFormatError) {
+            res.status(422).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof IpAlreadyTakenError) {
+            res.status(409).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof PppoeServiceNotFoundError || err instanceof NasNotFoundError) {
+            res.status(404).json({ code: err.code, error: err.message });
+            return;
+          }
+          // NAS no-RADIUS (pin no soportado) y orchestrator caído → 502.
+          if (err instanceof OrchestratorUnreachableError) {
+            res.status(502).json({ code: err.code, error: err.message });
+            return;
+          }
+          throw err;
+        }
+      },
+    );
+  }
+
+  // ── POST /pppoe/:id/unpin-ip — libera la IP fija, vuelve al pool (pppoe-pool-ip) ──
+  if (unpinPppoeIp) {
+    router.post(
+      '/pppoe/:id/unpin-ip',
+      auth,
+      canManage,
+      async (req: Request, res: Response): Promise<void> => {
+        try {
+          const service = await unpinPppoeIp.execute({ pppoeId: req.params['id'] as string });
+          res.json(toPppoeServiceDto(service));
+        } catch (err) {
+          // NAS sin poolName (no pool-mode) → 409 (no hay pool al que volver).
+          if (err instanceof NasNoPoolError) {
+            res.status(409).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof PppoeServiceNotFoundError || err instanceof NasNotFoundError) {
+            res.status(404).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof OrchestratorUnreachableError) {
+            res.status(502).json({ code: err.code, error: err.message });
             return;
           }
           throw err;

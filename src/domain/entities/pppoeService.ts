@@ -52,5 +52,11 @@ export interface PppoeService {
   contractId: string | null; // FK Contract — null = sin contrato asociado aún
   enforcedState: EnforcedState; // Fase C: estado del corte (default 'active')
   callerId: string | null;    // MAC del CPE (persistida de la última sesión vista — sobrevive a la desconexión)
+  /**
+   * pppoe-pool-ip: modo de asignación de IP.
+   * 'pool'  = FreeRADIUS asigna la IP del pool del NAS (framedIp null en RADIUS).
+   * 'fixed' = IP pineada (radreply Framed-IP-Address) — bypasea el pool. Default 'fixed'.
+   */
+  ipMode: 'pool' | 'fixed';
   createdAt: string;
 }

@@ -18,6 +18,8 @@ export interface PppoeServiceDto {
   remoteAddress: string | null;
   status: string;
   enforcedState: string; // Fase C — active | reduced | blocked
+  /** pppoe-pool-ip: modo de asignación de IP — 'pool' (FreeRADIUS asigna del pool) | 'fixed' (IP pineada). */
+  ipMode: string;
   nasId: string;
   contractId: string | null;
   createdAt: string;
@@ -34,6 +36,8 @@ export function toPppoeServiceDto(s: {
   remoteAddress: string | null;
   status: string;
   enforcedState: string;
+  /** pppoe-pool-ip: opcional para back-compat con callers que preceden al campo. Default 'fixed'. */
+  ipMode?: string;
   nasId: string;
   contractId: string | null;
   createdAt: string;
@@ -45,6 +49,7 @@ export function toPppoeServiceDto(s: {
     remoteAddress: s.remoteAddress,
     status:        s.status,
     enforcedState: s.enforcedState,
+    ipMode:        s.ipMode ?? 'fixed',
     nasId:         s.nasId,
     contractId:    s.contractId,
     createdAt:     s.createdAt,

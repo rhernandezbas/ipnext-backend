@@ -1731,6 +1731,9 @@ model NasServer {
   lastSeen     DateTime?
   clientCount  Int       @default(0)
   description  String?
+  // pppoe-pool-ip: nombre del pool de FreeRADIUS (radippool) para este NAS. No nulo ⟺ NAS en modo pool
+  // (las altas nuevas sin IP fija usan ipMode='pool'). Nulo ⟺ comportamiento legacy (el caller pre-elige IP).
+  poolName     String?
   createdAt    DateTime  @default(now())
   pppoeServices PppoeService[]
   radiusEvents  RadiusEvent[]
@@ -1802,6 +1805,8 @@ model PppoeService {
   nasId         String
   contractId    String?
   callerId      String?   // MAC del CPE (persistida de la última sesión vista — sobrevive a la desconexión)
+  // pppoe-pool-ip: modo de asignación de IP — 'pool' (FreeRADIUS asigna del pool del NAS, framedIp null) | 'fixed' (Framed-IP-Address pineada).
+  ipMode        String    @default("fixed")
   createdAt     DateTime  @default(now())
   nas           NasServer @relation(fields: [nasId], references: [id])
   contract      Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)

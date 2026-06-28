@@ -18,7 +18,7 @@ function pppoe(over: Partial<PppoeService> = {}): PppoeService {
   return {
     id: 'p1', username: USER, password: 'pw', profile: COMMERCIAL,
     remoteAddress: '100.64.10.10', status: 'enabled', nasId: '6', contractId: 'c1',
-    enforcedState: 'active', callerId: null, createdAt: '2026-01-01', ...over,
+    enforcedState: 'active', callerId: null, ipMode: 'fixed', createdAt: '2026-01-01', ...over,
   };
 }
 

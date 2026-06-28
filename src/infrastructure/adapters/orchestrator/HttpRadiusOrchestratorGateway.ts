@@ -12,6 +12,7 @@ import {
   ListPostauthFilters,
   PostauthPage,
   AuthEventRow,
+  RadiusIpPool,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -140,6 +141,13 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     return Array.isArray(ips) ? (ips as string[]) : [];
   }
 
+  async listPools(): Promise<RadiusIpPool[]> {
+    const { data } = await this.call(() => this.http.get('/pools'));
+    // El orchestrator puede devolver el array directo o envuelto en { pools: [...] }.
+    const rows: unknown = Array.isArray(data) ? data : (data as { pools?: unknown } | null)?.pools;
+    return (Array.isArray(rows) ? rows : []).map(toRadiusIpPool);
+  }
+
   async listActiveSessions(offset = 0, limit = 10000): Promise<OrchestratorSession[]> {
     const { data } = await this.call(() =>
       this.http.get('/sessions', { params: { offset, limit } }),
@@ -185,6 +193,20 @@ function toInventoryItem(r: any): RadiusUserInventoryItem {
     password: r.password,
     plan: r.plan ?? null,
     framedIp: r.framed_ip ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toRadiusIpPool(r: any): RadiusIpPool {
+  // Mapeo defensivo del GET /pools. Shape verificado contra el código del orchestrator:
+  // { name: str, total: int, in_use: int, free: int }. Mapeamos name/total/free (in_use no se
+  // usa en el pre-check); seguimos aceptando snake_case (pool_name) y alias razonables
+  // (size/available) por robustez. El pre-check de SetNasPoolMode es fail-closed ante un `free`
+  // no-finito, así que un shape corrupto NUNCA pasa como falso-OK.
+  return {
+    name:  r.name ?? r.pool_name ?? '',
+    total: Number(r.total ?? r.size ?? r.count ?? 0),
+    free:  Number(r.free ?? r.available ?? 0),
   };
 }
 

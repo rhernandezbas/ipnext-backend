@@ -62,6 +62,14 @@ export class CreatePppoeService {
     const remoteAddress = input.remoteAddress ?? null;
     const isRadius = routesViaOrchestrator(nas.type);
 
+    // pppoe-pool-ip (Decisión 4): NAS RADIUS en modo pool (poolName != null) Y sin IP fija pedida
+    // → ipMode='pool': NO se pre-elige IP (FreeRADIUS la asigna del pool en el auth), framedIp=null.
+    // NAS legacy o IP fija pedida → ipMode='fixed', flujo actual intacto (framedIp=remoteAddress).
+    const ipMode: 'pool' | 'fixed' =
+      isRadius && nas.poolName != null && remoteAddress == null ? 'pool' : 'fixed';
+    const framedIp = ipMode === 'pool' ? null : remoteAddress;
+    const persistedRemoteAddress = ipMode === 'pool' ? null : remoteAddress;
+
     // 2b. Un usuario RADIUS NECESITA su grupo/plan (radusergroup): sin `profile` no hay alta.
     //     Validar ANTES de tocar la DB → no dejamos filas `pending` huérfanas por un input inválido.
     if (isRadius && !profile) throw new PppoeProfileRequiredError(input.username);
@@ -79,9 +87,10 @@ export class CreatePppoeService {
       username: input.username,
       password: input.password,
       profile,
-      remoteAddress,
+      remoteAddress: persistedRemoteAddress,
       nasId: input.nasId,
       contractId: input.contractId ?? null,
+      ipMode,
     };
 
     // 3. DB pending → aprovisionar (RADIUS o router según el NAS) → DB confirm
@@ -92,7 +101,7 @@ export class CreatePppoeService {
         username: input.username,
         password: input.password,
         plan: profile!,
-        framedIp: remoteAddress,
+        framedIp,
       });
     } else {
       await this.router.createSecret(toNasTarget(nas), {

@@ -115,3 +115,62 @@ describe('CreatePppoeService', () => {
       .rejects.toBeInstanceOf(NasNotFoundError);
   });
 });
+
+// ── pppoe-pool-ip Fase 1: ipMode (rama pool del alta, Decisión 4) ─────────────
+describe('CreatePppoeService — ipMode (pppoe-pool-ip)', () => {
+  let repo: InMemoryPppoeServiceRepository;
+  let router: InMemoryRouterGateway;
+  let nasRepo: InMemoryNasRepository;
+  let orchestrator: InMemoryRadiusOrchestratorGateway;
+  let uc: CreatePppoeService;
+
+  beforeEach(() => {
+    repo = new InMemoryPppoeServiceRepository();
+    router = new InMemoryRouterGateway();
+    nasRepo = new InMemoryNasRepository();
+    orchestrator = new InMemoryRadiusOrchestratorGateway();
+    const ensure = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
+    uc = new CreatePppoeService(repo, router, nasRepo, orchestrator, ensure);
+  });
+
+  it('NAS pool-mode (poolName) + sin remoteAddress: ipMode=pool, createUser con framedIp=null, NO persiste IP', async () => {
+    // NAS '3' es radius_orchestrator con poolName en el seed.
+    const s = await uc.execute({
+      contractId: 'C1',
+      username: 'pooluser',
+      password: 'p',
+      profile: 'PLAN-10M',
+      nasId: '3',
+      // sin remoteAddress
+    });
+    expect(s.ipMode).toBe('pool');
+    expect(s.remoteAddress).toBeNull();
+    expect(orchestrator.createdUser('pooluser')!.framedIp).toBeNull();
+  });
+
+  it('NAS pool-mode + remoteAddress explícito (IP fija pedida): ipMode=fixed, framedIp=la IP', async () => {
+    const s = await uc.execute({
+      contractId: 'C1',
+      username: 'fixeduser',
+      password: 'p',
+      profile: 'PLAN-10M',
+      nasId: '3',
+      remoteAddress: '100.64.10.5',
+    });
+    expect(s.ipMode).toBe('fixed');
+    expect(s.remoteAddress).toBe('100.64.10.5');
+    expect(orchestrator.createdUser('fixeduser')!.framedIp).toBe('100.64.10.5');
+  });
+
+  it('NAS legacy (mikrotik_api, sin poolName): ipMode=fixed (alta fija intacta)', async () => {
+    // NAS '1' es mikrotik_api + sin poolName → flujo actual.
+    const s = await uc.execute({
+      contractId: 'C1',
+      username: 'mkuser',
+      password: 'p',
+      profile: 'IP-Air-30-10',
+      nasId: '1',
+    });
+    expect(s.ipMode).toBe('fixed');
+  });
+});

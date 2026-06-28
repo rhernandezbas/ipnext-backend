@@ -53,6 +53,9 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     };
     // enforcedState: solo se escribe si viene (en create cae al default 'active' del schema).
     if (data.enforcedState !== undefined) fields['enforcedState'] = data.enforcedState;
+    // pppoe-pool-ip: ipMode solo se escribe si viene (en create cae al default 'fixed' del schema).
+    // CRÍTICO: sin esto, la rama pool de CreatePppoeService no persistiría ipMode='pool' en prod.
+    if (data.ipMode !== undefined) fields['ipMode'] = data.ipMode;
     const row = await model().upsert({
       where: { username: data.username },
       create: { username: data.username, enforcedState: data.enforcedState ?? 'active', ...fields },
@@ -92,6 +95,7 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
         nasId: true,
         contractId: true,
         callerId: true,
+        ipMode: true,
         createdAt: true,
         contract: { select: { clientId: true, client: { select: { name: true } } } },
       },
@@ -235,6 +239,7 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
           nasId: true,
           contractId: true,
           callerId: true,
+          ipMode: true,
           createdAt: true,
           contract: { select: { clientId: true, client: { select: { name: true } } } },
         },
@@ -267,6 +272,16 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
 
   async setCallerId(id: string, callerId: string): Promise<void> {
     await model().update({ where: { id }, data: { callerId } });
+  }
+
+  async setIpMode(id: string, ipMode: 'pool' | 'fixed', remoteAddress: string | null): Promise<PppoeService | null> {
+    try {
+      const row = await model().update({ where: { id }, data: { ipMode, remoteAddress } });
+      return toEntity(row);
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null; // fila inexistente → null; el resto PROPAGA
+      throw err;
+    }
   }
 
   async setEnforcedState(id: string, state: EnforcedState): Promise<PppoeService | null> {
@@ -302,6 +317,7 @@ function toEntity(row: any): PppoeService {
     nasId: row.nasId,
     contractId: row.contractId ?? null,
     callerId: row.callerId ?? null,
+    ipMode: (row.ipMode ?? 'fixed') as 'pool' | 'fixed',
     createdAt: new Date(row.createdAt).toISOString(),
   };
 }
@@ -320,6 +336,7 @@ function toEntityWithClient(row: any): PppoeServiceWithClient {
     nasId:         row.nasId,
     contractId:    row.contractId ?? null,
     callerId:      row.callerId ?? null,
+    ipMode:        (row.ipMode ?? 'fixed') as 'pool' | 'fixed',
     createdAt:     new Date(row.createdAt).toISOString(),
     clientId:      row.contract?.clientId ?? null,
     customerName:  row.contract?.client?.name ?? null,

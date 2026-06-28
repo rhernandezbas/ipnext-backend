@@ -50,6 +50,7 @@
 - [ ] 7.4 **Validación LIVE** con **usuario de PRUEBA (NUNCA cliente real)** en Acceso Sur: alta pool → toma IP del pool; pin → mantiene la IP; unpin → vuelve al pool; reconexión → sticky.
 
 ## 8. Salida de fase — push gated
+- [ ] 8.0 **PinPppoeIp: validar rango gestionado (IpNetwork) antes del go-live** (spec SHALL; hoy solo valida formato + no-tomada). Requiere inyectar `IpNetworkRepository` + decidir "qué rango cuenta" como gestionado. Ver `// TODO(go-live)` en `PinPppoeIp.ts`.
 - [ ] 8.1 **PRE-DEPLOY:** confirmar que ningún NAS quedó `poolName` no nulo sin su pool poblado (evita 502 / clientes sin IP).
 - [ ] 8.2 Merge BE+FE coordinado a `main` + push (= prod). **Requiere OK explícito del usuario.** Deploy verde (migración aditiva aplicada).
 - [ ] 8.3 Go-live gradual: marcar el NAS de Acceso Sur en modo pool **después** del gate `-XC`/`-X` + restart en ventana + validación LIVE. Los ~2287 fijos siguen intactos (dormant hasta el go-live).

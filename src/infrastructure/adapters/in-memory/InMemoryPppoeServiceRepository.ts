@@ -40,6 +40,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       existing.nasId = data.nasId;
       existing.contractId = data.contractId ?? null;
       if (data.enforcedState !== undefined) existing.enforcedState = data.enforcedState;
+      if (data.ipMode !== undefined) existing.ipMode = data.ipMode;
       return { ...existing };
     }
     const created: PppoeService = {
@@ -52,6 +53,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       nasId: data.nasId,
       contractId: data.contractId ?? null,
       enforcedState: data.enforcedState ?? 'active',
+      ipMode: data.ipMode ?? 'fixed',
       callerId: null,
       createdAt: this.now().toISOString(),
     };
@@ -90,6 +92,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
           nasId:         s.nasId,
           contractId:    s.contractId,
           callerId:      s.callerId,
+          ipMode:        s.ipMode,
           createdAt:     s.createdAt,
           clientId:      client?.clientId ?? null,
           customerName:  client?.customerName ?? null,
@@ -194,6 +197,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
         nasId:         s.nasId,
         contractId:    s.contractId,
         callerId:      s.callerId,
+        ipMode:        s.ipMode,
         createdAt:     s.createdAt,
         clientId:      client?.clientId ?? null,
         customerName:  client?.customerName ?? null,
@@ -255,5 +259,13 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     return this.store
       .filter(s => s.contractId !== null && this.contractClientStatus.get(s.contractId) === status)
       .map(s => ({ ...s }));
+  }
+
+  async setIpMode(id: string, ipMode: 'pool' | 'fixed', remoteAddress: string | null): Promise<PppoeService | null> {
+    const found = this.store.find(s => s.id === id);
+    if (!found) return null;
+    found.ipMode = ipMode;
+    found.remoteAddress = remoteAddress;
+    return { ...found };
   }
 }

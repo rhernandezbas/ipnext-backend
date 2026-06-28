@@ -9,6 +9,8 @@ export interface PppoeServiceUpsert {
   nasId: string;
   contractId?: string | null;
   enforcedState?: EnforcedState; // Fase C — default 'active' si se omite
+  /** pppoe-pool-ip: modo de asignación de IP. 'pool' = FreeRADIUS asigna del pool | 'fixed' = IP pineada. Default 'fixed'. */
+  ipMode?: 'pool' | 'fixed';
 }
 
 /**
@@ -117,6 +119,11 @@ export interface PppoeServiceRepository {
   setEnforcedState(id: string, state: EnforcedState): Promise<PppoeService | null>;
   /** persist-caller-id: guarda la MAC del CPE (última sesión vista) para que sobreviva a la desconexión. */
   setCallerId(id: string, callerId: string): Promise<void>;
+  /**
+   * pppoe-pool-ip: actualiza SOLO `ipMode` y `remoteAddress` de un PPPoE (pin/unpin de IP fija).
+   * NO toca password/profile/status. Devuelve la entidad actualizada, o null si no existe.
+   */
+  setIpMode(id: string, ipMode: 'pool' | 'fixed', remoteAddress: string | null): Promise<PppoeService | null>;
   /**
    * PPPoE de clientes con un `Client.status` dado (cruza pppoe→contract→client).
    * Es el resolver de `target='debtors'` (status='late') sin depender de RADIUS.

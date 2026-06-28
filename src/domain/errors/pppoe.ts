@@ -142,3 +142,52 @@ export class OrchestratorRejectedError extends DomainError {
     this.name = 'OrchestratorRejectedError';
   }
 }
+
+/**
+ * pppoe-pool-ip: la IP provista no es un IPv4 válido (formato inválido).
+ * Code → HTTP: INVALID_IP_FORMAT → 422.
+ */
+export class InvalidIpFormatError extends DomainError {
+  constructor(public readonly ip: string) {
+    super(`IP '${ip}' no es un IPv4 válido`, 'INVALID_IP_FORMAT');
+    this.name = 'InvalidIpFormatError';
+  }
+}
+
+/**
+ * pppoe-pool-ip: la IP a pinear ya está asignada a OTRO usuario en el RADIUS (radreply Framed-IP).
+ * Code → HTTP: IP_ALREADY_TAKEN → 409.
+ */
+export class IpAlreadyTakenError extends DomainError {
+  constructor(public readonly ip: string) {
+    super(`La IP ${ip} ya está asignada a otro usuario`, 'IP_ALREADY_TAKEN');
+    this.name = 'IpAlreadyTakenError';
+  }
+}
+
+/**
+ * pppoe-pool-ip: se intentó despinear (unpin) un servicio en un NAS que NO está en modo pool
+ * (poolName nulo). Sin pool de respaldo el cliente quedaría sin IP → el unpin es inválido.
+ * Code → HTTP: NAS_NO_POOL → 409.
+ */
+export class NasNoPoolError extends DomainError {
+  constructor(public readonly nasId: string) {
+    super(`El NAS ${nasId} no está en modo pool (sin poolName) — no hay pool al que volver`, 'NAS_NO_POOL');
+    this.name = 'NasNoPoolError';
+  }
+}
+
+/**
+ * pppoe-pool-ip (Decisión 3): se intentó marcar un NAS en modo pool con un pool que no existe
+ * en el `radippool` o que no tiene IPs libres. Aceptarlo dejaría a las altas nuevas sin IP.
+ * Code → HTTP: RADIUS_POOL_EMPTY → 409.
+ */
+export class RadiusPoolEmptyError extends DomainError {
+  constructor(public readonly poolName: string) {
+    super(
+      `El pool '${poolName}' no existe o no tiene IPs libres en el RADIUS — no se puede marcar el NAS en modo pool`,
+      'RADIUS_POOL_EMPTY',
+    );
+    this.name = 'RadiusPoolEmptyError';
+  }
+}

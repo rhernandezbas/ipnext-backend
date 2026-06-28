@@ -20,6 +20,13 @@ export interface NasServer {
   lastSeen: string | null;
   clientCount: number;
   description: string;
+  /**
+   * pppoe-pool-ip: nombre del pool de FreeRADIUS (radippool) para este NAS.
+   * No nulo ⟺ NAS en modo pool (las altas nuevas sin IP fija usan ipMode='pool').
+   * Nulo/ausente ⟺ comportamiento legacy (el caller pre-elige la IP). Opcional para
+   * no romper los literales NasServer preexistentes (la columna es nullable, default null).
+   */
+  poolName?: string | null;
 }
 
 export interface RadiusConfig {

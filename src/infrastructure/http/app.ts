@@ -299,6 +299,7 @@ import { DeleteIpPool } from '@application/use-cases/DeleteIpPool';
 import { createNasRouter } from './routes/nas.routes';
 import { PrismaNasRepository } from '../adapters/prisma/PrismaNasRepository';
 import { FindFreeIp } from '@application/use-cases/FindFreeIp';
+import { SetNasPoolMode } from '@application/use-cases/SetNasPoolMode';
 import { createDashboardRouter } from './routes/dashboard.routes';
 import { PrismaDashboardRepository } from '../adapters/prisma/PrismaDashboardRepository';
 import { GetDashboardStats } from '@application/use-cases/GetDashboardStats';
@@ -649,6 +650,8 @@ import { DeassociatePppoeFromContract } from '@application/use-cases/Deassociate
 import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
 import { TerminatePppoeService } from '@application/use-cases/TerminatePppoeService';
 import { GetPppoeCallerId } from '@application/use-cases/GetPppoeCallerId';
+import { PinPppoeIp } from '@application/use-cases/PinPppoeIp';
+import { UnpinPppoeIp } from '@application/use-cases/UnpinPppoeIp';
 import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
 import { ListInternetServiceHistory } from '@application/use-cases/ListInternetServiceHistory';
 import { ListInternetActivationOperators } from '@application/use-cases/ListInternetActivationOperators';
@@ -1153,6 +1156,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // crea su propio NasLiveStatsProvider fresco (evita cache singleton entre requests).
   const listNasServers = new ListNasServers(nasRepo, ipNetworkRepo, orchestrator);
   const getNasServer = new GetNasServer(nasRepo, ipNetworkRepo, orchestrator);
+  // pppoe-pool-ip (Decisión 3): marca un NAS en modo pool con pre-check del radippool (GET /pools).
+  const setNasPoolMode = new SetNasPoolMode(nasRepo, orchestrator);
 
   const networkSiteRepo = new PrismaNetworkSiteRepository();
   const listNetworkSites = new ListNetworkSites(networkSiteRepo);
@@ -1755,6 +1760,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listNasServers, getNasServer, createNasServer, updateNasServer, deleteNasServer,
     getRadiusConfig, updateRadiusConfig,
     findFreeIp,
+    setNasPoolMode,
   ));
   app.use(
     '/api/settings',
@@ -2165,6 +2171,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new ListAllPppoeServices(pppoeRepo, new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
       new ListInternetServiceHistory(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
       new ListInternetActivationOperators(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
+      // pppoe-pool-ip (Decisión 5): pin/unpin de IP fija sobre el pool del NAS (RADIUS HA).
+      new PinPppoeIp(pppoeRepo, nasRepoForPppoe, orchestrator),
+      new UnpinPppoeIp(pppoeRepo, nasRepoForPppoe, orchestrator),
     ));
   }
 
