@@ -45,6 +45,7 @@
 
 ## 🟡 Deuda técnica
 
+- [ ] 🔒 **Leak de secretos NAS en prod (`radiusSecret`/`apiPassword` crudos).** `GET /api/nas-servers` (ListNasServers) y `GET /api/nas-servers/:id` (GetNasServer) devuelven la entidad `NasServer` CRUDA con `radiusSecret`/`apiPassword` reales — `PrismaNasRepository.toEntity` NO enmascara. Los tests NO lo cazan porque `InMemoryNasRepository` seedea `'••••••••'` (oculta el leak; el comentario "masked in responses" en `domain/entities/nas.ts` es aspiracional, no real). Gateado por `network.read`/`network.manage` (no público, pero el secreto viaja a cualquier operador de red y puede loguearse/cachearse). **Fix:** enmascarar en los use cases/rutas (helper compartido, convención `'••••••••'`) — igual que ya hace la ruta `pool-mode` (commit `83e1c245`). Descubierto en el review adversarial del sqlippool BE (2026-06-27). Cambio chico + review enfocado. **Verificar en vivo antes** (curl a `/api/nas-servers` en prod) para confirmar que no hay otro masking en el medio.
 - [ ] **16 tests pre-existentes rotos en el frontend** (NO introducidos esta sesión, confirmado con git stash):
   - `CustomerDetailPage.test` / `ClienteDetailPage` (~7)
   - `CreateTicketPage.test` (~6)
