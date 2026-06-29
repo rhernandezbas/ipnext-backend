@@ -43,7 +43,7 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 > ```
 > **Regla:** antes de explorar/codear cualquier cosa nueva, confirmar `main local == origin/main` (`git rev-list --count main..origin/main` == 0) en los dos repos. Si difiere, sincronizar PRIMERO. **El local stale es una fuente silenciosa de bugs: se explora y se "arregla" código que en prod ya cambió.**
 >
-> **Doc-only en `main` → se PUSHEA, no se acumula local (decisión del usuario, 2026-06-25).** Los cambios doc-only que se editan directo en `main` (`BACKLOG.md`, `WORKFLOW-MULTI-REPO.md`, `DEUDAS-PENDIENTES.md`, `.gitignore`) NO se dejan commiteados solo-local: se **pushean** para que `origin` quede como fuente de verdad y el `main` local no diverja. Un commit local-ahead es la otra cara del problema de staleness — el `BACKLOG`/`WORKFLOW` "vive en origin"; si queda solo local, la próxima sesión no lo ve (o lo pierde en un sync). Sí, el push del BE dispara un deploy, pero doc-only = **blast radius ~0** (rebuild + `migrate deploy` no-op + swap de container, sin cambio de runtime). El push igual se confirma con el usuario (gate), pero para doc-only el default es **pushear ya** y dejar `main local == origin`.
+> **Doc-only en `main` → se PUSHEA, no se acumula local (decisión del usuario, 2026-06-25).** Los cambios doc-only que se editan directo en `main` (`BACKLOG.md`, `WORKFLOW-MULTI-REPO.md`, `.gitignore`) NO se dejan commiteados solo-local: se **pushean** para que `origin` quede como fuente de verdad y el `main` local no diverja. Un commit local-ahead es la otra cara del problema de staleness — el `BACKLOG`/`WORKFLOW` "vive en origin"; si queda solo local, la próxima sesión no lo ve (o lo pierde en un sync). Sí, el push del BE dispara un deploy, pero doc-only = **blast radius ~0** (rebuild + `migrate deploy` no-op + swap de container, sin cambio de runtime). El push igual se confirma con el usuario (gate), pero para doc-only el default es **pushear ya** y dejar `main local == origin`.
 
 ## Base de datos
 
@@ -90,7 +90,7 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 > - **TIPO**: `[FEAT]`, `🐛 [BUG]`, `[BUG→FEAT]`, `[REFACTOR]`, `[DOC]`, `[CONFIG]` — segun corresponda.
 > - **ESTADO**: `PENDIENTE` → `EN PROGRESO` → `✅ HECHO Y EN PROD` (o `EN PROD`). Se ACTUALIZA la card existente al avanzar, NO se crea una nueva por cada paso.
 > - **fecha** en calendario AR; **contexto** = pedido del usuario / hallazgo de review / PR (`BE #NNN / FE #NNN`).
-> - El `BACKLOG.md` se edita **directo en `main`** (es doc de proceso — misma excepcion que este archivo y `DEUDAS-PENDIENTES.md`, ver "Reglas para agentes").
+> - El `BACKLOG.md` se edita **directo en `main`** (es doc de proceso — misma excepcion que este archivo, ver "Reglas para agentes").
 
 ## Verificación
 
@@ -166,7 +166,7 @@ Reglas operativas del loop:
 
 ## Reglas para agentes / asistentes de IA
 
-- **SIEMPRE worktree, NUNCA sobre `main` directo (INNEGOCIABLE).** Todo trabajo de **código** (feature, fix, refactor) se hace en un **worktree dedicado por cambio**, jamás editando/implementando sobre el working tree de `main`. El `main` local queda limpio y solo avanza por merge/pull. *(Única excepción: los docs de proceso — este archivo, `BACKLOG.md`, `DEUDAS-PENDIENTES.md` — se editan directo en `main`.)*
+- **SIEMPRE worktree, NUNCA sobre `main` directo (INNEGOCIABLE).** Todo trabajo de **código** (feature, fix, refactor) se hace en un **worktree dedicado por cambio**, jamás editando/implementando sobre el working tree de `main`. El `main` local queda limpio y solo avanza por merge/pull. *(Única excepción: los docs de proceso — este archivo y `BACKLOG.md` (que incluye la sección "🔧 Deudas conocidas") — se editan directo en `main`.)*
   - **Un worktree por cosa**, en el repo que corresponde: `<repo>/.claude/worktrees/<name>-<be|fe>`, branch `feat/<name>` o `fix/<name>` derivado de `main`, con **junction de `node_modules`** (`New-Item -ItemType Junction` en PowerShell — instantáneo, reusa el del repo principal).
   - **Crear el worktree con path ABSOLUTO** (no relativo: el cwd persistido del shell los anida mal) y **branchear desde el SHA explícito de `main`** (`MAIN=$(git -C <repo> rev-parse main)`), NO desde el nombre `main`: hay sesiones en PARALELO moviendo `main`, y un `worktree add … main` puede agarrar un commit en flujo (cazado el 2026-06-14 — el worktree quedó en un merge de otra branch).
   - **Verificar SIEMPRE el HEAD recién creado**: `git -C <worktree> rev-parse HEAD` == el SHA de `main` esperado. Si quedó mal: `git -C <worktree> reset --hard $MAIN` (NO borres el worktree — un `rm -rf` que sigue el junction de `node_modules` puede borrar el `node_modules` REAL del repo principal).
@@ -213,7 +213,7 @@ Reglas operativas del loop:
 - **Los secrets del pipeline se setean SIEMPRE con `gh`** (ej. `gh secret set DATABASE_URL`), nunca a mano en la UI ni hardcodeados. El deploy consume `secrets.DATABASE_URL` y companhia desde GitHub Actions, asi que `gh secret set` / `gh secret list` es la via canonica para crearlos, rotarlos y auditarlos. El valor del secret se pasa por stdin o archivo, jamas inline en el comando que queda en el historial.
 - **Las env vars de runtime del contenedor de prod tambien son secrets de GitHub.** No se setean en EasyPanel a mano: el step `Deploy container` de `deploy.yml` las forwardea al contenedor via `-e VAR="${{ secrets.VAR }}"`. Para agregar una nueva env de runtime: (1) agregar la linea `-e VAR=...` en el step `Deploy container`, (2) `gh secret set VAR`. El agente lo hace (no requiere accion manual del operador en EasyPanel).
 - **`COOKIE_SECURE`**: controla el flag `Secure` de la cookie de sesion (SDD #6a), desacoplado de `NODE_ENV`. **Prod corre por HTTP plano (sin TLS)** → `COOKIE_SECURE=false` (si se setea `true` sin HTTPS, el browser descarta la cookie y se rompe el login). Pasa a `true` recién cuando haya HTTPS adelante.
-- Hay deuda de seguridad abierta en [`DEUDAS-PENDIENTES.md`](./DEUDAS-PENDIENTES.md) (PAT de GitHub, password de DB, credenciales en skills, enforcement de roles).
+- Hay deuda de seguridad abierta en `BACKLOG.md`, sección "🔧 Deudas conocidas" (PAT de GitHub, credenciales en skills, enforcement de roles, leak de secretos NAS).
 
 ## Servidor y runners self-hosted (infra)
 

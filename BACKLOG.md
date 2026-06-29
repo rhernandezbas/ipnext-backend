@@ -118,7 +118,7 @@
 > **Migración: POR FASES (decisión del usuario).** Los ~2287 actuales quedan **FIJOS** (intactos, CERO migración de data) — fijos y pool conviven seamless vía el bypass de FreeRADIUS. Solo los NUEVOS van a pool. **Fase 1: NE8000/Acceso Sur (limpio, 100% en el HA) + clientes nuevos → sqlippool.** Fase 2 (futura, dependiente): otros nodos, requieren migrarse primero al RADIUS HA.
 > **Scope:** 3 repos (orchestrator + BE + FE) + config FreeRADIUS. SDD interactivo, worktree, TDD, review adversarial, no push sin OK.
 > **✅ PLAN SDD COMPLETO Y LOCKEADO (2026-06-27):** `openspec/changes/pppoe-pool-ip/` tiene proposal + design (8 decisiones) + spec (8 requirements c/scenarios) + tasks. **Phase 0 RESUELTA** (recon live r1: una sola puerta NAS `10.75.0.30`, `radippool` VACÍO, replicación sana Seconds_Behind=0, sin huntgroups, FreeRADIUS 3.2.1, `rlm_sqlippool.so` instalado pero comentado). **Reconciliado el desfasaje "staging":** NO existe staging → gate `freeradius -XC` (config-check) + `-X` (debug, usuario de prueba) + ventana de mantenimiento (Decisión 7), alineado en proposal + tasks. **PENDIENTE = APPLY (implementación Fase 1):** migración aditiva `ipMode`/`poolName` + use cases (CreatePppoeService rama pool, PinPppoeIp/UnpinPppoeIp, SetNasPoolMode con pre-check) + FE toggle (ui-ux-pro-max) + config `sqlippool` en r1/r2 **prod** (operación grande AAA-prod, sin staging, ventana + backup + rolling + rollback). Los ~2287 fijos quedan INTACTOS (bypass Framed-IP, cero migración de data).
-> **✅ BE EN PROD (DORMANT) — 2026-06-27, commit `83e1c245`, deploy 28313231889 verde (migración aditiva `20260822000000` aplicada):** `PppoeService.ipMode` (default `fixed`) + `NasServer.poolName` (nullable) + `CreatePppoeService` rama pool (D4) + `PinPppoeIp`/`UnpinPppoeIp` (D5) + `SetNasPoolMode` (D3, pre-check `listPools` con NaN-guard) + rutas (pin/unpin `pppoe.manage`, pool-mode `network.manage`, enmascara secretos). **DORMANT** (ningún NAS con `poolName` → cero cambio de comportamiento). Construido alineado al design lockeado (el commit viejo `b08a1c1b` usaba `poolMode` boolean sin pre-check → superseded). Gate 5775/0 + tsc + review adversarial (1 fix wave: NaN-guard/own-IP/route-tests + fix de leak de secretos en la ruta pool-mode). **Hallazgo → DEUDA:** las rutas NAS existentes (ListNasServers/GetNasServer) leakean `radiusSecret`/`apiPassword` crudos en prod (ver `DEUDAS-PENDIENTES.md`). **PENDIENTE:** (1) **FE** toggle "IP fija" (InternetPanel, ui-ux-pro-max, dormant); (2) **infra FreeRADIUS** (sqlippool en r1/r2 + poblar radippool + gate `-XC`/`-X` + ventana, tasks §1); (3) **#1** validación de rango gestionado en PinPppoeIp (task 8.0, prereq go-live); (4) **go-live** gradual (marcar Acceso Sur pool-mode tras validación live).
+> **✅ BE EN PROD (DORMANT) — 2026-06-27, commit `83e1c245`, deploy 28313231889 verde (migración aditiva `20260822000000` aplicada):** `PppoeService.ipMode` (default `fixed`) + `NasServer.poolName` (nullable) + `CreatePppoeService` rama pool (D4) + `PinPppoeIp`/`UnpinPppoeIp` (D5) + `SetNasPoolMode` (D3, pre-check `listPools` con NaN-guard) + rutas (pin/unpin `pppoe.manage`, pool-mode `network.manage`, enmascara secretos). **DORMANT** (ningún NAS con `poolName` → cero cambio de comportamiento). Construido alineado al design lockeado (el commit viejo `b08a1c1b` usaba `poolMode` boolean sin pre-check → superseded). Gate 5775/0 + tsc + review adversarial (1 fix wave: NaN-guard/own-IP/route-tests + fix de leak de secretos en la ruta pool-mode). **Hallazgo → DEUDA:** las rutas NAS existentes (ListNasServers/GetNasServer) leakean `radiusSecret`/`apiPassword` crudos en prod (ver sección "🔧 Deudas conocidas" abajo). **PENDIENTE:** (1) **FE** toggle "IP fija" (InternetPanel, ui-ux-pro-max, dormant); (2) **infra FreeRADIUS** (sqlippool en r1/r2 + poblar radippool + gate `-XC`/`-X` + ventana, tasks §1); (3) **#1** validación de rango gestionado en PinPppoeIp (task 8.0, prereq go-live); (4) **go-live** gradual (marcar Acceso Sur pool-mode tras validación live).
 > **✅ FE EN PROD (DORMANT) — 2026-06-27, FE `718081a4` (cherry-pick `1de9307e` de la sesión 25-jun + reconciliación), deploy 28315159503 verde:** toggle "IP fija" en `InternetPanel` (`ipMode='fixed'`→"IP fija"+Liberar / `ipMode='pool'`→"Automática"+Fijar) consumiendo `pin-ip`/`unpin-ip` del BE. Reconciliado a main (ipMode en fixtures + mocks honestos Ola 1). Gate FE 3983/0 + tsc + review CLEAN. **El control es VISIBLE** (decisión del usuario: pushear así): en NAS sin pool el botón "Liberar" da 409 graceful inline → es un control "esperando" el go-live. Refinamiento (ocultarlo hasta pool-mode) va junto con la infra. **TODO EL CÓDIGO del sqlippool (BE+FE) está EN PROD DORMANT. Solo falta la infra FreeRADIUS (ventana dedicada) + go-live.** Worktrees viejos `pppoe-pool-ip-be`/`pppoe-pool-ip-fe` (b08a1c1b/c0413829, 25-jun) quedaron SUPERSEDED — limpiar.
 > **🔧 Infra — prep SEGURO hecho (2026-06-27), restart pendiente de VENTANA:** recon read-only completo de r1 (FreeRADIUS 3.2.1; `mods-available/sqlippool` existe sin enablear; `sqlippool` comentado en sites/default 833=allocate/693=release; `radippool` InnoDB ✓ VACÍO; 179 fijos en `100.64.10.x` a excluir). **Config sqlippool validada con `freeradius -XC` (RC=0 "Configuration appears to be OK") en una COPIA de la config viva — CERO impacto en el daemon vivo:** lease 2sem + pool_key=Calling-Station-Id + enable + uncomment cargan limpio. **Runbook de go-live preciso y validado:** `Documents/IPNext/Operaciones/Runbooks/sqlippool - go-live Fase 1.md` (poblar radippool excl. fijos + bloque unlang selección Pool-Name/bypass + gate `-XC`/`-X` + restart rolling r1→r2 + rollback + go-live). **FALTA (ventana de bajo tráfico, usuario presente): agregar el bloque de selección + `-X` con usuario de PRUEBA + poblar radippool + RESTART del FreeRADIUS vivo + marcar Acceso Sur pool-mode.** El restart es el único paso de riesgo (puede dejar sin internet a la fibra si la config está mal) → NO se hace fuera de ventana.
 
@@ -704,6 +704,77 @@
 - **Permisos del botón**: `inventory.write` (dos capas).
 - **Decisiones cerradas (usuario, 2026-06-10)**: (a) **Retiro POR ÍTEM con PICKER**: un contrato con N equipos abre un picker listando los activos — se retira el/los seleccionados, NUNCA todo-o-nada (hay retiros parciales). (b) **Aplicación DIRECTA** con confirm-dialog (sin encolar en Devoluciones pendientes — el operador YA está decidiendo al apretar el botón), registrando `source='MANUAL'` en el movimiento RETURN.
 - **Sub-ítem (gap de configurabilidad W4)**: toggle **"Es retiro de equipo"** por fila en la sub-tab "Mapeo de resultados" del Cierre de OS — hoy `IClassResultCode.isRemovalCode` solo se edita por SQL (cero referencias en el FE); un código de retiro nuevo de IClass requiere migración a mano. BE expone el campo en el PUT del mapping + FE el switch (gate `iclass.manage`).
+
+---
+
+## 🔧 Deudas conocidas (sin card activa)  *(absorbido de DEUDAS-PENDIENTES.md el 2026-06-28 — fuente única en el BACKLOG)*
+
+> Deuda viva que todavía NO tiene card propia en Pendientes. Lo HECHO no figura acá: esto es solo lo que QUEDA. Cuando una deuda se agarra, se convierte en card arriba (`PENDIENTE`→`✅ HECHO`) y se borra de esta sección.
+
+### 🔒 Seguridad / acción del usuario (URGENTE)
+
+- [ ] **Revocar el PAT de GitHub** `ghp_GDHPEtPhz0...` usado para cargar los GitHub Secrets.
+  → github.com/settings/tokens. Ya cumplió su función.
+- [ ] **Credenciales hardcodeadas en el skill `gestion-real-ipnext`** (CUIT `30708499850`, SECRET `IPNEXT@2023`).
+  Viven en texto plano en el `SKILL.md`. Evaluar moverlas a variables/secret manager.
+- [ ] **No hay enforcement de roles/permisos en el backend.** Los roles son editables
+  (`AdminRoleDefinition`) pero NUNCA se chequean server-side: el auth middleware solo valida
+  el token. El botón "Eliminar tarea" se gatea SOLO en el front por rol → no es seguridad real.
+  Pendiente: la página de permisos + enforcement en backend (el usuario lo hará después).
+
+### 🔴 Funcionales pendientes
+
+- [ ] **sqlippool Fase 1 — GO-LIVE (VENTANA de mantenimiento, AAA prod).** Tiene **card propia** en Pendientes:
+  ver "[FEAT] IP automática del pool del NAS (sqlippool)" (incluye runbook, prereqs task 8.0, infra FreeRADIUS).
+- [ ] 🔒 **Leak de secretos NAS en prod (`radiusSecret`/`apiPassword` crudos).** `GET /api/nas-servers` (ListNasServers) y `GET /api/nas-servers/:id` (GetNasServer) devuelven la entidad `NasServer` CRUDA con `radiusSecret`/`apiPassword` reales — `PrismaNasRepository.toEntity` NO enmascara. Los tests NO lo cazan porque `InMemoryNasRepository` seedea `'••••••••'` (oculta el leak; el comentario "masked in responses" en `domain/entities/nas.ts` es aspiracional, no real). Gateado por `network.read`/`network.manage` (no público, pero el secreto viaja a cualquier operador de red y puede loguearse/cachearse). **Fix:** enmascarar en los use cases/rutas (helper compartido, convención `'••••••••'`) — igual que ya hace la ruta `pool-mode` (commit `83e1c245`). Descubierto en el review adversarial del sqlippool BE (2026-06-27). Cambio chico + review enfocado. **Verificar en vivo antes** (curl a `/api/nas-servers` en prod) para confirmar que no hay otro masking en el medio.
+- [ ] **Sincronizar facturas de Gestión Real** (candidato SDD `gr-invoices-sync`). **[BE+FE]**
+  El tab Facturación ("Saldo pendiente") suma la tabla `Invoice` local, que está en **0** porque
+  no traemos las facturas de GR → un deudor muestra $0 pendiente, inconsistente con `balanceDue`.
+  La data YA la fetcheamos: la acción `cliente` de GR devuelve `cuentas.invoices[]`
+  (importe, saldo, fecha_vto, url_pdf, link de pago MercadoPago) en el mismo payload del saldo.
+  Solo falta persistirlas en `Invoice` durante el balance refresh.
+- [ ] **Replies de tickets siguen in-memory.** **[BE]**
+  El change `tickets-model` migró el modelo de tickets a Prisma, pero los `ticketRepliesStore`
+  (respuestas) quedaron out-of-scope, todavía en memoria en `tickets.routes.ts`.
+  Pendiente: modelo `TicketReply` con FK a `Ticket`.
+- [ ] **Integración de `casos` de GR como tickets.** **[BE]**
+  El modelo `Ticket` tiene `grCasoId` reservado pero sin lógica. A futuro: traer los reclamos/casos
+  de GR (acción `casos`) y mapearlos a tickets.
+- [ ] **lat/lng no viaja en el alta de tarea.** **[FE]**
+  Al CREAR una tarea con un servicio, solo se carga la dirección (texto); las coordenadas
+  (lat/lng) del servicio NO se mandan en `CreateTaskPayload` (el detalle sí las setea).
+
+### 🟡 Deuda técnica
+
+- [ ] **16 tests pre-existentes rotos en el frontend** (NO introducidos esta sesión, confirmado con git stash):
+  - `CustomerDetailPage.test` / `ClienteDetailPage` (~7)
+  - `CreateTicketPage.test` (~6)
+  - `InfoTab.test` — "renders customer fields" + "map iframe" (2)
+  - `Sidebar.test` (1)
+- [ ] **Logging `prisma:query` verboso en producción.** Llena los logs y cuesta algo de
+  performance. Bajar el log level de Prisma en el entorno prod.
+- [ ] **`prismaClientLookup` ya tipado**, pero revisar si quedan otros `as any` o `new GlobalSearch()`
+  sin puerto (hallazgo del arquitecto backend).
+
+### 🧹 Cosmético / menor
+
+- [ ] **Tabs de estado de la lista de tickets desalineadas.** **[FE]**
+  `TicketsListPage` muestra tabs `Abierto / En progreso / Resuelto / Cerrado` (vocabulario viejo de 4),
+  pero el backend canónico es `open | pending | closed` (3). El tab "Resuelto" no matchea nada.
+- [ ] **Migrar el contador de deudores a una card/badge visible** (idea ofrecida, no pedida).
+
+### 🗂️ Datos de prueba dejados en prod (limpiar cuando se quiera)
+
+- [ ] Tarea **#4273** "Verificación servicio + contador" (cliente ABALO ALFREDO) — cerrada.
+- [ ] Ticket **"Ticket de prueba"** (cliente CARLE ALICIA) — creado para verificar el contador.
+
+### 🏗️ Limitaciones conocidas (por diseño, no necesariamente a resolver)
+
+- El scheduler de GR es in-process con **lock distribuido** (Postgres advisory lock) → seguro con
+  N réplicas. Si algún día se escala mucho, evaluar un worker dedicado.
+- GR no tiene delta global de contratos: se sincronizan por cliente tocado + barrido inicial.
+- El saldo deudor (`balanceDue`) solo se puebla para deudores (estado 2), vía refresh
+  on-demand (TTL 60m) + batch horario.
 
 ---
 
