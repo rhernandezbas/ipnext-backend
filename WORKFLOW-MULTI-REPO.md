@@ -103,7 +103,7 @@ Cada repo tiene `.github/workflows/deploy.yml` con un runner **self-hosted**. Ha
 
 - **El estado de cada deploy se revisa con `gh`** — fuente de verdad del pipeline. Tras pushear, se sigue el run con `gh run list` / `gh run watch` / `gh run view <id> --log` para confirmar que el job quedo verde (incluido el step `Run DB migrations`). No se asume "deployo bien" sin mirar el run en `gh`.
 - Para backend sin UI todavia, basta el run verde en `gh` + el log del step de migraciones.
-- Para features con UI, ademas se verifica con **Playwright** contra la app real (`http://190.7.234.37:7778`, login admin): se recorre el flujo real (crear/editar/borrar) y se limpian los datos de prueba.
+- Para features con UI, ademas se verifica con **Playwright** contra la app real (`http://190.7.234.37:7778`, login admin): se recorre el flujo real (crear/editar/borrar) y se limpian los datos de prueba. **Credenciales del user de debug (`superadmin`) para ese login: en [`CREDENCIALES-LOCAL.md`](./CREDENCIALES-LOCAL.md) (gitignored, NO commiteado — la clave NUNCA va en este archivo) y en engram. La pagina "Gestion de red" (NAS/pools/sesiones) esta en `/admin/networking/routers/list`.**
 
 ### Testear el SEAM completo, no solo las puntas (lección #28/#27)
 
