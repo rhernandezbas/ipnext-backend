@@ -257,7 +257,7 @@
 ### PPPoE Acceso Sur: ciclo completo por RADIUS + adopción de inventario — ✅ EN PROD *(sesión 2026-06-20, cont.)*
 > Misma jornada. **(1) Editar/baja por RADIUS** (orchestrator `8e2fbfd` POST /users/:u/password + BE `512f1194`): `UpdatePppoeService`/`DeactivatePppoeService` rutean por `nas.type` — profile→changePlan, password→changePassword (endpoint nuevo, upsert radcheck), IP→changeFramedIp, estado→suspend/reactivate; baja→suspend. Verificado en vivo (OldPass1→NewPass2 en radcheck). El RouterOS 7.x ya no bloquea NADA del lifecycle. **(2) Adopción de inventario** (orchestrator `868d421` GET /users + BE `173ebc16` + FE `fdcc299`): cargar PPPoE existentes como huérfanos (contractId=null, con password) → asociar a contratos → ver password. `GET /users` lista 192 con password (gotcha: filtrar radcheck a Cleartext-Password, si no la fila Calling-Station-Id del MAC-lock genera fantasmas; excluir grupos `_`). BE: `IngestPppoeFromNas` (rutea por type, skip-existentes idempotente) + `AssociatePppoeToContract` (409 si ya asociado a otro) + `GetPppoeCredentials` (reveal, espeja `/tv-credentials`, DTO sigue sin password) + `ListUnassignedPppoe`. FE: sección "asociar PPPoE existente" (buscable) + botón ojo (lazy, gateado pppoe.manage). **Verificado en vivo (Playwright): ingest Acceso Sur → {created:192} → GET /unassigned 192; reveal → {username,password}.** Permisos pppoe.read/manage.
 
-### 🐛 [BUG] Gestión de Red: contadores de IPs/pool todos en 0 (parece vacío) — 🔶 PARCIAL *(2026-06-20; #157 371abab6 trajo contadores live de NAS RADIUS; FALTA el free/used real de ip-pools/ip-networks computado vía radreply)*
+### 🐛 [BUG] Gestión de Red: contadores de IPs/pool todos en 0 (parece vacío) — ✅ HECHO Y EN PROD *(resuelto 2026-06-29 por el fix de "contadores 0 intermitente": el free/used real vía radreply YA estaba computado — confirmado en el diagnóstico en vivo — y ahora es HONESTO (null "no disponible" vs 0 mentiroso). Ver esa card.)*
 > El usuario no ve PPPoE/pool/IPs libres en Gestión de Red. **Diagnóstico (en vivo, NO es no-data):** la data existe (`/api/ip-networks` 2 redes, `/api/ip-pools` 2 pools de Acceso Sur) pero los contadores están en 0: ip-networks `totalIps/usedIps/freeIps=0`, ip-pools `assignedCount/totalCount=0`, nas `clientCount=0`, `/api/ip-assignments` vacío. **Causa:** la página lee las tablas LEGACY (`IpAssignment`/contadores stored), vacías para Acceso Sur — las asignaciones reales viven en `radreply`/RADIUS + en los `PppoeService`. Misma familia que la deuda del allocator (el allocator anda porque lee radreply; la página no). **Fix:** computar contadores del rango (total) + IPs asignadas reales (usado, ruteado por nas.type: radreply vía orchestrator para mikrotik_radius) → free=total−usado; poblar la tab "Asignaciones" con los `PppoeService` (no con ip-assignments).
 
 ### PPPoE InternetPanel: crear + asociar = colapsables — ✅ HECHO Y EN PROD *(reconciliado 2026-06-26; FE 4d088e79 + merge c6a85618)*
@@ -746,10 +746,6 @@
   La data YA la fetcheamos: la acción `cliente` de GR devuelve `cuentas.invoices[]`
   (importe, saldo, fecha_vto, url_pdf, link de pago MercadoPago) en el mismo payload del saldo.
   Solo falta persistirlas en `Invoice` durante el balance refresh.
-- [ ] **Replies de tickets siguen in-memory.** **[BE]**
-  El change `tickets-model` migró el modelo de tickets a Prisma, pero los `ticketRepliesStore`
-  (respuestas) quedaron out-of-scope, todavía en memoria en `tickets.routes.ts`.
-  Pendiente: modelo `TicketReply` con FK a `Ticket`.
 - [ ] **Integración de `casos` de GR como tickets.** **[BE]**
   El modelo `Ticket` tiene `grCasoId` reservado pero sin lógica. A futuro: traer los reclamos/casos
   de GR (acción `casos`) y mapearlos a tickets.
@@ -759,21 +755,11 @@
 
 ### 🟡 Deuda técnica
 
-- [ ] **16 tests pre-existentes rotos en el frontend** (NO introducidos esta sesión, confirmado con git stash):
-  - `CustomerDetailPage.test` / `ClienteDetailPage` (~7)
-  - `CreateTicketPage.test` (~6)
-  - `InfoTab.test` — "renders customer fields" + "map iframe" (2)
-  - `Sidebar.test` (1)
-- [ ] **Logging `prisma:query` verboso en producción.** Llena los logs y cuesta algo de
-  performance. Bajar el log level de Prisma en el entorno prod.
-- [ ] **`prismaClientLookup` ya tipado**, pero revisar si quedan otros `as any` o `new GlobalSearch()`
-  sin puerto (hallazgo del arquitecto backend).
+- [ ] **`as any` / `as unknown as` sueltos en producción** (revisión 2026-06-29): ~8 candidatos — trivial `computeUpdateTaskActivities.ts:33`; tipar `req.user` (Express.Request) en `requirePermission.ts:26` + `rbacUser.routes.ts:129,174`; los de `app.ts:721,725,743` (`(prisma as any).client/ticket/project`) son por columnas nuevas que el cliente Prisma no tipa hasta `prisma generate` (en prod el Dockerfile lo corre → ok). `prismaClientLookup` ya tipado.
 
 ### 🧹 Cosmético / menor
 
-- [ ] **Tabs de estado de la lista de tickets desalineadas.** **[FE]**
-  `TicketsListPage` muestra tabs `Abierto / En progreso / Resuelto / Cerrado` (vocabulario viejo de 4),
-  pero el backend canónico es `open | pending | closed` (3). El tab "Resuelto" no matchea nada.
+- [ ] **Tipo `TicketStats` con estado legacy `resolved`** **[FE]** *(revisión 2026-06-29)*: los TABS de `TicketsListPage` YA usan el catálogo dinámico (andan bien) — lo que QUEDA es limpiar el tipo `TicketStats` (`types/ticket.ts:62-67`) que aún declara `resolved` (4 estados) cuando el BE canónico devuelve 3 (`open|pending|closed`); + el mock `getMockTicketStats` (`tickets.api.ts:63-75`). Cleanup de tipo, no bug visible.
 - [ ] **Migrar el contador de deudores a una card/badge visible** (idea ofrecida, no pedida).
 
 ### 🗂️ Datos de prueba dejados en prod (limpiar cuando se quiera)
