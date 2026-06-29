@@ -57,6 +57,10 @@ export class InMemoryRecaptureRepository implements RecaptureRepository {
     } else if (query.assigneeId) {
       results = results.filter((l) => l.assigneeId === query.assigneeId);
     }
+    if (query.clientIds) {
+      const allowed = new Set(query.clientIds);
+      results = results.filter((l) => l.clientId !== null && allowed.has(l.clientId));
+    }
 
     const total = results.length;
     const page = query.page ?? 1;

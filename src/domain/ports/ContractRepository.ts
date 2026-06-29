@@ -47,6 +47,22 @@ export interface ContractLocationResult {
 export interface ContractRepository {
   /** Global paginated listing across all clients, with optional filters. */
   list(query: ListContractsQuery): Promise<PaginatedResult<ContractListItem>>;
+  /**
+   * Batch read for Recaptación lead enrichment (anti-N+1): ONE query returning the
+   * (clientId, technology) of EVERY contract owned by any of `clientIds`, across ALL
+   * statuses (baja contracts included — no status filter). Flat projection (not a
+   * full row) — the caller only needs the client↔technology association. Dedup /
+   * null-empty filtering is the caller's responsibility (kept in the use case).
+   */
+  findContractTechnologiesByClientIds(
+    clientIds: string[],
+  ): Promise<Array<{ clientId: string; technology: string | null }>>;
+  /**
+   * The DISTINCT clientIds owning at least one contract whose technology equals
+   * `technology` (exact match, any status). Returns `[]` when nothing matches.
+   * Used by ListRecaptureLeads to apply the `technology` filter server-side.
+   */
+  findClientIdsByTechnology(technology: string): Promise<string[]>;
   /** Returns total count + per-status breakdown. Status values are dynamic (from Gestión Real). */
   stats(): Promise<ContractStats>;
   /**

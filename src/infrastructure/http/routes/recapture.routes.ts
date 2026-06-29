@@ -160,7 +160,7 @@ export function createRecaptureRouter(
           return;
         }
 
-        const { status, assigneeId, unassigned, page, limit, source } = req.query as Record<string, string>;
+        const { status, assigneeId, unassigned, page, limit, source, technology } = req.query as Record<string, string>;
 
         // Non-admin agents can only see their own leads
         const effectiveAssigneeId = isAdmin ? (assigneeId || undefined) : actorId;
@@ -171,6 +171,9 @@ export function createRecaptureRouter(
           status: VALID_STATUSES.includes(status as RecaptureLeadStatus) ? (status as RecaptureLeadStatus) : undefined,
           assigneeId: effectiveAssigneeId,
           unassigned: effectiveUnassigned,
+          // Free-text catalog value (Fiber/FTTH/Wireless/DOCSIS/HFC/Radio). Resolved
+          // to clientIds server-side by the use case; unknown values yield an empty page.
+          technology: technology || undefined,
           page: page ? +page : 1,
           limit: limit ? +limit : 25,
         });

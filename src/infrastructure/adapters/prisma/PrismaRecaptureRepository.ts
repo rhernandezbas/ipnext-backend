@@ -65,6 +65,10 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
     } else if (query.assigneeId) {
       where['assigneeId'] = query.assigneeId;
     }
+    // technology filter is applied upstream (ListRecaptureLeads → clientIds): WHERE clientId IN (...)
+    if (query.clientIds) {
+      where['clientId'] = { in: query.clientIds };
+    }
 
     const page = query.page ?? 1;
     const limit = query.limit ?? 25;

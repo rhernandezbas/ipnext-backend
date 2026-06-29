@@ -9,6 +9,7 @@ import express, { Request, Response, NextFunction, RequestHandler } from 'expres
 import cookieParser from 'cookie-parser';
 import { createRecaptureRouter } from '../infrastructure/http/routes/recapture.routes';
 import { InMemoryRecaptureRepository } from '../infrastructure/adapters/in-memory/InMemoryRecaptureRepository';
+import { InMemoryContractRepository } from '../infrastructure/adapters/in-memory/InMemoryContractRepository';
 import { ListRecaptureLeads } from '../application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '../application/use-cases/recapture/GetRecaptureLead';
 import { UpdateRecaptureLeadStatus } from '../application/use-cases/recapture/UpdateRecaptureLeadStatus';
@@ -44,7 +45,7 @@ function makeCustomerRepo(): CustomerRepository {
 function buildApp(repo?: InMemoryRecaptureRepository) {
   const r = repo ?? new InMemoryRecaptureRepository();
 
-  const listUC = new ListRecaptureLeads(r);
+  const listUC = new ListRecaptureLeads(r, new InMemoryContractRepository());
   const getUC = new GetRecaptureLead(r);
   const updateStatusUC = new UpdateRecaptureLeadStatus(r);
   const addContactUC = new AddRecaptureContact(r);

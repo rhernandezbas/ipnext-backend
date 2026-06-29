@@ -10,6 +10,19 @@ export interface ListRecaptureLeadsQuery extends PaginatedQuery {
   unassigned?: boolean;
   /** Filter by origin source */
   source?: 'churned_client' | 'csv';
+  /**
+   * Restrict to leads whose clientId is in this set (WHERE clientId IN (...)).
+   * Used by ListRecaptureLeads to apply the `technology` filter server-side
+   * (the use case resolves matching clientIds first, then paginates over them).
+   */
+  clientIds?: string[];
+  /**
+   * Filter leads by the technology of their client's contracts (catalog value).
+   * Consumed by the ListRecaptureLeads use case — translated into `clientIds`
+   * via ContractRepository.findClientIdsByTechnology. The repository itself
+   * never reads this field (it acts only on `clientIds`).
+   */
+  technology?: string;
 }
 
 // ─── Mutation inputs ──────────────────────────────────────────────────────────

@@ -52,6 +52,35 @@ export class PrismaContractRepository implements ContractRepository {
     return { data: rows.map(toContractListItem), total, page, limit };
   }
 
+  /**
+   * Anti-N+1 batch: ONE query returning the (clientId, technology) of every contract
+   * owned by any of `clientIds`, across ALL statuses (no status filter → baja included).
+   * Dedup / null-empty filtering is done by the caller (ListRecaptureLeads).
+   */
+  async findContractTechnologiesByClientIds(
+    clientIds: string[],
+  ): Promise<Array<{ clientId: string; technology: string | null }>> {
+    if (clientIds.length === 0) return [];
+    const rows = await prisma.contract.findMany({
+      where: { clientId: { in: clientIds } },
+      select: { clientId: true, technology: true },
+    });
+    return rows.map((r) => ({ clientId: r.clientId, technology: r.technology ?? null }));
+  }
+
+  /**
+   * DISTINCT clientIds owning at least one contract with the given technology
+   * (exact match, any status). Single query via Prisma `distinct`.
+   */
+  async findClientIdsByTechnology(technology: string): Promise<string[]> {
+    const rows = await prisma.contract.findMany({
+      where: { technology },
+      select: { clientId: true },
+      distinct: ['clientId'],
+    });
+    return rows.map((r) => r.clientId);
+  }
+
   async stats(): Promise<ContractStats> {
     const groups = await prisma.contract.groupBy({
       by: ['status'],

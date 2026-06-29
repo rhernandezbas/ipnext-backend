@@ -21,6 +21,8 @@ function makeRepo(overrides: Partial<ContractRepository> = {}): ContractReposito
     updateName: jest.fn(),
     listDistinctVendedores: jest.fn(),
     updateLocation: jest.fn().mockResolvedValue(BASE_RESULT),
+    findContractTechnologiesByClientIds: jest.fn().mockResolvedValue([]),
+    findClientIdsByTechnology: jest.fn().mockResolvedValue([]),
     ...overrides,
   };
 }

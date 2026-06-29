@@ -79,6 +79,22 @@ export class InMemoryContractRepository implements ContractRepository {
     return { data, total, page, limit };
   }
 
+  async findContractTechnologiesByClientIds(
+    clientIds: string[],
+  ): Promise<Array<{ clientId: string; technology: string | null }>> {
+    const allowed = new Set(clientIds);
+    return this.items
+      .filter((c) => allowed.has(c.clientId))
+      .map((c) => ({ clientId: c.clientId, technology: c.technology }));
+  }
+
+  async findClientIdsByTechnology(technology: string): Promise<string[]> {
+    const ids = this.items
+      .filter((c) => c.technology === technology)
+      .map((c) => c.clientId);
+    return [...new Set(ids)];
+  }
+
   async stats(): Promise<ContractStats> {
     // Canonicalize each status before bucketing so legacy raw rows ('Vigente') and
     // new canonical rows ('active') COLLAPSE into the same bucket (defense-in-depth,

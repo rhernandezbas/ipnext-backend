@@ -8,6 +8,7 @@ import express, { Request, Response, NextFunction, RequestHandler } from 'expres
 import cookieParser from 'cookie-parser';
 import { createRecaptureRouter } from '../infrastructure/http/routes/recapture.routes';
 import { InMemoryRecaptureRepository } from '../infrastructure/adapters/in-memory/InMemoryRecaptureRepository';
+import { InMemoryContractRepository } from '../infrastructure/adapters/in-memory/InMemoryContractRepository';
 import { ListRecaptureLeads } from '../application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '../application/use-cases/recapture/GetRecaptureLead';
 import { UpdateRecaptureLeadStatus } from '../application/use-cases/recapture/UpdateRecaptureLeadStatus';
@@ -55,6 +56,7 @@ interface BuildAppOptions {
   assignPerm?: RequestHandler;
   hasAssignPerm?: (userId: string) => Promise<boolean>;
   customerRepo?: CustomerRepository;
+  contractRepo?: InMemoryContractRepository;
   repo?: InMemoryRecaptureRepository;
   auth?: RequestHandler;
 }
@@ -62,9 +64,10 @@ interface BuildAppOptions {
 function buildApp(opts: BuildAppOptions = {}) {
   const repo = opts.repo ?? new InMemoryRecaptureRepository();
   const customerRepo = opts.customerRepo ?? makeCustomerRepo([]);
+  const contractRepo = opts.contractRepo ?? new InMemoryContractRepository();
   const hasAssignPerm = opts.hasAssignPerm ?? (async () => true);
 
-  const listUC = new ListRecaptureLeads(repo);
+  const listUC = new ListRecaptureLeads(repo, contractRepo);
   const getUC = new GetRecaptureLead(repo);
   const updateStatusUC = new UpdateRecaptureLeadStatus(repo);
   const addContactUC = new AddRecaptureContact(repo);
@@ -92,7 +95,7 @@ function buildApp(opts: BuildAppOptions = {}) {
     ),
   );
 
-  return { app, repo };
+  return { app, repo, contractRepo };
 }
 
 // â€”â€”â€” Tests: RBAC gates â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”
@@ -109,6 +112,28 @@ describe('GET /api/recapture/leads â€” RBAC', () => {
     const res = await request(app).get('/api/recapture/leads').set('Cookie', 'auth_token=tok');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ data: [], total: 0 });
+  });
+});
+
+// â€”â€”â€” Tests: GET /leads ?technology filter (HTTP seam) â€”â€”â€”â€”â€”
+
+describe('GET /api/recapture/leads â€” ?technology filter', () => {
+  it('threads the technology query param through to the server-side filter + enriches the response', async () => {
+    const { app, repo, contractRepo } = buildApp();
+    const wLead = await repo.create({ source: 'churned_client', clientId: 'cli-w', contactName: 'Wireless cli' });
+    await repo.create({ source: 'churned_client', clientId: 'cli-f', contactName: 'Fiber cli' });
+    contractRepo.seed({ clientId: 'cli-w', technology: 'Wireless', clientName: 'W', plan: 'p' });
+    contractRepo.seed({ clientId: 'cli-f', technology: 'Fiber', clientName: 'F', plan: 'p' });
+
+    const res = await request(app)
+      .get('/api/recapture/leads?technology=Wireless')
+      .set('Cookie', 'auth_token=tok');
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].id).toBe(wLead.id);
+    expect(res.body.data[0].technologies).toEqual(['Wireless']);
   });
 });
 

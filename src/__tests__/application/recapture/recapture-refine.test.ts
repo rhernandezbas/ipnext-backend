@@ -4,6 +4,7 @@
  * All tests via InMemoryRecaptureRepository. No Prisma mocking.
  */
 import { InMemoryRecaptureRepository } from '../../../infrastructure/adapters/in-memory/InMemoryRecaptureRepository';
+import { InMemoryContractRepository } from '../../../infrastructure/adapters/in-memory/InMemoryContractRepository';
 import { ListRecaptureLeads } from '../../../application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '../../../application/use-cases/recapture/GetRecaptureLead';
 import { AddRecaptureContact } from '../../../application/use-cases/recapture/AddRecaptureContact';
@@ -21,7 +22,7 @@ describe('#3b — assigneeName in RecaptureLeadDto', () => {
   it('list() returns assigneeName=null when lead is unassigned', async () => {
     const repo = makeRepo();
     await repo.create({ source: 'csv', contactName: 'Sin asignar' });
-    const uc = new ListRecaptureLeads(repo);
+    const uc = new ListRecaptureLeads(repo, new InMemoryContractRepository());
     const result = await uc.execute({});
     const dto = result.data[0]!;
     expect(dto).toHaveProperty('assigneeName', null);
@@ -50,7 +51,7 @@ describe('#3b — assigneeName in RecaptureLeadDto', () => {
       previousPlan: null,
     };
     repo.seedLead(lead);
-    const uc = new ListRecaptureLeads(repo);
+    const uc = new ListRecaptureLeads(repo, new InMemoryContractRepository());
     const result = await uc.execute({});
     const dto = result.data[0]!;
     expect(dto.assigneeId).toBe('user-42');
@@ -105,7 +106,7 @@ describe('#4 — source filter in ListRecaptureLeads', () => {
   it('returns only csv leads when source=csv', async () => {
     const repo = makeRepo();
     await seedMixed(repo);
-    const uc = new ListRecaptureLeads(repo);
+    const uc = new ListRecaptureLeads(repo, new InMemoryContractRepository());
     const result = await uc.execute({ source: 'csv' });
     expect(result.total).toBe(3);
     result.data.forEach((d) => expect(d.source).toBe('csv'));
@@ -114,7 +115,7 @@ describe('#4 — source filter in ListRecaptureLeads', () => {
   it('returns only churned_client leads when source=churned_client', async () => {
     const repo = makeRepo();
     await seedMixed(repo);
-    const uc = new ListRecaptureLeads(repo);
+    const uc = new ListRecaptureLeads(repo, new InMemoryContractRepository());
     const result = await uc.execute({ source: 'churned_client' });
     expect(result.total).toBe(2);
     result.data.forEach((d) => expect(d.source).toBe('churned_client'));
@@ -123,7 +124,7 @@ describe('#4 — source filter in ListRecaptureLeads', () => {
   it('returns all leads when source is omitted', async () => {
     const repo = makeRepo();
     await seedMixed(repo);
-    const uc = new ListRecaptureLeads(repo);
+    const uc = new ListRecaptureLeads(repo, new InMemoryContractRepository());
     const result = await uc.execute({});
     expect(result.total).toBe(5);
   });
@@ -136,7 +137,7 @@ describe('#4 — source filter in ListRecaptureLeads', () => {
     const csvLead = leads.data.find((l) => l.source === 'csv')!;
     await repo.updateStatus(csvLead.id, 'contactado');
 
-    const uc = new ListRecaptureLeads(repo);
+    const uc = new ListRecaptureLeads(repo, new InMemoryContractRepository());
     const result = await uc.execute({ source: 'csv', status: 'contactado' });
     expect(result.total).toBe(1);
     expect(result.data[0]!.status).toBe('contactado');

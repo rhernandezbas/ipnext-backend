@@ -7,6 +7,7 @@ import express, { Request, Response, NextFunction, RequestHandler } from 'expres
 import cookieParser from 'cookie-parser';
 import { createRecaptureRouter } from '../infrastructure/http/routes/recapture.routes';
 import { InMemoryRecaptureRepository } from '../infrastructure/adapters/in-memory/InMemoryRecaptureRepository';
+import { InMemoryContractRepository } from '../infrastructure/adapters/in-memory/InMemoryContractRepository';
 import { ListRecaptureLeads } from '../application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '../application/use-cases/recapture/GetRecaptureLead';
 import { UpdateRecaptureLeadStatus } from '../application/use-cases/recapture/UpdateRecaptureLeadStatus';
@@ -57,6 +58,7 @@ interface BuildAppOptions {
 function buildApp(opts: BuildAppOptions = {}) {
   const repo = opts.repo ?? new InMemoryRecaptureRepository();
   const customerRepo = makeCustomerRepo();
+  const contractRepo = new InMemoryContractRepository();
 
   const knownIds = opts.knownOperatorIds ?? ['op-1', 'op-2', 'user-test'];
   const userLookup: EntityLookup = {
@@ -74,7 +76,7 @@ function buildApp(opts: BuildAppOptions = {}) {
   app.use(
     '/api/recapture',
     createRecaptureRouter(
-      new ListRecaptureLeads(repo),
+      new ListRecaptureLeads(repo, contractRepo),
       new GetRecaptureLead(repo),
       new UpdateRecaptureLeadStatus(repo),
       new AddRecaptureContact(repo),

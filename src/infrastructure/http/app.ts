@@ -2205,7 +2205,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     return perms.some((p) => p.moduleCode === 'recapture' && p.action === 'assign');
   };
   app.use('/api/recapture', createRecaptureRouter(
-    new ListRecaptureLeads(recaptureRepo),
+    new ListRecaptureLeads(recaptureRepo, contractRepo),
     new GetRecaptureLead(recaptureRepo),
     new UpdateRecaptureLeadStatus(recaptureRepo),
     new AddRecaptureContact(recaptureRepo),

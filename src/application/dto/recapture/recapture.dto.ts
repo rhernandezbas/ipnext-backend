@@ -19,6 +19,19 @@ export interface RecaptureLeadDto {
   updatedAt: string;
 }
 
+// ─── Lead LIST-item DTO ──────────────────────────────────────────────────────
+// technologies lives ONLY here, not on the base DTO: it is enrichment that only
+// the listing (ListRecaptureLeads) computes. Detail / update / assign return the
+// base RecaptureLeadDto, which never carries technologies (no empty-[] lie).
+
+export interface RecaptureLeadListItemDto extends RecaptureLeadDto {
+  /**
+   * DISTINCT technologies of the lead's client contracts (catalog values:
+   * Fiber/FTTH/Wireless/DOCSIS/HFC/Radio). `[]` when no clientId or no technologies.
+   */
+  technologies: string[];
+}
+
 // ─── Contact DTO ─────────────────────────────────────────────────────────────
 
 export interface RecaptureContactDto {
