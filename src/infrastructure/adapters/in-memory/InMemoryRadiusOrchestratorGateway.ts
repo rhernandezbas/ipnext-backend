@@ -83,6 +83,8 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   private readonly onSyncPlanCb: (() => void) | undefined;
   /** IPs asignadas en el RADIUS (radreply Framed-IP) que devuelve listAssignedIps. */
   private readonly assignedIps: string[];
+  /** Si true, listAssignedIps lanza OrchestratorUnreachableError (simula orchestrator caído). */
+  private readonly assignedIpsUnreachable: boolean;
   /** Inventario que devuelve listUsers (GET /users). Sembrable para tests de ingest/adopción. */
   private readonly usersInventory: RadiusUserInventoryItem[];
   /** Sesiones globales que devuelve listActiveSessions (GET /sessions). */
@@ -115,6 +117,8 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     onSyncPlan?: () => void;
     /** IPs asignadas que devolverá listAssignedIps (radreply Framed-IP). Default: []. */
     assignedIps?: string[];
+    /** Si true, listAssignedIps lanza OrchestratorUnreachableError (simula orchestrator caído). Default: false. */
+    assignedIpsUnreachable?: boolean;
     /** Inventario que devolverá listUsers (GET /users). Default: []. */
     usersInventory?: RadiusUserInventoryItem[];
     /** Sesiones globales que devolverá listActiveSessions (GET /sessions). Default: []. */
@@ -143,6 +147,7 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     this.rejectPlanCode = new Map((opts?.rejectPlanCode ?? []).map(r => [r.code, r]));
     this.onSyncPlanCb = opts?.onSyncPlan;
     this.assignedIps = [...(opts?.assignedIps ?? [])];
+    this.assignedIpsUnreachable = opts?.assignedIpsUnreachable ?? false;
     this.usersInventory = [...(opts?.usersInventory ?? [])];
     this.globalSessionsList = [...(opts?.globalSessions ?? [])];
     this.globalSessionsUnreachable = opts?.globalSessionsUnreachable ?? false;
@@ -263,6 +268,7 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   }
 
   async listAssignedIps(): Promise<string[]> {
+    if (this.assignedIpsUnreachable) throw new OrchestratorUnreachableError('in-memory');
     return [...this.assignedIps];
   }
 

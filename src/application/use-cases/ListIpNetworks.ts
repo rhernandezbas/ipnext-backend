@@ -16,7 +16,9 @@ import { AssignedIpsProvider } from '@application/services/AssignedIpsProvider';
  * fuente se rutea por `nas.type` (radius_orchestrator → RADIUS; resto → router), igual que el allocator.
  * La tabla IpAssignment está vacía en prod: no se usa para contar.
  *
- * Degrada por red: si algún NAS está caído, sus IPs cuentan 0 y la lista sigue (nunca 500).
+ * Resiliente por red: si tras los reintentos ALGÚN NAS de la red sigue caído, el total de la
+ * red NO es confiable → `usedIps`/`freeIps` salen `null` ("no disponible") y la lista sigue
+ * (nunca 500) — NUNCA un 0 que mentiría. `totalIps` (cálculo puro del CIDR) siempre se computa.
  * El `AssignedIpsProvider` cachea por NAS: redes/pools que comparten NAS hacen UN solo fetch.
  */
 export class ListIpNetworks {
@@ -49,9 +51,15 @@ export class ListIpNetworks {
         // Reunir las asignadas de todos los NAS de la red (el provider dedupe el RADIUS global
         // por su clave sintética; aquí dedupe por IP el countAssignedInCidr).
         const lists = await Promise.all([...nasIds].map((id) => provider.forNas(id)));
-        const assigned = lists.flat();
 
-        const totalIps = usableIpsInCidr(net.network);
+        const totalIps = usableIpsInCidr(net.network); // cálculo puro: SIEMPRE se computa.
+
+        // Si falta UN solo NAS, el total de la red no es confiable → "no disponible" (null), no 0.
+        if (lists.some((l) => l === null)) {
+          return { ...net, totalIps, usedIps: null, freeIps: null };
+        }
+
+        const assigned = (lists as string[][]).flat();
         const usedIps = countAssignedInCidr(assigned, net.network);
         const freeIps = totalIps - usedIps > 0 ? totalIps - usedIps : 0;
         return { ...net, totalIps, usedIps, freeIps };

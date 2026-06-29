@@ -13,7 +13,8 @@ import { AssignedIpsProvider } from '@application/services/AssignedIpsProvider';
  *      ruteando la fuente por `nas.type` (radius_orchestrator → RADIUS; resto → router).
  *
  * La tabla IpAssignment está vacía en prod: la verdad de lo asignado vive en el RADIUS/router.
- * Degrada por pool: si el NAS está caído, ese pool sale con `assignedCount: 0` y la lista sigue.
+ * Resiliente por pool: si tras los reintentos el NAS sigue caído, ese pool sale con
+ * `assignedCount: null` ("no disponible") y la lista sigue — NUNCA con un 0 que mentiría.
  */
 export class ListIpPools {
   constructor(
@@ -33,7 +34,10 @@ export class ListIpPools {
         return {
           ...pool,
           totalCount: usableIpsInRange(pool.rangeStart, pool.rangeEnd),
-          assignedCount: countAssignedInRange(assigned, pool.rangeStart, pool.rangeEnd),
+          // `null` = fuente no disponible → contador "no disponible", NO un 0 mentiroso.
+          assignedCount: assigned === null
+            ? null
+            : countAssignedInRange(assigned, pool.rangeStart, pool.rangeEnd),
         };
       }),
     );

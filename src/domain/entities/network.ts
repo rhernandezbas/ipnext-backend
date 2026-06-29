@@ -8,8 +8,10 @@ export interface IpNetwork {
   partnerId: string | null;
   type: 'static' | 'dhcp' | 'pppoe';
   totalIps: number;
-  usedIps: number;
-  freeIps: number;
+  /** `null` = la fuente de IPs asignadas (router/RADIUS) no está disponible (no es un 0 real). */
+  usedIps: number | null;
+  /** `null` = no se puede calcular libres porque `usedIps` no es confiable. */
+  freeIps: number | null;
 }
 
 /** Clase de direccionamiento del pool — eje ORTOGONAL a `type` (static/dynamic). */
@@ -22,7 +24,8 @@ export interface IpPool {
   rangeStart: string;    // e.g. "192.168.1.10"
   rangeEnd: string;      // e.g. "192.168.1.200"
   type: 'static' | 'dynamic';
-  assignedCount: number;
+  /** `null` = la fuente de IPs asignadas (router/RADIUS) no está disponible (no es un 0 real). */
+  assignedCount: number | null;
   totalCount: number;
   nasId: string | null;
   /**

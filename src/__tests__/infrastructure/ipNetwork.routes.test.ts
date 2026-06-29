@@ -58,7 +58,10 @@ interface Fixture {
   noPermUserId: string;
 }
 
-async function buildApp(): Promise<Fixture> {
+async function buildApp(deps?: {
+  router?: InMemoryRouterGateway;
+  orchestrator?: InMemoryRadiusOrchestratorGateway;
+}): Promise<Fixture> {
   const roleRepo     = new InMemoryRbacRoleRepository();
   const userRoleRepo = new InMemoryRbacUserRoleRepository();
   const permRepo     = new InMemoryRbacPermissionRepository();
@@ -105,8 +108,8 @@ async function buildApp(): Promise<Fixture> {
 
   const repo = new InMemoryIpNetworkRepository();
   const nasRepo = new InMemoryNasRepository();
-  const router = new InMemoryRouterGateway();
-  const orchestrator = new InMemoryRadiusOrchestratorGateway();
+  const router = deps?.router ?? new InMemoryRouterGateway();
+  const orchestrator = deps?.orchestrator ?? new InMemoryRadiusOrchestratorGateway();
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
   const app = express();
@@ -169,5 +172,34 @@ describe('ipNetwork.routes — redes/pools + security guard (network.read / netw
     const res = await asUser(request(app).post('/api/ip-networks'), manageUserId)
       .send({ name: 'Red Test', cidr: '10.9.0.0/24', gateway: '10.9.0.1', vlan: null, type: 'private' });
     expect(res.status).toBe(201);
+  });
+
+  // Seam HTTP (lección #28): el contador "no disponible" (null) debe sobrevivir la serialización
+  // del endpoint. Si alguien introduce un mapper/DTO con `?? 0`, revive el bug del 0 mentiroso y
+  // estos casos lo cazan. El pool/red seed '1' cuelga del NAS '1' (mikrotik_api 192.168.1.1) →
+  // router caído ⇒ assignedCount/usedIps/freeIps null en el JSON de respuesta.
+  it('GET /api/ip-pools con la fuente caída → assignedCount === null en el JSON (no 0)', async () => {
+    const downRouter = new InMemoryRouterGateway({ unreachable: ['192.168.1.1'] });
+    const { app, readUserId } = await buildApp({ router: downRouter });
+
+    const res = await asUser(request(app).get('/api/ip-pools'), readUserId);
+
+    expect(res.status).toBe(200);
+    const pool1 = res.body.find((p: { id: string }) => p.id === '1'); // NAS '1' (router caído)
+    expect(pool1.assignedCount).toBeNull();
+    expect(pool1.totalCount).toBe(191); // el total del rango siempre se computa
+  });
+
+  it('GET /api/ip-networks con la fuente caída → usedIps/freeIps === null en el JSON (no 0)', async () => {
+    const downRouter = new InMemoryRouterGateway({ unreachable: ['192.168.1.1'] });
+    const { app, readUserId } = await buildApp({ router: downRouter });
+
+    const res = await asUser(request(app).get('/api/ip-networks'), readUserId);
+
+    expect(res.status).toBe(200);
+    const net1 = res.body.find((n: { id: string }) => n.id === '1'); // cuelga del pool del NAS '1'
+    expect(net1.usedIps).toBeNull();
+    expect(net1.freeIps).toBeNull();
+    expect(net1.totalIps).toBe(254); // el total del CIDR siempre se computa
   });
 });
