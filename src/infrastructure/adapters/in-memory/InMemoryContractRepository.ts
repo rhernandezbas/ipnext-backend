@@ -81,18 +81,15 @@ export class InMemoryContractRepository implements ContractRepository {
 
   async findContractTechnologiesByClientIds(
     clientIds: string[],
-  ): Promise<Array<{ clientId: string; technology: string | null }>> {
+  ): Promise<Array<{ clientId: string; technology: string | null; plan: string }>> {
     const allowed = new Set(clientIds);
     return this.items
       .filter((c) => allowed.has(c.clientId))
-      .map((c) => ({ clientId: c.clientId, technology: c.technology }));
+      .map((c) => ({ clientId: c.clientId, technology: c.technology, plan: c.plan }));
   }
 
-  async findClientIdsByTechnology(technology: string): Promise<string[]> {
-    const ids = this.items
-      .filter((c) => c.technology === technology)
-      .map((c) => c.clientId);
-    return [...new Set(ids)];
+  async findAllContractTechnologies(): Promise<Array<{ clientId: string; technology: string | null; plan: string }>> {
+    return this.items.map((c) => ({ clientId: c.clientId, technology: c.technology, plan: c.plan }));
   }
 
   async stats(): Promise<ContractStats> {

@@ -53,32 +53,36 @@ export class PrismaContractRepository implements ContractRepository {
   }
 
   /**
-   * Anti-N+1 batch: ONE query returning the (clientId, technology) of every contract
-   * owned by any of `clientIds`, across ALL statuses (no status filter → baja included).
-   * Dedup / null-empty filtering is done by the caller (ListRecaptureLeads).
+   * Anti-N+1 batch: ONE query returning the (clientId, technology, plan) of every
+   * contract owned by any of `clientIds`, across ALL statuses (no status filter → baja
+   * included). The caller derives the effective tech (deriveTechnology) — the raw
+   * `technology` column is NULL for all GR rows, so `plan` is required for derivation.
    */
   async findContractTechnologiesByClientIds(
     clientIds: string[],
-  ): Promise<Array<{ clientId: string; technology: string | null }>> {
+  ): Promise<Array<{ clientId: string; technology: string | null; plan: string }>> {
     if (clientIds.length === 0) return [];
     const rows = await prisma.contract.findMany({
       where: { clientId: { in: clientIds } },
-      select: { clientId: true, technology: true },
+      select: { clientId: true, technology: true, plan: true },
     });
-    return rows.map((r) => ({ clientId: r.clientId, technology: r.technology ?? null }));
+    return rows.map((r) => ({ clientId: r.clientId, technology: r.technology ?? null, plan: r.plan }));
   }
 
   /**
-   * DISTINCT clientIds owning at least one contract with the given technology
-   * (exact match, any status). Single query via Prisma `distinct`.
+   * Every contract's (clientId, technology, plan) — used by the Recaptación technology
+   * filter. We CANNOT filter by `technology` in SQL: that column is NULL for every GR
+   * contract, so the effective tech only exists once derived from the plan. The use
+   * case derives via `deriveTechnology` and collects the matching clientIds — ZERO
+   * drift with ListContracts (same source of truth). Tradeoff: this loads the whole
+   * Contract table (small 3-column projection) per technology-filtered request; it is a
+   * low-frequency internal-admin action and pagination still runs over the resolved set.
    */
-  async findClientIdsByTechnology(technology: string): Promise<string[]> {
+  async findAllContractTechnologies(): Promise<Array<{ clientId: string; technology: string | null; plan: string }>> {
     const rows = await prisma.contract.findMany({
-      where: { technology },
-      select: { clientId: true },
-      distinct: ['clientId'],
+      select: { clientId: true, technology: true, plan: true },
     });
-    return rows.map((r) => r.clientId);
+    return rows.map((r) => ({ clientId: r.clientId, technology: r.technology ?? null, plan: r.plan }));
   }
 
   async stats(): Promise<ContractStats> {

@@ -7,7 +7,7 @@ class StubContractRepo implements ContractRepository {
   public store: Record<string, string | null> = {};
   async list(): Promise<any> { throw new Error('not used'); }
   async findContractTechnologiesByClientIds(): Promise<any> { throw new Error('not used'); }
-  async findClientIdsByTechnology(): Promise<string[]> { throw new Error('not used'); }
+  async findAllContractTechnologies(): Promise<any> { throw new Error('not used'); }
   async stats(): Promise<any> { throw new Error('not used'); }
   async updateName(id: string, name?: string | null) {
     if (!(id in this.store)) return null;

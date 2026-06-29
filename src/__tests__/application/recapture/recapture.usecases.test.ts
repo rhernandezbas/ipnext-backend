@@ -27,14 +27,25 @@ function makeEmptyContractRepo(): InMemoryContractRepository {
   return new InMemoryContractRepository();
 }
 
-/** Seed a contract (clientId + technology) into the InMemoryContractRepository. */
+/**
+ * Seed a contract into the InMemoryContractRepository.
+ * The technology shown in Recaptación is DERIVED (deriveTechnology): the manual
+ * `technology` wins when set; otherwise it is classified from the `plan` speed.
+ * In prod `Contract.technology` is NULL for all rows, so tests seed a real `plan`
+ * and (optionally) a manual technology that should override the derivation.
+ */
 function seedTech(
   repo: InMemoryContractRepository,
   clientId: string,
-  technology: string | null,
-  status = 'active',
+  opts: { plan: string; technology?: string | null; status?: string },
 ): void {
-  repo.seed({ clientId, technology, status, clientName: `Client ${clientId}`, plan: 'plan' });
+  repo.seed({
+    clientId,
+    technology: opts.technology ?? null,
+    plan: opts.plan,
+    status: opts.status ?? 'active',
+    clientName: `Client ${clientId}`,
+  });
 }
 
 async function seedFreeLead(repo: InMemoryRecaptureRepository): Promise<RecaptureLead> {
@@ -277,12 +288,13 @@ describe('IngestChurnedClients', () => {
 // ─── ListRecaptureLeads — technologies enrichment ─────────────────────────────
 
 describe('ListRecaptureLeads — technologies enrichment', () => {
-  it('enriches each lead with the DISTINCT technologies of its client contracts', async () => {
+  it('enriches each lead with the DISTINCT technologies DERIVED from its contract plans', async () => {
     const repo = makeRepo();
     const contractRepo = new InMemoryContractRepository();
     const lead = await repo.create({ source: 'churned_client', clientId: 'client-1', contactName: 'Multi' });
-    seedTech(contractRepo, 'client-1', 'Fiber');
-    seedTech(contractRepo, 'client-1', 'Wireless');
+    // technology column is NULL (as in prod) → derive from the plan speed.
+    seedTech(contractRepo, 'client-1', { plan: '300MB' });   // ≥100 → Fiber
+    seedTech(contractRepo, 'client-1', { plan: '10/5MB' });  // <100 → Wireless
 
     const uc = new ListRecaptureLeads(repo, contractRepo);
     const result = await uc.execute({});
@@ -296,7 +308,7 @@ describe('ListRecaptureLeads — technologies enrichment', () => {
     const contractRepo = new InMemoryContractRepository();
     await repo.create({ source: 'csv', contactName: 'No client' }); // clientId is null
     // Even if some other client has contracts, a lead with no clientId stays empty.
-    seedTech(contractRepo, 'client-99', 'Fiber');
+    seedTech(contractRepo, 'client-99', { plan: '300MB' });
 
     const uc = new ListRecaptureLeads(repo, contractRepo);
     const result = await uc.execute({});
@@ -304,12 +316,12 @@ describe('ListRecaptureLeads — technologies enrichment', () => {
     expect(result.data[0]!.technologies).toEqual([]);
   });
 
-  it('counts contracts of ALL statuses, including baja (no status filter)', async () => {
+  it('counts contracts of ALL statuses (baja included) and lets a MANUAL technology win over derivation', async () => {
     const repo = makeRepo();
     const contractRepo = new InMemoryContractRepository();
     await repo.create({ source: 'churned_client', clientId: 'client-1', contactName: 'Baja contracts' });
-    seedTech(contractRepo, 'client-1', 'Fiber', 'active');
-    seedTech(contractRepo, 'client-1', 'DOCSIS', 'baja'); // a churned contract still contributes
+    seedTech(contractRepo, 'client-1', { plan: '300MB', status: 'active' });               // derived → Fiber
+    seedTech(contractRepo, 'client-1', { technology: 'DOCSIS', plan: 'TV', status: 'baja' }); // manual wins; baja still contributes
 
     const uc = new ListRecaptureLeads(repo, contractRepo);
     const result = await uc.execute({});
@@ -317,14 +329,14 @@ describe('ListRecaptureLeads — technologies enrichment', () => {
     expect([...result.data[0]!.technologies].sort()).toEqual(['DOCSIS', 'Fiber']);
   });
 
-  it('dedupes repeated technologies and drops null/empty values', async () => {
+  it('dedupes DERIVED technologies and drops unclassified / null / whitespace values', async () => {
     const repo = makeRepo();
     const contractRepo = new InMemoryContractRepository();
     await repo.create({ source: 'churned_client', clientId: 'client-1', contactName: 'Dupes' });
-    seedTech(contractRepo, 'client-1', 'Fiber');
-    seedTech(contractRepo, 'client-1', 'Fiber');
-    seedTech(contractRepo, 'client-1', null);
-    seedTech(contractRepo, 'client-1', '  '); // whitespace-only → dropped
+    seedTech(contractRepo, 'client-1', { plan: '300MB' });                  // → Fiber
+    seedTech(contractRepo, 'client-1', { plan: '500MB' });                  // → Fiber (dup after derive)
+    seedTech(contractRepo, 'client-1', { plan: 'Instalacion Wireless H' }); // no integer → unclassified → dropped
+    seedTech(contractRepo, 'client-1', { technology: '  ', plan: '300MB' }); // whitespace manual → trimmed → dropped
 
     const uc = new ListRecaptureLeads(repo, contractRepo);
     const result = await uc.execute({});
@@ -337,7 +349,7 @@ describe('ListRecaptureLeads — technologies enrichment', () => {
     const contractRepo = new InMemoryContractRepository();
     for (let i = 1; i <= 5; i++) {
       await repo.create({ source: 'churned_client', clientId: `client-${i}`, contactName: `Lead ${i}` });
-      seedTech(contractRepo, `client-${i}`, 'Fiber');
+      seedTech(contractRepo, `client-${i}`, { plan: '300MB' });
     }
     const spy = jest.spyOn(contractRepo, 'findContractTechnologiesByClientIds');
 
@@ -361,8 +373,9 @@ describe('ListRecaptureLeads — technology filter', () => {
     await repo.create({ source: 'churned_client', clientId: 'wireless-1', contactName: 'W1' });
     await repo.create({ source: 'churned_client', clientId: 'fiber-1', contactName: 'F1' });
     await repo.create({ source: 'csv', contactName: 'No client' }); // clientId null → never matches
-    seedTech(contractRepo, 'wireless-1', 'Wireless');
-    seedTech(contractRepo, 'fiber-1', 'Fiber');
+    // technology NULL (as in prod) → the filter must DERIVE from the plan speed.
+    seedTech(contractRepo, 'wireless-1', { plan: '10/5MB' }); // <100 → Wireless
+    seedTech(contractRepo, 'fiber-1', { plan: '300MB' });     // ≥100 → Fiber
   }
 
   it('returns only leads whose client has a contract of the given technology', async () => {
@@ -395,11 +408,11 @@ describe('ListRecaptureLeads — technology filter', () => {
     const contractRepo = new InMemoryContractRepository();
     for (let i = 1; i <= 3; i++) {
       await repo.create({ source: 'churned_client', clientId: `w-${i}`, contactName: `W${i}` });
-      seedTech(contractRepo, `w-${i}`, 'Wireless');
+      seedTech(contractRepo, `w-${i}`, { plan: '30/10MB' }); // → Wireless
     }
     for (let i = 1; i <= 2; i++) {
       await repo.create({ source: 'churned_client', clientId: `f-${i}`, contactName: `F${i}` });
-      seedTech(contractRepo, `f-${i}`, 'Fiber');
+      seedTech(contractRepo, `f-${i}`, { plan: '100 MB' }); // → Fiber
     }
 
     const uc = new ListRecaptureLeads(repo, contractRepo);
@@ -408,5 +421,20 @@ describe('ListRecaptureLeads — technology filter', () => {
     expect(result.total).toBe(3);        // total reflects the filtered set, not all 5 leads
     expect(result.data).toHaveLength(2); // page 1 of 2
     result.data.forEach((d) => expect(d.technologies).toEqual(['Wireless']));
+  });
+
+  it('a MANUAL technology wins over plan derivation in the filter', async () => {
+    const repo = makeRepo();
+    const contractRepo = new InMemoryContractRepository();
+    // plan '20/5MB' derives to Wireless, but the manual 'Fiber' overrides it.
+    await repo.create({ source: 'churned_client', clientId: 'override-1', contactName: 'Override' });
+    seedTech(contractRepo, 'override-1', { technology: 'Fiber', plan: '20/5MB' });
+
+    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const result = await uc.execute({ technology: 'Fiber' });
+
+    expect(result.total).toBe(1);
+    expect(result.data[0]!.clientId).toBe('override-1');
+    expect(result.data[0]!.technologies).toEqual(['Fiber']);
   });
 });

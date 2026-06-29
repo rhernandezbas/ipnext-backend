@@ -17,10 +17,12 @@ export interface ListRecaptureLeadsQuery extends PaginatedQuery {
    */
   clientIds?: string[];
   /**
-   * Filter leads by the technology of their client's contracts (catalog value).
-   * Consumed by the ListRecaptureLeads use case — translated into `clientIds`
-   * via ContractRepository.findClientIdsByTechnology. The repository itself
-   * never reads this field (it acts only on `clientIds`).
+   * Filter leads by the DERIVED technology of their client's contracts. Consumed by
+   * the ListRecaptureLeads use case, which reads all contracts via
+   * ContractRepository.findAllContractTechnologies, derives the effective tech with
+   * `deriveTechnology` (the raw column is NULL in prod), and translates the matches
+   * into `clientIds`. The repository itself never reads this field (it acts only on
+   * `clientIds`).
    */
   technology?: string;
 }

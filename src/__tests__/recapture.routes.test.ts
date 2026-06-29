@@ -122,8 +122,9 @@ describe('GET /api/recapture/leads â€” ?technology filter', () => {
     const { app, repo, contractRepo } = buildApp();
     const wLead = await repo.create({ source: 'churned_client', clientId: 'cli-w', contactName: 'Wireless cli' });
     await repo.create({ source: 'churned_client', clientId: 'cli-f', contactName: 'Fiber cli' });
-    contractRepo.seed({ clientId: 'cli-w', technology: 'Wireless', clientName: 'W', plan: 'p' });
-    contractRepo.seed({ clientId: 'cli-f', technology: 'Fiber', clientName: 'F', plan: 'p' });
+    // technology NULL (as in prod) → derived from the plan speed by deriveTechnology.
+    contractRepo.seed({ clientId: 'cli-w', technology: null, clientName: 'W', plan: '10/5MB' });
+    contractRepo.seed({ clientId: 'cli-f', technology: null, clientName: 'F', plan: '300MB' });
 
     const res = await request(app)
       .get('/api/recapture/leads?technology=Wireless')

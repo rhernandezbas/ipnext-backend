@@ -49,20 +49,23 @@ export interface ContractRepository {
   list(query: ListContractsQuery): Promise<PaginatedResult<ContractListItem>>;
   /**
    * Batch read for Recaptación lead enrichment (anti-N+1): ONE query returning the
-   * (clientId, technology) of EVERY contract owned by any of `clientIds`, across ALL
-   * statuses (baja contracts included — no status filter). Flat projection (not a
-   * full row) — the caller only needs the client↔technology association. Dedup /
-   * null-empty filtering is the caller's responsibility (kept in the use case).
+   * (clientId, technology, plan) of EVERY contract owned by any of `clientIds`, across
+   * ALL statuses (baja contracts included — no status filter). The raw `technology`
+   * column is NULL for every GR contract, so the caller DERIVES the effective tech via
+   * `deriveTechnology(technology, plan)` (manual value wins; else classify by plan
+   * speed). Dedup / null-empty filtering is the caller's responsibility (use case).
    */
   findContractTechnologiesByClientIds(
     clientIds: string[],
-  ): Promise<Array<{ clientId: string; technology: string | null }>>;
+  ): Promise<Array<{ clientId: string; technology: string | null; plan: string }>>;
   /**
-   * The DISTINCT clientIds owning at least one contract whose technology equals
-   * `technology` (exact match, any status). Returns `[]` when nothing matches.
-   * Used by ListRecaptureLeads to apply the `technology` filter server-side.
+   * Every contract's (clientId, technology, plan) across ALL clients and ALL statuses.
+   * Feeds the Recaptación `technology` filter: the caller derives the effective
+   * technology via `deriveTechnology` and collects the matching clientIds — the raw
+   * `Contract.technology` column is NULL for all GR rows, so the filter MUST derive
+   * (zero drift with ListContracts). Returns `[]` when there are no contracts.
    */
-  findClientIdsByTechnology(technology: string): Promise<string[]>;
+  findAllContractTechnologies(): Promise<Array<{ clientId: string; technology: string | null; plan: string }>>;
   /** Returns total count + per-status breakdown. Status values are dynamic (from Gestión Real). */
   stats(): Promise<ContractStats>;
   /**
