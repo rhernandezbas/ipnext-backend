@@ -749,23 +749,14 @@
 - [ ] **Integración de `casos` de GR como tickets.** **[BE]**
   El modelo `Ticket` tiene `grCasoId` reservado pero sin lógica. A futuro: traer los reclamos/casos
   de GR (acción `casos`) y mapearlos a tickets.
-- [ ] **lat/lng no viaja en el alta de tarea.** **[FE]**
-  Al CREAR una tarea con un servicio, solo se carga la dirección (texto); las coordenadas
-  (lat/lng) del servicio NO se mandan en `CreateTaskPayload` (el detalle sí las setea).
 
 ### 🟡 Deuda técnica
 
-- [ ] **`as any` / `as unknown as` sueltos en producción** (revisión 2026-06-29): ~8 candidatos — trivial `computeUpdateTaskActivities.ts:33`; tipar `req.user` (Express.Request) en `requirePermission.ts:26` + `rbacUser.routes.ts:129,174`; los de `app.ts:721,725,743` (`(prisma as any).client/ticket/project`) son por columnas nuevas que el cliente Prisma no tipa hasta `prisma generate` (en prod el Dockerfile lo corre → ok). `prismaClientLookup` ya tipado.
+- [ ] **`as any` restantes (no accionables hoy)** *(2026-06-29, BE 9e6ee2cf)*: lo accionable se hizo (cast trivial en `computeUpdateTaskActivities` + `req.user` tipado vía `express.d.ts`, 10 sitios). Quedan SOLO los `(prisma as any).client/ticket/project` de `app.ts:721,725,743`, por columnas nuevas que el cliente Prisma no tipa hasta `prisma generate` (el Dockerfile lo corre en el build → en prod están bien). No es deuda accionable sin regenerar Prisma local.
 
 ### 🧹 Cosmético / menor
 
-- [ ] **Tipo `TicketStats` con estado legacy `resolved`** **[FE]** *(revisión 2026-06-29)*: los TABS de `TicketsListPage` YA usan el catálogo dinámico (andan bien) — lo que QUEDA es limpiar el tipo `TicketStats` (`types/ticket.ts:62-67`) que aún declara `resolved` (4 estados) cuando el BE canónico devuelve 3 (`open|pending|closed`); + el mock `getMockTicketStats` (`tickets.api.ts:63-75`). Cleanup de tipo, no bug visible.
 - [ ] **Migrar el contador de deudores a una card/badge visible** (idea ofrecida, no pedida).
-
-### 🗂️ Datos de prueba dejados en prod (limpiar cuando se quiera)
-
-- [ ] Tarea **#4273** "Verificación servicio + contador" (cliente ABALO ALFREDO) — cerrada.
-- [ ] Ticket **"Ticket de prueba"** (cliente CARLE ALICIA) — creado para verificar el contador.
 
 ### 🏗️ Limitaciones conocidas (por diseño, no necesariamente a resolver)
 
