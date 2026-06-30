@@ -935,7 +935,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // updateTask is instantiated below (after iclassTeamRepo + autoAssigner are ready)
   // to inject the optional IClassAutoAssigner collaborator (AD-2).
   let updateTask: UpdateTask;
-  const deleteTask = new DeleteTask(schedulingRepo);
+  // deleteTask se instancia más abajo (tras taskAttachmentRepo + taskPhotoStorage)
+  // para poder limpiar de forma EAGER los binarios del storage al borrar la tarea
+  // (el cascade de Postgres borra las filas de adjuntos pero NO los objetos de MinIO).
+  let deleteTask: DeleteTask;
   const archiveTask = new ArchiveTask(schedulingRepo);
   // IClass integration: moving a task to "Enviar a IClass" delegates the OS
   // creation. The on/off decision lives in the feature flag (default OFF).
@@ -1683,6 +1686,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     bucket: config.minio.bucket,
   });
   const taskImageProcessor = new JimpImageProcessor();
+  // deleteTask: limpieza EAGER de los binarios (original + thumbnail) en el storage
+  // ANTES de borrar la tarea — el cascade de Postgres borra las filas de adjuntos pero
+  // deja huérfanos los objetos de MinIO. Best-effort: un fallo de MinIO no aborta el borrado.
+  deleteTask = new DeleteTask(schedulingRepo, taskAttachmentRepo, taskPhotoStorage);
   // EntityLookup de tarea: existencia vía el getTask ya instanciado (línea ~894).
   const taskLookupForAttachments = {
     findById: async (id: string): Promise<{ id: string } | null> => {
