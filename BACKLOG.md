@@ -8,7 +8,8 @@
 
 ## 📋 Pendientes
 
-### [FEAT] Desbloquear usuario (account-lockout) desde la UI — mini modal en gestión de usuarios — 🔧 EN CURSO *(2026-06-30, pedido del usuario)*
+### [FEAT] Desbloquear usuario (account-lockout) desde la UI — mini modal en gestión de usuarios — ✅ HECHO Y EN PROD *(2026-06-30, BE `9170cce2` / FE `b9c7fd19`, deploys 28466607072/28466709980 verdes)*
+> **✅ EN PROD (2026-06-30):** BE `9170cce2` (rebaseado sobre el commit del orchestrator `87b5f0dc`) + FE `b9c7fd19`. Gates: BE 5976 / FE 4159 + tsc. Review consolidado CLEAN. El gate completo cazó el mock de `useRbacUsers` faltante en `AdministracionPage.test` (29 tests) que el apply FE no vio → arreglado. Badge "Bloqueado" + botón "Desbloquear" + mini modal vivos en `/admin/administration` (tab Usuarios).
 > **Qué:** botón "Desbloquear" + mini modal en la página de usuarios RBAC (`RbacUsersBody`) para resetear el account-lockout (`failedLoginCount`/`lockedUntil`) sin entrar por SQL. Nace del incidente del login 429/423 (hubo que desbloquear a GiovaniL por psql en el `.37`).
 > **Alcance:** **BE aditivo** — use case `UnlockRbacUser` + `POST /api/admin/rbac/users/:id/unlock` (gate `admin/manage`, el del router) + exponer `lockedUntil` en `RbacUserDto` (solo lectura, para el indicador). El repo `RbacUserRepository.update` ya soporta resetear esos campos. **FE** — badge "Bloqueado" en la fila (si `lockedUntil > now`) + botón "Desbloquear" (solo si bloqueado) + mini modal (reusa `useConfirm`/`ConfirmModal`) + hook `useUnlockRbacUser` + `rbacUsersApi.unlock`. ui-ux-pro-max. **Sin migración.**
 > **Proceso:** worktrees BE+FE + TDD + review adversarial + deploy con OK del usuario. Convierte en un click la operación manual del unlock (ver [[auth/unlock-locked-user]]).
