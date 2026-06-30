@@ -8,7 +8,8 @@
 
 ## 📋 Pendientes
 
-### 🐛 [BUG/incidente] Login 429 masivo — el rate limiter keyeaba por IP y agrupaba a toda la oficina (NAT compartido) — 🔧 EN CURSO *(2026-06-30, incidente reportado por el usuario)*
+### 🐛 [BUG/incidente] Login 429 masivo — el rate limiter keyeaba por IP y agrupaba a toda la oficina (NAT compartido) — ✅ RESUELTO Y EN PROD *(2026-06-30, BE `0a126426`, deploy 28455348061 verde)*
+> **✅ EN PROD (2026-06-30):** deploy `28455348061` verde (el swap reseteó el contador en memoria del limiter + aplicó el fix en un solo paso → la gente trabada entró de inmediato). **Verificado EN VIVO:** 5 logins con usernames distintos → 401 (credenciales), CERO 429. Gate previo: tsc 0 + 5967 tests. Review adversarial CLEAN en los riesgos letales + W1 blindado.
 > **Síntoma:** `POST /api/auth/login` devolvía **429 Too Many Requests a TODOS los usuarios** (no podían entrar).
 > **Causa raíz (confirmada por logs nginx del `.37`):** todos los empleados salen por la MISMA IP pública (`190.7.234.33`, NAT de oficina; en los logs, mismos 429 desde esa IP con navegadores distintos Win/Mac). El login limiter (`rateLimiters.ts`, express-rate-limit) keyeaba **solo por IP** con límite **10/15min** → los contaba a todos juntos → con 10 logins se saturaba y el resto recibía 429. `trust proxy=1` ya estaba bien. Disparado por los re-logins masivos tras los 3 deploys seguidos del feature PPPoE (swaps de container). **Bug LATENTE desde SDD #6a — NO es del feature PPPoE.**
 > **Fix:** `keyGenerator` por **IP + username** (`ipKeyGenerator` IPv6-safe) → limita el brute-force contra UN usuario SIN penalizar a usuarios distintos del mismo NAT + default 10→**20** + **configurable por env** (`LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_MS`). Archivos: `rateLimiters.ts`, `config.ts`, `app.ts:1256`, `deploy.yml`. TDD (test que reproduce el incidente: 2 usuarios misma IP NO se pisan).
