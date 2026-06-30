@@ -64,6 +64,8 @@ jobs:
             -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
             -e COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}" \
             -e CORS_ORIGIN="${{ secrets.CORS_ORIGIN }}" \
+            -e LOGIN_RATE_LIMIT="${{ secrets.LOGIN_RATE_LIMIT }}" \
+            -e LOGIN_RATE_WINDOW_MS="${{ secrets.LOGIN_RATE_WINDOW_MS }}" \
             -e SPLYNX_API_URL="http://localhost" \
             -e SPLYNX_API_KEY="test" \
             -e SPLYNX_API_SECRET="test" \

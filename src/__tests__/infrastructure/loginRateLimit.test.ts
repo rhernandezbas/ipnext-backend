@@ -46,4 +46,31 @@ describe('POST /api/auth/login rate limit', () => {
     expect(r3.status).toBe(429);
     expect(r3.body.code).toBe('RATE_LIMITED');
   });
+
+  // login-ratelimit-nat fix: el limiter keyea por IP+username. Dos usuarios DISTINTOS
+  // detrás de la MISMA IP (NAT de oficina) NO deben pisarse — el bug del incidente era
+  // que el keyGenerator por-IP los agrupaba y el 429 caía sobre todos.
+  it('no agrupa usuarios distintos detrás de la misma IP (keyea por IP+username)', async () => {
+    const app = buildApp(); // limit: 2 por (IP+username)
+    const hit = (username: string) =>
+      request(app).post('/api/auth/login').send({ username, password: 'x' });
+
+    await hit('ana');               // ana 1 → 401
+    await hit('ana');               // ana 2 → 401
+    const anaOver = await hit('ana'); // ana 3 → 429 (su propia cuota agotada)
+    const beto1 = await hit('beto');  // beto 1, MISMA IP → debe ser 401, NO 429
+
+    expect(anaOver.status).toBe(429);  // el usuario brute-forceado SÍ se limita
+    expect(beto1.status).toBe(401);    // otro usuario en la misma IP NO se pisa (bug viejo → 429)
+  });
+
+  it('limita el brute-force contra UN usuario (mismo IP+username)', async () => {
+    const app = buildApp(); // limit: 2
+    const hit = () => request(app).post('/api/auth/login').send({ username: 'victima', password: 'x' });
+    await hit();
+    await hit();
+    const over = await hit(); // 3er intento contra 'victima' → 429
+    expect(over.status).toBe(429);
+    expect(over.body.code).toBe('RATE_LIMITED');
+  });
 });

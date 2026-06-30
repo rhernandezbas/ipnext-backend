@@ -1255,7 +1255,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // Routes
   app.use('/api/dashboard', createDashboardRouter(getDashboardStats, getDashboardShortcuts, getRecentActivity));
   app.use('/api/messages', createMessagesRouter(listMessages, getMessage, createMessage, markMessageAsRead, deleteMessage));
-  app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions, sessionRepo, createLoginRateLimiter()));
+  app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions, sessionRepo, createLoginRateLimiter(config.loginRateLimit)));
   app.use('/api/clients', createClientsRouter(listClients, getDetail, getContracts, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer, updateClientLocation, requirePerm));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
   // TicketStatus catalog — mounted BEFORE the tickets router to avoid /:id catch-all swallowing /statuses.

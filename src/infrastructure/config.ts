@@ -39,6 +39,27 @@ export const config = {
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
 
   /**
+   * Login rate limit (SDD #6a + login-ratelimit-nat). El limiter keyea por IP+username;
+   * estos controlan el techo por (IP, usuario) y la ventana. Configurables por env para
+   * ajustar sin recompilar si una oficina con muchos usuarios necesita más holgura.
+   * windowMs: clamp [1min, 24h] vía parseIntervalMs (default 15min). limit default 20.
+   */
+  loginRateLimit: {
+    // limit ENDURECIDO (review W1): un secret mal seteado a "0"/"-5" daría limit<=0 →
+    // 429 en el 1er request → outage TOTAL (peor que el incidente). NaN/0/negativo → 20.
+    // Mismo patrón defensivo que MINIO_PORT abajo. parseIntervalMs ya endurece windowMs.
+    limit: (() => {
+      const n = parseInt(process.env.LOGIN_RATE_LIMIT || '', 10);
+      return Number.isInteger(n) && n > 0 ? n : 20;
+    })(),
+    windowMs: parseIntervalMs(process.env.LOGIN_RATE_WINDOW_MS, {
+      default: 15 * 60 * 1000,
+      min: 60_000,
+      max: 24 * 60 * 60 * 1000,
+    }),
+  },
+
+  /**
    * Gestión Real read-only mirror sync. Opt-in: the whole feature stays dark
    * unless GR_SYNC_ENABLED=true, so the rest of the app boots and runs exactly
    * as before when it's off (no required vars, no scheduler started).
