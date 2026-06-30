@@ -95,6 +95,12 @@ jobs:
             -e AIROS_SSH_USER="ubnt" \
             -e AIROS_SSH_PASSWORDS="${{ secrets.AIROS_SSH_PASSWORDS }}" \
             -e EXTERNAL_API_KEY="${{ secrets.EXTERNAL_API_KEY }}" \
+            -e MINIO_ENDPOINT="${{ secrets.MINIO_ENDPOINT }}" \
+            -e MINIO_PORT="${{ secrets.MINIO_PORT }}" \
+            -e MINIO_USE_SSL="${{ secrets.MINIO_USE_SSL }}" \
+            -e MINIO_ACCESS_KEY="${{ secrets.MINIO_ACCESS_KEY }}" \
+            -e MINIO_SECRET_KEY="${{ secrets.MINIO_SECRET_KEY }}" \
+            -e MINIO_BUCKET="${{ secrets.MINIO_BUCKET }}" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
