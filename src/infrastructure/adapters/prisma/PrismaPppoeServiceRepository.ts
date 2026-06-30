@@ -303,6 +303,15 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     });
     return rows.map(toEntity);
   }
+
+  async deleteById(id: string): Promise<void> {
+    try {
+      await model().delete({ where: { id } });
+    } catch (err: any) {
+      if (err?.code === 'P2025') return; // ya no existe — no-op
+      throw err;
+    }
+  }
 }
 
 function toEntity(row: any): PppoeService {

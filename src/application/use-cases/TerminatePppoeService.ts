@@ -9,9 +9,8 @@ import { EnsureInternetContractService, EnsureInternetOpts } from './EnsureInter
 import { toNasTarget } from './nasTarget';
 
 /**
- * Baja HARD: elimina el usuario del RADIUS (libera la IP) y marca `status='terminated'`.
- * La fila queda como historial (no se borra la row). Irreversible: para reactivar hay que
- * crear de nuevo.
+ * Baja HARD: elimina el usuario del RADIUS (libera la IP) y borra la fila de la DB.
+ * El username queda libre para ser re-ingresado en el futuro sin conflictos.
  *
  * Ruteado por `nas.type`:
  *   - `radius_orchestrator` → `orchestrator.deleteUser` (borra radcheck + radusergroup + radreply
@@ -59,15 +58,8 @@ export class TerminatePppoeService {
       await this.router.removeSecret(toNasTarget(nas), s.username);
     }
 
-    const result = await this.repo.upsertByUsername({
-      username: s.username,
-      password: s.password,
-      profile: s.profile,
-      remoteAddress: null,    // IP liberada
-      status: 'terminated',
-      nasId: s.nasId,
-      contractId: null,       // desvincula del contrato al dar de baja
-    });
+    // Borrado HARD: el username queda libre (ingest lo puede crear de cero en el futuro).
+    await this.repo.deleteById(s.id);
 
     // Best-effort: inactivar la línea INTERNET si el PPPoE tenía un contrato.
     if (s.contractId != null) {
@@ -78,6 +70,6 @@ export class TerminatePppoeService {
       }
     }
 
-    return result;
+    return s;
   }
 }

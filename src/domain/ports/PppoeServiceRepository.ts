@@ -120,6 +120,12 @@ export interface PppoeServiceRepository {
   /** persist-caller-id: guarda la MAC del CPE (última sesión vista) para que sobreviva a la desconexión. */
   setCallerId(id: string, callerId: string): Promise<void>;
   /**
+   * Borrado HARD de la fila (baja total). Se llama DESPUÉS de confirmar que el plano de control
+   * (RADIUS/router) eliminó al usuario. El username queda libre para ser re-ingresado en el futuro.
+   * No-op si el id no existe.
+   */
+  deleteById(id: string): Promise<void>;
+  /**
    * pppoe-pool-ip: actualiza SOLO `ipMode` y `remoteAddress` de un PPPoE (pin/unpin de IP fija).
    * NO toca password/profile/status. Devuelve la entidad actualizada, o null si no existe.
    */

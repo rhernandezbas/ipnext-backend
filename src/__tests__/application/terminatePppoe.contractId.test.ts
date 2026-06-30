@@ -1,14 +1,9 @@
 /**
  * terminatePppoe.contractId.test.ts
  *
- * Bug: TerminatePppoeService preservaba el contractId al dar de baja un PPPoE.
- * Eso causaba dos problemas:
- *   1. El PPPoE terminated NO aparecía en findUnassigned() (WHERE contractId IS NULL)
- *      → el operador no podía re-asociarlo desde el selector.
- *   2. ListRadiusSessions devolvía contractId no-null para sesiones de un PPPoE terminated
- *      → el FE no mostraba el ⚠ aunque el contrato no tuviera servicio de internet activo.
- *
- * Fix esperado: al terminar un PPPoE, el contractId se pone NULL.
+ * TerminatePppoeService hace BORRADO HARD de la fila (deleteById).
+ * El username queda completamente libre para ser re-ingresado desde el router
+ * sin ningún conflicto ni residuo en la DB.
  */
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
@@ -37,8 +32,8 @@ function buildUseCase() {
   return { pppoeRepo, terminatePppoe };
 }
 
-describe('TerminatePppoeService — contractId se pone null al dar de baja', () => {
-  it('el PPPoE terminated queda con contractId=null (no con el contractId original)', async () => {
+describe('TerminatePppoeService — borrado HARD de la fila (baja total)', () => {
+  it('la fila es eliminada completamente de la DB tras la baja', async () => {
     const { pppoeRepo, terminatePppoe } = buildUseCase();
 
     const pppoe = await pppoeRepo.upsertByUsername({
@@ -51,13 +46,13 @@ describe('TerminatePppoeService — contractId se pone null al dar de baja', () 
       contractId:    CONTRACT_ID,
     });
 
-    const result = await terminatePppoe.execute(pppoe.id);
+    await terminatePppoe.execute(pppoe.id);
 
-    expect(result.status).toBe('terminated');
-    expect(result.contractId).toBeNull();
+    const afterBaja = await pppoeRepo.findByUsername('CintiaMoyanoMercFibra');
+    expect(afterBaja).toBeNull();
   });
 
-  it('el PPPoE terminated aparece en findUnassigned() para poder re-asociarlo', async () => {
+  it('el username NO aparece en findUnassigned() (no hay fila huérfana)', async () => {
     const { pppoeRepo, terminatePppoe } = buildUseCase();
 
     const pppoe = await pppoeRepo.upsertByUsername({
@@ -74,8 +69,38 @@ describe('TerminatePppoeService — contractId se pone null al dar de baja', () 
 
     const unassigned = await pppoeRepo.findUnassigned();
     const found = unassigned.find(p => p.username === 'CintiaMoyanoMercFibra');
-    expect(found).toBeDefined();
-    expect(found?.status).toBe('terminated');
-    expect(found?.contractId).toBeNull();
+    expect(found).toBeUndefined();
+  });
+
+  it('el ingest puede crear el username de cero después de la baja (no hay conflicto UNIQUE)', async () => {
+    const { pppoeRepo, terminatePppoe } = buildUseCase();
+
+    const pppoe = await pppoeRepo.upsertByUsername({
+      username:      'CintiaMoyanoMercFibra',
+      password:      'secret123',
+      profile:       'IP-Fibra-100',
+      remoteAddress: '100.64.9.245',
+      status:        'enabled',
+      nasId:         NAS_RADIUS_ID,
+      contractId:    CONTRACT_ID,
+    });
+
+    await terminatePppoe.execute(pppoe.id);
+
+    // Simula re-ingest desde el router (fresh entry, contractId=null)
+    const reingested = await pppoeRepo.upsertByUsername({
+      username:   'CintiaMoyanoMercFibra',
+      password:   'secret123',
+      profile:    'IP-Fibra-100',
+      nasId:      NAS_RADIUS_ID,
+      contractId: null,
+    });
+
+    expect(reingested.status).toBe('enabled');
+    expect(reingested.contractId).toBeNull();
+
+    // Y aparece como huérfano disponible para asociar
+    const unassigned = await pppoeRepo.findUnassigned();
+    expect(unassigned.find(p => p.username === 'CintiaMoyanoMercFibra')).toBeDefined();
   });
 });

@@ -203,9 +203,9 @@ describe('DELETE /api/pppoe/:id — terminate (pppoe-terminate-callerid)', () =>
 
     expect(res.status).toBe(204);
 
+    // Fila borrada — borrado HARD
     const updated = await fx.pppoeRepo.findById(row.id);
-    expect(updated!.status).toBe('terminated');
-    expect(updated!.remoteAddress).toBeNull();
+    expect(updated).toBeNull();
 
     const ops = fx.orchestrator.opsFor('term-user');
     expect(ops).toContain('deleteUser');
@@ -224,7 +224,7 @@ describe('DELETE /api/pppoe/:id — terminate (pppoe-terminate-callerid)', () =>
 
     expect(res.status).toBe(204);
     const updated = await fx.pppoeRepo.findById(row.id);
-    expect(updated!.status).toBe('terminated');
+    expect(updated).toBeNull();
   });
 
   it('404 cuando el PPPoE no existe', async () => {

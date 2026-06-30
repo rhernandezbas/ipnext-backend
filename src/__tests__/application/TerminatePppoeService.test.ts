@@ -2,7 +2,7 @@
  * TerminatePppoeService.test.ts — TDD (red → green → refactor)
  *
  * Cubre:
- *   - radius_orchestrator: llama orchestrator.deleteUser + sets status='terminated' + remoteAddress=null
+ *   - radius_orchestrator: llama orchestrator.deleteUser + borra la fila de la DB (borrado HARD)
  *   - radius_orchestrator: registra evento con reason via ensureInternet
  *   - radius_orchestrator: deleteUser lanza 502 → DB NO se modifica (atomicidad)
  *   - radius_orchestrator: kickea sesión live best-effort (disconnectSessions)
@@ -52,7 +52,7 @@ async function seedInternetLine(
 }
 
 describe('TerminatePppoeService — radius_orchestrator path', () => {
-  it('llama orchestrator.deleteUser y establece status=terminated + remoteAddress=null', async () => {
+  it('llama orchestrator.deleteUser y borra la fila de la DB (borrado HARD)', async () => {
     const { pppoeRepo, orchestrator, svc } = buildDeps();
     const row = await pppoeRepo.upsertByUsername({
       username: 'client1', password: 'pwd', nasId: NAS_RADIUS_ID, contractId: CONTRACT_ID,
@@ -65,10 +65,9 @@ describe('TerminatePppoeService — radius_orchestrator path', () => {
     const ops = orchestrator.opsFor('client1');
     expect(ops).toContain('deleteUser');
 
-    // DB actualizada: terminated + IP liberada
+    // DB: fila borrada — username libre para re-ingest
     const updated = await pppoeRepo.findById(row.id);
-    expect(updated!.status).toBe('terminated');
-    expect(updated!.remoteAddress).toBeNull();
+    expect(updated).toBeNull();
   });
 
   it('kickea la sesión live best-effort (disconnectSessions) después de deleteUser', async () => {
@@ -112,7 +111,7 @@ describe('TerminatePppoeService — radius_orchestrator path', () => {
     expect(unchanged!.status).toBe('enabled');
   });
 
-  it('deleteUser 404 (user ya borrado del RADIUS) → idempotente: marca terminated igual', async () => {
+  it('deleteUser 404 (user ya borrado del RADIUS) → idempotente: borra la fila igual', async () => {
     const { pppoeRepo, orchestrator, svc } = buildDeps();
     // Doble-baja: el user ya no existe en RADIUS → el orchestrator responde 404.
     orchestrator.deleteUser = async () => {
@@ -125,9 +124,9 @@ describe('TerminatePppoeService — radius_orchestrator path', () => {
 
     await svc.execute(row.id); // NO debe tirar 500
 
+    // Fila borrada — idempotente en ambos sentidos (RADIUS ya limpio, DB ahora también)
     const updated = await pppoeRepo.findById(row.id);
-    expect(updated!.status).toBe('terminated');
-    expect(updated!.remoteAddress).toBeNull();
+    expect(updated).toBeNull();
   });
 
   it('falla con PppoeServiceNotFoundError para ID inexistente', async () => {
@@ -159,8 +158,8 @@ describe('TerminatePppoeService — non-radius path (mikrotik_api)', () => {
     const secrets = await router.listSecrets({ ipAddress: '192.168.1.1', apiPort: 8728 });
     expect(secrets.find(s => s.username === 'api-client')).toBeUndefined();
 
-    // DB actualizada
+    // DB: fila borrada
     const updated = await pppoeRepo.findById(row.id);
-    expect(updated!.status).toBe('terminated');
+    expect(updated).toBeNull();
   });
 });

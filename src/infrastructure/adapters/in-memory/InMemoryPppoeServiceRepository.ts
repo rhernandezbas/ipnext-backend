@@ -268,4 +268,9 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     found.remoteAddress = remoteAddress;
     return { ...found };
   }
+
+  async deleteById(id: string): Promise<void> {
+    const idx = this.store.findIndex(s => s.id === id);
+    if (idx !== -1) this.store.splice(idx, 1);
+  }
 }
