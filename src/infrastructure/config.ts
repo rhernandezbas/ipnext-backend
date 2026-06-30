@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { parseIntervalMs } from './parseIntervalMs';
 dotenv.config();
 
 const REQUIRED_VARS = [
@@ -164,6 +165,23 @@ export const config = {
     baseUrl: process.env.ORCHESTRATOR_BASE_URL ?? '',
     token: process.env.ORCHESTRATOR_API_TOKEN ?? '',
     timeoutMs: parseInt(process.env.ORCHESTRATOR_TIMEOUT_MS || '6000', 10),
+  },
+
+  /**
+   * RADIUS auth ingest (radpostauth) — frescura del scheduler de errores de auth.
+   * Configurable sin redeploy via RADIUS_AUTH_INGEST_INTERVAL_MS para poder bajar/subir
+   * el ritmo si el orchestrator se carga. Default 60_000 (1 min). Mínimo de seguridad
+   * 15_000 (15s) para NO martillar al orchestrator; máximo 86_400_000 (24h) para que un
+   * fat-finger por confusión de unidades no haga que setInterval dispare cada 1ms (techo
+   * < TIMEOUT_MAX de Node). Valor inválido/ausente → default; fuera de rango → se clampa.
+   * NUNCA tumba el boot (no fail-fast): el scheduler es opt-in y best-effort.
+   */
+  radiusAuthIngest: {
+    intervalMs: parseIntervalMs(process.env.RADIUS_AUTH_INGEST_INTERVAL_MS, {
+      default: 60_000,
+      min: 15_000,
+      max: 86_400_000,
+    }),
   },
 
   /**

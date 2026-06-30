@@ -14,11 +14,13 @@ import { IngestRadiusAuth } from '@application/use-cases/IngestRadiusAuth';
 import { RadiusAuthIngestScheduler } from './RadiusAuthIngestScheduler';
 
 /**
- * @param intervalMs - Intervalo de tick. main.ts pasa 300_000 (5 min).
+ * @param intervalMs - Intervalo de tick. Default: `config.radiusAuthIngest.intervalMs`
+ *   (60s por default, env-configurable via RADIUS_AUTH_INGEST_INTERVAL_MS, mínimo 15s).
+ *   main.ts lo invoca sin args, así que toma el valor de config.
  * @returns Scheduler listo para .start(), o null si el orchestrator no está configurado.
  */
 export async function bootstrapRadiusAuthIngest(
-  intervalMs = 300_000,
+  intervalMs = config.radiusAuthIngest.intervalMs,
 ): Promise<RadiusAuthIngestScheduler | null> {
   const { baseUrl, token } = config.orchestrator;
 
