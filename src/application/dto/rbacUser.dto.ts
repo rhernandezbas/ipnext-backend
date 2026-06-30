@@ -17,7 +17,9 @@ export interface RbacRoleDto {
 }
 
 /**
- * Safe wire-shape for a user. MUST NOT expose passwordHash.
+ * Safe wire-shape for a user. MUST NOT expose passwordHash or failedLoginCount.
+ * lockedUntil is display-safe: used by the admin UI to show the lock indicator
+ * and is reset to null by the unlock endpoint.
  */
 export interface RbacUserDto {
   id: string;
@@ -28,6 +30,7 @@ export interface RbacUserDto {
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
+  lockedUntil: string | null;
 }
 
 export interface RbacUserWithRolesDto extends RbacUserDto {
@@ -74,8 +77,9 @@ export interface ChangeRbacUserPasswordDto {
 
 /**
  * Maps any object with the required fields to RbacUserDto.
- * Explicitly enumerates fields — unknown extra fields (including passwordHash)
- * are dropped, never passed to the wire.
+ * Explicitly enumerates fields — unknown extra fields (including passwordHash,
+ * failedLoginCount, grVendedorName) are dropped, never passed to the wire.
+ * lockedUntil is the one lockout field that IS exposed (display indicator only).
  */
 export function toRbacUserDto(u: {
   id: string;
@@ -86,6 +90,7 @@ export function toRbacUserDto(u: {
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
+  lockedUntil?: string | null;
 }): RbacUserDto {
   return {
     id: u.id,
@@ -96,6 +101,7 @@ export function toRbacUserDto(u: {
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
     lastLoginAt: u.lastLoginAt,
+    lockedUntil: u.lockedUntil ?? null,
   };
 }
 

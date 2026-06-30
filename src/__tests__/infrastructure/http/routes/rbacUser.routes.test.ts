@@ -37,6 +37,7 @@ import { ListRolesForUser } from '@application/use-cases/rbac/ListRolesForUser';
 import { SetRolesForUser } from '@application/use-cases/rbac/SetRolesForUser';
 import { AssignRoleToUser } from '@application/use-cases/rbac/AssignRoleToUser';
 import { RemoveRoleFromUser } from '@application/use-cases/rbac/RemoveRoleFromUser';
+import { UnlockRbacUser } from '@application/use-cases/rbac/UnlockRbacUser';
 
 // ---------------------------------------------------------------------------
 // Test app builder
@@ -121,6 +122,7 @@ async function buildTestApp(): Promise<TestApp> {
   const setRoles    = new SetRolesForUser(userRepo, roleRepo, userRoleRepo);
   const assignRole  = new AssignRoleToUser(userRepo, roleRepo, userRoleRepo);
   const removeRole  = new RemoveRoleFromUser(userRepo, roleRepo, userRoleRepo);
+  const unlockUser  = new UnlockRbacUser(userRepo);
 
   const requirePermAdmin = requirePermission(userRepo, 'admin', 'manage');
 
@@ -158,6 +160,7 @@ async function buildTestApp(): Promise<TestApp> {
       setRolesForUser: setRoles,
       assignRoleToUser: assignRole,
       removeRoleFromUser: removeRole,
+      unlockUser,
     }),
   );
 
@@ -508,6 +511,37 @@ describe('requirePerm middleware', () => {
 
     const res = await authed(request(app).get('/admin/rbac/users'), permUserId);
     expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /admin/rbac/users/:id/unlock
+// ---------------------------------------------------------------------------
+
+describe('POST /admin/rbac/users/:id/unlock', () => {
+  it('200 with lockedUntil=null after unlocking a locked user', async () => {
+    const { app, superAdminUser: sa, roleId } = await buildTestApp();
+
+    // Create a user to lock+unlock
+    const createRes = await authed(request(app).post('/admin/rbac/users'), sa.id)
+      .send({ name: 'Locked', email: 'locked@example.com', login: 'lockeduser', password: 'password123', roleIds: [roleId] });
+    expect(createRes.status).toBe(201);
+    const lockedUserId = createRes.body.user.id;
+
+    const res = await authed(request(app).post(`/admin/rbac/users/${lockedUserId}/unlock`), sa.id);
+    expect(res.status).toBe(200);
+    expect(res.body.user).toBeDefined();
+    expect(res.body.user.id).toBe(lockedUserId);
+    expect(res.body.user.lockedUntil).toBeNull();
+    expect(JSON.stringify(res.body)).not.toContain('passwordHash');
+    expect(JSON.stringify(res.body)).not.toContain('failedLoginCount');
+  });
+
+  it('404 + USER_NOT_FOUND when user does not exist', async () => {
+    const { app, superAdminUser: sa } = await buildTestApp();
+    const res = await authed(request(app).post('/admin/rbac/users/non-existent-id/unlock'), sa.id);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('USER_NOT_FOUND');
   });
 });
 

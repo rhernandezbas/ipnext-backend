@@ -25,6 +25,7 @@ import type { ListRolesForUser } from '@application/use-cases/rbac/ListRolesForU
 import type { SetRolesForUser } from '@application/use-cases/rbac/SetRolesForUser';
 import type { AssignRoleToUser } from '@application/use-cases/rbac/AssignRoleToUser';
 import type { RemoveRoleFromUser } from '@application/use-cases/rbac/RemoveRoleFromUser';
+import type { UnlockRbacUser } from '@application/use-cases/rbac/UnlockRbacUser';
 
 export interface RbacUserRouterDeps {
   listUsers: ListRbacUsers;
@@ -37,6 +38,7 @@ export interface RbacUserRouterDeps {
   setRolesForUser: SetRolesForUser;
   assignRoleToUser: AssignRoleToUser;
   removeRoleFromUser: RemoveRoleFromUser;
+  unlockUser: UnlockRbacUser;
 }
 
 export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
@@ -118,6 +120,16 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
     try {
       await deps.removeRoleFromUser.execute(req.params['id'] as string, req.params['roleId'] as string);
       res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /:id/unlock — reset account lockout (failedLoginCount=0, lockedUntil=null)
+  router.post('/:id/unlock', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const user = await deps.unlockUser.execute(req.params['id'] as string);
+      res.json({ user });
     } catch (err) {
       next(err);
     }

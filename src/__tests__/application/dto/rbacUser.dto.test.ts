@@ -43,6 +43,24 @@ describe('toRbacUserDto', () => {
     const dto = toRbacUserDto({ ...userEntity, grVendedorName: 'JUAN PEREZ' } as Parameters<typeof toRbacUserDto>[0]);
     expect('grVendedorName' in dto).toBe(false);
   });
+
+  it('should include lockedUntil=null when not provided', () => {
+    const dto = toRbacUserDto(userEntity);
+    expect('lockedUntil' in dto).toBe(true);
+    expect(dto.lockedUntil).toBeNull();
+  });
+
+  it('should map lockedUntil ISO string when provided', () => {
+    const iso = '2026-07-01T10:00:00.000Z';
+    const dto = toRbacUserDto({ ...userEntity, lockedUntil: iso });
+    expect(dto.lockedUntil).toBe(iso);
+  });
+
+  it('should NOT expose failedLoginCount', () => {
+    const dto = toRbacUserDto({ ...userEntity } as Parameters<typeof toRbacUserDto>[0]);
+    expect('failedLoginCount' in dto).toBe(false);
+    expect(JSON.stringify(dto)).not.toContain('failedLoginCount');
+  });
 });
 
 describe('toRbacRoleDto', () => {

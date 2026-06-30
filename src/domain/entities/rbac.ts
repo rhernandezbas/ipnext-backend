@@ -154,6 +154,9 @@ export type SystemRoleCode = (typeof SYSTEM_ROLES)[number];
 /**
  * RbacUser — domain entity.
  * Does NOT expose passwordHash (security boundary).
+ * Does NOT expose failedLoginCount (auth-internal counter).
+ * lockedUntil is display-safe: it tells the UI whether the account is locked
+ * without revealing the auth failure details.
  */
 export interface RbacUser {
   id: string;
@@ -171,6 +174,12 @@ export interface RbacUser {
    * Soft mapping, nullable, sin FK física. Set/cleared via UpdateRbacUser.
    */
   grVendedorName?: string | null;
+  /**
+   * Account lockout expiry (ISO string) or null if not locked.
+   * Display-safe: exposed in list/get so the admin UI can show the lock indicator.
+   * Reset to null by UnlockRbacUser. NOT a security-sensitive field.
+   */
+  lockedUntil?: string | null;
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;

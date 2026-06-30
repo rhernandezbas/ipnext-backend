@@ -52,6 +52,7 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
       ...entry.user,
       iclassTeamLogin: entry.iclassTeamLogin,
       grVendedorName: entry.grVendedorName,
+      lockedUntil: entry.lockedUntil ? entry.lockedUntil.toISOString() : null,
       lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
     };
   }
@@ -126,6 +127,7 @@ export class InMemoryRbacUserRepository implements RbacUserRepository {
       ...entry.user,
       iclassTeamLogin: entry.iclassTeamLogin,
       grVendedorName: entry.grVendedorName,
+      lockedUntil: entry.lockedUntil ? entry.lockedUntil.toISOString() : null,
       lastLoginAt: entry.lastLoginAt ? entry.lastLoginAt.toISOString() : null,
     }));
   }

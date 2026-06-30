@@ -8,6 +8,11 @@
 
 ## 📋 Pendientes
 
+### [FEAT] Desbloquear usuario (account-lockout) desde la UI — mini modal en gestión de usuarios — 🔧 EN CURSO *(2026-06-30, pedido del usuario)*
+> **Qué:** botón "Desbloquear" + mini modal en la página de usuarios RBAC (`RbacUsersBody`) para resetear el account-lockout (`failedLoginCount`/`lockedUntil`) sin entrar por SQL. Nace del incidente del login 429/423 (hubo que desbloquear a GiovaniL por psql en el `.37`).
+> **Alcance:** **BE aditivo** — use case `UnlockRbacUser` + `POST /api/admin/rbac/users/:id/unlock` (gate `admin/manage`, el del router) + exponer `lockedUntil` en `RbacUserDto` (solo lectura, para el indicador). El repo `RbacUserRepository.update` ya soporta resetear esos campos. **FE** — badge "Bloqueado" en la fila (si `lockedUntil > now`) + botón "Desbloquear" (solo si bloqueado) + mini modal (reusa `useConfirm`/`ConfirmModal`) + hook `useUnlockRbacUser` + `rbacUsersApi.unlock`. ui-ux-pro-max. **Sin migración.**
+> **Proceso:** worktrees BE+FE + TDD + review adversarial + deploy con OK del usuario. Convierte en un click la operación manual del unlock (ver [[auth/unlock-locked-user]]).
+
 ### 🐛 [BUG] Orchestrator: username no-ASCII (ñ) rompe validación + UoW singleton corrompe la conexión async (cambiar velocidad / sesiones fallan) — ✅ HECHO Y EN PROD *(2026-06-30, ORCH `b67241f`, deploy 28465249285 verde; repo `freeradius-orchestrator`)*
 > **Síntoma:** panel "Internet — PPPoE" tira "No se pudo cambiar la velocidad. Reintentá." (LuisGodoyCh/Parque). Log BE: `OrchestratorUnreachableError: timeout of 6000ms exceeded` en `changePlan`; `listSessions` → 500.
 > **Raíz (2 bugs, destapados al migrar 6 MikroTik al RADIUS HA):** (a) `domain/value_objects/username.py` validaba con `^[a-zA-Z0-9._@-]{3,128}$` (solo ASCII) → rechazaba `BrendaPeñaCh` (ñ, válida — la manda el CPE; cargada así en radcheck para arreglar su auth) con `InvalidUsername`, que envenenaba la conexión async. (b) `SqlAlchemyUnitOfWork` era un singleton compartido por todos los servicios (`container.py`) con `self._session` mutable → requests concurrentes pisaban/reusaban la sesión → `pymysql (2014) Command Out of Sync` / `readexactly() ... another coroutine`. La excepción de (a) sobre la sesión compartida de (b) agravaba el envenenamiento. Lo destapó la carga de la migración.

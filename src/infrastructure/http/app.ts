@@ -629,6 +629,7 @@ import { CreateRbacUser } from '@application/use-cases/rbac/CreateRbacUser';
 import { UpdateRbacUser } from '@application/use-cases/rbac/UpdateRbacUser';
 import { DeleteRbacUser } from '@application/use-cases/rbac/DeleteRbacUser';
 import { ChangeRbacUserPassword } from '@application/use-cases/rbac/ChangeRbacUserPassword';
+import { UnlockRbacUser } from '@application/use-cases/rbac/UnlockRbacUser';
 import { ListRolesForUser } from '@application/use-cases/rbac/ListRolesForUser';
 import { SetRolesForUser } from '@application/use-cases/rbac/SetRolesForUser';
 import { AssignRoleToUser } from '@application/use-cases/rbac/AssignRoleToUser';
@@ -1970,6 +1971,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const updateRbacUserUC  = new UpdateRbacUser(rbacUserRepo, passwordHasher);
   const deleteRbacUserUC  = new DeleteRbacUser(rbacUserRepo, rbacUserRoleRepo, rbacRoleRepo);
   const changePasswordUC  = new ChangeRbacUserPassword(rbacUserRepo, passwordHasher);
+  const unlockRbacUserUC  = new UnlockRbacUser(rbacUserRepo);
   const listRolesForUserUC = new ListRolesForUser(rbacUserRepo, rbacUserRoleRepo, rbacRoleRepo);
   const setRolesForUserUC  = new SetRolesForUser(rbacUserRepo, rbacRoleRepo, rbacUserRoleRepo);
   const assignRoleToUserUC = new AssignRoleToUser(rbacUserRepo, rbacRoleRepo, rbacUserRoleRepo);
@@ -1988,6 +1990,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       updateUser: updateRbacUserUC,
       deleteUser: deleteRbacUserUC,
       changePassword: changePasswordUC,
+      unlockUser: unlockRbacUserUC,
       listRolesForUser: listRolesForUserUC,
       setRolesForUser: setRolesForUserUC,
       assignRoleToUser: assignRoleToUserUC,

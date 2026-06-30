@@ -58,6 +58,7 @@ function mapUser(row: RbacUserRow): RbacUser {
     status: (row.status === 'active' || row.status === 'disabled') ? row.status : 'active',
     iclassTeamLogin: row.iclassTeamLogin ?? null,
     grVendedorName: row.grVendedorName ?? null,
+    lockedUntil: row.lockedUntil ? row.lockedUntil.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     lastLoginAt: row.lastLoginAt ? row.lastLoginAt.toISOString() : null,
