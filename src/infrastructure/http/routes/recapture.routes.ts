@@ -150,7 +150,7 @@ export function createRecaptureRouter(
     perms.read,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        const actorId = (req as any).user?.id as string;
+        const actorId = req.user?.id as string;
         const isAdmin = await hasAssignPerm(actorId);
 
         // Fail-closed (defense in depth): a non-admin without a resolvable actorId
@@ -191,7 +191,7 @@ export function createRecaptureRouter(
     perms.read,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        const actorId = (req as any).user?.id as string;
+        const actorId = req.user?.id as string;
         const isAdmin = await hasAssignPerm(actorId);
         const lead = await getLead.execute(req.params['id'] as string);
 
@@ -218,7 +218,7 @@ export function createRecaptureRouter(
     auth,
     perms.manage,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-      const actorId = (req as any).user?.id as string;
+      const actorId = req.user?.id as string;
       const isAdmin = await hasAssignPerm(actorId);
 
       // Non-admin agents can only mutate their own leads â€” check ownership first
@@ -273,7 +273,7 @@ export function createRecaptureRouter(
     auth,
     perms.manage,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-      const actorId = (req as any).user?.id as string;
+      const actorId = req.user?.id as string;
       const isAdmin = await hasAssignPerm(actorId);
 
       // Non-admin agents can only mutate their own leads â€” check ownership first

@@ -23,7 +23,7 @@ export function requirePermission(
   action: PermissionAction,
 ) {
   return async function guard(req: Request, res: Response, next: NextFunction): Promise<void> {
-    const userId = (req as any).user?.id as string | undefined;
+    const userId = req.user?.id;
 
     if (!userId) {
       res.status(401).json({ error: 'UNAUTHORIZED', code: 'NO_USER_CONTEXT' });

@@ -30,8 +30,7 @@ export function computeUpdateTaskActivities(
 ): TaskActivityEvent[] {
   const events: TaskActivityEvent[] = [];
   const d = data as Record<string, unknown>;
-  const p = prev as unknown as Record<string, unknown>;
-  const changed = (field: string): boolean => d[field] !== undefined && d[field] !== p[field];
+  const changed = (field: keyof ScheduledTask): boolean => d[field] !== undefined && d[field] !== prev[field];
 
   // Human-readable from/to names for FK fields (omitted when `next` is absent, e.g. unit tests).
   const names = (fromName: string | null | undefined, toName: string | null | undefined) =>

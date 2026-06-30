@@ -126,7 +126,7 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
   // POST /:id/password — change password (admin-managed or self-change)
   router.post('/:id/password', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const requestingUserId = (req as any).user!.id as string;
+      const requestingUserId = req.user!.id;
       const targetId = req.params['id'] as string;
       const isAdminManaged = targetId !== requestingUserId;
       const { newPassword, oldPassword } = req.body as { newPassword: string; oldPassword?: string };
@@ -171,7 +171,7 @@ export function createRbacUserRouter(deps: RbacUserRouterDeps): Router {
   // DELETE /:id — delete user
   router.delete('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const requestingUserId = (req as any).user!.id as string;
+      const requestingUserId = req.user!.id;
       await deps.deleteUser.execute(req.params['id'] as string, requestingUserId);
       res.status(204).send();
     } catch (err) {

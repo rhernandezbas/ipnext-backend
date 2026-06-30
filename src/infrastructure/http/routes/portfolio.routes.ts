@@ -33,7 +33,7 @@ export function createPortfolioRouter(
     perms.read,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        const userId = (req as any).user?.id as string;
+        const userId = req.user?.id as string;
         res.json(await getMyPortfolio.execute(userId));
       } catch (err) {
         next(err);

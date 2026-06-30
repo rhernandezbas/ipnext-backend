@@ -373,7 +373,7 @@ export function createSchedulingRouter(
         const task = await resendTaskToIClassWithNode.execute(
           req.params['id'] as string,
           parsed.data.nodeCode,
-          (req as any).user?.id ?? null,
+          req.user?.id ?? null,
         );
         res.status(200).json(task);
       } catch (err) {
@@ -480,7 +480,7 @@ export function createSchedulingRouter(
         const result = await retireContractEquipment.execute({
           taskId: req.params['id'] as string,
           itemIds: parsed.data.itemIds,
-          actorId: (req as any).user?.id ?? null,
+          actorId: req.user?.id ?? null,
         });
         // Map internal result to wire contract: { retired: [{itemId, status, assetReturned}] }
         res.status(200).json({

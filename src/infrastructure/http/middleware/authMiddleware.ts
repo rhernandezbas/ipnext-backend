@@ -1,18 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
-import { User } from '@domain/entities/auth';
 import { AuthenticationError } from '@domain/errors';
 import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { isSessionAlive } from '@domain/entities/session.policy';
 import { hashToken } from '../../auth/sessionToken';
 
-declare global {
-  namespace Express {
-    interface Request {
-      user?: User;
-    }
-  }
-}
+// `Express.Request.user` is augmented globally in src/types/express.d.ts.
 
 const TOUCH_THROTTLE_MS = 5 * 60 * 1000;
 

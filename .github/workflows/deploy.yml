@@ -59,6 +59,7 @@ jobs:
             -p 8291:3000 \
             -e NODE_ENV=development \
             -e PORT=3000 \
+            -e PRISMA_LOG_QUERIES="false" \
             -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
             -e COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}" \
