@@ -144,6 +144,23 @@ export class OrchestratorRejectedError extends DomainError {
 }
 
 /**
+ * fix-wave-2 (CRITICAL): el rename de un PPPoE requiere NAS de tipo `radius_orchestrator`.
+ * El flujo es SOLO-RADIUS (usa orchestrator.createUser / deleteUser siempre). Un NAS
+ * `mikrotik_api` u otro tipo no pasa por el radius-orchestrator → rechazar antes de tocar
+ * el plano de control, para no crear fantasmas en el RADIUS ni inconsistencias en el espejo.
+ * Code → HTTP: PPPOE_RENAME_NAS_NOT_SUPPORTED → 422.
+ */
+export class PppoeRenameNasNotSupportedError extends DomainError {
+  constructor(public readonly nasType: string) {
+    super(
+      `El rename de PPPoE requiere un NAS de tipo 'radius_orchestrator' — tipo '${nasType}' no está soportado`,
+      'PPPOE_RENAME_NAS_NOT_SUPPORTED',
+    );
+    this.name = 'PppoeRenameNasNotSupportedError';
+  }
+}
+
+/**
  * pppoe-pool-ip: la IP provista no es un IPv4 válido (formato inválido).
  * Code → HTTP: INVALID_IP_FORMAT → 422.
  */

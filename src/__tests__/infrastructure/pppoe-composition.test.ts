@@ -158,4 +158,16 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
     // ...Y se inyecta en createNasRouter (si no se pasa, la ruta /pool-mode queda muerta).
     expect(appSrc).toMatch(/createNasRouter\([\s\S]*setNasPoolMode/);
   });
+
+  // ── fix-wave-2 (CRITICAL): RenamePppoeUsername usa radiusEnforcement, NO enforcementGw ──
+  it('(m) RenamePppoeUsername wired con nasRepoForPppoe y radiusEnforcement (fix-wave-2 CRITICAL)', () => {
+    // El rename es SOLO-RADIUS: el enforcement debe ir por OrchestratorEnforcementAdapter
+    // (radiusEnforcement) directo — NO por el PerNasEnforcementGateway (enforcementGw),
+    // que con {} as NasServer ruteaba a RouterOsEnforcementAdapter → 500 en prod.
+    expect(appSrc).toMatch(/new RenamePppoeUsername\([^)]*nasRepoForPppoe[^)]*radiusEnforcement\s*\)/s);
+  });
+
+  it('(m) CreatePppoeStandalone wired (pppoe-full-management Fase 2)', () => {
+    expect(appSrc).toMatch(/new CreatePppoeStandalone\(/);
+  });
 });

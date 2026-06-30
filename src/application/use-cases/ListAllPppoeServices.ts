@@ -1,6 +1,7 @@
 import type { PppoeServiceRepository, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 import type { ContractServiceEventRepository } from '@domain/ports/ContractServiceEventRepository';
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
+import type { NasRepository } from '@domain/ports/NasRepository';
 import { pppoeDisplayStatus, type PppoeDisplayStatus } from '@domain/entities/pppoeService';
 import type { PppoeServiceListItemDto, PppoeServiceListPageDto } from '@application/dto/pppoe.dto';
 
@@ -10,6 +11,8 @@ export interface ListAllPppoeServicesFilter {
   nasId?: string;
   page?: number;
   limit?: number;
+  /** pppoe-full-management: cuando true, incluye PPPoE sin contrato (huérfanos). Default false. */
+  includeUnassigned?: boolean;
 }
 
 const DEFAULT_LIMIT = 20;
@@ -34,6 +37,8 @@ export class ListAllPppoeServices {
     private readonly pppoeRepo: PppoeServiceRepository,
     private readonly eventRepo: ContractServiceEventRepository,
     private readonly catalogRepo: ServiceCatalogRepository,
+    /** pppoe-full-management: opcional — si se inyecta, enriquece con nasName/nasType. */
+    private readonly nasRepo?: NasRepository,
   ) {}
 
   async execute(filters: ListAllPppoeServicesFilter): Promise<PppoeServiceListPageDto> {
@@ -49,16 +54,42 @@ export class ListAllPppoeServices {
       ...(filters.search ? { search: filters.search } : {}),
       ...(displayStatus ? { displayStatus } : {}),
       ...(filters.nasId ? { nasId: filters.nasId } : {}),
+      ...(filters.includeUnassigned ? { includeUnassigned: true } : {}),
     });
 
     const createdByByContract = await this.resolveCreatedBy(data);
 
+    // pppoe-full-management: batch NAS enrichment (nasName/nasType) cuando nasRepo está disponible.
+    const nasById = await this.resolveNasInfo(data);
+
     return {
-      data: data.map(s => toDto(s, s.contractId ? createdByByContract.get(s.contractId) ?? null : null)),
+      data: data.map(s => toDto(
+        s,
+        s.contractId ? createdByByContract.get(s.contractId) ?? null : null,
+        nasById.get(s.nasId) ?? null,
+      )),
       total,
       page,
       limit,
     };
+  }
+
+  /** Batch NAS enrichment: nasId → { name, type }. Empty map if nasRepo not injected. */
+  private async resolveNasInfo(rows: PppoeServiceWithClient[]): Promise<Map<string, { name: string; type: string }>> {
+    const result = new Map<string, { name: string; type: string }>();
+    if (!this.nasRepo) return result;
+
+    const uniqueNasIds = new Set(rows.map(r => r.nasId));
+    if (uniqueNasIds.size === 0) return result;
+
+    // Batch fetch all NAS servers and index by id (no N+1).
+    const allNas = await this.nasRepo.findAllNasServers();
+    for (const nas of allNas) {
+      if (uniqueNasIds.has(nas.id)) {
+        result.set(nas.id, { name: nas.name, type: nas.type });
+      }
+    }
+    return result;
   }
 
   /**
@@ -98,7 +129,11 @@ function isDisplayStatus(v: string | undefined): v is PppoeDisplayStatus {
   return v !== undefined && (DISPLAY_STATUSES as readonly string[]).includes(v);
 }
 
-function toDto(s: PppoeServiceWithClient, createdBy: string | null): PppoeServiceListItemDto {
+function toDto(
+  s: PppoeServiceWithClient,
+  createdBy: string | null,
+  nasInfo: { name: string; type: string } | null,
+): PppoeServiceListItemDto {
   return {
     id:            s.id,
     username:      s.username,
@@ -106,7 +141,11 @@ function toDto(s: PppoeServiceWithClient, createdBy: string | null): PppoeServic
     // BUSINESS status (active|reduced|blocked|baja|inactive), NOT the raw RADIUS status.
     status:        pppoeDisplayStatus(s.status, s.enforcedState),
     enforcedState: s.enforcedState,
+    remoteAddress: s.remoteAddress,
+    ipMode:        s.ipMode ?? 'fixed',
     nasId:         s.nasId,
+    nasName:       nasInfo?.name ?? null,
+    nasType:       nasInfo?.type ?? null,
     contractId:    s.contractId,
     clientId:      s.clientId,
     customerName:  s.customerName,

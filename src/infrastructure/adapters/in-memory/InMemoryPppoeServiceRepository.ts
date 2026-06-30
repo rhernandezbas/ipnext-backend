@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { PppoeService, EnforcedState, PppoeDisplayStatus, pppoeDisplayStatus } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
+import { PppoeUsernameTakenError } from '@domain/errors/pppoe';
 
 /**
  * InMemoryPppoeServiceRepository — test seam para PppoeServiceRepository (pppoe-foundation + Fase C).
@@ -179,8 +180,9 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     search?: string;
     displayStatus?: PppoeDisplayStatus;
     nasId?: string;
+    includeUnassigned?: boolean;
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }> {
-    const { page, pageSize, search, displayStatus, nasId } = params;
+    const { page, pageSize, search, displayStatus, nasId, includeUnassigned } = params;
     const searchLower = search ? search.toLowerCase() : undefined;
 
     // SECURITY: build the projection explicitly WITHOUT `password` (mirrors the Prisma `select`).
@@ -205,9 +207,9 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     };
 
     const filtered = this.store.map(withClient).filter(s => {
-      // FIXED filter: esta es la página de servicios de CLIENTES — solo PPPoE CON contrato.
-      // Los huérfanos del ingest (contractId=null) NUNCA aparecen, ni cuentan para el total.
-      if (s.contractId === null) return false;
+      // pppoe-full-management: si includeUnassigned=true NO filtrar por contractId.
+      // Default (false/omitido): solo PPPoE CON contrato (comportamiento actual — pina InternetServicesPage).
+      if (!includeUnassigned && s.contractId === null) return false;
       // BUSINESS-status filter: compute each row's display status and compare. Mirrors the Prisma
       // WHERE translation and stays consistent with the DTO (same precedence, single source of truth).
       if (displayStatus && pppoeDisplayStatus(s.status, s.enforcedState) !== displayStatus) return false;
@@ -272,5 +274,23 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
   async deleteById(id: string): Promise<void> {
     const idx = this.store.findIndex(s => s.id === id);
     if (idx !== -1) this.store.splice(idx, 1);
+  }
+
+  /**
+   * pppoe-full-management (W3): crea un PPPoE en el espejo rechazando si el username ya existe.
+   * Lanza PppoeUsernameTakenError en vez de sobreescribir silenciosamente (anti-TOCTOU).
+   */
+  async createByUsername(data: PppoeServiceUpsert): Promise<PppoeService> {
+    const existing = this.store.find(s => s.username === data.username);
+    if (existing) throw new PppoeUsernameTakenError(data.username);
+    return this.upsertByUsername(data);
+  }
+
+  /** pppoe-full-management: actualiza SOLO el username (para recrear-username). */
+  async updateUsername(id: string, newUsername: string): Promise<PppoeService | null> {
+    const found = this.store.find(s => s.id === id);
+    if (!found) return null;
+    found.username = newUsername;
+    return { ...found };
   }
 }

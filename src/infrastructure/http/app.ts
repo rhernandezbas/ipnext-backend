@@ -664,6 +664,8 @@ import { UnpinPppoeIp } from '@application/use-cases/UnpinPppoeIp';
 import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
 import { ListInternetServiceHistory } from '@application/use-cases/ListInternetServiceHistory';
 import { ListInternetActivationOperators } from '@application/use-cases/ListInternetActivationOperators';
+import { CreatePppoeStandalone } from '@application/use-cases/CreatePppoeStandalone';
+import { RenamePppoeUsername } from '@application/use-cases/RenamePppoeUsername';
 import { RecordPppoeEnforceEvent } from '@application/use-cases/RecordPppoeEnforceEvent';
 // add-by-pppoe — inspección SSH de antena airOS para detección de equipos del contrato
 import { InspectPppoeDevices } from '@application/use-cases/InspectPppoeDevices';
@@ -2198,12 +2200,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new PrismaServiceCatalogRepository(),
       new PrismaContractServiceEventRepository(),
     );
+    // pppoe-full-management: CreatePppoeService extraído a variable para reusarlo como
+    // delegate de CreatePppoeStandalone (C2d: camino con contractId = Guard #4 + activación + evento).
+    const createPppoeSvc = new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository());
     app.use('/api', createPppoeRouter(
       authAdapter,
       sessionRepo,
       requirePerm,
       new ListPppoeByContract(pppoeRepo),
-      new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository()),
+      createPppoeSvc,
       new UpdatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository()),
       new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepoForPppoe),
       new DeactivatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet),
@@ -2222,12 +2227,22 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new TerminatePppoeService(pppoeRepo, orchestrator, routerGw, nasRepoForPppoe, ensureInternet),
       new GetPppoeCallerId(pppoeRepo, orchestrator),
       // internet-history — vista GLOBAL de servicios de internet (espejo de la página de TV).
-      new ListAllPppoeServices(pppoeRepo, new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
+      // pppoe-full-management: se pasa nasRepoForPppoe para enriquecer nasName/nasType en el DTO.
+      new ListAllPppoeServices(pppoeRepo, new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository(), nasRepoForPppoe),
       new ListInternetServiceHistory(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
       new ListInternetActivationOperators(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
       // pppoe-pool-ip (Decisión 5): pin/unpin de IP fija sobre el pool del NAS (RADIUS HA).
       new PinPppoeIp(pppoeRepo, nasRepoForPppoe, orchestrator),
       new UnpinPppoeIp(pppoeRepo, nasRepoForPppoe, orchestrator),
+      // pppoe-full-management: creación standalone (contrato opcional) + rename seguro.
+      // C2b: routerGw para NAS mikrotik_api · C2d: createPppoeSvc delegate para el camino con contractId.
+      new CreatePppoeStandalone(pppoeRepo, orchestrator, nasRepoForPppoe, routerGw, createPppoeSvc),
+      // fix-wave-2 (CRITICAL): nasRepoForPppoe para el guard de tipo de NAS + radiusEnforcement
+      // (OrchestratorEnforcementAdapter directo, NO el PerNasEnforcementGateway) para re-aplicar
+      // corte/reducción. El rename es un flujo SOLO-RADIUS; el guard valida que el NAS sea
+      // radius_orchestrator antes de tocar el plano de control. Con enforcementGw (el gateway
+      // per-NAS compuesto), pasar {} as NasServer ruteaba a RouterOsEnforcementAdapter → 500.
+      new RenamePppoeUsername(pppoeRepo, orchestrator, nasRepoForPppoe, radiusEnforcement),
     ));
   }
 

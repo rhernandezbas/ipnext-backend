@@ -52,6 +52,8 @@ import { DeassociatePppoeFromContract } from '@application/use-cases/Deassociate
 import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
 import { ListInternetServiceHistory } from '@application/use-cases/ListInternetServiceHistory';
 import { ListInternetActivationOperators } from '@application/use-cases/ListInternetActivationOperators';
+import { CreatePppoeStandalone } from '@application/use-cases/CreatePppoeStandalone';
+import { RenamePppoeUsername } from '@application/use-cases/RenamePppoeUsername';
 import type { ServiceCutRunner } from '@infrastructure/scheduling/ServiceCutRunner';
 import type { ServiceCutBatchRepository } from '@domain/ports/ServiceCutBatchRepository';
 import {
@@ -61,6 +63,8 @@ import {
   AssociatePppoeBodySchema,
   EnforcePppoeBodySchema,
   EnforceBulkBodySchema,
+  CreatePppoeStandaloneBodySchema,
+  RenamePppoeBodySchema,
   toPppoeServiceDto,
   toServiceCutBatchDto,
 } from '@application/dto/pppoe.dto';
@@ -84,6 +88,7 @@ import {
   PppoeAlreadyAssociatedError,
   PppoeContractAlreadyHasServiceError,
   PppoeIngestNotSupportedError,
+  PppoeRenameNasNotSupportedError,
   NasNotFoundError,
   InvalidIpFormatError,
   IpAlreadyTakenError,
@@ -121,6 +126,10 @@ export function createPppoeRouter(
   listInternetActivationOperators?: ListInternetActivationOperators,
   pinPppoeIp?: PinPppoeIp,
   unpinPppoeIp?: UnpinPppoeIp,
+  /** pppoe-full-management: Crea PPPoE standalone (contrato opcional). POST /api/pppoe. */
+  createPppoeStandalone?: CreatePppoeStandalone,
+  /** pppoe-full-management: Renombra PPPoE (create-then-delete seguro). POST /api/pppoe/:id/rename. */
+  renamePppoeUsername?: RenamePppoeUsername,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -259,7 +268,10 @@ export function createPppoeRouter(
       canRead,
       async (req: Request, res: Response): Promise<void> => {
         const q = req.query;
-        const filter: { search?: string; status?: string; nasId?: string; page?: number; limit?: number } = {};
+        const filter: {
+          search?: string; status?: string; nasId?: string; page?: number; limit?: number;
+          includeUnassigned?: boolean;
+        } = {};
         if (typeof q['search'] === 'string' && q['search'] !== '') filter.search = q['search'];
         if (typeof q['status'] === 'string' && q['status'] !== '') filter.status = q['status'];
         if (typeof q['nasId']  === 'string' && q['nasId']  !== '') filter.nasId  = q['nasId'];
@@ -271,8 +283,60 @@ export function createPppoeRouter(
           const n = parseInt(q['limit'], 10);
           if (!isNaN(n) && n > 0) filter.limit = n;
         }
+        // pppoe-full-management: incluir huérfanos (contractId=null) cuando se pide explícitamente.
+        if (q['includeUnassigned'] === 'true') filter.includeUnassigned = true;
         const page = await listAllPppoeServices.execute(filter);
         res.json(page);
+      },
+    );
+  }
+
+  // ── POST /pppoe — crea PPPoE standalone con contrato opcional (pppoe-full-management) ──
+  // LITERAL, montada ANTES de cualquier /pppoe/:id para no ser sombreada. Gate pppoe.manage.
+  if (createPppoeStandalone) {
+    router.post(
+      '/pppoe',
+      auth,
+      canManage,
+      async (req: Request, res: Response): Promise<void> => {
+        const parsed = CreatePppoeStandaloneBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          // W3 fix: forwardear el actor para que el evento 'activated' lleve el nombre del operador.
+          const service = await createPppoeStandalone.execute(parsed.data, actorOf(req));
+          res.status(201).json(toPppoeServiceDto(service));
+        } catch (err) {
+          if (err instanceof PppoeUsernameTakenError) {
+            res.status(409).json({ code: err.code, error: err.message });
+            return;
+          }
+          // W2 fix: contrato ya tiene PPPoE activo → 409 (no 400, que es el fallback del errorHandler).
+          // En Express 4 los async handlers necesitan captura explícita — throw err no llega al errorHandler.
+          if (err instanceof PppoeContractAlreadyHasServiceError) {
+            res.status(409).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof NasNotFoundError) {
+            res.status(404).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof OrchestratorRejectedError) {
+            res.status(err.upstreamStatus).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof RouterUnreachableError) {
+            res.status(502).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof OrchestratorUnreachableError) {
+            res.status(502).json({ code: err.code, error: err.message });
+            return;
+          }
+          throw err;
+        }
       },
     );
   }
@@ -554,6 +618,61 @@ export function createPppoeRouter(
       }
     },
   );
+
+  // ── POST /pppoe/:id/rename — renombra PPPoE (create-then-delete, pppoe-full-management) ──
+  // Montado ANTES de DELETE /pppoe/:id (distinto verbo, pero evitamos ambigüedad). Gate pppoe.manage.
+  if (renamePppoeUsername) {
+    router.post(
+      '/pppoe/:id/rename',
+      auth,
+      canManage,
+      async (req: Request, res: Response): Promise<void> => {
+        const parsed = RenamePppoeBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          const result = await renamePppoeUsername.execute({
+            id: req.params['id'] as string,
+            newUsername: parsed.data.newUsername,
+          });
+          res.json(result);
+        } catch (err) {
+          if (err instanceof PppoeServiceNotFoundError) {
+            res.status(404).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof PppoeUsernameTakenError) {
+            res.status(409).json({ code: err.code, error: err.message });
+            return;
+          }
+          // fix-wave-2: NAS inválido/incorrecto → 404 o 422 (misma lógica que standalone).
+          if (err instanceof NasNotFoundError) {
+            res.status(404).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof PppoeRenameNasNotSupportedError) {
+            res.status(422).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof PppoeProfileRequiredError) {
+            res.status(422).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof OrchestratorUnreachableError) {
+            res.status(502).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof OrchestratorRejectedError) {
+            res.status(err.upstreamStatus).json({ code: err.code, error: err.message });
+            return;
+          }
+          throw err;
+        }
+      },
+    );
+  }
 
   // ── DELETE /pppoe/:id — baja HARD (terminate): borra del RADIUS, libera IP ──
   // Usa TerminatePppoeService si está wired (pppoe-terminate-callerid); cae a

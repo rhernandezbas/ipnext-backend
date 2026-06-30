@@ -103,10 +103,15 @@ export function toPppoeAssignmentDto(s: {
  * Curado para la página espejo de TV: cruza al cliente (clientId/customerName) y expone
  * quién creó el servicio (createdBy = actorName del evento 'activated' de internet, si está).
  * NUNCA expone `password` — frontera de seguridad (igual que PppoeServiceDto).
+ *
+ * pppoe-full-management: extendido con remoteAddress, ipMode, nasName, nasType
+ * para la page de gestión de red (PppoeManagementTab). Backward-compat: los campos nuevos
+ * son nullable (null cuando la info no está disponible).
  */
 export interface PppoeServiceListItemDto {
   id: string;
   username: string;
+  /** Perfil/plan del secret RADIUS (profile = plan en la terminología del FE). */
   profile: string | null;
   /**
    * Estado de NEGOCIO computado (NO el crudo de RADIUS): 'active' | 'reduced' | 'blocked' | 'baja' | 'inactive'.
@@ -115,7 +120,15 @@ export interface PppoeServiceListItemDto {
   status: string;
   /** enforcedState crudo (active|reduced|blocked) — el FE NO lo usa; queda por compatibilidad/diagnóstico. */
   enforcedState: string;
+  /** IP asignada al PPPoE (Framed-IP-Address en RADIUS). null si modo pool sin IP asignada aún. */
+  remoteAddress: string | null;
+  /** Modo de asignación de IP: 'fixed' (IP pineada) | 'pool' (FreeRADIUS asigna del pool). */
+  ipMode: string;
   nasId: string;
+  /** Nombre del NAS (null si el NAS fue borrado o no se pudo resolver). */
+  nasName: string | null;
+  /** Tipo del NAS: 'mikrotik_api' | 'radius_orchestrator' | 'cisco' | 'ubiquiti' | 'cambium' | 'other' | null. */
+  nasType: string | null;
   contractId: string | null;
   clientId: string | null;
   customerName: string | null;
@@ -264,4 +277,42 @@ export function toServiceCutBatchDto(b: {
     createdAt: b.createdAt,
     finishedAt: b.finishedAt,
   };
+}
+
+// ── pppoe-full-management ─────────────────────────────────────────────────
+
+/**
+ * Body de POST /api/pppoe (CreatePppoeStandalone).
+ * Crea un PPPoE en el RADIUS HA con contrato OPCIONAL.
+ */
+export const CreatePppoeStandaloneBodySchema = z.object({
+  username:    z.string().min(1),
+  password:    z.string().min(1),
+  plan:        z.string().min(1),
+  nasId:       z.string().min(1),
+  framedIp:    z.string().nullable().optional(),
+  ipMode:      z.enum(['fixed', 'pool']).optional(),
+  contractId:  z.string().min(1).optional(),
+});
+
+export type CreatePppoeStandaloneBody = z.infer<typeof CreatePppoeStandaloneBodySchema>;
+
+/**
+ * Body de POST /api/pppoe/:id/rename (RenamePppoeUsername).
+ */
+export const RenamePppoeBodySchema = z.object({
+  newUsername: z.string().min(1),
+});
+
+export type RenamePppoeBody = z.infer<typeof RenamePppoeBodySchema>;
+
+/**
+ * Respuesta de POST /api/pppoe/:id/rename.
+ * status: 'ok' = happy path. 'partial' = nuevo creado pero delete del viejo falló.
+ */
+export interface RenamePppoeResultDto {
+  id: string;
+  username: string;
+  status: 'ok' | 'partial';
+  message?: string;
 }

@@ -1,5 +1,6 @@
 import { PppoeService, EnforcedState, PppoeDisplayStatus } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
+import { PppoeUsernameTakenError } from '@domain/errors/pppoe';
 import { prisma } from '../../database/prisma';
 
 /**
@@ -195,17 +196,21 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     search?: string;
     displayStatus?: PppoeDisplayStatus;
     nasId?: string;
+    includeUnassigned?: boolean;
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }> {
-    const { page, pageSize, search, displayStatus, nasId } = params;
+    const { page, pageSize, search, displayStatus, nasId, includeUnassigned } = params;
     const skip = (page - 1) * pageSize;
 
     // Combine independent predicates with AND so two separate OR-clauses (search vs. blocked) never
     // collide on the same key. Each entry is its own where-fragment.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const and: Record<string, any>[] = [];
+    // pppoe-full-management: solo filtrar por contractId IS NOT NULL cuando includeUnassigned=false (default).
     // FIXED filter: esta es la página de servicios de CLIENTES — solo PPPoE CON contrato.
     // Los huérfanos del ingest (contractId=null) NUNCA aparecen, ni cuentan para el total.
-    and.push({ contractId: { not: null } });
+    if (!includeUnassigned) {
+      and.push({ contractId: { not: null } });
+    }
     if (nasId) and.push({ nasId });
     if (search) {
       // search matches username OR the contract's client name (JOIN through the relation).
@@ -309,6 +314,40 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
       await model().delete({ where: { id } });
     } catch (err: any) {
       if (err?.code === 'P2025') return; // ya no existe — no-op
+      throw err;
+    }
+  }
+
+  /** pppoe-full-management: actualiza SOLO el username (para recrear-username). */
+  async createByUsername(data: PppoeServiceUpsert): Promise<PppoeService> {
+    const fields: Record<string, unknown> = {
+      password: data.password,
+      profile: data.profile ?? null,
+      remoteAddress: data.remoteAddress ?? null,
+      status: data.status ?? 'enabled',
+      nasId: data.nasId,
+      contractId: data.contractId ?? null,
+      enforcedState: data.enforcedState ?? 'active',
+    };
+    if (data.ipMode !== undefined) fields['ipMode'] = data.ipMode;
+    try {
+      const row = await model().create({ data: { username: data.username, ...fields } });
+      return toEntity(row);
+    } catch (err: any) {
+      if (err?.code === 'P2002') throw new PppoeUsernameTakenError(data.username);
+      throw err;
+    }
+  }
+
+  async updateUsername(id: string, newUsername: string): Promise<PppoeService | null> {
+    try {
+      const updated = await model().update({
+        where: { id },
+        data: { username: newUsername },
+      });
+      return toEntity(updated);
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null; // no existe
       throw err;
     }
   }

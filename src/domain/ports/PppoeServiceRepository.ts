@@ -89,6 +89,8 @@ export interface PppoeServiceRepository {
    *     baja     → status='terminated'
    *     inactive → el resto (negación de todos los anteriores)
    * - `nasId`: filtro exacto por router.
+   * - `includeUnassigned`: cuando `true`, NO aplica el filtro `contractId IS NOT NULL` →
+   *   la lista incluye huérfanos (contractId=null). Default `false` = comportamiento actual.
    * - Orden estable: username asc.
    * - `total` = count con el MISMO where (sin skip/take) para el paginador del FE.
    */
@@ -98,7 +100,23 @@ export interface PppoeServiceRepository {
     search?: string;
     displayStatus?: PppoeDisplayStatus;
     nasId?: string;
+    /** pppoe-full-management: cuando true, incluye PPPoE sin contrato (huérfanos). Default false. */
+    includeUnassigned?: boolean;
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }>;
+
+  /**
+   * pppoe-full-management: actualiza SOLO el `username` de un PPPoE (para recrear-username).
+   * Preserva TODOS los demás campos (contractId, id, historial, etc.).
+   * Devuelve la entidad actualizada, o null si el id no existe.
+   */
+  updateUsername(id: string, newUsername: string): Promise<PppoeService | null>;
+  /**
+   * pppoe-full-management (W3 — anti-TOCTOU): crea un PPPoE en el espejo rechazando si el username
+   * ya existe. A diferencia de `upsertByUsername`, NUNCA sobreescribe una fila existente —
+   * lanza `PppoeUsernameTakenError`. Previene la condición de carrera entre el chequeo de
+   * unicidad y la persistencia en el standalone path (sin contractId).
+   */
+  createByUsername(data: PppoeServiceUpsert): Promise<PppoeService>;
   /**
    * Asocia un PPPoE a un contrato seteando SOLO su `contractId` (no toca password/profile/etc.).
    * Devuelve la entidad actualizada, o null si el PPPoE no existe.
