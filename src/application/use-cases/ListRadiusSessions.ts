@@ -10,9 +10,10 @@ import { RadiusSession } from '@domain/entities/radiusSessions';
  * query (`findByUsernames` → `username IN (...)`), NUNCA N+1 — son potencialmente miles de sesiones.
  *
  * Para cada sesión:
- *   - PppoeService con contrato       → contractId + clientId + customerName
- *   - PppoeService huérfano (sin FK)  → los 3 en null
- *   - sin PppoeService matching       → los 3 en null
+ *   - PppoeService enabled con contrato  → contractId + clientId + customerName
+ *   - PppoeService terminated            → los 3 en null (servicio dado de baja → ⚠)
+ *   - PppoeService huérfano (sin FK)     → los 3 en null
+ *   - sin PppoeService matching          → los 3 en null
  * Los 3 en null = el FE muestra ⚠ ("PPPoE sin contrato asociado").
  */
 export class ListRadiusSessions {
@@ -35,11 +36,13 @@ export class ListRadiusSessions {
 
     return sessions.map(s => {
       const p = byUsername.get(s.username);
+      // terminated = servicio dado de baja; tratar como sin contrato para mostrar ⚠ en el FE.
+      const linked = p != null && p.status !== 'terminated';
       return {
         ...s,
-        contractId:   p?.contractId ?? null,
-        clientId:     p?.clientId ?? null,
-        customerName: p?.customerName ?? null,
+        contractId:   linked ? (p!.contractId   ?? null) : null,
+        clientId:     linked ? (p!.clientId     ?? null) : null,
+        customerName: linked ? (p!.customerName ?? null) : null,
       };
     });
   }

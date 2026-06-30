@@ -66,7 +66,7 @@ export class TerminatePppoeService {
       remoteAddress: null,    // IP liberada
       status: 'terminated',
       nasId: s.nasId,
-      contractId: s.contractId,
+      contractId: null,       // desvincula del contrato al dar de baja
     });
 
     // Best-effort: inactivar la línea INTERNET si el PPPoE tenía un contrato.

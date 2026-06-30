@@ -22,8 +22,10 @@ export interface IngestPppoeResult {
  *   - `radius_orchestrator` → `orchestrator.listUsers()` (GET /users: username, password, plan, framed_ip).
  *   - resto            → `PppoeIngestNotSupportedError` (no hay fuente de inventario con password aún).
  *
- * SKIP de existentes (NO clobber): si el `username` YA está en la DB, se OMITE — jamás se pisa una
- * fila (podría estar asociada a un contrato, con su propia password/profile). Solo se INSERTAN nuevos.
+ * SKIP de existentes (NO clobber): si el `username` YA está en la DB Y NO está terminated, se OMITE
+ * (podría estar asociado con su propia password/profile). Excepción: si el existente tiene
+ * status='terminated', significa que fue recreado en el router tras una baja → se RE-INGESTA
+ * (se actualiza a enabled+contractId=null con los datos frescos del RADIUS).
  * Mapeo: plan → profile, framedIp → remoteAddress, status='enabled', contractId=null.
  */
 export class IngestPppoeFromNas {
@@ -62,8 +64,11 @@ export class IngestPppoeFromNas {
 
       const existing = await this.repo.findByUsername(item.username);
       if (existing) {
-        skipped += 1;
-        continue; // NUNCA pisar: la fila puede estar asociada con su propia clave
+        // terminated = fue recreado en el router tras una baja → re-ingestar con los datos frescos
+        if (existing.status !== 'terminated') {
+          skipped += 1;
+          continue; // fila activa/asociada — jamás pisar
+        }
       }
       await this.repo.upsertByUsername({
         username: item.username,
