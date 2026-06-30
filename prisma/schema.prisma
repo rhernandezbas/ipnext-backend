@@ -1280,6 +1280,9 @@ model ScheduledTask {
   // NEW — comments back-relation
   comments TaskComment[]
 
+  // task-photos — fotos/adjuntos de la tarea (galería)
+  attachments ScheduledTaskAttachment[]
+
   // Material consumption ledger per task
   materialConsumptions TaskMaterialConsumption[]
 
@@ -1464,6 +1467,26 @@ model TaskCommentAttachment {
   sizeBytes Int?
 
   @@index([commentId])
+}
+
+// task-photos — fotos/adjuntos de una ScheduledTask (galería). Espejo de
+// TaskCommentAttachment, pero el binario vive en el storage (MinIO/FileStorage) bajo
+// `storageKey` (no una url pública). onDelete: Cascade ⟹ al borrar la tarea se borran
+// sus filas de adjunto (el binario lo limpia el use case vía FileStorage).
+model ScheduledTaskAttachment {
+  id           String        @id @default(uuid())
+  taskId       String
+  task         ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  storageKey   String
+  filename     String
+  mimeType     String
+  sizeBytes    Int
+  width        Int?
+  height       Int?
+  uploadedById String
+  createdAt    DateTime      @default(now())
+
+  @@index([taskId])
 }
 
 // #44 — Conversación persistida de tickets con adjuntos inline (espejo de TaskComment).

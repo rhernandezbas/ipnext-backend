@@ -75,6 +75,15 @@ import { CreateBackup } from '@application/use-cases/CreateBackup';
 import { GetClientPortalSettings } from '@application/use-cases/GetClientPortalSettings';
 import { UpdateClientPortalSettings } from '@application/use-cases/UpdateClientPortalSettings';
 import { createSchedulingRouter } from './routes/scheduling.routes';
+// task-photos — adjuntos (fotos) de tarea
+import { createTaskAttachmentsRouter } from './routes/taskAttachments.routes';
+import { AttachPhotosToTask } from '@application/use-cases/AttachPhotosToTask';
+import { ListTaskAttachments } from '@application/use-cases/ListTaskAttachments';
+import { GetTaskAttachmentFile } from '@application/use-cases/GetTaskAttachmentFile';
+import { DeleteTaskAttachment } from '@application/use-cases/DeleteTaskAttachment';
+import { PrismaTaskAttachmentRepository } from '../adapters/prisma/PrismaTaskAttachmentRepository';
+import { MinioFileStorage } from '../adapters/minio/MinioFileStorage';
+import { JimpImageProcessor } from '../adapters/image/JimpImageProcessor';
 import { createTaskCommentsRouter } from './routes/taskComments.routes';
 import { createTicketCommentsRouter } from './routes/ticketComments.routes';
 import { ListTicketComments } from '@application/use-cases/ListTicketComments';
@@ -1656,6 +1665,44 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // iclass-ops-config (Ola A): Technician↔Team mapping use cases + router
   const setTechnicianTeamMapping = new SetTechnicianTeamMapping(rbacUserRepo, iclassTeamRepo);
   const listTechnicianTeamMappings = new ListTechnicianTeamMappings(rbacUserRepo);
+
+  // ── task-photos — adjuntos (fotos) de tarea ───────────────────────────────
+  // Montado en /api/scheduling. El orden vs. el scheduling router principal NO es
+  // estructuralmente necesario: los paths son disjuntos por nº de segmentos
+  // (/attachments/:id/file=3, /:taskId/attachments=2, catch-all GET /:id=1), así que no
+  // hay shadowing real. Se mantiene este orden por claridad/convención.
+  // MinioFileStorage se construye con config.minio (opt-in): si MINIO_* falta el
+  // BE arranca igual y la conexión a MinIO solo falla al USARSE (lazy en el cliente).
+  const taskAttachmentRepo = new PrismaTaskAttachmentRepository();
+  const taskPhotoStorage = new MinioFileStorage({
+    endPoint: config.minio.endPoint,
+    port: config.minio.port,
+    useSSL: config.minio.useSSL,
+    accessKey: config.minio.accessKey,
+    secretKey: config.minio.secretKey,
+    bucket: config.minio.bucket,
+  });
+  const taskImageProcessor = new JimpImageProcessor();
+  // EntityLookup de tarea: existencia vía el getTask ya instanciado (línea ~894).
+  const taskLookupForAttachments = {
+    findById: async (id: string): Promise<{ id: string } | null> => {
+      const t = await getTask.execute(id);
+      return t ? { id: t.id } : null;
+    },
+  };
+  app.use('/api/scheduling', createTaskAttachmentsRouter(
+    {
+      attachPhotosToTask: new AttachPhotosToTask(taskAttachmentRepo, taskPhotoStorage, taskLookupForAttachments, taskImageProcessor),
+      listTaskAttachments: new ListTaskAttachments(taskAttachmentRepo),
+      getTaskAttachmentFile: new GetTaskAttachmentFile(taskAttachmentRepo, taskPhotoStorage),
+      deleteTaskAttachment: new DeleteTaskAttachment(taskAttachmentRepo, taskPhotoStorage),
+    },
+    {
+      authProvider: authAdapter,
+      requireRead: requirePerm('scheduling', 'read'),
+      requireWrite: requirePerm('scheduling', 'write'),
+    },
+  ));
 
   app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authAdapter, stageRepo, {
     addChecklistItem: addChecklistItemUC,

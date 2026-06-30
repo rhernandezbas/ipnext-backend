@@ -217,4 +217,26 @@ export const config = {
   networkAudit: {
     ne8000NasIp: process.env.NE8000_NAS_IP ?? '10.75.0.30',
   },
+
+  /**
+   * MinIO (S3-compatible) — storage de las fotos de tareas (feature task-photos).
+   * OPT-IN, NO fail-fast (mismo patrón que iclass/uisp/router): si faltan las env,
+   * quedan strings vacíos / defaults y el BE ARRANCA IGUAL. La feature de fotos
+   * degrada (los endpoints fallan al usarse contra un MinIO inalcanzable) pero el
+   * resto del sistema levanta normal. Hoy en prod las MINIO_* todavía NO están
+   * seteadas: una integración externa faltante NO debe tumbar el boot.
+   */
+  minio: {
+    endPoint: process.env.MINIO_ENDPOINT ?? '',
+    // D4: parse robusto — un MINIO_PORT no numérico/vacío cae a 9000 (NaN NUNCA llega al
+    // Client; el guard lazy de MinioFileStorage protege igual, pero no producimos NaN acá).
+    port: (() => {
+      const p = Number(process.env.MINIO_PORT);
+      return Number.isInteger(p) && p > 0 && p <= 65535 ? p : 9000;
+    })(),
+    useSSL: process.env.MINIO_USE_SSL === 'true',
+    accessKey: process.env.MINIO_ACCESS_KEY ?? '',
+    secretKey: process.env.MINIO_SECRET_KEY ?? '',
+    bucket: process.env.MINIO_BUCKET ?? 'task-photos',
+  },
 };

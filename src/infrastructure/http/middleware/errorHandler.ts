@@ -105,6 +105,12 @@ const statusMap: Record<string, number> = {
   NETWORK_TASK_LOCALITY_REQUIRED: 422,
   // #79 — SLA timer thresholds must satisfy dangerMinutes > warnMinutes
   TICKET_SLA_THRESHOLD_ORDER: 422,
+  // task-photos — adjuntos de tarea
+  UNSUPPORTED_ATTACHMENT_TYPE: 415,
+  TOO_MANY_ATTACHMENTS: 422,
+  ATTACHMENT_NOT_FOUND: 404,
+  IMAGE_TOO_LARGE: 422,
+  STORAGE_NOT_CONFIGURED: 503,
 };
 
 /** Express global error-handling middleware. */
