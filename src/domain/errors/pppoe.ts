@@ -161,6 +161,36 @@ export class PppoeRenameNasNotSupportedError extends DomainError {
 }
 
 /**
+ * pppoe-move-nas (REQ-MOVE-3): move entre tipos de NAS MIXTOS (radius_orchestrator ↔ legacy).
+ * El flujo radius reasigna IP + Framed-IP central; el legacy copia el secret por API del router.
+ * No hay puente coherente entre ambos → se rechaza ANTES de tocar nada.
+ * Code → HTTP: PPPOE_MOVE_MIXED_NAS_TYPES → 409.
+ */
+export class PppoeMoveMixedNasTypesError extends DomainError {
+  constructor(
+    public readonly fromType: string,
+    public readonly toType: string,
+  ) {
+    super(
+      `Move de PPPoE entre tipos de NAS mixtos no soportado: origen '${fromType}' ↔ destino '${toType}' (radius↔legacy)`,
+      'PPPOE_MOVE_MIXED_NAS_TYPES',
+    );
+    this.name = 'PppoeMoveMixedNasTypesError';
+  }
+}
+
+/**
+ * pppoe-move-nas: el servicio está 'terminated' (baja HARD: usuario borrado del RADIUS, IP liberada).
+ * No hay nada que mover — la fila es una lápida. Code → HTTP: PPPOE_TERMINATED → 409.
+ */
+export class PppoeServiceTerminatedError extends DomainError {
+  constructor(public readonly id: string) {
+    super(`El PPPoE ${id} está dado de baja (terminated) — no se puede mover`, 'PPPOE_TERMINATED');
+    this.name = 'PppoeServiceTerminatedError';
+  }
+}
+
+/**
  * pppoe-pool-ip: la IP provista no es un IPv4 válido (formato inválido).
  * Code → HTTP: INVALID_IP_FORMAT → 422.
  */

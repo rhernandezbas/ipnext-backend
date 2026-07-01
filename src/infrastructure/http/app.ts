@@ -648,6 +648,10 @@ import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract'
 import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
 import { UpdatePppoeService } from '@application/use-cases/UpdatePppoeService';
 import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServiceToRouter';
+// pppoe-move-nas W1: move radius-aware (subsume al legacy) + registro visible de movimientos.
+import { MovePppoeToNas } from '@application/use-cases/MovePppoeToNas';
+import { ListPppoeNasMoveEvents } from '@application/use-cases/ListPppoeNasMoveEvents';
+import { PrismaPppoeNasMoveEventRepository } from '../adapters/prisma/PrismaPppoeNasMoveEventRepository';
 import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeService';
 import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
 import { PreviewEnforcement } from '@application/use-cases/PreviewEnforcement';
@@ -2206,6 +2210,22 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // pppoe-full-management: CreatePppoeService extraído a variable para reusarlo como
     // delegate de CreatePppoeStandalone (C2d: camino con contractId = Guard #4 + activación + evento).
     const createPppoeSvc = new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository());
+    // pppoe-move-nas W1: move radius-aware — reasigna IP del pool CGNAT del destino (findFreeIp,
+    // singleton de arriba) + changeFramedIp + kick best-effort + registro DOBLE (PppoeNasMoveEvent
+    // + evento 'modified' del historial del contrato). Subsume al legacy: NAS no-radius delega en
+    // MovePppoeServiceToRouter (instancia compartida con la ruta back-compat).
+    const legacyMovePppoe = new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepoForPppoe);
+    const nasMoveEventRepo = new PrismaPppoeNasMoveEventRepository();
+    const movePppoeToNas = new MovePppoeToNas(
+      pppoeRepo,
+      nasRepoForPppoe,
+      orchestrator,
+      findFreeIp,
+      legacyMovePppoe,
+      nasMoveEventRepo,
+      new PrismaServiceCatalogRepository(),
+      new PrismaContractServiceEventRepository(),
+    );
     app.use('/api', createPppoeRouter(
       authAdapter,
       sessionRepo,
@@ -2213,7 +2233,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new ListPppoeByContract(pppoeRepo),
       createPppoeSvc,
       new UpdatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository()),
-      new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepoForPppoe),
+      legacyMovePppoe,
       new DeactivatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet),
       enforcePppoe,
       previewEnforcement,
@@ -2246,6 +2266,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // radius_orchestrator antes de tocar el plano de control. Con enforcementGw (el gateway
       // per-NAS compuesto), pasar {} as NasServer ruteaba a RouterOsEnforcementAdapter → 500.
       new RenamePppoeUsername(pppoeRepo, orchestrator, nasRepoForPppoe, radiusEnforcement),
+      // pppoe-move-nas W1: POST /pppoe/:id/move usa el move radius-aware; sin esto la ruta
+      // caería al legacy pre-HA (IP rota en el nodo nuevo) — wiring OBLIGATORIO (lección W6).
+      movePppoeToNas,
+      // pppoe-move-nas W1: GET /pppoe/nas-move-events (tab "Movimientos NAS" de la auditoría).
+      new ListPppoeNasMoveEvents(nasMoveEventRepo, nasRepoForPppoe),
     ));
   }
 

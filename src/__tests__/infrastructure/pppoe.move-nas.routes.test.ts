@@ -1,0 +1,453 @@
+/**
+ * pppoe.move-nas.routes.test.ts — supertest para pppoe-move-nas W1:
+ *   POST /api/pppoe/:id/move            (gate pppoe.manage — cableado al NUEVO MovePppoeToNas)
+ *   GET  /api/pppoe/nas-move-events     (gate pppoe.read — registro visible, wire contract D6)
+ *
+ * Foco: mapeo error→HTTP del move radius-aware + wire contract del listado campo por campo.
+ *   move:   200 (IP nueva en el DTO) · 404 service/nas · 409 NO_FREE_IP · 409 mixto
+ *           · 502 ORCHESTRATOR_UNREACHABLE · 422 body inválido · 401/403 gates
+ *   events: 200 {items,total,page,limit} · filtros outcome/trigger/username · paginado
+ *           · limit clamp 100 · 401/403 gates
+ *
+ * Patrón espejo de pppoe.pin-ip.routes.test.ts (EchoAuthProvider + cookie token = userId + RBAC in-memory).
+ * NAS seed (InMemoryNasRepository): '1' mikrotik_api (legacy) · '3' radius_orchestrator. El destino
+ * radius B se crea en el fixture con su pool cgnat 100.64.43.0/24 (100.64.43.2 tomada → primera libre .3).
+ */
+import request from 'supertest';
+import express from 'express';
+import cookieParser from 'cookie-parser';
+
+import { createPppoeRouter } from '@infrastructure/http/routes/pppoe.routes';
+import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
+import { requirePermission } from '@infrastructure/http/middleware/requirePermission';
+
+import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
+import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
+import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
+import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
+import { InMemoryPppoeNasMoveEventRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeNasMoveEventRepository';
+import { InMemoryServiceCutBatchRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCutBatchRepository';
+import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
+import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
+import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
+import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
+import { InMemoryRbacPermissionRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacPermissionRepository';
+import { InMemoryRbacRolePermissionRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRolePermissionRepository';
+import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMemoryPasswordHasher';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryContractServiceEventRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceEventRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
+
+import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract';
+import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
+import { UpdatePppoeService } from '@application/use-cases/UpdatePppoeService';
+import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServiceToRouter';
+import { MovePppoeToNas } from '@application/use-cases/MovePppoeToNas';
+import { ListPppoeNasMoveEvents } from '@application/use-cases/ListPppoeNasMoveEvents';
+import { FindFreeIp } from '@application/use-cases/FindFreeIp';
+import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeService';
+import { EnforcePppoeService } from '@application/use-cases/EnforcePppoeService';
+import { PreviewEnforcement } from '@application/use-cases/PreviewEnforcement';
+import { RunBulkEnforcement } from '@application/use-cases/RunBulkEnforcement';
+import { ServiceCutRunner } from '@infrastructure/scheduling/ServiceCutRunner';
+import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
+import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
+import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
+import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
+import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+
+import { AuthProvider } from '@domain/ports/AuthProvider';
+import { User } from '@domain/entities/auth';
+import type { NasServer } from '@domain/entities/nas';
+import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+
+class EchoAuthProvider implements AuthProvider {
+  async login() {
+    return {
+      user: { id: 'x', username: 't', email: 't@t.com', role: 'admin' as const },
+      cookieValue: 'x',
+      cookieOptions: { httpOnly: true, secure: false, sameSite: 'lax' as const, maxAge: 3600, path: '/' },
+    };
+  }
+  logout() {
+    return { cookieOptions: { httpOnly: true, secure: false, sameSite: 'lax' as const, maxAge: 0, path: '/' } };
+  }
+  async getSession(token: string): Promise<User> {
+    return { id: token, username: 'operador', email: 'test@test.com', role: 'admin' };
+  }
+}
+
+const RADIUS_NAS_A = '3'; // radius_orchestrator (seed InMemoryNasRepository)
+const MK_NAS       = '1'; // mikrotik_api (legacy)
+const OLD_IP       = '100.64.60.25';
+
+interface Fixture {
+  app: express.Express;
+  pppoeRepo: InMemoryPppoeServiceRepository;
+  moveEvents: InMemoryPppoeNasMoveEventRepository;
+  nasRadiusB: NasServer;
+  readUserId: string;
+  manageUserId: string;
+  nobodyUserId: string;
+}
+
+async function buildApp(opts?: {
+  assignedIps?: string[];
+  unreachableUsers?: string[];
+  poolRange?: { start: string; end: string };
+}): Promise<Fixture> {
+  const roleRepo     = new InMemoryRbacRoleRepository();
+  const userRoleRepo = new InMemoryRbacUserRoleRepository();
+  const permRepo     = new InMemoryRbacPermissionRepository();
+  const rolePermRepo = new InMemoryRbacRolePermissionRepository();
+  const hasher       = new InMemoryPasswordHasher();
+  const userRepo     = new InMemoryRbacUserRepository(userRoleRepo, roleRepo);
+
+  userRepo.listRolesForUser = async (userId: string) => {
+    const roleIds = await userRoleRepo.listForUser(userId);
+    const roles = await Promise.all(roleIds.map((id) => roleRepo.findById(id)));
+    return roles.filter((r): r is NonNullable<typeof r> => r !== null);
+  };
+  userRepo.listPermissionsForUser = async (userId: string) => {
+    const roleIds = await userRoleRepo.listForUser(userId);
+    const perms: import('@domain/entities/rbac').RbacPermission[] = [];
+    const allPerms = await permRepo.listAll();
+    for (const roleId of roleIds) {
+      const permIds = await rolePermRepo.listForRole(roleId);
+      for (const permId of permIds) {
+        const p = allPerms.find((ap) => ap.id === permId);
+        if (p) perms.push(p);
+      }
+    }
+    return perms;
+  };
+
+  const readerRole  = await roleRepo.create({ code: 'pppoe_reader', label: 'PPPoE Reader', isSystem: false });
+  const managerRole = await roleRepo.create({ code: 'pppoe_manager', label: 'PPPoE Manager', isSystem: false });
+  const readPerm    = await permRepo.seed({ moduleCode: 'pppoe', action: 'read' });
+  const managePerm  = await permRepo.seed({ moduleCode: 'pppoe', action: 'manage' });
+  await rolePermRepo.grant(readerRole.id, readPerm.id);
+  await rolePermRepo.grant(managerRole.id, readPerm.id);
+  await rolePermRepo.grant(managerRole.id, managePerm.id);
+
+  const pwHash = await hasher.hash('pw');
+  const mkUser = (login: string) =>
+    userRepo.create({ name: login, email: `${login}@x.com`, login, passwordHash: pwHash, status: 'active' });
+
+  const readUser   = await mkUser('reader');
+  const manageUser = await mkUser('manager');
+  const nobodyUser = await mkUser('nobody'); // sin roles → 403 en todo
+  await userRoleRepo.assign(readUser.id, readerRole.id);
+  await userRoleRepo.assign(manageUser.id, managerRole.id);
+
+  const pppoeRepo = new InMemoryPppoeServiceRepository();
+  const routerGw  = new InMemoryRouterGateway();
+  const nasRepo   = new InMemoryNasRepository();
+  const netRepo   = new InMemoryIpNetworkRepository();
+  const moveEvents = new InMemoryPppoeNasMoveEventRepository();
+  const csRepo    = new InMemoryContractServiceRepository();
+  const catalogRepo = new InMemoryServiceCatalogRepository();
+  await catalogRepo.create({ name: 'INTERNET' });
+  const eventRepo = new InMemoryContractServiceEventRepository();
+  const ensure    = new EnsureInternetContractService(csRepo, catalogRepo);
+  const orchestrator = new InMemoryRadiusOrchestratorGateway({
+    assignedIps: opts?.assignedIps ?? ['100.64.43.2', OLD_IP],
+    unreachable: opts?.unreachableUsers,
+  });
+
+  // NAS destino radius B + su pool cgnat 100.64.43.0/24.
+  const nasRadiusB = await nasRepo.createNasServer({
+    name: 'NAS Radius B',
+    type: 'radius_orchestrator',
+    ipAddress: '10.0.0.6',
+    radiusSecret: 'x',
+    nasIpAddress: '10.0.0.6',
+    apiPort: null,
+    apiLogin: null,
+    apiPassword: null,
+    status: 'active',
+    lastSeen: null,
+    clientCount: 0,
+    description: 'destino radius',
+  });
+  netRepo.seedNetwork({
+    id: 'net-b', network: '100.64.43.0/24', gateway: '100.64.43.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
+    description: 'CGNAT NAS B', partnerId: null, type: 'pppoe', totalIps: 254, usedIps: null, freeIps: null,
+  });
+  netRepo.seedPool({
+    id: 'pool-b', name: 'cgnat-nas-b', networkId: 'net-b',
+    rangeStart: opts?.poolRange?.start ?? '100.64.43.2',
+    rangeEnd:   opts?.poolRange?.end   ?? '100.64.43.254',
+    type: 'static', assignedCount: null, totalCount: 253, nasId: nasRadiusB.id, ipKind: 'cgnat',
+  });
+
+  const findFreeIp = new FindFreeIp(netRepo, nasRepo, routerGw, orchestrator);
+  const legacyMove = new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepo);
+  const movePppoeToNas = new MovePppoeToNas(
+    pppoeRepo, nasRepo, orchestrator, findFreeIp, legacyMove, moveEvents, catalogRepo, eventRepo,
+  );
+  const listMoveEvents = new ListPppoeNasMoveEvents(moveEvents, nasRepo);
+
+  const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
+
+  const app = express();
+  app.use(cookieParser());
+  app.use(express.json());
+  const batchRepo = new InMemoryServiceCutBatchRepository();
+  const lock = new InMemoryDistributedLock();
+  const enforce = new EnforcePppoeService(pppoeRepo, new RouterOsEnforcementAdapter(routerGw, 'IP-REDUCCION'), nasRepo);
+  const preview = new PreviewEnforcement(pppoeRepo);
+  const bulk = new RunBulkEnforcement(pppoeRepo, enforce, batchRepo, { throttleMs: 0 });
+  const runner = new ServiceCutRunner(bulk, batchRepo, lock);
+
+  app.use('/api', createPppoeRouter(
+    new EchoAuthProvider(),
+    undefined,
+    requirePerm,
+    new ListPppoeByContract(pppoeRepo),
+    new CreatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator, ensure),
+    new UpdatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator),
+    legacyMove,
+    new DeactivatePppoeService(pppoeRepo, routerGw, nasRepo, orchestrator, ensure),
+    enforce,
+    preview,
+    runner,
+    batchRepo,
+    new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator),
+    new AssociatePppoeToContract(pppoeRepo, ensure),
+    new GetPppoeCredentials(pppoeRepo),
+    new ListUnassignedPppoe(pppoeRepo),
+    new DeassociatePppoeFromContract(pppoeRepo, ensure),
+    undefined, // terminatePppoeService
+    undefined, // getPppoeCallerId
+    undefined, // listAllPppoeServices
+    undefined, // listInternetServiceHistory
+    undefined, // listInternetActivationOperators
+    undefined, // pinPppoeIp
+    undefined, // unpinPppoeIp
+    undefined, // createPppoeStandalone
+    undefined, // renamePppoeUsername
+    movePppoeToNas,
+    listMoveEvents,
+  ));
+  app.use(errorHandler);
+
+  return {
+    app, pppoeRepo, moveEvents, nasRadiusB,
+    readUserId: readUser.id, manageUserId: manageUser.id, nobodyUserId: nobodyUser.id,
+  };
+}
+
+function asUser(req: request.Test, userId: string): request.Test {
+  return req.set('Cookie', `auth_token=${userId}`);
+}
+
+async function seedPppoe(
+  fx: Fixture,
+  opts?: { username?: string; nasId?: string; remoteAddress?: string | null; contractId?: string | null },
+) {
+  return fx.pppoeRepo.upsertByUsername({
+    username: opts?.username ?? 'moveuser',
+    password: 'secret',
+    profile: 'IP-Air-10M',
+    nasId: opts?.nasId ?? RADIUS_NAS_A,
+    status: 'enabled',
+    ipMode: 'fixed',
+    remoteAddress: opts?.remoteAddress !== undefined ? opts.remoteAddress : OLD_IP,
+    contractId: opts?.contractId ?? null,
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// POST /api/pppoe/:id/move — radius-aware (MovePppoeToNas)
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/pppoe/:id/move (radius-aware)', () => {
+  it('401 sin auth', async () => {
+    const fx = await buildApp();
+    expect((await request(fx.app).post('/api/pppoe/x/move').send({ nasId: '2' })).status).toBe(401);
+  });
+
+  it('403 con pppoe.read solo (gate pppoe.manage)', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.readUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('move radius→radius exitoso → 200 con nasId destino + IP NUEVA del pool + ipMode=fixed (sin password)', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.nasId).toBe(fx.nasRadiusB.id);
+    expect(res.body.remoteAddress).toBe('100.64.43.3'); // .2 tomada → primera libre
+    expect(res.body.ipMode).toBe('fixed');
+    expect(res.body.password).toBeUndefined();
+  });
+
+  it('move exitoso registra el PppoeNasMoveEvent manual/moved con el actor autenticado', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx);
+    await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      username: 'moveuser',
+      trigger: 'manual',
+      outcome: 'moved',
+      fromIp: OLD_IP,
+      toIp: '100.64.43.3',
+      actorName: 'operador', // username del EchoAuthProvider
+    });
+  });
+
+  it('servicio inexistente → 404 PPPOE_NOT_FOUND', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).post('/api/pppoe/ghost/move').send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PPPOE_NOT_FOUND');
+  });
+
+  it('NAS destino inexistente → 404 NAS_NOT_FOUND', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: 'ghost-nas' }), fx.manageUserId);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NAS_NOT_FOUND');
+  });
+
+  it('pool destino LLENO → 409 NO_FREE_IP y el cliente queda como estaba', async () => {
+    const fx = await buildApp({
+      poolRange: { start: '100.64.43.2', end: '100.64.43.3' },
+      assignedIps: ['100.64.43.2', '100.64.43.3'],
+    });
+    const s = await seedPppoe(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_FREE_IP');
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(RADIUS_NAS_A);
+    expect(row!.remoteAddress).toBe(OLD_IP);
+  });
+
+  it('move mixto radius→legacy → 409 PPPOE_MOVE_MIXED_NAS_TYPES', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx); // origen radius
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: MK_NAS }), fx.manageUserId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PPPOE_MOVE_MIXED_NAS_TYPES');
+  });
+
+  it('orchestrator caído → 502 ORCHESTRATOR_UNREACHABLE', async () => {
+    const fx = await buildApp({ unreachableUsers: ['downuser'] });
+    const s = await seedPppoe(fx, { username: 'downuser' });
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('ORCHESTRATOR_UNREACHABLE');
+  });
+
+  it('body sin nasId → 422 VALIDATION_ERROR', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({}), fx.manageUserId);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// GET /api/pppoe/nas-move-events — registro visible (gate pppoe.read)
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('GET /api/pppoe/nas-move-events (pppoe.read)', () => {
+  it('401 sin auth', async () => {
+    const fx = await buildApp();
+    expect((await request(fx.app).get('/api/pppoe/nas-move-events')).status).toBe(401);
+  });
+
+  it('403 sin pppoe.read', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.nobodyUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('200 con pppoe.read: wire contract campo por campo {items,total,page,limit}', async () => {
+    const fx = await buildApp();
+    await fx.moveEvents.record({
+      username: 'user1', pppoeServiceId: 'svc-1',
+      fromNasId: RADIUS_NAS_A, toNasId: fx.nasRadiusB.id,
+      fromIp: OLD_IP, toIp: '100.64.43.3',
+      trigger: 'manual', outcome: 'moved', reason: null, actorName: 'operador',
+    });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.page).toBe(1);
+    expect(res.body.limit).toBe(20);
+    expect(res.body.items).toHaveLength(1);
+    const item = res.body.items[0];
+    expect(Object.keys(item).sort()).toEqual(
+      ['actorName', 'createdAt', 'fromIp', 'fromNas', 'id', 'outcome', 'reason', 'toIp', 'toNas', 'trigger', 'username'],
+    );
+    expect(item.fromNas).toEqual({ id: RADIUS_NAS_A, name: 'MikroTik sucursal' });
+    expect(item.toNas).toEqual({ id: fx.nasRadiusB.id, name: 'NAS Radius B' });
+    expect(item.username).toBe('user1');
+    expect(item.fromIp).toBe(OLD_IP);
+    expect(item.toIp).toBe('100.64.43.3');
+    expect(item.trigger).toBe('manual');
+    expect(item.outcome).toBe('moved');
+    expect(item.actorName).toBe('operador');
+  });
+
+  it('S10.4: ?outcome=failed_no_free_ip devuelve SOLO los fallos', async () => {
+    const fx = await buildApp();
+    await fx.moveEvents.record({ username: 'ok1', trigger: 'manual', outcome: 'moved' });
+    await fx.moveEvents.record({ username: 'fail1', trigger: 'auto', outcome: 'failed_no_free_ip' });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?outcome=failed_no_free_ip'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.items[0].username).toBe('fail1');
+    expect(res.body.items[0].outcome).toBe('failed_no_free_ip');
+  });
+
+  it('filtros trigger + username y paginado page/limit', async () => {
+    const fx = await buildApp();
+    await fx.moveEvents.record({ username: 'juan.perez', trigger: 'manual', outcome: 'moved' });
+    await fx.moveEvents.record({ username: 'maria.auto', trigger: 'auto', outcome: 'moved' });
+    await fx.moveEvents.record({ username: 'pedro.auto', trigger: 'auto', outcome: 'moved' });
+
+    const byTrigger = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?trigger=auto'), fx.readUserId);
+    expect(byTrigger.body.total).toBe(2);
+
+    const byUser = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?username=perez'), fx.readUserId);
+    expect(byUser.body.total).toBe(1);
+    expect(byUser.body.items[0].username).toBe('juan.perez');
+
+    const paged = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?page=2&limit=1&trigger=auto'), fx.readUserId);
+    expect(paged.body.total).toBe(2);
+    expect(paged.body.page).toBe(2);
+    expect(paged.body.limit).toBe(1);
+    expect(paged.body.items).toHaveLength(1);
+  });
+
+  it('limit > 100 se clampea a 100', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?limit=500'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.limit).toBe(100);
+  });
+
+  it('la ruta literal NO es sombreada por catch-alls /pppoe/:id (devuelve el shape del listado)', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.items)).toBe(true);
+    expect(typeof res.body.total).toBe('number');
+  });
+});

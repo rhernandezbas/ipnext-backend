@@ -170,4 +170,26 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
   it('(m) CreatePppoeStandalone wired (pppoe-full-management Fase 2)', () => {
     expect(appSrc).toMatch(/new CreatePppoeStandalone\(/);
   });
+
+  // ── pppoe-move-nas W1 — anti "feature muerta": move radius-aware + registro visible wired ──
+  it('(n) MovePppoeToNas construido con findFreeIp y el legacy move como delegate (pppoe-move-nas)', () => {
+    // Se construye con el allocator (IP nueva del pool cgnat del destino)...
+    expect(appSrc).toMatch(/const movePppoeToNas = new MovePppoeToNas\(/);
+    expect(appSrc).toMatch(/new MovePppoeToNas\([^;]*findFreeIp/s);
+    // ...y con el flujo legacy como colaborador (rama NAS no-radius).
+    expect(appSrc).toMatch(/new MovePppoeToNas\([^;]*legacyMovePppoe/s);
+  });
+
+  it('(n) movePppoeToNas INYECTADO en createPppoeRouter (sin esto la ruta cae al legacy pre-HA)', () => {
+    expect(appSrc).toMatch(/createPppoeRouter\([\s\S]*movePppoeToNas,/);
+  });
+
+  it('(n) PrismaPppoeNasMoveEventRepository instanciado (registro visible de movimientos)', () => {
+    expect(appSrc).toMatch(/new PrismaPppoeNasMoveEventRepository\(\)/);
+  });
+
+  it('(n) ListPppoeNasMoveEvents wired con el repo de eventos y pasado a createPppoeRouter', () => {
+    expect(appSrc).toMatch(/new ListPppoeNasMoveEvents\(\s*nasMoveEventRepo/);
+    expect(appSrc).toMatch(/createPppoeRouter\([\s\S]*new ListPppoeNasMoveEvents\(/);
+  });
 });

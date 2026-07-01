@@ -5,7 +5,8 @@
  *   GET    /api/contracts/:contractId/pppoe      pppoe.read
  *   POST   /api/contracts/:contractId/pppoe      pppoe.manage
  *   PATCH  /api/pppoe/:id                         pppoe.manage
- *   POST   /api/pppoe/:id/move                    pppoe.manage
+ *   POST   /api/pppoe/:id/move                    pppoe.manage  (radius-aware: IP nueva del pool cgnat del destino + kick)
+ *   GET    /api/pppoe/nas-move-events             pppoe.read    (registro visible de movimientos de NAS)
  *   DELETE /api/pppoe/:id                         pppoe.manage  (baja soft)
  *   --- Adopción del inventario ---
  *   GET    /api/pppoe/unassigned                  pppoe.read    (huérfanos, sin password)
@@ -26,6 +27,8 @@
  *   NAS_NOT_FOUND         → 404
  *   ENFORCEMENT_IN_PROGRESS → 409
  *   BATCH_NOT_FOUND       → 404
+ *   NO_FREE_IP / NO_POOL_FOR_NAS_TYPE (move)   → 409
+ *   PPPOE_MOVE_MIXED_NAS_TYPES / PPPOE_TERMINATED → 409
  *   zod invalid           → 422
  */
 import { Router, Request, Response, RequestHandler } from 'express';
@@ -37,6 +40,8 @@ import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract'
 import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
 import { UpdatePppoeService } from '@application/use-cases/UpdatePppoeService';
 import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServiceToRouter';
+import { MovePppoeToNas } from '@application/use-cases/MovePppoeToNas';
+import { ListPppoeNasMoveEvents } from '@application/use-cases/ListPppoeNasMoveEvents';
 import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeService';
 import { TerminatePppoeService } from '@application/use-cases/TerminatePppoeService';
 import { GetPppoeCallerId } from '@application/use-cases/GetPppoeCallerId';
@@ -89,11 +94,14 @@ import {
   PppoeContractAlreadyHasServiceError,
   PppoeIngestNotSupportedError,
   PppoeRenameNasNotSupportedError,
+  PppoeMoveMixedNasTypesError,
+  PppoeServiceTerminatedError,
   NasNotFoundError,
   InvalidIpFormatError,
   IpAlreadyTakenError,
   NasNoPoolError,
 } from '@domain/errors/pppoe';
+import { NoFreeIpError, NoPoolForNasTypeError } from '@domain/errors/network';
 
 const BajaBodySchema = z.object({ reason: z.string().nullish() }).optional();
 /** pppoe-pool-ip: body de POST /pppoe/:id/pin-ip — la IP fija a pinear. */
@@ -130,6 +138,14 @@ export function createPppoeRouter(
   createPppoeStandalone?: CreatePppoeStandalone,
   /** pppoe-full-management: Renombra PPPoE (create-then-delete seguro). POST /api/pppoe/:id/rename. */
   renamePppoeUsername?: RenamePppoeUsername,
+  /**
+   * pppoe-move-nas W1: move radius-aware (reasigna IP CGNAT del destino + kick). Cuando está
+   * wired, POST /pppoe/:id/move usa ESTE use case; sin él cae al legacy (back-compat, patrón
+   * terminatePppoeService ?? deactivatePppoeService). En prod SIEMPRE viene wired (composition test).
+   */
+  movePppoeToNas?: MovePppoeToNas,
+  /** pppoe-move-nas W1: registro visible de movimientos. GET /api/pppoe/nas-move-events (pppoe.read). */
+  listPppoeNasMoveEvents?: ListPppoeNasMoveEvents,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -257,6 +273,35 @@ export function createPppoeRouter(
       const operators = await listInternetActivationOperators.execute();
       res.json(operators);
     });
+  }
+
+  // ── GET /pppoe/nas-move-events — registro VISIBLE de movimientos de NAS (pppoe-move-nas W1) ──
+  // LITERAL, montada ANTES de cualquier /pppoe/:id para no ser sombreada por el catch-all.
+  // Wire contract D6 punto 3: { items: [{id, username, fromNas, toNas, fromIp, toIp, trigger,
+  // outcome, reason, actorName, createdAt}], total, page, limit }. Gate pppoe.read.
+  if (listPppoeNasMoveEvents) {
+    router.get(
+      '/pppoe/nas-move-events',
+      auth,
+      canRead,
+      async (req: Request, res: Response): Promise<void> => {
+        const q = req.query;
+        const filter: { page?: number; limit?: number; outcome?: string; trigger?: string; username?: string } = {};
+        if (typeof q['outcome']  === 'string' && q['outcome']  !== '') filter.outcome  = q['outcome'];
+        if (typeof q['trigger']  === 'string' && q['trigger']  !== '') filter.trigger  = q['trigger'];
+        if (typeof q['username'] === 'string' && q['username'] !== '') filter.username = q['username'];
+        if (typeof q['page'] === 'string' && q['page'] !== '') {
+          const n = parseInt(q['page'], 10);
+          if (!isNaN(n) && n > 0) filter.page = n;
+        }
+        if (typeof q['limit'] === 'string' && q['limit'] !== '') {
+          const n = parseInt(q['limit'], 10);
+          if (!isNaN(n) && n > 0) filter.limit = n;
+        }
+        const page = await listPppoeNasMoveEvents.execute(filter);
+        res.json(page);
+      },
+    );
   }
 
   // ── GET /pppoe — lista GLOBAL paginada de servicios de internet (DTO SIN password) ──
@@ -585,6 +630,9 @@ export function createPppoeRouter(
 
   // ── POST /pppoe/:id/move ────────────────────────────────────────────────────
   // Sub-recurso /move montado ANTES de que cualquier catch-all /:id lo sombree.
+  // pppoe-move-nas W1: cablea el NUEVO MovePppoeToNas (radius-aware, mismo body {nasId}).
+  // Si no está wired cae al legacy (back-compat de fixtures viejas; en prod SIEMPRE viene wired).
+  // En Express 4 los async handlers necesitan captura explícita — throw no llega al errorHandler.
   router.post(
     '/pppoe/:id/move',
     auth,
@@ -596,13 +644,19 @@ export function createPppoeRouter(
         return;
       }
       try {
-        const service = await movePppoeServiceToRouter.execute({
-          id: req.params['id'] as string,
-          nasId: parsed.data.nasId,
-        });
+        const service = movePppoeToNas
+          ? await movePppoeToNas.execute(
+              { id: req.params['id'] as string, nasId: parsed.data.nasId, trigger: 'manual' },
+              actorOf(req),
+            )
+          : await movePppoeServiceToRouter.execute({
+              id: req.params['id'] as string,
+              nasId: parsed.data.nasId,
+            });
         res.json(toPppoeServiceDto(service));
       } catch (err) {
-        if (err instanceof RouterUnreachableError) {
+        // Backend de move inalcanzable: router legacy o RADIUS/orchestrator → 502.
+        if (err instanceof RouterUnreachableError || err instanceof OrchestratorUnreachableError) {
           res.status(502).json({ code: err.code, error: err.message });
           return;
         }
@@ -612,6 +666,21 @@ export function createPppoeRouter(
         }
         if (err instanceof NasNotFoundError) {
           res.status(404).json({ code: err.code, error: err.message });
+          return;
+        }
+        // Pool cgnat del destino lleno/inexistente → 409: el move NO puede asignar IP, nada cambió.
+        if (err instanceof NoFreeIpError || err instanceof NoPoolForNasTypeError) {
+          res.status(409).json({ code: err.code, error: err.message });
+          return;
+        }
+        // Move mixto radius↔legacy → 409 (REQ-MOVE-3).
+        if (err instanceof PppoeMoveMixedNasTypesError) {
+          res.status(409).json({ code: err.code, error: err.message });
+          return;
+        }
+        // Servicio dado de baja (terminated) → 409: no hay nada que mover.
+        if (err instanceof PppoeServiceTerminatedError) {
+          res.status(409).json({ code: err.code, error: err.message });
           return;
         }
         throw err;

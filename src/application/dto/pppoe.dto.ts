@@ -172,6 +172,35 @@ export interface InternetActivationOperatorDto {
   actorName: string;
 }
 
+// ── pppoe-move-nas — registro visible de movimientos de NAS (design D6 punto 3) ──
+
+/**
+ * Wire contract del tab "Movimientos NAS" (campo por campo, lección #28 — NO cambiar sin sync FE).
+ * `fromNas`/`toNas` vienen RESUELTOS {id, name} (null cuando el evento no tiene ese NAS).
+ * NUNCA contiene password ni secrets.
+ */
+export interface PppoeNasMoveEventDto {
+  id: string;
+  username: string;
+  fromNas: { id: string; name: string } | null;
+  toNas: { id: string; name: string } | null;
+  fromIp: string | null;
+  toIp: string | null;
+  trigger: string;   // 'manual' | 'auto'
+  outcome: string;   // 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'skipped_public' | 'skipped_unknown_nas'
+  reason: string | null;
+  actorName: string | null;
+  createdAt: string; // ISO string
+}
+
+/** DTO paginado de GET /api/pppoe/nas-move-events. */
+export interface PppoeNasMoveEventPageDto {
+  items: PppoeNasMoveEventDto[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
 // ── Body schemas (Zod) ──────────────────────────────────────────────────────
 
 export const CreatePppoeBodySchema = z.object({
