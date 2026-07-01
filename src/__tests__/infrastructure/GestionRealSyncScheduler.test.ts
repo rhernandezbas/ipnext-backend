@@ -6,6 +6,7 @@ import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMe
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
+import { SyncGestionRealContractsDelta } from '@application/use-cases/SyncGestionRealContractsDelta';
 import { BackfillGrContractsBatch } from '@application/use-cases/BackfillGrContractsBatch';
 import { GestionRealSyncScheduler } from '@infrastructure/scheduling/GestionRealSyncScheduler';
 import { GrClient, GrContract } from '@domain/entities/gestionReal';
@@ -20,7 +21,7 @@ function client(id: string): GrClient {
 function contract(id: string, cli: string): GrContract {
   return {
     grContratoId: id, grClienteId: cli, plan: '50MB', status: 'Vigente',
-    startDate: '01-01-2026', address: null, lat: null, lng: null, pppoeUsername: null, modificado: null, vendedor: null, raw: {},
+    startDate: '01-01-2026', address: null, lat: null, lng: null, pppoeUsername: null, modificado: null, fechaCreacion: null, vendedor: null, raw: {},
   };
 }
 
@@ -170,5 +171,88 @@ describe('GestionRealSyncScheduler', () => {
     expect(spy).not.toHaveBeenCalled();
     expect(summary.backfill?.processed ?? 0).toBe(0);
     expect(lock.heldKeys.has('gr-sync')).toBe(false);
+  });
+
+  // ── Contract delta global (REQ-DELTA-10 / REQ-DELTA-11) ──────────────────────
+
+  function makeSchedulerWithDelta(
+    grPort: InMemoryGestionRealPort,
+    mirrorRepo: InMemoryClientMirrorRepository,
+    stateRepo: InMemorySyncStateRepository,
+    lockAdapter: InMemoryDistributedLock,
+    /** Optional clock for the delta use case — inject to make REQ-DELTA-11 deterministic. */
+    deltaOpts?: { now?: () => Date },
+  ): GestionRealSyncScheduler {
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed('gestion-real-sync', true);
+    const syncClients = new SyncGestionRealClients(grPort, mirrorRepo, stateRepo, flags);
+    const syncContracts = new SyncGestionRealContracts(grPort, mirrorRepo);
+    const backfill = new BackfillGrContractsBatch(
+      new InMemoryClientMirrorReadRepository(),
+      syncContracts,
+      stateRepo,
+      2,
+    );
+    const syncContractsDelta = new SyncGestionRealContractsDelta(grPort, mirrorRepo, stateRepo, flags, deltaOpts);
+    return new GestionRealSyncScheduler(
+      syncClients, syncContracts, { intervalMs: 1000, silent: true }, lockAdapter, backfill, syncContractsDelta,
+    );
+  }
+
+  it('runs the delta after client-sync and includes it in the summary (REQ-DELTA-10)', async () => {
+    gr.clients = [client('100')];
+    gr.contractsByClient = { '100': [contract('k1', '100')] };
+    gr.contractsModified = [];
+    const schedulerWithDelta = makeSchedulerWithDelta(gr, mirror, state, lock);
+
+    const summary = await schedulerWithDelta.runOnce();
+
+    expect(summary.clients?.created).toBe(1);
+    expect(summary.contracts?.created).toBe(1);
+    // delta ran (field present, not undefined)
+    expect(summary.contractsDelta).toBeDefined();
+    expect(summary.contractsDelta?.fetched).toBe(0); // no contracts in the modified feed
+    expect(lock.heldKeys.has('gr-sync')).toBe(false);
+  });
+
+  it('delta error is swallowed — runOnce completes and releases lock (REQ-DELTA-10)', async () => {
+    gr.clients = [client('1')];
+    gr.contractsByClient = {};
+    const schedulerWithDelta = makeSchedulerWithDelta(gr, mirror, state, lock);
+    jest.spyOn(gr, 'fetchContractsModifiedSince').mockRejectedValueOnce(new Error('delta down'));
+
+    const summary = await schedulerWithDelta.runOnce();
+
+    // runOnce completed (didn't rethrow)
+    expect(summary.clients).toBeDefined();
+    // Lock released even though delta threw
+    expect(lock.heldKeys.has('gr-sync')).toBe(false);
+  });
+
+  // REQ-DELTA-11: deterministic now prevents the fixture from going stale after 2026-06-30.
+  // Without a fixed clock, SyncGestionRealContractsDelta would use today's date as fechaDesde,
+  // and the fixture modificado='30-06-2026 09:00:00' would fall outside the window → delta no-op.
+  it('per-client contract-sync is maintained alongside the delta (REQ-DELTA-11)', async () => {
+    const fixedNow = () => new Date(2026, 5, 30, 12, 0, 0); // 2026-06-30, same as fixture date
+    gr.clients = [client('200')];
+    gr.contractsByClient = { '200': [contract('kA', '200')] };
+    gr.contractsModified = [{ ...contract('kA', '200'), modificado: '30-06-2026 09:00:00' }];
+    const schedulerWithDelta = makeSchedulerWithDelta(gr, mirror, state, lock, { now: fixedNow });
+    const spyPerClient = jest.spyOn(gr, 'fetchContractsByClient');
+    const spyDelta = jest.spyOn(gr, 'fetchContractsModifiedSince');
+
+    const summary = await schedulerWithDelta.runOnce();
+
+    // Both sync paths called
+    expect(spyPerClient).toHaveBeenCalled();
+    expect(spyDelta).toHaveBeenCalled();
+    // The delta actually PROCESSED the contract — this is what makes the fixed clock
+    // matter: with new Date() > 2026-06-30 the fixture modificado would fall outside
+    // the [fechaDesde, fechaHasta] window and the delta would fetch nothing.
+    expect(summary.contractsDelta?.fetched).toBe(1);
+    // Per-client created it first, so the delta's upsert is an UPDATE, not a new row.
+    expect(summary.contractsDelta?.updated).toBe(1);
+    // Idempotent double-upsert from per-client + delta: still a single contract.
+    expect(mirror.contracts.size).toBe(1);
   });
 });

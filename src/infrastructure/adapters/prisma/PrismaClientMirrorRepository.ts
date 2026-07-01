@@ -86,7 +86,9 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       select: { id: true },
     });
     // Parent must exist — the client sync always runs before contracts.
-    if (!parent) return { created: false };
+    // Return skipped:true so the delta use case can distinguish "orphan skip"
+    // from "contract updated" and report accurate counters.
+    if (!parent) return { created: false, skipped: true };
 
     const existing = await prisma.contract.findUnique({
       where: { grContratoId: k.grContratoId },
@@ -115,6 +117,10 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       lng: k.lng ?? null,
       // GR-owned: el vendedor/agente que dio de alta. NO es user-managed → GR-wins en cada sync.
       vendedor: k.vendedor ?? null,
+      // REQ-DELTA-12: include clientId in the shared data block so the UPDATE branch also
+      // reassigns the owner. GR creates a new grContratoId on ownership change, so this is
+      // defensive robustness — but cheap and eliminates a latent inconsistency.
+      clientId: parent.id,
     };
 
     if (existing) {
@@ -123,7 +129,7 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
     }
 
     await prisma.contract.create({
-      data: { ...data, grContratoId: k.grContratoId, clientId: parent.id },
+      data: { ...data, grContratoId: k.grContratoId },
     });
     return { created: true };
   }

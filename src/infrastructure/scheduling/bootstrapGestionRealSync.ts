@@ -7,6 +7,7 @@ import { PrismaGestionRealSyncConfigRepository } from '../adapters/prisma/Prisma
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
+import { SyncGestionRealContractsDelta } from '@application/use-cases/SyncGestionRealContractsDelta';
 import { BackfillGrContractsBatch } from '@application/use-cases/BackfillGrContractsBatch';
 import { RefreshDebtorBalances } from '@application/use-cases/RefreshDebtorBalances';
 import { GestionRealSyncScheduler } from './GestionRealSyncScheduler';
@@ -53,11 +54,14 @@ export async function bootstrapGestionRealSync(): Promise<GestionRealSyncSchedul
   // read-only mirror port; reuses the contract fetch+upsert path.
   const mirrorRead = new PrismaClientMirrorReadRepository();
   const backfill = new BackfillGrContractsBatch(mirrorRead, syncContracts, state);
+  // Global contract delta by modification date — runs AFTER client-sync each tick
+  // so newly-created clients are already in the mirror (closes titularidad gap).
+  const syncContractsDelta = new SyncGestionRealContractsDelta(client, mirror, state, featureFlags);
   // PgAdvisoryLock uses a dedicated pg.Client (not the pool) so that session
   // advisory locks are tied to one stable connection across acquire/release.
   const lock = new PgAdvisoryLock();
 
-  const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: persisted.intervalMs }, lock, backfill);
+  const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: persisted.intervalMs }, lock, backfill, syncContractsDelta);
 
   // Batch debtor balance refresh — runs on its own interval (default 1h), independently.
   startBalanceBatchJob(refreshDebtorBalances, gr.balanceBatchIntervalMs);

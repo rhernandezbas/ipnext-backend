@@ -1,5 +1,27 @@
 import { GrClient, GrClientBalance, GrContract, GrServiceOrder } from '../entities/gestionReal';
 
+export interface FetchContractsDeltaParams {
+  /** Lower bound "DD-MM-AAAA". */
+  fechaDesde: string;
+  /** Upper bound "DD-MM-AAAA". */
+  fechaHasta: string;
+  /**
+   * Date axis: 'm' = modification date, 'c' = creation date.
+   * The use case always sets this explicitly; defaults to 'm' in the adapter
+   * when omitted (backward-compatible with test doubles that call without it).
+   */
+  fechaTipo?: 'm' | 'c';
+  /** Page size — GR caps at 100. */
+  cantidad: number;
+  offset: number;
+}
+
+export interface FetchContractsDeltaResult {
+  /** Total rows matching (GR "resultados"), drives paging. */
+  total: number;
+  contracts: GrContract[];
+}
+
 export interface FetchClientsParams {
   /** 'c' = creación, 'm' = modificación. Omit for a full unfiltered scan. */
   fechaTipo?: 'c' | 'm';
@@ -43,4 +65,9 @@ export interface GestionRealPort {
   fetchClientBalance(grClienteId: string): Promise<GrClientBalance>;
   /** Fetch service orders via the `ordenesdeservicio` action, normalized to a flat array. */
   getServiceOrders(params: GetServiceOrdersParams): Promise<GrServiceOrder[]>;
+  /**
+   * Global contract delta by modification date (action:contratos, fecha_tipo=m).
+   * Each item carries its OWN cliente_id — the parser stamps grClienteId PER ITEM.
+   */
+  fetchContractsModifiedSince(params: FetchContractsDeltaParams): Promise<FetchContractsDeltaResult>;
 }

@@ -2,6 +2,8 @@ import {
   GestionRealPort,
   FetchClientsParams,
   FetchClientsResult,
+  FetchContractsDeltaParams,
+  FetchContractsDeltaResult,
   GetServiceOrdersParams,
 } from '@domain/ports/GestionRealPort';
 import {
@@ -31,6 +33,10 @@ export class InMemoryGestionRealPort implements GestionRealPort {
   serviceOrders: GrServiceOrder[] = [];
   /** Records every getServiceOrders call for assertions. */
   serviceOrderCalls: GetServiceOrdersParams[] = [];
+  /** Multi-client flat contract list for fetchContractsModifiedSince test doubles. */
+  contractsModified: GrContract[] = [];
+  /** Records every fetchContractsModifiedSince call for assertions. */
+  contractsDeltaCalls: FetchContractsDeltaParams[] = [];
 
   async fetchClients(params: FetchClientsParams): Promise<FetchClientsResult> {
     this.calls.push(params);
@@ -78,6 +84,31 @@ export class InMemoryGestionRealPort implements GestionRealPort {
   async getServiceOrders(params: GetServiceOrdersParams): Promise<GrServiceOrder[]> {
     this.serviceOrderCalls.push(params);
     return this.serviceOrders;
+  }
+
+  async fetchContractsModifiedSince(p: FetchContractsDeltaParams): Promise<FetchContractsDeltaResult> {
+    this.contractsDeltaCalls.push(p);
+    const from = parseGrDate(p.fechaDesde);
+    // fechaHasta is a date string (no time). GR includes the entire day, so we
+    // treat it as exclusive next-day midnight: any timestamp on fechaHasta day
+    // satisfies ts < nextDay (i.e. ts <= end-of-day of fechaHasta).
+    const toExclusive = parseGrDate(p.fechaHasta) + 24 * 60 * 60 * 1000;
+
+    // Mirrors the real GR server-side filtering verified live:
+    //   fecha_tipo=m → filter by modificado (rows without modificado are excluded)
+    //   fecha_tipo=c → filter by fechaCreacion (rows without fechaCreacion are excluded)
+    // Both apply a [fechaDesde, fechaHasta] window (inclusive on both ends, day-granular).
+    const matched = this.contractsModified.filter(c => {
+      if (p.fechaTipo === 'c') {
+        const created = c.fechaCreacion ? parseGrDateTime(c.fechaCreacion) : null;
+        return created !== null && created >= from && created < toExclusive;
+      }
+      // Default: fecha_tipo=m (or undefined → backward compat with tests that omit fechaTipo)
+      const mod = c.modificado ? parseGrDateTime(c.modificado) : null;
+      return mod !== null && mod >= from && mod < toExclusive;
+    });
+    const page = matched.slice(p.offset, p.offset + p.cantidad);
+    return { total: matched.length, contracts: page };
   }
 }
 

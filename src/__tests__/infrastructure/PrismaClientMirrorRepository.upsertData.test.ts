@@ -23,9 +23,9 @@ describe('upsertContract data block pinning (#43)', () => {
     dataBlock = match![1];
   });
 
-  it('contains exactly the GR-owned keys', () => {
+  it('contains exactly the GR-owned keys (including clientId for REQ-DELTA-12)', () => {
     const keys = (dataBlock.match(/^\s*(\w+)\s*:/gm) ?? []).map(k => k.trim().replace(/:$/, ''));
-    expect(new Set(keys)).toEqual(new Set(['type', 'plan', 'status', 'startDate', 'address', 'lat', 'lng', 'vendedor']));
+    expect(new Set(keys)).toEqual(new Set(['type', 'plan', 'status', 'startDate', 'address', 'lat', 'lng', 'vendedor', 'clientId']));
   });
 
   it('pins address as GR-wins (address: k.address)', () => {
@@ -45,5 +45,13 @@ describe('upsertContract data block pinning (#43)', () => {
     expect(dataBlock).toMatch(/status:\s*mapContractStatus\(k\.status\)/);
     // The old raw passthrough default must be gone.
     expect(dataBlock).not.toMatch(/status:\s*k\.status\s*\?\?/);
+  });
+
+  // REQ-DELTA-12: upsertContract.update MUST also reassign clientId so that a contract
+  // that changes owner (titularidad) gets wired to the new client. The fix is to move
+  // `clientId: parent.id` from the create-only block into the shared `data` object so
+  // the update branch inherits it automatically.
+  it('contains clientId in the shared data block (update also reassigns owner — REQ-DELTA-12)', () => {
+    expect(dataBlock).toMatch(/clientId\s*:/);
   });
 });

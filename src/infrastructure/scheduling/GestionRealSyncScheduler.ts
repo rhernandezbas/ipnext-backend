@@ -1,5 +1,6 @@
 import { SyncGestionRealClients, SyncRunResult } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts, ContractSyncResult } from '@application/use-cases/SyncGestionRealContracts';
+import { SyncGestionRealContractsDelta, ContractDeltaResult } from '@application/use-cases/SyncGestionRealContractsDelta';
 import { BackfillGrContractsBatch, BackfillBatchResult } from '@application/use-cases/BackfillGrContractsBatch';
 import { DistributedLock } from '@domain/ports/DistributedLock';
 
@@ -16,6 +17,8 @@ export interface RunSummary {
   contracts?: ContractSyncResult;
   /** Result of the one bounded contract-backfill batch run this tick (when armed). */
   backfill?: BackfillBatchResult;
+  /** Result of the global contract delta sync (when wired). */
+  contractsDelta?: ContractDeltaResult;
 }
 
 /** Key used for the distributed lock — all replicas must agree on this string. */
@@ -49,6 +52,12 @@ export class GestionRealSyncScheduler {
      * tests/contexts that don't exercise the backfill.
      */
     private readonly backfill?: BackfillGrContractsBatch,
+    /**
+     * Optional global contract delta sync (by modification date). When provided,
+     * runs AFTER the per-client contract sync so newly-mirrored clients are available.
+     * Errors are swallowed like the rest of the cycle — one bad delta doesn't kill the timer.
+     */
+    private readonly syncContractsDelta?: SyncGestionRealContractsDelta,
   ) {}
 
   start(): void {
@@ -94,14 +103,29 @@ export class GestionRealSyncScheduler {
       let backfill: BackfillBatchResult | undefined;
       if (this.backfill) backfill = await this.backfill.execute();
 
+      // Run the global contract delta (by modification date). Runs AFTER the
+      // client-sync so newly-created clients are already in the mirror.
+      // Error is swallowed — one bad delta tick never kills the interval.
+      let contractsDelta: ContractDeltaResult | undefined;
+      if (this.syncContractsDelta) {
+        try {
+          contractsDelta = await this.syncContractsDelta.execute();
+        } catch (deltaErr) {
+          this.log(`[gr-sync] contract-delta ERROR (swallowed): ${(deltaErr as Error).message}`);
+        }
+      }
+
       this.log(
         `[gr-sync] ${clients.mode}: clients +${clients.created}/~${clients.updated}, ` +
         `contracts +${contracts.created}/~${contracts.updated}` +
         (backfill && backfill.processed
           ? `, backfill ${backfill.processed} (@${backfill.nextOffset}${backfill.done ? ' done' : ''})`
+          : '') +
+        (contractsDelta && !contractsDelta.skippedFlag
+          ? `, delta +${contractsDelta.created}/~${contractsDelta.updated}`
           : ''),
       );
-      return { clients, contracts, backfill };
+      return { clients, contracts, backfill, contractsDelta };
     } catch (err) {
       const message = (err as Error).message;
       this.log(`[gr-sync] ERROR: ${message}`);

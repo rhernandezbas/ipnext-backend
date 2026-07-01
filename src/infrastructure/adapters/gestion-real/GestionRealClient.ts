@@ -5,6 +5,8 @@ import {
   GestionRealPort,
   FetchClientsParams,
   FetchClientsResult,
+  FetchContractsDeltaParams,
+  FetchContractsDeltaResult,
   GetServiceOrdersParams,
 } from '@domain/ports/GestionRealPort';
 import {
@@ -93,6 +95,22 @@ export class GestionRealClient implements GestionRealPort {
    * `fecha_desde`/`fecha_hasta` window (DD-MM-AAAA). The response is an object
    * keyed by order id; `parseServiceOrdersResponse` flattens it into an array.
    */
+  async fetchContractsModifiedSince(p: FetchContractsDeltaParams): Promise<FetchContractsDeltaResult> {
+    const { data } = await this.http.post(
+      '',
+      {
+        action: 'contratos',
+        fecha_tipo: p.fechaTipo ?? 'm',
+        fecha_desde: p.fechaDesde,
+        fecha_hasta: p.fechaHasta,
+        cantidad: p.cantidad,
+        offset: p.offset,
+      },
+      { auth: this.auth() },
+    );
+    return parseContractsDeltaResponse(data);
+  }
+
   async getServiceOrders(params: GetServiceOrdersParams): Promise<GrServiceOrder[]> {
     const payload: Record<string, unknown> = {
       action: 'ordenesdeservicio',
@@ -225,9 +243,38 @@ export function parseContractsResponse(data: unknown, grClienteId: string): GrCo
     lng: numOrNull(c.lng),
     pppoeUsername: firstPppoeUser(c.conexiones),
     modificado: str(c.modificado),
+    fechaCreacion: null,  // per-client feed does not expose creation date
     vendedor: str(c.vendedor),
     raw: c,
   }));
+}
+
+/**
+ * Parse the GR `contratos` delta response (action:contratos + fecha_tipo:m).
+ * Unlike `parseContractsResponse`, each item carries its OWN `cliente_id` —
+ * the parser stamps `grClienteId` PER ITEM (not from a caller-supplied parameter).
+ * `total` comes from `resultados` (string) for paging.
+ */
+export function parseContractsDeltaResponse(data: unknown): FetchContractsDeltaResult {
+  const root = (data ?? {}) as Record<string, unknown>;
+  const total = parseInt(String(root.resultados ?? '0'), 10) || 0;
+  const list = Array.isArray(root.contratos) ? (root.contratos as Record<string, unknown>[]) : [];
+  const contracts: GrContract[] = list.map(c => ({
+    grContratoId: str(c.id) ?? '',
+    grClienteId: str(c.cliente_id) ?? '',
+    plan: str(c.nombre),
+    status: str(c.estado),
+    startDate: str(c.inicio),
+    address: str(c.domicilio) || null,
+    lat: numOrNull(c.lat),
+    lng: numOrNull(c.lng),
+    pppoeUsername: null,               // global feed does not carry conexiones
+    modificado: str(c.modificado),
+    fechaCreacion: null,               // GR does not expose fecha_alta in the contratos feed
+    vendedor: str(c.vendedor),
+    raw: c,
+  }));
+  return { total, contracts };
 }
 
 /**

@@ -3,6 +3,12 @@ import { GrClient, GrContract } from '../entities/gestionReal';
 export interface UpsertResult {
   /** true when a new local row was created, false when an existing one was updated. */
   created: boolean;
+  /**
+   * true when the upsert was skipped due to a missing parent (orphan guard).
+   * Only set by `upsertContract` when `created` is false for this reason.
+   * Optional so existing callers (backfill, per-client sync) don't break.
+   */
+  skipped?: boolean;
 }
 
 /**

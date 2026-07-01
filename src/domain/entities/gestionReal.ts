@@ -68,6 +68,15 @@ export interface GrContract {
   pppoeUsername: string | null;
   /** Raw GR modification timestamp "DD-MM-YYYY HH:MM:SS". */
   modificado: string | null;
+  /**
+   * Raw GR creation timestamp "DD-MM-YYYY HH:MM:SS" (field `fecha_alta`).
+   * Needed for the c-scan delta: GR does NOT set `modificado` on newly created
+   * contracts, and fecha_tipo=m EXCLUDES rows with an empty modificado —
+   * without the c-scan those contracts never reach the mirror (same as clients).
+   * The real GR feed filters server-side; this field lets the in-memory double
+   * simulate the c-scan in tests.
+   */
+  fechaCreacion: string | null;
   /** Nombre del vendedor/agente que dio de alta el contrato (GR field `vendedor`).
    * Nombre crudo, sin normalizar (ej. "CAROLINA ROSALES", "julietapalilla"). */
   vendedor: string | null;
