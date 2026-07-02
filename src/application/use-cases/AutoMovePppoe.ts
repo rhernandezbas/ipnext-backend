@@ -41,6 +41,18 @@ const DEFAULT_MAX_MOVES_PER_TICK  = 10;
 const DEFAULT_COOLDOWN_MS         = 600_000;     // 10 min
 const DEFAULT_SESSION_FRESHNESS_MS = 259_200_000; // 72 h
 
+/**
+ * D7.2 — outcomes `failed_*` PERSISTENTES-por-construcción: reintentarlos dentro de la ventana
+ * de 6h da determinísticamente el MISMO fallo (pool sin IPs libres; API del router legacy roto).
+ * SOLO estos alimentan el anti-starvation del cap (D6.3). failed_orchestrator/failed_db quedan
+ * FUERA a propósito: son transitorios (hiccup del plano de control / de la DB) — bajo presión
+ * el candidato se reintenta normal.
+ */
+const PERSISTENT_FAILED_OUTCOMES: ReadonlySet<PppoeNasMoveOutcome> = new Set([
+  'failed_no_free_ip',
+  'failed_router',
+]);
+
 /** Resumen de UN tick del watcher (D-W2.3 + D-W2.5 item 8): se loguea estructurado por el scheduler. */
 export interface AutoMovePppoeSummary {
   /** Sesiones vivas crudas devueltas por el orchestrator. */
@@ -80,14 +92,18 @@ export interface AutoMovePppoeSummary {
   alreadyConverged: number;
   /** W4: servicios terminated con sesión viva — pre-filtrados sin core call ni fila. */
   skippedTerminated: number;
-  /** C1: mismatches cuya sesión ganadora no tiene actividad reciente (fila skipped_stale_session). */
+  /** C1: mismatches cuya sesión ganadora no tiene actividad reciente (fila skipped_stale_session).
+   *  D7.1: también cuenta adopciones cuya sesión ganadora PRECEDE al createdAt del servicio
+   *  (username reciclado con colgada histórica — fila skipped_stale_session, reason propio). */
   skippedStale: number;
   /** W7: usernames con sesiones vivas en NAS distintos entre sí (fila skipped_nas_conflict). */
   nasConflicts: number;
   /**
    * D6.3 (anti-starvation del cap): candidatos salteados BAJO PRESIÓN de cap porque su último
-   * evento es un failed_* idéntico (<6h, mismo toNas, username exacto). Sin fila (la del fallo
-   * anterior sigue visible); reintentan al expirar la ventana o al aflojar la presión.
+   * evento es un failed_* PERSISTENTE idéntico (<6h, mismo toNas, username exacto). Sin fila
+   * (la del fallo anterior sigue visible); reintentan al expirar la ventana o al aflojar la
+   * presión. D7.2: SOLO failed_no_free_ip/failed_router suprimen (persistentes-por-construcción);
+   * un failed_orchestrator/failed_db transitorio NO — el candidato se reintenta normal.
    */
   skippedRecentFailure: number;
 }
@@ -146,7 +162,9 @@ interface PendingSkip {
  * editada). WARN + `aborted: true` en el summary. Las ADOPCIONES (pendientes de instalación,
  * nasId null) se cuentan APARTE (`summary.adoptions`) y NO alimentan el breaker — pendientes
  * acumulados son el modo esperado con flag OFF, no inventario roto; el CAP los drena.
- * También están EXENTAS del freshness gate (D6.2 — username nuevo, sin colgadas históricas).
+ * La exención del freshness gate (D6.2) quedó ACOTADA POR NACIMIENTO (D7.1): la adopción exige
+ * startedAt(ganadora) >= createdAt(servicio) — una sesión que PRECEDE a la pre-provisión es la
+ * colgada histórica de un username RECICLADO (terminate+recreate), no su instalación.
  *
  * FASE 2 — acción: se registran las filas de skip (throttle 6h) y se procesan a lo sumo
  * maxMovesPerTick candidatos (el resto → `deferred`). D6.3: bajo PRESIÓN de cap, un candidato
@@ -286,10 +304,13 @@ export class AutoMovePppoe {
       //     breaker protege contra inventario roto; N pendientes acumulados (flag OFF unos días
       //     = modo esperado pre-go-live) no son evidencia de nada roto. Sin esto, 26+ pendientes
       //     abortaban el tick PARA SIEMPRE (cero adopciones, cero moves, cero filas).
-      //   · D6.2: EXENTA del freshness gate — un username pre-provisionado es NUEVO (no existen
-      //     colgadas históricas de él); una sesión vieja en el pool preinstall = el CPE instalado
-      //     ESPERANDO la adopción (instalado lunes, flag ON jueves). Peor caso: adoptar con el
-      //     cliente ya offline → converge solo cuando vuelve.
+      //   · D6.2 + D7.1: exención del freshness gate ACOTADA POR NACIMIENTO — una sesión vieja
+      //     en el pool preinstall que NACIÓ DESPUÉS del alta = el CPE instalado ESPERANDO la
+      //     adopción (instalado lunes, flag ON jueves; peor caso: adoptar con el cliente ya
+      //     offline → converge solo cuando vuelve). Pero una sesión que PRECEDE al createdAt
+      //     del servicio NO puede ser su instalación: es la colgada histórica de un username
+      //     RECICLADO (terminate+recreate, el workaround documentado de edición de pendientes)
+      //     → skipped_stale_session VISIBLE (throttled), cero adopción — restaura el C1.
       // El core (MovePppoeToNas) asigna del pool del ipTypePreference persistido y registra el
       // evento moved con reason 'auto_install' y fromNas null.
       const isAdoption = service.nasId === null;
@@ -297,10 +318,10 @@ export class AutoMovePppoe {
       if (isAdoption) summary.adoptions++;
       else summary.mismatches++;
 
-      // C1 (D-W2.5 item 4): freshness de la sesión ganadora — SOLO mismatches reales (D6.2
-      // exime a las adopciones, ver arriba). El wire de /sessions NO trae lastUpdate/
-      // acctupdatetime → fallback startedAt (design). Una sesión colgada vieja (acctstoptime
-      // NULL) como única sesión NO mueve a un cliente offline al NAS fantasma.
+      // C1 (D-W2.5 item 4): freshness de la sesión ganadora — SOLO mismatches reales (la
+      // adopción tiene su propio gate por nacimiento, abajo). El wire de /sessions NO trae
+      // lastUpdate/acctupdatetime → fallback startedAt (design). Una sesión colgada vieja
+      // (acctstoptime NULL) como única sesión NO mueve a un cliente offline al NAS fantasma.
       // startedAt no parseable cuenta como epoch 0 → stale (fail-safe).
       if (!isAdoption) {
         const activityAge = this.now().getTime() - startedAtMs(winner);
@@ -315,6 +336,27 @@ export class AutoMovePppoe {
             outcome: 'skipped_stale_session',
             // Reason ESTABLE (derivado del umbral configurado, no de la edad) para el throttle.
             reason: `winner_session_stale_gt_${Math.round(this.sessionFreshnessMs / 3_600_000)}h`,
+            toNasId: realNas.id,
+          });
+          continue;
+        }
+      } else {
+        // D7.1 — exención de freshness ACOTADA POR NACIMIENTO: la adopción solo procede si la
+        // sesión ganadora NACIÓ en o después del alta del servicio (startedAt >= createdAt).
+        // La negación `!(a >= b)` es deliberada: cubre startedAt no parseable (epoch 0) Y
+        // createdAt no parseable (NaN — toda comparación da false) como skip FAIL-SAFE.
+        if (!(startedAtMs(winner) >= Date.parse(service.createdAt))) {
+          summary.skippedStale++;
+          console.warn(
+            `[AutoMovePppoe] adopción skipped: la sesión ganadora PRECEDE a la pre-provisión ` +
+            `(username reciclado con colgada histórica) — username=${username} ` +
+            `startedAt=${winner.startedAt} createdAt=${service.createdAt} nasReal=${realNas.id} (${realNas.name})`,
+          );
+          pendingSkips.push({
+            service,
+            outcome: 'skipped_stale_session',
+            // Reason ESTABLE (sin edades) — identidad del throttle de 6h.
+            reason: 'session_predates_service',
             toNasId: realNas.id,
           });
           continue;
@@ -362,10 +404,12 @@ export class AutoMovePppoe {
     // y se re-detecta — no hace falta cola).
     //
     // D6.3 — anti-starvation del cap: BAJO PRESIÓN (más candidatos que slots), un candidato
-    // cuyo último evento es un failed_* idéntico (<6h, mismo toNas, username exacto) NO consume
-    // slot: se saltea (skippedRecentFailure, SIN fila — la del fallo anterior sigue visible) y
-    // reintenta al expirar la ventana. Sin esto, un 'public' sin pool cargado (falla PERMANENTE,
-    // orden de candidatos estable tick a tick) quema 1 de los 10 slots CADA tick para siempre.
+    // cuyo último evento es un failed_* PERSISTENTE idéntico (<6h, mismo toNas, username exacto)
+    // NO consume slot: se saltea (skippedRecentFailure, SIN fila — la del fallo anterior sigue
+    // visible) y reintenta al expirar la ventana. Sin esto, un 'public' sin pool cargado (falla
+    // PERMANENTE, orden de candidatos estable tick a tick) quema 1 de los 10 slots CADA tick
+    // para siempre. D7.2: el match aplica SOLO a failed_no_free_ip/failed_router (persistentes-
+    // por-construcción) — un failed_orchestrator/failed_db transitorio NO suprime (se reintenta).
     // SIN presión de cap el check ni corre: el retry barato de D-W2.2 queda intacto (pool lleno
     // se reintenta cada tick y converge apenas se libera lugar; el registro ya lo throttlea el core).
     const capPressure = candidates.length > this.maxMovesPerTick;
@@ -458,8 +502,12 @@ export class AutoMovePppoe {
   }
 
   /**
-   * D6.3 — ¿el ÚLTIMO evento del username (match EXACTO) es un `failed_*` hacia el MISMO NAS
-   * destino con menos de 6h (la ventana del throttle)? Solo se consulta BAJO PRESIÓN de cap.
+   * D6.3 — ¿el ÚLTIMO evento del username (match EXACTO) es un `failed_*` PERSISTENTE hacia el
+   * MISMO NAS destino con menos de 6h (la ventana del throttle)? Solo se consulta BAJO PRESIÓN
+   * de cap. D7.2: el match aplica SOLO a los outcomes persistentes-POR-CONSTRUCCIÓN (pool sin
+   * IPs libres / API del router): re-intentarlos en la misma ventana da el MISMO resultado.
+   * Un failed_orchestrator/failed_db es un transitorio (hiccup) — suprimirlo 6h castigaba al
+   * candidato por un fallo que probablemente ya pasó; ese NO consume la supresión.
    * FAIL-OPEN: si el check lanza (DB hiccup), el candidato se procesa normal — el pipeline
    * tiene sus propios guards fail-closed (cooldown, re-verify) antes de mover.
    */
@@ -468,7 +516,7 @@ export class AutoMovePppoe {
       const { items } = await this.moveEventRepo.list({ page: 1, limit: 1, usernameExact: username });
       const last = items[0];
       if (!last) return false;
-      if (!last.outcome.startsWith('failed_')) return false;
+      if (!PERSISTENT_FAILED_OUTCOMES.has(last.outcome)) return false;
       if ((last.toNasId ?? null) !== toNasId) return false;
       const age = this.now().getTime() - Date.parse(last.createdAt);
       return Number.isFinite(age) && age < AUTO_MOVE_EVENT_THROTTLE_MS;

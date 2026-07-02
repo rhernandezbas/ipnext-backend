@@ -18,6 +18,14 @@
  *   D6.5 pendiente hacia NAS LEGACY (no-radius) → PppoePendingLegacyNasError tipado ANTES de
  *        tocar nada (el moveLegacy adoptaba SIN IP, ignorando la preferencia, dejando el
  *        fantasma en el RADIUS central). Guard de bomba latente: hoy no hay NAS legacy en prod.
+ *
+ * D7.3 (mini fix wave): setNasAndIp CONDICIONAL para adopciones (expectedNasId=null →
+ *      WHERE nasId IS NULL). El PERDEDOR de la carrera doble-adopción matchea 0 filas y falla
+ *      DETERMINÍSTICO: evento failed_db reason 'concurrent_adoption_lost_race' +
+ *      PppoeConcurrentAdoptionError, SIN pisar la fila del ganador. Decisión documentada:
+ *      SIN auto-heal del RADIUS (consistente con D6.4 — el evento visible es la cue del
+ *      operador; una escritura compensatoria puede fallar/carrerear a su vez). El post-persist
+ *      check de D6.4 queda como segunda red.
  */
 import { MovePppoeToNas } from '@application/use-cases/MovePppoeToNas';
 import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServiceToRouter';
@@ -31,7 +39,11 @@ import { InMemoryPppoeNasMoveEventRepository } from '@infrastructure/adapters/in
 import { InMemoryContractServiceEventRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceEventRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { NoPoolForNasTypeError } from '@domain/errors/network';
-import { PppoePendingLegacyNasError } from '@domain/errors/pppoe';
+import {
+  PppoeConcurrentAdoptionError,
+  PppoePendingLegacyNasError,
+  PppoeServiceNotFoundError,
+} from '@domain/errors/pppoe';
 import type { NasServer } from '@domain/entities/nas';
 
 interface Fixture {
@@ -280,5 +292,89 @@ describe('MovePppoeToNas — D6.5: pendiente hacia NAS LEGACY (no-radius) → er
     const row = await fx.pppoeRepo.findById(s.id);
     expect(row!.nasId).toBeNull();
     expect(row!.remoteAddress).toBeNull();
+  });
+});
+
+describe('MovePppoeToNas — D7.3: carrera doble-adopción cerrada en DB (setNasAndIp condicional)', () => {
+  it("dos adopciones concurrentes del MISMO pendiente → el ganador queda intacto; el perdedor falla DETERMINÍSTICO: evento failed_db 'concurrent_adoption_lost_race' + PppoeConcurrentAdoptionError, SIN auto-heal del RADIUS", async () => {
+    const fx = await buildFixture();
+    const s = await seedPending(fx, 'cgnat');
+
+    // Interleave DETERMINÍSTICO: cuando la adopción PERDEDORA (hacia nasB) llega a su
+    // changeFramedIp — o sea DESPUÉS de leer la fila (nasId null) y elegir su IP — el actor
+    // GANADOR ejecuta su adopción COMPLETA (hacia nasSoloCgnat) y commitea la DB PRIMERO.
+    // El update condicional del perdedor (WHERE nasId IS NULL) entonces matchea 0 filas.
+    const origChange = fx.orchestrator.changeFramedIp.bind(fx.orchestrator);
+    let winnerRan = false;
+    fx.orchestrator.changeFramedIp = async (username, ip) => {
+      if (!winnerRan) {
+        winnerRan = true;
+        await fx.uc.execute({ id: s.id, nasId: fx.nasSoloCgnat.id }, { actorName: 'ganador' });
+      }
+      return origChange(username, ip);
+    };
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(
+        fx.uc.execute({ id: s.id, nasId: fx.nasB.id }, { actorName: 'perdedor' }),
+      ).rejects.toBeInstanceOf(PppoeConcurrentAdoptionError);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // La fila quedó como la dejó el GANADOR — el perdedor NO la pisó (antes la sobreescribía).
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(fx.nasSoloCgnat.id);
+    expect(row!.remoteAddress).toBe('100.64.43.3');
+
+    // Evento VISIBLE del perdedor + el moved del ganador — nada más.
+    const events = fx.moveEvents.all();
+    const lost = events.find(e => e.reason === 'concurrent_adoption_lost_race');
+    expect(lost).toBeDefined();
+    expect(lost).toMatchObject({
+      username: 'pendiente',
+      outcome: 'failed_db',
+      toNasId: fx.nasB.id,
+      fromNasId: null,
+      trigger: 'manual',
+      actorName: 'perdedor',
+    });
+    expect(events.filter(e => e.outcome === 'moved')).toHaveLength(1);
+    expect(events).toHaveLength(2);
+
+    // Decisión D7.3 (SIN auto-heal, consistente con D6.4): el RADIUS quedó con la ÚLTIMA
+    // escritura (la del perdedor) — NO se emite un changeFramedIp compensatorio. Solo los
+    // 2 writes de las dos adopciones, y solo el kick del ganador (el perdedor abortó antes).
+    expect(fx.orchestrator.calls.filter(c => c.op === 'changeFramedIp')).toHaveLength(2);
+    expect(fx.orchestrator.calls.filter(c => c.op === 'disconnectSessions')).toHaveLength(1);
+  });
+
+  it('regresión S1.7: pendiente cuya fila fue BORRADA mid-flight (terminate concurrente) → row_deleted_after_radius_write + PppoeServiceNotFoundError (NO se confunde con la carrera)', async () => {
+    const fx = await buildFixture();
+    const s = await seedPending(fx, 'cgnat');
+
+    // El terminate concurrente borra la fila entre la lectura y el update condicional.
+    const origChange = fx.orchestrator.changeFramedIp.bind(fx.orchestrator);
+    let deleted = false;
+    fx.orchestrator.changeFramedIp = async (username, ip) => {
+      await origChange(username, ip);
+      if (!deleted) {
+        deleted = true;
+        await fx.pppoeRepo.deleteById(s.id);
+      }
+    };
+
+    await expect(fx.uc.execute({ id: s.id, nasId: fx.nasB.id }))
+      .rejects.toBeInstanceOf(PppoeServiceNotFoundError);
+
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      outcome: 'failed_db',
+      reason: 'row_deleted_after_radius_write',
+    });
+    // CERO resurrección: la fila sigue borrada.
+    expect(await fx.pppoeRepo.findById(s.id)).toBeNull();
   });
 });

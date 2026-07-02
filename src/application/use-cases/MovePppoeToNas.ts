@@ -15,6 +15,7 @@ import {
   NasNotFoundError,
   OrchestratorRejectedError,
   OrchestratorUnreachableError,
+  PppoeConcurrentAdoptionError,
   PppoeMoveMixedNasTypesError,
   PppoeMovePublicIpError,
   PppoePendingLegacyNasError,
@@ -204,9 +205,12 @@ export class MovePppoeToNas {
     //    S1.7 — anti-resurrección: upsertByUsername re-INSERTABA la fila si un terminate/rename
     //    concurrente la borró entre la lectura y acá). Preserva password/profile/status/
     //    contractId/enforcedState. ipMode='fixed': la IP del move es estática por requisito operativo.
+    //    D7.3: la ADOPCIÓN pasa expectedNasId=null → update CONDICIONAL (WHERE nasId IS NULL):
+    //    el perdedor de la carrera doble-adopción matchea 0 filas y NO pisa al ganador (cierra
+    //    el lado DB por completo; el post-persist check de D6.4 queda como segunda red).
     let updated: PppoeService | null;
     try {
-      updated = await this.repo.setNasAndIp(s.id, destino.id, newIp, 'fixed');
+      updated = await this.repo.setNasAndIp(s.id, destino.id, newIp, 'fixed', esAdopcion ? null : undefined);
     } catch (err) {
       // Ajuste 4 / S1.8: el RADIUS YA quedó escrito — sin este evento la divergencia RADIUS↔DB
       // sería invisible (el watcher W2 NO la cura: compara sesión vs nasId, no la Framed-IP).
@@ -215,6 +219,26 @@ export class MovePppoeToNas {
       throw err;
     }
     if (!updated) {
+      // D7.3 — con expectedNasId=null el `null` es ambiguo: fila BORRADA (terminate concurrente)
+      // o condición sin match (OTRO actor adoptó primero). Se distingue re-leyendo por id.
+      // (Si esta re-lectura lanza —hiccup de DB inmediatamente después de un update limpio,
+      // secuencia rarísima— el error propaga crudo: el caller lo ve como fallo del move.)
+      if (esAdopcion && (await this.repo.findById(s.id))) {
+        // Carrera DOBLE-ADOPCIÓN perdida (tick del watcher vs adopción manual del MISMO
+        // pendiente): la fila del GANADOR queda intacta — nada se pisó. El RADIUS pudo quedar
+        // con NUESTRA Framed-IP (la última escritura gana). DECISIÓN D7.3: SIN auto-heal,
+        // consistente con D6.4 (misma carrera sub-segundo, mismo trato): una escritura
+        // compensatoria puede fallar o carrerear a su vez (tercer estado), y el orden real de
+        // los writes en el orchestrator es incognoscible desde acá — el evento VISIBLE
+        // failed_db es la cue de intervención manual, con la IP escrita en `toIp`.
+        console.warn(
+          `[MovePppoeToNas] concurrent_adoption_lost_race: '${s.username}' — otro actor adoptó ` +
+          `primero (update condicional matcheó 0 filas). RADIUS pudo quedar con ${newIp}; sin auto-heal.`,
+        );
+        await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'failed_db',
+          'concurrent_adoption_lost_race', actor);
+        throw new PppoeConcurrentAdoptionError(s.id);
+      }
       // Fila borrada por un terminate concurrente (que también limpia el RADIUS por su lado):
       // typed not-found, CERO filas creadas (S1.7). Mini fix wave (ajuste 10): el RADIUS YA
       // quedó escrito acá — evento failed_db best-effort para que la divergencia deje rastro

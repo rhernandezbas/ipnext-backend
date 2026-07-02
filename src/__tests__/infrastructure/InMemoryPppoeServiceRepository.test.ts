@@ -146,4 +146,41 @@ describe('InMemoryPppoeServiceRepository', () => {
       expect(total).toBe(0);
     });
   });
+
+  // ── pppoe-preprovision D7.3 — setNasAndIp condicional (CAS por nasId, espejo del Prisma) ──
+  describe('setNasAndIp condicional (D7.3)', () => {
+    it('expectedNasId=null + fila PENDIENTE (nasId null) → el update aplica (adopción gana la carrera)', async () => {
+      const s = await repo.upsertByUsername({ username: 'pend', password: 'p', nasId: null });
+
+      const updated = await repo.setNasAndIp(s.id, 'nas-1', '100.64.43.3', 'fixed', null);
+
+      expect(updated).not.toBeNull();
+      expect(updated!.nasId).toBe('nas-1');
+      expect(updated!.remoteAddress).toBe('100.64.43.3');
+    });
+
+    it('expectedNasId=null + fila YA adoptada (nasId seteado) → null y la fila queda INTACTA (CAS no matchea)', async () => {
+      const s = await repo.upsertByUsername({
+        username: 'pend', password: 'p', nasId: 'nas-ganador', remoteAddress: '100.64.43.9',
+      });
+
+      const updated = await repo.setNasAndIp(s.id, 'nas-perdedor', '100.64.43.3', 'fixed', null);
+
+      expect(updated).toBeNull();
+      const row = await repo.findById(s.id);
+      expect(row!.nasId).toBe('nas-ganador');
+      expect(row!.remoteAddress).toBe('100.64.43.9');
+    });
+
+    it('SIN expectedNasId → comportamiento actual intacto (update incondicional por id)', async () => {
+      const s = await repo.upsertByUsername({
+        username: 'u1', password: 'p', nasId: 'nas-viejo', remoteAddress: '100.64.43.9',
+      });
+
+      const updated = await repo.setNasAndIp(s.id, 'nas-nuevo', '100.64.43.3', 'fixed');
+
+      expect(updated).not.toBeNull();
+      expect(updated!.nasId).toBe('nas-nuevo');
+    });
+  });
 });

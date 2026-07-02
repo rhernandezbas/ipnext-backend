@@ -247,6 +247,24 @@ export class PppoePendingLegacyNasError extends DomainError {
 }
 
 /**
+ * pppoe-preprovision D7.3: carrera de DOBLE ADOPCIÓN perdida — el update condicional de la
+ * adopción (`WHERE nasId IS NULL`) matcheó 0 filas porque OTRO actor (tick del watcher vs
+ * adopción manual) adoptó el pendiente PRIMERO. La fila del ganador queda intacta; el RADIUS
+ * pudo quedar con NUESTRA Framed-IP (divergencia VISIBLE via evento failed_db reason
+ * 'concurrent_adoption_lost_race'; SIN auto-heal — consistente con D6.4).
+ * Code → HTTP: PPPOE_CONCURRENT_ADOPTION → 409.
+ */
+export class PppoeConcurrentAdoptionError extends DomainError {
+  constructor(public readonly pppoeId: string) {
+    super(
+      `El PPPoE ${pppoeId} ya fue adoptado por otro actor durante esta adopción (carrera doble-adopción) — nada se pisó; revisá el evento 'concurrent_adoption_lost_race'`,
+      'PPPOE_CONCURRENT_ADOPTION',
+    );
+    this.name = 'PppoeConcurrentAdoptionError';
+  }
+}
+
+/**
  * pppoe-preprovision D6.8: alta con ipTypePreference='public' en un NAS RADIUS en modo POOL
  * (poolName != null y sin IP fija pedida). El sqlippool asigna del pool CGNAT del NAS — el
  * alta "public" mentiría. Dormant hoy (ningún alta pool-mode pide public), guard honesto.

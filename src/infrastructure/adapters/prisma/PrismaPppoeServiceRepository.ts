@@ -373,10 +373,16 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
    * P2025 (fila borrada por terminate/rename concurrente) → null; el caller lanza el typed
    * not-found SIN re-crear la lápida. Cualquier otro error de infra PROPAGA (el caller registra
    * el evento `failed_db` — el RADIUS ya quedó escrito y la divergencia necesita rastro).
+   *
+   * pppoe-preprovision D7.3: `expectedNasId` PROVISTO ⇒ CAS ATÓMICO por nasId actual —
+   * `WHERE id = ? AND nasId = ?` (extended where unique; con `null` ⇒ `nasId IS NULL`, la
+   * adopción de un pendiente). Condición sin match ⇒ P2025 ⇒ null (el caller distingue
+   * "fila borrada" vs "carrera doble-adopción perdida" re-leyendo por id).
    */
-  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed'): Promise<PppoeService | null> {
+  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed', expectedNasId?: string | null): Promise<PppoeService | null> {
     try {
-      const row = await model().update({ where: { id }, data: { nasId, remoteAddress, ipMode } });
+      const where = expectedNasId !== undefined ? { id, nasId: expectedNasId } : { id };
+      const row = await model().update({ where, data: { nasId, remoteAddress, ipMode } });
       return toEntity(row);
     } catch (err: any) {
       if (err?.code === 'P2025') return null;

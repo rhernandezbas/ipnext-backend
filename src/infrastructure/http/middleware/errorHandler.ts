@@ -63,6 +63,8 @@ const statusMap: Record<string, number> = {
   PPPOE_PENDING_INSTALL: 409,
   // pppoe-preprovision D6.5: adoptar un pendiente en un NAS legacy (no-radius) → 409.
   PPPOE_PENDING_LEGACY_NAS: 409,
+  // pppoe-preprovision D7.3: carrera doble-adopción perdida (otro actor adoptó primero) → 409.
+  PPPOE_CONCURRENT_ADOPTION: 409,
   // pppoe-preprovision D6.8: alta 'public' en NAS pool-mode (el sqlippool asignaría cgnat) → 422.
   PPPOE_PUBLIC_IP_POOL_MODE: 422,
   WORKFLOW_NAME_CONFLICT: 409,

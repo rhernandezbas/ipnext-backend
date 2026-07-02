@@ -355,10 +355,15 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     return { ...found };
   }
 
-  /** pppoe-move-nas (ajuste 3 — anti-resurrección): update NO-creador por id. Fila ausente → null. */
-  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed'): Promise<PppoeService | null> {
+  /**
+   * pppoe-move-nas (ajuste 3 — anti-resurrección): update NO-creador por id. Fila ausente → null.
+   * pppoe-preprovision D7.3: `expectedNasId` PROVISTO ⇒ CAS por nasId actual (espejo del
+   * `WHERE id AND nasId = ?` del adapter Prisma) — mismatch ⇒ null SIN tocar la fila.
+   */
+  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed', expectedNasId?: string | null): Promise<PppoeService | null> {
     const found = this.store.find(s => s.id === id);
     if (!found) return null;
+    if (expectedNasId !== undefined && found.nasId !== expectedNasId) return null;
     found.nasId = nasId;
     found.remoteAddress = remoteAddress;
     found.ipMode = ipMode;

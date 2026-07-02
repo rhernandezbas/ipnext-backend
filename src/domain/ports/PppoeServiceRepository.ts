@@ -189,8 +189,15 @@ export interface PppoeServiceRepository {
    * `upsertByUsername`, si la fila fue borrada por un terminate/rename concurrente devuelve
    * `null` (typed not-found en el caller) en vez de re-INSERTAR la lápida.
    * NO toca password/profile/status/contractId/enforcedState.
+   *
+   * pppoe-preprovision D7.3 — `expectedNasId` (ADITIVO, compare-and-set): cuando viene
+   * (incluido `null`), el update es CONDICIONAL al `nasId` ACTUAL de la fila:
+   * `WHERE id = ? AND nasId = expectedNasId` (con `null` ⇒ `nasId IS NULL` — la adopción de un
+   * pendiente). Si la condición no matchea (otro actor adoptó primero) devuelve `null` SIN
+   * tocar la fila; el caller distingue "fila borrada" vs "carrera perdida" re-leyendo por id.
+   * OMITIDO (`undefined`) ⇒ comportamiento actual intacto (update incondicional por id).
    */
-  setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed'): Promise<PppoeService | null>;
+  setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed', expectedNasId?: string | null): Promise<PppoeService | null>;
   /**
    * PPPoE de clientes con un `Client.status` dado (cruza pppoe→contract→client).
    * Es el resolver de `target='debtors'` (status='late') sin depender de RADIUS.

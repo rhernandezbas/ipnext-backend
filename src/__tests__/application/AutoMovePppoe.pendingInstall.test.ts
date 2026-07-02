@@ -26,6 +26,17 @@
  *        failed_* idéntico (<6h, mismo toNas, username exacto) NO consume slot
  *        (skippedRecentFailure, sin fila). SIN presión, el retry barato de D-W2.2 sigue intacto.
  *   D6.10 auto_install_kick_failed + cooldown sobre adopción.
+ *
+ * D7 (mini fix wave):
+ *   D7.1 exención de freshness ACOTADA POR NACIMIENTO: la adopción exige
+ *        startedAt(ganadora) >= createdAt(servicio). Una sesión que PRECEDE a la pre-provisión
+ *        no puede ser su instalación — es la colgada histórica de un username RECICLADO
+ *        (terminate+recreate, el workaround documentado para editar pendientes) →
+ *        skipped_stale_session VISIBLE (throttled), CERO adopción. El caso "instalado lunes,
+ *        flag ON jueves" queda intacto (esa sesión nace DESPUÉS del alta).
+ *   D7.2 anti-starvation acotado a failed_* PERSISTENTES-por-construcción (failed_no_free_ip,
+ *        failed_router): un failed_orchestrator transitorio reciente ya NO suprime al candidato
+ *        bajo presión de cap (se reintenta).
  */
 import { AutoMovePppoe } from '@application/use-cases/AutoMovePppoe';
 import { MovePppoeToNas } from '@application/use-cases/MovePppoeToNas';
@@ -53,6 +64,14 @@ const OLD_IP   = '100.64.60.25'; // en pool-a (cgnat del NAS A) — para el mism
 
 /** Reloj FIJO (patrón AutoMovePppoe.test): sesiones default (10:00Z) frescas para el gate de 72h. */
 const FIXED_NOW = new Date('2026-07-02T12:00:00Z');
+
+/**
+ * D7.1: nacimiento (createdAt) de las filas sembradas — ANTERIOR a TODA sesión de la suite,
+ * que es el orden real de la vida: el alta de la pre-provisión PRECEDE a la sesión de la
+ * instalación. El caso inverso (sesión que precede al alta = username reciclado con colgada
+ * histórica) se testea aparte inyectando `serviceCreatedAt`.
+ */
+const SEED_CREATED_AT = new Date('2026-06-01T00:00:00Z');
 
 function session(username: string, nasIp: string, startedAt = '2026-07-02T10:00:00Z'): OrchestratorSession {
   return {
@@ -85,9 +104,12 @@ async function buildFixture(opts?: {
   abortThreshold?: number;
   /** D6.3: reloj compartido watcher+eventos (para sembrar un failed_* "de hace 1h"). */
   now?: () => Date;
+  /** D7.1: createdAt de las filas sembradas (default SEED_CREATED_AT — anterior a toda sesión). */
+  serviceCreatedAt?: Date;
 }): Promise<Fixture> {
   const now = opts?.now ?? (() => FIXED_NOW);
-  const pppoeRepo  = new InMemoryPppoeServiceRepository();
+  const createdAt = opts?.serviceCreatedAt ?? SEED_CREATED_AT;
+  const pppoeRepo  = new InMemoryPppoeServiceRepository({ now: () => createdAt });
   const nasRepo    = new InMemoryNasRepository();
   const routerGw   = new InMemoryRouterGateway();
   const netRepo    = new InMemoryIpNetworkRepository();
@@ -290,6 +312,9 @@ describe('AutoMovePppoe — rama pending install (REQ-PRE-3)', () => {
     // históricas de él; la sesión "vieja" en el pool preinstall es el CPE instalado ESPERANDO
     // (instalado lunes, flag ON jueves). Peor caso = adoptar con el cliente ya offline →
     // converge solo cuando vuelve. El guard multi-NAS (S3.4) SÍ sigue aplicando.
+    // D7.1: la exención quedó ACOTADA POR NACIMIENTO — acá la sesión (06-20) nace DESPUÉS del
+    // alta (SEED_CREATED_AT 06-01), o sea sigue siendo el caso legítimo. El username RECICLADO
+    // (sesión que PRECEDE al alta) se testea en el describe D7.1.
     const fx = await buildFixture({
       globalSessions: [session('pend1', NAS_B_IP, '2026-06-20T10:00:00Z')], // 12 días > 72h
     });
@@ -543,5 +568,166 @@ describe('AutoMovePppoe — D6.10: tests faltantes de la adopción', () => {
     expect(row!.nasId).toBeNull();
     // Solo la fila manual pre-sembrada: el cooldown no registra.
     expect(fx.moveEvents.all()).toHaveLength(1);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// D7 — Mini fix wave post-re-review: freshness acotada por nacimiento + anti-starvation acotado
+// ════════════════════════════════════════════════════════════════════════════════════════════
+
+describe('AutoMovePppoe — D7.1: exención de freshness ACOTADA POR NACIMIENTO', () => {
+  it('username RECICLADO: pendiente creado HOY + única sesión colgada de hace 3 semanas (startedAt < createdAt) → skipped_stale_session VISIBLE + throttled, CERO adopción', async () => {
+    // El escenario del bug: terminate+recreate (workaround documentado para editar pendientes)
+    // recicla el username; la sesión COLGADA histórica del servicio anterior sigue viva en el
+    // NAS fantasma. Sin el bound por nacimiento, la exención D6.2 adoptaba SILENCIOSO hacia ese
+    // NAS. Una sesión que PRECEDE a la pre-provisión no puede ser su instalación.
+    const fx = await buildFixture({
+      globalSessions: [session('recycled', NAS_B_IP, '2026-06-11T10:00:00Z')], // 3 semanas atrás
+      serviceCreatedAt: FIXED_NOW, // re-creado HOY (posterior a la sesión colgada)
+    });
+    const s = await seedPending(fx, 'cgnat', 'recycled');
+
+    const summary = await fx.uc.run();
+
+    // Detectado como candidato a adopción... pero la sesión precede al alta: CERO move.
+    expect(summary.adoptions).toBe(1);
+    expect(summary.skippedStale).toBe(1);
+    expect(summary.moved).toBe(0);
+    expect(summary.failed).toBe(0);
+
+    // CERO writes al plano de control (ni changeFramedIp ni kick).
+    expect(fx.orchestrator.calls).toHaveLength(0);
+
+    // Sigue PENDIENTE (visible en el tab con su badge).
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBeNull();
+    expect(row!.remoteAddress).toBeNull();
+
+    // Fila VISIBLE del skip, con reason ESTABLE (identidad del throttle).
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      username: 'recycled',
+      outcome: 'skipped_stale_session',
+      reason: 'session_predates_service',
+      toNasId: fx.nasB.id,
+      fromNasId: null,
+      trigger: 'auto',
+      actorName: 'sistema',
+    });
+
+    // Throttled: el próximo tick NO spamea una fila idéntica (ventana 6h).
+    const summary2 = await fx.uc.run();
+    expect(summary2.skippedStale).toBe(1);
+    expect(summary2.throttled).toBe(1);
+    expect(fx.moveEvents.all()).toHaveLength(1);
+  });
+
+  it("regresión 'instalado lunes, flag ON jueves': pendiente creado hace 4 días + sesión >72h nacida DESPUÉS del alta → SE ADOPTA", async () => {
+    // La sesión (hace ~74h, MÁS vieja que el freshness de 72h de los mismatches normales)
+    // nació DESPUÉS de la pre-provisión → es el CPE instalado ESPERANDO la adopción.
+    const fx = await buildFixture({
+      globalSessions: [session('pend1', NAS_B_IP, '2026-06-29T10:00:00Z')], // 74h > 72h
+      serviceCreatedAt: new Date('2026-06-28T09:00:00Z'), // alta 4 días antes del tick
+    });
+    const s = await seedPending(fx, 'cgnat');
+
+    const summary = await fx.uc.run();
+
+    expect(summary.skippedStale).toBe(0);
+    expect(summary.adoptions).toBe(1);
+    expect(summary.moved).toBe(1);
+
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(fx.nasB.id);
+    expect(row!.remoteAddress).toBe('100.64.43.3');
+
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ username: 'pend1', outcome: 'moved', reason: 'auto_install' });
+  });
+
+  it('startedAt NO parseable (→ epoch 0) → skip fail-safe: no puede probar que nació después del alta', async () => {
+    const fx = await buildFixture({
+      globalSessions: [session('pend1', NAS_B_IP, 'not-a-date')],
+    });
+    const s = await seedPending(fx, 'cgnat');
+
+    const summary = await fx.uc.run();
+
+    expect(summary.skippedStale).toBe(1);
+    expect(summary.moved).toBe(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBeNull();
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      username: 'pend1',
+      outcome: 'skipped_stale_session',
+      reason: 'session_predates_service',
+    });
+  });
+});
+
+describe('AutoMovePppoe — D7.2: anti-starvation acotado a failed_* PERSISTENTES', () => {
+  it('un failed_orchestrator TRANSITORIO reciente (<6h, mismo toNas) NO suprime bajo presión — el candidato SÍ consume slot y se reintenta', async () => {
+    // failed_orchestrator = hiccup del plano de control, NO persistente-por-construcción:
+    // suprimirlo 6h bajo presión castigaba al candidato por un fallo que probablemente ya pasó.
+    let t = new Date('2026-07-02T11:00:00Z'); // 1h antes de FIXED_NOW
+    const sanos = Array.from({ length: 10 }, (_, i) => `sano${i}`);
+    const fx = await buildFixture({
+      globalSessions: [
+        session('hiccup', NAS_B_IP), // primero en el orden — el que se evalúa bajo presión
+        ...sanos.map(u => session(u, NAS_B_IP)),
+      ],
+      now: () => t,
+    });
+    const sHiccup = await seedPending(fx, 'cgnat', 'hiccup');
+    for (const u of sanos) await seedPending(fx, 'cgnat', u);
+    // La fila del tick anterior (hace 1h): failed_orchestrator hacia el MISMO NAS B —
+    // la identidad que ANTES suprimía por el prefijo failed_* genérico.
+    await fx.moveEvents.record({
+      username: 'hiccup', pppoeServiceId: sHiccup.id, fromNasId: null, toNasId: fx.nasB.id,
+      fromIp: null, toIp: null, trigger: 'auto', outcome: 'failed_orchestrator',
+      reason: 'boom', actorName: 'sistema',
+    });
+    t = FIXED_NOW; // el tick corre 1h después (dentro de la ventana de 6h)
+
+    const summary = await fx.uc.run();
+
+    // 11 candidatos > cap 10 = presión. El transitorio NO suprime: hiccup consume slot y ADOPTA.
+    expect(summary.skippedRecentFailure).toBe(0);
+    expect(summary.moved).toBe(10);
+    expect(summary.deferred).toBe(1); // el último sano queda para el próximo tick
+    const row = await fx.pppoeRepo.findById(sHiccup.id);
+    expect(row!.nasId).toBe(fx.nasB.id); // se reintentó y convergió
+  });
+
+  it('failed_router (persistente-por-construcción) SÍ sigue suprimiendo bajo presión — pin del set junto a failed_no_free_ip', async () => {
+    let t = new Date('2026-07-02T11:00:00Z');
+    const sanos = Array.from({ length: 10 }, (_, i) => `sano${i}`);
+    const fx = await buildFixture({
+      globalSessions: [
+        session('rfail', NAS_B_IP),
+        ...sanos.map(u => session(u, NAS_B_IP)),
+      ],
+      now: () => t,
+    });
+    const sRfail = await seedPending(fx, 'cgnat', 'rfail');
+    for (const u of sanos) await seedPending(fx, 'cgnat', u);
+    await fx.moveEvents.record({
+      username: 'rfail', pppoeServiceId: sRfail.id, fromNasId: null, toNasId: fx.nasB.id,
+      fromIp: null, toIp: null, trigger: 'auto', outcome: 'failed_router',
+      reason: 'router_api_error', actorName: 'sistema',
+    });
+    t = FIXED_NOW;
+
+    const summary = await fx.uc.run();
+
+    expect(summary.skippedRecentFailure).toBe(1);
+    expect(summary.moved).toBe(10); // los 10 sanos entraron al cap
+    expect(summary.deferred).toBe(0);
+    const row = await fx.pppoeRepo.findById(sRfail.id);
+    expect(row!.nasId).toBeNull(); // rfail NI se intentó
   });
 });
