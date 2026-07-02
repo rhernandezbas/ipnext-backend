@@ -1,7 +1,7 @@
 /**
  * pppoe.move-nas.routes.test.ts — supertest para pppoe-move-nas W1:
  *   POST /api/pppoe/:id/move            (gate pppoe.manage — cableado al NUEVO MovePppoeToNas)
- *   GET  /api/pppoe/nas-move-events     (gate pppoe.read — registro visible, wire contract D6)
+ *   GET  /api/pppoe/nas-move-events     (gate network.read — registro visible en la page de auditoria, wire contract D6)
  *
  * Foco: mapeo error→HTTP del move radius-aware + wire contract del listado campo por campo.
  *   move:   200 (IP nueva en el DTO) · 404 service/nas · 409 NO_FREE_IP · 409 mixto
@@ -95,6 +95,8 @@ interface Fixture {
   readUserId: string;
   manageUserId: string;
   nobodyUserId: string;
+  /** review FE W1: el listado de movimientos gatea network.read (tabs vecinos de la page de auditoría). */
+  networkUserId: string;
 }
 
 async function buildApp(opts?: {
@@ -132,11 +134,14 @@ async function buildApp(opts?: {
 
   const readerRole  = await roleRepo.create({ code: 'pppoe_reader', label: 'PPPoE Reader', isSystem: false });
   const managerRole = await roleRepo.create({ code: 'pppoe_manager', label: 'PPPoE Manager', isSystem: false });
+  const networkRole = await roleRepo.create({ code: 'network_reader', label: 'Network Reader', isSystem: false });
   const readPerm    = await permRepo.seed({ moduleCode: 'pppoe', action: 'read' });
   const managePerm  = await permRepo.seed({ moduleCode: 'pppoe', action: 'manage' });
+  const networkPerm = await permRepo.seed({ moduleCode: 'network', action: 'read' });
   await rolePermRepo.grant(readerRole.id, readPerm.id);
   await rolePermRepo.grant(managerRole.id, readPerm.id);
   await rolePermRepo.grant(managerRole.id, managePerm.id);
+  await rolePermRepo.grant(networkRole.id, networkPerm.id);
 
   const pwHash = await hasher.hash('pw');
   const mkUser = (login: string) =>
@@ -145,8 +150,10 @@ async function buildApp(opts?: {
   const readUser   = await mkUser('reader');
   const manageUser = await mkUser('manager');
   const nobodyUser = await mkUser('nobody'); // sin roles → 403 en todo
+  const networkUser = await mkUser('networker'); // network.read SOLO (perfil NOC de la page de auditoría)
   await userRoleRepo.assign(readUser.id, readerRole.id);
   await userRoleRepo.assign(manageUser.id, managerRole.id);
+  await userRoleRepo.assign(networkUser.id, networkRole.id);
 
   const pppoeRepo = new InMemoryPppoeServiceRepository();
   const routerGw  = new InMemoryRouterGateway();
@@ -280,6 +287,7 @@ async function buildApp(opts?: {
   return {
     app, pppoeRepo, moveEvents, nasRadiusB, nasRadiusC,
     readUserId: readUser.id, manageUserId: manageUser.id, nobodyUserId: nobodyUser.id,
+    networkUserId: networkUser.id,
   };
 }
 
@@ -473,19 +481,25 @@ describe('POST /api/pppoe/:id/move (radius-aware)', () => {
 // GET /api/pppoe/nas-move-events — registro visible (gate pppoe.read)
 // ════════════════════════════════════════════════════════════════════════════════
 
-describe('GET /api/pppoe/nas-move-events (pppoe.read)', () => {
+describe('GET /api/pppoe/nas-move-events (network.read — tabs vecinos de la page de auditoria)', () => {
   it('401 sin auth', async () => {
     const fx = await buildApp();
     expect((await request(fx.app).get('/api/pppoe/nas-move-events')).status).toBe(401);
   });
 
-  it('403 sin pppoe.read', async () => {
+  it('403 sin network.read', async () => {
     const fx = await buildApp();
     const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.nobodyUserId);
     expect(res.status).toBe(403);
   });
 
-  it('200 con pppoe.read: wire contract campo por campo {items,total,page,limit}', async () => {
+  it('403 con pppoe.read SOLO: el listado gatea network.read (alineado a los tabs vecinos de la page de auditoria — un NOC con network.read debe verlo; pppoe.read no alcanza)', async () => {
+    const fx = await buildApp();
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.readUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('200 con network.read: wire contract campo por campo {items,total,page,limit}', async () => {
     const fx = await buildApp();
     await fx.moveEvents.record({
       username: 'user1', pppoeServiceId: 'svc-1',
@@ -494,7 +508,7 @@ describe('GET /api/pppoe/nas-move-events (pppoe.read)', () => {
       trigger: 'manual', outcome: 'moved', reason: null, actorName: 'operador',
     });
 
-    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.readUserId);
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.networkUserId);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.page).toBe(1);
@@ -519,7 +533,7 @@ describe('GET /api/pppoe/nas-move-events (pppoe.read)', () => {
     await fx.moveEvents.record({ username: 'ok1', trigger: 'manual', outcome: 'moved' });
     await fx.moveEvents.record({ username: 'fail1', trigger: 'auto', outcome: 'failed_no_free_ip' });
 
-    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?outcome=failed_no_free_ip'), fx.readUserId);
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?outcome=failed_no_free_ip'), fx.networkUserId);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.items[0].username).toBe('fail1');
@@ -532,14 +546,14 @@ describe('GET /api/pppoe/nas-move-events (pppoe.read)', () => {
     await fx.moveEvents.record({ username: 'maria.auto', trigger: 'auto', outcome: 'moved' });
     await fx.moveEvents.record({ username: 'pedro.auto', trigger: 'auto', outcome: 'moved' });
 
-    const byTrigger = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?trigger=auto'), fx.readUserId);
+    const byTrigger = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?trigger=auto'), fx.networkUserId);
     expect(byTrigger.body.total).toBe(2);
 
-    const byUser = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?username=perez'), fx.readUserId);
+    const byUser = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?username=perez'), fx.networkUserId);
     expect(byUser.body.total).toBe(1);
     expect(byUser.body.items[0].username).toBe('juan.perez');
 
-    const paged = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?page=2&limit=1&trigger=auto'), fx.readUserId);
+    const paged = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?page=2&limit=1&trigger=auto'), fx.networkUserId);
     expect(paged.body.total).toBe(2);
     expect(paged.body.page).toBe(2);
     expect(paged.body.limit).toBe(1);
@@ -548,14 +562,14 @@ describe('GET /api/pppoe/nas-move-events (pppoe.read)', () => {
 
   it('limit > 100 se clampea a 100', async () => {
     const fx = await buildApp();
-    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?limit=500'), fx.readUserId);
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?limit=500'), fx.networkUserId);
     expect(res.status).toBe(200);
     expect(res.body.limit).toBe(100);
   });
 
   it('la ruta literal NO es sombreada por catch-alls /pppoe/:id (devuelve el shape del listado)', async () => {
     const fx = await buildApp();
-    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.readUserId);
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.networkUserId);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.items)).toBe(true);
     expect(typeof res.body.total).toBe('number');
@@ -564,7 +578,7 @@ describe('GET /api/pppoe/nas-move-events (pppoe.read)', () => {
   it('repo del listado roto → 500 INTERNAL_ERROR, la request NO cuelga (handler con next(err))', async () => {
     const fx = await buildApp();
     fx.moveEvents.list = async () => { throw new Error('boom listado'); };
-    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.readUserId);
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.networkUserId);
     expect(res.status).toBe(500);
     expect(res.body.code).toBe('INTERNAL_ERROR');
   });

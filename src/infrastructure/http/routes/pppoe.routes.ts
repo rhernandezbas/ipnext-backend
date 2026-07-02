@@ -6,7 +6,7 @@
  *   POST   /api/contracts/:contractId/pppoe      pppoe.manage
  *   PATCH  /api/pppoe/:id                         pppoe.manage
  *   POST   /api/pppoe/:id/move                    pppoe.manage  (radius-aware: IP nueva del pool cgnat del destino + kick)
- *   GET    /api/pppoe/nas-move-events             pppoe.read    (registro visible de movimientos de NAS)
+ *   GET    /api/pppoe/nas-move-events             network.read  (registro visible — tab de la page de auditoria de red)
  *   DELETE /api/pppoe/:id                         pppoe.manage  (baja soft)
  *   --- Adopción del inventario ---
  *   GET    /api/pppoe/unassigned                  pppoe.read    (huérfanos, sin password)
@@ -145,7 +145,7 @@ export function createPppoeRouter(
    * terminatePppoeService ?? deactivatePppoeService). En prod SIEMPRE viene wired (composition test).
    */
   movePppoeToNas?: MovePppoeToNas,
-  /** pppoe-move-nas W1: registro visible de movimientos. GET /api/pppoe/nas-move-events (pppoe.read). */
+  /** pppoe-move-nas W1: registro visible de movimientos. GET /api/pppoe/nas-move-events (network.read). */
   listPppoeNasMoveEvents?: ListPppoeNasMoveEvents,
 ): Router {
   const router = Router();
@@ -155,6 +155,10 @@ export function createPppoeRouter(
   const canRead   = requirePerm('pppoe', 'read');
   const canManage = requirePerm('pppoe', 'manage');
   const canCut    = requirePerm('pppoe', 'cut');
+  // review FE W1: el listado de movimientos vive como tab de la page de auditoria de red,
+  // cuyos tabs vecinos (radius/events, ne8000/audit, auth-failures) gatean network.read.
+  // Gatearlo pppoe.read dejaba el tab "visible pero muerto" (403) para un NOC con network.read.
+  const canNetworkRead = requirePerm('network', 'read');
 
   // ── GET /contracts/:contractId/pppoe ────────────────────────────────────────
   router.get(
@@ -279,12 +283,12 @@ export function createPppoeRouter(
   // ── GET /pppoe/nas-move-events — registro VISIBLE de movimientos de NAS (pppoe-move-nas W1) ──
   // LITERAL, montada ANTES de cualquier /pppoe/:id para no ser sombreada por el catch-all.
   // Wire contract D6 punto 3: { items: [{id, username, fromNas, toNas, fromIp, toIp, trigger,
-  // outcome, reason, actorName, createdAt}], total, page, limit }. Gate pppoe.read.
+  // outcome, reason, actorName, createdAt}], total, page, limit }. Gate network.read.
   if (listPppoeNasMoveEvents) {
     router.get(
       '/pppoe/nas-move-events',
       auth,
-      canRead,
+      canNetworkRead,
       // fix wave 1 (ajuste 1): handler async SIEMPRE con try/catch → next(err). Sin él, un fallo
       // del use case era un unhandledRejection y la request quedaba COLGADA (Express 4).
       async (req: Request, res: Response, next: NextFunction): Promise<void> => {
