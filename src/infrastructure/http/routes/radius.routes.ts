@@ -1,4 +1,4 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { SessionRepository } from '@domain/ports/SessionRepository';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
@@ -18,6 +18,7 @@ const VALID_PPPOE_STATUSES = new Set(['enabled', 'disabled']);
 const VALID_ENFORCED       = new Set(['active', 'reduced', 'blocked']);
 const VALID_AUTH_REPLIES   = new Set(['Access-Accept', 'Access-Reject']);
 const VALID_AUTH_REASONS   = new Set(['session_stuck', 'user_not_found', 'other']);
+const VALID_SESSION_STATUS = new Set(['active', 'idle']);
 
 /**
  * FIX5: parseIntPositive — devuelve el número si es un entero positivo válido; NaN si no.
@@ -52,6 +53,20 @@ function parseDate(s: string | undefined): string | undefined | 'invalid' {
 }
 
 /**
+ * W1/W2: normalizeQueryParam — normaliza un query param que debe ser un string simple.
+ *
+ * - Ausente → undefined (sin filtro).
+ * - No-string (array — param repetido, ej. `?search=a&search=b`) → 'invalid' (W2: 400, no 500).
+ * - String vacío `''` → undefined (W1: "sin filtro", coherente entre search/nasId/status).
+ * - String no vacío → se devuelve tal cual.
+ */
+function normalizeQueryParam(v: unknown): string | undefined | 'invalid' {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string') return 'invalid';
+  return v === '' ? undefined : v;
+}
+
+/**
  * Sesiones RADIUS + Auditoría de red.
  *
  * `network.read`:   GET /sessions, GET /events, GET /ne8000/audit, GET /auth-failures
@@ -72,11 +87,57 @@ export function createRadiusRouter(
   const canRead   = requirePerm('network', 'read');
   const canManage = requirePerm('network', 'manage');
 
-  // ── Sesiones existentes ──────────────────────────────────────────────────────
+  // ── Sesiones RADIUS — GET /sessions ─────────────────────────────────────────
+  // Sin params → array legacy RadiusSession[] (back-compat; tests Array.isArray intactos).
+  // Con al menos un param → envelope { data, total, page, limit, hasNext, stats }.
+  // network-sessions-pools-redesign: filtros search/nasId/status + paginación page/limit.
 
-  router.get('/sessions', auth, canRead, async (_req: Request, res: Response): Promise<void> => {
-    const sessions = await listRadiusSessions.execute();
-    res.json(sessions);
+  router.get('/sessions', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const q = req.query;
+      const hasParams = Object.keys(q).some(k => ['search', 'nasId', 'status', 'page', 'limit'].includes(k));
+
+      if (!hasParams) {
+        // Back-compat: sin params → array legacy
+        const sessions = await listRadiusSessions.execute();
+        res.json(sessions);
+        return;
+      }
+
+      // W1/W2: normalizar search/nasId/status — deben ser un string simple (no array de
+      // param repetido) y '' se trata como "sin filtro" (coherente entre los 3).
+      const search = normalizeQueryParam(q['search']);
+      const nasId  = normalizeQueryParam(q['nasId']);
+      const status = normalizeQueryParam(q['status']);
+      if (search === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'search must be a single string value' }); return; }
+      if (nasId  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'nasId must be a single string value' }); return; }
+      if (status === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'status must be a single string value' }); return; }
+
+      // Validar status (enum) — solo si vino un valor no vacío (W1: '' = sin filtro, no valida).
+      if (status !== undefined && !VALID_SESSION_STATUS.has(status)) {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'status must be active | idle' });
+        return;
+      }
+
+      // Validar page y limit (enteros positivos)
+      const page  = parseIntPositive(q['page']  as string | undefined);
+      const limit = parseIntPositive(q['limit'] as string | undefined);
+      if (page  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'page must be a positive integer' }); return; }
+      if (limit === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'limit must be a positive integer' }); return; }
+
+      const result = await listRadiusSessions.execute({
+        search,
+        nasId,
+        status: status as 'active' | 'idle' | undefined,
+        page,
+        limit,
+      });
+      res.json(result);
+    } catch (err) {
+      // Express 4 sin express-async-errors: el throw dentro de un handler async NO llega
+      // al errorHandler — hay que encaminarlo explícitamente (patrón auditEvents.routes.ts).
+      next(err);
+    }
   });
 
   router.delete('/sessions/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
