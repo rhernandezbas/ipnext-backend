@@ -39,6 +39,8 @@ export class InMemoryPlanRepository implements PlanRepository {
   }
 
   async list(): Promise<Plan[]> {
+    // Orden de inserción, deliberadamente SIN sort: espeja a Prisma (orden de DB).
+    // El orden del catálogo lo aplica ListPlans (el port no garantiza orden).
     return this.store.map(p => ({ ...p }));
   }
 

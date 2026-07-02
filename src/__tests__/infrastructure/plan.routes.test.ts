@@ -150,6 +150,17 @@ describe('GET /api/plans', () => {
     expect(res.body).toHaveLength(1);
     expect(res.body[0].rateLimit).toBe('10M/30M');
   });
+  // plans-natural-sort (Requirement 3): la ruta responde el array ya ordenado por code.
+  // Los names son deliberadamente contrarios al orden de code para probar la clave real.
+  it('returns plans in natural order by code (IP-Air-20-10 before IP-Air-100-30)', async () => {
+    await fx.planRepo.upsertByCode({ code: 'IP-Air-100-30', name: 'A-primero-por-name', category: 'Air', downloadKbps: 100000, uploadKbps: 30000 });
+    await fx.planRepo.upsertByCode({ code: 'IP-Air-20-10', name: 'Z-ultimo-por-name', category: 'Air', downloadKbps: 20000, uploadKbps: 10000 });
+    const res = await asUser(request(fx.app).get('/api/plans'), fx.readOnlyUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.map((p: { code: string }) => p.code)).toEqual(['IP-Air-20-10', 'IP-Air-100-30']);
+    // rateLimit sigue calculándose bien en cada elemento (contrato intacto)
+    expect(res.body[0].rateLimit).toBe('10M/20M');
+  });
 });
 
 describe('POST /api/plans', () => {
