@@ -183,9 +183,13 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
   it('(n) movePppoeToNas INYECTADO en createPppoeRouter (sin esto la ruta cae al legacy pre-HA)', () => {
     // fix wave 1 (ajuste 8d): ventana ACOTADA a la llamada de createPppoeRouter (patrón del test b)
     // — el [\s\S]* anterior escaneaba hasta EOF y matcheaba un movePppoeToNas de cualquier otro lado.
+    // mini fix wave (ajuste 11): la ventana corta en el `));` de CIERRE del call, no en un largo
+    // fijo — el margen de 4000 chars se agotaba con ~2 use cases más en la lista de args.
     const idx = appSrc.indexOf('createPppoeRouter(');
     expect(idx).toBeGreaterThan(-1);
-    const window = appSrc.slice(idx, idx + 4000);
+    const end = appSrc.indexOf('));', idx);
+    expect(end).toBeGreaterThan(idx);
+    const window = appSrc.slice(idx, end + '));'.length);
     expect(window).toMatch(/movePppoeToNas,/);
   });
 

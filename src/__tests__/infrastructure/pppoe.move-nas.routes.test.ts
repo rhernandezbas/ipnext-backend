@@ -198,6 +198,17 @@ async function buildApp(opts?: {
     rangeStart: '190.15.242.2', rangeEnd: '190.15.242.254',
     type: 'static', assignedCount: null, totalCount: 253, nasId: null, ipKind: 'public',
   });
+  // mini fix wave (ajuste 9 / S1.5 FAIL-CLOSED): pool CGNAT del NAS ORIGEN cubriendo OLD_IP —
+  // el guard ahora exige clasificación POSITIVA como cgnat para pasar sin force.
+  netRepo.seedNetwork({
+    id: 'net-a', network: '100.64.60.0/24', gateway: '100.64.60.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
+    description: 'CGNAT NAS A (origen)', partnerId: null, type: 'pppoe', totalIps: 254, usedIps: null, freeIps: null,
+  });
+  netRepo.seedPool({
+    id: 'pool-a', name: 'cgnat-nas-a', networkId: 'net-a',
+    rangeStart: '100.64.60.2', rangeEnd: '100.64.60.254',
+    type: 'static', assignedCount: null, totalCount: 253, nasId: RADIUS_NAS_A, ipKind: 'cgnat',
+  });
 
   // fix wave 1: NAS radius C sin NINGÚN pool cgnat → FindFreeIp lanza NO_POOL_FOR_NAS_TYPE.
   const nasRadiusC = await nasRepo.createNasServer({

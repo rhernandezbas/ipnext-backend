@@ -31,8 +31,10 @@ export interface MovePppoeToNasInput {
   /** Disparador del move: 'manual' (operador, default) | 'auto' (watcher W2). */
   trigger?: PppoeNasMoveTrigger;
   /**
-   * fix wave 1 (ajuste 6 / S1.5): mover un servicio cuya IP ACTUAL cae en un pool `public`
-   * exige `force: true` (decisión explícita — mover a CGNAT libera la IP pública contratada).
+   * fix waves 1+mini (ajustes 6+9 / S1.5, FAIL-CLOSED): mover un servicio cuya IP ACTUAL no es
+   * clasificable como CGNAT (cae en pool `public` O fuera de TODO pool cargado) exige
+   * `force: true` (decisión explícita — mover a CGNAT libera la IP actual, que puede ser una
+   * pública contratada aunque su pool no esté cargado en Prominense).
    */
   force?: boolean;
 }
@@ -58,7 +60,8 @@ function normalizeActorName(actor?: MovePppoeToNasActor): string | null {
  * Rutea por `routesViaOrchestrator(nas.type)`:
  *   - **radius → radius** (los 10 NAS de prod): el secret vive en el RADIUS central → NO hay
  *     create/remove de secrets. Secuencia (plano de control primero, patrón CreatePppoeService):
- *       0. guard IP PÚBLICA (S1.5): IP actual en pool `public` sin `force: true` → 409, nada cambió
+ *       0. guard IP no-CGNAT FAIL-CLOSED (S1.5): IP actual NO clasificada en pool `cgnat`
+ *          (pública o fuera de todo pool) sin `force: true` → 409, nada cambió
  *       1. newIp = FindFreeIp(destino, 'cgnat')      ← NoFreeIpError → abort, NADA cambió
  *       2. orchestrator.changeFramedIp(user, newIp)  ← guard AUTORITATIVO de colisiones (S1.6):
  *          rechazo 409 (FramedIpAlreadyAssigned) → UN retry con FindFreeIp fresco; 2º rechazo → abort
@@ -131,11 +134,15 @@ export class MovePppoeToNas {
     force: boolean,
     actor?: MovePppoeToNasActor,
   ): Promise<PppoeService> {
-    // 0. Guard de IP PÚBLICA (ajuste 6 / S1.5): mover a CGNAT libera la IP pública contratada —
-    //    no puede pasar por accidente. Guard de INPUT: 4xx directo, SIN fila de evento (REQ-LOG-1).
+    // 0. Guard FAIL-CLOSED de IP no-CGNAT (ajustes 6+9 / S1.5): mover a CGNAT libera la IP
+    //    actual — no puede pasar por accidente. Solo una IP clasificada POSITIVAMENTE como
+    //    cgnat pasa sin force; pública O fuera de todo pool cargado exige force (en prod solo
+    //    3 NAS tienen pools públicos cargados — fail-open desprotegía al resto). Servicio SIN
+    //    IP actual → no hay IP que perder, no exige force. Guard de INPUT: 4xx directo, SIN
+    //    fila de evento (REQ-LOG-1).
     if (!force && s.remoteAddress) {
-      const publicPools = (await this.networkRepo.findAllPools()).filter((p) => p.ipKind === 'public');
-      if (ipInAnyRange(s.remoteAddress, publicPools)) {
+      const cgnatPools = (await this.networkRepo.findAllPools()).filter((p) => p.ipKind === 'cgnat');
+      if (!ipInAnyRange(s.remoteAddress, cgnatPools)) {
         throw new PppoeMovePublicIpError(s.id, s.remoteAddress);
       }
     }
@@ -182,7 +189,11 @@ export class MovePppoeToNas {
     }
     if (!updated) {
       // Fila borrada por un terminate concurrente (que también limpia el RADIUS por su lado):
-      // typed not-found, CERO filas creadas (S1.7).
+      // typed not-found, CERO filas creadas (S1.7). Mini fix wave (ajuste 10): el RADIUS YA
+      // quedó escrito acá — evento failed_db best-effort para que la divergencia deje rastro
+      // (era el último path divergente invisible).
+      await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'failed_db',
+        'row_deleted_after_radius_write', actor);
       throw new PppoeServiceNotFoundError(s.id);
     }
 

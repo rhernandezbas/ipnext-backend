@@ -157,6 +157,34 @@ async function buildFixture(opts?: {
     nasId: null,
     ipKind: 'public',
   });
+  // mini fix wave (ajuste 9 / S1.5 FAIL-CLOSED): pool CGNAT del NAS ORIGEN cubriendo OLD_IP —
+  // el guard ahora exige clasificación POSITIVA como cgnat para pasar sin force; una IP fuera
+  // de TODO pool cargado exige force. La IP "base" de los tests queda clasificada como cgnat.
+  netRepo.seedNetwork({
+    id: 'net-a',
+    network: '100.64.60.0/24',
+    gateway: '100.64.60.1',
+    dns1: '8.8.8.8',
+    dns2: '8.8.4.4',
+    description: 'CGNAT NAS A (origen)',
+    partnerId: null,
+    type: 'pppoe',
+    totalIps: 254,
+    usedIps: null,
+    freeIps: null,
+  });
+  netRepo.seedPool({
+    id: 'pool-a',
+    name: 'cgnat-nas-a',
+    networkId: 'net-a',
+    rangeStart: '100.64.60.2',
+    rangeEnd: '100.64.60.254',
+    type: 'static',
+    assignedCount: null,
+    totalCount: 253,
+    nasId: NAS_RADIUS_A,
+    ipKind: 'cgnat',
+  });
 
   const findFreeIp = new FindFreeIp(netRepo, nasRepo, routerGw, orchestrator);
   const legacyMove = new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepo);
@@ -583,12 +611,55 @@ describe('MovePppoeToNas — S1.5: guard de IP PÚBLICA (force explícito)', () 
     expect(events.map(e => e.outcome)).toEqual(['moved']);
   });
 
-  it('IP actual CGNAT (no pública) → el move NO exige force (comportamiento base intacto)', async () => {
+  it('IP actual CGNAT (clasificada POSITIVAMENTE en pool cgnat) → el move NO exige force', async () => {
     const fx = await buildFixture();
-    const s = await seedService(fx); // OLD_IP 100.64.60.25, fuera de todo pool public
+    const s = await seedService(fx); // OLD_IP 100.64.60.25, dentro de pool-a (cgnat del NAS A)
 
     const moved = await fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' });
     expect(moved.remoteAddress).toBe('100.64.43.3');
+  });
+
+  // ── mini fix wave (ajuste 9): guard FAIL-CLOSED — pública O fuera de todo pool → force ──
+  it('IP actual fuera de TODO pool conocido SIN force → PppoeMovePublicIpError y NADA cambió (fail-closed)', async () => {
+    const fx = await buildFixture();
+    // 203.0.113.50 (TEST-NET-3): no cae ni en pool-a, ni en pool-b, ni en pool-pub — pool
+    // público SIN cargar en Prominense. Fail-open la dejaba pasar sin protección.
+    const s = await seedService(fx, { remoteAddress: '203.0.113.50' });
+
+    await expect(fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' }))
+      .rejects.toBeInstanceOf(PppoeMovePublicIpError);
+
+    expect(fx.orchestrator.calls).toHaveLength(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(NAS_RADIUS_A);
+    expect(row!.remoteAddress).toBe('203.0.113.50');
+    // Guard de INPUT: responde 4xx directo, NO persiste fila (REQ-LOG-1).
+    expect(fx.moveEvents.all()).toHaveLength(0);
+  });
+
+  it('IP fuera de todo pool CON force: true → procede (decisión explícita del operador)', async () => {
+    const fx = await buildFixture();
+    const s = await seedService(fx, { remoteAddress: '203.0.113.50' });
+
+    const moved = await fx.uc.execute(
+      { id: s.id, nasId: fx.nasRadiusB.id, force: true },
+      { actorName: 'operador' },
+    );
+
+    expect(moved.nasId).toBe(fx.nasRadiusB.id);
+    expect(moved.remoteAddress).toBe('100.64.43.3');
+    expect(fx.moveEvents.all().map(e => e.outcome)).toEqual(['moved']);
+  });
+
+  it('servicio SIN IP actual (remoteAddress null) → NO exige force (no hay IP que perder)', async () => {
+    const fx = await buildFixture();
+    const s = await seedService(fx, { remoteAddress: null });
+
+    const moved = await fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' });
+
+    expect(moved.nasId).toBe(fx.nasRadiusB.id);
+    expect(moved.remoteAddress).toBe('100.64.43.3');
+    expect(fx.moveEvents.all().map(e => e.outcome)).toEqual(['moved']);
   });
 });
 
@@ -660,7 +731,7 @@ describe('MovePppoeToNas — S1.6: colisión de Framed-IP (guard autoritativo de
 });
 
 describe('MovePppoeToNas — S1.7: anti-resurrección (update NO-creador)', () => {
-  it('fila borrada entre la lectura y la persistencia → typed not-found y CERO filas creadas', async () => {
+  it('fila borrada entre la lectura y la persistencia → typed not-found, CERO filas creadas y 1 evento failed_db (row_deleted_after_radius_write)', async () => {
     const orchestrator = new DeleteRowAfterRadiusOrchestrator({ assignedIps: ['100.64.43.2', OLD_IP] });
     const fx = await buildFixture({ orchestrator });
     const s = await seedService(fx);
@@ -673,6 +744,20 @@ describe('MovePppoeToNas — S1.7: anti-resurrección (update NO-creador)', () =
     // La lápida NO resucitó: cero filas (upsertByUsername la habría re-INSERTADO).
     expect(await fx.pppoeRepo.list()).toHaveLength(0);
     expect(await fx.pppoeRepo.findByUsername('moveuser')).toBeNull();
+
+    // mini fix wave (ajuste 10): el RADIUS YA quedó escrito — la divergencia deja rastro VISIBLE.
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      username: 'moveuser',
+      fromNasId: NAS_RADIUS_A,
+      toNasId: fx.nasRadiusB.id,
+      fromIp: OLD_IP,
+      toIp: '100.64.43.3',
+      trigger: 'manual',
+      outcome: 'failed_db',
+      reason: 'row_deleted_after_radius_write',
+    });
   });
 });
 
