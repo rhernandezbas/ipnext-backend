@@ -108,6 +108,26 @@ export interface PppoeServiceRepository {
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }>;
 
   /**
+   * pppoe-bulk-select-filter (v2) — devuelve TODOS los ids que matchean el filtro, SIN
+   * paginar. Los MISMOS `search`/`displayStatus`/`nasId`/`includeUnassigned` que
+   * `listAllPaginated`, con la MISMA semántica de WHERE (paridad GARANTIZADA por
+   * construcción — el adapter Prisma comparte un único WHERE-builder entre ambos métodos;
+   * el in-memory replica exactamente el mismo filtrado). Orden estable `username asc`
+   * (irrelevante para el caller, pero determinístico para tests). `ids.length === total`
+   * siempre (no hay paginación) — `total` se devuelve igual por simetría de contrato con
+   * el listado y como sanity value barato.
+   * Proyección liviana: SOLO ids, sin el JOIN cliente ni el resto de los campos que trae
+   * `listAllPaginated` — este método existe para alimentar una selección masiva, no una
+   * grilla.
+   */
+  listAllIds(params: {
+    search?: string;
+    displayStatus?: PppoeDisplayStatus;
+    nasId?: string;
+    includeUnassigned?: boolean;
+  }): Promise<{ ids: string[]; total: number }>;
+
+  /**
    * pppoe-full-management: actualiza SOLO el `username` de un PPPoE (para recrear-username).
    * Preserva TODOS los demás campos (contractId, id, historial, etc.).
    * Devuelve la entidad actualizada, o null si el id no existe.

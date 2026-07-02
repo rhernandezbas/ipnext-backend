@@ -14,6 +14,8 @@
  *   POST   /api/pppoe/:id/associate              pppoe.manage  (asocia a un contrato)
  *   DELETE /api/contracts/:contractId/pppoe/:pppoeId  pppoe.manage  (desasocia: contractId=null, sin baja)
  *   GET    /api/pppoe/:id/credentials            pppoe.manage  (revela {username, password})
+ *   --- pppoe-bulk-select-filter (v2) ---
+ *   GET    /api/pppoe/ids                         pppoe.manage  (ids del filtro activo — selección masiva; 400 FILTER_REQUIRED sin filtro)
  *   --- Fase C (cortes) ---
  *   POST   /api/pppoe/enforce/preview            pppoe.cut   (impacto, sin ejecutar)
  *   POST   /api/pppoe/enforce/bulk               pppoe.cut   (202 + jobId; 409 si hay uno en curso)
@@ -59,6 +61,8 @@ import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials'
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
 import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
 import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
+// pppoe-bulk-select-filter (v2): hermano liviano de ListAllPppoeServices — solo { ids, total }.
+import { ListAllPppoeServiceIds } from '@application/use-cases/ListAllPppoeServiceIds';
 import { ListInternetServiceHistory } from '@application/use-cases/ListInternetServiceHistory';
 import { ListInternetActivationOperators } from '@application/use-cases/ListInternetActivationOperators';
 import { CreatePppoeStandalone } from '@application/use-cases/CreatePppoeStandalone';
@@ -153,6 +157,12 @@ export function createPppoeRouter(
   listPppoeNasMoveEvents?: ListPppoeNasMoveEvents,
   /** pppoe-search-bulk-plan: Cambia el plan de N PPPoE en bulk. POST /pppoe/bulk/change-plan. */
   bulkChangePppoePlan?: BulkChangePppoePlan,
+  /**
+   * pppoe-bulk-select-filter (v2): ids del filtro activo, para la selección masiva del bulk.
+   * GET /pppoe/ids (gate pppoe.manage). Sin este wired, la ruta no se monta (back-compat de
+   * fixtures viejas; en prod SIEMPRE viene wired — composition test, lección W6).
+   */
+  listAllPppoeServiceIds?: ListAllPppoeServiceIds,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -349,6 +359,47 @@ export function createPppoeRouter(
         if (q['includeUnassigned'] === 'true') filter.includeUnassigned = true;
         const page = await listAllPppoeServices.execute(filter);
         res.json(page);
+      },
+    );
+  }
+
+  // ── GET /pppoe/ids — ids del filtro activo (pppoe-bulk-select-filter v2) ─────────────
+  // Mismos filtros que GET /pppoe (search/status/nasId/includeUnassigned), SIN page/limit.
+  // Precondición: AL MENOS UNO de {search, status, nasId} presente → si no, 400
+  // FILTER_REQUIRED (el endpoint existe para SELECCIÓN FILTRADA, nunca "todo el sistema"
+  // — includeUnassigned es un toggle de scope, NO cuenta como filtro de narrowing).
+  // Gate pppoe.manage (NO pppoe.read): existe exclusivamente para alimentar el bulk
+  // POST /pppoe/bulk/change-plan — gatearlo en read filtraría una afordancia de bulk-
+  // selection a usuarios read-only.
+  // Catch async EXPLÍCITO → next(err) (sin express-async-errors, un throw async cuelga
+  // la request en Express 4).
+  if (listAllPppoeServiceIds) {
+    router.get(
+      '/pppoe/ids',
+      auth,
+      canManage,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+          const q = req.query;
+          const filter: { search?: string; status?: string; nasId?: string; includeUnassigned?: boolean } = {};
+          if (typeof q['search'] === 'string' && q['search'] !== '') filter.search = q['search'];
+          if (typeof q['status'] === 'string' && q['status'] !== '') filter.status = q['status'];
+          if (typeof q['nasId']  === 'string' && q['nasId']  !== '') filter.nasId  = q['nasId'];
+          if (q['includeUnassigned'] === 'true') filter.includeUnassigned = true;
+
+          if (!filter.search && !filter.status && !filter.nasId) {
+            res.status(400).json({
+              code: 'FILTER_REQUIRED',
+              error: 'GET /pppoe/ids requiere al menos un filtro (search, status o nasId)',
+            });
+            return;
+          }
+
+          const result = await listAllPppoeServiceIds.execute(filter);
+          res.json(result);
+        } catch (err) {
+          next(err);
+        }
       },
     );
   }

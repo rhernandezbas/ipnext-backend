@@ -217,6 +217,23 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
       /new ChangePppoePlanService\([\s\S]*?new PrismaServiceCatalogRepository\(\),[\s\S]*?new PrismaContractServiceEventRepository\(\)/,
     );
   });
+
+  // ── pppoe-bulk-select-filter (v2) — anti "feature muerta" (lección W6): GET /pppoe/ids wired ──
+  it('(o) ListAllPppoeServiceIds está IMPORTADO en app.ts (pppoe-bulk-select-filter)', () => {
+    expect(appSrc).toMatch(/import.*ListAllPppoeServiceIds.*from.*ListAllPppoeServiceIds/);
+  });
+
+  it('(o) ListAllPppoeServiceIds construido con pppoeRepo e INYECTADO en createPppoeRouter', () => {
+    // Si no se construye e inyecta, GET /api/pppoe/ids responde 404 y la feature queda muerta.
+    expect(appSrc).toMatch(/new ListAllPppoeServiceIds\(\s*pppoeRepo\s*\)/);
+
+    const idx = appSrc.indexOf('createPppoeRouter(');
+    expect(idx).toBeGreaterThan(-1);
+    const end = appSrc.indexOf('));', idx);
+    expect(end).toBeGreaterThan(idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+    expect(window).toMatch(/new ListAllPppoeServiceIds\(/);
+  });
 });
 
 // ── pppoe-move-nas W2 — watcher auto-move: anti "feature muerta" (lección W6) ─────────────────

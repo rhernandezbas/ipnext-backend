@@ -42,6 +42,63 @@ function model() {
   return (prisma as any).pppoeService;
 }
 
+/**
+ * pppoe-bulk-select-filter (v2) — WHERE-builder COMPARTIDO entre `listAllPaginated` y
+ * `listAllIds` (design Decisión 1, Opción C). Extraído SIN cambio de comportamiento del
+ * bloque que antes vivía inline en `listAllPaginated` (:206-243 pre-refactor). Es el
+ * ÚNICO lugar donde se arma este WHERE — por construcción, ambos métodos NUNCA pueden
+ * driftear entre sí (el guardrail del riesgo #1 del change).
+ *
+ * Combine independent predicates with AND so two separate OR-clauses (search vs. blocked)
+ * never collide on the same key. Each entry is its own where-fragment.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildListAllWhere(params: {
+  search?: string;
+  displayStatus?: PppoeDisplayStatus;
+  nasId?: string;
+  includeUnassigned?: boolean;
+}): Record<string, any> {
+  const { search, displayStatus, nasId, includeUnassigned } = params;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const and: Record<string, any>[] = [];
+  // pppoe-full-management: solo filtrar por contractId IS NOT NULL cuando includeUnassigned=false (default).
+  // FIXED filter: esta es la página de servicios de CLIENTES — solo PPPoE CON contrato.
+  // Los huérfanos del ingest (contractId=null) NUNCA aparecen, ni cuentan para el total.
+  if (!includeUnassigned) {
+    and.push({ contractId: { not: null } });
+  }
+  if (nasId) and.push({ nasId });
+  if (search) {
+    // pppoe-search-bulk-plan: search matches username OR client name (existing), AND NOW ALSO
+    // remoteAddress (IP, partial, always) + callerId variants when the term looks like a MAC.
+    // All OR fragments are under a single AND entry to avoid colliding with displayStatus/contractId.
+    const searchOr: Record<string, unknown>[] = [
+      { username: { contains: search, mode: 'insensitive' } },
+      { contract: { is: { client: { is: { name: { contains: search, mode: 'insensitive' } } } } } },
+      // IP: partial, case-insensitive (IPs are stored canonical so case is N/A but consistent).
+      { remoteAddress: { contains: search, mode: 'insensitive' } },
+    ];
+
+    // MAC: only add callerId OR-branches when the search term looks like a MAC (hex-only after
+    // stripping MAC separators, 4-12 chars). Generates ≤4 variants (raw, colon, dash, plain)
+    // each as a `contains mode:insensitive` (covers both upper/lowercase in the DB).
+    if (looksLikeMac(search)) {
+      for (const variant of macSearchVariants(search)) {
+        searchOr.push({ callerId: { contains: variant, mode: 'insensitive' } });
+      }
+    }
+
+    and.push({ OR: searchOr });
+  }
+  // BUSINESS-status → WHERE translation (same precedence as pppoeDisplayStatus). Always in the WHERE,
+  // so pagination and total stay correct. 'inactive' = the negation of all the known buckets.
+  if (displayStatus) and.push(displayStatusWhere(displayStatus));
+
+  return and.length > 0 ? { AND: and } : {};
+}
+
 export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
   async upsertByUsername(data: PppoeServiceUpsert): Promise<PppoeService> {
     const fields: Record<string, unknown> = {
@@ -203,44 +260,9 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     const { page, pageSize, search, displayStatus, nasId, includeUnassigned } = params;
     const skip = (page - 1) * pageSize;
 
-    // Combine independent predicates with AND so two separate OR-clauses (search vs. blocked) never
-    // collide on the same key. Each entry is its own where-fragment.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const and: Record<string, any>[] = [];
-    // pppoe-full-management: solo filtrar por contractId IS NOT NULL cuando includeUnassigned=false (default).
-    // FIXED filter: esta es la página de servicios de CLIENTES — solo PPPoE CON contrato.
-    // Los huérfanos del ingest (contractId=null) NUNCA aparecen, ni cuentan para el total.
-    if (!includeUnassigned) {
-      and.push({ contractId: { not: null } });
-    }
-    if (nasId) and.push({ nasId });
-    if (search) {
-      // pppoe-search-bulk-plan: search matches username OR client name (existing), AND NOW ALSO
-      // remoteAddress (IP, partial, always) + callerId variants when the term looks like a MAC.
-      // All OR fragments are under a single AND entry to avoid colliding with displayStatus/contractId.
-      const searchOr: Record<string, unknown>[] = [
-        { username: { contains: search, mode: 'insensitive' } },
-        { contract: { is: { client: { is: { name: { contains: search, mode: 'insensitive' } } } } } },
-        // IP: partial, case-insensitive (IPs are stored canonical so case is N/A but consistent).
-        { remoteAddress: { contains: search, mode: 'insensitive' } },
-      ];
-
-      // MAC: only add callerId OR-branches when the search term looks like a MAC (hex-only after
-      // stripping MAC separators, 4-12 chars). Generates ≤4 variants (raw, colon, dash, plain)
-      // each as a `contains mode:insensitive` (covers both upper/lowercase in the DB).
-      if (looksLikeMac(search)) {
-        for (const variant of macSearchVariants(search)) {
-          searchOr.push({ callerId: { contains: variant, mode: 'insensitive' } });
-        }
-      }
-
-      and.push({ OR: searchOr });
-    }
-    // BUSINESS-status → WHERE translation (same precedence as pppoeDisplayStatus). Always in the WHERE,
-    // so pagination and total stay correct. 'inactive' = the negation of all the known buckets.
-    if (displayStatus) and.push(displayStatusWhere(displayStatus));
-
-    const where: Record<string, unknown> = and.length > 0 ? { AND: and } : {};
+    // pppoe-bulk-select-filter (v2): WHERE compartido con listAllIds — ÚNICA fuente de
+    // verdad del filtro (design Decisión 1). NUNCA reconstruir este WHERE inline acá.
+    const where = buildListAllWhere({ search, displayStatus, nasId, includeUnassigned });
 
     const [rows, total] = await Promise.all([
       model().findMany({
@@ -270,6 +292,31 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     ]);
 
     return { data: rows.map(toEntityWithClient), total };
+  }
+
+  /**
+   * pppoe-bulk-select-filter (v2) — reusa el MISMO `buildListAllWhere` que `listAllPaginated`
+   * (paridad garantizada por construcción). Proyección liviana (`select: { id: true }`, SIN el
+   * JOIN cliente): este método alimenta la selección masiva del bulk, no una grilla.
+   */
+  async listAllIds(params: {
+    search?: string;
+    displayStatus?: PppoeDisplayStatus;
+    nasId?: string;
+    includeUnassigned?: boolean;
+  }): Promise<{ ids: string[]; total: number }> {
+    const where = buildListAllWhere(params);
+
+    const [rows, total] = await Promise.all([
+      model().findMany({
+        where,
+        orderBy: { username: 'asc' },
+        select: { id: true },
+      }),
+      model().count({ where }),
+    ]);
+
+    return { ids: rows.map((r: { id: string }) => r.id), total };
   }
 
   async setContractId(id: string, contractId: string): Promise<PppoeService | null> {

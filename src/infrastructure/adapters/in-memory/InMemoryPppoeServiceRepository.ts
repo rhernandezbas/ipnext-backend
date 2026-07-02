@@ -243,6 +243,64 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     return { data, total };
   }
 
+  /**
+   * pppoe-bulk-select-filter (v2) — espejo EXACTO del filtrado de `listAllPaginated`
+   * (MISMO helper `macSearch`, MISMA traducción de `displayStatus`, MISMO `contractId`/
+   * `nasId`), sin paginar. `ids.length === total` siempre. La duplicación de la lógica de
+   * filtro (en vez de un helper compartido en runtime) es intencional: el in-memory replica
+   * la SEMÁNTICA del adapter Prisma, no su código — cada uno vive en su propio archivo
+   * de adapter, igual que el resto del port (ver design.md "Hexagonal / DIP").
+   */
+  async listAllIds(params: {
+    search?: string;
+    displayStatus?: PppoeDisplayStatus;
+    nasId?: string;
+    includeUnassigned?: boolean;
+  }): Promise<{ ids: string[]; total: number }> {
+    const { search, displayStatus, nasId, includeUnassigned } = params;
+    const searchLower = search ? search.toLowerCase() : undefined;
+
+    const withClient = (s: PppoeService): PppoeServiceWithClient => {
+      const client = s.contractId ? this.contractClient.get(s.contractId) : undefined;
+      return {
+        id:            s.id,
+        username:      s.username,
+        profile:       s.profile,
+        remoteAddress: s.remoteAddress,
+        status:        s.status,
+        enforcedState: s.enforcedState,
+        nasId:         s.nasId,
+        contractId:    s.contractId,
+        callerId:      s.callerId,
+        ipMode:        s.ipMode,
+        createdAt:     s.createdAt,
+        clientId:      client?.clientId ?? null,
+        customerName:  client?.customerName ?? null,
+      };
+    };
+
+    const filtered = this.store.map(withClient).filter(s => {
+      if (!includeUnassigned && s.contractId === null) return false;
+      if (displayStatus && pppoeDisplayStatus(s.status, s.enforcedState) !== displayStatus) return false;
+      if (nasId && s.nasId !== nasId) return false;
+      if (searchLower) {
+        const matchUsername = s.username.toLowerCase().includes(searchLower);
+        const matchClient   = (s.customerName ?? '').toLowerCase().includes(searchLower);
+        const matchIp       = s.remoteAddress ? s.remoteAddress.toLowerCase().includes(searchLower) : false;
+        let matchMac = false;
+        if (s.callerId && search && looksLikeMac(search)) {
+          const callerIdLower = s.callerId.toLowerCase();
+          matchMac = macSearchVariants(search).some(v => callerIdLower.includes(v.toLowerCase()));
+        }
+        if (!matchUsername && !matchClient && !matchIp && !matchMac) return false;
+      }
+      return true;
+    });
+
+    const sorted = [...filtered].sort((a, b) => a.username.localeCompare(b.username));
+    return { ids: sorted.map(s => s.id), total: sorted.length };
+  }
+
   async setContractId(id: string, contractId: string): Promise<PppoeService | null> {
     const found = this.store.find(s => s.id === id);
     if (!found) return null;

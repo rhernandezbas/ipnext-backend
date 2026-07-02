@@ -667,6 +667,8 @@ import { GetPppoeCallerId } from '@application/use-cases/GetPppoeCallerId';
 import { PinPppoeIp } from '@application/use-cases/PinPppoeIp';
 import { UnpinPppoeIp } from '@application/use-cases/UnpinPppoeIp';
 import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
+// pppoe-bulk-select-filter (v2): hermano liviano de ListAllPppoeServices — { ids, total } del filtro.
+import { ListAllPppoeServiceIds } from '@application/use-cases/ListAllPppoeServiceIds';
 import { ListInternetServiceHistory } from '@application/use-cases/ListInternetServiceHistory';
 import { ListInternetActivationOperators } from '@application/use-cases/ListInternetActivationOperators';
 import { CreatePppoeStandalone } from '@application/use-cases/CreatePppoeStandalone';
@@ -2292,6 +2294,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
           new PrismaContractServiceEventRepository(),
         ),
       ),
+      // pppoe-bulk-select-filter (v2): GET /api/pppoe/ids — ids del filtro activo para la
+      // selección masiva del bulk. Sin wired la ruta no se monta (feature muerta, lección W6).
+      new ListAllPppoeServiceIds(pppoeRepo),
     ));
   }
 

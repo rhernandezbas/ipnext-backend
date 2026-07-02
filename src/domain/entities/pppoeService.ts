@@ -41,6 +41,23 @@ export function pppoeDisplayStatus(status: string, enforcedState: EnforcedState)
   return 'inactive';
 }
 
+/**
+ * pppoe-bulk-select-filter (v2) — helper COMPARTIDO de normalización de filtro. El `status`
+ * de un filtro de listado llega en vocabulario de NEGOCIO (string suelto, potencialmente
+ * inválido); este type-guard valida contra los `PppoeDisplayStatus` conocidos. Fail-open:
+ * un valor desconocido devuelve `false` (el caller lo trata como "sin filtro"), NUNCA lanza.
+ *
+ * ÚNICA fuente de verdad — usada por `ListAllPppoeServices` Y `ListAllPppoeServiceIds` para
+ * que la traducción `status` → `displayStatus` NUNCA driftee entre el listado y el endpoint
+ * de ids (guardrail doble del riesgo #1, junto con `buildListAllWhere` en el adapter Prisma).
+ * Vivía duplicada como función privada en `ListAllPppoeServices.ts` antes de esta extracción.
+ */
+const PPPOE_DISPLAY_STATUSES: readonly PppoeDisplayStatus[] = ['active', 'reduced', 'blocked', 'baja', 'inactive'];
+
+export function isPppoeDisplayStatus(v: string | undefined): v is PppoeDisplayStatus {
+  return v !== undefined && (PPPOE_DISPLAY_STATUSES as readonly string[]).includes(v);
+}
+
 export interface PppoeService {
   id: string;
   username: string;            // name del /ppp secret — clave de upsert

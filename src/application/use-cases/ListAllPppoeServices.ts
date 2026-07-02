@@ -2,7 +2,7 @@ import type { PppoeServiceRepository, PppoeServiceWithClient } from '@domain/por
 import type { ContractServiceEventRepository } from '@domain/ports/ContractServiceEventRepository';
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
 import type { NasRepository } from '@domain/ports/NasRepository';
-import { pppoeDisplayStatus, type PppoeDisplayStatus } from '@domain/entities/pppoeService';
+import { pppoeDisplayStatus, isPppoeDisplayStatus } from '@domain/entities/pppoeService';
 import type { PppoeServiceListItemDto, PppoeServiceListPageDto } from '@application/dto/pppoe.dto';
 
 export interface ListAllPppoeServicesFilter {
@@ -46,7 +46,7 @@ export class ListAllPppoeServices {
     const limit = Math.min(MAX_LIMIT, Math.max(1, filters.limit ?? DEFAULT_LIMIT));
 
     // The `status` filter arrives in BUSINESS vocabulary; ignore unknown values (fail-open: no filter).
-    const displayStatus = isDisplayStatus(filters.status) ? filters.status : undefined;
+    const displayStatus = isPppoeDisplayStatus(filters.status) ? filters.status : undefined;
 
     const { data, total } = await this.pppoeRepo.listAllPaginated({
       page,
@@ -121,12 +121,6 @@ export class ListAllPppoeServices {
     }
     return result;
   }
-}
-
-const DISPLAY_STATUSES: readonly PppoeDisplayStatus[] = ['active', 'reduced', 'blocked', 'baja', 'inactive'];
-
-function isDisplayStatus(v: string | undefined): v is PppoeDisplayStatus {
-  return v !== undefined && (DISPLAY_STATUSES as readonly string[]).includes(v);
 }
 
 function toDto(

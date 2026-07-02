@@ -72,4 +72,78 @@ describe('InMemoryPppoeServiceRepository', () => {
     expect(data).toHaveLength(1);
     expect(data[0]!.username).toBe('cliente');
   });
+
+  // ── pppoe-bulk-select-filter (v2) — listAllIds (tasks 1.4/1.5) ────────────────────────
+  describe('listAllIds', () => {
+    it('SIN filtro (includeUnassigned default false): excluye huérfanos, ids.length === total', async () => {
+      await repo.upsertByUsername({ username: 'orphan', password: 'p', nasId: 'n1', contractId: null });
+      await repo.upsertByUsername({ username: 'a', password: 'p', nasId: 'n1', contractId: 'C1' });
+      await repo.upsertByUsername({ username: 'b', password: 'p', nasId: 'n1', contractId: 'C2' });
+
+      const { ids, total } = await repo.listAllIds({});
+      expect(total).toBe(2);
+      expect(ids.length).toBe(total);
+      expect(ids.sort()).toEqual([
+        (await repo.findByUsername('a'))!.id,
+        (await repo.findByUsername('b'))!.id,
+      ].sort());
+    });
+
+    it('includeUnassigned=true: incluye huérfanos', async () => {
+      await repo.upsertByUsername({ username: 'orphan', password: 'p', nasId: 'n1', contractId: null });
+      await repo.upsertByUsername({ username: 'a', password: 'p', nasId: 'n1', contractId: 'C1' });
+
+      const { ids, total } = await repo.listAllIds({ includeUnassigned: true });
+      expect(total).toBe(2);
+      expect(ids.length).toBe(2);
+    });
+
+    it('filtra por nasId', async () => {
+      const s1 = await repo.upsertByUsername({ username: 'a', password: 'p', nasId: 'nas-1', contractId: 'C1' });
+      await repo.upsertByUsername({ username: 'b', password: 'p', nasId: 'nas-2', contractId: 'C2' });
+
+      const { ids, total } = await repo.listAllIds({ nasId: 'nas-1', includeUnassigned: true });
+      expect(total).toBe(1);
+      expect(ids).toEqual([s1.id]);
+    });
+
+    it('filtra por search (username)', async () => {
+      const s1 = await repo.upsertByUsername({ username: 'juan', password: 'p', nasId: 'n1', contractId: 'C1' });
+      await repo.upsertByUsername({ username: 'pedro', password: 'p', nasId: 'n1', contractId: 'C2' });
+
+      const { ids, total } = await repo.listAllIds({ search: 'jua', includeUnassigned: true });
+      expect(total).toBe(1);
+      expect(ids).toEqual([s1.id]);
+    });
+
+    it('filtra por displayStatus (reduced)', async () => {
+      await repo.upsertByUsername({ username: 'a', password: 'p', nasId: 'n1', status: 'enabled', enforcedState: 'active', contractId: 'C1' });
+      const s2 = await repo.upsertByUsername({ username: 'b', password: 'p', nasId: 'n1', status: 'enabled', enforcedState: 'reduced', contractId: 'C2' });
+
+      const { ids, total } = await repo.listAllIds({ displayStatus: 'reduced', includeUnassigned: true });
+      expect(total).toBe(1);
+      expect(ids).toEqual([s2.id]);
+    });
+
+    it('combinación nasId + search + displayStatus (AND de los tres)', async () => {
+      const match = await repo.upsertByUsername({ username: 'juan', password: 'p', nasId: 'nas-1', status: 'enabled', enforcedState: 'active', contractId: 'C1' });
+      // Mismo nasId + search, pero status distinto → no matchea.
+      await repo.upsertByUsername({ username: 'juanito', password: 'p', nasId: 'nas-1', status: 'enabled', enforcedState: 'reduced', contractId: 'C2' });
+      // Mismo search + status, pero otro NAS → no matchea.
+      await repo.upsertByUsername({ username: 'juanma', password: 'p', nasId: 'nas-2', status: 'enabled', enforcedState: 'active', contractId: 'C3' });
+
+      const { ids, total } = await repo.listAllIds({
+        nasId: 'nas-1', search: 'juan', displayStatus: 'active', includeUnassigned: true,
+      });
+      expect(total).toBe(1);
+      expect(ids).toEqual([match.id]);
+    });
+
+    it('sin match: ids vacío, total 0 (no es un smoke test — hay filas que NO matchean el filtro)', async () => {
+      await repo.upsertByUsername({ username: 'a', password: 'p', nasId: 'nas-1', contractId: 'C1' });
+      const { ids, total } = await repo.listAllIds({ nasId: 'nas-inexistente', includeUnassigned: true });
+      expect(ids).toEqual([]);
+      expect(total).toBe(0);
+    });
+  });
 });
