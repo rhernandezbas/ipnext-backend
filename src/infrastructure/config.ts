@@ -206,6 +206,22 @@ export const config = {
   },
 
   /**
+   * PPPoE auto-move watcher (pppoe-move-nas W2) — frescura del tick de detección de mismatches
+   * NAS real vs asignado. Configurable sin redeploy via AUTO_MOVE_INTERVAL_MS. Default 120_000
+   * (2 min, decisión de design D4). Mismo contrato defensivo que radiusAuthIngest: piso 15s
+   * (no martillar al orchestrator), techo 24h (fat-finger de unidades), inválido/ausente →
+   * default. NUNCA tumba el boot (S7.2): el scheduler es opt-in y el ON/OFF real va por el
+   * feature flag 'pppoe-auto-move' (DB, chequeado por tick).
+   */
+  pppoeAutoMove: {
+    intervalMs: parseIntervalMs(process.env.AUTO_MOVE_INTERVAL_MS, {
+      default: 120_000,
+      min: 15_000,
+      max: 86_400_000,
+    }),
+  },
+
+  /**
    * airOS SSH — inspección de antenas Ubiquiti airOS para detección de equipos del cliente.
    * Opt-in (NO fail-fast): si faltan credenciales, el gateway falla al USARSE con
    * AirOsUnreachableError (200 con warning), pero el resto de la app arranca igual.

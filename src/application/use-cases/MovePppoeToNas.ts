@@ -22,6 +22,7 @@ import {
 } from '@domain/errors/pppoe';
 import { NoFreeIpError, NoPoolForNasTypeError } from '@domain/errors/network';
 import { ipInAnyRange } from '@domain/services/ipMath';
+import { isDuplicateAutoEvent } from '@application/services/pppoeNasMoveThrottle';
 import { FindFreeIp } from './FindFreeIp';
 import { MovePppoeServiceToRouter } from './MovePppoeServiceToRouter';
 
@@ -289,6 +290,18 @@ export class MovePppoeToNas {
     actor?: MovePppoeToNasActor,
   ): Promise<void> {
     try {
+      // W2 (D-W2.2 / S10.5) — throttle anti-spam del tab: un `failed_*` del WATCHER (trigger
+      // 'auto') idéntico al último evento del username (mismo outcome + toNasId, <6h) NO genera
+      // fila nueva — el intento SÍ ocurre cada tick (pool lleno se reintenta, barato); solo se
+      // suprime el registro. Trigger 'manual' NO cambia: cada intento manual registra SIEMPRE.
+      // Los 'moved' siempre registran (cambian estado).
+      if (
+        trigger === 'auto' &&
+        outcome !== 'moved' &&
+        (await isDuplicateAutoEvent(this.moveEventRepo, s.username, outcome, destino.id))
+      ) {
+        return;
+      }
       await this.moveEventRepo.record({
         username:       s.username,
         pppoeServiceId: s.id,

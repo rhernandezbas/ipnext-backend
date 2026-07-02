@@ -95,6 +95,7 @@ jobs:
             -e ORCHESTRATOR_BASE_URL="${{ secrets.ORCHESTRATOR_BASE_URL }}" \
             -e ORCHESTRATOR_API_TOKEN="${{ secrets.ORCHESTRATOR_API_TOKEN }}" \
             -e RADIUS_AUTH_INGEST_INTERVAL_MS="${{ secrets.RADIUS_AUTH_INGEST_INTERVAL_MS }}" \
+            -e AUTO_MOVE_INTERVAL_MS="${{ secrets.AUTO_MOVE_INTERVAL_MS }}" \
             -e AIROS_SSH_USER="ubnt" \
             -e AIROS_SSH_PASSWORDS="${{ secrets.AIROS_SSH_PASSWORDS }}" \
             -e EXTERNAL_API_KEY="${{ secrets.EXTERNAL_API_KEY }}" \

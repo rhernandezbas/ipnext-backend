@@ -218,3 +218,57 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
     );
   });
 });
+
+// ── pppoe-move-nas W2 — watcher auto-move: anti "feature muerta" (lección W6) ─────────────────
+// El scheduler sigue el patrón EXACTO de radius-auth-ingest, cuyo composition root vive en
+// main.ts + scheduling/bootstrap* (NO en app.ts: el watcher no tiene superficie HTTP propia).
+// Estas aserciones pinean ese wiring: sin bootstrap en main.ts el watcher jamás arranca; sin
+// el seed del flag, 'pppoe-auto-move' no aparece en la Config UI y nadie puede prenderlo.
+describe('PPPoE auto-move watcher composition (pppoe-move-nas W2)', () => {
+  let mainSrc: string;
+  let bootstrapSrc: string;
+  let configSrc: string;
+
+  beforeAll(() => {
+    const srcRoot = join(__dirname, '..', '..');
+    mainSrc      = readFileSync(join(srcRoot, 'main.ts'), 'utf8');
+    bootstrapSrc = readFileSync(join(srcRoot, 'infrastructure', 'scheduling', 'bootstrapPppoeAutoMove.ts'), 'utf8');
+    configSrc    = readFileSync(join(srcRoot, 'infrastructure', 'config.ts'), 'utf8');
+  });
+
+  it('(o) main.ts bootstrapea el scheduler fire-and-forget y lo arranca (patrón radius-auth-ingest)', () => {
+    expect(mainSrc).toMatch(/import \{ bootstrapPppoeAutoMove \}/);
+    expect(mainSrc).toMatch(/void bootstrapPppoeAutoMove\(\)[\s\S]{0,200}scheduler\?\.start\(\)/);
+  });
+
+  it('(o) el bootstrap construye AutoMovePppoe con el MovePppoeToNas radius-aware de W1 (no un move paralelo)', () => {
+    expect(bootstrapSrc).toMatch(/new MovePppoeToNas\(/);
+    expect(bootstrapSrc).toMatch(/new AutoMovePppoe\([\s\S]*?movePppoeToNas/);
+  });
+
+  it('(o) el scheduler recibe el flag repo REAL + lock advisory (gate por tick y un solo tick cross-replica)', () => {
+    expect(bootstrapSrc).toMatch(/new PppoeAutoMoveScheduler\(/);
+    expect(bootstrapSrc).toMatch(/new PrismaFeatureFlagRepository\(\)/);
+    expect(bootstrapSrc).toMatch(/new PgAdvisoryLock\(\)/);
+  });
+
+  it('(o) el intervalo viene de config.pppoeAutoMove (AUTO_MOVE_INTERVAL_MS, default 120000 = 2 min)', () => {
+    expect(bootstrapSrc).toMatch(/config\.pppoeAutoMove\.intervalMs/);
+    // Anclar al USO real de la env var (el nombre también aparece antes en el doc comment).
+    const idx = configSrc.indexOf('process.env.AUTO_MOVE_INTERVAL_MS');
+    expect(idx).toBeGreaterThan(-1);
+    const window = configSrc.slice(idx, idx + 300);
+    expect(window).toMatch(/default:\s*120_000/);
+    expect(window).toMatch(/min:\s*15_000/);
+    expect(window).toMatch(/max:\s*86_400_000/);
+  });
+
+  it("(o) migración idempotente seedea el flag 'pppoe-auto-move' en OFF (visible/toggleable en la Config UI)", () => {
+    const migrationSrc = readFileSync(
+      join(__dirname, '..', '..', '..', 'prisma', 'migrations', '20260825000000_pppoe_auto_move_flag', 'migration.sql'),
+      'utf8',
+    );
+    expect(migrationSrc).toMatch(/'pppoe-auto-move',\s*false/);
+    expect(migrationSrc).toMatch(/ON CONFLICT DO NOTHING/);
+  });
+});

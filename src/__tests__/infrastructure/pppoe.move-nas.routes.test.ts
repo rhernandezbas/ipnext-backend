@@ -583,3 +583,67 @@ describe('GET /api/pppoe/nas-move-events (network.read — tabs vecinos de la pa
     expect(res.body.code).toBe('INTERNAL_ERROR');
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════════
+// W2 — S10.2/S10.3: las filas de fallo/skip del WATCHER (trigger auto) son visibles
+// por el endpoint (el registro no puede vivir solo en el stdout del container).
+// Las filas se siembran con el shape EXACTO que producen AutoMovePppoe (skips) y
+// el core MovePppoeToNas (fallos) en trigger 'auto'.
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('GET /api/pppoe/nas-move-events — outcomes del watcher W2 (S10.2/S10.3)', () => {
+  it('S10.2: auto-move con pool lleno → la fila failed_no_free_ip es visible y filtrable', async () => {
+    const fx = await buildApp();
+    await fx.moveEvents.record({
+      username: 'w2user', pppoeServiceId: 'svc-1', fromNasId: RADIUS_NAS_A, toNasId: fx.nasRadiusB.id,
+      fromIp: OLD_IP, toIp: null, trigger: 'auto', outcome: 'failed_no_free_ip',
+      reason: 'NO_FREE_IP', actorName: 'sistema',
+    });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?outcome=failed_no_free_ip'), fx.networkUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.items[0]).toMatchObject({
+      username: 'w2user',
+      trigger: 'auto',
+      outcome: 'failed_no_free_ip',
+      actorName: 'sistema',
+      toNas: { id: fx.nasRadiusB.id, name: 'NAS Radius B' },
+    });
+  });
+
+  it('S10.3: auto-move skipped por IP pública → la fila skipped_public es visible con su reason', async () => {
+    const fx = await buildApp();
+    await fx.moveEvents.record({
+      username: 'w2pub', pppoeServiceId: 'svc-2', fromNasId: RADIUS_NAS_A, toNasId: fx.nasRadiusB.id,
+      fromIp: '190.15.242.10', toIp: null, trigger: 'auto', outcome: 'skipped_public',
+      reason: 'public_pool', actorName: 'sistema',
+    });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?outcome=skipped_public'), fx.networkUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.items[0]).toMatchObject({
+      username: 'w2pub',
+      trigger: 'auto',
+      outcome: 'skipped_public',
+      reason: 'public_pool',
+      fromIp: '190.15.242.10',
+    });
+  });
+
+  it('skipped_unknown_nas (toNasId null) → visible con toNas null (NAS fantasma sin inventario)', async () => {
+    const fx = await buildApp();
+    await fx.moveEvents.record({
+      username: 'w2ghost', pppoeServiceId: 'svc-3', fromNasId: RADIUS_NAS_A, toNasId: null,
+      fromIp: OLD_IP, toIp: null, trigger: 'auto', outcome: 'skipped_unknown_nas',
+      reason: 'nas_ip_not_registered:10.99.99.99', actorName: 'sistema',
+    });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?outcome=skipped_unknown_nas'), fx.networkUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.items[0].toNas).toBeNull();
+    expect(res.body.items[0].reason).toBe('nas_ip_not_registered:10.99.99.99');
+  });
+});
