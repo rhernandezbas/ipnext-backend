@@ -289,6 +289,22 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     }
   }
 
+  /**
+   * pppoe-move-nas (ajuste 3 — anti-resurrección): update NO-creador por id para el move.
+   * P2025 (fila borrada por terminate/rename concurrente) → null; el caller lanza el typed
+   * not-found SIN re-crear la lápida. Cualquier otro error de infra PROPAGA (el caller registra
+   * el evento `failed_db` — el RADIUS ya quedó escrito y la divergencia necesita rastro).
+   */
+  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed'): Promise<PppoeService | null> {
+    try {
+      const row = await model().update({ where: { id }, data: { nasId, remoteAddress, ipMode } });
+      return toEntity(row);
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
   async setEnforcedState(id: string, state: EnforcedState): Promise<PppoeService | null> {
     try {
       const row = await model().update({ where: { id }, data: { enforcedState: state } });

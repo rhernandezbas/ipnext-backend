@@ -2,6 +2,7 @@ import { PppoeService } from '@domain/entities/pppoeService';
 import { NasServer, routesViaOrchestrator } from '@domain/entities/nas';
 import { PppoeServiceRepository } from '@domain/ports/PppoeServiceRepository';
 import { NasRepository } from '@domain/ports/NasRepository';
+import { IpNetworkRepository } from '@domain/ports/IpNetworkRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
 import {
   PppoeNasMoveEventRepository,
@@ -12,11 +13,15 @@ import { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository
 import { ContractServiceEventRepository } from '@domain/ports/ContractServiceEventRepository';
 import {
   NasNotFoundError,
+  OrchestratorRejectedError,
+  OrchestratorUnreachableError,
   PppoeMoveMixedNasTypesError,
+  PppoeMovePublicIpError,
   PppoeServiceNotFoundError,
   PppoeServiceTerminatedError,
 } from '@domain/errors/pppoe';
 import { NoFreeIpError, NoPoolForNasTypeError } from '@domain/errors/network';
+import { ipInAnyRange } from '@domain/services/ipMath';
 import { FindFreeIp } from './FindFreeIp';
 import { MovePppoeServiceToRouter } from './MovePppoeServiceToRouter';
 
@@ -25,6 +30,11 @@ export interface MovePppoeToNasInput {
   nasId: string; // NAS destino
   /** Disparador del move: 'manual' (operador, default) | 'auto' (watcher W2). */
   trigger?: PppoeNasMoveTrigger;
+  /**
+   * fix wave 1 (ajuste 6 / S1.5): mover un servicio cuya IP ACTUAL cae en un pool `public`
+   * exige `force: true` (decisión explícita — mover a CGNAT libera la IP pública contratada).
+   */
+  force?: boolean;
 }
 
 export interface MovePppoeToNasActor {
@@ -33,22 +43,40 @@ export interface MovePppoeToNasActor {
 }
 
 /**
+ * Ajuste 8b: actorName vacío/blanco → null. La ruta manda `req.user?.username ?? ''` — con
+ * string vacío el `?? fallback` de los registros NUNCA aplicaba (ni el null del move event
+ * ni el 'sistema' del auto-move).
+ */
+function normalizeActorName(actor?: MovePppoeToNasActor): string | null {
+  const name = actor?.actorName;
+  return name && name.trim() !== '' ? name : null;
+}
+
+/**
  * MovePppoeToNas (pppoe-move-nas W1, design D1/D2) — move radius-aware. Subsume al legacy.
  *
  * Rutea por `routesViaOrchestrator(nas.type)`:
  *   - **radius → radius** (los 10 NAS de prod): el secret vive en el RADIUS central → NO hay
  *     create/remove de secrets. Secuencia (plano de control primero, patrón CreatePppoeService):
+ *       0. guard IP PÚBLICA (S1.5): IP actual en pool `public` sin `force: true` → 409, nada cambió
  *       1. newIp = FindFreeIp(destino, 'cgnat')      ← NoFreeIpError → abort, NADA cambió
- *       2. orchestrator.changeFramedIp(user, newIp)  ← si falla → abort, DB intacta
- *       3. repo.upsert(nasId destino, remoteAddress nueva, ipMode 'fixed')
- *       4. orchestrator.disconnectSessions(user)     ← BEST-EFFORT: si falla, warn (NO revierte)
+ *       2. orchestrator.changeFramedIp(user, newIp)  ← guard AUTORITATIVO de colisiones (S1.6):
+ *          rechazo 409 (FramedIpAlreadyAssigned) → UN retry con FindFreeIp fresco; 2º rechazo → abort
+ *       3. repo.setNasAndIp(id, destino, IP nueva, 'fixed')  ← update NO-creador (S1.7); si la DB
+ *          falla acá → evento `failed_db` + propaga (S1.8: la divergencia RADIUS↔DB deja rastro)
+ *       4. orchestrator.disconnectSessions(user)     ← BEST-EFFORT: si falla, el evento moved
+ *          lleva reason='kick_failed' (NO revierte)
  *       5. registro doble: PppoeNasMoveEvent + evento historial 'modified' (si hay contrato)
  *   - **legacy → legacy**: delega al flujo pre-HA intacto (`MovePppoeServiceToRouter`:
  *     create destino → remove origen → DB). La IP NO se reasigna (comportamiento histórico).
+ *     Si falla → evento `failed_router` + propaga.
  *   - **mixto radius↔legacy**: `PppoeMoveMixedNasTypesError` sin tocar nada (REQ-MOVE-3).
  *
- * REQ-LOG-1: todo intento persiste un PppoeNasMoveEvent (`moved` | `failed_no_free_ip` |
- * `failed_orchestrator`) — best-effort: el log NUNCA tumba el move ni enmascara el error original.
+ * REQ-LOG-1 (ampliado fix wave 1): todo intento que LLEGA a la fase de asignación persiste un
+ * PppoeNasMoveEvent (`moved` | `failed_no_free_ip` | `failed_orchestrator` | `failed_db` |
+ * `failed_router`) — best-effort: el log NUNCA tumba el move ni enmascara el error original.
+ * Los RECHAZOS de guard de input (no-op, mixto, terminated, pública-sin-force) responden 4xx
+ * directo y NO persisten fila.
  *
  * Depende SOLO de ports + colaboradores de application (FindFreeIp, legacy move). Cero infra.
  */
@@ -62,14 +90,18 @@ export class MovePppoeToNas {
     private readonly moveEventRepo: PppoeNasMoveEventRepository,
     private readonly catalogRepo: ServiceCatalogRepository,
     private readonly eventRepo: ContractServiceEventRepository,
+    /** ajuste 6: clasifica la IP actual contra los pools cargados (guard de IP pública). */
+    private readonly networkRepo: IpNetworkRepository,
   ) {}
 
   async execute(input: MovePppoeToNasInput, actor?: MovePppoeToNasActor): Promise<PppoeService> {
     const s = await this.repo.findById(input.id);
     if (!s) throw new PppoeServiceNotFoundError(input.id);
+    // S1.2 — no-op ANTES de cualquier otro guard (fix wave 1, ajuste 8a): mover al MISMO NAS no
+    // es una operación — ni siquiera sobre una lápida terminated (no merece un 409).
+    if (input.nasId === s.nasId) return s;
     // Baja HARD: el usuario ya no existe en el RADIUS — la fila es una lápida, no hay qué mover.
     if (s.status === 'terminated') throw new PppoeServiceTerminatedError(input.id);
-    if (input.nasId === s.nasId) return s; // S1.2 — no-op: ni RADIUS ni DB ni eventos
 
     const destino = await this.nasRepo.findNasServerById(input.nasId);
     if (!destino) throw new NasNotFoundError(input.nasId);
@@ -87,67 +119,128 @@ export class MovePppoeToNas {
     if (!destinoRadius) {
       return this.moveLegacy(s, origen, destino, trigger, actor);
     }
-    return this.moveRadius(s, origen, destino, trigger, actor);
+    return this.moveRadius(s, origen, destino, trigger, input.force ?? false, actor);
   }
 
-  /** Rama radius → radius: reasignar IP CGNAT del destino + kick (design D2). */
+  /** Rama radius → radius: reasignar IP CGNAT del destino + kick (design D2 + fix wave 1). */
   private async moveRadius(
     s: PppoeService,
     origen: NasServer | null,
     destino: NasServer,
     trigger: PppoeNasMoveTrigger,
+    force: boolean,
     actor?: MovePppoeToNasActor,
   ): Promise<PppoeService> {
-    // 1. IP nueva del pool CGNAT del destino. Pool lleno/inexistente → abort ANTES de tocar nada (S1.3).
-    let newIp: string;
-    try {
-      newIp = await this.findFreeIp.execute({ nasId: destino.id, type: 'cgnat' });
-    } catch (err) {
-      if (err instanceof NoFreeIpError || err instanceof NoPoolForNasTypeError) {
-        await this.recordMoveEvent(s, origen, destino, s.remoteAddress, null, trigger, 'failed_no_free_ip', err.code, actor);
+    // 0. Guard de IP PÚBLICA (ajuste 6 / S1.5): mover a CGNAT libera la IP pública contratada —
+    //    no puede pasar por accidente. Guard de INPUT: 4xx directo, SIN fila de evento (REQ-LOG-1).
+    if (!force && s.remoteAddress) {
+      const publicPools = (await this.networkRepo.findAllPools()).filter((p) => p.ipKind === 'public');
+      if (ipInAnyRange(s.remoteAddress, publicPools)) {
+        throw new PppoeMovePublicIpError(s.id, s.remoteAddress);
       }
-      throw err;
     }
 
-    // 2. Plano de control PRIMERO (patrón CreatePppoeService): si el RADIUS no confirma, la DB no miente (S1.4).
+    // 1. IP nueva del pool CGNAT del destino. Pool lleno/inexistente → abort ANTES de tocar nada (S1.3).
+    let newIp = await this.allocateFreeIp(s, origen, destino, trigger, actor);
+
+    // 2. Plano de control PRIMERO (patrón CreatePppoeService): si el RADIUS no confirma, la DB no
+    //    miente (S1.4). El orchestrator es además el guard AUTORITATIVO de colisiones de Framed-IP
+    //    (ajuste 2 / S1.6, verificado en user_management_service.py:203-218): si otro move tomó la
+    //    IP entre el snapshot y la escritura, rechaza con 409 → UN retry con FindFreeIp fresco
+    //    (el snapshot nuevo ya ve la IP tomada). Un 2º rechazo → failed_orchestrator + propagar.
     try {
       await this.orchestrator.changeFramedIp(s.username, newIp);
     } catch (err) {
-      await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'failed_orchestrator',
-        err instanceof Error ? err.message : String(err), actor);
-      throw err;
+      if (!(err instanceof OrchestratorRejectedError) || err.upstreamStatus !== 409) {
+        await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'failed_orchestrator',
+          err instanceof Error ? err.message : String(err), actor);
+        throw err;
+      }
+      newIp = await this.allocateFreeIp(s, origen, destino, trigger, actor);
+      try {
+        await this.orchestrator.changeFramedIp(s.username, newIp);
+      } catch (retryErr) {
+        await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'failed_orchestrator',
+          retryErr instanceof Error ? retryErr.message : String(retryErr), actor);
+        throw retryErr;
+      }
     }
 
-    // 3. Confirmar en DB: NAS destino + IP nueva FIJA. Preserva el resto (password/profile/status/
-    //    contractId/enforcedState). ipMode='fixed': la IP del move es estática por requisito operativo.
-    const updated = await this.repo.upsertByUsername({
-      username:      s.username,
-      password:      s.password,
-      profile:       s.profile,
-      remoteAddress: newIp,
-      status:        s.status,
-      nasId:         destino.id,
-      contractId:    s.contractId,
-      enforcedState: s.enforcedState,
-      ipMode:        'fixed',
-    });
+    // 3. Confirmar en DB: NAS destino + IP nueva FIJA, con update NO-creador por id (ajuste 3 /
+    //    S1.7 — anti-resurrección: upsertByUsername re-INSERTABA la fila si un terminate/rename
+    //    concurrente la borró entre la lectura y acá). Preserva password/profile/status/
+    //    contractId/enforcedState. ipMode='fixed': la IP del move es estática por requisito operativo.
+    let updated: PppoeService | null;
+    try {
+      updated = await this.repo.setNasAndIp(s.id, destino.id, newIp, 'fixed');
+    } catch (err) {
+      // Ajuste 4 / S1.8: el RADIUS YA quedó escrito — sin este evento la divergencia RADIUS↔DB
+      // sería invisible (el watcher W2 NO la cura: compara sesión vs nasId, no la Framed-IP).
+      await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'failed_db',
+        'db_update_failed_after_radius_write', actor);
+      throw err;
+    }
+    if (!updated) {
+      // Fila borrada por un terminate concurrente (que también limpia el RADIUS por su lado):
+      // typed not-found, CERO filas creadas (S1.7).
+      throw new PppoeServiceNotFoundError(s.id);
+    }
 
     // 4. Kick BEST-EFFORT (REQ-MOVE-2): fuerza la re-auth con la IP nueva. Si el CoA-Disconnect
     //    falla (NAS viejo muerto), el cliente converge solo por keepalive/re-auth — NO se revierte.
+    //    Ajuste 7: el fallo deja PISTA (reason='kick_failed' en el evento moved); catch acotado a
+    //    los errores esperables del plano de control, el resto se loguea como error (no revierte:
+    //    el move ya está persistido).
+    let kickFailed = false;
     try {
       await this.orchestrator.disconnectSessions(s.username);
     } catch (err) {
-      console.warn(
-        `[MovePppoeToNas] disconnectSessions('${s.username}') falló (best-effort, el cliente re-conecta por keepalive):`,
-        err,
-      );
+      kickFailed = true;
+      if (err instanceof OrchestratorUnreachableError || err instanceof OrchestratorRejectedError) {
+        console.warn(
+          `[MovePppoeToNas] disconnectSessions('${s.username}') falló (best-effort, el cliente re-conecta por keepalive):`,
+          err,
+        );
+      } else {
+        console.error(
+          `[MovePppoeToNas] disconnectSessions('${s.username}') error INESPERADO (move ya persistido, no se revierte):`,
+          err,
+        );
+      }
     }
 
     // 5. Registro doble (design D6): log visible + historial del contrato.
-    await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'moved', null, actor);
+    await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'moved',
+      kickFailed ? 'kick_failed' : null, actor);
     await this.recordHistory(s, origen, destino, s.remoteAddress, newIp, trigger, actor);
 
     return updated;
+  }
+
+  /**
+   * FindFreeIp con registro VISIBLE del fallo (REQ-LOG-1 ampliado, ajuste 5):
+   *   - pool lleno/inexistente → evento `failed_no_free_ip` (S1.3),
+   *   - orchestrator caído consultando las IPs asignadas → evento `failed_orchestrator`
+   *     reason `list_assigned_ips` (antes ese intento moría sin rastro).
+   * En ambos casos PROPAGA — nada se escribió todavía.
+   */
+  private async allocateFreeIp(
+    s: PppoeService,
+    origen: NasServer | null,
+    destino: NasServer,
+    trigger: PppoeNasMoveTrigger,
+    actor?: MovePppoeToNasActor,
+  ): Promise<string> {
+    try {
+      return await this.findFreeIp.execute({ nasId: destino.id, type: 'cgnat' });
+    } catch (err) {
+      if (err instanceof NoFreeIpError || err instanceof NoPoolForNasTypeError) {
+        await this.recordMoveEvent(s, origen, destino, s.remoteAddress, null, trigger, 'failed_no_free_ip', err.code, actor);
+      } else if (err instanceof OrchestratorUnreachableError) {
+        await this.recordMoveEvent(s, origen, destino, s.remoteAddress, null, trigger, 'failed_orchestrator', 'list_assigned_ips', actor);
+      }
+      throw err;
+    }
   }
 
   /** Rama legacy → legacy: delega al flujo pre-HA intacto (S3.2). La IP no cambia. */
@@ -158,7 +251,15 @@ export class MovePppoeToNas {
     trigger: PppoeNasMoveTrigger,
     actor?: MovePppoeToNasActor,
   ): Promise<PppoeService> {
-    const moved = await this.legacyMove.execute({ id: s.id, nasId: destino.id });
+    let moved: PppoeService;
+    try {
+      moved = await this.legacyMove.execute({ id: s.id, nasId: destino.id });
+    } catch (err) {
+      // Ajuste 5 (REQ-LOG-1): el fallo del flujo legacy (API del router) también deja rastro.
+      await this.recordMoveEvent(s, origen, destino, s.remoteAddress, null, trigger, 'failed_router',
+        err instanceof Error ? err.message : String(err), actor);
+      throw err;
+    }
     await this.recordMoveEvent(s, origen, destino, s.remoteAddress, moved.remoteAddress, trigger, 'moved', null, actor);
     await this.recordHistory(s, origen, destino, s.remoteAddress, moved.remoteAddress, trigger, actor);
     return moved;
@@ -187,7 +288,9 @@ export class MovePppoeToNas {
         trigger,
         outcome,
         reason,
-        actorName:      actor?.actorName ?? (trigger === 'auto' ? 'sistema' : null),
+        // Ajuste 8b: '' se normaliza a null — sin esto el `??` nunca aplica con string vacío
+        // (el auto-move quedaba sin 'sistema' y el manual persistía '' en vez de null).
+        actorName:      normalizeActorName(actor) ?? (trigger === 'auto' ? 'sistema' : null),
       });
     } catch (err) {
       console.warn('[MovePppoeToNas] Failed to record PppoeNasMoveEvent (best-effort):', err);
@@ -225,7 +328,8 @@ export class MovePppoeToNas {
         serviceCatalogId: catalog.id,
         eventType:        'modified',
         actorId:          actor?.actorId ?? null,
-        actorName:        actor?.actorName ?? (trigger === 'auto' ? 'sistema' : ''),
+        // Ajuste 8b: '' normalizado — el fallback 'sistema' del auto-move SÍ aplica.
+        actorName:        normalizeActorName(actor) ?? (trigger === 'auto' ? 'sistema' : ''),
         reason:           null,
         notes:            `Movido de NAS ${origen?.name ?? s.nasId} (${fromIp ?? '—'}) → ${destino.name} (${toIp ?? '—'}) [${trigger}]`,
       });

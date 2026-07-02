@@ -181,7 +181,12 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
   });
 
   it('(n) movePppoeToNas INYECTADO en createPppoeRouter (sin esto la ruta cae al legacy pre-HA)', () => {
-    expect(appSrc).toMatch(/createPppoeRouter\([\s\S]*movePppoeToNas,/);
+    // fix wave 1 (ajuste 8d): ventana ACOTADA a la llamada de createPppoeRouter (patrón del test b)
+    // — el [\s\S]* anterior escaneaba hasta EOF y matcheaba un movePppoeToNas de cualquier otro lado.
+    const idx = appSrc.indexOf('createPppoeRouter(');
+    expect(idx).toBeGreaterThan(-1);
+    const window = appSrc.slice(idx, idx + 4000);
+    expect(window).toMatch(/movePppoeToNas,/);
   });
 
   it('(n) PrismaPppoeNasMoveEventRepository instanciado (registro visible de movimientos)', () => {

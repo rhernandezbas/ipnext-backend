@@ -191,6 +191,25 @@ export class PppoeServiceTerminatedError extends DomainError {
 }
 
 /**
+ * pppoe-move-nas fix wave 1 (ajuste 6 / S1.5): la IP ACTUAL del servicio cae en un pool
+ * `ipKind='public'` y el move llegó SIN `force: true`. Mover un corporativo con IP pública
+ * pagada a CGNAT libera su IP contratada — no puede pasar por accidente: exige decisión
+ * explícita del operador. Code → HTTP: PPPOE_MOVE_PUBLIC_IP → 409.
+ */
+export class PppoeMovePublicIpError extends DomainError {
+  constructor(
+    public readonly pppoeId: string,
+    public readonly currentIp: string,
+  ) {
+    super(
+      `El PPPoE ${pppoeId} tiene una IP PÚBLICA (${currentIp}) — mover a CGNAT la libera. Reintentá con force: true si es una decisión explícita.`,
+      'PPPOE_MOVE_PUBLIC_IP',
+    );
+    this.name = 'PppoeMovePublicIpError';
+  }
+}
+
+/**
  * pppoe-pool-ip: la IP provista no es un IPv4 válido (formato inválido).
  * Code → HTTP: INVALID_IP_FORMAT → 422.
  */

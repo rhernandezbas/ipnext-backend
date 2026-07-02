@@ -187,7 +187,7 @@ export interface PppoeNasMoveEventDto {
   fromIp: string | null;
   toIp: string | null;
   trigger: string;   // 'manual' | 'auto'
-  outcome: string;   // 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'skipped_public' | 'skipped_unknown_nas'
+  outcome: string;   // 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'failed_db' | 'failed_router' | 'skipped_public' | 'skipped_unknown_nas'
   reason: string | null;
   actorName: string | null;
   createdAt: string; // ISO string
@@ -229,6 +229,11 @@ export type UpdatePppoeBody = z.infer<typeof UpdatePppoeBodySchema>;
 
 export const MovePppoeBodySchema = z.object({
   nasId: z.string().min(1),
+  /**
+   * pppoe-move-nas fix wave 1 (ajuste 6 / S1.5): la IP actual en un pool PUBLIC exige decisión
+   * explícita — sin `force: true` el move responde 409 PPPOE_MOVE_PUBLIC_IP y nada cambia.
+   */
+  force: z.boolean().optional(),
 });
 
 export type MovePppoeBody = z.infer<typeof MovePppoeBodySchema>;

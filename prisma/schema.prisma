@@ -1840,7 +1840,7 @@ model PppoeService {
 
 /// pppoe-move-nas (REQ-LOG-1 / design D6 punto 2) — registro VISIBLE de movimientos de NAS.
 /// TODO intento de move (manual o auto, con o sin contrato) persiste una fila con su outcome:
-/// 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'skipped_public' | 'skipped_unknown_nas'.
+/// 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'failed_db' | 'failed_router' | 'skipped_public' | 'skipped_unknown_nas'.
 /// Append-only. Sin FKs a propósito: fromNasId/toNasId/pppoeServiceId son referencias blandas —
 /// el log de auditoría debe sobrevivir al borrado del NAS/servicio (patrón RadiusEvent, sin cascada).
 model PppoeNasMoveEvent {
@@ -1852,7 +1852,7 @@ model PppoeNasMoveEvent {
   fromIp         String?
   toIp           String?
   trigger        String            // 'manual' | 'auto'
-  outcome        String            // 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'skipped_public' | 'skipped_unknown_nas'
+  outcome        String            // 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'failed_db' | 'failed_router' | 'skipped_public' | 'skipped_unknown_nas'
   reason         String?
   actorName      String?
   createdAt      DateTime @default(now())

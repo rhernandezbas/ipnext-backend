@@ -2225,6 +2225,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       nasMoveEventRepo,
       new PrismaServiceCatalogRepository(),
       new PrismaContractServiceEventRepository(),
+      // fix wave 1 (ajuste 6): clasifica la IP actual contra los pools cargados (IpPool.ipKind) —
+      // guard de IP PÚBLICA: 409 PPPOE_MOVE_PUBLIC_IP sin `force: true`.
+      ipNetworkRepo,
     );
     app.use('/api', createPppoeRouter(
       authAdapter,

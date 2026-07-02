@@ -28,12 +28,17 @@ import { InMemoryPppoeNasMoveEventRepository } from '@infrastructure/adapters/in
 import { InMemoryContractServiceEventRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceEventRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import type { NasServer } from '@domain/entities/nas';
+import type { PppoeService } from '@domain/entities/pppoeService';
+import type { PppoeServiceUpsert } from '@domain/ports/PppoeServiceRepository';
 import {
   PppoeServiceNotFoundError,
   NasNotFoundError,
   PppoeMoveMixedNasTypesError,
+  PppoeMovePublicIpError,
   PppoeServiceTerminatedError,
   OrchestratorUnreachableError,
+  OrchestratorRejectedError,
+  RouterUnreachableError,
 } from '@domain/errors/pppoe';
 import { NoFreeIpError } from '@domain/errors/network';
 
@@ -68,10 +73,14 @@ async function buildFixture(opts?: {
   assignedIps?: string[];
   /** Rango del pool cgnat del NAS B destino. Default 100.64.43.2–100.64.43.254. */
   poolRange?: { start: string; end: string };
+  /** fix wave 1: repo custom (p.ej. que falla el update post-RADIUS — S1.8). */
+  pppoeRepo?: InMemoryPppoeServiceRepository;
+  /** fix wave 1: router gateway custom (p.ej. destino legacy caído — failed_router). */
+  routerGw?: InMemoryRouterGateway;
 }): Promise<Fixture> {
-  const pppoeRepo = new InMemoryPppoeServiceRepository();
+  const pppoeRepo = opts?.pppoeRepo ?? new InMemoryPppoeServiceRepository();
   const nasRepo   = new InMemoryNasRepository();
-  const routerGw  = new InMemoryRouterGateway();
+  const routerGw  = opts?.routerGw ?? new InMemoryRouterGateway();
   const netRepo   = new InMemoryIpNetworkRepository();
   const moveEvents = new InMemoryPppoeNasMoveEventRepository();
   const eventRepo  = new InMemoryContractServiceEventRepository();
@@ -121,11 +130,38 @@ async function buildFixture(opts?: {
     nasId: nasRadiusB.id,
     ipKind: 'cgnat',
   });
+  // fix wave 1 (ajuste 6 / S1.5): pool PUBLIC cargado — clasifica la IP actual del servicio.
+  // Rango disjunto de todo lo demás: solo los tests que sientan la IP del servicio acá lo activan.
+  netRepo.seedNetwork({
+    id: 'net-pub',
+    network: '190.15.242.0/24',
+    gateway: '190.15.242.1',
+    dns1: '8.8.8.8',
+    dns2: '8.8.4.4',
+    description: 'Públicas corporativas',
+    partnerId: null,
+    type: 'pppoe',
+    totalIps: 254,
+    usedIps: null,
+    freeIps: null,
+  });
+  netRepo.seedPool({
+    id: 'pool-pub',
+    name: 'publicas',
+    networkId: 'net-pub',
+    rangeStart: '190.15.242.2',
+    rangeEnd: '190.15.242.254',
+    type: 'static',
+    assignedCount: null,
+    totalCount: 253,
+    nasId: null,
+    ipKind: 'public',
+  });
 
   const findFreeIp = new FindFreeIp(netRepo, nasRepo, routerGw, orchestrator);
   const legacyMove = new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepo);
   const uc = new MovePppoeToNas(
-    pppoeRepo, nasRepo, orchestrator, findFreeIp, legacyMove, moveEvents, catalogRepo, eventRepo,
+    pppoeRepo, nasRepo, orchestrator, findFreeIp, legacyMove, moveEvents, catalogRepo, eventRepo, netRepo,
   );
 
   return { pppoeRepo, nasRepo, orchestrator, routerGw, netRepo, moveEvents, eventRepo, catalogRepo, nasRadiusB, uc };
@@ -243,20 +279,45 @@ describe('MovePppoeToNas — radius → radius (REQ-MOVE-1/2)', () => {
     expect(events[0].outcome).toBe('failed_orchestrator');
   });
 
-  it('S2.1: move exitoso → disconnectSessions llamado DESPUÉS de changeFramedIp (post-persist kick)', async () => {
-    const fx = await buildFixture();
+  it('S2.1: kick DESPUÉS de PERSISTIR en DB — orden verificable con call-log COMPARTIDO repo↔gateway', async () => {
+    // fix wave 1 (ajuste 8c): "después de changeFramedIp" no alcanza — el kick debe ir después
+    // del write de DB. El log compartido registra AMBOS lados (RADIUS y DB) en un solo timeline.
+    const sharedLog: string[] = [];
+    let armed = false; // el seeding también escribe en DB — armar recién antes del move
+
+    class LoggingRepo extends InMemoryPppoeServiceRepository {
+      override async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed'): Promise<PppoeService | null> {
+        if (armed) sharedLog.push('db:persist');
+        return super.setNasAndIp(id, nasId, remoteAddress, ipMode);
+      }
+      override async upsertByUsername(data: PppoeServiceUpsert): Promise<PppoeService> {
+        if (armed) sharedLog.push('db:persist');
+        return super.upsertByUsername(data);
+      }
+    }
+    class LoggingOrchestrator extends InMemoryRadiusOrchestratorGateway {
+      override async changeFramedIp(username: string, framedIp: string | null): Promise<void> {
+        if (armed) sharedLog.push('radius:changeFramedIp');
+        return super.changeFramedIp(username, framedIp);
+      }
+      override async disconnectSessions(username: string): Promise<void> {
+        if (armed) sharedLog.push('radius:kick');
+        return super.disconnectSessions(username);
+      }
+    }
+
+    const pppoeRepo = new LoggingRepo();
+    const orchestrator = new LoggingOrchestrator({ assignedIps: ['100.64.43.2', OLD_IP] });
+    const fx = await buildFixture({ orchestrator, pppoeRepo });
     const s = await seedService(fx);
+    armed = true;
 
     await fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' });
 
-    const ops = fx.orchestrator.calls.filter(c => c.username === 'moveuser').map(c => c.op);
-    const idxChange = ops.indexOf('changeFramedIp');
-    const idxKick   = ops.indexOf('disconnectSessions');
-    expect(idxChange).toBeGreaterThanOrEqual(0);
-    expect(idxKick).toBeGreaterThan(idxChange);
+    expect(sharedLog).toEqual(['radius:changeFramedIp', 'db:persist', 'radius:kick']);
   });
 
-  it('S2.2: disconnectSessions falla → el move devuelve éxito igual y el servicio quedó movido', async () => {
+  it('S2.2: disconnectSessions falla → el move devuelve éxito igual y el evento moved lleva reason=kick_failed', async () => {
     const orchestrator = new KickFailsOrchestrator({ assignedIps: ['100.64.43.2'] });
     const fx = await buildFixture({ orchestrator });
     const s = await seedService(fx);
@@ -268,9 +329,12 @@ describe('MovePppoeToNas — radius → radius (REQ-MOVE-1/2)', () => {
     const row = await fx.pppoeRepo.findById(s.id);
     expect(row!.nasId).toBe(fx.nasRadiusB.id);
 
-    // El move quedó registrado como moved a pesar del kick fallido (best-effort).
+    // El move quedó registrado como moved a pesar del kick fallido (best-effort)…
     const events = fx.moveEvents.all();
-    expect(events.map(e => e.outcome)).toContain('moved');
+    const movedEvent = events.find(e => e.outcome === 'moved');
+    expect(movedEvent).toBeDefined();
+    // …pero con PISTA visible (ajuste 7): el operador sabe que el cliente sigue con la IP vieja.
+    expect(movedEvent!.reason).toBe('kick_failed');
   });
 
   it('S3.1: ambos radius → CERO llamadas al PppoeRouterGateway (sin create/remove de secrets)', async () => {
@@ -424,5 +488,288 @@ describe('MovePppoeToNas — guards', () => {
 
     expect(fx.orchestrator.calls).toHaveLength(0);
     expect(fx.moveEvents.all()).toHaveLength(0);
+  });
+
+  it('terminated hacia su MISMO NAS → no-op (el no-op va ANTES del guard terminated, ajuste 8a)', async () => {
+    const fx = await buildFixture();
+    const s = await seedService(fx, { status: 'terminated' }); // nasId = NAS_RADIUS_A
+
+    const result = await fx.uc.execute({ id: s.id, nasId: NAS_RADIUS_A }, { actorName: 'operador' });
+
+    expect(result.nasId).toBe(NAS_RADIUS_A);
+    expect(fx.orchestrator.calls).toHaveLength(0);
+    expect(fx.moveEvents.all()).toHaveLength(0);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Fix wave 1 (post-review 2026-07-01) — S1.5/S1.6/S1.7/S1.8 + REQ-LOG-1 ampliado
+// ════════════════════════════════════════════════════════════════════════════════
+
+/** Orchestrator con snapshot VIEJO: oculta una IP del PRÓXIMO listAssignedIps (simula el TOCTOU
+ *  entre el FindFreeIp de un move y el changeFramedIp de otro move concurrente). */
+class StaleSnapshotOrchestrator extends InMemoryRadiusOrchestratorGateway {
+  /** IP a ocultar del próximo listAssignedIps (una sola vez). */
+  hideOnce: string | null = null;
+  override async listAssignedIps(): Promise<string[]> {
+    const ips = await super.listAssignedIps();
+    if (this.hideOnce !== null) {
+      const hidden = this.hideOnce;
+      this.hideOnce = null;
+      return ips.filter(ip => ip !== hidden);
+    }
+    return ips;
+  }
+}
+
+/** Orchestrator que SIEMPRE rechaza changeFramedIp con 409 (colisión persistente de Framed-IP). */
+class RejectFramedIpOrchestrator extends InMemoryRadiusOrchestratorGateway {
+  override async changeFramedIp(username: string, framedIp: string | null): Promise<void> {
+    this.calls.push({ op: 'changeFramedIp', username, arg: { framedIp } });
+    throw new OrchestratorRejectedError(409, { detail: 'FramedIpAlreadyAssigned' });
+  }
+}
+
+/** Repo que FALLA todo write una vez armado (simula la DB caída DESPUÉS del write RADIUS — S1.8). */
+class DbDownRepo extends InMemoryPppoeServiceRepository {
+  failWrites = false;
+  override async upsertByUsername(data: PppoeServiceUpsert): Promise<PppoeService> {
+    if (this.failWrites) throw new Error('db down (post-RADIUS)');
+    return super.upsertByUsername(data);
+  }
+  override async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed'): Promise<PppoeService | null> {
+    if (this.failWrites) throw new Error('db down (post-RADIUS)');
+    return super.setNasAndIp(id, nasId, remoteAddress, ipMode);
+  }
+}
+
+/** Orchestrator que BORRA la fila del espejo tras el changeFramedIp OK (terminate concurrente — S1.7). */
+class DeleteRowAfterRadiusOrchestrator extends InMemoryRadiusOrchestratorGateway {
+  onFramedIpWritten: (() => Promise<void>) | null = null;
+  override async changeFramedIp(username: string, framedIp: string | null): Promise<void> {
+    await super.changeFramedIp(username, framedIp);
+    await this.onFramedIpWritten?.();
+  }
+}
+
+describe('MovePppoeToNas — S1.5: guard de IP PÚBLICA (force explícito)', () => {
+  it('IP actual en pool public SIN force → PppoeMovePublicIpError y NADA cambió (sin fila de evento)', async () => {
+    const fx = await buildFixture();
+    const s = await seedService(fx, { remoteAddress: '190.15.242.10' }); // dentro de pool-pub
+
+    await expect(fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' }))
+      .rejects.toBeInstanceOf(PppoeMovePublicIpError);
+
+    expect(fx.orchestrator.calls).toHaveLength(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(NAS_RADIUS_A);
+    expect(row!.remoteAddress).toBe('190.15.242.10');
+    // Guard de INPUT: responde 4xx directo, NO persiste fila (REQ-LOG-1).
+    expect(fx.moveEvents.all()).toHaveLength(0);
+  });
+
+  it('IP actual en pool public CON force: true → procede (IP nueva del pool cgnat del destino)', async () => {
+    const fx = await buildFixture();
+    const s = await seedService(fx, { remoteAddress: '190.15.242.10' });
+
+    const moved = await fx.uc.execute(
+      { id: s.id, nasId: fx.nasRadiusB.id, force: true },
+      { actorName: 'operador' },
+    );
+
+    expect(moved.nasId).toBe(fx.nasRadiusB.id);
+    expect(moved.remoteAddress).toBe('100.64.43.3');
+    const events = fx.moveEvents.all();
+    expect(events.map(e => e.outcome)).toEqual(['moved']);
+  });
+
+  it('IP actual CGNAT (no pública) → el move NO exige force (comportamiento base intacto)', async () => {
+    const fx = await buildFixture();
+    const s = await seedService(fx); // OLD_IP 100.64.60.25, fuera de todo pool public
+
+    const moved = await fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' });
+    expect(moved.remoteAddress).toBe('100.64.43.3');
+  });
+});
+
+describe('MovePppoeToNas — S1.6: colisión de Framed-IP (guard autoritativo del orchestrator + retry)', () => {
+  it('dos moves al mismo NAS "eligen" la misma IP → el 2º converge a otra tras el rechazo (retry con FindFreeIp fresco)', async () => {
+    const orchestrator = new StaleSnapshotOrchestrator({ assignedIps: ['100.64.43.2', OLD_IP] });
+    const fx = await buildFixture({ orchestrator });
+    const s1 = await seedService(fx); // moveuser
+    const s2 = await seedService(fx, { username: 'moveuser2', remoteAddress: '100.64.60.26' });
+
+    // Move 1 toma la .3 (queda registrada como asignada a moveuser en el RADIUS fake).
+    await fx.uc.execute({ id: s1.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' });
+
+    // TOCTOU: el snapshot del move 2 NO ve la .3 recién tomada → también la "elige".
+    orchestrator.hideOnce = '100.64.43.3';
+    const moved2 = await fx.uc.execute({ id: s2.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' });
+
+    // El orchestrator rechazó la .3 (guard autoritativo) → retry con snapshot fresco → .4.
+    expect(moved2.remoteAddress).toBe('100.64.43.4');
+    const attempts = orchestrator.calls
+      .filter(c => c.op === 'changeFramedIp' && c.username === 'moveuser2')
+      .map(c => (c.arg as { framedIp: string }).framedIp);
+    expect(attempts).toEqual(['100.64.43.3', '100.64.43.4']);
+    // El 2º move terminó moved (sin fila de fallo intermedia).
+    const eventsU2 = fx.moveEvents.all().filter(e => e.username === 'moveuser2');
+    expect(eventsU2.map(e => e.outcome)).toEqual(['moved']);
+    // Y la DB refleja la IP convergida.
+    const row2 = await fx.pppoeRepo.findById(s2.id);
+    expect(row2!.remoteAddress).toBe('100.64.43.4');
+  });
+
+  it('el 2º intento TAMBIÉN rechazado → evento failed_orchestrator + propaga OrchestratorRejectedError (UN solo retry)', async () => {
+    const orchestrator = new RejectFramedIpOrchestrator({ assignedIps: ['100.64.43.2', OLD_IP] });
+    const fx = await buildFixture({ orchestrator });
+    const s = await seedService(fx);
+
+    await expect(fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' }))
+      .rejects.toBeInstanceOf(OrchestratorRejectedError);
+
+    // Exactamente 2 intentos (1 original + 1 retry) — nunca un loop.
+    const attempts = orchestrator.calls.filter(c => c.op === 'changeFramedIp' && c.username === 'moveuser');
+    expect(attempts).toHaveLength(2);
+    // UN solo evento failed_orchestrator (el fallo FINAL, no uno por intento).
+    const events = fx.moveEvents.all();
+    expect(events.map(e => e.outcome)).toEqual(['failed_orchestrator']);
+    // La DB no cambió.
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(NAS_RADIUS_A);
+    expect(row!.remoteAddress).toBe(OLD_IP);
+  });
+
+  it('rechazo NO-409 (p.ej. 422) → NO reintenta: evento failed_orchestrator + propaga directo', async () => {
+    class Reject422Orchestrator extends InMemoryRadiusOrchestratorGateway {
+      override async changeFramedIp(username: string, framedIp: string | null): Promise<void> {
+        this.calls.push({ op: 'changeFramedIp', username, arg: { framedIp } });
+        throw new OrchestratorRejectedError(422, { detail: 'invalid framed ip' });
+      }
+    }
+    const orchestrator = new Reject422Orchestrator({ assignedIps: ['100.64.43.2', OLD_IP] });
+    const fx = await buildFixture({ orchestrator });
+    const s = await seedService(fx);
+
+    await expect(fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' }))
+      .rejects.toBeInstanceOf(OrchestratorRejectedError);
+
+    expect(orchestrator.calls.filter(c => c.op === 'changeFramedIp')).toHaveLength(1);
+    expect(fx.moveEvents.all().map(e => e.outcome)).toEqual(['failed_orchestrator']);
+  });
+});
+
+describe('MovePppoeToNas — S1.7: anti-resurrección (update NO-creador)', () => {
+  it('fila borrada entre la lectura y la persistencia → typed not-found y CERO filas creadas', async () => {
+    const orchestrator = new DeleteRowAfterRadiusOrchestrator({ assignedIps: ['100.64.43.2', OLD_IP] });
+    const fx = await buildFixture({ orchestrator });
+    const s = await seedService(fx);
+    // Terminate concurrente: borra la fila justo DESPUÉS del write RADIUS, ANTES del write DB.
+    orchestrator.onFramedIpWritten = async () => { await fx.pppoeRepo.deleteById(s.id); };
+
+    await expect(fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' }))
+      .rejects.toBeInstanceOf(PppoeServiceNotFoundError);
+
+    // La lápida NO resucitó: cero filas (upsertByUsername la habría re-INSERTADO).
+    expect(await fx.pppoeRepo.list()).toHaveLength(0);
+    expect(await fx.pppoeRepo.findByUsername('moveuser')).toBeNull();
+  });
+});
+
+describe('MovePppoeToNas — S1.8: fallo de DB DESPUÉS del write RADIUS (failed_db)', () => {
+  it('update de DB falla post-changeFramedIp → evento failed_db (reason db_update_failed_after_radius_write) + propaga', async () => {
+    const pppoeRepo = new DbDownRepo();
+    const fx = await buildFixture({ pppoeRepo });
+    const s = await seedService(fx);
+    pppoeRepo.failWrites = true; // armar DESPUÉS del seeding
+
+    await expect(fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' }))
+      .rejects.toThrow('db down (post-RADIUS)');
+
+    // El RADIUS SÍ quedó escrito (la divergencia existe y necesita rastro).
+    const radiusWrite = fx.orchestrator.calls.find(c => c.op === 'changeFramedIp' && c.username === 'moveuser');
+    expect(radiusWrite).toBeDefined();
+    expect((radiusWrite!.arg as { framedIp: string }).framedIp).toBe('100.64.43.3');
+    // El rastro VISIBLE de la divergencia RADIUS↔DB.
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0].outcome).toBe('failed_db');
+    expect(events[0].reason).toBe('db_update_failed_after_radius_write');
+    expect(events[0].toIp).toBe('100.64.43.3');
+  });
+});
+
+describe('MovePppoeToNas — REQ-LOG-1 ampliado (fix wave 1, ajuste 5)', () => {
+  it('OrchestratorUnreachableError DENTRO de FindFreeIp (listAssignedIps) → evento failed_orchestrator reason=list_assigned_ips', async () => {
+    const orchestrator = new InMemoryRadiusOrchestratorGateway({ assignedIpsUnreachable: true });
+    const fx = await buildFixture({ orchestrator });
+    const s = await seedService(fx);
+
+    await expect(fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: 'operador' }))
+      .rejects.toBeInstanceOf(OrchestratorUnreachableError);
+
+    // Nada se escribió (el fallo fue ANTES de elegir IP)…
+    expect(fx.orchestrator.calls.filter(c => c.op === 'changeFramedIp')).toHaveLength(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(NAS_RADIUS_A);
+    // …pero el intento quedó VISIBLE en la auditoría.
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0].outcome).toBe('failed_orchestrator');
+    expect(events[0].reason).toBe('list_assigned_ips');
+  });
+
+  it('fallo del move LEGACY (router caído) → evento failed_router + propaga, DB intacta', async () => {
+    const routerGw = new InMemoryRouterGateway({ unreachable: ['10.0.0.99'] });
+    const fx = await buildFixture({ routerGw });
+    const destinoMk = await fx.nasRepo.createNasServer({
+      name: 'MK destino caído',
+      type: 'mikrotik_api',
+      ipAddress: '10.0.0.99',
+      radiusSecret: 'x',
+      nasIpAddress: '10.0.0.99',
+      apiPort: 8728,
+      apiLogin: 'admin',
+      apiPassword: 'pw',
+      status: 'active',
+      lastSeen: null,
+      clientCount: 0,
+      description: 'destino legacy caído',
+    });
+    const s = await seedService(fx, { username: 'mklegacy', nasId: NAS_MK, remoteAddress: '192.168.1.50' });
+
+    await expect(fx.uc.execute({ id: s.id, nasId: destinoMk.id }, { actorName: 'operador' }))
+      .rejects.toBeInstanceOf(RouterUnreachableError);
+
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0].outcome).toBe('failed_router');
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(NAS_MK);
+    expect(row!.remoteAddress).toBe('192.168.1.50');
+  });
+});
+
+describe('MovePppoeToNas — actorName vacío se normaliza a null (fix wave 1, ajuste 8b)', () => {
+  it("manual con actorName '' → PppoeNasMoveEvent.actorName null (no string vacío)", async () => {
+    const fx = await buildFixture();
+    const s = await seedService(fx);
+
+    await fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id }, { actorName: '' });
+
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0].actorName).toBeNull();
+  });
+
+  it("auto con actorName '' → PppoeNasMoveEvent.actorName 'sistema' (el fallback SÍ aplica)", async () => {
+    const fx = await buildFixture();
+    const s = await seedService(fx);
+
+    await fx.uc.execute({ id: s.id, nasId: fx.nasRadiusB.id, trigger: 'auto' }, { actorName: '' });
+
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0].actorName).toBe('sistema');
   });
 });

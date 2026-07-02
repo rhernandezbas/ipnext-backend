@@ -27,11 +27,15 @@
  *   NAS_NOT_FOUND         → 404
  *   ENFORCEMENT_IN_PROGRESS → 409
  *   BATCH_NOT_FOUND       → 404
- *   NO_FREE_IP / NO_POOL_FOR_NAS_TYPE (move)   → 409
- *   PPPOE_MOVE_MIXED_NAS_TYPES / PPPOE_TERMINATED → 409
+ *   --- move (fix wave 1: via errorHandler, fuente ÚNICA — el handler solo hace next(err)) ---
+ *   NO_FREE_IP            → 422
+ *   NO_POOL_FOR_NAS_TYPE  → 404
+ *   PPPOE_MOVE_MIXED_NAS_TYPES / PPPOE_TERMINATED / PPPOE_MOVE_PUBLIC_IP → 409
+ *   ORCHESTRATOR_REJECTED → re-envía el upstreamStatus (p.ej. 409 colisión Framed-IP)
+ *   desconocido           → 500 (nunca request colgada)
  *   zod invalid           → 422
  */
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { SessionRepository } from '@domain/ports/SessionRepository';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
@@ -94,14 +98,11 @@ import {
   PppoeContractAlreadyHasServiceError,
   PppoeIngestNotSupportedError,
   PppoeRenameNasNotSupportedError,
-  PppoeMoveMixedNasTypesError,
-  PppoeServiceTerminatedError,
   NasNotFoundError,
   InvalidIpFormatError,
   IpAlreadyTakenError,
   NasNoPoolError,
 } from '@domain/errors/pppoe';
-import { NoFreeIpError, NoPoolForNasTypeError } from '@domain/errors/network';
 
 const BajaBodySchema = z.object({ reason: z.string().nullish() }).optional();
 /** pppoe-pool-ip: body de POST /pppoe/:id/pin-ip — la IP fija a pinear. */
@@ -284,22 +285,28 @@ export function createPppoeRouter(
       '/pppoe/nas-move-events',
       auth,
       canRead,
-      async (req: Request, res: Response): Promise<void> => {
-        const q = req.query;
-        const filter: { page?: number; limit?: number; outcome?: string; trigger?: string; username?: string } = {};
-        if (typeof q['outcome']  === 'string' && q['outcome']  !== '') filter.outcome  = q['outcome'];
-        if (typeof q['trigger']  === 'string' && q['trigger']  !== '') filter.trigger  = q['trigger'];
-        if (typeof q['username'] === 'string' && q['username'] !== '') filter.username = q['username'];
-        if (typeof q['page'] === 'string' && q['page'] !== '') {
-          const n = parseInt(q['page'], 10);
-          if (!isNaN(n) && n > 0) filter.page = n;
+      // fix wave 1 (ajuste 1): handler async SIEMPRE con try/catch → next(err). Sin él, un fallo
+      // del use case era un unhandledRejection y la request quedaba COLGADA (Express 4).
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+          const q = req.query;
+          const filter: { page?: number; limit?: number; outcome?: string; trigger?: string; username?: string } = {};
+          if (typeof q['outcome']  === 'string' && q['outcome']  !== '') filter.outcome  = q['outcome'];
+          if (typeof q['trigger']  === 'string' && q['trigger']  !== '') filter.trigger  = q['trigger'];
+          if (typeof q['username'] === 'string' && q['username'] !== '') filter.username = q['username'];
+          if (typeof q['page'] === 'string' && q['page'] !== '') {
+            const n = parseInt(q['page'], 10);
+            if (!isNaN(n) && n > 0) filter.page = n;
+          }
+          if (typeof q['limit'] === 'string' && q['limit'] !== '') {
+            const n = parseInt(q['limit'], 10);
+            if (!isNaN(n) && n > 0) filter.limit = n;
+          }
+          const page = await listPppoeNasMoveEvents.execute(filter);
+          res.json(page);
+        } catch (err) {
+          next(err);
         }
-        if (typeof q['limit'] === 'string' && q['limit'] !== '') {
-          const n = parseInt(q['limit'], 10);
-          if (!isNaN(n) && n > 0) filter.limit = n;
-        }
-        const page = await listPppoeNasMoveEvents.execute(filter);
-        res.json(page);
       },
     );
   }
@@ -630,14 +637,17 @@ export function createPppoeRouter(
 
   // ── POST /pppoe/:id/move ────────────────────────────────────────────────────
   // Sub-recurso /move montado ANTES de que cualquier catch-all /:id lo sombree.
-  // pppoe-move-nas W1: cablea el NUEVO MovePppoeToNas (radius-aware, mismo body {nasId}).
+  // pppoe-move-nas W1: cablea el NUEVO MovePppoeToNas (radius-aware, body {nasId, force?}).
   // Si no está wired cae al legacy (back-compat de fixtures viejas; en prod SIEMPRE viene wired).
-  // En Express 4 los async handlers necesitan captura explícita — throw no llega al errorHandler.
+  // fix wave 1 (ajuste 1): el handler termina en next(err) — en Express 4 un `throw` async NO
+  // llega al errorHandler y la request queda COLGADA (unhandledRejection). El errorHandler es la
+  // fuente ÚNICA del mapeo code→status: 502 unreachable · 404 not-found/NO_POOL_FOR_NAS_TYPE ·
+  // 422 NO_FREE_IP · 409 mixto/terminated/pública-sin-force · 500 desconocidos.
   router.post(
     '/pppoe/:id/move',
     auth,
     canManage,
-    async (req: Request, res: Response): Promise<void> => {
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = MovePppoeBodySchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -646,7 +656,12 @@ export function createPppoeRouter(
       try {
         const service = movePppoeToNas
           ? await movePppoeToNas.execute(
-              { id: req.params['id'] as string, nasId: parsed.data.nasId, trigger: 'manual' },
+              {
+                id: req.params['id'] as string,
+                nasId: parsed.data.nasId,
+                force: parsed.data.force,
+                trigger: 'manual',
+              },
               actorOf(req),
             )
           : await movePppoeServiceToRouter.execute({
@@ -655,35 +670,14 @@ export function createPppoeRouter(
             });
         res.json(toPppoeServiceDto(service));
       } catch (err) {
-        // Backend de move inalcanzable: router legacy o RADIUS/orchestrator → 502.
-        if (err instanceof RouterUnreachableError || err instanceof OrchestratorUnreachableError) {
-          res.status(502).json({ code: err.code, error: err.message });
+        // El orchestrator RECHAZÓ el move (4xx) — p.ej. colisión de Framed-IP persistente tras el
+        // retry (S1.6). Reenviamos su status (patrón de la ruta create).
+        if (err instanceof OrchestratorRejectedError) {
+          res.status(err.upstreamStatus).json({ code: err.code, error: err.message });
           return;
         }
-        if (err instanceof PppoeServiceNotFoundError) {
-          res.status(404).json({ code: err.code, error: err.message });
-          return;
-        }
-        if (err instanceof NasNotFoundError) {
-          res.status(404).json({ code: err.code, error: err.message });
-          return;
-        }
-        // Pool cgnat del destino lleno/inexistente → 409: el move NO puede asignar IP, nada cambió.
-        if (err instanceof NoFreeIpError || err instanceof NoPoolForNasTypeError) {
-          res.status(409).json({ code: err.code, error: err.message });
-          return;
-        }
-        // Move mixto radius↔legacy → 409 (REQ-MOVE-3).
-        if (err instanceof PppoeMoveMixedNasTypesError) {
-          res.status(409).json({ code: err.code, error: err.message });
-          return;
-        }
-        // Servicio dado de baja (terminated) → 409: no hay nada que mover.
-        if (err instanceof PppoeServiceTerminatedError) {
-          res.status(409).json({ code: err.code, error: err.message });
-          return;
-        }
-        throw err;
+        // Resto → errorHandler (fuente única). NUNCA `throw`: la request quedaría colgada.
+        next(err);
       }
     },
   );

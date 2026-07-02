@@ -12,10 +12,16 @@
 
 export type PppoeNasMoveTrigger = 'manual' | 'auto';
 
+/**
+ * fix wave 1 (ajuste 5): +`failed_db` (update de DB falló DESPUÉS del changeFramedIp OK —
+ * divergencia RADIUS↔DB con rastro) y +`failed_router` (fallo del move legacy por API router).
+ */
 export type PppoeNasMoveOutcome =
   | 'moved'
   | 'failed_no_free_ip'
   | 'failed_orchestrator'
+  | 'failed_db'
+  | 'failed_router'
   | 'skipped_public'
   | 'skipped_unknown_nas';
 

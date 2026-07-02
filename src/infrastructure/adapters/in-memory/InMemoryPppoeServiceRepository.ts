@@ -271,6 +271,16 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     return { ...found };
   }
 
+  /** pppoe-move-nas (ajuste 3 — anti-resurrección): update NO-creador por id. Fila ausente → null. */
+  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed'): Promise<PppoeService | null> {
+    const found = this.store.find(s => s.id === id);
+    if (!found) return null;
+    found.nasId = nasId;
+    found.remoteAddress = remoteAddress;
+    found.ipMode = ipMode;
+    return { ...found };
+  }
+
   async deleteById(id: string): Promise<void> {
     const idx = this.store.findIndex(s => s.id === id);
     if (idx !== -1) this.store.splice(idx, 1);

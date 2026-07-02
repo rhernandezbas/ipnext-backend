@@ -81,8 +81,20 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   private readonly failForPlanCode: Set<string>;
   private readonly rejectPlanCode: Map<string, PlanRejectionSeed>;
   private readonly onSyncPlanCb: (() => void) | undefined;
-  /** IPs asignadas en el RADIUS (radreply Framed-IP) que devuelve listAssignedIps. */
+  /** IPs asignadas en el RADIUS (radreply Framed-IP) que devuelve listAssignedIps.
+   *  fix wave 1 (pppoe-move-nas ajuste 2): MUTABLE — changeFramedIp registra acá la IP escrita
+   *  (y libera la anterior del mismo usuario), igual que el radreply real. */
   private readonly assignedIps: string[];
+  /**
+   * fix wave 1 (pppoe-move-nas ajuste 2): dueño de cada Framed-IP ESCRITA via changeFramedIp
+   * (ip → username). Modela el guard AUTORITATIVO del orchestrator real (verificado en
+   * user_management_service.py:203-218): escribir una IP ya asignada a OTRO username rechaza
+   * con FramedIpAlreadyAssigned → HTTP 409 (OrchestratorRejectedError).
+   * Las IPs sembradas por `assignedIps` quedan ANÓNIMAS: cuentan como tomadas para
+   * listAssignedIps pero NO rechazan la escritura (no se conoce el dueño — p.ej. el re-pin
+   * de un servicio a su propia IP sembrada debe seguir funcionando).
+   */
+  private readonly ipOwners = new Map<string, string>();
   /** Si true, listAssignedIps lanza OrchestratorUnreachableError (simula orchestrator caído). */
   private readonly assignedIpsUnreachable: boolean;
   /** Inventario que devuelve listUsers (GET /users). Sembrable para tests de ingest/adopción. */
@@ -220,7 +232,29 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
 
   async changeFramedIp(username: string, framedIp: string | null): Promise<void> {
     this.guardUser(username);
+    // El intento se registra ANTES del rechazo: la petición SÍ llegó al orchestrator
+    // (permite asertar la cantidad de intentos del retry en los tests de colisión).
     this.calls.push({ op: 'changeFramedIp', username, arg: { framedIp } });
+    if (framedIp !== null) {
+      const owner = this.ipOwners.get(framedIp);
+      if (owner !== undefined && owner !== username) {
+        // Guard autoritativo del orchestrator real: Framed-IP tomada por OTRO → 409.
+        throw new OrchestratorRejectedError(409, {
+          detail: `Framed-IP ${framedIp} already assigned to '${owner}' (FramedIpAlreadyAssigned)`,
+        });
+      }
+    }
+    // Libera la IP anterior escrita por ESTE username (el radreply real se sobreescribe).
+    const prev = this.state.get(username)?.framedIp;
+    if (prev && this.ipOwners.get(prev) === username) {
+      this.ipOwners.delete(prev);
+      const i = this.assignedIps.indexOf(prev);
+      if (i !== -1) this.assignedIps.splice(i, 1);
+    }
+    if (framedIp !== null) {
+      this.ipOwners.set(framedIp, username);
+      if (!this.assignedIps.includes(framedIp)) this.assignedIps.push(framedIp);
+    }
     this.upsert(username).framedIp = framedIp;
   }
 

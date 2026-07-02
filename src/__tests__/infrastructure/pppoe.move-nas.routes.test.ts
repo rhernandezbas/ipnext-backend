@@ -63,6 +63,7 @@ import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import type { NasServer } from '@domain/entities/nas';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+import { OrchestratorRejectedError } from '@domain/errors/pppoe';
 
 class EchoAuthProvider implements AuthProvider {
   async login() {
@@ -89,6 +90,8 @@ interface Fixture {
   pppoeRepo: InMemoryPppoeServiceRepository;
   moveEvents: InMemoryPppoeNasMoveEventRepository;
   nasRadiusB: NasServer;
+  /** fix wave 1: NAS radius SIN pools cgnat (para el mapeo NO_POOL_FOR_NAS_TYPE → 404). */
+  nasRadiusC: NasServer;
   readUserId: string;
   manageUserId: string;
   nobodyUserId: string;
@@ -98,6 +101,8 @@ async function buildApp(opts?: {
   assignedIps?: string[];
   unreachableUsers?: string[];
   poolRange?: { start: string; end: string };
+  /** fix wave 1: orchestrator custom (p.ej. que rechaza changeFramedIp con 409 — S1.6). */
+  orchestrator?: InMemoryRadiusOrchestratorGateway;
 }): Promise<Fixture> {
   const roleRepo     = new InMemoryRbacRoleRepository();
   const userRoleRepo = new InMemoryRbacUserRoleRepository();
@@ -153,7 +158,7 @@ async function buildApp(opts?: {
   await catalogRepo.create({ name: 'INTERNET' });
   const eventRepo = new InMemoryContractServiceEventRepository();
   const ensure    = new EnsureInternetContractService(csRepo, catalogRepo);
-  const orchestrator = new InMemoryRadiusOrchestratorGateway({
+  const orchestrator = opts?.orchestrator ?? new InMemoryRadiusOrchestratorGateway({
     assignedIps: opts?.assignedIps ?? ['100.64.43.2', OLD_IP],
     unreachable: opts?.unreachableUsers,
   });
@@ -183,11 +188,37 @@ async function buildApp(opts?: {
     rangeEnd:   opts?.poolRange?.end   ?? '100.64.43.254',
     type: 'static', assignedCount: null, totalCount: 253, nasId: nasRadiusB.id, ipKind: 'cgnat',
   });
+  // fix wave 1 (S1.5): pool PUBLIC cargado — clasifica la IP actual (rango disjunto del resto).
+  netRepo.seedNetwork({
+    id: 'net-pub', network: '190.15.242.0/24', gateway: '190.15.242.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
+    description: 'Públicas corporativas', partnerId: null, type: 'pppoe', totalIps: 254, usedIps: null, freeIps: null,
+  });
+  netRepo.seedPool({
+    id: 'pool-pub', name: 'publicas', networkId: 'net-pub',
+    rangeStart: '190.15.242.2', rangeEnd: '190.15.242.254',
+    type: 'static', assignedCount: null, totalCount: 253, nasId: null, ipKind: 'public',
+  });
+
+  // fix wave 1: NAS radius C sin NINGÚN pool cgnat → FindFreeIp lanza NO_POOL_FOR_NAS_TYPE.
+  const nasRadiusC = await nasRepo.createNasServer({
+    name: 'NAS Radius C (sin pool)',
+    type: 'radius_orchestrator',
+    ipAddress: '10.0.0.7',
+    radiusSecret: 'x',
+    nasIpAddress: '10.0.0.7',
+    apiPort: null,
+    apiLogin: null,
+    apiPassword: null,
+    status: 'active',
+    lastSeen: null,
+    clientCount: 0,
+    description: 'destino radius sin pools',
+  });
 
   const findFreeIp = new FindFreeIp(netRepo, nasRepo, routerGw, orchestrator);
   const legacyMove = new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepo);
   const movePppoeToNas = new MovePppoeToNas(
-    pppoeRepo, nasRepo, orchestrator, findFreeIp, legacyMove, moveEvents, catalogRepo, eventRepo,
+    pppoeRepo, nasRepo, orchestrator, findFreeIp, legacyMove, moveEvents, catalogRepo, eventRepo, netRepo,
   );
   const listMoveEvents = new ListPppoeNasMoveEvents(moveEvents, nasRepo);
 
@@ -236,7 +267,7 @@ async function buildApp(opts?: {
   app.use(errorHandler);
 
   return {
-    app, pppoeRepo, moveEvents, nasRadiusB,
+    app, pppoeRepo, moveEvents, nasRadiusB, nasRadiusC,
     readUserId: readUser.id, manageUserId: manageUser.id, nobodyUserId: nobodyUser.id,
   };
 }
@@ -320,18 +351,86 @@ describe('POST /api/pppoe/:id/move (radius-aware)', () => {
     expect(res.body.code).toBe('NAS_NOT_FOUND');
   });
 
-  it('pool destino LLENO → 409 NO_FREE_IP y el cliente queda como estaba', async () => {
+  it('pool destino LLENO → 422 NO_FREE_IP (status del errorHandler, fuente ÚNICA) y el cliente queda como estaba', async () => {
     const fx = await buildApp({
       poolRange: { start: '100.64.43.2', end: '100.64.43.3' },
       assignedIps: ['100.64.43.2', '100.64.43.3'],
     });
     const s = await seedPppoe(fx);
     const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(422);
     expect(res.body.code).toBe('NO_FREE_IP');
     const row = await fx.pppoeRepo.findById(s.id);
     expect(row!.nasId).toBe(RADIUS_NAS_A);
     expect(row!.remoteAddress).toBe(OLD_IP);
+  });
+
+  it('destino radius SIN pool cgnat → 404 NO_POOL_FOR_NAS_TYPE (status del errorHandler)', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusC.id }), fx.manageUserId);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NO_POOL_FOR_NAS_TYPE');
+  });
+
+  it('servicio terminated → 409 PPPOE_TERMINATED (via errorHandler)', async () => {
+    const fx = await buildApp();
+    const s = await fx.pppoeRepo.upsertByUsername({
+      username: 'terminated-user', password: 'x', nasId: RADIUS_NAS_A,
+      status: 'terminated', ipMode: 'fixed', remoteAddress: null, contractId: null,
+    });
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PPPOE_TERMINATED');
+  });
+
+  it('S1.6: orchestrator RECHAZA la Framed-IP (colisión persistente) → 409 ORCHESTRATOR_REJECTED, la request NO cuelga', async () => {
+    class RejectFramedIpOrchestrator extends InMemoryRadiusOrchestratorGateway {
+      override async changeFramedIp(username: string, framedIp: string | null): Promise<void> {
+        this.calls.push({ op: 'changeFramedIp', username, arg: { framedIp } });
+        throw new OrchestratorRejectedError(409, { detail: 'FramedIpAlreadyAssigned' });
+      }
+    }
+    const fx = await buildApp({
+      orchestrator: new RejectFramedIpOrchestrator({ assignedIps: ['100.64.43.2', OLD_IP] }),
+    });
+    const s = await seedPppoe(fx);
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ORCHESTRATOR_REJECTED');
+  });
+
+  it('error DESCONOCIDO del use case → 500 INTERNAL_ERROR, la request NO cuelga (next(err), nunca throw)', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx);
+    fx.pppoeRepo.findById = async () => { throw new Error('boom inesperado'); };
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
+  });
+
+  it('S1.5: IP actual PÚBLICA sin force → 409 PPPOE_MOVE_PUBLIC_IP y nada cambió', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx, { remoteAddress: '190.15.242.10' });
+    const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id }), fx.manageUserId);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PPPOE_MOVE_PUBLIC_IP');
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(RADIUS_NAS_A);
+    expect(row!.remoteAddress).toBe('190.15.242.10');
+    expect(fx.moveEvents.all()).toHaveLength(0);
+  });
+
+  it('S1.5: IP actual PÚBLICA con force: true → 200 con IP nueva del pool cgnat', async () => {
+    const fx = await buildApp();
+    const s = await seedPppoe(fx, { remoteAddress: '190.15.242.10' });
+    const res = await asUser(
+      request(fx.app).post(`/api/pppoe/${s.id}/move`).send({ nasId: fx.nasRadiusB.id, force: true }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.nasId).toBe(fx.nasRadiusB.id);
+    expect(res.body.remoteAddress).toBe('100.64.43.3');
   });
 
   it('move mixto radius→legacy → 409 PPPOE_MOVE_MIXED_NAS_TYPES', async () => {
@@ -449,5 +548,13 @@ describe('GET /api/pppoe/nas-move-events (pppoe.read)', () => {
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.items)).toBe(true);
     expect(typeof res.body.total).toBe('number');
+  });
+
+  it('repo del listado roto → 500 INTERNAL_ERROR, la request NO cuelga (handler con next(err))', async () => {
+    const fx = await buildApp();
+    fx.moveEvents.list = async () => { throw new Error('boom listado'); };
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events'), fx.readUserId);
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
   });
 });

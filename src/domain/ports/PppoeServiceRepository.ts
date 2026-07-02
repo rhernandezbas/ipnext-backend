@@ -149,6 +149,14 @@ export interface PppoeServiceRepository {
    */
   setIpMode(id: string, ipMode: 'pool' | 'fixed', remoteAddress: string | null): Promise<PppoeService | null>;
   /**
+   * pppoe-move-nas fix wave 1 (ajuste 3 / S1.7 — anti-resurrección): actualiza SOLO
+   * `nasId` + `remoteAddress` + `ipMode` de un PPPoE, POR ID y SIN crear. A diferencia de
+   * `upsertByUsername`, si la fila fue borrada por un terminate/rename concurrente devuelve
+   * `null` (typed not-found en el caller) en vez de re-INSERTAR la lápida.
+   * NO toca password/profile/status/contractId/enforcedState.
+   */
+  setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed'): Promise<PppoeService | null>;
+  /**
    * PPPoE de clientes con un `Client.status` dado (cruza pppoe→contract→client).
    * Es el resolver de `target='debtors'` (status='late') sin depender de RADIUS.
    */

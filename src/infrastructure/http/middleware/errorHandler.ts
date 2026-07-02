@@ -55,6 +55,10 @@ const statusMap: Record<string, number> = {
   NAS_NOT_FOUND: 404,
   NO_POOL_FOR_NAS_TYPE: 404,
   NO_FREE_IP: 422,
+  // pppoe-move-nas (fix wave 1): guards del move — fuente ÚNICA del mapeo (nada de 409 inline).
+  PPPOE_MOVE_MIXED_NAS_TYPES: 409,
+  PPPOE_TERMINATED: 409,
+  PPPOE_MOVE_PUBLIC_IP: 409,
   WORKFLOW_NAME_CONFLICT: 409,
   DEFAULT_WORKFLOW_PROTECTED: 409,
   WORKFLOW_IN_USE: 409,
