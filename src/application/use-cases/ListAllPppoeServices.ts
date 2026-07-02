@@ -13,6 +13,8 @@ export interface ListAllPppoeServicesFilter {
   limit?: number;
   /** pppoe-full-management: cuando true, incluye PPPoE sin contrato (huérfanos). Default false. */
   includeUnassigned?: boolean;
+  /** pppoe-preprovision D6.7: cuando true, SOLO pendientes de instalación (nasId IS NULL). */
+  pending?: boolean;
 }
 
 const DEFAULT_LIMIT = 20;
@@ -55,6 +57,9 @@ export class ListAllPppoeServices {
       ...(displayStatus ? { displayStatus } : {}),
       ...(filters.nasId ? { nasId: filters.nasId } : {}),
       ...(filters.includeUnassigned ? { includeUnassigned: true } : {}),
+      // pppoe-preprovision D6.7: chip "Pendientes" server-side (nasId IS NULL en el WHERE
+      // compartido del repo → paginación y total correctos, paridad con /pppoe/ids).
+      ...(filters.pending ? { pendingOnly: true } : {}),
     });
 
     const createdByByContract = await this.resolveCreatedBy(data);

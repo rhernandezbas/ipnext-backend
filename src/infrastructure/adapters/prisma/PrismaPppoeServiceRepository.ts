@@ -58,8 +58,9 @@ function buildListAllWhere(params: {
   displayStatus?: PppoeDisplayStatus;
   nasId?: string;
   includeUnassigned?: boolean;
+  pendingOnly?: boolean;
 }): Record<string, any> {
-  const { search, displayStatus, nasId, includeUnassigned } = params;
+  const { search, displayStatus, nasId, includeUnassigned, pendingOnly } = params;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const and: Record<string, any>[] = [];
@@ -69,6 +70,10 @@ function buildListAllWhere(params: {
   if (!includeUnassigned) {
     and.push({ contractId: { not: null } });
   }
+  // pppoe-preprovision D6.7: SOLO pendientes de instalación (nasId IS NULL). Vive en el
+  // WHERE-builder COMPARTIDO → paridad listado/ids POR CONSTRUCCIÓN (mismo guardrail que el
+  // resto de los filtros). Compositivo: pendingOnly + nasId=X da AND contradictorio (vacío).
+  if (pendingOnly) and.push({ nasId: null });
   if (nasId) and.push({ nasId });
   if (search) {
     // pppoe-search-bulk-plan: search matches username OR client name (existing), AND NOW ALSO
@@ -263,13 +268,14 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     displayStatus?: PppoeDisplayStatus;
     nasId?: string;
     includeUnassigned?: boolean;
+    pendingOnly?: boolean;
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }> {
-    const { page, pageSize, search, displayStatus, nasId, includeUnassigned } = params;
+    const { page, pageSize, search, displayStatus, nasId, includeUnassigned, pendingOnly } = params;
     const skip = (page - 1) * pageSize;
 
     // pppoe-bulk-select-filter (v2): WHERE compartido con listAllIds — ÚNICA fuente de
     // verdad del filtro (design Decisión 1). NUNCA reconstruir este WHERE inline acá.
-    const where = buildListAllWhere({ search, displayStatus, nasId, includeUnassigned });
+    const where = buildListAllWhere({ search, displayStatus, nasId, includeUnassigned, pendingOnly });
 
     const [rows, total] = await Promise.all([
       model().findMany({
@@ -312,6 +318,7 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     displayStatus?: PppoeDisplayStatus;
     nasId?: string;
     includeUnassigned?: boolean;
+    pendingOnly?: boolean;
   }): Promise<{ ids: string[]; total: number }> {
     const where = buildListAllWhere(params);
 

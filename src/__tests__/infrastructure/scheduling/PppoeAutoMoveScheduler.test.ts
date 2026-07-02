@@ -74,12 +74,13 @@ describe('PppoeAutoMoveScheduler', () => {
     expect(summary.skipped).toBeUndefined();
     // D-W2.5 item 8: summary honesto — el shape pineado incluye los counters del endurecimiento
     // (breaker/cap/cooldown/re-verify/terminated/freshness/conflicto). Test actualizado del
-    // contrato W2 original (8 campos).
+    // contrato W2 original (8 campos). pppoe-preprovision D6: +adoptions (contadas aparte del
+    // breaker) y +skippedRecentFailure (anti-starvation del cap) — campos ADITIVOS, valores 0.
     expect(summary.result).toEqual({
-      sessions: 0, mismatches: 0, moved: 0, skippedPublic: 0,
+      sessions: 0, mismatches: 0, adoptions: 0, moved: 0, skippedPublic: 0,
       skippedUnknownNas: 0, failed: 0, throttled: 0, ignoredNoService: 0,
       aborted: false, deferred: 0, skippedCooldown: 0, alreadyConverged: 0,
-      skippedTerminated: 0, skippedStale: 0, nasConflicts: 0,
+      skippedTerminated: 0, skippedStale: 0, nasConflicts: 0, skippedRecentFailure: 0,
     });
   });
 

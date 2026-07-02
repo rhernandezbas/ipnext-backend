@@ -3,7 +3,7 @@ import { PppoeServiceRepository, PppoeServiceUpsert } from '@domain/ports/PppoeS
 import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
-import { NasNotFoundError, PppoeUsernameTakenError, PppoeProfileRequiredError, PppoeContractAlreadyHasServiceError } from '@domain/errors/pppoe';
+import { NasNotFoundError, PppoeUsernameTakenError, PppoeProfileRequiredError, PppoeContractAlreadyHasServiceError, PppoePublicIpPoolModeError } from '@domain/errors/pppoe';
 import { routesViaOrchestrator } from '@domain/entities/nas';
 import type { IpKind } from '@domain/entities/network';
 import { EnsureInternetContractService } from './EnsureInternetContractService';
@@ -128,6 +128,13 @@ export class CreatePppoeService {
     // NAS legacy o IP fija pedida → ipMode='fixed', flujo actual intacto (framedIp=remoteAddress).
     const ipMode: 'pool' | 'fixed' =
       isRadius && nas.poolName != null && remoteAddress == null ? 'pool' : 'fixed';
+
+    // 2a-bis. pppoe-preprovision (D6.8): en modo POOL la IP la asigna el sqlippool del NAS
+    //     (CGNAT) — un alta 'public' MENTIRÍA (persistiría la preferencia sin cumplirla).
+    //     Error tipado ANTES de tocar DB/RADIUS. Con IP pública EXPLÍCITA (ipMode fixed) pasa.
+    if (ipMode === 'pool' && ipTypePreference === 'public') {
+      throw new PppoePublicIpPoolModeError(input.username, nas.id);
+    }
 
     // 2b. Un usuario RADIUS NECESITA su grupo/plan (radusergroup): sin `profile` no hay alta.
     //     Validar ANTES de tocar la DB → no dejamos filas `pending` huérfanas por un input inválido.

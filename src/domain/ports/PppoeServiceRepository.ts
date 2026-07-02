@@ -100,6 +100,8 @@ export interface PppoeServiceRepository {
    * - `nasId`: filtro exacto por router.
    * - `includeUnassigned`: cuando `true`, NO aplica el filtro `contractId IS NOT NULL` →
    *   la lista incluye huérfanos (contractId=null). Default `false` = comportamiento actual.
+   * - `pendingOnly` (pppoe-preprovision D6.7): cuando `true`, SOLO pendientes de instalación
+   *   (`nasId IS NULL`) — el chip "Pendientes" del FE server-side, con paginación correcta.
    * - Orden estable: username asc.
    * - `total` = count con el MISMO where (sin skip/take) para el paginador del FE.
    */
@@ -111,6 +113,8 @@ export interface PppoeServiceRepository {
     nasId?: string;
     /** pppoe-full-management: cuando true, incluye PPPoE sin contrato (huérfanos). Default false. */
     includeUnassigned?: boolean;
+    /** pppoe-preprovision D6.7: cuando true, SOLO pendientes de instalación (nasId IS NULL). */
+    pendingOnly?: boolean;
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }>;
 
   /**
@@ -131,6 +135,8 @@ export interface PppoeServiceRepository {
     displayStatus?: PppoeDisplayStatus;
     nasId?: string;
     includeUnassigned?: boolean;
+    /** pppoe-preprovision D6.7: cuando true, SOLO pendientes de instalación (nasId IS NULL). */
+    pendingOnly?: boolean;
   }): Promise<{ ids: string[]; total: number }>;
 
   /**

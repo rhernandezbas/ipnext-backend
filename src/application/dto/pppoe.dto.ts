@@ -229,7 +229,12 @@ export const CreatePppoeBodySchema = z.object({
   ipTypePreference: z.enum(['cgnat', 'public']),
   profile:       z.string().nullable().optional(),
   remoteAddress: z.string().nullable().optional(),
-});
+}).refine(
+  // pppoe-preprovision D6.6: una IP pedida SIN NAS es incoherente (¿la IP de qué router?).
+  // Antes la pre-provisión la DESCARTABA en silencio (persistía remoteAddress null) — ahora 422.
+  (data) => !(data.remoteAddress != null && data.nasId == null),
+  { message: 'remoteAddress requiere nasId (una pre-provisión no lleva IP)', path: ['remoteAddress'] },
+);
 
 export type CreatePppoeBody = z.infer<typeof CreatePppoeBodySchema>;
 
@@ -350,7 +355,12 @@ export const CreatePppoeStandaloneBodySchema = z.object({
   framedIp:    z.string().nullable().optional(),
   ipMode:      z.enum(['fixed', 'pool']).optional(),
   contractId:  z.string().min(1).optional(),
-});
+}).refine(
+  // pppoe-preprovision D6.6: espejo del refine de CreatePppoeBodySchema — framedIp SIN nasId
+  // es incoherente y antes se descartaba en silencio en la rama pre-provisión.
+  (data) => !(data.framedIp != null && data.nasId == null),
+  { message: 'framedIp requiere nasId (una pre-provisión no lleva IP)', path: ['framedIp'] },
+);
 
 export type CreatePppoeStandaloneBody = z.infer<typeof CreatePppoeStandaloneBodySchema>;
 

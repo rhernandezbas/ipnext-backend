@@ -94,6 +94,14 @@ describe('PrismaPppoeServiceRepository — listAllPaginated WHERE shape (approva
     );
   });
 
+  it('pendingOnly=true (pppoe-preprovision D6.7): AND includes { nasId: null }', async () => {
+    const repo = new PrismaPppoeServiceRepository();
+    await repo.listAllPaginated({ page: 1, pageSize: 25, includeUnassigned: true, pendingOnly: true });
+
+    const where = mockPrisma.pppoeService.findMany.mock.calls[0][0].where;
+    expect(where).toEqual({ AND: [{ nasId: null }] });
+  });
+
   it('displayStatus=reduced: AND includes the translated predicate', async () => {
     const repo = new PrismaPppoeServiceRepository();
     await repo.listAllPaginated({ page: 1, pageSize: 25, includeUnassigned: true, displayStatus: 'reduced' });
@@ -137,9 +145,12 @@ describe('PrismaPppoeServiceRepository — listAllIds (pppoe-bulk-select-filter,
     mockPrisma.pppoeService.count.mockResolvedValue(0);
   });
 
-  it('for the SAME filter params, listAllIds sends the IDENTICAL where as listAllPaginated (drift guardrail)', async () => {
+  it('for the SAME filter params (incl. pendingOnly, D6.7), listAllIds sends the IDENTICAL where as listAllPaginated (drift guardrail)', async () => {
     const repo = new PrismaPppoeServiceRepository();
-    const filterParams = { nasId: 'NE8000-1', search: 'juan', displayStatus: 'active' as const, includeUnassigned: false };
+    const filterParams = {
+      nasId: 'NE8000-1', search: 'juan', displayStatus: 'active' as const,
+      includeUnassigned: false, pendingOnly: true,
+    };
 
     await repo.listAllPaginated({ page: 1, pageSize: 25, ...filterParams });
     const paginatedWhere = mockPrisma.pppoeService.findMany.mock.calls[0][0].where;

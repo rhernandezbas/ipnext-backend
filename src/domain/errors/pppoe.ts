@@ -227,6 +227,45 @@ export class PppoePendingInstallError extends DomainError {
 }
 
 /**
+ * pppoe-preprovision D6.5: se intentó ADOPTAR un pendiente de instalación (nasId null) en un
+ * NAS LEGACY (no-radius). Un pendiente vive en el RADIUS central: el flujo legacy copiaría el
+ * secret al router SIN IP (ignorando la ipTypePreference) y dejaría el usuario fantasma en el
+ * RADIUS central. Guard de bomba latente — hoy no hay NAS legacy en prod.
+ * Code → HTTP: PPPOE_PENDING_LEGACY_NAS → 409.
+ */
+export class PppoePendingLegacyNasError extends DomainError {
+  constructor(
+    public readonly pppoeId: string,
+    public readonly nasType: string,
+  ) {
+    super(
+      `El PPPoE ${pppoeId} está pendiente de instalación (vive en el RADIUS central) — no se puede adoptar en un NAS legacy '${nasType}' (no-radius)`,
+      'PPPOE_PENDING_LEGACY_NAS',
+    );
+    this.name = 'PppoePendingLegacyNasError';
+  }
+}
+
+/**
+ * pppoe-preprovision D6.8: alta con ipTypePreference='public' en un NAS RADIUS en modo POOL
+ * (poolName != null y sin IP fija pedida). El sqlippool asigna del pool CGNAT del NAS — el
+ * alta "public" mentiría. Dormant hoy (ningún alta pool-mode pide public), guard honesto.
+ * Code → HTTP: PPPOE_PUBLIC_IP_POOL_MODE → 422.
+ */
+export class PppoePublicIpPoolModeError extends DomainError {
+  constructor(
+    public readonly username: string,
+    public readonly nasId: string,
+  ) {
+    super(
+      `El PPPoE '${username}' pide IP pública pero el NAS ${nasId} asigna por pool (sqlippool CGNAT) — el alta mentiría. Pedila con una IP pública explícita o en un NAS sin pool-mode`,
+      'PPPOE_PUBLIC_IP_POOL_MODE',
+    );
+    this.name = 'PppoePublicIpPoolModeError';
+  }
+}
+
+/**
  * pppoe-pool-ip: la IP provista no es un IPv4 válido (formato inválido).
  * Code → HTTP: INVALID_IP_FORMAT → 422.
  */

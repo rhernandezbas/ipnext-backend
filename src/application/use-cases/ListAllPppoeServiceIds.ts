@@ -7,6 +7,8 @@ export interface ListAllPppoeServiceIdsFilter {
   nasId?: string;
   /** pppoe-bulk-select-filter (v2): cuando true, incluye PPPoE sin contrato (huérfanos). Default false. */
   includeUnassigned?: boolean;
+  /** pppoe-preprovision D6.7: cuando true, SOLO pendientes de instalación (nasId IS NULL). */
+  pending?: boolean;
 }
 
 export interface ListAllPppoeServiceIdsResult {
@@ -38,6 +40,8 @@ export class ListAllPppoeServiceIds {
       ...(displayStatus ? { displayStatus } : {}),
       ...(filters.nasId ? { nasId: filters.nasId } : {}),
       ...(filters.includeUnassigned ? { includeUnassigned: true } : {}),
+      // pppoe-preprovision D6.7: mismo pendingOnly que el listado (paridad por construcción).
+      ...(filters.pending ? { pendingOnly: true } : {}),
     });
   }
 }

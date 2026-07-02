@@ -37,7 +37,7 @@ import type { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import type { PppoeService } from '@domain/entities/pppoeService';
 import type { IpKind } from '@domain/entities/network';
 import { routesViaOrchestrator } from '@domain/entities/nas';
-import { PppoeUsernameTakenError, NasNotFoundError } from '@domain/errors/pppoe';
+import { PppoeUsernameTakenError, NasNotFoundError, PppoePublicIpPoolModeError } from '@domain/errors/pppoe';
 import { toNasTarget } from './nasTarget';
 import type { CreatePppoeService } from './CreatePppoeService';
 import type { FindFreeIp } from './FindFreeIp';
@@ -146,6 +146,17 @@ export class CreatePppoeStandalone {
     let resolvedFramedIp = framedIp ?? null;
 
     if (isRadius) {
+      // pppoe-preprovision (D6.8): sin IP fija pedida y con asignación por POOL (ipMode 'pool'
+      // explícito O NAS con poolName), el sqlippool asigna CGNAT — un alta 'public' MENTIRÍA.
+      // Error tipado ANTES de tocar el plano de control (espejo del guard de CreatePppoeService).
+      if (
+        ipTypePreference === 'public' &&
+        resolvedFramedIp == null &&
+        (ipMode === 'pool' || nas.poolName != null)
+      ) {
+        throw new PppoePublicIpPoolModeError(username, nas.id);
+      }
+
       // pppoe-preprovision (S1.4): sin framedIp pedido, sin pool-mode (poolName null), sin
       // ipMode 'pool' explícito y con el allocator inyectado → IP fija server-side del pool
       // del tipo elegido. La rama pool-mode y el framedIp explícito quedan intactos.

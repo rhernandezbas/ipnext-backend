@@ -10,6 +10,14 @@
  *     servicio intacto (sigue pendiente),
  *   - regresión: un move NORMAL (con NAS origen) sigue asignando SIEMPRE cgnat aunque la
  *     preferencia persistida sea 'public' (semántica W1 intacta).
+ *
+ * D6 (fix wave):
+ *   D6.4 carrera doble-adopción (tick vs manual): re-read post-persist — si la DB trae OTRA IP
+ *        que la escrita en RADIUS → evento failed_db reason 'concurrent_adoption_detected' +
+ *        WARN, SIN auto-heal (el move propio no se revierte ni lanza).
+ *   D6.5 pendiente hacia NAS LEGACY (no-radius) → PppoePendingLegacyNasError tipado ANTES de
+ *        tocar nada (el moveLegacy adoptaba SIN IP, ignorando la preferencia, dejando el
+ *        fantasma en el RADIUS central). Guard de bomba latente: hoy no hay NAS legacy en prod.
  */
 import { MovePppoeToNas } from '@application/use-cases/MovePppoeToNas';
 import { MovePppoeServiceToRouter } from '@application/use-cases/MovePppoeServiceToRouter';
@@ -23,6 +31,7 @@ import { InMemoryPppoeNasMoveEventRepository } from '@infrastructure/adapters/in
 import { InMemoryContractServiceEventRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceEventRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { NoPoolForNasTypeError } from '@domain/errors/network';
+import { PppoePendingLegacyNasError } from '@domain/errors/pppoe';
 import type { NasServer } from '@domain/entities/nas';
 
 interface Fixture {
@@ -191,5 +200,85 @@ describe('MovePppoeToNas — adopción manual de un pendiente (S4.3)', () => {
 
     // Semántica W1 intacta: el move manual asigna del pool CGNAT del destino (no del público).
     expect(moved.remoteAddress).toBe('100.64.43.3');
+  });
+});
+
+describe('MovePppoeToNas — D6.4: carrera doble-adopción (post-persist check)', () => {
+  it("otro actor interleaved pisa la fila tras nuestro setNasAndIp → evento failed_db reason 'concurrent_adoption_detected' + WARN, SIN auto-heal ni throw", async () => {
+    const fx = await buildFixture();
+    const s = await seedPending(fx, 'cgnat');
+
+    // Simula el interleaving: apenas NUESTRO setNasAndIp persiste, el otro actor (adopción
+    // manual cruzada) escribe OTRA IP en la MISMA fila — el re-read del check la va a ver.
+    const realSet = fx.pppoeRepo.setNasAndIp.bind(fx.pppoeRepo);
+    fx.pppoeRepo.setNasAndIp = async (id, nasId, ip, mode) => {
+      const own = await realSet(id, nasId, ip, mode);
+      await realSet(id, nasId, '100.64.43.77', mode); // el otro actor gana la carrera en DB
+      return own;
+    };
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const moved = await fx.uc.execute(
+        { id: s.id, nasId: fx.nasB.id },
+        { actorId: 'op-1', actorName: 'operador' },
+      );
+      // El move propio NO lanza ni se revierte (sin auto-heal — ventana sub-segundo).
+      expect(moved.remoteAddress).toBe('100.64.43.3');
+
+      // WARN visible en el log del proceso.
+      expect(
+        warnSpy.mock.calls.some(args => String(args[0]).includes('concurrent_adoption_detected')),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // Evento VISIBLE de la divergencia (best-effort) + el moved del propio move.
+    const events = fx.moveEvents.all();
+    const divergence = events.find(e => e.reason === 'concurrent_adoption_detected');
+    expect(divergence).toBeDefined();
+    expect(divergence).toMatchObject({
+      username: 'pendiente',
+      outcome: 'failed_db',
+      toNasId: fx.nasB.id,
+    });
+    expect(events.some(e => e.outcome === 'moved')).toBe(true);
+
+    // Sin auto-heal: la fila queda como la dejó el OTRO actor (intervención manual).
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.remoteAddress).toBe('100.64.43.77');
+  });
+
+  it('sin carrera (la DB re-leída coincide con la IP escrita) → CERO evento extra (solo el moved)', async () => {
+    const fx = await buildFixture();
+    const s = await seedPending(fx, 'cgnat');
+
+    await fx.uc.execute({ id: s.id, nasId: fx.nasB.id });
+
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('moved');
+  });
+});
+
+describe('MovePppoeToNas — D6.5: pendiente hacia NAS LEGACY (no-radius) → error tipado', () => {
+  it('adopción hacia un NAS mikrotik_api → PppoePendingLegacyNasError, NADA tocado (ni router, ni RADIUS, ni DB, ni filas)', async () => {
+    // Un pendiente VIVE en el RADIUS central: "adoptarlo" en un NAS legacy dejaría el fantasma
+    // en el RADIUS y la fila adoptada SIN IP (el flujo legacy no reasigna IP ni mira la
+    // preferencia). Guard de bomba latente — hoy no hay NAS legacy en prod.
+    const fx = await buildFixture();
+    const s = await seedPending(fx, 'public');
+    // NAS '1' del seed del InMemoryNasRepository: mikrotik_api (legacy).
+
+    await expect(fx.uc.execute({ id: s.id, nasId: '1' }))
+      .rejects.toBeInstanceOf(PppoePendingLegacyNasError);
+
+    // Guard de INPUT: 4xx directo, sin fila (REQ-LOG-1) y sin tocar ningún plano de control.
+    expect(fx.moveEvents.all()).toHaveLength(0);
+    expect(fx.orchestrator.calls).toHaveLength(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBeNull();
+    expect(row!.remoteAddress).toBeNull();
   });
 });

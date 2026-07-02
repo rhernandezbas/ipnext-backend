@@ -348,7 +348,7 @@ export function createPppoeRouter(
         const q = req.query;
         const filter: {
           search?: string; status?: string; nasId?: string; page?: number; limit?: number;
-          includeUnassigned?: boolean;
+          includeUnassigned?: boolean; pending?: boolean;
         } = {};
         if (typeof q['search'] === 'string' && q['search'] !== '') filter.search = q['search'];
         if (typeof q['status'] === 'string' && q['status'] !== '') filter.status = q['status'];
@@ -363,6 +363,8 @@ export function createPppoeRouter(
         }
         // pppoe-full-management: incluir huérfanos (contractId=null) cuando se pide explícitamente.
         if (q['includeUnassigned'] === 'true') filter.includeUnassigned = true;
+        // pppoe-preprovision D6.7: chip "Pendientes" server-side (nasId IS NULL, paginación correcta).
+        if (q['pending'] === 'true') filter.pending = true;
         const page = await listAllPppoeServices.execute(filter);
         res.json(page);
       },
@@ -387,16 +389,23 @@ export function createPppoeRouter(
       async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
           const q = req.query;
-          const filter: { search?: string; status?: string; nasId?: string; includeUnassigned?: boolean } = {};
+          const filter: {
+            search?: string; status?: string; nasId?: string;
+            includeUnassigned?: boolean; pending?: boolean;
+          } = {};
           if (typeof q['search'] === 'string' && q['search'] !== '') filter.search = q['search'];
           if (typeof q['status'] === 'string' && q['status'] !== '') filter.status = q['status'];
           if (typeof q['nasId']  === 'string' && q['nasId']  !== '') filter.nasId  = q['nasId'];
           if (q['includeUnassigned'] === 'true') filter.includeUnassigned = true;
+          // pppoe-preprovision D6.7: pending=true SÍ cuenta como filtro de narrowing (recorta
+          // a los nasId IS NULL — un subconjunto chico), a diferencia de includeUnassigned que
+          // solo AMPLÍA el scope. Habilita bulk sobre el chip "Pendientes" con paridad list↔ids.
+          if (q['pending'] === 'true') filter.pending = true;
 
-          if (!filter.search && !filter.status && !filter.nasId) {
+          if (!filter.search && !filter.status && !filter.nasId && !filter.pending) {
             res.status(400).json({
               code: 'FILTER_REQUIRED',
-              error: 'GET /pppoe/ids requiere al menos un filtro (search, status o nasId)',
+              error: 'GET /pppoe/ids requiere al menos un filtro (search, status, nasId o pending)',
             });
             return;
           }

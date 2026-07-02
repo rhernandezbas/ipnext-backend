@@ -21,6 +21,8 @@ interface Filter {
   displayStatus?: PppoeDisplayStatus;
   nasId?: string;
   includeUnassigned?: boolean;
+  /** pppoe-preprovision D6.7: solo pendientes de instalación (nasId IS NULL). */
+  pendingOnly?: boolean;
 }
 
 async function sweepAllIds(repo: InMemoryPppoeServiceRepository, filter: Filter): Promise<{ ids: string[]; total: number }> {
@@ -223,5 +225,59 @@ describe('Paridad list↔ids (pppoe-bulk-select-filter v2, task 1.5) — mismo s
     expect(direct.total).toBe(0);
     expect(direct.ids).toEqual([]);
     expect(swept.ids).toEqual([]);
+  });
+});
+
+describe('Paridad list↔ids — pendingOnly (pppoe-preprovision D6.7): chip Pendientes server-side', () => {
+  let repo: InMemoryPppoeServiceRepository;
+
+  beforeEach(async () => {
+    repo = new InMemoryPppoeServiceRepository();
+    await seed(repo);
+    // Pendientes de instalación (nasId null): 2 con contrato + 1 huérfano.
+    await repo.upsertByUsername({
+      username: 'pendiente-a@test', password: 'x', nasId: null, status: 'enabled',
+      enforcedState: 'active', contractId: 'ct-pend-a',
+    });
+    await repo.upsertByUsername({
+      username: 'pendiente-b@test', password: 'x', nasId: null, status: 'enabled',
+      enforcedState: 'active', contractId: 'ct-pend-b',
+    });
+    await repo.upsertByUsername({
+      username: 'pendiente-huerfano', password: 'x', nasId: null, contractId: null,
+    });
+  });
+
+  it('pendingOnly=true: paridad exacta y SOLO filas nasId null (con contrato, default)', async () => {
+    const filter = { pendingOnly: true };
+    const swept = await sweepAllIds(repo, filter);
+    const direct = await repo.listAllIds(filter);
+
+    expect(direct.total).toBe(2); // el huérfano queda fuera sin includeUnassigned
+    expect(direct.ids.length).toBe(direct.total);
+    expect(asSortedSet(direct.ids)).toEqual(asSortedSet(swept.ids));
+  });
+
+  it('pendingOnly=true + includeUnassigned=true: el pendiente huérfano entra en AMBOS por igual', async () => {
+    const filter = { pendingOnly: true, includeUnassigned: true };
+    const swept = await sweepAllIds(repo, filter);
+    const direct = await repo.listAllIds(filter);
+
+    expect(direct.total).toBe(3);
+    expect(asSortedSet(direct.ids)).toEqual(asSortedSet(swept.ids));
+  });
+
+  it('pendingOnly combinado con search: paridad exacta (AND compositivo)', async () => {
+    const filter = { pendingOnly: true, search: 'pendiente-a', includeUnassigned: true };
+    const swept = await sweepAllIds(repo, filter);
+    const direct = await repo.listAllIds(filter);
+
+    expect(direct.total).toBe(1);
+    expect(asSortedSet(direct.ids)).toEqual(asSortedSet(swept.ids));
+  });
+
+  it('sin pendingOnly: los pendientes se listan junto al resto (regresión — el filtro es opt-in)', async () => {
+    const direct = await repo.listAllIds({ includeUnassigned: true });
+    expect(direct.total).toBe(51); // 48 del seed base + 3 pendientes
   });
 });

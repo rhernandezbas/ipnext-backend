@@ -17,6 +17,7 @@ import {
   OrchestratorUnreachableError,
   PppoeMoveMixedNasTypesError,
   PppoeMovePublicIpError,
+  PppoePendingLegacyNasError,
   PppoeServiceNotFoundError,
   PppoeServiceTerminatedError,
 } from '@domain/errors/pppoe';
@@ -134,6 +135,11 @@ export class MovePppoeToNas {
     const trigger = input.trigger ?? 'manual';
 
     if (!destinoRadius) {
+      // pppoe-preprovision D6.5: un PENDIENTE (nasId null) vive en el RADIUS central — el flujo
+      // legacy lo "adoptaría" copiando el secret al router SIN IP (ignorando la preferencia) y
+      // dejando el usuario fantasma en el RADIUS. Error tipado ANTES de tocar nada. Guard de
+      // bomba latente: hoy no hay NAS legacy en prod. Guard de INPUT: 4xx directo, SIN fila.
+      if (s.nasId === null) throw new PppoePendingLegacyNasError(s.id, destino.type);
       return this.moveLegacy(s, origen, destino, trigger, actor);
     }
     return this.moveRadius(s, origen, destino, trigger, input.force ?? false, actor);
@@ -216,6 +222,29 @@ export class MovePppoeToNas {
       await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'failed_db',
         'row_deleted_after_radius_write', actor);
       throw new PppoeServiceNotFoundError(s.id);
+    }
+
+    // 3b. pppoe-preprovision D6.4 — verificación post-persist BARATA de la carrera
+    //     doble-adopción (tick vs adopción manual del MISMO pendiente): re-leer la fila tras
+    //     nuestro setNasAndIp; si trae OTRA remoteAddress, un actor interleaved escribió después
+    //     — la Framed-IP del RADIUS (la nuestra o la de él, según el orden en el orchestrator)
+    //     diverge de la DB. Evento VISIBLE (failed_db / concurrent_adoption_detected) + WARN,
+    //     SIN auto-heal (ventana sub-segundo; intervención manual). Best-effort: el check jamás
+    //     tumba el move ya persistido.
+    if (esAdopcion) {
+      try {
+        const reread = await this.repo.findById(s.id);
+        if (reread && reread.remoteAddress !== newIp) {
+          console.warn(
+            `[MovePppoeToNas] concurrent_adoption_detected: '${s.username}' — DB=${reread.remoteAddress} ` +
+            `vs RADIUS escrito=${newIp} (otro actor interleaved durante la adopción). Sin auto-heal.`,
+          );
+          await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'failed_db',
+            'concurrent_adoption_detected', actor);
+        }
+      } catch (err) {
+        console.warn('[MovePppoeToNas] post-persist check de adopción falló (best-effort):', err);
+      }
     }
 
     // 4. Kick BEST-EFFORT (REQ-MOVE-2): fuerza la re-auth con la IP nueva. Si el CoA-Disconnect

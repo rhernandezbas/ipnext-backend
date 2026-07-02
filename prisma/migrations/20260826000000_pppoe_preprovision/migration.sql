@@ -18,6 +18,9 @@ ALTER COLUMN "nasId" DROP NOT NULL;
 --   · comparación por ::inet (orden correcto de IPv4; el compare de TEXT ordenaría mal '9.x' > '100.x');
 --   · los casts van DENTRO de un CASE WHEN <regex IPv4 estricta> — CASE garantiza el orden de
 --     evaluación (un WHERE plano puede reordenar predicados y castear basura antes del filtro);
+--   · D6.9: la regex EXCLUYE octetos con cero a la izquierda ('100.064.1.1') — el ::inet de
+--     PG moderno los RECHAZA con error (no los normaliza): una sola fila sucia crashearía el
+--     deploy entero. Octeto = 25[0-5] | 2[0-4][0-9] | 1[0-9][0-9] | [1-9]?[0-9];
 --   · un valor no-IPv4 (en la fila o en el pool) produce NULL → el BETWEEN da NULL → no matchea
 --     (best-effort: jamás rompe el deploy);
 --   · guard "ipTypePreference = 'cgnat'": re-correr la migración (o un pool cargado a posteriori)
@@ -30,8 +33,8 @@ WHERE p."ipTypePreference" = 'cgnat'
     SELECT 1
     FROM "IpPool" AS pool
     WHERE pool."ipKind" = 'public'
-      AND (CASE WHEN p."remoteAddress" ~ '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$' THEN p."remoteAddress"::inet END)
-          >= (CASE WHEN pool."rangeStart" ~ '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$' THEN pool."rangeStart"::inet END)
-      AND (CASE WHEN p."remoteAddress" ~ '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$' THEN p."remoteAddress"::inet END)
-          <= (CASE WHEN pool."rangeEnd" ~ '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$' THEN pool."rangeEnd"::inet END)
+      AND (CASE WHEN p."remoteAddress" ~ '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$' THEN p."remoteAddress"::inet END)
+          >= (CASE WHEN pool."rangeStart" ~ '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$' THEN pool."rangeStart"::inet END)
+      AND (CASE WHEN p."remoteAddress" ~ '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$' THEN p."remoteAddress"::inet END)
+          <= (CASE WHEN pool."rangeEnd" ~ '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$' THEN pool."rangeEnd"::inet END)
   );

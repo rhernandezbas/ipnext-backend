@@ -61,6 +61,10 @@ const statusMap: Record<string, number> = {
   PPPOE_MOVE_PUBLIC_IP: 409,
   // pppoe-preprovision (REQ-PRE-4): pendiente de instalación (nasId null) no operable → 409.
   PPPOE_PENDING_INSTALL: 409,
+  // pppoe-preprovision D6.5: adoptar un pendiente en un NAS legacy (no-radius) → 409.
+  PPPOE_PENDING_LEGACY_NAS: 409,
+  // pppoe-preprovision D6.8: alta 'public' en NAS pool-mode (el sqlippool asignaría cgnat) → 422.
+  PPPOE_PUBLIC_IP_POOL_MODE: 422,
   WORKFLOW_NAME_CONFLICT: 409,
   DEFAULT_WORKFLOW_PROTECTED: 409,
   WORKFLOW_IN_USE: 409,

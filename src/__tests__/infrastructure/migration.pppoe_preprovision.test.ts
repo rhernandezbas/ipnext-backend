@@ -58,6 +58,36 @@ describe('Migration: pppoe_preprovision', () => {
     expect(migrationSql).toMatch(/::inet/);
   });
 
+  it('D6.9: la regex IPv4 del backfill RECHAZA octetos con cero a la izquierda (el ::inet de PG moderno los rechaza → crash del deploy)', () => {
+    // Extraer la MISMA regex que ejecuta PG y evaluarla en JS (sintaxis compatible: solo
+    // clases/alternancia/cuantificadores básicos). '100.064.1.1' pasaba la regex vieja
+    // ([01]?[0-9][0-9]? matchea '064') y explotaba en el cast '100.064.1.1'::inet.
+    const matches = [...migrationSql.matchAll(/~ '([^']+)'/g)].map(m => m[1]!);
+    expect(matches.length).toBeGreaterThan(0);
+    // TODAS las apariciones (remoteAddress + rangeStart + rangeEnd) usan el MISMO patrón.
+    expect(new Set(matches).size).toBe(1);
+    const re = new RegExp(matches[0]!);
+
+    // IPv4 válidas y canónicas → matchean (el backfill las cruza).
+    expect(re.test('100.64.1.1')).toBe(true);
+    expect(re.test('0.0.0.0')).toBe(true);
+    expect(re.test('9.9.9.9')).toBe(true);
+    expect(re.test('255.255.255.255')).toBe(true);
+    expect(re.test('190.15.242.7')).toBe(true);
+
+    // Octetos con cero a la izquierda → NO matchean (quedan fuera del cast, best-effort).
+    expect(re.test('100.064.1.1')).toBe(false);
+    expect(re.test('01.2.3.4')).toBe(false);
+    expect(re.test('1.2.3.004')).toBe(false);
+    expect(re.test('00.0.0.0')).toBe(false);
+
+    // Fuera de rango / basura → NO matchean (regresión).
+    expect(re.test('256.1.1.1')).toBe(false);
+    expect(re.test('1.2.3')).toBe(false);
+    expect(re.test('not-an-ip')).toBe(false);
+    expect(re.test('1.2.3.4.5')).toBe(false);
+  });
+
   it('es ADITIVA: no dropea tablas/columnas/constraints ni altera otras tablas', () => {
     expect(migrationSql).not.toMatch(/DROP TABLE/i);
     expect(migrationSql).not.toMatch(/DROP COLUMN/i);

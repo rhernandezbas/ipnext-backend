@@ -237,6 +237,10 @@ const ZERO = {
   // D-W2.5: summary honesto — breaker/cap/cooldown/re-verify/terminated/freshness/conflicto.
   aborted: false, deferred: 0, skippedCooldown: 0, alreadyConverged: 0,
   skippedTerminated: 0, skippedStale: 0, nasConflicts: 0,
+  // pppoe-preprovision D6 (campos ADITIVOS, siempre 0 en esta suite — acá no hay pendientes
+  // y ningún escenario tiene presión de cap con fallo reciente): adopciones contadas aparte
+  // del breaker + anti-starvation del cap. Los asserts de W2 NO cambian.
+  adoptions: 0, skippedRecentFailure: 0,
 };
 
 describe('AutoMovePppoe — detección de mismatch (REQ-AUTO-1)', () => {

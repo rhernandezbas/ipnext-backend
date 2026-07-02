@@ -188,8 +188,9 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     displayStatus?: PppoeDisplayStatus;
     nasId?: string;
     includeUnassigned?: boolean;
+    pendingOnly?: boolean;
   }): Promise<{ data: PppoeServiceWithClient[]; total: number }> {
-    const { page, pageSize, search, displayStatus, nasId, includeUnassigned } = params;
+    const { page, pageSize, search, displayStatus, nasId, includeUnassigned, pendingOnly } = params;
     const searchLower = search ? search.toLowerCase() : undefined;
 
     // SECURITY: build the projection explicitly WITHOUT `password` (mirrors the Prisma `select`).
@@ -218,6 +219,9 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       // pppoe-full-management: si includeUnassigned=true NO filtrar por contractId.
       // Default (false/omitido): solo PPPoE CON contrato (comportamiento actual — pina InternetServicesPage).
       if (!includeUnassigned && s.contractId === null) return false;
+      // pppoe-preprovision D6.7: SOLO pendientes de instalación (nasId null) — espejo del
+      // buildListAllWhere del adapter Prisma.
+      if (pendingOnly && s.nasId !== null) return false;
       // BUSINESS-status filter: compute each row's display status and compare. Mirrors the Prisma
       // WHERE translation and stays consistent with the DTO (same precedence, single source of truth).
       if (displayStatus && pppoeDisplayStatus(s.status, s.enforcedState) !== displayStatus) return false;
@@ -262,8 +266,9 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     displayStatus?: PppoeDisplayStatus;
     nasId?: string;
     includeUnassigned?: boolean;
+    pendingOnly?: boolean;
   }): Promise<{ ids: string[]; total: number }> {
-    const { search, displayStatus, nasId, includeUnassigned } = params;
+    const { search, displayStatus, nasId, includeUnassigned, pendingOnly } = params;
     const searchLower = search ? search.toLowerCase() : undefined;
 
     const withClient = (s: PppoeService): PppoeServiceWithClient => {
@@ -288,6 +293,8 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
 
     const filtered = this.store.map(withClient).filter(s => {
       if (!includeUnassigned && s.contractId === null) return false;
+      // pppoe-preprovision D6.7: espejo EXACTO del filtro pendingOnly de listAllPaginated.
+      if (pendingOnly && s.nasId !== null) return false;
       if (displayStatus && pppoeDisplayStatus(s.status, s.enforcedState) !== displayStatus) return false;
       if (nasId && s.nasId !== nasId) return false;
       if (searchLower) {

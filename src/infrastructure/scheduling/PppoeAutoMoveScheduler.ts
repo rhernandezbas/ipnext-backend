@@ -87,12 +87,14 @@ export class PppoeAutoMoveScheduler {
         // D-W2.5 item 8: summary honesto — el log estructurado incluye los counters del
         // endurecimiento (breaker/cap/cooldown/re-verify/terminated/freshness/conflicto).
         this.log(
-          `[pppoe-auto-move] tick: sessions=${r.sessions} mismatches=${r.mismatches} moved=${r.moved} ` +
+          `[pppoe-auto-move] tick: sessions=${r.sessions} mismatches=${r.mismatches} ` +
+          `adoptions=${r.adoptions} moved=${r.moved} ` +
           `failed=${r.failed} aborted=${r.aborted} deferred=${r.deferred} ` +
           `skippedPublic=${r.skippedPublic} skippedUnknownNas=${r.skippedUnknownNas} ` +
           `skippedCooldown=${r.skippedCooldown} alreadyConverged=${r.alreadyConverged} ` +
           `skippedTerminated=${r.skippedTerminated} skippedStale=${r.skippedStale} ` +
-          `nasConflicts=${r.nasConflicts} throttled=${r.throttled} ignoredNoService=${r.ignoredNoService}`,
+          `nasConflicts=${r.nasConflicts} skippedRecentFailure=${r.skippedRecentFailure} ` +
+          `throttled=${r.throttled} ignoredNoService=${r.ignoredNoService}`,
         );
         return { result: r };
       } catch (err) {
