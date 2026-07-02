@@ -150,6 +150,8 @@ function toDto(
     clientId:      s.clientId,
     customerName:  s.customerName,
     createdBy,
+    // pppoe-search-bulk-plan: MAC del CPE. El repo ya lo selecciona; aquí lo exponemos en el DTO.
+    callerId:      s.callerId ?? null,
     createdAt:     s.createdAt,
   };
 }

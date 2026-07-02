@@ -196,8 +196,11 @@ describe('UpdatePppoeService — pppoe-plan-change-history', () => {
     // Should not throw even if event recording fails
     await expect(uc.execute({ id, profile: 'IP-Air-40-15', actorId: 'A1', actorName: 'Op' })).resolves.toBeDefined();
 
+    // pppoe-search-bulk-plan: el cambio de plan delega en ChangePppoePlanService (Opción B),
+    // así que el warn lo emite esa clase. El pin es sobre el detalle ESTABLE (el mensaje
+    // best-effort del evento), no sobre qué clase loguea.
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[UpdatePppoeService]'),
+      expect.stringContaining('Failed to record modified event (best-effort)'),
       expect.any(Error),
     );
     warnSpy.mockRestore();

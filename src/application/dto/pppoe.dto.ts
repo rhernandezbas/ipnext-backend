@@ -134,6 +134,8 @@ export interface PppoeServiceListItemDto {
   customerName: string | null;
   /** actorName del evento 'activated' del servicio de internet de ese contrato (best-effort, null si no se registró). */
   createdBy: string | null;
+  /** pppoe-search-bulk-plan: MAC del CPE (callerId del servicio RADIUS). null si nunca se registró sesión. */
+  callerId: string | null;
   createdAt: string;
 }
 
@@ -349,4 +351,28 @@ export interface RenamePppoeResultDto {
   username: string;
   status: 'ok' | 'partial';
   message?: string;
+}
+
+/**
+ * pppoe-search-bulk-plan: body de POST /api/pppoe/bulk/change-plan.
+ * `ids` viene de la selección explícita del FE (checkboxes) — nunca "todos los que matchean".
+ * El tope duro de 200 ids lo valida el use case (BulkTooLargeError → 422), no el Zod.
+ */
+export const BulkChangePlanBodySchema = z.object({
+  ids:     z.array(z.string().min(1)).min(1, 'ids must have at least one element'),
+  profile: z.string().min(1),
+  reason:  z.string().nullish(),
+});
+
+export type BulkChangePlanBody = z.infer<typeof BulkChangePlanBodySchema>;
+
+/**
+ * pppoe-search-bulk-plan: respuesta síncrona de POST /api/pppoe/bulk/change-plan (best-effort).
+ * Shape congelado en el spec — el FE lo consume campo por campo (lección W6).
+ */
+export interface BulkChangePlanResultDto {
+  /** IDs cuyos cambios de plan se aplicaron OK (RADIUS/router + DB). */
+  ok: string[];
+  /** Ítems fallidos: id + username (vacío si el id no existía) + mensaje de error. */
+  failed: { id: string; username: string; error: string }[];
 }

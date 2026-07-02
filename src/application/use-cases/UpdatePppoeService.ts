@@ -8,6 +8,8 @@ import { routesViaOrchestrator } from '@domain/entities/nas';
 import { toNasTarget } from './nasTarget';
 import { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
 import { ContractServiceEventRepository } from '@domain/ports/ContractServiceEventRepository';
+// pppoe-search-bulk-plan: extracted shared plan-change logic (Decisión 5, Opción B).
+import { ChangePppoePlanService } from '@application/services/ChangePppoePlanService';
 
 export interface UpdatePppoeServiceInput {
   id: string;
@@ -35,8 +37,24 @@ export interface UpdatePppoeServiceInput {
  *   - changePlan now passes { applyInSession: true } for CoA (hot update, no disconnect).
  *   - After a successful DB upsert, if `profile` changed and `contractId` is set, records a
  *     best-effort 'modified' event with reason + actor + old→new plan in notes.
+ *
+ * pppoe-search-bulk-plan (Decisión 5, Opción B) — F2 fix-wave:
+ *   - Profile change delegates to ChangePppoePlanService ONLY when profile is the SOLE field
+ *     being changed (profile-only patch). A combined patch (profile + password/status/
+ *     remoteAddress) goes ENTIRELY through the legacy inline path below, unchanged, to preserve
+ *     the ORIGINAL atomicity: one single control-plane call per field (Mikrotik combines every
+ *     field into ONE `updateSecret`), one upsert at the very end, one event at the very end — if
+ *     a later field (e.g. suspend) throws, NOTHING commits, not even the already-applied profile.
+ *   - F2 fix: the earlier version delegated profile changes for ANY patch that included profile,
+ *     even combined ones. That silently changed atomicity in prod: profile got committed +
+ *     evented even if a later field (e.g. suspend) failed, and the Mikrotik path issued TWO
+ *     `updateSecret` calls instead of one. Delegation is now profile-only.
+ *   - The observable contract of PATCH /api/pppoe/:id is UNCHANGED.
  */
 export class UpdatePppoeService {
+  /** pppoe-search-bulk-plan: lazily constructed from the same ports (injected via constructor). */
+  private readonly changePlanSvc: ChangePppoePlanService | null;
+
   constructor(
     private readonly repo: PppoeServiceRepository,
     private readonly router: PppoeRouterGateway,
@@ -45,13 +63,44 @@ export class UpdatePppoeService {
     /** pppoe-plan-change-history: optional; keeps back-compat with existing tests/callers that don't pass them. */
     private readonly catalogRepo?: ServiceCatalogRepository,
     private readonly eventRepo?: ContractServiceEventRepository,
-  ) {}
+  ) {
+    // Build the shared ChangePppoePlanService only when the optional repos are available.
+    // If they're absent (back-compat callers), fall back to the inline inline logic below.
+    this.changePlanSvc = catalogRepo && eventRepo
+      ? new ChangePppoePlanService(repo, router, nasRepo, orchestrator, catalogRepo, eventRepo)
+      : null;
+  }
 
   async execute(input: UpdatePppoeServiceInput): Promise<PppoeService> {
     const s = await this.repo.findById(input.id);
     if (!s) throw new PppoeServiceNotFoundError(input.id);
     const nas = await this.nasRepo.findNasServerById(s.nasId);
     if (!nas) throw new NasNotFoundError(s.nasId);
+
+    const profileChanged = input.profile !== undefined && input.profile && input.profile !== s.profile;
+    const hasOtherFields =
+      input.password !== undefined ||
+      input.remoteAddress !== undefined ||
+      input.status !== undefined;
+
+    // F2 fix-wave: delegate to ChangePppoePlanService ONLY for a profile-ONLY patch. Combined
+    // patches (profile + any of password/remoteAddress/status) fall through to the legacy inline
+    // path below, UNCHANGED, so the original atomicity + single-updateSecret-call behavior holds.
+    if (profileChanged && this.changePlanSvc && !hasOtherFields) {
+      await this.changePlanSvc.changePlan({
+        service: s,
+        nas,
+        profile: input.profile!,
+        reason:  input.reason ?? null,
+        actorId: input.actorId ?? null,
+        actorName: input.actorName ?? '',
+      });
+      // Profile-only change: ChangePppoePlanService already upserted + evented. Return latest state.
+      return (await this.repo.findById(s.id))!;
+    }
+
+    // ── Non-profile path — ALSO the path for combined patches (profile + other fields) and for
+    // legacy back-compat callers without changePlanSvc (catalogRepo/eventRepo not injected) ──────
 
     if (routesViaOrchestrator(nas.type)) {
       // SÓLO los campos provistos. Un `profile` vacío/null no es un plan RADIUS válido → se omite.
@@ -85,7 +134,10 @@ export class UpdatePppoeService {
     });
 
     // pppoe-plan-change-history: record 'modified' event best-effort when the profile changed.
-    const profileChanged = input.profile !== undefined && input.profile && input.profile !== s.profile;
+    // F2 fix-wave: reached in TWO cases now — (a) legacy back-compat callers without changePlanSvc
+    // (catalogRepo/eventRepo not injected), and (b) COMBINED patches (profile + password/status/
+    // remoteAddress) even when changePlanSvc IS present, since those no longer delegate (profile-only
+    // delegation only). Both cases upsert + event here, at the very end — same atomicity as before.
     if (profileChanged && s.contractId != null && this.catalogRepo && this.eventRepo) {
       try {
         const catalog = await this.catalogRepo.getByName('INTERNET');

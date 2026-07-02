@@ -80,7 +80,10 @@ export interface PppoeServiceRepository {
   /**
    * internet-history — TODOS los PPPoE (la vista GLOBAL de internet, espejo de la página de TV),
    * enriquecidos con su cliente (clientId + customerName via JOIN pppoe→contract→client).
-   * - `search`: coincidencia parcial case-insensitive sobre username o el nombre del cliente.
+   * - `search`: coincidencia parcial case-insensitive sobre username, el nombre del cliente o
+   *   `remoteAddress` (IP). pppoe-search-bulk-plan: si el término PARECE una MAC (`looksLikeMac`
+   *   de `@domain/services/macSearch`), también matchea `callerId` con las variantes de formato
+   *   (`aa:bb:…`, `aa-bb-…`, `aabb…`) en OR — la MAC persistida NO está normalizada en el BE.
    * - `displayStatus`: filtro por estado de NEGOCIO (active|reduced|blocked|baja|inactive). El adapter
    *   lo TRADUCE a su condición sobre (status crudo + enforcedState) en el WHERE — nunca post-paginación:
    *     active   → status='enabled' AND enforcedState='active'

@@ -2,6 +2,8 @@ import { randomUUID } from 'crypto';
 import { PppoeService, EnforcedState, PppoeDisplayStatus, pppoeDisplayStatus } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 import { PppoeUsernameTakenError } from '@domain/errors/pppoe';
+// pppoe-search-bulk-plan: MAC search helpers — SAME logic as Prisma adapter (parity).
+import { looksLikeMac, macSearchVariants } from '@domain/services/macSearch';
 
 /**
  * InMemoryPppoeServiceRepository — test seam para PppoeServiceRepository (pppoe-foundation + Fase C).
@@ -216,8 +218,18 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       if (nasId && s.nasId !== nasId) return false;
       if (searchLower) {
         const matchUsername = s.username.toLowerCase().includes(searchLower);
-        const matchClient = (s.customerName ?? '').toLowerCase().includes(searchLower);
-        if (!matchUsername && !matchClient) return false;
+        const matchClient   = (s.customerName ?? '').toLowerCase().includes(searchLower);
+        // pppoe-search-bulk-plan: also match remoteAddress (IP partial, case-insensitive).
+        const matchIp       = s.remoteAddress ? s.remoteAddress.toLowerCase().includes(searchLower) : false;
+        // pppoe-search-bulk-plan: also match callerId (MAC) when search looks like a MAC.
+        // Mirror of the Prisma adapter: same variants, same case-insensitive contains logic.
+        // `search` is always defined here (we're inside the `if (searchLower)` block).
+        let matchMac = false;
+        if (s.callerId && search && looksLikeMac(search)) {
+          const callerIdLower = s.callerId.toLowerCase();
+          matchMac = macSearchVariants(search).some(v => callerIdLower.includes(v.toLowerCase()));
+        }
+        if (!matchUsername && !matchClient && !matchIp && !matchMac) return false;
       }
       return true;
     });

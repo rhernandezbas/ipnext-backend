@@ -63,6 +63,9 @@ import { ListInternetServiceHistory } from '@application/use-cases/ListInternetS
 import { ListInternetActivationOperators } from '@application/use-cases/ListInternetActivationOperators';
 import { CreatePppoeStandalone } from '@application/use-cases/CreatePppoeStandalone';
 import { RenamePppoeUsername } from '@application/use-cases/RenamePppoeUsername';
+// pppoe-search-bulk-plan: bulk plan change
+import { BulkChangePppoePlan } from '@application/use-cases/BulkChangePppoePlan';
+import { BulkEmptyIdsError, BulkTooLargeError, PlanNotFoundForBulkError } from '@domain/errors/pppoe-bulk';
 import type { ServiceCutRunner } from '@infrastructure/scheduling/ServiceCutRunner';
 import type { ServiceCutBatchRepository } from '@domain/ports/ServiceCutBatchRepository';
 import {
@@ -74,6 +77,7 @@ import {
   EnforceBulkBodySchema,
   CreatePppoeStandaloneBodySchema,
   RenamePppoeBodySchema,
+  BulkChangePlanBodySchema,
   toPppoeServiceDto,
   toServiceCutBatchDto,
 } from '@application/dto/pppoe.dto';
@@ -147,6 +151,8 @@ export function createPppoeRouter(
   movePppoeToNas?: MovePppoeToNas,
   /** pppoe-move-nas W1: registro visible de movimientos. GET /api/pppoe/nas-move-events (network.read). */
   listPppoeNasMoveEvents?: ListPppoeNasMoveEvents,
+  /** pppoe-search-bulk-plan: Cambia el plan de N PPPoE en bulk. POST /pppoe/bulk/change-plan. */
+  bulkChangePppoePlan?: BulkChangePppoePlan,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -862,6 +868,58 @@ export function createPppoeRouter(
             return;
           }
           throw err;
+        }
+      },
+    );
+  }
+
+  // ── POST /pppoe/bulk/change-plan — bulk plan change (pppoe-search-bulk-plan) ──
+  // Gate: pppoe.manage (same as PATCH /pppoe/:id). No routing ambiguity with any /pppoe/:id*
+  // route: this path has 2 LITERAL segments ("bulk"/"change-plan") — Express only matches a
+  // `/pppoe/:id/<subresource>` pattern when the 3rd segment is literally that subresource (e.g.
+  // "move", "rename"), and there is no bare POST /pppoe/:id in this router (PATCH /pppoe/:id is
+  // a different HTTP verb). Cosmetic fix-wave: the old comment here ("MUST be defined BEFORE
+  // /pppoe/:id") was false — order doesn't matter for this route.
+  // Best-effort: partial successes return 200 with failed[] populated.
+  // Pre-flight throws (BulkEmptyIdsError, BulkTooLargeError, PlanNotFoundForBulkError) → 422.
+  // W1 fix: any OTHER unexpected rejection goes to `next(err)` (NOT `throw err`) so the global
+  // errorHandler can respond 500 — `throw` inside an async Express 4 handler is an unhandled
+  // rejection that never sends a response (the request hangs).
+  if (bulkChangePppoePlan) {
+    router.post(
+      '/pppoe/bulk/change-plan',
+      auth,
+      canManage,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const parsed = BulkChangePlanBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        const { actorId, actorName } = actorOf(req);
+        try {
+          const result = await bulkChangePppoePlan.execute({
+            ids:      parsed.data.ids,
+            profile:  parsed.data.profile,
+            reason:   parsed.data.reason ?? null,
+            actorId,
+            actorName,
+          });
+          res.json(result);
+        } catch (err) {
+          if (err instanceof BulkEmptyIdsError) {
+            res.status(422).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof BulkTooLargeError) {
+            res.status(422).json({ code: err.code, error: err.message });
+            return;
+          }
+          if (err instanceof PlanNotFoundForBulkError) {
+            res.status(422).json({ code: err.code, error: err.message });
+            return;
+          }
+          next(err);
         }
       },
     );

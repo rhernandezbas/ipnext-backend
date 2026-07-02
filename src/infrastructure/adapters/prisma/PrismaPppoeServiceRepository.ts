@@ -2,6 +2,8 @@ import { PppoeService, EnforcedState, PppoeDisplayStatus } from '@domain/entitie
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 import { PppoeUsernameTakenError } from '@domain/errors/pppoe';
 import { prisma } from '../../database/prisma';
+// pppoe-search-bulk-plan: MAC search helpers (pure domain, no infra deps).
+import { looksLikeMac, macSearchVariants } from '@domain/services/macSearch';
 
 /**
  * internet-history — traduce el estado de NEGOCIO a su predicado Prisma sobre (status crudo + enforcedState).
@@ -213,11 +215,26 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     }
     if (nasId) and.push({ nasId });
     if (search) {
-      // search matches username OR the contract's client name (JOIN through the relation).
-      and.push({ OR: [
+      // pppoe-search-bulk-plan: search matches username OR client name (existing), AND NOW ALSO
+      // remoteAddress (IP, partial, always) + callerId variants when the term looks like a MAC.
+      // All OR fragments are under a single AND entry to avoid colliding with displayStatus/contractId.
+      const searchOr: Record<string, unknown>[] = [
         { username: { contains: search, mode: 'insensitive' } },
         { contract: { is: { client: { is: { name: { contains: search, mode: 'insensitive' } } } } } },
-      ] });
+        // IP: partial, case-insensitive (IPs are stored canonical so case is N/A but consistent).
+        { remoteAddress: { contains: search, mode: 'insensitive' } },
+      ];
+
+      // MAC: only add callerId OR-branches when the search term looks like a MAC (hex-only after
+      // stripping MAC separators, 4-12 chars). Generates ≤4 variants (raw, colon, dash, plain)
+      // each as a `contains mode:insensitive` (covers both upper/lowercase in the DB).
+      if (looksLikeMac(search)) {
+        for (const variant of macSearchVariants(search)) {
+          searchOr.push({ callerId: { contains: variant, mode: 'insensitive' } });
+        }
+      }
+
+      and.push({ OR: searchOr });
     }
     // BUSINESS-status → WHERE translation (same precedence as pppoeDisplayStatus). Always in the WHERE,
     // so pagination and total stay correct. 'inactive' = the negation of all the known buckets.

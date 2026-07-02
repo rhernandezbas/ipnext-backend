@@ -201,4 +201,20 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
     expect(appSrc).toMatch(/new ListPppoeNasMoveEvents\(\s*nasMoveEventRepo/);
     expect(appSrc).toMatch(/createPppoeRouter\([\s\S]*new ListPppoeNasMoveEvents\(/);
   });
+
+  // ── pppoe-search-bulk-plan — anti "feature muerta" (lección W6): bulk change-plan wired ──
+  it('(n) BulkChangePppoePlan wired en createPppoeRouter (pppoe-search-bulk-plan)', () => {
+    // Si no se construye e inyecta, POST /api/pppoe/bulk/change-plan responde 404 y la feature queda muerta.
+    expect(appSrc).toMatch(/new BulkChangePppoePlan\(/);
+  });
+
+  it('(n) BulkChangePppoePlan recibe PrismaPlanRepository (fail-fast del plan contra el catálogo real)', () => {
+    expect(appSrc).toMatch(/new BulkChangePppoePlan\([\s\S]*?new PrismaPlanRepository\(\)/);
+  });
+
+  it('(n) ChangePppoePlanService construido con catálogo + eventRepo reales (evento modified por ítem)', () => {
+    expect(appSrc).toMatch(
+      /new ChangePppoePlanService\([\s\S]*?new PrismaServiceCatalogRepository\(\),[\s\S]*?new PrismaContractServiceEventRepository\(\)/,
+    );
+  });
 });

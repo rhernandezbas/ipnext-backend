@@ -671,6 +671,9 @@ import { ListInternetServiceHistory } from '@application/use-cases/ListInternetS
 import { ListInternetActivationOperators } from '@application/use-cases/ListInternetActivationOperators';
 import { CreatePppoeStandalone } from '@application/use-cases/CreatePppoeStandalone';
 import { RenamePppoeUsername } from '@application/use-cases/RenamePppoeUsername';
+// pppoe-search-bulk-plan: bulk plan change use case + shared service
+import { BulkChangePppoePlan } from '@application/use-cases/BulkChangePppoePlan';
+import { ChangePppoePlanService } from '@application/services/ChangePppoePlanService';
 import { RecordPppoeEnforceEvent } from '@application/use-cases/RecordPppoeEnforceEvent';
 // add-by-pppoe — inspección SSH de antena airOS para detección de equipos del contrato
 import { InspectPppoeDevices } from '@application/use-cases/InspectPppoeDevices';
@@ -2274,6 +2277,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       movePppoeToNas,
       // pppoe-move-nas W1: GET /pppoe/nas-move-events (tab "Movimientos NAS" de la auditoría).
       new ListPppoeNasMoveEvents(nasMoveEventRepo, nasRepoForPppoe),
+      // pppoe-search-bulk-plan: bulk plan change — POST /api/pppoe/bulk/change-plan.
+      // ChangePppoePlanService compartido entre UpdatePppoeService y BulkChangePppoePlan.
+      new BulkChangePppoePlan(
+        pppoeRepo,
+        new PrismaPlanRepository(),
+        nasRepoForPppoe,
+        new ChangePppoePlanService(
+          pppoeRepo,
+          routerGw,
+          nasRepoForPppoe,
+          orchestrator,
+          new PrismaServiceCatalogRepository(),
+          new PrismaContractServiceEventRepository(),
+        ),
+      ),
     ));
   }
 
