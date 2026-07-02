@@ -72,10 +72,29 @@ describe('PppoeAutoMoveScheduler', () => {
     const { scheduler } = makeHarness(true);
     const summary = await scheduler.runOnce();
     expect(summary.skipped).toBeUndefined();
+    // D-W2.5 item 8: summary honesto — el shape pineado incluye los counters del endurecimiento
+    // (breaker/cap/cooldown/re-verify/terminated/freshness/conflicto). Test actualizado del
+    // contrato W2 original (8 campos).
     expect(summary.result).toEqual({
       sessions: 0, mismatches: 0, moved: 0, skippedPublic: 0,
       skippedUnknownNas: 0, failed: 0, throttled: 0, ignoredNoService: 0,
+      aborted: false, deferred: 0, skippedCooldown: 0, alreadyConverged: 0,
+      skippedTerminated: 0, skippedStale: 0, nasConflicts: 0,
     });
+  });
+
+  it('D-W2.5 (item 9): flags.get lanza → runOnce NO rechaza (catch propio del tick) y el tick siguiente corre', async () => {
+    // Sin el catch propio, un throw ANTES del run (flags.get / tryAcquire) rechazaba runOnce()
+    // y el `void this.runOnce()` del timer quedaba como unhandled rejection.
+    const { scheduler, flags } = makeHarness(true);
+    jest.spyOn(flags, 'get').mockRejectedValueOnce(new Error('flag db down'));
+
+    await expect(scheduler.runOnce()).resolves.toMatchObject({
+      error: expect.stringContaining('flag db down'),
+    });
+
+    const next = await scheduler.runOnce(); // inFlight liberado, el scheduler sigue vivo
+    expect(next.result).toBeDefined();
   });
 
   it('S7.3: ON → procesa; vuelto a OFF → el tick siguiente NO procesa (sin restart, chequeo POR tick)', async () => {

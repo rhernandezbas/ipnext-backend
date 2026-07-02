@@ -646,4 +646,47 @@ describe('GET /api/pppoe/nas-move-events — outcomes del watcher W2 (S10.2/S10.
     expect(res.body.items[0].toNas).toBeNull();
     expect(res.body.items[0].reason).toBe('nas_ip_not_registered:10.99.99.99');
   });
+
+  // D-W2.5 items 4/5: los 2 outcomes NUEVOS del watcher endurecido entran al union del port y
+  // el endpoint los devuelve/filtra (degradan graceful en el FE actual: OutcomeBadge renderiza
+  // texto plano para desconocidos; labels/filtros llegan en la wave FE del flag).
+  it('D-W2.5: skipped_stale_session (freshness gate C1) es visible y filtrable por el endpoint', async () => {
+    const fx = await buildApp();
+    await fx.moveEvents.record({
+      username: 'w2stale', pppoeServiceId: 'svc-4', fromNasId: RADIUS_NAS_A, toNasId: fx.nasRadiusB.id,
+      fromIp: OLD_IP, toIp: null, trigger: 'auto', outcome: 'skipped_stale_session',
+      reason: 'winner_session_stale_gt_72h', actorName: 'sistema',
+    });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?outcome=skipped_stale_session'), fx.networkUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.items[0]).toMatchObject({
+      username: 'w2stale',
+      trigger: 'auto',
+      outcome: 'skipped_stale_session',
+      reason: 'winner_session_stale_gt_72h',
+      toNas: { id: fx.nasRadiusB.id, name: 'NAS Radius B' },
+    });
+  });
+
+  it('D-W2.5: skipped_nas_conflict (multi-NAS persistente W7) es visible y filtrable, con toNas null', async () => {
+    const fx = await buildApp();
+    await fx.moveEvents.record({
+      username: 'w2conflict', pppoeServiceId: 'svc-5', fromNasId: RADIUS_NAS_A, toNasId: null,
+      fromIp: OLD_IP, toIp: null, trigger: 'auto', outcome: 'skipped_nas_conflict',
+      reason: 'sessions_on_multiple_nas:10.0.0.5,10.0.0.6', actorName: 'sistema',
+    });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/nas-move-events?outcome=skipped_nas_conflict'), fx.networkUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.items[0]).toMatchObject({
+      username: 'w2conflict',
+      trigger: 'auto',
+      outcome: 'skipped_nas_conflict',
+      reason: 'sessions_on_multiple_nas:10.0.0.5,10.0.0.6',
+    });
+    expect(res.body.items[0].toNas).toBeNull();
+  });
 });

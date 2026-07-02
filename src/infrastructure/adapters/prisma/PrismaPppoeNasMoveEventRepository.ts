@@ -47,6 +47,9 @@ export class PrismaPppoeNasMoveEventRepository implements PppoeNasMoveEventRepos
     if (params.trigger) where['trigger'] = params.trigger;
     // username: coincidencia parcial case-insensitive (hábito del repo para búsquedas).
     if (params.username) where['username'] = { contains: params.username, mode: 'insensitive' };
+    // usernameExact (D-W2.5 item 7): igualdad EXACTA para throttle/cooldown del watcher —
+    // el contains hacía que 'perez1' viera la fila de 'perez10'. Si vienen ambos, exact gana.
+    if (params.usernameExact) where['username'] = params.usernameExact;
 
     const skip = (params.page - 1) * params.limit;
     const [rows, total] = await Promise.all([

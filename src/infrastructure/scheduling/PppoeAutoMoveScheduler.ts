@@ -84,10 +84,15 @@ export class PppoeAutoMoveScheduler {
 
       try {
         const r = await this.autoMove.run();
+        // D-W2.5 item 8: summary honesto — el log estructurado incluye los counters del
+        // endurecimiento (breaker/cap/cooldown/re-verify/terminated/freshness/conflicto).
         this.log(
           `[pppoe-auto-move] tick: sessions=${r.sessions} mismatches=${r.mismatches} moved=${r.moved} ` +
-          `skippedPublic=${r.skippedPublic} skippedUnknownNas=${r.skippedUnknownNas} failed=${r.failed} ` +
-          `throttled=${r.throttled} ignoredNoService=${r.ignoredNoService}`,
+          `failed=${r.failed} aborted=${r.aborted} deferred=${r.deferred} ` +
+          `skippedPublic=${r.skippedPublic} skippedUnknownNas=${r.skippedUnknownNas} ` +
+          `skippedCooldown=${r.skippedCooldown} alreadyConverged=${r.alreadyConverged} ` +
+          `skippedTerminated=${r.skippedTerminated} skippedStale=${r.skippedStale} ` +
+          `nasConflicts=${r.nasConflicts} throttled=${r.throttled} ignoredNoService=${r.ignoredNoService}`,
         );
         return { result: r };
       } catch (err) {
@@ -97,6 +102,13 @@ export class PppoeAutoMoveScheduler {
       } finally {
         if (acquired) await this.lock.release(LOCK_KEY);
       }
+    } catch (err) {
+      // D-W2.5 item 9: catch PROPIO del cuerpo del tick. Un throw ANTES del run (flags.get,
+      // lock.tryAcquire, lock.release) rechazaba runOnce() y el `void this.runOnce()` del
+      // timer quedaba como unhandled rejection. El tick falla, el scheduler sigue vivo.
+      const message = (err as Error).message;
+      this.log(`[pppoe-auto-move] tick ERROR (flag/lock): ${message}`);
+      return { error: message };
     } finally {
       this.inFlight = false;
     }

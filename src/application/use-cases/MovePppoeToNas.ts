@@ -291,14 +291,17 @@ export class MovePppoeToNas {
   ): Promise<void> {
     try {
       // W2 (D-W2.2 / S10.5) — throttle anti-spam del tab: un `failed_*` del WATCHER (trigger
-      // 'auto') idéntico al último evento del username (mismo outcome + toNasId, <6h) NO genera
-      // fila nueva — el intento SÍ ocurre cada tick (pool lleno se reintenta, barato); solo se
-      // suprime el registro. Trigger 'manual' NO cambia: cada intento manual registra SIEMPRE.
-      // Los 'moved' siempre registran (cambian estado).
+      // 'auto') idéntico al último evento del username NO genera fila nueva — el intento SÍ
+      // ocurre cada tick (pool lleno se reintenta, barato); solo se suprime el registro.
+      // Trigger 'manual' NO cambia: cada intento manual registra SIEMPRE. Los 'moved' siempre
+      // registran (cambian estado).
+      // D-W2.5 item 7 (throttle v2 — ÚNICO cambio de este use case en la fix wave): identidad
+      // = outcome + toNasId + REASON, match EXACTO de username (usernameExact, no contains),
+      // solo suprime si el último evento es 'auto', y el check es FAIL-OPEN (vive en el helper).
       if (
         trigger === 'auto' &&
         outcome !== 'moved' &&
-        (await isDuplicateAutoEvent(this.moveEventRepo, s.username, outcome, destino.id))
+        (await isDuplicateAutoEvent(this.moveEventRepo, s.username, outcome, destino.id, reason))
       ) {
         return;
       }

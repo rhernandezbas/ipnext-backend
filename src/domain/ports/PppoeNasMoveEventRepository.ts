@@ -15,6 +15,12 @@ export type PppoeNasMoveTrigger = 'manual' | 'auto';
 /**
  * fix wave 1 (ajuste 5): +`failed_db` (update de DB falló DESPUÉS del changeFramedIp OK —
  * divergencia RADIUS↔DB con rastro) y +`failed_router` (fallo del move legacy por API router).
+ *
+ * D-W2.5 (items 4/5): +`skipped_stale_session` (freshness gate C1 — la sesión ganadora no tiene
+ * actividad reciente, una colgada vieja jamás dispara un move) y +`skipped_nas_conflict` (W7 —
+ * sesiones vivas en NAS distintos entre sí, estado terminal del C1 VISIBLE en el tab, ya no un
+ * WARN de stdout). Ambos degradan graceful en el FE actual (OutcomeBadge renderiza texto plano
+ * para outcomes desconocidos).
  */
 export type PppoeNasMoveOutcome =
   | 'moved'
@@ -23,7 +29,9 @@ export type PppoeNasMoveOutcome =
   | 'failed_db'
   | 'failed_router'
   | 'skipped_public'
-  | 'skipped_unknown_nas';
+  | 'skipped_unknown_nas'
+  | 'skipped_stale_session'
+  | 'skipped_nas_conflict';
 
 export interface RecordPppoeNasMoveEventInput {
   username: string;
@@ -59,6 +67,11 @@ export interface PppoeNasMoveEvent {
  * Filtros + paginación del listado (GET /api/pppoe/nas-move-events).
  * `username` es coincidencia PARCIAL case-insensitive (hábito del repo para búsquedas);
  * `outcome`/`trigger` son match exacto. El caller (use case) ya clampeó page/limit.
+ *
+ * `usernameExact` (D-W2.5 item 7, ADITIVO): igualdad EXACTA case-sensitive del username —
+ * lo usan el throttle anti-spam y el cooldown anti-revert del watcher, donde el contains de
+ * `username` era un bug ('perez1' matcheaba la fila de 'perez10' y rompía la supresión).
+ * Si vienen ambos, `usernameExact` gana.
  */
 export interface ListPppoeNasMoveEventsParams {
   page: number;
@@ -66,6 +79,7 @@ export interface ListPppoeNasMoveEventsParams {
   outcome?: string;
   trigger?: string;
   username?: string;
+  usernameExact?: string;
 }
 
 export interface PppoeNasMoveEventRepository {

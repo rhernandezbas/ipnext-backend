@@ -189,7 +189,7 @@ export interface PppoeNasMoveEventDto {
   fromIp: string | null;
   toIp: string | null;
   trigger: string;   // 'manual' | 'auto'
-  outcome: string;   // 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'failed_db' | 'failed_router' | 'skipped_public' | 'skipped_unknown_nas'
+  outcome: string;   // 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'failed_db' | 'failed_router' | 'skipped_public' | 'skipped_unknown_nas' | 'skipped_stale_session' | 'skipped_nas_conflict' (D-W2.5)
   reason: string | null;
   actorName: string | null;
   createdAt: string; // ISO string

@@ -271,4 +271,52 @@ describe('PPPoE auto-move watcher composition (pppoe-move-nas W2)', () => {
     expect(migrationSrc).toMatch(/'pppoe-auto-move',\s*false/);
     expect(migrationSrc).toMatch(/ON CONFLICT DO NOTHING/);
   });
+
+  // ── D-W2.5 — endurecimiento post-review W2 ─────────────────────────────────────────────────
+  it('(p) D-W2.5: el gateway del bootstrap sale de config.orchestrator (baseUrl+token+timeoutMs)', () => {
+    expect(bootstrapSrc).toMatch(/const \{ baseUrl, token \} = config\.orchestrator/);
+    expect(bootstrapSrc).toMatch(
+      /new HttpRadiusOrchestratorGateway\(\{\s*baseUrl,\s*token,\s*timeoutMs:\s*config\.orchestrator\.timeoutMs\s*\}\)/,
+    );
+  });
+
+  it('(p) D-W2.5: el bootstrap inyecta el tuning de config.pppoeAutoMove en AutoMovePppoe (breaker/cap/cooldown/freshness)', () => {
+    // Sin esta inyección las envs AUTO_MOVE_* quedan muertas: el use case usaría sus defaults
+    // internos y el operador no podría calibrar el breaker sin redeploy.
+    expect(bootstrapSrc).toMatch(/new AutoMovePppoe\([\s\S]*?abortThreshold:\s*config\.pppoeAutoMove\.abortThreshold/);
+    expect(bootstrapSrc).toMatch(/maxMovesPerTick:\s*config\.pppoeAutoMove\.maxMovesPerTick/);
+    expect(bootstrapSrc).toMatch(/cooldownMs:\s*config\.pppoeAutoMove\.cooldownMs/);
+    expect(bootstrapSrc).toMatch(/sessionFreshnessMs:\s*config\.pppoeAutoMove\.sessionFreshnessMs/);
+  });
+
+  it('(p) D-W2.5: config.ts declara las envs del endurecimiento con parse seguro y los defaults del design (25/10/10min/72h)', () => {
+    const at = configSrc.indexOf('process.env.AUTO_MOVE_ABORT_THRESHOLD');
+    expect(at).toBeGreaterThan(-1);
+    expect(configSrc.slice(at, at + 120)).toMatch(/default:\s*25/);
+
+    const mm = configSrc.indexOf('process.env.AUTO_MOVE_MAX_MOVES_PER_TICK');
+    expect(mm).toBeGreaterThan(-1);
+    expect(configSrc.slice(mm, mm + 120)).toMatch(/default:\s*10/);
+
+    const cd = configSrc.indexOf('process.env.AUTO_MOVE_COOLDOWN_MS');
+    expect(cd).toBeGreaterThan(-1);
+    expect(configSrc.slice(cd, cd + 160)).toMatch(/default:\s*600_000/);
+
+    const fr = configSrc.indexOf('process.env.AUTO_MOVE_SESSION_FRESHNESS_MS');
+    expect(fr).toBeGreaterThan(-1);
+    expect(configSrc.slice(fr, fr + 160)).toMatch(/default:\s*259_200_000/);
+  });
+
+  it('(p) D-W2.5: env.example documenta TODAS las envs del watcher (interval + breaker + cap + cooldown + freshness)', () => {
+    const envSrc = readFileSync(join(__dirname, '..', '..', '..', 'env.example'), 'utf8');
+    for (const v of [
+      'AUTO_MOVE_INTERVAL_MS',
+      'AUTO_MOVE_ABORT_THRESHOLD',
+      'AUTO_MOVE_MAX_MOVES_PER_TICK',
+      'AUTO_MOVE_COOLDOWN_MS',
+      'AUTO_MOVE_SESSION_FRESHNESS_MS',
+    ]) {
+      expect(envSrc).toMatch(new RegExp(`^${v}=`, 'm'));
+    }
+  });
 });

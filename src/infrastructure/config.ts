@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import { parseIntervalMs } from './parseIntervalMs';
+import { parsePositiveInt } from './parsePositiveInt';
 dotenv.config();
 
 const REQUIRED_VARS = [
@@ -218,6 +219,45 @@ export const config = {
       default: 120_000,
       min: 15_000,
       max: 86_400_000,
+    }),
+    /**
+     * D-W2.5 item 1 (C3) — circuit breaker: mismatches del tick > umbral ⇒ tick ABORTADO
+     * entero, sin mover nada (huele a error de inventario: NAS duplicado, nasIpAddress mal
+     * editada). Parse seguro: inválida/0/negativa → default 25 (un fat-finger no deja el
+     * breaker en "abortar siempre"). JAMÁS tumba el boot.
+     */
+    abortThreshold: parsePositiveInt(process.env.AUTO_MOVE_ABORT_THRESHOLD, {
+      default: 25,
+      max: 100_000,
+    }),
+    /**
+     * D-W2.5 item 1 (C3) — cap de moves por tick: a lo sumo N moves; el resto queda `deferred`
+     * para el próximo tick (el mismatch persiste y se re-detecta). Default 10.
+     */
+    maxMovesPerTick: parsePositiveInt(process.env.AUTO_MOVE_MAX_MOVES_PER_TICK, {
+      default: 10,
+      max: 100_000,
+    }),
+    /**
+     * D-W2.5 item 2 (C2a) — cooldown anti-revert: si el último evento 'moved' del username
+     * (CUALQUIER trigger) es más nuevo que esto, el watcher NO mueve (evita deshacer un move
+     * manual recién hecho cuya sesión vieja sigue viva por un kick fallido). Default 10 min.
+     */
+    cooldownMs: parseIntervalMs(process.env.AUTO_MOVE_COOLDOWN_MS, {
+      default: 600_000,
+      min: 15_000,
+      max: 86_400_000,
+    }),
+    /**
+     * D-W2.5 item 4 (C1) — freshness de la sesión ganadora: sin actividad más reciente que
+     * esto NO se actúa (outcome skipped_stale_session). El wire del GET /sessions del
+     * orchestrator NO trae lastUpdate/acctupdatetime → el gate usa startedAt (fallback del
+     * design). Default 72h; piso 1h (un valor ínfimo apagaría el watcher entero).
+     */
+    sessionFreshnessMs: parseIntervalMs(process.env.AUTO_MOVE_SESSION_FRESHNESS_MS, {
+      default: 259_200_000,
+      min: 3_600_000,
+      max: 2_147_483_647,
     }),
   },
 

@@ -67,7 +67,15 @@ export async function bootstrapPppoeAutoMove(
     ipNetworkRepo,
   );
 
-  const autoMove = new AutoMovePppoe(gateway, nasRepo, pppoeRepo, ipNetworkRepo, moveEventRepo, movePppoeToNas);
+  // D-W2.5: el tuning del endurecimiento (breaker/cap/cooldown/freshness) baja de config —
+  // sin esta inyección las envs AUTO_MOVE_* quedarían muertas (el use case usaría sus
+  // defaults internos y el operador no podría calibrar sin redeploy).
+  const autoMove = new AutoMovePppoe(gateway, nasRepo, pppoeRepo, ipNetworkRepo, moveEventRepo, movePppoeToNas, {
+    abortThreshold:     config.pppoeAutoMove.abortThreshold,
+    maxMovesPerTick:    config.pppoeAutoMove.maxMovesPerTick,
+    cooldownMs:         config.pppoeAutoMove.cooldownMs,
+    sessionFreshnessMs: config.pppoeAutoMove.sessionFreshnessMs,
+  });
 
   return new PppoeAutoMoveScheduler(autoMove, { intervalMs }, new PgAdvisoryLock(), new PrismaFeatureFlagRepository());
 }

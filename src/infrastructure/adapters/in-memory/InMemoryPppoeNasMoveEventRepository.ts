@@ -43,7 +43,13 @@ export class InMemoryPppoeNasMoveEventRepository implements PppoeNasMoveEventRep
     const filtered = this.store.filter(e => {
       if (params.outcome && e.outcome !== params.outcome) return false;
       if (params.trigger && e.trigger !== params.trigger) return false;
-      if (usernameLower && !e.username.toLowerCase().includes(usernameLower)) return false;
+      // usernameExact (D-W2.5 item 7): igualdad EXACTA (throttle/cooldown del watcher) —
+      // espejo del adapter Prisma: si vienen ambos filtros, exact gana.
+      if (params.usernameExact) {
+        if (e.username !== params.usernameExact) return false;
+      } else if (usernameLower && !e.username.toLowerCase().includes(usernameLower)) {
+        return false;
+      }
       return true;
     });
 

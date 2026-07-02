@@ -1852,7 +1852,7 @@ model PppoeNasMoveEvent {
   fromIp         String?
   toIp           String?
   trigger        String            // 'manual' | 'auto'
-  outcome        String            // 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'failed_db' | 'failed_router' | 'skipped_public' | 'skipped_unknown_nas'
+  outcome        String            // 'moved' | 'failed_no_free_ip' | 'failed_orchestrator' | 'failed_db' | 'failed_router' | 'skipped_public' | 'skipped_unknown_nas' | 'skipped_stale_session' | 'skipped_nas_conflict' (D-W2.5; String libre — outcomes nuevos SIN migración)
   reason         String?
   actorName      String?
   createdAt      DateTime @default(now())
