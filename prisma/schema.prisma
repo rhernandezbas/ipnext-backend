@@ -1825,13 +1825,21 @@ model PppoeService {
   status        String    @default("enabled")
   // Fase C — estado del CORTE (separado del profile comercial): active | reduced | blocked
   enforcedState String    @default("active")
-  nasId         String
+  // pppoe-preprovision (D1): NULLABLE — nasId NULL = pre-provisión "pendiente de instalación"
+  // (el usuario vive en el RADIUS central sin Framed-IP; el watcher lo adopta al conectar).
+  nasId         String?
   contractId    String?
   callerId      String?   // MAC del CPE (persistida de la última sesión vista — sobrevive a la desconexión)
   // pppoe-pool-ip: modo de asignación de IP — 'pool' (FreeRADIUS asigna del pool del NAS, framedIp null) | 'fixed' (Framed-IP-Address pineada).
   ipMode        String    @default("fixed")
+  // pppoe-preprovision (D2): tipo de IP elegido al crear — 'cgnat' | 'public'. Obligatorio en el
+  // CREATE (zod 422); default para las filas legacy (backfill de públicas en la migración).
+  ipTypePreference String @default("cgnat")
   createdAt     DateTime  @default(now())
-  nas           NasServer @relation(fields: [nasId], references: [id])
+  // onDelete/onUpdate EXPLÍCITOS = los del FK original (Restrict/Cascade): al pasar la relación a
+  // opcional el default de Prisma cambia a SetNull — borrar un NAS convertiría a sus servicios en
+  // "pendientes de instalación" masivos por accidente. Restrict preserva la semántica de prod.
+  nas           NasServer? @relation(fields: [nasId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   contract      Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
 
   @@index([nasId])

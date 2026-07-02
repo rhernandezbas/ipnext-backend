@@ -44,6 +44,8 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       existing.contractId = data.contractId ?? null;
       if (data.enforcedState !== undefined) existing.enforcedState = data.enforcedState;
       if (data.ipMode !== undefined) existing.ipMode = data.ipMode;
+      // pppoe-preprovision: solo se pisa si viene (mirror del adapter Prisma).
+      if (data.ipTypePreference !== undefined) existing.ipTypePreference = data.ipTypePreference;
       return { ...existing };
     }
     const created: PppoeService = {
@@ -57,6 +59,8 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       contractId: data.contractId ?? null,
       enforcedState: data.enforcedState ?? 'active',
       ipMode: data.ipMode ?? 'fixed',
+      // pppoe-preprovision: default 'cgnat' (mirror del default del schema Prisma).
+      ipTypePreference: data.ipTypePreference ?? 'cgnat',
       callerId: null,
       createdAt: this.now().toISOString(),
     };
@@ -96,6 +100,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
           contractId:    s.contractId,
           callerId:      s.callerId,
           ipMode:        s.ipMode,
+          ipTypePreference: s.ipTypePreference,
           createdAt:     s.createdAt,
           clientId:      client?.clientId ?? null,
           customerName:  client?.customerName ?? null,
@@ -113,7 +118,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
 
   async findAssigned(): Promise<PppoeService[]> {
     return this.store
-      .filter(s => s.contractId !== null && s.remoteAddress !== null && s.status === 'enabled')
+      .filter(s => s.contractId !== null && s.remoteAddress !== null && s.nasId !== null && s.status === 'enabled')
       .map(s => ({ ...s }));
   }
 
@@ -155,7 +160,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     const searchLower = search ? search.toLowerCase() : undefined;
 
     const filtered = this.store.filter(s => {
-      if (s.contractId === null || s.remoteAddress === null || s.status !== 'enabled') return false;
+      if (s.contractId === null || s.remoteAddress === null || s.nasId === null || s.status !== 'enabled') return false;
       if (nasId && s.nasId !== nasId) return false;
       if (searchLower) {
         const matchUsername    = s.username.toLowerCase().includes(searchLower);
@@ -202,6 +207,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
         contractId:    s.contractId,
         callerId:      s.callerId,
         ipMode:        s.ipMode,
+        ipTypePreference: s.ipTypePreference,
         createdAt:     s.createdAt,
         clientId:      client?.clientId ?? null,
         customerName:  client?.customerName ?? null,
@@ -273,6 +279,7 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
         contractId:    s.contractId,
         callerId:      s.callerId,
         ipMode:        s.ipMode,
+        ipTypePreference: s.ipTypePreference,
         createdAt:     s.createdAt,
         clientId:      client?.clientId ?? null,
         customerName:  client?.customerName ?? null,

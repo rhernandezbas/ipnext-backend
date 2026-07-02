@@ -6,6 +6,7 @@ import {
   PppoeServiceNotFoundError,
   NasNotFoundError,
   NasNoPoolError,
+  PppoePendingInstallError,
 } from '@domain/errors/pppoe';
 
 export interface UnpinPppoeIpInput {
@@ -41,6 +42,8 @@ export class UnpinPppoeIp {
     if (!svc) throw new PppoeServiceNotFoundError(input.pppoeId);
 
     // 2. Resolver NAS.
+    //    pppoe-preprovision (REQ-PRE-4): un pendiente (nasId null) no tiene pool al que volver.
+    if (svc.nasId === null) throw new PppoePendingInstallError(svc.id);
     const nas = await this.nasRepo.findNasServerById(svc.nasId);
     if (!nas) throw new NasNotFoundError(svc.nasId);
 

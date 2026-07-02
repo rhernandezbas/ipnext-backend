@@ -15,7 +15,7 @@ export type EnforcementTarget =
 export interface EnforcementPreviewSample {
   id: string;
   username: string;
-  nasId: string;
+  nasId: string | null;
   contractId: string | null;
   enforcedState: PppoeService['enforcedState'];
 }
@@ -46,7 +46,8 @@ export class PreviewEnforcement {
 
     const byRouter: Record<string, number> = {};
     for (const s of candidates) {
-      byRouter[s.nasId] = (byRouter[s.nasId] ?? 0) + 1;
+      // resolveEnforcementCandidates ya excluye pendientes (nasId null) — el ! es seguro.
+      byRouter[s.nasId!] = (byRouter[s.nasId!] ?? 0) + 1;
     }
 
     return {
@@ -67,6 +68,10 @@ export class PreviewEnforcement {
 /**
  * Resuelve y filtra los PPPoE que la acción REALMENTE cambiaría (enforcedState != destino).
  * Compartido por PreviewEnforcement y el wiring del bulk. Solo lectura.
+ *
+ * pppoe-preprovision (REQ-PRE-4): los PENDIENTES de instalación (nasId null) se EXCLUYEN —
+ * no hay NAS donde aplicar el corte (limitación documentada en el proposal: el enforcement no
+ * aplica hasta la adopción). Así el preview y el bulk cuentan lo mismo.
  */
 export async function resolveEnforcementCandidates(
   repo: PppoeServiceRepository,
@@ -85,5 +90,5 @@ export async function resolveEnforcementCandidates(
     pool = found.filter((s): s is PppoeService => s !== null);
   }
 
-  return pool.filter(s => s.enforcedState !== target_state);
+  return pool.filter(s => s.enforcedState !== target_state && s.nasId !== null);
 }

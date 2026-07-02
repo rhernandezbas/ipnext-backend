@@ -200,8 +200,11 @@ async function buildFixture(opts?: {
 
   const findFreeIp = new FindFreeIp(netRepo, nasRepo, routerGw, orchestrator);
   const legacyMove = new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepo);
+  // pppoe-preprovision (fix colateral): el reloj FIJO también va al CORE — su throttle de
+  // registro comparaba el createdAt congelado del repo contra Date.now() REAL, y la ventana
+  // de 6h "expiraba" según la hora de la corrida (fila duplicada → test time-bomb).
   const move = new MovePppoeToNas(
-    pppoeRepo, nasRepo, orchestrator, findFreeIp, legacyMove, moveEvents, catalogRepo, eventRepo, netRepo,
+    pppoeRepo, nasRepo, orchestrator, findFreeIp, legacyMove, moveEvents, catalogRepo, eventRepo, netRepo, now,
   );
   const uc = new AutoMovePppoe(
     orchestrator, nasRepo, pppoeRepo, netRepo, moveEvents, move,

@@ -66,7 +66,9 @@ export class ListAllPppoeServices {
       data: data.map(s => toDto(
         s,
         s.contractId ? createdByByContract.get(s.contractId) ?? null : null,
-        nasById.get(s.nasId) ?? null,
+        // pppoe-preprovision (S4.1): pendiente de instalación (nasId null) → nas null en el DTO,
+        // sin crash — el FE renderiza "—" + badge "Pendiente de instalación".
+        s.nasId !== null ? nasById.get(s.nasId) ?? null : null,
       )),
       total,
       page,
@@ -79,7 +81,8 @@ export class ListAllPppoeServices {
     const result = new Map<string, { name: string; type: string }>();
     if (!this.nasRepo) return result;
 
-    const uniqueNasIds = new Set(rows.map(r => r.nasId));
+    // pppoe-preprovision: los pendientes (nasId null) no participan del enrichment.
+    const uniqueNasIds = new Set(rows.map(r => r.nasId).filter((id): id is string => id !== null));
     if (uniqueNasIds.size === 0) return result;
 
     // Batch fetch all NAS servers and index by id (no N+1).
@@ -138,6 +141,8 @@ function toDto(
     remoteAddress: s.remoteAddress,
     ipMode:        s.ipMode ?? 'fixed',
     nasId:         s.nasId,
+    // pppoe-preprovision: tipo de IP elegido (aditivo al wire; el FE lo muestra en el detalle).
+    ipTypePreference: s.ipTypePreference ?? 'cgnat',
     nasName:       nasInfo?.name ?? null,
     nasType:       nasInfo?.type ?? null,
     contractId:    s.contractId,

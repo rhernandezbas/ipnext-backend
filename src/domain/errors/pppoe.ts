@@ -210,6 +210,23 @@ export class PppoeMovePublicIpError extends DomainError {
 }
 
 /**
+ * pppoe-preprovision (REQ-PRE-4): el PPPoE está PENDIENTE DE INSTALACIÓN (nasId null — la
+ * pre-provisión todavía no fue adoptada por ningún NAS). Las operaciones que necesitan un NAS
+ * (enforce/corte, PATCH, rename, pin/unpin, baja soft) no aplican hasta la adopción — el move
+ * manual (= adopción) y el terminate (baja del RADIUS central) SÍ funcionan.
+ * Code → HTTP: PPPOE_PENDING_INSTALL → 409.
+ */
+export class PppoePendingInstallError extends DomainError {
+  constructor(public readonly id: string) {
+    super(
+      `El PPPoE ${id} está pendiente de instalación (sin NAS) — no operable hasta la adopción`,
+      'PPPOE_PENDING_INSTALL',
+    );
+    this.name = 'PppoePendingInstallError';
+  }
+}
+
+/**
  * pppoe-pool-ip: la IP provista no es un IPv4 válido (formato inválido).
  * Code → HTTP: INVALID_IP_FORMAT → 422.
  */

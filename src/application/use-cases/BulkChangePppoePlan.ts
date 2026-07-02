@@ -75,7 +75,8 @@ export interface BulkChangePppoePlanOptions {
 interface ServiceRow {
   id: string;
   username: string;
-  nasId: string;
+  /** pppoe-preprovision: null = pendiente de instalación (se filtra con failed tipado). */
+  nasId: string | null;
   contractId: string | null;
   profile: string | null;
   password: string;
@@ -84,6 +85,8 @@ interface ServiceRow {
   enforcedState: EnforcedState;
   callerId: string | null;
   ipMode: 'pool' | 'fixed';
+  /** pppoe-preprovision: tipo de IP elegido — pasa intacto al ChangePppoePlanService. */
+  ipTypePreference: 'cgnat' | 'public';
   createdAt: string;
 }
 
@@ -158,9 +161,16 @@ export class BulkChangePppoePlan {
         failed.push({ id, username: '', error: 'PPPOE_NOT_FOUND' });
         continue;
       }
-      const list = groups.get(s.nasId);
+      // pppoe-preprovision (REQ-PRE-4): un PENDIENTE de instalación (nasId null) no tiene NAS
+      // donde aplicar el cambio de plan — failed tipado, el resto del lote sigue.
+      const nasId = s.nasId;
+      if (nasId === null) {
+        failed.push({ id: s.id, username: s.username, error: 'PPPOE_PENDING_INSTALL' });
+        continue;
+      }
+      const list = groups.get(nasId);
       if (list) list.push(s);
-      else groups.set(s.nasId, [s]);
+      else groups.set(nasId, [s]);
     }
 
     // ── Execute: N routers in parallel, each serial with throttle ────────────

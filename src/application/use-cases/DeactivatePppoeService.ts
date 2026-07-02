@@ -3,7 +3,7 @@ import { PppoeServiceRepository } from '@domain/ports/PppoeServiceRepository';
 import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
-import { NasNotFoundError, PppoeServiceNotFoundError } from '@domain/errors/pppoe';
+import { NasNotFoundError, PppoeServiceNotFoundError, PppoePendingInstallError } from '@domain/errors/pppoe';
 import { routesViaOrchestrator } from '@domain/entities/nas';
 import { EnsureInternetContractService, EnsureInternetOpts } from './EnsureInternetContractService';
 import { toNasTarget } from './nasTarget';
@@ -32,6 +32,9 @@ export class DeactivatePppoeService {
   async execute(id: string, opts?: EnsureInternetOpts): Promise<PppoeService> {
     const s = await this.repo.findById(id);
     if (!s) throw new PppoeServiceNotFoundError(id);
+    // pppoe-preprovision (REQ-PRE-4): la baja SOFT de un pendiente de instalación no aplica
+    // (no hay NAS). Para limpiar una pre-provisión usar el terminate (baja del RADIUS central).
+    if (s.nasId === null) throw new PppoePendingInstallError(s.id);
     const nas = await this.nasRepo.findNasServerById(s.nasId);
     if (!nas) throw new NasNotFoundError(s.nasId);
 

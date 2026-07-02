@@ -20,7 +20,10 @@ export interface PppoeServiceDto {
   enforcedState: string; // Fase C — active | reduced | blocked
   /** pppoe-pool-ip: modo de asignación de IP — 'pool' (FreeRADIUS asigna del pool) | 'fixed' (IP pineada). */
   ipMode: string;
-  nasId: string;
+  /** pppoe-preprovision: null = pre-provisión "pendiente de instalación" (sin NAS todavía). */
+  nasId: string | null;
+  /** pppoe-preprovision: tipo de IP elegido al crear — 'cgnat' | 'public'. */
+  ipTypePreference: string;
   contractId: string | null;
   createdAt: string;
 }
@@ -38,7 +41,9 @@ export function toPppoeServiceDto(s: {
   enforcedState: string;
   /** pppoe-pool-ip: opcional para back-compat con callers que preceden al campo. Default 'fixed'. */
   ipMode?: string;
-  nasId: string;
+  nasId: string | null;
+  /** pppoe-preprovision: opcional para back-compat con callers que preceden al campo. Default 'cgnat'. */
+  ipTypePreference?: string;
   contractId: string | null;
   createdAt: string;
 }): PppoeServiceDto {
@@ -51,6 +56,7 @@ export function toPppoeServiceDto(s: {
     enforcedState: s.enforcedState,
     ipMode:        s.ipMode ?? 'fixed',
     nasId:         s.nasId,
+    ipTypePreference: s.ipTypePreference ?? 'cgnat',
     contractId:    s.contractId,
     createdAt:     s.createdAt,
   };
@@ -124,8 +130,11 @@ export interface PppoeServiceListItemDto {
   remoteAddress: string | null;
   /** Modo de asignación de IP: 'fixed' (IP pineada) | 'pool' (FreeRADIUS asigna del pool). */
   ipMode: string;
-  nasId: string;
-  /** Nombre del NAS (null si el NAS fue borrado o no se pudo resolver). */
+  /** pppoe-preprovision: null = pre-provisión "pendiente de instalación" (badge del tab; el FE deriva de nasId===null). */
+  nasId: string | null;
+  /** pppoe-preprovision: tipo de IP elegido al crear — 'cgnat' | 'public' (aditivo al wire). */
+  ipTypePreference: string;
+  /** Nombre del NAS (null si el NAS fue borrado, no se pudo resolver, o el servicio está pendiente de instalación). */
   nasName: string | null;
   /** Tipo del NAS: 'mikrotik_api' | 'radius_orchestrator' | 'cisco' | 'ubiquiti' | 'cambium' | 'other' | null. */
   nasType: string | null;
@@ -208,7 +217,16 @@ export interface PppoeNasMoveEventPageDto {
 export const CreatePppoeBodySchema = z.object({
   username:      z.string().min(1),
   password:      z.string().min(1),
-  nasId:         z.string().min(1),
+  /**
+   * pppoe-preprovision (S1.1): nasId OPCIONAL — ausente/null = pre-provisión "pendiente de
+   * instalación" (el flujo remoteAddress/perfil actual queda intacto cuando nasId viene).
+   */
+  nasId:         z.string().min(1).nullish(),
+  /**
+   * pppoe-preprovision (S1.2/S1.4): tipo de IP OBLIGATORIO en TODA creación — decisión
+   * consciente del operador, sin default en el wire. Falta/inválido → 422 VALIDATION_ERROR.
+   */
+  ipTypePreference: z.enum(['cgnat', 'public']),
   profile:       z.string().nullable().optional(),
   remoteAddress: z.string().nullable().optional(),
 });
@@ -325,7 +343,10 @@ export const CreatePppoeStandaloneBodySchema = z.object({
   username:    z.string().min(1),
   password:    z.string().min(1),
   plan:        z.string().min(1),
-  nasId:       z.string().min(1),
+  /** pppoe-preprovision (S1.1): OPCIONAL — ausente/null = pre-provisión "pendiente de instalación". */
+  nasId:       z.string().min(1).nullish(),
+  /** pppoe-preprovision (S1.2/S1.4): OBLIGATORIO en toda creación ('cgnat'|'public') — 422 si falta/inválido. */
+  ipTypePreference: z.enum(['cgnat', 'public']),
   framedIp:    z.string().nullable().optional(),
   ipMode:      z.enum(['fixed', 'pool']).optional(),
   contractId:  z.string().min(1).optional(),

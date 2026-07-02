@@ -50,6 +50,7 @@ import {
   OrchestratorRejectedError,
   NasNotFoundError,
   PppoeRenameNasNotSupportedError,
+  PppoePendingInstallError,
 } from '@domain/errors/pppoe';
 import type { RenamePppoeResultDto } from '@application/dto/pppoe.dto';
 
@@ -100,6 +101,8 @@ export class RenamePppoeUsername {
     // 2. fix-wave-2 (CRITICAL) — Cargar y validar el NAS.
     //    El rename es un flujo SOLO-RADIUS: siempre usa orchestrator.createUser / deleteUser.
     //    Rechazar antes de tocar el plano de control para no crear fantasmas ni inconsistencias.
+    //    pppoe-preprovision (REQ-PRE-4): un pendiente (nasId null) no se renombra hasta la adopción.
+    if (old.nasId === null) throw new PppoePendingInstallError(old.id);
     const nas = await this.nasRepo.findNasServerById(old.nasId);
     if (!nas) throw new NasNotFoundError(old.nasId);
     if (!routesViaOrchestrator(nas.type)) {

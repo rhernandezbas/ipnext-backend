@@ -59,6 +59,8 @@ const statusMap: Record<string, number> = {
   PPPOE_MOVE_MIXED_NAS_TYPES: 409,
   PPPOE_TERMINATED: 409,
   PPPOE_MOVE_PUBLIC_IP: 409,
+  // pppoe-preprovision (REQ-PRE-4): pendiente de instalación (nasId null) no operable → 409.
+  PPPOE_PENDING_INSTALL: 409,
   WORKFLOW_NAME_CONFLICT: 409,
   DEFAULT_WORKFLOW_PROTECTED: 409,
   WORKFLOW_IN_USE: 409,

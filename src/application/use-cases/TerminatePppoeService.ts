@@ -32,10 +32,13 @@ export class TerminatePppoeService {
   async execute(id: string, opts?: EnsureInternetOpts): Promise<PppoeService> {
     const s = await this.repo.findById(id);
     if (!s) throw new PppoeServiceNotFoundError(id);
-    const nas = await this.nasRepo.findNasServerById(s.nasId);
-    if (!nas) throw new NasNotFoundError(s.nasId);
+    // pppoe-preprovision (REQ-PRE-4): un PENDIENTE de instalación (nasId null) SÍ se puede dar
+    // de baja — el usuario vive en el RADIUS central (lo creó la pre-provisión), no necesita
+    // NAS. Es el escape de limpieza de una pre-provisión equivocada/no instalada.
+    const nas = s.nasId !== null ? await this.nasRepo.findNasServerById(s.nasId) : null;
+    if (s.nasId !== null && !nas) throw new NasNotFoundError(s.nasId);
 
-    if (routesViaOrchestrator(nas.type)) {
+    if (nas === null || routesViaOrchestrator(nas.type)) {
       // deleteUser lanza OrchestratorUnreachableError si el orchestrator no responde → 502.
       // La DB NO se toca hasta que el plano de control confirma.
       // IDEMPOTENTE: si el user ya no existe en RADIUS (404) la baja ya está hecha — seguimos

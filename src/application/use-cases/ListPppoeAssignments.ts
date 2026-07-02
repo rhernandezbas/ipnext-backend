@@ -42,7 +42,7 @@ export class ListPppoeAssignments {
         username:      s.username,
         contractId:    s.contractId!,     // non-null: garantizado por findAssignedPaginated
         profile:       s.profile,
-        nasId:         s.nasId,
+        nasId:         s.nasId!,          // non-null: garantizado por findAssignedPaginated (pppoe-preprovision)
         status:        s.status,
         createdAt:     s.createdAt,
       }),

@@ -2214,7 +2214,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     );
     // pppoe-full-management: CreatePppoeService extraído a variable para reusarlo como
     // delegate de CreatePppoeStandalone (C2d: camino con contractId = Guard #4 + activación + evento).
-    const createPppoeSvc = new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository());
+    // pppoe-preprovision (S1.4): findFreeIp (singleton del IP allocator) — sin él, la creación
+    // con NAS radius sin pool-mode y sin IP degrada al estado cojo (framedIp null). Wiring
+    // OBLIGATORIO (composition test q).
+    const createPppoeSvc = new CreatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository(), findFreeIp);
     // pppoe-move-nas W1: move radius-aware — reasigna IP del pool CGNAT del destino (findFreeIp,
     // singleton de arriba) + changeFramedIp + kick best-effort + registro DOBLE (PppoeNasMoveEvent
     // + evento 'modified' del historial del contrato). Subsume al legacy: NAS no-radius delega en
@@ -2267,7 +2270,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new UnpinPppoeIp(pppoeRepo, nasRepoForPppoe, orchestrator),
       // pppoe-full-management: creación standalone (contrato opcional) + rename seguro.
       // C2b: routerGw para NAS mikrotik_api · C2d: createPppoeSvc delegate para el camino con contractId.
-      new CreatePppoeStandalone(pppoeRepo, orchestrator, nasRepoForPppoe, routerGw, createPppoeSvc),
+      // pppoe-preprovision (S1.4): findFreeIp — mismo allocator server-side que CreatePppoeService.
+      new CreatePppoeStandalone(pppoeRepo, orchestrator, nasRepoForPppoe, routerGw, createPppoeSvc, findFreeIp),
       // fix-wave-2 (CRITICAL): nasRepoForPppoe para el guard de tipo de NAS + radiusEnforcement
       // (OrchestratorEnforcementAdapter directo, NO el PerNasEnforcementGateway) para re-aplicar
       // corte/reducción. El rename es un flujo SOLO-RADIUS; el guard valida que el NAS sea

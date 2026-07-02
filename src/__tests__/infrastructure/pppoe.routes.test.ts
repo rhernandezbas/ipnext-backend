@@ -372,7 +372,8 @@ describe('POST /api/contracts/:contractId/pppoe', () => {
     const res = await asUser(
       request(fx.app)
         .post(`/api/contracts/${CONTRACT_ID}/pppoe`)
-        .send({ username: 'clienteA', password: 'secret123', nasId: NAS_ID }),
+        // pppoe-preprovision: ipTypePreference ahora es REQUERIDO en el wire — 'cgnat' explicito.
+        .send({ username: 'clienteA', password: 'secret123', nasId: NAS_ID, ipTypePreference: 'cgnat' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(201);
@@ -389,7 +390,7 @@ describe('POST /api/contracts/:contractId/pppoe', () => {
     const res = await asUser(
       request(fx.app)
         .post(`/api/contracts/${CONTRACT_ID}/pppoe`)
-        .send({ username: 'dup-user', password: 'otro', nasId: NAS_ID }),
+        .send({ username: 'dup-user', password: 'otro', nasId: NAS_ID, ipTypePreference: 'cgnat' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(409);
@@ -403,7 +404,7 @@ describe('POST /api/contracts/:contractId/pppoe', () => {
     const res = await asUser(
       request(fx2.app)
         .post(`/api/contracts/${CONTRACT_ID}/pppoe`)
-        .send({ username: 'cliente-new', password: 'pw', nasId: NAS_ID }),
+        .send({ username: 'cliente-new', password: 'pw', nasId: NAS_ID, ipTypePreference: 'cgnat' }),
       fx2.manageUserId,
     );
     expect(res.status).toBe(502);
@@ -414,7 +415,7 @@ describe('POST /api/contracts/:contractId/pppoe', () => {
     const res = await asUser(
       request(fx.app)
         .post(`/api/contracts/${CONTRACT_ID}/pppoe`)
-        .send({ username: 'u', password: 'p', nasId: 'nas-99' }),
+        .send({ username: 'u', password: 'p', nasId: 'nas-99', ipTypePreference: 'cgnat' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(404);
@@ -425,7 +426,7 @@ describe('POST /api/contracts/:contractId/pppoe', () => {
     const res = await asUser(
       request(fx.app)
         .post(`/api/contracts/${CONTRACT_ID}/pppoe`)
-        .send({ password: 'pw', nasId: NAS_ID }),
+        .send({ password: 'pw', nasId: NAS_ID, ipTypePreference: 'cgnat' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(422);
@@ -436,7 +437,7 @@ describe('POST /api/contracts/:contractId/pppoe', () => {
     const res = await asUser(
       request(fx.app)
         .post(`/api/contracts/${CONTRACT_ID}/pppoe`)
-        .send({ username: 'u', nasId: NAS_ID }),
+        .send({ username: 'u', nasId: NAS_ID, ipTypePreference: 'cgnat' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(422);

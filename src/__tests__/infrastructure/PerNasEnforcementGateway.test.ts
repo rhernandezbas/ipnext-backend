@@ -14,7 +14,9 @@ function pppoe(): PppoeService {
   return {
     id: 'p1', username: 'cli', password: 'pw', profile: 'IP-Air-30-10',
     remoteAddress: null, status: 'enabled', nasId: 'n', contractId: null,
-    enforcedState: 'active', callerId: null, ipMode: 'fixed', createdAt: '2026-01-01',
+    enforcedState: 'active', callerId: null, ipMode: 'fixed',
+    // pppoe-preprovision: default 'cgnat' explicito (campo nuevo de la entidad).
+    ipTypePreference: 'cgnat', createdAt: '2026-01-01',
   };
 }
 

@@ -241,7 +241,8 @@ describe('POST /api/contracts/:contractId/pppoe — guard #4 (409 contrato ocupa
     await fx.pppoeRepo.upsertByUsername({ username: 'existente', password: 'p', nasId: NAS_ID, contractId: CONTRACT_ID, status: 'enabled' });
 
     const res = await asUser(
-      request(fx.app).post(`/api/contracts/${CONTRACT_ID}/pppoe`).send({ username: 'nuevo', password: 'pw', nasId: NAS_ID }),
+      // pppoe-preprovision: ipTypePreference ahora es REQUERIDO en el wire — 'cgnat' explicito.
+      request(fx.app).post(`/api/contracts/${CONTRACT_ID}/pppoe`).send({ username: 'nuevo', password: 'pw', nasId: NAS_ID, ipTypePreference: 'cgnat' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(409);

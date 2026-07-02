@@ -116,6 +116,8 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     // pppoe-pool-ip: ipMode solo se escribe si viene (en create cae al default 'fixed' del schema).
     // CRÍTICO: sin esto, la rama pool de CreatePppoeService no persistiría ipMode='pool' en prod.
     if (data.ipMode !== undefined) fields['ipMode'] = data.ipMode;
+    // pppoe-preprovision: idem — solo si viene (en create cae al default 'cgnat' del schema).
+    if (data.ipTypePreference !== undefined) fields['ipTypePreference'] = data.ipTypePreference;
     const row = await model().upsert({
       where: { username: data.username },
       create: { username: data.username, enforcedState: data.enforcedState ?? 'active', ...fields },
@@ -156,6 +158,7 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
         contractId: true,
         callerId: true,
         ipMode: true,
+        ipTypePreference: true,
         createdAt: true,
         contract: { select: { clientId: true, client: { select: { name: true } } } },
       },
@@ -178,6 +181,8 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
       where: {
         contractId: { not: null },
         remoteAddress: { not: null },
+        // pppoe-preprovision: un pendiente (nasId null) jamás es una asignación.
+        nasId: { not: null },
         status: 'enabled',
       },
     });
@@ -225,6 +230,8 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     const baseWhere: Record<string, unknown> = {
       contractId:    { not: null },
       remoteAddress: { not: null },
+      // pppoe-preprovision: un pendiente (nasId null) jamás es una asignación.
+      nasId:         { not: null },
       status:        'enabled',
     };
     if (nasId) baseWhere['nasId'] = nasId;
@@ -284,6 +291,7 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
           contractId: true,
           callerId: true,
           ipMode: true,
+          ipTypePreference: true,
           createdAt: true,
           contract: { select: { clientId: true, client: { select: { name: true } } } },
         },
@@ -410,6 +418,8 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
       enforcedState: data.enforcedState ?? 'active',
     };
     if (data.ipMode !== undefined) fields['ipMode'] = data.ipMode;
+    // pppoe-preprovision: solo si viene (en create cae al default 'cgnat' del schema).
+    if (data.ipTypePreference !== undefined) fields['ipTypePreference'] = data.ipTypePreference;
     try {
       const row = await model().create({ data: { username: data.username, ...fields } });
       return toEntity(row);
@@ -442,10 +452,11 @@ function toEntity(row: any): PppoeService {
     remoteAddress: row.remoteAddress ?? null,
     status: row.status,
     enforcedState: (row.enforcedState ?? 'active') as EnforcedState,
-    nasId: row.nasId,
+    nasId: row.nasId ?? null,
     contractId: row.contractId ?? null,
     callerId: row.callerId ?? null,
     ipMode: (row.ipMode ?? 'fixed') as 'pool' | 'fixed',
+    ipTypePreference: (row.ipTypePreference ?? 'cgnat') as 'cgnat' | 'public',
     createdAt: new Date(row.createdAt).toISOString(),
   };
 }
@@ -461,10 +472,11 @@ function toEntityWithClient(row: any): PppoeServiceWithClient {
     remoteAddress: row.remoteAddress ?? null,
     status:        row.status,
     enforcedState: (row.enforcedState ?? 'active') as EnforcedState,
-    nasId:         row.nasId,
+    nasId:         row.nasId ?? null,
     contractId:    row.contractId ?? null,
     callerId:      row.callerId ?? null,
     ipMode:        (row.ipMode ?? 'fixed') as 'pool' | 'fixed',
+    ipTypePreference: (row.ipTypePreference ?? 'cgnat') as 'cgnat' | 'public',
     createdAt:     new Date(row.createdAt).toISOString(),
     clientId:      row.contract?.clientId ?? null,
     customerName:  row.contract?.client?.name ?? null,

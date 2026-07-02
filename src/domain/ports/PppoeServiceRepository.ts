@@ -1,4 +1,5 @@
 import { PppoeService, EnforcedState, PppoeDisplayStatus } from '../entities/pppoeService';
+import type { IpKind } from '../entities/network';
 
 export interface PppoeServiceUpsert {
   username: string;
@@ -6,11 +7,14 @@ export interface PppoeServiceUpsert {
   profile?: string | null;
   remoteAddress?: string | null;
   status?: string;
-  nasId: string;
+  /** pppoe-preprovision (D1): null = pre-provisión "pendiente de instalación" (sin NAS todavía). */
+  nasId: string | null;
   contractId?: string | null;
   enforcedState?: EnforcedState; // Fase C — default 'active' si se omite
   /** pppoe-pool-ip: modo de asignación de IP. 'pool' = FreeRADIUS asigna del pool | 'fixed' = IP pineada. Default 'fixed'. */
   ipMode?: 'pool' | 'fixed';
+  /** pppoe-preprovision (D2): tipo de IP elegido ('cgnat'|'public'). Default 'cgnat' si se omite (callers legacy). */
+  ipTypePreference?: IpKind;
 }
 
 /**
@@ -46,8 +50,10 @@ export interface PppoeServiceRepository {
   /** PPPoE HUÉRFANOS: sin contrato asociado (contractId=null). El inventario por adoptar. */
   findUnassigned(): Promise<PppoeService[]>;
   /**
-   * PPPoE ASIGNADOS: con contractId != null AND remoteAddress != null AND status = 'enabled'.
-   * Fuente de datos para la tab Asignaciones (GET /api/ip-assignments).
+   * PPPoE ASIGNADOS: con contractId != null AND remoteAddress != null AND nasId != null
+   * AND status = 'enabled'. Fuente de datos para la tab Asignaciones (GET /api/ip-assignments).
+   * pppoe-preprovision: el filtro nasId != null hace el contrato EXPLÍCITO — un pendiente de
+   * instalación jamás es una "asignación" (no tiene IP ni NAS).
    */
   findAssigned(): Promise<PppoeService[]>;
   /**

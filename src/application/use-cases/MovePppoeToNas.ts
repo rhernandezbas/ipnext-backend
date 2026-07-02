@@ -85,6 +85,8 @@ function normalizeActorName(actor?: MovePppoeToNasActor): string | null {
  * Depende SOLO de ports + colaboradores de application (FindFreeIp, legacy move). Cero infra.
  */
 export class MovePppoeToNas {
+  private readonly now: () => Date;
+
   constructor(
     private readonly repo: PppoeServiceRepository,
     private readonly nasRepo: NasRepository,
@@ -96,7 +98,16 @@ export class MovePppoeToNas {
     private readonly eventRepo: ContractServiceEventRepository,
     /** ajuste 6: clasifica la IP actual contra los pools cargados (guard de IP pública). */
     private readonly networkRepo: IpNetworkRepository,
-  ) {}
+    /**
+     * pppoe-preprovision (fix colateral, patrón AutoMovePppoe): reloj inyectable para el check
+     * del throttle de registro. Antes el core usaba SIEMPRE Date.now() — con fixtures de reloj
+     * congelado la ventana de 6h "expiraba" según la hora REAL de la corrida (test time-bomb).
+     * En prod no cambia nada (default reloj real).
+     */
+    now?: () => Date,
+  ) {
+    this.now = now ?? (() => new Date());
+  }
 
   async execute(input: MovePppoeToNasInput, actor?: MovePppoeToNasActor): Promise<PppoeService> {
     const s = await this.repo.findById(input.id);
@@ -109,7 +120,9 @@ export class MovePppoeToNas {
 
     const destino = await this.nasRepo.findNasServerById(input.nasId);
     if (!destino) throw new NasNotFoundError(input.nasId);
-    const origen = await this.nasRepo.findNasServerById(s.nasId);
+    // pppoe-preprovision (D1): origen null también cuando el servicio está PENDIENTE de
+    // instalación (nasId null) — mover un pendiente = ADOPCIÓN (manual o del watcher).
+    const origen = s.nasId !== null ? await this.nasRepo.findNasServerById(s.nasId) : null;
 
     const destinoRadius = routesViaOrchestrator(destino.type);
     // Mixto radius↔legacy → error tipado, nada cambió (S3.3). Si el NAS origen ya no está en el
@@ -148,8 +161,15 @@ export class MovePppoeToNas {
       }
     }
 
-    // 1. IP nueva del pool CGNAT del destino. Pool lleno/inexistente → abort ANTES de tocar nada (S1.3).
-    let newIp = await this.allocateFreeIp(s, origen, destino, trigger, actor);
+    // pppoe-preprovision (D4/S4.3): mover un PENDIENTE (nasId null) = ADOPCIÓN — la IP sale del
+    // pool del `ipTypePreference` PERSISTIDO (la preferencia manda el pool). Un move NORMAL
+    // sigue asignando SIEMPRE cgnat (semántica W1 intacta: cgnat + force para no-cgnat).
+    const esAdopcion = s.nasId === null;
+    const poolType = esAdopcion ? s.ipTypePreference : 'cgnat';
+
+    // 1. IP nueva del pool del destino. Pool lleno/inexistente → abort ANTES de tocar nada (S1.3);
+    //    'public' en NAS sin pool público (adopción) → NoPoolForNasTypeError → failed_no_free_ip.
+    let newIp = await this.allocateFreeIp(s, origen, destino, trigger, poolType, actor);
 
     // 2. Plano de control PRIMERO (patrón CreatePppoeService): si el RADIUS no confirma, la DB no
     //    miente (S1.4). El orchestrator es además el guard AUTORITATIVO de colisiones de Framed-IP
@@ -164,7 +184,7 @@ export class MovePppoeToNas {
           err instanceof Error ? err.message : String(err), actor);
         throw err;
       }
-      newIp = await this.allocateFreeIp(s, origen, destino, trigger, actor);
+      newIp = await this.allocateFreeIp(s, origen, destino, trigger, poolType, actor);
       try {
         await this.orchestrator.changeFramedIp(s.username, newIp);
       } catch (retryErr) {
@@ -222,8 +242,15 @@ export class MovePppoeToNas {
     }
 
     // 5. Registro doble (design D6): log visible + historial del contrato.
+    //    pppoe-preprovision (D4/S3.1): la ADOPCIÓN del watcher lleva reason 'auto_install'
+    //    (outcome 'moved' — SIN outcome nuevo, el FE no cambia). Si además falló el kick, la
+    //    pista no se pierde: 'auto_install_kick_failed'. La adopción MANUAL registra como un
+    //    move normal (fromNas null ya cuenta la historia).
+    const movedReason = esAdopcion && trigger === 'auto'
+      ? (kickFailed ? 'auto_install_kick_failed' : 'auto_install')
+      : (kickFailed ? 'kick_failed' : null);
     await this.recordMoveEvent(s, origen, destino, s.remoteAddress, newIp, trigger, 'moved',
-      kickFailed ? 'kick_failed' : null, actor);
+      movedReason, actor);
     await this.recordHistory(s, origen, destino, s.remoteAddress, newIp, trigger, actor);
 
     return updated;
@@ -235,16 +262,19 @@ export class MovePppoeToNas {
    *   - orchestrator caído consultando las IPs asignadas → evento `failed_orchestrator`
    *     reason `list_assigned_ips` (antes ese intento moría sin rastro).
    * En ambos casos PROPAGA — nada se escribió todavía.
+   * pppoe-preprovision (D4): `poolType` viene del caller — 'cgnat' para el move normal (W1
+   * intacto) o el `ipTypePreference` persistido para la ADOPCIÓN de un pendiente.
    */
   private async allocateFreeIp(
     s: PppoeService,
     origen: NasServer | null,
     destino: NasServer,
     trigger: PppoeNasMoveTrigger,
+    poolType: PppoeService['ipTypePreference'],
     actor?: MovePppoeToNasActor,
   ): Promise<string> {
     try {
-      return await this.findFreeIp.execute({ nasId: destino.id, type: 'cgnat' });
+      return await this.findFreeIp.execute({ nasId: destino.id, type: poolType });
     } catch (err) {
       if (err instanceof NoFreeIpError || err instanceof NoPoolForNasTypeError) {
         await this.recordMoveEvent(s, origen, destino, s.remoteAddress, null, trigger, 'failed_no_free_ip', err.code, actor);
@@ -301,7 +331,7 @@ export class MovePppoeToNas {
       if (
         trigger === 'auto' &&
         outcome !== 'moved' &&
-        (await isDuplicateAutoEvent(this.moveEventRepo, s.username, outcome, destino.id, reason))
+        (await isDuplicateAutoEvent(this.moveEventRepo, s.username, outcome, destino.id, reason, this.now().getTime()))
       ) {
         return;
       }
@@ -358,7 +388,8 @@ export class MovePppoeToNas {
         // Ajuste 8b: '' normalizado — el fallback 'sistema' del auto-move SÍ aplica.
         actorName:        normalizeActorName(actor) ?? (trigger === 'auto' ? 'sistema' : ''),
         reason:           null,
-        notes:            `Movido de NAS ${origen?.name ?? s.nasId} (${fromIp ?? '—'}) → ${destino.name} (${toIp ?? '—'}) [${trigger}]`,
+        // pppoe-preprovision: origen null + nasId null = adopción de un pendiente de instalación.
+        notes:            `Movido de NAS ${origen?.name ?? s.nasId ?? 'sin NAS (pre-provisión)'} (${fromIp ?? '—'}) → ${destino.name} (${toIp ?? '—'}) [${trigger}]`,
       });
     } catch (err) {
       console.warn('[MovePppoeToNas] Failed to record modified event (best-effort):', err);

@@ -292,6 +292,8 @@ describe('POST /api/pppoe — CreatePppoeStandalone (Fase 2)', () => {
         password: 'pass123',
         plan: 'IP-10-5',
         nasId: '1',
+        // pppoe-preprovision: ipTypePreference ahora es REQUERIDO en el wire — 'cgnat' explicito.
+        ipTypePreference: 'cgnat',
       }),
       fx.manageUserId,
     );
@@ -314,6 +316,7 @@ describe('POST /api/pppoe — CreatePppoeStandalone (Fase 2)', () => {
         plan: 'IP-20-10',
         nasId: '1',
         contractId: 'ct-xyz',
+        ipTypePreference: 'cgnat', // pppoe-preprovision: requerido en el wire
       }),
       fx.manageUserId,
     );
@@ -328,7 +331,7 @@ describe('POST /api/pppoe — CreatePppoeStandalone (Fase 2)', () => {
     await fx.pppoeRepo.upsertByUsername({ username: 'dupe', password: 'x', nasId: 'n', contractId: null });
 
     const res = await asUser(
-      request(fx.app).post('/api/pppoe').send({ username: 'dupe', password: 'new', plan: 'P', nasId: '1' }),
+      request(fx.app).post('/api/pppoe').send({ username: 'dupe', password: 'new', plan: 'P', nasId: '1', ipTypePreference: 'cgnat' }),
       fx.manageUserId,
     );
     expect(res.status).toBe(409);
@@ -355,6 +358,7 @@ describe('POST /api/pppoe — CreatePppoeStandalone (Fase 2)', () => {
         password: 'pass',
         plan: 'IP-10-5',
         nasId: '1', // mikrotik_api → usa router.createSecret (no orchestrator)
+        ipTypePreference: 'cgnat', // pppoe-preprovision: requerido en el wire
       }),
       fx.manageUserId,
     );
@@ -400,6 +404,7 @@ describe('POST /api/pppoe — CreatePppoeStandalone (Fase 2)', () => {
         plan:       'IP-10-5',
         nasId:      '3',
         contractId: 'ct-taken-w2',
+        ipTypePreference: 'cgnat', // pppoe-preprovision: requerido en el wire
       }),
       fx.manageUserId,
     );

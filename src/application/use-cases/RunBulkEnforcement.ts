@@ -65,9 +65,18 @@ export class RunBulkEnforcement {
         failed++;
         continue;
       }
-      const list = groups.get(s.nasId);
+      // pppoe-preprovision (REQ-PRE-4): un PENDIENTE de instalación (nasId null) no es cortable
+      // — failed tipado up-front (defensa en profundidad: resolveEnforcementCandidates ya lo
+      // excluye en el camino HTTP, pero un caller directo no pasa por ahí).
+      const nasId = s.nasId;
+      if (nasId === null) {
+        results.push({ pppoeId: id, ok: false, error: 'PPPOE_PENDING_INSTALL' });
+        failed++;
+        continue;
+      }
+      const list = groups.get(nasId);
       if (list) list.push(s);
-      else groups.set(s.nasId, [s]);
+      else groups.set(nasId, [s]);
     }
 
     // Writer de progreso COALESCED + SERIAL + best-effort:

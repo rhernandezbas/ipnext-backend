@@ -234,6 +234,18 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
     const window = appSrc.slice(idx, end + '));'.length);
     expect(window).toMatch(/new ListAllPppoeServiceIds\(/);
   });
+
+  // ── pppoe-preprovision-autoinstall (tasks 1.5) — anti "feature muerta": el allocator
+  // server-side de la creación (S1.4) tiene que llegar INYECTADO a ambos use cases de alta.
+  // Sin el findFreeIp, la rama "NAS radius sin pool-mode y sin IP" degrada silenciosamente al
+  // comportamiento viejo (fixed con framedIp null) y la preferencia de tipo de IP queda muerta.
+  it('(q) pppoe-preprovision: CreatePppoeService recibe findFreeIp (allocator server-side del alta)', () => {
+    expect(appSrc).toMatch(/const createPppoeSvc = new CreatePppoeService\([^;]*findFreeIp/s);
+  });
+
+  it('(q) pppoe-preprovision: CreatePppoeStandalone recibe findFreeIp (mismo allocator en el alta standalone)', () => {
+    expect(appSrc).toMatch(/new CreatePppoeStandalone\([^)]*findFreeIp/s);
+  });
 });
 
 // ── pppoe-move-nas W2 — watcher auto-move: anti "feature muerta" (lección W6) ─────────────────

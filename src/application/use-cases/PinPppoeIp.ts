@@ -9,6 +9,7 @@ import {
   InvalidIpFormatError,
   IpAlreadyTakenError,
   OrchestratorUnreachableError,
+  PppoePendingInstallError,
 } from '@domain/errors/pppoe';
 
 export interface PinPppoeIpInput {
@@ -57,6 +58,9 @@ export class PinPppoeIp {
     if (!svc) throw new PppoeServiceNotFoundError(input.pppoeId);
 
     // 3. Resolver NAS.
+    //    pppoe-preprovision (REQ-PRE-4): un pendiente (nasId null) no tiene pool contra el cual
+    //    pinear — no operable hasta la adopción.
+    if (svc.nasId === null) throw new PppoePendingInstallError(svc.id);
     const nas = await this.nasRepo.findNasServerById(svc.nasId);
     if (!nas) throw new NasNotFoundError(svc.nasId);
 

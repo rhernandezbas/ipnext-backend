@@ -28,7 +28,8 @@ export class MovePppoeServiceToRouter {
 
     const destino = await this.nasRepo.findNasServerById(input.nasId);
     if (!destino) throw new NasNotFoundError(input.nasId);
-    const origen = await this.nasRepo.findNasServerById(s.nasId);
+    // pppoe-preprovision: nasId null (pendiente de instalación) → sin origen que dar de baja.
+    const origen = s.nasId !== null ? await this.nasRepo.findNasServerById(s.nasId) : null;
 
     // crear en destino primero (si falla → throw, nada cambió)
     await this.router.createSecret(toNasTarget(destino), {

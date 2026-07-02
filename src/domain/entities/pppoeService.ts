@@ -1,3 +1,5 @@
+import type { IpKind } from './network';
+
 /**
  * enforcedState (Fase C) — estado del CORTE de servicio, SEPARADO del `profile` comercial.
  * El `profile` de la DB siempre guarda el plan comercial; en el router puede estar cambiado a
@@ -65,7 +67,13 @@ export interface PppoeService {
   profile: string | null;     // /ppp profile COMERCIAL (IP-Air-* / *-PUB) — NO se pisa al cortar
   remoteAddress: string | null; // IP fija (remote-address): CGNAT o pública
   status: string;             // enabled | disabled (del secret) | terminated (baja HARD: user borrado del RADIUS, IP liberada)
-  nasId: string;              // router donde vive (FK NasServer)
+  /**
+   * pppoe-preprovision (D1): router donde vive (FK NasServer) — o NULL = PRE-PROVISIÓN
+   * "pendiente de instalación": el usuario existe en el RADIUS central SIN Framed-IP y el
+   * watcher lo adopta cuando aparece su primera sesión. "Pendiente" es esta DERIVACIÓN
+   * (nasId === null), NO un status nuevo.
+   */
+  nasId: string | null;
   contractId: string | null; // FK Contract — null = sin contrato asociado aún
   enforcedState: EnforcedState; // Fase C: estado del corte (default 'active')
   callerId: string | null;    // MAC del CPE (persistida de la última sesión vista — sobrevive a la desconexión)
@@ -75,5 +83,11 @@ export interface PppoeService {
    * 'fixed' = IP pineada (radreply Framed-IP-Address) — bypasea el pool. Default 'fixed'.
    */
   ipMode: 'pool' | 'fixed';
+  /**
+   * pppoe-preprovision (D2): tipo de IP elegido al crear — 'cgnat' | 'public' (IpKind).
+   * Obligatorio en el CREATE (zod 422); persistido para que la adopción (manual o del watcher)
+   * asigne del pool correcto. Las filas legacy quedan 'cgnat' salvo backfill de públicas.
+   */
+  ipTypePreference: IpKind;
   createdAt: string;
 }

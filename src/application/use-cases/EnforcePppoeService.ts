@@ -2,7 +2,7 @@ import { PppoeService, EnforcementAction, enforcedStateForAction } from '@domain
 import { PppoeServiceRepository } from '@domain/ports/PppoeServiceRepository';
 import { EnforcementGateway } from '@domain/ports/EnforcementGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
-import { NasNotFoundError, PppoeServiceNotFoundError } from '@domain/errors/pppoe';
+import { NasNotFoundError, PppoeServiceNotFoundError, PppoePendingInstallError } from '@domain/errors/pppoe';
 import type { RecordPppoeEnforceEvent } from './RecordPppoeEnforceEvent';
 
 export interface EnforcePppoeServiceInput {
@@ -41,6 +41,9 @@ export class EnforcePppoeService {
   async execute(input: EnforcePppoeServiceInput): Promise<PppoeService> {
     const s = await this.repo.findById(input.id);
     if (!s) throw new PppoeServiceNotFoundError(input.id);
+    // pppoe-preprovision (S4.2): un PENDIENTE de instalación (nasId null) NO es operable —
+    // no hay NAS donde aplicar el corte. Error tipado (409), jamás crash/NasNotFound confuso.
+    if (s.nasId === null) throw new PppoePendingInstallError(s.id);
 
     const target = enforcedStateForAction(input.action);
     if (s.enforcedState === target) return s; // idempotente: no-op (no toca la red, no evento)

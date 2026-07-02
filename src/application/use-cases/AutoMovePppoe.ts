@@ -257,6 +257,12 @@ export class AutoMovePppoe {
         continue;
       }
 
+      // pppoe-preprovision (D4 / REQ-PRE-3): un servicio con nasId === null (pre-provisión
+      // "pendiente de instalación") con sesión viva NO es un mismatch clásico — es una ADOPCIÓN.
+      // Comparte TODO el pipeline: mismas defensas (terminated/conflicto multi-NAS/freshness ya
+      // corrieron arriba; IP null → elegible abajo), mismo breaker/cap (cuenta como mismatch del
+      // tick), mismo cooldown, y el core (MovePppoeToNas) asigna del pool del ipTypePreference
+      // persistido y registra el evento moved con reason 'auto_install' y fromNas null.
       if (realNas.id === service.nasId) continue; // sin mismatch
       summary.mismatches++;
 

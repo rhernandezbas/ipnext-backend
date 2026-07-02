@@ -3,7 +3,7 @@ import { PppoeServiceRepository } from '@domain/ports/PppoeServiceRepository';
 import { PppoeRouterGateway, SecretInput } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
-import { NasNotFoundError, PppoeServiceNotFoundError } from '@domain/errors/pppoe';
+import { NasNotFoundError, PppoeServiceNotFoundError, PppoePendingInstallError } from '@domain/errors/pppoe';
 import { routesViaOrchestrator } from '@domain/entities/nas';
 import { toNasTarget } from './nasTarget';
 import { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
@@ -74,6 +74,9 @@ export class UpdatePppoeService {
   async execute(input: UpdatePppoeServiceInput): Promise<PppoeService> {
     const s = await this.repo.findById(input.id);
     if (!s) throw new PppoeServiceNotFoundError(input.id);
+    // pppoe-preprovision (REQ-PRE-4): un pendiente de instalación (nasId null) no es editable
+    // hasta la adopción — error tipado 409, jamás crash/NasNotFound confuso.
+    if (s.nasId === null) throw new PppoePendingInstallError(s.id);
     const nas = await this.nasRepo.findNasServerById(s.nasId);
     if (!nas) throw new NasNotFoundError(s.nasId);
 

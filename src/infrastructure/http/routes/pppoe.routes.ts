@@ -106,6 +106,7 @@ import {
   PppoeContractAlreadyHasServiceError,
   PppoeIngestNotSupportedError,
   PppoeRenameNasNotSupportedError,
+  PppoePendingInstallError,
   NasNotFoundError,
   InvalidIpFormatError,
   IpAlreadyTakenError,
@@ -192,7 +193,7 @@ export function createPppoeRouter(
     '/contracts/:contractId/pppoe',
     auth,
     canManage,
-    async (req: Request, res: Response): Promise<void> => {
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = CreatePppoeBodySchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -202,6 +203,8 @@ export function createPppoeRouter(
         const service = await createPppoeService.execute({
           contractId: req.params['contractId'] as string,
           ...parsed.data,
+          // pppoe-preprovision (S1.1): nasId ausente/null = pre-provision "pendiente de instalacion".
+          nasId: parsed.data.nasId ?? null,
         }, actorOf(req));
         res.status(201).json(toPppoeServiceDto(service));
       } catch (err) {
@@ -233,7 +236,10 @@ export function createPppoeRouter(
           res.status(404).json({ code: err.code, error: err.message });
           return;
         }
-        throw err;
+        // pppoe-preprovision (S1.4): el allocator server-side puede fallar (NO_POOL_FOR_NAS_TYPE
+        // 404 / NO_FREE_IP 422) -> errorHandler (fuente unica). NUNCA re-lanzar: en Express 4 un
+        // throw async no llega al errorHandler y la request queda COLGADA.
+        next(err);
       }
     },
   );
@@ -411,7 +417,7 @@ export function createPppoeRouter(
       '/pppoe',
       auth,
       canManage,
-      async (req: Request, res: Response): Promise<void> => {
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         const parsed = CreatePppoeStandaloneBodySchema.safeParse(req.body);
         if (!parsed.success) {
           res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -419,7 +425,11 @@ export function createPppoeRouter(
         }
         try {
           // W3 fix: forwardear el actor para que el evento 'activated' lleve el nombre del operador.
-          const service = await createPppoeStandalone.execute(parsed.data, actorOf(req));
+          // pppoe-preprovision (S1.1): nasId ausente/null = pre-provision "pendiente de instalacion".
+          const service = await createPppoeStandalone.execute(
+            { ...parsed.data, nasId: parsed.data.nasId ?? null },
+            actorOf(req),
+          );
           res.status(201).json(toPppoeServiceDto(service));
         } catch (err) {
           if (err instanceof PppoeUsernameTakenError) {
@@ -448,7 +458,9 @@ export function createPppoeRouter(
             res.status(502).json({ code: err.code, error: err.message });
             return;
           }
-          throw err;
+          // pppoe-preprovision (S1.4): fallos del allocator server-side -> errorHandler
+          // (fuente unica). NUNCA re-lanzar: en Express 4 la request quedaria colgada.
+          next(err);
         }
       },
     );
@@ -655,6 +667,11 @@ export function createPppoeRouter(
           res.status(404).json({ code: err.code, error: err.message });
           return;
         }
+        // pppoe-preprovision (S4.2): pendiente de instalacion -> 409 tipado (wire contract).
+        if (err instanceof PppoePendingInstallError) {
+          res.status(409).json({ code: err.code, error: err.message });
+          return;
+        }
         throw err;
       }
     },
@@ -689,6 +706,11 @@ export function createPppoeRouter(
         }
         if (err instanceof NasNotFoundError) {
           res.status(404).json({ code: err.code, error: err.message });
+          return;
+        }
+        // pppoe-preprovision (REQ-PRE-4): pendiente de instalacion -> 409 tipado, no editable.
+        if (err instanceof PppoePendingInstallError) {
+          res.status(409).json({ code: err.code, error: err.message });
           return;
         }
         throw err;
@@ -792,6 +814,11 @@ export function createPppoeRouter(
             res.status(err.upstreamStatus).json({ code: err.code, error: err.message });
             return;
           }
+          // pppoe-preprovision (REQ-PRE-4): pendiente de instalacion -> 409 tipado.
+          if (err instanceof PppoePendingInstallError) {
+            res.status(409).json({ code: err.code, error: err.message });
+            return;
+          }
           throw err;
         }
       },
@@ -824,6 +851,12 @@ export function createPppoeRouter(
         }
         if (err instanceof NasNotFoundError) {
           res.status(404).json({ code: err.code, error: err.message });
+          return;
+        }
+        // pppoe-preprovision: el fallback deactivate rechaza pendientes con 409 tipado
+        // (el terminate wired en prod SI los borra del RADIUS central).
+        if (err instanceof PppoePendingInstallError) {
+          res.status(409).json({ code: err.code, error: err.message });
           return;
         }
         throw err;
@@ -883,6 +916,11 @@ export function createPppoeRouter(
             res.status(404).json({ code: err.code, error: err.message });
             return;
           }
+          // pppoe-preprovision (REQ-PRE-4): pendiente de instalacion -> 409 tipado.
+          if (err instanceof PppoePendingInstallError) {
+            res.status(409).json({ code: err.code, error: err.message });
+            return;
+          }
           // NAS no-RADIUS (pin no soportado) y orchestrator caído → 502.
           if (err instanceof OrchestratorUnreachableError) {
             res.status(502).json({ code: err.code, error: err.message });
@@ -907,6 +945,11 @@ export function createPppoeRouter(
         } catch (err) {
           // NAS sin poolName (no pool-mode) → 409 (no hay pool al que volver).
           if (err instanceof NasNoPoolError) {
+            res.status(409).json({ code: err.code, error: err.message });
+            return;
+          }
+          // pppoe-preprovision (REQ-PRE-4): pendiente de instalacion -> 409 tipado.
+          if (err instanceof PppoePendingInstallError) {
             res.status(409).json({ code: err.code, error: err.message });
             return;
           }

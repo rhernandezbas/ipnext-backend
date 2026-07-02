@@ -17,7 +17,9 @@ function pppoe(over: Partial<PppoeService> = {}): PppoeService {
   return {
     id: 'p1', username: 'cliente1', password: 'pw', profile: COMMERCIAL,
     remoteAddress: null, status: 'enabled', nasId: '1', contractId: 'c1',
-    enforcedState: 'active', callerId: null, ipMode: 'fixed', createdAt: '2026-01-01', ...over,
+    enforcedState: 'active', callerId: null, ipMode: 'fixed',
+    // pppoe-preprovision: default 'cgnat' explicito (campo nuevo de la entidad).
+    ipTypePreference: 'cgnat', createdAt: '2026-01-01', ...over,
   };
 }
 
