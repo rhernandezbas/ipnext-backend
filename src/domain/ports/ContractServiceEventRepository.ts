@@ -16,6 +16,10 @@ export interface RecordContractServiceEventInput {
   actorId?: string | null;
   actorName?: string;
   notes?: string | null;
+  // internet-history-plan-direction — snapshot de los CÓDIGOS de plan del cambio (solo 'modified').
+  // La DIRECCIÓN (upgrade/downgrade) NO se persiste: se deriva al leer contra el catálogo de planes.
+  oldPlan?: string | null;
+  newPlan?: string | null;
   // #127 - optional cancellation reason.
   reason?: string | null;
 }
@@ -28,6 +32,9 @@ export interface ContractServiceEvent {
   actorId: string | null;
   actorName: string;
   notes: string | null;
+  // internet-history-plan-direction — códigos de plan viejo/nuevo; null salvo en cambios de plan.
+  oldPlan: string | null;
+  newPlan: string | null;
   // #127 - optional cancellation reason; null for legacy events.
   reason: string | null;
   createdAt: string; // ISO string
@@ -51,6 +58,11 @@ export interface ContractServiceEventWithClient extends ContractServiceEvent {
 export interface ListContractServiceEventsFilter {
   serviceCatalogId?: string;
   contractId?: string;
+  /**
+   * internet-history-plan-direction — narrows to a single event TÓPICO (eventType), e.g. 'modified'.
+   * Push-down filter (SQL `eventType = ?`) so the tópico select of the history page filters at the DB.
+   */
+  eventType?: string;
   /**
    * internet-history — narrows to events whose contract is in this set (SQL `contractId IN (...)`).
    * Push-down filter so the createdBy enrichment of a page is bounded by the page's contracts,

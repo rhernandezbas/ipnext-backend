@@ -2257,7 +2257,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // internet-history — vista GLOBAL de servicios de internet (espejo de la página de TV).
       // pppoe-full-management: se pasa nasRepoForPppoe para enriquecer nasName/nasType en el DTO.
       new ListAllPppoeServices(pppoeRepo, new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository(), nasRepoForPppoe),
-      new ListInternetServiceHistory(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
+      // internet-history-plan-direction — PrismaPlanRepository para derivar upgrade/downgrade por kbps.
+      new ListInternetServiceHistory(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository(), new PrismaPlanRepository()),
       new ListInternetActivationOperators(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository()),
       // pppoe-full-management: creación standalone (contrato opcional) + rename seguro.
       // C2b: routerGw para NAS mikrotik_api · C2d: createPppoeSvc delegate para el camino con contractId.

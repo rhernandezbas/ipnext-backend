@@ -96,6 +96,9 @@ export class ChangePppoePlanService {
             actorId:          actorId ?? null,
             actorName:        actorName ?? '',
             notes:            `${service.profile ?? '—'} → ${profile}`,
+            // internet-history-plan-direction — snapshot de códigos (notes se mantiene por compat).
+            oldPlan:          service.profile ?? null,
+            newPlan:          profile,
           });
         }
       } catch (err) {

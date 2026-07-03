@@ -153,6 +153,9 @@ export class UpdatePppoeService {
             actorId: input.actorId ?? null,
             actorName: input.actorName ?? '',
             notes: `${s.profile ?? '—'} → ${input.profile}`,
+            // internet-history-plan-direction — snapshot de códigos (notes se mantiene por compat).
+            oldPlan: s.profile ?? null,
+            newPlan: input.profile ?? null,
           });
         }
       } catch (err) {

@@ -72,4 +72,29 @@ describe('InMemoryContractServiceEventRepository', () => {
     await repo.record({ contractId: 'D', serviceCatalogId: 'S', eventType: 'activated' });
     expect(repo.all()).toHaveLength(2);
   });
+
+  // internet-history-plan-direction — oldPlan/newPlan round-trip + eventType push-down filter
+  it('record persists oldPlan/newPlan and returns them (null by default)', async () => {
+    const withPlans = await repo.record({
+      contractId: 'C', serviceCatalogId: 'S', eventType: 'modified',
+      oldPlan: 'IP-30M', newPlan: 'IP-50M',
+    });
+    expect(withPlans.oldPlan).toBe('IP-30M');
+    expect(withPlans.newPlan).toBe('IP-50M');
+
+    const noPlans = await repo.record({ contractId: 'C', serviceCatalogId: 'S', eventType: 'activated' });
+    expect(noPlans.oldPlan).toBeNull();
+    expect(noPlans.newPlan).toBeNull();
+  });
+
+  it('list filters by eventType (tópico) and carries oldPlan/newPlan through', async () => {
+    await repo.record({ contractId: 'C', serviceCatalogId: 'S', eventType: 'activated' });
+    await repo.record({ contractId: 'C', serviceCatalogId: 'S', eventType: 'modified', oldPlan: 'IP-30M', newPlan: 'IP-50M' });
+
+    const modified = await repo.list({ serviceCatalogId: 'S', eventType: 'modified' });
+    expect(modified).toHaveLength(1);
+    expect(modified[0]!.eventType).toBe('modified');
+    expect(modified[0]!.oldPlan).toBe('IP-30M');
+    expect(modified[0]!.newPlan).toBe('IP-50M');
+  });
 });

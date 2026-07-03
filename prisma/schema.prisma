@@ -2680,6 +2680,12 @@ model ContractServiceEvent {
   actor            RbacUser? @relation("ContractServiceEventActor", fields: [actorId], references: [id], onDelete: SetNull)
   actorName        String    @default("")  // snapshot, legible tras borrado del user
   notes            String?
+  // internet-history-plan-direction — snapshot de los CÓDIGOS de plan (viejo/nuevo) del cambio.
+  // Solo se completan en eventos 'modified' (cambio de plan). La DIRECCIÓN (upgrade/downgrade) NO
+  // se persiste: se DERIVA al leer comparando downloadKbps(newPlan) vs downloadKbps(oldPlan) contra
+  // el catálogo de planes. `notes` se mantiene por compatibilidad (mismo par "viejo → nuevo").
+  oldPlan          String?
+  newPlan          String?
   // #127 - optional cancellation reason threaded from the FE cancel modal.
   reason           String?
   createdAt        DateTime  @default(now())

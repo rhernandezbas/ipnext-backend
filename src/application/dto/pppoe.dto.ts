@@ -171,6 +171,12 @@ export interface InternetServiceEventDto {
   actorId: string | null;
   actorName: string;
   reason: string | null;
+  // internet-history-plan-direction — cambio de plan: códigos viejo/nuevo + dirección DERIVADA.
+  // direction se calcula al leer (downloadKbps(newPlan) vs downloadKbps(oldPlan)); null salvo
+  // en un 'modified' con ambos códigos en el catálogo, kbps distintos y sin plan de enforcement.
+  direction: 'upgrade' | 'downgrade' | null;
+  oldPlan: string | null;
+  newPlan: string | null;
   createdAt: string; // ISO string
 }
 

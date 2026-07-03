@@ -149,6 +149,9 @@ describe('ChangePppoePlanService.changePlan — event recording', () => {
     expect(events[0]!.actorId).toBe('actor-1');
     expect(events[0]!.actorName).toBe('operador1');
     expect(events[0]!.notes).toBe('IP-30M → IP-50M');
+    // internet-history-plan-direction — snapshot de códigos viejo/nuevo (notes se mantiene por compat).
+    expect(events[0]!.oldPlan).toBe('IP-30M');
+    expect(events[0]!.newPlan).toBe('IP-50M');
   });
 
   it('does NOT record event when contractId is null (orphan service)', async () => {

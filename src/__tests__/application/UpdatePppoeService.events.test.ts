@@ -93,6 +93,9 @@ describe('UpdatePppoeService — pppoe-plan-change-history', () => {
     expect(events[0]!.actorId).toBe('A1');
     expect(events[0]!.actorName).toBe('Operador1');
     expect(events[0]!.notes).toBe('IP-Air-30-10 → IP-Air-40-15');
+    // internet-history-plan-direction — snapshot de códigos viejo/nuevo (notes se mantiene por compat).
+    expect(events[0]!.oldPlan).toBe('IP-Air-30-10');
+    expect(events[0]!.newPlan).toBe('IP-Air-40-15');
   });
 
   it('reason=null → evento modified con reason null', async () => {
@@ -124,6 +127,9 @@ describe('UpdatePppoeService — pppoe-plan-change-history', () => {
     const events = await eventRepo.listByContract(CONTRACT_ID);
     expect(events).toHaveLength(1);
     expect(events[0]!.notes).toBe('— → IP-Air-40-15');
+    // internet-history-plan-direction — oldPlan null cuando el profile original era null.
+    expect(events[0]!.oldPlan).toBeNull();
+    expect(events[0]!.newPlan).toBe('IP-Air-40-15');
   });
 
   // ── 3. Sin evento cuando el profile no cambia ───────────────────────────────

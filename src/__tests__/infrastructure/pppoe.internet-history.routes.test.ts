@@ -37,6 +37,7 @@ import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMem
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { InMemoryContractServiceEventRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceEventRepository';
+import { InMemoryPlanRepository } from '@infrastructure/adapters/in-memory/InMemoryPlanRepository';
 
 import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract';
 import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
@@ -134,6 +135,11 @@ async function buildApp(): Promise<Fixture> {
   const eventRepo   = new InMemoryContractServiceEventRepository();
   const ensure      = new EnsureInternetContractService(csRepo, catalogRepo, eventRepo);
 
+  // internet-history-plan-direction — catálogo de planes para derivar upgrade/downgrade por kbps.
+  const planRepo    = new InMemoryPlanRepository();
+  await planRepo.upsertByCode({ code: 'IP-30M', name: '30M', category: 'IP', downloadKbps: 30000, uploadKbps: 10000 });
+  await planRepo.upsertByCode({ code: 'IP-50M', name: '50M', category: 'IP', downloadKbps: 50000, uploadKbps: 15000 });
+
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
   const batchRepo = new InMemoryServiceCutBatchRepository();
@@ -167,7 +173,7 @@ async function buildApp(): Promise<Fixture> {
     undefined,
     undefined,
     new ListAllPppoeServices(pppoeRepo, eventRepo, catalogRepo),
-    new ListInternetServiceHistory(eventRepo, catalogRepo),
+    new ListInternetServiceHistory(eventRepo, catalogRepo, planRepo),
     new ListInternetActivationOperators(eventRepo, catalogRepo),
   ));
   app.use(errorHandler);
@@ -289,6 +295,31 @@ describe('GET /api/pppoe/activation-history — global internet history (interne
     expect(res.body).toHaveLength(1);
     expect(res.body[0].clientId).toBe('client-1');
     expect(res.body[0].customerName).toBe('Alice');
+  });
+
+  it('200 filtra por eventType (tópico)', async () => {
+    const fx = await buildApp();
+    await fx.eventRepo.record({ contractId: 'ct-1', serviceCatalogId: fx.internetId, eventType: 'activated', actorName: 'Op' });
+    await fx.eventRepo.record({ contractId: 'ct-2', serviceCatalogId: fx.internetId, eventType: 'modified', actorName: 'Op', oldPlan: 'IP-30M', newPlan: 'IP-50M' });
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/activation-history?eventType=modified'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].eventType).toBe('modified');
+  });
+
+  it('200 filtra por direction=upgrade y expone direction/oldPlan/newPlan en el DTO', async () => {
+    const fx = await buildApp();
+    await fx.eventRepo.record({ contractId: 'ct-1', serviceCatalogId: fx.internetId, eventType: 'activated', actorName: 'Op' });
+    await fx.eventRepo.record({ contractId: 'ct-2', serviceCatalogId: fx.internetId, eventType: 'modified', actorName: 'Op', oldPlan: 'IP-30M', newPlan: 'IP-50M' }); // upgrade
+    await fx.eventRepo.record({ contractId: 'ct-3', serviceCatalogId: fx.internetId, eventType: 'modified', actorName: 'Op', oldPlan: 'IP-50M', newPlan: 'IP-30M' }); // downgrade
+
+    const res = await asUser(request(fx.app).get('/api/pppoe/activation-history?direction=upgrade'), fx.readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].direction).toBe('upgrade');
+    expect(res.body[0].oldPlan).toBe('IP-30M');
+    expect(res.body[0].newPlan).toBe('IP-50M');
   });
 
   it('403 sin pppoe.read', async () => {

@@ -266,10 +266,17 @@ export function createPppoeRouter(
       canRead,
       async (req: Request, res: Response): Promise<void> => {
         const q = req.query;
-        const filter: { actorId?: string; customerId?: string; clientId?: string; from?: Date; to?: Date } = {};
+        const filter: {
+          actorId?: string; customerId?: string; clientId?: string;
+          eventType?: string; direction?: 'upgrade' | 'downgrade';
+          from?: Date; to?: Date;
+        } = {};
         if (typeof q['actorId'] === 'string' && q['actorId'] !== '') filter.actorId = q['actorId'];
         if (typeof q['customerId'] === 'string' && q['customerId'] !== '') filter.customerId = q['customerId'];
         if (typeof q['clientId'] === 'string' && q['clientId'] !== '') filter.clientId = q['clientId'];
+        // internet-history-plan-direction — TÓPICO (eventType, push-down SQL) + DIRECCIÓN (in-memory).
+        if (typeof q['eventType'] === 'string' && q['eventType'] !== '') filter.eventType = q['eventType'];
+        if (q['direction'] === 'upgrade' || q['direction'] === 'downgrade') filter.direction = q['direction'];
         if (typeof q['from'] === 'string' && q['from'] !== '') {
           const d = new Date(q['from']);
           if (!isNaN(d.getTime())) filter.from = d;

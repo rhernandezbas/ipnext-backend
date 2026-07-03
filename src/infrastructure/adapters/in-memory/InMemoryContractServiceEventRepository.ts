@@ -47,6 +47,8 @@ export class InMemoryContractServiceEventRepository implements ContractServiceEv
       actorId:          input.actorId ?? null,
       actorName:        input.actorName ?? '',
       notes:            input.notes ?? null,
+      oldPlan:          input.oldPlan ?? null,
+      newPlan:          input.newPlan ?? null,
       reason:           input.reason ?? null,
       createdAt:        this.now().toISOString(),
     };
@@ -75,6 +77,7 @@ export class InMemoryContractServiceEventRepository implements ContractServiceEv
     return this.store
       .filter(e => {
         if (filters.serviceCatalogId && e.serviceCatalogId !== filters.serviceCatalogId) return false;
+        if (filters.eventType && e.eventType !== filters.eventType) return false;
         if (filters.contractId && e.contractId !== filters.contractId) return false;
         if (contractIdSet && !contractIdSet.has(e.contractId)) return false;
         if (filters.actorId && e.actorId !== filters.actorId) return false;

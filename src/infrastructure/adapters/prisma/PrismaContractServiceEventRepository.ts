@@ -29,6 +29,8 @@ export class PrismaContractServiceEventRepository implements ContractServiceEven
         actorId:          input.actorId ?? null,
         actorName:        input.actorName ?? '',
         notes:            input.notes ?? null,
+        oldPlan:          input.oldPlan ?? null,
+        newPlan:          input.newPlan ?? null,
         reason:           input.reason ?? null,
       },
     });
@@ -50,6 +52,8 @@ export class PrismaContractServiceEventRepository implements ContractServiceEven
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const where: Record<string, any> = {};
     if (filters.serviceCatalogId) where['serviceCatalogId'] = filters.serviceCatalogId;
+    // internet-history-plan-direction — push-down del filtro de TÓPICO (eventType).
+    if (filters.eventType) where['eventType'] = filters.eventType;
     // push-down: `contractIds` scopes to the page's contracts (SQL `contractId IN (...)`) so the
     // createdBy enrichment is bounded by the page, NOT by the full historical event count.
     // A single `contractId` filter takes precedence (it's the narrower predicate).
@@ -125,6 +129,8 @@ function toEvent(row: any): ContractServiceEvent {
     // #117 — 3-branch fallback: snapshot (sobrevive rename/delete) || JOIN actor.login (eventos viejos sin snapshot) || ''
     actorName:        row.actorName || row.actor?.login || '',
     notes:            row.notes ?? null,
+    oldPlan:          row.oldPlan ?? null,
+    newPlan:          row.newPlan ?? null,
     reason:           row.reason ?? null,
     createdAt:        row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
   };
