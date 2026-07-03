@@ -107,6 +107,13 @@ export function toClientLog(row: any): ClientLog {
   };
 }
 
+/** Prisma Decimal | number | null → number | null (Decimal carries a `.toNumber()`). */
+function decimalToNumberOrNull(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'object' && 'toNumber' in (v as object)) return (v as { toNumber(): number }).toNumber();
+  return Number(v);
+}
+
 export function toInvoice(row: any): Invoice {
   const lineItems: LineItem[] = Array.isArray(row.lineItems) ? row.lineItems as LineItem[] : [];
   return {
@@ -121,6 +128,13 @@ export function toInvoice(row: any): Invoice {
       : Number(row.amount),
     status: row.status as InvoiceStatus,
     lineItems,
+    grInvoiceId: row.grInvoiceId ?? null,
+    balance: decimalToNumberOrNull(row.balance),
+    grType: row.grType ?? null,
+    currency: row.currency ?? null,
+    pdfUrl: row.pdfUrl ?? null,
+    couponPdfUrl: row.couponPdfUrl ?? null,
+    paymentUrl: row.paymentUrl ?? null,
   };
 }
 

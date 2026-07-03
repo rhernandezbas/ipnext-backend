@@ -273,12 +273,24 @@ model ClientLog {
 
 model Invoice {
   id           String        @id @default(uuid())
-  number       String        @unique
+  // NOTE: `number` is NO LONGER unique — a GR invoice `numero` is only unique in
+  // combination with tipo+sucursal. Identity/upsert key is `grInvoiceId` instead.
+  number       String
+  // GR composite identity "{tipo}-{sucursal}-{numero}" — unique + nullable, the
+  // upsert key and the "sourced from GR" marker (null = manual, never touched by sync).
+  grInvoiceId  String?       @unique
   clientId     String
   customerName String
   issueDate    DateTime
   dueDate      DateTime
   amount       Decimal       @db.Decimal(12, 2)
+  // Outstanding balance (GR `saldo`); nullable for non-GR/manual rows. Drives status.
+  balance      Decimal?      @db.Decimal(12, 2)
+  grType       String?
+  currency     String?
+  pdfUrl       String?
+  couponPdfUrl String?
+  paymentUrl   String?
   status       InvoiceStatus @default(pendiente)
   lineItems    Json
   createdAt    DateTime      @default(now())

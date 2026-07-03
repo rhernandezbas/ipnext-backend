@@ -77,6 +77,7 @@ export class InMemoryGestionRealPort implements GestionRealPort {
       currency: null,
       invoicesQty: 0,
       paymentUrls: {},
+      invoices: [],
       raw: {},
     };
   }

@@ -34,6 +34,39 @@ export interface GrClient {
 }
 
 /**
+ * Normalized invoice from the GR `cliente` action (`cuentas.invoices[]`).
+ *
+ * GR gives NO status and NO atomic id — identity is the composite
+ * `"{tipo}-{sucursal}-{numero}"` and status is DERIVED from `saldo` + `fechaVto`.
+ * Amounts arrive as real JSON floats; dates as "DD-MM-YYYY" strings (parsed in
+ * Argentina time downstream). All optional string fields are `null` when GR omits them.
+ */
+export interface GrInvoice {
+  /** Comprobante type, e.g. "FB". Part of the composite identity. */
+  tipo: string | null;
+  /** Sucursal code, e.g. "00010". Part of the composite identity. */
+  sucursal: string | null;
+  /** Invoice number, e.g. "000074035". NOT unique on its own. */
+  numero: string;
+  /** Currency code, e.g. "PES". */
+  moneda: string | null;
+  /** Issue date "DD-MM-YYYY". */
+  fecha: string | null;
+  /** Due date "DD-MM-YYYY". */
+  fechaVto: string | null;
+  /** Total amount (JSON float). */
+  importe: number;
+  /** Outstanding balance (JSON float; may be negative for credit notes). */
+  saldo: number;
+  /** Link to the invoice PDF. */
+  urlPdf: string | null;
+  /** Link to the payment coupon PDF. */
+  cuponPdf: string | null;
+  /** MercadoPago payment link (from `payments_url.MercadoPago`). */
+  paymentUrl: string | null;
+}
+
+/**
  * Normalized balance from the GR `cliente` action.
  * amount = 0 means no outstanding debt; null fields = unknown/not-yet-fetched.
  */
@@ -47,6 +80,11 @@ export interface GrClientBalance {
   invoicesQty: number;
   /** Payment URLs by provider (e.g. MercadoPago). */
   paymentUrls?: Record<string, string>;
+  /**
+   * The client's invoices as returned by GR in the SAME payload
+   * (`cuentas.invoices[]`). Empty when GR omits/returns none. Never undefined.
+   */
+  invoices: GrInvoice[];
   /** Full raw `cliente` payload for debug/fidelity. */
   raw: Record<string, unknown>;
 }

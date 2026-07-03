@@ -17,6 +17,20 @@ export interface Invoice {
   amount: number;
   status: InvoiceStatus;
   lineItems: LineItem[];
+  /** GR composite identity, or null for manual (non-GR) invoices. */
+  grInvoiceId: string | null;
+  /** Outstanding balance (GR `saldo`); null for non-GR rows. */
+  balance: number | null;
+  /** GR comprobante type (e.g. "FB"); null for non-GR rows. */
+  grType: string | null;
+  /** Currency code (e.g. "PES"); null for non-GR rows. */
+  currency: string | null;
+  /** Link to the invoice PDF (GR). */
+  pdfUrl: string | null;
+  /** Link to the payment coupon PDF (GR). */
+  couponPdfUrl: string | null;
+  /** MercadoPago payment link (GR). */
+  paymentUrl: string | null;
 }
 
 export interface Payment {

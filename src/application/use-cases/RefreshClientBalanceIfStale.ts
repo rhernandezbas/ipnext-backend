@@ -55,6 +55,13 @@ export class RefreshClientBalanceIfStale {
       const at = this.now();
       const balance = await this.withTimeout(this.gr.fetchClientBalance(grClienteId), this.timeoutMs);
       await this.mirror.updateClientBalance(grClienteId, balance.amount, balance.currency, at);
+      // Sync the client's GR invoices from the SAME payload (zero extra GR calls).
+      // Guard (review #1): debt reported (amount > 0) but no itemized invoices ⇒ the list
+      // is non-authoritative (schema drift / partial payload); a blind replace-all would
+      // wipe the mirror. Sync only when authoritative: non-empty, or genuine zero-debt.
+      if (balance.invoices.length > 0 || balance.amount <= 0) {
+        await this.mirror.upsertInvoices(grClienteId, balance.invoices, at);
+      }
       return true;
     } catch {
       // Swallow — caller will serve stored value with balanceStale:true

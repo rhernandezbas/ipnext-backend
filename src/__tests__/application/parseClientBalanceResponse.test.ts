@@ -113,3 +113,95 @@ describe('parseClientBalanceResponse', () => {
     expect(result.amount).toBe(0);
   });
 });
+
+// Real GR invoice item shape captured live in Phase 0 (2026-07-03).
+const REAL_INVOICE_ITEM = {
+  tipo: 'FB',
+  sucursal: '00010',
+  numero: '000074035',
+  moneda: 'PES',
+  fecha: '26-06-2026',
+  fecha_vto: '07-07-2026',
+  importe: 35121.37,
+  saldo: 35121.37,
+  url_pdf: 'https://clientes.ipnext.com.ar/factura_prt.php?id=1',
+  cupon_pdf: 'https://clientes.ipnext.com.ar/factura_prt.php?id=1&cupon=SI',
+  payments_url: { MercadoPago: 'https://pagos.gestionreal.com.ar/mp.php?id=1' },
+};
+
+function payloadWithInvoices(invoices: unknown): unknown {
+  return {
+    error: '0',
+    clientes: [
+      {
+        idcustomer: '100011',
+        cuentas: { debt: '35121.37', invoices_qty: '1', invoices },
+      },
+    ],
+  };
+}
+
+describe('parseClientBalanceResponse — invoices', () => {
+  it('maps the real GR invoice item into GrClientBalance.invoices', () => {
+    const result = parseClientBalanceResponse('100011', payloadWithInvoices([REAL_INVOICE_ITEM]));
+    expect(result.invoices).toHaveLength(1);
+    const inv = result.invoices[0];
+    expect(inv.tipo).toBe('FB');
+    expect(inv.sucursal).toBe('00010');
+    expect(inv.numero).toBe('000074035');
+    expect(inv.moneda).toBe('PES');
+    expect(inv.fecha).toBe('26-06-2026');
+    expect(inv.fechaVto).toBe('07-07-2026');
+    expect(inv.importe).toBe(35121.37);
+    expect(inv.saldo).toBe(35121.37);
+    expect(inv.urlPdf).toBe('https://clientes.ipnext.com.ar/factura_prt.php?id=1');
+    expect(inv.cuponPdf).toBe('https://clientes.ipnext.com.ar/factura_prt.php?id=1&cupon=SI');
+    expect(inv.paymentUrl).toBe('https://pagos.gestionreal.com.ar/mp.php?id=1');
+  });
+
+  it('returns [] when invoices is an empty array', () => {
+    const result = parseClientBalanceResponse('100011', payloadWithInvoices([]));
+    expect(result.invoices).toEqual([]);
+  });
+
+  it('returns [] when invoices is absent', () => {
+    const payload = { error: '0', clientes: [{ idcustomer: '100011', cuentas: { debt: '0' } }] };
+    const result = parseClientBalanceResponse('100011', payload);
+    expect(result.invoices).toEqual([]);
+  });
+
+  it('returns [] (no throw) when invoices is malformed (not an array)', () => {
+    const result = parseClientBalanceResponse('100011', payloadWithInvoices('garbage'));
+    expect(result.invoices).toEqual([]);
+  });
+
+  it('skips malformed items but keeps the well-formed ones', () => {
+    const result = parseClientBalanceResponse('100011', payloadWithInvoices([REAL_INVOICE_ITEM, null, 42, {}]));
+    // The {} item has no numero → skipped; null/42 skipped. Only the real one survives.
+    expect(result.invoices).toHaveLength(1);
+    expect(result.invoices[0].numero).toBe('000074035');
+  });
+
+  it('skips an item missing tipo or sucursal (composite id would degrade, review #6)', () => {
+    const noTipo = { ...REAL_INVOICE_ITEM, numero: '000074099', tipo: undefined };
+    const noSucursal = { ...REAL_INVOICE_ITEM, numero: '000074100', sucursal: undefined };
+    const result = parseClientBalanceResponse(
+      '100011',
+      payloadWithInvoices([REAL_INVOICE_ITEM, noTipo, noSucursal]),
+    );
+    expect(result.invoices).toHaveLength(1);
+    expect(result.invoices[0].numero).toBe('000074035');
+  });
+
+  it('handles a negative saldo (credit note) and missing payment url', () => {
+    const creditNote = { ...REAL_INVOICE_ITEM, numero: '000074036', saldo: -500, payments_url: {} };
+    const result = parseClientBalanceResponse('100011', payloadWithInvoices([creditNote]));
+    expect(result.invoices[0].saldo).toBe(-500);
+    expect(result.invoices[0].paymentUrl).toBeNull();
+  });
+
+  it('returns invoices [] on the defensive zero path', () => {
+    const result = parseClientBalanceResponse('999', null);
+    expect(result.invoices).toEqual([]);
+  });
+});

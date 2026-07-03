@@ -108,7 +108,7 @@ describe('GET /api/clients/:id — balance fields', () => {
   it('returns balance fields for a debtor when GR succeeds', async () => {
     const gr = new InMemoryGestionRealPort();
     const mirror = new InMemoryClientMirrorRepository();
-    gr.balancesByClient['100011'] = { grClienteId: '100011', amount: 65722.07, currency: 'ARS', invoicesQty: 2, paymentUrls: {}, raw: {} };
+    gr.balancesByClient['100011'] = { grClienteId: '100011', amount: 65722.07, currency: 'ARS', invoicesQty: 2, paymentUrls: {}, invoices: [], raw: {} };
 
     const repo = makeCustomerRepo(DEBTOR, DEBTOR_FRESH);
     const app = buildApp(repo, gr, mirror);

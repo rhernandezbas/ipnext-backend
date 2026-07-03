@@ -15,6 +15,7 @@ import { ClientNotFoundError, SplynxUnavailableError } from '@domain/errors';
 import { InvalidLocationError } from '@domain/errors/geolocation';
 import { deriveTechnology } from '@application/use-cases/deriveTechnology';
 import { mapContractStatus } from '@application/use-cases/mapContractStatus';
+import { toInvoiceDto } from '@application/dto/invoice.dto';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { incrementClients, decrementClients } from '../../adapters/in-memory/shared-stores';
 
@@ -223,7 +224,8 @@ export function createClientsRouter(
 
   router.get('/:id/invoices', auth, async (req: Request, res: Response): Promise<void> => {
     const invoices = await getInvoices.execute(req.params['id'] as string);
-    res.json(invoices);
+    // Map to the stable InvoiceDto contract — never leak the raw domain entity (AD-6).
+    res.json(invoices.map(toInvoiceDto));
   });
 
   router.get('/:id/logs', auth, async (req: Request, res: Response): Promise<void> => {

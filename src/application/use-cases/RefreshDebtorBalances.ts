@@ -96,6 +96,14 @@ export class RefreshDebtorBalances {
       try {
         const balance = await this.gr.fetchClientBalance(grClienteId);
         await this.mirror.updateClientBalance(grClienteId, balance.amount, balance.currency, at);
+        // Sync the client's GR invoices from the SAME payload (zero extra GR calls).
+        // Guard (review #1): if GR reports debt (amount > 0) but returns NO itemized
+        // invoices, the list is non-authoritative (schema drift / partial payload) — a
+        // blind replace-all would wipe the mirror and reintroduce the $0-vs-debt bug this
+        // feature kills. Sync only when authoritative: non-empty, or genuine zero-debt (paid off).
+        if (balance.invoices.length > 0 || balance.amount <= 0) {
+          await this.mirror.upsertInvoices(grClienteId, balance.invoices, at);
+        }
         refreshed++;
       } catch (err) {
         console.error(`[gr-balance] Error refreshing debtor ${grClienteId}:`, (err as Error).message);

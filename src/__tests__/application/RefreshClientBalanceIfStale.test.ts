@@ -1,10 +1,18 @@
 import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
 import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
-import { GrClientBalance } from '@domain/entities/gestionReal';
+import { GrClientBalance, GrInvoice } from '@domain/entities/gestionReal';
 
 function makeBalance(grClienteId: string, amount: number): GrClientBalance {
-  return { grClienteId, amount, currency: 'ARS', invoicesQty: 1, paymentUrls: {}, raw: {} };
+  return { grClienteId, amount, currency: 'ARS', invoicesQty: 1, paymentUrls: {}, invoices: [], raw: {} };
+}
+
+function makeGrInvoice(numero: string): GrInvoice {
+  return {
+    tipo: 'FB', sucursal: '00010', numero, moneda: 'PES',
+    fecha: '26-06-2026', fechaVto: '07-07-2026', importe: 1000, saldo: 1000,
+    urlPdf: 'https://pdf', cuponPdf: 'https://cupon', paymentUrl: 'https://mp',
+  };
 }
 
 describe('RefreshClientBalanceIfStale', () => {
@@ -64,6 +72,49 @@ describe('RefreshClientBalanceIfStale', () => {
     gr.balancesByClient['100011'] = makeBalance('100011', 500);
     const refreshed = await uc.execute({ grClienteId: '100011', lastBalanceAt: null });
     expect(refreshed).toBe(true);
+  });
+
+  it('also syncs the balance invoices via upsertInvoices when stale', async () => {
+    const balance = makeBalance('100011', 2000);
+    balance.invoices = [makeGrInvoice('A')];
+    gr.balancesByClient['100011'] = balance;
+
+    await uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+
+    const rows = mirror.invoices.filter((r) => r.clientId === '100011');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].grInvoiceId).toBe('FB-00010-A');
+  });
+
+  it('does NOT wipe invoices when GR reports debt but returns an empty list (guard, review #1)', async () => {
+    const seed = makeBalance('100011', 2000);
+    seed.invoices = [makeGrInvoice('A')];
+    gr.balancesByClient['100011'] = seed;
+    await uc.execute({ grClienteId: '100011', lastBalanceAt: null }); // seeds invoice A
+    expect(mirror.invoices.filter((r) => r.clientId === '100011')).toHaveLength(1);
+
+    // GR now returns debt > 0 but NO itemized invoices (schema drift / partial payload).
+    gr.balancesByClient['100011'] = makeBalance('100011', 2000); // invoices: [] by default
+    await uc.execute({ grClienteId: '100011', lastBalanceAt: null }); // still stale
+
+    // Guard skipped the sync → the previously synced invoice survives (no $0-vs-debt wipe).
+    const rows = mirror.invoices.filter((r) => r.clientId === '100011');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].grInvoiceId).toBe('FB-00010-A');
+  });
+
+  it('DOES clear invoices when the client is fully paid off (amount 0, empty list)', async () => {
+    const seed = makeBalance('100011', 2000);
+    seed.invoices = [makeGrInvoice('A')];
+    gr.balancesByClient['100011'] = seed;
+    await uc.execute({ grClienteId: '100011', lastBalanceAt: null }); // seeds invoice A
+    expect(mirror.invoices.filter((r) => r.clientId === '100011')).toHaveLength(1);
+
+    // Paid off: amount 0 + empty list is authoritative → replace-all clears the GR rows.
+    gr.balancesByClient['100011'] = makeBalance('100011', 0); // invoices: []
+    await uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+
+    expect(mirror.invoices.filter((r) => r.clientId === '100011')).toHaveLength(0);
   });
 
   it('returns false and does NOT throw when GR errors (fallback behavior)', async () => {

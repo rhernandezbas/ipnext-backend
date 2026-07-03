@@ -1,6 +1,7 @@
 import { ClientMirrorRepository, UpsertResult } from '@domain/ports/ClientMirrorRepository';
-import { GrClient, GrContract } from '@domain/entities/gestionReal';
+import { GrClient, GrContract, GrInvoice } from '@domain/entities/gestionReal';
 import { mapContractStatus } from '@application/use-cases/mapContractStatus';
+import { mapGrInvoice } from '@application/use-cases/mapGrInvoice';
 import { prisma } from '../../database/prisma';
 
 type ClientStatus = 'active' | 'late' | 'blocked' | 'inactive' | 'baja';
@@ -77,6 +78,62 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
         balanceCurrency: currency,
         lastBalanceAt: at,
       },
+    });
+  }
+
+  /**
+   * Replace-all sync of a client's GR invoices into the local Invoice table.
+   *
+   * Resolve the local client by grClienteId (no-op if absent — same contract as
+   * updateClientBalance). Then, in ONE transaction:
+   *   1. deleteMany the client's GR-sourced invoices (grInvoiceId NOT NULL) whose
+   *      grInvoiceId is NOT in the current set → the `{ not: null }` guard means
+   *      manual invoices (grInvoiceId null) are NEVER deleted. An empty current
+   *      set deletes all of the client's GR invoices (paid off → disappears).
+   *   2. upsert each current invoice by its composite grInvoiceId.
+   */
+  async upsertInvoices(grClienteId: string, invoices: GrInvoice[], at: Date): Promise<void> {
+    const client = await prisma.client.findUnique({
+      where: { grClienteId },
+      select: { id: true, name: true },
+    });
+    if (!client) return; // unknown client → no-op (mirror of updateClientBalance)
+
+    const mapped = invoices.map((inv) => mapGrInvoice(inv, at));
+    const currentIds = mapped.map((m) => m.grInvoiceId);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.invoice.deleteMany({
+        where: {
+          clientId: client.id,
+          grInvoiceId: { not: null },
+          NOT: { grInvoiceId: { in: currentIds } },
+        },
+      });
+
+      for (const m of mapped) {
+        const data = {
+          number: m.number,
+          clientId: client.id,
+          customerName: client.name,
+          issueDate: m.issueDate ?? at,
+          dueDate: m.dueDate ?? at,
+          amount: m.amount,
+          balance: m.balance,
+          grType: m.grType,
+          currency: m.currency,
+          pdfUrl: m.pdfUrl,
+          couponPdfUrl: m.couponPdfUrl,
+          paymentUrl: m.paymentUrl,
+          status: m.status,
+          lineItems: [] as unknown as object, // GR gives no line items
+        };
+        await tx.invoice.upsert({
+          where: { grInvoiceId: m.grInvoiceId },
+          create: { ...data, grInvoiceId: m.grInvoiceId },
+          update: data,
+        });
+      }
     });
   }
 

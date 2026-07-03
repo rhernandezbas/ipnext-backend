@@ -139,6 +139,14 @@ export class SplynxCustomerAdapter implements CustomerRepository {
         amount: Number(inv['total'] ?? 0),
         status: mapInvoiceStatus(String(inv['status'] ?? '')),
         lineItems: [] as import('@domain/entities/billing').LineItem[],
+        // Splynx invoices are not GR-sourced — GR-specific fields are null.
+        grInvoiceId: null,
+        balance: null,
+        grType: null,
+        currency: null,
+        pdfUrl: null,
+        couponPdfUrl: null,
+        paymentUrl: null,
       };
     });
   }

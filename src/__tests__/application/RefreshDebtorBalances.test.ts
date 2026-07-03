@@ -2,7 +2,15 @@ import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMe
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { RefreshDebtorBalances } from '@application/use-cases/RefreshDebtorBalances';
-import { GrClient, GrClientBalance } from '@domain/entities/gestionReal';
+import { GrClient, GrClientBalance, GrInvoice } from '@domain/entities/gestionReal';
+
+function makeGrInvoice(numero: string): GrInvoice {
+  return {
+    tipo: 'FB', sucursal: '00010', numero, moneda: 'PES',
+    fecha: '26-06-2026', fechaVto: '07-07-2026', importe: 1000, saldo: 1000,
+    urlPdf: 'https://pdf', cuponPdf: 'https://cupon', paymentUrl: 'https://mp',
+  };
+}
 
 function makeDebtor(id: string): GrClient {
   return {
@@ -35,7 +43,7 @@ function makeBajaClient(id: string): GrClient {
 }
 
 function makeBalance(grClienteId: string, amount: number): GrClientBalance {
-  return { grClienteId, amount, currency: 'ARS', invoicesQty: 1, paymentUrls: {}, raw: {} };
+  return { grClienteId, amount, currency: 'ARS', invoicesQty: 1, paymentUrls: {}, invoices: [], raw: {} };
 }
 
 describe('RefreshDebtorBalances', () => {
@@ -81,6 +89,19 @@ describe('RefreshDebtorBalances', () => {
     expect(stored?.amount).toBe(65722.07);
     expect(stored?.currency).toBe('ARS');
     expect(stored?.lastBalanceAt).toEqual(now);
+  });
+
+  it('also syncs the balance invoices via upsertInvoices', async () => {
+    gr.clients = [makeDebtor('D1')];
+    const balance = makeBalance('D1', 2000);
+    balance.invoices = [makeGrInvoice('A'), makeGrInvoice('B')];
+    gr.balancesByClient['D1'] = balance;
+
+    await uc.execute();
+
+    const rows = mirror.invoices.filter((r) => r.clientId === 'D1');
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.grInvoiceId).sort()).toEqual(['FB-00010-A', 'FB-00010-B']);
   });
 
   it('skips one debtor on GR error and continues with the rest', async () => {

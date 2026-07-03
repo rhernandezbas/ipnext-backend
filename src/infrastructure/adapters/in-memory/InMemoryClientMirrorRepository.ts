@@ -1,5 +1,6 @@
 import { ClientMirrorRepository, UpsertResult } from '@domain/ports/ClientMirrorRepository';
-import { GrClient, GrContract } from '@domain/entities/gestionReal';
+import { GrClient, GrContract, GrInvoice } from '@domain/entities/gestionReal';
+import { mapGrInvoice, MappedGrInvoice } from '@application/use-cases/mapGrInvoice';
 
 interface BalanceRecord {
   amount: number;
@@ -7,11 +8,21 @@ interface BalanceRecord {
   lastBalanceAt: Date;
 }
 
+/** In-memory Invoice row: the mapped GR shape stamped with its owning client. */
+export interface InMemoryInvoiceRecord extends Omit<MappedGrInvoice, 'grInvoiceId'> {
+  /** In-memory this is the grClienteId; in Prisma it resolves to the local Client.id. */
+  clientId: string;
+  /** null for manual (non-GR) invoices — those are NEVER deleted by the sync. */
+  grInvoiceId: string | null;
+}
+
 export class InMemoryClientMirrorRepository implements ClientMirrorRepository {
   clients = new Map<string, GrClient>();
   contracts = new Map<string, GrContract>();
   /** Separate balance store so catalog upserts never clobber balance data. */
   balances = new Map<string, BalanceRecord>();
+  /** Flat invoice store (mirrors the local `Invoice` table). */
+  invoices: InMemoryInvoiceRecord[] = [];
 
   /**
    * When true, mirrors the Prisma guard: `upsertContract` returns `{ created: false }`
@@ -39,5 +50,28 @@ export class InMemoryClientMirrorRepository implements ClientMirrorRepository {
   async updateClientBalance(grClienteId: string, amount: number, currency: string | null, at: Date): Promise<void> {
     // No-op for unknown clients (don't throw)
     this.balances.set(grClienteId, { amount, currency, lastBalanceAt: at });
+  }
+
+  async upsertInvoices(grClienteId: string, invoices: GrInvoice[], at: Date): Promise<void> {
+    const mapped = invoices.map((inv) => mapGrInvoice(inv, at));
+    const currentIds = new Set(mapped.map((m) => m.grInvoiceId));
+
+    // Replace-all scoped to GR invoices: drop this client's GR rows GR no longer
+    // returns; keep other clients and NEVER touch manual rows (grInvoiceId null).
+    this.invoices = this.invoices.filter((row) => {
+      if (row.clientId !== grClienteId) return true;
+      if (row.grInvoiceId === null) return true;
+      return currentIds.has(row.grInvoiceId);
+    });
+
+    // Upsert each current GR invoice by composite grInvoiceId.
+    for (const m of mapped) {
+      const idx = this.invoices.findIndex(
+        (r) => r.clientId === grClienteId && r.grInvoiceId === m.grInvoiceId,
+      );
+      const record: InMemoryInvoiceRecord = { ...m, clientId: grClienteId };
+      if (idx >= 0) this.invoices[idx] = record;
+      else this.invoices.push(record);
+    }
   }
 }

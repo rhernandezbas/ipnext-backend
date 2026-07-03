@@ -13,6 +13,7 @@ import {
   GrClient,
   GrClientBalance,
   GrContract,
+  GrInvoice,
   GrServiceOrder,
 } from '@domain/entities/gestionReal';
 
@@ -287,7 +288,7 @@ export function parseContractsDeltaResponse(data: unknown): FetchContractsDeltaR
  * Handles both point-decimal ("65722.07") and AR-locale ("1.234,56") formats.
  */
 export function parseClientBalanceResponse(grClienteId: string, data: unknown): GrClientBalance {
-  const zero: GrClientBalance = { grClienteId, amount: 0, currency: null, invoicesQty: 0, paymentUrls: {}, raw: {} };
+  const zero: GrClientBalance = { grClienteId, amount: 0, currency: null, invoicesQty: 0, paymentUrls: {}, invoices: [], raw: {} };
 
   try {
     const root = (data ?? {}) as Record<string, unknown>;
@@ -318,11 +319,70 @@ export function parseClientBalanceResponse(grClienteId: string, data: unknown): 
       currency: amount > 0 ? 'ARS' : null,
       invoicesQty,
       paymentUrls,
+      invoices: parseGrInvoices(cuentas.invoices),
       raw,
     };
   } catch {
     return zero;
   }
+}
+
+/**
+ * Parse `cuentas.invoices[]` into normalized GrInvoice[].
+ *
+ * Defensive by contract: a non-array (missing/`[]`/malformed) yields `[]` with no
+ * throw; individual items that are not objects or lack a `numero` (the identity's
+ * required piece) are skipped. Amounts come as real JSON floats; `paymentUrl` is
+ * pulled from `payments_url.MercadoPago`.
+ */
+function parseGrInvoices(invoices: unknown): GrInvoice[] {
+  if (!Array.isArray(invoices)) return [];
+  const out: GrInvoice[] = [];
+  for (const item of invoices) {
+    if (!item || typeof item !== 'object') continue;
+    const inv = item as Record<string, unknown>;
+    const numero = str(inv.numero);
+    const tipo = str(inv.tipo);
+    const sucursal = str(inv.sucursal);
+    // The composite identity is `{tipo}-{sucursal}-{numero}` — all three are required
+    // to form a stable grInvoiceId. Skip items missing any part so the key never degrades
+    // to "null-null-…" (review #6). GR always supplies all three.
+    if (numero === null || tipo === null || sucursal === null) continue;
+    out.push({
+      tipo,
+      sucursal,
+      numero,
+      moneda: str(inv.moneda),
+      fecha: str(inv.fecha),
+      fechaVto: str(inv.fecha_vto),
+      importe: grFloat(inv.importe),
+      saldo: grFloat(inv.saldo),
+      urlPdf: str(inv.url_pdf),
+      cuponPdf: str(inv.cupon_pdf),
+      paymentUrl: grMercadoPagoUrl(inv.payments_url),
+    });
+  }
+  return out;
+}
+
+/**
+ * GR invoice amounts arrive as real JSON floats (e.g. 35121.37, or -500 for
+ * credit notes). Accept the number directly; fall back to parseFloat for a
+ * stringified value; 0 on anything unparseable. Unlike `parseArNumber`, these
+ * are NOT AR-locale strings.
+ */
+function grFloat(v: unknown): number {
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  const s = str(v);
+  if (s === null) return 0;
+  const n = parseFloat(s);
+  return isFinite(n) ? n : 0;
+}
+
+/** Pull the MercadoPago link out of a GR `payments_url` object, or null. */
+function grMercadoPagoUrl(paymentsUrl: unknown): string | null {
+  if (!paymentsUrl || typeof paymentsUrl !== 'object') return null;
+  return str((paymentsUrl as Record<string, unknown>).MercadoPago);
 }
 
 /**

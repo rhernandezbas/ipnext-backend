@@ -12,8 +12,12 @@ export class GetClientDetail {
     // First load — may have a stale balance
     const customer = await this.repo.findById(id);
 
-    // On-demand refresh: only for debtors, only if we have the collaborator
-    if (this.balanceRefresh && customer.status === 'late' && customer.grClienteId) {
+    // On-demand refresh: for ANY client with a GR link (not just debtors) so every
+    // opened ficha syncs its balance AND invoices. TTL-gated inside the collaborator;
+    // on a stale client it AWAITS a live GR fetch (up to timeoutMs, default 4s) — this
+    // adds latency to the first open per TTL window (accepted cost of "all clients"),
+    // but errors/timeouts are swallowed so it never THROWS or breaks the ficha.
+    if (this.balanceRefresh && customer.grClienteId) {
       const refreshed = await this.balanceRefresh.execute({
         grClienteId: customer.grClienteId,
         lastBalanceAt: customer.lastBalanceAt,
