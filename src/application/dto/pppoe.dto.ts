@@ -177,6 +177,13 @@ export interface InternetServiceEventDto {
   direction: 'upgrade' | 'downgrade' | null;
   oldPlan: string | null;
   newPlan: string | null;
+  // pppoe-change-audit — cambios de IP/password/status auditados. changeKind ∈ 'ip'|'password'|'status'
+  // (null = cambio de plan u otro evento). El FE renderiza: 'ip' → "IP: {oldValue} → {newValue}",
+  // 'password' → "Contraseña cambiada", 'status' → "Estado: {oldValue} → {newValue}". En 'password'
+  // oldValue/newValue son null (la clave NUNCA viaja al browser).
+  changeKind: string | null;
+  oldValue: string | null;
+  newValue: string | null;
   createdAt: string; // ISO string
 }
 

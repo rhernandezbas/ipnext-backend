@@ -163,6 +163,61 @@ export class UpdatePppoeService {
       }
     }
 
+    // pppoe-change-audit: audita cambios de IP / password / status al historial del cliente cuando el
+    // servicio está asociado a un contrato. Mismo guard + try/catch best-effort que el evento de plan de
+    // arriba. El evento de plan queda para el cambio de profile; estos eventos cubren los campos que el
+    // path inline legacy NUNCA registraba. changeKind discrimina: 'ip' | 'password' | 'status'. Un patch
+    // combinado (plan + ip/password/status) produce el evento de plan (arriba) Y estos — no hay doble-log
+    // porque profile no está entre {ip, password, status}.
+    if (s.contractId != null && this.catalogRepo && this.eventRepo) {
+      const ipChanged       = input.remoteAddress !== undefined && input.remoteAddress !== s.remoteAddress;
+      const passwordChanged = input.password !== undefined && input.password !== '' && input.password !== s.password;
+      const statusChanged   = input.status !== undefined && input.status !== s.status;
+
+      if (ipChanged || passwordChanged || statusChanged) {
+        try {
+          const catalog = await this.catalogRepo.getByName('INTERNET');
+          if (catalog) {
+            const base = {
+              contractId:       s.contractId,
+              serviceCatalogId: catalog.id,
+              eventType:        'modified' as const,
+              reason:           input.reason ?? null,
+              actorId:          input.actorId ?? null,
+              actorName:        input.actorName ?? '',
+            };
+            if (ipChanged) {
+              await this.eventRepo.record({
+                ...base,
+                changeKind: 'ip',
+                oldValue:   s.remoteAddress ?? null,
+                newValue:   input.remoteAddress ?? null,
+              });
+            }
+            if (passwordChanged) {
+              // SEGURIDAD: la clave NUNCA se persiste — oldValue/newValue van null a propósito.
+              await this.eventRepo.record({
+                ...base,
+                changeKind: 'password',
+                oldValue:   null,
+                newValue:   null,
+              });
+            }
+            if (statusChanged) {
+              await this.eventRepo.record({
+                ...base,
+                changeKind: 'status',
+                oldValue:   s.status ?? null,
+                newValue:   input.status ?? null,
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('[UpdatePppoeService] Failed to record change-audit event (best-effort):', err);
+        }
+      }
+    }
+
     return result;
   }
 }

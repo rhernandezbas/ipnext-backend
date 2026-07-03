@@ -49,6 +49,9 @@ export class InMemoryContractServiceEventRepository implements ContractServiceEv
       notes:            input.notes ?? null,
       oldPlan:          input.oldPlan ?? null,
       newPlan:          input.newPlan ?? null,
+      changeKind:       input.changeKind ?? null,
+      oldValue:         input.oldValue ?? null,
+      newValue:         input.newValue ?? null,
       reason:           input.reason ?? null,
       createdAt:        this.now().toISOString(),
     };

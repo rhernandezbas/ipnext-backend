@@ -2698,6 +2698,12 @@ model ContractServiceEvent {
   // el catálogo de planes. `notes` se mantiene por compatibilidad (mismo par "viejo → nuevo").
   oldPlan          String?
   newPlan          String?
+  // pppoe-change-audit — audita cambios de IP/password/status de un PPPoE asociado a contrato.
+  // changeKind ('ip'|'password'|'status') discrimina el evento 'modified' cuando NO es cambio de plan.
+  // oldValue/newValue guardan el valor viejo/nuevo (password: ambos null — la clave NUNCA se persiste).
+  changeKind       String?
+  oldValue         String?
+  newValue         String?
   // #127 - optional cancellation reason threaded from the FE cancel modal.
   reason           String?
   createdAt        DateTime  @default(now())

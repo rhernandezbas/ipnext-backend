@@ -110,6 +110,10 @@ function toDto(
     actorName: string;
     oldPlan: string | null;
     newPlan: string | null;
+    // pppoe-change-audit — cambios de IP/password/status.
+    changeKind: string | null;
+    oldValue: string | null;
+    newValue: string | null;
     reason: string | null;
     createdAt: string;
   },
@@ -128,6 +132,10 @@ function toDto(
     direction:        deriveDirection(e.eventType, e.oldPlan ?? null, e.newPlan ?? null, kbpsByCode),
     oldPlan:          e.oldPlan ?? null,
     newPlan:          e.newPlan ?? null,
+    // pppoe-change-audit — passthrough al wire; null en eventos de plan/activación.
+    changeKind:       e.changeKind ?? null,
+    oldValue:         e.oldValue ?? null,
+    newValue:         e.newValue ?? null,
     createdAt:        e.createdAt,
   };
 }

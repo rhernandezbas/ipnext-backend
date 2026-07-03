@@ -87,6 +87,22 @@ describe('InMemoryContractServiceEventRepository', () => {
     expect(noPlans.newPlan).toBeNull();
   });
 
+  // pppoe-change-audit — changeKind/oldValue/newValue round-trip (null by default)
+  it('record persists changeKind/oldValue/newValue and returns them (null by default)', async () => {
+    const ipEvent = await repo.record({
+      contractId: 'C', serviceCatalogId: 'S', eventType: 'modified',
+      changeKind: 'ip', oldValue: '100.64.10.10', newValue: '100.64.10.99',
+    });
+    expect(ipEvent.changeKind).toBe('ip');
+    expect(ipEvent.oldValue).toBe('100.64.10.10');
+    expect(ipEvent.newValue).toBe('100.64.10.99');
+
+    const plain = await repo.record({ contractId: 'C', serviceCatalogId: 'S', eventType: 'activated' });
+    expect(plain.changeKind).toBeNull();
+    expect(plain.oldValue).toBeNull();
+    expect(plain.newValue).toBeNull();
+  });
+
   it('list filters by eventType (tópico) and carries oldPlan/newPlan through', async () => {
     await repo.record({ contractId: 'C', serviceCatalogId: 'S', eventType: 'activated' });
     await repo.record({ contractId: 'C', serviceCatalogId: 'S', eventType: 'modified', oldPlan: 'IP-30M', newPlan: 'IP-50M' });

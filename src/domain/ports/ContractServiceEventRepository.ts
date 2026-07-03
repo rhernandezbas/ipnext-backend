@@ -20,6 +20,13 @@ export interface RecordContractServiceEventInput {
   // La DIRECCIÓN (upgrade/downgrade) NO se persiste: se deriva al leer contra el catálogo de planes.
   oldPlan?: string | null;
   newPlan?: string | null;
+  // pppoe-change-audit — discrimina el tipo de cambio de un evento 'modified' cuando NO es un cambio
+  // de plan: 'ip' | 'password' | 'status'. null = cambio de plan (usa oldPlan/newPlan) o evento no-modified.
+  changeKind?: string | null;
+  // pppoe-change-audit — valor viejo/nuevo del campo cambiado (ip/status). SEGURIDAD: en 'password'
+  // ambos van null — la clave NUNCA se persiste.
+  oldValue?: string | null;
+  newValue?: string | null;
   // #127 - optional cancellation reason.
   reason?: string | null;
 }
@@ -35,6 +42,11 @@ export interface ContractServiceEvent {
   // internet-history-plan-direction — códigos de plan viejo/nuevo; null salvo en cambios de plan.
   oldPlan: string | null;
   newPlan: string | null;
+  // pppoe-change-audit — tipo de cambio ('ip' | 'password' | 'status') y valor viejo/nuevo. null en
+  // eventos que no son cambios de campo (plan / activated / etc.). password: oldValue/newValue = null.
+  changeKind: string | null;
+  oldValue: string | null;
+  newValue: string | null;
   // #127 - optional cancellation reason; null for legacy events.
   reason: string | null;
   createdAt: string; // ISO string

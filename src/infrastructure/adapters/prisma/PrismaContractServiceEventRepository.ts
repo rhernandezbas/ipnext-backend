@@ -31,6 +31,9 @@ export class PrismaContractServiceEventRepository implements ContractServiceEven
         notes:            input.notes ?? null,
         oldPlan:          input.oldPlan ?? null,
         newPlan:          input.newPlan ?? null,
+        changeKind:       input.changeKind ?? null,
+        oldValue:         input.oldValue ?? null,
+        newValue:         input.newValue ?? null,
         reason:           input.reason ?? null,
       },
     });
@@ -131,6 +134,9 @@ function toEvent(row: any): ContractServiceEvent {
     notes:            row.notes ?? null,
     oldPlan:          row.oldPlan ?? null,
     newPlan:          row.newPlan ?? null,
+    changeKind:       row.changeKind ?? null,
+    oldValue:         row.oldValue ?? null,
+    newValue:         row.newValue ?? null,
     reason:           row.reason ?? null,
     createdAt:        row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
   };

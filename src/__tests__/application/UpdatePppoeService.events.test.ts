@@ -145,15 +145,18 @@ describe('UpdatePppoeService — pppoe-plan-change-history', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('profile no provisto (undefined) → NO se registra evento', async () => {
+  it('profile no provisto (undefined) → NO se registra evento de PLAN', async () => {
     const uc = new UpdatePppoeService(repo, router, nasRepo, orchestrator, catalogRepo, eventRepo);
     const id = await seedRadiusWithContract();
     await seedCatalog(catalogRepo);
 
     await uc.execute({ id, password: 'nueva123', actorId: 'A1', actorName: 'Op' });
 
+    // pppoe-change-audit: un cambio de password ahora SÍ audita (changeKind 'password'), pero
+    // NO produce un evento de cambio de PLAN (oldPlan/newPlan quedan null; changeKind != null).
     const events = await eventRepo.listByContract(CONTRACT_ID);
-    expect(events).toHaveLength(0);
+    const planEvents = events.filter(e => e.changeKind == null);
+    expect(planEvents).toHaveLength(0);
   });
 
   // ── 4. Sin evento cuando no hay contractId ──────────────────────────────────

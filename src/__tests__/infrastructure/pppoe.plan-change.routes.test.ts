@@ -240,7 +240,7 @@ describe('PATCH /api/pppoe/:id — pppoe-plan-change-history (route seam)', () =
     expect(events[0]!.reason).toBeNull();
   });
 
-  it('{ password } sin profile → sin evento modified', async () => {
+  it('{ password } sin profile → sin evento de PLAN, pero SÍ audita el cambio (pppoe-change-audit)', async () => {
     const fx = await buildApp();
     await seedCatalog(fx.catalogRepo);
     const row = await seedPppoe(fx.pppoeRepo);
@@ -252,7 +252,14 @@ describe('PATCH /api/pppoe/:id — pppoe-plan-change-history (route seam)', () =
 
     expect(res.status).toBe(200);
     const events = await fx.eventRepo.listByContract(CONTRACT_ID);
-    expect(events).toHaveLength(0);
+    // pppoe-change-audit (route seam): el cambio de password NO produce evento de PLAN, pero SÍ un
+    // evento de auditoría changeKind 'password' con oldValue/newValue null (SEGURIDAD).
+    expect(events.filter(e => e.changeKind == null)).toHaveLength(0);
+    const pwEvents = events.filter(e => e.changeKind === 'password');
+    expect(pwEvents).toHaveLength(1);
+    expect(pwEvents[0]!.eventType).toBe('modified');
+    expect(pwEvents[0]!.oldValue).toBeNull();
+    expect(pwEvents[0]!.newValue).toBeNull();
   });
 
   it('profile igual al actual → sin evento modified', async () => {

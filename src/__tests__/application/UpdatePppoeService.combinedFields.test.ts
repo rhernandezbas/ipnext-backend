@@ -94,11 +94,18 @@ describe('UpdatePppoeService — F2 fix-wave: delegación SOLO para profile-solo
     expect(after!.profile).toBe('IP-Air-40-15');
     expect(after!.password).toBe('newpass123');
 
-    // Event recorded (same as before the fix — combined patches still record the event).
+    // pppoe-change-audit: el patch combinado audita AMBOS campos → evento de PLAN + evento de
+    // PASSWORD. El evento de plan sigue igual que antes del fix (oldPlan/newPlan + notes).
     const events = await eventRepo.listByContract(CONTRACT_ID);
-    expect(events).toHaveLength(1);
-    expect(events[0]!.eventType).toBe('modified');
-    expect(events[0]!.notes).toBe('IP-Air-30-10 → IP-Air-40-15');
+    expect(events).toHaveLength(2);
+    const planEvent = events.find(e => e.changeKind == null);
+    expect(planEvent).toBeDefined();
+    expect(planEvent!.eventType).toBe('modified');
+    expect(planEvent!.notes).toBe('IP-Air-30-10 → IP-Air-40-15');
+    const pwEvent = events.find(e => e.changeKind === 'password');
+    expect(pwEvent).toBeDefined();
+    expect(pwEvent!.oldValue).toBeNull();
+    expect(pwEvent!.newValue).toBeNull();
   });
 
   // ── (b) {profile,status:'disabled'}: si suspend TIRA → NO upsert de profile NI evento ─────────

@@ -143,6 +143,37 @@ describe('ListInternetServiceHistory — global internet history (internet-histo
     // No password leaks into the wire contract.
     expect((dto as unknown as Record<string, unknown>)['password']).toBeUndefined();
   });
+
+  // pppoe-change-audit — el DTO del historial expone changeKind/oldValue/newValue (wire contract FE).
+  it('carries pppoe-change-audit fields (changeKind/oldValue/newValue) through to the DTO', async () => {
+    const { useCase, eventRepo, internet } = await setup();
+    // Evento de cambio de IP: changeKind 'ip' + old/new IP.
+    await eventRepo.record({
+      contractId: 'ct-ip', serviceCatalogId: internet.id, eventType: 'modified',
+      actorName: 'Op', changeKind: 'ip', oldValue: '100.64.10.10', newValue: '100.64.10.99',
+    });
+
+    const res = await useCase.execute({});
+    const dto = res[0]!;
+    expect(dto.changeKind).toBe('ip');
+    expect(dto.oldValue).toBe('100.64.10.10');
+    expect(dto.newValue).toBe('100.64.10.99');
+  });
+
+  // pppoe-change-audit — un evento de PLAN (changeKind null) deja los 3 campos en null.
+  it('plan-change events leave changeKind/oldValue/newValue null in the DTO', async () => {
+    const { useCase, eventRepo, internet } = await setup();
+    await eventRepo.record({
+      contractId: 'ct-plan', serviceCatalogId: internet.id, eventType: 'modified',
+      actorName: 'Op', oldPlan: 'IP-30M', newPlan: 'IP-50M',
+    });
+
+    const res = await useCase.execute({});
+    const dto = res[0]!;
+    expect(dto.changeKind).toBeNull();
+    expect(dto.oldValue).toBeNull();
+    expect(dto.newValue).toBeNull();
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════
