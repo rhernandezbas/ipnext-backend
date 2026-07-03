@@ -1,10 +1,12 @@
-import { NasServer } from '@domain/entities/nas';
+import { NasServer, maskNasServerSecrets } from '@domain/entities/nas';
 import { NasRepository } from '@domain/ports/NasRepository';
 
 export class CreateNasServer {
   constructor(private readonly repo: NasRepository) {}
 
   async execute(data: Omit<NasServer, 'id'>): Promise<NasServer> {
-    return this.repo.createNasServer(data);
+    // El repo persiste el secreto REAL; solo se enmascara la RESPUESTA que devolvemos.
+    const created = await this.repo.createNasServer(data);
+    return maskNasServerSecrets(created);
   }
 }

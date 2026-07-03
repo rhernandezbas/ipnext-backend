@@ -42,6 +42,7 @@ import { UpdateRadiusConfig } from '@application/use-cases/UpdateRadiusConfig';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+import { NAS_SECRET_MASK } from '@domain/entities/nas';
 
 class EchoAuthProvider implements AuthProvider {
   async login() {
@@ -341,5 +342,75 @@ describe('nas.routes — sqlippool-cleanup (REQ-DEL-1/2)', () => {
     const res = await asUser(request(app).get('/api/nas-servers'), noPermUserId);
     expect(res.status).toBe(200);
     expect(res.body.every((n: Record<string, unknown>) => !('poolName' in n))).toBe(true);
+  });
+});
+
+describe('nas.routes — secret masking + update sentinel', () => {
+  it('GET /api/nas-servers masks radiusSecret/apiPassword and never leaks the real secret', async () => {
+    const { app, nasRepo, noPermUserId } = await buildApp();
+    await nasRepo.updateNasServer('1', { radiusSecret: 'LEAK-RADIUS', apiPassword: 'LEAK-API' });
+    const res = await asUser(request(app).get('/api/nas-servers'), noPermUserId);
+    expect(res.status).toBe(200);
+    const nas1 = res.body.find((n: { id: string }) => n.id === '1');
+    expect(nas1.radiusSecret).toBe(NAS_SECRET_MASK);
+    expect(nas1.apiPassword).toBe(NAS_SECRET_MASK);
+    expect(JSON.stringify(res.body)).not.toContain('LEAK-RADIUS');
+    expect(JSON.stringify(res.body)).not.toContain('LEAK-API');
+  });
+
+  it('GET /api/nas-servers/:id masks and never leaks the real secret', async () => {
+    const { app, nasRepo, noPermUserId } = await buildApp();
+    await nasRepo.updateNasServer('1', { radiusSecret: 'LEAK-RADIUS', apiPassword: 'LEAK-API' });
+    const res = await asUser(request(app).get('/api/nas-servers/1'), noPermUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.radiusSecret).toBe(NAS_SECRET_MASK);
+    expect(res.body.apiPassword).toBe(NAS_SECRET_MASK);
+    expect(JSON.stringify(res.body)).not.toContain('LEAK-RADIUS');
+  });
+
+  it('PUT /api/nas-servers/:id with the mask leaves the stored secret intact', async () => {
+    const { app, nasRepo, manageUserId } = await buildApp();
+    await nasRepo.updateNasServer('1', { radiusSecret: 'STORED-REAL' });
+    const res = await asUser(request(app).put('/api/nas-servers/1'), manageUserId)
+      .send({ radiusSecret: NAS_SECRET_MASK });
+    expect(res.status).toBe(200);
+    const stored = await nasRepo.findNasServerById('1');
+    expect(stored!.radiusSecret).toBe('STORED-REAL');
+  });
+
+  it('PUT /api/nas-servers/:id with a real new secret updates the stored value', async () => {
+    const { app, nasRepo, manageUserId } = await buildApp();
+    await nasRepo.updateNasServer('1', { radiusSecret: 'STORED-REAL' });
+    const res = await asUser(request(app).put('/api/nas-servers/1'), manageUserId)
+      .send({ radiusSecret: 'NEW-REAL' });
+    expect(res.status).toBe(200);
+    const stored = await nasRepo.findNasServerById('1');
+    expect(stored!.radiusSecret).toBe('NEW-REAL');
+  });
+
+  it('POST /api/nas-servers masks the secret in its own response but stores the real one', async () => {
+    const { app, nasRepo, manageUserId } = await buildApp();
+    const body = { name: 'nuevo', type: 'mikrotik_api', ipAddress: '10.9.9.9', radiusSecret: 'CREATE-REAL',
+      nasIpAddress: '10.9.9.9', apiPort: 8728, apiLogin: 'admin', apiPassword: 'CREATE-API',
+      status: 'active', lastSeen: null, clientCount: 0, description: '' };
+    const res = await asUser(request(app).post('/api/nas-servers'), manageUserId).send(body);
+    expect(res.status).toBe(201);
+    expect(res.body.radiusSecret).toBe(NAS_SECRET_MASK);
+    expect(res.body.apiPassword).toBe(NAS_SECRET_MASK);
+    expect(JSON.stringify(res.body)).not.toContain('CREATE-REAL');
+    expect(JSON.stringify(res.body)).not.toContain('CREATE-API');
+    const stored = await nasRepo.findNasServerById(res.body.id);
+    expect(stored!.radiusSecret).toBe('CREATE-REAL');
+    expect(stored!.apiPassword).toBe('CREATE-API');
+  });
+
+  it('PUT /api/nas-servers/:id masks the secret in its own response but stores the new real one', async () => {
+    const { app, nasRepo, manageUserId } = await buildApp();
+    const res = await asUser(request(app).put('/api/nas-servers/1'), manageUserId).send({ radiusSecret: 'PUT-NEW-REAL' });
+    expect(res.status).toBe(200);
+    expect(res.body.radiusSecret).toBe(NAS_SECRET_MASK);
+    expect(JSON.stringify(res.body)).not.toContain('PUT-NEW-REAL');
+    const stored = await nasRepo.findNasServerById('1');
+    expect(stored!.radiusSecret).toBe('PUT-NEW-REAL');
   });
 });

@@ -33,3 +33,19 @@ export interface RadiusConfig {
   enableCoa: boolean;
   enableAccounting: boolean;
 }
+
+/** Máscara con la que se ocultan los secretos de un NAS en las respuestas de lectura. */
+export const NAS_SECRET_MASK = '••••••••';
+
+/**
+ * Devuelve una copia de `nas` con radiusSecret/apiPassword reemplazados por la máscara,
+ * SOLO si el valor es no-nulo y no-vacío. Un null o '' se preserva tal cual (no se enmascara).
+ * Genérico para preservar campos aditivos (ej. displayType del DTO).
+ */
+export function maskNasServerSecrets<T extends { radiusSecret: string; apiPassword: string | null }>(nas: T): T {
+  return {
+    ...nas,
+    radiusSecret: nas.radiusSecret ? NAS_SECRET_MASK : nas.radiusSecret,
+    apiPassword: nas.apiPassword ? NAS_SECRET_MASK : nas.apiPassword,
+  } as T;
+}

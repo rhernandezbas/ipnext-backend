@@ -1,6 +1,7 @@
 import { NasRepository } from '@domain/ports/NasRepository';
 import { IpNetworkRepository } from '@domain/ports/IpNetworkRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
+import { maskNasServerSecrets } from '@domain/entities/nas';
 import { NasLiveStatsProvider, NasServerDto } from '@application/services/NasLiveStatsProvider';
 
 export class ListNasServers {
@@ -13,10 +14,11 @@ export class ListNasServers {
   async execute(): Promise<NasServerDto[]> {
     const servers = await this.repo.findAllNasServers();
     if (!this.ipNetworkRepo || !this.orchestrator) {
-      return servers.map(s => ({ ...s, displayType: s.type }));
+      return servers.map(s => ({ ...maskNasServerSecrets(s), displayType: s.type }));
     }
     // #1: provider creado por request (fresh instance -> cachedSessions no congela)
     const liveStats = new NasLiveStatsProvider(this.ipNetworkRepo, this.orchestrator);
-    return liveStats.enrichAll(servers);
+    const enriched = await liveStats.enrichAll(servers);
+    return enriched.map(maskNasServerSecrets);
   }
 }
