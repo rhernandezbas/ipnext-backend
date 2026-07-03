@@ -62,9 +62,10 @@ function buildApp(opts: BuildAppOptions = {}) {
   const userLookup: EntityLookup = {
     findById: async (id: string) => ({ id, name: `Operator ${id}` }),
   };
+  const roleLookup = { listRoleCodes: async () => ['ventas'] };
 
-  const assignUC = new AssignRecaptureLead(repo, userLookup);
-  const assignBulkUC = new AssignRecaptureLeadsBulk(repo, userLookup);
+  const assignUC = new AssignRecaptureLead(repo, userLookup, roleLookup);
+  const assignBulkUC = new AssignRecaptureLeadsBulk(repo, userLookup, roleLookup);
 
   const app = express();
   app.use(express.json());

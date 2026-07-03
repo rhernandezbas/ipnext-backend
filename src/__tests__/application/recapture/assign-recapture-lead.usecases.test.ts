@@ -1,12 +1,18 @@
 /**
  * AssignRecaptureLead use-case — strict TDD via InMemoryRecaptureRepository.
  * No Prisma mocking. Mirrors the pattern in recapture.usecases.test.ts.
+ *
+ * recapture-assignable-roles: the use case now enforces the assignee pool
+ * (active user WITH at least one role AND none technical) via a 3rd required
+ * arg — a UserRoleLookup stub. Non-assignable targets throw
+ * RecaptureAssigneeNotAllowedError.
  */
 import { InMemoryRecaptureRepository } from '../../../infrastructure/adapters/in-memory/InMemoryRecaptureRepository';
-import { RecaptureLeadNotFoundError } from '../../../domain/errors/recapture';
+import { RecaptureLeadNotFoundError, RecaptureAssigneeNotAllowedError } from '../../../domain/errors/recapture';
 import { ReferenceNotFoundError } from '../../../domain/errors/scheduling';
 import { AssignRecaptureLead } from '../../../application/use-cases/recapture/AssignRecaptureLead';
 import type { EntityLookup } from '../../../domain/ports/EntityLookup';
+import type { UserRoleLookup } from '../../../domain/ports/UserRoleLookup';
 import type { RecaptureLead } from '../../../domain/entities/recaptureLead';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -34,6 +40,18 @@ function makeUserLookup(knownIds: string[]): EntityLookup {
   };
 }
 
+/** Role lookup stub: maps userId → role codes. Unknown ids resolve to []. */
+function makeRoleLookup(rolesById: Record<string, string[]>): UserRoleLookup {
+  return {
+    listRoleCodes: async (userId: string) => rolesById[userId] ?? [],
+  };
+}
+
+/** Default non-technical role lookup — every known user carries 'ventas'. */
+function ventasRoleLookup(): UserRoleLookup {
+  return { listRoleCodes: async () => ['ventas'] };
+}
+
 // ─── AssignRecaptureLead ──────────────────────────────────────────────────────
 
 describe('AssignRecaptureLead', () => {
@@ -41,7 +59,7 @@ describe('AssignRecaptureLead', () => {
     const repo = makeRepo();
     const lead = await seedFreeLead(repo);
     const userLookup = makeUserLookup(['user-A']);
-    const uc = new AssignRecaptureLead(repo, userLookup);
+    const uc = new AssignRecaptureLead(repo, userLookup, ventasRoleLookup());
 
     const dto = await uc.execute(lead.id, 'user-A');
 
@@ -55,7 +73,7 @@ describe('AssignRecaptureLead', () => {
     const lead = await seedFreeLead(repo);
     await repo.claim(lead.id, 'user-A');
     const userLookup = makeUserLookup(['user-A', 'user-B']);
-    const uc = new AssignRecaptureLead(repo, userLookup);
+    const uc = new AssignRecaptureLead(repo, userLookup, ventasRoleLookup());
 
     const dto = await uc.execute(lead.id, 'user-B');
 
@@ -68,7 +86,7 @@ describe('AssignRecaptureLead', () => {
     const lead = await seedFreeLead(repo);
     await repo.claim(lead.id, 'user-A');
     const userLookup = makeUserLookup(['user-A']);
-    const uc = new AssignRecaptureLead(repo, userLookup);
+    const uc = new AssignRecaptureLead(repo, userLookup, ventasRoleLookup());
 
     const dto = await uc.execute(lead.id, null);
 
@@ -81,7 +99,7 @@ describe('AssignRecaptureLead', () => {
     const repo = makeRepo();
     const lead = await seedFreeLead(repo);
     const userLookup = makeUserLookup([]); // nobody exists
-    const uc = new AssignRecaptureLead(repo, userLookup);
+    const uc = new AssignRecaptureLead(repo, userLookup, ventasRoleLookup());
 
     await expect(uc.execute(lead.id, 'ghost-user')).rejects.toThrow(ReferenceNotFoundError);
   });
@@ -89,22 +107,80 @@ describe('AssignRecaptureLead', () => {
   it('throws RecaptureLeadNotFoundError when lead does not exist', async () => {
     const repo = makeRepo();
     const userLookup = makeUserLookup(['user-A']);
-    const uc = new AssignRecaptureLead(repo, userLookup);
+    const uc = new AssignRecaptureLead(repo, userLookup, ventasRoleLookup());
 
     await expect(uc.execute('nonexistent-lead', 'user-A')).rejects.toThrow(RecaptureLeadNotFoundError);
   });
 
-  it('skips user lookup when operatorId is null (no unnecessary validation)', async () => {
+  it('skips user + role lookup when operatorId is null (no unnecessary validation)', async () => {
     const repo = makeRepo();
     const lead = await seedFreeLead(repo);
     const userLookup: EntityLookup = {
       findById: jest.fn().mockResolvedValue(null),
     };
-    const uc = new AssignRecaptureLead(repo, userLookup);
+    const roleLookup: UserRoleLookup = {
+      listRoleCodes: jest.fn().mockResolvedValue([]),
+    };
+    const uc = new AssignRecaptureLead(repo, userLookup, roleLookup);
 
-    // Should not call findById at all when unassigning
+    // Should not call findById NOR listRoleCodes when unassigning
     const dto = await uc.execute(lead.id, null);
     expect(dto.assigneeId).toBeNull();
     expect(userLookup.findById).not.toHaveBeenCalled();
+    expect(roleLookup.listRoleCodes).not.toHaveBeenCalled();
+  });
+
+  // ─── recapture-assignable-roles: assignee-pool enforcement ──────────────────
+
+  it('throws RecaptureAssigneeNotAllowedError when the target holds a technical role', async () => {
+    const repo = makeRepo();
+    const lead = await seedFreeLead(repo);
+    const userLookup = makeUserLookup(['tech-user']);
+    const roleLookup = makeRoleLookup({ 'tech-user': ['tecnico'] });
+    const uc = new AssignRecaptureLead(repo, userLookup, roleLookup);
+
+    await expect(uc.execute(lead.id, 'tech-user')).rejects.toThrow(RecaptureAssigneeNotAllowedError);
+  });
+
+  it('throws RecaptureAssigneeNotAllowedError when the target has NO roles at all', async () => {
+    const repo = makeRepo();
+    const lead = await seedFreeLead(repo);
+    const userLookup = makeUserLookup(['no-role-user']);
+    const roleLookup = makeRoleLookup({ 'no-role-user': [] });
+    const uc = new AssignRecaptureLead(repo, userLookup, roleLookup);
+
+    await expect(uc.execute(lead.id, 'no-role-user')).rejects.toThrow(RecaptureAssigneeNotAllowedError);
+  });
+
+  it('allows a target with the noc role (only tecnico is excluded)', async () => {
+    const repo = makeRepo();
+    const lead = await seedFreeLead(repo);
+    const userLookup = makeUserLookup(['noc-user']);
+    const roleLookup = makeRoleLookup({ 'noc-user': ['noc'] });
+    const uc = new AssignRecaptureLead(repo, userLookup, roleLookup);
+
+    const dto = await uc.execute(lead.id, 'noc-user');
+    expect(dto.assigneeId).toBe('noc-user');
+    expect(dto.status).toBe('en_gestion');
+  });
+
+  it('rejects a multi-role target that includes tecnico', async () => {
+    const repo = makeRepo();
+    const lead = await seedFreeLead(repo);
+    const userLookup = makeUserLookup(['mixed-user']);
+    const roleLookup = makeRoleLookup({ 'mixed-user': ['ventas', 'tecnico'] });
+    const uc = new AssignRecaptureLead(repo, userLookup, roleLookup);
+
+    await expect(uc.execute(lead.id, 'mixed-user')).rejects.toThrow(RecaptureAssigneeNotAllowedError);
+  });
+
+  it('validates existence BEFORE roles — a ghost user throws ReferenceNotFoundError, not the pool error', async () => {
+    const repo = makeRepo();
+    const lead = await seedFreeLead(repo);
+    const userLookup = makeUserLookup([]); // ghost: does not exist
+    const roleLookup = makeRoleLookup({});
+    const uc = new AssignRecaptureLead(repo, userLookup, roleLookup);
+
+    await expect(uc.execute(lead.id, 'ghost-user')).rejects.toThrow(ReferenceNotFoundError);
   });
 });

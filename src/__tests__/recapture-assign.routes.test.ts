@@ -18,6 +18,7 @@ import { AssignRecaptureLead } from '../application/use-cases/recapture/AssignRe
 import { AssignRecaptureLeadsBulk } from '../application/use-cases/recapture/AssignRecaptureLeadsBulk';
 import type { CustomerRepository } from '../domain/ports/CustomerRepository';
 import type { EntityLookup } from '../domain/ports/EntityLookup';
+import type { UserRoleLookup } from '../domain/ports/UserRoleLookup';
 
 // â”€â”€â”€ Auth + RBAC mock helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -53,6 +54,8 @@ interface BuildAppOptions {
   assignPerm?: RequestHandler;
   repo?: InMemoryRecaptureRepository;
   knownOperatorIds?: string[];
+  /** userId → role codes. Unknown ids default to ['ventas'] (assignable). */
+  operatorRoles?: Record<string, string[]>;
 }
 
 function buildApp(opts: BuildAppOptions = {}) {
@@ -66,8 +69,14 @@ function buildApp(opts: BuildAppOptions = {}) {
       knownIds.includes(id) ? { id, name: `Operator ${id}` } : null,
   };
 
-  const assignUC = new AssignRecaptureLead(repo, userLookup);
-  const assignBulkUC = new AssignRecaptureLeadsBulk(repo, userLookup);
+  // Default: every operator carries the 'ventas' role (assignable). Individual
+  // ids can be overridden (e.g. a technical or role-less user) via operatorRoles.
+  const roleLookup: UserRoleLookup = {
+    listRoleCodes: async (id: string) => opts.operatorRoles?.[id] ?? ['ventas'],
+  };
+
+  const assignUC = new AssignRecaptureLead(repo, userLookup, roleLookup);
+  const assignBulkUC = new AssignRecaptureLeadsBulk(repo, userLookup, roleLookup);
 
   const app = express();
   app.use(express.json());
@@ -197,6 +206,85 @@ describe('PATCH /api/recapture/leads/:id/assign â€” validation errors', () 
       .set('Cookie', 'auth_token=tok')
       .send({ operatorId: 'op-1' });
     expect(res.status).toBe(404);
+  });
+});
+
+// ─── recapture-assignable-roles: assignee-pool enforcement (422) ──────────────
+
+describe('PATCH /api/recapture/leads/:id/assign — assignee pool (recapture-assignable-roles)', () => {
+  it('returns 422 RECAPTURE_ASSIGNEE_NOT_ALLOWED when the target holds a technical role', async () => {
+    const { app, repo } = buildApp({
+      knownOperatorIds: ['tech-user'],
+      operatorRoles: { 'tech-user': ['tecnico'] },
+    });
+    const lead = await repo.create({ source: 'csv', contactName: 'Lead Tech' });
+
+    const res = await request(app)
+      .patch(`/api/recapture/leads/${lead.id}/assign`)
+      .set('Cookie', 'auth_token=tok')
+      .send({ operatorId: 'tech-user' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('RECAPTURE_ASSIGNEE_NOT_ALLOWED');
+  });
+
+  it('returns 422 when the target has NO roles at all', async () => {
+    const { app, repo } = buildApp({
+      knownOperatorIds: ['no-role-user'],
+      operatorRoles: { 'no-role-user': [] },
+    });
+    const lead = await repo.create({ source: 'csv', contactName: 'Lead NoRole' });
+
+    const res = await request(app)
+      .patch(`/api/recapture/leads/${lead.id}/assign`)
+      .set('Cookie', 'auth_token=tok')
+      .send({ operatorId: 'no-role-user' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('RECAPTURE_ASSIGNEE_NOT_ALLOWED');
+  });
+
+  it('returns 200 for a noc target (only tecnico is excluded)', async () => {
+    const { app, repo } = buildApp({
+      knownOperatorIds: ['noc-user'],
+      operatorRoles: { 'noc-user': ['noc'] },
+    });
+    const lead = await repo.create({ source: 'csv', contactName: 'Lead Noc' });
+
+    const res = await request(app)
+      .patch(`/api/recapture/leads/${lead.id}/assign`)
+      .set('Cookie', 'auth_token=tok')
+      .send({ operatorId: 'noc-user' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.assigneeId).toBe('noc-user');
+  });
+
+  it('returns 200 when unassigning (operatorId null) — pool check is skipped', async () => {
+    const { app, repo } = buildApp();
+    const lead = await repo.create({ source: 'csv', contactName: 'Lead Unassign' });
+    await repo.claim(lead.id, 'op-1');
+
+    const res = await request(app)
+      .patch(`/api/recapture/leads/${lead.id}/assign`)
+      .set('Cookie', 'auth_token=tok')
+      .send({ operatorId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.assigneeId).toBeNull();
+  });
+
+  it('returns 400 REFERENCE_NOT_FOUND (not 422) for a ghost user — existence wins over pool', async () => {
+    const { app, repo } = buildApp({ knownOperatorIds: [] });
+    const lead = await repo.create({ source: 'csv', contactName: 'Lead Ghost' });
+
+    const res = await request(app)
+      .patch(`/api/recapture/leads/${lead.id}/assign`)
+      .set('Cookie', 'auth_token=tok')
+      .send({ operatorId: 'ghost-user' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('REFERENCE_NOT_FOUND');
   });
 });
 

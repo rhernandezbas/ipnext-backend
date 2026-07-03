@@ -13,3 +13,20 @@ export class RecaptureLeadAlreadyClaimedError extends DomainError {
     this.name = 'RecaptureLeadAlreadyClaimedError';
   }
 }
+
+/**
+ * Raised when the assignment target is NOT an allowed recaptación assignee.
+ *
+ * A user is assignable iff they are ACTIVE, carry AT LEAST ONE role, and NONE
+ * of their roles is technical (see TECHNICAL_ROLE_CODES). A user with no roles
+ * or with a technical role is rejected. The HTTP layer maps this to 422.
+ */
+export class RecaptureAssigneeNotAllowedError extends DomainError {
+  constructor(public readonly operatorId: string) {
+    super(
+      `User "${operatorId}" is not an allowed recapture assignee (must have at least one non-technical role)`,
+      'RECAPTURE_ASSIGNEE_NOT_ALLOWED',
+    );
+    this.name = 'RecaptureAssigneeNotAllowedError';
+  }
+}

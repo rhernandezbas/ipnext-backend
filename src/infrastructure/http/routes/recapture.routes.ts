@@ -7,7 +7,7 @@ import { IngestChurnedClients } from '@application/use-cases/recapture/IngestChu
 import { ImportCsvLeads } from '@application/use-cases/recapture/ImportCsvLeads';
 import { AssignRecaptureLead } from '@application/use-cases/recapture/AssignRecaptureLead';
 import { AssignRecaptureLeadsBulk } from '@application/use-cases/recapture/AssignRecaptureLeadsBulk';
-import { RecaptureLeadNotFoundError } from '@domain/errors/recapture';
+import { RecaptureLeadNotFoundError, RecaptureAssigneeNotAllowedError } from '@domain/errors/recapture';
 import { ReferenceNotFoundError } from '@domain/errors/scheduling';
 import type { RecaptureLeadStatus, RecaptureLeadSource, RecaptureContactChannel, RecaptureContactOutcome } from '@domain/entities/recaptureLead';
 
@@ -134,6 +134,10 @@ export function createRecaptureRouter(
         const result = await assignBulk.execute(leadIds as string[], operatorId as string | null);
         res.json(result);
       } catch (err) {
+        if (err instanceof RecaptureAssigneeNotAllowedError) {
+          res.status(422).json({ error: err.message, code: err.code });
+          return;
+        }
         if (err instanceof ReferenceNotFoundError) {
           res.status(400).json({ error: err.message, code: 'REFERENCE_NOT_FOUND' });
           return;
@@ -370,6 +374,10 @@ export function createRecaptureRouter(
       } catch (err) {
         if (err instanceof RecaptureLeadNotFoundError) {
           res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof RecaptureAssigneeNotAllowedError) {
+          res.status(422).json({ error: err.message, code: err.code });
           return;
         }
         if (err instanceof ReferenceNotFoundError) {

@@ -11,6 +11,8 @@ import {
   RBAC_MODULES,
   SYSTEM_ROLES,
   KNOWN_ACTIONS,
+  TECHNICAL_ROLE_CODES,
+  isTechnicalRoleSet,
   RbacUser,
   RbacRole,
   RbacModule,
@@ -87,6 +89,32 @@ describe('SYSTEM_ROLES constant', () => {
   it('is readonly (as const)', () => {
     const code: SystemRoleCode = 'super_admin';
     expect(code).toBe('super_admin');
+  });
+});
+
+describe('TECHNICAL_ROLE_CODES + isTechnicalRoleSet (recapture-assignable-roles)', () => {
+  it('TECHNICAL_ROLE_CODES contains exactly ["tecnico"]', () => {
+    expect([...TECHNICAL_ROLE_CODES]).toEqual(['tecnico']);
+  });
+
+  it('isTechnicalRoleSet(["tecnico"]) → true (the set carries a technical role)', () => {
+    expect(isTechnicalRoleSet(['tecnico'])).toBe(true);
+  });
+
+  it('isTechnicalRoleSet(["noc"]) → false (noc is NOT technical)', () => {
+    expect(isTechnicalRoleSet(['noc'])).toBe(false);
+  });
+
+  it('isTechnicalRoleSet([]) → false (empty set carries no technical role)', () => {
+    expect(isTechnicalRoleSet([])).toBe(false);
+  });
+
+  it('isTechnicalRoleSet is true when tecnico appears alongside other roles', () => {
+    expect(isTechnicalRoleSet(['ventas', 'tecnico'])).toBe(true);
+  });
+
+  it('isTechnicalRoleSet is false for a non-technical multi-role set', () => {
+    expect(isTechnicalRoleSet(['ventas', 'noc', 'administrador'])).toBe(false);
   });
 });
 

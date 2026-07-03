@@ -2315,6 +2315,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
 
   // ─── #80 Recaptación ───────────────────────────────────────────────────────
   const recaptureRepo = new PrismaRecaptureRepository();
+  // recapture-assignable-roles: assignee-pool enforcement (BE half of the double
+  // guard). Resolves a user's role CODES so AssignRecaptureLead(sBulk) can reject
+  // targets that are role-less or technical. Satisfies UserRoleLookup by mapping
+  // RbacUserRepository.listRolesForUser → codes.
+  const roleLookupForRecapture = {
+    listRoleCodes: async (id: string): Promise<string[]> => {
+      const roles = await rbacUserRepo.listRolesForUser(id);
+      return roles.map((r) => r.code);
+    },
+  };
   const hasRecaptureAssign = async (userId: string): Promise<boolean> => {
     if (!userId) return false; // fail-closed: Prisma trata undefined como "sin filtro" y devolveria perms de todos
     const roles = await rbacUserRepo.listRolesForUser(userId);
@@ -2329,8 +2339,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new AddRecaptureContact(recaptureRepo),
     new IngestChurnedClients(recaptureRepo, customerAdapter),
     new ImportCsvLeads(recaptureRepo),
-    new AssignRecaptureLead(recaptureRepo, userLookupForScheduling),
-    new AssignRecaptureLeadsBulk(recaptureRepo, userLookupForScheduling),
+    new AssignRecaptureLead(recaptureRepo, userLookupForScheduling, roleLookupForRecapture),
+    new AssignRecaptureLeadsBulk(recaptureRepo, userLookupForScheduling, roleLookupForRecapture),
     hasRecaptureAssign,
     createAuthMiddleware(authAdapter, sessionRepo),
     {

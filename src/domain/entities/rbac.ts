@@ -148,6 +148,39 @@ export const SYSTEM_ROLES = [
 export type SystemRoleCode = (typeof SYSTEM_ROLES)[number];
 
 // ---------------------------------------------------------------------------
+// Technical role codes (recapture-assignable-roles)
+// ---------------------------------------------------------------------------
+
+/**
+ * Role codes considered "technical" — field/NOC-technician profiles that must
+ * NOT receive recaptación (sales-recovery) leads. Only `tecnico` qualifies;
+ * `noc` is intentionally NOT here (a NOC operator MAY receive leads).
+ *
+ * Single source of truth for the Recaptación assignee-pool exclusion, mirrored
+ * on the FE (useAssignableOperators). Kept as its own list — separate from
+ * SYSTEM_ROLES — so widening/narrowing the exclusion is a one-line change.
+ */
+export const TECHNICAL_ROLE_CODES = ['tecnico'] as const;
+
+export type TechnicalRoleCode = (typeof TECHNICAL_ROLE_CODES)[number];
+
+/**
+ * True when a user's role-code set carries AT LEAST ONE technical role.
+ *
+ * - `['tecnico']`            → true
+ * - `['ventas', 'tecnico']`  → true
+ * - `['noc']`                → false
+ * - `[]`                     → false (an empty set carries no technical role)
+ *
+ * NOTE: this checks ONLY the technical-role condition. The full "assignable"
+ * rule (active AND has ≥1 role AND not technical) lives in the use case, which
+ * also enforces the non-empty-roles requirement.
+ */
+export function isTechnicalRoleSet(codes: readonly string[]): boolean {
+  return codes.some((c) => (TECHNICAL_ROLE_CODES as readonly string[]).includes(c));
+}
+
+// ---------------------------------------------------------------------------
 // Domain interfaces
 // ---------------------------------------------------------------------------
 

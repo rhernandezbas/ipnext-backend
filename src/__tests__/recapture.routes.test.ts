@@ -18,6 +18,7 @@ import { ImportCsvLeads } from '../application/use-cases/recapture/ImportCsvLead
 import { AssignRecaptureLead } from '../application/use-cases/recapture/AssignRecaptureLead';
 import { AssignRecaptureLeadsBulk } from '../application/use-cases/recapture/AssignRecaptureLeadsBulk';
 import type { CustomerRepository } from '../domain/ports/CustomerRepository';
+import type { UserRoleLookup } from '../domain/ports/UserRoleLookup';
 
 // â€”â€”â€” Auth + RBAC mock helpers â€”â€”â€”â€”â€”
 
@@ -59,6 +60,8 @@ interface BuildAppOptions {
   contractRepo?: InMemoryContractRepository;
   repo?: InMemoryRecaptureRepository;
   auth?: RequestHandler;
+  /** userId → role codes. Unknown ids default to ['ventas'] (assignable). */
+  operatorRoles?: Record<string, string[]>;
 }
 
 function buildApp(opts: BuildAppOptions = {}) {
@@ -67,14 +70,20 @@ function buildApp(opts: BuildAppOptions = {}) {
   const contractRepo = opts.contractRepo ?? new InMemoryContractRepository();
   const hasAssignPerm = opts.hasAssignPerm ?? (async () => true);
 
+  // Default: every operator is assignable (carries 'ventas'). Individual ids can
+  // be overridden (technical or role-less) via operatorRoles.
+  const roleLookup: UserRoleLookup = {
+    listRoleCodes: async (id: string) => opts.operatorRoles?.[id] ?? ['ventas'],
+  };
+
   const listUC = new ListRecaptureLeads(repo, contractRepo);
   const getUC = new GetRecaptureLead(repo);
   const updateStatusUC = new UpdateRecaptureLeadStatus(repo);
   const addContactUC = new AddRecaptureContact(repo);
   const ingestUC = new IngestChurnedClients(repo, customerRepo);
   const importCsvUC = new ImportCsvLeads(repo);
-  const assignUC = new AssignRecaptureLead(repo, { findById: async (id) => ({ id }) });
-  const assignBulkUC = new AssignRecaptureLeadsBulk(repo, { findById: async (id) => ({ id }) });
+  const assignUC = new AssignRecaptureLead(repo, { findById: async (id) => ({ id }) }, roleLookup);
+  const assignBulkUC = new AssignRecaptureLeadsBulk(repo, { findById: async (id) => ({ id }) }, roleLookup);
 
   const app = express();
   app.use(express.json());
@@ -353,6 +362,26 @@ describe('PATCH /api/recapture/leads/assign-bulk', () => {
       .set('Cookie', 'auth_token=tok')
       .send({ leadIds: [l1.id], operatorId: 'op-1' });
     expect(res.status).toBe(403);
+  });
+
+  it('returns 422 RECAPTURE_ASSIGNEE_NOT_ALLOWED for a technical target and leaves NO lead touched', async () => {
+    const { app, repo } = buildApp({ operatorRoles: { 'tech-op': ['tecnico'] } });
+    const l1 = await repo.create({ source: 'csv', contactName: 'Lead 1' });
+    const l2 = await repo.create({ source: 'csv', contactName: 'Lead 2' });
+
+    const res = await request(app)
+      .patch('/api/recapture/leads/assign-bulk')
+      .set('Cookie', 'auth_token=tok')
+      .send({ leadIds: [l1.id, l2.id], operatorId: 'tech-op' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('RECAPTURE_ASSIGNEE_NOT_ALLOWED');
+
+    // Pre-loop check ⇒ neither lead was mutated.
+    const d1 = await repo.getById(l1.id);
+    const d2 = await repo.getById(l2.id);
+    expect(d1!.assigneeId).toBeNull();
+    expect(d2!.assigneeId).toBeNull();
   });
 });
 

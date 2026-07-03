@@ -51,8 +51,9 @@ function buildApp(repo?: InMemoryRecaptureRepository) {
   const addContactUC = new AddRecaptureContact(r);
   const ingestUC = new IngestChurnedClients(r, makeCustomerRepo());
   const importCsvUC = new ImportCsvLeads(r);
-  const assignUC = new AssignRecaptureLead(r, { findById: async (id) => ({ id }) });
-  const assignBulkUC = new AssignRecaptureLeadsBulk(r, { findById: async (id) => ({ id }) });
+  const roleLookup = { listRoleCodes: async () => ['ventas'] };
+  const assignUC = new AssignRecaptureLead(r, { findById: async (id) => ({ id }) }, roleLookup);
+  const assignBulkUC = new AssignRecaptureLeadsBulk(r, { findById: async (id) => ({ id }) }, roleLookup);
 
   const app = express();
   app.use(express.json());
