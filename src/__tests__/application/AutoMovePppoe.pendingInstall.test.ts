@@ -73,12 +73,17 @@ const FIXED_NOW = new Date('2026-07-02T12:00:00Z');
  */
 const SEED_CREATED_AT = new Date('2026-06-01T00:00:00Z');
 
-function session(username: string, nasIp: string, startedAt = '2026-07-02T10:00:00Z'): OrchestratorSession {
+function session(
+  username: string,
+  nasIp: string,
+  startedAt = '2026-07-02T10:00:00Z',
+  framedIp: string | null = null,
+): OrchestratorSession {
   return {
     sessionId: `${username}@${nasIp}@${startedAt}`,
     username,
     nasIp,
-    framedIp: null,
+    framedIp,
     startedAt,
     bytesIn: 0,
     bytesOut: 0,
@@ -106,6 +111,9 @@ async function buildFixture(opts?: {
   now?: () => Date;
   /** D7.1: createdAt de las filas sembradas (default SEED_CREATED_AT — anterior a toda sesión). */
   serviceCreatedAt?: Date;
+  /** D7.1b: NO sembrar ningún pool → `pools` vacío en el use case. Para el test fail-safe del
+   *  gate de adopción (sin pools no se puede afirmar que la IP sea temporal → skip). */
+  noProductionPools?: boolean;
 }): Promise<Fixture> {
   const now = opts?.now ?? (() => FIXED_NOW);
   const createdAt = opts?.serviceCreatedAt ?? SEED_CREATED_AT;
@@ -140,41 +148,49 @@ async function buildFixture(opts?: {
   const nasB = await mkNas('NAS Radius B', NAS_B_IP);
   const nasD = await mkNas('NAS Radius D (solo cgnat)', NAS_D_IP);
 
-  // Pools del NAS B: cgnat + public.
-  netRepo.seedNetwork({
-    id: 'net-b', network: '100.64.43.0/24', gateway: '100.64.43.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
-    description: 'CGNAT B', partnerId: null, type: 'pppoe', totalIps: 254, usedIps: null, freeIps: null,
-  });
-  netRepo.seedPool({
-    id: 'pool-b-cg', name: 'cgnat-b', networkId: 'net-b',
-    rangeStart: '100.64.43.2', rangeEnd: '100.64.43.254',
-    type: 'static', assignedCount: null, totalCount: 253, nasId: nasB.id, ipKind: 'cgnat',
-  });
-  netRepo.seedNetwork({
-    id: 'net-pub', network: '190.15.242.0/24', gateway: '190.15.242.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
-    description: 'Públicas B', partnerId: null, type: 'pppoe', totalIps: 254, usedIps: null, freeIps: null,
-  });
-  netRepo.seedPool({
-    id: 'pool-b-pub', name: 'publicas-b', networkId: 'net-pub',
-    rangeStart: '190.15.242.2', rangeEnd: '190.15.242.254',
-    type: 'static', assignedCount: null, totalCount: 253, nasId: nasB.id, ipKind: 'public',
-  });
-  // Pool del NAS D: SOLO cgnat (S3.3: preferencia public sin pool público).
-  netRepo.seedPool({
-    id: 'pool-d-cg', name: 'cgnat-d', networkId: 'net-b',
-    rangeStart: '100.64.43.2', rangeEnd: '100.64.43.254',
-    type: 'static', assignedCount: null, totalCount: 253, nasId: nasD.id, ipKind: 'cgnat',
-  });
-  // Pool cgnat del NAS A (origen del mismatch normal de S3.6) cubriendo OLD_IP.
-  netRepo.seedNetwork({
-    id: 'net-a', network: '100.64.60.0/24', gateway: '100.64.60.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
-    description: 'CGNAT NAS A', partnerId: null, type: 'pppoe', totalIps: 254, usedIps: null, freeIps: null,
-  });
-  netRepo.seedPool({
-    id: 'pool-a', name: 'cgnat-nas-a', networkId: 'net-a',
-    rangeStart: '100.64.60.2', rangeEnd: '100.64.60.254',
-    type: 'static', assignedCount: null, totalCount: 253, nasId: NAS_A, ipKind: 'cgnat',
-  });
+  // D7.1b: el test fail-safe (noProductionPools) salta TODO el seed de pools → productionPools
+  // vacío en el use case. El resto de la suite siembra normal.
+  if (!opts?.noProductionPools) {
+    // Pools del NAS B: cgnat + public.
+    netRepo.seedNetwork({
+      id: 'net-b', network: '100.64.43.0/24', gateway: '100.64.43.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
+      description: 'CGNAT B', partnerId: null, type: 'pppoe', totalIps: 254, usedIps: null, freeIps: null,
+    });
+    netRepo.seedPool({
+      id: 'pool-b-cg', name: 'cgnat-b', networkId: 'net-b',
+      rangeStart: '100.64.43.2', rangeEnd: '100.64.43.254',
+      type: 'static', assignedCount: null, totalCount: 253, nasId: nasB.id, ipKind: 'cgnat',
+    });
+    netRepo.seedNetwork({
+      id: 'net-pub', network: '190.15.242.0/24', gateway: '190.15.242.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
+      description: 'Públicas B', partnerId: null, type: 'pppoe', totalIps: 254, usedIps: null, freeIps: null,
+    });
+    netRepo.seedPool({
+      id: 'pool-b-pub', name: 'publicas-b', networkId: 'net-pub',
+      rangeStart: '190.15.242.2', rangeEnd: '190.15.242.254',
+      type: 'static', assignedCount: null, totalCount: 253, nasId: nasB.id, ipKind: 'public',
+    });
+    // Pool del NAS D: SOLO cgnat (S3.3: preferencia public sin pool público).
+    netRepo.seedPool({
+      id: 'pool-d-cg', name: 'cgnat-d', networkId: 'net-b',
+      rangeStart: '100.64.43.2', rangeEnd: '100.64.43.254',
+      type: 'static', assignedCount: null, totalCount: 253, nasId: nasD.id, ipKind: 'cgnat',
+    });
+    // Pool cgnat del NAS A (origen del mismatch normal de S3.6) cubriendo OLD_IP.
+    netRepo.seedNetwork({
+      id: 'net-a', network: '100.64.60.0/24', gateway: '100.64.60.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
+      description: 'CGNAT NAS A', partnerId: null, type: 'pppoe', totalIps: 254, usedIps: null, freeIps: null,
+    });
+    netRepo.seedPool({
+      id: 'pool-a', name: 'cgnat-nas-a', networkId: 'net-a',
+      rangeStart: '100.64.60.2', rangeEnd: '100.64.60.254',
+      type: 'static', assignedCount: null, totalCount: 253, nasId: NAS_A, ipKind: 'cgnat',
+    });
+  } else {
+    // El in-memory repo trae pools DEFAULT en su constructor → borrarlos para lograr `pools`
+    // GENUINAMENTE vacío en el use case (test del guard fail-safe `pools.length > 0`).
+    for (const p of await netRepo.findAllPools()) await netRepo.deletePool(p.id);
+  }
 
   const findFreeIp = new FindFreeIp(netRepo, nasRepo, routerGw, orchestrator);
   const legacyMove = new MovePppoeServiceToRouter(pppoeRepo, routerGw, nasRepo);
@@ -576,13 +592,15 @@ describe('AutoMovePppoe — D6.10: tests faltantes de la adopción', () => {
 // ════════════════════════════════════════════════════════════════════════════════════════════
 
 describe('AutoMovePppoe — D7.1: exención de freshness ACOTADA POR NACIMIENTO', () => {
-  it('username RECICLADO: pendiente creado HOY + única sesión colgada de hace 3 semanas (startedAt < createdAt) → skipped_stale_session VISIBLE + throttled, CERO adopción', async () => {
+  it('username RECICLADO con IP de PRODUCCIÓN: pendiente creado HOY + colgada de hace 3 semanas con Framed-IP cgnat (startedAt < createdAt) → skipped_stale_session VISIBLE + throttled, CERO adopción', async () => {
     // El escenario del bug: terminate+recreate (workaround documentado para editar pendientes)
     // recicla el username; la sesión COLGADA histórica del servicio anterior sigue viva en el
-    // NAS fantasma. Sin el bound por nacimiento, la exención D6.2 adoptaba SILENCIOSO hacia ese
-    // NAS. Una sesión que PRECEDE a la pre-provisión no puede ser su instalación.
+    // NAS fantasma. La señal del reciclado es que su Framed-IP es de PRODUCCIÓN (pool cgnat/
+    // public) — un cliente viejo que SÍ tenía IP fija. Una sesión que PRECEDE a la pre-provisión
+    // Y tiene IP de producción no puede ser la instalación del pendiente nuevo → skip.
     const fx = await buildFixture({
-      globalSessions: [session('recycled', NAS_B_IP, '2026-06-11T10:00:00Z')], // 3 semanas atrás
+      // framedIp 100.64.43.50 ∈ pool cgnat de B (producción) → reciclado, NO preinstall.
+      globalSessions: [session('recycled', NAS_B_IP, '2026-06-11T10:00:00Z', '100.64.43.50')], // 3 sem atrás
       serviceCreatedAt: FIXED_NOW, // re-creado HOY (posterior a la sesión colgada)
     });
     const s = await seedPending(fx, 'cgnat', 'recycled');
@@ -621,6 +639,59 @@ describe('AutoMovePppoe — D7.1: exención de freshness ACOTADA POR NACIMIENTO'
     expect(summary2.skippedStale).toBe(1);
     expect(summary2.throttled).toBe(1);
     expect(fx.moveEvents.all()).toHaveLength(1);
+  });
+
+  it('FIX radacct-HA (bug Ignacio): pendiente creado HOY + sesión en pool PREINSTALL (172.31.255.x) que PRECEDE al alta → ADOPTA (el acctstarttime podrido NO bloquea)', async () => {
+    // Cliente EXISTENTE migrando local→RADIUS: el CPE cae en el pool preinstall del NAS. El
+    // radacct del HA master-master MIENTE el acctstarttime (session-id reusado + Start/Stop
+    // cruzados) → parece de hace semanas. Pero la Framed-IP (172.31.255.254) NO es de producción
+    // (fuera de todo pool cgnat/public) → es un CPE ESPERANDO adopción, no un reciclado. Se
+    // adopta ignorando el timestamp podrido.
+    const fx = await buildFixture({
+      globalSessions: [session('ignacio', NAS_B_IP, '2026-06-11T10:00:00Z', '172.31.255.254')],
+      serviceCreatedAt: FIXED_NOW, // creado HOY (la sesión "precede" solo por el timestamp podrido)
+    });
+    const s = await seedPending(fx, 'cgnat', 'ignacio');
+
+    const summary = await fx.uc.run();
+
+    expect(summary.adoptions).toBe(1);
+    expect(summary.skippedStale).toBe(0);
+    expect(summary.moved).toBe(1);
+    expect(summary.failed).toBe(0);
+
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBe(fx.nasB.id);
+    expect(row!.remoteAddress).toBe('100.64.43.3'); // IP definitiva del pool cgnat de B
+
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ username: 'ignacio', outcome: 'moved', reason: 'auto_install' });
+  });
+
+  it('CONSERVADOR: pendiente + sesión framedIp null que PRECEDE al alta → sigue skip (no se puede afirmar que la IP sea preinstall)', async () => {
+    // framedIp desconocido (null): el fix NO adopta — solo bypasea el gate cuando la IP es
+    // POSITIVAMENTE no-producción. En prod las sesiones traen su framedipaddress; este es el
+    // borde defensivo (mantiene el gate por nacimiento).
+    const fx = await buildFixture({
+      globalSessions: [session('unknownip', NAS_B_IP, '2026-06-11T10:00:00Z', null)],
+      serviceCreatedAt: FIXED_NOW,
+    });
+    const s = await seedPending(fx, 'cgnat', 'unknownip');
+
+    const summary = await fx.uc.run();
+
+    expect(summary.skippedStale).toBe(1);
+    expect(summary.moved).toBe(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBeNull();
+    const events = fx.moveEvents.all();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      username: 'unknownip',
+      outcome: 'skipped_stale_session',
+      reason: 'session_predates_service',
+    });
   });
 
   it("regresión 'instalado lunes, flag ON jueves': pendiente creado hace 4 días + sesión >72h nacida DESPUÉS del alta → SE ADOPTA", async () => {
@@ -729,5 +800,95 @@ describe('AutoMovePppoe — D7.2: anti-starvation acotado a failed_* PERSISTENTE
     expect(summary.deferred).toBe(0);
     const row = await fx.pppoeRepo.findById(sRfail.id);
     expect(row!.nasId).toBeNull(); // rfail NI se intentó
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// D7.1b — clasificador de adopción por IP FAIL-SAFE (fix wave del review adversarial)
+// El bypass del gate por nacimiento SOLO procede si la IP se puede AFIRMAR no-producción:
+// IP parseable + hay pools de producción cargados + fuera de ellos. Ante la duda → skip.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+
+describe('AutoMovePppoe — D7.1b: clasificador de adopción por IP FAIL-SAFE', () => {
+  it('FAIL-SAFE pools vacíos: reciclado con IP de producción + productionPools vacío → SKIP (sin pools NO se puede afirmar preinstall, NO adopta)', async () => {
+    // R1-CRITICAL: sin el guard, productionPools=[] hacía !ipInAnyRange(ip,[])=true → CUALQUIER
+    // IP se clasificaba no-producción → el gate del reciclado quedaba DESACTIVADO (fail-open).
+    // Fail-safe: sin pools cargados no se puede afirmar preinstall → conservador (skip).
+    const fx = await buildFixture({
+      globalSessions: [session('recycled', NAS_B_IP, '2026-06-11T10:00:00Z', '100.64.43.50')],
+      serviceCreatedAt: FIXED_NOW,
+      noProductionPools: true, // productionPools vacío
+    });
+    const s = await seedPending(fx, 'cgnat', 'recycled');
+
+    const summary = await fx.uc.run();
+
+    expect(summary.skippedStale).toBe(1); // el GATE skipeó (no el allocator)
+    expect(summary.moved).toBe(0);
+    expect(summary.failed).toBe(0);        // NI llegó a intentar el move
+    expect(fx.orchestrator.calls).toHaveLength(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBeNull();
+  });
+
+  it("FAIL-SAFE IP no parseable: framedIp '' (string vacío) que precede → SKIP (una IP basura NO cuenta como preinstall)", async () => {
+    // R1-MEDIUM + R2-LOW: ipInAnyRange('', pools) devuelve false (ipToInt tira) → sin el guard
+    // isIpv4, '' se clasificaba no-producción → adoptaba. Fail-safe: IP no parseable → conservador.
+    const fx = await buildFixture({
+      globalSessions: [session('badip', NAS_B_IP, '2026-06-11T10:00:00Z', '')],
+      serviceCreatedAt: FIXED_NOW,
+    });
+    const s = await seedPending(fx, 'cgnat', 'badip');
+
+    const summary = await fx.uc.run();
+
+    expect(summary.skippedStale).toBe(1);
+    expect(summary.moved).toBe(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBeNull();
+  });
+
+  it('reciclado con IP de pool PÚBLICO (no solo cgnat) que precede → SKIP (cualquier pool gestionado cuenta como producción)', async () => {
+    const fx = await buildFixture({
+      globalSessions: [session('recpub', NAS_B_IP, '2026-06-11T10:00:00Z', '190.15.242.50')], // ∈ pool public de B
+      serviceCreatedAt: FIXED_NOW,
+    });
+    const s = await seedPending(fx, 'cgnat', 'recpub');
+
+    const summary = await fx.uc.run();
+
+    expect(summary.skippedStale).toBe(1);
+    expect(summary.moved).toBe(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBeNull();
+  });
+
+  it('MEDIUM del review — reciclado con IP en pool cargado con ipKind=null (rango estático/legacy) que precede → SKIP (IP GESTIONADA, no solo cgnat/public)', async () => {
+    // Hallazgo del review: definir producción como cgnat∪public dejaba afuera los pools con
+    // ipKind=null (default del in-memory + rangos no backfilleados por la migración) → una IP
+    // de producción ahí se clasificaba temporal → fail-open. "IP conocida" = está en CUALQUIER
+    // pool gestionado.
+    const fx = await buildFixture({
+      globalSessions: [session('recnull', NAS_B_IP, '2026-06-11T10:00:00Z', '10.20.30.40')],
+      serviceCreatedAt: FIXED_NOW,
+    });
+    // Pool estático/corporativo cargado SIN ipKind (null) que cubre la IP del reciclado.
+    fx.netRepo.seedNetwork({
+      id: 'net-null', network: '10.20.30.0/24', gateway: '10.20.30.1', dns1: '8.8.8.8', dns2: '8.8.4.4',
+      description: 'estatico sin ipKind', partnerId: null, type: 'static', totalIps: 254, usedIps: null, freeIps: null,
+    });
+    fx.netRepo.seedPool({
+      id: 'pool-null', name: 'estatico', networkId: 'net-null',
+      rangeStart: '10.20.30.2', rangeEnd: '10.20.30.254',
+      type: 'static', assignedCount: null, totalCount: 253, nasId: fx.nasB.id, ipKind: null,
+    });
+    const s = await seedPending(fx, 'cgnat', 'recnull');
+
+    const summary = await fx.uc.run();
+
+    expect(summary.skippedStale).toBe(1); // IP en pool gestionado (aunque ipKind null) → reciclado → skip
+    expect(summary.moved).toBe(0);
+    const row = await fx.pppoeRepo.findById(s.id);
+    expect(row!.nasId).toBeNull();
   });
 });

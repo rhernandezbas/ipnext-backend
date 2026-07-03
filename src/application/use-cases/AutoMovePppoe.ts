@@ -13,7 +13,7 @@ import {
   PppoeNasMoveEventRepository,
   PppoeNasMoveOutcome,
 } from '@domain/ports/PppoeNasMoveEventRepository';
-import { ipInAnyRange } from '@domain/services/ipMath';
+import { ipInAnyRange, isIpv4 } from '@domain/services/ipMath';
 import { isDuplicateAutoEvent, AUTO_MOVE_EVENT_THROTTLE_MS } from '@application/services/pppoeNasMoveThrottle';
 import { MovePppoeToNas } from './MovePppoeToNas';
 
@@ -343,14 +343,46 @@ export class AutoMovePppoe {
       } else {
         // D7.1 — exención de freshness ACOTADA POR NACIMIENTO: la adopción solo procede si la
         // sesión ganadora NACIÓ en o después del alta del servicio (startedAt >= createdAt).
-        // La negación `!(a >= b)` es deliberada: cubre startedAt no parseable (epoch 0) Y
-        // createdAt no parseable (NaN — toda comparación da false) como skip FAIL-SAFE.
-        if (!(startedAtMs(winner) >= Date.parse(service.createdAt))) {
+        // La negación `!(a >= b)` es deliberada: startedAt no parseable (epoch 0) Y createdAt no
+        // parseable (NaN — toda comparación da false) dan `precedesAlta=true` → skip, SALVO que la
+        // IP de la sesión sea demostrablemente temporal (D7.1b abajo).
+        const precedesAlta = !(startedAtMs(winner) >= Date.parse(service.createdAt));
+        // D7.1b (fix radacct-HA-podrido, bug prod 2026-07-03 `IgnacioBellAlt`): el acctstarttime
+        // del RADIUS HA master-master MIENTE cuando el NAS reusa el acctsessionid (Start/Stop
+        // cruzados entre r1/r2 → startedAt clavado en el pasado) → `precedesAlta` da falso
+        // positivo y traba PARA SIEMPRE a un cliente EXISTENTE que migra local→RADIUS (su CPE
+        // cae en el pool preinstall antes del alta). La señal confiable NO es el timestamp sino
+        // la IP: un pendiente legítimo se crea SIN Framed-IP → el NAS le da IP temporal del pool
+        // preinstall (fuera de todo pool de producción); solo un username RECICLADO (cliente
+        // viejo con Framed-IP) tiene la colgada en un pool cgnat/public. Por eso el skip por
+        // nacimiento aplica SOLO si la IP de la sesión es de PRODUCCIÓN o DESCONOCIDA (null →
+        // conservador: no se puede afirmar preinstall). IP demostrablemente no-producción →
+        // adoptar igual (el timestamp podrido no bloquea).
+        // FAIL-SAFE (fix wave del review adversarial): SOLO se AFIRMA que la IP es temporal/
+        // preinstall (y se bypasea el gate del reciclado) si se puede DEMOSTRAR — la IP existe, es
+        // IPv4 parseable, y NO cae en NINGÚN pool GESTIONADO. "Gestionado" = CUALQUIER pool
+        // cargado (`pools`), NO solo cgnat/public: un pool con ipKind null/otro (rango estático o
+        // legacy) también es una IP conocida de un cliente. El pool preinstall (172.31.255.x) NO
+        // está registrado en Prominense → toda IP preinstall queda fuera de `pools` → adoptable.
+        // Ante la duda (framedIp null/basura, o `pools` vacío por un NAS sin pools / read
+        // incompleto) NO se afirma nada → conservador: mantener el skip por nacimiento. El
+        // fail-open (ausencia de evidencia = evidencia de ausencia) reintroducía el reciclado.
+        // Trade-off CONOCIDO y aceptado: una IP de un cliente cuyo rango NO está cargado como
+        // NINGÚN pool se clasificaría temporal (un reciclado con esa IP se adoptaría) — se corrige
+        // con un move manual; en prod los rangos gestionados están cargados.
+        const winnerIp = winner.framedIp;
+        const winnerIpIsUnmanaged =
+          winnerIp !== null &&
+          isIpv4(winnerIp) &&
+          pools.length > 0 &&
+          !ipInAnyRange(winnerIp, pools);
+        if (precedesAlta && !winnerIpIsUnmanaged) {
           summary.skippedStale++;
           console.warn(
-            `[AutoMovePppoe] adopción skipped: la sesión ganadora PRECEDE a la pre-provisión ` +
-            `(username reciclado con colgada histórica) — username=${username} ` +
-            `startedAt=${winner.startedAt} createdAt=${service.createdAt} nasReal=${realNas.id} (${realNas.name})`,
+            `[AutoMovePppoe] adopción skipped: la sesión ganadora PRECEDE a la pre-provisión y su ` +
+            `IP está en un pool gestionado o no es verificable (username reciclado con colgada histórica) — ` +
+            `username=${username} startedAt=${winner.startedAt} createdAt=${service.createdAt} ` +
+            `framedIp=${winnerIp ?? 'null'} nasReal=${realNas.id} (${realNas.name})`,
           );
           pendingSkips.push({
             service,

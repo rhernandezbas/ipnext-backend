@@ -1,6 +1,7 @@
 import {
   ipToInt,
   intToIp,
+  isIpv4,
   networkEdges,
   usableIpsInCidr,
   usableIpsInRange,
@@ -16,6 +17,21 @@ describe('ipMath', () => {
     it('ipToInt rejects invalid IPv4', () => {
       expect(() => ipToInt('999.1.1.1')).toThrow();
       expect(() => ipToInt('1.2.3')).toThrow();
+    });
+  });
+
+  describe('isIpv4', () => {
+    it('true for a valid dotted-quad (incl. edges)', () => {
+      expect(isIpv4('100.64.10.42')).toBe(true);
+      expect(isIpv4('0.0.0.0')).toBe(true);
+      expect(isIpv4('255.255.255.255')).toBe(true);
+    });
+    it('false (no throw) for empty / malformed / out-of-range / IPv6', () => {
+      expect(isIpv4('')).toBe(false);
+      expect(isIpv4('999.1.1.1')).toBe(false);
+      expect(isIpv4('1.2.3')).toBe(false);
+      expect(isIpv4('garbage')).toBe(false);
+      expect(isIpv4('2001:db8::1')).toBe(false);
     });
   });
 

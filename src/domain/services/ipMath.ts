@@ -30,6 +30,16 @@ export function intToIp(n: number): string {
   return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join('.');
 }
 
+/** true si `ip` es una IPv4 dotted-quad parseable (no lanza — envuelve `ipToInt`). */
+export function isIpv4(ip: string): boolean {
+  try {
+    ipToInt(ip);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Network + broadcast de un CIDR "a.b.c.d/p". null si el CIDR no es parseable. */
 export function networkEdges(cidr: string): { network: number; broadcast: number } | null {
   const [base, prefixStr] = cidr.split('/');
