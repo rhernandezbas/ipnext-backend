@@ -1,3 +1,5 @@
+> **[DESCARTADO] (2026-07-03).** Este change (sqlippool / "IP automatica del pool del NAS") fue DESCARTADO: su objetivo se cumplio por otra via (move-nas + watcher + pre-provision, con IP FIJA). El codigo dormant que dejo en prod se removio en el change `pppoe-sqlippool-cleanup` (EN PROD 2026-07-03). Se conserva esta carpeta como registro historico de la decision. NO implementar.
+
 # Proposal: PPPoE — IP automática del pool del NAS (sqlippool) + toggle "IP fija" (Fase 1: NE8000 / Acceso Sur)
 
 ## Intent
