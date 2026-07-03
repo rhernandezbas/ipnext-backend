@@ -471,7 +471,7 @@ export function createPppoeRouter(
     '/nas/:id/ingest-pppoe',
     auth,
     canManage,
-    async (req: Request, res: Response): Promise<void> => {
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const result = await ingestPppoeFromNas.execute(req.params['id'] as string);
         res.json(result);
@@ -490,7 +490,9 @@ export function createPppoeRouter(
           res.status(422).json({ code: err.code, error: err.message });
           return;
         }
-        throw err;
+        // Resto (p.ej. OrchestratorRejectedError de listUsers, 4xx) → errorHandler (fuente única).
+        // NUNCA `throw`: en Express 4 sin express-async-errors la request queda COLGADA → proxy 504.
+        next(err);
       }
     },
   );
@@ -500,7 +502,7 @@ export function createPppoeRouter(
     '/pppoe/:id/associate',
     auth,
     canManage,
-    async (req: Request, res: Response): Promise<void> => {
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = AssociatePppoeBodySchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -524,7 +526,8 @@ export function createPppoeRouter(
           res.status(409).json({ code: err.code, error: err.message });
           return;
         }
-        throw err;
+        // Resto → errorHandler (fuente única). NUNCA `throw`: la request quedaría COLGADA → 504.
+        next(err);
       }
     },
   );
@@ -534,7 +537,7 @@ export function createPppoeRouter(
     '/contracts/:contractId/pppoe/:pppoeId',
     auth,
     canManage,
-    async (req: Request, res: Response): Promise<void> => {
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const body = BajaBodySchema.safeParse(req.body);
       const reason = body.success ? (body.data?.reason ?? null) : null;
       const { actorId, actorName } = actorOf(req);
@@ -550,7 +553,8 @@ export function createPppoeRouter(
           res.status(404).json({ code: err.code, error: err.message });
           return;
         }
-        throw err;
+        // Resto → errorHandler (fuente única). NUNCA `throw`: la request quedaría COLGADA → 504.
+        next(err);
       }
     },
   );
@@ -562,7 +566,7 @@ export function createPppoeRouter(
     '/pppoe/:id/credentials',
     auth,
     canManage,
-    async (req: Request, res: Response): Promise<void> => {
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const creds = await getPppoeCredentials.execute(req.params['id'] as string);
         res.json(creds);
@@ -571,7 +575,8 @@ export function createPppoeRouter(
           res.status(404).json({ code: err.code, error: err.message });
           return;
         }
-        throw err;
+        // Resto → errorHandler (fuente única). NUNCA `throw`: la request quedaría COLGADA → 504.
+        next(err);
       }
     },
   );
@@ -639,7 +644,7 @@ export function createPppoeRouter(
     '/pppoe/:id/enforce',
     auth,
     canCut,
-    async (req: Request, res: Response): Promise<void> => {
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = EnforcePppoeBodySchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -672,7 +677,9 @@ export function createPppoeRouter(
           res.status(409).json({ code: err.code, error: err.message });
           return;
         }
-        throw err;
+        // Resto (p.ej. OrchestratorRejectedError del changePlan/suspend, 4xx) → errorHandler
+        // (fuente única). NUNCA `throw`: en Express 4 la request quedaría COLGADA → proxy 504.
+        next(err);
       }
     },
   );
@@ -682,7 +689,7 @@ export function createPppoeRouter(
     '/pppoe/:id',
     auth,
     canManage,
-    async (req: Request, res: Response): Promise<void> => {
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = UpdatePppoeBodySchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -696,8 +703,15 @@ export function createPppoeRouter(
         });
         res.json(toPppoeServiceDto(service));
       } catch (err) {
-        if (err instanceof RouterUnreachableError) {
+        // NAS RADIUS caído (red/timeout/5xx) → mismo trato que el router MikroTik caído.
+        if (err instanceof RouterUnreachableError || err instanceof OrchestratorUnreachableError) {
           res.status(502).json({ code: err.code, error: err.message });
+          return;
+        }
+        // El orchestrator RECHAZÓ el update (4xx) — p.ej. colisión de Framed-IP al fijar IP fija
+        // sobre un username homónimo (409). Reenviamos su status (patrón de create/move).
+        if (err instanceof OrchestratorRejectedError) {
+          res.status(err.upstreamStatus).json({ code: err.code, error: err.message });
           return;
         }
         if (err instanceof PppoeServiceNotFoundError) {
@@ -713,7 +727,9 @@ export function createPppoeRouter(
           res.status(409).json({ code: err.code, error: err.message });
           return;
         }
-        throw err;
+        // Resto → errorHandler (fuente única). NUNCA `throw`: en Express 4 sin express-async-errors
+        // un throw async NO llega al errorHandler y la request queda COLGADA → proxy 504 (bug JoseSutera2Ch).
+        next(err);
       }
     },
   );
@@ -772,7 +788,7 @@ export function createPppoeRouter(
       '/pppoe/:id/rename',
       auth,
       canManage,
-      async (req: Request, res: Response): Promise<void> => {
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         const parsed = RenamePppoeBodySchema.safeParse(req.body);
         if (!parsed.success) {
           res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -819,7 +835,8 @@ export function createPppoeRouter(
             res.status(409).json({ code: err.code, error: err.message });
             return;
           }
-          throw err;
+          // Resto → errorHandler (fuente única). NUNCA `throw`: la request quedaría COLGADA → 504.
+          next(err);
         }
       },
     );
@@ -832,7 +849,7 @@ export function createPppoeRouter(
     '/pppoe/:id',
     auth,
     canManage,
-    async (req: Request, res: Response): Promise<void> => {
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const body = BajaBodySchema.safeParse(req.body);
       const reason = body.success ? (body.data?.reason ?? null) : null;
       const { actorId, actorName } = actorOf(req);
@@ -859,7 +876,9 @@ export function createPppoeRouter(
           res.status(409).json({ code: err.code, error: err.message });
           return;
         }
-        throw err;
+        // Resto (p.ej. OrchestratorRejectedError del deleteUser, 4xx≠404) → errorHandler (fuente
+        // única). NUNCA `throw`: en Express 4 la request quedaría COLGADA → proxy 504.
+        next(err);
       }
     },
   );
@@ -873,7 +892,7 @@ export function createPppoeRouter(
       '/pppoe/:id/caller-id',
       auth,
       canRead,
-      async (req: Request, res: Response): Promise<void> => {
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
           const callerId = await getPppoeCallerId.execute(req.params['id'] as string);
           res.json({ callerId });
@@ -882,7 +901,9 @@ export function createPppoeRouter(
             res.status(404).json({ code: err.code, error: err.message });
             return;
           }
-          throw err;
+          // Resto (p.ej. OrchestratorUnreachableError/OrchestratorRejectedError de listSessions)
+          // → errorHandler (fuente única). NUNCA `throw`: la request quedaría COLGADA → proxy 504.
+          next(err);
         }
       },
     );

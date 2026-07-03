@@ -16,6 +16,7 @@ import { requirePermission } from '@infrastructure/http/middleware/requirePermis
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
 import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
+import { OrchestratorEnforcementAdapter } from '@infrastructure/adapters/orchestrator/OrchestratorEnforcementAdapter';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
@@ -48,6 +49,7 @@ import { ServiceCutRunner, SERVICE_CUT_LOCK_KEY } from '@infrastructure/scheduli
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+import { OrchestratorRejectedError } from '@domain/errors/pppoe';
 
 const NAS_ID = '1';
 const NAS_IP = '192.168.1.1';
@@ -78,7 +80,7 @@ interface Fixture {
   noPermUserId: string;
 }
 
-async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> {
+async function buildApp(opts?: { unreachableNas?: string[]; orchestratorEnforcement?: InMemoryRadiusOrchestratorGateway }): Promise<Fixture> {
   const roleRepo     = new InMemoryRbacRoleRepository();
   const userRoleRepo = new InMemoryRbacUserRoleRepository();
   const permRepo     = new InMemoryRbacPermissionRepository();
@@ -124,7 +126,13 @@ async function buildApp(opts?: { unreachableNas?: string[] }): Promise<Fixture> 
   const lock      = new InMemoryDistributedLock();
   const ensure    = new EnsureInternetContractService(new InMemoryContractServiceRepository(), new InMemoryServiceCatalogRepository());
 
-  const enforce = new EnforcePppoeService(pppoeRepo, new RouterOsEnforcementAdapter(router, 'IP-REDUCCION'), nasRepo);
+  const enforce = new EnforcePppoeService(
+    pppoeRepo,
+    opts?.orchestratorEnforcement
+      ? new OrchestratorEnforcementAdapter(opts.orchestratorEnforcement, 'IP-REDUCCION')
+      : new RouterOsEnforcementAdapter(router, 'IP-REDUCCION'),
+    nasRepo,
+  );
   const preview = new PreviewEnforcement(pppoeRepo);
   const bulk    = new RunBulkEnforcement(pppoeRepo, enforce, batchRepo, { throttleMs: 0 });
   const runner  = new ServiceCutRunner(bulk, batchRepo, lock);
@@ -230,6 +238,25 @@ describe('Rutas de enforcement PPPoE (Fase C)', () => {
       const s = await seedActive(fx, 'cli1');
       const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/enforce`).send({ action: 'nope' }), fx.cutUserId);
       expect(res.status).toBe(422);
+    });
+
+    // ── pppoe-update-504-handler: el corte NO debe COLGAR cuando el orchestrator RECHAZA ──
+    // Con un NAS radius_orchestrator, apply() pega por changePlan/suspend; un 4xx del orchestrator
+    // (OrchestratorRejectedError) caía en `throw err` (Express 4) → request colgada → proxy 504.
+    // Debe reenviar el upstreamStatus vía el errorHandler (fuente única).
+    it('orchestrator RECHAZA changePlan (422) → 422 ORCHESTRATOR_REJECTED, la request NO cuelga', async () => {
+      class RejectChangePlanOrchestrator extends InMemoryRadiusOrchestratorGateway {
+        override async changePlan(): Promise<void> {
+          throw new OrchestratorRejectedError(422, { detail: 'reduced plan not found' });
+        }
+      }
+      const fx = await buildApp({ orchestratorEnforcement: new RejectChangePlanOrchestrator() });
+      const s = await fx.pppoeRepo.upsertByUsername({
+        username: 'cli1', password: 'pw', profile: 'IP-Air', nasId: NAS_ID, contractId: 'c1', enforcedState: 'active',
+      });
+      const res = await asUser(request(fx.app).post(`/api/pppoe/${s.id}/enforce`).send({ action: 'reduce' }), fx.cutUserId);
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('ORCHESTRATOR_REJECTED');
     });
   });
 

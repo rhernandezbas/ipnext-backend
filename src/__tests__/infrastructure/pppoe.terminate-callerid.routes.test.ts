@@ -54,6 +54,7 @@ import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import type { OrchestratorSession } from '@domain/ports/RadiusOrchestratorGateway';
+import { OrchestratorRejectedError, OrchestratorUnreachableError } from '@domain/errors/pppoe';
 
 const NAS_RADIUS_ID = '3';  // radius_orchestrator (InMemoryNasRepository seed)
 const CONTRACT_ID   = 'contract-term';
@@ -82,7 +83,7 @@ interface Fixture {
   manageUserId: string;
 }
 
-async function buildApp(opts?: { sessionSeed?: OrchestratorSession[] }): Promise<Fixture> {
+async function buildApp(opts?: { sessionSeed?: OrchestratorSession[]; orchestrator?: InMemoryRadiusOrchestratorGateway }): Promise<Fixture> {
   const roleRepo     = new InMemoryRbacRoleRepository();
   const userRoleRepo = new InMemoryRbacUserRoleRepository();
   const permRepo     = new InMemoryRbacPermissionRepository();
@@ -131,7 +132,7 @@ async function buildApp(opts?: { sessionSeed?: OrchestratorSession[] }): Promise
   const orchestratorSeed = opts?.sessionSeed
     ? [{ username: 'term-user', sessions: opts.sessionSeed }]
     : [];
-  const orchestrator = new InMemoryRadiusOrchestratorGateway({ seed: orchestratorSeed });
+  const orchestrator = opts?.orchestrator ?? new InMemoryRadiusOrchestratorGateway({ seed: orchestratorSeed });
 
   const csRepo      = new InMemoryContractServiceRepository();
   const catalogRepo = new InMemoryServiceCatalogRepository();
@@ -237,6 +238,29 @@ describe('DELETE /api/pppoe/:id — terminate (pppoe-terminate-callerid)', () =>
 
     expect(res.status).toBe(404);
   });
+
+  // ── pppoe-update-504-handler: la baja HARD NO debe COLGAR cuando el orchestrator RECHAZA ──
+  // deleteUser puede rechazar con 4xx (≠404) — p.ej. 409. Caía en `throw err` (Express 4) →
+  // request colgada → proxy 504. Debe reenviar el upstreamStatus vía el errorHandler.
+  it('orchestrator RECHAZA deleteUser (409) → 409 ORCHESTRATOR_REJECTED, la request NO cuelga', async () => {
+    class RejectDeleteOrchestrator extends InMemoryRadiusOrchestratorGateway {
+      override async deleteUser(): Promise<void> {
+        throw new OrchestratorRejectedError(409, { detail: 'user has active sessions' });
+      }
+    }
+    const fx = await buildApp({ orchestrator: new RejectDeleteOrchestrator() });
+    const row = await fx.pppoeRepo.upsertByUsername({
+      username: 'term-user', password: 'pwd', nasId: NAS_RADIUS_ID, contractId: CONTRACT_ID, status: 'enabled',
+    });
+
+    const res = await asUser(
+      request(fx.app).delete(`/api/pppoe/${row.id}`).send({ reason: 'baja' }),
+      fx.manageUserId,
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ORCHESTRATOR_REJECTED');
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -293,5 +317,28 @@ describe('GET /api/pppoe/:id/caller-id (pppoe-terminate-callerid)', () => {
     );
 
     expect(res.status).toBe(404);
+  });
+
+  // ── pppoe-update-504-handler: el caller-id NO debe COLGAR si el orchestrator está caído ──
+  // listSessions puede tirar OrchestratorUnreachableError (red/timeout/5xx). El handler solo
+  // mapeaba NotFound y terminaba en `throw err` → request colgada → proxy 504. Debe dar 502.
+  it('orchestrator INALCANZABLE en listSessions → 502 ORCHESTRATOR_UNREACHABLE, la request NO cuelga', async () => {
+    class UnreachableSessionsOrchestrator extends InMemoryRadiusOrchestratorGateway {
+      override async listSessions(): Promise<never> {
+        throw new OrchestratorUnreachableError('10.75.0.20:8080');
+      }
+    }
+    const fx = await buildApp({ orchestrator: new UnreachableSessionsOrchestrator() });
+    const row = await fx.pppoeRepo.upsertByUsername({
+      username: 'term-user', password: 'pwd', nasId: NAS_RADIUS_ID, status: 'enabled',
+    });
+
+    const res = await asUser(
+      request(fx.app).get(`/api/pppoe/${row.id}/caller-id`),
+      fx.manageUserId,
+    );
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('ORCHESTRATOR_UNREACHABLE');
   });
 });

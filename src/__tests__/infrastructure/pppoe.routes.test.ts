@@ -53,6 +53,7 @@ import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-me
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+import { OrchestratorRejectedError, OrchestratorUnreachableError } from '@domain/errors/pppoe';
 
 // ── EchoAuthProvider — convierte el cookie value en { id } ──────────────────
 class EchoAuthProvider implements AuthProvider {
@@ -76,6 +77,9 @@ class EchoAuthProvider implements AuthProvider {
 // NAS seed: el InMemoryNasRepository tiene id='1' con ipAddress='192.168.1.1'
 const NAS_ID      = '1';
 const NAS_IP      = '192.168.1.1';
+// NAS '3' del InMemoryNasRepository es type 'radius_orchestrator' → el update pega por el
+// orchestrator (changeFramedIp), NO por el routerGw. Es el camino que colgaba en el 504 (JoseSutera2Ch).
+const RADIUS_NAS_ID = '3';
 const CONTRACT_ID = 'contract-1';
 
 interface Fixture {
@@ -92,7 +96,7 @@ type RadiusInventory = ConstructorParameters<typeof InMemoryRadiusOrchestratorGa
   ? O extends { usersInventory?: infer U } ? U : never
   : never;
 
-async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: RadiusInventory }): Promise<Fixture> {
+async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: RadiusInventory; orchestrator?: InMemoryRadiusOrchestratorGateway }): Promise<Fixture> {
   // RBAC plumbing
   const roleRepo     = new InMemoryRbacRoleRepository();
   const userRoleRepo = new InMemoryRbacUserRoleRepository();
@@ -158,7 +162,7 @@ async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: Rad
   app.use(express.json());
   const batchRepo = new InMemoryServiceCutBatchRepository();
   const lock = new InMemoryDistributedLock();
-  const orchestrator = new InMemoryRadiusOrchestratorGateway({ usersInventory: opts?.usersInventory });
+  const orchestrator = opts?.orchestrator ?? new InMemoryRadiusOrchestratorGateway({ usersInventory: opts?.usersInventory });
   const enforce = new EnforcePppoeService(pppoeRepo, new RouterOsEnforcementAdapter(routerGw, 'IP-REDUCCION'), nasRepo);
   const preview = new PreviewEnforcement(pppoeRepo);
   const bulk = new RunBulkEnforcement(pppoeRepo, enforce, batchRepo, { throttleMs: 0 });
@@ -506,6 +510,44 @@ describe('PATCH /api/pppoe/:id', () => {
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('VALIDATION_ERROR');
   });
+
+  // ── pppoe-update-504-handler: el camino radius_orchestrator NO debe COLGAR ──────
+  // Regresión del 504 en prod (JoseSutera2Ch): un error del orchestrator en el PATCH caía
+  // en `throw err` (Express 4 sin express-async-errors) → la request NUNCA respondía → el
+  // proxy cortaba ~60s → 504. Debe mapear a un status inmediato (patrón de create/move).
+  it('orchestrator RECHAZA la Framed-IP (409) al fijar IP fija → 409 ORCHESTRATOR_REJECTED, la request NO cuelga', async () => {
+    class RejectFramedIpOrchestrator extends InMemoryRadiusOrchestratorGateway {
+      override async changeFramedIp(): Promise<void> {
+        throw new OrchestratorRejectedError(409, { detail: 'FramedIpAlreadyAssigned' });
+      }
+    }
+    const fx2 = await buildApp({ orchestrator: new RejectFramedIpOrchestrator({}) });
+    const s = await seedService(fx2.pppoeRepo, { nasId: RADIUS_NAS_ID });
+
+    const res = await asUser(
+      request(fx2.app).patch(`/api/pppoe/${s.id}`).send({ remoteAddress: '100.64.67.13' }),
+      fx2.manageUserId,
+    );
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ORCHESTRATOR_REJECTED');
+  });
+
+  it('orchestrator INALCANZABLE al fijar IP fija → 502 ORCHESTRATOR_UNREACHABLE, la request NO cuelga', async () => {
+    class UnreachableOrchestrator extends InMemoryRadiusOrchestratorGateway {
+      override async changeFramedIp(): Promise<void> {
+        throw new OrchestratorUnreachableError('10.75.0.20:8080');
+      }
+    }
+    const fx2 = await buildApp({ orchestrator: new UnreachableOrchestrator({}) });
+    const s = await seedService(fx2.pppoeRepo, { nasId: RADIUS_NAS_ID });
+
+    const res = await asUser(
+      request(fx2.app).patch(`/api/pppoe/${s.id}`).send({ remoteAddress: '100.64.67.13' }),
+      fx2.manageUserId,
+    );
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('ORCHESTRATOR_UNREACHABLE');
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -695,6 +737,22 @@ describe('POST /api/nas/:id/ingest-pppoe (pppoe.manage)', () => {
     const res = await asUser(request(fx.app).post(`/api/nas/nas-99/ingest-pppoe`), fx.manageUserId);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('NAS_NOT_FOUND');
+  });
+
+  // ── pppoe-update-504-handler: el ingest NO debe COLGAR cuando el orchestrator RECHAZA ──
+  // Mismo bug latente que el PATCH: un OrchestratorRejectedError de listUsers (4xx) caía en
+  // `throw err` (Express 4 sin express-async-errors) → request colgada → proxy 504. Debe
+  // reenviar el upstreamStatus vía el errorHandler (fuente única) inmediatamente.
+  it('orchestrator RECHAZA listUsers (403) → 403 ORCHESTRATOR_REJECTED, la request NO cuelga', async () => {
+    class RejectListUsersOrchestrator extends InMemoryRadiusOrchestratorGateway {
+      override async listUsers(): Promise<never> {
+        throw new OrchestratorRejectedError(403, { detail: 'Forbidden' });
+      }
+    }
+    const fx = await buildApp({ orchestrator: new RejectListUsersOrchestrator({}) });
+    const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('ORCHESTRATOR_REJECTED');
   });
 });
 
