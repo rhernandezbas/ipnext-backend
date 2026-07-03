@@ -2,39 +2,43 @@
 
 > Cambio FE-only. TDD estricto (test primero, red → green). Sin migración, sin backend.
 > Gate de salida: suite FE verde + `tsc` limpio + review adversarial (1 revisor) CLEAN.
-> No hay push sin OK del usuario.
+> **✅ HECHO Y EN PROD (2026-07-03, FE `c4922712`, deploy 28655386931).**
 
 ## 1. Tests (primero — red)
 
-- [ ] 1.1 En `App.routing.test.tsx`: quitar los casos de `/admin/customers/search` (`[PAGE:CustomerSearch]`) y `/admin/customers/vouchers` (`[PAGE:CustomerVouchers]`) — tanto la lista de rutas montadas como los casos `shouldNotSee`.
-- [ ] 1.2 En `Sidebar.test.tsx`: afirmar que el submenú Clientes NO contiene "Búsqueda" ni "Vouchers", y que SÍ contiene "Clientes" (antes "Lista").
-- [ ] 1.3 En `SidebarVentasAccess.test.tsx` y `CollapsibleNavItem.test.tsx`: ajustar cualquier aserción que dependa de los labels "Búsqueda"/"Vouchers"/"Lista".
-- [ ] 1.4 Confirmar rojo con el código actual.
+- [x] 1.1 En `App.routing.test.tsx`: quitados los casos de `/admin/customers/search` (`[PAGE:CustomerSearch]`) y `/admin/customers/vouchers` (`[PAGE:CustomerVouchers]`) + los `vi.mock` de ambas páginas + los casos `shouldNotSee`.
+- [x] 1.2 En `Sidebar.test.tsx`: afirma que el submenú Clientes NO contiene "Búsqueda" ni "Vouchers", y SÍ contiene "Clientes" (antes "Lista").
+- [x] 1.3 En `SidebarVentasAccess.test.tsx` y `CollapsibleNavItem.test.tsx`: ajustadas las aserciones de labels ("Lista"→"Clientes"; fixture de colapso pasó de "Vouchers" a "Añadir"; quitadas Búsqueda/Vouchers).
+- [x] 1.4 Confirmado rojo con el código actual (3 files, 4 tests en rojo).
 
 ## 2. Sidebar + routing (green)
 
-- [ ] 2.1 `Sidebar.tsx`: quitar el `SubItem` de `Búsqueda` (`/admin/customers/search`) y el de `Vouchers` (`/admin/customers/vouchers`); cambiar el `label` de `/admin/customers/list` de "Lista" a "Clientes".
-- [ ] 2.2 `App.tsx`: quitar los `lazy` de `CustomerSearchPage` y `CustomerVouchersPage`; quitar los `<Route path="search">` y `<Route path="vouchers">`.
+- [x] 2.1 `Sidebar.tsx`: quitados los `SubItem` de `Búsqueda` y `Vouchers`; label de `/admin/customers/list` de "Lista" a "Clientes".
+- [x] 2.2 `App.tsx`: quitados los 2 `lazy` (`CustomerSearchPage`, `CustomerVouchersPage`) + los 2 `<Route>` (`search`, `vouchers`).
 
 ## 3. Borrado de páginas y código huérfano (green)
 
-- [ ] 3.1 Borrar `CustomerSearchPage.tsx` + `.module.css` + `__tests__/customers/CustomerSearchPage.test.tsx`.
-- [ ] 3.2 Borrar `CustomerVouchersPage.tsx` + `.module.css` + `__tests__/customers/CustomerVouchersPage.test.tsx`.
-- [ ] 3.3 Borrar el stack de vouchers huérfano: `types/voucher.ts`, `hooks/useCustomerVouchers.ts`, `api/voucher.api.ts`.
-- [ ] 3.4 Grep de cierre: `voucher`/`Voucher`, `CustomerSearchPage`, `CustomerVouchersPage` no aparecen en `src/` (fuera de esta carpeta openspec).
+- [x] 3.1 Borrado `CustomerSearchPage.tsx` + `.module.css` + `__tests__/customers/CustomerSearchPage.test.tsx`.
+- [x] 3.2 Borrado `CustomerVouchersPage.tsx` + `.module.css` + `__tests__/customers/CustomerVouchersPage.test.tsx`.
+- [x] 3.3 Borrado el stack de vouchers huérfano: `types/voucher.ts`, `hooks/useCustomerVouchers.ts`, `api/voucher.api.ts`.
+- [x] 3.4 Grep de cierre: sin rastros de `voucher`/`CustomerSearchPage`/`CustomerVouchersPage` en `src/` (salvo las aserciones negativas de `Sidebar.test.tsx`).
 
 ## 4. Gate de calidad
 
-- [ ] 4.1 Suite FE completa verde (corrida por el orquestador).
-- [ ] 4.2 `tsc`/typecheck limpio.
-- [ ] 4.3 Verificar que `useClientList` y `CustomersListPage` siguen intactos y funcionando.
+- [x] 4.1 Suite FE completa verde: **438/438 files, 4439 tests** (corrida por el orquestador).
+- [x] 4.2 `tsc --noEmit` limpio.
+- [x] 4.3 `useClientList` y `CustomersListPage` intactos (fuera del diff; su test pasa).
 
 ## 5. Review
 
-- [ ] 5.1 Review adversarial (1 revisor focalizado): imports huérfanos, `lazy` colgado, rutas rotas, tests con lo viejo, no-regresión de la Lista.
-- [ ] 5.2 Fix wave si el review no da CLEAN + re-review focalizada.
+- [x] 5.1 Review adversarial (1 revisor): **ISSUES FOUND (2), ambos LOW no bloqueantes** — (a) docs stale (`features.md`/`domain-glossary.md`/`overview.md` mencionaban Búsqueda/Vouchers/voucher.ts) → **FIXEADO**; (b) sin redirect para bookmarks viejos de `/search`·`/vouchers` (caen al catch-all `:id`) → **deuda documentada** (decisión de diseño #5: borrado completo, sin redirect, cero bookmarks externos conocidos).
+- [x] 5.2 Fix aplicado (docs) + colisión de link-name "Clientes" (breadcrumb vs sidebar) resuelta en `AdminLayout.test.tsx` con `within(breadcrumb)`. El review confirmó que es la única colisión.
 
 ## 6. Salida de fase
 
-- [ ] 6.1 Commit FE (conventional). Push con OK del usuario → deploy FE.
-- [ ] 6.2 Actualizar BACKLOG (card a ✅ EN PROD + PR/commit). `sdd-archive` del change si corresponde.
+- [x] 6.1 Commit FE `c4922712` (conventional). Push a `main` → deploy 28655386931.
+- [x] 6.2 BACKLOG actualizado (card → ✅ EN PROD). `tasks.md` cerrado.
+
+## Deuda LOW (no bloquea)
+
+- Sin redirect de compatibilidad para `/admin/customers/search` y `/admin/customers/vouchers`: hoy caen al catch-all `/admin/customers/:id` → `CustomerDetailPage` con id inexistente. Cero bookmarks externos conocidos (rutas internas del sidebar recién removidas). Si molesta, es un `<Navigate to="/admin/customers/list" replace />` de 2 líneas.
