@@ -118,8 +118,9 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
     };
     // enforcedState: solo se escribe si viene (en create cae al default 'active' del schema).
     if (data.enforcedState !== undefined) fields['enforcedState'] = data.enforcedState;
-    // pppoe-pool-ip: ipMode solo se escribe si viene (en create cae al default 'fixed' del schema).
-    // CRÍTICO: sin esto, la rama pool de CreatePppoeService no persistiría ipMode='pool' en prod.
+    // ipMode solo se escribe si viene (en create cae al default 'fixed' del schema).
+    // sqlippool-cleanup: el modo pool fue descartado — toda alta actual escribe 'fixed';
+    // el campo se conserva en el modelo/DTO (persistencia de la IP fija).
     if (data.ipMode !== undefined) fields['ipMode'] = data.ipMode;
     // pppoe-preprovision: idem — solo si viene (en create cae al default 'cgnat' del schema).
     if (data.ipTypePreference !== undefined) fields['ipTypePreference'] = data.ipTypePreference;
@@ -356,16 +357,6 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
 
   async setCallerId(id: string, callerId: string): Promise<void> {
     await model().update({ where: { id }, data: { callerId } });
-  }
-
-  async setIpMode(id: string, ipMode: 'pool' | 'fixed', remoteAddress: string | null): Promise<PppoeService | null> {
-    try {
-      const row = await model().update({ where: { id }, data: { ipMode, remoteAddress } });
-      return toEntity(row);
-    } catch (err: any) {
-      if (err?.code === 'P2025') return null; // fila inexistente → null; el resto PROPAGA
-      throw err;
-    }
   }
 
   /**

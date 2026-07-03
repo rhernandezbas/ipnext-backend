@@ -305,6 +305,45 @@ describe('POST /api/pppoe — CreatePppoeStandalone (Fase 2)', () => {
     expect(res.body.nasId).toBe('1');
   });
 
+  // sqlippool-cleanup D5.1: el modo pool fue descartado. El body ya NO declara `ipMode`
+  // en el schema (no es .strict() → zod STRIPEA el campo). Un cliente que aún mande
+  // ipMode:'pool' (el FE del tab lo hacía por default) NO debe recibir 422: se ignora
+  // y el alta cae siempre en 'fixed'. Cero dependencia de orden de deploy.
+  it("201 con ipMode:'pool' en el body → stripeado, crea ipMode='fixed' (NO 422)", async () => {
+    const fx = await buildApp();
+    const res = await asUser(
+      request(fx.app).post('/api/pppoe').send({
+        username: 'poolbody',
+        password: 'pass123',
+        plan: 'IP-10-5',
+        nasId: '1',
+        ipTypePreference: 'cgnat',
+        ipMode: 'pool', // campo desconocido para el schema → stripeado por zod
+      }),
+      fx.manageUserId,
+    );
+
+    expect(res.status).toBe(201);
+    expect(res.body.ipMode).toBe('fixed');
+  });
+
+  it("201 sin ipMode en el body → crea ipMode='fixed' (regresión)", async () => {
+    const fx = await buildApp();
+    const res = await asUser(
+      request(fx.app).post('/api/pppoe').send({
+        username: 'noipmode',
+        password: 'pass123',
+        plan: 'IP-10-5',
+        nasId: '1',
+        ipTypePreference: 'cgnat',
+      }),
+      fx.manageUserId,
+    );
+
+    expect(res.status).toBe(201);
+    expect(res.body.ipMode).toBe('fixed');
+  });
+
   it('201 con contractId → DTO con contractId', async () => {
     const fx = await buildApp();
     const res = await asUser(

@@ -11,7 +11,6 @@ import {
   ListPostauthFilters,
   PostauthPage,
   AuthEventRow,
-  RadiusIpPool,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -107,10 +106,6 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   private readonly accountingEvents: AccountingEventRow[];
   /** Eventos de auth (postauth) que devuelve listPostauth. Sembrable para tests del scheduler. */
   private readonly authEvents: AuthEventRow[];
-  /** pppoe-pool-ip: pools del radippool que devuelve listPools (GET /pools). Sembrable. */
-  private readonly pools: RadiusIpPool[];
-  /** pppoe-pool-ip: si true, listPools lanza OrchestratorUnreachableError (simula orchestrator caído). */
-  private readonly poolsUnreachable: boolean;
 
   public readonly calls: UserCallLog[] = [];
   public readonly planCalls: PlanCallLog[] = [];
@@ -149,10 +144,6 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
      * Default: [].
      */
     authEvents?: AuthEventRow[];
-    /** pppoe-pool-ip: pools del radippool que devolverá listPools (GET /pools). Default: []. */
-    pools?: RadiusIpPool[];
-    /** pppoe-pool-ip: si true, listPools lanza OrchestratorUnreachableError. Default: false. */
-    poolsUnreachable?: boolean;
   }) {
     this.unreachable = new Set(opts?.unreachable ?? []);
     this.failForPlanCode = new Set(opts?.failForPlanCode ?? []);
@@ -165,8 +156,6 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     this.globalSessionsUnreachable = opts?.globalSessionsUnreachable ?? false;
     this.accountingEvents = [...(opts?.accountingEvents ?? [])];
     this.authEvents = [...(opts?.authEvents ?? [])];
-    this.pools = [...(opts?.pools ?? [])];
-    this.poolsUnreachable = opts?.poolsUnreachable ?? false;
     for (const u of opts?.seed ?? []) {
       this.state.set(u.username, { plan: u.plan ?? '', suspended: u.suspended ?? false });
       if (u.sessions) this.sessions.set(u.username, u.sessions);
@@ -304,11 +293,6 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   async listAssignedIps(): Promise<string[]> {
     if (this.assignedIpsUnreachable) throw new OrchestratorUnreachableError('in-memory');
     return [...this.assignedIps];
-  }
-
-  async listPools(): Promise<RadiusIpPool[]> {
-    if (this.poolsUnreachable) throw new OrchestratorUnreachableError('in-memory');
-    return this.pools.map(p => ({ ...p }));
   }
 
   async listActiveSessions(offset = 0, limit = 10000): Promise<OrchestratorSession[]> {

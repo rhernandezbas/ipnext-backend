@@ -179,11 +179,6 @@ export interface PppoeServiceRepository {
    */
   deleteById(id: string): Promise<void>;
   /**
-   * pppoe-pool-ip: actualiza SOLO `ipMode` y `remoteAddress` de un PPPoE (pin/unpin de IP fija).
-   * NO toca password/profile/status. Devuelve la entidad actualizada, o null si no existe.
-   */
-  setIpMode(id: string, ipMode: 'pool' | 'fixed', remoteAddress: string | null): Promise<PppoeService | null>;
-  /**
    * pppoe-move-nas fix wave 1 (ajuste 3 / S1.7 — anti-resurrección): actualiza SOLO
    * `nasId` + `remoteAddress` + `ipMode` de un PPPoE, POR ID y SIN crear. A diferencia de
    * `upsertByUsername`, si la fila fue borrada por un terminate/rename concurrente devuelve

@@ -347,14 +347,6 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
       .map(s => ({ ...s }));
   }
 
-  async setIpMode(id: string, ipMode: 'pool' | 'fixed', remoteAddress: string | null): Promise<PppoeService | null> {
-    const found = this.store.find(s => s.id === id);
-    if (!found) return null;
-    found.ipMode = ipMode;
-    found.remoteAddress = remoteAddress;
-    return { ...found };
-  }
-
   /**
    * pppoe-move-nas (ajuste 3 — anti-resurrección): update NO-creador por id. Fila ausente → null.
    * pppoe-preprovision D7.3: `expectedNasId` PROVISTO ⇒ CAS por nasId actual (espejo del

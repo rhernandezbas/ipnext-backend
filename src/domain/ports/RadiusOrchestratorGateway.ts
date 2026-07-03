@@ -50,21 +50,6 @@ export interface RadiusUserInventoryItem {
   framedIp: string | null;
 }
 
-/**
- * pppoe-pool-ip (Decisión 3) — Un pool de IPs del FreeRADIUS (`radippool`) tal como lo
- * expone el orchestrator en `GET /pools`. Es la fuente del PRE-CHECK al marcar un NAS en
- * modo pool: si el pool no existe o no tiene IPs libres, marcar pool-mode dejaría a las
- * altas nuevas sin IP. `free` es la cantidad de IPs sin lease activo.
- */
-export interface RadiusIpPool {
-  /** `pool_name` del `radippool`. Debe coincidir con `NasServer.poolName`. */
-  name: string;
-  /** Total de IPs cargadas en el pool. */
-  total: number;
-  /** IPs libres (sin lease activo) — el pre-check exige `free > 0`. */
-  free: number;
-}
-
 /** Alta de un usuario en el RADIUS. Corresponde a `POST /users` del orchestrator. */
 export interface CreateRadiusUserInput {
   username: string;
@@ -258,14 +243,6 @@ export interface RadiusOrchestratorGateway {
    * tomadas: el allocator excluye ESTA lista al buscar un IP libre (evita el 409 al crear).
    */
   listAssignedIps(): Promise<string[]>;
-
-  /**
-   * pppoe-pool-ip (Decisión 3) — Lista los pools de IP del FreeRADIUS (`radippool`) con su
-   * conteo de IPs totales/libres. Corresponde a `GET /pools` del radius-orchestrator.
-   * Usado por `SetNasPoolMode` como pre-check: marcar un NAS en modo pool exige que el pool
-   * exista y tenga IPs libres. Fallo de red/5xx → `OrchestratorUnreachableError`.
-   */
-  listPools(): Promise<RadiusIpPool[]>;
 
   /**
    * Lista TODAS las sesiones PPPoE activas del RADIUS (todas las cuentas en el NAS RADIUS).
