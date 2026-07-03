@@ -174,8 +174,6 @@ async function buildApp(): Promise<Fixture> {
     listAllPppoeServices,
     undefined, // listInternetServiceHistory
     undefined, // listInternetActivationOperators
-    undefined, // pinPppoeIp
-    undefined, // unpinPppoeIp
     undefined, // createPppoeStandalone
     undefined, // renamePppoeUsername
     undefined, // movePppoeToNas

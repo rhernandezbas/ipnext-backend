@@ -143,22 +143,6 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
     expect(appSrc).toMatch(/new GetPppoeCallerId\(/);
   });
 
-  // ── pppoe-pool-ip (Fase 1) — anti "feature muerta": pin/unpin/pool-mode wired ──
-  it('(l) PinPppoeIp wired en createPppoeRouter (pppoe-pool-ip)', () => {
-    expect(appSrc).toMatch(/new PinPppoeIp\(/);
-  });
-
-  it('(l) UnpinPppoeIp wired en createPppoeRouter (pppoe-pool-ip)', () => {
-    expect(appSrc).toMatch(/new UnpinPppoeIp\(/);
-  });
-
-  it('(l) SetNasPoolMode wired y pasado a createNasRouter (pppoe-pool-ip)', () => {
-    // Se construye con el orchestrator (pre-check del radippool)...
-    expect(appSrc).toMatch(/const setNasPoolMode = new SetNasPoolMode\(/);
-    // ...Y se inyecta en createNasRouter (si no se pasa, la ruta /pool-mode queda muerta).
-    expect(appSrc).toMatch(/createNasRouter\([\s\S]*setNasPoolMode/);
-  });
-
   // ── fix-wave-2 (CRITICAL): RenamePppoeUsername usa radiusEnforcement, NO enforcementGw ──
   it('(m) RenamePppoeUsername wired con nasRepoForPppoe y radiusEnforcement (fix-wave-2 CRITICAL)', () => {
     // El rename es SOLO-RADIUS: el enforcement debe ir por OrchestratorEnforcementAdapter

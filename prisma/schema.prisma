@@ -1754,9 +1754,6 @@ model NasServer {
   lastSeen     DateTime?
   clientCount  Int       @default(0)
   description  String?
-  // pppoe-pool-ip: nombre del pool de FreeRADIUS (radippool) para este NAS. No nulo ⟺ NAS en modo pool
-  // (las altas nuevas sin IP fija usan ipMode='pool'). Nulo ⟺ comportamiento legacy (el caller pre-elige IP).
-  poolName     String?
   createdAt    DateTime  @default(now())
   pppoeServices PppoeService[]
   radiusEvents  RadiusEvent[]

@@ -353,7 +353,8 @@ export const CreatePppoeStandaloneBodySchema = z.object({
   /** pppoe-preprovision (S1.2/S1.4): OBLIGATORIO en toda creación ('cgnat'|'public') — 422 si falta/inválido. */
   ipTypePreference: z.enum(['cgnat', 'public']),
   framedIp:    z.string().nullable().optional(),
-  ipMode:      z.enum(['fixed', 'pool']).optional(),
+  /** sqlippool-cleanup: el modo pool fue descartado — solo 'fixed' (default). Aceptado por back-compat del wire. */
+  ipMode:      z.enum(['fixed']).optional(),
   contractId:  z.string().min(1).optional(),
 }).refine(
   // pppoe-preprovision D6.6: espejo del refine de CreatePppoeBodySchema — framedIp SIN nasId

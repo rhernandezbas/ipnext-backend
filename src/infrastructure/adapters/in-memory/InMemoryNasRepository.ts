@@ -49,8 +49,6 @@ export class InMemoryNasRepository implements NasRepository {
       lastSeen: '2026-04-25T12:00:00Z',
       clientCount: 45,
       description: 'MikroTik sucursal centro',
-      // pppoe-pool-ip: NAS '3' en modo pool (radius_orchestrator) para los tests de pool/pin/unpin.
-      poolName: 'asur-cgnat',
     },
   ];
 

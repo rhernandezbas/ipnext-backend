@@ -14,8 +14,6 @@ import { UpdatePppoeService } from '@application/use-cases/UpdatePppoeService';
 import { DeactivatePppoeService } from '@application/use-cases/DeactivatePppoeService';
 import { TerminatePppoeService } from '@application/use-cases/TerminatePppoeService';
 import { RenamePppoeUsername } from '@application/use-cases/RenamePppoeUsername';
-import { PinPppoeIp } from '@application/use-cases/PinPppoeIp';
-import { UnpinPppoeIp } from '@application/use-cases/UnpinPppoeIp';
 import { PreviewEnforcement } from '@application/use-cases/PreviewEnforcement';
 import { RunBulkEnforcement } from '@application/use-cases/RunBulkEnforcement';
 import { BulkChangePppoePlan } from '@application/use-cases/BulkChangePppoePlan';
@@ -111,18 +109,6 @@ describe('Barrido nasId-null — pendiente NO operable (REQ-PRE-4)', () => {
     await expect(uc.execute({ id: s.id, newUsername: 'otro' }))
       .rejects.toBeInstanceOf(PppoePendingInstallError);
     expect(orchestrator.calls).toHaveLength(0);
-  });
-
-  it('pin-ip / unpin-ip de un pendiente → PppoePendingInstallError', async () => {
-    const { repo, nasRepo, orchestrator } = makeBase();
-    const pin = new PinPppoeIp(repo, nasRepo, orchestrator);
-    const unpin = new UnpinPppoeIp(repo, nasRepo, orchestrator);
-    const s = await seedPending(repo);
-
-    await expect(pin.execute({ pppoeId: s.id, ip: '100.64.43.9' }))
-      .rejects.toBeInstanceOf(PppoePendingInstallError);
-    await expect(unpin.execute({ pppoeId: s.id }))
-      .rejects.toBeInstanceOf(PppoePendingInstallError);
   });
 
   it('TERMINATE de un pendiente SÍ funciona: baja del RADIUS central + fila borrada (escape de limpieza)', async () => {

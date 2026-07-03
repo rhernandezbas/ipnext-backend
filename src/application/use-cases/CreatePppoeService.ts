@@ -3,7 +3,7 @@ import { PppoeServiceRepository, PppoeServiceUpsert } from '@domain/ports/PppoeS
 import { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
 import { RadiusOrchestratorGateway } from '@domain/ports/RadiusOrchestratorGateway';
-import { NasNotFoundError, PppoeUsernameTakenError, PppoeProfileRequiredError, PppoeContractAlreadyHasServiceError, PppoePublicIpPoolModeError } from '@domain/errors/pppoe';
+import { NasNotFoundError, PppoeUsernameTakenError, PppoeProfileRequiredError, PppoeContractAlreadyHasServiceError } from '@domain/errors/pppoe';
 import { routesViaOrchestrator } from '@domain/entities/nas';
 import type { IpKind } from '@domain/entities/network';
 import { EnsureInternetContractService } from './EnsureInternetContractService';
@@ -46,10 +46,10 @@ export interface CreatePppoeServiceInput {
  * FindFreeIp (no hay pool sin NAS). El servicio nace `enabled`; "pendiente de instalación" es la
  * DERIVACIÓN `nasId === null`, no un status nuevo.
  *
- * pppoe-preprovision (S1.4): con NAS radius SIN pool-mode (poolName null) y SIN remoteAddress
- * pedida, la IP se asigna server-side con `FindFreeIp(nas, ipTypePreference)` (antes quedaba
- * 'fixed' con framedIp null — estado cojo). El flujo con remoteAddress explícita y la rama
- * pool-mode quedan intactos.
+ * pppoe-preprovision (S1.4): con NAS radius y SIN remoteAddress pedida, la IP se asigna
+ * server-side con `FindFreeIp(nas, ipTypePreference)` (antes quedaba 'fixed' con framedIp null
+ * — estado cojo). El flujo con remoteAddress explícita queda intacto. sqlippool-cleanup: el
+ * modo pool fue descartado; toda alta radius es ipMode='fixed'.
  *
  * Guard #4 (pppoe-contract-integrity): cuando `contractId != null`, antes de tocar la DB,
  * verifica que el contrato no tenga ya un PPPoE 'enabled' → PppoeContractAlreadyHasServiceError.
@@ -123,19 +123,6 @@ export class CreatePppoeService {
     let remoteAddress = input.remoteAddress ?? null;
     const isRadius = routesViaOrchestrator(nas.type);
 
-    // pppoe-pool-ip (Decisión 4): NAS RADIUS en modo pool (poolName != null) Y sin IP fija pedida
-    // → ipMode='pool': NO se pre-elige IP (FreeRADIUS la asigna del pool en el auth), framedIp=null.
-    // NAS legacy o IP fija pedida → ipMode='fixed', flujo actual intacto (framedIp=remoteAddress).
-    const ipMode: 'pool' | 'fixed' =
-      isRadius && nas.poolName != null && remoteAddress == null ? 'pool' : 'fixed';
-
-    // 2a-bis. pppoe-preprovision (D6.8): en modo POOL la IP la asigna el sqlippool del NAS
-    //     (CGNAT) — un alta 'public' MENTIRÍA (persistiría la preferencia sin cumplirla).
-    //     Error tipado ANTES de tocar DB/RADIUS. Con IP pública EXPLÍCITA (ipMode fixed) pasa.
-    if (ipMode === 'pool' && ipTypePreference === 'public') {
-      throw new PppoePublicIpPoolModeError(input.username, nas.id);
-    }
-
     // 2b. Un usuario RADIUS NECESITA su grupo/plan (radusergroup): sin `profile` no hay alta.
     //     Validar ANTES de tocar la DB → no dejamos filas `pending` huérfanas por un input inválido.
     if (isRadius && !profile) throw new PppoeProfileRequiredError(input.username);
@@ -143,24 +130,24 @@ export class CreatePppoeService {
     // 2c. Guard #4: si el contrato tiene ya un PPPoE enabled, rechazar ANTES de tocar la DB.
     await this.guardContractFree(input.contractId ?? null);
 
-    // 2d. pppoe-preprovision (S1.4): NAS radius SIN pool-mode y SIN IP pedida → la IP se asigna
-    //     server-side del pool del TIPO elegido (la preferencia manda el pool). Falla del
-    //     allocator (NO_POOL_FOR_NAS_TYPE / NO_FREE_IP) → propaga ANTES de tocar DB/RADIUS.
-    if (isRadius && ipMode === 'fixed' && remoteAddress == null && this.findFreeIp) {
+    // 2d. pppoe-preprovision (S1.4): NAS radius SIN IP pedida → la IP se asigna server-side del
+    //     pool del TIPO elegido (la preferencia manda el pool). Falla del allocator
+    //     (NO_POOL_FOR_NAS_TYPE / NO_FREE_IP) → propaga ANTES de tocar DB/RADIUS.
+    //     sqlippool-cleanup: toda alta radius es ipMode='fixed' (el modo pool fue descartado).
+    if (isRadius && remoteAddress == null && this.findFreeIp) {
       remoteAddress = await this.findFreeIp.execute({ nasId: nas.id, type: ipTypePreference });
     }
 
-    const framedIp = ipMode === 'pool' ? null : remoteAddress;
-    const persistedRemoteAddress = ipMode === 'pool' ? null : remoteAddress;
+    const framedIp = remoteAddress;
 
     const base: PppoeServiceUpsert = {
       username: input.username,
       password: input.password,
       profile,
-      remoteAddress: persistedRemoteAddress,
+      remoteAddress,
       nasId: input.nasId,
       contractId: input.contractId ?? null,
-      ipMode,
+      ipMode: 'fixed',
       ipTypePreference,
     };
 

@@ -215,24 +215,6 @@ describe('CreatePppoeService — ipTypePreference en el flujo CON NAS (S1.4 / RE
     expect(s.ipTypePreference).toBe('cgnat');
   });
 
-  it('S1.4 regresión: NAS pool-mode (poolName) sin remoteAddress → rama pool intacta (framedIp null, sin FindFreeIp)', async () => {
-    const fx = await buildFixture();
-
-    // NAS '3' del seed: radius_orchestrator CON poolName ('asur-cgnat').
-    const s = await fx.uc.execute({
-      contractId: 'C1',
-      username: 'pooluser',
-      password: 'p',
-      profile: 'PLAN-10M',
-      nasId: '3',
-      ipTypePreference: 'cgnat',
-    });
-
-    expect(s.ipMode).toBe('pool');
-    expect(s.remoteAddress).toBeNull();
-    expect(fx.orchestrator.createdUser('pooluser')!.framedIp).toBeNull();
-  });
-
   it("S1.4: preferencia 'public' en NAS sin pool público → NoPoolForNasTypeError ANTES de tocar el RADIUS", async () => {
     const fx = await buildFixture();
     // NAS radius sin pools públicos: creo otro NAS sin seeds de pool public.
@@ -262,12 +244,14 @@ describe('CreatePppoeService — ipTypePreference en el flujo CON NAS (S1.4 / RE
   it("S2.2: sin ipTypePreference en el input (caller legacy) → default 'cgnat' persistido", async () => {
     const fx = await buildFixture();
 
+    // sqlippool-cleanup: NAS radius sin IP explícita → FindFreeIp del pool del tipo (default cgnat).
+    // Antes usaba NAS '3' (pool-mode), que ya no existe; el nasSinPool tiene el pool cgnat seedeado.
     const s = await fx.uc.execute({
       contractId: 'C1',
       username: 'legacy-caller',
       password: 'p',
       profile: 'IP-Air-30-10',
-      nasId: '3',
+      nasId: fx.nasSinPool.id,
     });
 
     expect(s.ipTypePreference).toBe('cgnat');

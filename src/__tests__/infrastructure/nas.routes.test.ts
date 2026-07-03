@@ -324,3 +324,22 @@ describe('nas.routes — live counters HTTP seam', () => {
     expect(legacyNas.displayType).toBe('mikrotik_api');
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// sqlippool-cleanup (REQ-DEL-1/2) — ruta pool-mode eliminada + poolName fuera del DTO
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('nas.routes — sqlippool-cleanup (REQ-DEL-1/2)', () => {
+  it('S1.2: POST /api/nas-servers/:id/pool-mode → 404 (ruta inexistente)', async () => {
+    const { app } = await buildApp();
+    const res = await request(app).post('/api/nas-servers/1/pool-mode').send({ poolName: 'asur-cgnat' });
+    expect(res.status).toBe(404);
+  });
+
+  it('S2.1: GET /api/nas-servers → ningún item expone poolName', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/nas-servers'), noPermUserId);
+    expect(res.status).toBe(200);
+    expect(res.body.every((n: Record<string, unknown>) => !('poolName' in n))).toBe(true);
+  });
+});

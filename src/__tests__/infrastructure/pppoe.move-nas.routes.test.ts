@@ -275,8 +275,6 @@ async function buildApp(opts?: {
     undefined, // listAllPppoeServices
     undefined, // listInternetServiceHistory
     undefined, // listInternetActivationOperators
-    undefined, // pinPppoeIp
-    undefined, // unpinPppoeIp
     undefined, // createPppoeStandalone
     undefined, // renamePppoeUsername
     movePppoeToNas,

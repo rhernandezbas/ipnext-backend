@@ -134,23 +134,6 @@ describe('CreatePppoeStandalone — ipTypePreference con NAS (S1.4 / REQ-PRE-2)'
     expect(fx.orchestrator.createdUser('standalone-alloc')!.framedIp).toBe('100.64.43.3');
   });
 
-  it('regresión: NAS pool-mode (poolName) sin framedIp → rama pool intacta (framedIp null, ipMode pool)', async () => {
-    const fx = await buildFixture();
-
-    // NAS '3' del seed: radius_orchestrator CON poolName.
-    const s = await fx.useCase.execute({
-      username: 'standalone-pool',
-      password: 'p',
-      plan: 'IP-10-5',
-      nasId: '3',
-      ipTypePreference: 'cgnat',
-    });
-
-    expect(s.ipMode).toBe('pool');
-    expect(s.remoteAddress).toBeNull();
-    expect(fx.orchestrator.createdUser('standalone-pool')!.framedIp).toBeNull();
-  });
-
   it('framedIp explícito sigue intacto y la preferencia se persiste', async () => {
     const fx = await buildFixture();
 

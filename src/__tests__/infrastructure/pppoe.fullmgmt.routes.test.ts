@@ -180,8 +180,6 @@ async function buildApp(opts?: { unreachableRouterIps?: string[] }): Promise<Fix
     new ListAllPppoeServices(pppoeRepo, eventRepo, catalogRepo, nasRepo),
     undefined,
     undefined,
-    undefined,
-    undefined,
     createPppoeStandalone,
     renamePppoeUsername,
   ));
@@ -524,5 +522,23 @@ describe('POST /api/pppoe/:id/rename — RenamePppoeUsername (Fase 3)', () => {
     // Si hubiera shadowing devolvería algo diferente. Esperamos que el rename funcione.
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// sqlippool-cleanup (REQ-DEL-1) — las rutas pin-ip/unpin-ip fueron REMOVIDAS
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('sqlippool-cleanup — rutas pin/unpin eliminadas (REQ-DEL-1)', () => {
+  it('S1.1: POST /api/pppoe/:id/pin-ip → 404 (ruta inexistente, no 401/403/otro handler)', async () => {
+    const fx = await buildApp();
+    const res = await request(fx.app).post('/api/pppoe/whatever/pin-ip').send({ ip: '100.64.10.10' });
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /api/pppoe/:id/unpin-ip → 404 (ruta inexistente)', async () => {
+    const fx = await buildApp();
+    const res = await request(fx.app).post('/api/pppoe/whatever/unpin-ip').send({});
+    expect(res.status).toBe(404);
   });
 });

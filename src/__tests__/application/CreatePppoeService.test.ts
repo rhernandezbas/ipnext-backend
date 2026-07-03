@@ -116,8 +116,8 @@ describe('CreatePppoeService', () => {
   });
 });
 
-// ── pppoe-pool-ip Fase 1: ipMode (rama pool del alta, Decisión 4) ─────────────
-describe('CreatePppoeService — ipMode (pppoe-pool-ip)', () => {
+// ── sqlippool-cleanup: toda creación persiste ipMode='fixed' (el modo pool fue descartado) ──
+describe('CreatePppoeService — ipMode siempre fixed (REQ-DEL-3)', () => {
   let repo: InMemoryPppoeServiceRepository;
   let router: InMemoryRouterGateway;
   let nasRepo: InMemoryNasRepository;
@@ -133,22 +133,7 @@ describe('CreatePppoeService — ipMode (pppoe-pool-ip)', () => {
     uc = new CreatePppoeService(repo, router, nasRepo, orchestrator, ensure);
   });
 
-  it('NAS pool-mode (poolName) + sin remoteAddress: ipMode=pool, createUser con framedIp=null, NO persiste IP', async () => {
-    // NAS '3' es radius_orchestrator con poolName en el seed.
-    const s = await uc.execute({
-      contractId: 'C1',
-      username: 'pooluser',
-      password: 'p',
-      profile: 'PLAN-10M',
-      nasId: '3',
-      // sin remoteAddress
-    });
-    expect(s.ipMode).toBe('pool');
-    expect(s.remoteAddress).toBeNull();
-    expect(orchestrator.createdUser('pooluser')!.framedIp).toBeNull();
-  });
-
-  it('NAS pool-mode + remoteAddress explícito (IP fija pedida): ipMode=fixed, framedIp=la IP', async () => {
+  it('S3.1: NAS radius + remoteAddress explícito → ipMode=fixed, framedIp=la IP', async () => {
     const s = await uc.execute({
       contractId: 'C1',
       username: 'fixeduser',
@@ -162,8 +147,7 @@ describe('CreatePppoeService — ipMode (pppoe-pool-ip)', () => {
     expect(orchestrator.createdUser('fixeduser')!.framedIp).toBe('100.64.10.5');
   });
 
-  it('NAS legacy (mikrotik_api, sin poolName): ipMode=fixed (alta fija intacta)', async () => {
-    // NAS '1' es mikrotik_api + sin poolName → flujo actual.
+  it('S3.1: NAS legacy (mikrotik_api) → ipMode=fixed (alta fija intacta)', async () => {
     const s = await uc.execute({
       contractId: 'C1',
       username: 'mkuser',
@@ -172,5 +156,21 @@ describe('CreatePppoeService — ipMode (pppoe-pool-ip)', () => {
       nasId: '1',
     });
     expect(s.ipMode).toBe('fixed');
+  });
+
+  it("S3.3: crear con ipTypePreference='public' en un NAS radius NO tira PPPOE_PUBLIC_IP_POOL_MODE (guard removido) → ipMode=fixed", async () => {
+    // Sin findFreeIp wired la IP queda null (framedIp null), pero el alta NO se rechaza:
+    // el guard PppoePublicIpPoolModeError se fue con el modo pool descartado.
+    const s = await uc.execute({
+      contractId: 'C1',
+      username: 'pubuser',
+      password: 'p',
+      profile: 'IP-PUB-50',
+      nasId: '3',
+      ipTypePreference: 'public',
+    });
+    expect(s.ipMode).toBe('fixed');
+    expect(s.ipTypePreference).toBe('public');
+    expect(orchestrator.createdUser('pubuser')).toBeDefined();
   });
 });

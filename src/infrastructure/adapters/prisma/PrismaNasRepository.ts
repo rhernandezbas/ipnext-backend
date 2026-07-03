@@ -19,7 +19,6 @@ function toNasServer(row: any): NasServer {
       : null,
     clientCount: row.clientCount,
     description: row.description ?? null,
-    poolName: row.poolName ?? null,
   };
 }
 
@@ -68,10 +67,6 @@ export class PrismaNasRepository implements NasRepository {
         lastSeen: data.lastSeen ? new Date(data.lastSeen) : null,
         clientCount: data.clientCount ?? 0,
         description: data.description ?? null,
-        // pppoe-pool-ip: el client Prisma local puede estar stale (poolName recién agregado al schema).
-        // Igual gotcha que `(prisma as any).pppoeService`: el spread `as any` evita el error de tipo;
-        // en build el Dockerfile corre `prisma generate` y tipa bien. WORKFLOW-MULTI-REPO.
-        ...({ poolName: data.poolName ?? null } as any),
       },
     });
     return toNasServer(row);
@@ -96,8 +91,6 @@ export class PrismaNasRepository implements NasRepository {
           }),
           ...(data.clientCount !== undefined && { clientCount: data.clientCount }),
           ...(data.description !== undefined && { description: data.description }),
-          // pppoe-pool-ip: spread `as any` por el client stale (ver createNasServer).
-          ...(data.poolName !== undefined && ({ poolName: data.poolName } as any)),
         },
       });
       return toNasServer(row);

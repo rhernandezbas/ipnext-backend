@@ -37,7 +37,7 @@ import type { PppoeRouterGateway } from '@domain/ports/PppoeRouterGateway';
 import type { PppoeService } from '@domain/entities/pppoeService';
 import type { IpKind } from '@domain/entities/network';
 import { routesViaOrchestrator } from '@domain/entities/nas';
-import { PppoeUsernameTakenError, NasNotFoundError, PppoePublicIpPoolModeError } from '@domain/errors/pppoe';
+import { PppoeUsernameTakenError, NasNotFoundError } from '@domain/errors/pppoe';
 import { toNasTarget } from './nasTarget';
 import type { CreatePppoeService } from './CreatePppoeService';
 import type { FindFreeIp } from './FindFreeIp';
@@ -49,7 +49,8 @@ export interface CreatePppoeStandaloneInput {
   /** pppoe-preprovision: ausente/null = pre-provisión "pendiente de instalación". */
   nasId?:     string | null;
   framedIp?:  string | null;
-  ipMode?:    'fixed' | 'pool';
+  /** sqlippool-cleanup: el modo pool fue descartado — toda alta es 'fixed'. Se acepta por back-compat de callers/fixtures. */
+  ipMode?:    'fixed';
   contractId?: string;
   /** pppoe-preprovision (D2): tipo de IP elegido. El wire lo exige; default 'cgnat' para callers legacy. */
   ipTypePreference?: IpKind;
@@ -87,7 +88,7 @@ export class CreatePppoeStandalone {
     input: CreatePppoeStandaloneInput,
     actor?: { actorId?: string | null; actorName?: string },
   ): Promise<PppoeService> {
-    const { username, password, plan, framedIp, ipMode, contractId } = input;
+    const { username, password, plan, framedIp, contractId } = input;
     const nasId = input.nasId ?? null;
     const ipTypePreference: IpKind = input.ipTypePreference ?? 'cgnat';
 
@@ -146,26 +147,10 @@ export class CreatePppoeStandalone {
     let resolvedFramedIp = framedIp ?? null;
 
     if (isRadius) {
-      // pppoe-preprovision (D6.8): sin IP fija pedida y con asignación por POOL (ipMode 'pool'
-      // explícito O NAS con poolName), el sqlippool asigna CGNAT — un alta 'public' MENTIRÍA.
-      // Error tipado ANTES de tocar el plano de control (espejo del guard de CreatePppoeService).
-      if (
-        ipTypePreference === 'public' &&
-        resolvedFramedIp == null &&
-        (ipMode === 'pool' || nas.poolName != null)
-      ) {
-        throw new PppoePublicIpPoolModeError(username, nas.id);
-      }
-
-      // pppoe-preprovision (S1.4): sin framedIp pedido, sin pool-mode (poolName null), sin
-      // ipMode 'pool' explícito y con el allocator inyectado → IP fija server-side del pool
-      // del tipo elegido. La rama pool-mode y el framedIp explícito quedan intactos.
-      if (
-        resolvedFramedIp == null &&
-        ipMode !== 'pool' &&
-        nas.poolName == null &&
-        this.findFreeIp
-      ) {
+      // pppoe-preprovision (S1.4): sin framedIp pedido y con el allocator inyectado → IP fija
+      // server-side del pool del tipo elegido. El framedIp explícito queda intacto.
+      // sqlippool-cleanup: toda alta radius es ipMode='fixed' (el modo pool fue descartado).
+      if (resolvedFramedIp == null && this.findFreeIp) {
         resolvedFramedIp = await this.findFreeIp.execute({ nasId: nas.id, type: ipTypePreference });
       }
 
@@ -194,14 +179,13 @@ export class CreatePppoeStandalone {
     // 4. W3 — Persistir espejo con createByUsername (strict create, anti-TOCTOU).
     //    Si entre el check (paso 1) y acá otro request insertó el mismo username,
     //    createByUsername lanza PppoeUsernameTakenError en vez de pisar silenciosamente.
-    const resolvedIpMode = ipMode ?? (resolvedFramedIp ? 'fixed' : 'pool');
-
+    //    sqlippool-cleanup: toda alta es ipMode='fixed' (el modo pool fue descartado).
     return this.pppoeRepo.createByUsername({
       username,
       password,
       profile:       plan,
       remoteAddress: resolvedFramedIp,
-      ipMode:        resolvedIpMode,
+      ipMode:        'fixed',
       nasId,
       contractId:    null,
       ipTypePreference,
