@@ -11,7 +11,7 @@ import { GetRecaptureLead } from '../../../application/use-cases/recapture/GetRe
 import { UpdateRecaptureLeadStatus } from '../../../application/use-cases/recapture/UpdateRecaptureLeadStatus';
 import { AddRecaptureContact } from '../../../application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '../../../application/use-cases/recapture/IngestChurnedClients';
-import type { CustomerRepository } from '../../../domain/ports/CustomerRepository';
+import type { CustomerRepository, ActiveClientContact } from '../../../domain/ports/CustomerRepository';
 import type { RecaptureLead } from '../../../domain/entities/recaptureLead';
 
 // ─── Shared setup ────────────────────────────────────────────────────────────
@@ -48,6 +48,25 @@ function seedTech(
   });
 }
 
+/**
+ * recapture-active-client-match — jest-stub `CustomerRepository` for the
+ * `listActiveContacts()` dependency of `ListRecaptureLeads`/`GetRecaptureLead`.
+ * Established convention (Batch 1 / IngestChurnedClients precedent): no new
+ * InMemory adapter class, just a narrow `jest.fn()` cast through the port.
+ */
+function makeActiveContactsRepo(contacts: ActiveClientContact[] = []): CustomerRepository {
+  return {
+    listActiveContacts: jest.fn().mockResolvedValue(contacts),
+  } as unknown as CustomerRepository;
+}
+
+/** Simulates `listActiveContacts()` failing — exercises the fail-open path (design.md Decisión 3). */
+function makeThrowingCustomerRepo(): CustomerRepository {
+  return {
+    listActiveContacts: jest.fn().mockRejectedValue(new Error('listActiveContacts boom')),
+  } as unknown as CustomerRepository;
+}
+
 async function seedFreeLead(repo: InMemoryRecaptureRepository): Promise<RecaptureLead> {
   return repo.create({
     source: 'churned_client',
@@ -63,7 +82,7 @@ async function seedFreeLead(repo: InMemoryRecaptureRepository): Promise<Recaptur
 describe('ListRecaptureLeads', () => {
   it('returns empty list when no leads exist', async () => {
     const repo = makeRepo();
-    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo());
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), makeActiveContactsRepo());
     const result = await uc.execute({});
     expect(result.data).toHaveLength(0);
     expect(result.total).toBe(0);
@@ -72,7 +91,7 @@ describe('ListRecaptureLeads', () => {
   it('returns all leads with DTO shape', async () => {
     const repo = makeRepo();
     await seedFreeLead(repo);
-    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo());
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), makeActiveContactsRepo());
     const result = await uc.execute({});
     expect(result.total).toBe(1);
     const dto = result.data[0]!;
@@ -89,7 +108,7 @@ describe('ListRecaptureLeads', () => {
     const lead = await seedFreeLead(repo);
     await repo.create({ source: 'csv', contactName: 'CSV Lead' });
     await repo.updateStatus(lead.id, 'contactado');
-    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo());
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), makeActiveContactsRepo());
     const result = await uc.execute({ status: 'contactado' });
     expect(result.total).toBe(1);
     expect(result.data[0]!.status).toBe('contactado');
@@ -101,7 +120,7 @@ describe('ListRecaptureLeads', () => {
     await repo.create({ source: 'csv', contactName: 'CSV Lead' });
     // Claim the first lead
     await repo.claim('lead-001', 'user-1');
-    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo());
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), makeActiveContactsRepo());
     const result = await uc.execute({ unassigned: true });
     expect(result.total).toBe(1);
     expect(result.data[0]!.contactName).toBe('CSV Lead');
@@ -112,7 +131,7 @@ describe('ListRecaptureLeads', () => {
     await seedFreeLead(repo);
     await repo.create({ source: 'csv', contactName: 'Other' });
     await repo.claim('lead-001', 'user-99');
-    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo());
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), makeActiveContactsRepo());
     const result = await uc.execute({ assigneeId: 'user-99' });
     expect(result.total).toBe(1);
     expect(result.data[0]!.assigneeId).toBe('user-99');
@@ -123,7 +142,7 @@ describe('ListRecaptureLeads', () => {
     for (let i = 0; i < 5; i++) {
       await repo.create({ source: 'csv', contactName: `Lead ${i}` });
     }
-    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo());
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), makeActiveContactsRepo());
     const result = await uc.execute({ page: 2, limit: 2 });
     expect(result.data).toHaveLength(2);
     expect(result.page).toBe(2);
@@ -138,7 +157,7 @@ describe('GetRecaptureLead', () => {
   it('returns lead with empty contacts when none appended', async () => {
     const repo = makeRepo();
     const lead = await seedFreeLead(repo);
-    const uc = new GetRecaptureLead(repo);
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo());
     const dto = await uc.execute(lead.id);
     expect(dto.id).toBe(lead.id);
     expect(dto.contacts).toHaveLength(0);
@@ -153,7 +172,7 @@ describe('GetRecaptureLead', () => {
       channel: 'llamada',
       outcome: 'contactado',
     });
-    const uc = new GetRecaptureLead(repo);
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo());
     const dto = await uc.execute(lead.id);
     expect(dto.contacts).toHaveLength(1);
     expect(dto.contacts[0]!.channel).toBe('llamada');
@@ -161,7 +180,7 @@ describe('GetRecaptureLead', () => {
 
   it('throws RecaptureLeadNotFoundError when id does not exist', async () => {
     const repo = makeRepo();
-    const uc = new GetRecaptureLead(repo);
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo());
     await expect(uc.execute('nonexistent')).rejects.toThrow(RecaptureLeadNotFoundError);
   });
 });
@@ -296,7 +315,7 @@ describe('ListRecaptureLeads — technologies enrichment', () => {
     seedTech(contractRepo, 'client-1', { plan: '300MB' });   // ≥100 → Fiber
     seedTech(contractRepo, 'client-1', { plan: '10/5MB' });  // <100 → Wireless
 
-    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
     const result = await uc.execute({});
 
     const dto = result.data.find((d) => d.id === lead.id)!;
@@ -310,7 +329,7 @@ describe('ListRecaptureLeads — technologies enrichment', () => {
     // Even if some other client has contracts, a lead with no clientId stays empty.
     seedTech(contractRepo, 'client-99', { plan: '300MB' });
 
-    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
     const result = await uc.execute({});
 
     expect(result.data[0]!.technologies).toEqual([]);
@@ -323,7 +342,7 @@ describe('ListRecaptureLeads — technologies enrichment', () => {
     seedTech(contractRepo, 'client-1', { plan: '300MB', status: 'active' });               // derived → Fiber
     seedTech(contractRepo, 'client-1', { technology: 'DOCSIS', plan: 'TV', status: 'baja' }); // manual wins; baja still contributes
 
-    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
     const result = await uc.execute({});
 
     expect([...result.data[0]!.technologies].sort()).toEqual(['DOCSIS', 'Fiber']);
@@ -338,7 +357,7 @@ describe('ListRecaptureLeads — technologies enrichment', () => {
     seedTech(contractRepo, 'client-1', { plan: 'Instalacion Wireless H' }); // no integer → unclassified → dropped
     seedTech(contractRepo, 'client-1', { technology: '  ', plan: '300MB' }); // whitespace manual → trimmed → dropped
 
-    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
     const result = await uc.execute({});
 
     expect(result.data[0]!.technologies).toEqual(['Fiber']);
@@ -353,7 +372,7 @@ describe('ListRecaptureLeads — technologies enrichment', () => {
     }
     const spy = jest.spyOn(contractRepo, 'findContractTechnologiesByClientIds');
 
-    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
     await uc.execute({});
 
     expect(spy).toHaveBeenCalledTimes(1);
@@ -383,7 +402,7 @@ describe('ListRecaptureLeads — technology filter', () => {
     const contractRepo = new InMemoryContractRepository();
     await seedClientLeads(repo, contractRepo);
 
-    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
     const result = await uc.execute({ technology: 'Wireless' });
 
     expect(result.total).toBe(1);
@@ -396,7 +415,7 @@ describe('ListRecaptureLeads — technology filter', () => {
     const contractRepo = new InMemoryContractRepository();
     await seedClientLeads(repo, contractRepo);
 
-    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
     const result = await uc.execute({ technology: 'HFC' });
 
     expect(result.data).toHaveLength(0);
@@ -415,7 +434,7 @@ describe('ListRecaptureLeads — technology filter', () => {
       seedTech(contractRepo, `f-${i}`, { plan: '100 MB' }); // → Fiber
     }
 
-    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
     const result = await uc.execute({ technology: 'Wireless', page: 1, limit: 2 });
 
     expect(result.total).toBe(3);        // total reflects the filtered set, not all 5 leads
@@ -430,11 +449,183 @@ describe('ListRecaptureLeads — technology filter', () => {
     await repo.create({ source: 'churned_client', clientId: 'override-1', contactName: 'Override' });
     seedTech(contractRepo, 'override-1', { technology: 'Fiber', plan: '20/5MB' });
 
-    const uc = new ListRecaptureLeads(repo, contractRepo);
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
     const result = await uc.execute({ technology: 'Fiber' });
 
     expect(result.total).toBe(1);
     expect(result.data[0]!.clientId).toBe('override-1');
     expect(result.data[0]!.technologies).toEqual(['Fiber']);
+  });
+});
+
+// ─── ListRecaptureLeads — active-client match enrichment (recapture-active-client-match) ──
+
+describe('ListRecaptureLeads — active-client match enrichment', () => {
+  it('returns [] possibleActiveMatchSignals when nothing matches', async () => {
+    const repo = makeRepo();
+    await repo.create({ source: 'csv', contactName: 'No match', phone: '1112223333', email: 'nomatch@test.com' });
+    const customerRepo = makeActiveContactsRepo([
+      { id: 'c-unrelated', name: 'Unrelated', phone: '9998887777', email: 'unrelated@test.com' },
+    ]);
+
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), customerRepo);
+    const result = await uc.execute({});
+
+    expect(result.data[0]!.possibleActiveMatchSignals).toEqual([]);
+  });
+
+  it('computes the phone signal against the active-contact candidate set', async () => {
+    const repo = makeRepo();
+    await repo.create({ source: 'csv', contactName: 'Phone match', phone: '+54 9 11 1234-5678' });
+    const customerRepo = makeActiveContactsRepo([
+      { id: 'c-active-1', name: 'Active One', phone: '011 15-1234-5678', email: null },
+    ]);
+
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), customerRepo);
+    const result = await uc.execute({});
+
+    expect(result.data[0]!.possibleActiveMatchSignals).toEqual(['phone']);
+  });
+
+  it('computes the reactivated signal when the lead\'s own clientId is active', async () => {
+    const repo = makeRepo();
+    await repo.create({ source: 'churned_client', clientId: 'client-9', contactName: 'Reactivated' });
+    const customerRepo = makeActiveContactsRepo([
+      { id: 'client-9', name: 'Client Nine', phone: null, email: null },
+    ]);
+
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), customerRepo);
+    const result = await uc.execute({});
+
+    expect(result.data[0]!.possibleActiveMatchSignals).toEqual(['reactivated']);
+  });
+
+  it('computes the churn_reason signal from lead.churnReason (source-agnostic seam — Batch 3B adds Contract.motivoBaja)', async () => {
+    const repo = makeRepo();
+    await repo.create({ source: 'csv', contactName: 'Titularidad', churnReason: 'CAMBIO DE TITULARIDAD' });
+
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), makeActiveContactsRepo());
+    const result = await uc.execute({});
+
+    expect(result.data[0]!.possibleActiveMatchSignals).toEqual(['churn_reason']);
+  });
+
+  it('calls listActiveContacts() exactly ONCE per page regardless of lead count (anti-N+1)', async () => {
+    const repo = makeRepo();
+    for (let i = 0; i < 5; i++) {
+      await repo.create({ source: 'csv', contactName: `Lead ${i}` });
+    }
+    const customerRepo = makeActiveContactsRepo([]);
+
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), customerRepo);
+    await uc.execute({});
+
+    expect(customerRepo.listActiveContacts).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT call listActiveContacts() when the page is empty (S1b)', async () => {
+    const repo = makeRepo();
+    const customerRepo = makeActiveContactsRepo([]);
+
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), customerRepo);
+    const result = await uc.execute({});
+
+    expect(result.data).toHaveLength(0);
+    expect(customerRepo.listActiveContacts).not.toHaveBeenCalled();
+  });
+
+  it('fails OPEN with [] signals for every lead when listActiveContacts() rejects (design.md Decisión 3)', async () => {
+    const repo = makeRepo();
+    await repo.create({ source: 'csv', contactName: 'A' });
+    await repo.create({ source: 'csv', contactName: 'B' });
+    const customerRepo = makeThrowingCustomerRepo();
+
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), customerRepo);
+    const result = await uc.execute({});
+
+    expect(result.data).toHaveLength(2);
+    result.data.forEach((d) => expect(d.possibleActiveMatchSignals).toEqual([]));
+  });
+});
+
+// ─── GetRecaptureLead — active-client match enrichment (recapture-active-client-match) ────
+
+describe('GetRecaptureLead — active-client match enrichment', () => {
+  it('returns possibleActiveMatch = {signals: [], matchedClients: []} when nothing matches (S9a — never undefined)', async () => {
+    const repo = makeRepo();
+    const lead = await repo.create({ source: 'csv', contactName: 'No match' });
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo([]));
+
+    const dto = await uc.execute(lead.id);
+
+    expect(dto.possibleActiveMatch).toEqual({ signals: [], matchedClients: [] });
+  });
+
+  it('reports every matched active client, deduplicated by clientId (S8 detail — cardinality)', async () => {
+    const repo = makeRepo();
+    const lead = await repo.create({
+      source: 'csv',
+      contactName: 'Multi match',
+      clientId: 'lead-owner', // not active itself → no 'reactivated'
+      phone: '2324421234',
+    });
+    const customerRepo = makeActiveContactsRepo([
+      { id: 'c-2', name: 'Client Two', phone: '02324 421234', email: null }, // phone match
+      { id: 'c-3', name: 'Client Three', phone: null, email: null },        // no match, present in candidate set
+    ]);
+
+    const uc = new GetRecaptureLead(repo, customerRepo);
+    const dto = await uc.execute(lead.id);
+
+    expect(dto.possibleActiveMatch.signals).toEqual(['phone']);
+    expect(dto.possibleActiveMatch.matchedClients).toHaveLength(1);
+    expect(dto.possibleActiveMatch.matchedClients[0]).toMatchObject({
+      clientId: 'c-2',
+      name: 'Client Two',
+      status: 'active',
+      matchedBy: ['phone'],
+    });
+  });
+
+  it('reports churn_reason with matchedClients: [] when there is no client match (S9b)', async () => {
+    const repo = makeRepo();
+    const lead = await repo.create({
+      source: 'csv',
+      contactName: 'Churn only',
+      churnReason: 'Solicitó baja por CAMBIO DE TITULARIDAD',
+    });
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo([]));
+
+    const dto = await uc.execute(lead.id);
+
+    expect(dto.possibleActiveMatch.signals).toEqual(['churn_reason']);
+    expect(dto.possibleActiveMatch.matchedClients).toEqual([]);
+  });
+
+  it('fails OPEN to the empty shape when listActiveContacts() rejects', async () => {
+    const repo = makeRepo();
+    const lead = await repo.create({ source: 'csv', contactName: 'Boom' });
+    const uc = new GetRecaptureLead(repo, makeThrowingCustomerRepo());
+
+    const dto = await uc.execute(lead.id);
+
+    expect(dto.possibleActiveMatch).toEqual({ signals: [], matchedClients: [] });
+  });
+
+  it('calling execute() repeatedly is read-only — no mutation of the lead or the matched client (S10)', async () => {
+    const repo = makeRepo();
+    const lead = await repo.create({ source: 'csv', contactName: 'Idempotent', phone: '2324421234' });
+    const customerRepo = makeActiveContactsRepo([
+      { id: 'c-2', name: 'Client Two', phone: '2324421234', email: null },
+    ]);
+    const uc = new GetRecaptureLead(repo, customerRepo);
+
+    const first = await uc.execute(lead.id);
+    const second = await uc.execute(lead.id);
+
+    expect(second).toEqual(first);
+    expect(customerRepo.listActiveContacts).toHaveBeenCalledTimes(2);
+    const stored = await repo.getById(lead.id);
+    expect(stored!.updatedAt).toBe(lead.updatedAt);
   });
 });

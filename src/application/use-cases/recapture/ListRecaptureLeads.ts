@@ -1,13 +1,16 @@
 import { RecaptureRepository, ListRecaptureLeadsQuery } from '@domain/ports/RecaptureRepository';
 import { ContractRepository } from '@domain/ports/ContractRepository';
+import { CustomerRepository, ActiveClientContact } from '@domain/ports/CustomerRepository';
 import { PaginatedResult } from '@application/dto/pagination';
 import { RecaptureLeadListItemDto, toRecaptureLeadDto } from '@application/dto/recapture/recapture.dto';
 import { deriveTechnology } from '@application/use-cases/deriveTechnology';
+import { matchActiveClient } from '@application/use-cases/recapture/matchActiveClient';
 
 export class ListRecaptureLeads {
   constructor(
     private readonly repo: RecaptureRepository,
     private readonly contractRepo: ContractRepository,
+    private readonly customerRepo: CustomerRepository,
   ) {}
 
   async execute(query: ListRecaptureLeadsQuery): Promise<PaginatedResult<RecaptureLeadListItemDto>> {
@@ -59,14 +62,42 @@ export class ListRecaptureLeads {
       }
     }
 
+    // ── 3. Enrich the page with "posible cliente activo" signals ───────────────
+    // ONE batch call reused across the whole page (design.md Decisión 1 — no
+    // N+1). NEVER runs when the page is empty (nothing to match against). The
+    // call is fail-OPEN: a broken candidate-set read must never break the list
+    // itself, which is the primary function of this endpoint (design.md Decisión 3).
+    let activeContacts: ActiveClientContact[] = [];
+    if (result.data.length > 0) {
+      try {
+        activeContacts = await this.customerRepo.listActiveContacts();
+      } catch {
+        activeContacts = [];
+      }
+    }
+
     return {
       ...result,
-      data: result.data.map((lead) => ({
-        ...toRecaptureLeadDto(lead),
-        technologies: lead.clientId
-          ? [...(technologiesByClient.get(lead.clientId) ?? [])]
-          : [],
-      })),
+      data: result.data.map((lead) => {
+        // SOURCE-AGNOSTIC churn text seam (design.md Decisión 6): today only
+        // `lead.churnReason` (CSV import / IngestChurnedClients) feeds it. The
+        // persisted `Contract.motivoBaja` source is merged in here by Batch 3B —
+        // this array is the exact seam the helper already expects.
+        const churnReasonTexts = lead.churnReason ? [lead.churnReason] : [];
+        const { signals } = matchActiveClient(
+          { clientId: lead.clientId, phone: lead.phone, email: lead.email },
+          activeContacts,
+          churnReasonTexts,
+        );
+
+        return {
+          ...toRecaptureLeadDto(lead),
+          technologies: lead.clientId
+            ? [...(technologiesByClient.get(lead.clientId) ?? [])]
+            : [],
+          possibleActiveMatchSignals: signals,
+        };
+      }),
     };
   }
 }

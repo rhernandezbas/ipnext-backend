@@ -1,5 +1,13 @@
 import { RecaptureLead, RecaptureContact } from '@domain/entities/recaptureLead';
 import { RecaptureLeadWithContacts } from '@domain/ports/RecaptureRepository';
+import type {
+  ActiveMatchSignal,
+  MatchedClientSummary,
+} from '@application/use-cases/recapture/matchActiveClient';
+
+// Re-exported here so FE-facing DTO consumers don't need to reach into the
+// use-case module for the Wire Contract types (tasks.md §3.1).
+export type { ActiveMatchSignal, MatchedClientSummary };
 
 // ─── Lead DTO ────────────────────────────────────────────────────────────────
 
@@ -30,6 +38,14 @@ export interface RecaptureLeadListItemDto extends RecaptureLeadDto {
    * Fiber/FTTH/Wireless/DOCSIS/HFC/Radio). `[]` when no clientId or no technologies.
    */
   technologies: string[];
+  /**
+   * recapture-active-client-match — "posible cliente activo" detector.
+   * Deduplicated union of signals across every active client matched (design.md
+   * Decisión 4: list gets ONLY the signal list, the rich match lives on detail).
+   * `[]` = no match, AND the fail-open value if the enrichment errors (design.md
+   * Decisión 3 — this badge is secondary, it must never break the list).
+   */
+  possibleActiveMatchSignals: ActiveMatchSignal[];
 }
 
 // ─── Contact DTO ─────────────────────────────────────────────────────────────
@@ -48,8 +64,22 @@ export interface RecaptureContactDto {
 
 // ─── Lead detail DTO (with contacts timeline) ────────────────────────────────
 
+/**
+ * recapture-active-client-match — rich match result for the detail view.
+ * `signals` is the same deduplicated union as the list's `possibleActiveMatchSignals`;
+ * `matchedClients` carries one entry PER matched active client (array — spec.md
+ * "Cardinalidad", NOT a singular). `'churn_reason'` can live in `signals` without
+ * any corresponding `matchedClients[]` entry (it is a property of the lead, not
+ * of a client — spec.md).
+ */
+export interface PossibleActiveMatch {
+  signals: ActiveMatchSignal[];
+  matchedClients: MatchedClientSummary[];
+}
+
 export interface RecaptureLeadDetailDto extends RecaptureLeadDto {
   contacts: RecaptureContactDto[];
+  possibleActiveMatch: PossibleActiveMatch;
 }
 
 // ─── Mappers ──────────────────────────────────────────────────────────────────
@@ -85,7 +115,15 @@ export function toRecaptureContactDto(contact: RecaptureContact): RecaptureConta
   };
 }
 
-export function toRecaptureLeadDetailDto(lead: RecaptureLeadWithContacts): RecaptureLeadDetailDto {
+/**
+ * Returns the detail DTO shape MINUS `possibleActiveMatch` — that field is
+ * assembled by `GetRecaptureLead` (needs `CustomerRepository`, a dependency this
+ * pure mapper does not have), not by this function. Same split precedent as
+ * `technologies` on `RecaptureLeadListItemDto` (mapper stays a pure fn of the domain entity).
+ */
+export function toRecaptureLeadDetailDto(
+  lead: RecaptureLeadWithContacts,
+): Omit<RecaptureLeadDetailDto, 'possibleActiveMatch'> {
   return {
     ...toRecaptureLeadDto(lead),
     contacts: lead.contacts.map(toRecaptureContactDto),
