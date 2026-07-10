@@ -45,6 +45,19 @@ export class PrismaContractServiceRepository implements ContractServiceRepositor
     return rows.map(toView);
   }
 
+  // service-transfer — locate the ACTIVE Gigared-managed TV slot(s) by notes prefix ("CIC {cic}")
+  // when the transfer caller did not supply sourceContractId. Fix wave MEDIUM-1: findMany (ALL
+  // candidates, oldest-first) — the use case re-validates the exact cic (cicFromNotes) per row
+  // (prefix collision "CIC 123" vs "CIC 1234") and inactivates EVERY row recording the cic.
+  async findActiveByCatalogAndNotesPrefix(serviceCatalogId: string, notesPrefix: string): Promise<ContractServiceView[]> {
+    const rows = await (prisma as any).contractService.findMany({
+      where: { serviceCatalogId, status: 'active', notes: { startsWith: notesPrefix } },
+      include: INCLUDE,
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map(toView);
+  }
+
   async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView> {
     try {
       const row = await (prisma as any).contractService.create({

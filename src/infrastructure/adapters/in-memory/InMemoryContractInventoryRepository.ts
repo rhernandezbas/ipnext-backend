@@ -1,5 +1,6 @@
 import { ContractInventoryRepository, ClientInstalledItemRow } from '@domain/ports/ContractInventoryRepository';
 import { ContractInstalledItem } from '@domain/entities/contract-installed-item';
+import { InstalledItemNotFoundError, InstalledItemAlreadyRemovedError } from '@domain/errors/inventory';
 
 /** Contexto de contrato registrado para el JOIN in-memory de `listByClient`. */
 interface ContractContext {
@@ -64,5 +65,17 @@ export class InMemoryContractInventoryRepository implements ContractInventoryRep
     const updated = { ...existing, status: 'removed' as const, updatedAt: new Date().toISOString() };
     this.store.set(id, updated);
     return { ...updated };
+  }
+
+  // service-transfer (W3) — reasigna SOLO contractId; ítem inexistente lanza (paridad Prisma).
+  // Fix wave L1: CONDICIONAL a status='active' (espejo del updateMany WHERE status='active' del
+  // adapter Prisma) — el retire concurrente entre la validación del caller y esta escritura
+  // falla tipado en vez de mover una lápida. Objeto NUEVO en el set (invariante del snapshot
+  // shallow del InMemoryUnitOfWork).
+  async transferToContract(itemId: string, targetContractId: string): Promise<void> {
+    const existing = this.store.get(itemId);
+    if (!existing) throw new InstalledItemNotFoundError(itemId);
+    if (existing.status !== 'active') throw new InstalledItemAlreadyRemovedError(itemId);
+    this.store.set(itemId, { ...existing, contractId: targetContractId, updatedAt: new Date().toISOString() });
   }
 }

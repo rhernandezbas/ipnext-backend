@@ -6,6 +6,16 @@ export interface ContractServiceRepository {
   getByPair(contractId: string, serviceCatalogId: string): Promise<ContractServiceView | null>;
   /** #73 Return ALL rows (active + inactive) for a contract, ordered by createdAt asc. */
   listByContract(contractId: string): Promise<ContractServiceView[]>;
+  /**
+   * service-transfer — ALL the ACTIVE rows of a catalog whose notes start with `notesPrefix`
+   * (oldest first, deterministic). Exists to locate the SOURCE TV slot(s) of a transfer when the
+   * caller did not supply sourceContractId: the Gigared-managed row records its CIC in notes
+   * ("CIC {cic} · …"), so the slot is resolvable by CIC without a contract id.
+   * Fix wave MEDIUM-1: returns EVERY candidate (not a findFirst) — prefix matching only, so the
+   * caller MUST re-validate the exact cic per row (cicFromNotes: "CIC 123" also matches
+   * "CIC 1234") and handle dirty data (two active rows recording the same cic).
+   */
+  findActiveByCatalogAndNotesPrefix(serviceCatalogId: string, notesPrefix: string): Promise<ContractServiceView[]>;
   add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView>;
   update(id: string, data: { status?: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView | null>;
   /** Returns true when a row was deleted, false when the id did not exist (idempotent caller). */

@@ -13,9 +13,12 @@ import { RecordMaterialConsumption } from '@application/use-cases/RecordMaterial
 import { ListTaskMaterialConsumptions } from '@application/use-cases/ListTaskMaterialConsumptions';
 import { DeleteMaterialConsumption } from '@application/use-cases/DeleteMaterialConsumption';
 import { CreateManualSuggestion } from '@application/use-cases/CreateManualSuggestion';
+import { TransferContractEquipment } from '@application/use-cases/TransferContractEquipment';
 import { DeviceTypeCatalogService } from '@application/services/DeviceTypeCatalogService';
 import {
   InstalledItemNotFoundError,
+  InstalledItemAlreadyRemovedError,
+  EquipmentTransferValidationError,
   MaterialConsumptionNotFoundError,
   MaterialNotFoundError,
   InvalidQuantityError,
@@ -44,6 +47,12 @@ export interface InventoryRoutePerms {
   contractWrite: RequestHandler;  // inventory.write  (was clients.write)
   materialWrite: RequestHandler;  // inventory.write  (NEW — material consumption mutations)
   manage: RequestHandler;         // inventory.manage (admin — correct confirmed device type)
+  /**
+   * service-transfer (W3): inventory.transfer — transferir equipos a OTRO contrato NO es
+   * write (RBAC-1 granular). Opcional por back-compat de fixtures; si falta, la ruta de
+   * transfer responde 403 FAIL-CLOSED (nunca se cuela por contractWrite).
+   */
+  transfer?: RequestHandler;
 }
 
 const RecordConsumptionSchema = z.object({
@@ -80,9 +89,15 @@ export function createContractInventoryRouter(
   perms: InventoryRoutePerms,
   deviceTypes: DeviceTypeCatalogService,
   createManualSuggestion: CreateManualSuggestion,
+  /**
+   * service-transfer (W3): transferencia de equipos a otro contrato. Opcional (fixtures
+   * legacy); en prod SIEMPRE viene wired — pineado por inventory-composition-root.test.ts.
+   */
+  transferEquipment?: TransferContractEquipment,
 ): Router {
   const router = Router();
   const userId = (req: Request): string | null => (req as { user?: { id?: string } }).user?.id ?? null;
+  const userName = (req: Request): string => (req as { user?: { username?: string } }).user?.username ?? '';
 
   // ── Task-scoped staging (the operator's checkboxes) ───────────────────────
   router.get('/scheduling/:taskId/inventory/suggestions', auth, perms.taskRead, async (req: Request, res: Response, next: NextFunction) => {
@@ -405,6 +420,56 @@ export function createContractInventoryRouter(
       next(e);
     }
   });
+
+  // ── Transferencia de equipos a otro contrato (service-transfer W3) ──────────
+  // Gate inventory.transfer (RBAC-1 granular — write NO alcanza; sin guard wired → 403
+  // fail-closed). Lote ATÓMICO: un ítem inválido → error SIN mover nada (uow del use case).
+  // Wire contract: 200 {moved, items} · 400 VALIDATION_ERROR (zod / destino==origen) ·
+  // 404 INSTALLED_ITEM_NOT_FOUND (ítem ghost/ajeno) · 409 INSTALLED_ITEM_ALREADY_REMOVED ·
+  // resto (CONTRACT_NOT_FOUND 404, …) → errorHandler global vía next(err) (lección 504).
+  const TransferEquipmentSchema = z.object({
+    targetContractId: z.string().min(1),
+    itemIds: z.array(z.string().min(1)).min(1),
+  });
+  // Fix wave L2 — el fallback fail-closed espeja el shape REAL de requirePermission
+  // (error 'FORBIDDEN' + code 'PERMISSION_DENIED' + module/action) para que el FE trate
+  // "guard no wired" exactamente igual que "permiso denegado".
+  const transferDenied: RequestHandler = (_req, res) => {
+    res.status(403).json({ error: 'FORBIDDEN', code: 'PERMISSION_DENIED', module: 'inventory', action: 'transfer' });
+  };
+
+  if (transferEquipment) {
+    router.post('/contracts/:contractId/inventory/transfer', auth, perms.transfer ?? transferDenied, async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = TransferEquipmentSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        const result = await transferEquipment.execute(req.params.contractId, {
+          targetContractId: parsed.data.targetContractId,
+          itemIds: parsed.data.itemIds,
+          actorId: userId(req),
+          actorName: userName(req),
+        });
+        res.json(result);
+      } catch (e) {
+        if (e instanceof EquipmentTransferValidationError) {
+          res.status(400).json({ error: e.message, code: e.code });
+          return;
+        }
+        if (e instanceof InstalledItemAlreadyRemovedError) {
+          res.status(409).json({ error: e.message, code: e.code });
+          return;
+        }
+        if (e instanceof InstalledItemNotFoundError) {
+          res.status(404).json({ error: e.message, code: e.code });
+          return;
+        }
+        next(e);
+      }
+    });
+  }
 
   return router;
 }

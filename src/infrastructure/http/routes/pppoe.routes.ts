@@ -12,6 +12,7 @@
  *   GET    /api/pppoe/unassigned                  pppoe.read    (huérfanos, sin password)
  *   POST   /api/nas/:id/ingest-pppoe              pppoe.manage  (adopta el inventario del NAS)
  *   POST   /api/pppoe/:id/associate              pppoe.manage  (asocia a un contrato)
+ *   POST   /api/pppoe/:id/transfer               pppoe.transfer (service-transfer W2: a otro contrato, as-is|recreate; 207 = recreate parcial)
  *   DELETE /api/contracts/:contractId/pppoe/:pppoeId  pppoe.manage  (desasocia: contractId=null, sin baja)
  *   GET    /api/pppoe/:id/credentials            pppoe.manage  (revela {username, password})
  *   --- pppoe-bulk-select-filter (v2) ---
@@ -58,6 +59,8 @@ import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeT
 import { GetPppoeCredentials } from '@application/use-cases/GetPppoeCredentials';
 import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe';
 import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
+// service-transfer (W2): transferencia de PPPoE entre contratos (as-is | recreate).
+import { TransferPppoe } from '@application/use-cases/TransferPppoe';
 import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
 // pppoe-bulk-select-filter (v2): hermano liviano de ListAllPppoeServices — solo { ids, total }.
 import { ListAllPppoeServiceIds } from '@application/use-cases/ListAllPppoeServiceIds';
@@ -80,6 +83,7 @@ import {
   CreatePppoeStandaloneBodySchema,
   RenamePppoeBodySchema,
   BulkChangePlanBodySchema,
+  TransferPppoeBodySchema,
   toPppoeServiceDto,
   toServiceCutBatchDto,
 } from '@application/dto/pppoe.dto';
@@ -155,6 +159,12 @@ export function createPppoeRouter(
    * fixtures viejas; en prod SIEMPRE viene wired — composition test, lección W6).
    */
   listAllPppoeServiceIds?: ListAllPppoeServiceIds,
+  /**
+   * service-transfer (W2): transfiere un PPPoE a otro contrato (as-is | recreate).
+   * POST /pppoe/:id/transfer (gate pppoe.transfer). Sin wired la ruta no se monta (back-compat
+   * de fixtures viejas; en prod SIEMPRE viene wired — composition test, lección W6).
+   */
+  transferPppoe?: TransferPppoe,
 ): Router {
   const router = Router();
   // STATEFUL en prod (sessionRepo presente): una sesión revocada NO puede cortar servicio.
@@ -163,6 +173,8 @@ export function createPppoeRouter(
   const canRead   = requirePerm('pppoe', 'read');
   const canManage = requirePerm('pppoe', 'manage');
   const canCut    = requirePerm('pppoe', 'cut');
+  // service-transfer (W2): permiso granular propio — transferir NO es manage (RBAC-1, fail-closed).
+  const canTransfer = requirePerm('pppoe', 'transfer');
   // review FE W1: el listado de movimientos vive como tab de la page de auditoria de red,
   // cuyos tabs vecinos (radius/events, ne8000/audit, auth-failures) gatean network.read.
   // Gatearlo pppoe.read dejaba el tab "visible pero muerto" (403) para un NOC con network.read.
@@ -538,6 +550,47 @@ export function createPppoeRouter(
       }
     },
   );
+
+  // ── POST /pppoe/:id/transfer — transfiere el PPPoE a otro contrato (service-transfer W2) ──
+  // Body { targetContractId, mode: 'as-is'|'recreate', reason?, newPppoe? }. Gate pppoe.transfer.
+  // Wire contract (spec PPPOE-1/PPPOE-2 + RBAC-2):
+  //   200 → transferencia completa
+  //   207 → recreate PARCIAL (nuevo vivo, viejo pendiente de borrar; retry = DELETE /pppoe/:id del viejo)
+  //   400 VALIDATION_ERROR (mode inválido / as-is sin reason / recreate sin newPppoe) — pineado
+  //       por el spec en 400 (espejo del wire de transfer-tv W1), NO el 422 zod de las rutas vecinas
+  //   404 PPPOE_NOT_FOUND / CONTRACT_NOT_FOUND · 409 PPPOE_ALREADY_ASSOCIATED (destino == actual) /
+  //       PPPOE_CONTRACT_ALREADY_HAS_SERVICE (destino ocupado)
+  //   resto → errorHandler global (fuente ÚNICA del mapeo: 502 unreachable, upstreamStatus de
+  //   ORCHESTRATOR_REJECTED, 500 desconocido). NUNCA `throw` async (lección 504): SIEMPRE next(err).
+  if (transferPppoe) {
+    router.post(
+      '/pppoe/:id/transfer',
+      auth,
+      canTransfer,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const parsed = TransferPppoeBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          const { targetContractId, mode, reason, newPppoe } = parsed.data;
+          const result = await transferPppoe.execute(req.params['id'] as string, {
+            targetContractId,
+            mode,
+            reason: reason ?? null,
+            // pppoe-preprovision (S1.1): nasId ausente/null = pre-provision (mismo trato que la creación).
+            ...(newPppoe ? { newPppoe: { ...newPppoe, nasId: newPppoe.nasId ?? null } } : {}),
+            ...actorOf(req),
+          });
+          res.status(result.partial ? 207 : 200).json(result);
+        } catch (err) {
+          // TODO el mapeo va al errorHandler global (statusMap) — nada inline acá.
+          next(err);
+        }
+      },
+    );
+  }
 
   // ── DELETE /contracts/:contractId/pppoe/:pppoeId — desasocia sin tocar el secret ─
   router.delete(

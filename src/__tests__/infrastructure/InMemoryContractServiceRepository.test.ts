@@ -63,4 +63,34 @@ describe('InMemoryContractServiceRepository (port parity)', () => {
     expect(await repo.getById(cs.id)).toBeNull();
     expect(await repo.delete('nope')).toBe(false);
   });
+
+  // service-transfer fix wave (MEDIUM-1) — el método devuelve TODAS las filas activas candidatas
+  // (no un findFirst): el caller filtra por cic EXACTO e inactiva todas las que registren el cic.
+  describe('findActiveByCatalogAndNotesPrefix', () => {
+    it('devuelve TODAS las filas activas del catálogo que matchean el prefijo, más viejas primero', async () => {
+      const a = await repo.add({ contractId: 'C1', serviceCatalogId: 'S2', notes: 'CIC 123 · Pack A' });
+      const b = await repo.add({ contractId: 'C2', serviceCatalogId: 'S2', notes: 'CIC 123 · Residuo' });
+      // Fila inactiva con el mismo prefijo: NO debe aparecer.
+      const c = await repo.add({ contractId: 'C3', serviceCatalogId: 'S2', notes: 'CIC 123 · Baja' });
+      await repo.update(c.id, { status: 'inactive' });
+      // Otro catálogo con el mismo prefijo: NO debe aparecer.
+      await repo.add({ contractId: 'C1', serviceCatalogId: 'S1', notes: 'CIC 123 · Otro catálogo' });
+
+      const rows = await repo.findActiveByCatalogAndNotesPrefix('S2', 'CIC 123');
+      expect(rows.map((r) => r.id)).toEqual([a.id, b.id]);
+    });
+
+    it('colisión de prefijo: "CIC 123" también matchea "CIC 1234 · …" — devuelve AMBAS y el caller filtra por cic exacto', async () => {
+      const collision = await repo.add({ contractId: 'C1', serviceCatalogId: 'S2', notes: 'CIC 1234 · Pack X' });
+      const exact = await repo.add({ contractId: 'C2', serviceCatalogId: 'S2', notes: 'CIC 123 · Pack Y' });
+
+      const rows = await repo.findActiveByCatalogAndNotesPrefix('S2', 'CIC 123');
+      expect(rows.map((r) => r.id)).toEqual([collision.id, exact.id]);
+    });
+
+    it('sin matches → array vacío', async () => {
+      await repo.add({ contractId: 'C1', serviceCatalogId: 'S2', notes: 'CIC 999 · Pack' });
+      expect(await repo.findActiveByCatalogAndNotesPrefix('S2', 'CIC 123')).toEqual([]);
+    });
+  });
 });

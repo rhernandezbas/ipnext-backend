@@ -8,16 +8,19 @@ import { TvCatalogMissingError } from '@domain/errors/gigared';
  * Prefix that marks a ContractService row as GIGARED-MANAGED (H2 ownership).
  * Reconcile only ever touches rows whose notes begin with this — a TV row created by hand
  * via the #42 UI (notes null or anything else) is left completely alone.
+ * Exported (service-transfer): TransferTvToCustomer reuses the SAME ownership convention to
+ * resolve/inactivate the SOURCE slot directly (the account-driven reconcile can't — the source
+ * internal_id keeps resolving via the CUA alias).
  */
-const GIGARED_NOTES_PREFIX = 'CIC ';
+export const GIGARED_NOTES_PREFIX = 'CIC ';
 
 /** A row is Gigared-managed only when its notes start with the reconcile-owned prefix. */
-function isGigaredManaged(notes: string | null | undefined): boolean {
+export function isGigaredManaged(notes: string | null | undefined): boolean {
   return typeof notes === 'string' && notes.startsWith(GIGARED_NOTES_PREFIX);
 }
 
 /** Extract the cic recorded in a managed row's notes ("CIC {cic} · …"). null when not present. */
-function cicFromNotes(notes: string | null | undefined): string | null {
+export function cicFromNotes(notes: string | null | undefined): string | null {
   if (!isGigaredManaged(notes)) return null;
   const rest = (notes as string).slice(GIGARED_NOTES_PREFIX.length);
   const cic = rest.split(' · ')[0]?.trim();

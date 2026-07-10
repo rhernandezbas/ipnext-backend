@@ -230,6 +230,36 @@ describe('PPPoE composition root (#pppoe-service Fase B)', () => {
   it('(q) pppoe-preprovision: CreatePppoeStandalone recibe findFreeIp (mismo allocator en el alta standalone)', () => {
     expect(appSrc).toMatch(/new CreatePppoeStandalone\([^)]*findFreeIp/s);
   });
+
+  // ── service-transfer W2 — anti "feature muerta" (lección W6): TransferPppoe wired ─────────
+  it('(r) service-transfer: TransferPppoe COMPONE las instancias singleton (createPppoeSvc + terminatePppoeSvc, no instancias paralelas)', () => {
+    expect(appSrc).toMatch(/const transferPppoe = new TransferPppoe\([\s\S]*?createPppoeSvc,[\s\S]*?terminatePppoeSvc,/);
+  });
+
+  it('(r) service-transfer: terminatePppoeSvc es UNA instancia compartida entre el router (DELETE) y TransferPppoe (recreate)', () => {
+    // Se extrae a variable...
+    expect(appSrc).toMatch(/const terminatePppoeSvc = new TerminatePppoeService\(/);
+    // ...y la MISMA variable viaja a createPppoeRouter (ventana acotada al call, patrón test n).
+    const idx = appSrc.indexOf('createPppoeRouter(');
+    expect(idx).toBeGreaterThan(-1);
+    const end = appSrc.indexOf('));', idx);
+    expect(end).toBeGreaterThan(idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+    expect(window).toMatch(/terminatePppoeSvc,/);
+  });
+
+  it('(r) service-transfer: transferPppoe INYECTADO en createPppoeRouter (sin esto POST /pppoe/:id/transfer responde 404)', () => {
+    const idx = appSrc.indexOf('createPppoeRouter(');
+    expect(idx).toBeGreaterThan(-1);
+    const end = appSrc.indexOf('));', idx);
+    expect(end).toBeGreaterThan(idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+    expect(window).toMatch(/transferPppoe,/);
+  });
+
+  it('(r) service-transfer: el lookup de contrato de TransferPppoe usa prismaContractClientNameLookup (ownership + nombre del cliente)', () => {
+    expect(appSrc).toMatch(/new TransferPppoe\([\s\S]*?prismaContractClientNameLookup/);
+  });
 });
 
 // ── pppoe-move-nas W2 — watcher auto-move: anti "feature muerta" (lección W6) ─────────────────

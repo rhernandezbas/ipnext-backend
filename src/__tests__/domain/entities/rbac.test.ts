@@ -130,8 +130,12 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 43 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions + 1 pppoe.cut Fase C + 1 recapture.assign)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(43);
+  it('contains exactly 44 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions + 1 pppoe.cut Fase C + 1 recapture.assign + 1 transfer service-transfer)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(44);
+  });
+
+  it('includes transfer (service-transfer — transferir servicios entre clientes: tv.transfer hoy, pppoe/inventory en waves 2-3)', () => {
+    expect(KNOWN_ACTIONS).toContain('transfer');
   });
 
   it('includes scheduling.hard_delete (#86 — super_admin-only hard delete of tasks)', () => {

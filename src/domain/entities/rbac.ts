@@ -76,6 +76,9 @@ export const KNOWN_ACTIONS = [
   'cut',
   // recapture sub-actions — bulk assignment (separate from recapture.manage)
   'assign',
+  // service-transfer — transferir servicios entre clientes; Wave 1 lo usa el módulo tv
+  // (tv.transfer); las waves 2-3 lo reusan para pppoe.transfer / inventory.transfer.
+  'transfer',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.

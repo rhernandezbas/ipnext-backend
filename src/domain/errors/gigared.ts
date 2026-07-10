@@ -163,3 +163,29 @@ export class CicAlreadyLinkedError extends DomainError {
     this.name = 'CicAlreadyLinkedError';
   }
 }
+
+/**
+ * service-transfer — el cliente DESTINO de una transferencia ya tiene una cuenta de TV vigente
+ * (su internal_id vigente resuelve en el CUA). Transferirle otra crearía un doble vínculo
+ * irreversible (el mapping internal_id↔CIC del partner es append-only) → router 409
+ * TV_ALREADY_LINKED, sin llamar a setInternalId.
+ *
+ * Fix wave 2: también cubre (a) el guard A→A (FIX-2: transferirse a sí mismo — el destino YA es
+ * el dueño; corre ANTES de tocar el partner, así que el cic todavía no se conoce → cic '') y
+ * (b) el cross-check LOCAL del resume (FIX-1: el dueño local vigente es un TERCERO — se pasa
+ * SU customerId para que el mensaje diga quién tiene la cuenta hoy).
+ */
+export class TvAlreadyLinkedError extends DomainError {
+  constructor(
+    public readonly customerId: string,
+    public readonly cic: string,
+  ) {
+    super(
+      cic === ''
+        ? `Customer ${customerId} already has a Gigared TV account linked`
+        : `Customer ${customerId} already has a Gigared TV account linked (CIC ${cic})`,
+      'TV_ALREADY_LINKED',
+    );
+    this.name = 'TvAlreadyLinkedError';
+  }
+}

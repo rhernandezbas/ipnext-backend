@@ -283,6 +283,30 @@ export const AssociatePppoeBodySchema = z.object({
 
 export type AssociatePppoeBody = z.infer<typeof AssociatePppoeBodySchema>;
 
+/**
+ * service-transfer (W2): body de POST /api/pppoe/:id/transfer.
+ * - mode 'as-is'   → `reason` obligatorio (no vacío).
+ * - mode 'recreate' → `newPppoe` obligatorio (mismo shape que la creación; el `contractId`
+ *   lo fija el server con el targetContractId — nunca viene del body).
+ * La ruta responde 400 VALIDATION_ERROR (no el 422 zod de las rutas vecinas): contrato de wire
+ * pineado por el spec PPPOE-1, espejo del 400 de POST /gigared/customers/:id/transfer-tv (W1).
+ */
+export const TransferPppoeBodySchema = z.object({
+  targetContractId: z.string().min(1),
+  mode: z.enum(['as-is', 'recreate']),
+  reason: z.string().nullish(),
+  newPppoe: CreatePppoeBodySchema.optional(),
+}).superRefine((data, ctx) => {
+  if (data.mode === 'as-is' && (data.reason == null || data.reason.trim() === '')) {
+    ctx.addIssue({ code: 'custom', path: ['reason'], message: "mode 'as-is' requiere un motivo (reason)" });
+  }
+  if (data.mode === 'recreate' && data.newPppoe == null) {
+    ctx.addIssue({ code: 'custom', path: ['newPppoe'], message: "mode 'recreate' requiere los datos del PPPoE nuevo (newPppoe)" });
+  }
+});
+
+export type TransferPppoeBody = z.infer<typeof TransferPppoeBodySchema>;
+
 // ── Fase C — enforcement (cortes) ────────────────────────────────────────────
 
 const EnforcementActionSchema = z.enum(['reduce', 'block', 'restore']);

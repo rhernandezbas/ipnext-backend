@@ -198,6 +198,31 @@ describe('Inventory composition root — dual-write wiring (Fix Test-H1/DimA)', 
     expect(callWindow).toContain('ResolveClientLocation');
   });
 
+  // service-transfer (W3) — transferencia de equipos entre contratos: el use case debe
+  // componerse con el lookup ownership-aware (prismaContractClientNameLookup), la resolución
+  // de CLIENTE-locations, el UnitOfWork (lote atómico) y los repos de eventos (historial).
+  it('W3: app.ts instantiates TransferContractEquipment with lookup + ResolveClientLocation + uow + event repos', () => {
+    const callIdx = appSrc.indexOf('new TransferContractEquipment(');
+    expect(callIdx).toBeGreaterThan(-1);
+    const callWindow = appSrc.slice(callIdx, callIdx + 520);
+    expect(callWindow).toContain('contractInventoryRepo');
+    expect(callWindow).toContain('prismaContractClientNameLookup');
+    expect(callWindow).toContain('ResolveClientLocation');
+    expect(callWindow).toContain('inventoryUow');
+    expect(callWindow).toContain('PrismaServiceCatalogRepository');
+    expect(callWindow).toContain('PrismaContractServiceEventRepository');
+  });
+
+  it('W3: app.ts passes transferContractEquipment into createContractInventoryRouter', () => {
+    const match = appSrc.match(/createContractInventoryRouter\(([\s\S]*?)\)\s*\)/);
+    expect(match).not.toBeNull();
+    expect(match![1]).toContain('transferContractEquipment');
+  });
+
+  it('W3: the contract inventory perms object wires transfer to requirePerm(inventory, transfer)', () => {
+    expect(appSrc).toMatch(/transfer:\s*requirePerm\s*\(\s*['"]inventory['"]\s*,\s*['"]transfer['"]\s*\)/);
+  });
+
   // FIX 1 (#39 security) — createProjectsRouter must receive requirePerm('inventory','manage') as last arg
   it('#39 FIX-1: app.ts passes requirePerm(inventory,manage) into createProjectsRouter', () => {
     // Find the line (or block) containing the createProjectsRouter call.

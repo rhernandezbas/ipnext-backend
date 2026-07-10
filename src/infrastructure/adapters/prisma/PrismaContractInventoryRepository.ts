@@ -1,5 +1,6 @@
 import { ContractInventoryRepository, ClientInstalledItemRow } from '@domain/ports/ContractInventoryRepository';
 import { ContractInstalledItem } from '@domain/entities/contract-installed-item';
+import { InstalledItemNotFoundError, InstalledItemAlreadyRemovedError } from '@domain/errors/inventory';
 import { prisma } from '../../database/prisma';
 import { PrismaClientLike } from './PrismaClientLike';
 
@@ -90,5 +91,22 @@ export class PrismaContractInventoryRepository implements ContractInventoryRepos
       data: { status: 'removed' },
     });
     return toEntity(row);
+  }
+
+  // service-transfer (W3) — reasigna SOLO contractId. Fix wave L1: update CONDICIONAL
+  // (updateMany WHERE { id, status: 'active' }) — como el repo corre tx-scoped en el UnitOfWork,
+  // esto mata la ventana del retire concurrente entre la validación del use case y la tx: una
+  // fila que dejó de estar active matchea 0 y el lote aborta tipado (rollback). count 0 se
+  // diagnostica re-leyendo: inexistente → NotFound; no-active → AlreadyRemoved (paridad InMemory).
+  async transferToContract(itemId: string, targetContractId: string): Promise<void> {
+    const result = await this.db.contractInstalledItem.updateMany({
+      where: { id: itemId, status: 'active' },
+      data: { contractId: targetContractId },
+    });
+    if (result.count === 0) {
+      const existing = await this.db.contractInstalledItem.findUnique({ where: { id: itemId } });
+      if (!existing) throw new InstalledItemNotFoundError(itemId);
+      throw new InstalledItemAlreadyRemovedError(itemId);
+    }
   }
 }

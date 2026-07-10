@@ -10,6 +10,7 @@ import type { AddTvService } from '@application/use-cases/gigared/AddTvService';
 import type { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
 import type { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
 import type { CancelTv } from '@application/use-cases/gigared/CancelTv';
+import type { TransferTvToCustomer } from '@application/use-cases/gigared/TransferTvToCustomer';
 import type { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import type { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
 import type { ListTvActivationHistory } from '@application/use-cases/gigared/ListTvActivationHistory';
@@ -30,6 +31,7 @@ import {
   GigaredInvalidPasswordError,
   TvCatalogMissingError,
   TvNotLinkedError,
+  TvAlreadyLinkedError,
   CicNotFoundError,
   CicAlreadyLinkedError,
   GrClientIdRequiredError,
@@ -161,6 +163,12 @@ function sendGigaredError(res: Response, err: unknown): boolean {
     res.status(404).json({ error: err.message, code: err.code });
     return true;
   }
+  // service-transfer — el destino ya tiene TV vigente: transferirle otro CIC crearía un doble
+  // vínculo irreversible (mapping append-only del CUA) → 409, espejo de CIC_ALREADY_LINKED.
+  if (err instanceof TvAlreadyLinkedError) {
+    res.status(409).json({ error: err.message, code: err.code, cic: err.cic });
+    return true;
+  }
   return false;
 }
 
@@ -178,6 +186,8 @@ export interface GigaredRouterDeps {
   cancelTv: CancelTv;
   changeTvPassword: ChangeTvPassword;
   getTvCredentials: GetTvCredentials;
+  // service-transfer — transferir la TV (CIC) a otro cliente sin baja (EPIC Titularidad F1).
+  transferTv: TransferTvToCustomer;
   requireRead: RequestHandler;
   // #50 — granular TV permissions (replace the generic tv.write guard).
   requireLink: RequestHandler;     // tv.link — vincular/desvincular CIC
@@ -185,6 +195,7 @@ export interface GigaredRouterDeps {
   requirePacks: RequestHandler;    // tv.packs — agregar/quitar packs
   requireOtt: RequestHandler;      // tv.ott — habilitar/deshabilitar OTT
   requireCancel: RequestHandler;   // tv.cancel — dar de baja TV
+  requireTransfer: RequestHandler; // tv.transfer — transferir la TV a otro cliente (service-transfer)
   requireManage: RequestHandler;
   /** Key-required + flag-required — gates every non-probe, non-config route. */
   gigaredReady: RequestHandler;
@@ -283,6 +294,52 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
       res.status(result.local === 'failed' ? 207 : 200).json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'link');
+    }
+  });
+
+  // service-transfer — transferir la TV (CIC) del cliente :id a otro cliente (EPIC Titularidad F1).
+  // Body { targetCustomerId, targetContractId, sourceContractId? }. Guard tv.transfer.
+  // Wire contract:
+  //   200 → alias verificado + severing + slots locales OK
+  //   207 → el partner YA transfirió pero severed=false o algún slot local falló (retry direccionado;
+  //         la op partner NUNCA se revierte — no hay unlink primitive en el CUA)
+  //   400 VALIDATION_ERROR · 404 CLIENT_NOT_FOUND/CONTRACT_NOT_FOUND/TV_NOT_LINKED ·
+  //   409 TV_ALREADY_LINKED · 422 GIGARED_REJECTED (el alias no tomó, F0) · 502/503 upstream.
+  // Errores por instancia (sendGigaredError) + fallback sendUnhandled: el handler NUNCA cuelga.
+  router.post('/customers/:id/transfer-tv', deps.requireTransfer, async (req, res): Promise<void> => {
+    try {
+      // MEDIUM-B2 — sin body (parser no corrió / content-type ausente) req.body es undefined:
+      // debe dar 400 VALIDATION_ERROR, jamás un TypeError → 500.
+      const b = (req.body ?? {}) as { targetCustomerId?: unknown; targetContractId?: unknown; sourceContractId?: unknown };
+      const targetCustomerId = typeof b.targetCustomerId === 'string' ? b.targetCustomerId : '';
+      const targetContractId = typeof b.targetContractId === 'string' ? b.targetContractId : '';
+      if (targetCustomerId === '' || targetContractId === '') {
+        res.status(400).json({ error: 'targetCustomerId y targetContractId son obligatorios', code: 'VALIDATION_ERROR' });
+        return;
+      }
+      // MEDIUM-3c — sourceContractId presente pero NO string (número, null, objeto…) → 400
+      // explícito. Descartarlo en silencio mandaba el transfer-out a un contrato resuelto por
+      // heurística sin que el operador se entere de que su input se ignoró.
+      if (b.sourceContractId !== undefined && typeof b.sourceContractId !== 'string') {
+        res.status(400).json({ error: 'sourceContractId debe ser un string', code: 'VALIDATION_ERROR' });
+        return;
+      }
+      const sourceContractId = typeof b.sourceContractId === 'string' && b.sourceContractId !== '' ? b.sourceContractId : undefined;
+      const actor = req.user ? { actorId: req.user.id, actorName: req.user.username } : { actorId: null, actorName: '' };
+      const result = await deps.transferTv.execute(req.params['id'] as string, {
+        targetCustomerId,
+        targetContractId,
+        ...(sourceContractId !== undefined ? { sourceContractId } : {}),
+        actorId: actor.actorId,
+        actorName: actor.actorName,
+      });
+      // 207 = parcial: el partner ya quedó transferido pero falta severing, el clear del flag
+      // del destino (MEDIUM-2) o algún slot local. El retry es el MISMO POST (modo resume).
+      const partial = !result.severed || !result.targetCleared
+        || result.localSource === 'failed' || result.localTarget === 'failed';
+      res.status(partial ? 207 : 200).json(result);
+    } catch (err) {
+      if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'transfer-tv');
     }
   });
 

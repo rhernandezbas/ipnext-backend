@@ -104,6 +104,18 @@ export class InstalledItemAlreadyRemovedError extends DomainError {
   }
 }
 
+/**
+ * service-transfer (W3) — input inválido de la transferencia de equipos entre contratos
+ * (itemIds vacío / destino == origen). Mismo código VALIDATION_ERROR que
+ * PppoeTransferValidationError (W2) → 400 en el statusMap global.
+ */
+export class EquipmentTransferValidationError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'EquipmentTransferValidationError';
+  }
+}
+
 export class MaterialConsumptionNotFoundError extends DomainError {
   constructor(id: string) {
     super(`Material consumption ${id} not found`, 'MATERIAL_CONSUMPTION_NOT_FOUND');

@@ -53,6 +53,11 @@ export class ListContractServiceHistory {
           cic:        null,
           reason:     ev.reason ?? null,
           notes:      ev.notes ?? null,
+          // service-transfer fix wave MEDIUM-5 (aditivo) — la ficha etiqueta transferencias
+          // por changeKind y muestra la dirección con oldValue/newValue.
+          changeKind: ev.changeKind ?? null,
+          oldValue:   ev.oldValue ?? null,
+          newValue:   ev.newValue ?? null,
         });
       }
     }
@@ -142,6 +147,9 @@ function synthesizeLegacyEvents(createdAt: string, deactivatedAt: string | null)
       cic:        null,
       reason:     null,
       notes:      null,
+      changeKind: null,
+      oldValue:   null,
+      newValue:   null,
     },
   ];
   if (deactivatedAt) {
@@ -153,6 +161,9 @@ function synthesizeLegacyEvents(createdAt: string, deactivatedAt: string | null)
       cic:        null,
       reason:     null,
       notes:      null,
+      changeKind: null,
+      oldValue:   null,
+      newValue:   null,
     });
   }
   return events;

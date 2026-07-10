@@ -38,6 +38,7 @@ import { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
 import { CancelTv } from '@application/use-cases/gigared/CancelTv';
 import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
+import { TransferTvToCustomer } from '@application/use-cases/gigared/TransferTvToCustomer';
 import { CancelTvJobRunner } from '@infrastructure/scheduling/CancelTvJobRunner';
 import { ListTvActivationHistory } from '@application/use-cases/gigared/ListTvActivationHistory';
 
@@ -113,12 +114,15 @@ async function buildApp(opts: BuildOpts = {}) {
     cancelTv,
     changeTvPassword:   new ChangeTvPassword(port, customerLookup, contractLookup, csRepo, catalog),
     getTvCredentials:   new GetTvCredentials(customerLookup, { getByCustomer: async () => ({ login: 'GIGA100', password: 'ip243200' }) }),
+    // service-transfer — satisfies the router contract (dedicated tests in gigared.transfer.routes.test.ts).
+    transferTv:         new TransferTvToCustomer(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
     requireRead:        opts.requireRead ?? pass,
     requireLink:        pass,
     requireRegister:    pass,
     requirePacks:       pass,
     requireOtt:         pass,
     requireCancel:      pass,
+    requireTransfer:    pass,
     requireManage:      pass,
     gigaredReady:       createGigaredReadyMiddleware(cfg, flags),
     gigaredProbeReady:  createGigaredReadyMiddleware(cfg, flags, { requireFlag: false }),

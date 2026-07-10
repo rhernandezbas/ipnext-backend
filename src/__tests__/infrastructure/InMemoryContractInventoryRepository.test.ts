@@ -60,3 +60,40 @@ describe('InMemoryContractInventoryRepository — getById and remove', () => {
     expect(result).toBeNull();
   });
 });
+
+// service-transfer (W3) — reasignación de contrato del ítem instalado.
+describe('InMemoryContractInventoryRepository — transferToContract', () => {
+  let repo: InMemoryContractInventoryRepository;
+
+  beforeEach(() => {
+    repo = new InMemoryContractInventoryRepository();
+  });
+
+  it('mueve el ítem al contrato destino sin tocar el resto de los campos', async () => {
+    await repo.create(makeItem({ id: 'item-1', contractId: 'contract-1', serialNumber: 'SN-1' }));
+
+    await repo.transferToContract('item-1', 'contract-2');
+
+    const moved = await repo.getById('item-1');
+    expect(moved?.contractId).toBe('contract-2');
+    expect(moved?.serialNumber).toBe('SN-1');
+    expect(moved?.status).toBe('active');
+  });
+
+  it('lanza InstalledItemNotFoundError para un id desconocido (paridad con el adapter Prisma)', async () => {
+    const { InstalledItemNotFoundError } = await import('@domain/errors/inventory');
+    await expect(repo.transferToContract('nonexistent', 'contract-2'))
+      .rejects.toThrow(InstalledItemNotFoundError);
+  });
+
+  // service-transfer fix wave L1 — el transfer es CONDICIONAL a status='active' (espejo del
+  // updateMany WHERE status='active' del adapter Prisma): mata la ventana del retire concurrente
+  // entre la validación del use case y la tx.
+  it('L1: lanza InstalledItemAlreadyRemovedError si el ítem no está active y NO lo mueve', async () => {
+    const { InstalledItemAlreadyRemovedError } = await import('@domain/errors/inventory');
+    await repo.create(makeItem({ id: 'item-1', status: 'removed' }));
+    await expect(repo.transferToContract('item-1', 'contract-2'))
+      .rejects.toThrow(InstalledItemAlreadyRemovedError);
+    expect((await repo.getById('item-1'))!.contractId).toBe('contract-1');
+  });
+});

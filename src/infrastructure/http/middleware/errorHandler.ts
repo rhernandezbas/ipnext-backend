@@ -43,9 +43,16 @@ const statusMap: Record<string, number> = {
   // PPPoE enforcement (Fase C): backend de corte inalcanzable.
   ROUTER_UNREACHABLE: 502,
   ORCHESTRATOR_UNREACHABLE: 502,
+  // service-transfer (W2): contrato destino inexistente en POST /pppoe/:id/transfer (y cualquier
+  // otra ruta que forwardee ContractNotFoundError al handler global — 404 es su semántica real;
+  // las rutas legacy que lo mapean inline no pasan por acá).
+  CONTRACT_NOT_FOUND: 404,
   // PPPoE management errors
   PPPOE_NOT_FOUND: 404,
   PPPOE_USERNAME_TAKEN: 409,
+  // service-transfer fix wave (MEDIUM-4): residuo pending de un recreate parcial en el destino
+  // → 409 distinguible con retry direccionado (DELETE /pppoe/:id de la fila pending).
+  PPPOE_TRANSFER_PENDING_RESIDUE: 409,
   PPPOE_ALREADY_ASSOCIATED: 409,
   PPPOE_CONTRACT_ALREADY_HAS_SERVICE: 409,
   PPPOE_PROFILE_REQUIRED: 422,

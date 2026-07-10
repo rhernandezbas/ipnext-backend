@@ -93,6 +93,14 @@ export interface ServiceEventDto {
   reason:     string | null;
   // pppoe-plan-change-history: detalle del evento (ej. "IP-Air-40-40 → IP-Air-30-10"). null si no aplica.
   notes:      string | null;
+  // service-transfer fix wave MEDIUM-5 (aditivo) — discrimina el tipo de un evento 'modified'
+  // ('transfer-out' | 'transfer-in' | 'ip' | 'password' | 'status' | …) para que la ficha pueda
+  // etiquetar transferencias. null en eventos que no son cambios de campo / legacy / TV.
+  changeKind: string | null;
+  // service-transfer fix wave MEDIUM-5 (aditivo) — valor viejo/nuevo del cambio (en transfers:
+  // nombres snapshot de los clientes origen/destino). null si no aplica.
+  oldValue:   string | null;
+  newValue:   string | null;
 }
 
 /** Wire DTO for the service history endpoint. tvLogin IS exposed; tvPassword is NEVER exposed. */
@@ -157,6 +165,10 @@ export function tvEventToServiceEvent(tvEvent: {
     cic:        tvEvent.cic,
     reason:     tvEvent.reason ?? null,
     notes:      null,
+    // MEDIUM-5 — los eventos TV (alta/baja/reactivacion) no discriminan changeKind.
+    changeKind: null,
+    oldValue:   null,
+    newValue:   null,
   };
 }
 

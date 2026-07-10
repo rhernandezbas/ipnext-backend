@@ -247,6 +247,43 @@ export class PppoePendingLegacyNasError extends DomainError {
 }
 
 /**
+ * service-transfer (W2): input inválido de la transferencia de PPPoE — mode 'as-is' sin `reason`,
+ * mode 'recreate' sin `newPppoe`, mode desconocido, o un PPPoE huérfano (sin contrato origen:
+ * transferir exige titularidad; un huérfano se adopta por POST /pppoe/:id/associate).
+ * Defensa del use case para callers directos — la ruta valida primero (zod → 400).
+ * Code → HTTP: VALIDATION_ERROR → 400 (statusMap del errorHandler).
+ */
+export class PppoeTransferValidationError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'PppoeTransferValidationError';
+  }
+}
+
+/**
+ * service-transfer fix wave (MEDIUM-4): un recreate PREVIO falló post-upsert y dejó la fila del
+ * PPPoE nuevo en `pending` en el contrato DESTINO (CreatePppoeService: DB pending → provisioning
+ * explotó → la fila queda visible/reintentable). El retry del transfer chocaría con un
+ * PPPOE_USERNAME_TAKEN engañoso — este error dice QUÉ pasó y CÓMO recuperar: borrar la fila
+ * pending con DELETE /api/pppoe/{id} y reintentar, o continuar el aprovisionamiento desde la
+ * ficha. Code → HTTP: PPPOE_TRANSFER_PENDING_RESIDUE → 409 (statusMap del errorHandler).
+ */
+export class PppoeTransferPendingResidueError extends DomainError {
+  constructor(
+    public readonly username: string,
+    public readonly pendingPppoeId: string,
+  ) {
+    super(
+      `Un intento previo de transferencia dejó el PPPoE '${username}' PENDIENTE en el contrato destino ` +
+      `(id ${pendingPppoeId}) — borralo con DELETE /api/pppoe/${pendingPppoeId} y reintentá, ` +
+      `o continuá el aprovisionamiento desde la ficha`,
+      'PPPOE_TRANSFER_PENDING_RESIDUE',
+    );
+    this.name = 'PppoeTransferPendingResidueError';
+  }
+}
+
+/**
  * pppoe-preprovision D7.3: carrera de DOBLE ADOPCIÓN perdida — el update condicional de la
  * adopción (`WHERE nasId IS NULL`) matcheó 0 filas porque OTRO actor (tick del watcher vs
  * adopción manual) adoptó el pendiente PRIMERO. La fila del ganador queda intacta; el RADIUS

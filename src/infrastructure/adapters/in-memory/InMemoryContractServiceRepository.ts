@@ -59,6 +59,21 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
       .map(r => this.toView(r));
   }
 
+  // service-transfer — mirror of the Prisma adapter: ALL the ACTIVE rows of the catalog whose
+  // notes start with the prefix, oldest first (MEDIUM-1). The caller re-validates the exact cic
+  // per row (prefix collision "CIC 123" vs "CIC 1234") and handles multi-row dirty data.
+  async findActiveByCatalogAndNotesPrefix(serviceCatalogId: string, notesPrefix: string): Promise<ContractServiceView[]> {
+    return this.rows
+      .filter(r =>
+        r.serviceCatalogId === serviceCatalogId &&
+        r.status === 'active' &&
+        typeof r.notes === 'string' &&
+        r.notes.startsWith(notesPrefix),
+      )
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map(r => this.toView(r));
+  }
+
   async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView> {
     // Parity with the Prisma UNIQUE(contractId, serviceCatalogId): the Prisma adapter maps
     // P2002 → ContractServiceDuplicateError; the in-memory port must mirror that so tests

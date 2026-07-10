@@ -21,7 +21,8 @@ describe('Gigared composition root (#47)', () => {
     expect(idx).toBeGreaterThan(-1);
     // #65 fix wave — the deps block grew (getTvCredentials); widen the window so the first
     // requirePerm('tv', …) is still inside it.
-    const window = appSrc.slice(idx, idx + 1900);
+    // service-transfer — grew again (transferTv + its comment); widened once more.
+    const window = appSrc.slice(idx, idx + 2600);
     expect(window).toMatch(/requirePerm\(\s*['"]tv['"]/);
   });
 
@@ -53,6 +54,22 @@ describe('Gigared composition root (#47)', () => {
     expect(m![1]).toMatch(/contractServiceRepo/);
     expect(m![1]).toMatch(/serviceCatalogRepo/);
     expect(m![1]).toMatch(/gigaredContractLookup/);
+  });
+
+  it('(h) service-transfer: TransferTvToCustomer is wired with the shared deps + event repo + tv.transfer guard', () => {
+    const m = appSrc.match(/new TransferTvToCustomer\(([^)]*)\)/);
+    expect(m).not.toBeNull();
+    // Mismas deps compartidas del bloque gigared (cliente, lookups ownership-aware, repos locales,
+    // flag de baja local) + el singleton del historial de eventos (contractServiceEventRepo).
+    expect(m![1]).toMatch(/gigaredClient/);
+    expect(m![1]).toMatch(/gigaredCustomerLookup/);
+    expect(m![1]).toMatch(/gigaredContractLookup/);
+    expect(m![1]).toMatch(/contractServiceRepo/);
+    expect(m![1]).toMatch(/serviceCatalogRepo/);
+    expect(m![1]).toMatch(/gigaredTvCancellation/);
+    expect(m![1]).toMatch(/contractServiceEventRepo/);
+    // Guard granular nuevo: tv.transfer (doble capa BE+FE).
+    expect(appSrc).toMatch(/requireTransfer:\s*requirePerm\(\s*['"]tv['"],\s*['"]transfer['"]\s*\)/);
   });
 
   it('(g) #47k/#115: the Gigared TV use cases use an ownership-aware contract lookup (clientId + grContratoId)', () => {

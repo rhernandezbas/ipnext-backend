@@ -368,6 +368,7 @@ import { AddTvService } from '@application/use-cases/gigared/AddTvService';
 import { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
 import { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
 import { CancelTv } from '@application/use-cases/gigared/CancelTv';
+import { TransferTvToCustomer } from '@application/use-cases/gigared/TransferTvToCustomer';
 import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
 import { PrismaTvCredentialsReader } from '../adapters/prisma/PrismaTvCredentialsReader';
@@ -582,6 +583,8 @@ import { DiscardInventorySuggestion } from '@application/use-cases/DiscardInvent
 import { ListContractInstalledItems } from '@application/use-cases/ListContractInstalledItems';
 import { ListClientEquipment } from '@application/use-cases/ListClientEquipment';
 import { AddContractEquipment } from '@application/use-cases/AddContractEquipment';
+// service-transfer (W3): transferencia de equipos entre contratos (lote atómico + ledger TRANSFER).
+import { TransferContractEquipment } from '@application/use-cases/TransferContractEquipment';
 import { InstallContractAsset } from '@application/services/InstallContractAsset';
 import { UpdateInstalledItem } from '@application/use-cases/UpdateInstalledItem';
 import { RemoveInstalledItem } from '@application/use-cases/RemoveInstalledItem';
@@ -662,6 +665,8 @@ import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe'
 import { DeassociatePppoeFromContract } from '@application/use-cases/DeassociatePppoeFromContract';
 import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
 import { TerminatePppoeService } from '@application/use-cases/TerminatePppoeService';
+// service-transfer (W2): transferencia de PPPoE entre contratos (as-is | recreate).
+import { TransferPppoe } from '@application/use-cases/TransferPppoe';
 import { GetPppoeCallerId } from '@application/use-cases/GetPppoeCallerId';
 import { ListAllPppoeServices } from '@application/use-cases/ListAllPppoeServices';
 // pppoe-bulk-select-filter (v2): hermano liviano de ListAllPppoeServices — { ids, total } del filtro.
@@ -728,15 +733,17 @@ import { DeleteZone } from '@application/use-cases/DeleteZone';
 // Covers entity kinds used for FK validation in scheduling use cases.
 // #70: the declared shape includes grClienteId so reverting the select below breaks the COMPILE,
 // not just runtime (RegisterGigaredAccount needs it to derive the deterministic password).
-function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project' | 'Ticket', id: string): Promise<{ id: string; grClienteId?: string | null; tvActivationSeq?: number | null } | null> {
+function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project' | 'Ticket', id: string): Promise<{ id: string; name?: string; grClienteId?: string | null; tvActivationSeq?: number | null } | null> {
   switch (model) {
     // #70 — Client carries grClienteId so RegisterGigaredAccount can derive the deterministic
     // TV password server-side. Selecting it here is harmless for the existence-only callers.
     // #81 — also carries tvActivationSeq so every TV use case resolves the CURRENT internal_id
     // (currentTvInternalId(id, seq)) instead of the bare Client.id. Cast keeps it compile-safe
     // before the Prisma Client is regenerated with the new column (mirror of tvCancelledAt).
+    // service-transfer — also carries name so TransferTvToCustomer can snapshot legible
+    // oldValue/newValue ("de quién a quién") in the transfer-out/in history events.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    case 'Client':   return (prisma as any).client.findUnique({ where: { id }, select: { id: true, grClienteId: true, tvActivationSeq: true } });
+    case 'Client':   return (prisma as any).client.findUnique({ where: { id }, select: { id: true, name: true, grClienteId: true, tvActivationSeq: true } });
     case 'Contract': return prisma.contract.findUnique({ where: { id }, select: { id: true } });
     case 'Partner':  return prisma.partner.findUnique({ where: { id }, select: { id: true } });
     case 'Project':  return prisma.project.findUnique({ where: { id }, select: { id: true } });
@@ -751,6 +758,19 @@ function prismaClientLookup(model: 'Client' | 'Contract' | 'Partner' | 'Project'
 // TV identity (email + password) from the contract's grContratoId without a second query (no N+1).
 function prismaContractOwnershipLookup(id: string): Promise<{ id: string; clientId: string; grContratoId: string | null } | null> {
   return prisma.contract.findUnique({ where: { id }, select: { id: true, clientId: true, grContratoId: true } });
+}
+
+// service-transfer (W2) — contract lookup con clientId + NOMBRE del cliente para TransferPppoe:
+// ownership del contrato destino (existencia + resolución del cliente) y snapshot LEGIBLE
+// ("de quién a quién") de los eventos transfer-out/in. UN findUnique con JOIN al Client (no N+1).
+async function prismaContractClientNameLookup(
+  id: string,
+): Promise<{ id: string; clientId: string; clientName: string | null } | null> {
+  const row = await prisma.contract.findUnique({
+    where: { id },
+    select: { id: true, clientId: true, client: { select: { name: true } } },
+  });
+  return row ? { id: row.id, clientId: row.clientId, clientName: row.client?.name ?? null } : null;
 }
 
 // #40 — ProjectKindLookup wiring: a single findUnique resolves both project
@@ -1451,6 +1471,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     featureFlagRepo, materialStockRepo, materialDeductionSuggestionRepo,
     new ResolveTechnicianLocation(stockLocationRepo),
   );
+  // service-transfer (W3) — mueve ContractInstalledItems a otro contrato (lote atómico via
+  // inventoryUow: legacy + ledger TRANSFER en UNA tx) con eventos transfer-out/in al historial.
+  // Mismo lookup ownership-aware + nombre de cliente que TransferPppoe (W2).
+  const transferContractEquipment = new TransferContractEquipment(
+    contractInventoryRepo,
+    { findById: (id: string) => prismaContractClientNameLookup(id) },
+    new ResolveClientLocation(stockLocationRepo),
+    inventoryUow,
+    new PrismaServiceCatalogRepository(),
+    new PrismaContractServiceEventRepository(),
+  );
   app.use('/api', createContractInventoryRouter(
     new ListTaskInventorySuggestions(inventorySuggestionRepo, contractInventoryRepo, schedulingRepo),
     new ConfirmInventorySuggestion(
@@ -1495,9 +1526,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       contractWrite: requirePerm('inventory', 'write'),   // ← was 'clients','write'
       materialWrite: requirePerm('inventory', 'write'),   // material consumption mutations
       manage:        requirePerm('inventory', 'manage'),  // admin — correct confirmed device type
+      transfer:      requirePerm('inventory', 'transfer'), // service-transfer (W3) — granular, write NO alcanza
     },
     deviceTypeCatalogService,
     new CreateManualSuggestion(inventorySuggestionRepo, schedulingRepo, contractInventoryRepo, deviceTypeCatalogService),
+    transferContractEquipment,
   ));
 
   // Inventory depot read surface (EPIC #38 W3) + closure-detected returns (W4).
@@ -2149,6 +2182,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     changeTvPassword:   new ChangeTvPassword(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
     // #65 fix wave H3 — superficie dedicada para las credenciales (guard tv.register).
     getTvCredentials:   new GetTvCredentials(gigaredCustomerLookup, new PrismaTvCredentialsReader()),
+    // service-transfer — transferencia de TV entre clientes (EPIC Titularidad F1). Mismas deps
+    // compartidas del bloque + el singleton del historial (contractServiceEventRepo, ~1332) para
+    // los eventos transfer-out/in en ambos contratos.
+    transferTv:         new TransferTvToCustomer(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, contractServiceEventRepo),
     requireRead:        requirePerm('tv', 'read'),
     // #50 — granular TV permissions (replace generic tv.write).
     requireLink:        requirePerm('tv', 'link'),
@@ -2156,6 +2193,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     requirePacks:       requirePerm('tv', 'packs'),
     requireOtt:         requirePerm('tv', 'ott'),
     requireCancel:      requirePerm('tv', 'cancel'),
+    requireTransfer:    requirePerm('tv', 'transfer'),
     requireManage:      requirePerm('tv', 'manage'),
     gigaredReady:       createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo),
     gigaredProbeReady:  createGigaredReadyMiddleware(gigaredConfigRepo, featureFlagRepo, { requireFlag: false }),
@@ -2231,6 +2269,22 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // guard de IP PÚBLICA: 409 PPPOE_MOVE_PUBLIC_IP sin `force: true`.
       ipNetworkRepo,
     );
+    // pppoe-terminate-callerid: baja HARD (deleteUser RADIUS) — extraído a variable porque
+    // service-transfer (W2) COMPONE esta MISMA instancia dentro de TransferPppoe (recreate:
+    // crear con createPppoeSvc PRIMERO, borrar el viejo con terminatePppoeSvc DESPUÉS).
+    const terminatePppoeSvc = new TerminatePppoeService(pppoeRepo, orchestrator, routerGw, nasRepoForPppoe, ensureInternet);
+    // service-transfer (W2): POST /pppoe/:id/transfer — as-is (setContractId puro) | recreate
+    // (compone createPppoeSvc + terminatePppoeSvc, las instancias singleton del bloque).
+    // Lookup de contrato con clientId + nombre del cliente para el snapshot de los eventos.
+    const transferPppoe = new TransferPppoe(
+      pppoeRepo,
+      { findById: (id: string) => prismaContractClientNameLookup(id) },
+      createPppoeSvc,
+      terminatePppoeSvc,
+      ensureInternet,
+      new PrismaServiceCatalogRepository(),
+      new PrismaContractServiceEventRepository(),
+    );
     app.use('/api', createPppoeRouter(
       authAdapter,
       sessionRepo,
@@ -2252,7 +2306,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new ListUnassignedPppoe(pppoeRepo, config.pppoe.ingestExcludePatterns),
       new DeassociatePppoeFromContract(pppoeRepo, ensureInternet),
       // pppoe-terminate-callerid: baja HARD (deleteUser RADIUS) + caller-id desde sesión activa.
-      new TerminatePppoeService(pppoeRepo, orchestrator, routerGw, nasRepoForPppoe, ensureInternet),
+      // service-transfer (W2): instancia compartida con TransferPppoe (ver arriba).
+      terminatePppoeSvc,
       new GetPppoeCallerId(pppoeRepo, orchestrator),
       // internet-history — vista GLOBAL de servicios de internet (espejo de la página de TV).
       // pppoe-full-management: se pasa nasRepoForPppoe para enriquecer nasName/nasType en el DTO.
@@ -2293,6 +2348,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // pppoe-bulk-select-filter (v2): GET /api/pppoe/ids — ids del filtro activo para la
       // selección masiva del bulk. Sin wired la ruta no se monta (feature muerta, lección W6).
       new ListAllPppoeServiceIds(pppoeRepo),
+      // service-transfer (W2): POST /api/pppoe/:id/transfer (gate pppoe.transfer). Sin wired
+      // la ruta no se monta y la feature queda muerta (lección W6 — composition test).
+      transferPppoe,
     ));
   }
 

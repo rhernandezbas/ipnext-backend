@@ -37,6 +37,7 @@ import { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
 import { CancelTv } from '@application/use-cases/gigared/CancelTv';
 import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
+import { TransferTvToCustomer } from '@application/use-cases/gigared/TransferTvToCustomer';
 import type { TvCredentials } from '@domain/ports/TvCredentialsReader';
 
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
@@ -169,12 +170,16 @@ async function buildApp(opts: Opts = {}) {
     getTvCredentials: new GetTvCredentials(customerLookup, {
       getByCustomer: async () => (opts.tvCredentials === undefined ? { login: 'GIGA100', password: 'ip243200' } : opts.tvCredentials),
     }),
+    // service-transfer — wired with the same in-memory deps (dedicated seam tests live in
+    // gigared.transfer.routes.test.ts; here it only satisfies the router contract).
+    transferTv: new TransferTvToCustomer(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
     requireRead: opts.perms?.read ?? pass,
     requireLink: opts.perms?.link ?? opts.perms?.write ?? pass,
     requireRegister: opts.perms?.register ?? opts.perms?.write ?? pass,
     requirePacks: opts.perms?.packs ?? opts.perms?.write ?? pass,
     requireOtt: opts.perms?.ott ?? opts.perms?.write ?? pass,
     requireCancel: opts.perms?.cancel ?? opts.perms?.write ?? pass,
+    requireTransfer: pass,
     requireManage: opts.perms?.manage ?? pass,
     gigaredReady: createGigaredReadyMiddleware(cfg, flags),
     gigaredProbeReady: createGigaredReadyMiddleware(cfg, flags, { requireFlag: false }),

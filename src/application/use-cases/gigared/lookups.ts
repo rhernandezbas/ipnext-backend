@@ -13,10 +13,15 @@ export interface CustomerLookup {
    * que TODOS los use cases resuelvan el internal_id VIGENTE vía currentTvInternalId(id, seq) en
    * vez del Client.id pelado. Opcional → absent/null se trata como seq=0 (identidad de hoy,
    * back-compat: los callers/tests que no lo proveen siguen compilando y comportándose igual).
+   *
+   * service-transfer — `name` viaja de vuelta para el snapshot LEGIBLE de los eventos
+   * transfer-out/in (oldValue = nombre del cliente origen, newValue = destino). Opcional →
+   * los callers/tests existentes que no lo proveen siguen compilando; ausente, el use case
+   * cae al id como snapshot.
    */
   findById(
     id: string,
-  ): Promise<{ id: string; grClienteId?: string | null; tvActivationSeq?: number | null } | null>;
+  ): Promise<{ id: string; name?: string | null; grClienteId?: string | null; tvActivationSeq?: number | null } | null>;
 }
 
 /**

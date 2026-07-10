@@ -111,4 +111,43 @@ describe('ListContractServiceHistory', () => {
     expect(result).toHaveLength(1);
     expect(result[0]!.contractId).toBe('C');
   });
+
+  // service-transfer fix wave MEDIUM-5 — la ficha necesita distinguir un 'modified' de
+  // transferencia: changeKind/oldValue/newValue tienen que viajar en el ServiceEventDto.
+  it('MEDIUM-5: expone changeKind/oldValue/newValue en los eventos (transfer visible en la ficha)', async () => {
+    const { InMemoryContractServiceEventRepository } = await import(
+      '@infrastructure/adapters/in-memory/InMemoryContractServiceEventRepository'
+    );
+    const catalogRepo = new InMemoryServiceCatalogRepository();
+    const csRepo = new InMemoryContractServiceRepository();
+    const cseRepo = new InMemoryContractServiceEventRepository();
+    const uc = new ListContractServiceHistory(csRepo, cseRepo);
+    const cat = await catalogRepo.create({ name: 'INTERNET', label: 'Internet', active: true, sortOrder: 0 });
+    csRepo.catalog[cat.id] = { name: cat.name, label: cat.label };
+    await csRepo.add({ contractId: 'C', serviceCatalogId: cat.id });
+    await cseRepo.record({
+      contractId: 'C', serviceCatalogId: cat.id, eventType: 'modified',
+      changeKind: 'transfer-out', oldValue: 'Perez Juan', newValue: 'Gomez Ana',
+      actorName: 'caro', notes: 'PPPoE juanp — tal cual (sin recrear) — pendiente de regularizar',
+    });
+
+    const result = await uc.execute('C');
+    const ev = result[0]!.events.find((e) => e.eventType === 'modified')!;
+    expect(ev.changeKind).toBe('transfer-out');
+    expect(ev.oldValue).toBe('Perez Juan');
+    expect(ev.newValue).toBe('Gomez Ana');
+    expect(ev.notes).toContain('tal cual');
+  });
+
+  // MEDIUM-5 (aditivo, no rompe el wire): los eventos sintetizados legacy llevan null en los
+  // campos nuevos — nunca undefined (shape estable para el FE).
+  it('MEDIUM-5: los eventos sintetizados legacy llevan changeKind/oldValue/newValue en null', async () => {
+    const { csRepo, uc, catId } = await setup();
+    await csRepo.add({ contractId: 'C', serviceCatalogId: catId });
+    const result = await uc.execute('C');
+    const ev = result[0]!.events[0]!;
+    expect(ev.changeKind).toBeNull();
+    expect(ev.oldValue).toBeNull();
+    expect(ev.newValue).toBeNull();
+  });
 });
