@@ -25,11 +25,17 @@ export class InMemoryContractRepository implements ContractRepository {
    * can mirror the Prisma adapter without leaking vendedor into the listing.
    */
   private vendedores: (string | null)[] = [];
+  /**
+   * recapture-active-client-match — GR `Contract.motivoBaja` per seeded contract,
+   * parallel to `vendedores` (same reason: not part of the `ContractListItem` wire
+   * shape, index-aligned with `items`). Feeds `findContractTechnologiesByClientIds`.
+   */
+  private motivoBajas: (string | null)[] = [];
   /** client-geolocation — Prominense-owned GPS per contract id. */
   public locations: Record<string, ContractLocationResult> = {};
 
   /** Test seam: seed a contract list item. Returns the generated id. */
-  seed(data: Partial<ContractListItem> & { clientName: string; plan: string; vendedor?: string | null }): ContractListItem {
+  seed(data: Partial<ContractListItem> & { clientName: string; plan: string; vendedor?: string | null; motivoBaja?: string | null }): ContractListItem {
     const item: ContractListItem = {
       id: data.id ?? randomUUID(),
       code: data.code ?? null,
@@ -42,6 +48,7 @@ export class InMemoryContractRepository implements ContractRepository {
     };
     this.items.push(item);
     this.vendedores.push(data.vendedor ?? null);
+    this.motivoBajas.push(data.motivoBaja ?? null);
     if (!(item.id in this.names)) this.names[item.id] = null;
     if (!(item.id in this.locations)) {
       this.locations[item.id] = { id: item.id, gpsLat: null, gpsLng: null, gpsPlusCode: null };
@@ -81,11 +88,16 @@ export class InMemoryContractRepository implements ContractRepository {
 
   async findContractTechnologiesByClientIds(
     clientIds: string[],
-  ): Promise<Array<{ clientId: string; technology: string | null; plan: string }>> {
+  ): Promise<Array<{ clientId: string; technology: string | null; plan: string; motivoBaja: string | null }>> {
     const allowed = new Set(clientIds);
     return this.items
-      .filter((c) => allowed.has(c.clientId))
-      .map((c) => ({ clientId: c.clientId, technology: c.technology, plan: c.plan }));
+      .map((c, idx) => ({
+        clientId: c.clientId,
+        technology: c.technology,
+        plan: c.plan,
+        motivoBaja: this.motivoBajas[idx] ?? null,
+      }))
+      .filter((c) => allowed.has(c.clientId));
   }
 
   async findAllContractTechnologies(): Promise<Array<{ clientId: string; technology: string | null; plan: string }>> {

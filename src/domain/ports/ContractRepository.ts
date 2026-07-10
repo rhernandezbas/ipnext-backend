@@ -49,15 +49,21 @@ export interface ContractRepository {
   list(query: ListContractsQuery): Promise<PaginatedResult<ContractListItem>>;
   /**
    * Batch read for Recaptación lead enrichment (anti-N+1): ONE query returning the
-   * (clientId, technology, plan) of EVERY contract owned by any of `clientIds`, across
-   * ALL statuses (baja contracts included — no status filter). The raw `technology`
-   * column is NULL for every GR contract, so the caller DERIVES the effective tech via
-   * `deriveTechnology(technology, plan)` (manual value wins; else classify by plan
-   * speed). Dedup / null-empty filtering is the caller's responsibility (use case).
+   * (clientId, technology, plan, motivoBaja) of EVERY contract owned by any of
+   * `clientIds`, across ALL statuses (baja contracts included — no status filter).
+   * The raw `technology` column is NULL for every GR contract, so the caller DERIVES
+   * the effective tech via `deriveTechnology(technology, plan)` (manual value wins;
+   * else classify by plan speed). Dedup / null-empty filtering is the caller's
+   * responsibility (use case).
+   *
+   * `motivoBaja` (recapture-active-client-match, Decisión 6) piggybacks this SAME
+   * batch — zero extra query. Tech derivation ignores it; it feeds the source-agnostic
+   * `churnReasonTexts` assembled by `ListRecaptureLeads`/`GetRecaptureLead`/
+   * `IngestChurnedClients` (the persisted `Contract.motivoBaja`, GR-owned, forward-only).
    */
   findContractTechnologiesByClientIds(
     clientIds: string[],
-  ): Promise<Array<{ clientId: string; technology: string | null; plan: string }>>;
+  ): Promise<Array<{ clientId: string; technology: string | null; plan: string; motivoBaja: string | null }>>;
   /**
    * Every contract's (clientId, technology, plan) across ALL clients and ALL statuses.
    * Feeds the Recaptación `technology` filter: the caller derives the effective

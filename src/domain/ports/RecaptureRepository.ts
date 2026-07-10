@@ -98,8 +98,16 @@ export interface RecaptureRepository {
    * create a RecaptureLead (source='churned_client') if one does not already
    * exist (idempotent via partial unique index on clientId WHERE source='churned_client').
    * Returns the number of new leads created.
+   *
+   * `churnReason` (recapture-active-client-match, Decisión 5b) — when provided,
+   * seeded from the client's baja contract `motivoBaja` — is written ONLY on the
+   * CREATE branch. Idempotent: an already-existing lead is NEVER re-stamped (that
+   * lead's `churn_reason` signal coverage comes from reading the contract at
+   * match-time instead, not from a backfill here).
    */
-  ingestChurned(clients: Array<{ id: string; name: string; phone?: string | null; email?: string | null }>): Promise<number>;
+  ingestChurned(
+    clients: Array<{ id: string; name: string; phone?: string | null; email?: string | null; churnReason?: string | null }>,
+  ): Promise<number>;
 
   /**
    * Unconditional assign: set the lead's assigneeId to `operatorId`.

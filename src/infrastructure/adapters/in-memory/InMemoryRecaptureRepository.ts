@@ -202,7 +202,7 @@ export class InMemoryRecaptureRepository implements RecaptureRepository {
   }
 
   async ingestChurned(
-    clients: Array<{ id: string; name: string; phone?: string | null; email?: string | null }>,
+    clients: Array<{ id: string; name: string; phone?: string | null; email?: string | null; churnReason?: string | null }>,
   ): Promise<number> {
     let created = 0;
 
@@ -219,6 +219,8 @@ export class InMemoryRecaptureRepository implements RecaptureRepository {
         contactName: client.name,
         phone: client.phone,
         email: client.email,
+        // recapture-active-client-match Decisión 5b — CREATE-only, never re-stamped.
+        churnReason: client.churnReason ?? null,
       });
       created++;
     }

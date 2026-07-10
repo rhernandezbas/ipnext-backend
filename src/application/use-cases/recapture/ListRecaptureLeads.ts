@@ -48,6 +48,10 @@ export class ListRecaptureLeads {
     ];
 
     const technologiesByClient = new Map<string, Set<string>>();
+    // recapture-active-client-match (design.md Decisión 6) — piggybacks the SAME
+    // batch: no extra query. Gathers every non-null `Contract.motivoBaja` per
+    // clientId so the churn_reason signal can fire from either source.
+    const motivoBajaByClient = new Map<string, Set<string>>();
     if (clientIds.length > 0) {
       const rows = await this.contractRepo.findContractTechnologiesByClientIds(clientIds);
       for (const row of rows) {
@@ -55,10 +59,16 @@ export class ListRecaptureLeads {
         // speed). Identical rule to ListContracts → ZERO drift. trim() keeps the
         // dedup Set clean and drops whitespace-only manual values.
         const tech = deriveTechnology(row.technology, row.plan)?.trim();
-        if (!tech) continue; // drop unclassified (null) / empty / whitespace-only
-        const set = technologiesByClient.get(row.clientId) ?? new Set<string>();
-        set.add(tech);
-        technologiesByClient.set(row.clientId, set);
+        if (tech) {
+          const set = technologiesByClient.get(row.clientId) ?? new Set<string>();
+          set.add(tech);
+          technologiesByClient.set(row.clientId, set);
+        }
+        if (row.motivoBaja) {
+          const mset = motivoBajaByClient.get(row.clientId) ?? new Set<string>();
+          mset.add(row.motivoBaja);
+          motivoBajaByClient.set(row.clientId, mset);
+        }
       }
     }
 
@@ -79,11 +89,14 @@ export class ListRecaptureLeads {
     return {
       ...result,
       data: result.data.map((lead) => {
-        // SOURCE-AGNOSTIC churn text seam (design.md Decisión 6): today only
-        // `lead.churnReason` (CSV import / IngestChurnedClients) feeds it. The
-        // persisted `Contract.motivoBaja` source is merged in here by Batch 3B —
-        // this array is the exact seam the helper already expects.
-        const churnReasonTexts = lead.churnReason ? [lead.churnReason] : [];
+        // SOURCE-AGNOSTIC churn text seam (design.md Decisión 6): merges BOTH
+        // sources — `lead.churnReason` (CSV import / IngestChurnedClients) AND
+        // every persisted `Contract.motivoBaja` of the lead's own client (read from
+        // the SAME batch above, zero extra query). Nulls filtered.
+        const motivoTexts = lead.clientId ? [...(motivoBajaByClient.get(lead.clientId) ?? [])] : [];
+        const churnReasonTexts = [lead.churnReason, ...motivoTexts].filter(
+          (t): t is string => !!t,
+        );
         const { signals } = matchActiveClient(
           { clientId: lead.clientId, phone: lead.phone, email: lead.email },
           activeContacts,

@@ -53,20 +53,27 @@ export class PrismaContractRepository implements ContractRepository {
   }
 
   /**
-   * Anti-N+1 batch: ONE query returning the (clientId, technology, plan) of every
-   * contract owned by any of `clientIds`, across ALL statuses (no status filter → baja
-   * included). The caller derives the effective tech (deriveTechnology) — the raw
+   * Anti-N+1 batch: ONE query returning the (clientId, technology, plan, motivoBaja) of
+   * every contract owned by any of `clientIds`, across ALL statuses (no status filter →
+   * baja included). The caller derives the effective tech (deriveTechnology) — the raw
    * `technology` column is NULL for all GR rows, so `plan` is required for derivation.
+   * `motivoBaja` (recapture-active-client-match) piggybacks this SAME query — zero
+   * extra round-trip; tech derivation ignores it.
    */
   async findContractTechnologiesByClientIds(
     clientIds: string[],
-  ): Promise<Array<{ clientId: string; technology: string | null; plan: string }>> {
+  ): Promise<Array<{ clientId: string; technology: string | null; plan: string; motivoBaja: string | null }>> {
     if (clientIds.length === 0) return [];
     const rows = await prisma.contract.findMany({
       where: { clientId: { in: clientIds } },
-      select: { clientId: true, technology: true, plan: true },
+      select: { clientId: true, technology: true, plan: true, motivoBaja: true },
     });
-    return rows.map((r) => ({ clientId: r.clientId, technology: r.technology ?? null, plan: r.plan }));
+    return rows.map((r) => ({
+      clientId: r.clientId,
+      technology: r.technology ?? null,
+      plan: r.plan,
+      motivoBaja: r.motivoBaja ?? null,
+    }));
   }
 
   /**

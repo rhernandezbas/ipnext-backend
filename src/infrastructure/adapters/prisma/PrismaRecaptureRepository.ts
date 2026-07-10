@@ -215,7 +215,7 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
   }
 
   async ingestChurned(
-    clients: Array<{ id: string; name: string; phone?: string | null; email?: string | null }>,
+    clients: Array<{ id: string; name: string; phone?: string | null; email?: string | null; churnReason?: string | null }>,
   ): Promise<number> {
     let created = 0;
 
@@ -229,6 +229,9 @@ export class PrismaRecaptureRepository implements RecaptureRepository {
             contactName: client.name,
             phone: client.phone ?? null,
             email: client.email ?? null,
+            // recapture-active-client-match Decisión 5b — CREATE-only, never re-stamped
+            // (P2002 below means an existing lead is skipped, not updated).
+            churnReason: client.churnReason ?? null,
           },
         });
         created++;

@@ -73,7 +73,7 @@ describe('#3b — assigneeName in RecaptureLeadDto', () => {
   it('getById() returns assigneeName=null when unassigned', async () => {
     const repo = makeRepo();
     const lead = await repo.create({ source: 'csv', contactName: 'Solo' });
-    const uc = new GetRecaptureLead(repo, makeEmptyCustomerRepo());
+    const uc = new GetRecaptureLead(repo, makeEmptyCustomerRepo(), new InMemoryContractRepository());
     const dto = await uc.execute(lead.id);
     expect(dto).toHaveProperty('assigneeName', null);
   });
@@ -98,7 +98,7 @@ describe('#3b — assigneeName in RecaptureLeadDto', () => {
       previousPlan: null,
     };
     repo.seedLead(lead);
-    const uc = new GetRecaptureLead(repo, makeEmptyCustomerRepo());
+    const uc = new GetRecaptureLead(repo, makeEmptyCustomerRepo(), new InMemoryContractRepository());
     const dto = await uc.execute(lead.id);
     expect(dto.assigneeName).toBe('Carlos Ruiz');
   });

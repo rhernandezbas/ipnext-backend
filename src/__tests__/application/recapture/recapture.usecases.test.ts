@@ -157,7 +157,7 @@ describe('GetRecaptureLead', () => {
   it('returns lead with empty contacts when none appended', async () => {
     const repo = makeRepo();
     const lead = await seedFreeLead(repo);
-    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo());
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo(), makeEmptyContractRepo());
     const dto = await uc.execute(lead.id);
     expect(dto.id).toBe(lead.id);
     expect(dto.contacts).toHaveLength(0);
@@ -172,7 +172,7 @@ describe('GetRecaptureLead', () => {
       channel: 'llamada',
       outcome: 'contactado',
     });
-    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo());
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo(), makeEmptyContractRepo());
     const dto = await uc.execute(lead.id);
     expect(dto.contacts).toHaveLength(1);
     expect(dto.contacts[0]!.channel).toBe('llamada');
@@ -180,7 +180,7 @@ describe('GetRecaptureLead', () => {
 
   it('throws RecaptureLeadNotFoundError when id does not exist', async () => {
     const repo = makeRepo();
-    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo());
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo(), makeEmptyContractRepo());
     await expect(uc.execute('nonexistent')).rejects.toThrow(RecaptureLeadNotFoundError);
   });
 });
@@ -269,7 +269,7 @@ describe('IngestChurnedClients', () => {
       { id: 'c-1', name: 'Alice', phone: '111', email: 'alice@test.com' },
       { id: 'c-2', name: 'Bob', phone: '222', email: 'bob@test.com' },
     ]);
-    const uc = new IngestChurnedClients(repo, customerRepo);
+    const uc = new IngestChurnedClients(repo, customerRepo, makeEmptyContractRepo());
     const result = await uc.execute();
     expect(result.created).toBe(2);
     expect(result.skipped).toBe(0);
@@ -284,7 +284,7 @@ describe('IngestChurnedClients', () => {
     const customerRepo = makeCustomerRepo([
       { id: 'c-1', name: 'Alice', phone: '111', email: 'alice@test.com' },
     ]);
-    const uc = new IngestChurnedClients(repo, customerRepo);
+    const uc = new IngestChurnedClients(repo, customerRepo, makeEmptyContractRepo());
     await uc.execute();
     const second = await uc.execute();
     expect(second.created).toBe(0);
@@ -297,10 +297,60 @@ describe('IngestChurnedClients', () => {
   it('returns created=0 when no baja clients', async () => {
     const repo = makeRepo();
     const customerRepo = makeCustomerRepo([]);
-    const uc = new IngestChurnedClients(repo, customerRepo);
+    const uc = new IngestChurnedClients(repo, customerRepo, makeEmptyContractRepo());
     const result = await uc.execute();
     expect(result.created).toBe(0);
     expect(result.skipped).toBe(0);
+  });
+
+  // recapture-active-client-match — Decisión 5b: populate churnReason from the
+  // baja client's persisted Contract.motivoBaja, create-only/idempotent.
+  it('a new lead inherits churnReason from the baja contract\'s motivoBaja (S15a)', async () => {
+    const repo = makeRepo();
+    const customerRepo = makeCustomerRepo([
+      { id: 'c-1', name: 'Alice', phone: '111', email: 'alice@test.com' },
+    ]);
+    const contractRepo = new InMemoryContractRepository();
+    contractRepo.seed({
+      clientId: 'c-1',
+      clientName: 'Alice',
+      plan: 'IP-Air-30',
+      status: 'baja',
+      motivoBaja: 'CAMBIO DE TITULARIDAD',
+    });
+
+    const uc = new IngestChurnedClients(repo, customerRepo, contractRepo);
+    await uc.execute();
+
+    const list = await repo.list({});
+    expect(list.data[0]!.churnReason).toBe('CAMBIO DE TITULARIDAD');
+  });
+
+  it('idempotent ingest does NOT re-stamp churnReason on an existing lead (S15b)', async () => {
+    const repo = makeRepo();
+    const customerRepo = makeCustomerRepo([
+      { id: 'c-1', name: 'Alice', phone: '111', email: 'alice@test.com' },
+    ]);
+    // First run: contract has NO motivoBaja yet → lead is created with churnReason=null.
+    const contractRepo = new InMemoryContractRepository();
+    contractRepo.seed({ clientId: 'c-1', clientName: 'Alice', plan: 'IP-Air-30', status: 'baja' });
+    const uc = new IngestChurnedClients(repo, customerRepo, contractRepo);
+    await uc.execute();
+
+    let list = await repo.list({});
+    expect(list.data[0]!.churnReason).toBeNull();
+
+    // Contract is re-synced later and NOW carries a motivoBaja — but the lead
+    // already exists, so the SECOND ingest run must NOT re-stamp it (forward-only;
+    // this lead's churn_reason coverage comes from the match-time contract read, not a backfill).
+    contractRepo.seed({ clientId: 'c-1', clientName: 'Alice', plan: 'IP-Air-30', status: 'baja', motivoBaja: 'CAMBIO DE TITULARIDAD' });
+    const second = await uc.execute();
+    expect(second.created).toBe(0);
+    expect(second.skipped).toBe(1);
+
+    list = await repo.list({});
+    expect(list.total).toBe(1);
+    expect(list.data[0]!.churnReason).toBeNull();
   });
 });
 
@@ -510,6 +560,26 @@ describe('ListRecaptureLeads — active-client match enrichment', () => {
     expect(result.data[0]!.possibleActiveMatchSignals).toEqual(['churn_reason']);
   });
 
+  // recapture-active-client-match — Decisión 6: churn_reason from the OTHER source
+  // (the lead's own client's persisted Contract.motivoBaja), no lead.churnReason at all.
+  it('computes the churn_reason signal from the lead\'s client Contract.motivoBaja (S16a — no lead.churnReason)', async () => {
+    const repo = makeRepo();
+    await repo.create({ source: 'churned_client', clientId: 'client-1', contactName: 'Baja sin motivo propio' });
+    const contractRepo = new InMemoryContractRepository();
+    contractRepo.seed({
+      clientId: 'client-1',
+      clientName: 'Baja sin motivo propio',
+      plan: 'IP-Air-30',
+      status: 'baja',
+      motivoBaja: 'CAMBIO DE TITULARIDAD',
+    });
+
+    const uc = new ListRecaptureLeads(repo, contractRepo, makeActiveContactsRepo());
+    const result = await uc.execute({});
+
+    expect(result.data[0]!.possibleActiveMatchSignals).toEqual(['churn_reason']);
+  });
+
   it('calls listActiveContacts() exactly ONCE per page regardless of lead count (anti-N+1)', async () => {
     const repo = makeRepo();
     for (let i = 0; i < 5; i++) {
@@ -554,7 +624,7 @@ describe('GetRecaptureLead — active-client match enrichment', () => {
   it('returns possibleActiveMatch = {signals: [], matchedClients: []} when nothing matches (S9a — never undefined)', async () => {
     const repo = makeRepo();
     const lead = await repo.create({ source: 'csv', contactName: 'No match' });
-    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo([]));
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo([]), makeEmptyContractRepo());
 
     const dto = await uc.execute(lead.id);
 
@@ -574,7 +644,7 @@ describe('GetRecaptureLead — active-client match enrichment', () => {
       { id: 'c-3', name: 'Client Three', phone: null, email: null },        // no match, present in candidate set
     ]);
 
-    const uc = new GetRecaptureLead(repo, customerRepo);
+    const uc = new GetRecaptureLead(repo, customerRepo, makeEmptyContractRepo());
     const dto = await uc.execute(lead.id);
 
     expect(dto.possibleActiveMatch.signals).toEqual(['phone']);
@@ -594,8 +664,28 @@ describe('GetRecaptureLead — active-client match enrichment', () => {
       contactName: 'Churn only',
       churnReason: 'Solicitó baja por CAMBIO DE TITULARIDAD',
     });
-    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo([]));
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo([]), makeEmptyContractRepo());
 
+    const dto = await uc.execute(lead.id);
+
+    expect(dto.possibleActiveMatch.signals).toEqual(['churn_reason']);
+    expect(dto.possibleActiveMatch.matchedClients).toEqual([]);
+  });
+
+  // recapture-active-client-match — Decisión 6: same source-agnostic seam on the detail side.
+  it('computes churn_reason from the lead\'s client Contract.motivoBaja (S16a detail — no lead.churnReason)', async () => {
+    const repo = makeRepo();
+    const lead = await repo.create({ source: 'churned_client', clientId: 'client-1', contactName: 'Baja sin motivo propio' });
+    const contractRepo = new InMemoryContractRepository();
+    contractRepo.seed({
+      clientId: 'client-1',
+      clientName: 'Baja sin motivo propio',
+      plan: 'IP-Air-30',
+      status: 'baja',
+      motivoBaja: 'CAMBIO DE TITULARIDAD',
+    });
+
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo([]), contractRepo);
     const dto = await uc.execute(lead.id);
 
     expect(dto.possibleActiveMatch.signals).toEqual(['churn_reason']);
@@ -605,7 +695,7 @@ describe('GetRecaptureLead — active-client match enrichment', () => {
   it('fails OPEN to the empty shape when listActiveContacts() rejects', async () => {
     const repo = makeRepo();
     const lead = await repo.create({ source: 'csv', contactName: 'Boom' });
-    const uc = new GetRecaptureLead(repo, makeThrowingCustomerRepo());
+    const uc = new GetRecaptureLead(repo, makeThrowingCustomerRepo(), makeEmptyContractRepo());
 
     const dto = await uc.execute(lead.id);
 
@@ -618,7 +708,7 @@ describe('GetRecaptureLead — active-client match enrichment', () => {
     const customerRepo = makeActiveContactsRepo([
       { id: 'c-2', name: 'Client Two', phone: '2324421234', email: null },
     ]);
-    const uc = new GetRecaptureLead(repo, customerRepo);
+    const uc = new GetRecaptureLead(repo, customerRepo, makeEmptyContractRepo());
 
     const first = await uc.execute(lead.id);
     const second = await uc.execute(lead.id);
