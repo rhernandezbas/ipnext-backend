@@ -12,6 +12,7 @@ import { UpdateRecaptureLeadStatus } from '../../../application/use-cases/recapt
 import { AddRecaptureContact } from '../../../application/use-cases/recapture/AddRecaptureContact';
 import { IngestChurnedClients } from '../../../application/use-cases/recapture/IngestChurnedClients';
 import type { CustomerRepository, ActiveClientContact } from '../../../domain/ports/CustomerRepository';
+import type { ContractRepository } from '../../../domain/ports/ContractRepository';
 import type { RecaptureLead } from '../../../domain/entities/recaptureLead';
 
 // ─── Shared setup ────────────────────────────────────────────────────────────
@@ -65,6 +66,16 @@ function makeThrowingCustomerRepo(): CustomerRepository {
   return {
     listActiveContacts: jest.fn().mockRejectedValue(new Error('listActiveContacts boom')),
   } as unknown as CustomerRepository;
+}
+
+/**
+ * Fix-wave Finding 1/3b — simulates `findContractTechnologiesByClientIds()` failing.
+ * Same narrow jest.fn()-through-the-port convention as `makeThrowingCustomerRepo`.
+ */
+function makeThrowingContractRepo(): ContractRepository {
+  return {
+    findContractTechnologiesByClientIds: jest.fn().mockRejectedValue(new Error('findContractTechnologiesByClientIds boom')),
+  } as unknown as ContractRepository;
 }
 
 async function seedFreeLead(repo: InMemoryRecaptureRepository): Promise<RecaptureLead> {
@@ -616,6 +627,64 @@ describe('ListRecaptureLeads — active-client match enrichment', () => {
     expect(result.data).toHaveLength(2);
     result.data.forEach((d) => expect(d.possibleActiveMatchSignals).toEqual([]));
   });
+
+  // Fix-wave Finding 1 — the contract batch used to run OUTSIDE the fail-open
+  // guard: a throwing findContractTechnologiesByClientIds() 500'd the whole list.
+  // design.md Decisión 3: "un contrato corrupto JAMÁS debe voltear la tabla".
+  it('Finding 1: findContractTechnologiesByClientIds() rejecting must NOT break the list — degrades technologies to [], drops the contract-sourced churn text, but phone + lead.churnReason signals still fire', async () => {
+    const repo = makeRepo();
+    await repo.create({
+      source: 'churned_client',
+      clientId: 'client-1',
+      contactName: 'Still matches',
+      phone: '2324421234',
+      churnReason: 'CAMBIO DE TITULARIDAD',
+    });
+    const contractRepo = makeThrowingContractRepo();
+    const customerRepo = makeActiveContactsRepo([
+      { id: 'c-2', name: 'Client Two', phone: '2324421234', email: null },
+    ]);
+
+    const uc = new ListRecaptureLeads(repo, contractRepo, customerRepo);
+    const result = await uc.execute({});
+
+    expect(result.data).toHaveLength(1);
+    const dto = result.data[0]!;
+    expect(dto.technologies).toEqual([]); // contract batch degraded to []
+    // phone (from listActiveContacts, unaffected) + churn_reason (from lead.churnReason,
+    // NOT the contract) both still compute — only the contract-sourced motivoBaja text is lost.
+    expect([...dto.possibleActiveMatchSignals].sort()).toEqual(['churn_reason', 'phone']);
+  });
+});
+
+// ─── ListRecaptureLeads — fail-open logging (Fix-wave Finding 2) ──────────────
+
+describe('ListRecaptureLeads — fail-open logging (Finding 2)', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('logs once when findContractTechnologiesByClientIds() rejects', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const repo = makeRepo();
+    await repo.create({ source: 'churned_client', clientId: 'client-1', contactName: 'A' });
+
+    const uc = new ListRecaptureLeads(repo, makeThrowingContractRepo(), makeActiveContactsRepo());
+    await uc.execute({});
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs once when listActiveContacts() rejects', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const repo = makeRepo();
+    await repo.create({ source: 'csv', contactName: 'A' });
+
+    const uc = new ListRecaptureLeads(repo, makeEmptyContractRepo(), makeThrowingCustomerRepo());
+    await uc.execute({});
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ─── GetRecaptureLead — active-client match enrichment (recapture-active-client-match) ────
@@ -717,5 +786,58 @@ describe('GetRecaptureLead — active-client match enrichment', () => {
     expect(customerRepo.listActiveContacts).toHaveBeenCalledTimes(2);
     const stored = await repo.getById(lead.id);
     expect(stored!.updatedAt).toBe(lead.updatedAt);
+  });
+
+  // Fix-wave Finding 3b — pins that a contract-read failure degrades ONLY the
+  // contract-sourced churn text; signals computed from the (successful) active-contact
+  // read must still fire. Requires the same granular fail-open split as Finding 1's fix.
+  it('Finding 3b: findContractTechnologiesByClientIds() rejects — detail resolves with signals still computed from remaining sources (no throw)', async () => {
+    const repo = makeRepo();
+    const lead = await repo.create({
+      source: 'churned_client',
+      clientId: 'client-1',
+      contactName: 'Partial degrade',
+      phone: '2324421234',
+    });
+    const customerRepo = makeActiveContactsRepo([
+      { id: 'c-2', name: 'Client Two', phone: '2324421234', email: null },
+    ]);
+
+    const uc = new GetRecaptureLead(repo, customerRepo, makeThrowingContractRepo());
+    const dto = await uc.execute(lead.id);
+
+    expect(dto.possibleActiveMatch.signals).toEqual(['phone']);
+    expect(dto.possibleActiveMatch.matchedClients).toHaveLength(1);
+    expect(dto.possibleActiveMatch.matchedClients[0]).toMatchObject({ clientId: 'c-2', matchedBy: ['phone'] });
+  });
+});
+
+// ─── GetRecaptureLead — fail-open logging (Fix-wave Finding 2) ────────────────
+
+describe('GetRecaptureLead — fail-open logging (Finding 2)', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('logs once when listActiveContacts() rejects', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const repo = makeRepo();
+    const lead = await repo.create({ source: 'csv', contactName: 'Boom' });
+
+    const uc = new GetRecaptureLead(repo, makeThrowingCustomerRepo(), makeEmptyContractRepo());
+    await uc.execute(lead.id);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs once when findContractTechnologiesByClientIds() rejects', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const repo = makeRepo();
+    const lead = await repo.create({ source: 'churned_client', clientId: 'client-1', contactName: 'Boom' });
+
+    const uc = new GetRecaptureLead(repo, makeActiveContactsRepo(), makeThrowingContractRepo());
+    await uc.execute(lead.id);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -99,4 +99,20 @@ describe('InMemoryClientMirrorRepository.upsertContract (REQ-DELTA-12)', () => {
     await mirror.upsertContract(updated);
     expect(mirror.contracts.get('900')?.motivoBaja).toBe('CAMBIO DE TITULARIDAD');
   });
+
+  // Fix-wave Finding 3a — the CLEAR direction (ghost-signal prevention). Pins this
+  // against a create-only regression: if `upsertContract`'s update branch ever stops
+  // reflecting the incoming `motivoBaja` (e.g. a future "merge instead of replace"
+  // refactor), a client re-synced without motivoBaja would keep showing a STALE
+  // churn_reason signal forever.
+  it('update — motivoBaja clears back to null when GR omits it on re-sync (S14c — ghost-signal prevention)', async () => {
+    const mirror = new InMemoryClientMirrorRepository();
+    const withMotivo = { ...makeContract('900', '111'), motivoBaja: 'CAMBIO DE TITULARIDAD' };
+    await mirror.upsertContract(withMotivo);
+    expect(mirror.contracts.get('900')?.motivoBaja).toBe('CAMBIO DE TITULARIDAD');
+
+    // Re-sync: GR no longer reports a motivoBaja for this contract (absent/null).
+    await mirror.upsertContract(makeContract('900', '111'));
+    expect(mirror.contracts.get('900')?.motivoBaja).toBeNull();
+  });
 });

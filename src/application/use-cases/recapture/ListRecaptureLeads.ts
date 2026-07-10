@@ -52,23 +52,36 @@ export class ListRecaptureLeads {
     // batch: no extra query. Gathers every non-null `Contract.motivoBaja` per
     // clientId so the churn_reason signal can fire from either source.
     const motivoBajaByClient = new Map<string, Set<string>>();
+    // Fix-wave Finding 1 (design.md Decisión 3) — this batch MUST be fail-OPEN:
+    // a corrupt/throwing contract read can never 500 the whole list, the primary
+    // function of this endpoint. On error, both maps stay empty for this page —
+    // technologies degrade to [], and churn_reason loses the contract-sourced text
+    // (lead.churnReason / listActiveContacts-based signals are unaffected, they are
+    // computed independently below).
     if (clientIds.length > 0) {
-      const rows = await this.contractRepo.findContractTechnologiesByClientIds(clientIds);
-      for (const row of rows) {
-        // DERIVE the effective technology (manual value wins; else classify by plan
-        // speed). Identical rule to ListContracts → ZERO drift. trim() keeps the
-        // dedup Set clean and drops whitespace-only manual values.
-        const tech = deriveTechnology(row.technology, row.plan)?.trim();
-        if (tech) {
-          const set = technologiesByClient.get(row.clientId) ?? new Set<string>();
-          set.add(tech);
-          technologiesByClient.set(row.clientId, set);
+      try {
+        const rows = await this.contractRepo.findContractTechnologiesByClientIds(clientIds);
+        for (const row of rows) {
+          // DERIVE the effective technology (manual value wins; else classify by plan
+          // speed). Identical rule to ListContracts → ZERO drift. trim() keeps the
+          // dedup Set clean and drops whitespace-only manual values.
+          const tech = deriveTechnology(row.technology, row.plan)?.trim();
+          if (tech) {
+            const set = technologiesByClient.get(row.clientId) ?? new Set<string>();
+            set.add(tech);
+            technologiesByClient.set(row.clientId, set);
+          }
+          if (row.motivoBaja) {
+            const mset = motivoBajaByClient.get(row.clientId) ?? new Set<string>();
+            mset.add(row.motivoBaja);
+            motivoBajaByClient.set(row.clientId, mset);
+          }
         }
-        if (row.motivoBaja) {
-          const mset = motivoBajaByClient.get(row.clientId) ?? new Set<string>();
-          mset.add(row.motivoBaja);
-          motivoBajaByClient.set(row.clientId, mset);
-        }
+      } catch (err) {
+        console.warn(
+          '[recapture-match] ListRecaptureLeads: findContractTechnologiesByClientIds falló — FAIL-OPEN (technologies=[] / motivoBaja de contrato perdido para esta página):',
+          err,
+        );
       }
     }
 
@@ -81,7 +94,9 @@ export class ListRecaptureLeads {
     if (result.data.length > 0) {
       try {
         activeContacts = await this.customerRepo.listActiveContacts();
-      } catch {
+      } catch (err) {
+        // Fix-wave Finding 2 — operational trace for prod (design.md Decisión 3: "ante error → log + []").
+        console.warn('[recapture-match] ListRecaptureLeads: listActiveContacts falló — FAIL-OPEN ([] signals para toda la página):', err);
         activeContacts = [];
       }
     }
