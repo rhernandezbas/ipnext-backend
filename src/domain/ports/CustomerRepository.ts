@@ -38,6 +38,21 @@ export interface UpdateClientLocationInput {
   plusCode?: string | null;
 }
 
+/**
+ * recapture-active-client-match — narrow candidate-contact shape for the
+ * "posible cliente activo" detector (design.md Decisión 1). Deliberately NOT
+ * the full `Customer` entity — only the 4 columns the in-memory matcher needs.
+ * phone/email are nullable: real GR data can have gaps even though the Client
+ * table columns are non-null strings today (defensive, matches matchActiveClient's
+ * null-safe contract).
+ */
+export interface ActiveClientContact {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+}
+
 export interface CustomerRepository {
   list(query: ListClientsQuery): Promise<PaginatedResult<Customer>>;
   findById(id: string): Promise<Customer>;
@@ -54,4 +69,12 @@ export interface CustomerRepository {
    * Returns the updated Customer, or null if the id does not exist.
    */
   updateLocation(id: string, data: UpdateClientLocationInput): Promise<Customer | null>;
+  /**
+   * recapture-active-client-match — batch candidate set for the "posible cliente
+   * activo" detector. Returns EVERY client with status='active' (id/name/phone/
+   * email only, 4 narrow columns — NOT the full Customer). ONE call serves an
+   * entire list page or a single detail lookup; the caller matches in memory via
+   * `matchActiveClient` (design.md Decisión 1 — no Prisma OR-query, no N+1).
+   */
+  listActiveContacts(): Promise<ActiveClientContact[]>;
 }

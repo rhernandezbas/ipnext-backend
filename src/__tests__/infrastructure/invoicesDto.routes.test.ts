@@ -52,6 +52,7 @@ function makeRepo(invoices: Invoice[]): CustomerRepository {
     listInvoices: jest.fn().mockResolvedValue(invoices),
     listLogs: jest.fn(),
     updateLocation: jest.fn(),
+    listActiveContacts: jest.fn().mockResolvedValue([]),
   };
 }
 

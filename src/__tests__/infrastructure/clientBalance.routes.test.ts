@@ -69,6 +69,7 @@ function makeCustomerRepo(debtor: Customer, fresh?: Customer): CustomerRepositor
     listInvoices: jest.fn().mockResolvedValue([]),
     listLogs: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }),
     updateLocation: jest.fn(),
+    listActiveContacts: jest.fn().mockResolvedValue([]),
   };
 }
 

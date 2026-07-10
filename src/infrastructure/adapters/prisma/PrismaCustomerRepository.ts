@@ -1,4 +1,4 @@
-import { CustomerRepository, ListClientsQuery, ListLogsQuery, CreateCustomerInput, ClientStats, UpdateClientLocationInput } from '@domain/ports/CustomerRepository';
+import { CustomerRepository, ListClientsQuery, ListLogsQuery, CreateCustomerInput, ClientStats, UpdateClientLocationInput, ActiveClientContact } from '@domain/ports/CustomerRepository';
 import { Customer, CustomerStatus, Contract, ClientLog } from '@domain/entities/customer';
 import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
 import { PaginatedResult } from '@application/dto/pagination';
@@ -139,6 +139,22 @@ export function toInvoice(row: any): Invoice {
 }
 
 /**
+ * recapture-active-client-match batch 1 — maps a narrow Prisma `Client` row
+ * (id/name/phone/email only) into the candidate-contact shape consumed by
+ * `matchActiveClient`. Defensive on phone/email: `Client.phone`/`Client.email`
+ * are non-null columns today, but the mapper never leaks `undefined` and stays
+ * honest with `null` for any row that doesn't carry a value.
+ */
+export function toActiveClientContact(row: any): ActiveClientContact {
+  return {
+    id: row.id,
+    name: row.name,
+    phone: row.phone ?? null,
+    email: row.email ?? null,
+  };
+}
+
+/**
  * Folds Prisma `groupBy(status)` results into a ClientStats breakdown.
  * `total` is the sum of every group; recognized statuses land in their own
  * bucket (active/inactive/blocked/late/baja). Pure + exported for testing.
@@ -272,6 +288,21 @@ export class PrismaCustomerRepository implements CustomerRepository {
       prisma.clientLog.count({ where }),
     ]);
     return { data: rows.map(toClientLog), total, page, limit };
+  }
+
+  /**
+   * recapture-active-client-match batch 1 — ONE query, pure Prisma (no
+   * `$queryRaw`, no new index needed: `status` is already indexed). Returns
+   * every active client's id/name/phone/email; the caller matches in memory
+   * via `matchActiveClient` (design.md Decisión 1 — recall over query-side
+   * normalization, since `Client.phone` is stored dirty/unnormalized).
+   */
+  async listActiveContacts(): Promise<ActiveClientContact[]> {
+    const rows = await prisma.client.findMany({
+      where: { status: 'active' as never },
+      select: { id: true, name: true, phone: true, email: true },
+    });
+    return rows.map(toActiveClientContact);
   }
 
   async updateLocation(id: string, data: UpdateClientLocationInput): Promise<Customer | null> {

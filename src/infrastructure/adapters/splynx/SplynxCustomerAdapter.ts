@@ -155,6 +155,10 @@ export class SplynxCustomerAdapter implements CustomerRepository {
     throw new Error('SplynxCustomerAdapter.updateLocation is not implemented — location updates go through PrismaCustomerRepository');
   }
 
+  async listActiveContacts(): Promise<never> {
+    throw new Error('SplynxCustomerAdapter.listActiveContacts is not implemented — recapture-active-client-match reads exclusively from PrismaCustomerRepository');
+  }
+
   async listLogs(query: ListLogsQuery): Promise<PaginatedResult<ClientLog>> {
     const raw = await this.client.get<SplynxLog[]>(
       `/api/2.0/admin/logs/customer-activity`,

@@ -3,6 +3,7 @@ import {
   toService,
   toClientLog,
   toInvoice,
+  toActiveClientContact,
 } from '../../infrastructure/adapters/prisma/PrismaCustomerRepository';
 import { CustomerStatus } from '../../domain/entities/customer';
 
@@ -174,6 +175,58 @@ describe('PrismaCustomerRepository mappers', () => {
         lineItems: null,
       });
       expect(inv.lineItems).toEqual([]);
+    });
+  });
+
+  // recapture-active-client-match batch 1 — narrow candidate-contact mapper
+  // for CustomerRepository.listActiveContacts() (design.md Decisión 1).
+  describe('toActiveClientContact', () => {
+    it('maps a full row into an ActiveClientContact', () => {
+      const contact = toActiveClientContact({
+        id: 'c-active-1',
+        name: 'Ana Activa',
+        phone: '2324-421234',
+        email: 'ana@example.com',
+      });
+      expect(contact).toEqual({
+        id: 'c-active-1',
+        name: 'Ana Activa',
+        phone: '2324-421234',
+        email: 'ana@example.com',
+      });
+    });
+
+    it('preserves a null phone (defensive — Client.phone is non-null in schema, but stay honest)', () => {
+      const contact = toActiveClientContact({
+        id: 'c-active-2',
+        name: 'Sin Telefono',
+        phone: null,
+        email: 'notel@example.com',
+      });
+      expect(contact.phone).toBeNull();
+      expect(contact.email).toBe('notel@example.com');
+    });
+
+    it('preserves a null email', () => {
+      const contact = toActiveClientContact({
+        id: 'c-active-3',
+        name: 'Sin Email',
+        phone: '111-2222',
+        email: null,
+      });
+      expect(contact.email).toBeNull();
+      expect(contact.phone).toBe('111-2222');
+    });
+
+    it('coerces undefined phone/email to null (never leaks undefined into the DTO)', () => {
+      const contact = toActiveClientContact({
+        id: 'c-active-4',
+        name: 'Undefined Fields',
+        phone: undefined,
+        email: undefined,
+      });
+      expect(contact.phone).toBeNull();
+      expect(contact.email).toBeNull();
     });
   });
 });

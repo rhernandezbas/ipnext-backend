@@ -68,6 +68,7 @@ function makeCustomerRepo(overrides: Partial<CustomerRepository> = {}): Customer
     listInvoices: jest.fn().mockResolvedValue([]),
     listLogs: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 25 }),
     updateLocation: jest.fn().mockResolvedValue({ ...BASE_CUSTOMER, lat: -34.6, lng: -58.38, plusCode: '48Q9+CF' }),
+    listActiveContacts: jest.fn().mockResolvedValue([]),
     ...overrides,
   };
 }
