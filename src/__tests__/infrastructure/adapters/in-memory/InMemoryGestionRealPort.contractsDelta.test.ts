@@ -16,6 +16,7 @@ function contract(id: string, cli: string, modificado: string | null): GrContrac
     modificado,
     fechaCreacion: null,
     vendedor: null,
+    motivoBaja: null,
     raw: {},
   };
 }

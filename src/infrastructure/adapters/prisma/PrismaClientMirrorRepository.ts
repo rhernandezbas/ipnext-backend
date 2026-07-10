@@ -174,6 +174,9 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       lng: k.lng ?? null,
       // GR-owned: el vendedor/agente que dio de alta. NO es user-managed → GR-wins en cada sync.
       vendedor: k.vendedor ?? null,
+      // GR-owned (recapture-active-client-match, Decisión 5): motivo de baja del contrato.
+      // Forward-only, GR-wins en cada sync — igual que vendedor.
+      motivoBaja: k.motivoBaja ?? null,
       // REQ-DELTA-12: include clientId in the shared data block so the UPDATE branch also
       // reassigns the owner. GR creates a new grContratoId on ownership change, so this is
       // defensive robustness — but cheap and eliminates a latent inconsistency.

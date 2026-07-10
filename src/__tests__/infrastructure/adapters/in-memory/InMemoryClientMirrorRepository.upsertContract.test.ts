@@ -22,7 +22,7 @@ function makeContract(contratoId: string, clienteId: string): GrContract {
   return {
     grContratoId: contratoId, grClienteId: clienteId, plan: 'IP-Air-30', status: 'Vigente',
     startDate: '01-01-2025', address: null, lat: null, lng: null, pppoeUsername: null,
-    modificado: '20-06-2026 10:00:00', fechaCreacion: null, vendedor: null, raw: {},
+    modificado: '20-06-2026 10:00:00', fechaCreacion: null, vendedor: null, motivoBaja: null, raw: {},
   };
 }
 
@@ -74,5 +74,29 @@ describe('InMemoryClientMirrorRepository.upsertContract (REQ-DELTA-12)', () => {
     const result = await mirror.upsertContract(makeContract('900', '111'));
     expect(result.created).toBe(true);
     expect(mirror.contracts.has('900')).toBe(true);
+  });
+
+  // recapture-active-client-match — Decisión 5: motivoBaja persists through the mirror (S14a/S14b)
+  it('create — persists motivoBaja when GR provides it (S14a)', async () => {
+    const mirror = new InMemoryClientMirrorRepository();
+    const withMotivo = { ...makeContract('900', '111'), motivoBaja: 'CAMBIO DE TITULARIDAD' };
+    await mirror.upsertContract(withMotivo);
+    expect(mirror.contracts.get('900')?.motivoBaja).toBe('CAMBIO DE TITULARIDAD');
+  });
+
+  it('create — motivoBaja is null passthrough when GR omits it (S14b)', async () => {
+    const mirror = new InMemoryClientMirrorRepository();
+    await mirror.upsertContract(makeContract('900', '111'));
+    expect(mirror.contracts.get('900')?.motivoBaja).toBeNull();
+  });
+
+  it('update — motivoBaja updates GR-wins on re-sync', async () => {
+    const mirror = new InMemoryClientMirrorRepository();
+    await mirror.upsertContract(makeContract('900', '111'));
+    expect(mirror.contracts.get('900')?.motivoBaja).toBeNull();
+
+    const updated = { ...makeContract('900', '111'), motivoBaja: 'CAMBIO DE TITULARIDAD' };
+    await mirror.upsertContract(updated);
+    expect(mirror.contracts.get('900')?.motivoBaja).toBe('CAMBIO DE TITULARIDAD');
   });
 });

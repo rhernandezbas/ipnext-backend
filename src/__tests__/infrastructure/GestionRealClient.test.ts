@@ -85,6 +85,7 @@ const CONTRACTS_RESPONSE = {
       },
       modificado: '27-04-2026 11:01:27',
       vendedor: 'CAROLINA ROSALES',
+      motivo_baja: 'CAMBIO DE TITULARIDAD',
     },
   ],
 };
@@ -176,6 +177,12 @@ describe('GestionRealClient parsing', () => {
     expect(k.pppoeUsername).toBe('RaulAranMercFibra');
     expect(k.modificado).toBe('27-04-2026 11:01:27');
     expect(k.vendedor).toBe('CAROLINA ROSALES');
+    expect(k.motivoBaja).toBe('CAMBIO DE TITULARIDAD');
+  });
+
+  it('maps motivoBaja to null when motivo_baja is absent (S14b)', () => {
+    const contracts = parseContractsResponse(CONTRACTS_RESPONSE_WITH_LOCATION, '200');
+    expect(contracts[0]!.motivoBaja).toBeNull();
   });
 
   it('captures lat/lng as numbers when GR provides non-empty strings', () => {

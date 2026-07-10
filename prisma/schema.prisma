@@ -246,6 +246,7 @@ model Contract {
   technology   String?         // Phase 1: free-text name from ContractTechnology catalog. NOT a FK.
   name         String?         // #43 manual-only identifier. GR sync NEVER writes this.
   vendedor     String?         // GR `vendedor` — agente que dio de alta. Base de la cartera por agente.
+  motivoBaja   String?         // GR `motivo_baja` — recapture-active-client-match, mirror field GR-owned, forward-only.
   createdAt    DateTime        @default(now())
   client         Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   tasks          ScheduledTask[]

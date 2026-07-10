@@ -30,6 +30,7 @@ function makeContract(id: string, cli: string, modificado: string | null = '20-0
     modificado,
     fechaCreacion: null,
     vendedor: null,
+    motivoBaja: null,
     raw: {},
   };
 }

@@ -25,7 +25,12 @@ describe('upsertContract data block pinning (#43)', () => {
 
   it('contains exactly the GR-owned keys (including clientId for REQ-DELTA-12)', () => {
     const keys = (dataBlock.match(/^\s*(\w+)\s*:/gm) ?? []).map(k => k.trim().replace(/:$/, ''));
-    expect(new Set(keys)).toEqual(new Set(['type', 'plan', 'status', 'startDate', 'address', 'lat', 'lng', 'vendedor', 'clientId']));
+    expect(new Set(keys)).toEqual(new Set(['type', 'plan', 'status', 'startDate', 'address', 'lat', 'lng', 'vendedor', 'motivoBaja', 'clientId']));
+  });
+
+  // recapture-active-client-match — Decisión 5: motivoBaja is GR-owned (GR-wins), same as vendedor.
+  it('pins motivoBaja as GR-wins with null passthrough (S14a/S14b)', () => {
+    expect(dataBlock).toMatch(/motivoBaja:\s*k\.motivoBaja\s*\?\?\s*null/);
   });
 
   it('pins address as GR-wins (address: k.address)', () => {

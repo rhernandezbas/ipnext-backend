@@ -17,6 +17,7 @@ function makeContract(id: string, cli: string, overrides: Partial<GrContract> = 
     modificado: '27-04-2026 11:01:27',
     fechaCreacion: null,
     vendedor: null,
+    motivoBaja: null,
     raw: { id },
     ...overrides,
   };

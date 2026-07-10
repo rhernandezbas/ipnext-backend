@@ -15,6 +15,7 @@ const SAMPLE_PAYLOAD = {
       lng: '-58.3',
       vendedor: 'JUAN PEREZ',
       modificado: '20-06-2026 10:00:00',
+      motivo_baja: 'CAMBIO DE TITULARIDAD',
     },
     {
       id: '901',
@@ -27,6 +28,7 @@ const SAMPLE_PAYLOAD = {
       lng: null,
       vendedor: null,
       modificado: '20-06-2026 11:00:00',
+      // motivo_baja absent — contrato vigente
     },
   ],
 };
@@ -90,5 +92,16 @@ describe('parseContractsDeltaResponse — REQ-DELTA-1', () => {
     const result = parseContractsDeltaResponse(null);
     expect(result.total).toBe(0);
     expect(result.contracts).toHaveLength(0);
+  });
+
+  // recapture-active-client-match — Decisión 5: GR-owned motivo_baja → Contract.motivoBaja
+  it('maps motivo_baja → motivoBaja when present (S14a)', () => {
+    const result = parseContractsDeltaResponse(SAMPLE_PAYLOAD);
+    expect(result.contracts[0]!.motivoBaja).toBe('CAMBIO DE TITULARIDAD');
+  });
+
+  it('maps motivoBaja to null when motivo_baja is absent (contrato vigente)', () => {
+    const result = parseContractsDeltaResponse(SAMPLE_PAYLOAD);
+    expect(result.contracts[1]!.motivoBaja).toBeNull();
   });
 });

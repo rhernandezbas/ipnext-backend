@@ -11,7 +11,7 @@ const BACKFILL_ENTITY = 'gr-contracts-backfill';
 function contract(id: string, cli: string): GrContract {
   return {
     grContratoId: id, grClienteId: cli, plan: '50MB', status: 'Vigente',
-    startDate: '01-01-2026', address: null, lat: null, lng: null, pppoeUsername: null, modificado: null, fechaCreacion: null, vendedor: null, raw: {},
+    startDate: '01-01-2026', address: null, lat: null, lng: null, pppoeUsername: null, modificado: null, fechaCreacion: null, vendedor: null, motivoBaja: null, raw: {},
   };
 }
 

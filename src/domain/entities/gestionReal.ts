@@ -118,6 +118,13 @@ export interface GrContract {
   /** Nombre del vendedor/agente que dio de alta el contrato (GR field `vendedor`).
    * Nombre crudo, sin normalizar (ej. "CAROLINA ROSALES", "julietapalilla"). */
   vendedor: string | null;
+  /**
+   * recapture-active-client-match — motivo de baja del contrato (GR field `motivo_baja`,
+   * ej. "CAMBIO DE TITULARIDAD"). GR-owned, forward-only: sólo los syncs futuros lo
+   * pueblan (sin backfill histórico). `null` cuando GR no lo trae (contrato vigente
+   * o feed sin el campo).
+   */
+  motivoBaja: string | null;
   raw: Record<string, unknown>;
 }
 

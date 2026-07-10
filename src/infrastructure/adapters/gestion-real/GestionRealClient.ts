@@ -246,6 +246,7 @@ export function parseContractsResponse(data: unknown, grClienteId: string): GrCo
     modificado: str(c.modificado),
     fechaCreacion: null,  // per-client feed does not expose creation date
     vendedor: str(c.vendedor),
+    motivoBaja: str(c.motivo_baja),
     raw: c,
   }));
 }
@@ -273,6 +274,7 @@ export function parseContractsDeltaResponse(data: unknown): FetchContractsDeltaR
     modificado: str(c.modificado),
     fechaCreacion: null,               // GR does not expose fecha_alta in the contratos feed
     vendedor: str(c.vendedor),
+    motivoBaja: str(c.motivo_baja),
     raw: c,
   }));
   return { total, contracts };
