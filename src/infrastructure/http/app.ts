@@ -434,6 +434,14 @@ import { createLeadsRouter } from './routes/leads.routes';
 import { PrismaLeadRepository } from '../adapters/prisma/PrismaLeadRepository';
 // #80 — Recaptación
 import { createRecaptureRouter } from './routes/recapture.routes';
+// actions-worklist (W2) — worklist de titularidad + bajas recientes
+import { createActionsRouter } from './routes/actions.routes';
+import { ListOwnershipCases } from '@application/use-cases/actions/ListOwnershipCases';
+import { UpdateOwnershipCase } from '@application/use-cases/actions/UpdateOwnershipCase';
+import { ListRecentBajas } from '@application/use-cases/actions/ListRecentBajas';
+import { PrismaOwnershipCaseRepository } from '../adapters/prisma/PrismaOwnershipCaseRepository';
+import { PrismaContractPairingReader } from '../adapters/prisma/PrismaContractPairingReader';
+import { PrismaRetirementOrderReader } from '../adapters/prisma/PrismaRetirementOrderReader';
 import { PrismaRecaptureRepository } from '../adapters/prisma/PrismaRecaptureRepository';
 import { ListRecaptureLeads } from '@application/use-cases/recapture/ListRecaptureLeads';
 import { GetRecaptureLead } from '@application/use-cases/recapture/GetRecaptureLead';
@@ -2408,6 +2416,41 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       assign: requirePerm('recapture', 'assign'),
     },
   ));
+
+  // ─── Acciones (actions-worklist W2) — worklist de titularidad + bajas recientes ─
+  {
+    const ownershipCaseRepo = new PrismaOwnershipCaseRepository();
+    // Reader compartido: findRecentBajas para el listado + getContract como
+    // ContractOwnershipLookup estructural del set-target (H1b, design §5).
+    const actionsPairingReader = new PrismaContractPairingReader();
+    // Nombres de cliente para el DTO (source/target/candidates) — patrón F1.
+    const actionsClientNameLookup = { findById: (id: string) => prismaClientLookup('Client', id) };
+    app.use('/api/actions', createActionsRouter(
+      new ListOwnershipCases(
+        ownershipCaseRepo,
+        new PrismaClientTvCancellationRepository(),
+        new PrismaContractServiceRepository(),
+        new PrismaServiceCatalogRepository(),
+        new PrismaPppoeServiceRepository(),
+        new PrismaContractInventoryRepository(),
+        actionsClientNameLookup,
+        // userLookupForScheduling resuelve el NOMBRE del reviewer manual (RbacUser).
+        userLookupForScheduling,
+      ),
+      new UpdateOwnershipCase(ownershipCaseRepo, actionsPairingReader),
+      new ListRecentBajas(
+        actionsPairingReader,
+        new PrismaRetirementOrderReader(),
+        new PrismaContractInventoryRepository(),
+        actionsClientNameLookup,
+      ),
+      createAuthMiddleware(authAdapter, sessionRepo),
+      {
+        read:   requirePerm('actions', 'read'),
+        manage: requirePerm('actions', 'manage'),
+      },
+    ));
+  }
 
   // ─── Mis clientes (Fase 3) — cartera del agente + vista super admin ─────────
   const portfolioReadRepo = new PrismaPortfolioReadRepository();

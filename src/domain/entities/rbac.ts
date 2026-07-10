@@ -131,6 +131,8 @@ export const RBAC_MODULES = [
   'plan',
   // Visual zones on the customer map (customer-zones-map)
   'zones',
+  // Acciones / worklist operativo (actions-worklist) — casos de titularidad + bajas recientes
+  'actions',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

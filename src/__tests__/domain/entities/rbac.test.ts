@@ -22,8 +22,8 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 32 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones)', () => {
-    expect(RBAC_MODULES).toHaveLength(32);
+  it('contains exactly 33 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions)', () => {
+    expect(RBAC_MODULES).toHaveLength(33);
   });
 
   it('includes all 14 original module codes', () => {
@@ -65,6 +65,10 @@ describe('RBAC_MODULES constant', () => {
 
   it('includes the plan module (plan-catalog)', () => {
     expect(RBAC_MODULES).toContain('plan');
+  });
+
+  it('includes the actions module (actions-worklist — worklist de titularidad + bajas)', () => {
+    expect(RBAC_MODULES).toContain('actions');
   });
 
   it('is readonly (as const)', () => {

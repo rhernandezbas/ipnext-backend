@@ -255,4 +255,73 @@ describe('GestionRealSyncScheduler', () => {
     // Idempotent double-upsert from per-client + delta: still a single contract.
     expect(mirror.contracts.size).toBe(1);
   });
+
+  // ── Ownership-transfer detector pata (actions-worklist DET-1) ────────────────
+
+  function makeSchedulerWithOwnership(
+    grPort: InMemoryGestionRealPort,
+    mirrorRepo: InMemoryClientMirrorRepository,
+    stateRepo: InMemorySyncStateRepository,
+    lockAdapter: InMemoryDistributedLock,
+    detect: { execute(): Promise<unknown> },
+  ): { scheduler: GestionRealSyncScheduler; delta: SyncGestionRealContractsDelta } {
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed('gestion-real-sync', true);
+    const syncClients = new SyncGestionRealClients(grPort, mirrorRepo, stateRepo, flags);
+    const syncContracts = new SyncGestionRealContracts(grPort, mirrorRepo);
+    const backfill = new BackfillGrContractsBatch(
+      new InMemoryClientMirrorReadRepository(),
+      syncContracts,
+      stateRepo,
+      2,
+    );
+    const delta = new SyncGestionRealContractsDelta(grPort, mirrorRepo, stateRepo, flags);
+    const schedulerWithDetect = new GestionRealSyncScheduler(
+      syncClients, syncContracts, { intervalMs: 1000, silent: true }, lockAdapter, backfill, delta, detect,
+    );
+    return { scheduler: schedulerWithDetect, delta };
+  }
+
+  it('runs the ownership detector AFTER the contract delta and includes its result in the summary', async () => {
+    gr.clients = [client('100')];
+    gr.contractsByClient = { '100': [contract('k1', '100')] };
+    gr.contractsModified = [];
+    const detectFn = jest.fn().mockResolvedValue({ scanned: 2, created: 1, skipped: 1 });
+    const { scheduler: s, delta } = makeSchedulerWithOwnership(gr, mirror, state, lock, { execute: detectFn });
+    const deltaSpy = jest.spyOn(delta, 'execute');
+
+    const summary = await s.runOnce();
+
+    expect(detectFn).toHaveBeenCalledTimes(1);
+    expect(summary.ownershipCases).toEqual({ scanned: 2, created: 1, skipped: 1 });
+    // The detector runs AFTER the delta pata (fresh mirror rows from this tick are visible).
+    expect(deltaSpy.mock.invocationCallOrder[0]!).toBeLessThan(detectFn.mock.invocationCallOrder[0]!);
+    expect(lock.heldKeys.has('gr-sync')).toBe(false);
+  });
+
+  it('detector error is swallowed — the tick completes, the other patas run, lock released', async () => {
+    gr.clients = [client('7')];
+    gr.contractsByClient = { '7': [contract('k7', '7')] };
+    gr.contractsModified = [];
+    const detectFn = jest.fn().mockRejectedValue(new Error('detector down'));
+    const { scheduler: s } = makeSchedulerWithOwnership(gr, mirror, state, lock, { execute: detectFn });
+
+    const summary = await s.runOnce();
+
+    // The tick did NOT error out — the other patas completed normally.
+    expect(summary.error).toBeUndefined();
+    expect(summary.clients?.created).toBe(1);
+    expect(summary.contracts?.created).toBe(1);
+    expect(summary.contractsDelta).toBeDefined();
+    expect(summary.ownershipCases).toBeUndefined();
+    expect(lock.heldKeys.has('gr-sync')).toBe(false);
+  });
+
+  it('summary has no ownershipCases field when the detector is not wired', async () => {
+    gr.clients = [client('1')];
+
+    const summary = await scheduler.runOnce();
+
+    expect(summary.ownershipCases).toBeUndefined();
+  });
 });

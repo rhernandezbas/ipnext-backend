@@ -19,6 +19,8 @@ export interface RunSummary {
   backfill?: BackfillBatchResult;
   /** Result of the global contract delta sync (when wired). */
   contractsDelta?: ContractDeltaResult;
+  /** Result of the ownership-transfer case detector (when wired). */
+  ownershipCases?: unknown;
 }
 
 /** Key used for the distributed lock — all replicas must agree on this string. */
@@ -58,6 +60,14 @@ export class GestionRealSyncScheduler {
      * Errors are swallowed like the rest of the cycle — one bad delta doesn't kill the timer.
      */
     private readonly syncContractsDelta?: SyncGestionRealContractsDelta,
+    /**
+     * Optional ownership-transfer case detector (actions-worklist DET-1). When
+     * provided, runs AFTER the contract delta so status/motivoBaja flips from this
+     * tick are already visible in the mirror. Structural type (not the use case
+     * class) — the scheduler only needs `execute()`. Errors are swallowed like the
+     * delta pata — one bad detection never kills the timer.
+     */
+    private readonly detectOwnershipCases?: { execute(): Promise<unknown> },
   ) {}
 
   start(): void {
@@ -115,6 +125,18 @@ export class GestionRealSyncScheduler {
         }
       }
 
+      // Detect ownership-transfer cases from the freshly-synced mirror. Runs AFTER
+      // the delta so this tick's status/motivoBaja flips are already visible.
+      // Error is swallowed — one bad detection never kills the interval.
+      let ownershipCases: unknown;
+      if (this.detectOwnershipCases) {
+        try {
+          ownershipCases = await this.detectOwnershipCases.execute();
+        } catch (detectErr) {
+          this.warn(`[gr-sync] ownership-detect ERROR (swallowed): ${(detectErr as Error).message}`);
+        }
+      }
+
       this.log(
         `[gr-sync] ${clients.mode}: clients +${clients.created}/~${clients.updated}, ` +
         `contracts +${contracts.created}/~${contracts.updated}` +
@@ -125,7 +147,7 @@ export class GestionRealSyncScheduler {
           ? `, delta +${contractsDelta.created}/~${contractsDelta.updated}`
           : ''),
       );
-      return { clients, contracts, backfill, contractsDelta };
+      return { clients, contracts, backfill, contractsDelta, ownershipCases };
     } catch (err) {
       const message = (err as Error).message;
       this.log(`[gr-sync] ERROR: ${message}`);
@@ -138,5 +160,9 @@ export class GestionRealSyncScheduler {
 
   private log(msg: string): void {
     if (!this.opts.silent) console.log(msg);
+  }
+
+  private warn(msg: string): void {
+    if (!this.opts.silent) console.warn(msg);
   }
 }

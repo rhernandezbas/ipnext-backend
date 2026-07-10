@@ -5,11 +5,14 @@ import { PrismaClientMirrorReadRepository } from '../adapters/prisma/PrismaClien
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { PrismaGestionRealSyncConfigRepository } from '../adapters/prisma/PrismaGestionRealSyncConfigRepository';
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
+import { PrismaOwnershipCaseRepository } from '../adapters/prisma/PrismaOwnershipCaseRepository';
+import { PrismaContractPairingReader } from '../adapters/prisma/PrismaContractPairingReader';
 import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealClients';
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
 import { SyncGestionRealContractsDelta } from '@application/use-cases/SyncGestionRealContractsDelta';
 import { BackfillGrContractsBatch } from '@application/use-cases/BackfillGrContractsBatch';
 import { RefreshDebtorBalances } from '@application/use-cases/RefreshDebtorBalances';
+import { DetectOwnershipTransferCases } from '@application/use-cases/actions/DetectOwnershipTransferCases';
 import { GestionRealSyncScheduler } from './GestionRealSyncScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 
@@ -57,11 +60,17 @@ export async function bootstrapGestionRealSync(): Promise<GestionRealSyncSchedul
   // Global contract delta by modification date — runs AFTER client-sync each tick
   // so newly-created clients are already in the mirror (closes titularidad gap).
   const syncContractsDelta = new SyncGestionRealContractsDelta(client, mirror, state, featureFlags);
+  // Ownership-transfer case detector (actions-worklist DET-1) — scans the mirror
+  // AFTER the delta each tick and opens cases for titularity bajas (idempotent).
+  const detectOwnershipCases = new DetectOwnershipTransferCases(
+    new PrismaOwnershipCaseRepository(),
+    new PrismaContractPairingReader(),
+  );
   // PgAdvisoryLock uses a dedicated pg.Client (not the pool) so that session
   // advisory locks are tied to one stable connection across acquire/release.
   const lock = new PgAdvisoryLock();
 
-  const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: persisted.intervalMs }, lock, backfill, syncContractsDelta);
+  const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: persisted.intervalMs }, lock, backfill, syncContractsDelta, detectOwnershipCases);
 
   // Batch debtor balance refresh — runs on its own interval (default 1h), independently.
   startBalanceBatchJob(refreshDebtorBalances, gr.balanceBatchIntervalMs);

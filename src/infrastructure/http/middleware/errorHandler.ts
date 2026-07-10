@@ -136,6 +136,12 @@ const statusMap: Record<string, number> = {
   ATTACHMENT_NOT_FOUND: 404,
   IMAGE_TOO_LARGE: 422,
   STORAGE_NOT_CONFIGURED: 503,
+  // actions-worklist (W2) — worklist de titularidad
+  OWNERSHIP_CASE_NOT_FOUND: 404,
+  INVALID_CANDIDATE_PICK: 422,
+  INVALID_TARGET_ASSIGNMENT: 422,
+  INVALID_CASE_TRANSITION: 422,
+  DISMISS_REASON_REQUIRED: 400,
 };
 
 /** Express global error-handling middleware. */

@@ -2714,3 +2714,32 @@ model ContractServiceEvent {
   @@index([contractId, createdAt])
   @@map("contract_service_events")
 }
+
+// actions-worklist (EPIC titularidad F2) — caso operativo de cambio de titularidad
+// detectado desde el mirror GR. Sin FKs duras a Contract/Client: los ids del mirror
+// pueden re-sincronizarse; el caso es un registro operativo (mismo criterio que
+// RecaptureLead usa SetNull, acá directamente String). Los checks AUTO (tv/pppoe/
+// equipos) NO se persisten — se computan en la lectura.
+model OwnershipTransferCase {
+  id                    String    @id @default(uuid())
+  // Lado BAJA (origen) — siempre presente, es el disparador
+  sourceContractId      String    @unique // 1 caso por contrato de baja (idempotencia)
+  sourceClientId        String
+  motivoBaja            String    // snapshot del motivo que disparó
+  bajaDate              String?   // GR `baja` (dd-mm-yyyy) si está en raw
+  // Lado ALTA (destino) — null si sin candidato o ambiguo hasta el pick
+  targetContractId      String?
+  targetClientId        String?
+  candidates            Json?     // [{contractId, clientId}] si ≥2
+  status                String    @default("pending") // pending | ambiguous | done | dismissed
+  dismissReason         String?
+  // Check MANUAL (mundo físico) — con rastro
+  equipmentReviewed     Boolean   @default(false)
+  equipmentReviewedById String?
+  equipmentReviewedAt   DateTime?
+  detectedAt            DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([status])
+  @@index([targetClientId])
+}
