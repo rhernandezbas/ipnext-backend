@@ -36,7 +36,12 @@ const denyPerm: RequestHandler = (_req, res, _next) => {
 /** Always-pass RBAC guard */
 const allowPerm: RequestHandler = (_req, _res, next) => next();
 
-function makeCustomerRepo(clients: Array<{ id: string; name: string; phone: string; email: string }>): CustomerRepository {
+function makeCustomerRepo(
+  clients: Array<{ id: string; name: string; phone: string; email: string }>,
+  // recapture-active-client-match — candidate set for listActiveContacts(); defaults to
+  // [] so existing tests (which never asserted on match signals) are unaffected.
+  activeContacts: Array<{ id: string; name: string; phone: string | null; email: string | null }> = [],
+): CustomerRepository {
   return {
     list: jest.fn().mockResolvedValue({ data: clients, total: clients.length, page: 1, limit: 10000 }),
     findById: jest.fn(),
@@ -46,6 +51,7 @@ function makeCustomerRepo(clients: Array<{ id: string; name: string; phone: stri
     listContracts: jest.fn(),
     listInvoices: jest.fn(),
     listLogs: jest.fn(),
+    listActiveContacts: jest.fn().mockResolvedValue(activeContacts),
   } as unknown as CustomerRepository;
 }
 
@@ -76,11 +82,11 @@ function buildApp(opts: BuildAppOptions = {}) {
     listRoleCodes: async (id: string) => opts.operatorRoles?.[id] ?? ['ventas'],
   };
 
-  const listUC = new ListRecaptureLeads(repo, contractRepo);
-  const getUC = new GetRecaptureLead(repo);
+  const listUC = new ListRecaptureLeads(repo, contractRepo, customerRepo);
+  const getUC = new GetRecaptureLead(repo, customerRepo, contractRepo);
   const updateStatusUC = new UpdateRecaptureLeadStatus(repo);
   const addContactUC = new AddRecaptureContact(repo);
-  const ingestUC = new IngestChurnedClients(repo, customerRepo);
+  const ingestUC = new IngestChurnedClients(repo, customerRepo, contractRepo);
   const importCsvUC = new ImportCsvLeads(repo);
   const assignUC = new AssignRecaptureLead(repo, { findById: async (id) => ({ id }) }, roleLookup);
   const assignBulkUC = new AssignRecaptureLeadsBulk(repo, { findById: async (id) => ({ id }) }, roleLookup);
@@ -290,6 +296,25 @@ describe('GET /api/recapture/leads', () => {
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
   });
+
+  // recapture-active-client-match — the enrichment fields must survive the full
+  // HTTP round-trip (DI wiring + JSON serialization), not just the use-case layer.
+  it('includes possibleActiveMatchSignals in each list item (S11)', async () => {
+    const customerRepo = makeCustomerRepo([], [
+      { id: 'c-active-1', name: 'Active One', phone: '1112223333', email: null },
+    ]);
+    const { app, repo } = buildApp({ customerRepo });
+    await repo.create({ source: 'csv', contactName: 'No match', phone: '999', email: null });
+    const matchLead = await repo.create({ source: 'csv', contactName: 'Phone match', phone: '1112223333', email: null });
+
+    const res = await request(app).get('/api/recapture/leads').set('Cookie', 'auth_token=tok');
+
+    expect(res.status).toBe(200);
+    const noMatchDto = res.body.data.find((d: any) => d.contactName === 'No match');
+    const matchDto = res.body.data.find((d: any) => d.id === matchLead.id);
+    expect(noMatchDto.possibleActiveMatchSignals).toEqual([]);
+    expect(matchDto.possibleActiveMatchSignals).toEqual(['phone']);
+  });
 });
 
 // â€”â€”â€” Tests: GET /leads/:id â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”
@@ -315,6 +340,30 @@ describe('GET /api/recapture/leads/:id', () => {
       .set('Cookie', 'auth_token=tok');
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('RECAPTURE_LEAD_NOT_FOUND');
+  });
+
+  // recapture-active-client-match — the rich match object must survive the full
+  // HTTP round-trip too (S11).
+  it('includes possibleActiveMatch {signals, matchedClients} in the detail response (S11)', async () => {
+    const customerRepo = makeCustomerRepo([], [
+      { id: 'c-active-1', name: 'Active One', phone: '1112223333', email: null },
+    ]);
+    const { app, repo } = buildApp({ customerRepo });
+    const lead = await repo.create({ source: 'csv', contactName: 'Phone match', phone: '1112223333', email: null });
+
+    const res = await request(app)
+      .get(`/api/recapture/leads/${lead.id}`)
+      .set('Cookie', 'auth_token=tok');
+
+    expect(res.status).toBe(200);
+    expect(res.body.possibleActiveMatch.signals).toEqual(['phone']);
+    expect(res.body.possibleActiveMatch.matchedClients).toHaveLength(1);
+    expect(res.body.possibleActiveMatch.matchedClients[0]).toMatchObject({
+      clientId: 'c-active-1',
+      name: 'Active One',
+      status: 'active',
+      matchedBy: ['phone'],
+    });
   });
 });
 

@@ -85,11 +85,11 @@ function buildApp(opts: BuildAppOptions = {}) {
   app.use(
     '/api/recapture',
     createRecaptureRouter(
-      new ListRecaptureLeads(repo, contractRepo),
-      new GetRecaptureLead(repo),
+      new ListRecaptureLeads(repo, contractRepo, customerRepo),
+      new GetRecaptureLead(repo, customerRepo, contractRepo),
       new UpdateRecaptureLeadStatus(repo),
       new AddRecaptureContact(repo),
-      new IngestChurnedClients(repo, customerRepo),
+      new IngestChurnedClients(repo, customerRepo, contractRepo),
       new ImportCsvLeads(repo),
       assignUC,
       assignBulkUC,

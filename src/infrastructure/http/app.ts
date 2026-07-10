@@ -2334,11 +2334,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     return perms.some((p) => p.moduleCode === 'recapture' && p.action === 'assign');
   };
   app.use('/api/recapture', createRecaptureRouter(
-    new ListRecaptureLeads(recaptureRepo, contractRepo),
-    new GetRecaptureLead(recaptureRepo),
+    new ListRecaptureLeads(recaptureRepo, contractRepo, customerAdapter),
+    new GetRecaptureLead(recaptureRepo, customerAdapter, contractRepo),
     new UpdateRecaptureLeadStatus(recaptureRepo),
     new AddRecaptureContact(recaptureRepo),
-    new IngestChurnedClients(recaptureRepo, customerAdapter),
+    new IngestChurnedClients(recaptureRepo, customerAdapter, contractRepo),
     new ImportCsvLeads(recaptureRepo),
     new AssignRecaptureLead(recaptureRepo, userLookupForScheduling, roleLookupForRecapture),
     new AssignRecaptureLeadsBulk(recaptureRepo, userLookupForScheduling, roleLookupForRecapture),

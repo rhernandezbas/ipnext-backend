@@ -45,11 +45,13 @@ function makeCustomerRepo(): CustomerRepository {
 function buildApp(repo?: InMemoryRecaptureRepository) {
   const r = repo ?? new InMemoryRecaptureRepository();
 
-  const listUC = new ListRecaptureLeads(r, new InMemoryContractRepository());
-  const getUC = new GetRecaptureLead(r);
+  const contractRepo = new InMemoryContractRepository();
+  const customerRepo = makeCustomerRepo();
+  const listUC = new ListRecaptureLeads(r, contractRepo, customerRepo);
+  const getUC = new GetRecaptureLead(r, customerRepo, contractRepo);
   const updateStatusUC = new UpdateRecaptureLeadStatus(r);
   const addContactUC = new AddRecaptureContact(r);
-  const ingestUC = new IngestChurnedClients(r, makeCustomerRepo());
+  const ingestUC = new IngestChurnedClients(r, customerRepo, contractRepo);
   const importCsvUC = new ImportCsvLeads(r);
   const roleLookup = { listRoleCodes: async () => ['ventas'] };
   const assignUC = new AssignRecaptureLead(r, { findById: async (id) => ({ id }) }, roleLookup);
