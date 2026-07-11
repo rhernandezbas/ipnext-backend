@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import crypto from 'crypto';
 import he from 'he';
 import {
@@ -24,6 +24,26 @@ export interface GestionRealClientOptions {
   /** Injectable clock for deterministic password tests. */
   now?: () => Date;
   timeoutMs?: number;
+  /**
+   * Resilience against GR's flaky load balancer (some nodes 503, others ok).
+   * Retries transient failures (5xx / network / timeout / 429) with exponential
+   * backoff. All defaults match the "Estándar" profile. GR calls are read-only
+   * POSTs (idempotent) so retrying is safe.
+   */
+  /** Retries AFTER the initial attempt (⇒ maxRetries+1 attempts). Default 3. */
+  maxRetries?: number;
+  /** Base for the exponential backoff (ms): base·3^i + jitter. Default 300. */
+  retryBaseMs?: number;
+  /**
+   * Upper cap for ANY single backoff wait (ms). Bounds a hostile/misconfigured
+   * `Retry-After` (e.g. 3600s) so a 429 can't freeze the sync — and its distributed
+   * `gr-sync` lock — for hours across all replicas. Default 30000 (30s).
+   */
+  maxBackoffMs?: number;
+  /** Injectable delay — tests pass a no-op spy. Default setTimeout-based. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Injectable jitter source — tests pin it. Default Math.random. */
+  random?: () => number;
 }
 
 /**
@@ -38,16 +58,69 @@ export class GestionRealClient implements GestionRealPort {
   private readonly cuit: string;
   private readonly secret: string;
   private readonly now: () => Date;
+  private readonly maxRetries: number;
+  private readonly retryBaseMs: number;
+  private readonly maxBackoffMs: number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
 
   constructor(opts: GestionRealClientOptions) {
     this.cuit = opts.cuit;
     this.secret = opts.secret;
     this.now = opts.now ?? (() => new Date());
+    this.maxRetries = opts.maxRetries ?? 3;
+    this.retryBaseMs = opts.retryBaseMs ?? 300;
+    this.maxBackoffMs = opts.maxBackoffMs ?? 30000;
+    this.sleep =
+      opts.sleep ??
+      ((ms) =>
+        new Promise((resolve) => {
+          const timer = setTimeout(resolve, ms);
+          // Don't keep the event loop alive on a pending backoff (clean SIGTERM/deploy).
+          (timer as { unref?: () => void }).unref?.();
+        }));
+    this.random = opts.random ?? Math.random;
     this.http = axios.create({
       baseURL: opts.baseUrl,
       timeout: opts.timeoutMs ?? 30000,
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+
+  /**
+   * POST to GR with retry-on-transient + exponential backoff. All public methods
+   * go through this so the retry is inherited uniformly. Auth (the daily MD5
+   * password) is recomputed PER attempt in case a retry crosses the AR midnight.
+   *
+   * Retries only transient AxiosErrors (5xx / network-timeout / 429); 4xx auth
+   * (401/403) and 400 fail fast (retrying won't fix a bad password or payload),
+   * and any non-axios throw (e.g. a parser bug) propagates untouched. On exhausted
+   * retries the last error is re-thrown so the caller still records `error: ...`
+   * in SyncState — the badge stays honest about a REAL outage.
+   */
+  private async postWithRetry(payload: Record<string, unknown>): Promise<AxiosResponse> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.http.post('', payload, { auth: this.auth() });
+      } catch (err) {
+        if (attempt >= this.maxRetries || !isRetryableAxiosError(err)) throw err;
+        await this.sleep(this.backoffMs(attempt, err));
+      }
+    }
+  }
+
+  /**
+   * Exponential backoff base·3^i + jitter[0,base); for 429 honors Retry-After.
+   * The result is clamped to `maxBackoffMs` so a hostile/misconfigured Retry-After
+   * can't block the run (and the gr-sync lock) for hours, and guarded against a
+   * non-finite injected `random`.
+   */
+  private backoffMs(attempt: number, err: unknown): number {
+    const exp = this.retryBaseMs * Math.pow(3, attempt);
+    const jitter = Math.floor(this.random() * this.retryBaseMs);
+    const raw = Math.max(exp + jitter, retryAfterMs(err) ?? 0);
+    const bounded = Number.isFinite(raw) ? raw : exp;
+    return Math.min(bounded, this.maxBackoffMs);
   }
 
   private auth() {
@@ -67,25 +140,21 @@ export class GestionRealClient implements GestionRealPort {
     if (params.fechaHasta) payload.fecha_hasta = params.fechaHasta;
     if (params.estado) payload.estado = params.estado;
 
-    const { data } = await this.http.post('', payload, { auth: this.auth() });
+    const { data } = await this.postWithRetry(payload);
     return parseClientsResponse(data);
   }
 
   async fetchContractsByClient(grClienteId: string): Promise<GrContract[]> {
-    const { data } = await this.http.post(
-      '',
-      { action: 'contrato', cli_id: Number(grClienteId), incluye_bajas: 'S' },
-      { auth: this.auth() },
-    );
+    const { data } = await this.postWithRetry({
+      action: 'contrato',
+      cli_id: Number(grClienteId),
+      incluye_bajas: 'S',
+    });
     return parseContractsResponse(data, grClienteId);
   }
 
   async fetchClientBalance(grClienteId: string): Promise<GrClientBalance> {
-    const { data } = await this.http.post(
-      '',
-      { action: 'cliente', cliente_id: Number(grClienteId) },
-      { auth: this.auth() },
-    );
+    const { data } = await this.postWithRetry({ action: 'cliente', cliente_id: Number(grClienteId) });
     return parseClientBalanceResponse(grClienteId, data);
   }
 
@@ -97,18 +166,14 @@ export class GestionRealClient implements GestionRealPort {
    * keyed by order id; `parseServiceOrdersResponse` flattens it into an array.
    */
   async fetchContractsModifiedSince(p: FetchContractsDeltaParams): Promise<FetchContractsDeltaResult> {
-    const { data } = await this.http.post(
-      '',
-      {
-        action: 'contratos',
-        fecha_tipo: p.fechaTipo ?? 'm',
-        fecha_desde: p.fechaDesde,
-        fecha_hasta: p.fechaHasta,
-        cantidad: p.cantidad,
-        offset: p.offset,
-      },
-      { auth: this.auth() },
-    );
+    const { data } = await this.postWithRetry({
+      action: 'contratos',
+      fecha_tipo: p.fechaTipo ?? 'm',
+      fecha_desde: p.fechaDesde,
+      fecha_hasta: p.fechaHasta,
+      cantidad: p.cantidad,
+      offset: p.offset,
+    });
     return parseContractsDeltaResponse(data);
   }
 
@@ -121,9 +186,46 @@ export class GestionRealClient implements GestionRealPort {
     if (params.fechaDesde) payload.fecha_desde = params.fechaDesde;
     if (params.fechaHasta) payload.fecha_hasta = params.fechaHasta;
 
-    const { data } = await this.http.post('', payload, { auth: this.auth() });
+    const { data } = await this.postWithRetry(payload);
     return parseServiceOrdersResponse(data);
   }
+}
+
+/**
+ * HTTP statuses worth retrying: the transient 5xx that a flapping load balancer
+ * emits, plus 429. Deliberately NOT the whole 5xx range — 501/505/511 are
+ * permanent, so retrying them just burns attempts + backoff before failing anyway.
+ */
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+/**
+ * Only transient AxiosErrors are retryable. Any non-axios throw (e.g. a parser
+ * bug) returns false so it propagates untouched — we never retry a code bug.
+ * 4xx auth (401/403) and 400 are NOT retried (a retry won't fix a bad daily
+ * password or a malformed payload). An axios error WITHOUT a response is a
+ * network/timeout failure (ECONNRESET/ECONNABORTED/…) → retryable.
+ */
+function isRetryableAxiosError(err: unknown): boolean {
+  const e = err as { isAxiosError?: boolean; response?: { status?: number } } | null;
+  if (!e || e.isAxiosError !== true) return false;
+  const status = e.response?.status;
+  if (status === undefined) return true; // network / timeout
+  return RETRYABLE_STATUS.has(status);
+}
+
+/**
+ * Retry-After (in ms) for a 429 response, or null. Only the delta-seconds form is
+ * honored (what GR sends); an HTTP-date or missing header falls back to null so
+ * the caller uses the computed exponential backoff.
+ */
+function retryAfterMs(err: unknown): number | null {
+  const e = err as { response?: { status?: number; headers?: Record<string, unknown> } } | null;
+  if (!e || e.response?.status !== 429) return null;
+  const headers = e.response.headers ?? {};
+  const raw = headers['retry-after'] ?? headers['Retry-After'];
+  if (raw === undefined || raw === null) return null;
+  const secs = parseInt(String(raw), 10);
+  return Number.isFinite(secs) && secs >= 0 ? secs * 1000 : null;
 }
 
 /**
