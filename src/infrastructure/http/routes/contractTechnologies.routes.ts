@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { ListContractTechnology } from '@application/use-cases/ListContractTechnology';
@@ -31,7 +31,7 @@ export function createContractTechnologiesRouter(
     res.json(await listContractTechnology.execute());
   });
 
-  router.get('/contract-technologies/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.get('/contract-technologies/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       res.json(await getContractTechnology.execute(req.params['id'] as string));
     } catch (err) {
@@ -39,11 +39,12 @@ export function createContractTechnologiesRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.post('/contract-technologies', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/contract-technologies', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateContractTechnologySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -56,11 +57,12 @@ export function createContractTechnologiesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.put('/contract-technologies/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.put('/contract-technologies/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateContractTechnologySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -77,11 +79,12 @@ export function createContractTechnologiesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.delete('/contract-technologies/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/contract-technologies/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await deleteContractTechnology.execute(req.params['id'] as string);
       res.status(204).send();
@@ -94,7 +97,8 @@ export function createContractTechnologiesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

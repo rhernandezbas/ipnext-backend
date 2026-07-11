@@ -1,4 +1,4 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
@@ -48,7 +48,7 @@ export function createContractServicesRouter(
   const readPerm  = requirePerm('clients', 'read');
 
   // ── PATCH /contracts/:id — set/clear the manual name ─────────────────────────
-  router.patch('/contracts/:id', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/contracts/:id', auth, writePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateContractNameSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -61,12 +61,13 @@ export function createContractServicesRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
   // ── POST /contracts/:contractId/services — add a service ─────────────────────
-  router.post('/contracts/:contractId/services', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
+  router.post('/contracts/:contractId/services', auth, writePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = AddContractServiceSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -94,12 +95,13 @@ export function createContractServicesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
   // ── PATCH /contracts/:contractId/services/:id — update status/notes ──────────
-  router.patch('/contracts/:contractId/services/:id', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/contracts/:contractId/services/:id', auth, writePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateContractServiceSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -120,7 +122,8 @@ export function createContractServicesRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

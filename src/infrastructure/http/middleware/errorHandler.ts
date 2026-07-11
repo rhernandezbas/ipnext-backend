@@ -130,6 +130,11 @@ const statusMap: Record<string, number> = {
   NETWORK_TASK_LOCALITY_REQUIRED: 422,
   // #79 — SLA timer thresholds must satisfy dangerMinutes > warnMinutes
   TICKET_SLA_THRESHOLD_ORDER: 422,
+  // async-error-sweep — #66: FibraTaskNoSiteError es defensa en profundidad de
+  // CreateTask (el superRefine del DTO cubre el caso normal con 422 inline).
+  // NO está mapeado inline en POST /scheduling → post-sweep llega acá via
+  // next(err); el wire contract congelado es 422 FIBRA_TASK_NO_SITE.
+  FIBRA_TASK_NO_SITE: 422,
   // task-photos — adjuntos de tarea
   UNSUPPORTED_ATTACHMENT_TYPE: 415,
   TOO_MANY_ATTACHMENTS: 422,

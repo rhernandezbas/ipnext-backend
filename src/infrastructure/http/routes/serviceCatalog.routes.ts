@@ -1,4 +1,4 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -36,7 +36,7 @@ export function createServiceCatalogRouter(
     res.json(await list.execute(filter));
   });
 
-  router.post('/service-catalog', auth, managePerm, async (req: Request, res: Response): Promise<void> => {
+  router.post('/service-catalog', auth, managePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateServiceCatalogSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -49,11 +49,12 @@ export function createServiceCatalogRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.patch('/service-catalog/:id', auth, managePerm, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/service-catalog/:id', auth, managePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateServiceCatalogSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -74,11 +75,12 @@ export function createServiceCatalogRouter(
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.delete('/service-catalog/:id', auth, managePerm, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/service-catalog/:id', auth, managePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await del.execute(req.params['id'] as string);
       res.status(204).send();
@@ -95,7 +97,8 @@ export function createServiceCatalogRouter(
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ListTaskTemplates } from '@application/use-cases/ListTaskTemplates';
 import { GetTaskTemplate } from '@application/use-cases/GetTaskTemplate';
 import { CreateTaskTemplate } from '@application/use-cases/CreateTaskTemplate';
@@ -73,7 +73,7 @@ export function createTaskTemplateRouter(
 
   // NEW: replace-set template items
   if (replaceTemplateItems) {
-    router.put('/:id/items', auth, async (req: Request, res: Response): Promise<void> => {
+    router.put('/:id/items', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = ReplaceTemplateItemsSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -87,7 +87,8 @@ export function createTaskTemplateRouter(
           res.status(404).json({ error: err.message, code: err.code });
           return;
         }
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     });
   }

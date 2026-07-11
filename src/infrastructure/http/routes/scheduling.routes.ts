@@ -209,7 +209,7 @@ export function createSchedulingRouter(
     });
 
     // POST /:id/checklist/assign-template — MUST come before /:id/checklist/:itemId
-    router.post('/:id/checklist/assign-template', auth, async (req: Request, res: Response): Promise<void> => {
+    router.post('/:id/checklist/assign-template', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = AssignTemplateSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -223,7 +223,8 @@ export function createSchedulingRouter(
           res.status(404).json({ error: err.message, code: err.code });
           return;
         }
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     });
 
@@ -234,7 +235,7 @@ export function createSchedulingRouter(
     });
 
     // PUT /:id/checklist/order — reorder items — MUST come before /:id/checklist/:itemId
-    router.put('/:id/checklist/order', auth, async (req: Request, res: Response): Promise<void> => {
+    router.put('/:id/checklist/order', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = ReorderChecklistSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -248,12 +249,13 @@ export function createSchedulingRouter(
           res.status(400).json({ error: err.message, code: 'VALIDATION_ERROR' });
           return;
         }
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     });
 
     // PATCH /:id/checklist/:itemId/toggle — toggle done
-    router.patch('/:id/checklist/:itemId/toggle', auth, async (req: Request, res: Response): Promise<void> => {
+    router.patch('/:id/checklist/:itemId/toggle', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const item = await checklist.toggleChecklistItem.execute(req.params['itemId'] as string, actorOf(req));
         res.json(item);
@@ -262,12 +264,13 @@ export function createSchedulingRouter(
           res.status(404).json({ error: err.message, code: err.code });
           return;
         }
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     });
 
     // PATCH /:id/checklist/:itemId — update text
-    router.patch('/:id/checklist/:itemId', auth, async (req: Request, res: Response): Promise<void> => {
+    router.patch('/:id/checklist/:itemId', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = UpdateChecklistItemSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -281,7 +284,8 @@ export function createSchedulingRouter(
           res.status(404).json({ error: err.message, code: err.code });
           return;
         }
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     });
 
@@ -301,7 +305,7 @@ export function createSchedulingRouter(
   // ── RV — Revisado por Inventario ─────────────────────────────────────────
   // MUST be registered BEFORE /:id to avoid Express routing it as /:id with id='*'
   if (setTaskInventoryReview) {
-    router.patch('/:id/inventory-review', auth, invWrite, async (req: Request, res: Response): Promise<void> => {
+    router.patch('/:id/inventory-review', auth, invWrite, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const InventoryReviewSchema = z.object({ reviewed: z.boolean() });
       const parsed = InventoryReviewSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -317,7 +321,8 @@ export function createSchedulingRouter(
           res.status(404).json({ error: err.message, code: err.code });
           return;
         }
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     });
   }
@@ -444,7 +449,7 @@ export function createSchedulingRouter(
   // Activity feed (#10). MUST be registered BEFORE GET /:id so the extra
   // `/activity` segment is not shadowed by the catch-all id route.
   if (getTaskActivity) {
-    router.get('/:id/activity', auth, async (req: Request, res: Response): Promise<void> => {
+    router.get('/:id/activity', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const rawLimit = req.query['limit'];
       const limit = rawLimit !== undefined ? parseInt(rawLimit as string, 10) : undefined;
       const cursor = req.query['cursor'] as string | undefined;
@@ -460,7 +465,8 @@ export function createSchedulingRouter(
           res.status(400).json({ error: err.message, code: err.code });
           return;
         }
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     });
   }
@@ -527,7 +533,7 @@ export function createSchedulingRouter(
   if (setTaskGeneralStatus) {
     const StatusSchema = z.object({ status: z.enum(['open', 'closed', 'dismissed']) });
 
-    router.post('/:id/status', auth, schedWrite, async (req: Request, res: Response): Promise<void> => {
+    router.post('/:id/status', auth, schedWrite, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const parsed = StatusSchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -545,7 +551,8 @@ export function createSchedulingRouter(
           res.status(422).json({ error: err.message, code: err.code });
           return;
         }
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     });
   }
@@ -556,7 +563,7 @@ export function createSchedulingRouter(
   // MUST be registered BEFORE GET /:id so the catch-all id route does not shadow it.
   // Gated by auth + scheduling:write (schedWrite is pass-through when omitted).
   if (archiveTask) {
-    router.post('/:id/archive', auth, schedWrite, async (req: Request, res: Response): Promise<void> => {
+    router.post('/:id/archive', auth, schedWrite, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const task = await archiveTask.execute(req.params['id'] as string);
         res.status(200).json(task);
@@ -569,7 +576,8 @@ export function createSchedulingRouter(
           res.status(422).json({ error: err.message, code: err.code });
           return;
         }
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     });
   }
@@ -585,7 +593,7 @@ export function createSchedulingRouter(
     res.json(task);
   });
 
-  router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateTaskSchema.safeParse(req.body);
     if (!parsed.success) {
       // #66 — The hybrid fibra+site shape is a semantic conflict, not a malformed
@@ -690,11 +698,12 @@ export function createSchedulingRouter(
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.put('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.put('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateTaskSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -739,7 +748,8 @@ export function createSchedulingRouter(
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

@@ -1,4 +1,4 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -67,7 +67,7 @@ export function createContractsRouter(
    * Whitelisted body: gpsLat, gpsLng, gpsPlusCode. GR lat/lng are NEVER touched.
    * Gate: clients.write.
    */
-  router.patch('/contracts/:id/location', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/contracts/:id/location', auth, writePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (!updateContractLocation) {
       res.status(501).json({ error: 'Not implemented', code: 'NOT_IMPLEMENTED' });
       return;
@@ -94,7 +94,8 @@ export function createContractsRouter(
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

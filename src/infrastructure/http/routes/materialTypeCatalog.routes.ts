@@ -1,4 +1,4 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -39,7 +39,7 @@ export function createMaterialTypeCatalogRouter(
     res.json(await list.execute());
   });
 
-  router.get('/material-types/:id', auth, readPerm, async (req: Request, res: Response): Promise<void> => {
+  router.get('/material-types/:id', auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       res.json(await get.execute(req.params['id'] as string));
     } catch (err) {
@@ -47,11 +47,12 @@ export function createMaterialTypeCatalogRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.post('/material-types', auth, managePerm, async (req: Request, res: Response): Promise<void> => {
+  router.post('/material-types', auth, managePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateMaterialSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -66,11 +67,12 @@ export function createMaterialTypeCatalogRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.put('/material-types/:id', auth, managePerm, async (req: Request, res: Response): Promise<void> => {
+  router.put('/material-types/:id', auth, managePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateMaterialSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -94,11 +96,12 @@ export function createMaterialTypeCatalogRouter(
         res.status(400).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.delete('/material-types/:id', auth, managePerm, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/material-types/:id', auth, managePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await del.execute(req.params['id'] as string);
       service.invalidate();
@@ -116,7 +119,8 @@ export function createMaterialTypeCatalogRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

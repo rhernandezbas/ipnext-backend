@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { ListTaskCategory } from '@application/use-cases/ListTaskCategory';
@@ -28,7 +28,7 @@ export function createTaskCategoriesRouter(
     res.json(await listTaskCategory.execute());
   });
 
-  router.get('/task-categories/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.get('/task-categories/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       res.json(await getTaskCategory.execute(req.params['id'] as string));
     } catch (err) {
@@ -36,11 +36,12 @@ export function createTaskCategoriesRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.post('/task-categories', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/task-categories', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateTaskCategorySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -53,11 +54,12 @@ export function createTaskCategoriesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.put('/task-categories/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.put('/task-categories/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateTaskCategorySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -74,11 +76,12 @@ export function createTaskCategoriesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.delete('/task-categories/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/task-categories/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await deleteTaskCategory.execute(req.params['id'] as string);
       res.status(204).send();
@@ -91,7 +94,8 @@ export function createTaskCategoriesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

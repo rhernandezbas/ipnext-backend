@@ -66,7 +66,7 @@ export function createProjectsRouter(
     res.json(project);
   });
 
-  router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateProjectSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -80,7 +80,8 @@ export function createProjectsRouter(
         res.status(404).json({ error: err.message, code: REFERENCE_TO_CODE[err.reference] });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
@@ -181,7 +182,7 @@ export function createProjectsRouter(
     }
   });
 
-  router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const deleted = await deleteProject.execute(req.params['id'] as string);
       if (!deleted) {
@@ -198,7 +199,8 @@ export function createProjectsRouter(
         });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { ListTicketStatuses } from '@application/use-cases/ListTicketStatuses';
@@ -28,7 +28,7 @@ export function createTicketStatusesRouter(
     res.json(await listTicketStatuses.execute());
   });
 
-  router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.get('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       res.json(await getTicketStatus.execute(req.params['id'] as string));
     } catch (err) {
@@ -36,11 +36,12 @@ export function createTicketStatusesRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateTicketStatusSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -53,11 +54,12 @@ export function createTicketStatusesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.put('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.put('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateTicketStatusSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -74,11 +76,12 @@ export function createTicketStatusesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await deleteTicketStatus.execute(req.params['id'] as string);
       res.status(204).send();
@@ -91,7 +94,8 @@ export function createTicketStatusesRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

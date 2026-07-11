@@ -1,4 +1,4 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { z } from 'zod';
 import { ListClients } from '@application/use-cases/ListClients';
 import { GetClientDetail } from '@application/use-cases/GetClientDetail';
@@ -160,7 +160,7 @@ export function createClientsRouter(
     res.status(204).send();
   });
 
-  router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+  router.get('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const numId = parseInt(req.params['id'] as string);
     if (deletedClientsStore.has(numId)) {
       res.status(404).json({ error: 'Client not found', code: 'CLIENT_NOT_FOUND' });
@@ -173,7 +173,8 @@ export function createClientsRouter(
       if (err instanceof ClientNotFoundError) {
         res.status(404).json({ error: err.message, code: err.code });
       } else {
-        throw err;
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
       }
     }
   });
@@ -291,7 +292,7 @@ export function createClientsRouter(
    * Whitelisted body: lat, lng, plusCode. Any other fields are ignored by Zod.
    * Gate: clients.write.
    */
-  router.patch('/:id', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/:id', auth, writePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (!updateClientLocation) {
       res.status(501).json({ error: 'Not implemented', code: 'NOT_IMPLEMENTED' });
       return;
@@ -318,7 +319,8 @@ export function createClientsRouter(
         res.status(422).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 

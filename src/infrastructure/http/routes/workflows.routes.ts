@@ -1,4 +1,4 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -89,7 +89,7 @@ export function createWorkflowsRouter(
     res.json(workflows);
   });
 
-  router.get('/workflows/:id', auth, canRead, async (req: Request, res: Response): Promise<void> => {
+  router.get('/workflows/:id', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const wf = await getWorkflow.execute(req.params['id'] as string);
       res.json(wf);
@@ -98,11 +98,12 @@ export function createWorkflowsRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.post('/workflows', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.post('/workflows', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateWorkflowSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -116,11 +117,12 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.put('/workflows/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.put('/workflows/:id', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateWorkflowSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -138,11 +140,12 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.delete('/workflows/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/workflows/:id', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await deleteWorkflow.execute(req.params['id'] as string);
       res.status(204).send();
@@ -159,13 +162,14 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code, details: { taskCount: err.taskCount } });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
   // ─── Stages ───────────────────────────────────────────────────────────────
 
-  router.post('/workflows/:id/stages', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.post('/workflows/:id/stages', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateStageSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -183,11 +187,12 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.put('/workflows/:id/stages/reorder', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.put('/workflows/:id/stages/reorder', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = ReorderStagesSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -205,11 +210,12 @@ export function createWorkflowsRouter(
         res.status(400).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.delete('/workflows/:id/stages/:stageId', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/workflows/:id/stages/:stageId', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await removeStageFromWorkflow.execute(req.params['id'] as string, req.params['stageId'] as string);
       res.status(204).send();
@@ -222,11 +228,12 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code, details: { taskCount: err.taskCount } });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.patch('/workflows/:id/stages/:stageId/color', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/workflows/:id/stages/:stageId/color', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const { color } = req.body as { color?: string };
     if (!color || typeof color !== 'string') {
       res.status(400).json({ error: 'color is required', code: 'VALIDATION_ERROR' });
@@ -240,11 +247,12 @@ export function createWorkflowsRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.patch('/workflows/:id/stages/:stageId', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.patch('/workflows/:id/stages/:stageId', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const VALID_CATEGORIES: StageCategory[] = ['nuevo', 'enProgreso', 'hecho'];
     const body = req.body as { name?: unknown; category?: unknown };
     const hasName     = body.name !== undefined;
@@ -281,7 +289,8 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
@@ -292,7 +301,7 @@ export function createWorkflowsRouter(
     res.json(items);
   });
 
-  router.get('/project-categories/:id', auth, canRead, async (req: Request, res: Response): Promise<void> => {
+  router.get('/project-categories/:id', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const item = await getProjectCategory.execute(req.params['id'] as string);
       res.json(item);
@@ -301,11 +310,12 @@ export function createWorkflowsRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.post('/project-categories', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.post('/project-categories', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateProjectCategorySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -319,11 +329,12 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.put('/project-categories/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.put('/project-categories/:id', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateProjectCategorySchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -341,11 +352,12 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.delete('/project-categories/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/project-categories/:id', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await deleteProjectCategory.execute(req.params['id'] as string);
       res.status(204).send();
@@ -358,7 +370,8 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
@@ -369,7 +382,7 @@ export function createWorkflowsRouter(
     res.json(items);
   });
 
-  router.get('/project-types/:id', auth, canRead, async (req: Request, res: Response): Promise<void> => {
+  router.get('/project-types/:id', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const item = await getProjectType.execute(req.params['id'] as string);
       res.json(item);
@@ -378,11 +391,12 @@ export function createWorkflowsRouter(
         res.status(404).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.post('/project-types', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.post('/project-types', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = CreateProjectTypeSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -396,11 +410,12 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.put('/project-types/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.put('/project-types/:id', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateProjectTypeSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
@@ -418,11 +433,12 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
-  router.delete('/project-types/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
+  router.delete('/project-types/:id', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await deleteProjectType.execute(req.params['id'] as string);
       res.status(204).send();
@@ -435,7 +451,8 @@ export function createWorkflowsRouter(
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
-      throw err;
+      // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+      next(err);
     }
   });
 
