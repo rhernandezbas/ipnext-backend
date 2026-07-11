@@ -208,31 +208,43 @@ export function createClientsRouter(
     }
   });
 
-  router.get('/:id/contracts', auth, async (req: Request, res: Response): Promise<void> => {
-    const contracts = await getContracts.execute(req.params['id'] as string);
-    // Apply deriveTechnology + mapContractStatus at the output layer.
-    // - technology: manual value wins, else derived from plan.
-    // - status: raw GR estado ("Vigente"/"Baja"/…) → canonical enum the FE understands
-    //   (idempotent for already-canonical values; same computed-on-read convention).
-    // The raw stored values on the entity are NOT mutated.
-    const mapped = contracts.map((c) => ({
-      ...c,
-      status: mapContractStatus(c.status),
-      technology: deriveTechnology(c.technology, c.plan),
-    }));
-    res.json(mapped);
+  router.get('/:id/contracts', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const contracts = await getContracts.execute(req.params['id'] as string);
+      // Apply deriveTechnology + mapContractStatus at the output layer.
+      // - technology: manual value wins, else derived from plan.
+      // - status: raw GR estado ("Vigente"/"Baja"/…) → canonical enum the FE understands
+      //   (idempotent for already-canonical values; same computed-on-read convention).
+      // The raw stored values on the entity are NOT mutated.
+      const mapped = contracts.map((c) => ({
+        ...c,
+        status: mapContractStatus(c.status),
+        technology: deriveTechnology(c.technology, c.plan),
+      }));
+      res.json(mapped);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.get('/:id/invoices', auth, async (req: Request, res: Response): Promise<void> => {
-    const invoices = await getInvoices.execute(req.params['id'] as string);
-    // Map to the stable InvoiceDto contract — never leak the raw domain entity (AD-6).
-    res.json(invoices.map(toInvoiceDto));
+  router.get('/:id/invoices', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const invoices = await getInvoices.execute(req.params['id'] as string);
+      // Map to the stable InvoiceDto contract — never leak the raw domain entity (AD-6).
+      res.json(invoices.map(toInvoiceDto));
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.get('/:id/logs', auth, async (req: Request, res: Response): Promise<void> => {
-    const { page, limit } = req.query as Record<string, string>;
-    const result = await getLogs.execute({ clientId: req.params['id'] as string, page: page ? +page : 1, limit: limit ? +limit : 25 });
-    res.json(result);
+  router.get('/:id/logs', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { page, limit } = req.query as Record<string, string>;
+      const result = await getLogs.execute({ clientId: req.params['id'] as string, page: page ? +page : 1, limit: limit ? +limit : 25 });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.post('/', auth, async (req: Request, res: Response): Promise<void> => {

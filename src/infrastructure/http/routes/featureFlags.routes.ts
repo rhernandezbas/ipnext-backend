@@ -1,4 +1,4 @@
-import { Router, Request, Response, RequestHandler } from 'express';
+import { Router, Request, Response, RequestHandler, NextFunction } from 'express';
 import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
@@ -19,8 +19,12 @@ export function createFeatureFlagsRouter(
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
 
-  router.get('/', auth, async (_req: Request, res: Response): Promise<void> => {
-    res.json(await listFeatureFlags.execute());
+  router.get('/', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.json(await listFeatureFlags.execute());
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/:key', auth, async (req: Request, res: Response, next): Promise<void> => {

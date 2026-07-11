@@ -84,9 +84,13 @@ export function createWorkflowsRouter(
 
   // ─── Workflows ────────────────────────────────────────────────────────────
 
-  router.get('/workflows', auth, canRead, async (_req: Request, res: Response): Promise<void> => {
-    const workflows = await listWorkflows.execute();
-    res.json(workflows);
+  router.get('/workflows', auth, canRead, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const workflows = await listWorkflows.execute();
+      res.json(workflows);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/workflows/:id', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -296,9 +300,13 @@ export function createWorkflowsRouter(
 
   // ─── ProjectCategory ──────────────────────────────────────────────────────
 
-  router.get('/project-categories', auth, canRead, async (_req: Request, res: Response): Promise<void> => {
-    const items = await listProjectCategory.execute();
-    res.json(items);
+  router.get('/project-categories', auth, canRead, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const items = await listProjectCategory.execute();
+      res.json(items);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/project-categories/:id', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -377,9 +385,13 @@ export function createWorkflowsRouter(
 
   // ─── ProjectType ──────────────────────────────────────────────────────────
 
-  router.get('/project-types', auth, canRead, async (_req: Request, res: Response): Promise<void> => {
-    const items = await listProjectType.execute();
-    res.json(items);
+  router.get('/project-types', auth, canRead, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const items = await listProjectType.execute();
+      res.json(items);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/project-types/:id', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {

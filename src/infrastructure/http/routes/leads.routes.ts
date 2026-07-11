@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ListLeads } from '@application/use-cases/ListLeads';
 import { GetLead } from '@application/use-cases/GetLead';
 import { CreateLead } from '@application/use-cases/CreateLead';
@@ -17,52 +17,76 @@ export function createLeadsRouter(
 ): Router {
   const router = Router();
 
-  router.get('/', async (_req: Request, res: Response): Promise<void> => {
-    const leads = await listLeads.execute();
-    res.json(leads);
-  });
-
-  router.get('/:id', async (req: Request, res: Response): Promise<void> => {
-    const lead = await getLead.execute(req.params['id'] as string);
-    if (!lead) {
-      res.status(404).json({ error: 'Lead not found', code: 'LEAD_NOT_FOUND' });
-      return;
+  router.get('/', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const leads = await listLeads.execute();
+      res.json(leads);
+    } catch (err) {
+      next(err);
     }
-    res.json(lead);
   });
 
-  router.post('/', async (req: Request, res: Response): Promise<void> => {
-    const data = req.body as Omit<Lead, 'id' | 'createdAt' | 'convertedAt' | 'convertedClientId'>;
-    const lead = await createLead.execute(data);
-    res.status(201).json(lead);
-  });
-
-  router.put('/:id', async (req: Request, res: Response): Promise<void> => {
-    const lead = await updateLead.execute(req.params['id'] as string, req.body as Partial<Lead>);
-    if (!lead) {
-      res.status(404).json({ error: 'Lead not found', code: 'LEAD_NOT_FOUND' });
-      return;
+  router.get('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const lead = await getLead.execute(req.params['id'] as string);
+      if (!lead) {
+        res.status(404).json({ error: 'Lead not found', code: 'LEAD_NOT_FOUND' });
+        return;
+      }
+      res.json(lead);
+    } catch (err) {
+      next(err);
     }
-    res.json(lead);
   });
 
-  router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
-    const deleted = await deleteLead.execute(req.params['id'] as string);
-    if (!deleted) {
-      res.status(404).json({ error: 'Lead not found', code: 'LEAD_NOT_FOUND' });
-      return;
+  router.post('/', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const data = req.body as Omit<Lead, 'id' | 'createdAt' | 'convertedAt' | 'convertedClientId'>;
+      const lead = await createLead.execute(data);
+      res.status(201).json(lead);
+    } catch (err) {
+      next(err);
     }
-    res.status(204).send();
   });
 
-  router.post('/:id/convert', async (req: Request, res: Response): Promise<void> => {
-    const { clientId } = req.body as { clientId: string };
-    const lead = await convertLeadToClient.execute(req.params['id'] as string, clientId);
-    if (!lead) {
-      res.status(404).json({ error: 'Lead not found', code: 'LEAD_NOT_FOUND' });
-      return;
+  router.put('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const lead = await updateLead.execute(req.params['id'] as string, req.body as Partial<Lead>);
+      if (!lead) {
+        res.status(404).json({ error: 'Lead not found', code: 'LEAD_NOT_FOUND' });
+        return;
+      }
+      res.json(lead);
+    } catch (err) {
+      next(err);
     }
-    res.json(lead);
+  });
+
+  router.delete('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const deleted = await deleteLead.execute(req.params['id'] as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'Lead not found', code: 'LEAD_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/:id/convert', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { clientId } = req.body as { clientId: string };
+      const lead = await convertLeadToClient.execute(req.params['id'] as string, clientId);
+      if (!lead) {
+        res.status(404).json({ error: 'Lead not found', code: 'LEAD_NOT_FOUND' });
+        return;
+      }
+      res.json(lead);
+    } catch (err) {
+      next(err);
+    }
   });
 
   return router;

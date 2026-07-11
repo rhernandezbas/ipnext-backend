@@ -151,61 +151,69 @@ export function createSchedulingRouter(
     actorName: req.user?.username ?? 'System',
   });
 
-  router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
-    // Wire format: frontend sends ?stageIds[]=a&stageIds[]=b
-    // Express 4 uses `qs` internally and auto-strips bracket notation:
-    //   ?stageIds[]=a&stageIds[]=b → req.query.stageIds = ['a', 'b']
-    // We normalise to array if a single string was provided.
-    const rawStageIds = req.query['stageIds'];
-    const stageIds = rawStageIds === undefined
-      ? undefined
-      : Array.isArray(rawStageIds)
-        ? rawStageIds as string[]
-        : [rawStageIds as string];
+  router.get('/', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      // Wire format: frontend sends ?stageIds[]=a&stageIds[]=b
+      // Express 4 uses `qs` internally and auto-strips bracket notation:
+      //   ?stageIds[]=a&stageIds[]=b → req.query.stageIds = ['a', 'b']
+      // We normalise to array if a single string was provided.
+      const rawStageIds = req.query['stageIds'];
+      const stageIds = rawStageIds === undefined
+        ? undefined
+        : Array.isArray(rawStageIds)
+          ? rawStageIds as string[]
+          : [rawStageIds as string];
 
-    const rawQuery = {
-      projectId:  req.query['projectId'],
-      stageIds,
-      customerId: req.query['customerId'],
-      partnerId:  req.query['partnerId'],
-      assigneeId: req.query['assigneeId'],
-      priority:   req.query['priority'],
-      q:          req.query['q'],
-      from:       req.query['from'],
-      to:         req.query['to'],
-      isClosed:   req.query['isClosed'],
-      kind:       req.query['kind'],
-      status:     req.query['status'],
-      // #86 — archived filter. Omitted → exclude archived. true → only archived.
-      archived:   req.query['archived'],
-    };
+      const rawQuery = {
+        projectId:  req.query['projectId'],
+        stageIds,
+        customerId: req.query['customerId'],
+        partnerId:  req.query['partnerId'],
+        assigneeId: req.query['assigneeId'],
+        priority:   req.query['priority'],
+        q:          req.query['q'],
+        from:       req.query['from'],
+        to:         req.query['to'],
+        isClosed:   req.query['isClosed'],
+        kind:       req.query['kind'],
+        status:     req.query['status'],
+        // #86 — archived filter. Omitted → exclude archived. true → only archived.
+        archived:   req.query['archived'],
+      };
 
-    const parsed = ListTasksFilterSchema.safeParse(rawQuery);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
-      return;
+      const parsed = ListTasksFilterSchema.safeParse(rawQuery);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+
+      const tasks = await listTasks.execute(parsed.data);
+      res.json(tasks);
+    } catch (err) {
+      next(err);
     }
-
-    const tasks = await listTasks.execute(parsed.data);
-    res.json(tasks);
   });
 
   // ── Checklist sub-routes — MUST be registered BEFORE /:id to avoid shadowing ──
 
   if (checklist) {
     // POST /:id/checklist — add ad-hoc item
-    router.post('/:id/checklist', auth, async (req: Request, res: Response): Promise<void> => {
-      const parsed = AddChecklistItemSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
-        return;
+    router.post('/:id/checklist', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const parsed = AddChecklistItemSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        const item = await checklist.addChecklistItem.execute(req.params['id'] as string, parsed.data.text, actorOf(req));
+        if (!item) {
+          res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
+          return;
+        }
+        res.status(201).json(item);
+      } catch (err) {
+        next(err);
       }
-      const item = await checklist.addChecklistItem.execute(req.params['id'] as string, parsed.data.text, actorOf(req));
-      if (!item) {
-        res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
-        return;
-      }
-      res.status(201).json(item);
     });
 
     // POST /:id/checklist/assign-template — MUST come before /:id/checklist/:itemId
@@ -229,9 +237,13 @@ export function createSchedulingRouter(
     });
 
     // DELETE /:id/checklist — clear all items
-    router.delete('/:id/checklist', auth, async (req: Request, res: Response): Promise<void> => {
-      await checklist.clearTaskChecklist.execute(req.params['id'] as string, actorOf(req));
-      res.status(204).send();
+    router.delete('/:id/checklist', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        await checklist.clearTaskChecklist.execute(req.params['id'] as string, actorOf(req));
+        res.status(204).send();
+      } catch (err) {
+        next(err);
+      }
     });
 
     // PUT /:id/checklist/order — reorder items — MUST come before /:id/checklist/:itemId
@@ -290,13 +302,17 @@ export function createSchedulingRouter(
     });
 
     // DELETE /:id/checklist/:itemId — remove single item
-    router.delete('/:id/checklist/:itemId', auth, async (req: Request, res: Response): Promise<void> => {
-      const deleted = await checklist.removeChecklistItem.execute(req.params['itemId'] as string, req.params['id'] as string, actorOf(req));
-      if (!deleted) {
-        res.status(404).json({ error: 'Checklist item not found', code: 'CHECKLIST_ITEM_NOT_FOUND' });
-        return;
+    router.delete('/:id/checklist/:itemId', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const deleted = await checklist.removeChecklistItem.execute(req.params['itemId'] as string, req.params['id'] as string, actorOf(req));
+        if (!deleted) {
+          res.status(404).json({ error: 'Checklist item not found', code: 'CHECKLIST_ITEM_NOT_FOUND' });
+          return;
+        }
+        res.status(204).send();
+      } catch (err) {
+        next(err);
       }
-      res.status(204).send();
     });
   }
 
@@ -337,14 +353,18 @@ export function createSchedulingRouter(
       stageId: z.string().min(1),
     });
 
-    router.post('/bulk/stage', auth, async (req: Request, res: Response): Promise<void> => {
-      const parsed = BulkMoveSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
-        return;
+    router.post('/bulk/stage', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const parsed = BulkMoveSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        const result = await bulkMoveTasksToStage.execute(parsed.data.ids, parsed.data.stageId, actorOf(req));
+        res.json(result);
+      } catch (err) {
+        next(err);
       }
-      const result = await bulkMoveTasksToStage.execute(parsed.data.ids, parsed.data.stageId, actorOf(req));
-      res.json(result);
     });
   }
 
@@ -584,13 +604,17 @@ export function createSchedulingRouter(
 
   // ── End archive ───────────────────────────────────────────────────────────
 
-  router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
-    const task = await getTask.execute(req.params['id'] as string);
-    if (!task) {
-      res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
-      return;
+  router.get('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const task = await getTask.execute(req.params['id'] as string);
+      if (!task) {
+        res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
+        return;
+      }
+      res.json(task);
+    } catch (err) {
+      next(err);
     }
-    res.json(task);
   });
 
   router.post('/', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -615,12 +639,19 @@ export function createSchedulingRouter(
     let stageId = data.stageId;
     if (!stageId) {
       if (stageRepo) {
-        const defaultStage = await stageRepo.getDefaultWorkflowStageByLegacyStatus('pending');
-        if (!defaultStage) {
-          res.status(500).json({ error: 'Default workflow not seeded', code: 'INTERNAL_ERROR' });
+        // async-error-sweep-2: este await corría FUERA del try de abajo — si el
+        // lookup rechazaba (infra caída) la request quedaba COLGADA (504).
+        try {
+          const defaultStage = await stageRepo.getDefaultWorkflowStageByLegacyStatus('pending');
+          if (!defaultStage) {
+            res.status(500).json({ error: 'Default workflow not seeded', code: 'INTERNAL_ERROR' });
+            return;
+          }
+          stageId = defaultStage.id;
+        } catch (err) {
+          next(err);
           return;
         }
-        stageId = defaultStage.id;
       } else {
         stageId = '10000000-0000-4000-a000-000000000001';
       }
@@ -780,13 +811,17 @@ export function createSchedulingRouter(
 
   // #86 — hard_delete guard: only super_admin (via requirePerm('scheduling','hard_delete')).
   // hardDelete is a pass-through when omitted (back-compat for tests without guard wired).
-  router.delete('/:id', auth, hardDelete, async (req: Request, res: Response): Promise<void> => {
-    const deleted = await deleteTask.execute(req.params['id'] as string);
-    if (!deleted) {
-      res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
-      return;
+  router.delete('/:id', auth, hardDelete, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const deleted = await deleteTask.execute(req.params['id'] as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'Task not found', code: 'TASK_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      next(err);
     }
-    res.status(204).send();
   });
 
   return router;

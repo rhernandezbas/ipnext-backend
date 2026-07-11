@@ -223,7 +223,15 @@ export function createRecaptureRouter(
     perms.manage,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const actorId = req.user?.id as string;
-      const isAdmin = await hasAssignPerm(actorId);
+      // async-error-sweep-2: este await corria SIN try - si el lookup de permisos
+      // rechazaba (infra caida) la request quedaba COLGADA (504).
+      let isAdmin: boolean;
+      try {
+        isAdmin = await hasAssignPerm(actorId);
+      } catch (err) {
+        next(err);
+        return;
+      }
 
       // Non-admin agents can only mutate their own leads â€” check ownership first
       if (!isAdmin) {
@@ -278,7 +286,15 @@ export function createRecaptureRouter(
     perms.manage,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       const actorId = req.user?.id as string;
-      const isAdmin = await hasAssignPerm(actorId);
+      // async-error-sweep-2: este await corria SIN try - si el lookup de permisos
+      // rechazaba (infra caida) la request quedaba COLGADA (504).
+      let isAdmin: boolean;
+      try {
+        isAdmin = await hasAssignPerm(actorId);
+      } catch (err) {
+        next(err);
+        return;
+      }
 
       // Non-admin agents can only mutate their own leads â€” check ownership first
       if (!isAdmin) {

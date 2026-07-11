@@ -18,28 +18,40 @@ export function createNetworkSiteRouter(
 ): Router {
   const router = Router();
 
-  router.get('/', async (_req: Request, res: Response): Promise<void> => {
-    if (listNetworkSitesWithUisp) {
-      const sites = await listNetworkSitesWithUisp.execute();
-      res.json(sites);
-    } else {
-      const sites = await listNetworkSites.execute();
-      res.json(sites);
+  router.get('/', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (listNetworkSitesWithUisp) {
+        const sites = await listNetworkSitesWithUisp.execute();
+        res.json(sites);
+      } else {
+        const sites = await listNetworkSites.execute();
+        res.json(sites);
+      }
+    } catch (err) {
+      next(err);
     }
   });
 
-  router.post('/', async (req: Request, res: Response): Promise<void> => {
-    const site = await createNetworkSite.execute(req.body);
-    res.status(201).json(site);
+  router.post('/', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const site = await createNetworkSite.execute(req.body);
+      res.status(201).json(site);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.get('/:id', async (req: Request, res: Response): Promise<void> => {
-    const site = await getNetworkSite.execute(req.params['id'] as string);
-    if (!site) {
-      res.status(404).json({ error: 'Network site not found', code: 'NETWORK_SITE_NOT_FOUND' });
-      return;
+  router.get('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const site = await getNetworkSite.execute(req.params['id'] as string);
+      if (!site) {
+        res.status(404).json({ error: 'Network site not found', code: 'NETWORK_SITE_NOT_FOUND' });
+        return;
+      }
+      res.json(site);
+    } catch (err) {
+      next(err);
     }
-    res.json(site);
   });
 
   router.put('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -84,13 +96,17 @@ export function createNetworkSiteRouter(
     }
   });
 
-  router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
-    const deleted = await deleteNetworkSite.execute(req.params['id'] as string);
-    if (!deleted) {
-      res.status(404).json({ error: 'Network site not found', code: 'NETWORK_SITE_NOT_FOUND' });
-      return;
+  router.delete('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const deleted = await deleteNetworkSite.execute(req.params['id'] as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'Network site not found', code: 'NETWORK_SITE_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      next(err);
     }
-    res.status(204).send();
   });
 
   return router;

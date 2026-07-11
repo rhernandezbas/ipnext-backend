@@ -42,52 +42,80 @@ export function createNasRouter(
   const canManage = requirePerm('network', 'manage');
 
   // NAS Servers
-  router.get('/nas-servers', auth, async (_req: Request, res: Response): Promise<void> => {
-    const servers = await listNasServers.execute();
-    res.json(servers);
-  });
-
-  router.post('/nas-servers', auth, canManage, async (req: Request, res: Response): Promise<void> => {
-    const server = await createNasServer.execute(req.body);
-    res.status(201).json(server);
-  });
-
-  router.get('/nas-servers/:id', auth, async (req: Request, res: Response): Promise<void> => {
-    const server = await getNasServer.execute(req.params['id'] as string);
-    if (!server) {
-      res.status(404).json({ error: 'NAS server not found', code: 'NAS_SERVER_NOT_FOUND' });
-      return;
+  router.get('/nas-servers', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const servers = await listNasServers.execute();
+      res.json(servers);
+    } catch (err) {
+      next(err);
     }
-    res.json(server);
   });
 
-  router.put('/nas-servers/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
-    const server = await updateNasServer.execute(req.params['id'] as string, req.body);
-    if (!server) {
-      res.status(404).json({ error: 'NAS server not found', code: 'NAS_SERVER_NOT_FOUND' });
-      return;
+  router.post('/nas-servers', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const server = await createNasServer.execute(req.body);
+      res.status(201).json(server);
+    } catch (err) {
+      next(err);
     }
-    res.json(server);
   });
 
-  router.delete('/nas-servers/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
-    const deleted = await deleteNasServer.execute(req.params['id'] as string);
-    if (!deleted) {
-      res.status(404).json({ error: 'NAS server not found', code: 'NAS_SERVER_NOT_FOUND' });
-      return;
+  router.get('/nas-servers/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const server = await getNasServer.execute(req.params['id'] as string);
+      if (!server) {
+        res.status(404).json({ error: 'NAS server not found', code: 'NAS_SERVER_NOT_FOUND' });
+        return;
+      }
+      res.json(server);
+    } catch (err) {
+      next(err);
     }
-    res.status(204).send();
+  });
+
+  router.put('/nas-servers/:id', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const server = await updateNasServer.execute(req.params['id'] as string, req.body);
+      if (!server) {
+        res.status(404).json({ error: 'NAS server not found', code: 'NAS_SERVER_NOT_FOUND' });
+        return;
+      }
+      res.json(server);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/nas-servers/:id', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const deleted = await deleteNasServer.execute(req.params['id'] as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'NAS server not found', code: 'NAS_SERVER_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
   });
 
   // Radius Config
-  router.get('/radius-config', auth, async (_req: Request, res: Response): Promise<void> => {
-    const config = await getRadiusConfig.execute();
-    res.json(config);
+  router.get('/radius-config', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const config = await getRadiusConfig.execute();
+      res.json(config);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.put('/radius-config', auth, canManage, async (req: Request, res: Response): Promise<void> => {
-    const config = await updateRadiusConfig.execute(req.body);
-    res.json(config);
+  router.put('/radius-config', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const config = await updateRadiusConfig.execute(req.body);
+      res.json(config);
+    } catch (err) {
+      next(err);
+    }
   });
 
   // IP allocator (ip-allocator / FindFreeIp): primer IP libre de un NAS para `cgnat|public`.

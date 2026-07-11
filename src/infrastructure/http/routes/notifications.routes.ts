@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ListNotifications } from '@application/use-cases/ListNotifications';
 import { MarkNotificationRead } from '@application/use-cases/MarkNotificationRead';
 import { MarkAllNotificationsRead } from '@application/use-cases/MarkAllNotificationsRead';
@@ -12,33 +12,49 @@ export function createNotificationsRouter(
 ): Router {
   const router = Router();
 
-  router.get('/', async (req: Request, res: Response): Promise<void> => {
-    const unread = req.query['unread'] === 'true';
-    const notifications = await listNotifications.execute(unread || undefined);
-    res.json(notifications);
-  });
-
-  router.put('/read-all', async (_req: Request, res: Response): Promise<void> => {
-    await markAllRead.execute();
-    res.json({ success: true });
-  });
-
-  router.put('/:id/read', async (req: Request, res: Response): Promise<void> => {
-    const notification = await markRead.execute(req.params['id'] as string);
-    if (!notification) {
-      res.status(404).json({ error: 'Notification not found', code: 'NOTIFICATION_NOT_FOUND' });
-      return;
+  router.get('/', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const unread = req.query['unread'] === 'true';
+      const notifications = await listNotifications.execute(unread || undefined);
+      res.json(notifications);
+    } catch (err) {
+      next(err);
     }
-    res.json(notification);
   });
 
-  router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
-    const deleted = await deleteNotification.execute(req.params['id'] as string);
-    if (!deleted) {
-      res.status(404).json({ error: 'Notification not found', code: 'NOTIFICATION_NOT_FOUND' });
-      return;
+  router.put('/read-all', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await markAllRead.execute();
+      res.json({ success: true });
+    } catch (err) {
+      next(err);
     }
-    res.status(204).send();
+  });
+
+  router.put('/:id/read', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const notification = await markRead.execute(req.params['id'] as string);
+      if (!notification) {
+        res.status(404).json({ error: 'Notification not found', code: 'NOTIFICATION_NOT_FOUND' });
+        return;
+      }
+      res.json(notification);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const deleted = await deleteNotification.execute(req.params['id'] as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'Notification not found', code: 'NOTIFICATION_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
   });
 
   return router;

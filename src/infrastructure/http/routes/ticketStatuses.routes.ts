@@ -24,8 +24,12 @@ export function createTicketStatusesRouter(
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
 
-  router.get('/', auth, async (_req: Request, res: Response): Promise<void> => {
-    res.json(await listTicketStatuses.execute());
+  router.get('/', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.json(await listTicketStatuses.execute());
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {

@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { GetBillingSummary } from '@application/use-cases/GetBillingSummary';
 import { ListInvoices } from '@application/use-cases/ListInvoices';
 import { ListPayments } from '@application/use-cases/ListPayments';
@@ -28,27 +28,43 @@ export function createBillingRouter(
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
 
-  router.get('/summary', auth, async (_req: Request, res: Response): Promise<void> => {
-    const summary = await getSummary.execute();
-    res.json(summary);
+  router.get('/summary', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const summary = await getSummary.execute();
+      res.json(summary);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.get('/invoices', auth, async (req: Request, res: Response): Promise<void> => {
-    const { page, limit, status, dateFrom, dateTo, search } = req.query as Record<string, string>;
-    const result = await listInvoices.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, status, dateFrom, dateTo, search });
-    res.json(result);
+  router.get('/invoices', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { page, limit, status, dateFrom, dateTo, search } = req.query as Record<string, string>;
+      const result = await listInvoices.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, status, dateFrom, dateTo, search });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.get('/payments', auth, async (req: Request, res: Response): Promise<void> => {
-    const { page, limit, search } = req.query as Record<string, string>;
-    const result = await listPayments.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, search });
-    res.json(result);
+  router.get('/payments', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { page, limit, search } = req.query as Record<string, string>;
+      const result = await listPayments.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, search });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.get('/transactions', auth, async (req: Request, res: Response): Promise<void> => {
-    const { page, limit, dateFrom, dateTo } = req.query as Record<string, string>;
-    const result = await listTransactions.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, dateFrom, dateTo });
-    res.json(result);
+  router.get('/transactions', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { page, limit, dateFrom, dateTo } = req.query as Record<string, string>;
+      const result = await listTransactions.execute({ page: page ? +page : 1, limit: limit ? +limit : 25, dateFrom, dateTo });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.post('/invoices', auth, (req: Request, res: Response): void => {

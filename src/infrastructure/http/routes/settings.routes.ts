@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { GetSystemSettings } from '@application/use-cases/GetSystemSettings';
 import { UpdateSystemSettings } from '@application/use-cases/UpdateSystemSettings';
 import { GetEmailSettings } from '@application/use-cases/GetEmailSettings';
@@ -51,33 +51,53 @@ export function createSettingsRouter(
 ): Router {
   const router = Router();
 
-  router.get('/system', async (_req: Request, res: Response): Promise<void> => {
-    const settings = await getSystemSettings.execute();
-    res.json(settings);
+  router.get('/system', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const settings = await getSystemSettings.execute();
+      res.json(settings);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.put('/system', async (req: Request, res: Response): Promise<void> => {
-    const settings = await updateSystemSettings.execute(req.body as Partial<SystemSettings>);
-    res.json(settings);
+  router.put('/system', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const settings = await updateSystemSettings.execute(req.body as Partial<SystemSettings>);
+      res.json(settings);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.get('/email', async (_req: Request, res: Response): Promise<void> => {
-    const settings = await getEmailSettings.execute();
-    res.json(settings);
+  router.get('/email', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const settings = await getEmailSettings.execute();
+      res.json(settings);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.put('/email', async (req: Request, res: Response): Promise<void> => {
-    const settings = await updateEmailSettings.execute(req.body as Partial<EmailSettings>);
-    res.json(settings);
+  router.put('/email', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const settings = await updateEmailSettings.execute(req.body as Partial<EmailSettings>);
+      res.json(settings);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.post('/email/test', async (_req: Request, res: Response): Promise<void> => {
     res.json({ success: true, message: 'Correo de prueba enviado correctamente.' });
   });
 
-  router.get('/templates', async (_req: Request, res: Response): Promise<void> => {
-    const templates = await listTemplates.execute();
-    res.json(templates);
+  router.get('/templates', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const templates = await listTemplates.execute();
+      res.json(templates);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/template-variables', async (_req: Request, res: Response): Promise<void> => {
@@ -108,133 +128,197 @@ export function createSettingsRouter(
     res.json(allVarsByType);
   });
 
-  router.put('/templates/:id', async (req: Request, res: Response): Promise<void> => {
-    const template = await updateTemplate.execute(
-      req.params['id'] as string,
-      req.body as Partial<MessageTemplate>,
-    );
-    if (!template) {
-      res.status(404).json({ error: 'Template not found', code: 'TEMPLATE_NOT_FOUND' });
-      return;
+  router.put('/templates/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const template = await updateTemplate.execute(
+        req.params['id'] as string,
+        req.body as Partial<MessageTemplate>,
+      );
+      if (!template) {
+        res.status(404).json({ error: 'Template not found', code: 'TEMPLATE_NOT_FOUND' });
+        return;
+      }
+      res.json(template);
+    } catch (err) {
+      next(err);
     }
-    res.json(template);
   });
 
-  router.get('/api-tokens', async (_req: Request, res: Response): Promise<void> => {
-    const tokens = await listApiTokens.execute();
-    res.json(tokens);
-  });
-
-  router.post('/api-tokens', async (req: Request, res: Response): Promise<void> => {
-    const { name, permissions } = req.body as { name: string; permissions: string[] };
-    const token = await createApiToken.execute(name, permissions);
-    res.status(201).json(token);
-  });
-
-  router.delete('/api-tokens/:id', async (req: Request, res: Response): Promise<void> => {
-    const revoked = await revokeApiToken.execute(req.params['id'] as string);
-    if (!revoked) {
-      res.status(404).json({ error: 'Token not found', code: 'TOKEN_NOT_FOUND' });
-      return;
+  router.get('/api-tokens', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const tokens = await listApiTokens.execute();
+      res.json(tokens);
+    } catch (err) {
+      next(err);
     }
-    res.status(204).send();
+  });
+
+  router.post('/api-tokens', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { name, permissions } = req.body as { name: string; permissions: string[] };
+      const token = await createApiToken.execute(name, permissions);
+      res.status(201).json(token);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/api-tokens/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const revoked = await revokeApiToken.execute(req.params['id'] as string);
+      if (!revoked) {
+        res.status(404).json({ error: 'Token not found', code: 'TOKEN_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
   });
 
   if (getFinanceSettings) {
-    router.get('/finance', async (_req: Request, res: Response): Promise<void> => {
-      const settings = await getFinanceSettings.execute();
-      res.json(settings);
+    router.get('/finance', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const settings = await getFinanceSettings.execute();
+        res.json(settings);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
   if (updateFinanceSettings) {
-    router.put('/finance', async (req: Request, res: Response): Promise<void> => {
-      const settings = await updateFinanceSettings.execute(req.body as Partial<FinanceSettings>);
-      res.json(settings);
+    router.put('/finance', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const settings = await updateFinanceSettings.execute(req.body as Partial<FinanceSettings>);
+        res.json(settings);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
   if (listPaymentMethods) {
-    router.get('/payment-methods', async (_req: Request, res: Response): Promise<void> => {
-      const methods = await listPaymentMethods.execute();
-      res.json(methods);
+    router.get('/payment-methods', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const methods = await listPaymentMethods.execute();
+        res.json(methods);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
   if (createPaymentMethod) {
-    router.post('/payment-methods', async (req: Request, res: Response): Promise<void> => {
-      const method = await createPaymentMethod.execute(req.body as Omit<PaymentMethod, 'id'>);
-      res.status(201).json(method);
+    router.post('/payment-methods', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const method = await createPaymentMethod.execute(req.body as Omit<PaymentMethod, 'id'>);
+        res.status(201).json(method);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
   if (updatePaymentMethod) {
-    router.put('/payment-methods/:id', async (req: Request, res: Response): Promise<void> => {
-      const method = await updatePaymentMethod.execute(req.params['id'] as string, req.body as Partial<PaymentMethod>);
-      if (!method) {
-        res.status(404).json({ error: 'Payment method not found', code: 'PAYMENT_METHOD_NOT_FOUND' });
-        return;
+    router.put('/payment-methods/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const method = await updatePaymentMethod.execute(req.params['id'] as string, req.body as Partial<PaymentMethod>);
+        if (!method) {
+          res.status(404).json({ error: 'Payment method not found', code: 'PAYMENT_METHOD_NOT_FOUND' });
+          return;
+        }
+        res.json(method);
+      } catch (err) {
+        next(err);
       }
-      res.json(method);
     });
   }
 
   if (deletePaymentMethod) {
-    router.delete('/payment-methods/:id', async (req: Request, res: Response): Promise<void> => {
-      const deleted = await deletePaymentMethod.execute(req.params['id'] as string);
-      if (!deleted) {
-        res.status(404).json({ error: 'Payment method not found', code: 'PAYMENT_METHOD_NOT_FOUND' });
-        return;
+    router.delete('/payment-methods/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const deleted = await deletePaymentMethod.execute(req.params['id'] as string);
+        if (!deleted) {
+          res.status(404).json({ error: 'Payment method not found', code: 'PAYMENT_METHOD_NOT_FOUND' });
+          return;
+        }
+        res.status(204).send();
+      } catch (err) {
+        next(err);
       }
-      res.status(204).send();
     });
   }
 
   // Webhooks
   if (listWebhooks) {
-    router.get('/webhooks', async (_req: Request, res: Response): Promise<void> => {
-      const webhooks = await listWebhooks.execute();
-      res.json(webhooks);
+    router.get('/webhooks', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const webhooks = await listWebhooks.execute();
+        res.json(webhooks);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
   if (createWebhook) {
-    router.post('/webhooks', async (req: Request, res: Response): Promise<void> => {
-      const webhook = await createWebhook.execute(req.body as Omit<Webhook, 'id' | 'createdAt' | 'lastTriggered' | 'lastStatus'>);
-      res.status(201).json(webhook);
+    router.post('/webhooks', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const webhook = await createWebhook.execute(req.body as Omit<Webhook, 'id' | 'createdAt' | 'lastTriggered' | 'lastStatus'>);
+        res.status(201).json(webhook);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
   if (deleteWebhook) {
-    router.delete('/webhooks/:id', async (req: Request, res: Response): Promise<void> => {
-      const deleted = await deleteWebhook.execute(req.params['id'] as string);
-      if (!deleted) {
-        res.status(404).json({ error: 'Webhook not found', code: 'WEBHOOK_NOT_FOUND' });
-        return;
+    router.delete('/webhooks/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const deleted = await deleteWebhook.execute(req.params['id'] as string);
+        if (!deleted) {
+          res.status(404).json({ error: 'Webhook not found', code: 'WEBHOOK_NOT_FOUND' });
+          return;
+        }
+        res.status(204).send();
+      } catch (err) {
+        next(err);
       }
-      res.status(204).send();
     });
   }
 
   if (testWebhook) {
-    router.post('/webhooks/:id/test', async (req: Request, res: Response): Promise<void> => {
-      const result = await testWebhook.execute(req.params['id'] as string);
-      res.json(result);
+    router.post('/webhooks/:id/test', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const result = await testWebhook.execute(req.params['id'] as string);
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
   // Backups
   if (listBackups) {
-    router.get('/backups', async (_req: Request, res: Response): Promise<void> => {
-      const backups = await listBackups.execute();
-      res.json(backups);
+    router.get('/backups', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const backups = await listBackups.execute();
+        res.json(backups);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
   if (createBackup) {
-    router.post('/backups', async (_req: Request, res: Response): Promise<void> => {
-      const backup = await createBackup.execute();
-      res.status(201).json(backup);
+    router.post('/backups', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const backup = await createBackup.execute();
+        res.status(201).json(backup);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
@@ -244,16 +328,24 @@ export function createSettingsRouter(
 
   // Client Portal
   if (getClientPortalSettings) {
-    router.get('/client-portal', async (_req: Request, res: Response): Promise<void> => {
-      const settings = await getClientPortalSettings.execute();
-      res.json(settings);
+    router.get('/client-portal', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const settings = await getClientPortalSettings.execute();
+        res.json(settings);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
   if (updateClientPortalSettings) {
-    router.put('/client-portal', async (req: Request, res: Response): Promise<void> => {
-      const settings = await updateClientPortalSettings.execute(req.body as Partial<ClientPortalSettings>);
-      res.json(settings);
+    router.put('/client-portal', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const settings = await updateClientPortalSettings.execute(req.body as Partial<ClientPortalSettings>);
+        res.json(settings);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 

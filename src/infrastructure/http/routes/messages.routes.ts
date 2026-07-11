@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ListMessages } from '@application/use-cases/ListMessages';
 import { GetMessage } from '@application/use-cases/GetMessage';
 import { CreateMessage } from '@application/use-cases/CreateMessage';
@@ -15,43 +15,63 @@ export function createMessagesRouter(
 ): Router {
   const router = Router();
 
-  router.get('/', async (req: Request, res: Response): Promise<void> => {
-    const filter = req.query['filter'] as 'inbox' | 'sent' | 'draft' | undefined;
-    const messages = await listMessages.execute(filter);
-    res.json(messages);
-  });
-
-  router.get('/:id', async (req: Request, res: Response): Promise<void> => {
-    const message = await getMessage.execute(req.params['id'] as string);
-    if (!message) {
-      res.status(404).json({ error: 'Message not found', code: 'MESSAGE_NOT_FOUND' });
-      return;
+  router.get('/', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const filter = req.query['filter'] as 'inbox' | 'sent' | 'draft' | undefined;
+      const messages = await listMessages.execute(filter);
+      res.json(messages);
+    } catch (err) {
+      next(err);
     }
-    res.json(message);
   });
 
-  router.post('/', async (req: Request, res: Response): Promise<void> => {
-    const data = req.body as Omit<Message, 'id' | 'createdAt'>;
-    const message = await createMessage.execute({ ...data, status: 'sent' });
-    res.status(201).json(message);
-  });
-
-  router.patch('/:id/read', async (req: Request, res: Response): Promise<void> => {
-    const message = await markAsRead.execute(req.params['id'] as string);
-    if (!message) {
-      res.status(404).json({ error: 'Message not found', code: 'MESSAGE_NOT_FOUND' });
-      return;
+  router.get('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const message = await getMessage.execute(req.params['id'] as string);
+      if (!message) {
+        res.status(404).json({ error: 'Message not found', code: 'MESSAGE_NOT_FOUND' });
+        return;
+      }
+      res.json(message);
+    } catch (err) {
+      next(err);
     }
-    res.json(message);
   });
 
-  router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
-    const deleted = await deleteMessage.execute(req.params['id'] as string);
-    if (!deleted) {
-      res.status(404).json({ error: 'Message not found', code: 'MESSAGE_NOT_FOUND' });
-      return;
+  router.post('/', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const data = req.body as Omit<Message, 'id' | 'createdAt'>;
+      const message = await createMessage.execute({ ...data, status: 'sent' });
+      res.status(201).json(message);
+    } catch (err) {
+      next(err);
     }
-    res.status(204).send();
+  });
+
+  router.patch('/:id/read', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const message = await markAsRead.execute(req.params['id'] as string);
+      if (!message) {
+        res.status(404).json({ error: 'Message not found', code: 'MESSAGE_NOT_FOUND' });
+        return;
+      }
+      res.json(message);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const deleted = await deleteMessage.execute(req.params['id'] as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'Message not found', code: 'MESSAGE_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
   });
 
   return router;

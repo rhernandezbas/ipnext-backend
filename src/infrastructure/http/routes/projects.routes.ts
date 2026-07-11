@@ -36,34 +36,42 @@ export function createProjectsRouter(
   const invManage: RequestHandler = requireInventoryManage ?? ((_req, _res, next) => next());
   const schedManage: RequestHandler = requireSchedulingManage ?? ((_req, _res, next) => next());
 
-  router.get('/', auth, async (req: Request, res: Response): Promise<void> => {
-    const parsed = ListProjectsQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
-      return;
+  router.get('/', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const parsed = ListProjectsQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      // Default behaviour: only return enabled projects. Callers must opt in to
+      // see disabled projects with ?visible=false, or pass ?visible=all to get
+      // everything (for restore-aware UIs).
+      let filter: { visible?: boolean } | undefined;
+      if (parsed.data.visible === undefined) {
+        filter = { visible: true };
+      } else if (parsed.data.visible === 'all') {
+        filter = undefined;
+      } else {
+        filter = { visible: parsed.data.visible === 'true' };
+      }
+      const projects = await listProjects.execute(filter);
+      res.json(projects);
+    } catch (err) {
+      next(err);
     }
-    // Default behaviour: only return enabled projects. Callers must opt in to
-    // see disabled projects with ?visible=false, or pass ?visible=all to get
-    // everything (for restore-aware UIs).
-    let filter: { visible?: boolean } | undefined;
-    if (parsed.data.visible === undefined) {
-      filter = { visible: true };
-    } else if (parsed.data.visible === 'all') {
-      filter = undefined;
-    } else {
-      filter = { visible: parsed.data.visible === 'true' };
-    }
-    const projects = await listProjects.execute(filter);
-    res.json(projects);
   });
 
-  router.get('/:id', auth, async (req: Request, res: Response): Promise<void> => {
-    const project = await getProject.execute(req.params['id'] as string);
-    if (!project) {
-      res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
-      return;
+  router.get('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const project = await getProject.execute(req.params['id'] as string);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+        return;
+      }
+      res.json(project);
+    } catch (err) {
+      next(err);
     }
-    res.json(project);
   });
 
   router.post('/', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {

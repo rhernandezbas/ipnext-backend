@@ -24,8 +24,12 @@ export function createTaskCategoriesRouter(
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
 
-  router.get('/task-categories', auth, async (_req: Request, res: Response): Promise<void> => {
-    res.json(await listTaskCategory.execute());
+  router.get('/task-categories', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.json(await listTaskCategory.execute());
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/task-categories/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {

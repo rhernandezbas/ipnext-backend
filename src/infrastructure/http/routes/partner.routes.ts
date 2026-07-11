@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ListPartners } from '@application/use-cases/ListPartners';
 import { GetPartner } from '@application/use-cases/GetPartner';
 import { CreatePartner } from '@application/use-cases/CreatePartner';
@@ -15,42 +15,62 @@ export function createPartnerRouter(
 ): Router {
   const router = Router();
 
-  router.get('/', async (_req: Request, res: Response): Promise<void> => {
-    const partners = await listPartners.execute();
-    res.json(partners);
-  });
-
-  router.get('/:id', async (req: Request, res: Response): Promise<void> => {
-    const partner = await getPartner.execute(req.params['id'] as string);
-    if (!partner) {
-      res.status(404).json({ error: 'Partner not found', code: 'PARTNER_NOT_FOUND' });
-      return;
+  router.get('/', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const partners = await listPartners.execute();
+      res.json(partners);
+    } catch (err) {
+      next(err);
     }
-    res.json(partner);
   });
 
-  router.post('/', async (req: Request, res: Response): Promise<void> => {
-    const data = req.body as Omit<Partner, 'id' | 'createdAt' | 'clientCount' | 'adminCount'>;
-    const partner = await createPartner.execute(data);
-    res.status(201).json(partner);
-  });
-
-  router.put('/:id', async (req: Request, res: Response): Promise<void> => {
-    const partner = await updatePartner.execute(req.params['id'] as string, req.body as Partial<Partner>);
-    if (!partner) {
-      res.status(404).json({ error: 'Partner not found', code: 'PARTNER_NOT_FOUND' });
-      return;
+  router.get('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const partner = await getPartner.execute(req.params['id'] as string);
+      if (!partner) {
+        res.status(404).json({ error: 'Partner not found', code: 'PARTNER_NOT_FOUND' });
+        return;
+      }
+      res.json(partner);
+    } catch (err) {
+      next(err);
     }
-    res.json(partner);
   });
 
-  router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
-    const deleted = await deletePartner.execute(req.params['id'] as string);
-    if (!deleted) {
-      res.status(404).json({ error: 'Partner not found', code: 'PARTNER_NOT_FOUND' });
-      return;
+  router.post('/', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const data = req.body as Omit<Partner, 'id' | 'createdAt' | 'clientCount' | 'adminCount'>;
+      const partner = await createPartner.execute(data);
+      res.status(201).json(partner);
+    } catch (err) {
+      next(err);
     }
-    res.status(204).send();
+  });
+
+  router.put('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const partner = await updatePartner.execute(req.params['id'] as string, req.body as Partial<Partner>);
+      if (!partner) {
+        res.status(404).json({ error: 'Partner not found', code: 'PARTNER_NOT_FOUND' });
+        return;
+      }
+      res.json(partner);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const deleted = await deletePartner.execute(req.params['id'] as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'Partner not found', code: 'PARTNER_NOT_FOUND' });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
   });
 
   return router;

@@ -31,8 +31,12 @@ export function createTicketAreasRouter(
   const readPerm   = requirePerm('tickets', 'read');
   const managePerm = requirePerm('tickets', 'manage');
 
-  router.get('/', auth, readPerm, async (_req: Request, res: Response): Promise<void> => {
-    res.json(await listTicketAreas.execute());
+  router.get('/', auth, readPerm, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.json(await listTicketAreas.execute());
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/:id', auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {

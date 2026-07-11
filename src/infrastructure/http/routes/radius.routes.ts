@@ -140,138 +140,154 @@ export function createRadiusRouter(
     }
   });
 
-  router.delete('/sessions/:id', auth, canManage, async (req: Request, res: Response): Promise<void> => {
-    const result = await disconnectSession.execute(req.params['id'] as string);
-    res.json(result);
+  router.delete('/sessions/:id', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await disconnectSession.execute(req.params['id'] as string);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
   });
 
   // ── GET /events — Logs RADIUS ────────────────────────────────────────────────
   // FIX4: listRadiusEvents ahora es REQUERIDO (sin ?) — la ruta SIEMPRE se registra.
   // FIX5: validación de inputs numéricos y fechas antes de llamar al use case.
-  router.get('/events', auth, canRead, async (req: Request, res: Response): Promise<void> => {
-    const q = req.query;
+  router.get('/events', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const q = req.query;
 
-    // REQ-FILTER-8: validar eventType
-    if (q['eventType'] !== undefined && !VALID_EVENT_TYPES.has(q['eventType'] as string)) {
-      res.status(400).json({ code: 'VALIDATION_ERROR', message: 'eventType must be start | stop | interim' });
-      return;
+      // REQ-FILTER-8: validar eventType
+      if (q['eventType'] !== undefined && !VALID_EVENT_TYPES.has(q['eventType'] as string)) {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'eventType must be start | stop | interim' });
+        return;
+      }
+
+      // FIX5: validar page y limit (enteros positivos)
+      const page  = parseIntPositive(q['page']  as string | undefined);
+      const limit = parseIntPositive(q['limit'] as string | undefined);
+      if (page  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'page must be a positive integer' }); return; }
+      if (limit === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'limit must be a positive integer' }); return; }
+
+      // FIX5: validar vlanId (entero no negativo)
+      const vlanId = parseIntNonNeg(q['vlanId'] as string | undefined);
+      if (vlanId === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'vlanId must be a non-negative integer' }); return; }
+
+      // FIX5: validar from/to (fechas parseables)
+      const from = parseDate(q['from'] as string | undefined);
+      const to   = parseDate(q['to']   as string | undefined);
+      if (from === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'from must be a valid ISO 8601 date' }); return; }
+      if (to   === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'to must be a valid ISO 8601 date' }); return; }
+
+      const online = q['online'] !== undefined
+        ? q['online'] === 'true'
+        : undefined;
+
+      const result = await listRadiusEvents.execute({
+        username:  q['username']  as string | undefined,
+        nasId:     q['nasId']     as string | undefined,
+        vlanId,
+        eventType: q['eventType'] as 'start' | 'stop' | 'interim' | undefined,
+        online,
+        from,
+        to,
+        page,
+        limit,
+      });
+
+      res.json(result);
+    } catch (err) {
+      next(err);
     }
-
-    // FIX5: validar page y limit (enteros positivos)
-    const page  = parseIntPositive(q['page']  as string | undefined);
-    const limit = parseIntPositive(q['limit'] as string | undefined);
-    if (page  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'page must be a positive integer' }); return; }
-    if (limit === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'limit must be a positive integer' }); return; }
-
-    // FIX5: validar vlanId (entero no negativo)
-    const vlanId = parseIntNonNeg(q['vlanId'] as string | undefined);
-    if (vlanId === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'vlanId must be a non-negative integer' }); return; }
-
-    // FIX5: validar from/to (fechas parseables)
-    const from = parseDate(q['from'] as string | undefined);
-    const to   = parseDate(q['to']   as string | undefined);
-    if (from === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'from must be a valid ISO 8601 date' }); return; }
-    if (to   === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'to must be a valid ISO 8601 date' }); return; }
-
-    const online = q['online'] !== undefined
-      ? q['online'] === 'true'
-      : undefined;
-
-    const result = await listRadiusEvents.execute({
-      username:  q['username']  as string | undefined,
-      nasId:     q['nasId']     as string | undefined,
-      vlanId,
-      eventType: q['eventType'] as 'start' | 'stop' | 'interim' | undefined,
-      online,
-      from,
-      to,
-      page,
-      limit,
-    });
-
-    res.json(result);
   });
 
   // ── GET /ne8000/audit — Auditoría NE8000 ────────────────────────────────────
   // FIX4: listNe8000Audit ahora es REQUERIDO (sin ?) — la ruta SIEMPRE se registra.
   // FIX5: validación de inputs numéricos antes de llamar al use case.
-  router.get('/ne8000/audit', auth, canRead, async (req: Request, res: Response): Promise<void> => {
-    const q = req.query;
+  router.get('/ne8000/audit', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const q = req.query;
 
-    // REQ-FILTER-3: validar status
-    if (q['status'] !== undefined && !VALID_PPPOE_STATUSES.has(q['status'] as string)) {
-      res.status(400).json({ code: 'VALIDATION_ERROR', message: 'status must be enabled | disabled' });
-      return;
+      // REQ-FILTER-3: validar status
+      if (q['status'] !== undefined && !VALID_PPPOE_STATUSES.has(q['status'] as string)) {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'status must be enabled | disabled' });
+        return;
+      }
+
+      // REQ-FILTER-4: validar enforcedState
+      if (q['enforcedState'] !== undefined && !VALID_ENFORCED.has(q['enforcedState'] as string)) {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'enforcedState must be active | reduced | blocked' });
+        return;
+      }
+
+      // FIX5: validar page y limit (enteros positivos)
+      const page  = parseIntPositive(q['page']  as string | undefined);
+      const limit = parseIntPositive(q['limit'] as string | undefined);
+      if (page  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'page must be a positive integer' }); return; }
+      if (limit === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'limit must be a positive integer' }); return; }
+
+      const online = q['online'] !== undefined
+        ? q['online'] === 'true'
+        : undefined;
+
+      const result = await listNe8000Audit.execute({
+        username:      q['username']      as string | undefined,
+        status:        q['status']        as string | undefined,
+        enforcedState: q['enforcedState'] as string | undefined,
+        online,
+        page,
+        limit,
+      });
+
+      res.json(result);
+    } catch (err) {
+      next(err);
     }
-
-    // REQ-FILTER-4: validar enforcedState
-    if (q['enforcedState'] !== undefined && !VALID_ENFORCED.has(q['enforcedState'] as string)) {
-      res.status(400).json({ code: 'VALIDATION_ERROR', message: 'enforcedState must be active | reduced | blocked' });
-      return;
-    }
-
-    // FIX5: validar page y limit (enteros positivos)
-    const page  = parseIntPositive(q['page']  as string | undefined);
-    const limit = parseIntPositive(q['limit'] as string | undefined);
-    if (page  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'page must be a positive integer' }); return; }
-    if (limit === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'limit must be a positive integer' }); return; }
-
-    const online = q['online'] !== undefined
-      ? q['online'] === 'true'
-      : undefined;
-
-    const result = await listNe8000Audit.execute({
-      username:      q['username']      as string | undefined,
-      status:        q['status']        as string | undefined,
-      enforcedState: q['enforcedState'] as string | undefined,
-      online,
-      page,
-      limit,
-    });
-
-    res.json(result);
   });
 
   // ── GET /auth-failures — eventos de autenticación RADIUS (radpostauth) ───────
   // Espejo de /events: gate network.read + validación de inputs.
-  router.get('/auth-failures', auth, canRead, async (req: Request, res: Response): Promise<void> => {
-    const q = req.query;
+  router.get('/auth-failures', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const q = req.query;
 
-    // Validar reply (opcional): Access-Accept | Access-Reject
-    if (q['reply'] !== undefined && !VALID_AUTH_REPLIES.has(q['reply'] as string)) {
-      res.status(400).json({ code: 'VALIDATION_ERROR', message: 'reply must be Access-Accept | Access-Reject' });
-      return;
+      // Validar reply (opcional): Access-Accept | Access-Reject
+      if (q['reply'] !== undefined && !VALID_AUTH_REPLIES.has(q['reply'] as string)) {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'reply must be Access-Accept | Access-Reject' });
+        return;
+      }
+
+      // Validar reason (opcional): session_stuck | user_not_found | other
+      if (q['reason'] !== undefined && !VALID_AUTH_REASONS.has(q['reason'] as string)) {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'reason must be session_stuck | user_not_found | other' });
+        return;
+      }
+
+      // Validar page y limit (enteros positivos)
+      const page  = parseIntPositive(q['page']  as string | undefined);
+      const limit = parseIntPositive(q['limit'] as string | undefined);
+      if (page  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'page must be a positive integer' }); return; }
+      if (limit === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'limit must be a positive integer' }); return; }
+
+      // Validar from/to (fechas parseables)
+      const from = parseDate(q['from'] as string | undefined);
+      const to   = parseDate(q['to']   as string | undefined);
+      if (from === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'from must be a valid ISO 8601 date' }); return; }
+      if (to   === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'to must be a valid ISO 8601 date' }); return; }
+
+      const result = await listRadiusAuthFailures.execute({
+        username: q['username'] as string | undefined,
+        reply:    q['reply']    as RadiusAuthReply | undefined,
+        reason:   q['reason']   as string | undefined,
+        from,
+        to,
+        page,
+        limit,
+      });
+
+      res.json(result);
+    } catch (err) {
+      next(err);
     }
-
-    // Validar reason (opcional): session_stuck | user_not_found | other
-    if (q['reason'] !== undefined && !VALID_AUTH_REASONS.has(q['reason'] as string)) {
-      res.status(400).json({ code: 'VALIDATION_ERROR', message: 'reason must be session_stuck | user_not_found | other' });
-      return;
-    }
-
-    // Validar page y limit (enteros positivos)
-    const page  = parseIntPositive(q['page']  as string | undefined);
-    const limit = parseIntPositive(q['limit'] as string | undefined);
-    if (page  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'page must be a positive integer' }); return; }
-    if (limit === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'limit must be a positive integer' }); return; }
-
-    // Validar from/to (fechas parseables)
-    const from = parseDate(q['from'] as string | undefined);
-    const to   = parseDate(q['to']   as string | undefined);
-    if (from === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'from must be a valid ISO 8601 date' }); return; }
-    if (to   === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'to must be a valid ISO 8601 date' }); return; }
-
-    const result = await listRadiusAuthFailures.execute({
-      username: q['username'] as string | undefined,
-      reply:    q['reply']    as RadiusAuthReply | undefined,
-      reason:   q['reason']   as string | undefined,
-      from,
-      to,
-      page,
-      limit,
-    });
-
-    res.json(result);
   });
 
   return router;

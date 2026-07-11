@@ -50,16 +50,20 @@ export function createContractsRouter(
     }
   });
 
-  router.get('/contracts', auth, async (req: Request, res: Response): Promise<void> => {
-    const { page, limit, search, status, technology } = req.query as Record<string, string>;
-    const result = await listContracts.execute({
-      page: page ? +page : 1,
-      limit: limit ? +limit : 25,
-      search,
-      status,
-      technology,
-    });
-    res.json(result);
+  router.get('/contracts', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { page, limit, search, status, technology } = req.query as Record<string, string>;
+      const result = await listContracts.execute({
+        page: page ? +page : 1,
+        limit: limit ? +limit : 25,
+        search,
+        status,
+        technology,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
   });
 
   /**

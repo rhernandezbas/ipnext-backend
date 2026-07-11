@@ -24,8 +24,12 @@ export function createTaskPrioritiesRouter(
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
 
-  router.get('/task-priorities', auth, async (_req: Request, res: Response): Promise<void> => {
-    res.json(await listTaskPriority.execute());
+  router.get('/task-priorities', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.json(await listTaskPriority.execute());
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/task-priorities/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {

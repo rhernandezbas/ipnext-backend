@@ -31,9 +31,13 @@ export function createServiceCatalogRouter(
   const readPerm   = requirePerm('clients', 'read');
   const managePerm = requirePerm('clients', 'manage');
 
-  router.get('/service-catalog', auth, readPerm, async (req: Request, res: Response): Promise<void> => {
-    const filter = req.query['active'] === 'true' ? { active: true } : undefined;
-    res.json(await list.execute(filter));
+  router.get('/service-catalog', auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const filter = req.query['active'] === 'true' ? { active: true } : undefined;
+      res.json(await list.execute(filter));
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.post('/service-catalog', auth, managePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {

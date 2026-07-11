@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ListOlts } from '@application/use-cases/ListOlts';
 import { GetOlt } from '@application/use-cases/GetOlt';
 import { CreateOlt } from '@application/use-cases/CreateOlt';
@@ -21,78 +21,110 @@ export function createGponRouter(
 ): Router {
   const router = Router();
 
-  router.get('/olts', async (_req: Request, res: Response): Promise<void> => {
-    const olts = await listOlts.execute();
-    res.json(olts);
-  });
-
-  router.post('/olts', async (req: Request, res: Response): Promise<void> => {
-    if (!createOlt) { res.status(501).json({ error: 'Not implemented' }); return; }
-    const { name, ip, model, location } = req.body as { name: string; ip: string; model: string; location: string };
-    const olt = await createOlt.execute({ name, ipAddress: ip, model, manufacturer: '', uplink: '', ponPorts: 0 } as Omit<OltDevice, 'id' | 'totalOnus' | 'onlineOnus' | 'status' | 'lastSeen'>);
-    res.status(201).json(olt);
-  });
-
-  router.get('/olts/:id', async (req: Request, res: Response): Promise<void> => {
-    const olt = await getOlt.execute(req.params['id'] as string);
-    if (!olt) {
-      res.status(404).json({ error: 'OLT not found', code: 'OLT_NOT_FOUND' });
-      return;
+  router.get('/olts', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const olts = await listOlts.execute();
+      res.json(olts);
+    } catch (err) {
+      next(err);
     }
-    res.json(olt);
   });
 
-  router.get('/olts/:id/onus', async (req: Request, res: Response): Promise<void> => {
-    const onus = await listOnusByOlt.execute(req.params['id'] as string);
-    res.json(onus);
+  router.post('/olts', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!createOlt) { res.status(501).json({ error: 'Not implemented' }); return; }
+      const { name, ip, model, location } = req.body as { name: string; ip: string; model: string; location: string };
+      const olt = await createOlt.execute({ name, ipAddress: ip, model, manufacturer: '', uplink: '', ponPorts: 0 } as Omit<OltDevice, 'id' | 'totalOnus' | 'onlineOnus' | 'status' | 'lastSeen'>);
+      res.status(201).json(olt);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.post('/onus', async (req: Request, res: Response): Promise<void> => {
-    if (!createOnu) { res.status(501).json({ error: 'Not implemented' }); return; }
-    const { serial, model, oltId, port, customerId, customerName } = req.body as {
-      serial: string; model: string; oltId: number; port: number;
-      customerId?: number; customerName?: string;
-    };
-    const onu = await createOnu.execute({
-      serialNumber: serial,
-      model,
-      oltId: String(oltId),
-      ponPort: port,
-      clientId: customerId ? String(customerId) : null,
-      clientName: customerName ?? null,
-    } as Omit<OnuDevice, 'id' | 'oltName' | 'onuId' | 'rxPower' | 'txPower' | 'distance' | 'firmwareVersion' | 'lastSeen' | 'status'>);
-    res.status(201).json(onu);
+  router.get('/olts/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const olt = await getOlt.execute(req.params['id'] as string);
+      if (!olt) {
+        res.status(404).json({ error: 'OLT not found', code: 'OLT_NOT_FOUND' });
+        return;
+      }
+      res.json(olt);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  router.get('/onus', async (req: Request, res: Response): Promise<void> => {
-    const { oltId } = req.query as { oltId?: string };
-    if (oltId) {
-      const onus = await listOnusByOlt.execute(oltId);
+  router.get('/olts/:id/onus', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const onus = await listOnusByOlt.execute(req.params['id'] as string);
       res.json(onus);
-      return;
+    } catch (err) {
+      next(err);
     }
-    const onus = await listOnus.execute();
-    res.json(onus);
   });
 
-  router.get('/onus/:id', async (req: Request, res: Response): Promise<void> => {
-    const onu = await getOnu.execute(req.params['id'] as string);
-    if (!onu) {
-      res.status(404).json({ error: 'ONU not found', code: 'ONU_NOT_FOUND' });
-      return;
+  router.post('/onus', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!createOnu) { res.status(501).json({ error: 'Not implemented' }); return; }
+      const { serial, model, oltId, port, customerId, customerName } = req.body as {
+        serial: string; model: string; oltId: number; port: number;
+        customerId?: number; customerName?: string;
+      };
+      const onu = await createOnu.execute({
+        serialNumber: serial,
+        model,
+        oltId: String(oltId),
+        ponPort: port,
+        clientId: customerId ? String(customerId) : null,
+        clientName: customerName ?? null,
+      } as Omit<OnuDevice, 'id' | 'oltName' | 'onuId' | 'rxPower' | 'txPower' | 'distance' | 'firmwareVersion' | 'lastSeen' | 'status'>);
+      res.status(201).json(onu);
+    } catch (err) {
+      next(err);
     }
-    res.json(onu);
   });
 
-  router.patch('/onus/:id/status', async (req: Request, res: Response): Promise<void> => {
-    if (!updateOnuStatus) { res.status(501).json({ error: 'Not implemented' }); return; }
-    const { status } = req.body as { status: OnuDevice['status'] };
-    const onu = await updateOnuStatus.execute(req.params['id'] as string, status);
-    if (!onu) {
-      res.status(404).json({ error: 'ONU not found', code: 'ONU_NOT_FOUND' });
-      return;
+  router.get('/onus', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { oltId } = req.query as { oltId?: string };
+      if (oltId) {
+        const onus = await listOnusByOlt.execute(oltId);
+        res.json(onus);
+        return;
+      }
+      const onus = await listOnus.execute();
+      res.json(onus);
+    } catch (err) {
+      next(err);
     }
-    res.json(onu);
+  });
+
+  router.get('/onus/:id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const onu = await getOnu.execute(req.params['id'] as string);
+      if (!onu) {
+        res.status(404).json({ error: 'ONU not found', code: 'ONU_NOT_FOUND' });
+        return;
+      }
+      res.json(onu);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.patch('/onus/:id/status', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!updateOnuStatus) { res.status(501).json({ error: 'Not implemented' }); return; }
+      const { status } = req.body as { status: OnuDevice['status'] };
+      const onu = await updateOnuStatus.execute(req.params['id'] as string, status);
+      if (!onu) {
+        res.status(404).json({ error: 'ONU not found', code: 'ONU_NOT_FOUND' });
+        return;
+      }
+      res.json(onu);
+    } catch (err) {
+      next(err);
+    }
   });
 
   return router;

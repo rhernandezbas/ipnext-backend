@@ -185,9 +185,13 @@ export function createPppoeRouter(
     '/contracts/:contractId/pppoe',
     auth,
     canRead,
-    async (req: Request, res: Response): Promise<void> => {
-      const services = await listPppoeByContract.execute(req.params['contractId'] as string);
-      res.json(services.map(toPppoeServiceDto));
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const services = await listPppoeByContract.execute(req.params['contractId'] as string);
+        res.json(services.map(toPppoeServiceDto));
+      } catch (err) {
+        next(err);
+      }
     },
   );
 
@@ -257,9 +261,13 @@ export function createPppoeRouter(
     '/pppoe/unassigned',
     auth,
     canRead,
-    async (_req: Request, res: Response): Promise<void> => {
-      const orphans = await listUnassignedPppoe.execute();
-      res.json(orphans.map(toPppoeServiceDto));
+    async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const orphans = await listUnassignedPppoe.execute();
+        res.json(orphans.map(toPppoeServiceDto));
+      } catch (err) {
+        next(err);
+      }
     },
   );
 
@@ -276,29 +284,33 @@ export function createPppoeRouter(
       '/pppoe/activation-history',
       auth,
       canRead,
-      async (req: Request, res: Response): Promise<void> => {
-        const q = req.query;
-        const filter: {
-          actorId?: string; customerId?: string; clientId?: string;
-          eventType?: string; direction?: 'upgrade' | 'downgrade';
-          from?: Date; to?: Date;
-        } = {};
-        if (typeof q['actorId'] === 'string' && q['actorId'] !== '') filter.actorId = q['actorId'];
-        if (typeof q['customerId'] === 'string' && q['customerId'] !== '') filter.customerId = q['customerId'];
-        if (typeof q['clientId'] === 'string' && q['clientId'] !== '') filter.clientId = q['clientId'];
-        // internet-history-plan-direction — TÓPICO (eventType, push-down SQL) + DIRECCIÓN (in-memory).
-        if (typeof q['eventType'] === 'string' && q['eventType'] !== '') filter.eventType = q['eventType'];
-        if (q['direction'] === 'upgrade' || q['direction'] === 'downgrade') filter.direction = q['direction'];
-        if (typeof q['from'] === 'string' && q['from'] !== '') {
-          const d = new Date(q['from']);
-          if (!isNaN(d.getTime())) filter.from = d;
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+          const q = req.query;
+          const filter: {
+            actorId?: string; customerId?: string; clientId?: string;
+            eventType?: string; direction?: 'upgrade' | 'downgrade';
+            from?: Date; to?: Date;
+          } = {};
+          if (typeof q['actorId'] === 'string' && q['actorId'] !== '') filter.actorId = q['actorId'];
+          if (typeof q['customerId'] === 'string' && q['customerId'] !== '') filter.customerId = q['customerId'];
+          if (typeof q['clientId'] === 'string' && q['clientId'] !== '') filter.clientId = q['clientId'];
+          // internet-history-plan-direction — TÓPICO (eventType, push-down SQL) + DIRECCIÓN (in-memory).
+          if (typeof q['eventType'] === 'string' && q['eventType'] !== '') filter.eventType = q['eventType'];
+          if (q['direction'] === 'upgrade' || q['direction'] === 'downgrade') filter.direction = q['direction'];
+          if (typeof q['from'] === 'string' && q['from'] !== '') {
+            const d = new Date(q['from']);
+            if (!isNaN(d.getTime())) filter.from = d;
+          }
+          if (typeof q['to'] === 'string' && q['to'] !== '') {
+            const d = new Date(q['to']);
+            if (!isNaN(d.getTime())) filter.to = d;
+          }
+          const events = await listInternetServiceHistory.execute(filter);
+          res.json(events);
+        } catch (err) {
+          next(err);
         }
-        if (typeof q['to'] === 'string' && q['to'] !== '') {
-          const d = new Date(q['to']);
-          if (!isNaN(d.getTime())) filter.to = d;
-        }
-        const events = await listInternetServiceHistory.execute(filter);
-        res.json(events);
       },
     );
   }
@@ -306,9 +318,13 @@ export function createPppoeRouter(
   // ── GET /pppoe/activation-history/operators — operadores DISTINCT de eventos INTERNET ──
   // Para el <select> de operadores del historial (gate pppoe.read, sin admin/rbac).
   if (listInternetActivationOperators) {
-    router.get('/pppoe/activation-history/operators', auth, canRead, async (_req, res) => {
-      const operators = await listInternetActivationOperators.execute();
-      res.json(operators);
+    router.get('/pppoe/activation-history/operators', auth, canRead, async (_req, res, next: NextFunction) => {
+      try {
+        const operators = await listInternetActivationOperators.execute();
+        res.json(operators);
+      } catch (err) {
+        next(err);
+      }
     });
   }
 
@@ -354,29 +370,33 @@ export function createPppoeRouter(
       '/pppoe',
       auth,
       canRead,
-      async (req: Request, res: Response): Promise<void> => {
-        const q = req.query;
-        const filter: {
-          search?: string; status?: string; nasId?: string; page?: number; limit?: number;
-          includeUnassigned?: boolean; pending?: boolean;
-        } = {};
-        if (typeof q['search'] === 'string' && q['search'] !== '') filter.search = q['search'];
-        if (typeof q['status'] === 'string' && q['status'] !== '') filter.status = q['status'];
-        if (typeof q['nasId']  === 'string' && q['nasId']  !== '') filter.nasId  = q['nasId'];
-        if (typeof q['page']   === 'string' && q['page']   !== '') {
-          const n = parseInt(q['page'], 10);
-          if (!isNaN(n) && n > 0) filter.page = n;
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+          const q = req.query;
+          const filter: {
+            search?: string; status?: string; nasId?: string; page?: number; limit?: number;
+            includeUnassigned?: boolean; pending?: boolean;
+          } = {};
+          if (typeof q['search'] === 'string' && q['search'] !== '') filter.search = q['search'];
+          if (typeof q['status'] === 'string' && q['status'] !== '') filter.status = q['status'];
+          if (typeof q['nasId']  === 'string' && q['nasId']  !== '') filter.nasId  = q['nasId'];
+          if (typeof q['page']   === 'string' && q['page']   !== '') {
+            const n = parseInt(q['page'], 10);
+            if (!isNaN(n) && n > 0) filter.page = n;
+          }
+          if (typeof q['limit'] === 'string' && q['limit'] !== '') {
+            const n = parseInt(q['limit'], 10);
+            if (!isNaN(n) && n > 0) filter.limit = n;
+          }
+          // pppoe-full-management: incluir huérfanos (contractId=null) cuando se pide explícitamente.
+          if (q['includeUnassigned'] === 'true') filter.includeUnassigned = true;
+          // pppoe-preprovision D6.7: chip "Pendientes" server-side (nasId IS NULL, paginación correcta).
+          if (q['pending'] === 'true') filter.pending = true;
+          const page = await listAllPppoeServices.execute(filter);
+          res.json(page);
+        } catch (err) {
+          next(err);
         }
-        if (typeof q['limit'] === 'string' && q['limit'] !== '') {
-          const n = parseInt(q['limit'], 10);
-          if (!isNaN(n) && n > 0) filter.limit = n;
-        }
-        // pppoe-full-management: incluir huérfanos (contractId=null) cuando se pide explícitamente.
-        if (q['includeUnassigned'] === 'true') filter.includeUnassigned = true;
-        // pppoe-preprovision D6.7: chip "Pendientes" server-side (nasId IS NULL, paginación correcta).
-        if (q['pending'] === 'true') filter.pending = true;
-        const page = await listAllPppoeServices.execute(filter);
-        res.json(page);
       },
     );
   }
@@ -651,14 +671,18 @@ export function createPppoeRouter(
     '/pppoe/enforce/preview',
     auth,
     canCut,
-    async (req: Request, res: Response): Promise<void> => {
-      const parsed = EnforceBulkBodySchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
-        return;
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const parsed = EnforceBulkBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        const result = await previewEnforcement.execute({ action: parsed.data.action, target: parsed.data.target });
+        res.json({ total: result.total, byRouter: result.byRouter, sample: result.sample });
+      } catch (err) {
+        next(err);
       }
-      const result = await previewEnforcement.execute({ action: parsed.data.action, target: parsed.data.target });
-      res.json({ total: result.total, byRouter: result.byRouter, sample: result.sample });
     },
   );
 
@@ -667,20 +691,24 @@ export function createPppoeRouter(
     '/pppoe/enforce/bulk',
     auth,
     canCut,
-    async (req: Request, res: Response): Promise<void> => {
-      const parsed = EnforceBulkBodySchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
-        return;
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const parsed = EnforceBulkBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(422).json({ code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        // Resolver candidatos (mismo filtro que el preview: solo los que la acción cambiaría).
+        const preview = await previewEnforcement.execute({ action: parsed.data.action, target: parsed.data.target });
+        const started = await serviceCutRunner.start(parsed.data.action, preview.pppoeIds);
+        if (!started.accepted) {
+          res.status(409).json({ code: 'ENFORCEMENT_IN_PROGRESS', error: 'Ya hay un corte masivo en curso' });
+          return;
+        }
+        res.status(202).json({ jobId: started.batchId, total: preview.total });
+      } catch (err) {
+        next(err);
       }
-      // Resolver candidatos (mismo filtro que el preview: solo los que la acción cambiaría).
-      const preview = await previewEnforcement.execute({ action: parsed.data.action, target: parsed.data.target });
-      const started = await serviceCutRunner.start(parsed.data.action, preview.pppoeIds);
-      if (!started.accepted) {
-        res.status(409).json({ code: 'ENFORCEMENT_IN_PROGRESS', error: 'Ya hay un corte masivo en curso' });
-        return;
-      }
-      res.status(202).json({ jobId: started.batchId, total: preview.total });
     },
   );
 
@@ -689,13 +717,17 @@ export function createPppoeRouter(
     '/pppoe/enforce/bulk/:id',
     auth,
     canCut,
-    async (req: Request, res: Response): Promise<void> => {
-      const batch = await serviceCutBatchRepo.findById(req.params['id'] as string);
-      if (!batch) {
-        res.status(404).json({ code: 'BATCH_NOT_FOUND', error: 'Batch de corte no encontrado' });
-        return;
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const batch = await serviceCutBatchRepo.findById(req.params['id'] as string);
+        if (!batch) {
+          res.status(404).json({ code: 'BATCH_NOT_FOUND', error: 'Batch de corte no encontrado' });
+          return;
+        }
+        res.json(toServiceCutBatchDto(batch));
+      } catch (err) {
+        next(err);
       }
-      res.json(toServiceCutBatchDto(batch));
     },
   );
 

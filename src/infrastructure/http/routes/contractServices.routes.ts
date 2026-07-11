@@ -128,19 +128,27 @@ export function createContractServicesRouter(
   });
 
   // ── DELETE /contracts/:contractId/services/:id — idempotent remove ───────────
-  router.delete('/contracts/:contractId/services/:id', auth, writePerm, async (req: Request, res: Response): Promise<void> => {
-    // #110 — thread actor from req.user for event registration
-    // #127 - parse optional reason from JSON body
-    const _delBody = (req.body && typeof req.body === 'object') ? (req.body as Record<string, unknown>) : {};
-    const deleteReason = typeof _delBody['reason'] === 'string' ? _delBody['reason'] : undefined;
-    await removeSvc.execute(req.params['id'] as string, actorOf(req), deleteReason);
-    res.status(204).send();
+  router.delete('/contracts/:contractId/services/:id', auth, writePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      // #110 — thread actor from req.user for event registration
+      // #127 - parse optional reason from JSON body
+      const _delBody = (req.body && typeof req.body === 'object') ? (req.body as Record<string, unknown>) : {};
+      const deleteReason = typeof _delBody['reason'] === 'string' ? _delBody['reason'] : undefined;
+      await removeSvc.execute(req.params['id'] as string, actorOf(req), deleteReason);
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
   });
 
   // ── GET /contracts/:contractId/service-history — full history (#73, #110) ─────
-  router.get('/contracts/:contractId/service-history', auth, readPerm, async (req: Request, res: Response): Promise<void> => {
-    const dtos = await listHistory.execute(req.params['contractId'] as string);
-    res.json(dtos);
+  router.get('/contracts/:contractId/service-history', auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const dtos = await listHistory.execute(req.params['contractId'] as string);
+      res.json(dtos);
+    } catch (err) {
+      next(err);
+    }
   });
 
   return router;

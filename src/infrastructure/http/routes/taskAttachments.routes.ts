@@ -168,9 +168,13 @@ export function createTaskAttachmentsRouter(
   });
 
   // GET /api/scheduling/:taskId/attachments
-  router.get('/:taskId/attachments', auth, deps.requireRead, async (req: Request, res: Response): Promise<void> => {
-    const dtos = await useCases.listTaskAttachments.execute({ taskId: req.params['taskId'] as string });
-    res.json(dtos);
+  router.get('/:taskId/attachments', auth, deps.requireRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const dtos = await useCases.listTaskAttachments.execute({ taskId: req.params['taskId'] as string });
+      res.json(dtos);
+    } catch (err) {
+      next(err);
+    }
   });
 
   return router;

@@ -67,15 +67,19 @@ export function createIClassClosureRouter(
     }
   });
 
-  router.get('/result-codes', auth, async (req: Request, res: Response): Promise<void> => {
-    const parsed = ListQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
-      return;
+  router.get('/result-codes', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const parsed = ListQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      const filter = parsed.data.mapped !== undefined ? { mapped: parsed.data.mapped } : undefined;
+      const items = (await listResultCodes.execute(filter)).map(toResultCodeDTO);
+      res.status(200).json({ items });
+    } catch (err) {
+      next(err);
     }
-    const filter = parsed.data.mapped !== undefined ? { mapped: parsed.data.mapped } : undefined;
-    const items = (await listResultCodes.execute(filter)).map(toResultCodeDTO);
-    res.status(200).json({ items });
   });
 
   router.patch('/result-codes/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {

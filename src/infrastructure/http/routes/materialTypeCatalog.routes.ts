@@ -35,8 +35,12 @@ export function createMaterialTypeCatalogRouter(
   const readPerm   = requirePerm('inventory', 'read');
   const managePerm = requirePerm('inventory', 'manage');
 
-  router.get('/material-types', auth, readPerm, async (_req: Request, res: Response): Promise<void> => {
-    res.json(await list.execute());
+  router.get('/material-types', auth, readPerm, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.json(await list.execute());
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/material-types/:id', auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {

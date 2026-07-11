@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { ListTickets } from '@application/use-cases/ListTickets';
 import { GetTicketStats } from '@application/use-cases/GetTicketStats';
@@ -341,7 +341,7 @@ export function createTicketsRouter(
   // POST /:id/tasks — create a task from a ticket (AD-7: mounted BEFORE /:id to avoid capture)
   // contractId is REQUIRED in the body (AD-2: ticket has no contractId).
   // ticketId comes from the path — NOT body-overridable.
-  router.post('/:id/tasks', auth, async (req: Request, res: Response): Promise<void> => {
+  router.post('/:id/tasks', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (!createTaskFromTicket) {
       res.status(501).json({ error: 'Not implemented', code: 'NOT_IMPLEMENTED' });
       return;
@@ -360,12 +360,19 @@ export function createTicketsRouter(
     let stageId = data.stageId;
     if (!stageId) {
       if (stageRepo) {
-        const defaultStage = await stageRepo.getDefaultWorkflowStageByLegacyStatus('pending');
-        if (!defaultStage) {
-          res.status(500).json({ error: 'Default workflow not seeded', code: 'INTERNAL_ERROR' });
+        // async-error-sweep-2: este await corría FUERA del try de abajo — si el
+        // lookup rechazaba (infra caída) la request quedaba COLGADA (504).
+        try {
+          const defaultStage = await stageRepo.getDefaultWorkflowStageByLegacyStatus('pending');
+          if (!defaultStage) {
+            res.status(500).json({ error: 'Default workflow not seeded', code: 'INTERNAL_ERROR' });
+            return;
+          }
+          stageId = defaultStage.id;
+        } catch (err) {
+          next(err);
           return;
         }
-        stageId = defaultStage.id;
       } else {
         stageId = '10000000-0000-4000-a000-000000000001';
       }
@@ -405,6 +412,13 @@ export function createTicketsRouter(
         res.status(status).json({ error: err.message, code });
         return;
       }
+      // async-error-sweep-2: este fallback se queda INLINE a propósito (no next(err)).
+      // El errorHandler global NO produce el mismo wire para lo que puede llegar acá:
+      // (a) su 500 genérico dice `error: 'Internal server error'` (acá 'Error interno');
+      // (b) DomainErrors no mapeados inline (p. ej. PROJECT_KIND_MISMATCH del CreateTask
+      //     subyacente) hoy salen 500 INTERNAL_ERROR — via next(err) pasarían a
+      //     400 PROJECT_KIND_MISMATCH del statusMap: un cambio de contrato, fuera
+      //     del alcance de este sweep. El catch responde SIEMPRE → no hay cuelgue.
       console.error('[tickets] createTaskFromTicket error', err);
       res.status(500).json({ error: 'Error interno', code: 'INTERNAL_ERROR' });
     }

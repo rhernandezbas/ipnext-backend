@@ -27,8 +27,12 @@ export function createContractTechnologiesRouter(
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
 
-  router.get('/contract-technologies', auth, async (_req: Request, res: Response): Promise<void> => {
-    res.json(await listContractTechnology.execute());
+  router.get('/contract-technologies', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.json(await listContractTechnology.execute());
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/contract-technologies/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
