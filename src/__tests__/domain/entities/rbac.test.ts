@@ -3,6 +3,7 @@
  * Phase 2: updated to assert 25 modules and 28 known actions.
  * service-technology change: added 'contracts' module → 26 total.
  * uisp-integration change: added 'uisp' module → 27 total.
+ * messaging-inbox (F1): added 'messaging' module → 34 total; added 'send' action → 45 total.
  */
 import {
   PermissionAction,
@@ -22,8 +23,8 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 33 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions)', () => {
-    expect(RBAC_MODULES).toHaveLength(33);
+  it('contains exactly 34 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging)', () => {
+    expect(RBAC_MODULES).toHaveLength(34);
   });
 
   it('includes all 14 original module codes', () => {
@@ -69,6 +70,10 @@ describe('RBAC_MODULES constant', () => {
 
   it('includes the actions module (actions-worklist — worklist de titularidad + bajas)', () => {
     expect(RBAC_MODULES).toContain('actions');
+  });
+
+  it('includes the messaging module (messaging-inbox F1 — inbox WhatsApp/Chatwoot)', () => {
+    expect(RBAC_MODULES).toContain('messaging');
   });
 
   it('is readonly (as const)', () => {
@@ -134,12 +139,16 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 44 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions + 1 pppoe.cut Fase C + 1 recapture.assign + 1 transfer service-transfer)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(44);
+  it('contains exactly 45 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions + 1 pppoe.cut Fase C + 1 recapture.assign + 1 transfer service-transfer + 1 send messaging-inbox)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(45);
   });
 
   it('includes transfer (service-transfer — transferir servicios entre clientes: tv.transfer hoy, pppoe/inventory en waves 2-3)', () => {
     expect(KNOWN_ACTIONS).toContain('transfer');
+  });
+
+  it('includes send (messaging-inbox F1 — responder un mensaje dentro de la ventana 24h, RBAC-2)', () => {
+    expect(KNOWN_ACTIONS).toContain('send');
   });
 
   it('includes scheduling.hard_delete (#86 — super_admin-only hard delete of tasks)', () => {

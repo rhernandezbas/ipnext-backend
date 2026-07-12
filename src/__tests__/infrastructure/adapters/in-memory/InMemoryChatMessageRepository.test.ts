@@ -1,0 +1,107 @@
+// randomUUID is non-configurable on the real `crypto` module (jest.spyOn can't
+// redefine it) — mock the whole module, keeping every other export real, so the
+// §8 tiebreaker test below can force a deterministic (and insertion-REVERSED) id
+// sequence.
+jest.mock('crypto', () => ({
+  ...jest.requireActual('crypto'),
+  randomUUID: jest.fn(jest.requireActual('crypto').randomUUID),
+}));
+
+import * as crypto from 'crypto';
+import { InMemoryChatMessageRepository } from '@infrastructure/adapters/in-memory/InMemoryChatMessageRepository';
+import { UpsertChatMessageInput } from '@domain/ports/ChatMessageRepository';
+
+const mockRandomUUID = crypto.randomUUID as unknown as jest.Mock;
+
+function input(overrides: Partial<UpsertChatMessageInput> = {}): UpsertChatMessageInput {
+  return {
+    conversationId: 'conv-1',
+    chatwootMessageId: 100,
+    direction: 'inbound',
+    content: 'hola',
+    chatwootCreatedAt: '2026-07-10T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('InMemoryChatMessageRepository', () => {
+  let repo: InMemoryChatMessageRepository;
+
+  beforeEach(() => {
+    repo = new InMemoryChatMessageRepository();
+  });
+
+  it('upsertByChatwootMessageId creates a new message', async () => {
+    const created = await repo.upsertByChatwootMessageId(input());
+
+    expect(created.conversationId).toBe('conv-1');
+    expect(created.chatwootMessageId).toBe(100);
+    expect(created.direction).toBe('inbound');
+    expect(created.content).toBe('hola');
+    expect(created.chatwootCreatedAt).toBe('2026-07-10T10:00:00.000Z');
+    expect(created.id).toBeTruthy();
+  });
+
+  it('upsertByChatwootMessageId is idempotent — same chatwootMessageId does NOT duplicate (HOOK-4)', async () => {
+    await repo.upsertByChatwootMessageId(input());
+    await repo.upsertByChatwootMessageId(input({ content: 'hola (edit)' }));
+
+    const messages = await repo.listByConversation('conv-1');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.content).toBe('hola (edit)');
+  });
+
+  it('listByConversation orders messages ASC by chatwootCreatedAt (INBOX-3)', async () => {
+    await repo.upsertByChatwootMessageId(
+      input({ chatwootMessageId: 2, chatwootCreatedAt: '2026-07-10T12:00:00.000Z', content: 'segundo' }),
+    );
+    await repo.upsertByChatwootMessageId(
+      input({ chatwootMessageId: 1, chatwootCreatedAt: '2026-07-10T10:00:00.000Z', content: 'primero' }),
+    );
+    await repo.upsertByChatwootMessageId(
+      input({ chatwootMessageId: 3, chatwootCreatedAt: '2026-07-10T14:00:00.000Z', content: 'tercero' }),
+    );
+
+    const messages = await repo.listByConversation('conv-1');
+
+    expect(messages.map((m) => m.content)).toEqual(['primero', 'segundo', 'tercero']);
+  });
+
+  it('listByConversation only returns messages for the given conversation', async () => {
+    await repo.upsertByChatwootMessageId(input({ conversationId: 'conv-1', chatwootMessageId: 1 }));
+    await repo.upsertByChatwootMessageId(input({ conversationId: 'conv-2', chatwootMessageId: 2 }));
+
+    const messages = await repo.listByConversation('conv-1');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.conversationId).toBe('conv-1');
+  });
+
+  it('listByConversation returns an empty array for a conversation without messages (INBOX-3)', async () => {
+    const messages = await repo.listByConversation('conv-empty');
+
+    expect(messages).toEqual([]);
+  });
+
+  describe('§8 — tiebreaker determinístico en empates de chatwootCreatedAt (in-memory DEBE ordenar igual que Prisma)', () => {
+    it('dos mensajes con el MISMO chatwootCreatedAt se ordenan por id ASC, no por orden de insercion', async () => {
+      // Same rationale as InMemoryConversationRepository's §8 test: Postgres gives
+      // NO guarantee on tie order without a secondary ORDER BY key, unlike JS's
+      // stable Array.prototype.sort (which would just preserve insertion order and
+      // mask the missing tiebreaker). Force the generated id sequence to be the
+      // REVERSE of insertion order — only an explicit id ASC tiebreaker can make
+      // the assertion below pass.
+      mockRandomUUID.mockReturnValueOnce('bbbbbbbb-0000-0000-0000-000000000000');
+      mockRandomUUID.mockReturnValueOnce('aaaaaaaa-0000-0000-0000-000000000000');
+
+      const same = '2026-07-10T10:00:00.000Z';
+      await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 1, chatwootCreatedAt: same, content: 'primero-insertado' }));
+      await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 2, chatwootCreatedAt: same, content: 'segundo-insertado' }));
+
+      const messages = await repo.listByConversation('conv-1');
+
+      expect(messages.map((m) => m.content)).toEqual(['segundo-insertado', 'primero-insertado']);
+    });
+  });
+});

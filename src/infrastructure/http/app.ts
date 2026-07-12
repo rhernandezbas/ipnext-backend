@@ -731,6 +731,20 @@ import { CreateZone } from '@application/use-cases/CreateZone';
 import { GetZone } from '@application/use-cases/GetZone';
 import { UpdateZone } from '@application/use-cases/UpdateZone';
 import { DeleteZone } from '@application/use-cases/DeleteZone';
+// ── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send (RBAC-1/2/4) ─
+import { createMessagingRouter } from './routes/messaging.routes';
+import { createChatwootSignatureMiddleware, rawBodyJsonParser } from './middleware/chatwootSignatureMiddleware';
+import { HttpChatwootGateway } from '../adapters/chatwoot/HttpChatwootGateway';
+import { PrismaConversationRepository } from '../adapters/prisma/PrismaConversationRepository';
+import { PrismaChatMessageRepository } from '../adapters/prisma/PrismaChatMessageRepository';
+import { PrismaWebhookDeliveryRepository } from '../adapters/prisma/PrismaWebhookDeliveryRepository';
+import { ReceiveChatwootWebhook } from '@application/use-cases/messaging/ReceiveChatwootWebhook';
+import { ListConversations } from '@application/use-cases/messaging/ListConversations';
+import { GetConversation } from '@application/use-cases/messaging/GetConversation';
+// Aliased: `ListMessages` already names an unrelated notifications-inbox use case above (:318).
+import { ListMessages as ListChatMessages } from '@application/use-cases/messaging/ListMessages';
+import { SendMessage } from '@application/use-cases/messaging/SendMessage';
+import { GetClientContextByPhone } from '@application/use-cases/messaging/GetClientContextByPhone';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -827,6 +841,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // reject big bodies with 413 before the comments router ever sees them. body-parser
   // skips the second parse (req._body), so the double registration is safe.
   app.use('/api/tickets/:ticketId/comments', express.json({ limit: '8mb' }));
+  // messaging-inbox (F1) — same "path-scoped parser BEFORE the global express.json()"
+  // pattern as the ticket-comments override above. `rawBodyJsonParser()` (B5) captures
+  // the untouched bytes into `req.rawBody` via its `verify` hook while ALSO parsing
+  // `req.body` as JSON — chatwootSignatureMiddleware (HOOK-1/2) recomputes the HMAC over
+  // req.rawBody, and ReceiveChatwootWebhook consumes the already-parsed req.body. Must
+  // stay registered here, BEFORE the global express.json() below (body-parser's
+  // req._body guard makes the second global parse a no-op, same safety as :829).
+  app.use('/api/messaging/webhook', rawBodyJsonParser());
   app.use(express.json());
   app.use(cookieParser());
 
@@ -2448,6 +2470,36 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       {
         read:   requirePerm('actions', 'read'),
         manage: requirePerm('actions', 'manage'),
+      },
+    ));
+  }
+
+  // ─── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send ───────
+  {
+    const conversationRepo = new PrismaConversationRepository();
+    const chatMessageRepo = new PrismaChatMessageRepository();
+    const webhookDeliveryRepo = new PrismaWebhookDeliveryRepository();
+    // Opt-in config (design §9): if CHATWOOT_* is unset the gateway still builds, but
+    // any call fails with ChatwootUnavailableError (503) — boot NEVER fails for this.
+    const chatwootGateway = new HttpChatwootGateway({
+      baseUrl: config.chatwoot.baseUrl,
+      accountId: config.chatwoot.accountId,
+      inboxId: config.chatwoot.inboxId,
+      apiToken: config.chatwoot.apiToken,
+    });
+    const getClientContextByPhone = new GetClientContextByPhone(customerAdapter);
+
+    app.use('/api/messaging', createMessagingRouter(
+      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo),
+      new ListConversations(conversationRepo),
+      new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone),
+      new ListChatMessages(conversationRepo, chatMessageRepo),
+      new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway),
+      createChatwootSignatureMiddleware(),
+      createAuthMiddleware(authAdapter, sessionRepo),
+      {
+        read: requirePerm('messaging', 'read'),
+        send: requirePerm('messaging', 'send'),
       },
     ));
   }

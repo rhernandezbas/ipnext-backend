@@ -2743,3 +2743,69 @@ model OwnershipTransferCase {
   @@index([status])
   @@index([targetClientId])
 }
+
+// =============================================
+// MESSAGING-INBOX DOMAIN (F1: Inbox WhatsApp/Chatwoot)
+// =============================================
+
+// Mirror local de conversaciones de Chatwoot. Sin `clientId` cacheado (desvío deliberado
+// del boceto original): CTX-2 exige que calcular el contexto de cliente NO modifique la
+// Conversation — persistir un FK cacheado obligaría a re-escribirlo en cada fetch-on-open
+// o dejarlo stale entre altas/bajas de Client. El contexto se computa en cada lectura de
+// detalle (GetClientContextByPhone), nunca en el listado. Sin FK dura a Client: el match
+// es por teléfono normalizado, no por id.
+model Conversation {
+  id                     String        @id @default(uuid())
+  chatwootConversationId Int           @unique
+  contactName            String?
+  contactPhone           String?
+  status                 String        @default("open") // passthrough del vocabulario de
+                                                          // Chatwoot (open/resolved/pending) —
+                                                          // String plano, mismo criterio que
+                                                          // Contract.status/Message.channel
+  canReply               Boolean       @default(false)   // cache del can_reply de Chatwoot —
+                                                          // SendMessage lo lee del mirror,
+                                                          // NUNCA recalcula la ventana 24h local
+  lastMessageAt          DateTime?
+  lastMessagePreview     String?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+  messages               ChatMessage[]
+
+  // §9: DESC matches the actual INBOX-1 query (orderBy lastMessageAt DESC NULLS
+  // LAST in PrismaConversationRepository.list) — same `sort: Desc` idiom already
+  // used elsewhere in this schema (e.g. ScheduledTaskActivity's `createdAt(sort: Desc)`).
+  @@index([lastMessageAt(sort: Desc)])
+}
+
+// chatwootMessageId es único a nivel MENSAJE de Chatwoot — idempotencia de upsert (HOOK-4).
+model ChatMessage {
+  id                String       @id @default(uuid())
+  conversationId    String
+  conversation      Conversation @relation(fields: [conversationId], references: [id])
+  chatwootMessageId Int          @unique
+  direction         String       // 'inbound' | 'outbound' — mensajes 'activity'/'template' NO
+                                  // se persisten (filtrados antes del upsert por
+                                  // ReceiveChatwootWebhook, ver design §7)
+  content           String
+  senderName        String?
+  chatwootCreatedAt DateTime     // timestamp de Chatwoot — usado para ordenar (INBOX-3), NUNCA
+                                 // para calcular la ventana 24h (eso lo resuelve canReply,
+                                 // no math local)
+  createdAt         DateTime     @default(now())
+
+  @@index([conversationId, chatwootCreatedAt])
+}
+
+// Dedup de entregas de webhook por X-Chatwoot-Delivery (HOOK-3). Tabla separada de
+// ChatMessage: conversation_created/conversation_status_changed no generan ninguna fila
+// ChatMessage donde guardar la idempotencia — WebhookDelivery desacopla la idempotencia de
+// ENTREGA HTTP del efecto sobre el mirror, cubriendo los 3 tipos suscritos uniformemente.
+model WebhookDelivery {
+  id         String   @id @default(uuid())
+  source     String   @default("chatwoot")
+  deliveryId String   // X-Chatwoot-Delivery
+  receivedAt DateTime @default(now())
+
+  @@unique([source, deliveryId])
+}

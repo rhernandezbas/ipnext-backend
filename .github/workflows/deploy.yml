@@ -105,6 +105,11 @@ jobs:
             -e MINIO_ACCESS_KEY="${{ secrets.MINIO_ACCESS_KEY }}" \
             -e MINIO_SECRET_KEY="${{ secrets.MINIO_SECRET_KEY }}" \
             -e MINIO_BUCKET="${{ secrets.MINIO_BUCKET }}" \
+            -e CHATWOOT_BASE_URL="${{ secrets.CHATWOOT_BASE_URL }}" \
+            -e CHATWOOT_ACCOUNT_ID="${{ secrets.CHATWOOT_ACCOUNT_ID }}" \
+            -e CHATWOOT_API_TOKEN="${{ secrets.CHATWOOT_API_TOKEN }}" \
+            -e CHATWOOT_INBOX_ID="${{ secrets.CHATWOOT_INBOX_ID }}" \
+            -e CHATWOOT_WEBHOOK_SECRET="${{ secrets.CHATWOOT_WEBHOOK_SECRET }}" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 

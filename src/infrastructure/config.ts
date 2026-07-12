@@ -334,4 +334,19 @@ export const config = {
     secretKey: process.env.MINIO_SECRET_KEY ?? '',
     bucket: process.env.MINIO_BUCKET ?? 'task-photos',
   },
+
+  /**
+   * Chatwoot (messaging-inbox F1) — Application API para el inbox de WhatsApp. Opt-in
+   * (NO en REQUIRED_VARS, patrón `iclass`): si faltan las credenciales, `HttpChatwootGateway`
+   * igual se construye pero cualquier llamada falla con `ChatwootUnavailableError` (503) —
+   * no hay "flag ready" tipo Gestión Real acá, decisión ya cerrada en design.md §9/§6:
+   * config estática, el boot NUNCA falla por esto.
+   */
+  chatwoot: {
+    baseUrl: process.env.CHATWOOT_BASE_URL ?? '',
+    accountId: process.env.CHATWOOT_ACCOUNT_ID ?? '',
+    apiToken: process.env.CHATWOOT_API_TOKEN ?? '',
+    inboxId: process.env.CHATWOOT_INBOX_ID ?? '',
+    webhookSecret: process.env.CHATWOOT_WEBHOOK_SECRET ?? '',
+  },
 };

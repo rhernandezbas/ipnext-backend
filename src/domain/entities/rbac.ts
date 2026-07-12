@@ -79,6 +79,9 @@ export const KNOWN_ACTIONS = [
   // service-transfer — transferir servicios entre clientes; Wave 1 lo usa el módulo tv
   // (tv.transfer); las waves 2-3 lo reusan para pppoe.transfer / inventory.transfer.
   'transfer',
+  // messaging-inbox (F1) — responder un mensaje de WhatsApp/Chatwoot dentro de la ventana
+  // 24h. Separado de 'read' porque leer el inbox no debe habilitar enviar (RBAC-2).
+  'send',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.
@@ -133,6 +136,8 @@ export const RBAC_MODULES = [
   'zones',
   // Acciones / worklist operativo (actions-worklist) — casos de titularidad + bajas recientes
   'actions',
+  // Inbox de mensajería omnicanal (messaging-inbox F1) — WhatsApp vía Chatwoot
+  'messaging',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

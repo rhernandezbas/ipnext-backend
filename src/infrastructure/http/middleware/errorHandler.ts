@@ -147,6 +147,11 @@ const statusMap: Record<string, number> = {
   INVALID_TARGET_ASSIGNMENT: 422,
   INVALID_CASE_TRANSITION: 422,
   DISMISS_REASON_REQUIRED: 400,
+  // messaging-inbox (F1) — inbox WhatsApp/Chatwoot. INVALID_SIGNATURE/STALE_TIMESTAMP (401)
+  // se responden directo desde el middleware HMAC, no pasan por acá (ver domain/errors/messaging.ts).
+  CONVERSATION_NOT_FOUND: 404,
+  MESSAGING_WINDOW_EXPIRED: 422,
+  CHATWOOT_UNAVAILABLE: 503,
 };
 
 /** Express global error-handling middleware. */
