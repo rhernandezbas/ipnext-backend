@@ -128,6 +128,11 @@ export class InMemoryTicketRepository implements TicketRepository {
     if (query.areaId) {
       results = results.filter((t) => t.areaId === query.areaId);
     }
+    // fix-be #2 — "solo abiertos", espejo EXACTO de countOpenByClientIds (resolvedAt
+    // null AND archivedAt null) — mismo criterio que PrismaTicketRepository.list.
+    if (query.openOnly === true) {
+      results = results.filter((t) => t.resolvedAt == null && t.archivedAt == null);
+    }
     if (query.search) {
       const q = query.search.toLowerCase();
       // #63 — LIKE over subject + customer.name + sequenceNumber (exact if numeric)

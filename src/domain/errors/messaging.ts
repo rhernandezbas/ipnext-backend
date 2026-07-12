@@ -43,3 +43,17 @@ export class ChatwootUnavailableError extends DomainError {
     this.name = 'ChatwootUnavailableError';
   }
 }
+
+/**
+ * messaging-inbox-v2 (F1.5, RICH-1 #4) — raised by GetInboxClientContext when
+ * `?clientId=` is provided on an `ambiguous` conversation but does NOT belong
+ * to that conversation's candidate set (resolved from the contact phone). This
+ * guards against `messaging:read` being used to pull a rich context for an
+ * arbitrary client id unrelated to the conversation being worked.
+ */
+export class ClientIdNotACandidateError extends DomainError {
+  constructor(clientId: string, conversationId: string) {
+    super(`Client "${clientId}" is not a candidate for conversation "${conversationId}"`, 'CLIENT_ID_NOT_A_CANDIDATE');
+    this.name = 'ClientIdNotACandidateError';
+  }
+}

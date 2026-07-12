@@ -1,5 +1,6 @@
 import type { ConversationRecord } from '@domain/ports/ConversationRepository';
 import type { ChatMessageRecord } from '@domain/ports/ChatMessageRepository';
+import type { CustomerStatus } from '@domain/entities/customer';
 
 /**
  * messaging-inbox (F1, design §5) — DTOs for the inbox. Never expose the mirror's
@@ -38,6 +39,99 @@ export interface ClientContextDto {
 export interface ConversationDetailDto extends ConversationListItemDto {
   canReply: boolean;
   clientContext: ClientContextDto;
+}
+
+// ─── Inbox client context (F1.5, RICH-1..6) — rich, on-demand aggregate ─────
+// Never expose `PppoeService.password` nor a raw Prisma entity anywhere in this
+// tree (RICH-3 #16). Every section is truncated to a fixed limit — see design.
+
+export interface InboxBalanceDto {
+  due: number | null;
+  currency: string | null;
+  /** `due != null && due > 0` */
+  isDebtor: boolean;
+  /** TTL 60min over `lastRefreshedAt`, computed via `isBalanceOlderThanTtl` (RICH-4). */
+  stale: boolean;
+  lastRefreshedAt: string | null;
+}
+
+export interface InboxInvoiceSummaryDto {
+  id: string;
+  number: string;
+  dueDate: string;
+  amount: number;
+  status: 'pagada' | 'pendiente' | 'vencida';
+  balance: number | null;
+}
+
+export interface InboxContractSummaryDto {
+  id: string;
+  plan: string;
+  status: string;
+  technology: string | null;
+  address: string | null;
+  /** `pppoeDisplayStatus`, mirror-only (no RADIUS). `null` when the contract has
+   * no PPPoE service, or when the lookup for it failed (RICH-2, isolated failure). */
+  serviceStatus: 'active' | 'reduced' | 'blocked' | 'baja' | 'inactive' | null;
+}
+
+export interface InboxTicketSummaryDto {
+  id: string;
+  sequenceNumber: number;
+  subject: string;
+  status: string;
+  priority: string;
+}
+
+export interface InboxTaskSummaryDto {
+  id: string;
+  sequenceNumber: number;
+  title: string;
+  status: string;
+}
+
+export interface InboxLogSummaryDto {
+  id: string;
+  timestamp: string;
+  eventType: string;
+  description: string;
+}
+
+export interface InboxClientSummaryDto {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  /** fix-be #3 — typed against the domain union (was widened to `string`, losing
+   * type-safety at every call site). */
+  status: CustomerStatus; // active|late|blocked|inactive|baja
+  /** The FE builds the link to the existing ficha from this id (same as `id`). */
+  fichaClientId: string;
+  balance: InboxBalanceDto;
+  /** The single most recent invoice, or null when the client has none. */
+  lastInvoice: InboxInvoiceSummaryDto | null;
+  /** dueDate of the next PENDING invoice, or null. */
+  nextDueDate: string | null;
+  /** No fixed limit — cardinality is small (1-2 contracts per client). */
+  contracts: InboxContractSummaryDto[];
+  /** Total open tickets, via `TicketRepository.countOpenByClientIds` — NEVER the
+   * (truncated) length of `recentTickets` (RICH-3, scenario "más de 3 abiertos"). */
+  openTicketsCount: number;
+  /** Max 3, open only. */
+  recentTickets: InboxTicketSummaryDto[];
+  /** Max 3. */
+  recentTasks: InboxTaskSummaryDto[];
+  /** Max 5, first page. */
+  recentLogs: InboxLogSummaryDto[];
+}
+
+export interface InboxClientContextDto {
+  status: 'matched' | 'ambiguous' | 'unknown';
+  /** Only present for `ambiguous` WITHOUT a chosen `clientId` — never carries
+   * aggregated data for any candidate (RICH-1, no data leak before the agent picks). */
+  candidates?: ClientContextClientDto[];
+  /** `matched`, or the candidate already chosen via `?clientId=`. */
+  client?: InboxClientSummaryDto;
 }
 
 // ─── Chat message ─────────────────────────────────────────────────────────────

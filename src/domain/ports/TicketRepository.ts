@@ -13,6 +13,11 @@ export interface ListTicketsQuery extends PaginatedQuery {
   areaId?: string;                // #49 — filtrar por área
   // #85 — when true returns ONLY archived tickets; default (false/absent) excludes them
   archived?: boolean;
+  /** fix-be #2 (messaging-inbox-v2 review) — when true, returns ONLY open tickets
+   * (resolvedAt IS NULL AND archivedAt IS NULL), same semantics as
+   * `countOpenByClientIds`. Additive/optional: absent/false leaves every existing
+   * caller's behavior untouched (any status, subject to the other filters). */
+  openOnly?: boolean;
 }
 
 export interface CreateTicketData {

@@ -18,6 +18,7 @@ export class ListTickets {
       to: query.to,                 // filtro nunca llegaba al where.
       areaId: query.areaId,         // #49 — ídem; debe llegar al repo
       archived: query.archived,     // #85 — pasar el flag de archivados
+      openOnly: query.openOnly,     // fix-be #2 — "solo abiertos" (aditivo, GetInboxClientContext)
     });
   }
 }

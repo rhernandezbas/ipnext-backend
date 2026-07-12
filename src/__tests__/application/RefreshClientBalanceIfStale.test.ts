@@ -1,6 +1,6 @@
 import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
-import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
+import { RefreshClientBalanceIfStale, isBalanceOlderThanTtl } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { GrClientBalance, GrInvoice } from '@domain/entities/gestionReal';
 
 function makeBalance(grClienteId: string, amount: number): GrClientBalance {
@@ -126,5 +126,40 @@ describe('RefreshClientBalanceIfStale', () => {
     expect(refreshed).toBe(false);
     // Balance not stored (GR failed)
     expect(mirror.balances.has('100011')).toBe(false);
+  });
+});
+
+// messaging-inbox-v2 (F1.5, B2) — `isBalanceOlderThanTtl` extracted as a pure,
+// exported helper so GetInboxClientContext (RICH-4, mirror-only default path) can
+// compute `balance.stale` with the EXACT SAME TTL rule as this collaborator,
+// without invoking it (no GR call). Avoids the rule drifting between the two call
+// sites. fix-be #6 — renamed from `isBalanceStale`: that name collided (same name,
+// different signature/semantics) with the private `isBalanceStale` in
+// PrismaCustomerRepository.ts (status-aware, debtor-only check).
+describe('isBalanceOlderThanTtl (pure helper, B2)', () => {
+  const now = () => new Date('2026-05-27T12:00:00Z');
+  const TTL = 60; // minutes
+
+  it('is stale when lastBalanceAt is null (never fetched)', () => {
+    expect(isBalanceOlderThanTtl(null, TTL, now)).toBe(true);
+  });
+
+  it('is stale when lastBalanceAt is undefined', () => {
+    expect(isBalanceOlderThanTtl(undefined, TTL, now)).toBe(true);
+  });
+
+  it('is stale when older than the TTL window', () => {
+    const staleAt = new Date(now().getTime() - 90 * 60 * 1000).toISOString(); // 90 min ago
+    expect(isBalanceOlderThanTtl(staleAt, TTL, now)).toBe(true);
+  });
+
+  it('is NOT stale when within the TTL window', () => {
+    const freshAt = new Date(now().getTime() - 10 * 60 * 1000).toISOString(); // 10 min ago
+    expect(isBalanceOlderThanTtl(freshAt, TTL, now)).toBe(false);
+  });
+
+  it('is exactly at the TTL boundary → NOT stale (strictly greater-than semantics)', () => {
+    const boundaryAt = new Date(now().getTime() - TTL * 60 * 1000).toISOString(); // exactly 60 min ago
+    expect(isBalanceOlderThanTtl(boundaryAt, TTL, now)).toBe(false);
   });
 });

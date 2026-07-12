@@ -131,6 +131,12 @@ export class PrismaTicketRepository implements TicketRepository {
       where['archivedAt'] = null;
     }
 
+    // fix-be #2 — "solo abiertos", MISMA semántica que countOpenByClientIds (resolvedAt
+    // null AND archivedAt null). archivedAt ya quedó en null arriba (default, no-archived).
+    if (query.openOnly === true) {
+      where['resolvedAt'] = null;
+    }
+
     const page = query.page ?? 1;
     const limit = query.limit ?? 25;
     const skip = (page - 1) * limit;

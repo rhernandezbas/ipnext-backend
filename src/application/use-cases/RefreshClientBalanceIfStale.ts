@@ -1,6 +1,36 @@
 import { GestionRealPort } from '@domain/ports/GestionRealPort';
 import { ClientMirrorRepository } from '@domain/ports/ClientMirrorRepository';
 
+/** Default TTL (minutes) before a balance is considered stale. Shared constant so
+ * every caller of `isBalanceOlderThanTtl` (this collaborator's own gate AND
+ * GetInboxClientContext's mirror-only RICH-4 default path) uses the EXACT SAME
+ * default and never drifts apart. */
+export const DEFAULT_BALANCE_STALE_TTL_MINUTES = 60;
+
+/**
+ * messaging-inbox-v2 (F1.5, B2) — pure staleness check, extracted out of the
+ * `isStale` private method so it can be reused verbatim by GetInboxClientContext's
+ * default (no-refresh) path (RICH-4): that path MUST compute `balance.stale` with
+ * the SAME TTL rule as this collaborator WITHOUT invoking it (no GR call). A
+ * hand-rolled duplicate of this rule in the use case would risk drifting from
+ * this one if the TTL default or the comparison ever changes here.
+ *
+ * fix-be #6 — named `isBalanceOlderThanTtl` (not `isBalanceStale`): that name
+ * collided with the private, semantically DIFFERENT `isBalanceStale` in
+ * `PrismaCustomerRepository.ts` (status-aware, debtor-only — `(status, lastBalanceAt,
+ * ttlMinutes)`). Same name, different signature/rule — confusing even though they
+ * never actually clash at compile time (different modules).
+ */
+export function isBalanceOlderThanTtl(
+  lastBalanceAt: string | null | undefined,
+  ttlMinutes: number,
+  now: () => Date,
+): boolean {
+  if (!lastBalanceAt) return true; // never fetched
+  const ageMs = now().getTime() - new Date(lastBalanceAt).getTime();
+  return ageMs > ttlMinutes * 60 * 1000;
+}
+
 export interface RefreshClientBalanceIfStaleOptions {
   now?: () => Date;
   /** TTL in minutes before a balance is considered stale. Default: 60. */
@@ -38,7 +68,7 @@ export class RefreshClientBalanceIfStale {
     opts: RefreshClientBalanceIfStaleOptions = {},
   ) {
     this.now = opts.now ?? (() => new Date());
-    this.ttlMinutes = opts.ttlMinutes ?? 60;
+    this.ttlMinutes = opts.ttlMinutes ?? DEFAULT_BALANCE_STALE_TTL_MINUTES;
     this.timeoutMs = opts.timeoutMs ?? 4000;
   }
 
@@ -70,9 +100,7 @@ export class RefreshClientBalanceIfStale {
   }
 
   private isStale(lastBalanceAt: string | null | undefined): boolean {
-    if (!lastBalanceAt) return true; // never fetched
-    const ageMs = this.now().getTime() - new Date(lastBalanceAt).getTime();
-    return ageMs > this.ttlMinutes * 60 * 1000;
+    return isBalanceOlderThanTtl(lastBalanceAt, this.ttlMinutes, this.now);
   }
 
   private withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

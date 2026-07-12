@@ -152,6 +152,9 @@ const statusMap: Record<string, number> = {
   CONVERSATION_NOT_FOUND: 404,
   MESSAGING_WINDOW_EXPIRED: 422,
   CHATWOOT_UNAVAILABLE: 503,
+  // messaging-inbox-v2 (F1.5, RICH-1 #4) — client-context endpoint: clientId query
+  // param not among the conversation's candidates.
+  CLIENT_ID_NOT_A_CANDIDATE: 400,
 };
 
 /** Express global error-handling middleware. */

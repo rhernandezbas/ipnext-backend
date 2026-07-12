@@ -745,6 +745,7 @@ import { GetConversation } from '@application/use-cases/messaging/GetConversatio
 import { ListMessages as ListChatMessages } from '@application/use-cases/messaging/ListMessages';
 import { SendMessage } from '@application/use-cases/messaging/SendMessage';
 import { GetClientContextByPhone } from '@application/use-cases/messaging/GetClientContextByPhone';
+import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -2488,6 +2489,28 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       apiToken: config.chatwoot.apiToken,
     });
     const getClientContextByPhone = new GetClientContextByPhone(customerAdapter);
+    // messaging-inbox-v2 (F1.5, B5) — `pppoeRepo` (PPPoE management block, line ~2242)
+    // is already out of scope here (its enclosing `{ }` closed above), same gotcha
+    // documented for `pppoeRepoForInspect`. A fresh, scope-local instance follows
+    // that exact pattern instead of hoisting the earlier one.
+    const pppoeRepoForInboxContext = new PrismaPppoeServiceRepository();
+    const getInboxClientContext = new GetInboxClientContext(
+      conversationRepo,
+      getClientContextByPhone,
+      customerAdapter,
+      getContracts,
+      getInvoices,
+      getLogs,
+      listTickets,
+      ticketAdapter,
+      listTasks,
+      new ListPppoeByContract(pppoeRepoForInboxContext),
+      balanceRefresh,
+      // fix-be #1 — sin esto, GetInboxClientContext usaba el default hardcoded
+      // (DEFAULT_BALANCE_STALE_TTL_MINUTES=60) en vez del TTL configurado, que ya
+      // es el mismo que consumen PrismaCustomerRepository/RefreshClientBalanceIfStale.
+      { ttlMinutes: config.gestionReal.balanceStaleTtlMinutes },
+    );
 
     app.use('/api/messaging', createMessagingRouter(
       new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo),
@@ -2495,6 +2518,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone),
       new ListChatMessages(conversationRepo, chatMessageRepo),
       new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway),
+      getInboxClientContext,
       createChatwootSignatureMiddleware(),
       createAuthMiddleware(authAdapter, sessionRepo),
       {

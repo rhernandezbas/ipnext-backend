@@ -22,11 +22,22 @@ import { GetConversation } from '../../application/use-cases/messaging/GetConver
 import { ListMessages } from '../../application/use-cases/messaging/ListMessages';
 import { SendMessage } from '../../application/use-cases/messaging/SendMessage';
 import { GetClientContextByPhone } from '../../application/use-cases/messaging/GetClientContextByPhone';
+import { GetInboxClientContext } from '../../application/use-cases/messaging/GetInboxClientContext';
+import { GetClientContracts } from '../../application/use-cases/GetClientContracts';
+import { GetClientInvoices } from '../../application/use-cases/GetClientInvoices';
+import { GetClientLogs } from '../../application/use-cases/GetClientLogs';
+import { ListTickets } from '../../application/use-cases/ListTickets';
+import { ListTasks } from '../../application/use-cases/ListTasks';
+import { ListPppoeByContract } from '../../application/use-cases/ListPppoeByContract';
 import { InMemoryConversationRepository } from '../../infrastructure/adapters/in-memory/InMemoryConversationRepository';
 import { InMemoryChatMessageRepository } from '../../infrastructure/adapters/in-memory/InMemoryChatMessageRepository';
 import { InMemoryWebhookDeliveryRepository } from '../../infrastructure/adapters/in-memory/InMemoryWebhookDeliveryRepository';
+import { InMemoryTicketRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketRepository';
+import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
+import { InMemoryPppoeServiceRepository } from '../../infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { FakeChatwootGateway } from '../helpers/FakeChatwootGateway';
 import type { CustomerRepository, ActiveClientContact } from '../../domain/ports/CustomerRepository';
+import type { Customer } from '../../domain/entities/customer';
 import { config } from '../../infrastructure/config';
 
 // Same "override config.chatwoot.webhookSecret per test" pattern as
@@ -66,8 +77,20 @@ const denyPerm: RequestHandler = (_req, res, _next) => {
 
 const allowPerm: RequestHandler = (_req, _res, next) => next();
 
-function makeCustomerRepo(contacts: ActiveClientContact[] = []): CustomerRepository {
-  return { listActiveContacts: jest.fn().mockResolvedValue(contacts) } as unknown as CustomerRepository;
+function makeCustomerRepo(contacts: ActiveClientContact[] = [], overrides?: Partial<CustomerRepository>): CustomerRepository {
+  return {
+    listActiveContacts: jest.fn().mockResolvedValue(contacts),
+    findById: jest.fn(),
+    listContracts: jest.fn().mockResolvedValue([]),
+    listInvoices: jest.fn().mockResolvedValue([]),
+    listLogs: jest.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 5 }),
+    list: jest.fn(),
+    create: jest.fn(),
+    delete: jest.fn(),
+    stats: jest.fn(),
+    updateLocation: jest.fn(),
+    ...overrides,
+  } as unknown as CustomerRepository;
 }
 
 // ─── App factory (seam completo) ────────────────────────────────────────────────
@@ -81,6 +104,13 @@ interface BuildAppOptions {
   deliveryRepo?: InMemoryWebhookDeliveryRepository;
   gateway?: FakeChatwootGateway;
   customerContacts?: ActiveClientContact[];
+  /** messaging-inbox-v2 (F1.5, B4) — full CustomerRepository override for
+   * client-context tests that need `findById`/`listContracts`/etc, not just
+   * `listActiveContacts`. Takes precedence over `customerContacts`. */
+  customerRepo?: CustomerRepository;
+  ticketRepo?: InMemoryTicketRepository;
+  schedulingRepo?: InMemorySchedulingRepository;
+  pppoeRepo?: InMemoryPppoeServiceRepository;
 }
 
 function buildApp(opts: BuildAppOptions = {}) {
@@ -90,8 +120,23 @@ function buildApp(opts: BuildAppOptions = {}) {
   const messageRepo = opts.messageRepo ?? new InMemoryChatMessageRepository();
   const deliveryRepo = opts.deliveryRepo ?? new InMemoryWebhookDeliveryRepository();
   const gateway = opts.gateway ?? new FakeChatwootGateway();
-  const customerRepo = makeCustomerRepo(opts.customerContacts);
+  const customerRepo = opts.customerRepo ?? makeCustomerRepo(opts.customerContacts);
+  const ticketRepo = opts.ticketRepo ?? new InMemoryTicketRepository();
+  const schedulingRepo = opts.schedulingRepo ?? new InMemorySchedulingRepository();
+  const pppoeRepo = opts.pppoeRepo ?? new InMemoryPppoeServiceRepository();
   const getClientContext = new GetClientContextByPhone(customerRepo);
+  const getInboxClientContext = new GetInboxClientContext(
+    conversationRepo,
+    getClientContext,
+    customerRepo,
+    new GetClientContracts(customerRepo),
+    new GetClientInvoices(customerRepo),
+    new GetClientLogs(customerRepo),
+    new ListTickets(ticketRepo),
+    ticketRepo,
+    new ListTasks(schedulingRepo),
+    new ListPppoeByContract(pppoeRepo),
+  );
 
   const perms: MessagingRoutePerms = {
     read: opts.readPerm ?? allowPerm,
@@ -111,6 +156,7 @@ function buildApp(opts: BuildAppOptions = {}) {
       new GetConversation(conversationRepo, messageRepo, gateway, getClientContext),
       new ListMessages(conversationRepo, messageRepo),
       new SendMessage(conversationRepo, messageRepo, gateway),
+      getInboxClientContext,
       createChatwootSignatureMiddleware({ now: () => NOW_MS }),
       opts.auth ?? allowAuth,
       perms,
@@ -118,7 +164,7 @@ function buildApp(opts: BuildAppOptions = {}) {
   );
   app.use(errorHandler);
 
-  return { app, conversationRepo, messageRepo, deliveryRepo, gateway, customerRepo };
+  return { app, conversationRepo, messageRepo, deliveryRepo, gateway, customerRepo, ticketRepo, schedulingRepo, pppoeRepo };
 }
 
 // ─── RBAC gates (RBAC-1/2) ───────────────────────────────────────────────────────
@@ -571,5 +617,177 @@ describe('POST /api/messaging/conversations/:id/messages', () => {
       .post('/api/messaging/conversations/ghost/messages')
       .send({ content: 'hola' });
     expect(res.status).toBe(404);
+  });
+});
+
+// ─── GET /conversations/:id/client-context (messaging-inbox-v2 F1.5, RICH-1..6) ──
+
+describe('GET /api/messaging/conversations/:id/client-context', () => {
+  function makeMatchedCustomer(overrides: Partial<Customer> & Pick<Customer, 'id' | 'name'>): Customer {
+    return {
+      email: 'client@test.com',
+      phone: '+5492324421234',
+      status: 'active',
+      address: 'Calle 123',
+      city: 'Rosario',
+      country: 'AR',
+      login: 'user',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('#6 :id inexistente en el mirror → 404 CONVERSATION_NOT_FOUND', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/messaging/conversations/ghost/client-context');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONVERSATION_NOT_FOUND');
+  });
+
+  it('#14 sin messaging:read → 403, el use case NUNCA se invoca', async () => {
+    const { app, conversationRepo } = buildApp({ readPerm: denyPerm });
+    const spy = jest.spyOn(conversationRepo, 'findById');
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 100 });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context`);
+
+    expect(res.status).toBe(403);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('#15 con messaging:read (sin billing/tickets:read simulados) → 200 con balance/lastInvoice/recentTickets/recentTasks completos', async () => {
+    const customer = makeMatchedCustomer({
+      id: 'c1',
+      name: 'Juan Perez',
+      balanceDue: 500,
+      balanceCurrency: 'ARS',
+      lastBalanceAt: '2026-07-11T09:50:00.000Z',
+    });
+    const customerRepo = makeCustomerRepo(
+      [{ id: 'c1', name: 'Juan Perez', phone: '+5492324421234', email: null }],
+      { findById: jest.fn().mockResolvedValue(customer) },
+    );
+    const ticketRepo = new InMemoryTicketRepository();
+    await ticketRepo.create({ subject: 'Sin señal', description: 'x', customerId: 'c1' });
+    const schedulingRepo = new InMemorySchedulingRepository();
+    schedulingRepo.seedTask({ id: 'task-c1', title: 'Instalar equipo', customerId: 'c1' });
+
+    const { app, conversationRepo } = buildApp({ customerRepo, ticketRepo, schedulingRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 101, contactPhone: '+5492324421234' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('matched');
+    expect(res.body.client.balance.due).toBe(500);
+    expect(res.body.client.recentTickets).toHaveLength(1);
+    expect(res.body.client.recentTasks).toHaveLength(1);
+  });
+
+  it('#17 el repo de clientes lanza al resolver el match → responde con status de error inmediato (next(err)), nunca cuelga', async () => {
+    const customerRepo = makeCustomerRepo([], { listActiveContacts: jest.fn().mockRejectedValue(new Error('db down')) });
+    const { app, conversationRepo } = buildApp({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 102, contactPhone: '+5492324421234' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context`);
+
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
+  });
+
+  it('#4 (integración) ?clientId=<ajeno> sobre conversación ambigua → 400 CLIENT_ID_NOT_A_CANDIDATE', async () => {
+    const customerRepo = makeCustomerRepo([
+      { id: 'a', name: 'Cliente A', phone: '+5492324000000', email: null },
+      { id: 'b', name: 'Cliente B', phone: '+5492324000000', email: null },
+    ]);
+    const { app, conversationRepo } = buildApp({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 103, contactPhone: '+5492324000000' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context?clientId=zzz`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('CLIENT_ID_NOT_A_CANDIDATE');
+  });
+
+  it('#1 matched — 200 con status matched y client agregado (smoke, seam completo)', async () => {
+    const customer = makeMatchedCustomer({ id: 'c1', name: 'Juan Perez' });
+    const customerRepo = makeCustomerRepo(
+      [{ id: 'c1', name: 'Juan Perez', phone: '+5492324421234', email: null }],
+      { findById: jest.fn().mockResolvedValue(customer) },
+    );
+    const { app, conversationRepo } = buildApp({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 104, contactPhone: '+5492324421234' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('matched');
+    expect(res.body.client.id).toBe('c1');
+  });
+
+  it('#2 ambiguous sin clientId — 200 con candidates, sin client (smoke)', async () => {
+    const customerRepo = makeCustomerRepo([
+      { id: 'a', name: 'Cliente A', phone: '+5492324000000', email: null },
+      { id: 'b', name: 'Cliente B', phone: '+5492324000000', email: null },
+    ]);
+    const { app, conversationRepo } = buildApp({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 105, contactPhone: '+5492324000000' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ambiguous');
+    expect(res.body.candidates).toHaveLength(2);
+    expect(res.body.client).toBeUndefined();
+  });
+
+  it('#3 ambiguous con clientId válido — 200 con status matched (smoke)', async () => {
+    const customerB = makeMatchedCustomer({ id: 'b', name: 'Cliente B' });
+    const customerRepo = makeCustomerRepo(
+      [
+        { id: 'a', name: 'Cliente A', phone: '+5492324000000', email: null },
+        { id: 'b', name: 'Cliente B', phone: '+5492324000000', email: null },
+      ],
+      { findById: jest.fn().mockResolvedValue(customerB) },
+    );
+    const { app, conversationRepo } = buildApp({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 106, contactPhone: '+5492324000000' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context?clientId=b`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('matched');
+    expect(res.body.client.id).toBe('b');
+  });
+
+  it('#5 unknown — 200 sin client ni candidates (smoke)', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 107, contactPhone: '+5492324999999' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'unknown' });
+  });
+
+  it('fix-be #7 [BAJO] clientId repetido en la query (?clientId=b&clientId=a, Express lo entrega como string[]) — normaliza al PRIMERO, no rompe la resolucion del candidato', async () => {
+    const customerB = makeMatchedCustomer({ id: 'b', name: 'Cliente B' });
+    const customerRepo = makeCustomerRepo(
+      [
+        { id: 'a', name: 'Cliente A', phone: '+5492324000000', email: null },
+        { id: 'b', name: 'Cliente B', phone: '+5492324000000', email: null },
+      ],
+      { findById: jest.fn().mockResolvedValue(customerB) },
+    );
+    const { app, conversationRepo } = buildApp({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 108, contactPhone: '+5492324000000' });
+
+    // Antes del fix: req.query.clientId llega como ['b','a'] (array), el `.some(c => c.id === chosenId)`
+    // compara un string contra un array → siempre false → 400 CLIENT_ID_NOT_A_CANDIDATE aunque 'b' sea válido.
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context?clientId=b&clientId=a`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('matched');
+    expect(res.body.client.id).toBe('b');
   });
 });

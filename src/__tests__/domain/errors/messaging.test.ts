@@ -1,6 +1,7 @@
 import { DomainError } from '@domain/errors';
 import {
   ChatwootUnavailableError,
+  ClientIdNotACandidateError,
   ConversationNotFoundError,
   MessagingWindowExpiredError,
 } from '@domain/errors/messaging';
@@ -62,5 +63,28 @@ describe('ChatwootUnavailableError', () => {
 
   it('is an instance of DomainError', () => {
     expect(new ChatwootUnavailableError()).toBeInstanceOf(DomainError);
+  });
+});
+
+describe('ClientIdNotACandidateError', () => {
+  it('sets code to CLIENT_ID_NOT_A_CANDIDATE', () => {
+    expect(new ClientIdNotACandidateError('client-z', 'conv-1').code).toBe('CLIENT_ID_NOT_A_CANDIDATE');
+  });
+
+  it.each([
+    ['client-z', 'conv-1'],
+    ['client-abc-99', 'conv-xyz-2'],
+  ])('interpolates the given clientId "%s" and conversationId "%s" into the message', (clientId, conversationId) => {
+    expect(new ClientIdNotACandidateError(clientId, conversationId).message).toBe(
+      `Client "${clientId}" is not a candidate for conversation "${conversationId}"`,
+    );
+  });
+
+  it('sets name to ClientIdNotACandidateError', () => {
+    expect(new ClientIdNotACandidateError('client-z', 'conv-1').name).toBe('ClientIdNotACandidateError');
+  });
+
+  it('is an instance of DomainError', () => {
+    expect(new ClientIdNotACandidateError('client-z', 'conv-1')).toBeInstanceOf(DomainError);
   });
 });

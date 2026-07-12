@@ -91,4 +91,57 @@ describe('Messaging composition root (messaging-inbox F1, B6)', () => {
   it('(i) GetClientContextByPhone reusa el customerAdapter existente (sin duplicar el port)', () => {
     expect(appSrc).toMatch(/new GetClientContextByPhone\(customerAdapter\)/);
   });
+
+  // ─── messaging-inbox-v2 (F1.5, B5) — GetInboxClientContext wiring ───────────
+
+  it('(j) GetInboxClientContext importado', () => {
+    expect(appSrc).toMatch(
+      /import\s*\{\s*GetInboxClientContext\s*\}\s*from\s*['"]@application\/use-cases\/messaging\/GetInboxClientContext['"]/,
+    );
+  });
+
+  it('(k) GetInboxClientContext instanciado (mismo bloque messaging) y pasado a createMessagingRouter dentro de la MISMA llamada de mount', () => {
+    const blockIdx = appSrc.indexOf('// ─── messaging-inbox (F1) — Chatwoot webhook ingest');
+    expect(blockIdx).toBeGreaterThan(-1);
+    const mountIdx = appSrc.indexOf("app.use('/api/messaging', createMessagingRouter(", blockIdx);
+    expect(mountIdx).toBeGreaterThan(blockIdx);
+    // Instantiated BEFORE the mount call, same pattern as getClientContextByPhone
+    // (built once, then passed by name — not inlined `new` inside the call).
+    expect(appSrc.slice(blockIdx, mountIdx)).toMatch(/const getInboxClientContext = new GetInboxClientContext\(/);
+
+    const end = appSrc.indexOf('));', mountIdx);
+    expect(end).toBeGreaterThan(mountIdx);
+    const window = appSrc.slice(mountIdx, end + '));'.length);
+    expect(window).toMatch(/^\s*getInboxClientContext,\s*$/m);
+  });
+
+  it("(l) exactamente UN requirePerm('messaging', 'read') cubre la ventana de mount (RICH-5 — sin permisos de otros módulos)", () => {
+    const idx = appSrc.indexOf("app.use('/api/messaging', createMessagingRouter(");
+    const end = appSrc.indexOf('));', idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+    const matches = window.match(/requirePerm\('messaging',\s*'read'\)/g) ?? [];
+    expect(matches).toHaveLength(1);
+  });
+
+  it('(m) el nuevo PrismaPppoeServiceRepository local del bloque messaging sigue el patrón pppoeRepoForInspect (scope acotado, no reusa el pppoeRepo cerrado)', () => {
+    const idx = appSrc.indexOf('// ─── messaging-inbox (F1) — Chatwoot webhook ingest');
+    expect(idx).toBeGreaterThan(-1);
+    const end = appSrc.indexOf("app.use('/api/messaging', createMessagingRouter(", idx);
+    expect(end).toBeGreaterThan(idx);
+    const window = appSrc.slice(idx, end);
+    expect(window).toMatch(/new PrismaPppoeServiceRepository\(\)/);
+  });
+
+  // ─── fix-be #1 [ALTO] — TTL drift: GetInboxClientContext se instanciaba SIN el
+  // 12º arg `opts`, así que usaba DEFAULT_BALANCE_STALE_TTL_MINUTES=60 hardcoded
+  // en vez de config.gestionReal.balanceStaleTtlMinutes (el mismo TTL que ya usa
+  // PrismaCustomerRepository/RefreshClientBalanceIfStale via ese mismo config).
+  it('(n) GetInboxClientContext recibe el TTL de balance desde config.gestionReal.balanceStaleTtlMinutes (bug: sin esto usaba el default hardcoded 60)', () => {
+    const idx = appSrc.indexOf('const getInboxClientContext = new GetInboxClientContext(');
+    expect(idx).toBeGreaterThan(-1);
+    const end = appSrc.indexOf(');', idx);
+    expect(end).toBeGreaterThan(idx);
+    const window = appSrc.slice(idx, end);
+    expect(window).toMatch(/ttlMinutes:\s*config\.gestionReal\.balanceStaleTtlMinutes/);
+  });
 });

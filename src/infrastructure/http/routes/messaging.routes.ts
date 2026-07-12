@@ -17,6 +17,7 @@ import { ListConversations } from '@application/use-cases/messaging/ListConversa
 import { GetConversation } from '@application/use-cases/messaging/GetConversation';
 import { ListMessages } from '@application/use-cases/messaging/ListMessages';
 import { SendMessage } from '@application/use-cases/messaging/SendMessage';
+import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
 
 /** Per-route permission guards (messaging read/send — RBAC-1/2). */
 export interface MessagingRoutePerms {
@@ -48,6 +49,19 @@ export interface MessagingRoutePerms {
  * `conversation_created` are already unique per real event via `payload.id` — left
  * untouched.
  */
+/**
+ * fix-be #7 — Express types a repeated query key (`?clientId=a&clientId=b`) as
+ * `string[]`, not `string`. A bare `as Record<string, string | undefined>` cast
+ * doesn't change that at runtime — `clientId` could be an array, silently
+ * breaking the `.some(c => c.id === chosenId)` candidate match (array !== string,
+ * always false) or the `refresh === 'true'` check. Normalize by taking the FIRST
+ * value, same convention as most single-value query params.
+ */
+function firstQueryValue(v: unknown): string | undefined {
+  if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : undefined;
+  return typeof v === 'string' ? v : undefined;
+}
+
 function computeDedupKey(payload: ChatwootWebhookPayload, signedTimestamp: string | undefined): string {
   const conversationId = payload.conversation?.id ?? payload.id;
   switch (payload.event) {
@@ -68,6 +82,7 @@ export function createMessagingRouter(
   getConversation: GetConversation,
   listMessages: ListMessages,
   sendMessage: SendMessage,
+  getInboxClientContext: GetInboxClientContext,
   chatwootSignatureMw: RequestHandler,
   auth: RequestHandler,
   perms: MessagingRoutePerms,
@@ -143,6 +158,28 @@ export function createMessagingRouter(
       try {
         const data = await listMessages.execute(req.params['id'] as string);
         res.json({ data });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /conversations/:id/client-context (read) — RICH-1..6 ───────────────
+  // Lazy, on-demand rich aggregate — see GetInboxClientContext. Same messaging:read
+  // guard as the rest of the router (RICH-5, no extra billing/tickets permission).
+  router.get(
+    '/conversations/:id/client-context',
+    auth,
+    perms.read,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const clientId = firstQueryValue(req.query['clientId']);
+        const refresh = firstQueryValue(req.query['refresh']);
+        const result = await getInboxClientContext.execute(req.params['id'] as string, {
+          clientId,
+          refresh: refresh === 'true' || refresh === '1',
+        });
+        res.json(result);
       } catch (err) {
         next(err);
       }
