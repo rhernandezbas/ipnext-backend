@@ -155,6 +155,11 @@ const statusMap: Record<string, number> = {
   // messaging-inbox-v2 (F1.5, RICH-1 #4) — client-context endpoint: clientId query
   // param not among the conversation's candidates.
   CLIENT_ID_NOT_A_CANDIDATE: 400,
+  // messaging-inbox-v2-media (F1.5 fase A, Tanda 1) — adjuntos de chat (fotos/videos/
+  // audios/docs entrantes por WhatsApp). Mismo criterio HTTP que task-photos.
+  CHAT_ATTACHMENT_TOO_LARGE: 413,
+  CHAT_ATTACHMENT_NOT_FOUND: 404,
+  CHAT_ATTACHMENT_NOT_READY: 409,
 };
 
 /** Express global error-handling middleware. */

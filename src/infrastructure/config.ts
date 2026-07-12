@@ -207,6 +207,21 @@ export const config = {
   },
 
   /**
+   * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-3) — barrido de reintento de
+   * `ChatMessageAttachment` (`ChatMediaDownloadScheduler`). Default 120_000 (~2min, decisión
+   * F del proposal). Mismo contrato defensivo que radiusAuthIngest: piso 15s, techo 24h,
+   * inválido/ausente → default. NUNCA tumba el boot: opt-in, gateado por el feature flag
+   * 'chat-media-download' (dark by default).
+   */
+  chatMediaDownload: {
+    intervalMs: parseIntervalMs(process.env.CHAT_MEDIA_DOWNLOAD_INTERVAL_MS, {
+      default: 120_000,
+      min: 15_000,
+      max: 86_400_000,
+    }),
+  },
+
+  /**
    * PPPoE auto-move watcher (pppoe-move-nas W2) — frescura del tick de detección de mismatches
    * NAS real vs asignado. Configurable sin redeploy via AUTO_MOVE_INTERVAL_MS. Default 120_000
    * (2 min, decisión de design D4). Mismo contrato defensivo que radiusAuthIngest: piso 15s

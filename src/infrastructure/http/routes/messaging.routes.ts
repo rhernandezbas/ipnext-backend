@@ -18,6 +18,30 @@ import { GetConversation } from '@application/use-cases/messaging/GetConversatio
 import { ListMessages } from '@application/use-cases/messaging/ListMessages';
 import { SendMessage } from '@application/use-cases/messaging/SendMessage';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
+import { GetChatAttachmentFile } from '@application/use-cases/messaging/GetChatAttachmentFile';
+import { ChatAttachmentNotFoundError, ChatAttachmentNotReadyError } from '@domain/errors/chatAttachment';
+
+/**
+ * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-5) — construye un header
+ * `Content-Disposition` seguro (RFC 5987). Clon EXACTO del helper de
+ * `taskAttachments.routes.ts` (duplicado deliberado: distinto router, misma regla),
+ * salvo por `disposition` (fix-be #3 — ver `INLINE_SAFE_FILE_TYPES` abajo).
+ */
+function contentDisposition(filename: string, disposition: 'inline' | 'attachment'): string {
+  const asciiFallback = filename.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+/**
+ * fix-be #3 (MEDIUM) — stored-XSS: a 'file' attachment is an ARBITRARY document a
+ * WhatsApp user sent, and its `content_type` is whatever the sender's client
+ * claimed — nothing stops a `.html` upload from arriving as `text/html`. Serving
+ * it `inline` renders it (and any embedded `<script>`) in the agent's browser the
+ * moment they open it. 'image'/'audio'/'video' are the only fileTypes the FE's
+ * media viewer actually needs inline; everything else (i.e. 'file') is forced to
+ * `attachment` — same criterion as `GetConversation.BINARY_FILE_TYPES` minus 'file'.
+ */
+const INLINE_SAFE_FILE_TYPES = new Set(['image', 'audio', 'video']);
 
 /** Per-route permission guards (messaging read/send — RBAC-1/2). */
 export interface MessagingRoutePerms {
@@ -83,6 +107,7 @@ export function createMessagingRouter(
   listMessages: ListMessages,
   sendMessage: SendMessage,
   getInboxClientContext: GetInboxClientContext,
+  getChatAttachmentFile: GetChatAttachmentFile,
   chatwootSignatureMw: RequestHandler,
   auth: RequestHandler,
   perms: MessagingRoutePerms,
@@ -202,6 +227,40 @@ export function createMessagingRouter(
         const result = await sendMessage.execute(req.params['id'] as string, content);
         res.status(201).json(result);
       } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /attachments/:id/file (read) — messaging-inbox-v2-media, MEDIA-5 ───────
+  // Clon 1:1 de GET /api/scheduling/attachments/:id/file. Resuelve SIEMPRE por el
+  // `id` propio del attachment (nunca acepta una storageKey/URL cruda como input).
+  router.get(
+    '/attachments/:id/file',
+    auth,
+    perms.read,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const variant = req.query['variant'] === 'thumb' ? 'thumb' : 'original';
+      try {
+        const file = await getChatAttachmentFile.execute({
+          attachmentId: req.params['id'] as string,
+          variant,
+        });
+        const disposition = INLINE_SAFE_FILE_TYPES.has(file.fileType) ? 'inline' : 'attachment';
+        res.setHeader('Content-Type', file.mimeType);
+        res.setHeader('Content-Disposition', contentDisposition(file.filename, disposition));
+        res.send(file.buffer);
+      } catch (err) {
+        if (err instanceof ChatAttachmentNotFoundError) {
+          res.status(404).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof ChatAttachmentNotReadyError) {
+          res.status(409).json({ error: err.message, code: err.code });
+          return;
+        }
+        // MEDIA-6/ROB-1 — a repo/storage throw resolves with an immediate error
+        // status, never hangs the request.
         next(err);
       }
     },

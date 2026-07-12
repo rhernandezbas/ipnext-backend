@@ -50,4 +50,9 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       })
       .map((r) => ({ ...r }));
   }
+
+  async findById(id: string): Promise<ChatMessageRecord | null> {
+    const row = this.rows.find((r) => r.id === id);
+    return row ? { ...row } : null;
+  }
 }

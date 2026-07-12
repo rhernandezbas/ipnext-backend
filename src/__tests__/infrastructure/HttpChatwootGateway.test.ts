@@ -1,6 +1,12 @@
-import type { AxiosInstance } from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import { HttpChatwootGateway } from '@infrastructure/adapters/chatwoot/HttpChatwootGateway';
 import { ChatwootUnavailableError } from '@domain/errors/messaging';
+
+// fix-be #1 (HIGH) — only the "hardening de memoria/timeout" describe block below
+// exercises the REAL (non-injected) `rawGet`, which falls through to a bare
+// `axios.get`. Every other test in this file injects its own `http`/`rawGet` fake
+// and never touches the real axios module, so mocking it here is safe.
+jest.mock('axios');
 
 function fakeHttp(over?: Partial<Record<'get' | 'post', jest.Mock>>) {
   const http = {
@@ -306,6 +312,121 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
       // No lanza y queda usable — el axios real se ejercita indirectamente en los tests de arriba
       // via el http inyectado; acá solo probamos que el ctor no explota sin `http`.
       expect(() => new HttpChatwootGateway({ baseUrl: 'https://chat.ipnext.com.ar', accountId: '2', inboxId: '1', apiToken: 'tok' })).not.toThrow();
+    });
+  });
+
+  describe('downloadAttachment (messaging-inbox-v2-media, Tanda 1 · MEDIA-2)', () => {
+    function gwWithRawGet(rawGet: jest.Mock) {
+      return new HttpChatwootGateway({
+        baseUrl: 'https://chat.ipnext.com.ar',
+        accountId: '2',
+        inboxId: '1',
+        apiToken: 'tok',
+        rawGet: rawGet as unknown as (url: string) => Promise<{ data: ArrayBuffer; headers: Record<string, unknown> }>,
+      });
+    }
+
+    it('scenario 6/8 — sigue el sourceUrl y devuelve { buffer, contentType } desde la respuesta cruda', async () => {
+      const bytes = new TextEncoder().encode('fake-jpg-bytes').buffer;
+      const rawGet = jest.fn().mockResolvedValue({ data: bytes, headers: { 'content-type': 'image/jpeg' } });
+      const gw = gwWithRawGet(rawGet);
+
+      const result = await gw.downloadAttachment('https://chat.ipnext.com.ar/rails/active_storage/blobs/redirect/abc/foto.jpg');
+
+      // fix-be #1 — `downloadAttachment` now always forwards its (optional) `options`
+      // through to `rawGet`, even when the caller didn't pass any (`undefined`), so the
+      // real axios-backed `rawGet` can apply its hardening defaults (see fix-be #1
+      // describe block below).
+      expect(rawGet).toHaveBeenCalledWith(
+        'https://chat.ipnext.com.ar/rails/active_storage/blobs/redirect/abc/foto.jpg',
+        undefined,
+      );
+      expect(result.buffer.toString()).toBe('fake-jpg-bytes');
+      expect(result.contentType).toBe('image/jpeg');
+    });
+
+    it('content-type ausente en la respuesta → fallback application/octet-stream (nunca truena el mapeo)', async () => {
+      const bytes = new TextEncoder().encode('x').buffer;
+      const rawGet = jest.fn().mockResolvedValue({ data: bytes, headers: {} });
+      const gw = gwWithRawGet(rawGet);
+
+      const result = await gw.downloadAttachment('https://x/y');
+      expect(result.contentType).toBe('application/octet-stream');
+    });
+
+    it('scenario 9 — red caída/timeout en la descarga → ChatwootUnavailableError (mismo criterio SEND-3/ROB-1)', async () => {
+      const rawGet = jest.fn().mockRejectedValue(new Error('ETIMEDOUT'));
+      const gw = gwWithRawGet(rawGet);
+
+      await expect(gw.downloadAttachment('https://x/y')).rejects.toBeInstanceOf(ChatwootUnavailableError);
+    });
+
+    it('sin rawGet inyectado, el ctor no explota (usa axios.get real internamente)', () => {
+      expect(() =>
+        new HttpChatwootGateway({ baseUrl: 'https://chat.ipnext.com.ar', accountId: '2', inboxId: '1', apiToken: 'tok' }),
+      ).not.toThrow();
+    });
+  });
+
+  describe('fix-be #1 (HIGH) — hardening de memoria/timeout del rawGet REAL (sin inyección)', () => {
+    afterEach(() => jest.clearAllMocks());
+
+    function gwWithRealRawGet() {
+      return new HttpChatwootGateway({ baseUrl: 'https://chat.ipnext.com.ar', accountId: '2', inboxId: '1', apiToken: 'tok' });
+    }
+
+    it('fija maxContentLength/maxBodyLength = options.maxBytes y un timeout — axios NUNCA bufferea sin cota', async () => {
+      const bytes = new TextEncoder().encode('x').buffer;
+      (axios.get as jest.Mock).mockResolvedValue({ data: bytes, headers: {} });
+      const gw = gwWithRealRawGet();
+
+      await gw.downloadAttachment('https://x/y', { maxBytes: 5 * 1024 * 1024 });
+
+      expect(axios.get).toHaveBeenCalledWith(
+        'https://x/y',
+        expect.objectContaining({
+          responseType: 'arraybuffer',
+          maxContentLength: 5 * 1024 * 1024,
+          maxBodyLength: 5 * 1024 * 1024,
+          timeout: expect.any(Number),
+        }),
+      );
+    });
+
+    it('sin options (maxBytes ausente) igual fija un default FINITO — nunca Infinity/sin cota', async () => {
+      const bytes = new TextEncoder().encode('x').buffer;
+      (axios.get as jest.Mock).mockResolvedValue({ data: bytes, headers: {} });
+      const gw = gwWithRealRawGet();
+
+      await gw.downloadAttachment('https://x/y');
+
+      const callOptions = (axios.get as jest.Mock).mock.calls[0][1];
+      expect(Number.isFinite(callOptions.maxContentLength)).toBe(true);
+      expect(callOptions.maxContentLength).toBeGreaterThan(0);
+      expect(Number.isFinite(callOptions.maxBodyLength)).toBe(true);
+      expect(callOptions.timeout).toBeGreaterThan(0);
+    });
+
+    it('axios abortando a mitad de stream (maxContentLength excedido) → ChatwootUnavailableError, nunca un buffer parcial ni un throw crudo', async () => {
+      (axios.get as jest.Mock).mockRejectedValue(
+        Object.assign(new Error('maxContentLength size of 5242880 exceeded'), {
+          code: 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED',
+        }),
+      );
+      const gw = gwWithRealRawGet();
+
+      await expect(gw.downloadAttachment('https://x/y', { maxBytes: 5 * 1024 * 1024 })).rejects.toBeInstanceOf(
+        ChatwootUnavailableError,
+      );
+    });
+
+    it('timeout de un data_url que nunca responde → ChatwootUnavailableError (no deja la promesa colgada)', async () => {
+      (axios.get as jest.Mock).mockRejectedValue(Object.assign(new Error('timeout of 30000ms exceeded'), { code: 'ECONNABORTED' }));
+      const gw = gwWithRealRawGet();
+
+      await expect(gw.downloadAttachment('https://x/y', { maxBytes: 100 * 1024 * 1024 })).rejects.toBeInstanceOf(
+        ChatwootUnavailableError,
+      );
     });
   });
 });

@@ -10,6 +10,7 @@ import { bootstrapUispSync } from './infrastructure/scheduling/bootstrapUispSync
 import { bootstrapRadiusAccountingIngest } from './infrastructure/scheduling/bootstrapRadiusAccountingIngest';
 import { bootstrapRadiusAuthIngest } from './infrastructure/scheduling/bootstrapRadiusAuthIngest';
 import { bootstrapPppoeAutoMove } from './infrastructure/scheduling/bootstrapPppoeAutoMove';
+import { bootstrapChatMediaDownload } from './infrastructure/scheduling/bootstrapChatMediaDownload';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
@@ -69,6 +70,11 @@ void (async () => {
   void bootstrapPppoeAutoMove()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[pppoe-auto-move] bootstrap failed (server kept alive):', (err as Error).message));
+  // messaging-inbox-v2-media (F1.5 fase A, Tanda 1) — reintento de descarga de media
+  // entrante — opt-in, dark by default (flag 'chat-media-download').
+  void bootstrapChatMediaDownload()
+    .then((scheduler) => scheduler?.start())
+    .catch((err) => console.error('[chat-media-download] bootstrap failed (server kept alive):', (err as Error).message));
 
   // Start schedulers — both start dormant (gated by feature flags).
   iclassClosure?.start();

@@ -64,4 +64,30 @@ export class FakeChatwootGateway implements ChatwootGateway {
 
   /** Invoked only by the one-shot ops script (B7), never by a use case. */
   async registerWebhook(): Promise<void> {}
+
+  // ─── messaging-inbox-v2-media (Tanda 1 · MEDIA-2) ────────────────────────────
+  /** Keyed by url. Populate before calling `downloadAttachment`. */
+  public downloadsByUrl = new Map<string, { buffer: Buffer; contentType: string }>();
+  public failDownloadAttachment = false;
+  /**
+   * fix-be #5 — selective failure by URL (the ORIGINAL boolean-only
+   * `failDownloadAttachment` fails EVERYTHING, so it can't simulate "original OK,
+   * thumbnail fails" — the exact degrade `DownloadChatMessageAttachment` is
+   * supposed to handle gracefully). Populate before calling `downloadAttachment`.
+   */
+  public failUrls = new Set<string>();
+  public downloadAttachmentCalls: Array<{ url: string; options?: { maxBytes?: number } }> = [];
+
+  async downloadAttachment(
+    url: string,
+    options?: { maxBytes?: number },
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    this.downloadAttachmentCalls.push({ url, options });
+    if (this.failDownloadAttachment || this.failUrls.has(url)) {
+      throw new Error('fake: Chatwoot unreachable (downloadAttachment)');
+    }
+    const found = this.downloadsByUrl.get(url);
+    if (found) return found;
+    return { buffer: Buffer.from('fake-binary'), contentType: 'application/octet-stream' };
+  }
 }

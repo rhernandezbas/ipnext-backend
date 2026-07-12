@@ -1,6 +1,36 @@
 import type { ConversationRepository } from '@domain/ports/ConversationRepository';
 import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository';
 import type { WebhookDeliveryRepository } from '@domain/ports/WebhookDeliveryRepository';
+import type { ChatMessageAttachmentRepository } from '@domain/ports/ChatMessageAttachmentRepository';
+import type { ChatMediaDownloadTrigger } from '@domain/ports/ChatMediaDownloadTrigger';
+
+/**
+ * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-1) — a single Chatwoot
+ * attachment as it arrives on the webhook's TOP-LEVEL `attachments[]` array
+ * (verified against Chatwoot v4.13.0 source, `Attachment#push_event_data`/
+ * `Message#webhook_data`: the local `data` hash IS the webhook's JSON root, so
+ * `attachments` sits alongside `content`/`conversation`/`sender` — same level,
+ * NOT nested under a `data` key). `file_type` arrives as a STRING enum.
+ */
+export interface RawChatwootAttachment {
+  id: number;
+  message_id?: number;
+  /** 'image' | 'audio' | 'video' | 'file' | 'location' | 'contact' | 'fallback' | 'embed'. */
+  file_type: string;
+  account_id?: number;
+  extension?: string;
+  content_type?: string;
+  /** 301-redirect, stable, verified live to need no `api_access_token`. */
+  data_url?: string;
+  /** Only populated for `file_type==='image'`; `''` for the rest. */
+  thumb_url?: string;
+  file_size?: number;
+  width?: number;
+  height?: number;
+}
+
+/** MEDIA-1 — only these carry a downloadable binary; the rest never get a row. */
+const BINARY_FILE_TYPES = new Set(['image', 'audio', 'video', 'file']);
 
 /**
  * Chatwoot webhook payload — DOMAIN shape as received by this use case, AFTER the HMAC
@@ -42,6 +72,8 @@ export interface ChatwootWebhookPayload {
   sender?: { name?: string | null } | null;
   /** Only meaningful on CONVERSATION-level events (`conversation_created`/`conversation_status_changed`). */
   meta?: { sender?: { name?: string | null; phone_number?: string | null } | null };
+  /** MEDIA-1 — top-level, same nesting level as `content`/`conversation`/`sender` (see RawChatwootAttachment doc). */
+  attachments?: RawChatwootAttachment[];
 }
 
 const WEBHOOK_SOURCE = 'chatwoot';
@@ -80,6 +112,9 @@ export class ReceiveChatwootWebhook {
     private readonly conversationRepo: ConversationRepository,
     private readonly messageRepo: ChatMessageRepository,
     private readonly deliveryRepo: WebhookDeliveryRepository,
+    /** messaging-inbox-v2-media (Tanda 1) — optional so existing 3-arg call sites keep compiling. */
+    private readonly attachmentRepo?: ChatMessageAttachmentRepository,
+    private readonly downloadTrigger?: ChatMediaDownloadTrigger,
   ) {}
 
   async execute(deliveryId: string, payload: ChatwootWebhookPayload): Promise<void> {
@@ -127,7 +162,7 @@ export class ReceiveChatwootWebhook {
 
     if (direction === null || isPrivateNote || payload.id === undefined) return; // §7/H2 — not persisted
 
-    await this.messageRepo.upsertByChatwootMessageId({
+    const message = await this.messageRepo.upsertByChatwootMessageId({
       conversationId: conversation.id,
       chatwootMessageId: payload.id,
       direction,
@@ -135,6 +170,49 @@ export class ReceiveChatwootWebhook {
       senderName: payload.sender?.name,
       chatwootCreatedAt: createdAt,
     });
+
+    await this.captureAttachments(message.id, payload.attachments);
+  }
+
+  /**
+   * MEDIA-1 — upserts one `ChatMessageAttachment` row (status `pending`) per
+   * BINARY attachment (`image`/`audio`/`video`/`file`); `location`/`contact`/
+   * `fallback`/`embed` never get a row (no downloadable binary). Fires
+   * `downloadTrigger.requestDownload` per NEW/refreshed row, isolated in its
+   * own try/catch (MEDIA-6/scenario 24): a synchronous throw from the trigger's
+   * infra impl must NEVER abort the webhook's 200 response.
+   */
+  private async captureAttachments(messageId: string, attachments: RawChatwootAttachment[] | undefined): Promise<void> {
+    if (!this.attachmentRepo || !attachments || attachments.length === 0) return;
+
+    for (const raw of attachments) {
+      if (!BINARY_FILE_TYPES.has(raw.file_type)) continue;
+
+      const row = await this.attachmentRepo.upsertByChatwootAttachmentId({
+        messageId,
+        chatwootAttachmentId: raw.id,
+        fileType: raw.file_type,
+        contentType: raw.content_type ?? 'application/octet-stream',
+        sizeBytes: raw.file_size ?? null,
+        width: raw.width ?? null,
+        height: raw.height ?? null,
+        sourceUrl: raw.data_url ?? '',
+        thumbSourceUrl: raw.file_type === 'image' && raw.thumb_url ? raw.thumb_url : null,
+      });
+
+      if (!this.downloadTrigger) continue;
+      try {
+        this.downloadTrigger.requestDownload(row.id);
+      } catch (err) {
+        // MEDIA-6 — isolated on purpose: a bug in the trigger's infra impl must
+        // never take down the webhook's 200 ack. The ChatMediaDownloadScheduler
+        // (MEDIA-3) is the safety net that eventually retries this row anyway.
+        console.error('[messaging] ChatMediaDownloadTrigger.requestDownload threw (isolated, webhook still acks 200)', {
+          attachmentId: row.id,
+          error: err,
+        });
+      }
+    }
   }
 
   private async handleConversationCreated(payload: ChatwootWebhookPayload): Promise<void> {

@@ -2793,8 +2793,42 @@ model ChatMessage {
                                  // para calcular la ventana 24h (eso lo resuelve canReply,
                                  // no math local)
   createdAt         DateTime     @default(now())
+  attachments       ChatMessageAttachment[]
 
   @@index([conversationId, chatwootCreatedAt])
+}
+
+// messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MODEL-1) — adjuntos (fotos/videos/
+// audios/documentos) entrantes por WhatsApp. Migración ADITIVA, clon del molde de
+// 20260823000000_add_scheduled_task_attachment. chatwootAttachmentId es único a nivel
+// ADJUNTO de Chatwoot — idempotencia de upsert (MEDIA-1, mismo criterio que
+// ChatMessage.chatwootMessageId). storageKey queda NULL mientras status='pending': la
+// descarga del binario es ASYNC (fire-and-forget + scheduler de reintento, MEDIA-2/3),
+// a diferencia de ScheduledTaskAttachment donde la escritura es síncrona con el alta.
+model ChatMessageAttachment {
+  id                   String      @id @default(uuid())
+  messageId            String
+  message              ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  chatwootAttachmentId Int         @unique
+  fileType             String      // 'image' | 'audio' | 'video' | 'file' (String plano, mismo
+                                    // criterio que ChatMessage.direction/Conversation.status)
+  contentType          String      // MIME real reportado por Chatwoot (content_type)
+  filename             String?     // Chatwoot no siempre lo reporta directo
+  sizeBytes            Int?        // file_size de Chatwoot; se expone como fileSize en el DTO
+  width                Int?        // solo image/video
+  height               Int?        // solo image/video
+  storageKey           String?     // NULL mientras pending; key = messaging/{conversationId}/{id}.ext
+  thumbStorageKey      String?     // solo image; thumb_url de Chatwoot bajado a MinIO
+  sourceUrl            String      // data_url de Chatwoot — lo usa el job de descarga y los reintentos
+  thumbSourceUrl       String?     // thumb_url de Chatwoot (solo image)
+  status               String      @default("pending") // 'pending' | 'downloaded' | 'failed'
+  downloadAttempts     Int         @default(0)
+  lastError            String?     // último error del download job (debug)
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  @@index([messageId])  // mapper de attachments por mensaje, sin N+1 (listByMessageIds)
+  @@index([status])     // el scheduler barre por status='pending'/'failed'
 }
 
 // Dedup de entregas de webhook por X-Chatwoot-Delivery (HOOK-3). Tabla separada de

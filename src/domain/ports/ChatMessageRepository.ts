@@ -27,4 +27,10 @@ export interface ChatMessageRepository {
   upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord>;
   /** INBOX-3 — full history, ordered by `chatwootCreatedAt` ASC (oldest first). */
   listByConversation(conversationId: string): Promise<ChatMessageRecord[]>;
+  /**
+   * messaging-inbox-v2-media (Tanda 1 · MEDIA-2) — resolves a message's own mirror
+   * row by its (internal) id. `DownloadChatMessageAttachment` uses this to recover
+   * `conversationId` for the storage key (`messaging/{conversationId}/{attachmentId}.ext`).
+   */
+  findById(id: string): Promise<ChatMessageRecord | null>;
 }

@@ -1,9 +1,14 @@
 import type { ConversationRepository, ConversationRecord } from '@domain/ports/ConversationRepository';
 import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository';
-import type { ChatwootGateway } from '@domain/ports/ChatwootGateway';
+import type { ChatwootGateway, ChatwootMessageAttachmentDto } from '@domain/ports/ChatwootGateway';
+import type { ChatMessageAttachmentRepository } from '@domain/ports/ChatMessageAttachmentRepository';
+import type { ChatMediaDownloadTrigger } from '@domain/ports/ChatMediaDownloadTrigger';
 import { ConversationNotFoundError } from '@domain/errors/messaging';
 import { toConversationListItemDto, type ConversationDetailDto } from '@application/dto/messaging';
 import type { GetClientContextByPhone } from './GetClientContextByPhone';
+
+/** MEDIA-1 — only these carry a downloadable binary (same set as `ReceiveChatwootWebhook`). */
+const BINARY_FILE_TYPES = new Set(['image', 'audio', 'video', 'file']);
 
 /**
  * GetConversation (F1, design §4, INBOX-2 + CTX-2) — conversation detail with
@@ -27,6 +32,9 @@ export class GetConversation {
     private readonly messageRepo: ChatMessageRepository,
     private readonly gateway: ChatwootGateway,
     private readonly getClientContext: GetClientContextByPhone,
+    /** messaging-inbox-v2-media (Tanda 1) — optional so existing 4-arg call sites keep compiling. */
+    private readonly attachmentRepo?: ChatMessageAttachmentRepository,
+    private readonly downloadTrigger?: ChatMediaDownloadTrigger,
   ) {}
 
   async execute(id: string): Promise<ConversationDetailDto> {
@@ -63,7 +71,7 @@ export class GetConversation {
         // note (`m.private`): the GET path has no other way to filter it out, and letting
         // it through here would leak an internal note into the customer-facing thread.
         if (m.direction === null || m.private === true) continue;
-        await this.messageRepo.upsertByChatwootMessageId({
+        const message = await this.messageRepo.upsertByChatwootMessageId({
           conversationId: existing.id,
           chatwootMessageId: m.id,
           direction: m.direction,
@@ -71,6 +79,8 @@ export class GetConversation {
           senderName: m.senderName,
           chatwootCreatedAt: m.createdAt,
         });
+
+        await this.captureAttachments(message.id, m.attachments);
       }
     } catch (error) {
       // INBOX-2 — a Chatwoot outage during fetch-on-open MUST NOT fail the read.
@@ -79,6 +89,46 @@ export class GetConversation {
         chatwootConversationId: existing.chatwootConversationId,
         error,
       });
+    }
+  }
+
+  /**
+   * MEDIA-1 (scenario 5, fetch-on-open parity) — same capture rule as
+   * `ReceiveChatwootWebhook.captureAttachments`: one `pending` row per BINARY
+   * attachment, idempotent by `chatwootAttachmentId`, trigger fired isolated so a
+   * throw here never fails the (already try/catch-wrapped) sync block.
+   */
+  private async captureAttachments(
+    messageId: string,
+    attachments: ChatwootMessageAttachmentDto[] | undefined,
+  ): Promise<void> {
+    if (!this.attachmentRepo || !attachments || attachments.length === 0) return;
+
+    for (const raw of attachments) {
+      if (!BINARY_FILE_TYPES.has(raw.fileType)) continue;
+
+      const row = await this.attachmentRepo.upsertByChatwootAttachmentId({
+        messageId,
+        chatwootAttachmentId: raw.id,
+        fileType: raw.fileType,
+        contentType: raw.contentType,
+        filename: raw.filename,
+        sizeBytes: raw.sizeBytes,
+        width: raw.width,
+        height: raw.height,
+        sourceUrl: raw.sourceUrl,
+        thumbSourceUrl: raw.thumbSourceUrl,
+      });
+
+      if (!this.downloadTrigger) continue;
+      try {
+        this.downloadTrigger.requestDownload(row.id);
+      } catch (err) {
+        console.error('[messaging] ChatMediaDownloadTrigger.requestDownload threw during fetch-on-open (isolated)', {
+          attachmentId: row.id,
+          error: err,
+        });
+      }
     }
   }
 }

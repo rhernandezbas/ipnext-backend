@@ -21,6 +21,8 @@ import { ReceiveChatwootWebhook } from '@application/use-cases/messaging/Receive
 import { InMemoryConversationRepository } from '@infrastructure/adapters/in-memory/InMemoryConversationRepository';
 import { InMemoryChatMessageRepository } from '@infrastructure/adapters/in-memory/InMemoryChatMessageRepository';
 import { InMemoryWebhookDeliveryRepository } from '@infrastructure/adapters/in-memory/InMemoryWebhookDeliveryRepository';
+import { InMemoryChatMessageAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemoryChatMessageAttachmentRepository';
+import type { ChatMediaDownloadTrigger } from '@domain/ports/ChatMediaDownloadTrigger';
 
 function makeUseCase() {
   const conversationRepo = new InMemoryConversationRepository();
@@ -28,6 +30,21 @@ function makeUseCase() {
   const deliveryRepo = new InMemoryWebhookDeliveryRepository();
   const uc = new ReceiveChatwootWebhook(conversationRepo, messageRepo, deliveryRepo);
   return { uc, conversationRepo, messageRepo, deliveryRepo };
+}
+
+function makeUseCaseWithAttachments() {
+  const conversationRepo = new InMemoryConversationRepository();
+  const messageRepo = new InMemoryChatMessageRepository();
+  const deliveryRepo = new InMemoryWebhookDeliveryRepository();
+  const attachmentRepo = new InMemoryChatMessageAttachmentRepository();
+  const requestedDownloads: string[] = [];
+  const trigger: ChatMediaDownloadTrigger = {
+    requestDownload: (id: string) => {
+      requestedDownloads.push(id);
+    },
+  };
+  const uc = new ReceiveChatwootWebhook(conversationRepo, messageRepo, deliveryRepo, attachmentRepo, trigger);
+  return { uc, conversationRepo, messageRepo, deliveryRepo, attachmentRepo, requestedDownloads };
 }
 
 describe('ReceiveChatwootWebhook', () => {
@@ -518,6 +535,212 @@ describe('ReceiveChatwootWebhook', () => {
 
       const conv = await conversationRepo.findByChatwootId(122);
       expect(conv!.status).toBe('open'); // NOT re-applied to 'resolved'
+    });
+  });
+
+  describe('MEDIA-1 — captura sync de adjuntos (messaging-inbox-v2-media, Tanda 1)', () => {
+    it('scenario 1 — dos webhooks con el MISMO chatwootAttachmentId dejan UNA sola fila', async () => {
+      const { uc, conversationRepo, messageRepo, attachmentRepo } = makeUseCaseWithAttachments();
+      const payload = {
+        event: 'message_created',
+        id: 1001,
+        content: 'foto del comprobante',
+        message_type: 'incoming',
+        created_at: 1735690000,
+        conversation: { id: 200 },
+        attachments: [
+          {
+            id: 55,
+            file_type: 'image',
+            content_type: 'image/jpeg',
+            data_url: 'https://chat.ipnext.com.ar/rails/active_storage/blobs/redirect/abc/foto.jpg',
+            thumb_url: 'https://chat.ipnext.com.ar/rails/active_storage/representations/abc/thumb.jpg',
+            file_size: 12345,
+            width: 800,
+            height: 600,
+          },
+        ],
+      };
+
+      await uc.execute('delivery-att-1', payload);
+      await uc.execute('delivery-att-1-retry', { ...payload, content: 'reenvio de chatwoot' });
+
+      const conv = await conversationRepo.findByChatwootId(200);
+      const messages = await messageRepo.listByConversation(conv!.id);
+      expect(messages).toHaveLength(1);
+      const rows = await attachmentRepo.listByMessageIds([messages[0]!.id]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.chatwootAttachmentId).toBe(55);
+      expect(rows[0]!.status).toBe('pending');
+    });
+
+    it('scenario 2 — reintento sobre un adjunto YA downloaded no lo revierte a pending', async () => {
+      const { uc, conversationRepo, messageRepo, attachmentRepo } = makeUseCaseWithAttachments();
+      const payload = {
+        event: 'message_created',
+        id: 1002,
+        content: 'foto',
+        message_type: 'incoming',
+        created_at: 1735690100,
+        conversation: { id: 201 },
+        attachments: [
+          {
+            id: 56,
+            file_type: 'image',
+            content_type: 'image/jpeg',
+            data_url: 'https://chat.ipnext.com.ar/rails/active_storage/blobs/redirect/def/foto.jpg',
+          },
+        ],
+      };
+
+      await uc.execute('delivery-att-2', payload);
+      const conv = await conversationRepo.findByChatwootId(201);
+      const messages = await messageRepo.listByConversation(conv!.id);
+      const [row] = await attachmentRepo.listByMessageIds([messages[0]!.id]);
+      await attachmentRepo.markDownloaded(row!.id, { storageKey: 'messaging/201/56.jpg' });
+
+      await uc.execute('delivery-att-2-retry', payload); // Chatwoot re-sends the same webhook
+
+      const [reprocessed] = await attachmentRepo.listByMessageIds([messages[0]!.id]);
+      expect(reprocessed!.status).toBe('downloaded');
+      expect(reprocessed!.storageKey).toBe('messaging/201/56.jpg');
+    });
+
+    it('scenario 3 — mensaje solo-attachment (content vacío) persiste el ChatMessage Y su adjunto pending', async () => {
+      const { uc, conversationRepo, messageRepo, attachmentRepo } = makeUseCaseWithAttachments();
+
+      await uc.execute('delivery-att-3', {
+        event: 'message_created',
+        id: 1003,
+        content: '',
+        message_type: 'incoming',
+        created_at: 1735690200,
+        conversation: { id: 202 },
+        attachments: [
+          { id: 57, file_type: 'image', content_type: 'image/jpeg', data_url: 'https://chat.ipnext.com.ar/x/57.jpg' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(202);
+      const messages = await messageRepo.listByConversation(conv!.id);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]!.content).toBe('');
+      const rows = await attachmentRepo.listByMessageIds([messages[0]!.id]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.status).toBe('pending');
+    });
+
+    it('scenario 4 — fileType no-binario (location/contact/fallback/embed) NO crea fila, el mensaje se persiste igual', async () => {
+      const { uc, conversationRepo, messageRepo, attachmentRepo } = makeUseCaseWithAttachments();
+
+      await uc.execute('delivery-att-4', {
+        event: 'message_created',
+        id: 1004,
+        content: 'te comparto mi ubicacion',
+        message_type: 'incoming',
+        created_at: 1735690300,
+        conversation: { id: 203 },
+        attachments: [
+          { id: 58, file_type: 'location', data_url: 'https://chat.ipnext.com.ar/x/58' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(203);
+      const messages = await messageRepo.listByConversation(conv!.id);
+      expect(messages).toHaveLength(1);
+      const rows = await attachmentRepo.listByMessageIds([messages[0]!.id]);
+      expect(rows).toHaveLength(0);
+    });
+
+    it('captura además audio/video/file (todo el set binario), ignora contact/fallback/embed mezclados', async () => {
+      const { uc, conversationRepo, messageRepo, attachmentRepo } = makeUseCaseWithAttachments();
+
+      await uc.execute('delivery-att-mixed', {
+        event: 'message_created',
+        id: 1005,
+        content: '',
+        message_type: 'incoming',
+        created_at: 1735690400,
+        conversation: { id: 204 },
+        attachments: [
+          { id: 59, file_type: 'audio', content_type: 'audio/ogg', data_url: 'https://chat.ipnext.com.ar/x/59.ogg' },
+          { id: 60, file_type: 'video', content_type: 'video/mp4', data_url: 'https://chat.ipnext.com.ar/x/60.mp4' },
+          { id: 61, file_type: 'file', content_type: 'application/pdf', data_url: 'https://chat.ipnext.com.ar/x/61.pdf' },
+          { id: 62, file_type: 'contact', data_url: 'https://chat.ipnext.com.ar/x/62' },
+          { id: 63, file_type: 'fallback', data_url: 'https://chat.ipnext.com.ar/x/63' },
+          { id: 64, file_type: 'embed', data_url: 'https://chat.ipnext.com.ar/x/64' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(204);
+      const messages = await messageRepo.listByConversation(conv!.id);
+      const rows = await attachmentRepo.listByMessageIds([messages[0]!.id]);
+      expect(rows.map((r) => r.chatwootAttachmentId).sort()).toEqual([59, 60, 61]);
+    });
+
+    it('sin attachmentRepo/trigger inyectados (compat hacia atrás), el webhook procesa el mensaje normal sin tirar', async () => {
+      const { uc, conversationRepo } = makeUseCase(); // NO attachmentRepo/trigger — 3-arg ctor
+      await expect(
+        uc.execute('delivery-att-no-repo', {
+          event: 'message_created',
+          id: 1006,
+          content: 'sin adjuntos soportados',
+          message_type: 'incoming',
+          created_at: 1735690500,
+          conversation: { id: 205 },
+          attachments: [{ id: 65, file_type: 'image', content_type: 'image/jpeg', data_url: 'https://x/65.jpg' }],
+        }),
+      ).resolves.toBeUndefined();
+      expect(await conversationRepo.findByChatwootId(205)).not.toBeNull();
+    });
+
+    it('scenario 24 — dispara el trigger fire-and-forget por cada adjunto binario nuevo', async () => {
+      const { uc, requestedDownloads } = makeUseCaseWithAttachments();
+
+      await uc.execute('delivery-att-trigger', {
+        event: 'message_created',
+        id: 1007,
+        content: '',
+        message_type: 'incoming',
+        created_at: 1735690600,
+        conversation: { id: 206 },
+        attachments: [
+          { id: 66, file_type: 'image', content_type: 'image/jpeg', data_url: 'https://x/66.jpg' },
+        ],
+      });
+
+      expect(requestedDownloads).toHaveLength(1);
+    });
+
+    it('scenario 24 — si requestDownload lanza SÍNCRONO, el webhook igual procesa y responde (no propaga)', async () => {
+      const conversationRepo = new InMemoryConversationRepository();
+      const messageRepo = new InMemoryChatMessageRepository();
+      const deliveryRepo = new InMemoryWebhookDeliveryRepository();
+      const attachmentRepo = new InMemoryChatMessageAttachmentRepository();
+      const throwingTrigger: ChatMediaDownloadTrigger = {
+        requestDownload: () => {
+          throw new Error('boom - infra bug en el trigger');
+        },
+      };
+      const uc = new ReceiveChatwootWebhook(conversationRepo, messageRepo, deliveryRepo, attachmentRepo, throwingTrigger);
+
+      await expect(
+        uc.execute('delivery-att-throw', {
+          event: 'message_created',
+          id: 1008,
+          content: '',
+          message_type: 'incoming',
+          created_at: 1735690700,
+          conversation: { id: 207 },
+          attachments: [{ id: 67, file_type: 'image', content_type: 'image/jpeg', data_url: 'https://x/67.jpg' }],
+        }),
+      ).resolves.toBeUndefined();
+
+      const conv207 = await conversationRepo.findByChatwootId(207);
+      expect(conv207).not.toBeNull();
+      const messages = await messageRepo.listByConversation(conv207!.id);
+      const rows = await attachmentRepo.listByMessageIds([messages[0]!.id]);
+      expect(rows).toHaveLength(1); // the row was created before the (isolated) trigger threw
     });
   });
 });

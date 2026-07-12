@@ -1,5 +1,6 @@
 import type { ConversationRepository } from '@domain/ports/ConversationRepository';
 import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository';
+import type { ChatMessageAttachmentRepository } from '@domain/ports/ChatMessageAttachmentRepository';
 import { ConversationNotFoundError } from '@domain/errors/messaging';
 import { toChatMessageDto, type ChatMessageDto } from '@application/dto/messaging';
 
@@ -8,11 +9,17 @@ import { toChatMessageDto, type ChatMessageDto } from '@application/dto/messagin
  * oldest first — sort lives in the repository) mapped to `ChatMessageDto`. No
  * pagination in F1 (design §8: no spec scenario asks for `page=`, a WhatsApp
  * thread is bounded — revisit in F2 if a thread grows enough to justify a cursor).
+ *
+ * messaging-inbox-v2-media (Tanda 1 · MEDIA-4) — `attachmentRepo` is optional (keeps
+ * existing 2-arg call sites compiling). When present, attachments for ALL messages of
+ * the conversation are fetched in ONE bulk call (`listByMessageIds`, anti-N+1) and
+ * merged per-message before mapping to DTO — never a per-row query in the loop.
  */
 export class ListMessages {
   constructor(
     private readonly conversationRepo: ConversationRepository,
     private readonly messageRepo: ChatMessageRepository,
+    private readonly attachmentRepo?: ChatMessageAttachmentRepository,
   ) {}
 
   async execute(conversationId: string): Promise<ChatMessageDto[]> {
@@ -20,6 +27,18 @@ export class ListMessages {
     if (!conversation) throw new ConversationNotFoundError(conversationId);
 
     const messages = await this.messageRepo.listByConversation(conversationId);
-    return messages.map(toChatMessageDto);
+    if (!this.attachmentRepo || messages.length === 0) {
+      return messages.map((m) => toChatMessageDto(m));
+    }
+
+    const attachments = await this.attachmentRepo.listByMessageIds(messages.map((m) => m.id));
+    const byMessageId = new Map<string, typeof attachments>();
+    for (const a of attachments) {
+      const bucket = byMessageId.get(a.messageId);
+      if (bucket) bucket.push(a);
+      else byMessageId.set(a.messageId, [a]);
+    }
+
+    return messages.map((m) => toChatMessageDto(m, byMessageId.get(m.id) ?? []));
   }
 }

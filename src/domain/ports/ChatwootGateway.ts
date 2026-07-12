@@ -33,6 +33,25 @@ export interface ChatwootConversationDto {
   lastActivityAt?: string | null;
 }
 
+/**
+ * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-1 fetch-on-open parity) —
+ * domain shape of a Chatwoot attachment, already mapped from the wire (snake_case →
+ * camelCase) by `HttpChatwootGateway`. `GetConversation.syncFromChatwoot` filters by
+ * `fileType` (only image/audio/video/file get a `ChatMessageAttachment` row) — the
+ * gateway itself does no filtering, same split of responsibility as `direction`.
+ */
+export interface ChatwootMessageAttachmentDto {
+  id: number;
+  fileType: string;
+  contentType: string;
+  filename: string | null;
+  sizeBytes: number | null;
+  width: number | null;
+  height: number | null;
+  sourceUrl: string;
+  thumbSourceUrl: string | null;
+}
+
 export interface ChatwootMessageDto {
   id: number;
   /** null = filtered by design §7 (activity/template message_type — not persisted). */
@@ -50,6 +69,8 @@ export interface ChatwootMessageDto {
    * never bumps the preview.
    */
   private?: boolean;
+  /** MEDIA-1 — parity with the webhook's `attachments[]` (same Chatwoot API shape). */
+  attachments?: ChatwootMessageAttachmentDto[];
 }
 
 export interface ChatwootGateway {
@@ -61,4 +82,21 @@ export interface ChatwootGateway {
   searchContact(query: string): Promise<{ id: number; name: string | null; phone: string | null }[]>;
   /** Invoked ONLY by `scripts/registerChatwootWebhook.ts` (one-shot operational setup), not by app.ts. */
   registerWebhook(url: string, secret: string): Promise<void>;
+  /**
+   * messaging-inbox-v2-media (Tanda 1 · MEDIA-2) — follows Chatwoot's `sourceUrl`
+   * (`data_url`, a stable 301) WITHOUT forwarding any auth header (verified live: the
+   * signed redirect needs no `api_access_token`). Any failure (network/timeout/4xx/5xx)
+   * throws `ChatwootUnavailableError`, same single-outcome convention as the rest of
+   * this port.
+   *
+   * fix-be #1 (HIGH) — `options.maxBytes` MUST be forwarded down to the underlying
+   * HTTP client as a hard `maxContentLength`/`maxBodyLength` ceiling: the caller
+   * (`DownloadChatMessageAttachment`) already re-validates size AFTER the buffer is
+   * fully in memory, which is too late to prevent an OOM on a lied-about/absent
+   * `file_size`. Passing it here lets the adapter abort mid-stream instead.
+   */
+  downloadAttachment(
+    url: string,
+    options?: { maxBytes?: number },
+  ): Promise<{ buffer: Buffer; contentType: string }>;
 }

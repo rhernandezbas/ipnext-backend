@@ -1,6 +1,34 @@
 import axios, { AxiosInstance } from 'axios';
-import { ChatwootConversationDto, ChatwootGateway, ChatwootMessageDto } from '@domain/ports/ChatwootGateway';
+import {
+  ChatwootConversationDto,
+  ChatwootGateway,
+  ChatwootMessageDto,
+  ChatwootMessageAttachmentDto,
+} from '@domain/ports/ChatwootGateway';
 import { ChatwootUnavailableError } from '@domain/errors/messaging';
+
+/** Respuesta cruda de un GET binario, desacoplada de axios para poder fakearla en tests. */
+export interface RawBinaryResponse {
+  data: ArrayBuffer;
+  headers: Record<string, unknown>;
+}
+
+/** fix-be #1 (HIGH) — hard ceiling forwarded down to axios' `maxContentLength`/`maxBodyLength`. */
+export interface RawGetOptions {
+  maxBytes?: number;
+}
+
+/**
+ * fix-be #1 (HIGH) — conservative absolute fallback when no `maxBytes` is given
+ * (defensive: this should never happen in practice, `DownloadChatMessageAttachment`
+ * always passes one, but a bare axios.get with NO ceiling at all is exactly the bug
+ * being fixed here). Matches the highest per-fileType ceiling ('file', 100MB).
+ */
+const DOWNLOAD_MAX_BYTES_DEFAULT = 100 * 1024 * 1024;
+/** fix-be #1 (HIGH) — a hung `data_url` (no response at all) must not leave the
+ * fire-and-forget's promise pending forever: that keeps `inFlight`/the scheduler's
+ * `DistributedLock` held indefinitely on every replica. */
+const DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export interface HttpChatwootGatewayOptions {
   baseUrl: string;
@@ -9,6 +37,13 @@ export interface HttpChatwootGatewayOptions {
   apiToken: string;
   /** Inyectable para tests (AxiosInstance fake). En prod se crea internamente. */
   http?: AxiosInstance;
+  /**
+   * messaging-inbox-v2-media (Tanda 1 · MEDIA-2) — GET binario CRUDO usado por
+   * `downloadAttachment`, deliberadamente SEPARADO de `this.http` (que carga el header
+   * `api_access_token` por default): el `sourceUrl` de Chatwoot no lo necesita (la firma
+   * del redirect ES la auth) y reenviarlo sería un leak de credencial. Inyectable en tests.
+   */
+  rawGet?: (url: string, options?: RawGetOptions) => Promise<RawBinaryResponse>;
 }
 
 /**
@@ -29,6 +64,7 @@ export class HttpChatwootGateway implements ChatwootGateway {
   private readonly http: AxiosInstance;
   private readonly accountId: string;
   private readonly inboxId: string;
+  private readonly rawGet: (url: string, options?: RawGetOptions) => Promise<RawBinaryResponse>;
 
   constructor(opts: HttpChatwootGatewayOptions) {
     this.accountId = opts.accountId;
@@ -39,6 +75,25 @@ export class HttpChatwootGateway implements ChatwootGateway {
         baseURL: opts.baseUrl,
         headers: { api_access_token: opts.apiToken },
       });
+    // Bare axios.get — NOT this.http, NOT axios.create: no baseURL, no default headers,
+    // so the api_access_token can never leak to sourceUrl or a redirect target.
+    //
+    // fix-be #1 (HIGH) — `maxContentLength`/`maxBodyLength` MUST be set: without them
+    // axios buffers the ENTIRE response body before `DownloadChatMessageAttachment`
+    // gets a chance to size-check it, so a lied-about/absent `file_size` OOMs the
+    // process. Setting them makes axios abort mid-stream instead. `timeout` guards
+    // the other half of the same bug: a `data_url` that never responds used to leave
+    // the fire-and-forget's promise pending forever, which never releases the
+    // scheduler's `inFlight`/`DistributedLock` on any replica.
+    this.rawGet =
+      opts.rawGet ??
+      ((url: string, options?: RawGetOptions) =>
+        axios.get<ArrayBuffer>(url, {
+          responseType: 'arraybuffer',
+          maxContentLength: options?.maxBytes ?? DOWNLOAD_MAX_BYTES_DEFAULT,
+          maxBodyLength: options?.maxBytes ?? DOWNLOAD_MAX_BYTES_DEFAULT,
+          timeout: DOWNLOAD_TIMEOUT_MS,
+        }));
   }
 
   private accountPath(suffix: string): string {
@@ -99,6 +154,29 @@ export class HttpChatwootGateway implements ChatwootGateway {
         secret,
       }),
     );
+  }
+
+  /**
+   * messaging-inbox-v2-media (Tanda 1 · MEDIA-2) — downloads a Chatwoot attachment
+   * binary by following its `sourceUrl` (`data_url`, a stable 301 redirect). Uses a
+   * BARE `axios.get` (NOT `this.http`, which carries the `api_access_token` default
+   * header) so no auth header is ever sent to this request or to whatever host the
+   * redirect lands on — verified live that the signed redirect needs none. Buffered
+   * (not streamed): Tanda 1's decision is a serialized-download tradeoff (the
+   * scheduler's `DistributedLock`/`inFlight` already caps concurrency to one).
+   */
+  async downloadAttachment(
+    url: string,
+    options?: RawGetOptions,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    return this.call(async () => {
+      const response = await this.rawGet(url, options);
+      const contentType =
+        typeof response.headers?.['content-type'] === 'string'
+          ? (response.headers['content-type'] as string)
+          : 'application/octet-stream';
+      return { buffer: Buffer.from(response.data), contentType };
+    });
   }
 }
 
@@ -171,6 +249,36 @@ function mapMessageTypeToDirection(messageType: number | string | undefined): 'i
   return null; // 2/'activity', 3/'template', o desconocido/ausente
 }
 
+/**
+ * messaging-inbox-v2-media (Tanda 1 · MEDIA-1 fetch-on-open parity) — same shape as
+ * `RawChatwootAttachment` in `ReceiveChatwootWebhook.ts` (deliberate duplicate: distinct
+ * layer, same wire rule — infra must not import from the application use case).
+ */
+interface RawChatwootMessageAttachment {
+  id: number;
+  file_type: string;
+  content_type?: string;
+  file_size?: number;
+  width?: number;
+  height?: number;
+  data_url?: string;
+  thumb_url?: string;
+}
+
+function toAttachmentDto(raw: RawChatwootMessageAttachment): ChatwootMessageAttachmentDto {
+  return {
+    id: raw.id,
+    fileType: raw.file_type,
+    contentType: raw.content_type ?? 'application/octet-stream',
+    filename: null,
+    sizeBytes: raw.file_size ?? null,
+    width: raw.width ?? null,
+    height: raw.height ?? null,
+    sourceUrl: raw.data_url ?? '',
+    thumbSourceUrl: raw.file_type === 'image' && raw.thumb_url ? raw.thumb_url : null,
+  };
+}
+
 interface RawChatwootMessage {
   id: number;
   message_type?: number | string;
@@ -179,6 +287,9 @@ interface RawChatwootMessage {
   created_at?: number | null;
   /** H2 residual — internal agent note, same wire field as the webhook's `payload.private`. */
   private?: boolean;
+  /** MEDIA-1 — same top-level shape as the webhook's `attachments[]` (Chatwoot's GET
+   * .../messages response nests attachments identically, verified against source). */
+  attachments?: RawChatwootMessageAttachment[];
 }
 
 function toMessageDto(raw: unknown): ChatwootMessageDto {
@@ -196,6 +307,7 @@ function toMessageDto(raw: unknown): ChatwootMessageDto {
     // ruidoso) para que GetConversation.syncFromChatwoot lo filtre igual que el
     // webhook filtra `payload.private` (nunca persistir una nota).
     private: r.private === true ? true : undefined,
+    attachments: r.attachments && r.attachments.length > 0 ? r.attachments.map(toAttachmentDto) : undefined,
   };
 }
 

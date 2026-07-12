@@ -1,5 +1,6 @@
 import type { ConversationRecord } from '@domain/ports/ConversationRepository';
 import type { ChatMessageRecord } from '@domain/ports/ChatMessageRepository';
+import type { ChatMessageAttachmentRecord } from '@domain/ports/ChatMessageAttachmentRepository';
 import type { CustomerStatus } from '@domain/entities/customer';
 
 /**
@@ -142,6 +143,45 @@ export interface ChatMessageDto {
   content: string;
   senderName: string | null;
   sentAt: string;
+  attachments: ChatMessageAttachmentDto[];
+}
+
+// ─── Chat message attachment (messaging-inbox-v2-media, F1.5 fase A, Tanda 1 · MEDIA-4) ─
+// NEVER expose `sourceUrl`/`thumbSourceUrl`/`storageKey`/`thumbStorageKey`/`lastError`/
+// `downloadAttempts` — `url`/`thumbUrl` are BE-proxy routes, never a Chatwoot/MinIO URL.
+
+export interface ChatMessageAttachmentDto {
+  id: string;
+  fileType: 'image' | 'audio' | 'video' | 'file';
+  contentType: string;
+  filename: string | null;
+  fileSize: number | null;
+  width: number | null;
+  height: number | null;
+  status: 'pending' | 'downloaded' | 'failed';
+  url: string;
+  thumbUrl: string | null;
+}
+
+/** Base de los endpoints de file (montado en /api/messaging — B5.4). */
+const CHAT_ATTACHMENTS_FILE_BASE = '/api/messaging/attachments';
+
+export function toChatMessageAttachmentDto(a: ChatMessageAttachmentRecord): ChatMessageAttachmentDto {
+  return {
+    id: a.id,
+    fileType: a.fileType as ChatMessageAttachmentDto['fileType'],
+    contentType: a.contentType,
+    filename: a.filename,
+    fileSize: a.sizeBytes,
+    width: a.width,
+    height: a.height,
+    status: a.status,
+    url: `${CHAT_ATTACHMENTS_FILE_BASE}/${a.id}/file`,
+    // thumb falls back to the original at serve-time (GetChatAttachmentFile) when
+    // there's no thumbStorageKey — here we simply omit the query param (null) so the
+    // FE knows not to request a thumb variant that doesn't exist.
+    thumbUrl: a.thumbStorageKey ? `${CHAT_ATTACHMENTS_FILE_BASE}/${a.id}/file?variant=thumb` : null,
+  };
 }
 
 // ─── Mappers (pure functions of the mirror record) ──────────────────────────
@@ -157,12 +197,16 @@ export function toConversationListItemDto(record: ConversationRecord): Conversat
   };
 }
 
-export function toChatMessageDto(record: ChatMessageRecord): ChatMessageDto {
+export function toChatMessageDto(
+  record: ChatMessageRecord,
+  attachments: ChatMessageAttachmentRecord[] = [],
+): ChatMessageDto {
   return {
     id: record.id,
     direction: record.direction,
     content: record.content,
     senderName: record.senderName,
     sentAt: record.chatwootCreatedAt,
+    attachments: attachments.map(toChatMessageAttachmentDto),
   };
 }

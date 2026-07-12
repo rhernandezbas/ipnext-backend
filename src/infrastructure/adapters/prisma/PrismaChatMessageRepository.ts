@@ -66,4 +66,10 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return rows.map((r: any) => toDomain(r));
   }
+
+  async findById(id: string): Promise<ChatMessageRecord | null> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = await (prisma as any).chatMessage.findUnique({ where: { id } });
+    return row ? toDomain(row) : null;
+  }
 }

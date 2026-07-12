@@ -144,4 +144,31 @@ describe('Messaging composition root (messaging-inbox F1, B6)', () => {
     const window = appSrc.slice(idx, end);
     expect(window).toMatch(/ttlMinutes:\s*config\.gestionReal\.balanceStaleTtlMinutes/);
   });
+
+  // ─── messaging-inbox-v2-media (F1.5 fase A, Tanda 1) — recibir media wiring ─────
+
+  it('(o) PrismaChatMessageAttachmentRepository + DownloadChatMessageAttachment + FireAndForgetChatMediaDownloadTrigger + GetChatAttachmentFile instanciados', () => {
+    expect(appSrc).toMatch(/new PrismaChatMessageAttachmentRepository\(\)/);
+    expect(appSrc).toMatch(/new DownloadChatMessageAttachment\(/);
+    expect(appSrc).toMatch(/new FireAndForgetChatMediaDownloadTrigger\(/);
+    expect(appSrc).toMatch(/new GetChatAttachmentFile\(/);
+  });
+
+  it('(p) DownloadChatMessageAttachment reusa taskPhotoStorage (MISMA instancia MinIO que task-photos, bucket compartido)', () => {
+    const idx = appSrc.indexOf('const downloadChatMessageAttachment = new DownloadChatMessageAttachment(');
+    expect(idx).toBeGreaterThan(-1);
+    const end = appSrc.indexOf(');', idx);
+    const window = appSrc.slice(idx, end);
+    expect(window).toMatch(/taskPhotoStorage/);
+  });
+
+  it('(q) ReceiveChatwootWebhook/GetConversation/ListChatMessages reciben chatAttachmentRepo (paridad webhook + fetch-on-open + DTO)', () => {
+    const idx = appSrc.indexOf("app.use('/api/messaging', createMessagingRouter(");
+    const end = appSrc.indexOf('));', idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+    expect(window).toMatch(/new ReceiveChatwootWebhook\([^)]*chatAttachmentRepo/);
+    expect(window).toMatch(/new GetConversation\([^)]*chatAttachmentRepo/);
+    expect(window).toMatch(/new ListChatMessages\([^)]*chatAttachmentRepo/);
+    expect(window).toMatch(/getChatAttachmentFile,/);
+  });
 });

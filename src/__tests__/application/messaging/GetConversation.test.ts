@@ -9,8 +9,10 @@ import { GetClientContextByPhone } from '@application/use-cases/messaging/GetCli
 import { ConversationNotFoundError } from '@domain/errors/messaging';
 import { InMemoryConversationRepository } from '@infrastructure/adapters/in-memory/InMemoryConversationRepository';
 import { InMemoryChatMessageRepository } from '@infrastructure/adapters/in-memory/InMemoryChatMessageRepository';
+import { InMemoryChatMessageAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemoryChatMessageAttachmentRepository';
 import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
 import type { CustomerRepository, ActiveClientContact } from '@domain/ports/CustomerRepository';
+import type { ChatMediaDownloadTrigger } from '@domain/ports/ChatMediaDownloadTrigger';
 
 function makeCustomerRepo(contacts: ActiveClientContact[] = []): CustomerRepository {
   return { listActiveContacts: jest.fn().mockResolvedValue(contacts) } as unknown as CustomerRepository;
@@ -197,5 +199,140 @@ describe('GetConversation (fetch-on-open)', () => {
       clients: [{ id: 'c1', name: 'Juan Perez', status: 'active' }],
     });
     expect(customerRepo.listActiveContacts).toHaveBeenCalledTimes(1); // ONE call per detail read, no N+1
+  });
+
+  describe('MEDIA-1 scenario 5 — fetch-on-open también captura adjuntos (paridad con el webhook)', () => {
+    it('un mensaje traído por el GET con attachments genera una fila ChatMessageAttachment pending', async () => {
+      const conversationRepo = new InMemoryConversationRepository();
+      const messageRepo = new InMemoryChatMessageRepository();
+      const attachmentRepo = new InMemoryChatMessageAttachmentRepository();
+      const gateway = new FakeChatwootGateway();
+      const getClientContext = new GetClientContextByPhone(makeCustomerRepo());
+
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 50 });
+      gateway.conversationsById.set(50, {
+        id: 50, contactName: null, contactPhone: null, status: 'open', canReply: true, lastActivityAt: null,
+      });
+      gateway.messagesById.set(50, [
+        {
+          id: 5001,
+          direction: 'inbound',
+          content: '',
+          senderName: 'Cliente',
+          createdAt: '2026-07-11T14:00:00.000Z',
+          attachments: [
+            {
+              id: 88,
+              fileType: 'image',
+              contentType: 'image/jpeg',
+              filename: null,
+              sizeBytes: 5000,
+              width: 400,
+              height: 300,
+              sourceUrl: 'https://chat.ipnext.com.ar/x/88.jpg',
+              thumbSourceUrl: 'https://chat.ipnext.com.ar/x/88-thumb.jpg',
+            },
+          ],
+        },
+      ]);
+
+      const uc = new GetConversation(conversationRepo, messageRepo, gateway, getClientContext, attachmentRepo);
+      await uc.execute(conv.id);
+
+      const messages = await messageRepo.listByConversation(conv.id);
+      const rows = await attachmentRepo.listByMessageIds([messages[0]!.id]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.chatwootAttachmentId).toBe(88);
+      expect(rows[0]!.status).toBe('pending');
+    });
+
+    it('re-fetch-on-open sobre el mismo mensaje/adjunto no duplica la fila (idempotencia también acá)', async () => {
+      const conversationRepo = new InMemoryConversationRepository();
+      const messageRepo = new InMemoryChatMessageRepository();
+      const attachmentRepo = new InMemoryChatMessageAttachmentRepository();
+      const gateway = new FakeChatwootGateway();
+      const getClientContext = new GetClientContextByPhone(makeCustomerRepo());
+
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 51 });
+      gateway.conversationsById.set(51, {
+        id: 51, contactName: null, contactPhone: null, status: 'open', canReply: true, lastActivityAt: null,
+      });
+      gateway.messagesById.set(51, [
+        {
+          id: 5101,
+          direction: 'inbound',
+          content: '',
+          createdAt: '2026-07-11T14:00:00.000Z',
+          senderName: null,
+          attachments: [
+            { id: 89, fileType: 'file', contentType: 'application/pdf', filename: null, sizeBytes: 1000, width: null, height: null, sourceUrl: 'https://x/89.pdf', thumbSourceUrl: null },
+          ],
+        },
+      ]);
+
+      const uc = new GetConversation(conversationRepo, messageRepo, gateway, getClientContext, attachmentRepo);
+      await uc.execute(conv.id);
+      await uc.execute(conv.id);
+
+      const messages = await messageRepo.listByConversation(conv.id);
+      const rows = await attachmentRepo.listByMessageIds([messages[0]!.id]);
+      expect(rows).toHaveLength(1);
+    });
+  });
+
+  describe('fix-be #7 (BAJO) — aislación del trigger también en fetch-on-open (paridad con ReceiveChatwootWebhook scenario 24)', () => {
+    it('requestDownload lanza SÍNCRONO en el primer mensaje con adjunto → NO dropea la persistencia del resto de los mensajes del mismo sync', async () => {
+      const conversationRepo = new InMemoryConversationRepository();
+      const messageRepo = new InMemoryChatMessageRepository();
+      const attachmentRepo = new InMemoryChatMessageAttachmentRepository();
+      const gateway = new FakeChatwootGateway();
+      const getClientContext = new GetClientContextByPhone(makeCustomerRepo());
+      const throwingTrigger: ChatMediaDownloadTrigger = {
+        requestDownload: () => {
+          throw new Error('boom - infra bug en el trigger');
+        },
+      };
+
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 60 });
+      gateway.conversationsById.set(60, {
+        id: 60, contactName: null, contactPhone: null, status: 'open', canReply: true, lastActivityAt: null,
+      });
+      gateway.messagesById.set(60, [
+        {
+          id: 6001,
+          direction: 'inbound',
+          content: '',
+          senderName: 'Cliente',
+          createdAt: '2026-07-11T15:00:00.000Z',
+          attachments: [
+            {
+              id: 90, fileType: 'image', contentType: 'image/jpeg', filename: null, sizeBytes: 1000,
+              width: null, height: null, sourceUrl: 'https://x/90.jpg', thumbSourceUrl: null,
+            },
+          ],
+        },
+        {
+          id: 6002,
+          direction: 'inbound',
+          content: 'segundo mensaje sin adjunto, del MISMO sync',
+          senderName: 'Cliente',
+          createdAt: '2026-07-11T15:01:00.000Z',
+        },
+      ]);
+
+      const uc = new GetConversation(conversationRepo, messageRepo, gateway, getClientContext, attachmentRepo, throwingTrigger);
+      await uc.execute(conv.id);
+
+      const messages = await messageRepo.listByConversation(conv.id);
+      // Ambos mensajes persistidos — el throw síncrono del trigger en el PRIMERO no
+      // interrumpió el loop de sync del SEGUNDO.
+      expect(messages).toHaveLength(2);
+      expect(messages.map((m) => m.content)).toContain('segundo mensaje sin adjunto, del MISMO sync');
+
+      // Y el adjunto del primer mensaje SÍ quedó capturado (pending) pese al throw del trigger.
+      const rows = await attachmentRepo.listByMessageIds([messages[0]!.id, messages[1]!.id]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.status).toBe('pending');
+    });
   });
 });

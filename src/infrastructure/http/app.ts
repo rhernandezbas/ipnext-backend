@@ -738,6 +738,11 @@ import { HttpChatwootGateway } from '../adapters/chatwoot/HttpChatwootGateway';
 import { PrismaConversationRepository } from '../adapters/prisma/PrismaConversationRepository';
 import { PrismaChatMessageRepository } from '../adapters/prisma/PrismaChatMessageRepository';
 import { PrismaWebhookDeliveryRepository } from '../adapters/prisma/PrismaWebhookDeliveryRepository';
+// messaging-inbox-v2-media (F1.5 fase A, Tanda 1) — recibir media entrante
+import { PrismaChatMessageAttachmentRepository } from '../adapters/prisma/PrismaChatMessageAttachmentRepository';
+import { FireAndForgetChatMediaDownloadTrigger } from '../adapters/chatwoot/FireAndForgetChatMediaDownloadTrigger';
+import { DownloadChatMessageAttachment } from '@application/use-cases/messaging/DownloadChatMessageAttachment';
+import { GetChatAttachmentFile } from '@application/use-cases/messaging/GetChatAttachmentFile';
 import { ReceiveChatwootWebhook } from '@application/use-cases/messaging/ReceiveChatwootWebhook';
 import { ListConversations } from '@application/use-cases/messaging/ListConversations';
 import { GetConversation } from '@application/use-cases/messaging/GetConversation';
@@ -2488,6 +2493,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       inboxId: config.chatwoot.inboxId,
       apiToken: config.chatwoot.apiToken,
     });
+    // messaging-inbox-v2-media (Tanda 1) — recibir media entrante. Reusa la MISMA
+    // instancia `taskPhotoStorage` (MinIO) de task-photos (bucket compartido, prefijo
+    // 'messaging/' aísla lógicamente — Decisión 1 del proposal). El trigger dispara
+    // fire-and-forget tras el 200 del webhook/fetch-on-open; ChatMediaDownloadScheduler
+    // (bootstrapChatMediaDownload, main.ts) es la red de reintento.
+    const chatAttachmentRepo = new PrismaChatMessageAttachmentRepository();
+    const downloadChatMessageAttachment = new DownloadChatMessageAttachment(
+      chatAttachmentRepo,
+      chatMessageRepo,
+      chatwootGateway,
+      taskPhotoStorage,
+    );
+    const chatMediaDownloadTrigger = new FireAndForgetChatMediaDownloadTrigger(downloadChatMessageAttachment);
+    const getChatAttachmentFile = new GetChatAttachmentFile(chatAttachmentRepo, taskPhotoStorage);
     const getClientContextByPhone = new GetClientContextByPhone(customerAdapter);
     // messaging-inbox-v2 (F1.5, B5) — `pppoeRepo` (PPPoE management block, line ~2242)
     // is already out of scope here (its enclosing `{ }` closed above), same gotcha
@@ -2513,12 +2532,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     );
 
     app.use('/api/messaging', createMessagingRouter(
-      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo),
+      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger),
       new ListConversations(conversationRepo),
-      new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone),
-      new ListChatMessages(conversationRepo, chatMessageRepo),
+      new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone, chatAttachmentRepo, chatMediaDownloadTrigger),
+      new ListChatMessages(conversationRepo, chatMessageRepo, chatAttachmentRepo),
       new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway),
       getInboxClientContext,
+      getChatAttachmentFile,
       createChatwootSignatureMiddleware(),
       createAuthMiddleware(authAdapter, sessionRepo),
       {

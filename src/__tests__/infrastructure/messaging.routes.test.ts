@@ -23,6 +23,7 @@ import { ListMessages } from '../../application/use-cases/messaging/ListMessages
 import { SendMessage } from '../../application/use-cases/messaging/SendMessage';
 import { GetClientContextByPhone } from '../../application/use-cases/messaging/GetClientContextByPhone';
 import { GetInboxClientContext } from '../../application/use-cases/messaging/GetInboxClientContext';
+import { GetChatAttachmentFile } from '../../application/use-cases/messaging/GetChatAttachmentFile';
 import { GetClientContracts } from '../../application/use-cases/GetClientContracts';
 import { GetClientInvoices } from '../../application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '../../application/use-cases/GetClientLogs';
@@ -31,6 +32,8 @@ import { ListTasks } from '../../application/use-cases/ListTasks';
 import { ListPppoeByContract } from '../../application/use-cases/ListPppoeByContract';
 import { InMemoryConversationRepository } from '../../infrastructure/adapters/in-memory/InMemoryConversationRepository';
 import { InMemoryChatMessageRepository } from '../../infrastructure/adapters/in-memory/InMemoryChatMessageRepository';
+import { InMemoryChatMessageAttachmentRepository } from '../../infrastructure/adapters/in-memory/InMemoryChatMessageAttachmentRepository';
+import { InMemoryFileStorage } from '../../infrastructure/adapters/in-memory/InMemoryFileStorage';
 import { InMemoryWebhookDeliveryRepository } from '../../infrastructure/adapters/in-memory/InMemoryWebhookDeliveryRepository';
 import { InMemoryTicketRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketRepository';
 import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
@@ -102,6 +105,8 @@ interface BuildAppOptions {
   conversationRepo?: InMemoryConversationRepository;
   messageRepo?: InMemoryChatMessageRepository;
   deliveryRepo?: InMemoryWebhookDeliveryRepository;
+  attachmentRepo?: InMemoryChatMessageAttachmentRepository;
+  fileStorage?: InMemoryFileStorage;
   gateway?: FakeChatwootGateway;
   customerContacts?: ActiveClientContact[];
   /** messaging-inbox-v2 (F1.5, B4) — full CustomerRepository override for
@@ -119,6 +124,8 @@ function buildApp(opts: BuildAppOptions = {}) {
   const conversationRepo = opts.conversationRepo ?? new InMemoryConversationRepository();
   const messageRepo = opts.messageRepo ?? new InMemoryChatMessageRepository();
   const deliveryRepo = opts.deliveryRepo ?? new InMemoryWebhookDeliveryRepository();
+  const attachmentRepo = opts.attachmentRepo ?? new InMemoryChatMessageAttachmentRepository();
+  const fileStorage = opts.fileStorage ?? new InMemoryFileStorage();
   const gateway = opts.gateway ?? new FakeChatwootGateway();
   const customerRepo = opts.customerRepo ?? makeCustomerRepo(opts.customerContacts);
   const ticketRepo = opts.ticketRepo ?? new InMemoryTicketRepository();
@@ -151,12 +158,13 @@ function buildApp(opts: BuildAppOptions = {}) {
   app.use(
     '/api/messaging',
     createMessagingRouter(
-      new ReceiveChatwootWebhook(conversationRepo, messageRepo, deliveryRepo),
+      new ReceiveChatwootWebhook(conversationRepo, messageRepo, deliveryRepo, attachmentRepo),
       new ListConversations(conversationRepo),
-      new GetConversation(conversationRepo, messageRepo, gateway, getClientContext),
-      new ListMessages(conversationRepo, messageRepo),
+      new GetConversation(conversationRepo, messageRepo, gateway, getClientContext, attachmentRepo),
+      new ListMessages(conversationRepo, messageRepo, attachmentRepo),
       new SendMessage(conversationRepo, messageRepo, gateway),
       getInboxClientContext,
+      new GetChatAttachmentFile(attachmentRepo, fileStorage),
       createChatwootSignatureMiddleware({ now: () => NOW_MS }),
       opts.auth ?? allowAuth,
       perms,
@@ -164,7 +172,7 @@ function buildApp(opts: BuildAppOptions = {}) {
   );
   app.use(errorHandler);
 
-  return { app, conversationRepo, messageRepo, deliveryRepo, gateway, customerRepo, ticketRepo, schedulingRepo, pppoeRepo };
+  return { app, conversationRepo, messageRepo, deliveryRepo, attachmentRepo, fileStorage, gateway, customerRepo, ticketRepo, schedulingRepo, pppoeRepo };
 }
 
 // ─── RBAC gates (RBAC-1/2) ───────────────────────────────────────────────────────
@@ -617,6 +625,142 @@ describe('POST /api/messaging/conversations/:id/messages', () => {
       .post('/api/messaging/conversations/ghost/messages')
       .send({ content: 'hola' });
     expect(res.status).toBe(404);
+  });
+});
+
+// ─── GET /attachments/:id/file (messaging-inbox-v2-media, MEDIA-5) ──────────────
+
+describe('GET /api/messaging/attachments/:id/file', () => {
+  let nextChatwootAttachmentId = 1;
+
+  async function seedDownloaded(
+    attachmentRepo: InMemoryChatMessageAttachmentRepository,
+    fileStorage: InMemoryFileStorage,
+    opts: { withThumb?: boolean } = {},
+  ) {
+    const row = await attachmentRepo.upsertByChatwootAttachmentId({
+      messageId: 'msg-1',
+      chatwootAttachmentId: nextChatwootAttachmentId++,
+      fileType: 'image',
+      contentType: 'image/jpeg',
+      filename: 'foto.jpg',
+      sourceUrl: 'https://x/1.jpg',
+    });
+    await fileStorage.save({ key: `messaging/conv-1/${row.id}.jpg`, buffer: Buffer.from('ORIGINAL'), mimeType: 'image/jpeg' });
+    if (opts.withThumb) {
+      await fileStorage.save({ key: `messaging/conv-1/${row.id}-thumb.jpg`, buffer: Buffer.from('THUMB'), mimeType: 'image/jpeg' });
+      await attachmentRepo.markDownloaded(row.id, {
+        storageKey: `messaging/conv-1/${row.id}.jpg`,
+        thumbStorageKey: `messaging/conv-1/${row.id}-thumb.jpg`,
+      });
+    } else {
+      await attachmentRepo.markDownloaded(row.id, { storageKey: `messaging/conv-1/${row.id}.jpg` });
+    }
+    return row;
+  }
+
+  it('scenario 18 — sirve el original con Content-Type y Content-Disposition', async () => {
+    const { app, attachmentRepo, fileStorage } = buildApp();
+    const row = await seedDownloaded(attachmentRepo, fileStorage);
+
+    const res = await request(app).get(`/api/messaging/attachments/${row.id}/file`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('image/jpeg');
+    expect(res.headers['content-disposition']).toContain('inline');
+    expect(res.body.toString()).toBe('ORIGINAL');
+  });
+
+  it('scenario 19 — sirve el thumb con ?variant=thumb, con fallback al original si no hay thumbStorageKey', async () => {
+    const { app, attachmentRepo, fileStorage } = buildApp();
+    const withThumb = await seedDownloaded(attachmentRepo, fileStorage, { withThumb: true });
+    const noThumb = await seedDownloaded(attachmentRepo, fileStorage);
+
+    const resThumb = await request(app).get(`/api/messaging/attachments/${withThumb.id}/file?variant=thumb`);
+    expect(resThumb.status).toBe(200);
+    expect(resThumb.body.toString()).toBe('THUMB');
+
+    const resFallback = await request(app).get(`/api/messaging/attachments/${noThumb.id}/file?variant=thumb`);
+    expect(resFallback.status).toBe(200);
+    expect(resFallback.body.toString()).toBe('ORIGINAL');
+  });
+
+  it('scenario 20 — status pending/failed → 409', async () => {
+    const { app, attachmentRepo } = buildApp();
+    const row = await attachmentRepo.upsertByChatwootAttachmentId({
+      messageId: 'msg-1', chatwootAttachmentId: 2, fileType: 'file', contentType: 'application/pdf',
+      sourceUrl: 'https://x/2.pdf',
+    });
+
+    const res = await request(app).get(`/api/messaging/attachments/${row.id}/file`);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('CHAT_ATTACHMENT_NOT_READY');
+  });
+
+  it('scenario 21 — id inexistente → 404', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/messaging/attachments/ghost/file');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CHAT_ATTACHMENT_NOT_FOUND');
+  });
+
+  it('scenario 22 — sin messaging:read → 403, sin tocar el repo ni el storage', async () => {
+    const { app, attachmentRepo } = buildApp({ readPerm: denyPerm });
+    const spy = jest.spyOn(attachmentRepo, 'findById');
+    const res = await request(app).get('/api/messaging/attachments/whatever/file');
+    expect(res.status).toBe(403);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('scenario 23 — el repo lanza → next(err), responde 500 inmediato (no cuelga)', async () => {
+    class ThrowingAttachmentRepo extends InMemoryChatMessageAttachmentRepository {
+      override async findById(): Promise<never> {
+        throw new Error('db down');
+      }
+    }
+    const { app } = buildApp({ attachmentRepo: new ThrowingAttachmentRepo() });
+    const res = await request(app).get('/api/messaging/attachments/whatever/file');
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
+  });
+
+  it('fix-be #3 (MEDIUM) — fileType "file" con content_type text/html se sirve como attachment (NO inline): previene XSS almacenado al abrirlo el agente', async () => {
+    const { app, attachmentRepo, fileStorage } = buildApp();
+    const row = await attachmentRepo.upsertByChatwootAttachmentId({
+      messageId: 'msg-1',
+      chatwootAttachmentId: 999,
+      fileType: 'file', // documento arbitrario del cliente, NO clasificado como imagen/audio/video
+      contentType: 'text/html',
+      filename: 'factura.html',
+      sourceUrl: 'https://x/evil.html',
+    });
+    await fileStorage.save({
+      key: `messaging/conv-1/${row.id}.html`,
+      buffer: Buffer.from('<script>alert(document.cookie)</script>'),
+      mimeType: 'text/html',
+    });
+    await attachmentRepo.markDownloaded(row.id, { storageKey: `messaging/conv-1/${row.id}.html` });
+
+    const res = await request(app).get(`/api/messaging/attachments/${row.id}/file`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('attachment');
+    expect(res.headers['content-disposition']).not.toContain('inline');
+  });
+
+  it('fix-be #3 — image/audio/video SIGUEN sirviéndose inline (no regresión sobre el visor de media del inbox)', async () => {
+    const { app, attachmentRepo, fileStorage } = buildApp();
+    const audioRow = await attachmentRepo.upsertByChatwootAttachmentId({
+      messageId: 'msg-1', chatwootAttachmentId: 998, fileType: 'audio', contentType: 'audio/ogg',
+      sourceUrl: 'https://x/nota.ogg',
+    });
+    await fileStorage.save({ key: `messaging/conv-1/${audioRow.id}.ogg`, buffer: Buffer.from('AUDIO'), mimeType: 'audio/ogg' });
+    await attachmentRepo.markDownloaded(audioRow.id, { storageKey: `messaging/conv-1/${audioRow.id}.ogg` });
+
+    const res = await request(app).get(`/api/messaging/attachments/${audioRow.id}/file`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('inline');
   });
 });
 
