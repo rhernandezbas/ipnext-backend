@@ -19,6 +19,7 @@ import {
 import { AttachmentTooLargeError, UnsupportedAttachmentTypeError } from '@domain/errors/chatAttachment';
 import { MAX_BYTES_BY_FILE_TYPE } from './DownloadChatMessageAttachment';
 import { toChatMessageDto, type ChatMessageDto } from '@application/dto/messaging';
+import { deriveConversationPreview } from './conversationPreview';
 
 type OutboundFileType = 'image' | 'video' | 'audio' | 'file';
 
@@ -187,10 +188,16 @@ export class SendMessage {
       }
     }
 
+    // messaging-inbox-polish (F1.5) — same WhatsApp-style rule as the inbound webhook:
+    // when WE send media-only (empty caption), the mirror preview shows "📷 Imagen"/etc
+    // from what Chatwoot echoed back, instead of a blank "Sin mensajes" in the list.
     await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId: conversation.chatwootConversationId,
       lastMessageAt: sent.createdAt,
-      lastMessagePreview: sent.content,
+      lastMessagePreview: deriveConversationPreview(
+        sent.content,
+        sentAttachments.map((a) => a.fileType),
+      ),
     });
 
     return toChatMessageDto(message, attachmentRecords);

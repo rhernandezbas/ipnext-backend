@@ -3,6 +3,7 @@ import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository'
 import type { WebhookDeliveryRepository } from '@domain/ports/WebhookDeliveryRepository';
 import type { ChatMessageAttachmentRepository } from '@domain/ports/ChatMessageAttachmentRepository';
 import type { ChatMediaDownloadTrigger } from '@domain/ports/ChatMediaDownloadTrigger';
+import { deriveConversationPreview } from './conversationPreview';
 
 /**
  * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-1) — a single Chatwoot
@@ -150,6 +151,12 @@ export class ReceiveChatwootWebhook {
     // customer-facing: it must never bump the inbox preview/lastMessageAt.
     const bumpsPreview = direction !== null && !isPrivateNote;
     const sender = payload.conversation?.meta?.sender; // M1 — real wire path, not top-level meta.sender
+    // messaging-inbox-polish (F1.5) — only the BINARY attachments (same set the mirror
+    // actually rows) feed the WhatsApp-style media preview; location/contact/fallback/embed
+    // never count, so a location-only message keeps the original (empty) fallback.
+    const mediaFileTypes = (payload.attachments ?? [])
+      .filter((a) => BINARY_FILE_TYPES.has(a.file_type))
+      .map((a) => a.file_type);
 
     const conversation = await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId,
@@ -157,7 +164,7 @@ export class ReceiveChatwootWebhook {
       contactPhone: sender?.phone_number,
       canReply: payload.conversation?.can_reply, // M2 — keeps the mirror's canReply fresh
       lastMessageAt: bumpsPreview ? createdAt : undefined,
-      lastMessagePreview: bumpsPreview ? (payload.content ?? null) : undefined,
+      lastMessagePreview: bumpsPreview ? deriveConversationPreview(payload.content, mediaFileTypes) : undefined,
     });
 
     if (direction === null || isPrivateNote || payload.id === undefined) return; // §7/H2 — not persisted

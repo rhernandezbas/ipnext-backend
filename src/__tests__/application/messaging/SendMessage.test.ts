@@ -363,4 +363,68 @@ describe('SendMessage', () => {
       expect(att['url']).toEqual(expect.stringContaining('/api/messaging/attachments/'));
     });
   });
+
+  describe('messaging-inbox-polish (F1.5) — preview WhatsApp-style para el ÚLTIMO mensaje ENVIADO solo-media', () => {
+    it('outbound solo-imagen (content vacío) → Conversation.lastMessagePreview = "📷 Imagen"', async () => {
+      const { conversationRepo, gateway, uc } = makeHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 30, canReply: true });
+      gateway.sendMessageResult = {
+        id: 960,
+        direction: 'outbound',
+        content: '',
+        senderName: 'Agente',
+        createdAt: '2026-07-11T12:30:00.000Z',
+        attachments: [
+          {
+            id: 8001,
+            fileType: 'image',
+            contentType: 'image/jpeg',
+            filename: 'foto.jpg',
+            sizeBytes: 3,
+            width: null,
+            height: null,
+            sourceUrl: 'https://x/8001.jpg',
+            thumbSourceUrl: null,
+          },
+        ],
+      };
+      const files = [{ buffer: Buffer.from('img'), filename: 'foto.jpg', contentType: 'image/jpeg' }];
+
+      await uc.execute(conv.id, '', files);
+
+      const updatedConv = await conversationRepo.findById(conv.id);
+      expect(updatedConv!.lastMessagePreview).toBe('📷 Imagen');
+    });
+
+    it('outbound con caption + adjunto → el preview usa el content (la caption manda, igual que en el inbound)', async () => {
+      const { conversationRepo, gateway, uc } = makeHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 31, canReply: true });
+      gateway.sendMessageResult = {
+        id: 961,
+        direction: 'outbound',
+        content: 'mirá el plan',
+        senderName: 'Agente',
+        createdAt: '2026-07-11T12:35:00.000Z',
+        attachments: [
+          {
+            id: 8002,
+            fileType: 'image',
+            contentType: 'image/jpeg',
+            filename: 'foto.jpg',
+            sizeBytes: 3,
+            width: null,
+            height: null,
+            sourceUrl: 'https://x/8002.jpg',
+            thumbSourceUrl: null,
+          },
+        ],
+      };
+      const files = [{ buffer: Buffer.from('img'), filename: 'foto.jpg', contentType: 'image/jpeg' }];
+
+      await uc.execute(conv.id, 'mirá el plan', files);
+
+      const updatedConv = await conversationRepo.findById(conv.id);
+      expect(updatedConv!.lastMessagePreview).toBe('mirá el plan');
+    });
+  });
 });

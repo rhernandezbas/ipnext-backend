@@ -786,4 +786,140 @@ describe('ReceiveChatwootWebhook', () => {
       expect(messages).toHaveLength(1); // no duplicado
     });
   });
+
+  describe('messaging-inbox-polish (F1.5) — preview WhatsApp-style para mensajes solo-media', () => {
+    it('último mensaje solo-imagen (content vacío) → preview "📷 Imagen"', async () => {
+      const { uc, conversationRepo } = makeUseCase();
+
+      await uc.execute('delivery-preview-image', {
+        event: 'message_created',
+        id: 2100,
+        content: '',
+        message_type: 'incoming',
+        created_at: 1735700000,
+        conversation: { id: 410 },
+        attachments: [
+          { id: 90, file_type: 'image', content_type: 'image/jpeg', data_url: 'https://x/90.jpg' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(410);
+      expect(conv!.lastMessagePreview).toBe('📷 Imagen');
+    });
+
+    it('último mensaje solo-video (content null) → preview "🎥 Video"', async () => {
+      const { uc, conversationRepo } = makeUseCase();
+
+      await uc.execute('delivery-preview-video', {
+        event: 'message_created',
+        id: 2101,
+        content: null,
+        message_type: 'incoming',
+        created_at: 1735700100,
+        conversation: { id: 411 },
+        attachments: [
+          { id: 91, file_type: 'video', content_type: 'video/mp4', data_url: 'https://x/91.mp4' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(411);
+      expect(conv!.lastMessagePreview).toBe('🎥 Video');
+    });
+
+    it('último mensaje solo-audio → preview "🎵 Audio"', async () => {
+      const { uc, conversationRepo } = makeUseCase();
+
+      await uc.execute('delivery-preview-audio', {
+        event: 'message_created',
+        id: 2102,
+        content: '',
+        message_type: 'incoming',
+        created_at: 1735700200,
+        conversation: { id: 412 },
+        attachments: [
+          { id: 92, file_type: 'audio', content_type: 'audio/ogg', data_url: 'https://x/92.ogg' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(412);
+      expect(conv!.lastMessagePreview).toBe('🎵 Audio');
+    });
+
+    it('último mensaje solo-file (documento) → preview "📎 Archivo"', async () => {
+      const { uc, conversationRepo } = makeUseCase();
+
+      await uc.execute('delivery-preview-file', {
+        event: 'message_created',
+        id: 2103,
+        content: '',
+        message_type: 'incoming',
+        created_at: 1735700300,
+        conversation: { id: 413 },
+        attachments: [
+          { id: 93, file_type: 'file', content_type: 'application/pdf', data_url: 'https://x/93.pdf' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(413);
+      expect(conv!.lastMessagePreview).toBe('📎 Archivo');
+    });
+
+    it('con caption (content Y media) el preview usa el content — la caption manda sobre el emoji, como WhatsApp', async () => {
+      const { uc, conversationRepo } = makeUseCase();
+
+      await uc.execute('delivery-preview-caption', {
+        event: 'message_created',
+        id: 2104,
+        content: 'mirá el comprobante',
+        message_type: 'incoming',
+        created_at: 1735700400,
+        conversation: { id: 414 },
+        attachments: [
+          { id: 94, file_type: 'image', content_type: 'image/jpeg', data_url: 'https://x/94.jpg' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(414);
+      expect(conv!.lastMessagePreview).toBe('mirá el comprobante');
+    });
+
+    it('múltiples adjuntos sin texto → preview con el count ("📎 N archivos")', async () => {
+      const { uc, conversationRepo } = makeUseCase();
+
+      await uc.execute('delivery-preview-multi', {
+        event: 'message_created',
+        id: 2105,
+        content: '',
+        message_type: 'incoming',
+        created_at: 1735700500,
+        conversation: { id: 415 },
+        attachments: [
+          { id: 95, file_type: 'image', content_type: 'image/jpeg', data_url: 'https://x/95.jpg' },
+          { id: 96, file_type: 'file', content_type: 'application/pdf', data_url: 'https://x/96.pdf' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(415);
+      expect(conv!.lastMessagePreview).toBe('📎 2 archivos');
+    });
+
+    it('sin media (attachments no-binarios, ej. location) y sin texto → mantiene el fallback actual, sin regresión', async () => {
+      const { uc, conversationRepo } = makeUseCase();
+
+      await uc.execute('delivery-preview-no-media', {
+        event: 'message_created',
+        id: 2106,
+        content: '',
+        message_type: 'incoming',
+        created_at: 1735700600,
+        conversation: { id: 416 },
+        attachments: [
+          { id: 97, file_type: 'location', data_url: 'https://x/97' },
+        ],
+      });
+
+      const conv = await conversationRepo.findByChatwootId(416);
+      expect(conv!.lastMessagePreview).toBe(''); // comportamiento previo preservado (retrocompat)
+    });
+  });
 });
