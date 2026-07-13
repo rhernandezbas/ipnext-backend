@@ -2792,6 +2792,11 @@ model ChatMessage {
   chatwootCreatedAt DateTime     // timestamp de Chatwoot — usado para ordenar (INBOX-3), NUNCA
                                  // para calcular la ventana 24h (eso lo resuelve canReply,
                                  // no math local)
+  // messaging-inbox-notes (F1.5 fase D, NOTE-1) — migración aditiva sin backfill (nunca hubo
+  // filas históricas de private, F1 siempre las descartó). `true` marca una nota interna de
+  // Chatwoot (nunca cruza a WhatsApp) — persistida, pero NUNCA bumpea el preview del inbox
+  // (NOTE-3, `bumpsPreview`/el guard de `SendMessage`).
+  isPrivate         Boolean      @default(false)
   createdAt         DateTime     @default(now())
   attachments       ChatMessageAttachment[]
 

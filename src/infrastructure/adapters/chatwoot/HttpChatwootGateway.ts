@@ -165,11 +165,15 @@ export class HttpChatwootGateway implements ChatwootGateway {
     chatwootConversationId: number,
     content: string,
     files?: OutboundAttachmentFile[],
+    options?: { private?: boolean },
   ): Promise<ChatwootMessageDto> {
     if (files && files.length > 0) {
       const form = new FormData();
       form.append('content', content);
       form.append('message_type', 'outgoing');
+      // messaging-inbox-notes (NOTE-4) — only appended when truthy: an ABSENT field is
+      // the compat baseline (F1, zero regression), never a noisy `private=false`.
+      if (options?.private) form.append('private', 'true');
       for (const file of files) {
         form.append('attachments[]', file.buffer, {
           filename: file.filename,
@@ -187,11 +191,12 @@ export class HttpChatwootGateway implements ChatwootGateway {
       return toMessageDto(data);
     }
 
+    // messaging-inbox-notes (NOTE-4) — same additive rule as the multipart path above:
+    // `private` only enters the JSON body when explicitly `true`.
+    const body: Record<string, unknown> = { content, message_type: 'outgoing' };
+    if (options?.private) body['private'] = true;
     const { data } = await this.call(() =>
-      this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/messages`), {
-        content,
-        message_type: 'outgoing',
-      }),
+      this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/messages`), body),
     );
     return toMessageDto(data);
   }

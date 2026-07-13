@@ -116,6 +116,35 @@ describe('Migración 20260904000100_messaging_permissions (RBAC-3: seed idempote
   });
 });
 
+describe('Migración 20260906000000_add_chat_message_is_private (messaging-inbox-notes, NOTE-1)', () => {
+  let sql: string;
+
+  beforeAll(() => {
+    sql = readFileSync(
+      join(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        'prisma',
+        'migrations',
+        '20260906000000_add_chat_message_is_private',
+        'migration.sql',
+      ),
+      'utf8',
+    );
+  });
+
+  it('agrega isPrivate como columna ADITIVA con default false (sin backfill)', () => {
+    expect(sql).toMatch(/ALTER TABLE "ChatMessage" ADD COLUMN "isPrivate" BOOLEAN NOT NULL DEFAULT false/);
+  });
+
+  it('sin BEGIN/COMMIT explícito (Prisma envuelve cada migración en su propia transacción)', () => {
+    expect(sql).not.toMatch(/^\s*BEGIN\s*;/m);
+    expect(sql).not.toMatch(/^\s*COMMIT\s*;/m);
+  });
+});
+
 describe('errorHandler — codes nuevos de messaging mapeados (SEND-2/3, INBOX-2)', () => {
   let handlerSrc: string;
 

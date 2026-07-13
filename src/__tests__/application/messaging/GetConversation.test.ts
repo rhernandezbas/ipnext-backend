@@ -147,7 +147,7 @@ describe('GetConversation (fetch-on-open)', () => {
     expect(result.lastMessageAt).toBe('2026-07-01T00:00:00.000Z'); // untouched
   });
 
-  it('H2 residual — fetch-on-open NO persiste una nota privada de agente (message_type outbound + private:true) aunque el GET la traiga', async () => {
+  it('messaging-inbox-notes (F1.5 fase D, NOTE-2) — fetch-on-open PERSISTE una nota privada de agente (message_type outbound + private:true) marcada isPrivate:true', async () => {
     const conversationRepo = new InMemoryConversationRepository();
     const messageRepo = new InMemoryChatMessageRepository();
     const gateway = new FakeChatwootGateway();
@@ -173,7 +173,31 @@ describe('GetConversation (fetch-on-open)', () => {
     await uc.execute(conv.id);
 
     const messages = await messageRepo.listByConversation(conv.id);
-    expect(messages).toEqual([]); // hoy se persiste como un mensaje outbound normal (leak)
+    expect(messages).toEqual([
+      expect.objectContaining({ chatwootMessageId: 4001, direction: 'outbound', isPrivate: true }),
+    ]);
+  });
+
+  it('messaging-inbox-notes (NOTE-2) — un mensaje normal (private ausente) se persiste con isPrivate:false', async () => {
+    const conversationRepo = new InMemoryConversationRepository();
+    const messageRepo = new InMemoryChatMessageRepository();
+    const gateway = new FakeChatwootGateway();
+    const getClientContext = new GetClientContextByPhone(makeCustomerRepo());
+
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 41 });
+
+    gateway.conversationsById.set(41, {
+      id: 41, contactName: null, contactPhone: null, status: 'open', canReply: true, lastActivityAt: null,
+    });
+    gateway.messagesById.set(41, [
+      { id: 4101, direction: 'inbound', content: 'hola', senderName: 'Cliente', createdAt: '2026-07-11T13:05:00.000Z' },
+    ]);
+
+    const uc = new GetConversation(conversationRepo, messageRepo, gateway, getClientContext);
+    await uc.execute(conv.id);
+
+    const messages = await messageRepo.listByConversation(conv.id);
+    expect(messages).toEqual([expect.objectContaining({ chatwootMessageId: 4101, isPrivate: false })]);
   });
 
   it('CTX-2 + composition: returns clientContext computed from the (possibly refreshed) contactPhone, without mutating the client', async () => {
@@ -333,6 +357,123 @@ describe('GetConversation (fetch-on-open)', () => {
       const rows = await attachmentRepo.listByMessageIds([messages[0]!.id, messages[1]!.id]);
       expect(rows).toHaveLength(1);
       expect(rows[0]!.status).toBe('pending');
+    });
+  });
+
+  describe('fix-be #HIGH — anti-leak: fetch-on-open no debe re-bumpear lastMessageAt desde una nota privada', () => {
+    it('live.lastActivityAt refleja una nota privada MÁS NUEVA que el último mensaje normal → lastMessageAt persistido es el del mensaje normal, no el de la nota (la conversación no salta al tope del inbox)', async () => {
+      const conversationRepo = new InMemoryConversationRepository();
+      const messageRepo = new InMemoryChatMessageRepository();
+      const gateway = new FakeChatwootGateway();
+      const getClientContext = new GetClientContextByPhone(makeCustomerRepo());
+
+      const conv = await conversationRepo.upsertByChatwootId({
+        chatwootConversationId: 70,
+        lastMessageAt: '2026-07-01T00:00:00.000Z', // valor viejo conocido, previo a este fetch-on-open
+        status: 'open',
+      });
+
+      // Chatwoot bumpea last_activity_at con CUALQUIER mensaje, incluidas notas privadas.
+      gateway.conversationsById.set(70, {
+        id: 70,
+        contactName: null,
+        contactPhone: null,
+        status: 'open',
+        canReply: true,
+        lastActivityAt: '2026-07-11T15:00:00.000Z', // == createdAt de la nota privada de abajo
+      });
+      gateway.messagesById.set(70, [
+        {
+          id: 7001,
+          direction: 'inbound',
+          content: 'mensaje normal del cliente',
+          senderName: 'Cliente',
+          createdAt: '2026-07-11T09:00:00.000Z', // ANTERIOR a la nota
+        },
+        {
+          id: 7002,
+          direction: 'outbound',
+          content: 'nota interna: revisar con soporte',
+          senderName: 'Agente',
+          createdAt: '2026-07-11T15:00:00.000Z', // nota privada, la más nueva del batch
+          private: true,
+        },
+      ]);
+
+      const uc = new GetConversation(conversationRepo, messageRepo, gateway, getClientContext);
+      const result = await uc.execute(conv.id);
+
+      // Ambos mensajes se persisten (NOTE-2), pero el ordering key ignora la nota.
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages).toHaveLength(2);
+
+      expect(result.lastMessageAt).toBe('2026-07-11T09:00:00.000Z'); // el del mensaje normal
+      expect(result.lastMessageAt).not.toBe('2026-07-11T15:00:00.000Z'); // NUNCA el de la nota
+    });
+
+    it('sin ningún mensaje no-privado en el batch, lastMessageAt queda SIN TOCAR (no se pisa con el timestamp de la nota)', async () => {
+      const conversationRepo = new InMemoryConversationRepository();
+      const messageRepo = new InMemoryChatMessageRepository();
+      const gateway = new FakeChatwootGateway();
+      const getClientContext = new GetClientContextByPhone(makeCustomerRepo());
+
+      const conv = await conversationRepo.upsertByChatwootId({
+        chatwootConversationId: 71,
+        lastMessageAt: '2026-07-01T00:00:00.000Z',
+        status: 'open',
+      });
+
+      gateway.conversationsById.set(71, {
+        id: 71, contactName: null, contactPhone: null, status: 'open', canReply: true,
+        lastActivityAt: '2026-07-11T15:00:00.000Z',
+      });
+      gateway.messagesById.set(71, [
+        {
+          id: 7101,
+          direction: 'outbound',
+          content: 'nota interna sola en el batch',
+          senderName: 'Agente',
+          createdAt: '2026-07-11T15:00:00.000Z',
+          private: true,
+        },
+      ]);
+
+      const uc = new GetConversation(conversationRepo, messageRepo, gateway, getClientContext);
+      const result = await uc.execute(conv.id);
+
+      expect(result.lastMessageAt).toBe('2026-07-01T00:00:00.000Z'); // sin tocar
+    });
+
+    it('un mensaje NORMAL nuevo SÍ actualiza lastMessageAt — el reorden legítimo del inbox no se rompe', async () => {
+      const conversationRepo = new InMemoryConversationRepository();
+      const messageRepo = new InMemoryChatMessageRepository();
+      const gateway = new FakeChatwootGateway();
+      const getClientContext = new GetClientContextByPhone(makeCustomerRepo());
+
+      const conv = await conversationRepo.upsertByChatwootId({
+        chatwootConversationId: 72,
+        lastMessageAt: '2026-07-01T00:00:00.000Z',
+        status: 'open',
+      });
+
+      gateway.conversationsById.set(72, {
+        id: 72, contactName: null, contactPhone: null, status: 'open', canReply: true,
+        lastActivityAt: '2026-07-11T16:00:00.000Z',
+      });
+      gateway.messagesById.set(72, [
+        {
+          id: 7201,
+          direction: 'inbound',
+          content: 'mensaje normal nuevo del cliente',
+          senderName: 'Cliente',
+          createdAt: '2026-07-11T16:00:00.000Z',
+        },
+      ]);
+
+      const uc = new GetConversation(conversationRepo, messageRepo, gateway, getClientContext);
+      const result = await uc.execute(conv.id);
+
+      expect(result.lastMessageAt).toBe('2026-07-11T16:00:00.000Z');
     });
   });
 });

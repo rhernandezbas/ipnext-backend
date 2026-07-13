@@ -167,7 +167,11 @@ export class ReceiveChatwootWebhook {
       lastMessagePreview: bumpsPreview ? deriveConversationPreview(payload.content, mediaFileTypes) : undefined,
     });
 
-    if (direction === null || isPrivateNote || payload.id === undefined) return; // §7/H2 — not persisted
+    // §7 — activity/template (direction===null) never persist. messaging-inbox-notes
+    // (F1.5 fase D, NOTE-2) — private notes are NO LONGER discarded here: they persist
+    // marked `isPrivate:true` below. `bumpsPreview` (above) is the ONLY guard that still
+    // treats private specially — it must NEVER bump the inbox preview (NOTE-3).
+    if (direction === null || payload.id === undefined) return;
 
     const message = await this.messageRepo.upsertByChatwootMessageId({
       conversationId: conversation.id,
@@ -176,6 +180,7 @@ export class ReceiveChatwootWebhook {
       content: payload.content ?? '',
       senderName: payload.sender?.name,
       chatwootCreatedAt: createdAt,
+      isPrivate: isPrivateNote,
     });
 
     await this.captureAttachments(message.id, payload.attachments);

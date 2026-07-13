@@ -20,6 +20,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       existing.content = input.content;
       existing.senderName = input.senderName ?? null;
       existing.chatwootCreatedAt = input.chatwootCreatedAt;
+      existing.isPrivate = input.isPrivate ?? false;
       return { ...existing };
     }
 
@@ -31,6 +32,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       content: input.content,
       senderName: input.senderName ?? null,
       chatwootCreatedAt: input.chatwootCreatedAt,
+      isPrivate: input.isPrivate ?? false,
       createdAt: new Date().toISOString(),
     };
     this.rows.push(row);

@@ -99,11 +99,19 @@ export class SendMessage {
     conversationId: string,
     content: string,
     files: OutboundAttachmentFile[] = [],
+    /**
+     * messaging-inbox-notes (F1.5 fase D, SEND-1 MODIFIED) — a note NEVER crosses to
+     * WhatsApp, so the 24h window (a Meta/WhatsApp rule) is irrelevant to it: guard 2
+     * below is BYPASSED only when `isPrivate`. This is the OPPOSITE criterion from the
+     * preview bump at the end of `execute` (NOTE-3), which is BLOCKED when `isPrivate`
+     * — do not collapse the two into a single flag/branch.
+     */
+    isPrivate = false,
   ): Promise<ChatMessageDto> {
     const conversation = await this.conversationRepo.findById(conversationId);
     if (!conversation) throw new ConversationNotFoundError(conversationId);
 
-    if (!conversation.canReply) {
+    if (!isPrivate && !conversation.canReply) {
       throw new MessagingWindowExpiredError(conversationId);
     }
 
@@ -126,6 +134,8 @@ export class SendMessage {
         conversation.chatwootConversationId,
         content,
         validatedFiles.length > 0 ? validatedFiles : undefined,
+        // NOTE-4 — additive, compat: only sent when true (never a noisy `private:false`).
+        isPrivate ? { private: true } : undefined,
       );
     } catch {
       throw new ChatwootUnavailableError();
@@ -140,6 +150,7 @@ export class SendMessage {
       content: sent.content,
       senderName: sent.senderName,
       chatwootCreatedAt: sent.createdAt,
+      isPrivate,
     });
 
     // fix-be #1 — SEND-5 re-diseñado: cada fila se crea con la metadata de CHATWOOT
@@ -191,14 +202,20 @@ export class SendMessage {
     // messaging-inbox-polish (F1.5) — same WhatsApp-style rule as the inbound webhook:
     // when WE send media-only (empty caption), the mirror preview shows "📷 Imagen"/etc
     // from what Chatwoot echoed back, instead of a blank "Sin mensajes" in the list.
-    await this.conversationRepo.upsertByChatwootId({
-      chatwootConversationId: conversation.chatwootConversationId,
-      lastMessageAt: sent.createdAt,
-      lastMessagePreview: deriveConversationPreview(
-        sent.content,
-        sentAttachments.map((a) => a.fileType),
-      ),
-    });
+    //
+    // messaging-inbox-notes (F1.5 fase D, NOTE-3) — a private note MUST NEVER bump the
+    // inbox preview (same criterion as `bumpsPreview` in the webhook's capture path) —
+    // skipped ENTIRELY when `isPrivate`, not just defaulted to a blank value.
+    if (!isPrivate) {
+      await this.conversationRepo.upsertByChatwootId({
+        chatwootConversationId: conversation.chatwootConversationId,
+        lastMessageAt: sent.createdAt,
+        lastMessagePreview: deriveConversationPreview(
+          sent.content,
+          sentAttachments.map((a) => a.fileType),
+        ),
+      });
+    }
 
     return toChatMessageDto(message, attachmentRecords);
   }

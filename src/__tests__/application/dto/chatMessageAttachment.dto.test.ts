@@ -87,6 +87,7 @@ describe('toChatMessageDto — attachments (MEDIA-4)', () => {
       senderName: null,
       chatwootCreatedAt: '2026-07-11T00:00:00.000Z',
       createdAt: '2026-07-11T00:00:00.000Z',
+      isPrivate: false,
       ...overrides,
     };
   }

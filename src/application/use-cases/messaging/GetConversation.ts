@@ -56,21 +56,38 @@ export class GetConversation {
   private async syncFromChatwoot(existing: ConversationRecord): Promise<void> {
     try {
       const live = await this.gateway.getConversation(existing.chatwootConversationId);
+      const liveMessages = await this.gateway.listMessages(existing.chatwootConversationId);
+
+      // fix-be #HIGH (anti-leak) — Chatwoot bumps `last_activity_at` with ANY message,
+      // including private agent notes. Using `live.lastActivityAt` verbatim as the
+      // inbox ordering key let a private note re-bump `lastMessageAt` on the next
+      // fetch-on-open, jumping the conversation to the top of the inbox even though
+      // its preview never changed. Same "private never bumps the ordering key" rule
+      // as `bumpsPreview` in `ReceiveChatwootWebhook`/`SendMessage` — computed here as
+      // the max `createdAt` over the NON-private messages in THIS sync batch. If none
+      // qualify, `lastMessageAt` stays `undefined` (untouched), never pisado por la nota.
+      const nonPrivateCreatedAts = liveMessages
+        .filter((m) => m.direction !== null && m.private !== true)
+        .map((m) => m.createdAt);
+      const syncedLastMessageAt = nonPrivateCreatedAts.length > 0
+        ? nonPrivateCreatedAts.reduce((max, c) => (c > max ? c : max))
+        : undefined;
+
       await this.conversationRepo.upsertByChatwootId({
         chatwootConversationId: existing.chatwootConversationId,
         contactName: live.contactName,
         contactPhone: live.contactPhone,
         status: live.status,
         canReply: live.canReply,
-        lastMessageAt: live.lastActivityAt,
+        lastMessageAt: syncedLastMessageAt,
       });
 
-      const liveMessages = await this.gateway.listMessages(existing.chatwootConversationId);
       for (const m of liveMessages) {
-        // §7 — activity/template, not persisted. H2 residual — same for a private agent
-        // note (`m.private`): the GET path has no other way to filter it out, and letting
-        // it through here would leak an internal note into the customer-facing thread.
-        if (m.direction === null || m.private === true) continue;
+        // §7 — activity/template (direction===null), never persisted. messaging-inbox-notes
+        // (F1.5 fase D, NOTE-2) — a private agent note (`m.private`) is NO LONGER filtered
+        // out here: it persists marked `isPrivate:true` below (never bumps any preview —
+        // this sync block doesn't derive one from an individual message anyway).
+        if (m.direction === null) continue;
         const message = await this.messageRepo.upsertByChatwootMessageId({
           conversationId: existing.id,
           chatwootMessageId: m.id,
@@ -78,6 +95,7 @@ export class GetConversation {
           content: m.content,
           senderName: m.senderName,
           chatwootCreatedAt: m.createdAt,
+          isPrivate: m.private === true,
         });
 
         await this.captureAttachments(message.id, m.attachments);

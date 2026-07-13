@@ -256,6 +256,39 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
         createdAt: new Date(1751000400 * 1000).toISOString(),
       });
     });
+
+    describe('messaging-inbox-notes (F1.5 fase D, NOTE-4) — options.private', () => {
+      it('options.private:true → el POST JSON incluye private:true', async () => {
+        const { http, gw } = fakeHttp({
+          post: jest.fn().mockResolvedValue({
+            data: { id: 100, message_type: 1, content: 'nota interna', created_at: 1751000401 },
+          }),
+        });
+
+        await gw.sendMessage(42, 'nota interna', undefined, { private: true });
+
+        expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/messages', {
+          content: 'nota interna',
+          message_type: 'outgoing',
+          private: true,
+        });
+      });
+
+      it('options ausente/private:false → el POST JSON NO incluye el campo private (compat, cero regresión)', async () => {
+        const { http, gw } = fakeHttp({
+          post: jest.fn().mockResolvedValue({
+            data: { id: 101, message_type: 1, content: 'hola', created_at: 1751000402 },
+          }),
+        });
+
+        await gw.sendMessage(42, 'hola', undefined, { private: false });
+
+        expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/messages', {
+          content: 'hola',
+          message_type: 'outgoing',
+        });
+      });
+    });
   });
 
   describe('sendMessage — multipart (messaging-inbox-v2-media, Tanda 2 · SEND-4)', () => {
@@ -321,6 +354,37 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
       const files = [{ buffer: Buffer.from('x'), filename: 'a.jpg', contentType: 'image/jpeg' }];
 
       await expect(gw.sendMessage(42, 'x', files)).rejects.toBeInstanceOf(ChatwootUnavailableError);
+    });
+
+    it('messaging-inbox-notes (NOTE-4) — options.private:true con files → multipart incluye form.append("private","true")', async () => {
+      const { http, gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({
+          data: { id: 102, message_type: 1, content: 'nota con archivo', created_at: 1751000600 },
+        }),
+      });
+      const files = [{ buffer: Buffer.from('img'), filename: 'foto.jpg', contentType: 'image/jpeg' }];
+
+      await gw.sendMessage(42, 'nota con archivo', files, { private: true });
+
+      const [, body] = http.post.mock.calls[0] as [string, FormData];
+      const raw = body.getBuffer().toString('utf8');
+      expect(raw).toContain('name="private"');
+      expect(raw).toContain('true');
+    });
+
+    it('messaging-inbox-notes (NOTE-4) — options ausente con files → multipart NO incluye el campo private (compat)', async () => {
+      const { http, gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({
+          data: { id: 103, message_type: 1, content: 'con archivo normal', created_at: 1751000601 },
+        }),
+      });
+      const files = [{ buffer: Buffer.from('img'), filename: 'foto.jpg', contentType: 'image/jpeg' }];
+
+      await gw.sendMessage(42, 'con archivo normal', files);
+
+      const [, body] = http.post.mock.calls[0] as [string, FormData];
+      const raw = body.getBuffer().toString('utf8');
+      expect(raw).not.toContain('name="private"');
     });
   });
 

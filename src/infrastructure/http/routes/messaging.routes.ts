@@ -188,6 +188,19 @@ function firstQueryValue(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
+/**
+ * messaging-inbox-notes (F1.5 fase D, NOTE-6) — reads a `private`/`isPrivate` flag off
+ * either wire shape this endpoint accepts: a plain JSON body (`{content, private:true}`,
+ * a real boolean) or a multipart form field (`form.append('private','true')`, always a
+ * STRING once multer/`express.json()` parse it). Anything else (absent, `false`,
+ * `'false'`, any other truthy-looking junk) resolves to `false` — same "default false,
+ * zero regression" contract as every other optional flag in this router.
+ */
+function parsePrivateFlag(body: Record<string, unknown> | undefined): boolean {
+  const raw = body?.['private'] ?? body?.['isPrivate'];
+  return raw === true || raw === 'true';
+}
+
 function computeDedupKey(payload: ChatwootWebhookPayload, signedTimestamp: string | undefined): string {
   const conversationId = payload.conversation?.id ?? payload.id;
   switch (payload.event) {
@@ -341,13 +354,17 @@ export function createMessagingRouter(
     uploadAttachments,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        const rawContent = (req.body as Record<string, unknown> | undefined)?.['content'];
+        const body = req.body as Record<string, unknown> | undefined;
+        const rawContent = body?.['content'];
         const content = typeof rawContent === 'string' ? rawContent : '';
         const files = ((req.files as Express.Multer.File[] | undefined) ?? []).map((f) => ({
           buffer: f.buffer,
           filename: f.originalname,
           contentType: f.mimetype,
         }));
+        // NOTE-6 — reads `private`/`isPrivate` off either wire shape (JSON boolean or
+        // multipart string); defaults to `false` when absent (cero regresión sobre F1).
+        const isPrivate = parsePrivateFlag(body);
 
         // SEND-6 — at least one of {content non-empty, files.length>0}; a caption-less
         // media-only message IS valid (content falls back to '').
@@ -356,7 +373,7 @@ export function createMessagingRouter(
           return;
         }
 
-        const result = await sendMessage.execute(req.params['id'] as string, content, files);
+        const result = await sendMessage.execute(req.params['id'] as string, content, files, isPrivate);
         res.status(201).json(result);
       } catch (err) {
         next(err);

@@ -38,8 +38,10 @@ export class FakeChatwootGateway implements ChatwootGateway {
 
   /** Tanda 2 (SEND-4/BE1.10) — `files` records only the COUNT (not the buffers) sent,
    * keeping `toEqual` assertions from Tanda 1 stable (an `undefined` `files` is
-   * ignored by `toEqual`, same as any other absent property). */
-  public sendMessageCalls: Array<{ chatwootConversationId: number; content: string; files?: number }> = [];
+   * ignored by `toEqual`, same as any other absent property).
+   * messaging-inbox-notes (NOTE-4) — `private` records `options?.private` verbatim,
+   * same "undefined is ignored by toEqual" property as `files`. */
+  public sendMessageCalls: Array<{ chatwootConversationId: number; content: string; files?: number; private?: boolean }> = [];
 
   async listConversations(): Promise<ChatwootConversationDto[]> {
     return Array.from(this.conversationsById.values());
@@ -61,8 +63,9 @@ export class FakeChatwootGateway implements ChatwootGateway {
     chatwootConversationId: number,
     content: string,
     files?: OutboundAttachmentFile[],
+    options?: { private?: boolean },
   ): Promise<ChatwootMessageDto> {
-    this.sendMessageCalls.push({ chatwootConversationId, content, files: files?.length });
+    this.sendMessageCalls.push({ chatwootConversationId, content, files: files?.length, private: options?.private });
     if (this.failSendMessage) throw new Error('fake: Chatwoot unreachable (sendMessage)');
     if (this.sendMessageResult) return this.sendMessageResult;
 

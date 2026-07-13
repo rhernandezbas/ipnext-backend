@@ -11,6 +11,8 @@ export interface ChatMessageRecord {
   senderName: string | null;
   chatwootCreatedAt: string;
   createdAt: string;
+  /** messaging-inbox-notes (F1.5 fase D, NOTE-1) — always present (defaults false). */
+  isPrivate: boolean;
 }
 
 export interface UpsertChatMessageInput {
@@ -20,6 +22,8 @@ export interface UpsertChatMessageInput {
   content: string;
   senderName?: string | null;
   chatwootCreatedAt: string;
+  /** messaging-inbox-notes (F1.5 fase D, NOTE-1) — optional, defaults to false when absent. */
+  isPrivate?: boolean;
 }
 
 export interface ChatMessageRepository {

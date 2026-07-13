@@ -252,8 +252,8 @@ describe('ReceiveChatwootWebhook', () => {
     });
   });
 
-  describe('H2 — private notes never persist a ChatMessage nor bump the preview', () => {
-    it('private:true on an "outgoing" message is NOT persisted as a ChatMessage', async () => {
+  describe('messaging-inbox-notes (F1.5 fase D, NOTE-2/3) — private notes ARE persisted (marked), but never bump the preview', () => {
+    it('NOTE-2: private:true on an "outgoing" message IS persisted as a ChatMessage marked isPrivate:true', async () => {
       const { uc, conversationRepo, messageRepo } = makeUseCase();
 
       await uc.execute('d-private', {
@@ -267,11 +267,36 @@ describe('ReceiveChatwootWebhook', () => {
       });
 
       const conv = await conversationRepo.findByChatwootId(80);
-      expect(conv).not.toBeNull(); // conversation row still exists
-      expect(await messageRepo.listByConversation(conv!.id)).toHaveLength(0);
+      expect(conv).not.toBeNull();
+      const messages = await messageRepo.listByConversation(conv!.id);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          chatwootMessageId: 800,
+          direction: 'outbound',
+          content: 'nota interna: cliente enojado',
+          isPrivate: true,
+        }),
+      ]);
     });
 
-    it('private:true does NOT bump lastMessageAt/lastMessagePreview (an internal note is not a customer-facing message)', async () => {
+    it('NOTE-2: a normal message (private ausente) se persiste con isPrivate:false — comportamiento idéntico a hoy', async () => {
+      const { uc, conversationRepo, messageRepo } = makeUseCase();
+
+      await uc.execute('d-normal', {
+        event: 'message_created',
+        id: 802,
+        content: 'hola, necesito ayuda',
+        message_type: 'incoming',
+        created_at: 1735690450,
+        conversation: { id: 82 },
+      });
+
+      const conv = await conversationRepo.findByChatwootId(82);
+      const messages = await messageRepo.listByConversation(conv!.id);
+      expect(messages).toEqual([expect.objectContaining({ chatwootMessageId: 802, isPrivate: false })]);
+    });
+
+    it('NOTE-3: private:true does NOT bump lastMessageAt/lastMessagePreview (an internal note is not a customer-facing message)', async () => {
       const { uc, conversationRepo } = makeUseCase();
       await conversationRepo.upsertByChatwootId({
         chatwootConversationId: 81,

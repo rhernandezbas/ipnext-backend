@@ -84,6 +84,27 @@ describe('InMemoryChatMessageRepository', () => {
     expect(messages).toEqual([]);
   });
 
+  describe('messaging-inbox-notes (F1.5 fase D, NOTE-1) — isPrivate', () => {
+    it('upsert con isPrivate:true lo persiste marcado', async () => {
+      const created = await repo.upsertByChatwootMessageId(input({ isPrivate: true }));
+
+      expect(created.isPrivate).toBe(true);
+    });
+
+    it('upsert sin isPrivate explícito → queda isPrivate:false por default', async () => {
+      const created = await repo.upsertByChatwootMessageId(input());
+
+      expect(created.isPrivate).toBe(false);
+    });
+
+    it('un re-upsert (mismo chatwootMessageId) actualiza isPrivate igual que el resto de los campos', async () => {
+      await repo.upsertByChatwootMessageId(input({ isPrivate: false }));
+      const updated = await repo.upsertByChatwootMessageId(input({ isPrivate: true }));
+
+      expect(updated.isPrivate).toBe(true);
+    });
+  });
+
   describe('§8 — tiebreaker determinístico en empates de chatwootCreatedAt (in-memory DEBE ordenar igual que Prisma)', () => {
     it('dos mensajes con el MISMO chatwootCreatedAt se ordenan por id ASC, no por orden de insercion', async () => {
       // Same rationale as InMemoryConversationRepository's §8 test: Postgres gives

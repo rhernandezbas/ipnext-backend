@@ -21,6 +21,7 @@ function toDomain(row: any): ChatMessageRecord {
     senderName: row.senderName ?? null,
     chatwootCreatedAt: toIso(row.chatwootCreatedAt),
     createdAt: toIso(row.createdAt),
+    isPrivate: row.isPrivate ?? false,
   };
 }
 
@@ -41,6 +42,7 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         content: input.content,
         senderName: input.senderName ?? null,
         chatwootCreatedAt: new Date(input.chatwootCreatedAt),
+        isPrivate: input.isPrivate ?? false,
       },
       update: {
         conversationId: input.conversationId,
@@ -48,6 +50,7 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         content: input.content,
         senderName: input.senderName ?? null,
         chatwootCreatedAt: new Date(input.chatwootCreatedAt),
+        isPrivate: input.isPrivate ?? false,
       },
     });
     return toDomain(row);

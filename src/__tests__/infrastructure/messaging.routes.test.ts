@@ -805,6 +805,97 @@ describe('POST /api/messaging/conversations/:id/messages — multipart (BE3)', (
   });
 });
 
+// ─── POST /conversations/:id/messages — nota privada (messaging-inbox-notes, SEND-1
+// MODIFIED / NOTE-3/6/7) ──────────────────────────────────────────────────────────
+
+describe('POST /api/messaging/conversations/:id/messages — nota privada (NOTE-6/7)', () => {
+  it('JSON con private:true + canReply=false → 201 (bypass, NUNCA 422), Chatwoot recibe private:true', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 50 }); // canReply default false
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .send({ content: 'nota interna', private: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body.private).toBe(true);
+    expect(gateway.sendMessageCalls).toEqual([
+      expect.objectContaining({ chatwootConversationId: 50, content: 'nota interna', private: true }),
+    ]);
+  });
+
+  it('multipart con field private=true + canReply=false → 201 (bypass)', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 51 });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .field('content', 'nota interna multipart')
+      .field('private', 'true');
+
+    expect(res.status).toBe(201);
+    expect(res.body.private).toBe(true);
+    expect(gateway.sendMessageCalls).toEqual([
+      expect.objectContaining({ chatwootConversationId: 51, content: 'nota interna multipart', private: true }),
+    ]);
+  });
+
+  it('ausencia de private → sendMessage.execute recibe isPrivate:false, comportamiento F1.5 idéntico (canReply=false SIGUE dando 422)', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 52 }); // canReply default false
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .send({ content: 'reply normal' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('MESSAGING_WINDOW_EXPIRED');
+  });
+
+  it('NOTE-3: una nota privada enviada NO bumpea lastMessagePreview/lastMessageAt de la conversación', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({
+      chatwootConversationId: 53,
+      lastMessagePreview: 'Hola',
+      lastMessageAt: '2026-07-01T00:00:00.000Z',
+    });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .send({ content: 'nota interna', private: true });
+
+    expect(res.status).toBe(201);
+    const updated = await conversationRepo.findById(conv.id);
+    expect(updated!.lastMessagePreview).toBe('Hola');
+    expect(updated!.lastMessageAt).toBe('2026-07-01T00:00:00.000Z');
+  });
+
+  it('un mensaje normal enviado (private ausente) SIGUE bumpeando el preview — regresión F1.5', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 54, canReply: true });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .send({ content: 'reply normal' });
+
+    expect(res.status).toBe(201);
+    const updated = await conversationRepo.findById(conv.id);
+    expect(updated!.lastMessagePreview).toBe('reply normal');
+  });
+
+  it('NOTE-7 — sin messaging:send, nota privada → 403 sin llamar a Chatwoot (mismo guard messaging:send, sin permiso separado)', async () => {
+    const { app, conversationRepo, gateway } = buildApp({ sendPerm: denyPerm });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 55, canReply: true });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .send({ content: 'nota interna', private: true });
+
+    expect(res.status).toBe(403);
+    expect(gateway.sendMessageCalls).toHaveLength(0);
+  });
+});
+
 // ─── GET /attachments/:id/file (messaging-inbox-v2-media, MEDIA-5) ──────────────
 
 describe('GET /api/messaging/attachments/:id/file', () => {

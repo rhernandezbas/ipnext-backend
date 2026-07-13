@@ -93,11 +93,18 @@ export interface ChatwootGateway {
    * SEND-4 — `files` is additive/optional: WITHOUT it, the JSON path is unchanged
    * (F1, zero regression). WITH at least one file, the adapter MUST switch to a
    * multipart/form-data POST (`HttpChatwootGateway`).
+   *
+   * messaging-inbox-notes (F1.5 fase D, NOTE-4) — `options.private` is additive/optional
+   * (4th param, same criterion as `files?` in SEND-4): WITHOUT it (or `private:false`),
+   * the request is byte-for-byte identical to today (no `private` field at all — not
+   * even a `false`). WITH `private:true`, the adapter MUST include it in BOTH the JSON
+   * body and the multipart form (`form.append('private','true')`).
    */
   sendMessage(
     chatwootConversationId: number,
     content: string,
     files?: OutboundAttachmentFile[],
+    options?: { private?: boolean },
   ): Promise<ChatwootMessageDto>;
   /** F2: not consumed by any F1 use case; kept in the port for contract completeness. */
   searchContact(query: string): Promise<{ id: number; name: string | null; phone: string | null }[]>;

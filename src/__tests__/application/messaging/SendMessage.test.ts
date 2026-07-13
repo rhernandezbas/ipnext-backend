@@ -364,6 +364,92 @@ describe('SendMessage', () => {
     });
   });
 
+  describe('messaging-inbox-notes (F1.5 fase D, SEND-1 MODIFIED / NOTE-3/4) — nota privada (isPrivate)', () => {
+    it('canReply=false + isPrivate=true → bypasea el guard de ventana (NO throw), llama a Chatwoot con private:true, upsertea isPrivate:true, y NO bumpea el preview', async () => {
+      const { conversationRepo, messageRepo, gateway, uc } = makeHarness();
+      const conv = await conversationRepo.upsertByChatwootId({
+        chatwootConversationId: 40,
+        canReply: false,
+        lastMessageAt: '2026-07-01T00:00:00.000Z',
+        lastMessagePreview: 'ultimo mensaje real',
+      });
+      gateway.sendMessageResult = {
+        id: 970,
+        direction: 'outbound',
+        content: 'nota interna: revisar con soporte',
+        senderName: 'Agente',
+        createdAt: '2026-07-11T14:00:00.000Z',
+      };
+
+      const result = await uc.execute(conv.id, 'nota interna: revisar con soporte', [], true);
+
+      expect(result.private).toBe(true);
+      expect(gateway.sendMessageCalls).toEqual([
+        expect.objectContaining({ chatwootConversationId: 40, content: 'nota interna: revisar con soporte', private: true }),
+      ]);
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages[0]).toMatchObject({ isPrivate: true });
+      const updatedConv = await conversationRepo.findById(conv.id);
+      expect(updatedConv!.lastMessagePreview).toBe('ultimo mensaje real'); // NOT bumped
+      expect(updatedConv!.lastMessageAt).toBe('2026-07-01T00:00:00.000Z'); // NOT bumped
+    });
+
+    it('isPrivate=true CON canReply=true (ventana abierta) también bloquea el bump de preview — el criterio NO depende de canReply', async () => {
+      const { conversationRepo, messageRepo, gateway, uc } = makeHarness();
+      const conv = await conversationRepo.upsertByChatwootId({
+        chatwootConversationId: 41,
+        canReply: true,
+        lastMessageAt: '2026-07-01T00:00:00.000Z',
+        lastMessagePreview: 'ultimo mensaje real',
+      });
+      gateway.sendMessageResult = {
+        id: 971,
+        direction: 'outbound',
+        content: 'otra nota',
+        senderName: 'Agente',
+        createdAt: '2026-07-11T14:05:00.000Z',
+      };
+
+      await uc.execute(conv.id, 'otra nota', [], true);
+
+      const updatedConv = await conversationRepo.findById(conv.id);
+      expect(updatedConv!.lastMessagePreview).toBe('ultimo mensaje real');
+      expect(updatedConv!.lastMessageAt).toBe('2026-07-01T00:00:00.000Z');
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages[0]).toMatchObject({ isPrivate: true });
+    });
+
+    it('isPrivate ausente/false (default) → comportamiento SEND-1 idéntico a hoy: preview bumpea, DTO trae private:false, gateway sin campo private', async () => {
+      const { conversationRepo, gateway, uc } = makeHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 42, canReply: true });
+      gateway.sendMessageResult = {
+        id: 972,
+        direction: 'outbound',
+        content: 'hola normal',
+        senderName: 'Agente',
+        createdAt: '2026-07-11T14:10:00.000Z',
+      };
+
+      const result = await uc.execute(conv.id, 'hola normal');
+
+      expect(result.private).toBe(false);
+      expect(gateway.sendMessageCalls).toEqual([
+        expect.objectContaining({ chatwootConversationId: 42, content: 'hola normal' }),
+      ]);
+      expect(gateway.sendMessageCalls[0]!.private).toBeUndefined();
+      const updatedConv = await conversationRepo.findById(conv.id);
+      expect(updatedConv!.lastMessagePreview).toBe('hola normal'); // bump intact — cero regresión
+    });
+
+    it('canReply=false + isPrivate=false (explícito) → SIGUE dando 422 (el bypass es SOLO para notas, no cambia el reply normal)', async () => {
+      const { conversationRepo, gateway, uc } = makeHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 43, canReply: false });
+
+      await expect(uc.execute(conv.id, 'tarde', [], false)).rejects.toBeInstanceOf(MessagingWindowExpiredError);
+      expect(gateway.sendMessageCalls).toHaveLength(0);
+    });
+  });
+
   describe('messaging-inbox-polish (F1.5) — preview WhatsApp-style para el ÚLTIMO mensaje ENVIADO solo-media', () => {
     it('outbound solo-imagen (content vacío) → Conversation.lastMessagePreview = "📷 Imagen"', async () => {
       const { conversationRepo, gateway, uc } = makeHarness();

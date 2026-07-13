@@ -143,6 +143,9 @@ export interface ChatMessageDto {
   content: string;
   senderName: string | null;
   sentAt: string;
+  /** messaging-inbox-notes (F1.5 fase D, NOTE-5) — rename de wire vs el dominio
+   * (`ChatMessageRecord.isPrivate`), mismo nombre que Chatwoot usa en su propio wire. */
+  private: boolean;
   attachments: ChatMessageAttachmentDto[];
 }
 
@@ -207,6 +210,7 @@ export function toChatMessageDto(
     content: record.content,
     senderName: record.senderName,
     sentAt: record.chatwootCreatedAt,
+    private: record.isPrivate,
     attachments: attachments.map(toChatMessageAttachmentDto),
   };
 }
