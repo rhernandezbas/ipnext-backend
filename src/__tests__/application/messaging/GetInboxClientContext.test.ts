@@ -194,6 +194,13 @@ describe('GetInboxClientContext', () => {
     expect(result.client?.recentTasks).toEqual([]);
     expect(result.client?.recentLogs).toEqual([]);
     expect(result.client?.openTicketsCount).toBe(0);
+    // states-be (F1.5 spec #2) — nothing seeded, so every open/closed
+    // ticket/task field defaults to empty/zero.
+    expect(result.client?.recentClosedTickets).toEqual([]);
+    expect(result.client?.closedTicketsCount).toBe(0);
+    expect(result.client?.openTasksCount).toBe(0);
+    expect(result.client?.recentClosedTasks).toEqual([]);
+    expect(result.client?.closedTasksCount).toBe(0);
   });
 
   it('#2 ambiguous sin clientId — devuelve candidatos, sin agregar ningun colaborador', async () => {
@@ -635,5 +642,142 @@ describe('GetInboxClientContext', () => {
 
     expect(result.client?.recentTickets).toHaveLength(1);
     expect(result.client?.openTicketsCount).toBe(0);
+  });
+
+  // ─── states-be (F1.5 spec #2) — abierto/cerrado en el panel de contexto ────
+  // "Cerrado" ticket = Ticket.resolvedAt != null (archivedAt: null) — el mismo
+  // criterio que countOpenByClientIds/openOnly, NUNCA inferido de
+  // TicketStatusCatalog (no tiene flag). "Cerrada" tarea = generalStatus !== 'open'
+  // (agrupa closed+dismissed) — NUNCA el legacy isClosed (engañoso: dismissed
+  // tiene isClosed=false).
+
+  it('states-be #1 tickets cerrados — recentClosedTickets trunca a 2, closedTicketsCount cuenta el total real', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const ticketRepo = new InMemoryTicketRepository();
+    for (let i = 0; i < 4; i++) {
+      const t = await ticketRepo.create({ subject: `Cerrado ${i}`, description: 'x', customerId: 'c1' });
+      await ticketRepo.close(t.id, 'closed');
+    }
+    await ticketRepo.create({ subject: 'Abierto', description: 'x', customerId: 'c1' });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo, ticketRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 21, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.client?.recentClosedTickets).toHaveLength(2);
+    expect(result.client?.recentClosedTickets.every((t) => t.subject.startsWith('Cerrado'))).toBe(true);
+    expect(result.client?.closedTicketsCount).toBe(4);
+    expect(result.client?.openTicketsCount).toBe(1);
+    expect(result.client?.recentTickets).toHaveLength(1);
+  });
+
+  it('states-be #2 tareas — recentTasks ahora excluye cerradas/descartadas; openTasksCount cuenta solo abiertas', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const schedulingRepo = new InMemorySchedulingRepository();
+    schedulingRepo.seedTask({ id: 'task-open-1', title: 'Abierta 1', customerId: 'c1', generalStatus: 'open' });
+    schedulingRepo.seedTask({ id: 'task-open-2', title: 'Abierta 2', customerId: 'c1', generalStatus: 'open' });
+    schedulingRepo.seedTask({ id: 'task-closed-1', title: 'Cerrada 1', customerId: 'c1', generalStatus: 'closed' });
+    schedulingRepo.seedTask({ id: 'task-dismissed-1', title: 'Descartada 1', customerId: 'c1', generalStatus: 'dismissed' });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo, schedulingRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 22, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.client?.recentTasks).toHaveLength(2);
+    expect(result.client?.recentTasks.every((t) => t.status === 'open')).toBe(true);
+    expect(result.client?.openTasksCount).toBe(2);
+  });
+
+  it('states-be #3 tareas cerradas/descartadas — recentClosedTasks agrupa closed+dismissed, trunca a 2, closedTasksCount cuenta el total', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const schedulingRepo = new InMemorySchedulingRepository();
+    schedulingRepo.seedTask({ id: 'task-open-1', title: 'Abierta 1', customerId: 'c1', generalStatus: 'open' });
+    schedulingRepo.seedTask({ id: 'task-closed-1', title: 'Cerrada 1', customerId: 'c1', generalStatus: 'closed' });
+    schedulingRepo.seedTask({ id: 'task-closed-2', title: 'Cerrada 2', customerId: 'c1', generalStatus: 'closed' });
+    schedulingRepo.seedTask({ id: 'task-dismissed-1', title: 'Descartada 1', customerId: 'c1', generalStatus: 'dismissed' });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo, schedulingRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 23, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.client?.recentClosedTasks).toHaveLength(2);
+    expect(result.client?.closedTasksCount).toBe(3);
+    expect(result.client?.recentClosedTasks.every((t) => t.status === 'closed' || t.status === 'dismissed')).toBe(true);
+  });
+
+  it('states-be #4 tarea dismissed (isClosed=false) se cuenta como cerrada via generalStatus, NUNCA via el legacy isClosed', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const schedulingRepo = new InMemorySchedulingRepository();
+    const dismissed = schedulingRepo.seedTask({ id: 'task-dismissed', title: 'Descartada', customerId: 'c1', generalStatus: 'dismissed' });
+    // Sanity check on the legacy trap the spec warns about.
+    expect(dismissed.isClosed).toBe(false);
+    const { uc, conversationRepo } = buildUseCase({ customerRepo, schedulingRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 24, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.client?.recentTasks).toHaveLength(0);
+    expect(result.client?.openTasksCount).toBe(0);
+    expect(result.client?.recentClosedTasks).toHaveLength(1);
+    expect(result.client?.recentClosedTasks[0]?.status).toBe('dismissed');
+    expect(result.client?.closedTasksCount).toBe(1);
+  });
+
+  it('states-be #5 [aislamiento] countClosedByClientIds falla — closedTicketsCount degrada a 0, recentTickets/openTicketsCount siguen intactos', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const ticketRepo = new InMemoryTicketRepository();
+    await ticketRepo.create({ subject: 'Abierto', description: 'x', customerId: 'c1' });
+    jest.spyOn(ticketRepo, 'countClosedByClientIds').mockRejectedValue(new Error('count down'));
+    const { uc, conversationRepo } = buildUseCase({ customerRepo, ticketRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 25, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.client?.closedTicketsCount).toBe(0);
+    expect(result.client?.openTicketsCount).toBe(1);
+    expect(result.client?.recentTickets).toHaveLength(1);
+  });
+
+  it('states-be #6 [aislamiento] list closedOnly falla — recentClosedTickets vacio, el resto del DTO de tickets sigue intacto', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const ticketRepo = new InMemoryTicketRepository();
+    await ticketRepo.create({ subject: 'Abierto', description: 'x', customerId: 'c1' });
+    const originalList = ticketRepo.list.bind(ticketRepo);
+    jest.spyOn(ticketRepo, 'list').mockImplementation(async (query) => {
+      if (query.closedOnly) throw new Error('closed query down');
+      return originalList(query);
+    });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo, ticketRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 26, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.client?.recentClosedTickets).toEqual([]);
+    expect(result.client?.recentTickets).toHaveLength(1);
+    expect(result.client?.openTicketsCount).toBe(1);
   });
 });

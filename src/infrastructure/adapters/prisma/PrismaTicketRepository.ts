@@ -137,6 +137,13 @@ export class PrismaTicketRepository implements TicketRepository {
       where['resolvedAt'] = null;
     }
 
+    // states-be (F1.5 spec #2) — "solo cerrados", MISMA semántica que
+    // countClosedByClientIds (resolvedAt NOT null AND archivedAt null). archivedAt
+    // ya quedó en null arriba (default, no-archived).
+    if (query.closedOnly === true) {
+      where['resolvedAt'] = { not: null };
+    }
+
     const page = query.page ?? 1;
     const limit = query.limit ?? 25;
     const skip = (page - 1) * limit;
@@ -307,6 +314,24 @@ export class PrismaTicketRepository implements TicketRepository {
     const rows: any[] = await (prisma as any).ticket.groupBy({
       by: ['customerId'],
       where: { customerId: { in: clientIds }, resolvedAt: null, archivedAt: null },
+      _count: { _all: true },
+    });
+    for (const row of rows) {
+      if (row.customerId == null) continue;
+      result.set(row.customerId, row._count?._all ?? 0);
+    }
+    return result;
+  }
+
+  async countClosedByClientIds(clientIds: string[]): Promise<Map<string, number>> {
+    // states-be (F1.5 spec #2) — mirror of countOpenByClientIds for CLOSED
+    // tickets in a SINGLE aggregated query. "Closed" = resolvedAt NOT null AND
+    // archivedAt null (same terminal signal as `closedOnly`). No N+1.
+    const result = new Map<string, number>();
+    if (clientIds.length === 0) return result; // skip the query entirely
+    const rows: any[] = await (prisma as any).ticket.groupBy({
+      by: ['customerId'],
+      where: { customerId: { in: clientIds }, resolvedAt: { not: null }, archivedAt: null },
       _count: { _all: true },
     });
     for (const row of rows) {

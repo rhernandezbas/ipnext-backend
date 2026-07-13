@@ -16,8 +16,22 @@ export interface ListTicketsQuery extends PaginatedQuery {
   /** fix-be #2 (messaging-inbox-v2 review) — when true, returns ONLY open tickets
    * (resolvedAt IS NULL AND archivedAt IS NULL), same semantics as
    * `countOpenByClientIds`. Additive/optional: absent/false leaves every existing
-   * caller's behavior untouched (any status, subject to the other filters). */
+   * caller's behavior untouched (any status, subject to the other filters).
+   *
+   * MUTUALLY EXCLUSIVE with `closedOnly` — never set both `true`. The adapters
+   * do NOT agree on what that combination means (Prisma: last-write-wins,
+   * `closedOnly`'s where-assignment runs after `openOnly`'s, so closed wins;
+   * InMemory: sequential narrowing, so the result is always empty). `ListTickets`
+   * (the only place these two flags are meant to be read together) enforces
+   * this fail-fast via `TicketListFilterConflictError` — do NOT rely on either
+   * repo implementation to resolve the conflict for you. */
   openOnly?: boolean;
+  /** states-be (messaging-inbox-v2 F1.5, spec #2) — when true, returns ONLY closed
+   * tickets (resolvedAt IS NOT NULL AND archivedAt IS NULL). Mirror of `openOnly`.
+   * Additive/optional: absent/false leaves every existing caller untouched.
+   *
+   * MUTUALLY EXCLUSIVE with `openOnly` — see the note on that field. */
+  closedOnly?: boolean;
 }
 
 export interface CreateTicketData {
@@ -73,4 +87,11 @@ export interface TicketRepository {
    * Returns a Map keyed by clientId; clientIds with zero open tickets MAY be absent (caller defaults to 0).
    */
   countOpenByClientIds(clientIds: string[]): Promise<Map<string, number>>;
+  /**
+   * states-be (messaging-inbox-v2 F1.5, spec #2) — mirror of `countOpenByClientIds`
+   * for CLOSED tickets per client, in a SINGLE aggregated query (no N+1).
+   * "Closed" = resolvedAt IS NOT NULL AND archivedAt IS NULL. Returns a Map keyed
+   * by clientId; clientIds with zero closed tickets MAY be absent (caller defaults to 0).
+   */
+  countClosedByClientIds(clientIds: string[]): Promise<Map<string, number>>;
 }

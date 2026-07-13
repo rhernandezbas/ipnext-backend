@@ -161,7 +161,7 @@ export class GetInboxClientContext {
 
     // RICH-2 — fan-out via Promise.all: a slow collaborator never serializes the
     // rest (spec scenario "un colaborador lento no serializa a los demas").
-    const [contracts, invoiceSummary, recentLogs, ticketsSummary, recentTasks] = await Promise.all([
+    const [contracts, invoiceSummary, recentLogs, ticketsSummary, tasksSummary] = await Promise.all([
       this.safeContracts(clientId),
       this.safeInvoices(clientId),
       this.safeLogs(clientId),
@@ -188,7 +188,12 @@ export class GetInboxClientContext {
       contracts,
       openTicketsCount: ticketsSummary.openTicketsCount,
       recentTickets: ticketsSummary.recentTickets,
-      recentTasks,
+      closedTicketsCount: ticketsSummary.closedTicketsCount,
+      recentClosedTickets: ticketsSummary.recentClosedTickets,
+      openTasksCount: tasksSummary.openTasksCount,
+      recentTasks: tasksSummary.recentTasks,
+      closedTasksCount: tasksSummary.closedTasksCount,
+      recentClosedTasks: tasksSummary.recentClosedTasks,
       recentLogs,
     };
   }
@@ -271,31 +276,62 @@ export class GetInboxClientContext {
     }
   }
 
-  private async safeTasks(clientId: string): Promise<InboxTaskSummaryDto[]> {
+  /**
+   * states-be (F1.5 spec #2) — ONE fetch (no server-side status filter or
+   * count-only port method exists for tasks), split client-side by
+   * `generalStatus`. "Closed" for a task = `generalStatus !== 'open'` (groups
+   * `closed` + `dismissed`) — NEVER the legacy `isClosed` flag (misleading: a
+   * `dismissed` task has `isClosed === false`).
+   *
+   * PRE-EXISTING DEBT (already flagged at #7b): `ListTasks`/`SchedulingRepository`
+   * has no limit/pagination, so this brings back ALL of a client's tasks — not
+   * worsened here (the counts below are exact precisely BECAUSE the list isn't
+   * truncated), but a real port-level count method would be cheaper at scale.
+   */
+  private async safeTasks(clientId: string): Promise<{
+    recentTasks: InboxTaskSummaryDto[];
+    openTasksCount: number;
+    recentClosedTasks: InboxTaskSummaryDto[];
+    closedTasksCount: number;
+  }> {
     try {
       const tasks = await this.listTasks.execute({ customerId: clientId });
-      return tasks.slice(0, 3).map((t) => ({
+      const openTasks = tasks.filter((t) => t.generalStatus === 'open');
+      const closedTasks = tasks.filter((t) => t.generalStatus !== 'open');
+      const toDto = (t: (typeof tasks)[number]): InboxTaskSummaryDto => ({
         id: t.id,
         sequenceNumber: t.sequenceNumber,
         title: t.title,
         status: t.generalStatus,
-      }));
+      });
+      return {
+        recentTasks: openTasks.slice(0, 3).map(toDto),
+        openTasksCount: openTasks.length,
+        recentClosedTasks: closedTasks.slice(0, 2).map(toDto),
+        closedTasksCount: closedTasks.length,
+      };
     } catch {
-      return [];
+      return { recentTasks: [], openTasksCount: 0, recentClosedTasks: [], closedTasksCount: 0 };
     }
   }
 
-  private async safeTickets(
-    clientId: string,
-  ): Promise<{ recentTickets: InboxTicketSummaryDto[]; openTicketsCount: number }> {
-    // fix-be #5 — INDEPENDENT try/catch per sub-query: a failure in ONE of them
-    // (e.g. countOpenByClientIds) must not wipe out the other (recentTickets), and
-    // vice-versa. Still fanned out via Promise.all (RICH-2, no serialization).
-    const [recentTickets, openTicketsCount] = await Promise.all([
+  private async safeTickets(clientId: string): Promise<{
+    recentTickets: InboxTicketSummaryDto[];
+    openTicketsCount: number;
+    recentClosedTickets: InboxTicketSummaryDto[];
+    closedTicketsCount: number;
+  }> {
+    // fix-be #5 (+ states-be, F1.5 spec #2) — INDEPENDENT try/catch per sub-query:
+    // a failure in ANY ONE of the four (open list, open count, closed list, closed
+    // count) must not wipe out the other three. Still fanned out via Promise.all
+    // (RICH-2, no serialization).
+    const [recentTickets, openTicketsCount, recentClosedTickets, closedTicketsCount] = await Promise.all([
       this.safeRecentTickets(clientId),
       this.safeOpenTicketsCount(clientId),
+      this.safeRecentClosedTickets(clientId),
+      this.safeClosedTicketsCount(clientId),
     ]);
-    return { recentTickets, openTicketsCount };
+    return { recentTickets, openTicketsCount, recentClosedTickets, closedTicketsCount };
   }
 
   private async safeRecentTickets(clientId: string): Promise<InboxTicketSummaryDto[]> {
@@ -322,6 +358,34 @@ export class GetInboxClientContext {
     try {
       const openMap = await this.ticketRepo.countOpenByClientIds([clientId]);
       return openMap.get(clientId) ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private async safeRecentClosedTickets(clientId: string): Promise<InboxTicketSummaryDto[]> {
+    try {
+      // states-be (F1.5 spec #2) — `closedOnly: true` mirrors `openOnly`'s
+      // server-side filter (resolvedAt NOT null AND archivedAt null). "Closed" is
+      // defined by `Ticket.resolvedAt`, NEVER inferred from `TicketStatusCatalog`
+      // (which carries no closed flag).
+      const listResult = await this.listTickets.execute({ customerId: clientId, closedOnly: true });
+      return listResult.data.slice(0, 2).map((t) => ({
+        id: t.id,
+        sequenceNumber: t.sequenceNumber,
+        subject: t.subject,
+        status: t.status,
+        priority: t.priority,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async safeClosedTicketsCount(clientId: string): Promise<number> {
+    try {
+      const closedMap = await this.ticketRepo.countClosedByClientIds([clientId]);
+      return closedMap.get(clientId) ?? 0;
     } catch {
       return 0;
     }

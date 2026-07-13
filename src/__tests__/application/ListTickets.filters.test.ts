@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@jest/globals';
 import { ListTickets } from '@application/use-cases/ListTickets';
 import { InMemoryTicketRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketRepository';
+import { TicketListFilterConflictError } from '@domain/errors/tickets';
 
 // #28 — the #25 filters (assigneeId, from, to) were wired in the route and the
 // repo, but ListTickets rebuilt the query field-by-field and DROPPED them, so
@@ -42,6 +43,34 @@ describe('ListTickets — forwards #25 filters to the repository (#28)', () => {
 
     expect(res.total).toBe(1);
     expect(res.data[0]!.priority).toBe('high');
+  });
+
+  // states-be (F1.5 spec #2) — closedOnly is a NEW field on ListTicketsQuery
+  // (mirrors openOnly, fix-be #2). Locks the seam so it never suffers the same
+  // #28 drop bug (ListTickets rebuilds the query field-by-field; a forgotten key
+  // here silently discards the filter before it reaches the repository).
+  it('forwards closedOnly to the repository (states-be — same seam #28 already bit openOnly-adjacent filters)', async () => {
+    const repo = new InMemoryTicketRepository();
+    const closed = await repo.create({ subject: 'Cerrado', description: 'x' });
+    await repo.close(closed.id, 'closed');
+    await repo.create({ subject: 'Abierto', description: 'y' });
+
+    const res = await new ListTickets(repo).execute({ closedOnly: true });
+
+    expect(res.total).toBe(1);
+    expect(res.data[0]!.id).toBe(closed.id);
+  });
+
+  // adversarial review (F1.5 spec #2, LOW finding) — openOnly + closedOnly both
+  // true diverge between adapters (Prisma: last-write-wins → closed; InMemory:
+  // sequential narrowing → always empty). Unreachable today, but fail-fast in
+  // the use case closes the seam for any future caller.
+  it('rejects openOnly + closedOnly together (fail-fast, mutually exclusive)', async () => {
+    const repo = new InMemoryTicketRepository();
+
+    await expect(
+      new ListTickets(repo).execute({ openOnly: true, closedOnly: true }),
+    ).rejects.toThrow(TicketListFilterConflictError);
   });
 });
 

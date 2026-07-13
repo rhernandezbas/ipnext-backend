@@ -146,8 +146,25 @@ export interface InboxClientSummaryDto {
   openTicketsCount: number;
   /** Max 3, open only. */
   recentTickets: InboxTicketSummaryDto[];
-  /** Max 3. */
+  /** states-be (F1.5 spec #2) — total closed tickets, via
+   * `TicketRepository.countClosedByClientIds` — NEVER the truncated length of
+   * `recentClosedTickets`. "Closed" = `Ticket.resolvedAt != null` (archivedAt: null). */
+  closedTicketsCount: number;
+  /** states-be (F1.5 spec #2) — max 2, closed only (resolvedAt != null). */
+  recentClosedTickets: InboxTicketSummaryDto[];
+  /** states-be (F1.5 spec #2) — total OPEN tasks (`generalStatus === 'open'`).
+   * Computed from the full (unfiltered, unpaginated) `ListTasks` result — never
+   * truncated, since `ListTasks` has no server-side limit (pre-existing debt,
+   * tracked separately; NOT worsened here). */
+  openTasksCount: number;
+  /** Max 3, OPEN only (`generalStatus === 'open'`). */
   recentTasks: InboxTaskSummaryDto[];
+  /** states-be (F1.5 spec #2) — total closed+dismissed tasks
+   * (`generalStatus !== 'open'`) — NEVER the legacy `isClosed` flag (misleading:
+   * a `dismissed` task has `isClosed === false`). */
+  closedTasksCount: number;
+  /** states-be (F1.5 spec #2) — max 2, closed+dismissed (`generalStatus !== 'open'`). */
+  recentClosedTasks: InboxTaskSummaryDto[];
   /** Max 5, first page. */
   recentLogs: InboxLogSummaryDto[];
 }

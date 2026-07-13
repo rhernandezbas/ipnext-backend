@@ -85,6 +85,30 @@ export class NoClosableStatusError extends DomainError {
   }
 }
 
+/**
+ * states-be (F1.5 spec #2 adversarial review, LOW finding) — thrown by
+ * `ListTickets.execute` when the caller sets `openOnly` AND `closedOnly` both
+ * `true`. The two flags are documented as MUTUALLY EXCLUSIVE (see
+ * `TicketRepository.ts`), but nothing enforced it: `PrismaTicketRepository`
+ * resolves the conflict via last-write-wins (`closedOnly` wins, since its
+ * `where` assignment runs after `openOnly`'s) while `InMemoryTicketRepository`
+ * narrows sequentially (open AND closed can never both be true, so the result
+ * is always empty) — same input, different adapters, silently divergent
+ * behavior. Unreachable today (the only caller, `GetInboxClientContext`,
+ * always sets exactly one), but fail-fast here closes the seam before a
+ * future caller can hit it. Reuses the codebase-wide `'VALIDATION_ERROR'`
+ * code (400, already mapped in errorHandler's statusMap).
+ */
+export class TicketListFilterConflictError extends DomainError {
+  constructor() {
+    super(
+      'ListTickets: openOnly and closedOnly are mutually exclusive; set at most one',
+      'VALIDATION_ERROR',
+    );
+    this.name = 'TicketListFilterConflictError';
+  }
+}
+
 // ─── #79 SLA timer config error ──────────────────────────────────────────────
 
 /** Raised when the merged SLA config would have dangerMinutes <= warnMinutes. */

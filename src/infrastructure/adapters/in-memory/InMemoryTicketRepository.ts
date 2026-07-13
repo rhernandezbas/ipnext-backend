@@ -133,6 +133,11 @@ export class InMemoryTicketRepository implements TicketRepository {
     if (query.openOnly === true) {
       results = results.filter((t) => t.resolvedAt == null && t.archivedAt == null);
     }
+    // states-be (F1.5 spec #2) — "solo cerrados", espejo EXACTO de openOnly (y de
+    // countClosedByClientIds): resolvedAt NOT null AND archivedAt null.
+    if (query.closedOnly === true) {
+      results = results.filter((t) => t.resolvedAt != null && t.archivedAt == null);
+    }
     if (query.search) {
       const q = query.search.toLowerCase();
       // #63 — LIKE over subject + customer.name + sequenceNumber (exact if numeric)
@@ -310,6 +315,26 @@ export class InMemoryTicketRepository implements TicketRepository {
         t.customerId != null &&
         wanted.has(t.customerId) &&
         t.resolvedAt == null &&
+        t.archivedAt == null
+      ) {
+        result.set(t.customerId, (result.get(t.customerId) ?? 0) + 1);
+      }
+    }
+    return result;
+  }
+
+  async countClosedByClientIds(clientIds: string[]): Promise<Map<string, number>> {
+    // states-be (F1.5 spec #2) — mirror of countOpenByClientIds for CLOSED tickets.
+    // "Closed" = resolvedAt NOT null AND archivedAt null (same terminal signal,
+    // never inferred from TicketStatusCatalog — it has no closed flag).
+    const result = new Map<string, number>();
+    if (clientIds.length === 0) return result;
+    const wanted = new Set(clientIds);
+    for (const t of this.tickets) {
+      if (
+        t.customerId != null &&
+        wanted.has(t.customerId) &&
+        t.resolvedAt != null &&
         t.archivedAt == null
       ) {
         result.set(t.customerId, (result.get(t.customerId) ?? 0) + 1);
