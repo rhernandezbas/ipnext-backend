@@ -752,6 +752,10 @@ import { SendMessage } from '@application/use-cases/messaging/SendMessage';
 import { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
 import { GetClientContextByPhone } from '@application/use-cases/messaging/GetClientContextByPhone';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
+// F1.5-C2 (asignación) — LOCAL-only (Chatwoot nunca se entera de assigneeId/areaId)
+import { AssignConversation } from '@application/use-cases/messaging/AssignConversation';
+import { SetConversationArea } from '@application/use-cases/messaging/SetConversationArea';
+import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssignableUsers';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -2558,6 +2562,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // esto, memoryStorage permitía hasta 1GB en RAM por request sin ningún techo
       // sobre cuántos requests puede sostener un mismo agente).
       createMessagingSendRateLimiter(),
+      // F1.5-C2 (asignación) — LOCAL-only: assigneeId/areaId nunca se sincronizan a
+      // Chatwoot. `userLookupForScheduling` (línea ~978) y `roleLookupForRecapture`
+      // (línea ~2418) son reusados tal cual (mismas instancias que scheduling/
+      // recapture) — sin duplicar wiring. `ticketAreaRepo`/`listTicketAreas` (línea
+      // ~1081) también son las MISMAS instancias que /api/tickets/areas.
+      new AssignConversation(conversationRepo, userLookupForScheduling),
+      new SetConversationArea(conversationRepo, ticketAreaRepo),
+      new ListAssignableUsers(rbacUserRepo, roleLookupForRecapture),
+      listTicketAreas,
     ));
   }
 

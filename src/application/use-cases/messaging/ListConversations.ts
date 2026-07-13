@@ -1,5 +1,5 @@
-import type { ConversationRepository } from '@domain/ports/ConversationRepository';
-import type { PaginatedQuery, PaginatedResult } from '@application/dto/pagination';
+import type { ConversationRepository, ConversationListQuery } from '@domain/ports/ConversationRepository';
+import type { PaginatedResult } from '@application/dto/pagination';
 import { toConversationListItemDto, type ConversationListItemDto } from '@application/dto/messaging';
 
 /**
@@ -13,7 +13,7 @@ import { toConversationListItemDto, type ConversationListItemDto } from '@applic
 export class ListConversations {
   constructor(private readonly conversationRepo: ConversationRepository) {}
 
-  async execute(query: PaginatedQuery): Promise<PaginatedResult<ConversationListItemDto>> {
+  async execute(query: ConversationListQuery): Promise<PaginatedResult<ConversationListItemDto>> {
     const result = await this.conversationRepo.list(query);
     return {
       ...result,

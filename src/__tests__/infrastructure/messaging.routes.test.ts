@@ -26,12 +26,16 @@ import { SetConversationStatus } from '../../application/use-cases/messaging/Set
 import { GetClientContextByPhone } from '../../application/use-cases/messaging/GetClientContextByPhone';
 import { GetInboxClientContext } from '../../application/use-cases/messaging/GetInboxClientContext';
 import { GetChatAttachmentFile } from '../../application/use-cases/messaging/GetChatAttachmentFile';
+import { AssignConversation } from '../../application/use-cases/messaging/AssignConversation';
+import { SetConversationArea } from '../../application/use-cases/messaging/SetConversationArea';
+import { ListAssignableUsers } from '../../application/use-cases/messaging/ListAssignableUsers';
 import { GetClientContracts } from '../../application/use-cases/GetClientContracts';
 import { GetClientInvoices } from '../../application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '../../application/use-cases/GetClientLogs';
 import { ListTickets } from '../../application/use-cases/ListTickets';
 import { ListTasks } from '../../application/use-cases/ListTasks';
 import { ListPppoeByContract } from '../../application/use-cases/ListPppoeByContract';
+import { ListTicketAreas } from '../../application/use-cases/ListTicketAreas';
 import { InMemoryConversationRepository } from '../../infrastructure/adapters/in-memory/InMemoryConversationRepository';
 import { InMemoryChatMessageRepository } from '../../infrastructure/adapters/in-memory/InMemoryChatMessageRepository';
 import { InMemoryChatMessageAttachmentRepository } from '../../infrastructure/adapters/in-memory/InMemoryChatMessageAttachmentRepository';
@@ -40,10 +44,18 @@ import { InMemoryWebhookDeliveryRepository } from '../../infrastructure/adapters
 import { InMemoryTicketRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketRepository';
 import { InMemorySchedulingRepository } from '../../infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryPppoeServiceRepository } from '../../infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
+import { InMemoryTicketAreaCatalogRepository } from '../../infrastructure/adapters/in-memory/InMemoryTicketAreaCatalogRepository';
+import { InMemoryRbacUserRepository } from '../../infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { FakeChatwootGateway } from '../helpers/FakeChatwootGateway';
 import type { CustomerRepository, ActiveClientContact } from '../../domain/ports/CustomerRepository';
 import type { Customer } from '../../domain/entities/customer';
+import type { EntityLookup } from '../../domain/ports/EntityLookup';
+import type { UserRoleLookup } from '../../domain/ports/UserRoleLookup';
 import { config } from '../../infrastructure/config';
+
+/** F1.5-C2 — fixed known-assignee pool (same "fixed ids matching the fixture" idiom
+ * as `seedAdmins(['1','2'])` in tickets.routes.new.test.ts). */
+const KNOWN_ASSIGNEES: Record<string, string> = { 'user-1': 'Agente Uno', 'user-2': 'Agente Dos' };
 
 // Same "override config.chatwoot.webhookSecret per test" pattern as
 // chatwootSignatureMiddleware.test.ts / apiKeyMiddleware.test.ts.
@@ -122,6 +134,13 @@ interface BuildAppOptions {
    * limit to actually trigger 429. Defaults to a permissive passthrough so the rest
    * of the suite (many requests per test file) never trips it by accident. */
   sendRateLimiter?: RequestHandler;
+  // ─── F1.5-C2 (asignación) ───────────────────────────────────────────────────
+  areaRepo?: InMemoryTicketAreaCatalogRepository;
+  rbacUserRepo?: InMemoryRbacUserRepository;
+  /** Defaults to a lookup that only knows KNOWN_ASSIGNEES ('user-1'/'user-2'). */
+  assigneeLookup?: EntityLookup;
+  /** Defaults to a lookup returning ['administrador'] for every user (non-technical). */
+  roleLookup?: UserRoleLookup;
 }
 
 function buildApp(opts: BuildAppOptions = {}) {
@@ -138,6 +157,21 @@ function buildApp(opts: BuildAppOptions = {}) {
   const schedulingRepo = opts.schedulingRepo ?? new InMemorySchedulingRepository();
   const pppoeRepo = opts.pppoeRepo ?? new InMemoryPppoeServiceRepository();
   const getClientContext = new GetClientContextByPhone(customerRepo);
+
+  // ─── F1.5-C2 (asignación) ───────────────────────────────────────────────────
+  const areaRepo = opts.areaRepo ?? new InMemoryTicketAreaCatalogRepository();
+  const rbacUserRepo = opts.rbacUserRepo ?? new InMemoryRbacUserRepository();
+  // `seedAreas` links a LIVE repo reference (areas created after this call still
+  // resolve) — `seedUsers` is a static snapshot (same "fixed ids" idiom as
+  // InMemoryTicketRepository.seedAdmins), so only KNOWN_ASSIGNEES resolve a name.
+  conversationRepo.seedAreas(areaRepo);
+  conversationRepo.seedUsers(Object.entries(KNOWN_ASSIGNEES).map(([id, name]) => ({ id, name })));
+  const assigneeLookup: EntityLookup =
+    opts.assigneeLookup ??
+    {
+      findById: async (id: string) => (id in KNOWN_ASSIGNEES ? { id, name: KNOWN_ASSIGNEES[id] } : null),
+    };
+  const roleLookup: UserRoleLookup = opts.roleLookup ?? { listRoleCodes: async () => ['administrador'] };
   const getInboxClientContext = new GetInboxClientContext(
     conversationRepo,
     getClientContext,
@@ -178,11 +212,30 @@ function buildApp(opts: BuildAppOptions = {}) {
       // fix-be #2 [ALTO] — permissive by default (the rest of this file fires many
       // requests per test); tests targeting the limiter itself override it.
       opts.sendRateLimiter ?? allowPerm,
+      // F1.5-C2 (asignación) — LOCAL-only, sin llamada a Chatwoot.
+      new AssignConversation(conversationRepo, assigneeLookup),
+      new SetConversationArea(conversationRepo, areaRepo),
+      new ListAssignableUsers(rbacUserRepo, roleLookup),
+      new ListTicketAreas(areaRepo),
     ),
   );
   app.use(errorHandler);
 
-  return { app, conversationRepo, messageRepo, deliveryRepo, attachmentRepo, fileStorage, gateway, customerRepo, ticketRepo, schedulingRepo, pppoeRepo };
+  return {
+    app,
+    conversationRepo,
+    messageRepo,
+    deliveryRepo,
+    attachmentRepo,
+    fileStorage,
+    gateway,
+    customerRepo,
+    ticketRepo,
+    schedulingRepo,
+    pppoeRepo,
+    areaRepo,
+    rbacUserRepo,
+  };
 }
 
 // ─── RBAC gates (RBAC-1/2) ───────────────────────────────────────────────────────
@@ -224,6 +277,36 @@ describe('/api/messaging — RBAC', () => {
 
     expect(res.status).toBe(403);
     expect(gateway.setStatusCalls).toHaveLength(0);
+  });
+
+  // ─── F1.5-C2 (asignación) — RBAC ────────────────────────────────────────────
+
+  it('PATCH /conversations/:id/assignee con SOLO messaging:read (sin send) → 403', async () => {
+    const { app } = buildApp({ sendPerm: denyPerm });
+    const res = await request(app)
+      .patch('/api/messaging/conversations/conv-1/assignee')
+      .send({ assigneeId: 'user-1' });
+    expect(res.status).toBe(403);
+  });
+
+  it('PATCH /conversations/:id/area con SOLO messaging:read (sin send) → 403', async () => {
+    const { app } = buildApp({ sendPerm: denyPerm });
+    const res = await request(app)
+      .patch('/api/messaging/conversations/conv-1/area')
+      .send({ areaId: 'area-1' });
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /assignable-users sin messaging:read → 403', async () => {
+    const { app } = buildApp({ readPerm: denyPerm });
+    const res = await request(app).get('/api/messaging/assignable-users');
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /areas sin messaging:read → 403', async () => {
+    const { app } = buildApp({ readPerm: denyPerm });
+    const res = await request(app).get('/api/messaging/areas');
+    expect(res.status).toBe(403);
   });
 });
 
@@ -1012,6 +1095,274 @@ describe('POST /api/messaging/conversations/:id/status', () => {
     expect(res.status).toBe(200);
     const updated = await conversationRepo.findById(conv.id);
     expect(updated!.canReply).toBe(false);
+  });
+});
+
+// ─── PATCH /conversations/:id/assignee (F1.5-C2, asignación) ────────────────────
+
+describe('PATCH /api/messaging/conversations/:id/assignee', () => {
+  it('assigneeId válido → 200 con el DTO actualizado (assignee poblado), LOCAL sin llamar a Chatwoot', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 70, status: 'open' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/assignee`)
+      .send({ assigneeId: 'user-1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.assignee).toEqual({ id: 'user-1', name: 'Agente Uno' });
+    expect(gateway.setStatusCalls).toHaveLength(0); // NUNCA llama a Chatwoot
+    const updated = await conversationRepo.findById(conv.id);
+    expect(updated!.assigneeId).toBe('user-1');
+  });
+
+  it('assigneeId: null → 200, desasigna', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 71 });
+    await conversationRepo.updateLocalFields(conv.id, { assigneeId: 'user-1' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/assignee`)
+      .send({ assigneeId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.assignee).toBeNull();
+  });
+
+  it('assigneeId ausente en el body → 400 VALIDATION_ERROR', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 72 });
+
+    const res = await request(app).patch(`/api/messaging/conversations/${conv.id}/assignee`).send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('assigneeId con tipo inválido (number) → 400 VALIDATION_ERROR', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 73 });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/assignee`)
+      .send({ assigneeId: 123 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('conversación inexistente → 404 CONVERSATION_NOT_FOUND', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .patch('/api/messaging/conversations/ghost/assignee')
+      .send({ assigneeId: 'user-1' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONVERSATION_NOT_FOUND');
+  });
+
+  it('assigneeId inexistente → 404 USER_NOT_FOUND, mirror SIN tocar', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 74 });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/assignee`)
+      .send({ assigneeId: 'ghost-user' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('USER_NOT_FOUND');
+    const stillUnassigned = await conversationRepo.findById(conv.id);
+    expect(stillUnassigned!.assigneeId).toBeNull();
+  });
+
+  it('sin sesión (auth deniega) → 401', async () => {
+    const { app, conversationRepo } = buildApp({ auth: denyAuth });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 75 });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/assignee`)
+      .send({ assigneeId: 'user-1' });
+
+    expect(res.status).toBe(401);
+  });
+});
+
+// ─── PATCH /conversations/:id/area (F1.5-C2, asignación) ────────────────────────
+
+describe('PATCH /api/messaging/conversations/:id/area', () => {
+  it('areaId válido → 200 con el DTO actualizado (area poblada), LOCAL sin llamar a Chatwoot', async () => {
+    const { app, conversationRepo, areaRepo, gateway } = buildApp();
+    const area = await areaRepo.create({ name: 'Soporte', color: '#ff0000' });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 80, status: 'open' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/area`)
+      .send({ areaId: area.id });
+
+    expect(res.status).toBe(200);
+    expect(res.body.area).toEqual({ id: area.id, name: 'Soporte', color: '#ff0000' });
+    expect(gateway.setStatusCalls).toHaveLength(0); // NUNCA llama a Chatwoot
+    const updated = await conversationRepo.findById(conv.id);
+    expect(updated!.areaId).toBe(area.id);
+  });
+
+  it('areaId: null → 200, limpia el área', async () => {
+    const { app, conversationRepo, areaRepo } = buildApp();
+    const area = await areaRepo.create({ name: 'Facturación', color: '#00ff00' });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 81 });
+    await conversationRepo.updateLocalFields(conv.id, { areaId: area.id });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/area`)
+      .send({ areaId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.area).toBeNull();
+  });
+
+  it('areaId ausente en el body → 400 VALIDATION_ERROR', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 82 });
+
+    const res = await request(app).patch(`/api/messaging/conversations/${conv.id}/area`).send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('conversación inexistente → 404 CONVERSATION_NOT_FOUND', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .patch('/api/messaging/conversations/ghost/area')
+      .send({ areaId: 'area-1' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONVERSATION_NOT_FOUND');
+  });
+
+  it('areaId inexistente → 404 TICKET_AREA_NOT_FOUND, mirror SIN tocar', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 83 });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/area`)
+      .send({ areaId: 'ghost-area' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('TICKET_AREA_NOT_FOUND');
+    const stillNoArea = await conversationRepo.findById(conv.id);
+    expect(stillNoArea!.areaId).toBeNull();
+  });
+
+  it('sin sesión (auth deniega) → 401', async () => {
+    const { app, conversationRepo, areaRepo } = buildApp({ auth: denyAuth });
+    const area = await areaRepo.create({ name: 'NOC', color: '#111111' });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 84 });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/area`)
+      .send({ areaId: area.id });
+
+    expect(res.status).toBe(401);
+  });
+});
+
+// ─── GET /assignable-users (F1.5-C2) ─────────────────────────────────────────────
+
+describe('GET /api/messaging/assignable-users', () => {
+  it('200 con el pool asignable (active + con rol + sin rol técnico)', async () => {
+    const rbacUserRepo = new InMemoryRbacUserRepository();
+    const active = await rbacUserRepo.create({ name: 'Ana', email: 'ana@x.com', login: 'ana', passwordHash: 'x', status: 'active' });
+    const technical = await rbacUserRepo.create({ name: 'Carlos', email: 'carlos@x.com', login: 'carlos', passwordHash: 'x', status: 'active' });
+    const roleLookup: UserRoleLookup = {
+      listRoleCodes: async (id: string) => (id === technical.id ? ['tecnico'] : ['administrador']),
+    };
+    const { app } = buildApp({ rbacUserRepo, roleLookup });
+
+    const res = await request(app).get('/api/messaging/assignable-users');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([{ id: active.id, name: 'Ana' }]);
+  });
+
+  it('nunca expone passwordHash u otro campo sensible', async () => {
+    const rbacUserRepo = new InMemoryRbacUserRepository();
+    await rbacUserRepo.create({ name: 'Fede', email: 'fede@x.com', login: 'fede', passwordHash: 'top-secret', status: 'active' });
+    const { app } = buildApp({ rbacUserRepo, roleLookup: { listRoleCodes: async () => ['ventas'] } });
+
+    const res = await request(app).get('/api/messaging/assignable-users');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(Object.keys(res.body.data[0]).sort()).toEqual(['id', 'name']);
+  });
+});
+
+// ─── GET /areas (F1.5-C2) ─────────────────────────────────────────────────────────
+
+describe('GET /api/messaging/areas', () => {
+  it('200 con el catálogo de áreas (reusa TicketAreaCatalogRepository)', async () => {
+    const { app, areaRepo } = buildApp();
+    await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
+    await areaRepo.create({ name: 'Facturación', color: '#22c55e' });
+
+    const res = await request(app).get('/api/messaging/areas');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.data.map((a: { name: string }) => a.name).sort()).toEqual(['Facturación', 'Soporte']);
+  });
+
+  it('sin áreas → 200 con data: []', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/messaging/areas');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+  });
+});
+
+// ─── GET /conversations?assignment=mine|unassigned|all (F1.5-C2) ────────────────
+
+describe('GET /api/messaging/conversations — filtro ?assignment=', () => {
+  async function seedThree(conversationRepo: InMemoryConversationRepository) {
+    const mine = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 90, lastMessageAt: '2026-07-01T00:00:00.000Z' });
+    const other = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 91, lastMessageAt: '2026-07-02T00:00:00.000Z' });
+    const unassigned = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 92, lastMessageAt: '2026-07-03T00:00:00.000Z' });
+    // allowAuth stampea req.user.id = 'user-test' — 'mine' filtra por ESE id.
+    await conversationRepo.updateLocalFields(mine.id, { assigneeId: 'user-test' });
+    await conversationRepo.updateLocalFields(other.id, { assigneeId: 'user-1' });
+    return { mine, other, unassigned };
+  }
+
+  it("?assignment=mine → SOLO las asignadas a req.user.id (resuelto vía el middleware auth)", async () => {
+    const { app, conversationRepo } = buildApp();
+    const { mine } = await seedThree(conversationRepo);
+
+    const res = await request(app).get('/api/messaging/conversations?assignment=mine');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id)).toEqual([mine.id]);
+  });
+
+  it('?assignment=unassigned → SOLO las sin assigneeId', async () => {
+    const { app, conversationRepo } = buildApp();
+    const { unassigned } = await seedThree(conversationRepo);
+
+    const res = await request(app).get('/api/messaging/conversations?assignment=unassigned');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id)).toEqual([unassigned.id]);
+  });
+
+  it('?assignment=all (o ausente) → las 3, sin filtrar', async () => {
+    const { app, conversationRepo } = buildApp();
+    await seedThree(conversationRepo);
+
+    const resAll = await request(app).get('/api/messaging/conversations?assignment=all');
+    const resDefault = await request(app).get('/api/messaging/conversations');
+
+    expect(resAll.body.data).toHaveLength(3);
+    expect(resDefault.body.data).toHaveLength(3);
   });
 });
 

@@ -476,4 +476,30 @@ describe('GetConversation (fetch-on-open)', () => {
       expect(result.lastMessageAt).toBe('2026-07-11T16:00:00.000Z');
     });
   });
+
+  // ─── F1.5-C2 (asignación) — preservación: el sync fetch-on-open NUNCA pisa assigneeId/areaId ─
+  it('F1.5-C2: el fetch-on-open sync preserva assigneeId/areaId de una conversación ya asignada', async () => {
+    const conversationRepo = new InMemoryConversationRepository();
+    const messageRepo = new InMemoryChatMessageRepository();
+    const gateway = new FakeChatwootGateway();
+    const getClientContext = new GetClientContextByPhone(makeCustomerRepo());
+
+    conversationRepo.seedUsers([{ id: 'user-1', name: 'Agente Uno' }]);
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 73, status: 'open' });
+    await conversationRepo.updateLocalFields(conv.id, { assigneeId: 'user-1', areaId: 'area-1' });
+
+    gateway.conversationsById.set(73, {
+      id: 73, contactName: 'Cliente Y', contactPhone: '+5492324000073', status: 'resolved', canReply: true,
+      lastActivityAt: '2026-07-11T17:00:00.000Z',
+    });
+    gateway.messagesById.set(73, []);
+
+    const uc = new GetConversation(conversationRepo, messageRepo, gateway, getClientContext);
+    const result = await uc.execute(conv.id);
+
+    expect(result.status).toBe('resolved'); // sí se sincronizó
+    const updated = await conversationRepo.findById(conv.id);
+    expect(updated!.assigneeId).toBe('user-1'); // NO pisado por el sync
+    expect(updated!.areaId).toBe('area-1'); // NO pisado por el sync
+  });
 });

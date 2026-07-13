@@ -145,6 +145,53 @@ describe('Migración 20260906000000_add_chat_message_is_private (messaging-inbox
   });
 });
 
+describe('Migración 20260907000000_add_conversation_assignment (F1.5-C2: assigneeId/areaId LOCALES)', () => {
+  let sql: string;
+
+  beforeAll(() => {
+    sql = readFileSync(
+      join(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        'prisma',
+        'migrations',
+        '20260907000000_add_conversation_assignment',
+        'migration.sql',
+      ),
+      'utf8',
+    );
+  });
+
+  it('agrega assigneeId y areaId como columnas ADITIVAS (sin backfill)', () => {
+    expect(sql).toMatch(/ALTER TABLE "Conversation" ADD COLUMN\s+"assigneeId" TEXT/);
+    expect(sql).toMatch(/ALTER TABLE "Conversation" ADD COLUMN\s+"areaId" TEXT/);
+  });
+
+  it('crea los índices de assigneeId y areaId', () => {
+    expect(sql).toMatch(/CREATE INDEX "Conversation_assigneeId_idx" ON "Conversation"\("assigneeId"\)/);
+    expect(sql).toMatch(/CREATE INDEX "Conversation_areaId_idx" ON "Conversation"\("areaId"\)/);
+  });
+
+  it('assigneeId es FK a RbacUser con ON DELETE SET NULL (clon del patrón Ticket.assigneeId)', () => {
+    expect(sql).toMatch(
+      /ALTER TABLE "Conversation" ADD CONSTRAINT "Conversation_assigneeId_fkey" FOREIGN KEY \("assigneeId"\) REFERENCES "RbacUser"\("id"\) ON DELETE SET NULL ON UPDATE CASCADE/,
+    );
+  });
+
+  it('areaId es FK a TicketAreaCatalog con ON DELETE SET NULL (clon del patrón Ticket.areaId)', () => {
+    expect(sql).toMatch(
+      /ALTER TABLE "Conversation" ADD CONSTRAINT "Conversation_areaId_fkey" FOREIGN KEY \("areaId"\) REFERENCES "TicketAreaCatalog"\("id"\) ON DELETE SET NULL ON UPDATE CASCADE/,
+    );
+  });
+
+  it('sin BEGIN/COMMIT explícito (Prisma envuelve cada migración en su propia transacción)', () => {
+    expect(sql).not.toMatch(/^\s*BEGIN\s*;/m);
+    expect(sql).not.toMatch(/^\s*COMMIT\s*;/m);
+  });
+});
+
 describe('errorHandler — codes nuevos de messaging mapeados (SEND-2/3, INBOX-2)', () => {
   let handlerSrc: string;
 

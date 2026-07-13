@@ -13,6 +13,20 @@ import type { CustomerStatus } from '@domain/entities/customer';
 // Note the field RENAME vs the mirror row: `ConversationRecord.lastMessagePreview`
 // → `preview` on the wire (design §5) — deliberate, not a typo.
 
+// F1.5-C2 (asignación) — nested shape, no un flat `assigneeId/assigneeName` como
+// `Ticket` (design del contrato de esta fase): el FE consume `assignee`/`area`
+// como objeto único o `null`, nunca dos campos sueltos a reconciliar.
+export interface ConversationAssigneeDto {
+  id: string;
+  name: string;
+}
+
+export interface ConversationAreaDto {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export interface ConversationListItemDto {
   id: string;
   contactName: string | null;
@@ -20,6 +34,18 @@ export interface ConversationListItemDto {
   lastMessageAt: string | null;
   preview: string | null;
   status: string;
+  /** F1.5-C2 — LOCAL-only (Chatwoot never sees this). `null` = unassigned. */
+  assignee: ConversationAssigneeDto | null;
+  /** F1.5-C2 — LOCAL-only (Chatwoot never sees this). `null` = no area set. */
+  area: ConversationAreaDto | null;
+}
+
+// ─── Assignable users (F1.5-C2, dropdown) ────────────────────────────────────
+// Deliberately minimal — NEVER passwordHash/email/login/any auth-internal field.
+
+export interface AssignableUserDto {
+  id: string;
+  name: string;
 }
 
 // ─── Client context (CTX-1) ──────────────────────────────────────────────────
@@ -197,6 +223,13 @@ export function toConversationListItemDto(record: ConversationRecord): Conversat
     lastMessageAt: record.lastMessageAt,
     preview: record.lastMessagePreview,
     status: record.status,
+    // F1.5-C2 — built from the JOIN-derived flat fields (assigneeName/areaName/
+    // areaColor), same "flat on the record, nested on the wire" split as the
+    // rest of this mapper (never leaks the raw ConversationRecord shape).
+    assignee: record.assigneeId ? { id: record.assigneeId, name: record.assigneeName ?? '' } : null,
+    area: record.areaId
+      ? { id: record.areaId, name: record.areaName ?? '', color: record.areaColor ?? '#6366f1' }
+      : null,
   };
 }
 

@@ -947,4 +947,47 @@ describe('ReceiveChatwootWebhook', () => {
       expect(conv!.lastMessagePreview).toBe(''); // comportamiento previo preservado (retrocompat)
     });
   });
+
+  // ─── F1.5-C2 (asignación) — preservación: el webhook NUNCA pisa assigneeId/areaId ─
+  describe('F1.5-C2 — assigneeId/areaId son LOCALES, el webhook nunca los toca', () => {
+    it('un message_created sobre una conversación YA asignada preserva assigneeId/areaId', async () => {
+      const { uc, conversationRepo } = makeUseCase();
+      conversationRepo.seedUsers([{ id: 'user-1', name: 'Agente Uno' }]);
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 500, status: 'open' });
+      await conversationRepo.updateLocalFields(conv.id, { assigneeId: 'user-1', areaId: 'area-1' });
+
+      await uc.execute('delivery-assign-preserve', {
+        event: 'message_created',
+        id: 9001,
+        content: 'nuevo mensaje entrante',
+        message_type: 'incoming',
+        created_at: 1735700700,
+        conversation: { id: 500, meta: { sender: { name: 'Cliente X', phone_number: '+5492324000099' } } },
+        sender: { name: 'Cliente X' },
+      });
+
+      const updated = await conversationRepo.findByChatwootId(500);
+      expect(updated!.lastMessagePreview).toBe('nuevo mensaje entrante'); // sí se actualizó (mirror-driven)
+      expect(updated!.assigneeId).toBe('user-1'); // NO pisado
+      expect(updated!.areaId).toBe('area-1'); // NO pisado
+    });
+
+    it('un conversation_status_changed sobre una conversación YA asignada preserva assigneeId/areaId', async () => {
+      const { uc, conversationRepo } = makeUseCase();
+      conversationRepo.seedUsers([{ id: 'user-1', name: 'Agente Uno' }]);
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 501, status: 'open' });
+      await conversationRepo.updateLocalFields(conv.id, { assigneeId: 'user-1', areaId: 'area-1' });
+
+      await uc.execute('delivery-status-preserve', {
+        event: 'conversation_status_changed',
+        id: 501,
+        status: 'resolved',
+      });
+
+      const updated = await conversationRepo.findByChatwootId(501);
+      expect(updated!.status).toBe('resolved'); // sí se actualizó
+      expect(updated!.assigneeId).toBe('user-1'); // NO pisado
+      expect(updated!.areaId).toBe('area-1'); // NO pisado
+    });
+  });
 });

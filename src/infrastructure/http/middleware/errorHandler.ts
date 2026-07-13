@@ -163,6 +163,15 @@ const statusMap: Record<string, number> = {
   // messaging-inbox-v2-media (F1.5 fase A, Tanda 2 · SEND-1) — enviar media: el
   // contentType de un adjunto SALIENTE no es clasificable (vacío/ausente).
   CHAT_ATTACHMENT_UNSUPPORTED_TYPE: 415,
+  // F1.5-C2 (asignación) — SetConversationArea reusa TicketAreaNotFoundError
+  // (`@domain/errors/tickets`) para el area inexistente referenciado. El código
+  // ya existía sin entrada explícita acá (ticketAreas.routes.ts lo intercepta
+  // inline vía `instanceof` ANTES de llegar a este handler global, así que nunca
+  // había caído en el fallback `?? 400`). messaging.routes.ts sigue el convenio
+  // try/catch → next(err) SIN checks inline por código — agregar la entrada acá
+  // hace que el mismo error resuelva 404 en AMBOS routers, sin tocar
+  // ticketAreas.routes.ts ni sus tests (nunca llegan al fallback global).
+  TICKET_AREA_NOT_FOUND: 404,
 };
 
 /** Express global error-handling middleware. */

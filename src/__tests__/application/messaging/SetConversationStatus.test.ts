@@ -15,6 +15,7 @@ import {
   InvalidConversationStatusError,
 } from '@domain/errors/messaging';
 import { InMemoryConversationRepository } from '@infrastructure/adapters/in-memory/InMemoryConversationRepository';
+import { InMemoryTicketAreaCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketAreaCatalogRepository';
 import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
 
 function makeHarness() {
@@ -113,5 +114,25 @@ describe('SetConversationStatus', () => {
     const updated = await conversationRepo.findById(conv.id);
     expect(updated!.status).toBe('open');
     expect(updated!.canReply).toBe(false); // NOT reopened by a status change
+  });
+
+  // ─── F1.5-C2 (asignación) — preservación: SetConversationStatus NUNCA pisa assigneeId/areaId ─
+
+  it('NUNCA toca assigneeId/areaId — son campos LOCALES ajenos a este use case', async () => {
+    const { conversationRepo, uc } = makeHarness();
+    const areaRepo = new InMemoryTicketAreaCatalogRepository();
+    conversationRepo.seedUsers([{ id: 'user-1', name: 'Agente Uno' }]);
+    conversationRepo.seedAreas(areaRepo);
+    const area = await areaRepo.create({ name: 'Soporte', color: '#6366f1' });
+
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 107, status: 'open' });
+    await conversationRepo.updateLocalFields(conv.id, { assigneeId: 'user-1', areaId: area.id });
+
+    await uc.execute(conv.id, 'resolved');
+
+    const updated = await conversationRepo.findById(conv.id);
+    expect(updated!.status).toBe('resolved'); // sí cambió (es lo que testea esta use case)
+    expect(updated!.assigneeId).toBe('user-1'); // NO pisado
+    expect(updated!.areaId).toBe(area.id); // NO pisado
   });
 });

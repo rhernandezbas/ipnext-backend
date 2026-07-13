@@ -21,7 +21,12 @@ import { SendMessage } from '@application/use-cases/messaging/SendMessage';
 import { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
 import { GetChatAttachmentFile } from '@application/use-cases/messaging/GetChatAttachmentFile';
+import { AssignConversation } from '@application/use-cases/messaging/AssignConversation';
+import { SetConversationArea } from '@application/use-cases/messaging/SetConversationArea';
+import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssignableUsers';
+import { ListTicketAreas } from '@application/use-cases/ListTicketAreas';
 import { ChatAttachmentNotFoundError, ChatAttachmentNotReadyError } from '@domain/errors/chatAttachment';
+import type { ConversationListQuery } from '@domain/ports/ConversationRepository';
 
 /**
  * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-5) — construye un header
@@ -190,6 +195,25 @@ function firstQueryValue(v: unknown): string | undefined {
 }
 
 /**
+ * F1.5-C2 (asignación) — valida el body de `PATCH /conversations/:id/assignee`
+ * y `PATCH /conversations/:id/area`: la clave debe estar PRESENTE en el body
+ * (ausente → 400 — evita la ambigüedad entre "no mandaron el campo" y "quieren
+ * desasignar explícitamente con null") y su valor debe ser `string` no-vacío o
+ * `null` (nunca otro tipo — cierra el mismo gap de tipado que `firstQueryValue`
+ * cierra para query params repetidos).
+ */
+function parseNullableIdField(
+  body: Record<string, unknown> | undefined,
+  field: string,
+): { ok: true; value: string | null } | { ok: false } {
+  if (!body || !(field in body)) return { ok: false };
+  const raw = body[field];
+  if (raw === null) return { ok: true, value: null };
+  if (typeof raw === 'string' && raw.length > 0) return { ok: true, value: raw };
+  return { ok: false };
+}
+
+/**
  * messaging-inbox-notes (F1.5 fase D, NOTE-6) — reads a `private`/`isPrivate` flag off
  * either wire shape this endpoint accepts: a plain JSON body (`{content, private:true}`,
  * a real boolean) or a multipart form field (`form.append('private','true')`, always a
@@ -240,6 +264,18 @@ export function createMessagingRouter(
    * tocar los defaults de producción — mismo criterio que `chatwootSignatureMw`.
    */
   sendRateLimiter: RequestHandler,
+  /**
+   * F1.5-C2 (asignación) — LOCAL-only (Chatwoot nunca se entera): asigna un
+   * agente (RbacUser) a la conversación. Gateado por `perms.send` (mismo
+   * permiso que status/envío — no hay un permiso separado para asignar).
+   */
+  assignConversation: AssignConversation,
+  /** F1.5-C2 (asignación) — LOCAL-only. Setea/limpia el área (TicketAreaCatalog). */
+  setConversationArea: SetConversationArea,
+  /** F1.5-C2 (asignación) — pool asignable para el dropdown. Gateado por `perms.read`. */
+  listAssignableUsers: ListAssignableUsers,
+  /** F1.5-C2 (asignación) — catálogo de áreas, reusa el use case de tickets vía DI. Gateado por `perms.read`. */
+  listTicketAreas: ListTicketAreas,
 ): Router {
   const router = Router();
   const conditionalSendLimiter = conditionalSendRateLimiter(sendRateLimiter);
@@ -270,7 +306,7 @@ export function createMessagingRouter(
     },
   );
 
-  // ─── GET /conversations (read) — INBOX-1 ────────────────────────────────────
+  // ─── GET /conversations (read) — INBOX-1, F1.5-C2 ?assignment= filter ───────
   router.get(
     '/conversations',
     auth,
@@ -278,10 +314,20 @@ export function createMessagingRouter(
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const { page, limit } = req.query as Record<string, string | undefined>;
-        const result = await listConversations.execute({
+        const assignment = firstQueryValue(req.query['assignment']);
+        const query: ConversationListQuery = {
           page: page ? Number.parseInt(page, 10) : undefined,
           limit: limit ? Number.parseInt(limit, 10) : undefined,
-        });
+        };
+        // F1.5-C2 — 'mine' resuelve req.user.id (poblado por `auth`, mismo patrón
+        // que rbacUser.routes.ts/portfolio.routes.ts); 'unassigned' filtra
+        // assigneeId=null; 'all'/ausente no aplica filtro alguno.
+        if (assignment === 'mine') {
+          query.assigneeId = req.user?.id as string;
+        } else if (assignment === 'unassigned') {
+          query.unassigned = true;
+        }
+        const result = await listConversations.execute(query);
         res.json(result);
       } catch (err) {
         next(err);
@@ -405,6 +451,85 @@ export function createMessagingRouter(
         const status = typeof rawStatus === 'string' ? rawStatus : '';
         const result = await setConversationStatus.execute(req.params['id'] as string, status);
         res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── PATCH /conversations/:id/assignee (send) — F1.5-C2, asignación LOCAL ───
+  // Gateado por el MISMO permiso que status/envío (messaging:send) — no hay un
+  // permiso separado para asignar. NUNCA llama a Chatwoot (AssignConversation
+  // solo toca el mirror).
+  router.patch(
+    '/conversations/:id/assignee',
+    auth,
+    perms.send,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const body = req.body as Record<string, unknown> | undefined;
+        const parsed = parseNullableIdField(body, 'assigneeId');
+        if (!parsed.ok) {
+          res.status(400).json({ error: 'assigneeId must be a non-empty string or null', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        const result = await assignConversation.execute(req.params['id'] as string, parsed.value);
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── PATCH /conversations/:id/area (send) — F1.5-C2, asignación LOCAL ───────
+  router.patch(
+    '/conversations/:id/area',
+    auth,
+    perms.send,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const body = req.body as Record<string, unknown> | undefined;
+        const parsed = parseNullableIdField(body, 'areaId');
+        if (!parsed.ok) {
+          res.status(400).json({ error: 'areaId must be a non-empty string or null', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        const result = await setConversationArea.execute(req.params['id'] as string, parsed.value);
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /assignable-users (read) — F1.5-C2, dropdown pool ───────────────────
+  // Gate `messaging:read` (no admin.manage/tickets.read) — cualquier agente con
+  // acceso al inbox puede ver a quién asignarle una conversación.
+  router.get(
+    '/assignable-users',
+    auth,
+    perms.read,
+    async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const data = await listAssignableUsers.execute();
+        res.json({ data });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /areas (read) — F1.5-C2, catálogo de áreas para el dropdown ────────
+  // Reusa ListTicketAreas/TicketAreaCatalogRepository vía DI — mismo catálogo
+  // que /api/tickets/areas, sin duplicar el puerto.
+  router.get(
+    '/areas',
+    auth,
+    perms.read,
+    async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const data = await listTicketAreas.execute();
+        res.json({ data });
       } catch (err) {
         next(err);
       }

@@ -47,6 +47,8 @@ describe('ListConversations', () => {
       lastMessageAt: '2026-07-10T10:00:00.000Z',
       preview: 'Mensaje reciente', // renamed from lastMessagePreview (design §5)
       status: 'open',
+      assignee: null, // F1.5-C2 — unassigned by default
+      area: null, // F1.5-C2 — no area by default
     });
     expect(result.total).toBe(3);
   });
@@ -77,5 +79,53 @@ describe('ListConversations', () => {
     expect(result.limit).toBe(2);
     expect(result.data).toHaveLength(2);
     expect(result.total).toBe(5);
+  });
+
+  // ─── F1.5-C2 (asignación) — filtro server-side Mine/Unassigned/All ──────────
+
+  describe('filtro de asignación', () => {
+    async function seedThree(repo: InMemoryConversationRepository) {
+      const a = await repo.upsertByChatwootId({ chatwootConversationId: 10, contactName: 'A', lastMessageAt: '2026-07-01T00:00:00.000Z' });
+      const b = await repo.upsertByChatwootId({ chatwootConversationId: 11, contactName: 'B', lastMessageAt: '2026-07-02T00:00:00.000Z' });
+      const c = await repo.upsertByChatwootId({ chatwootConversationId: 12, contactName: 'C', lastMessageAt: '2026-07-03T00:00:00.000Z' });
+      repo.seedUsers([{ id: 'user-1', name: 'Agente Uno' }, { id: 'user-2', name: 'Agente Dos' }]);
+      await repo.updateLocalFields(a.id, { assigneeId: 'user-1' });
+      await repo.updateLocalFields(b.id, { assigneeId: 'user-2' });
+      // c queda sin asignar
+      return { a, b, c };
+    }
+
+    it("assigneeId → 'mine': devuelve SOLO las conversaciones asignadas a ese userId", async () => {
+      const repo = new InMemoryConversationRepository();
+      const { a } = await seedThree(repo);
+      const uc = new ListConversations(repo);
+
+      const result = await uc.execute({ assigneeId: 'user-1' });
+
+      expect(result.data.map((d) => d.id)).toEqual([a.id]);
+      expect(result.data[0]!.assignee).toEqual({ id: 'user-1', name: 'Agente Uno' });
+    });
+
+    it("unassigned:true → devuelve SOLO las conversaciones sin assigneeId", async () => {
+      const repo = new InMemoryConversationRepository();
+      const { c } = await seedThree(repo);
+      const uc = new ListConversations(repo);
+
+      const result = await uc.execute({ unassigned: true });
+
+      expect(result.data.map((d) => d.id)).toEqual([c.id]);
+      expect(result.data[0]!.assignee).toBeNull();
+    });
+
+    it('sin filtro (all) → devuelve las 3, con su assignee resuelto por fila', async () => {
+      const repo = new InMemoryConversationRepository();
+      await seedThree(repo);
+      const uc = new ListConversations(repo);
+
+      const result = await uc.execute({});
+
+      expect(result.data).toHaveLength(3);
+      expect(result.total).toBe(3);
+    });
   });
 });

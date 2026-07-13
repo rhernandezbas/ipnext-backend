@@ -2235,6 +2235,8 @@ model TicketAreaCatalog {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   tickets   Ticket[]
+  // F1.5-C2 (asignación) — back-relation del área LOCAL de Conversation (mirror WhatsApp).
+  conversations Conversation[]
 
   @@map("TicketAreaCatalog")
 }
@@ -2401,6 +2403,9 @@ model RbacUser {
   tvActivationEvents      TvActivationEvent[] @relation("TvActivationEventActor")
   // #110 — Contract service event history back-relation (soft FK, SetNull on delete)
   contractServiceEvents   ContractServiceEvent[] @relation("ContractServiceEventActor")
+  // F1.5-C2 (asignación) — back-relation de la asignación LOCAL de Conversation
+  // (mirror WhatsApp, nunca sincronizada a Chatwoot).
+  assignedConversations   Conversation[]         @relation("ConversationAssignee")
 
   @@index([login])
   @@index([iclassTeamLogin])
@@ -2768,6 +2773,19 @@ model Conversation {
                                                           // NUNCA recalcula la ventana 24h local
   lastMessageAt          DateTime?
   lastMessagePreview     String?
+
+  // F1.5-C2 (asignación) — assigneeId/areaId son campos EXCLUSIVAMENTE LOCALES del
+  // mirror: Chatwoot NUNCA se entera de la asignación (no existe llamada upstream),
+  // igual que status/canReply ya son locales-primero. NINGÚN camino de escritura
+  // impulsado por Chatwoot (upsertByChatwootId — webhook/fetch-on-open/SendMessage/
+  // SetConversationStatus) toca estos dos campos: solo
+  // ConversationRepository.updateLocalFields (AssignConversation/SetConversationArea)
+  // los escribe. Clon 1:1 del patrón Ticket.assigneeId/areaId.
+  assigneeId             String?
+  assignee               RbacUser?          @relation("ConversationAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  areaId                 String?
+  area                   TicketAreaCatalog? @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
   messages               ChatMessage[]
@@ -2776,6 +2794,8 @@ model Conversation {
   // LAST in PrismaConversationRepository.list) — same `sort: Desc` idiom already
   // used elsewhere in this schema (e.g. ScheduledTaskActivity's `createdAt(sort: Desc)`).
   @@index([lastMessageAt(sort: Desc)])
+  @@index([assigneeId])
+  @@index([areaId])
 }
 
 // chatwootMessageId es único a nivel MENSAJE de Chatwoot — idempotencia de upsert (HOOK-4).
