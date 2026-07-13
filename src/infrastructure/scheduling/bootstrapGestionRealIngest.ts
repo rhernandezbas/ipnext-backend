@@ -1,5 +1,3 @@
-import { randomUUID } from 'crypto';
-import bcrypt from 'bcryptjs';
 import { config } from '../config';
 import { GestionRealClient } from '../adapters/gestion-real/GestionRealClient';
 import { PrismaGrLinkResolver } from '../adapters/prisma/PrismaGrLinkResolver';
@@ -13,7 +11,7 @@ import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCateg
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 import { IngestGestionRealOrders } from '@application/use-cases/IngestGestionRealOrders';
-import { bootstrapApiUser, API_USER_LOGIN } from '../bootstrap/bootstrapApiUser';
+import { API_USER_LOGIN } from '../bootstrap/bootstrapApiUser';
 import { GestionRealIngestScheduler } from './GestionRealIngestScheduler';
 
 /**
@@ -59,15 +57,12 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
   // start of each run and BLOCKS (zero tasks) if either is missing.
   const priorities = new PrismaTaskPriorityRepository();
   const categories = new PrismaTaskCategoryRepository();
-  // System "Api" reporter (#15): ensure it exists (idempotent) so ingested tasks
-  // are reported by a stable system user, not left null. The user is created with
-  // an UNUSABLE passwordHash (bcrypt of a random secret) — it can never log in,
-  // it only exists to be referenced as reporterId.
+  // System "Api" reporter (#15): the reporter of ingested tasks. Its bootstrap now
+  // lives UNCONDITIONALLY in main.ts (bootstrapSystemUsers) — DECOUPLED from GR
+  // (deprecated) so the reporter survives with GR off. The ingest resolves it by
+  // login at runtime (apiReporterLogin below); by the time this scheduler runs
+  // (fire-and-forget after listen), main has already ensured login `api` exists.
   const rbacUsers = new PrismaRbacUserRepository();
-  const apiUser = await bootstrapApiUser(rbacUsers, {
-    passwordHash: bcrypt.hashSync(randomUUID(), 10),
-  });
-  console.log(`[gr-ingest] system "Api" reporter ${apiUser.outcome} (id=${apiUser.id})`);
 
   // Resolve a last-resort default stage for the NEEDS-REVIEW (null-project) path.
   //

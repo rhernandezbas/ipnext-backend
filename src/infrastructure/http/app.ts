@@ -2,7 +2,7 @@ import express, { Router, Request, Response } from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
-import { createLoginRateLimiter, createMessagingSendRateLimiter } from './middleware/rateLimiters';
+import { createLoginRateLimiter, createMessagingSendRateLimiter, createExternalWriteRateLimiter } from './middleware/rateLimiters';
 import { SplynxClient } from '../adapters/splynx/SplynxClient';
 import { PrismaCustomerRepository } from '../adapters/prisma/PrismaCustomerRepository';
 // SplynxTicketAdapter preserved but decabled — see AD-2 in design.md
@@ -2617,7 +2617,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   }
 
   // External API v1 — API-key auth, read-only (listClients + getDetail + listContracts reused from above)
-  app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail, listContracts));
+  // external-create-ticket — read GETs (#150/#152) + the first WRITE (POST /tickets).
+  // The write reuses the internal `createTicket` (FK+ownership), `rbacUserRepo` (resolves
+  // the system "api" reporter by login) and `ticketAreaRepo` (area-by-name), plus a
+  // dedicated rate limiter (the API key can now WRITE — public write needs a ceiling).
+  app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail, listContracts, {
+    createTicket,
+    rbacUserRepo,
+    ticketAreaRepo,
+    rateLimiter: createExternalWriteRateLimiter(),
+  }));
 
   // 404
   app.use((_req: Request, res: Response): void => {

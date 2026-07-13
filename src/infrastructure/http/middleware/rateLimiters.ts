@@ -92,3 +92,39 @@ export function createMessagingSendRateLimiter(opts: MessagingSendRateLimitOptio
     },
   });
 }
+
+/**
+ * external-create-ticket — rate limiter for the external WRITE surface
+ * (`POST /api/external/v1/tickets`). The external API is machine-to-machine
+ * (API key, NO session → no `req.user`), so a public write with no ceiling is an
+ * abuse vector (mass ticket creation). Applied ONLY to the POST, never to the
+ * existing read GETs (#150/#152) — those stay untouched to not break consumers.
+ *
+ * Keyed by IP: today there is a SINGLE shared API key, so per-consumer keying is
+ * impossible. DEUDA (BACKLOG "API Externa — el mapa", hardening): when per-consumer
+ * API keys land, key by consumer id instead of IP.
+ */
+export interface ExternalWriteRateLimitOptions {
+  windowMs?: number;
+  limit?: number;
+}
+
+const DEFAULT_EXTERNAL_WRITE_WINDOW_MS = 60 * 1000; // 1 min
+// 30 writes/min per IP — generous for a legit integration, cuts sustained abuse.
+const DEFAULT_EXTERNAL_WRITE_LIMIT = 30;
+
+export function createExternalWriteRateLimiter(opts: ExternalWriteRateLimitOptions = {}): RequestHandler {
+  return rateLimit({
+    windowMs: opts.windowMs ?? DEFAULT_EXTERNAL_WRITE_WINDOW_MS,
+    limit: opts.limit ?? DEFAULT_EXTERNAL_WRITE_LIMIT,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request) => `ip:${ipKeyGenerator(req.ip ?? '')}`,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({
+        error: 'Too many requests. Retry later.',
+        code: 'RATE_LIMITED',
+      });
+    },
+  });
+}

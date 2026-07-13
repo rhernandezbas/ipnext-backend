@@ -12,6 +12,10 @@ import { bootstrapRadiusAuthIngest } from './infrastructure/scheduling/bootstrap
 import { bootstrapPppoeAutoMove } from './infrastructure/scheduling/bootstrapPppoeAutoMove';
 import { bootstrapChatMediaDownload } from './infrastructure/scheduling/bootstrapChatMediaDownload';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
+import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
+import { bootstrapSystemUsers } from './infrastructure/bootstrap/bootstrapSystemUsers';
+import bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
 
 // Safety net: a single unhandled rejection (e.g. an external integration like
 // Splynx being unavailable inside an async route) must NOT take the whole
@@ -29,6 +33,15 @@ process.on('uncaughtException', (err) => {
 void (async () => {
   const configRepo = new PrismaIClassClosureConfigRepository();
   const cfg = await configRepo.get(); // (a) read persisted intervals ONCE
+
+  // (a') System users — the "Api" reporter MUST exist before we serve requests:
+  // the external ticket endpoint (external-create-ticket) stamps it as reporterId,
+  // and GR-ingested tasks reference it too. Runs UNCONDITIONALLY and idempotent,
+  // DECOUPLED from Gestión Real (deprecated) — it used to be seeded ONLY inside
+  // bootstrapGestionRealIngest, behind GR's early-returns (GR off → no reporter).
+  await bootstrapSystemUsers(new PrismaRbacUserRepository(), {
+    passwordHash: bcrypt.hashSync(randomUUID(), 10),
+  });
 
   // (b) IClass closure loop — now async, receives interval from config
   const iclassClosure = await bootstrapIClassClosure(cfg.closureIntervalMs);
