@@ -413,6 +413,21 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
     });
   });
 
+  describe('setStatus (messaging-inbox-productivity, F1.5 fase C, STATUS-1)', () => {
+    it('POST .../conversations/:id/toggle_status con { status }', async () => {
+      const { http, gw } = fakeHttp();
+      await gw.setStatus(42, 'resolved');
+      expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/toggle_status', {
+        status: 'resolved',
+      });
+    });
+
+    it('error de red/4xx/5xx en el POST → ChatwootUnavailableError (mismo criterio SEND-3/ROB-1 que el resto del port)', async () => {
+      const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
+      await expect(gw.setStatus(42, 'open')).rejects.toBeInstanceOf(ChatwootUnavailableError);
+    });
+  });
+
   describe('robustez ante fallos (SEND-3/ROB-1) — un solo resultado de fallo', () => {
     it('error de red en GET → ChatwootUnavailableError', async () => {
       const { gw } = fakeHttp({ get: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });

@@ -219,6 +219,18 @@ export class HttpChatwootGateway implements ChatwootGateway {
   }
 
   /**
+   * messaging-inbox-productivity (F1.5 fase C, STATUS-1) — same `toggle_status`
+   * endpoint the Chatwoot UI itself uses (Application API v1). Same
+   * wrapped-in-`this.call` convention as `sendMessage`/`registerWebhook` — ANY
+   * failure (network/timeout/4xx/5xx) maps to `ChatwootUnavailableError`.
+   */
+  async setStatus(chatwootConversationId: number, status: 'open' | 'resolved' | 'pending'): Promise<void> {
+    await this.call(() =>
+      this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/toggle_status`), { status }),
+    );
+  }
+
+  /**
    * messaging-inbox-v2-media (Tanda 1 · MEDIA-2) — downloads a Chatwoot attachment
    * binary by following its `sourceUrl` (`data_url`, a stable 301 redirect). Uses a
    * BARE `axios.get` (NOT `this.http`, which carries the `api_access_token` default

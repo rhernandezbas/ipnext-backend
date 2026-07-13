@@ -749,6 +749,7 @@ import { GetConversation } from '@application/use-cases/messaging/GetConversatio
 // Aliased: `ListMessages` already names an unrelated notifications-inbox use case above (:318).
 import { ListMessages as ListChatMessages } from '@application/use-cases/messaging/ListMessages';
 import { SendMessage } from '@application/use-cases/messaging/SendMessage';
+import { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
 import { GetClientContextByPhone } from '@application/use-cases/messaging/GetClientContextByPhone';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
 
@@ -2542,6 +2543,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // ya NO recibe `taskPhotoStorage` directo (nunca escribe un buffer local a MinIO
       // — deja la fila `pending` y dispara el trigger, igual que webhook/fetch-on-open).
       new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway, chatAttachmentRepo, chatMediaDownloadTrigger),
+      // messaging-inbox-productivity (F1.5 fase C, STATUS-1) — resolver/reabrir/marcar
+      // pendiente. Mismas instancias de conversationRepo/chatwootGateway, sin infra nueva.
+      new SetConversationStatus(conversationRepo, chatwootGateway),
       getInboxClientContext,
       getChatAttachmentFile,
       createChatwootSignatureMiddleware(),

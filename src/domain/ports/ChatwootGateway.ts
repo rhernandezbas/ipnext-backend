@@ -111,6 +111,15 @@ export interface ChatwootGateway {
   /** Invoked ONLY by `scripts/registerChatwootWebhook.ts` (one-shot operational setup), not by app.ts. */
   registerWebhook(url: string, secret: string): Promise<void>;
   /**
+   * messaging-inbox-productivity (F1.5 fase C, STATUS-1) — toggles a conversation's
+   * status in Chatwoot (resolver/reabrir/marcar pendiente). Independent of
+   * `canReply` (the 24h reply-window cache): this NEVER touches the window, only
+   * Chatwoot's own status field. Same single-outcome-on-failure convention as
+   * `sendMessage`/`registerWebhook`: ANY axios failure (network/timeout/4xx/5xx)
+   * throws `ChatwootUnavailableError`.
+   */
+  setStatus(chatwootConversationId: number, status: 'open' | 'resolved' | 'pending'): Promise<void>;
+  /**
    * messaging-inbox-v2-media (Tanda 1 · MEDIA-2) — follows Chatwoot's `sourceUrl`
    * (`data_url`, a stable 301) WITHOUT forwarding any auth header (verified live: the
    * signed redirect needs no `api_access_token`). Any failure (network/timeout/4xx/5xx)

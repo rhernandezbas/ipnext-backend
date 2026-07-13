@@ -105,6 +105,15 @@ export class FakeChatwootGateway implements ChatwootGateway {
   /** Invoked only by the one-shot ops script (B7), never by a use case. */
   async registerWebhook(): Promise<void> {}
 
+  // ─── messaging-inbox-productivity (F1.5 fase C, STATUS-1) ───────────────────
+  public setStatusCalls: Array<{ chatwootConversationId: number; status: string }> = [];
+  public failSetStatus = false;
+
+  async setStatus(chatwootConversationId: number, status: 'open' | 'resolved' | 'pending'): Promise<void> {
+    this.setStatusCalls.push({ chatwootConversationId, status });
+    if (this.failSetStatus) throw new Error('fake: Chatwoot unreachable (setStatus)');
+  }
+
   // ─── messaging-inbox-v2-media (Tanda 1 · MEDIA-2) ────────────────────────────
   /** Keyed by url. Populate before calling `downloadAttachment`. */
   public downloadsByUrl = new Map<string, { buffer: Buffer; contentType: string }>();

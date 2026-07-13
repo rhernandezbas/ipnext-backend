@@ -22,6 +22,7 @@ import { ListConversations } from '../../application/use-cases/messaging/ListCon
 import { GetConversation } from '../../application/use-cases/messaging/GetConversation';
 import { ListMessages } from '../../application/use-cases/messaging/ListMessages';
 import { SendMessage } from '../../application/use-cases/messaging/SendMessage';
+import { SetConversationStatus } from '../../application/use-cases/messaging/SetConversationStatus';
 import { GetClientContextByPhone } from '../../application/use-cases/messaging/GetClientContextByPhone';
 import { GetInboxClientContext } from '../../application/use-cases/messaging/GetInboxClientContext';
 import { GetChatAttachmentFile } from '../../application/use-cases/messaging/GetChatAttachmentFile';
@@ -168,6 +169,7 @@ function buildApp(opts: BuildAppOptions = {}) {
       new GetConversation(conversationRepo, messageRepo, gateway, getClientContext, attachmentRepo),
       new ListMessages(conversationRepo, messageRepo, attachmentRepo),
       new SendMessage(conversationRepo, messageRepo, gateway, attachmentRepo),
+      new SetConversationStatus(conversationRepo, gateway),
       getInboxClientContext,
       new GetChatAttachmentFile(attachmentRepo, fileStorage),
       createChatwootSignatureMiddleware({ now: () => NOW_MS }),
@@ -212,6 +214,16 @@ describe('/api/messaging — RBAC', () => {
 
     expect(res.status).toBe(403);
     expect(gateway.sendMessageCalls).toHaveLength(0);
+  });
+
+  it('POST /conversations/:id/status con SOLO messaging:read (sin send) → 403 sin llamar a Chatwoot (mismo permiso que el envío)', async () => {
+    const { app, gateway } = buildApp({ sendPerm: denyPerm });
+    const res = await request(app)
+      .post('/api/messaging/conversations/conv-1/status')
+      .send({ status: 'resolved' });
+
+    expect(res.status).toBe(403);
+    expect(gateway.setStatusCalls).toHaveLength(0);
   });
 });
 
@@ -893,6 +905,113 @@ describe('POST /api/messaging/conversations/:id/messages — nota privada (NOTE-
 
     expect(res.status).toBe(403);
     expect(gateway.sendMessageCalls).toHaveLength(0);
+  });
+});
+
+// ─── POST /conversations/:id/status (messaging-inbox-productivity, F1.5 fase C,
+// STATUS-1) — resolver/reabrir/marcar pendiente ─────────────────────────────────
+
+describe('POST /api/messaging/conversations/:id/status', () => {
+  it('status válido (resolved) → 200 con la conversación actualizada (DTO), el mirror refleja el cambio', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 60, status: 'open' });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/status`)
+      .send({ status: 'resolved' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: conv.id, status: 'resolved' });
+    expect(gateway.setStatusCalls).toEqual([{ chatwootConversationId: 60, status: 'resolved' }]);
+    const updated = await conversationRepo.findById(conv.id);
+    expect(updated!.status).toBe('resolved');
+  });
+
+  it.each(['open', 'resolved', 'pending'])('acepta status "%s"', async (status) => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 61 });
+
+    const res = await request(app).post(`/api/messaging/conversations/${conv.id}/status`).send({ status });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe(status);
+  });
+
+  it('status inválido → 400 VALIDATION_ERROR sin llamar a Chatwoot', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 62 });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/status`)
+      .send({ status: 'closed' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(gateway.setStatusCalls).toHaveLength(0);
+  });
+
+  it('status ausente → 400 VALIDATION_ERROR', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 63 });
+
+    const res = await request(app).post(`/api/messaging/conversations/${conv.id}/status`).send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(gateway.setStatusCalls).toHaveLength(0);
+  });
+
+  it('conversación inexistente → 404 CONVERSATION_NOT_FOUND', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/conversations/ghost/status')
+      .send({ status: 'resolved' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONVERSATION_NOT_FOUND');
+  });
+
+  it('Chatwoot inalcanzable → 503 CHATWOOT_UNAVAILABLE, mirror NO se toca', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    gateway.failSetStatus = true;
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 64, status: 'open' });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/status`)
+      .send({ status: 'resolved' });
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('CHATWOOT_UNAVAILABLE');
+    const stillOpen = await conversationRepo.findById(conv.id);
+    expect(stillOpen!.status).toBe('open');
+  });
+
+  it('sin sesión (auth deniega) → 401', async () => {
+    const { app, conversationRepo } = buildApp({ auth: denyAuth });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 65 });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/status`)
+      .send({ status: 'resolved' });
+
+    expect(res.status).toBe(401);
+  });
+
+  it('resolver NO toca canReply (independiente de la ventana de 24h)', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({
+      chatwootConversationId: 66,
+      status: 'open',
+      canReply: false,
+    });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/status`)
+      .send({ status: 'resolved' });
+
+    expect(res.status).toBe(200);
+    const updated = await conversationRepo.findById(conv.id);
+    expect(updated!.canReply).toBe(false);
   });
 });
 

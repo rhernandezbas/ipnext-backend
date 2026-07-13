@@ -18,6 +18,7 @@ import { ListConversations } from '@application/use-cases/messaging/ListConversa
 import { GetConversation } from '@application/use-cases/messaging/GetConversation';
 import { ListMessages } from '@application/use-cases/messaging/ListMessages';
 import { SendMessage } from '@application/use-cases/messaging/SendMessage';
+import { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
 import { GetChatAttachmentFile } from '@application/use-cases/messaging/GetChatAttachmentFile';
 import { ChatAttachmentNotFoundError, ChatAttachmentNotReadyError } from '@domain/errors/chatAttachment';
@@ -221,6 +222,12 @@ export function createMessagingRouter(
   getConversation: GetConversation,
   listMessages: ListMessages,
   sendMessage: SendMessage,
+  /**
+   * messaging-inbox-productivity (F1.5 fase C, STATUS-1) — resolver/reabrir/marcar
+   * pendiente. Gateado por el MISMO permiso que `sendMessage` (`messaging:send`,
+   * ver `perms.send` abajo), no un permiso separado.
+   */
+  setConversationStatus: SetConversationStatus,
   getInboxClientContext: GetInboxClientContext,
   getChatAttachmentFile: GetChatAttachmentFile,
   chatwootSignatureMw: RequestHandler,
@@ -375,6 +382,29 @@ export function createMessagingRouter(
 
         const result = await sendMessage.execute(req.params['id'] as string, content, files, isPrivate);
         res.status(201).json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── POST /conversations/:id/status (send) — F1.5-C STATUS-1, resolver/reabrir ──
+  // Gateado por el MISMO permiso que el envío de mensajes (messaging:send, RBAC-2)
+  // — no hay un permiso separado para cambiar el estado. `status` inválido/ausente
+  // resuelve en 400 VALIDATION_ERROR vía el error tipado que lanza el use case
+  // (mismo patrón try/catch → next(err) que el resto de este router, NO el chequeo
+  // inline que usa el body de /messages para content vacío).
+  router.post(
+    '/conversations/:id/status',
+    auth,
+    perms.send,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const body = req.body as Record<string, unknown> | undefined;
+        const rawStatus = body?.['status'];
+        const status = typeof rawStatus === 'string' ? rawStatus : '';
+        const result = await setConversationStatus.execute(req.params['id'] as string, status);
+        res.json(result);
       } catch (err) {
         next(err);
       }

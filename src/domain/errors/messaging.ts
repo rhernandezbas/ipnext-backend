@@ -57,3 +57,20 @@ export class ClientIdNotACandidateError extends DomainError {
     this.name = 'ClientIdNotACandidateError';
   }
 }
+
+/**
+ * messaging-inbox-productivity (F1.5 fase C, STATUS-1) — raised by
+ * `SetConversationStatus` when `status` is not one of the three values this
+ * endpoint accepts (`open`/`resolved`/`pending`). Reuses the codebase-wide
+ * `'VALIDATION_ERROR'` code — already mapped to 400 in errorHandler's
+ * statusMap (same convention as `RoleValidationError` in rbacUser.errors.ts).
+ */
+export class InvalidConversationStatusError extends DomainError {
+  constructor(status: string) {
+    super(
+      `Invalid conversation status: "${status}" (expected one of: open, resolved, pending)`,
+      'VALIDATION_ERROR',
+    );
+    this.name = 'InvalidConversationStatusError';
+  }
+}
