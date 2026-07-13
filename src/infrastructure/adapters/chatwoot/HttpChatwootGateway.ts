@@ -1,11 +1,32 @@
 import axios, { AxiosInstance } from 'axios';
+import FormData from 'form-data';
 import {
   ChatwootConversationDto,
   ChatwootGateway,
   ChatwootMessageDto,
   ChatwootMessageAttachmentDto,
+  OutboundAttachmentFile,
 } from '@domain/ports/ChatwootGateway';
 import { ChatwootUnavailableError } from '@domain/errors/messaging';
+
+/**
+ * SEND-4/SEND-8 — the send POST is SYNCHRONOUS (the agent waits for the 201), unlike
+ * `downloadAttachment`'s fire-and-forget/scheduled path. An explicit `timeout` turns a
+ * hung multipart upload into a controlled 503 (`ChatwootUnavailableError`) BEFORE any
+ * proxy/ingress in front of this backend cuts it with a bare 504 — the exact class of
+ * bug this repo already swept twice (`77a6fc97`). Value left generous (uploads can be
+ * legitimately slow) but finite — never `Infinity`/unset.
+ */
+const SEND_TIMEOUT_MS = 60_000;
+/**
+ * fix-be #1 pattern (same reasoning as `downloadAttachment`'s `maxBytes`) — caps the
+ * multipart request body. `MAX_FILES=10` × the 'file' fileType ceiling (100MB) is the
+ * theoretical worst case; a request that big is already rejected by the route's own
+ * multer limits (SEND-6) long before reaching this adapter, so 200MB here is a
+ * generous-but-finite defensive ceiling, NOT the "tope total exacto" left open in
+ * `spec-send.md`'s Decisiones abiertas.
+ */
+const SEND_MAX_BODY_LENGTH = 200 * 1024 * 1024;
 
 /** Respuesta cruda de un GET binario, desacoplada de axios para poder fakearla en tests. */
 export interface RawBinaryResponse {
@@ -129,7 +150,43 @@ export class HttpChatwootGateway implements ChatwootGateway {
     return extractRows(data).map(toMessageDto);
   }
 
-  async sendMessage(chatwootConversationId: number, content: string): Promise<ChatwootMessageDto> {
+  /**
+   * SEND-4 — WITHOUT `files` (undefined/empty), conserves the exact F1 JSON path
+   * (cero regresión, verified by `HttpChatwootGateway.test.ts`). WITH at least one
+   * file, switches to a multipart/form-data POST: one `attachments[]` part per file
+   * (buffer + filename + contentType) alongside `content`/`message_type`, with an
+   * explicit `timeout`/`maxBodyLength`/`maxContentLength` (SEND-8) so a hung upload
+   * resolves as `ChatwootUnavailableError` instead of hanging the request. The
+   * response is mapped by the SAME `toMessageDto` as the JSON path — already
+   * MEDIA-1-aware of `attachments[]` (`id`/`data_url` per file), which is the
+   * pegamento `SendMessage`'s post-OK mirror (SEND-5) depends on.
+   */
+  async sendMessage(
+    chatwootConversationId: number,
+    content: string,
+    files?: OutboundAttachmentFile[],
+  ): Promise<ChatwootMessageDto> {
+    if (files && files.length > 0) {
+      const form = new FormData();
+      form.append('content', content);
+      form.append('message_type', 'outgoing');
+      for (const file of files) {
+        form.append('attachments[]', file.buffer, {
+          filename: file.filename,
+          contentType: file.contentType,
+        });
+      }
+      const { data } = await this.call(() =>
+        this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/messages`), form, {
+          headers: form.getHeaders(),
+          timeout: SEND_TIMEOUT_MS,
+          maxBodyLength: SEND_MAX_BODY_LENGTH,
+          maxContentLength: SEND_MAX_BODY_LENGTH,
+        }),
+      );
+      return toMessageDto(data);
+    }
+
     const { data } = await this.call(() =>
       this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/messages`), {
         content,

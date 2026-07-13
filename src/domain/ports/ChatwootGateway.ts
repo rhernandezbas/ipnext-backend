@@ -73,11 +73,32 @@ export interface ChatwootMessageDto {
   attachments?: ChatwootMessageAttachmentDto[];
 }
 
+/**
+ * messaging-inbox-v2-media (F1.5 fase A, Tanda 2 · SEND-4) — a file the agent is
+ * SENDING, in-memory (multer's `memoryStorage`), never touching disk. Co-located
+ * with `ChatwootMessageAttachmentDto` (its inbound counterpart) since both describe
+ * the same wire-adjacent shape from opposite directions.
+ */
+export interface OutboundAttachmentFile {
+  buffer: Buffer;
+  filename: string;
+  contentType: string;
+}
+
 export interface ChatwootGateway {
   listConversations(): Promise<ChatwootConversationDto[]>;
   getConversation(chatwootConversationId: number): Promise<ChatwootConversationDto>;
   listMessages(chatwootConversationId: number): Promise<ChatwootMessageDto[]>;
-  sendMessage(chatwootConversationId: number, content: string): Promise<ChatwootMessageDto>;
+  /**
+   * SEND-4 — `files` is additive/optional: WITHOUT it, the JSON path is unchanged
+   * (F1, zero regression). WITH at least one file, the adapter MUST switch to a
+   * multipart/form-data POST (`HttpChatwootGateway`).
+   */
+  sendMessage(
+    chatwootConversationId: number,
+    content: string,
+    files?: OutboundAttachmentFile[],
+  ): Promise<ChatwootMessageDto>;
   /** F2: not consumed by any F1 use case; kept in the port for contract completeness. */
   searchContact(query: string): Promise<{ id: number; name: string | null; phone: string | null }[]>;
   /** Invoked ONLY by `scripts/registerChatwootWebhook.ts` (one-shot operational setup), not by app.ts. */

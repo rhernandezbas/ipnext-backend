@@ -160,6 +160,9 @@ const statusMap: Record<string, number> = {
   CHAT_ATTACHMENT_TOO_LARGE: 413,
   CHAT_ATTACHMENT_NOT_FOUND: 404,
   CHAT_ATTACHMENT_NOT_READY: 409,
+  // messaging-inbox-v2-media (F1.5 fase A, Tanda 2 · SEND-1) — enviar media: el
+  // contentType de un adjunto SALIENTE no es clasificable (vacío/ausente).
+  CHAT_ATTACHMENT_UNSUPPORTED_TYPE: 415,
 };
 
 /** Express global error-handling middleware. */

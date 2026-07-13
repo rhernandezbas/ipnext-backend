@@ -742,5 +742,48 @@ describe('ReceiveChatwootWebhook', () => {
       const rows = await attachmentRepo.listByMessageIds([messages[0]!.id]);
       expect(rows).toHaveLength(1); // the row was created before the (isolated) trigger threw
     });
+
+    it('scenario #18 (messaging-inbox-v2-media Tanda 2 · spec-send.md SEND-5) — fila creada por el envío SÍNCRONO (SendMessage, ya `downloaded`) no se revierte cuando llega después el webhook "outgoing" del MISMO chatwootMessageId/chatwootAttachmentId', async () => {
+      const { uc, conversationRepo, messageRepo, attachmentRepo } = makeUseCaseWithAttachments();
+      // Simula lo que `SendMessage.execute` YA dejó antes de que este webhook llegue:
+      // un ChatMessage outbound + su ChatMessageAttachment ya `downloaded` (SEND-5 —
+      // nace así en el envío síncrono, nunca pasa por 'pending' esperando este webhook).
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 300, canReply: true });
+      const message = await messageRepo.upsertByChatwootMessageId({
+        conversationId: conv!.id,
+        chatwootMessageId: 2001,
+        direction: 'outbound',
+        content: 'mirá la factura',
+        chatwootCreatedAt: '2026-07-11T12:00:00.000Z',
+      });
+      const row = await attachmentRepo.upsertByChatwootAttachmentId({
+        messageId: message.id,
+        chatwootAttachmentId: 7002,
+        fileType: 'image',
+        contentType: 'image/jpeg',
+        sourceUrl: 'https://chat.ipnext.com.ar/x/7002.jpg',
+      });
+      await attachmentRepo.markDownloaded(row.id, { storageKey: `messaging/${conv!.id}/${row.id}.jpg` });
+
+      // El webhook "message_created"/outgoing que Chatwoot dispara DESPUÉS del envío
+      // síncrono, para el MISMO chatwootMessageId/chatwootAttachmentId.
+      await uc.execute('delivery-outgoing-echo', {
+        event: 'message_created',
+        id: 2001,
+        content: 'mirá la factura',
+        message_type: 'outgoing',
+        created_at: 1735690000,
+        conversation: { id: 300 },
+        attachments: [
+          { id: 7002, file_type: 'image', content_type: 'image/jpeg', data_url: 'https://chat.ipnext.com.ar/x/7002.jpg' },
+        ],
+      });
+
+      const [reprocessed] = await attachmentRepo.listByMessageIds([message.id]);
+      expect(reprocessed!.status).toBe('downloaded'); // NOT revertido a 'pending'
+      expect(reprocessed!.storageKey).toBe(`messaging/${conv!.id}/${row.id}.jpg`); // NOT limpiado
+      const messages = await messageRepo.listByConversation(conv!.id);
+      expect(messages).toHaveLength(1); // no duplicado
+    });
   });
 });

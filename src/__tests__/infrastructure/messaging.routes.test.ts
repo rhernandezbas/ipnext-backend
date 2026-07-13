@@ -15,6 +15,7 @@ import {
   createChatwootSignatureMiddleware,
   rawBodyJsonParser,
 } from '../../infrastructure/http/middleware/chatwootSignatureMiddleware';
+import { createMessagingSendRateLimiter } from '../../infrastructure/http/middleware/rateLimiters';
 import { errorHandler } from '../../infrastructure/http/middleware/errorHandler';
 import { ReceiveChatwootWebhook } from '../../application/use-cases/messaging/ReceiveChatwootWebhook';
 import { ListConversations } from '../../application/use-cases/messaging/ListConversations';
@@ -116,6 +117,10 @@ interface BuildAppOptions {
   ticketRepo?: InMemoryTicketRepository;
   schedulingRepo?: InMemorySchedulingRepository;
   pppoeRepo?: InMemoryPppoeServiceRepository;
+  /** fix-be #2 [ALTO] — override the send-rate-limiter for tests that need a low
+   * limit to actually trigger 429. Defaults to a permissive passthrough so the rest
+   * of the suite (many requests per test file) never trips it by accident. */
+  sendRateLimiter?: RequestHandler;
 }
 
 function buildApp(opts: BuildAppOptions = {}) {
@@ -162,12 +167,15 @@ function buildApp(opts: BuildAppOptions = {}) {
       new ListConversations(conversationRepo),
       new GetConversation(conversationRepo, messageRepo, gateway, getClientContext, attachmentRepo),
       new ListMessages(conversationRepo, messageRepo, attachmentRepo),
-      new SendMessage(conversationRepo, messageRepo, gateway),
+      new SendMessage(conversationRepo, messageRepo, gateway, attachmentRepo),
       getInboxClientContext,
       new GetChatAttachmentFile(attachmentRepo, fileStorage),
       createChatwootSignatureMiddleware({ now: () => NOW_MS }),
       opts.auth ?? allowAuth,
       perms,
+      // fix-be #2 [ALTO] — permissive by default (the rest of this file fires many
+      // requests per test); tests targeting the limiter itself override it.
+      opts.sendRateLimiter ?? allowPerm,
     ),
   );
   app.use(errorHandler);
@@ -625,6 +633,175 @@ describe('POST /api/messaging/conversations/:id/messages', () => {
       .post('/api/messaging/conversations/ghost/messages')
       .send({ content: 'hola' });
     expect(res.status).toBe(404);
+  });
+});
+
+// ─── POST /conversations/:id/messages — multipart (messaging-inbox-v2-media, Tanda 2 · SEND-6) ──
+
+describe('POST /api/messaging/conversations/:id/messages — multipart (BE3)', () => {
+  it('multipart con caption + 2 attachments → 201 poblado', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 30, canReply: true });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .field('content', 'mirá esto')
+      .attach('attachments', Buffer.from('img-bytes'), { filename: 'foto.jpg', contentType: 'image/jpeg' })
+      .attach('attachments', Buffer.from('pdf-bytes'), { filename: 'factura.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.content).toBe('mirá esto');
+    expect(res.body.attachments).toHaveLength(2);
+    expect(gateway.sendMessageCalls).toEqual([
+      expect.objectContaining({ chatwootConversationId: 30, content: 'mirá esto', files: 2 }),
+    ]);
+  });
+
+  it('multipart solo attachments, sin caption → 201, content=""', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 31, canReply: true });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .attach('attachments', Buffer.from('img-bytes'), { filename: 'foto.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.content).toBe('');
+    expect(res.body.attachments).toHaveLength(1);
+  });
+
+  it('ni content ni attachments → 400 VALIDATION_ERROR, sendMessage.execute NUNCA invocado (#12)', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 32, canReply: true });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .field('foo', 'bar');
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(gateway.sendMessageCalls).toHaveLength(0);
+  });
+
+  it('11 archivos → 400 TOO_MANY_FILES (LIMIT_FILE_COUNT), sin llegar al use case (#13)', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 33, canReply: true });
+
+    let req = request(app).post(`/api/messaging/conversations/${conv.id}/messages`);
+    for (let i = 0; i < 11; i++) {
+      req = req.attach('attachments', Buffer.from([0xff, 0xd8, 0xff, 0xd9]), { filename: `f${i}.jpg`, contentType: 'image/jpeg' });
+    }
+    const res = await req;
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('TOO_MANY_FILES');
+    expect(gateway.sendMessageCalls).toHaveLength(0);
+  });
+
+  it('archivo >100MB → 413 FILE_TOO_LARGE a nivel multer, ANTES del handler/use case (#14)', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 34, canReply: true });
+    const big = Buffer.alloc(100 * 1024 * 1024 + 1, 0x41);
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .attach('attachments', big, { filename: 'big.bin', contentType: 'application/octet-stream' });
+
+    expect(res.status).toBe(413);
+    expect(res.body.code).toBe('FILE_TOO_LARGE');
+    expect(gateway.sendMessageCalls).toHaveLength(0);
+  }, 20000);
+
+  it('POST JSON texto-solo — passthrough sin regresión (#15)', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 35, canReply: true });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .send({ content: 'hola' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.content).toBe('hola');
+    expect(gateway.sendMessageCalls).toEqual([
+      expect.objectContaining({ chatwootConversationId: 35, content: 'hola' }),
+    ]);
+  });
+
+  it('fix-be #2 [ALTO] — 2 archivos c/u bajo el límite POR ARCHIVO (100MB) pero cuyo TOTAL supera el cap del batch → 413 BATCH_TOO_LARGE, sin llegar al use case', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 36, canReply: true });
+    // 60MB + 60MB = 120MB > 100MB (MAX_TOTAL_BATCH_BYTES), pero cada uno < 100MB
+    // (MAX_FILE_BYTES) — antes del fix, multer los dejaba pasar los dos sin techo
+    // sobre el TOTAL (hasta 1GB en RAM con 10 archivos así).
+    const chunk = Buffer.alloc(60 * 1024 * 1024, 0x41);
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .attach('attachments', chunk, { filename: 'a.bin', contentType: 'application/octet-stream' })
+      .attach('attachments', chunk, { filename: 'b.bin', contentType: 'application/octet-stream' });
+
+    expect(res.status).toBe(413);
+    expect(res.body.code).toBe('BATCH_TOO_LARGE');
+    expect(gateway.sendMessageCalls).toHaveLength(0);
+  }, 30000);
+
+  it('fix-be #3 [BAJO] — field name inesperado (no "attachments") → 400 UNEXPECTED_FIELD, distinto del mensaje engañoso de TOO_MANY_FILES', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 37, canReply: true });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .field('content', 'hola')
+      .attach('archivo-inesperado', Buffer.from('x'), { filename: 'x.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UNEXPECTED_FIELD');
+    expect(res.body.code).not.toBe('TOO_MANY_FILES');
+    expect(gateway.sendMessageCalls).toHaveLength(0);
+  });
+
+  it('fix-be #2 [ALTO] — rate-limiter dedicado dispara 429 RATE_LIMITED tras superar el cupo en requests CON adjuntos (multipart), sin llegar al use case', async () => {
+    const { app, conversationRepo, gateway } = buildApp({
+      sendRateLimiter: createMessagingSendRateLimiter({ limit: 2, windowMs: 60_000 }),
+    });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 38, canReply: true });
+
+    // fix-be micro (re-review adversarial, Tanda 2) — el limiter existe para el DoS
+    // de MEDIA (uploads grandes); el gate SOLO debe consumir cupo en requests
+    // multipart (con adjuntos), nunca en texto-solo. Se prueba acá con `.attach(...)`.
+    const send = () =>
+      request(app)
+        .post(`/api/messaging/conversations/${conv.id}/messages`)
+        .field('content', 'hola')
+        .attach('attachments', Buffer.from('x'), { filename: 'x.jpg', contentType: 'image/jpeg' });
+
+    const first = await send();
+    const second = await send();
+    const third = await send();
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(third.status).toBe(429);
+    expect(third.body.code).toBe('RATE_LIMITED');
+    expect(gateway.sendMessageCalls).toHaveLength(2); // el 3ro nunca llega al use case
+  });
+
+  it('fix-be micro [re-review adversarial] — texto-solo (JSON, sin adjuntos) NUNCA consume el cupo del rate-limiter — regresión F1 (F1 no tenía límite en el camino de texto)', async () => {
+    const { app, conversationRepo, gateway } = buildApp({
+      sendRateLimiter: createMessagingSendRateLimiter({ limit: 2, windowMs: 60_000 }),
+    });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 39, canReply: true });
+
+    const send = () => request(app).post(`/api/messaging/conversations/${conv.id}/messages`).send({ content: 'hola' });
+
+    const first = await send();
+    const second = await send();
+    const third = await send();
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(third.status).toBe(201); // texto-solo pasa SIEMPRE, aunque supere el cupo
+    expect(gateway.sendMessageCalls).toHaveLength(3);
   });
 });
 

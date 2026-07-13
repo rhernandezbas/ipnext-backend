@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import FormData from 'form-data';
 import { HttpChatwootGateway } from '@infrastructure/adapters/chatwoot/HttpChatwootGateway';
 import { ChatwootUnavailableError } from '@domain/errors/messaging';
 
@@ -254,6 +255,72 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
         senderName: 'Agente',
         createdAt: new Date(1751000400 * 1000).toISOString(),
       });
+    });
+  });
+
+  describe('sendMessage — multipart (messaging-inbox-v2-media, Tanda 2 · SEND-4)', () => {
+    it('BE1.1 — files=[] también usa el camino JSON, no multipart (SEND-4 scenario 2, cero regresión)', async () => {
+      const { http, gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({
+          data: { id: 1, message_type: 1, content: 'x', created_at: 1751000000 },
+        }),
+      });
+      await gw.sendMessage(42, 'x', []);
+      expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/messages', {
+        content: 'x',
+        message_type: 'outgoing',
+      });
+    });
+
+    it('BE1.2/BE1.3 — con 2 files → POST multipart con attachments[]×2 + content + message_type, timeout/maxBodyLength seteados, y la respuesta mapea attachments[].id/sourceUrl (SEND-4 scenarios 1/3)', async () => {
+      const { http, gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({
+          data: {
+            id: 100,
+            message_type: 1,
+            content: 'mirá esto',
+            created_at: 1751000500,
+            attachments: [
+              { id: 501, file_type: 'image', content_type: 'image/jpeg', data_url: 'https://chat.ipnext.com.ar/x/501.jpg', file_size: 111 },
+              { id: 502, file_type: 'file', content_type: 'application/pdf', data_url: 'https://chat.ipnext.com.ar/x/502.pdf', file_size: 222 },
+            ],
+          },
+        }),
+      });
+      const files = [
+        { buffer: Buffer.from('img-bytes'), filename: 'foto.jpg', contentType: 'image/jpeg' },
+        { buffer: Buffer.from('pdf-bytes'), filename: 'factura.pdf', contentType: 'application/pdf' },
+      ];
+
+      const result = await gw.sendMessage(42, 'mirá esto', files);
+
+      expect(http.post).toHaveBeenCalledTimes(1);
+      const [url, body, config] = http.post.mock.calls[0] as [string, FormData, Record<string, unknown>];
+      expect(url).toBe('/api/v1/accounts/2/conversations/42/messages');
+      expect(body).toBeInstanceOf(FormData);
+      expect(String((config['headers'] as Record<string, string>)['content-type'])).toContain('multipart/form-data');
+      expect(config['timeout']).toBeGreaterThan(0);
+      expect(config['maxBodyLength']).toBeGreaterThan(0);
+
+      const raw = body.getBuffer().toString('utf8');
+      expect((raw.match(/name="attachments\[\]"/g) ?? []).length).toBe(2);
+      expect(raw).toContain('name="content"');
+      expect(raw).toContain('name="message_type"');
+      expect(raw).toContain('mirá esto');
+      expect(raw).toContain('outgoing');
+
+      // SEND-4 scenario 3 — la respuesta mapeada trae attachments[].id/sourceUrl.
+      expect(result.attachments).toEqual([
+        expect.objectContaining({ id: 501, sourceUrl: 'https://chat.ipnext.com.ar/x/501.jpg' }),
+        expect.objectContaining({ id: 502, sourceUrl: 'https://chat.ipnext.com.ar/x/502.pdf' }),
+      ]);
+    });
+
+    it('BE1.4 — timeout/red caída en el POST multipart → ChatwootUnavailableError, nunca cuelga (#11)', async () => {
+      const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(new Error('ECONNABORTED')) });
+      const files = [{ buffer: Buffer.from('x'), filename: 'a.jpg', contentType: 'image/jpeg' }];
+
+      await expect(gw.sendMessage(42, 'x', files)).rejects.toBeInstanceOf(ChatwootUnavailableError);
     });
   });
 

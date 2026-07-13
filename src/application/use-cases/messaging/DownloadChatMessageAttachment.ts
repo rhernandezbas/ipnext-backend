@@ -3,10 +3,17 @@ import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository'
 import type { ChatwootGateway } from '@domain/ports/ChatwootGateway';
 import type { FileStorage } from '@domain/ports/FileStorage';
 
-/** MEDIA-2 — per-`fileType` size ceilings (bytes), re-validated in THIS use case
- * (multer, when it exists on the SEND path in Tanda 2, only enforces a single flat
- * ceiling — it cannot vary by type). */
-const MAX_BYTES_BY_FILE_TYPE: Record<string, number> = {
+/**
+ * MEDIA-2 — per-`fileType` size ceilings (bytes), re-validated in THIS use case
+ * (multer, on the RECEIVE side, only enforces a single flat ceiling — it cannot
+ * vary by type).
+ *
+ * **Exported** (Tanda 2 · BE2.17, decision confirmed) as the SINGLE SOURCE OF TRUTH
+ * for this ceiling table: `SendMessage.ts` (the SEND path) imports and reuses this
+ * exact constant instead of duplicating it — a duplicate table would drift the two
+ * directions apart silently.
+ */
+export const MAX_BYTES_BY_FILE_TYPE: Record<string, number> = {
   image: 5 * 1024 * 1024,
   video: 16 * 1024 * 1024,
   audio: 16 * 1024 * 1024,

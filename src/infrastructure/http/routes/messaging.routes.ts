@@ -9,6 +9,7 @@
  * errorHandler global maps typed DomainErrors via statusMap (single source of truth).
  */
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
+import multer from 'multer';
 import {
   ReceiveChatwootWebhook,
   ChatwootWebhookPayload,
@@ -43,10 +44,111 @@ function contentDisposition(filename: string, disposition: 'inline' | 'attachmen
  */
 const INLINE_SAFE_FILE_TYPES = new Set(['image', 'audio', 'video']);
 
+/**
+ * messaging-inbox-v2-media (F1.5 fase A, Tanda 2 · SEND-6/BE3) — flat multer ceiling
+ * for the SEND endpoint. `fileSize` is the PER-FILE multer-level ceiling (100MB,
+ * matches the highest per-`fileType` ceiling); `SendMessage` (SEND-1 guard 3)
+ * re-validates the TIGHTER per-`fileType` limits (5/16/16/100MB) that multer alone
+ * cannot express.
+ *
+ * fix-be #2 [ALTO] — el comentario anterior decía "clon 1:1 de `uploadPhotos` en
+ * `taskAttachments.routes.ts`", lo cual es FALSO en los límites: task-photos es
+ * 10MB × 15 archivos (150MB teórico por request); este endpoint es 100MB × 10
+ * (1GB teórico en RAM por request, memoryStorage — DoS real, no heredado de aquel).
+ * Solo el PATRÓN de wrapper (mapeo de errores de multer a 4xx) es análogo.
+ * `MAX_TOTAL_BATCH_BYTES` + `createMessagingSendRateLimiter` (abajo/rateLimiters.ts)
+ * son el fix: cap combinado del lote + límite de requests por agente.
+ */
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_FILES = 10;
+const ATTACHMENTS_FIELD = 'attachments';
+
+/**
+ * fix-be #2 [ALTO] — sin esto, `fileSize × files` (100MB × 10) permite hasta 1GB en
+ * RAM por request, sin ningún techo sobre el TOTAL del lote. Este cap corta la
+ * propagación aguas abajo (Chatwoot, el mirror) en cuanto multer termina de
+ * bufferear; combinado con el rate-limiter de abajo, evita que un mismo agente
+ * sostenga el abuso repitiendo lotes grandes.
+ */
+const MAX_TOTAL_BATCH_BYTES = 100 * 1024 * 1024;
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES },
+});
+
+/** Wrapper de multer que traduce sus errores de límite a 4xx claros (nunca 500) —
+ * mismo patrón de error-mapping que `uploadPhotos` en `taskAttachments.routes.ts`
+ * (ver nota fix-be #2 arriba sobre por qué NO es un clon 1:1 de sus límites). */
+const uploadAttachments: RequestHandler = (req, res, next) => {
+  upload.array(ATTACHMENTS_FIELD, MAX_FILES)(req, res, (err: unknown) => {
+    if (!err) {
+      // fix-be #2 [ALTO] — cap de tamaño TOTAL del lote (no solo por archivo).
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+      if (totalBytes > MAX_TOTAL_BATCH_BYTES) {
+        res.status(413).json({
+          error: `The combined size of all attachments exceeds the ${Math.floor(MAX_TOTAL_BATCH_BYTES / (1024 * 1024))}MB total batch limit`,
+          code: 'BATCH_TOO_LARGE',
+        });
+        return;
+      }
+      next();
+      return;
+    }
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        res.status(413).json({ error: 'One of the files exceeds the 100MB limit', code: 'FILE_TOO_LARGE' });
+        return;
+      }
+      if (err.code === 'LIMIT_FILE_COUNT') {
+        res
+          .status(400)
+          .json({ error: `At most ${MAX_FILES} files are allowed under the "attachments" field`, code: 'TOO_MANY_FILES' });
+        return;
+      }
+      if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+        // fix-be #3 [BAJO] — antes caía en la misma rama que LIMIT_FILE_COUNT y
+        // devolvía el mensaje engañoso "At most 10 files..." para un problema
+        // totalmente distinto (field name inesperado, no exceso de archivos).
+        res.status(400).json({
+          error: `Unexpected field — attachments must be sent under the "${ATTACHMENTS_FIELD}" field`,
+          code: 'UNEXPECTED_FIELD',
+        });
+        return;
+      }
+      res.status(400).json({ error: err.message, code: 'UPLOAD_ERROR' });
+      return;
+    }
+    next(err);
+  });
+};
+
 /** Per-route permission guards (messaging read/send — RBAC-1/2). */
 export interface MessagingRoutePerms {
   read: RequestHandler;
   send: RequestHandler;
+}
+
+/**
+ * fix-be micro (re-review adversarial, Tanda 2) — `sendRateLimiter` existe para
+ * mitigar el DoS de MEDIA (uploads grandes, ver nota fix-be #2 arriba), pero estaba
+ * montado sobre TODO el endpoint `POST /conversations/:id/messages`, ANTES de
+ * ramificar por `files`. Eso también limitaba los envíos de TEXTO-SOLO (F1, ya en
+ * prod, SIN límite) — un agente con muchas respuestas rápidas de texto se comía un
+ * 429 falso-positivo, una regresión de comportamiento en un camino que nunca tuvo
+ * este gate. `req.is('multipart/form-data')` lee el header `Content-Type` — corre
+ * ANTES de multer (no depende del body ya parseado), así que es seguro evaluarlo
+ * en este punto del pipeline.
+ */
+function conditionalSendRateLimiter(limiter: RequestHandler): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (req.is('multipart/form-data')) {
+      limiter(req, res, next);
+      return;
+    }
+    next();
+  };
 }
 
 /**
@@ -111,8 +213,16 @@ export function createMessagingRouter(
   chatwootSignatureMw: RequestHandler,
   auth: RequestHandler,
   perms: MessagingRoutePerms,
+  /**
+   * fix-be #2 [ALTO] — rate-limiter dedicado al endpoint de envío con adjuntos
+   * (patrón `createLoginRateLimiter`, `infrastructure/http/middleware/rateLimiters.ts`).
+   * Inyectado (no construido acá adentro) para poder testear con límites bajos sin
+   * tocar los defaults de producción — mismo criterio que `chatwootSignatureMw`.
+   */
+  sendRateLimiter: RequestHandler,
 ): Router {
   const router = Router();
+  const conditionalSendLimiter = conditionalSendRateLimiter(sendRateLimiter);
 
   // ─── POST /webhook — Chatwoot M2M ingest (HMAC only, RBAC-4) ────────────────
   router.post(
@@ -211,20 +321,42 @@ export function createMessagingRouter(
     },
   );
 
-  // ─── POST /conversations/:id/messages (send) — SEND-1/2/3 ───────────────────
+  // ─── POST /conversations/:id/messages (send) — SEND-1/2/3, extended SEND-6 ──
+  // messaging-inbox-v2-media (Tanda 2) — `uploadAttachments` (multer) parses
+  // `multipart/form-data` ONLY: a plain `application/json` request (F1 texto-solo)
+  // never sees content-type multipart, so multer no-ops and `express.json()`
+  // (mounted globally, BEFORE this router) already parsed `req.body` — zero
+  // regression on the JSON path (SEND-6 scenario "texto-solo passthrough").
   router.post(
     '/conversations/:id/messages',
     auth,
     perms.send,
+    // fix-be #2 [ALTO] — corre DESPUÉS de RBAC (un 403 no debe consumir cupo del
+    // limiter) y ANTES de multer (rechaza antes de bufferear si ya excedió el cupo).
+    // fix-be micro (re-review adversarial) — gateado a multipart-only (ver
+    // `conditionalSendRateLimiter` arriba): texto-solo (JSON) pasa SIN límite, como
+    // en F1 (regresión de comportamiento detectada en re-review — el limiter es
+    // para el DoS de MEDIA, no para el camino de texto).
+    conditionalSendLimiter,
+    uploadAttachments,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        const { content } = req.body as Record<string, unknown>;
-        if (typeof content !== 'string' || content.trim() === '') {
-          res.status(400).json({ error: 'content must be a non-empty string', code: 'VALIDATION_ERROR' });
+        const rawContent = (req.body as Record<string, unknown> | undefined)?.['content'];
+        const content = typeof rawContent === 'string' ? rawContent : '';
+        const files = ((req.files as Express.Multer.File[] | undefined) ?? []).map((f) => ({
+          buffer: f.buffer,
+          filename: f.originalname,
+          contentType: f.mimetype,
+        }));
+
+        // SEND-6 — at least one of {content non-empty, files.length>0}; a caption-less
+        // media-only message IS valid (content falls back to '').
+        if (content.trim() === '' && files.length === 0) {
+          res.status(400).json({ error: 'content or attachments must be provided', code: 'VALIDATION_ERROR' });
           return;
         }
 
-        const result = await sendMessage.execute(req.params['id'] as string, content);
+        const result = await sendMessage.execute(req.params['id'] as string, content, files);
         res.status(201).json(result);
       } catch (err) {
         next(err);

@@ -2,7 +2,7 @@ import express, { Router, Request, Response } from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
-import { createLoginRateLimiter } from './middleware/rateLimiters';
+import { createLoginRateLimiter, createMessagingSendRateLimiter } from './middleware/rateLimiters';
 import { SplynxClient } from '../adapters/splynx/SplynxClient';
 import { PrismaCustomerRepository } from '../adapters/prisma/PrismaCustomerRepository';
 // SplynxTicketAdapter preserved but decabled — see AD-2 in design.md
@@ -2536,7 +2536,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new ListConversations(conversationRepo),
       new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone, chatAttachmentRepo, chatMediaDownloadTrigger),
       new ListChatMessages(conversationRepo, chatMessageRepo, chatAttachmentRepo),
-      new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway),
+      // messaging-inbox-v2-media (Tanda 2 · BE4, fix-be #1 re-diseño) — `chatAttachmentRepo`
+      // (línea ~2501) y `chatMediaDownloadTrigger` (línea ~2508) YA existen — mismas
+      // instancias que el camino de RECEPCIÓN de Tanda 1, sin infra nueva. `SendMessage`
+      // ya NO recibe `taskPhotoStorage` directo (nunca escribe un buffer local a MinIO
+      // — deja la fila `pending` y dispara el trigger, igual que webhook/fetch-on-open).
+      new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway, chatAttachmentRepo, chatMediaDownloadTrigger),
       getInboxClientContext,
       getChatAttachmentFile,
       createChatwootSignatureMiddleware(),
@@ -2545,6 +2550,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
         read: requirePerm('messaging', 'read'),
         send: requirePerm('messaging', 'send'),
       },
+      // fix-be #2 [ALTO] — rate-limiter dedicado al envío con adjuntos (DoS: sin
+      // esto, memoryStorage permitía hasta 1GB en RAM por request sin ningún techo
+      // sobre cuántos requests puede sostener un mismo agente).
+      createMessagingSendRateLimiter(),
     ));
   }
 

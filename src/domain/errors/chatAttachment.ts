@@ -47,3 +47,22 @@ export class ChatAttachmentNotReadyError extends DomainError {
     this.name = 'ChatAttachmentNotReadyError';
   }
 }
+
+/**
+ * messaging-inbox-v2-media (Tanda 2 · SEND-1) — el `contentType` de un adjunto que
+ * el agente intenta ENVIAR viene vacío/ausente (no clasificable ni siquiera como el
+ * catch-all `'file'`). HTTP → 415.
+ *
+ * GOTCHA (deliberado, documentado en spec-send.md/proposal-send.md): existe un
+ * `UnsupportedAttachmentTypeError` HOMÓNIMO en `domain/errors/taskAttachment.ts`
+ * (dominio scheduling, adjuntos de tarea) — son DOS clases distintas en DOS módulos
+ * distintos, con códigos HTTP distintos (`UNSUPPORTED_ATTACHMENT_TYPE` allá vs.
+ * `CHAT_ATTACHMENT_UNSUPPORTED_TYPE` acá). El flujo de mensajería SIEMPRE importa
+ * la de ESTE archivo — jamás la de `taskAttachment.ts`.
+ */
+export class UnsupportedAttachmentTypeError extends DomainError {
+  constructor(public readonly contentType: string) {
+    super(`Unsupported attachment content type: "${contentType}"`, 'CHAT_ATTACHMENT_UNSUPPORTED_TYPE');
+    this.name = 'UnsupportedAttachmentTypeError';
+  }
+}
