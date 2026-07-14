@@ -4,6 +4,7 @@
  * service-technology change: added 'contracts' module → 26 total.
  * uisp-integration change: added 'uisp' module → 27 total.
  * messaging-inbox (F1): added 'messaging' module → 34 total; added 'send' action → 45 total.
+ * messaging-bulk (F2): added 'bulk' + 'templates' actions → 47 total.
  */
 import {
   PermissionAction,
@@ -139,8 +140,16 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 45 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions + 1 pppoe.cut Fase C + 1 recapture.assign + 1 transfer service-transfer + 1 send messaging-inbox)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(45);
+  it('contains exactly 47 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions + 1 pppoe.cut Fase C + 1 recapture.assign + 1 transfer service-transfer + 1 send messaging-inbox + 2 bulk/templates messaging-bulk)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(47);
+  });
+
+  it("includes bulk (messaging-bulk F2 — disparar/ver campañas masivas)", () => {
+    expect(KNOWN_ACTIONS).toContain('bulk');
+  });
+
+  it("includes templates (messaging-bulk F2 — listar/usar templates de WhatsApp)", () => {
+    expect(KNOWN_ACTIONS).toContain('templates');
   });
 
   it('includes transfer (service-transfer — transferir servicios entre clientes: tv.transfer hoy, pppoe/inventory en waves 2-3)', () => {

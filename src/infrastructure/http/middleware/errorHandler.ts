@@ -163,6 +163,21 @@ const statusMap: Record<string, number> = {
   // messaging-inbox-v2-media (F1.5 fase A, Tanda 2 · SEND-1) — enviar media: el
   // contentType de un adjunto SALIENTE no es clasificable (vacío/ausente).
   CHAT_ATTACHMENT_UNSUPPORTED_TYPE: 415,
+  // messaging-bulk (F2) — envío masivo por template WhatsApp (Twilio directo).
+  TEMPLATE_PROVIDER_UNAVAILABLE: 503,
+  // messaging-bulk fix wave (FIX-2) — auth/config sistémica del proveedor
+  // (token rotado, accountSid vacío). Aborta el run; rara vez llega al handler
+  // HTTP (el envío es fire-and-forget), entrada defensiva.
+  TEMPLATE_PROVIDER_MISCONFIGURED: 503,
+  TEMPLATE_SEND_REJECTED: 422,
+  TEMPLATE_NOT_APPROVED: 422,
+  MISSING_TEMPLATE_VARIABLES: 422,
+  EMPTY_SEGMENT: 422,
+  // messaging-bulk fix wave 2 (FIX-8) — segmento sin criterio (apuntaría a TODA
+  // la base): request inválido del cliente → 400.
+  UNFILTERED_SEGMENT: 400,
+  CAMPAIGN_NOT_FOUND: 404,
+  CAMPAIGN_ALREADY_FINISHED: 409,
   // F1.5-C2 (asignación) — SetConversationArea reusa TicketAreaNotFoundError
   // (`@domain/errors/tickets`) para el area inexistente referenciado. El código
   // ya existía sin entrada explícita acá (ticketAreas.routes.ts lo intercepta
@@ -206,6 +221,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     // Surface iclassSoTypeCode so the FE can render "Type «code» was deactivated".
     if (mapped?.iclassSoTypeCode !== undefined) {
       body['iclassSoTypeCode'] = mapped.iclassSoTypeCode;
+    }
+    // messaging-bulk (F2, CAMP-3) — spec.md's wire contract names this `missing`
+    // (distinct from the pre-existing `missingFields` used by another feature).
+    if (mapped?.missing !== undefined) {
+      body['missing'] = mapped.missing;
     }
     res.status(status).json(body);
     return;

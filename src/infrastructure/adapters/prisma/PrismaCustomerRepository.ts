@@ -1,4 +1,17 @@
-import { CustomerRepository, ListClientsQuery, ListLogsQuery, CreateCustomerInput, ClientStats, UpdateClientLocationInput, ActiveClientContact } from '@domain/ports/CustomerRepository';
+import {
+  CustomerRepository,
+  ListClientsQuery,
+  ListLogsQuery,
+  CreateCustomerInput,
+  ClientStats,
+  UpdateClientLocationInput,
+  ActiveClientContact,
+  CampaignSegmentSource,
+  CampaignSegmentFilter,
+  CampaignRecipientCandidate,
+  CampaignRecipientLookup,
+  OptOutRegistry,
+} from '@domain/ports/CustomerRepository';
 import { Customer, CustomerStatus, Contract, ClientLog } from '@domain/entities/customer';
 import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
 import { PaginatedResult } from '@application/dto/pagination';
@@ -172,7 +185,99 @@ export function foldClientStats(
   return out;
 }
 
-export class PrismaCustomerRepository implements CustomerRepository {
+/**
+ * messaging-bulk (F2, Batch 6, T6.1) — construye el `where` de `list()` de
+ * forma PURA y testeable sin Prisma (molde `foldClientStats`). `statuses`
+ * (multi, NUEVO) gana sobre `status` (single, F1) SOLO si viene con al menos
+ * un elemento — el path F1 (un solo `status`) queda idéntico si `statuses`
+ * nunca llega, cero riesgo de regresión (tasks.md T6.2).
+ */
+export function buildClientListWhere(query: ListClientsQuery): Record<string, unknown> {
+  const where: Record<string, unknown> = {};
+  if (query.statuses?.length) {
+    where['status'] = { in: query.statuses as never };
+  } else if (query.status) {
+    where['status'] = query.status as never;
+  }
+  if (query.balanceMin != null || query.balanceMax != null) {
+    where['balanceDue'] = {
+      ...(query.balanceMin != null ? { gte: query.balanceMin } : {}),
+      ...(query.balanceMax != null ? { lte: query.balanceMax } : {}),
+    };
+  }
+  if (query.search) {
+    where['OR'] = [
+      { name: { contains: query.search, mode: 'insensitive' } },
+      { email: { contains: query.search, mode: 'insensitive' } },
+      { login: { contains: query.search, mode: 'insensitive' } },
+    ];
+  }
+  return where;
+}
+
+/**
+ * messaging-bulk (F2, Batch 6, T6.3, design §4.2) — `where` de
+ * `listSegmentRecipients`, PURO y testeable sin Prisma. `statuses` vacío
+ * (`[]`) es el escape hatch de OPT-2 (T6.5): resuelve el universo COMPLETO de
+ * `Client` sin filtro de status — necesario para matchear un teléfono inbound
+ * contra CUALQUIER estado (`late`/`blocked`/`baja`, el público del bulk).
+ *
+ * ── fix wave 2 (FIX-11): opt-out NO se pre-filtra en el query ────────────────
+ * Antes, con `statuses` no vacío, este where agregaba `whatsappOptOutAt: null` a
+ * nivel query. Efecto colateral: los opt-out NUNCA llegaban a `resolveRecipients`
+ * → el contador `skipped.optedOut` daba SIEMPRE 0 en prod (viola SEG-2), aunque
+ * los tests pasaban porque el fake in-memory no filtraba (mock infiel). Ahora el
+ * where NO toca opt-out: `resolveRecipients` (SEG-2) los excluye del envío Y los
+ * CUENTA, y el SEND path re-chequea opt-out per-destinatario (SEND-5) — no hay
+ * hueco de compliance y el fake ahora matchea prod.
+ *
+ * ── fix wave 2 (FIX-12): rango de deuda y las filas balanceDue = NULL ────────
+ * `balanceDue:{gte,lte}` EXCLUYE en silencio las filas `balanceDue = NULL`
+ * (deudores never-synced desde GR). Semántica de producto: cuando NO hay piso
+ * real (`balanceMin` ausente o 0) se INCLUYEN esos NULL (vía `OR balanceDue:null`)
+ * — son deudores válidos aunque no tengamos el monto; cuando hay piso `> 0` se
+ * EXCLUYEN (no se puede confirmar que su monto ≥ piso).
+ */
+export function buildSegmentWhere(segment: CampaignSegmentFilter): Record<string, unknown> {
+  const where: Record<string, unknown> = {};
+  if (segment.statuses.length > 0) {
+    where['status'] = { in: segment.statuses as never };
+  }
+  if (segment.balanceMin != null || segment.balanceMax != null) {
+    const range: Record<string, number> = {};
+    if (segment.balanceMin != null) range['gte'] = segment.balanceMin;
+    if (segment.balanceMax != null) range['lte'] = segment.balanceMax;
+    // FIX-12 — sin piso real (piso ausente o ≤ 0), incluir también los NULL.
+    const includeNulls = segment.balanceMin == null || segment.balanceMin <= 0;
+    if (includeNulls) {
+      where['OR'] = [{ balanceDue: range }, { balanceDue: null }];
+    } else {
+      where['balanceDue'] = range;
+    }
+  }
+  return where;
+}
+
+/**
+ * messaging-bulk (F2, Batch 6, T6.3) — mapea una fila narrow de Prisma
+ * (`id/name/phone/balanceDue/whatsappOptOutAt`) al candidato de dominio. Molde
+ * `toActiveClientContact`/`toInvoice` (Decimal→number, Date→ISO string).
+ */
+export function toCampaignRecipientCandidate(row: any): CampaignRecipientCandidate {
+  return {
+    clientId: row.id,
+    name: row.name,
+    phone: row.phone ?? null,
+    balanceDue: decimalToNumberOrNull(row.balanceDue),
+    whatsappOptOutAt: row.whatsappOptOutAt instanceof Date
+      ? row.whatsappOptOutAt.toISOString()
+      : (row.whatsappOptOutAt ?? null),
+  };
+}
+
+export class PrismaCustomerRepository
+  implements CustomerRepository, CampaignSegmentSource, CampaignRecipientLookup, OptOutRegistry
+{
   /**
    * @param balanceTtlMinutes - TTL for balance staleness in minutes. Defaults to 60.
    *   Pass `config.gestionReal.balanceStaleTtlMinutes` from app.ts.
@@ -184,15 +289,10 @@ export class PrismaCustomerRepository implements CustomerRepository {
   async list(query: ListClientsQuery): Promise<PaginatedResult<Customer>> {
     const page = query.page && query.page > 0 ? query.page : 1;
     const limit = query.limit && query.limit > 0 ? query.limit : 25;
-    const where: Record<string, unknown> = {};
-    if (query.status) where['status'] = query.status as never;
-    if (query.search) {
-      where['OR'] = [
-        { name:  { contains: query.search, mode: 'insensitive' } },
-        { email: { contains: query.search, mode: 'insensitive' } },
-        { login: { contains: query.search, mode: 'insensitive' } },
-      ];
-    }
+    // messaging-bulk (F2, T6.2) — where-builder extraído a función pura
+    // (buildClientListWhere, arriba) para poder testear la precedencia
+    // statuses>status SIN Prisma. Comportamiento idéntico al inline anterior.
+    const where = buildClientListWhere(query);
     const [rows, total] = await Promise.all([
       prisma.client.findMany({
         where,
@@ -303,6 +403,53 @@ export class PrismaCustomerRepository implements CustomerRepository {
       select: { id: true, name: true, phone: true, email: true },
     });
     return rows.map(toActiveClientContact);
+  }
+
+  /**
+   * messaging-bulk (F2, Batch 6, T6.3, design §4.2) — implementa
+   * `CampaignSegmentSource`. UNA query, columnas narrow (molde
+   * `listActiveContacts`), sin paginar (el bulk necesita el universo completo,
+   * no una página — mismo tradeoff recall-over-pagination). `buildSegmentWhere`
+   * decide el escape hatch de OPT-2 (`statuses: []`, ver su doc arriba).
+   */
+  async listSegmentRecipients(segment: CampaignSegmentFilter): Promise<CampaignRecipientCandidate[]> {
+    const rows = await prisma.client.findMany({
+      where: buildSegmentWhere(segment),
+      select: { id: true, name: true, phone: true, balanceDue: true, whatsappOptOutAt: true },
+    });
+    return rows.map(toCampaignRecipientCandidate);
+  }
+
+  /**
+   * messaging-bulk (F2, Batch 4/6, SEND-5) — implementa `CampaignRecipientLookup`.
+   * Re-check per-cliente INMEDIATAMENTE antes de cada envío (`SendCampaign`) —
+   * `null` cuando el `Client` ya no resuelve (borrado).
+   */
+  async findRecipientCandidate(clientId: string): Promise<CampaignRecipientCandidate | null> {
+    const row = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { id: true, name: true, phone: true, balanceDue: true, whatsappOptOutAt: true },
+    });
+    return row ? toCampaignRecipientCandidate(row) : null;
+  }
+
+  /**
+   * messaging-bulk (F2, Batch 6, T6.4, OPT-1) — implementa `OptOutRegistry`.
+   * `updateMany` con `whatsappOptOutAt: null` en el WHERE hace la idempotencia
+   * primer-en-ganar ESTRUCTURAL (garantizada por el motor, no por un branch de
+   * código): si el cliente ya tenía `whatsappOptOutAt` seteado, el UPDATE no
+   * matchea ninguna fila y el timestamp original se preserva intacto. Sin
+   * test unitario propio contra Prisma real (no hay DB local, regla CLAUDE.md
+   * — mismo criterio documentado que `PrismaCampaignRepository`, Batch 7); el
+   * contrato OPT-1/OPT-2 se ejercita end-to-end vía
+   * `ReceiveChatwootWebhook.optout.test.ts` (Batch 6, T6.5) con un fake
+   * in-memory que implementa el mismo criterio primer-en-ganar.
+   */
+  async registerOptOut(clientId: string): Promise<void> {
+    await prisma.client.updateMany({
+      where: { id: clientId, whatsappOptOutAt: null },
+      data: { whatsappOptOutAt: new Date() },
+    });
   }
 
   async updateLocation(id: string, data: UpdateClientLocationInput): Promise<Customer | null> {

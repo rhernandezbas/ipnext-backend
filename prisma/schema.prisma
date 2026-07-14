@@ -204,6 +204,9 @@ model Client {
   plusCode         String?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
+  // messaging-bulk (F2) — null = contactable. IS NOT NULL = excluido SIEMPRE del bulk
+  // WhatsApp (OPT-1/OPT-2/SEG-2). Aditiva, sin backfill (default null = contactable).
+  whatsappOptOutAt DateTime?
   contracts        Contract[]
   logs             ClientLog[]
   invoices         Invoice[]
@@ -213,6 +216,8 @@ model Client {
   recaptureLeads   RecaptureLead[]
   // #5 BE — TV activation history back-relation
   tvActivationEvents TvActivationEvent[]
+  // messaging-bulk (F2) — back-relation a los destinatarios de campaña de este cliente.
+  campaignRecipients CampaignRecipient[] @relation("ClientCampaignRecipients")
 
   @@index([status])
   @@index([email])
@@ -2406,6 +2411,8 @@ model RbacUser {
   // F1.5-C2 (asignación) — back-relation de la asignación LOCAL de Conversation
   // (mirror WhatsApp, nunca sincronizada a Chatwoot).
   assignedConversations   Conversation[]         @relation("ConversationAssignee")
+  // messaging-bulk (F2) — back-relation de las campañas disparadas por este usuario.
+  createdCampaigns        Campaign[]             @relation("CampaignCreatedBy")
 
   @@index([login])
   @@index([iclassTeamLogin])
@@ -2867,4 +2874,80 @@ model WebhookDelivery {
   receivedAt DateTime @default(now())
 
   @@unique([source, deliveryId])
+}
+
+// =============================================
+// messaging-bulk (F2) — envío masivo por template WhatsApp (Twilio Content directo)
+// =============================================
+
+enum CampaignStatus {
+  pending
+  running
+  paused
+  done
+  failed
+}
+
+enum CampaignRecipientStatus {
+  queued
+  sent
+  delivered
+  opted_out // Prisma no admite guiones — display "opted-out" en el DTO
+  skipped
+  failed
+}
+
+// Header + contadores de una campaña de envío masivo. Molde ServiceCutBatch (lock
+// distribuido, resumible, status por-destinatario en CampaignRecipient). Uso Prisma
+// enum (no String) siguiendo el precedente ClientStatus — DB-enforced, vocabulario
+// cerrado (design §1.2).
+model Campaign {
+  id            String            @id @default(uuid())
+  name          String            // nombre humano ("Recordatorio deuda julio")
+  templateRef   String            // ContentSid Twilio (HX…) — enviable
+  templateName  String?           // friendly_name legible del template
+  segment       Json              // filtro serializado (reproducible/auditable):
+                                  // { statuses: string[], balanceMin?: number, balanceMax?: number }
+  variableSpec  Json              @default("{}") // cómo se llenan las variables del template
+                                  // por-destinatario: { "1": {source:'name'}, "2": {source:'balanceDue'},
+                                  // "3": {source:'literal', value:'…'} }
+  status        CampaignStatus    @default(pending)
+  total         Int               @default(0)   // destinatarios resueltos al crear
+  sentCount     Int               @default(0)
+  failedCount   Int               @default(0)
+  skippedCount  Int               @default(0)
+  optedOutCount Int               @default(0)
+  createdById   String            // FK RbacUser — quién la disparó
+  createdBy     RbacUser          @relation("CampaignCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  error         String?           // error fatal del batch (si status=failed)
+  createdAt     DateTime          @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  updatedAt     DateTime          @updatedAt
+  recipients    CampaignRecipient[]
+
+  @@index([status])
+  @@index([createdAt(sort: Desc)])   // historial ListCampaigns ordenado por fecha
+}
+
+// Status por-destinatario, PERSISTIDO por fila (auditable + resumible por SEND-6).
+model CampaignRecipient {
+  id                     String                   @id @default(uuid())
+  campaignId             String
+  campaign               Campaign                 @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  clientId               String
+  client                 Client                   @relation("ClientCampaignRecipients", fields: [clientId], references: [id], onDelete: Cascade)
+  phoneNormalized        String                   // clave de de-dup (normalizePhone) — auditable
+  phoneE164              String                   // el destino REAL enviado (whatsapp E164) — auditable
+  status                 CampaignRecipientStatus  @default(queued)
+  providerId             String?                  // SM… de Twilio (id del mensaje) cuando sent
+  chatwootConversationId Int?                     // link al mirror F1 si el cliente responde (F3/opcional)
+  error                  String?                  // motivo del fallo por-fila (best-effort, no aborta el lote)
+  sentAt                 DateTime?
+  deliveredAt            DateTime?                // recién se llena en F3 (status callback Twilio)
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+
+  @@unique([campaignId, clientId])   // idempotencia de creación de recipients + resumible
+  @@index([campaignId, status])       // progreso poleable + resume (WHERE status IN queued/failed)
 }

@@ -3,7 +3,12 @@ import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository'
 import type { WebhookDeliveryRepository } from '@domain/ports/WebhookDeliveryRepository';
 import type { ChatMessageAttachmentRepository } from '@domain/ports/ChatMessageAttachmentRepository';
 import type { ChatMediaDownloadTrigger } from '@domain/ports/ChatMediaDownloadTrigger';
+import type { CampaignSegmentSource, OptOutRegistry } from '@domain/ports/CustomerRepository';
+import { toWhatsAppE164 } from './toWhatsAppE164';
 import { deriveConversationPreview } from './conversationPreview';
+
+/** OPT-2 — keywords que disparan el opt-out (case-insensitive, trim-tolerant, match EXACTO). */
+const OPT_OUT_KEYWORDS = new Set(['BAJA', 'STOP']);
 
 /**
  * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-1) — a single Chatwoot
@@ -116,6 +121,15 @@ export class ReceiveChatwootWebhook {
     /** messaging-inbox-v2-media (Tanda 1) — optional so existing 3-arg call sites keep compiling. */
     private readonly attachmentRepo?: ChatMessageAttachmentRepository,
     private readonly downloadTrigger?: ChatMediaDownloadTrigger,
+    /**
+     * messaging-bulk (F2, Batch 6, T6.5, OPT-2) — optional (existing 3/5-arg
+     * call sites keep compiling, same criterion as `attachmentRepo`/
+     * `downloadTrigger` above). Resuelve el `Client` por teléfono (tasks.md
+     * contradicción #4: `listSegmentRecipients({statuses:[]})`, NUNCA
+     * `listActiveContacts()` — ese excluiría late/blocked/baja, el público del
+     * bulk) y registra el opt-out (OPT-1) cuando matchea.
+     */
+    private readonly optOutSource?: CampaignSegmentSource & OptOutRegistry,
   ) {}
 
   async execute(deliveryId: string, payload: ChatwootWebhookPayload): Promise<void> {
@@ -158,6 +172,13 @@ export class ReceiveChatwootWebhook {
       .filter((a) => BINARY_FILE_TYPES.has(a.file_type))
       .map((a) => a.file_type);
 
+    // messaging-bulk (F2, OPT-2) — solo mensajes INBOUND disparan la detección de
+    // baja; corre ANTES del upsert de abajo (independiente de si el mensaje en sí
+    // termina persistiéndose — ver el early-return de §7 más abajo).
+    if (direction === 'inbound') {
+      await this.maybeRegisterOptOut(payload.content, sender?.phone_number);
+    }
+
     const conversation = await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId,
       contactName: sender?.name,
@@ -184,6 +205,89 @@ export class ReceiveChatwootWebhook {
     });
 
     await this.captureAttachments(message.id, payload.attachments);
+  }
+
+  /**
+   * messaging-bulk (F2, Batch 6, T6.5, OPT-2) — detecta las keywords
+   * BAJA/STOP (case-insensitive, trim-tolerant, match EXACTO de keyword — no
+   * substring: "quiero darme de baja" NO dispara, se evita el falso positivo;
+   * afinar la detección de frases es mejora futura) en el contenido de un
+   * mensaje INBOUND y, si matchea, resuelve el `Client` por teléfono y
+   * registra su opt-out (OPT-1).
+   *
+   * tasks.md contradicción #4 — resuelve contra
+   * `optOutSource.listSegmentRecipients({statuses:[]})` (el escape hatch
+   * narrow de T6.3: universo COMPLETO, sin filtro de status ni de opt-out),
+   * NUNCA `listActiveContacts()` — ese filtra `status:'active'` y excluiría
+   * justo a los `late`/`blocked`/`baja` que son el público principal del
+   * bulk (los que más responden "BAJA").
+   *
+   * ── fix wave 3 (FIX-9-v2): match por E164 canónico, no por `normalizePhone` ──
+   * FIX-9 (wave 2) cambió el `suffixMatch` (últimos 8 dígitos → dos áreas
+   * distintas colisionaban y AMBAS se daban de baja) por igualdad EXACTA de
+   * `normalizePhone`. Pero `normalizePhone` es LOSSY: NO strippea el "15" móvil
+   * embebido entre área y abonado, así que un `Client.phone = "011 15-2345-6789"`
+   * normalizaba distinto que el webhook `+5491123456789` → el opt-out se IGNORABA
+   * en silencio (regresión: opt-out ignorado = riesgo de baneo Meta, PEOR que el
+   * falso-positivo cross-área original). Ahora el match es por
+   * `toWhatsAppE164(webhookFrom) === toWhatsAppE164(client.phone)` (ambos
+   * no-null): `toWhatsAppE164` (Wave 1) canonicaliza el "15" embebido y ancla en
+   * el NSN de 10 dígitos, así que resuelve el falso-NEGATIVO del "15" Y mantiene
+   * el fix del falso-positivo cross-área (áreas distintas → E164 distinto). Si
+   * `toWhatsAppE164` da null de algún lado, ese candidato NO matchea (teléfono no
+   * reconstruible con confianza). Si hay >1 exacto (el MISMO E164 en varios
+   * `Client`, ej. co-titulares) se opta-out a TODOS — conservador y
+   * compliance-safe: la de-dup de campaña colapsa ese número a UN recipient, así
+   * que suprimir todas las fichas garantiza que NUNCA vuelva a recibir.
+   *
+   * ── fix wave 2 (FIX-10): fail-open real ─────────────────────────────────────
+   * El docstring prometía "nunca lanza" pero `listSegmentRecipients`/
+   * `registerOptOut` PODÍAN throw (hipo de DB) y el error subía por `execute`,
+   * volando el webhook ANTES de espejar el mensaje (el "BAJA" se perdía y
+   * Chatwoot reintentaba y re-explotaba). Ahora la resolución/registro va
+   * envuelta en try/catch: se loguea y se sigue — el mensaje SIEMPRE se espeja.
+   *
+   * Fail-open, nunca lanza: sin `optOutSource` inyectado (call sites
+   * existentes, 3/5-arg), sin keyword, o sin match de teléfono → no-op
+   * silencioso (mismo criterio HOOK-4/5 — un contacto sin match no rompe el
+   * resto del webhook).
+   */
+  private async maybeRegisterOptOut(
+    content: string | null | undefined,
+    phone: string | null | undefined,
+  ): Promise<void> {
+    if (!this.optOutSource) return;
+
+    const trimmedUpper = (content ?? '').trim().toUpperCase();
+    if (!OPT_OUT_KEYWORDS.has(trimmedUpper)) return;
+
+    const fromE164 = toWhatsAppE164(phone);
+    if (fromE164 === null) return; // teléfono del webhook no reconstruible → no-op
+
+    try {
+      const candidates = await this.optOutSource.listSegmentRecipients({ statuses: [] });
+      // FIX-9-v2 — match por E164 CANÓNICO (no `normalizePhone`, que es lossy con
+      // el "15" embebido). Un candidato cuyo teléfono no reconstruye E164 no matchea.
+      const exactMatches = candidates.filter((c) => {
+        const candidateE164 = toWhatsAppE164(c.phone);
+        return candidateE164 !== null && candidateE164 === fromE164;
+      });
+      if (exactMatches.length === 0) {
+        // eslint-disable-next-line no-console
+        console.info('[messaging] opt-out keyword sin match EXACTO de teléfono (E164) — no-op', { fromE164 });
+        return;
+      }
+      for (const match of exactMatches) {
+        await this.optOutSource.registerOptOut(match.clientId);
+      }
+    } catch (err) {
+      // FIX-10 — fail-open: el opt-out es best-effort; su fallo NUNCA debe
+      // impedir que el mensaje se espeje (ni propagar → Chatwoot no reintenta).
+      // eslint-disable-next-line no-console
+      console.error('[messaging] registro de opt-out falló (fail-open, el webhook igual espeja el mensaje)', {
+        error: err instanceof Error ? err.message : err,
+      });
+    }
   }
 
   /**

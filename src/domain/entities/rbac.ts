@@ -82,6 +82,9 @@ export const KNOWN_ACTIONS = [
   // messaging-inbox (F1) — responder un mensaje de WhatsApp/Chatwoot dentro de la ventana
   // 24h. Separado de 'read' porque leer el inbox no debe habilitar enviar (RBAC-2).
   'send',
+  // messaging-bulk (F2) — disparar/ver campañas masivas + listar/usar templates
+  'bulk',
+  'templates',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.

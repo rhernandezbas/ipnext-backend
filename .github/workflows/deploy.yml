@@ -110,6 +110,10 @@ jobs:
             -e CHATWOOT_API_TOKEN="${{ secrets.CHATWOOT_API_TOKEN }}" \
             -e CHATWOOT_INBOX_ID="${{ secrets.CHATWOOT_INBOX_ID }}" \
             -e CHATWOOT_WEBHOOK_SECRET="${{ secrets.CHATWOOT_WEBHOOK_SECRET }}" \
+            -e TWILIO_ACCOUNT_SID="${{ secrets.TWILIO_ACCOUNT_SID }}" \
+            -e TWILIO_AUTH_TOKEN="${{ secrets.TWILIO_AUTH_TOKEN }}" \
+            -e TWILIO_MESSAGING_SERVICE_SID="${{ secrets.TWILIO_MESSAGING_SERVICE_SID }}" \
+            -e MESSAGING_BULK_RATE_PER_SEC="${{ secrets.MESSAGING_BULK_RATE_PER_SEC }}" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 

@@ -1,0 +1,50 @@
+/**
+ * messaging-bulk (F2, design §2.1) — port para el proveedor de templates de
+ * WhatsApp. NUEVO, NO extiende `ChatwootGateway`: templates + primer-contacto-
+ * outbound es responsabilidad distinta (crear el hilo desde cero, fuera de la
+ * ventana 24h) de `ChatwootGateway.sendMessage` (ops sobre una conversación
+ * existente, F1, estable). Port separado = swap de proveedor sin tocar el
+ * núcleo (ISP — Interface Segregation Principle).
+ *
+ * Send-path LOCKED = Twilio Content directo (D2). El adapter real
+ * (`TwilioContentGateway`, Batch 5) implementa esto contra la API de Twilio; el
+ * fake in-memory (`InMemoryTemplateMessagingGateway`, Batch 3) lo implementa
+ * para tests. Los use cases NUNCA ven JSON crudo del proveedor.
+ */
+
+/** DTO de dominio de un template — nunca el objeto crudo de Twilio. */
+export interface TemplateDto {
+  /** ContentSid de Twilio (HX…) — el `templateRef` enviable. */
+  contentSid: string;
+  friendlyName: string;
+  /** ej. 'es'. */
+  language: string;
+  /** Nombres/sample de las variables declaradas por el template. */
+  variables: Record<string, string>;
+  approvalStatus: 'approved' | 'pending' | 'rejected' | 'unsubmitted';
+  /** MARKETING | UTILITY | AUTHENTICATION. */
+  category?: string;
+}
+
+export interface SendTemplateResult {
+  /** SM… (Message SID) de Twilio. */
+  providerId: string;
+  /** Raw de Twilio (queued | sent | accepted …) — el use case lo mapea. */
+  status: string;
+}
+
+export interface TemplateMessagingPort {
+  /** Lista templates del proveedor. `ListTemplates` filtra los `approved`. */
+  listTemplates(): Promise<TemplateDto[]>;
+  /**
+   * Envía UN template. `to` = E164 con '+' (ej '+5493364xxxxxx'); el adapter
+   * le antepone 'whatsapp:'. `variables` = mapa índice/nombre→valor ya
+   * resuelto por el use case.
+   *
+   * Errores: transient (429/5xx/red) → `TemplateProviderUnavailableError`
+   * (retryable); 4xx per-mensaje (número inválido, template no aprobado) →
+   * `TemplateSendRejectedError` (terminal para ESE destinatario, no aborta el
+   * lote).
+   */
+  sendTemplate(to: string, contentSid: string, variables: Record<string, string>): Promise<SendTemplateResult>;
+}

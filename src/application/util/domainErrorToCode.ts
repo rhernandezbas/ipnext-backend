@@ -6,6 +6,7 @@ import {
   IClassSoTypeInactiveError,
   IClassNodeNotAssignableError,
 } from '@domain/errors/iclass';
+import { MissingTemplateVariablesError } from '@domain/errors/messaging-bulk';
 
 /** Shape of a domain error mapped to a transport-agnostic result. */
 export interface DomainErrorCode {
@@ -16,6 +17,12 @@ export interface DomainErrorCode {
   projectTitle?: string;
   /** Surfaced from IClassSoTypeInactiveError — the code of the inactive SO type. */
   iclassSoTypeCode?: string;
+  /**
+   * messaging-bulk (F2, CAMP-3) — surfaced from `MissingTemplateVariablesError`.
+   * Spec.md names this wire field `missing` (NOT `missingFields` — a distinct,
+   * pre-existing field used by a different feature); kept separate on purpose.
+   */
+  missing?: string[];
 }
 
 /**
@@ -45,6 +52,9 @@ export function domainErrorToCode(err: unknown): DomainErrorCode | null {
   }
   if (err instanceof IClassSoTypeInactiveError) {
     result.iclassSoTypeCode = err.iclassSoTypeCode;
+  }
+  if (err instanceof MissingTemplateVariablesError) {
+    result.missing = err.missing;
   }
   return result;
 }

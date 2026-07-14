@@ -756,6 +756,19 @@ import { GetInboxClientContext } from '@application/use-cases/messaging/GetInbox
 import { AssignConversation } from '@application/use-cases/messaging/AssignConversation';
 import { SetConversationArea } from '@application/use-cases/messaging/SetConversationArea';
 import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssignableUsers';
+// ── messaging-bulk (F2) — envío masivo por template WhatsApp (Twilio directo) ─
+import { createMessagingBulkRouter } from './routes/messagingBulk.routes';
+import { TwilioContentGateway } from '../adapters/twilio/TwilioContentGateway';
+import { PrismaCampaignRepository } from '../adapters/prisma/PrismaCampaignRepository';
+import { TokenBucketRateLimiter } from '@application/util/TokenBucketRateLimiter';
+import { CampaignRunner } from '../scheduling/CampaignRunner';
+// Aliased: `ListTemplates` already names an unrelated settings/email-templates use case above (:58).
+import { ListTemplates as ListMessagingTemplates } from '@application/use-cases/messaging/ListTemplates';
+import { PreviewCampaignSegment } from '@application/use-cases/messaging/PreviewCampaignSegment';
+import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign';
+import { SendCampaign } from '@application/use-cases/messaging/SendCampaign';
+import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
+import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -2537,7 +2550,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     );
 
     app.use('/api/messaging', createMessagingRouter(
-      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger),
+      // messaging-bulk (F2, Batch 6, OPT-2) — 6º arg `customerAdapter` (opcional):
+      // ya implementa `CampaignSegmentSource & OptOutRegistry` (misma instancia
+      // que el resto del BE) — habilita la detección BAJA/STOP inbound. Sin esto
+      // el opt-out inbound queda MUERTO en prod (lección W6).
+      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger, customerAdapter),
       new ListConversations(conversationRepo),
       new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone, chatAttachmentRepo, chatMediaDownloadTrigger),
       new ListChatMessages(conversationRepo, chatMessageRepo, chatAttachmentRepo),
@@ -2571,6 +2588,39 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new SetConversationArea(conversationRepo, ticketAreaRepo),
       new ListAssignableUsers(rbacUserRepo, roleLookupForRecapture),
       listTicketAreas,
+    ));
+  }
+
+  // ─── messaging-bulk (F2) — envío masivo por template WhatsApp (Twilio directo) ─
+  // Prefijo REAL `/api/messaging/bulk` (spec manda, tasks.md contradicción #1 —
+  // el prefijo `/api/messaging/campaigns` de design §7 NO se usa).
+  {
+    const templatePort = new TwilioContentGateway({
+      accountSid: config.twilio.accountSid,
+      authToken: config.twilio.authToken,
+      messagingServiceSid: config.twilio.messagingServiceSid,
+    });
+    const campaignRepo = new PrismaCampaignRepository();
+    const rateLimiter = new TokenBucketRateLimiter({ ratePerSec: config.messagingBulk.ratePerSec });
+    // customerAdapter (línea ~872) YA implementa CampaignSegmentSource +
+    // CampaignRecipientLookup (Batch 6) — misma instancia, sin duplicar wiring.
+    const sendCampaign = new SendCampaign(campaignRepo, customerAdapter, templatePort, rateLimiter);
+    const campaignRunner = new CampaignRunner(sendCampaign, campaignRepo, new PgAdvisoryLock());
+
+    app.use('/api/messaging/bulk', createMessagingBulkRouter(
+      new ListMessagingTemplates(templatePort),
+      new PreviewCampaignSegment(customerAdapter),
+      // 3 args — tasks.md contradicción #2 (design §7 wiring original olvidaba
+      // el templatePort; CAMP-2 lo necesita para validar templateRef aprobado).
+      new CreateCampaign(campaignRepo, customerAdapter, templatePort),
+      campaignRunner,
+      new GetCampaign(campaignRepo),
+      new ListCampaigns(campaignRepo),
+      createAuthMiddleware(authAdapter, sessionRepo),
+      {
+        bulk: requirePerm('messaging', 'bulk'),
+        templates: requirePerm('messaging', 'templates'),
+      },
     ));
   }
 

@@ -364,4 +364,31 @@ export const config = {
     inboxId: process.env.CHATWOOT_INBOX_ID ?? '',
     webhookSecret: process.env.CHATWOOT_WEBHOOK_SECRET ?? '',
   },
+
+  /**
+   * messaging-bulk (F2, Batch 8) — Twilio Content API, envío directo de
+   * templates de WhatsApp (design D2/§9). Opt-in (patrón chatwoot/iclass, NO
+   * en REQUIRED_VARS): si faltan las credenciales, `TwilioContentGateway`
+   * igual se construye, pero cualquier llamada falla con
+   * `TemplateProviderUnavailableError` (503) — el boot NUNCA falla por esto
+   * (lección ORCHESTRATOR_BASE_URL: env faltante = 502 en runtime, no 500 al
+   * levantar el server). El BE usa SUS PROPIOS secrets (no reusa los del
+   * canal Chatwoot `channel_twilio_sms` en runtime).
+   */
+  twilio: {
+    accountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
+    authToken: process.env.TWILIO_AUTH_TOKEN ?? '',
+    messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID ?? '',
+  },
+
+  /**
+   * messaging-bulk (F2, Batch 8, SEND-4) — rate limiter proactivo del envío
+   * masivo (~80 msg/s en prod, `TokenBucketRateLimiter`). Calibrable SIN
+   * redeploy vía env: el límite real del plan Twilio se confirma recién en el
+   * gate EN VIVO (Batch 9). `parsePositiveInt`: ausente/inválido/<=0 →
+   * default 80 (un fat-finger no puede dejar el rate en 0 = "nunca envía").
+   */
+  messagingBulk: {
+    ratePerSec: parsePositiveInt(process.env.MESSAGING_BULK_RATE_PER_SEC, { default: 80, max: 1000 }),
+  },
 };

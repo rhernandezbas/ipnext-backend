@@ -29,6 +29,16 @@ import { DistributedLock } from '@domain/ports/DistributedLock';
  * considers the connection dead before the client does. In practice, with
  * TCP keepalives and a healthy network, this window is <60s and acceptable
  * for a background sync job.
+ *
+ * ── RE-ENTRANCY gotcha (messaging-bulk fix wave, FIX-3) ─────────────────────
+ * Session advisory locks are RE-ENTRANT within a single connection:
+ * `pg_try_advisory_lock` returns `true` AGAIN if THIS same session already
+ * holds the key (Postgres keeps a per-session hold counter). Because this
+ * adapter reuses ONE long-lived connection per process, two concurrent
+ * `tryAcquire(sameKey)` calls on the SAME replica BOTH succeed — the lock only
+ * mutually excludes ACROSS replicas (distinct sessions). Callers that must also
+ * exclude an intra-replica double-start (e.g. `CampaignRunner`) need an
+ * in-process guard on top of this lock; this adapter alone does not provide it.
  */
 export class PgAdvisoryLock implements DistributedLock {
   private client: pg.Client;
