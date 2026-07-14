@@ -77,6 +77,15 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     expect(window).toMatch(/new ListCampaigns\(campaignRepo\)/);
   });
 
+  // messaging-bulk v1.1 (preview modal paginado) — anti-W6: ListSegmentRecipients
+  // NO debe quedar muerto (instanciado pero nunca pasado al router).
+  it('(f2) v1.1: ListSegmentRecipients instanciado con customerAdapter Y pasado dentro de la MISMA llamada de mount', () => {
+    const idx = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(");
+    const end = appSrc.indexOf('));', idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+    expect(window).toMatch(/new ListSegmentRecipients\(customerAdapter\)/);
+  });
+
   it('(g) CreateCampaign recibe 3 args — contradicción #2 (design §7 original tenía 2, sin templatePort)', () => {
     const idx = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(");
     const end = appSrc.indexOf('));', idx);

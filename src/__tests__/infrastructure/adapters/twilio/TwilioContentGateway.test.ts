@@ -47,6 +47,7 @@ const CONTENT_PAGE_1 = {
         language: 'es',
         variables: { '1': 'nombre' },
         approval_requests: { status: 'approved', category: 'UTILITY' },
+        types: { 'twilio/text': { body: 'Hola {{1}}, tenés un saldo pendiente' } },
       },
       {
         sid: 'HXpending',
@@ -61,20 +62,58 @@ const CONTENT_PAGE_1 = {
 };
 
 describe('TwilioContentGateway — listTemplates', () => {
-  it('1 página → mapea contentSid/friendlyName/language/variables/approvalStatus/category', async () => {
+  it('1 página → mapea contentSid/friendlyName/language/variables/approvalStatus/category/body', async () => {
     const { gateway, get } = makeGateway({ get: jest.fn().mockResolvedValueOnce(CONTENT_PAGE_1) });
 
     const templates = await gateway.listTemplates();
 
     expect(templates).toEqual([
-      { contentSid: 'HXapproved', friendlyName: 'recordatorio_deuda', language: 'es', variables: { '1': 'nombre' }, approvalStatus: 'approved', category: 'UTILITY' },
-      { contentSid: 'HXpending', friendlyName: 'promo_nueva', language: 'es', variables: {}, approvalStatus: 'pending', category: undefined },
+      { contentSid: 'HXapproved', friendlyName: 'recordatorio_deuda', language: 'es', variables: { '1': 'nombre' }, approvalStatus: 'approved', category: 'UTILITY', body: 'Hola {{1}}, tenés un saldo pendiente' },
+      { contentSid: 'HXpending', friendlyName: 'promo_nueva', language: 'es', variables: {}, approvalStatus: 'pending', category: undefined, body: '' },
     ]);
     expect(get).toHaveBeenCalledTimes(1);
     const [url, config] = get.mock.calls[0];
     expect(url).toContain('content.twilio.com/v1/ContentAndApprovals');
     expect(url).toContain('PageSize=200');
     expect((config as { auth: { username: string; password: string } }).auth).toEqual({ username: 'ACtest', password: 'secret' });
+  });
+
+  // ── messaging-bulk v1.1 — `body` (texto plano del template) ─────────────────
+  it('v1.1: template SIN `types` (u otro tipo sin body) → body vacío, nunca undefined', async () => {
+    const { gateway } = makeGateway({
+      get: jest.fn().mockResolvedValueOnce({
+        data: {
+          contents: [{ sid: 'HXnotype', friendly_name: 'x', language: 'es', variables: {}, approval_requests: { status: 'approved' } }],
+          meta: { next_page_url: null },
+        },
+      }),
+    });
+
+    const [template] = await gateway.listTemplates();
+
+    expect(template.body).toBe('');
+  });
+
+  it('v1.1: extrae `body` de un tipo equivalente a `twilio/text` (ej. twilio/quick-reply) cuando ese es el único con body', async () => {
+    const { gateway } = makeGateway({
+      get: jest.fn().mockResolvedValueOnce({
+        data: {
+          contents: [{
+            sid: 'HXqr',
+            friendly_name: 'promo_quick_reply',
+            language: 'es',
+            variables: {},
+            approval_requests: { status: 'approved' },
+            types: { 'twilio/quick-reply': { body: 'Elegí una opción' } },
+          }],
+          meta: { next_page_url: null },
+        },
+      }),
+    });
+
+    const [template] = await gateway.listTemplates();
+
+    expect(template.body).toBe('Elegí una opción');
   });
 
   it('2 páginas (next_page_url no-null luego null) → concatena todo', async () => {

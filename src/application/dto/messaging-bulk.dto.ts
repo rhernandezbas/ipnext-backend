@@ -19,6 +19,7 @@ import type {
   CampaignVariableSpec,
 } from '@domain/entities/campaign';
 import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
+import type { PaginatedQuery, PaginatedResult } from './pagination';
 
 // ─── Templates (TPL-1/TPL-2) ─────────────────────────────────────────────────
 
@@ -34,6 +35,12 @@ export interface TemplateSummaryDto {
   category?: string;
   /** `true` solo si `approvalStatus === 'approved'` (TPL-1). */
   sendable: boolean;
+  /**
+   * messaging-bulk v1.1 (preview modal) — texto plano del template, tal cual
+   * `TemplateDto.body` (ver ese doc). `''` cuando el proveedor no declaró un
+   * body de texto plano para este template.
+   */
+  body: string;
 }
 
 // ─── Segmentación — preview/conteo (SEG-1..SEG-5) ────────────────────────────
@@ -48,6 +55,8 @@ export interface PreviewSegmentSampleItemDto {
   clientId: string;
   name: string;
   phoneE164: string;
+  /** messaging-bulk v1.1 (preview modal) — estado del cliente (`ResolvedRecipient.status`). */
+  status: string;
 }
 
 export interface PreviewSegmentOutput {
@@ -63,6 +72,45 @@ export interface PreviewSegmentOutput {
     /** SEG-4 — `toWhatsAppE164` devolvió `null` (teléfono ausente/basura). */
     invalidPhone: number;
   };
+  /**
+   * messaging-bulk v1.1 (preview modal) — conteo de RECEPTORES (el set
+   * `resolved`, post opt-out/dedup/teléfono-inválido) agrupados por
+   * `status` del cliente. Ej. `{active:120, late:900}`.
+   */
+  statusCounts: Record<string, number>;
+}
+
+// ─── Paginado de destinatarios resueltos (messaging-bulk v1.1, ListSegmentRecipients) ──
+
+/**
+ * v1.1 — input de `ListSegmentRecipients`: el MISMO segmento que
+ * `PreviewSegmentInput` + paginado. El segmento NO está persistido: cada
+ * llamada re-resuelve `listSegmentRecipients` y pagina el set YA resuelto
+ * (post opt-out/dedup/teléfono-inválido) en memoria — no hay una tabla que
+ * pagine del lado de la DB.
+ */
+export interface ListSegmentRecipientsInput extends PreviewSegmentInput, PaginatedQuery {}
+
+/** v1.1 — un destinatario RESUELTO (receptor real), una página de este listado. */
+export interface SegmentRecipientItemDto {
+  clientId: string;
+  name: string;
+  phoneE164: string;
+  status: string;
+}
+
+/**
+ * v1.1 — igual que `PaginatedResult<SegmentRecipientItemDto>` + los mismos
+ * `skipped`/`statusCounts` que expone el preview (SEG-1..SEG-5), para que el
+ * modal no tenga que combinar dos respuestas distintas.
+ */
+export interface ListSegmentRecipientsOutput extends PaginatedResult<SegmentRecipientItemDto> {
+  skipped: {
+    optedOut: number;
+    duplicatePhone: number;
+    invalidPhone: number;
+  };
+  statusCounts: Record<string, number>;
 }
 
 // ─── Creación de campaña (CAMP-1..CAMP-4) ────────────────────────────────────

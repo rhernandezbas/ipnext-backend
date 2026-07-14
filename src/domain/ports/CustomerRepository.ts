@@ -115,6 +115,17 @@ export interface CampaignRecipientCandidate {
   phone: string | null;
   balanceDue: number | null;
   whatsappOptOutAt: string | null;
+  /**
+   * messaging-bulk v1.1 (preview modal — statusCounts) — el estado ACTUAL del
+   * `Client` (`active`/`late`/`blocked`/…). Opcional/deliberadamente NO
+   * requerido: `CampaignRecipientLookup.findRecipientCandidate` (re-check
+   * per-envío, `SendCampaign`) reusa el mismo shape y NUNCA necesitó este
+   * campo — hacerlo requerido hubiese forzado tocar ese path (y sus fakes) sin
+   * ningún beneficio. `CampaignSegmentSource.listSegmentRecipients` SIEMPRE lo
+   * completa (`resolveRecipients` lo usa para `statusCounts` + el `status` del
+   * sample/paginado).
+   */
+  status?: string;
 }
 
 /**

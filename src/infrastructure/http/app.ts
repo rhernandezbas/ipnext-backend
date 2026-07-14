@@ -765,6 +765,7 @@ import { CampaignRunner } from '../scheduling/CampaignRunner';
 // Aliased: `ListTemplates` already names an unrelated settings/email-templates use case above (:58).
 import { ListTemplates as ListMessagingTemplates } from '@application/use-cases/messaging/ListTemplates';
 import { PreviewCampaignSegment } from '@application/use-cases/messaging/PreviewCampaignSegment';
+import { ListSegmentRecipients } from '@application/use-cases/messaging/ListSegmentRecipients';
 import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign';
 import { SendCampaign } from '@application/use-cases/messaging/SendCampaign';
 import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
@@ -2610,6 +2611,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     app.use('/api/messaging/bulk', createMessagingBulkRouter(
       new ListMessagingTemplates(templatePort),
       new PreviewCampaignSegment(customerAdapter),
+      // v1.1 (preview modal paginado) — reusa customerAdapter (misma
+      // instancia que PreviewCampaignSegment, ya implementa
+      // CampaignSegmentSource), sin infra nueva.
+      new ListSegmentRecipients(customerAdapter),
       // 3 args — tasks.md contradicción #2 (design §7 wiring original olvidaba
       // el templatePort; CAMP-2 lo necesita para validar templateRef aprobado).
       new CreateCampaign(campaignRepo, customerAdapter, templatePort),

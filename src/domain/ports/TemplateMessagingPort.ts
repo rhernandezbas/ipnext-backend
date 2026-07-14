@@ -24,6 +24,14 @@ export interface TemplateDto {
   approvalStatus: 'approved' | 'pending' | 'rejected' | 'unsubmitted';
   /** MARKETING | UTILITY | AUTHENTICATION. */
   category?: string;
+  /**
+   * messaging-bulk v1.1 (preview modal) — texto plano del template (el `body`
+   * del tipo `twilio/text` u equivalente dentro de `content_templates`), para
+   * que el FE muestre el mensaje real en vez de solo los placeholders
+   * `{{1}}`/`{{2}}`. `''` cuando el template no declara ningún tipo con body de
+   * texto plano — NUNCA `undefined` (el FE siempre puede renderizarlo).
+   */
+  body: string;
 }
 
 export interface SendTemplateResult {

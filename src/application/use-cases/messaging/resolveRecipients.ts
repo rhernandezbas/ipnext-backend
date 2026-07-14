@@ -15,6 +15,14 @@ export interface ResolvedRecipient {
   /** Destino REAL para el envío (`toWhatsAppE164`). */
   phoneE164: string;
   balanceDue: number | null;
+  /**
+   * messaging-bulk v1.1 (preview modal) — estado del cliente al momento de
+   * resolver el segmento. `'unknown'` cuando el candidato no trae `status`
+   * (paths que no lo completan, ej. el re-check per-envío de `SendCampaign`
+   * vía `CampaignRecipientLookup` — nunca pasa por acá con `statusCounts`
+   * real, pero `resolveRecipients` es compartido y debe seguir siendo total).
+   */
+  status: string;
 }
 
 export interface ResolveRecipientsResult {
@@ -25,6 +33,11 @@ export interface ResolveRecipientsResult {
   excludedNoPhone: number;
   /** SEG-3 — colapsados por de-dup de `normalizePhone` (no cuenta el sobreviviente). */
   dedupCollapsed: number;
+  /**
+   * messaging-bulk v1.1 (preview modal) — conteo de RECEPTORES (post opt-out/
+   * dedup/teléfono-inválido, es decir sobre `resolved`) agrupados por `status`.
+   */
+  statusCounts: Record<string, number>;
 }
 
 /**
@@ -64,6 +77,7 @@ export function resolveRecipients(candidates: CampaignRecipientCandidate[]): Res
       phoneNormalized,
       phoneE164,
       balanceDue: candidate.balanceDue,
+      status: candidate.status ?? 'unknown',
     };
 
     const existing = byNormalized.get(phoneNormalized);
@@ -79,5 +93,10 @@ export function resolveRecipients(candidates: CampaignRecipientCandidate[]): Res
 
   const resolved = Array.from(byNormalized.values()).sort((a, b) => a.clientId.localeCompare(b.clientId));
 
-  return { resolved, excludedOptOut, excludedNoPhone, dedupCollapsed };
+  const statusCounts: Record<string, number> = {};
+  for (const r of resolved) {
+    statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1;
+  }
+
+  return { resolved, excludedOptOut, excludedNoPhone, dedupCollapsed, statusCounts };
 }

@@ -272,6 +272,11 @@ export function toCampaignRecipientCandidate(row: any): CampaignRecipientCandida
     whatsappOptOutAt: row.whatsappOptOutAt instanceof Date
       ? row.whatsappOptOutAt.toISOString()
       : (row.whatsappOptOutAt ?? null),
+    // messaging-bulk v1.1 (statusCounts) — solo presente cuando el `select` de
+    // la query lo pide (`listSegmentRecipients`); `findRecipientCandidate`
+    // (re-check per-envío, SEND-5) NO lo selecciona — queda `undefined`,
+    // `resolveRecipients` ya lo trata como opcional ('unknown' fallback).
+    status: row.status,
   };
 }
 
@@ -415,7 +420,10 @@ export class PrismaCustomerRepository
   async listSegmentRecipients(segment: CampaignSegmentFilter): Promise<CampaignRecipientCandidate[]> {
     const rows = await prisma.client.findMany({
       where: buildSegmentWhere(segment),
-      select: { id: true, name: true, phone: true, balanceDue: true, whatsappOptOutAt: true },
+      // messaging-bulk v1.1 (statusCounts) — `status` agregado al select: el
+      // preview/paginado de destinatarios necesita el estado ACTUAL de cada
+      // candidato para agrupar `statusCounts` + completar `status` por-item.
+      select: { id: true, name: true, phone: true, balanceDue: true, whatsappOptOutAt: true, status: true },
     });
     return rows.map(toCampaignRecipientCandidate);
   }

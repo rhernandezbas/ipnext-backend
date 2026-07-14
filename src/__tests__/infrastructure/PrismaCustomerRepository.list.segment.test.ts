@@ -177,4 +177,18 @@ describe('toCampaignRecipientCandidate (T6.3 — mapper narrow de Prisma row a C
     expect(candidate.balanceDue).toBe(12345.5);
     expect(candidate.phone).toBeNull();
   });
+
+  // ── messaging-bulk v1.1 (preview modal, statusCounts) — mapea `status` ────────
+  it('v1.1: mapea `status` de la fila TAL CUAL (para statusCounts/sample en el preview)', () => {
+    const row = {
+      id: 'c-4',
+      name: 'Juana Late',
+      phone: '3364000000',
+      balanceDue: 5000,
+      whatsappOptOutAt: null,
+      status: 'late',
+    };
+    const candidate = toCampaignRecipientCandidate(row);
+    expect(candidate.status).toBe('late');
+  });
 });

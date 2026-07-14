@@ -23,6 +23,7 @@ import {
 import { errorHandler } from '../../infrastructure/http/middleware/errorHandler';
 import { ListTemplates } from '../../application/use-cases/messaging/ListTemplates';
 import { PreviewCampaignSegment } from '../../application/use-cases/messaging/PreviewCampaignSegment';
+import { ListSegmentRecipients } from '../../application/use-cases/messaging/ListSegmentRecipients';
 import { CreateCampaign } from '../../application/use-cases/messaging/CreateCampaign';
 import { GetCampaign } from '../../application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '../../application/use-cases/messaging/ListCampaigns';
@@ -63,6 +64,7 @@ const APPROVED_TEMPLATE: TemplateDto = {
   language: 'es',
   variables: { '1': 'nombre', '2': 'monto_deuda' },
   approvalStatus: 'approved',
+  body: 'Hola {{1}}, tenés un saldo pendiente de {{2}}',
 };
 
 const PENDING_TEMPLATE: TemplateDto = {
@@ -71,6 +73,7 @@ const PENDING_TEMPLATE: TemplateDto = {
   language: 'es',
   variables: {},
   approvalStatus: 'pending',
+  body: '',
 };
 
 // ─── Auth + RBAC mock helpers (mismo idioma que messaging.routes.test.ts) ───────
@@ -101,6 +104,7 @@ function buildApp(opts: BuildAppOptions = {}) {
 
   const listTemplates = new ListTemplates(templatePort);
   const previewCampaignSegment = new PreviewCampaignSegment(segmentSource);
+  const listSegmentRecipients = new ListSegmentRecipients(segmentSource);
   const createCampaign = new CreateCampaign(campaignRepo, segmentSource, templatePort);
   const getCampaign = new GetCampaign(campaignRepo);
   const listCampaigns = new ListCampaigns(campaignRepo);
@@ -121,6 +125,7 @@ function buildApp(opts: BuildAppOptions = {}) {
     createMessagingBulkRouter(
       listTemplates,
       previewCampaignSegment,
+      listSegmentRecipients,
       createCampaign,
       campaignRunner,
       getCampaign,
@@ -169,6 +174,19 @@ describe('/api/messaging/bulk — RBAC-1 (sin messaging.bulk → 403, sin efecto
   it('POST /segment/preview → 403', async () => {
     const { app } = buildApp({ bulkPerm: denyPerm });
     const res = await request(app).post('/api/messaging/bulk/segment/preview').send({ statuses: ['late'] });
+    expect(res.status).toBe(403);
+  });
+
+  // ── messaging-bulk v1.1 (preview modal paginado) — /segment/recipients ──────
+  it('POST /segment/recipients → 403', async () => {
+    const { app } = buildApp({ bulkPerm: denyPerm });
+    const res = await request(app).post('/api/messaging/bulk/segment/recipients').send({ statuses: ['late'] });
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /segment/recipients → 403', async () => {
+    const { app } = buildApp({ bulkPerm: denyPerm });
+    const res = await request(app).get('/api/messaging/bulk/segment/recipients').query({ statuses: 'late' });
     expect(res.status).toBe(403);
   });
 
@@ -428,6 +446,68 @@ describe('/api/messaging/bulk — GET /segment/preview (FIX-16)', () => {
   });
 });
 
+// ─── messaging-bulk v1.1 — POST/GET /segment/recipients (preview modal paginado) ──
+describe('/api/messaging/bulk — POST /segment/recipients (v1.1)', () => {
+  it('200 con {data,total,page,limit,skipped,statusCounts}; mapea statuses[]+balance+page+limit del body', async () => {
+    const { app, segmentSource } = buildApp({
+      segmentCandidates: [
+        makeCandidate({ clientId: 'c1', phone: '3364111111', balanceDue: 5000 }),
+        makeCandidate({ clientId: 'c2', phone: '3364222222', balanceDue: 8000 }),
+      ],
+    });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/recipients')
+      .send({ statuses: ['late', 'blocked'], balanceMin: 1000, balanceMax: 100000, page: 1, limit: 10 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.page).toBe(1);
+    expect(res.body.limit).toBe(10);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.data[0]).toHaveProperty('clientId');
+    expect(res.body.data[0]).toHaveProperty('status');
+    expect(res.body.skipped).toEqual({ optedOut: 0, duplicatePhone: 0, invalidPhone: 0 });
+    expect(segmentSource.listSegmentRecipients).toHaveBeenCalledWith({
+      statuses: ['late', 'blocked'],
+      balanceMin: 1000,
+      balanceMax: 100000,
+    });
+  });
+
+  it('default page/limit cuando no vienen en el body', async () => {
+    const { app } = buildApp({ segmentCandidates: [makeCandidate({ clientId: 'c1' })] });
+
+    const res = await request(app).post('/api/messaging/bulk/segment/recipients').send({ statuses: ['late'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.page).toBe(1);
+    expect(res.body.limit).toBe(25);
+  });
+});
+
+describe('/api/messaging/bulk — GET /segment/recipients (v1.1, deep-link)', () => {
+  it('200; mapea query (?statuses=&page=&limit=) al mismo use case', async () => {
+    const { app, segmentSource } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111', balanceDue: 5000 })],
+    });
+
+    const res = await request(app)
+      .get('/api/messaging/bulk/segment/recipients')
+      .query({ statuses: ['late', 'blocked'], balanceMin: '1000', page: '1', limit: '5' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.page).toBe(1);
+    expect(res.body.limit).toBe(5);
+    expect(segmentSource.listSegmentRecipients).toHaveBeenCalledWith({
+      statuses: ['late', 'blocked'],
+      balanceMin: 1000,
+      balanceMax: undefined,
+    });
+  });
+});
+
 // ─── FIX-8: segmento sin criterio (apuntaría a TODA la base) → 400 end-to-end ────
 describe('/api/messaging/bulk — FIX-8 (segmento sin criterio → 400)', () => {
   it('POST /campaigns SIN segment → 400 UNFILTERED_SEGMENT, no crea Campaign', async () => {
@@ -454,6 +534,20 @@ describe('/api/messaging/bulk — FIX-8 (segmento sin criterio → 400)', () => 
   it('GET /segment/preview sin params → 400 UNFILTERED_SEGMENT', async () => {
     const { app } = buildApp();
     const res = await request(app).get('/api/messaging/bulk/segment/preview');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UNFILTERED_SEGMENT');
+  });
+
+  it('POST /segment/recipients con {statuses:[]} sin balance → 400 UNFILTERED_SEGMENT', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/api/messaging/bulk/segment/recipients').send({ statuses: [] });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UNFILTERED_SEGMENT');
+  });
+
+  it('GET /segment/recipients sin params → 400 UNFILTERED_SEGMENT', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/messaging/bulk/segment/recipients');
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('UNFILTERED_SEGMENT');
   });

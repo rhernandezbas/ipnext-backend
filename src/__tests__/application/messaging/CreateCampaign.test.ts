@@ -33,6 +33,7 @@ const APPROVED_TEMPLATE: TemplateDto = {
   language: 'es',
   variables: { '1': 'nombre', '2': 'monto_deuda' },
   approvalStatus: 'approved',
+  body: 'Hola {{1}}, tenés un saldo pendiente de {{2}}',
 };
 
 function makeCandidate(overrides: Partial<CampaignRecipientCandidate> = {}): CampaignRecipientCandidate {

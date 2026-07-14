@@ -24,6 +24,7 @@ export class ListTemplates {
       approvalStatus: t.approvalStatus,
       category: t.category,
       sendable: t.approvalStatus === 'approved',
+      body: t.body,
     }));
   }
 }

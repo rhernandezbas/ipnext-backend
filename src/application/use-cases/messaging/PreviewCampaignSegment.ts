@@ -32,7 +32,7 @@ export class PreviewCampaignSegment {
       balanceMax: input.balanceMax,
     });
 
-    const { resolved, excludedOptOut, excludedNoPhone, dedupCollapsed } = resolveRecipients(candidates);
+    const { resolved, excludedOptOut, excludedNoPhone, dedupCollapsed, statusCounts } = resolveRecipients(candidates);
 
     return {
       count: resolved.length,
@@ -40,12 +40,14 @@ export class PreviewCampaignSegment {
         clientId: r.clientId,
         name: r.name,
         phoneE164: r.phoneE164,
+        status: r.status,
       })),
       skipped: {
         optedOut: excludedOptOut,
         duplicatePhone: dedupCollapsed,
         invalidPhone: excludedNoPhone,
       },
+      statusCounts,
     };
   }
 }

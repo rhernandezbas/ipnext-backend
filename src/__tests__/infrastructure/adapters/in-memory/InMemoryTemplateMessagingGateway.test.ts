@@ -16,6 +16,7 @@ const APPROVED_TEMPLATE: TemplateDto = {
   variables: { '1': 'nombre', '2': 'monto_deuda' },
   approvalStatus: 'approved',
   category: 'UTILITY',
+  body: 'Hola {{1}}, tenés un saldo pendiente de {{2}}',
 };
 
 describe('InMemoryTemplateMessagingGateway', () => {

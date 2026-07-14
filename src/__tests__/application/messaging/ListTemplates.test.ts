@@ -23,6 +23,7 @@ function makeTemplate(overrides: Partial<TemplateDto> = {}): TemplateDto {
     language: 'es',
     variables: { '1': 'nombre' },
     approvalStatus: 'approved',
+    body: 'Hola {{1}}, este es el mensaje default',
     ...overrides,
   };
 }
@@ -85,5 +86,27 @@ describe('ListTemplates', () => {
     const result = await uc.execute();
 
     expect(result).toEqual([]);
+  });
+
+  // ── messaging-bulk v1.1 — preview modal paginado: agrega `body` (texto del
+  // template) para que el FE muestre el mensaje real, no solo {{1}}/{{2}} ────────
+  it('v1.1: propaga `body` del template TAL CUAL viene del port, para preview del mensaje en el FE', async () => {
+    const port = makeTemplatePort([
+      makeTemplate({ contentSid: 'HXbody', body: 'Hola {{1}}, tenés un saldo de {{2}}' }),
+    ]);
+    const uc = new ListTemplates(port);
+
+    const [result] = await uc.execute();
+
+    expect(result.body).toBe('Hola {{1}}, tenés un saldo de {{2}}');
+  });
+
+  it('v1.1: template sin body de texto plano → body vacío, nunca undefined', async () => {
+    const port = makeTemplatePort([makeTemplate({ contentSid: 'HXnobody', body: '' })]);
+    const uc = new ListTemplates(port);
+
+    const [result] = await uc.execute();
+
+    expect(result.body).toBe('');
   });
 });

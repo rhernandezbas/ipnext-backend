@@ -15,6 +15,7 @@ function makeCandidate(overrides: Partial<CampaignRecipientCandidate> = {}): Cam
     phone: '3364000000',
     balanceDue: 1000,
     whatsappOptOutAt: null,
+    status: 'active',
     ...overrides,
   };
 }
@@ -95,9 +96,67 @@ describe('resolveRecipients', () => {
     expect(result.dedupCollapsed).toBe(1);
   });
 
-  it('lista vacía → resolved vacío, todos los contadores en 0', () => {
+  it('lista vacía → resolved vacío, todos los contadores en 0, statusCounts vacío', () => {
     const result = resolveRecipients([]);
 
-    expect(result).toEqual({ resolved: [], excludedOptOut: 0, excludedNoPhone: 0, dedupCollapsed: 0 });
+    expect(result).toEqual({
+      resolved: [],
+      excludedOptOut: 0,
+      excludedNoPhone: 0,
+      dedupCollapsed: 0,
+      statusCounts: {},
+    });
+  });
+
+  // ── messaging-bulk v1.1 (preview modal) — statusCounts + status por-destinatario ──
+  it('v1.1: propaga el `status` del candidato a cada `ResolvedRecipient`', () => {
+    const candidates = [
+      makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late' }),
+      makeCandidate({ clientId: 'c2', phone: '3364222222', status: 'blocked' }),
+    ];
+
+    const result = resolveRecipients(candidates);
+
+    expect(result.resolved.find((r) => r.clientId === 'c1')?.status).toBe('late');
+    expect(result.resolved.find((r) => r.clientId === 'c2')?.status).toBe('blocked');
+  });
+
+  it('v1.1: statusCounts cuenta SOLO los RESUELTOS (post opt-out/dedup/teléfono-inválido), agrupados por status', () => {
+    const candidates = [
+      makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late' }),
+      makeCandidate({ clientId: 'c2', phone: '3364222222', status: 'late' }),
+      makeCandidate({ clientId: 'c3', phone: '3364333333', status: 'blocked' }),
+      // excluido (opt-out) — NO debe sumar a statusCounts.blocked
+      makeCandidate({ clientId: 'c4', phone: '3364444444', status: 'blocked', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+      // excluido (teléfono inválido) — NO debe sumar a statusCounts.late
+      makeCandidate({ clientId: 'c5', phone: '123', status: 'late' }),
+    ];
+
+    const result = resolveRecipients(candidates);
+
+    expect(result.resolved).toHaveLength(3);
+    expect(result.statusCounts).toEqual({ late: 2, blocked: 1 });
+  });
+
+  it('v1.1: de-dup por teléfono — el status contado es el del SOBREVIVIENTE (id menor), no se duplica ni se pierde', () => {
+    const candidates = [
+      makeCandidate({ clientId: 'c2', phone: '+5493364123456', status: 'blocked' }),
+      makeCandidate({ clientId: 'c1', phone: '3364123456', status: 'late' }), // normaliza igual, id menor, gana
+    ];
+
+    const result = resolveRecipients(candidates);
+
+    expect(result.resolved).toHaveLength(1);
+    expect(result.resolved[0].status).toBe('late');
+    expect(result.statusCounts).toEqual({ late: 1 });
+  });
+
+  it('v1.1: candidato sin `status` (path que no lo completa, ej. re-check per-envío) → cuenta como "unknown", nunca undefined', () => {
+    const candidates = [makeCandidate({ clientId: 'c1', phone: '3364111111', status: undefined })];
+
+    const result = resolveRecipients(candidates);
+
+    expect(result.resolved[0].status).toBe('unknown');
+    expect(result.statusCounts).toEqual({ unknown: 1 });
   });
 });

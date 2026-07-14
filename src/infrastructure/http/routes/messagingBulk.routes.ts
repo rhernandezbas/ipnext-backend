@@ -16,11 +16,12 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { ListTemplates } from '@application/use-cases/messaging/ListTemplates';
 import { PreviewCampaignSegment } from '@application/use-cases/messaging/PreviewCampaignSegment';
+import { ListSegmentRecipients } from '@application/use-cases/messaging/ListSegmentRecipients';
 import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign';
 import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
 import type { CampaignRunner } from '@infrastructure/scheduling/CampaignRunner';
-import type { PreviewSegmentInput, CreateCampaignInput } from '@application/dto/messaging-bulk.dto';
+import type { PreviewSegmentInput, ListSegmentRecipientsInput, CreateCampaignInput } from '@application/dto/messaging-bulk.dto';
 import type { CampaignSegment, CampaignVariableSpec, CampaignRecipientStatus } from '@domain/entities/campaign';
 
 /** Per-route permission guards (messaging.bulk / messaging.templates — RBAC-1/2). */
@@ -70,6 +71,7 @@ function toCampaignSegment(raw: unknown): CampaignSegment {
 export function createMessagingBulkRouter(
   listTemplates: ListTemplates,
   previewCampaignSegment: PreviewCampaignSegment,
+  listSegmentRecipients: ListSegmentRecipients,
   createCampaign: CreateCampaign,
   campaignRunner: CampaignRunner,
   getCampaign: GetCampaign,
@@ -134,6 +136,56 @@ export function createMessagingBulkRouter(
           balanceMax: parseOptionalInt(firstQueryValue(req.query['balanceMax'])),
         };
         const result = await previewCampaignSegment.execute(input);
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── POST /segment/recipients (v1.1, preview modal paginado) — RBAC-1 ──────
+  // Molde de /segment/preview: MISMO filtrado (opt-out excluido + dedup +
+  // teléfono válido), pero devuelve el set `resolved` COMPLETO paginado en vez
+  // de una `sample` acotada — el modal del FE pagina server-side sobre esto.
+  router.post(
+    '/segment/recipients',
+    auth,
+    perms.bulk,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const body = req.body as Record<string, unknown> | undefined;
+        const input: ListSegmentRecipientsInput = {
+          statuses: Array.isArray(body?.['statuses']) ? (body!['statuses'] as string[]) : [],
+          balanceMin: typeof body?.['balanceMin'] === 'number' ? (body!['balanceMin'] as number) : undefined,
+          balanceMax: typeof body?.['balanceMax'] === 'number' ? (body!['balanceMax'] as number) : undefined,
+          page: typeof body?.['page'] === 'number' ? (body!['page'] as number) : undefined,
+          limit: typeof body?.['limit'] === 'number' ? (body!['limit'] as number) : undefined,
+        };
+        const result = await listSegmentRecipients.execute(input);
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /segment/recipients (v1.1, deep-link opcional) — RBAC-1 ───────────
+  // Mismo criterio que el GET /segment/preview (FIX-16): el segmento + la
+  // página viajan como query-params para habilitar links/bookmarks al modal.
+  router.get(
+    '/segment/recipients',
+    auth,
+    perms.bulk,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const input: ListSegmentRecipientsInput = {
+          statuses: queryStatuses(req.query['statuses']),
+          balanceMin: parseOptionalInt(firstQueryValue(req.query['balanceMin'])),
+          balanceMax: parseOptionalInt(firstQueryValue(req.query['balanceMax'])),
+          page: parseOptionalInt(firstQueryValue(req.query['page'])),
+          limit: parseOptionalInt(firstQueryValue(req.query['limit'])),
+        };
+        const result = await listSegmentRecipients.execute(input);
         res.json(result);
       } catch (err) {
         next(err);

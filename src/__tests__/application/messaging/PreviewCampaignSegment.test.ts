@@ -19,6 +19,11 @@ interface FakeClientRow extends CampaignRecipientCandidate {
  * `balanceDue`. Deliberadamente NO filtra `whatsappOptOutAt` acá (eso lo hace
  * la query real a nivel DB, design §4.2) — el enforcement bajo test en este
  * use case es el defensivo en memoria (SEG-2, vía `resolveRecipients`).
+ *
+ * v1.1 (statusCounts) — el `status` de cada fila YA NO se descarta antes de
+ * devolver: la query Prisma real (`toCampaignRecipientCandidate`) lo incluye
+ * SIEMPRE en `listSegmentRecipients`, y `resolveRecipients` lo necesita para
+ * `statusCounts` + el `status` del sample.
  */
 function makeSegmentSource(rows: FakeClientRow[]): CampaignSegmentSource {
   return {
@@ -26,8 +31,7 @@ function makeSegmentSource(rows: FakeClientRow[]): CampaignSegmentSource {
       return rows
         .filter((r) => segment.statuses.length === 0 || segment.statuses.includes(r.status))
         .filter((r) => segment.balanceMin == null || (r.balanceDue ?? 0) >= segment.balanceMin)
-        .filter((r) => segment.balanceMax == null || (r.balanceDue ?? 0) <= segment.balanceMax)
-        .map(({ status: _status, ...rest }) => rest);
+        .filter((r) => segment.balanceMax == null || (r.balanceDue ?? 0) <= segment.balanceMax);
     },
   };
 }
@@ -218,6 +222,37 @@ describe('PreviewCampaignSegment', () => {
 
     const result = await uc.execute({ statuses: ['late'], balanceMax: 0 });
     expect(result.count).toBe(1);
+  });
+
+  // ── messaging-bulk v1.1 (preview modal) — statusCounts + status por-destinatario ──
+  it('v1.1: 2 estados distintos → statusCounts cuenta los RECEPTORES por status + cada item del sample trae su status', async () => {
+    const source = makeSegmentSource([
+      makeRow({ clientId: 'c1', phone: '3364111111', status: 'late' }),
+      makeRow({ clientId: 'c2', phone: '3364222222', status: 'late' }),
+      makeRow({ clientId: 'c3', phone: '3364333333', status: 'blocked' }),
+    ]);
+    const uc = new PreviewCampaignSegment(source);
+
+    const result = await uc.execute({ statuses: ['late', 'blocked'] });
+
+    expect(result.count).toBe(3);
+    expect(result.statusCounts).toEqual({ late: 2, blocked: 1 });
+    const c1 = result.sample.find((s) => s.clientId === 'c1');
+    const c3 = result.sample.find((s) => s.clientId === 'c3');
+    expect(c1?.status).toBe('late');
+    expect(c3?.status).toBe('blocked');
+  });
+
+  it('v1.1: statusCounts NO cuenta a los excluidos por opt-out (solo receptores reales)', async () => {
+    const source = makeSegmentSource([
+      makeRow({ clientId: 'c1', phone: '3364111111', status: 'late', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+      makeRow({ clientId: 'c2', phone: '3364222222', status: 'late' }),
+    ]);
+    const uc = new PreviewCampaignSegment(source);
+
+    const result = await uc.execute({ statuses: ['late'] });
+
+    expect(result.statusCounts).toEqual({ late: 1 });
   });
 
   it('SEG-5: el preview es de solo lectura — dos llamadas seguidas dan el mismo resultado', async () => {

@@ -233,6 +233,14 @@ interface TwilioContentItem {
   language: string;
   variables?: Record<string, string>;
   approval_requests?: { status?: string; category?: string };
+  /**
+   * messaging-bulk v1.1 — `types` es un mapa keyed por tipo de contenido
+   * declarado (`twilio/text`, `twilio/quick-reply`, `twilio/call-to-action`,
+   * `twilio/list-picker`, …). CADA tipo que soporta texto plano expone su
+   * propio campo `body` — el shape exacto varía por tipo, así que acá solo
+   * tipamos el `body` compartido (ver `extractTemplateBody`).
+   */
+  types?: Record<string, { body?: string }>;
 }
 
 interface TwilioContentAndApprovalsResponse {
@@ -245,6 +253,22 @@ function normalizeApprovalStatus(status: string | undefined): TemplateDto['appro
   return 'unsubmitted';
 }
 
+/**
+ * messaging-bulk v1.1 — extrae el texto plano del template desde `types`.
+ * Prioriza `twilio/text` (el tipo "canónico" de texto plano); si el template
+ * no lo declara, cae al PRIMER tipo de `types` que sí exponga un `body`
+ * string (ej. `twilio/quick-reply`, `twilio/call-to-action` — "u equivalente").
+ * `''` cuando no hay ningún tipo con body (nunca `undefined`).
+ */
+export function extractTemplateBody(types: Record<string, { body?: string }> | undefined): string {
+  if (!types) return '';
+  if (typeof types['twilio/text']?.body === 'string') return types['twilio/text']!.body!;
+  for (const value of Object.values(types)) {
+    if (typeof value?.body === 'string') return value.body;
+  }
+  return '';
+}
+
 function toTemplateDto(item: TwilioContentItem): TemplateDto {
   return {
     contentSid: item.sid,
@@ -253,5 +277,6 @@ function toTemplateDto(item: TwilioContentItem): TemplateDto {
     variables: item.variables ?? {},
     approvalStatus: normalizeApprovalStatus(item.approval_requests?.status),
     category: item.approval_requests?.category,
+    body: extractTemplateBody(item.types),
   };
 }
