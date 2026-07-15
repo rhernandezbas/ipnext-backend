@@ -4,10 +4,13 @@ import {
   ConversationRepository,
   ConversationRecord,
   ConversationListQuery,
+  ConversationCampaignRef,
   UpsertConversationInput,
+  UpsertBulkConversationInput,
   UpdateConversationLocalFieldsInput,
 } from '@domain/ports/ConversationRepository';
 import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
+import { toWhatsAppE164 } from '@application/use-cases/messaging/toWhatsAppE164';
 
 /** Minimal in-memory user shape for JOIN-derived assigneeName (F1.5-C2) — mirrors
  * InMemoryTicketRepository's InMemoryAdmin. */
@@ -60,7 +63,12 @@ export class InMemoryConversationRepository implements ConversationRepository {
       // F1.5-C2 — assigneeId/areaId/assigneeName/areaName/areaColor are DELIBERATELY
       // absent from this branch: this method must never touch them (LOCAL-only fields).
       if (input.contactName !== undefined) existing.contactName = input.contactName;
-      if (input.contactPhone !== undefined) existing.contactPhone = input.contactPhone;
+      // messaging-bulk-inbox (🟠 HIGH) — el write-path de Chatwoot puebla contactPhoneE164
+      // así una conversación Chatwoot creada DESPUÉS de la migración es matcheable por el bulk.
+      if (input.contactPhone !== undefined) {
+        existing.contactPhone = input.contactPhone;
+        existing.contactPhoneE164 = toWhatsAppE164(input.contactPhone);
+      }
       if (input.status !== undefined) existing.status = input.status;
       if (input.canReply !== undefined) existing.canReply = input.canReply;
       if (input.lastMessageAt !== undefined) existing.lastMessageAt = input.lastMessageAt;
@@ -73,8 +81,12 @@ export class InMemoryConversationRepository implements ConversationRepository {
     const row: ConversationRecord = {
       id: randomUUID(),
       chatwootConversationId: input.chatwootConversationId,
+      // messaging-bulk-inbox (F1) — el write-path de Chatwoot siempre crea origin='chatwoot'.
+      origin: 'chatwoot',
       contactName: input.contactName ?? null,
       contactPhone: input.contactPhone ?? null,
+      // messaging-bulk-inbox (🟠 HIGH) — E164 canónico también en el path de Chatwoot.
+      contactPhoneE164: toWhatsAppE164(input.contactPhone ?? null),
       status: input.status ?? 'open',
       canReply: input.canReply ?? false,
       lastMessageAt: input.lastMessageAt ?? null,
@@ -85,11 +97,101 @@ export class InMemoryConversationRepository implements ConversationRepository {
       areaId: null,
       areaName: null,
       areaColor: null,
+      campaigns: [],
       createdAt: now,
       updatedAt: now,
     };
     this.rows.push(row);
     return { ...row };
+  }
+
+  /**
+   * messaging-bulk-inbox (F1, PROYECCIÓN) — write-path BULK por E164 canónico,
+   * SEPARADO de `upsertByChatwootId`. Appendea a la conversación MÁS RECIENTE con ese
+   * `phoneE164` (cualquier origen) o crea una `origin:'bulk'` (`chatwootConversationId=null`).
+   * Bumpea el preview con el mensaje bulk recién enviado (outbound). NUNCA toca assigneeId/areaId.
+   */
+  async upsertBulkByPhone(
+    phoneE164: string,
+    input: UpsertBulkConversationInput,
+  ): Promise<ConversationRecord> {
+    const matches = this.rows
+      .filter((r) => r.contactPhoneE164 === phoneE164)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)); // más reciente primero
+    const existing = matches[0];
+    if (existing) {
+      if (existing.contactName == null && input.contactName != null) existing.contactName = input.contactName;
+      if (existing.contactPhone == null && input.contactPhone != null) existing.contactPhone = input.contactPhone;
+      if (input.lastMessageAt !== undefined) existing.lastMessageAt = input.lastMessageAt;
+      if (input.lastMessagePreview !== undefined) existing.lastMessagePreview = input.lastMessagePreview;
+      existing.updatedAt = new Date().toISOString();
+      return { ...existing };
+    }
+
+    const now = new Date().toISOString();
+    const row: ConversationRecord = {
+      id: randomUUID(),
+      chatwootConversationId: null,
+      origin: 'bulk',
+      contactName: input.contactName ?? null,
+      contactPhone: input.contactPhone ?? null,
+      contactPhoneE164: phoneE164,
+      status: 'open',
+      canReply: false,
+      lastMessageAt: input.lastMessageAt ?? null,
+      lastMessagePreview: input.lastMessagePreview ?? null,
+      assigneeId: null,
+      assigneeName: null,
+      areaId: null,
+      areaName: null,
+      areaColor: null,
+      campaigns: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.rows.push(row);
+    return { ...row };
+  }
+
+  /**
+   * messaging-bulk-inbox (F1, FASE 2 — reconciliación AISLADA) — adopta una
+   * conversación `origin:'bulk'` (chatwootConversationId=null) con el mismo
+   * `contactPhoneE164` (E164 canónico), seteándole el `chatwootConversationId` in-place
+   * (CONSERVA el id). No-op si ese chatwootConversationId ya está tomado o si no
+   * hay conversación bulk pendiente. NUNCA toca una conversación Chatwoot existente.
+   */
+  async adoptBulkConversation(
+    phoneE164: string,
+    chatwootConversationId: number,
+  ): Promise<ConversationRecord | null> {
+    // Guard: si alguna conversación YA es dueña de este chatwootConversationId, no-op
+    // (sería una conversación Chatwoot existente — jamás tocarla, ni colisionar el UNIQUE).
+    if (this.rows.some((r) => r.chatwootConversationId === chatwootConversationId)) return null;
+
+    const target = this.rows
+      .filter(
+        (r) =>
+          r.origin === 'bulk' &&
+          r.chatwootConversationId === null &&
+          r.contactPhoneE164 === phoneE164,
+      )
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))[0]; // más reciente
+    if (!target) return null;
+
+    target.chatwootConversationId = chatwootConversationId;
+    target.updatedAt = new Date().toISOString();
+    return { ...target };
+  }
+
+  /**
+   * messaging-bulk-inbox (F1, etiqueta #1) — seed de test: simula el JOIN
+   * Conversation×CampaignRecipient que el adapter Prisma resuelve por include.
+   * Asocia una campaña a una conversación (sin duplicar por id).
+   */
+  linkCampaign(conversationId: string, campaign: ConversationCampaignRef): void {
+    const row = this.rows.find((r) => r.id === conversationId);
+    if (!row) return;
+    if (!row.campaigns.some((c) => c.id === campaign.id)) row.campaigns.push({ ...campaign });
   }
 
   /** F1.5-C2 (asignación) — actualiza EXCLUSIVAMENTE assigneeId/areaId (LOCAL). */
@@ -131,6 +233,11 @@ export class InMemoryConversationRepository implements ConversationRepository {
       filtered = filtered.filter((r) => r.assigneeId === query.assigneeId);
     } else if (query.unassigned) {
       filtered = filtered.filter((r) => r.assigneeId === null);
+    }
+    // messaging-bulk-inbox (F1, etiqueta #1) — filtro por campaña (JOIN
+    // Conversation×CampaignRecipient). Combinable con el filtro de asignación.
+    if (query.campaignId) {
+      filtered = filtered.filter((r) => r.campaigns.some((c) => c.id === query.campaignId));
     }
 
     // INBOX-1: lastMessageAt DESC, nulls (never messaged) sorted last, id ASC as a

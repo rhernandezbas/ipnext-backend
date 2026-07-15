@@ -47,6 +47,12 @@ export interface Campaign {
   /** ContentSid de Twilio (HX…) — enviable. */
   templateRef: string;
   templateName: string | null;
+  /**
+   * messaging-bulk-inbox (F1) — texto plano del template (TemplateDto.body)
+   * capturado en CreateCampaign, para renderizar el body real al proyectar al
+   * inbox. `null` en campañas viejas (pre-feature) o templates sin body de texto.
+   */
+  templateBody: string | null;
   segment: CampaignSegment;
   variableSpec: CampaignVariableSpec;
   status: CampaignStatus;
@@ -75,6 +81,12 @@ export interface CampaignRecipient {
   providerId: string | null;
   /** Link al mirror F1 si el cliente responde (F3/opcional). */
   chatwootConversationId: number | null;
+  /**
+   * messaging-bulk-inbox (F1) — lazo al mirror local (Conversation.id) seteado
+   * por la proyección al inbox. Es la VERDAD de la etiqueta #1 y del link de la
+   * proyección. `null` hasta que la proyección corre (o si nunca se envió).
+   */
+  conversationId: string | null;
   /** Motivo del fallo por-fila, SANEADO (HIST-3 — nunca el payload crudo del proveedor). */
   error: string | null;
   sentAt: string | null;

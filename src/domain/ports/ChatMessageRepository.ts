@@ -5,7 +5,12 @@
 export interface ChatMessageRecord {
   id: string;
   conversationId: string;
-  chatwootMessageId: number;
+  /** messaging-bulk-inbox (F1) — `null` para un mensaje `origin:'bulk'` (salió por Twilio directo, sin id de Chatwoot). */
+  chatwootMessageId: number | null;
+  /** messaging-bulk-inbox (F1) — `'chatwoot'` (default) | `'bulk'`. */
+  origin: string;
+  /** messaging-bulk-inbox (F1) — clave de idempotencia del mensaje bulk; `null` para los de Chatwoot. */
+  campaignRecipientId: string | null;
   direction: 'inbound' | 'outbound';
   content: string;
   senderName: string | null;
@@ -26,9 +31,29 @@ export interface UpsertChatMessageInput {
   isPrivate?: boolean;
 }
 
+/**
+ * messaging-bulk-inbox (F1) — input para proyectar el mensaje bulk enviado al
+ * inbox. `direction` es SIEMPRE `'outbound'`, `origin:'bulk'`, `chatwootMessageId=null`.
+ * Idempotente por `campaignRecipientId` (una fila por recipient de campaña).
+ */
+export interface UpsertBulkChatMessageInput {
+  conversationId: string;
+  /** Clave de idempotencia — re-proyectar el mismo recipient NUNCA duplica. */
+  campaignRecipientId: string;
+  content: string;
+  chatwootCreatedAt: string;
+  senderName?: string | null;
+}
+
 export interface ChatMessageRepository {
   /** Idempotent by `chatwootMessageId` (HOOK-4/INBOX-2) — re-processing the same message never duplicates. */
   upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord>;
+  /**
+   * messaging-bulk-inbox (F1, PROYECCIÓN) — proyecta el mensaje bulk enviado como
+   * un `ChatMessage` `outbound`/`origin:'bulk'`. IDEMPOTENTE por `campaignRecipientId`
+   * (upsert) — best-effort/resumible: re-proyectar NO duplica la fila.
+   */
+  upsertBulkMessage(input: UpsertBulkChatMessageInput): Promise<ChatMessageRecord>;
   /** INBOX-3 — full history, ordered by `chatwootCreatedAt` ASC (oldest first). */
   listByConversation(conversationId: string): Promise<ChatMessageRecord[]>;
   /**

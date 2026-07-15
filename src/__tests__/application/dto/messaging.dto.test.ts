@@ -12,6 +12,8 @@ function record(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRecord {
     id: 'msg-1',
     conversationId: 'conv-1',
     chatwootMessageId: 100,
+    origin: 'chatwoot',
+    campaignRecipientId: null,
     direction: 'outbound',
     content: 'hola',
     senderName: 'Agente',

@@ -111,6 +111,14 @@ export class SendMessage {
     const conversation = await this.conversationRepo.findById(conversationId);
     if (!conversation) throw new ConversationNotFoundError(conversationId);
 
+    // messaging-bulk-inbox (F1) — una conversación origin:'bulk' aún no adoptada por
+    // Chatwoot no tiene contraparte donde enviar; se rechaza como ventana no disponible
+    // (edge case: responder a un hilo bulk antes de que el cliente escriba). Narrowing.
+    const chatwootConversationId = conversation.chatwootConversationId;
+    if (chatwootConversationId === null) {
+      throw new MessagingWindowExpiredError(conversationId);
+    }
+
     if (!isPrivate && !conversation.canReply) {
       throw new MessagingWindowExpiredError(conversationId);
     }
@@ -131,7 +139,7 @@ export class SendMessage {
     let sent: ChatwootMessageDto;
     try {
       sent = await this.gateway.sendMessage(
-        conversation.chatwootConversationId,
+        chatwootConversationId,
         content,
         validatedFiles.length > 0 ? validatedFiles : undefined,
         // NOTE-4 — additive, compat: only sent when true (never a noisy `private:false`).
@@ -208,7 +216,7 @@ export class SendMessage {
     // skipped ENTIRELY when `isPrivate`, not just defaulted to a blank value.
     if (!isPrivate) {
       await this.conversationRepo.upsertByChatwootId({
-        chatwootConversationId: conversation.chatwootConversationId,
+        chatwootConversationId,
         lastMessageAt: sent.createdAt,
         lastMessagePreview: deriveConversationPreview(
           sent.content,

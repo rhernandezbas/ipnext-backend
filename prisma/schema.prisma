@@ -2768,9 +2768,21 @@ model OwnershipTransferCase {
 // es por teléfono normalizado, no por id.
 model Conversation {
   id                     String        @id @default(uuid())
-  chatwootConversationId Int           @unique
+  // messaging-bulk-inbox (F1) — nullable: una conversación origin:'bulk' nace SIN
+  // chatwootConversationId (Chatwoot aún no la conoce). PG trata NULLs como distintos
+  // en un UNIQUE, así que N filas bulk conviven; Fase 2 lo setea al adoptar (in-place).
+  chatwootConversationId Int?          @unique
+  // messaging-bulk-inbox (F1) — 'chatwoot' (default, back-compat) | 'bulk'. Discrimina
+  // el origen del mirror sin romper el write-path de Chatwoot.
+  origin                 String        @default("chatwoot")
   contactName            String?
   contactPhone           String?
+  // messaging-bulk-inbox (F1) — E164 CANÓNICO (toWhatsAppE164(contactPhone)), clave de
+  // matcheo del bulk (upsertBulkByPhone) y de la reconciliación Fase 2. NO normalizePhone:
+  // ese es LOSSY (no strippea el "15" móvil embebido) → duplicados sistemáticos cross-format
+  // (mismo motivo por el que el opt-out migró a toWhatsAppE164, FIX-9-v2). Backfill
+  // best-effort en la migración (null = "no matcheable aún", degradación segura).
+  contactPhoneE164       String?
   status                 String        @default("open") // passthrough del vocabulario de
                                                           // Chatwoot (open/resolved/pending) —
                                                           // String plano, mismo criterio que
@@ -2796,6 +2808,8 @@ model Conversation {
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
   messages               ChatMessage[]
+  // messaging-bulk-inbox (F1) — lazo recipient↔Conversation (proyección + etiqueta #1).
+  campaignRecipients     CampaignRecipient[]
 
   // §9: DESC matches the actual INBOX-1 query (orderBy lastMessageAt DESC NULLS
   // LAST in PrismaConversationRepository.list) — same `sort: Desc` idiom already
@@ -2803,6 +2817,8 @@ model Conversation {
   @@index([lastMessageAt(sort: Desc)])
   @@index([assigneeId])
   @@index([areaId])
+  // messaging-bulk-inbox (F1) — matcheo por E164 canónico (upsertBulkByPhone / Fase 2).
+  @@index([contactPhoneE164])
 }
 
 // chatwootMessageId es único a nivel MENSAJE de Chatwoot — idempotencia de upsert (HOOK-4).
@@ -2810,7 +2826,16 @@ model ChatMessage {
   id                String       @id @default(uuid())
   conversationId    String
   conversation      Conversation @relation(fields: [conversationId], references: [id])
-  chatwootMessageId Int          @unique
+  // messaging-bulk-inbox (F1) — nullable: un mensaje origin:'bulk' NO tiene id de Chatwoot
+  // (salió por Twilio directo). PG trata NULLs distintos en el UNIQUE → N filas bulk conviven.
+  chatwootMessageId Int?         @unique
+  // messaging-bulk-inbox (F1) — 'chatwoot' (default) | 'bulk'.
+  origin            String       @default("chatwoot")
+  // messaging-bulk-inbox (F1) — clave de idempotencia del mensaje bulk (upsertBulkMessage):
+  // una fila por recipient de campaña. FK opcional; onDelete SetNull preserva el rastro en el
+  // inbox aunque la campaña/recipient se borre (el mensaje YA se envió).
+  campaignRecipientId String?    @unique
+  campaignRecipient   CampaignRecipient? @relation(fields: [campaignRecipientId], references: [id], onDelete: SetNull)
   direction         String       // 'inbound' | 'outbound' — mensajes 'activity'/'template' NO
                                   // se persisten (filtrados antes del upsert por
                                   // ReceiveChatwootWebhook, ver design §7)
@@ -2906,6 +2931,9 @@ model Campaign {
   name          String            // nombre humano ("Recordatorio deuda julio")
   templateRef   String            // ContentSid Twilio (HX…) — enviable
   templateName  String?           // friendly_name legible del template
+  // messaging-bulk-inbox (F1) — texto plano del template capturado en CreateCampaign
+  // (TemplateDto.body), para renderizar el body real del mensaje al proyectar al inbox.
+  templateBody  String?
   segment       Json              // filtro serializado (reproducible/auditable):
                                   // { statuses: string[], balanceMin?: number, balanceMax?: number }
   variableSpec  Json              @default("{}") // cómo se llenan las variables del template
@@ -2942,6 +2970,13 @@ model CampaignRecipient {
   status                 CampaignRecipientStatus  @default(queued)
   providerId             String?                  // SM… de Twilio (id del mensaje) cuando sent
   chatwootConversationId Int?                     // link al mirror F1 si el cliente responde (F3/opcional)
+  // messaging-bulk-inbox (F1) — lazo al mirror local seteado por la proyección. Es la
+  // VERDAD de la etiqueta #1 (JOIN Conversation×CampaignRecipient) y el link de la
+  // proyección. onDelete SetNull: si la conversación se borra, el recipient sobrevive.
+  conversationId         String?
+  conversation           Conversation?            @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  // messaging-bulk-inbox (F1) — back-relation 1:1 del mensaje bulk proyectado (idempotencia).
+  bulkMessage            ChatMessage?
   error                  String?                  // motivo del fallo por-fila (best-effort, no aborta el lote)
   sentAt                 DateTime?
   deliveredAt            DateTime?                // recién se llena en F3 (status callback Twilio)
@@ -2950,4 +2985,5 @@ model CampaignRecipient {
 
   @@unique([campaignId, clientId])   // idempotencia de creación de recipients + resumible
   @@index([campaignId, status])       // progreso poleable + resume (WHERE status IN queued/failed)
+  @@index([conversationId])           // etiqueta #1 — JOIN Conversation×CampaignRecipient
 }

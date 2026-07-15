@@ -179,6 +179,11 @@ export class ReceiveChatwootWebhook {
       await this.maybeRegisterOptOut(payload.content, sender?.phone_number);
     }
 
+    // messaging-bulk-inbox (F1, FASE 2) — reconciliación ANTES del upsert: si el
+    // cliente responde una conversación que ARRANCÓ como bulk, la adoptamos (mismo id)
+    // así el upsert de abajo cae sobre ELLA y NO crea un duplicado.
+    await this.maybeAdoptBulkConversation(chatwootConversationId, sender?.phone_number);
+
     const conversation = await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId,
       contactName: sender?.name,
@@ -335,12 +340,51 @@ export class ReceiveChatwootWebhook {
     const chatwootConversationId = payload.id;
     if (chatwootConversationId === undefined) return;
 
+    // messaging-bulk-inbox (F1, FASE 2) — adopta una conversación bulk pendiente ANTES
+    // del upsert, para que el upsert caiga sobre ella (mismo id) y no cree un duplicado.
+    await this.maybeAdoptBulkConversation(chatwootConversationId, payload.meta?.sender?.phone_number);
+
     await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId,
       contactName: payload.meta?.sender?.name,
       contactPhone: payload.meta?.sender?.phone_number,
       status: payload.status,
     });
+  }
+
+  /**
+   * messaging-bulk-inbox (F1, FASE 2 — reconciliación AISLADA, mayor riesgo) —
+   * cuando llega un evento de Chatwoot con teléfono, intenta ADOPTAR una conversación
+   * `origin:'bulk'` sin `chatwootConversationId` y mismo teléfono normalizado,
+   * conservando su `id` (el `recipient.conversationId` sigue válido, sin repoint). El
+   * `adoptBulkConversation` del repo NUNCA toca una conversación Chatwoot existente ni
+   * adopta si el `chatwootConversationId` ya está tomado (no duplica).
+   *
+   * Fail-open, nunca lanza (mismo criterio que `maybeRegisterOptOut`): sin teléfono
+   * reconstruible o ante un hipo de DB → se loguea y se sigue (el webhook SIEMPRE
+   * espeja el mensaje). El síntoma de un bug acá sería una conversación DUPLICADA,
+   * por eso está bien testeada y AISLADA del write-path principal.
+   *
+   * Clave de lookup = `toWhatsAppE164` (E164 CANÓNICO), NO `normalizePhone`: ese es
+   * LOSSY con el "15" móvil embebido → keyearía distinto que el bulk y NUNCA matchearía
+   * (duplicado sistemático). Mismo criterio que el opt-out (FIX-9-v2).
+   */
+  private async maybeAdoptBulkConversation(
+    chatwootConversationId: number,
+    phone: string | null | undefined,
+  ): Promise<void> {
+    const phoneE164 = toWhatsAppE164(phone);
+    if (phoneE164 === null) return; // teléfono ausente/no reconstruible → no hay clave de matcheo
+
+    try {
+      await this.conversationRepo.adoptBulkConversation(phoneE164, chatwootConversationId);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[messaging] adopción Fase 2 de conversación bulk falló (fail-open, el webhook igual espeja)', {
+        chatwootConversationId,
+        error: err instanceof Error ? err.message : err,
+      });
+    }
   }
 
   private async handleConversationStatusChanged(payload: ChatwootWebhookPayload): Promise<void> {

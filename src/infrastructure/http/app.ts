@@ -760,6 +760,7 @@ import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssign
 import { createMessagingBulkRouter } from './routes/messagingBulk.routes';
 import { TwilioContentGateway } from '../adapters/twilio/TwilioContentGateway';
 import { PrismaCampaignRepository } from '../adapters/prisma/PrismaCampaignRepository';
+import { PrismaCampaignInboxProjector } from '../adapters/prisma/PrismaCampaignInboxProjector';
 import { TokenBucketRateLimiter } from '@application/util/TokenBucketRateLimiter';
 import { CampaignRunner } from '../scheduling/CampaignRunner';
 // Aliased: `ListTemplates` already names an unrelated settings/email-templates use case above (:58).
@@ -2609,9 +2610,18 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     });
     const campaignRepo = new PrismaCampaignRepository();
     const rateLimiter = new TokenBucketRateLimiter({ ratePerSec: config.messagingBulk.ratePerSec });
+    // messaging-bulk-inbox (F1) — el projector compone los repos F1 (Conversation/
+    // ChatMessage, instancias scope-local, mismo patrón que pppoeRepoForInboxContext)
+    // + campaignRepo, para que el bulk deje rastro en el inbox. Sin esto la proyección
+    // queda MUERTA en prod (lección W6): SendCampaign lo recibe como 5º arg.
+    const campaignInboxProjector = new PrismaCampaignInboxProjector(
+      new PrismaConversationRepository(),
+      new PrismaChatMessageRepository(),
+      campaignRepo,
+    );
     // customerAdapter (línea ~872) YA implementa CampaignSegmentSource +
     // CampaignRecipientLookup (Batch 6) — misma instancia, sin duplicar wiring.
-    const sendCampaign = new SendCampaign(campaignRepo, customerAdapter, templatePort, rateLimiter);
+    const sendCampaign = new SendCampaign(campaignRepo, customerAdapter, templatePort, rateLimiter, campaignInboxProjector);
     const campaignRunner = new CampaignRunner(sendCampaign, campaignRepo, new PgAdvisoryLock());
 
     app.use('/api/messaging/bulk', createMessagingBulkRouter(

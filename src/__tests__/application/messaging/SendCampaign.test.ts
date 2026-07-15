@@ -306,7 +306,7 @@ describe('SendCampaign', () => {
       .mockRejectedValueOnce(new TemplateProviderUnavailableError('503'))
       .mockResolvedValueOnce({ providerId: 'SM1', status: 'queued' } satisfies SendTemplateResult);
     const templatePort: TemplateMessagingPort = { listTemplates: jest.fn(), sendTemplate };
-    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), {
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), undefined, {
       sleep: async () => {},
       random: () => 0,
       maxRetries: 3,
@@ -331,7 +331,7 @@ describe('SendCampaign', () => {
       return { providerId: 'SM-ok', status: 'queued' } satisfies SendTemplateResult;
     });
     const templatePort: TemplateMessagingPort = { listTemplates: jest.fn(), sendTemplate };
-    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), {
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), undefined, {
       sleep: async () => {},
       random: () => 0,
       maxRetries: 2,
@@ -362,7 +362,7 @@ describe('SendCampaign', () => {
     const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
     const sendTemplate = jest.fn().mockRejectedValue(new TemplateSendRejectedError('400 content_sid inválido'));
     const templatePort: TemplateMessagingPort = { listTemplates: jest.fn(), sendTemplate };
-    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), {
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), undefined, {
       sleep: async () => {},
       maxRetries: 3,
     });
@@ -540,7 +540,7 @@ describe('SendCampaign', () => {
       throw new TemplateProviderConfigError('Twilio 401 — proveedor mal configurado');
     });
     const templatePort: TemplateMessagingPort = { listTemplates: jest.fn(), sendTemplate };
-    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), {
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), undefined, {
       sleep: async () => {},
       maxRetries: 3,
     });
@@ -612,7 +612,7 @@ describe('SendCampaign', () => {
       return { providerId: `SM-${to}`, status: 'queued' } satisfies SendTemplateResult;
     });
     const templatePort: TemplateMessagingPort = { listTemplates: jest.fn(), sendTemplate };
-    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), {
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), undefined, {
       sleep: async () => {},
       maxRetries: 0,
     });
@@ -674,7 +674,7 @@ describe('SendCampaign', () => {
     const campaignRepo = new FailingSentPersistRepository(inner, 1); // falla el 1er write de 'sent'
     const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
     const templatePort = new InMemoryTemplateMessagingGateway();
-    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), {
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), undefined, {
       sleep: async () => {},
     });
 
@@ -744,7 +744,7 @@ describe('SendCampaign', () => {
     const campaignRepo = new FailingSentPersistRepository(inner, Number.MAX_SAFE_INTEGER); // el 'sent' nunca persiste
     const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
     const templatePort = new InMemoryTemplateMessagingGateway();
-    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), {
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), undefined, {
       sleep: async () => {},
     });
 

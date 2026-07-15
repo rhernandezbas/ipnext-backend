@@ -35,6 +35,7 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
       name: data.name,
       templateRef: data.templateRef,
       templateName: data.templateName ?? null,
+      templateBody: data.templateBody ?? null,
       segment: data.segment,
       variableSpec: data.variableSpec,
       status: 'pending',
@@ -119,6 +120,7 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
         status: 'queued',
         providerId: null,
         chatwootConversationId: null,
+        conversationId: null,
         error: null,
         sentAt: null,
         deliveredAt: null,
@@ -136,6 +138,7 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
     if (patch.status !== undefined) r.status = patch.status;
     if (patch.providerId !== undefined) r.providerId = patch.providerId;
     if (patch.chatwootConversationId !== undefined) r.chatwootConversationId = patch.chatwootConversationId;
+    if (patch.conversationId !== undefined) r.conversationId = patch.conversationId;
     if (patch.error !== undefined) r.error = patch.error;
     if (patch.sentAt !== undefined) r.sentAt = patch.sentAt;
     if (patch.deliveredAt !== undefined) r.deliveredAt = patch.deliveredAt;

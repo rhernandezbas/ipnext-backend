@@ -54,12 +54,28 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     expect(window).toMatch(/new TokenBucketRateLimiter\(\{\s*ratePerSec:\s*config\.messagingBulk\.ratePerSec\s*\}\)/);
   });
 
-  it('(e) SendCampaign reusa customerAdapter (sin duplicar el port) + CampaignRunner con new PgAdvisoryLock()', () => {
+  it('(e) SendCampaign reusa customerAdapter (sin duplicar el port) + inyecta el projector (5º arg) + CampaignRunner con new PgAdvisoryLock()', () => {
     const idx = appSrc.indexOf('// ─── messaging-bulk (F2)');
     const end = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(", idx);
     const window = appSrc.slice(idx, end);
-    expect(window).toMatch(/new SendCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*rateLimiter\)/);
+    // messaging-bulk-inbox (F1, lección W6) — el projector NO debe quedar muerto:
+    // SendCampaign lo recibe como 5º arg, o el bulk NUNCA deja rastro en el inbox.
+    expect(window).toMatch(
+      /new SendCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*rateLimiter,\s*campaignInboxProjector\)/,
+    );
     expect(window).toMatch(/new CampaignRunner\(sendCampaign,\s*campaignRepo,\s*new PgAdvisoryLock\(\)\)/);
+  });
+
+  it('(e2) PrismaCampaignInboxProjector importado e instanciado con los repos F1 + campaignRepo (anti-W6, proyección VIVA en prod)', () => {
+    expect(appSrc).toMatch(
+      /import\s*\{\s*PrismaCampaignInboxProjector\s*\}\s*from\s*['"]\.\.\/adapters\/prisma\/PrismaCampaignInboxProjector['"]/,
+    );
+    const idx = appSrc.indexOf('// ─── messaging-bulk (F2)');
+    const end = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(", idx);
+    const window = appSrc.slice(idx, end);
+    expect(window).toMatch(
+      /const campaignInboxProjector = new PrismaCampaignInboxProjector\(\s*new PrismaConversationRepository\(\),\s*new PrismaChatMessageRepository\(\),\s*campaignRepo,?\s*\)/,
+    );
   });
 
   it('(f) las 6 dependencias wired dentro de la MISMA llamada de mount', () => {

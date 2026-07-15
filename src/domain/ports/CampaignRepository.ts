@@ -13,6 +13,8 @@ export interface CampaignCreateData {
   name: string;
   templateRef: string;
   templateName?: string | null;
+  /** messaging-bulk-inbox (F1) — body de texto del template capturado en CreateCampaign. */
+  templateBody?: string | null;
   segment: CampaignSegment;
   variableSpec: CampaignVariableSpec;
   /** Total de destinatarios YA resuelto (SEG-1..SEG-4) al momento de crear. */
@@ -45,6 +47,8 @@ export interface CampaignRecipientPatch {
   status?: CampaignRecipientStatus;
   providerId?: string | null;
   chatwootConversationId?: number | null;
+  /** messaging-bulk-inbox (F1) — lazo al mirror local seteado por la proyección al inbox. */
+  conversationId?: string | null;
   error?: string | null;
   sentAt?: string | null;
   deliveredAt?: string | null;

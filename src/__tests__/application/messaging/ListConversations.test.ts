@@ -49,6 +49,7 @@ describe('ListConversations', () => {
       status: 'open',
       assignee: null, // F1.5-C2 — unassigned by default
       area: null, // F1.5-C2 — no area by default
+      campaigns: [], // messaging-bulk-inbox (F1) — sin campañas por defecto
     });
     expect(result.total).toBe(3);
   });

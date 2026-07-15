@@ -54,9 +54,13 @@ export class GetConversation {
   }
 
   private async syncFromChatwoot(existing: ConversationRecord): Promise<void> {
+    // messaging-bulk-inbox (F1) — una conversación origin:'bulk' aún NO adoptada por
+    // Chatwoot (chatwootConversationId=null) no tiene contraparte que sincronizar → skip.
+    const chatwootConversationId = existing.chatwootConversationId;
+    if (chatwootConversationId === null) return;
     try {
-      const live = await this.gateway.getConversation(existing.chatwootConversationId);
-      const liveMessages = await this.gateway.listMessages(existing.chatwootConversationId);
+      const live = await this.gateway.getConversation(chatwootConversationId);
+      const liveMessages = await this.gateway.listMessages(chatwootConversationId);
 
       // fix-be #HIGH (anti-leak) — Chatwoot bumps `last_activity_at` with ANY message,
       // including private agent notes. Using `live.lastActivityAt` verbatim as the
@@ -74,7 +78,7 @@ export class GetConversation {
         : undefined;
 
       await this.conversationRepo.upsertByChatwootId({
-        chatwootConversationId: existing.chatwootConversationId,
+        chatwootConversationId,
         contactName: live.contactName,
         contactPhone: live.contactPhone,
         status: live.status,

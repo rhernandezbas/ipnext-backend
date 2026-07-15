@@ -49,14 +49,19 @@ export class SetConversationStatus {
     const conversation = await this.conversationRepo.findById(conversationId);
     if (!conversation) throw new ConversationNotFoundError(conversationId);
 
+    // messaging-bulk-inbox (F1) — una conversación origin:'bulk' aún no adoptada por
+    // Chatwoot no tiene contraparte donde setear estado (edge case). Narrowing a number.
+    const chatwootConversationId = conversation.chatwootConversationId;
+    if (chatwootConversationId === null) throw new ConversationNotFoundError(conversationId);
+
     try {
-      await this.gateway.setStatus(conversation.chatwootConversationId, status);
+      await this.gateway.setStatus(chatwootConversationId, status);
     } catch {
       throw new ChatwootUnavailableError();
     }
 
     const updated = await this.conversationRepo.upsertByChatwootId({
-      chatwootConversationId: conversation.chatwootConversationId,
+      chatwootConversationId,
       status,
     });
 

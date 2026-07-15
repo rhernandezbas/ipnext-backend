@@ -82,6 +82,8 @@ describe('toChatMessageDto — attachments (MEDIA-4)', () => {
       id: 'msg-1',
       conversationId: 'conv-1',
       chatwootMessageId: 900,
+      origin: 'chatwoot',
+      campaignRecipientId: null,
       direction: 'inbound',
       content: '',
       senderName: null,

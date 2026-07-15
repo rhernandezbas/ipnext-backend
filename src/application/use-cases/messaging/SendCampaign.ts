@@ -4,6 +4,7 @@ import type { TemplateMessagingPort } from '@domain/ports/TemplateMessagingPort'
 import type { RateLimiter } from '@domain/ports/RateLimiter';
 import type { Campaign, CampaignRecipient, CampaignVariableSpec } from '@domain/entities/campaign';
 import type { SendTemplateResult } from '@domain/ports/TemplateMessagingPort';
+import type { CampaignInboxProjector } from '@domain/ports/CampaignInboxProjector';
 import { CampaignNotFoundError, TemplateProviderConfigError } from '@domain/errors/messaging-bulk';
 import { sendWithRetry, CampaignRetryOptions } from './campaignBackoff';
 
@@ -53,6 +54,14 @@ export class SendCampaign {
     private readonly customerRepo: CampaignRecipientLookup,
     private readonly templatePort: TemplateMessagingPort,
     private readonly rateLimiter: RateLimiter,
+    /**
+     * messaging-bulk-inbox (F1) — projector OPCIONAL (5º arg, molde del
+     * `optOutSource` opcional de ReceiveChatwootWebhook). AUSENTE → SendCampaign
+     * se comporta EXACTO como antes (backcompat total, sin rastro en el inbox).
+     * Presente → tras persistir `sent`, proyecta el mensaje al inbox best-effort
+     * y AISLADO (un fallo NUNCA re-marca el recipient `failed` → jamás re-envía).
+     */
+    private readonly inboxProjector?: CampaignInboxProjector,
     private readonly backoffOpts?: CampaignRetryOptions,
   ) {}
 
@@ -149,13 +158,51 @@ export class SendCampaign {
     // persistir el `sent` NO debe convertirlo en `failed` (sería resumible →
     // RE-ENVÍO al mismo destinatario). Se reintenta el persist; si aun así
     // falla, se LOGUEA y se deja como está (nunca se marca `failed`).
-    await this.persistRecipientSent(recipient.id, result);
+    const sentAt = new Date().toISOString();
+    await this.persistRecipientSent(recipient.id, result, sentAt);
+
+    // messaging-bulk-inbox (F1) — proyección al inbox DESPUÉS del `sent`, best-effort
+    // e AISLADA: su fallo se loguea y se sigue (JAMÁS re-marca `failed` → jamás re-envía).
+    // Sin projector inyectado (5º arg ausente) es un no-op → backcompat exacto.
+    await this.projectToInbox(campaign, recipient, candidate, variables, result, sentAt);
+  }
+
+  /**
+   * messaging-bulk-inbox (F1) — proyecta el envío al inbox (Conversation +
+   * ChatMessage outbound + recipient.conversationId). AISLADA: cualquier error se
+   * loguea y se traga. NUNCA propaga ni re-marca el recipient (el envío ya está
+   * `sent`; re-marcarlo `failed` lo volvería re-enviable). No-op sin projector.
+   */
+  private async projectToInbox(
+    campaign: Campaign,
+    recipient: CampaignRecipient,
+    candidate: CampaignRecipientCandidate,
+    variables: Record<string, string>,
+    result: SendTemplateResult,
+    sentAt: string,
+  ): Promise<void> {
+    if (!this.inboxProjector) return;
+    try {
+      const renderedBody = renderTemplateBody(campaign.templateBody, variables);
+      await this.inboxProjector.projectSentMessage({
+        recipient,
+        candidate,
+        renderedBody,
+        sentAt,
+        providerId: result.providerId,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[SendCampaign] proyección al inbox falló para recipient ${recipient.id} (best-effort/aislada, el envío ya está 'sent'):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   /** FIX-5 — persiste `sent` con reintentos; jamás marca `failed` un envío aceptado. */
-  private async persistRecipientSent(recipientId: string, result: SendTemplateResult): Promise<void> {
+  private async persistRecipientSent(recipientId: string, result: SendTemplateResult, sentAt: string): Promise<void> {
     const sleep = this.backoffOpts?.sleep ?? defaultSleep;
-    const sentAt = new Date().toISOString();
     for (let attempt = 1; ; attempt++) {
       try {
         await this.campaignRepo.updateRecipient(recipientId, {
@@ -251,6 +298,24 @@ export function formatArs(amount: number): string {
  * redactarse tolerando el monto vacío, o el segmento acotarse con `balanceMin > 0`
  * (FIX-12) para garantizar monto conocido en toda la audiencia.
  */
+/**
+ * messaging-bulk-inbox (F1) — renderiza el body del template sustituyendo los
+ * placeholders `{{n}}` (Twilio Content) por su valor resuelto POR-DESTINATARIO
+ * (el MISMO mapa `variables` que se envió a Twilio). Pura, total, nunca throws.
+ *
+ * - `templateBody` null/vacío → `''` (campaña vieja o template sin body de texto):
+ *   el mensaje bulk igual aterriza en el inbox, degradación segura.
+ * - Placeholder sin variable resuelta → `''` (nunca deja `{{n}}` crudo a la vista).
+ * - Tolera espacios dentro de las llaves (`{{ 1 }}`), como el wire de Twilio.
+ */
+export function renderTemplateBody(
+  templateBody: string | null | undefined,
+  variables: Record<string, string>,
+): string {
+  if (!templateBody) return '';
+  return templateBody.replace(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => variables[key] ?? '');
+}
+
 export function resolveCampaignVariables(
   variableSpec: CampaignVariableSpec,
   candidate: CampaignRecipientCandidate,

@@ -2,6 +2,7 @@ import {
   ChatMessageRepository,
   ChatMessageRecord,
   UpsertChatMessageInput,
+  UpsertBulkChatMessageInput,
 } from '@domain/ports/ChatMessageRepository';
 import { prisma } from '../../database/prisma';
 
@@ -15,7 +16,9 @@ function toDomain(row: any): ChatMessageRecord {
   return {
     id: row.id,
     conversationId: row.conversationId,
-    chatwootMessageId: row.chatwootMessageId,
+    chatwootMessageId: row.chatwootMessageId ?? null,
+    origin: row.origin ?? 'chatwoot',
+    campaignRecipientId: row.campaignRecipientId ?? null,
     direction: row.direction,
     content: row.content,
     senderName: row.senderName ?? null,
@@ -51,6 +54,36 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         senderName: input.senderName ?? null,
         chatwootCreatedAt: new Date(input.chatwootCreatedAt),
         isPrivate: input.isPrivate ?? false,
+      },
+    });
+    return toDomain(row);
+  }
+
+  /**
+   * messaging-bulk-inbox (F1, PROYECCIÓN) — idempotente por `campaignRecipientId`
+   * (@unique). Un mensaje `outbound`/`origin:'bulk'`/`chatwootMessageId:null`.
+   * Re-proyectar el mismo recipient actualiza la fila, NUNCA duplica.
+   */
+  async upsertBulkMessage(input: UpsertBulkChatMessageInput): Promise<ChatMessageRecord> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = await (prisma as any).chatMessage.upsert({
+      where: { campaignRecipientId: input.campaignRecipientId },
+      create: {
+        conversationId: input.conversationId,
+        chatwootMessageId: null,
+        origin: 'bulk',
+        campaignRecipientId: input.campaignRecipientId,
+        direction: 'outbound',
+        content: input.content,
+        senderName: input.senderName ?? null,
+        chatwootCreatedAt: new Date(input.chatwootCreatedAt),
+        isPrivate: false,
+      },
+      update: {
+        conversationId: input.conversationId,
+        content: input.content,
+        senderName: input.senderName ?? null,
+        chatwootCreatedAt: new Date(input.chatwootCreatedAt),
       },
     });
     return toDomain(row);

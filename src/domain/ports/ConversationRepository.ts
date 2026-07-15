@@ -5,11 +5,29 @@ import { PaginatedQuery, PaginatedResult } from '../../application/dto/paginatio
  * ISO 8601 strings, never raw Prisma `Date` objects (same convention as
  * `OwnershipTransferCase`/`ContractListItem`).
  */
+/**
+ * messaging-bulk-inbox (F1, etiqueta #1) — campaña asociada a una conversación,
+ * JOIN-derived del lazo `CampaignRecipient(conversationId, campaignId)` (mismo
+ * criterio "flat/JOIN-derived en el record" que `assigneeName`).
+ */
+export interface ConversationCampaignRef {
+  id: string;
+  name: string;
+}
+
 export interface ConversationRecord {
   id: string;
-  chatwootConversationId: number;
+  /** messaging-bulk-inbox (F1) — `null` para una conversación `origin:'bulk'` aún no adoptada por Chatwoot (Fase 2). */
+  chatwootConversationId: number | null;
+  /** messaging-bulk-inbox (F1) — `'chatwoot'` (default) | `'bulk'`. */
+  origin: string;
   contactName: string | null;
   contactPhone: string | null;
+  /**
+   * messaging-bulk-inbox (F1) — E164 CANÓNICO (`toWhatsAppE164(contactPhone)`), clave de
+   * matcheo del bulk / Fase 2. NO `normalizePhone` (lossy con el "15" embebido → duplicados).
+   */
+  contactPhoneE164: string | null;
   status: string;
   /** Cache of Chatwoot's `can_reply` — read by SendMessage, never recomputed locally (design §4). */
   canReply: boolean;
@@ -28,6 +46,11 @@ export interface ConversationRecord {
   areaId: string | null;
   areaName: string | null;
   areaColor: string | null;
+  /**
+   * messaging-bulk-inbox (F1, etiqueta #1) — campañas de esta conversación
+   * (JOIN-derived del lazo CampaignRecipient). `[]` cuando no participa en ninguna.
+   */
+  campaigns: ConversationCampaignRef[];
   createdAt: string;
   updatedAt: string;
 }
@@ -45,6 +68,11 @@ export interface ConversationRecord {
 export interface ConversationListQuery extends PaginatedQuery {
   assigneeId?: string;
   unassigned?: boolean;
+  /**
+   * messaging-bulk-inbox (F1, etiqueta #1) — filtra las conversaciones que
+   * participan en la campaña `campaignId` (JOIN Conversation×CampaignRecipient).
+   */
+  campaignId?: string;
 }
 
 /**
@@ -77,10 +105,43 @@ export interface UpsertConversationInput {
   lastMessagePreview?: string | null;
 }
 
+/**
+ * messaging-bulk-inbox (F1, PROYECCIÓN) — input del write-path BULK, DELIBERADAMENTE
+ * SEPARADO de `upsertByChatwootId`: nunca comparte método con el write-path de
+ * Chatwoot (misma disciplina que `updateLocalFields`), así que jamás puede pisar
+ * el mirror de Chatwoot por accidente. Busca la conversación MÁS RECIENTE con este
+ * `contactPhoneE164` (cualquier origen); si existe, appendea (cae en el hilo
+ * que el cliente YA tiene); si no, crea una `origin:'bulk'`.
+ */
+export interface UpsertBulkConversationInput {
+  contactName?: string | null;
+  contactPhone?: string | null;
+  /** Bump del preview del inbox con el mensaje bulk recién enviado (outbound). */
+  lastMessageAt?: string | null;
+  lastMessagePreview?: string | null;
+}
+
 export interface ConversationRepository {
   findById(id: string): Promise<ConversationRecord | null>;
   findByChatwootId(chatwootConversationId: number): Promise<ConversationRecord | null>;
   upsertByChatwootId(input: UpsertConversationInput): Promise<ConversationRecord>;
+  /**
+   * messaging-bulk-inbox (F1, PROYECCIÓN) — write-path BULK por E164 CANÓNICO
+   * (`toWhatsAppE164`, NO `normalizePhone` lossy), SEPARADO de `upsertByChatwootId`
+   * (ver `UpsertBulkConversationInput`). Idempotente a nivel conversación: appendea a
+   * la más reciente con ese `phoneE164` o crea una `origin:'bulk'` (`chatwootConversationId=null`).
+   */
+  upsertBulkByPhone(phoneE164: string, input: UpsertBulkConversationInput): Promise<ConversationRecord>;
+  /**
+   * messaging-bulk-inbox (F1, FASE 2 — reconciliación AISLADA) — si existe una
+   * conversación `origin:'bulk'` con `chatwootConversationId=null` y el mismo
+   * `contactPhoneE164` (E164 canónico, cross-format safe), la ADOPTA in-place
+   * seteándole `chatwootConversationId` (CONSERVA el `id` → `recipient.conversationId`
+   * sigue válido, sin repoint). NUNCA toca una conversación Chatwoot existente y NO
+   * adopta si `chatwootConversationId` ya está tomado (evita duplicados/colisión de
+   * UNIQUE). Devuelve la adoptada, o `null` si no hubo adopción (no-op seguro).
+   */
+  adoptBulkConversation(phoneE164: string, chatwootConversationId: number): Promise<ConversationRecord | null>;
   /**
    * INBOX-1 — paginated listing, ordered by `lastMessageAt` DESC (nulls last,
    * never-messaged conversations sort to the bottom). F1.5-C2 extends the query

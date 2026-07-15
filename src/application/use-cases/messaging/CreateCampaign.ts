@@ -74,6 +74,9 @@ export class CreateCampaign {
       name: input.name,
       templateRef: input.templateRef,
       templateName: input.templateName ?? template.friendlyName,
+      // messaging-bulk-inbox (F1) — captura el body de texto del template (TemplateDto.body,
+      // '' si el proveedor no declaró texto plano) para renderizar el mensaje real al proyectar.
+      templateBody: template.body,
       segment: input.segment,
       variableSpec: input.variablesMap,
       total: resolved.length,

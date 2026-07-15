@@ -27,6 +27,12 @@ export interface ConversationAreaDto {
   color: string;
 }
 
+/** messaging-bulk-inbox (F1, etiqueta #1) — campaña asociada a la conversación. */
+export interface ConversationCampaignDto {
+  id: string;
+  name: string;
+}
+
 export interface ConversationListItemDto {
   id: string;
   contactName: string | null;
@@ -38,6 +44,11 @@ export interface ConversationListItemDto {
   assignee: ConversationAssigneeDto | null;
   /** F1.5-C2 — LOCAL-only (Chatwoot never sees this). `null` = no area set. */
   area: ConversationAreaDto | null;
+  /**
+   * messaging-bulk-inbox (F1, etiqueta #1) — campañas de esta conversación
+   * (JOIN-derived del lazo CampaignRecipient). `[]` cuando no participa en ninguna.
+   */
+  campaigns: ConversationCampaignDto[];
 }
 
 // ─── Assignable users (F1.5-C2, dropdown) ────────────────────────────────────
@@ -247,6 +258,9 @@ export function toConversationListItemDto(record: ConversationRecord): Conversat
     area: record.areaId
       ? { id: record.areaId, name: record.areaName ?? '', color: record.areaColor ?? '#6366f1' }
       : null,
+    // messaging-bulk-inbox (F1, etiqueta #1) — JOIN-derived en el record; el mapper
+    // solo proyecta (nunca leakea el shape crudo del ConversationRecord).
+    campaigns: record.campaigns.map((c) => ({ id: c.id, name: c.name })),
   };
 }
 

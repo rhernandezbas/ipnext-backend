@@ -3,6 +3,7 @@ import {
   ChatMessageRepository,
   ChatMessageRecord,
   UpsertChatMessageInput,
+  UpsertBulkChatMessageInput,
 } from '@domain/ports/ChatMessageRepository';
 
 /**
@@ -28,11 +29,45 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       id: randomUUID(),
       conversationId: input.conversationId,
       chatwootMessageId: input.chatwootMessageId,
+      origin: 'chatwoot',
+      campaignRecipientId: null,
       direction: input.direction,
       content: input.content,
       senderName: input.senderName ?? null,
       chatwootCreatedAt: input.chatwootCreatedAt,
       isPrivate: input.isPrivate ?? false,
+      createdAt: new Date().toISOString(),
+    };
+    this.rows.push(row);
+    return { ...row };
+  }
+
+  /**
+   * messaging-bulk-inbox (F1, PROYECCIÓN) — idempotente por `campaignRecipientId`.
+   * Un mensaje `outbound`/`origin:'bulk'`/`chatwootMessageId:null`. Re-proyectar el
+   * mismo recipient actualiza la fila existente, NUNCA duplica.
+   */
+  async upsertBulkMessage(input: UpsertBulkChatMessageInput): Promise<ChatMessageRecord> {
+    const existing = this.rows.find((r) => r.campaignRecipientId === input.campaignRecipientId);
+    if (existing) {
+      existing.conversationId = input.conversationId;
+      existing.content = input.content;
+      existing.chatwootCreatedAt = input.chatwootCreatedAt;
+      existing.senderName = input.senderName ?? null;
+      return { ...existing };
+    }
+
+    const row: ChatMessageRecord = {
+      id: randomUUID(),
+      conversationId: input.conversationId,
+      chatwootMessageId: null,
+      origin: 'bulk',
+      campaignRecipientId: input.campaignRecipientId,
+      direction: 'outbound',
+      content: input.content,
+      senderName: input.senderName ?? null,
+      chatwootCreatedAt: input.chatwootCreatedAt,
+      isPrivate: false,
       createdAt: new Date().toISOString(),
     };
     this.rows.push(row);
