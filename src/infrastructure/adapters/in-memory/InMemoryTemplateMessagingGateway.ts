@@ -1,10 +1,37 @@
-import type { TemplateMessagingPort, TemplateDto, SendTemplateResult } from '@domain/ports/TemplateMessagingPort';
-import { TemplateProviderUnavailableError, TemplateSendRejectedError } from '@domain/errors/messaging-bulk';
+import type {
+  TemplateMessagingPort,
+  TemplateAdminPort,
+  TemplateDto,
+  SendTemplateResult,
+  CreateTemplateInput,
+} from '@domain/ports/TemplateMessagingPort';
+import {
+  TemplateProviderUnavailableError,
+  TemplateSendRejectedError,
+  TemplateNotFoundError,
+} from '@domain/errors/messaging-bulk';
 
 export interface TemplateMessagingCallRecord {
   to: string;
   contentSid: string;
   variables: Record<string, string>;
+}
+
+/** Change 3 (templates CRUD) — registros de las llamadas admin, para asserts. */
+export interface TemplateCreateCallRecord {
+  friendlyName: string;
+  language: string;
+  variables: Record<string, string>;
+  body: string;
+}
+export interface TemplateDeleteCallRecord {
+  contentSid: string;
+  deleteInWaba: boolean;
+}
+export interface TemplateSubmitCallRecord {
+  contentSid: string;
+  name: string;
+  category: string;
 }
 
 export interface InMemoryTemplateMessagingGatewayOptions {
@@ -18,30 +45,38 @@ export interface InMemoryTemplateMessagingGatewayOptions {
 }
 
 /**
- * InMemoryTemplateMessagingGateway — fake TemplateMessagingPort (messaging-bulk
- * F2, T3.2). Array de `TemplateDto` inyectable en el ctor + `sendTemplate` que
- * registra las llamadas (`calls`). Dos modos de falla configurables para
- * ejercitar el retry/backoff (Batch 4) y el manejo de rechazo per-destinatario
- * sin necesitar axios/nock real (regla TDD del repo — se inyecta el fake port).
+ * InMemoryTemplateMessagingGateway — fake de AMBOS ports de templates
+ * (`TemplateMessagingPort` del send-path F2 + `TemplateAdminPort` del CRUD del
+ * Change 3). Sostiene un store por `contentSid` (seedeable desde el ctor) para
+ * que create→get→delete/submit sean coherentes entre sí y con `listTemplates`.
+ * NO se mockea axios — se inyecta este fake (regla TDD del repo).
  */
-export class InMemoryTemplateMessagingGateway implements TemplateMessagingPort {
+export class InMemoryTemplateMessagingGateway implements TemplateMessagingPort, TemplateAdminPort {
   public readonly calls: TemplateMessagingCallRecord[] = [];
+  public readonly createCalls: TemplateCreateCallRecord[] = [];
+  public readonly deleteCalls: TemplateDeleteCallRecord[] = [];
+  public readonly submitCalls: TemplateSubmitCallRecord[] = [];
 
-  private readonly templates: TemplateDto[];
+  private readonly store = new Map<string, TemplateDto>();
   private readonly failNthWith429?: number;
   private readonly retryAfterMs?: number;
   private readonly rejectPhone?: string;
   private sendCount = 0;
+  private createCount = 0;
 
   constructor(opts: InMemoryTemplateMessagingGatewayOptions = {}) {
-    this.templates = opts.templates ?? [];
+    for (const t of opts.templates ?? []) {
+      this.store.set(t.contentSid, { ...t });
+    }
     this.failNthWith429 = opts.failNthWith429;
     this.retryAfterMs = opts.retryAfterMs;
     this.rejectPhone = opts.rejectPhone;
   }
 
+  // ─── TemplateMessagingPort (send-path F2) ─────────────────────────────────
+
   async listTemplates(): Promise<TemplateDto[]> {
-    return this.templates.map((t) => ({ ...t }));
+    return Array.from(this.store.values()).map((t) => ({ ...t }));
   }
 
   async sendTemplate(to: string, contentSid: string, variables: Record<string, string>): Promise<SendTemplateResult> {
@@ -56,5 +91,49 @@ export class InMemoryTemplateMessagingGateway implements TemplateMessagingPort {
     }
 
     return { providerId: `SMfake${this.sendCount}`, status: 'queued' };
+  }
+
+  // ─── TemplateAdminPort (CRUD, Change 3) ───────────────────────────────────
+
+  async createTemplate(input: CreateTemplateInput): Promise<TemplateDto> {
+    this.createCalls.push({
+      friendlyName: input.friendlyName,
+      language: input.language,
+      variables: { ...input.variables },
+      body: input.body,
+    });
+    this.createCount += 1;
+    const dto: TemplateDto = {
+      contentSid: `HXfake${this.createCount}`,
+      friendlyName: input.friendlyName,
+      language: input.language,
+      variables: { ...input.variables },
+      approvalStatus: 'unsubmitted',
+      body: input.body,
+    };
+    this.store.set(dto.contentSid, dto);
+    return { ...dto };
+  }
+
+  async getTemplate(contentSid: string): Promise<TemplateDto> {
+    const t = this.store.get(contentSid);
+    if (!t) throw new TemplateNotFoundError(`Template ${contentSid} not found`);
+    return { ...t };
+  }
+
+  async deleteTemplate(contentSid: string, deleteInWaba = false): Promise<void> {
+    if (!this.store.has(contentSid)) {
+      throw new TemplateNotFoundError(`Template ${contentSid} not found`);
+    }
+    this.deleteCalls.push({ contentSid, deleteInWaba });
+    this.store.delete(contentSid);
+  }
+
+  async submitForApproval(contentSid: string, name: string, category: string): Promise<void> {
+    const t = this.store.get(contentSid);
+    if (!t) throw new TemplateNotFoundError(`Template ${contentSid} not found`);
+    this.submitCalls.push({ contentSid, name, category });
+    t.approvalStatus = 'pending';
+    t.category = category;
   }
 }

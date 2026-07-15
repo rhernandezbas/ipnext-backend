@@ -1,9 +1,16 @@
 import axios, { AxiosInstance } from 'axios';
-import type { TemplateDto, TemplateMessagingPort, SendTemplateResult } from '@domain/ports/TemplateMessagingPort';
+import type {
+  TemplateDto,
+  TemplateMessagingPort,
+  TemplateAdminPort,
+  SendTemplateResult,
+  CreateTemplateInput,
+} from '@domain/ports/TemplateMessagingPort';
 import {
   TemplateProviderUnavailableError,
   TemplateSendRejectedError,
   TemplateProviderConfigError,
+  TemplateNotFoundError,
 } from '@domain/errors/messaging-bulk';
 
 export interface TwilioContentGatewayOptions {
@@ -53,7 +60,7 @@ const CONFIG_STATUS = new Set([401, 403, 404]);
  *
  * Basic auth en ambos (`accountSid:authToken`).
  */
-export class TwilioContentGateway implements TemplateMessagingPort {
+export class TwilioContentGateway implements TemplateMessagingPort, TemplateAdminPort {
   private readonly http: AxiosInstance;
   private readonly accountSid: string;
   private readonly authToken: string;
@@ -172,6 +179,99 @@ export class TwilioContentGateway implements TemplateMessagingPort {
       return new TemplateProviderUnavailableError(errorMessage(err), retryAfter);
     }
     if (CONFIG_STATUS.has(status)) {
+      return new TemplateProviderConfigError(errorMessage(err));
+    }
+    return new TemplateSendRejectedError(errorMessage(err));
+  }
+
+  // ─── TemplateAdminPort (CRUD, Change 3, Content API JSON) ──────────────────
+
+  /**
+   * POST `/v1/Content` (JSON — a diferencia del send-path, que es
+   * form-urlencoded contra api.twilio.com). Devuelve el template recién creado
+   * (`unsubmitted`, sin `approval_requests`). Reusa `toTemplateDto` para el mapeo.
+   */
+  async createTemplate(input: CreateTemplateInput): Promise<TemplateDto> {
+    try {
+      const response = await this.http.post(
+        `${this.contentBaseUrl}/v1/Content`,
+        {
+          friendly_name: input.friendlyName,
+          language: input.language,
+          variables: input.variables,
+          types: { 'twilio/text': { body: input.body } },
+        },
+        { auth: this.auth(), timeout: this.timeoutMs, headers: { 'Content-Type': 'application/json' } },
+      );
+      return toTemplateDto(response.data as TwilioContentItem);
+    } catch (err) {
+      throw this.mapCrudError(err);
+    }
+  }
+
+  /** GET `/v1/Content/{sid}`. 404 → `TemplateNotFoundError`. */
+  async getTemplate(contentSid: string): Promise<TemplateDto> {
+    try {
+      const response = await this.http.get(`${this.contentBaseUrl}/v1/Content/${contentSid}`, {
+        auth: this.auth(),
+        timeout: this.timeoutMs,
+      });
+      return toTemplateDto(response.data as TwilioContentItem);
+    } catch (err) {
+      throw this.mapCrudError(err);
+    }
+  }
+
+  /** DELETE `/v1/Content/{sid}?deleteInWaba={bool}`. 404 → `TemplateNotFoundError`. */
+  async deleteTemplate(contentSid: string, deleteInWaba = false): Promise<void> {
+    try {
+      await this.http.delete(
+        `${this.contentBaseUrl}/v1/Content/${contentSid}?deleteInWaba=${deleteInWaba}`,
+        { auth: this.auth(), timeout: this.timeoutMs },
+      );
+    } catch (err) {
+      throw this.mapCrudError(err);
+    }
+  }
+
+  /** POST `/v1/Content/{sid}/ApprovalRequests/whatsapp` con `{name, category}` (JSON). */
+  async submitForApproval(contentSid: string, name: string, category: string): Promise<void> {
+    try {
+      await this.http.post(
+        `${this.contentBaseUrl}/v1/Content/${contentSid}/ApprovalRequests/whatsapp`,
+        { name, category },
+        { auth: this.auth(), timeout: this.timeoutMs, headers: { 'Content-Type': 'application/json' } },
+      );
+    } catch (err) {
+      throw this.mapCrudError(err);
+    }
+  }
+
+  /**
+   * Mapeo de errores del CRUD. DIFERENCIA clave con `mapSendError`: un **404** es
+   * "template inexistente" → `TemplateNotFoundError` (404), NO config sistémica.
+   * El resto: sin `response`/red o RETRYABLE_STATUS → `TemplateProviderUnavailableError`
+   * (429 con `retryAfterMs`); 401/403 → `TemplateProviderConfigError`; cualquier
+   * otro 4xx (400/422 payload malo) → `TemplateSendRejectedError`. Mensaje SANEADO
+   * (nunca el body/headers crudos del proveedor ni credenciales).
+   */
+  private mapCrudError(err: unknown): Error {
+    const e = err as AxiosLikeError | null;
+    if (!e || e.isAxiosError !== true) {
+      return new TemplateProviderUnavailableError(errorMessage(err));
+    }
+    const status = e.response?.status;
+    if (status === undefined) {
+      return new TemplateProviderUnavailableError(errorMessage(err)); // red/timeout
+    }
+    if (status === 404) {
+      return new TemplateNotFoundError(errorMessage(err));
+    }
+    if (RETRYABLE_STATUS.has(status)) {
+      const retryAfter = status === 429 ? retryAfterMs(e) : undefined;
+      return new TemplateProviderUnavailableError(errorMessage(err), retryAfter);
+    }
+    if (status === 401 || status === 403) {
       return new TemplateProviderConfigError(errorMessage(err));
     }
     return new TemplateSendRejectedError(errorMessage(err));

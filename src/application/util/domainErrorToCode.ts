@@ -6,7 +6,7 @@ import {
   IClassSoTypeInactiveError,
   IClassNodeNotAssignableError,
 } from '@domain/errors/iclass';
-import { MissingTemplateVariablesError } from '@domain/errors/messaging-bulk';
+import { MissingTemplateVariablesError, TemplateInUseByCampaignError } from '@domain/errors/messaging-bulk';
 
 /** Shape of a domain error mapped to a transport-agnostic result. */
 export interface DomainErrorCode {
@@ -23,6 +23,12 @@ export interface DomainErrorCode {
    * pre-existing field used by a different feature); kept separate on purpose.
    */
   missing?: string[];
+  /**
+   * Change 3 (templates CRUD) — surfaced from `TemplateInUseByCampaignError`: ids
+   * de las campañas ACTIVAS que retienen el template (el diseño pedía exponer
+   * CUÁLES campañas bloquean el borrado, no solo el conteo del message).
+   */
+  campaignIds?: string[];
 }
 
 /**
@@ -55,6 +61,9 @@ export function domainErrorToCode(err: unknown): DomainErrorCode | null {
   }
   if (err instanceof MissingTemplateVariablesError) {
     result.missing = err.missing;
+  }
+  if (err instanceof TemplateInUseByCampaignError) {
+    result.campaignIds = err.campaignIds;
   }
   return result;
 }

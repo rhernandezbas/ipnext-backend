@@ -74,6 +74,19 @@ export interface ListRecipientsKeysetFilter {
 }
 
 /**
+ * Change 3 (templates CRUD) — lookup NARROW (ISP) para el guard de borrado de
+ * templates: "¿hay campañas ACTIVAS (pending/running) usando este `templateRef`?".
+ * Segregado de `CampaignRepository` a propósito: `DeleteTemplate` depende SOLO de
+ * esto (no del repo completo), y NO se fuerza a los wrappers de test que
+ * implementan `CampaignRepository` a implementar un método que no usan.
+ * `PrismaCampaignRepository` e `InMemoryCampaignRepository` implementan AMBAS.
+ */
+export interface ActiveCampaignLookup {
+  /** Campañas con status ∈ {pending, running} cuyo `templateRef === contentSid`. */
+  listActiveByTemplateRef(templateRef: string): Promise<Campaign[]>;
+}
+
+/**
  * messaging-bulk (F2, design §3.7) — molde `ServiceCutBatchRepository` + métodos
  * de recipients. Adapters: `PrismaCampaignRepository` (Batch 7) +
  * `InMemoryCampaignRepository` (Batch 3, tests).

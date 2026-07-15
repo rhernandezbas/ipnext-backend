@@ -178,6 +178,11 @@ const statusMap: Record<string, number> = {
   UNFILTERED_SEGMENT: 400,
   CAMPAIGN_NOT_FOUND: 404,
   CAMPAIGN_ALREADY_FINISHED: 409,
+  // Change 3 (templates CRUD) — ver/crear/submit/borrar templates WhatsApp.
+  // TEMPLATE_NOT_FOUND: GET/DELETE de un contentSid inexistente (Twilio 404).
+  // TEMPLATE_IN_USE: borrar un template retenido por una campaña activa (guard).
+  TEMPLATE_NOT_FOUND: 404,
+  TEMPLATE_IN_USE: 409,
   // F1.5-C2 (asignación) — SetConversationArea reusa TicketAreaNotFoundError
   // (`@domain/errors/tickets`) para el area inexistente referenciado. El código
   // ya existía sin entrada explícita acá (ticketAreas.routes.ts lo intercepta
@@ -226,6 +231,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     // (distinct from the pre-existing `missingFields` used by another feature).
     if (mapped?.missing !== undefined) {
       body['missing'] = mapped.missing;
+    }
+    // Change 3 (templates CRUD) — TemplateInUseByCampaignError expone CUÁLES
+    // campañas activas retienen el template (no solo el conteo del message).
+    if (mapped?.campaignIds !== undefined) {
+      body['campaignIds'] = mapped.campaignIds;
     }
     res.status(status).json(body);
     return;

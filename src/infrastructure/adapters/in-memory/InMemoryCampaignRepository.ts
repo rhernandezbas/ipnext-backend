@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { Campaign, CampaignRecipient } from '@domain/entities/campaign';
 import {
   CampaignRepository,
+  ActiveCampaignLookup,
   CampaignCreateData,
   CampaignPatch,
   CampaignRecipientCreateRow,
@@ -19,7 +20,7 @@ const DEFAULT_PAGE_SIZE = 25;
  * F2, T3.1). Molde InMemoryServiceCutBatchRepository (Map-backed por id).
  * `now()` inyectable para createdAt deterministas en tests.
  */
-export class InMemoryCampaignRepository implements CampaignRepository {
+export class InMemoryCampaignRepository implements CampaignRepository, ActiveCampaignLookup {
   private readonly campaigns = new Map<string, Campaign>();
   private readonly recipients = new Map<string, CampaignRecipient>();
   private readonly now: () => Date;
@@ -55,6 +56,22 @@ export class InMemoryCampaignRepository implements CampaignRepository {
   async findById(id: string): Promise<Campaign | null> {
     const c = this.campaigns.get(id);
     return c ? { ...c } : null;
+  }
+
+  /**
+   * Change 3 (ActiveCampaignLookup) — campañas EN VUELO (`pending`/`running`/
+   * `paused`) que usan `templateRef` como template. Guard de borrado de templates.
+   * `paused` cuenta como en-vuelo (una campaña pausada puede reanudarse y volver a
+   * enviar el template) — mismo criterio que `deriveLiveCounters`/`ListCampaigns`.
+   */
+  async listActiveByTemplateRef(templateRef: string): Promise<Campaign[]> {
+    return Array.from(this.campaigns.values())
+      .filter(
+        (c) =>
+          c.templateRef === templateRef &&
+          (c.status === 'pending' || c.status === 'running' || c.status === 'paused'),
+      )
+      .map((c) => ({ ...c }));
   }
 
   async update(id: string, patch: CampaignPatch): Promise<Campaign> {

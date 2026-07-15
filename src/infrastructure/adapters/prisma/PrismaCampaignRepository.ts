@@ -1,6 +1,7 @@
 import type { Campaign, CampaignRecipient } from '@domain/entities/campaign';
 import type {
   CampaignRepository,
+  ActiveCampaignLookup,
   CampaignCreateData,
   CampaignPatch,
   CampaignRecipientCreateRow,
@@ -64,7 +65,20 @@ export function toCampaignRecipient(row: any): CampaignRecipient {
   };
 }
 
-export class PrismaCampaignRepository implements CampaignRepository {
+export class PrismaCampaignRepository implements CampaignRepository, ActiveCampaignLookup {
+  /**
+   * Change 3 (ActiveCampaignLookup) — campañas EN VUELO (`pending`/`running`/
+   * `paused`) que referencian `templateRef`. Guard de borrado de templates: no
+   * borrar un template en uso por una campaña que todavía puede enviarlo. `paused`
+   * cuenta (es reanudable) — mismo criterio que `deriveLiveCounters`/`ListCampaigns`.
+   */
+  async listActiveByTemplateRef(templateRef: string): Promise<Campaign[]> {
+    const rows = await prisma.campaign.findMany({
+      where: { templateRef, status: { in: ['pending', 'running', 'paused'] } },
+    });
+    return rows.map(toCampaign);
+  }
+
   async create(data: CampaignCreateData): Promise<Campaign> {
     const row = await prisma.campaign.create({
       data: {

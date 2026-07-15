@@ -63,6 +63,57 @@ export class TemplateProviderConfigError extends DomainError {
 }
 
 /**
+ * Change 3 (templates CRUD) — raised when the provider reports a template does
+ * NOT exist (Twilio 404 on `GET`/`DELETE /v1/Content/{sid}`, or the in-memory
+ * fake looks up an unknown sid). Distinct from the send-path's treatment of 404
+ * as a SYSTEMIC config failure (`TemplateProviderConfigError`, 503): on a CRUD
+ * lookup a 404 is a genuine "not found" and must surface as 404, not 503.
+ * Maps to 404 in errorHandler's statusMap.
+ */
+export class TemplateNotFoundError extends DomainError {
+  constructor(message = 'Template not found') {
+    super(message, 'TEMPLATE_NOT_FOUND');
+    this.name = 'TemplateNotFoundError';
+  }
+}
+
+/**
+ * Change 3 (templates CRUD) — raised by `DeleteTemplate` when the template is
+ * still referenced as the `templateRef` of at least one ACTIVE campaign
+ * (`pending`/`running`). Borrar un template toca Meta/WABA y es IRREVERSIBLE:
+ * hacerlo mientras una campaña activa lo usa dejaría esa campaña sin template
+ * enviable. El borrado se BLOQUEA (409) y se expone cuántas/cuáles campañas lo
+ * retienen. Maps to 409 in errorHandler's statusMap.
+ */
+export class TemplateInUseByCampaignError extends DomainError {
+  /** Ids de las campañas activas que retienen el template (para diagnóstico). */
+  public readonly campaignIds: string[];
+
+  constructor(contentSid: string, campaignIds: string[]) {
+    super(
+      `Template "${contentSid}" is in use by ${campaignIds.length} active campaign(s)`,
+      'TEMPLATE_IN_USE',
+    );
+    this.name = 'TemplateInUseByCampaignError';
+    this.campaignIds = campaignIds;
+  }
+}
+
+/**
+ * Change 3 (templates CRUD) — raised by `CreateTemplate`/`SubmitTemplateForApproval`
+ * on invalid operator input (body/friendlyName/language vacíos, `category` fuera
+ * de {UTILITY, MARKETING, AUTHENTICATION}, `name` que normaliza a vacío). Reusa
+ * el código genérico `VALIDATION_ERROR` (ya mapeado a 400 en el statusMap, mismo
+ * convenio que `RoleValidationError`/`PppoeTransferValidationError`).
+ */
+export class InvalidTemplateInputError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'InvalidTemplateInputError';
+  }
+}
+
+/**
  * CAMP-2 — raised by `CreateCampaign` when `templateRef` does not correspond to
  * an `approved` template (either `pending`/`rejected`, or not found at all in
  * `TemplateMessagingPort.listTemplates()` — treated identically, no evidence of

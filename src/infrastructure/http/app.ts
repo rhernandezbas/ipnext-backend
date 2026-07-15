@@ -770,6 +770,12 @@ import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign'
 import { SendCampaign } from '@application/use-cases/messaging/SendCampaign';
 import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
+// ── Change 3 (templates CRUD) — VER/CREAR/SUBMIT/BORRAR templates WhatsApp ─────
+import { createMessagingTemplatesRouter } from './routes/templates.routes';
+import { CreateTemplate } from '@application/use-cases/messaging/CreateTemplate';
+import { GetTemplate } from '@application/use-cases/messaging/GetTemplate';
+import { SubmitTemplateForApproval } from '@application/use-cases/messaging/SubmitTemplateForApproval';
+import { DeleteTemplate } from '@application/use-cases/messaging/DeleteTemplate';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -2621,6 +2627,33 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       campaignRunner,
       new GetCampaign(campaignRepo),
       new ListCampaigns(campaignRepo),
+      createAuthMiddleware(authAdapter, sessionRepo),
+      {
+        bulk: requirePerm('messaging', 'bulk'),
+        templates: requirePerm('messaging', 'templates'),
+      },
+    ));
+  }
+
+  // ─── Change 3 (templates CRUD) — VER/CREAR/SUBMIT/BORRAR templates WhatsApp ──
+  // Bloque self-contained (NO reusa las vars del bloque bulk de arriba, para no
+  // interleaves con C2 en el merge): re-instancia el gateway Twilio (mismo config,
+  // implementa TemplateAdminPort) + el repo de campañas (guard de borrado: no
+  // borrar un template en uso por una campaña activa). RBAC doble capa:
+  // read=messaging.templates, write=messaging.bulk (sin acción nueva).
+  {
+    const templateAdminPort = new TwilioContentGateway({
+      accountSid: config.twilio.accountSid,
+      authToken: config.twilio.authToken,
+      messagingServiceSid: config.twilio.messagingServiceSid,
+    });
+    const templatesCampaignRepo = new PrismaCampaignRepository();
+    app.use('/api/messaging/templates', createMessagingTemplatesRouter(
+      new CreateTemplate(templateAdminPort),
+      new ListMessagingTemplates(templateAdminPort),
+      new GetTemplate(templateAdminPort),
+      new SubmitTemplateForApproval(templateAdminPort),
+      new DeleteTemplate(templateAdminPort, templatesCampaignRepo),
       createAuthMiddleware(authAdapter, sessionRepo),
       {
         bulk: requirePerm('messaging', 'bulk'),
