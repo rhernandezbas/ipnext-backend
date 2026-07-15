@@ -23,17 +23,29 @@ import { UnfilteredSegmentError } from '@domain/errors/messaging-bulk';
  * never-synced (la enorme mayoría de `Client`). Igual de peligroso que el
  * `balanceMin:0` de arriba. Un techo solo es criterio REAL si es `> 0`.
  */
-export function assertSegmentIsFiltered(segment: {
+export interface SegmentCriteria {
   statuses: string[];
   balanceMin?: number;
   balanceMax?: number;
-}): void {
+}
+
+/**
+ * Predicado PURO: ¿el segmento tiene un criterio de filtrado REAL? (al menos un
+ * status, O piso `balanceMin > 0`, O techo `balanceMax > 0`). Extraído para que
+ * `assertHasRecipients` (manual-recipients) y `resolveCombinedRecipients` puedan
+ * decidir si resolver el segmento SIN duplicar la lógica FIX-8/FIX-8-edge, y sin
+ * cambiar el comportamiento de `assertSegmentIsFiltered`.
+ */
+export function segmentHasCriteria(segment: SegmentCriteria): boolean {
   const hasStatuses = segment.statuses.length > 0;
   const hasMeaningfulBalance =
     (segment.balanceMin != null && segment.balanceMin > 0) ||
     (segment.balanceMax != null && segment.balanceMax > 0);
+  return hasStatuses || hasMeaningfulBalance;
+}
 
-  if (!hasStatuses && !hasMeaningfulBalance) {
+export function assertSegmentIsFiltered(segment: SegmentCriteria): void {
+  if (!segmentHasCriteria(segment)) {
     throw new UnfilteredSegmentError();
   }
 }

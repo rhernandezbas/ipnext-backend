@@ -2626,14 +2626,18 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
 
     app.use('/api/messaging/bulk', createMessagingBulkRouter(
       new ListMessagingTemplates(templatePort),
-      new PreviewCampaignSegment(customerAdapter),
+      // manual-recipients (MAN-5) — customerAdapter también implementa
+      // ManualRecipientSource (misma instancia): el preview cuenta la unión
+      // segmento ∪ lista manual cuando el composer la pasa.
+      new PreviewCampaignSegment(customerAdapter, customerAdapter),
       // v1.1 (preview modal paginado) — reusa customerAdapter (misma
       // instancia que PreviewCampaignSegment, ya implementa
       // CampaignSegmentSource), sin infra nueva.
       new ListSegmentRecipients(customerAdapter),
-      // 3 args — tasks.md contradicción #2 (design §7 wiring original olvidaba
-      // el templatePort; CAMP-2 lo necesita para validar templateRef aprobado).
-      new CreateCampaign(campaignRepo, customerAdapter, templatePort),
+      // 4 args — templatePort (CAMP-2, valida templateRef aprobado) +
+      // manual-recipients (MAN-1): customerAdapter como ManualRecipientSource
+      // (misma instancia) resuelve la lista manual combinable con el segmento.
+      new CreateCampaign(campaignRepo, customerAdapter, templatePort, customerAdapter),
       campaignRunner,
       new GetCampaign(campaignRepo),
       new ListCampaigns(campaignRepo),

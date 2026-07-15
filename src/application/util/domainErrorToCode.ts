@@ -6,7 +6,7 @@ import {
   IClassSoTypeInactiveError,
   IClassNodeNotAssignableError,
 } from '@domain/errors/iclass';
-import { MissingTemplateVariablesError, TemplateInUseByCampaignError } from '@domain/errors/messaging-bulk';
+import { MissingTemplateVariablesError, TemplateInUseByCampaignError, ManualRecipientsNotFoundError } from '@domain/errors/messaging-bulk';
 
 /** Shape of a domain error mapped to a transport-agnostic result. */
 export interface DomainErrorCode {
@@ -29,6 +29,12 @@ export interface DomainErrorCode {
    * CUÁLES campañas bloquean el borrado, no solo el conteo del message).
    */
   campaignIds?: string[];
+  /**
+   * manual-recipients (MAN-3) — surfaced from `ManualRecipientsNotFoundError`:
+   * los `clientId` de la lista manual que NO existen (para que el FE señale
+   * exactamente cuáles selecciones son inválidas).
+   */
+  missingClientIds?: string[];
 }
 
 /**
@@ -64,6 +70,9 @@ export function domainErrorToCode(err: unknown): DomainErrorCode | null {
   }
   if (err instanceof TemplateInUseByCampaignError) {
     result.campaignIds = err.campaignIds;
+  }
+  if (err instanceof ManualRecipientsNotFoundError) {
+    result.missingClientIds = err.missingClientIds;
   }
   return result;
 }

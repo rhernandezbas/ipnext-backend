@@ -45,15 +45,25 @@ describe('buildClientListWhere (T6.1 — SEG-1, aditivo sobre ListClients F1)', 
     expect(buildClientListWhere(query)).toEqual({ balanceDue: { gte: 1000 } });
   });
 
-  it('preserva el filtro `search` existente (OR name/email/login) sin romperlo', () => {
+  it('preserva el filtro `search` existente (OR name/email/login/phone) sin romperlo', () => {
     const query: ListClientsQuery = { search: 'garcia' };
     expect(buildClientListWhere(query)).toEqual({
       OR: [
         { name: { contains: 'garcia', mode: 'insensitive' } },
         { email: { contains: 'garcia', mode: 'insensitive' } },
         { login: { contains: 'garcia', mode: 'insensitive' } },
+        { phone: { contains: 'garcia', mode: 'insensitive' } },
       ],
     });
+  });
+
+  // ── manual-recipients (MAN-6): el search matchea también por teléfono ────────
+  // Para armar la lista manual del composer hay que poder encontrar por fragmento
+  // de teléfono, no solo por nombre/email/login.
+  it('MAN-6: search por fragmento de teléfono incluye `phone` en el OR', () => {
+    const query: ListClientsQuery = { search: '3364' };
+    const where = buildClientListWhere(query);
+    expect(where['OR']).toContainEqual({ phone: { contains: '3364', mode: 'insensitive' } });
   });
 });
 

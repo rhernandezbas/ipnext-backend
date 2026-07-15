@@ -163,6 +163,28 @@ export interface CampaignRecipientLookup {
 }
 
 /**
+ * manual-recipients (MAN-1..MAN-3) — port narrow (ISP, mismo criterio que
+ * `CampaignSegmentSource`/`CampaignRecipientLookup`/`OptOutRegistry`) para
+ * resolver una LISTA MANUAL de clientes al crear/previsualizar una campaña.
+ * Deliberadamente SEPARADO de `CampaignSegmentSource`: agregarle un método a esa
+ * interface habría roto TODOS los fakes ya verdes de `CreateCampaign.test.ts`/
+ * `PreviewCampaignSegment.test.ts`/`messagingBulk.routes.test.ts` (implementan
+ * solo `listSegmentRecipients`). `PrismaCustomerRepository` implementa AMBAS sin
+ * conflicto (misma instancia `customerAdapter` en el wiring).
+ */
+export interface ManualRecipientSource {
+  /**
+   * Resuelve un batch de `clientIds` a candidatos (mismo shape narrow que el
+   * segmento). Devuelve SOLO los ids que EXISTEN (subset, cualquier orden) —
+   * `findMany({ id: { in } })`. El caller detecta los faltantes por set-diff y
+   * hace fail-loud (`ManualRecipientsNotFoundError`, MAN-3). `[]` para input
+   * vacío. Selecciona `status` (para `statusCounts` del preview), a diferencia
+   * de `findRecipientCandidate` (re-check per-envío) que no lo necesita.
+   */
+  findRecipientCandidatesByIds(clientIds: string[]): Promise<CampaignRecipientCandidate[]>;
+}
+
+/**
  * messaging-bulk (F2, OPT-1, Batch 6/T6.4) — port narrow (ISP, mismo criterio
  * que `CampaignSegmentSource`/`CampaignRecipientLookup` de arriba) para
  * registrar la baja de WhatsApp de un cliente. Deliberadamente SEPARADO de

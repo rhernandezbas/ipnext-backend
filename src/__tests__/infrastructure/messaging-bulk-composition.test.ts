@@ -86,8 +86,10 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     const window = appSrc.slice(idx, end + '));'.length);
 
     expect(window).toMatch(/new ListMessagingTemplates\(templatePort\)/);
-    expect(window).toMatch(/new PreviewCampaignSegment\(customerAdapter\)/);
-    expect(window).toMatch(/new CreateCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort\)/);
+    // manual-recipients — Preview y Create reciben customerAdapter TAMBIÉN como
+    // ManualRecipientSource (misma instancia): 2 args en Preview, 4 en Create.
+    expect(window).toMatch(/new PreviewCampaignSegment\(customerAdapter,\s*customerAdapter\)/);
+    expect(window).toMatch(/new CreateCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*customerAdapter\)/);
     expect(window).toMatch(/^\s*campaignRunner,\s*$/m);
     expect(window).toMatch(/new GetCampaign\(campaignRepo\)/);
     expect(window).toMatch(/new ListCampaigns\(campaignRepo\)/);

@@ -49,6 +49,12 @@ export interface PreviewSegmentInput {
   statuses: string[];
   balanceMin?: number;
   balanceMax?: number;
+  /**
+   * manual-recipients (MAN-5) — lista manual OPCIONAL, PARALELA al filtro del
+   * segmento (NO parte de él). Cuando se pasa, `count` refleja la UNIÓN
+   * (segmento ∪ manuales) deduplicada por `clientId`, sin doble-contar el overlap.
+   */
+  manualClientIds?: string[];
 }
 
 export interface PreviewSegmentSampleItemDto {
@@ -128,6 +134,14 @@ export interface CreateCampaignInput {
    * mapa de valores fijos).
    */
   variablesMap: CampaignVariableSpec;
+  /**
+   * manual-recipients (MAN-1) — lista manual OPCIONAL de clientes, PARALELA al
+   * `segment` (NO dentro de `CampaignSegment`, que es el filtro serializado/
+   * auditable). Los destinatarios finales = UNIÓN de (segmento resuelto, si hay
+   * criterio) ∪ (estos clientes), deduplicada por `clientId`. Ids inexistentes →
+   * fail-loud (`ManualRecipientsNotFoundError`, MAN-3).
+   */
+  manualClientIds?: string[];
   createdById: string;
 }
 

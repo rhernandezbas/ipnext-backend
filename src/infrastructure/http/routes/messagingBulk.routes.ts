@@ -23,6 +23,7 @@ import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
 import type { CampaignRunner } from '@infrastructure/scheduling/CampaignRunner';
 import type { PreviewSegmentInput, ListSegmentRecipientsInput, CreateCampaignInput } from '@application/dto/messaging-bulk.dto';
 import type { CampaignSegment, CampaignVariableSpec, CampaignRecipientStatus } from '@domain/entities/campaign';
+import { InvalidManualRecipientsError } from '@domain/errors/messaging-bulk';
 
 /** Per-route permission guards (messaging.bulk / messaging.templates — RBAC-1/2). */
 export interface MessagingBulkRoutePerms {
@@ -51,6 +52,29 @@ function parseOptionalInt(raw: string | undefined): number | undefined {
 function queryStatuses(v: unknown): string[] {
   if (Array.isArray(v)) return v.filter((s): s is string => typeof s === 'string');
   return typeof v === 'string' ? [v] : [];
+}
+
+/**
+ * manual-recipients (MAN-1) — parsea `manualClientIds` del body. FIX-4 (fail-loud,
+ * coherente con MAN-3): NO se descartan elementos no-string en silencio.
+ *  - AUSENTE (`undefined`) → `[]` (campaña solo-segmento, válido).
+ *  - PRESENTE pero NO array, o array con algún elemento no-string → 400 explícito
+ *    (`InvalidManualRecipientsError` → VALIDATION_ERROR). Un id que viaje como
+ *    number desaparecería mudo — contradice la filosofía fail-loud del feature.
+ * Los strings vacíos/whitespace NO son "id malo": son normalización (el use case
+ * los limpia con trim vía `normalizeManualClientIds`), no error de contrato.
+ */
+function toManualClientIds(raw: unknown): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new InvalidManualRecipientsError('manualClientIds debe ser un array de strings');
+  }
+  for (const el of raw) {
+    if (typeof el !== 'string') {
+      throw new InvalidManualRecipientsError('manualClientIds solo admite ids string (elemento no-string recibido)');
+    }
+  }
+  return raw as string[];
 }
 
 /**
@@ -108,6 +132,8 @@ export function createMessagingBulkRouter(
           statuses: Array.isArray(body?.['statuses']) ? (body!['statuses'] as string[]) : [],
           balanceMin: typeof body?.['balanceMin'] === 'number' ? (body!['balanceMin'] as number) : undefined,
           balanceMax: typeof body?.['balanceMax'] === 'number' ? (body!['balanceMax'] as number) : undefined,
+          // manual-recipients (MAN-5) — el composer previsualiza la unión.
+          manualClientIds: toManualClientIds(body?.['manualClientIds']),
         };
         const result = await previewCampaignSegment.execute(input);
         res.json(result);
@@ -207,6 +233,9 @@ export function createMessagingBulkRouter(
           templateName: typeof body?.['templateName'] === 'string' ? (body['templateName'] as string) : undefined,
           // FIX-8 — NO defaultear a "todos": segmento fiel; el use case rechaza uno sin criterio.
           segment: toCampaignSegment(body?.['segment']),
+          // manual-recipients (MAN-1) — lista manual PARALELA al segmento; el use
+          // case dedup + valida existencia (MAN-3 fail-loud).
+          manualClientIds: toManualClientIds(body?.['manualClientIds']),
           variablesMap: (body?.['variablesMap'] as CampaignVariableSpec | undefined) ?? {},
           // createdById SIEMPRE del usuario autenticado (auth, arriba) — nunca del
           // body del cliente (evita que cualquiera atribuya la campaña a otro).

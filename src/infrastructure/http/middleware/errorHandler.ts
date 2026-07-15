@@ -176,6 +176,14 @@ const statusMap: Record<string, number> = {
   // messaging-bulk fix wave 2 (FIX-8) — segmento sin criterio (apuntaría a TODA
   // la base): request inválido del cliente → 400.
   UNFILTERED_SEGMENT: 400,
+  // manual-recipients (MAN-3) — la request trae manualClientIds que no resuelven
+  // a ningún Client: bien formada pero referencia entidades inexistentes → 422
+  // (mismo criterio que EMPTY_SEGMENT / MISSING_TEMPLATE_VARIABLES).
+  MANUAL_RECIPIENTS_NOT_FOUND: 422,
+  // manual-recipients (FIX-3) — la lista manual excede la cota MAX_MANUAL_RECIPIENTS:
+  // rechazo limpio ANTES de reventar el límite de bind params de Postgres (mismo
+  // criterio 422 que TOO_MANY_ATTACHMENTS — bien formada pero excede un tope).
+  TOO_MANY_MANUAL_RECIPIENTS: 422,
   CAMPAIGN_NOT_FOUND: 404,
   CAMPAIGN_ALREADY_FINISHED: 409,
   // Change 3 (templates CRUD) — ver/crear/submit/borrar templates WhatsApp.
@@ -236,6 +244,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     // campañas activas retienen el template (no solo el conteo del message).
     if (mapped?.campaignIds !== undefined) {
       body['campaignIds'] = mapped.campaignIds;
+    }
+    // manual-recipients (MAN-3) — ManualRecipientsNotFoundError expone CUÁLES
+    // manualClientIds no existen para que el FE señale las selecciones inválidas.
+    if (mapped?.missingClientIds !== undefined) {
+      body['missingClientIds'] = mapped.missingClientIds;
     }
     res.status(status).json(body);
     return;

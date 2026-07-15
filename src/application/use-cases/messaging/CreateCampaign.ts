@@ -1,5 +1,5 @@
 import type { CampaignRepository } from '@domain/ports/CampaignRepository';
-import type { CampaignSegmentSource } from '@domain/ports/CustomerRepository';
+import type { CampaignSegmentSource, ManualRecipientSource } from '@domain/ports/CustomerRepository';
 import type { TemplateMessagingPort } from '@domain/ports/TemplateMessagingPort';
 import type { CreateCampaignInput, CreateCampaignOutput } from '@application/dto/messaging-bulk.dto';
 import {
@@ -7,8 +7,8 @@ import {
   MissingTemplateVariablesError,
   EmptySegmentError,
 } from '@domain/errors/messaging-bulk';
-import { resolveRecipients } from './resolveRecipients';
-import { assertSegmentIsFiltered } from './assertSegmentIsFiltered';
+import { assertHasRecipients } from './assertHasRecipients';
+import { resolveCombinedRecipients, normalizeManualClientIds } from './resolveCombinedRecipients';
 
 /**
  * messaging-bulk (F2, CAMP-1..CAMP-4) — crea una campaña en `pending` SIN
@@ -31,12 +31,18 @@ export class CreateCampaign {
     private readonly campaignRepo: CampaignRepository,
     private readonly segmentSource: CampaignSegmentSource,
     private readonly templatePort: TemplateMessagingPort,
+    // manual-recipients (MAN-1) — OPCIONAL para no romper la aridad de los tests
+    // ya verdes (3 args). El wiring real (app.ts) SIEMPRE lo inyecta.
+    private readonly manualRecipientSource?: ManualRecipientSource,
   ) {}
 
   async execute(input: CreateCampaignInput): Promise<CreateCampaignOutput> {
-    // FIX-8 — un segmento sin criterio apuntaría a TODA la base (buildSegmentWhere
-    // → where:{}); se rechaza ANTES de cualquier efecto (mismo guard que Preview).
-    assertSegmentIsFiltered(input.segment);
+    // manual-recipients (MAN-1) — lista manual normalizada (dedup + sin vacíos).
+    const manualClientIds = normalizeManualClientIds(input.manualClientIds);
+
+    // MAN-2 (extiende FIX-8) — una campaña es válida con segmento filtrado O lista
+    // manual no vacía; se rechaza ANTES de efectos SOLO si ambos están vacíos.
+    assertHasRecipients(input.segment, manualClientIds);
 
     // CAMP-2 — templateRef debe corresponder a un template approved. Un
     // templateRef inexistente en el proveedor se trata IGUAL que no-aprobado
@@ -56,16 +62,18 @@ export class CreateCampaign {
       throw new MissingTemplateVariablesError(missing);
     }
 
-    // Re-resuelve el segmento con la MISMA lógica que PreviewCampaignSegment
-    // (helper compartido resolveRecipients — SEG-2/SEG-3/SEG-4).
-    const candidates = await this.segmentSource.listSegmentRecipients({
-      statuses: input.segment.statuses,
-      balanceMin: input.segment.balanceMin,
-      balanceMax: input.segment.balanceMax,
+    // MAN-1..MAN-4 — resuelve la UNIÓN (segmento ∪ manuales) deduplicada por
+    // clientId. Fail-loud (MAN-3) si algún manualClientId no existe; compliance
+    // (opt-out/teléfono/dedup) enforced por resolveRecipients en ambos sets.
+    const { resolved } = await resolveCombinedRecipients({
+      segment: input.segment,
+      manualClientIds,
+      segmentSource: this.segmentSource,
+      manualRecipientSource: this.manualRecipientSource,
     });
-    const { resolved } = resolveRecipients(candidates);
 
-    // CAMP-4 — segmento vacío se rechaza, evita campañas fantasma.
+    // CAMP-4 — cero destinatarios (segmento + manual resueltos a nada) se rechaza,
+    // evita campañas fantasma.
     if (resolved.length === 0) {
       throw new EmptySegmentError();
     }

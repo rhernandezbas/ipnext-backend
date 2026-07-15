@@ -175,6 +175,73 @@ export class UnfilteredSegmentError extends DomainError {
   }
 }
 
+/**
+ * manual-recipients (MAN-3) — raised by `CreateCampaign`/`PreviewCampaignSegment`
+ * when one or more of the operator-provided `manualClientIds` do NOT resolve to a
+ * `Client`. Fail-loud: a manual list is an EXPLICIT inclusion, so a bad id must
+ * surface (never dropped in silence). Carries the missing ids so the FE can point
+ * to exactly which selections are invalid. Nothing is persisted. Maps to 422
+ * (well-formed request referencing non-existent entities — same class as
+ * `EMPTY_SEGMENT`/`MISSING_TEMPLATE_VARIABLES`; distinct from `UNFILTERED_SEGMENT`
+ * which is a 400 "no criteria at all").
+ */
+export class ManualRecipientsNotFoundError extends DomainError {
+  public readonly missingClientIds: string[];
+
+  constructor(missingClientIds: string[]) {
+    super(
+      `Manual recipient client id(s) not found: ${missingClientIds.join(', ')}`,
+      'MANUAL_RECIPIENTS_NOT_FOUND',
+    );
+    this.name = 'ManualRecipientsNotFoundError';
+    this.missingClientIds = missingClientIds;
+  }
+}
+
+/**
+ * manual-recipients FIX-3 — raised by `resolveCombinedRecipients` (shared by
+ * `CreateCampaign`/`PreviewCampaignSegment`) when the NORMALIZED `manualClientIds`
+ * list exceeds `MAX_MANUAL_RECIPIENTS`. A manual list is HAND-CURATED (the operator
+ * hand-picks specific clients in the composer); a multi-thousand payload is never a
+ * legitimate curated list and would balloon the `id IN (...)` batch query toward
+ * Postgres's ~65535 bind-parameter ceiling — a raw 500. We reject fail-loud with a
+ * clear 4xx BEFORE hitting the DB. Mass sends of thousands go through the SEGMENT
+ * filter, NOT the manual list. Maps to 422 (same family as `TOO_MANY_ATTACHMENTS`:
+ * well-formed but refused for exceeding a size limit). Nothing is persisted.
+ */
+export class TooManyManualRecipientsError extends DomainError {
+  public readonly received: number;
+  public readonly max: number;
+
+  constructor(received: number, max: number) {
+    super(
+      `Manual recipient list has ${received} ids, exceeding the maximum of ${max}`,
+      'TOO_MANY_MANUAL_RECIPIENTS',
+    );
+    this.name = 'TooManyManualRecipientsError';
+    this.received = received;
+    this.max = max;
+  }
+}
+
+/**
+ * manual-recipients FIX-4 — raised by the `/api/messaging/bulk` route parser
+ * (`toManualClientIds`) when `manualClientIds` is PRESENT but malformed: not an
+ * array, or an array carrying a non-string element. Fail-loud contract coherence
+ * (MAN-3): a non-string id must NOT be dropped in silence (an id that travels as a
+ * number would vanish mute, contradicting the whole feature's philosophy). ABSENT
+ * (`undefined`) stays valid (segment-only campaign); empty/whitespace strings are
+ * normalization (trimmed away downstream), NOT a contract violation. Reuses the
+ * generic `VALIDATION_ERROR` code (→ 400), same convention as
+ * `InvalidTemplateInputError`/`RoleValidationError`/`PppoeTransferValidationError`.
+ */
+export class InvalidManualRecipientsError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'InvalidManualRecipientsError';
+  }
+}
+
 /** HIST-2 — raised by `GetCampaign` (and any lookup) when the id does not exist. */
 export class CampaignNotFoundError extends DomainError {
   constructor(id: string) {

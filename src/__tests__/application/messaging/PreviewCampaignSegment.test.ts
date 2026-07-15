@@ -6,11 +6,22 @@
  * RBAC gate `messaging.bulk` se testea en la ruta (Batch 7), no acá.
  */
 import { PreviewCampaignSegment } from '@application/use-cases/messaging/PreviewCampaignSegment';
-import { UnfilteredSegmentError } from '@domain/errors/messaging-bulk';
-import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter } from '@domain/ports/CustomerRepository';
+import { MAX_MANUAL_RECIPIENTS } from '@application/use-cases/messaging/resolveCombinedRecipients';
+import { UnfilteredSegmentError, ManualRecipientsNotFoundError, TooManyManualRecipientsError } from '@domain/errors/messaging-bulk';
+import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter, ManualRecipientSource } from '@domain/ports/CustomerRepository';
 
 interface FakeClientRow extends CampaignRecipientCandidate {
   status: string;
+}
+
+/** manual-recipients (MAN-5) — fake del port narrow para la lista manual del preview. */
+function makeManualSource(rows: FakeClientRow[]): ManualRecipientSource {
+  return {
+    findRecipientCandidatesByIds: async (ids: string[]) => {
+      const wanted = new Set(ids);
+      return rows.filter((r) => wanted.has(r.clientId));
+    },
+  };
 }
 
 /**
@@ -253,6 +264,191 @@ describe('PreviewCampaignSegment', () => {
     const result = await uc.execute({ statuses: ['late'] });
 
     expect(result.statusCounts).toEqual({ late: 1 });
+  });
+
+  // ── manual-recipients (MAN-5): el preview cuenta la unión sin doble-contar ────
+  it('MAN-5: overlap segmento∩manual → count = unión (3), NO doble-cuenta el que ya cae en el segmento', async () => {
+    const source = makeSegmentSource([
+      makeRow({ clientId: 'c1', phone: '3364111111', status: 'late' }),
+      makeRow({ clientId: 'c2', phone: '3364222222', status: 'late' }),
+    ]);
+    const manualSource = makeManualSource([
+      makeRow({ clientId: 'c2', phone: '3364222222', status: 'late' }), // ya está en el segmento
+      makeRow({ clientId: 'c3', phone: '3364333333', status: 'blocked' }), // nuevo
+    ]);
+    const uc = new PreviewCampaignSegment(source, manualSource);
+
+    const result = await uc.execute({ statuses: ['late'], manualClientIds: ['c2', 'c3'] });
+
+    expect(result.count).toBe(3);
+    expect(result.sample.map((s) => s.clientId).sort()).toEqual(['c1', 'c2', 'c3']);
+  });
+
+  it('MAN-5: solo lista manual (segmento sin criterio) → count = manuales, sin UnfilteredSegmentError', async () => {
+    const source = makeSegmentSource([]);
+    const listSpy = jest.spyOn(source, 'listSegmentRecipients');
+    const manualSource = makeManualSource([
+      makeRow({ clientId: 'c1', phone: '3364111111', status: 'active' }),
+    ]);
+    const uc = new PreviewCampaignSegment(source, manualSource);
+
+    const result = await uc.execute({ statuses: [], manualClientIds: ['c1'] });
+
+    expect(result.count).toBe(1);
+    expect(listSpy).not.toHaveBeenCalled(); // segmento sin criterio → no toca la fuente
+  });
+
+  it('MAN-5/MAN-3: manualClientId inexistente en el preview → ManualRecipientsNotFoundError', async () => {
+    const source = makeSegmentSource([makeRow({ clientId: 'c1', status: 'late' })]);
+    const manualSource = makeManualSource([]); // no existe ningún id manual
+    const uc = new PreviewCampaignSegment(source, manualSource);
+
+    await expect(
+      uc.execute({ statuses: ['late'], manualClientIds: ['no-existe'] }),
+    ).rejects.toBeInstanceOf(ManualRecipientsNotFoundError);
+  });
+
+  // ── FIX-2: el preview RECONCILIA las exclusiones de los MANUALES ─────────────
+  // `skipped` ahora suma segmentSkipped + manualSkipped SIN doble-contar el
+  // overlap (un cliente en ambos sets no cuenta dos veces). Invariante:
+  // count (enviables) + total_excluidos = destinatarios únicos considerados.
+  describe('FIX-2: reconciliación del skipped con la lista manual', () => {
+    it('FIX-2 (a): solo-manual con un opt-out → count=2, skipped.optedOut cuenta el manual (reconcilia 3 = 2 + 1)', async () => {
+      const source = makeSegmentSource([]);
+      const manualSource = makeManualSource([
+        makeRow({ clientId: 'c1', phone: '3364111111', status: 'active' }),
+        makeRow({ clientId: 'c2', phone: '3364222222', status: 'active', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+        makeRow({ clientId: 'c3', phone: '3364333333', status: 'active' }),
+      ]);
+      const uc = new PreviewCampaignSegment(source, manualSource);
+
+      const result = await uc.execute({ statuses: [], manualClientIds: ['c1', 'c2', 'c3'] });
+
+      expect(result.count).toBe(2);
+      expect(result.skipped.optedOut).toBe(1);
+      const totalSkipped = result.skipped.optedOut + result.skipped.duplicatePhone + result.skipped.invalidPhone;
+      expect(result.count + totalSkipped).toBe(3); // reconciliación: 3 considerados = 2 + 1
+    });
+
+    it('FIX-2 (b): manual con teléfono inválido → skipped.invalidPhone lo cuenta (reconcilia)', async () => {
+      const source = makeSegmentSource([]);
+      const manualSource = makeManualSource([
+        makeRow({ clientId: 'c1', phone: '3364111111', status: 'active' }),
+        makeRow({ clientId: 'c2', phone: '123', status: 'active' }), // basura (< 6 díg significativos)
+      ]);
+      const uc = new PreviewCampaignSegment(source, manualSource);
+
+      const result = await uc.execute({ statuses: [], manualClientIds: ['c1', 'c2'] });
+
+      expect(result.count).toBe(1);
+      expect(result.skipped.invalidPhone).toBe(1);
+      expect(result.count + result.skipped.invalidPhone).toBe(2);
+    });
+
+    it('FIX-2 (c)/FIX-1: manual cuyo teléfono colisiona con el segmento → skipped.duplicatePhone (cross-set)', async () => {
+      const source = makeSegmentSource([
+        makeRow({ clientId: 'A', phone: '3364111111', status: 'late' }),
+      ]);
+      const manualSource = makeManualSource([
+        makeRow({ clientId: 'B', phone: '3364111111', status: 'active' }), // mismo teléfono que A, distinto clientId
+      ]);
+      const uc = new PreviewCampaignSegment(source, manualSource);
+
+      const result = await uc.execute({ statuses: ['late'], manualClientIds: ['B'] });
+
+      expect(result.count).toBe(1); // solo A
+      expect(result.sample.map((s) => s.clientId)).toEqual(['A']);
+      expect(result.skipped.duplicatePhone).toBe(1); // B colapsado por teléfono
+      expect(result.count + result.skipped.duplicatePhone).toBe(2); // considerados: A + B
+    });
+
+    it('FIX-2 (d) no-regresión: preview segment-only reporta EXACTAMENTE el mismo skipped que antes', async () => {
+      const source = makeSegmentSource([
+        makeRow({ clientId: 'c1', phone: '3364111111', status: 'late', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+        makeRow({ clientId: 'c2', phone: '3364222222', status: 'late' }),
+        makeRow({ clientId: 'c3', phone: '123', status: 'late' }), // teléfono inválido
+      ]);
+      const uc = new PreviewCampaignSegment(source); // sin manual source, sin manualClientIds
+
+      const result = await uc.execute({ statuses: ['late'] });
+
+      expect(result.count).toBe(1);
+      expect(result.skipped).toEqual({ optedOut: 1, duplicatePhone: 0, invalidPhone: 1 });
+    });
+
+    // ── Pin del invariante de NO doble-conteo (overlap por clientId con un EXCLUIDO
+    // del segmento). Éste es el ÚNICO escenario donde `segmentCandidateIds` (set
+    // COMPLETO de candidatos, incl. excluidos) difiere de `segmentResolved`: un
+    // cliente que es candidato del segmento PERO excluido (opt-out/teléfono-inválido)
+    // y que además viaja en manualClientIds. Debe contarse UNA sola vez (vía el
+    // segmento). Si alguien simplificara `segmentCandidateIds`→`segmentResolved`,
+    // estos tests darían `2` y fallarían — esa es la red que protegen. ──────────────
+    it('FIX-2 pin (opt-out en ambos sets): candidato del segmento EXCLUIDO por opt-out + en manualClientIds → optedOut cuenta 1, NO 2', async () => {
+      // X es candidato del segmento (status late) pero opt-out → está en S, NO en segmentResolved.
+      const source = makeSegmentSource([
+        makeRow({ clientId: 'X', phone: '3364111111', status: 'late', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+        makeRow({ clientId: 'c1', phone: '3364222222', status: 'late' }),
+      ]);
+      // X también en la lista manual; c2 es un manual nuevo válido.
+      const manualSource = makeManualSource([
+        makeRow({ clientId: 'X', phone: '3364111111', status: 'late', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+        makeRow({ clientId: 'c2', phone: '3364333333', status: 'active' }),
+      ]);
+      const uc = new PreviewCampaignSegment(source, manualSource);
+
+      const result = await uc.execute({ statuses: ['late'], manualClientIds: ['X', 'c2'] });
+
+      expect(result.skipped.optedOut).toBe(1); // X contado UNA vez (vía el segmento), no 2
+      expect(result.count).toBe(2); // c1 (segmento) + c2 (manual)
+      // reconciliación: considerados únicos = |S|(X,c1)=2 + |M\S|(c2)=1 = 3 = count(2) + optedOut(1)
+      const totalSkipped = result.skipped.optedOut + result.skipped.duplicatePhone + result.skipped.invalidPhone;
+      expect(result.count + totalSkipped).toBe(3);
+    });
+
+    it('FIX-2 pin (invalid-phone en ambos sets): candidato del segmento EXCLUIDO por teléfono inválido + en manualClientIds → invalidPhone cuenta 1, NO 2', async () => {
+      const source = makeSegmentSource([
+        makeRow({ clientId: 'Y', phone: '123', status: 'late' }), // teléfono inválido → excluido del segmento
+        makeRow({ clientId: 'c1', phone: '3364222222', status: 'late' }),
+      ]);
+      const manualSource = makeManualSource([
+        makeRow({ clientId: 'Y', phone: '123', status: 'late' }),
+        makeRow({ clientId: 'c2', phone: '3364333333', status: 'active' }),
+      ]);
+      const uc = new PreviewCampaignSegment(source, manualSource);
+
+      const result = await uc.execute({ statuses: ['late'], manualClientIds: ['Y', 'c2'] });
+
+      expect(result.skipped.invalidPhone).toBe(1); // Y contado UNA vez, no 2
+      expect(result.count).toBe(2); // c1 (segmento) + c2 (manual)
+      const totalSkipped = result.skipped.optedOut + result.skipped.duplicatePhone + result.skipped.invalidPhone;
+      expect(result.count + totalSkipped).toBe(3);
+    });
+  });
+
+  // ── FIX-3: cota superior de manualClientIds (protege el límite de bind params) ─
+  describe('FIX-3: cota superior de manualClientIds', () => {
+    it('FIX-3 (a): MAX+1 ids → TooManyManualRecipientsError (rechazo limpio, no 500)', async () => {
+      const source = makeSegmentSource([]);
+      const manualSource = makeManualSource([]); // no llega a resolver: rechaza por la cota antes
+      const uc = new PreviewCampaignSegment(source, manualSource);
+
+      const ids = Array.from({ length: MAX_MANUAL_RECIPIENTS + 1 }, (_, i) => `c${i}`);
+
+      await expect(uc.execute({ statuses: [], manualClientIds: ids })).rejects.toBeInstanceOf(TooManyManualRecipientsError);
+    });
+
+    it('FIX-3 (b): exactamente MAX ids → NO rechaza por la cota (pasa)', async () => {
+      const rows = Array.from({ length: MAX_MANUAL_RECIPIENTS }, (_, i) =>
+        makeRow({ clientId: `c${i}`, phone: `3364${String(i).padStart(6, '0')}`, status: 'active' }),
+      );
+      const source = makeSegmentSource([]);
+      const manualSource = makeManualSource(rows);
+      const uc = new PreviewCampaignSegment(source, manualSource);
+
+      const result = await uc.execute({ statuses: [], manualClientIds: rows.map((r) => r.clientId) });
+
+      expect(result.count).toBe(MAX_MANUAL_RECIPIENTS);
+    });
   });
 
   it('SEG-5: el preview es de solo lectura — dos llamadas seguidas dan el mismo resultado', async () => {

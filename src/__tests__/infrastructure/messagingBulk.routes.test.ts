@@ -25,12 +25,13 @@ import { ListTemplates } from '../../application/use-cases/messaging/ListTemplat
 import { PreviewCampaignSegment } from '../../application/use-cases/messaging/PreviewCampaignSegment';
 import { ListSegmentRecipients } from '../../application/use-cases/messaging/ListSegmentRecipients';
 import { CreateCampaign } from '../../application/use-cases/messaging/CreateCampaign';
+import { MAX_MANUAL_RECIPIENTS } from '../../application/use-cases/messaging/resolveCombinedRecipients';
 import { GetCampaign } from '../../application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '../../application/use-cases/messaging/ListCampaigns';
 import { InMemoryCampaignRepository } from '../../infrastructure/adapters/in-memory/InMemoryCampaignRepository';
 import { InMemoryDistributedLock } from '../../infrastructure/adapters/in-memory/InMemoryDistributedLock';
 import { CampaignRunner, CampaignSender, CAMPAIGN_LOCK_KEY } from '../../infrastructure/scheduling/CampaignRunner';
-import type { CampaignSegmentSource, CampaignRecipientCandidate } from '../../domain/ports/CustomerRepository';
+import type { CampaignSegmentSource, CampaignRecipientCandidate, ManualRecipientSource } from '../../domain/ports/CustomerRepository';
 import type { TemplateMessagingPort, TemplateDto } from '../../domain/ports/TemplateMessagingPort';
 import type { Campaign } from '../../domain/entities/campaign';
 
@@ -38,6 +39,15 @@ import type { Campaign } from '../../domain/entities/campaign';
 
 function makeSegmentSource(candidates: CampaignRecipientCandidate[]): CampaignSegmentSource {
   return { listSegmentRecipients: jest.fn().mockResolvedValue(candidates) };
+}
+
+/** manual-recipients — fake del port narrow para la lista manual (subset por id). */
+function makeManualSource(candidates: CampaignRecipientCandidate[]): ManualRecipientSource {
+  return {
+    findRecipientCandidatesByIds: jest.fn(async (ids: string[]) =>
+      candidates.filter((c) => ids.includes(c.clientId)),
+    ),
+  };
 }
 
 function makeTemplatePort(templates: TemplateDto[]): TemplateMessagingPort {
@@ -93,6 +103,8 @@ interface BuildAppOptions {
   templatesPerm?: RequestHandler;
   templates?: TemplateDto[];
   segmentCandidates?: CampaignRecipientCandidate[];
+  /** manual-recipients — universo de clientes resolvibles por la lista manual. */
+  manualCandidates?: CampaignRecipientCandidate[];
   campaignRepo?: InMemoryCampaignRepository;
   sendCampaign?: CampaignSender;
 }
@@ -101,11 +113,14 @@ function buildApp(opts: BuildAppOptions = {}) {
   const campaignRepo = opts.campaignRepo ?? new InMemoryCampaignRepository();
   const templatePort = makeTemplatePort(opts.templates ?? [APPROVED_TEMPLATE]);
   const segmentSource = makeSegmentSource(opts.segmentCandidates ?? [makeCandidate()]);
+  // manual-recipients — misma instancia inyectada a Preview + Create (mismo
+  // criterio que app.ts, donde customerAdapter sirve ambos ports).
+  const manualSource = makeManualSource(opts.manualCandidates ?? []);
 
   const listTemplates = new ListTemplates(templatePort);
-  const previewCampaignSegment = new PreviewCampaignSegment(segmentSource);
+  const previewCampaignSegment = new PreviewCampaignSegment(segmentSource, manualSource);
   const listSegmentRecipients = new ListSegmentRecipients(segmentSource);
-  const createCampaign = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+  const createCampaign = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource);
   const getCampaign = new GetCampaign(campaignRepo);
   const listCampaigns = new ListCampaigns(campaignRepo);
 
@@ -425,6 +440,94 @@ describe('/api/messaging/bulk — happy-path del seam (FIX-13)', () => {
   });
 });
 
+// ─── manual-recipients (MAN-1/MAN-3): POST /campaigns con lista manual ──────────
+describe('/api/messaging/bulk — POST /campaigns con manualClientIds (MAN-1/MAN-3)', () => {
+  it('MAN-1 — segmento + manual: materializa la unión y devuelve el DTO curado (201)', async () => {
+    const { app, campaignRepo } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+      manualCandidates: [makeCandidate({ clientId: 'm1', phone: '3364999999' })],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'Segmento + manual',
+      templateRef: 'HXapproved',
+      segment: { statuses: ['late'] },
+      manualClientIds: ['m1'],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('pending');
+    expect(res.body.total).toBe(2);
+    // DTO curado — no la entidad Prisma cruda:
+    expect(Object.keys(res.body).sort()).toEqual(['campaignId', 'status', 'total']);
+
+    const recipients = await campaignRepo.listRecipients(res.body.campaignId);
+    expect(recipients.data.map((r) => r.clientId).sort()).toEqual(['c1', 'm1']);
+  });
+
+  it('MAN-1 — solo lista manual (segmento sin criterio) → 201, materializa los manuales', async () => {
+    const { app, campaignRepo } = buildApp({
+      segmentCandidates: [],
+      manualCandidates: [
+        makeCandidate({ clientId: 'm1', phone: '3364999991' }),
+        makeCandidate({ clientId: 'm2', phone: '3364999992' }),
+      ],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'Solo manual',
+      templateRef: 'HXapproved',
+      segment: { statuses: [] },
+      manualClientIds: ['m1', 'm2'],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.total).toBe(2);
+    const recipients = await campaignRepo.listRecipients(res.body.campaignId);
+    expect(recipients.data.map((r) => r.clientId).sort()).toEqual(['m1', 'm2']);
+  });
+
+  it('MAN-3 — manualClientId inexistente → 422 MANUAL_RECIPIENTS_NOT_FOUND con missingClientIds, no crea Campaign', async () => {
+    const { app, campaignRepo } = buildApp({ segmentCandidates: [], manualCandidates: [] });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x',
+      templateRef: 'HXapproved',
+      segment: { statuses: [] },
+      manualClientIds: ['no-existe'],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('MANUAL_RECIPIENTS_NOT_FOUND');
+    expect(res.body.missingClientIds).toEqual(['no-existe']);
+    const list = await campaignRepo.list({ page: 1, limit: 10 });
+    expect(list.total).toBe(0);
+  });
+
+  it('MAN-5 — POST /segment/preview con manualClientIds → count refleja la unión sin doble-contar', async () => {
+    const { app } = buildApp({
+      segmentCandidates: [
+        makeCandidate({ clientId: 'c1', phone: '3364111111' }),
+        makeCandidate({ clientId: 'c2', phone: '3364222222' }),
+      ],
+      manualCandidates: [
+        makeCandidate({ clientId: 'c2', phone: '3364222222' }), // overlap
+        makeCandidate({ clientId: 'c3', phone: '3364333333' }),
+      ],
+    });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], manualClientIds: ['c2', 'c3'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(3);
+  });
+});
+
 // ─── FIX-16: GET /segment/preview (query-params) ────────────────────────────────
 describe('/api/messaging/bulk — GET /segment/preview (FIX-16)', () => {
   it('GET ?statuses=late&statuses=blocked&balanceMin → 200 count; mapea query→DTO', async () => {
@@ -568,5 +671,85 @@ describe('/api/messaging/bulk — POST /campaigns/:id/send con lock GLOBAL tomad
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('CAMPAIGN_SEND_IN_PROGRESS');
     expect(res.body.error).toMatch(/una campaña a la vez/i);
+  });
+});
+
+// ─── FIX-3: cota superior de manualClientIds → 422 end-to-end (no 500) ──────────
+describe('/api/messaging/bulk — POST /campaigns con manualClientIds > cota (FIX-3)', () => {
+  it('MAX+1 ids → 422 TOO_MANY_MANUAL_RECIPIENTS (rechazo limpio, no 500), no crea Campaign', async () => {
+    const { app, campaignRepo } = buildApp();
+    const ids = Array.from({ length: MAX_MANUAL_RECIPIENTS + 1 }, (_, i) => `c${i}`);
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      manualClientIds: ids,
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TOO_MANY_MANUAL_RECIPIENTS');
+    const list = await campaignRepo.list({ page: 1, limit: 10 });
+    expect(list.total).toBe(0);
+  });
+});
+
+// ─── FIX-4: manualClientIds fail-loud (no descartar no-strings en silencio) ──────
+describe('/api/messaging/bulk — manualClientIds fail-loud (FIX-4)', () => {
+  it('FIX-4 (a): manualClientIds con un elemento no-string (number) → 400, no crea Campaign', async () => {
+    const { app, campaignRepo } = buildApp();
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      manualClientIds: [123],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    const list = await campaignRepo.list({ page: 1, limit: 10 });
+    expect(list.total).toBe(0);
+  });
+
+  it('FIX-4 (b): manualClientIds que NO es array (string) → 400', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      manualClientIds: 'abc',
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('FIX-4 (b bis): POST /segment/preview con manualClientIds no-array → 400 (mismo guard compartido)', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], manualClientIds: { nope: true } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('FIX-4 (c): sin manualClientIds → sigue OK (campaña solo-segmento, 201)', async () => {
+    const { app } = buildApp({ segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })] });
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.total).toBe(1);
+  });
+
+  it('FIX-4 (d): manualClientIds con whitespace se limpia (trim); el id real entra', async () => {
+    const { app, campaignRepo } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 's1', phone: '3364000001' })],
+      manualCandidates: [makeCandidate({ clientId: 'c1', phone: '3364999999' })],
+    });
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      manualClientIds: ['  ', 'c1'],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+    expect(res.status).toBe(201);
+    const recipients = await campaignRepo.listRecipients(res.body.campaignId);
+    expect(recipients.data.map((r) => r.clientId).sort()).toEqual(['c1', 's1']);
   });
 });

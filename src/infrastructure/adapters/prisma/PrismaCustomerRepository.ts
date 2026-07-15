@@ -10,6 +10,7 @@ import {
   CampaignSegmentFilter,
   CampaignRecipientCandidate,
   CampaignRecipientLookup,
+  ManualRecipientSource,
   OptOutRegistry,
 } from '@domain/ports/CustomerRepository';
 import { Customer, CustomerStatus, Contract, ClientLog } from '@domain/entities/customer';
@@ -210,6 +211,9 @@ export function buildClientListWhere(query: ListClientsQuery): Record<string, un
       { name: { contains: query.search, mode: 'insensitive' } },
       { email: { contains: query.search, mode: 'insensitive' } },
       { login: { contains: query.search, mode: 'insensitive' } },
+      // manual-recipients (MAN-6) — encontrar por fragmento de teléfono al armar
+      // la lista manual del composer (`Client.phone` es NOT NULL en el schema).
+      { phone: { contains: query.search, mode: 'insensitive' } },
     ];
   }
   return where;
@@ -281,7 +285,12 @@ export function toCampaignRecipientCandidate(row: any): CampaignRecipientCandida
 }
 
 export class PrismaCustomerRepository
-  implements CustomerRepository, CampaignSegmentSource, CampaignRecipientLookup, OptOutRegistry
+  implements
+    CustomerRepository,
+    CampaignSegmentSource,
+    CampaignRecipientLookup,
+    ManualRecipientSource,
+    OptOutRegistry
 {
   /**
    * @param balanceTtlMinutes - TTL for balance staleness in minutes. Defaults to 60.
@@ -439,6 +448,23 @@ export class PrismaCustomerRepository
       select: { id: true, name: true, phone: true, balanceDue: true, whatsappOptOutAt: true },
     });
     return row ? toCampaignRecipientCandidate(row) : null;
+  }
+
+  /**
+   * manual-recipients (MAN-1..MAN-3) — implementa `ManualRecipientSource`. UNA
+   * query batch `id IN (...)`, columnas narrow (molde `listSegmentRecipients`,
+   * incluye `status` para `statusCounts` del preview). Devuelve SOLO los ids que
+   * EXISTEN (subset); el caller (`resolveCombinedRecipients`) detecta faltantes
+   * por set-diff → `ManualRecipientsNotFoundError`. `[]` para input vacío (no
+   * dispara query).
+   */
+  async findRecipientCandidatesByIds(clientIds: string[]): Promise<CampaignRecipientCandidate[]> {
+    if (clientIds.length === 0) return [];
+    const rows = await prisma.client.findMany({
+      where: { id: { in: clientIds } },
+      select: { id: true, name: true, phone: true, balanceDue: true, whatsappOptOutAt: true, status: true },
+    });
+    return rows.map(toCampaignRecipientCandidate);
   }
 
   /**
