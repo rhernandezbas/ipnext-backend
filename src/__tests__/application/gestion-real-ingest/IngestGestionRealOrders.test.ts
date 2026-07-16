@@ -1,4 +1,14 @@
 import { IngestGestionRealOrders } from '@application/use-cases/IngestGestionRealOrders';
+import { PregenInstallPppoe } from '@application/use-cases/PregenInstallPppoe';
+import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
+import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
+import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
+import { GrContract } from '@domain/entities/gestionReal';
 import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
 import { InMemoryGrLinkResolver } from '@infrastructure/adapters/in-memory/InMemoryGrLinkResolver';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
@@ -89,6 +99,73 @@ async function makeHarness(): Promise<Harness> {
     now: () => new Date('2026-05-29T12:00:00Z'),
   });
   return { gr, resolver, scheduling, config, state, projects, featureFlags, priorities, categories, rbacUsers, apiUserId, useCase };
+}
+
+// ── install-pppoe-pregen (K1) ────────────────────────────────────────────────
+
+const PREGEN_FLAG_KEY = 'install-pppoe-pregen';
+const PREGEN_PROFILE = 'IP-Air-30-10';
+
+interface PregenHarness extends Harness {
+  pppoeRepo: InMemoryPppoeServiceRepository;
+  orchestrator: InMemoryRadiusOrchestratorGateway;
+  /** Use case con el colaborador de pre-generación WIRED (12° arg opcional). */
+  pregenUseCase: IngestGestionRealOrders;
+}
+
+/**
+ * Harness con la pre-generación de PPPoE cableada. Por default deja el flag
+ * K1 ON y el profile configurado; cada test lo apaga/limpia para asertar el gating.
+ */
+async function makePregenHarness(opts?: {
+  flagOn?: boolean;
+  profile?: string | null;
+}): Promise<PregenHarness> {
+  const h = await makeHarness();
+  if (opts?.flagOn !== false) h.featureFlags.seed(PREGEN_FLAG_KEY, true);
+  await h.config.update({ pppoeProfile: opts?.profile !== undefined ? opts.profile : PREGEN_PROFILE });
+  const pppoeRepo = new InMemoryPppoeServiceRepository();
+  const orchestrator = new InMemoryRadiusOrchestratorGateway();
+  const ensure = new EnsureInternetContractService(
+    new InMemoryContractServiceRepository(),
+    new InMemoryServiceCatalogRepository(),
+  );
+  const createPppoe = new CreatePppoeService(
+    pppoeRepo,
+    new InMemoryRouterGateway(),
+    new InMemoryNasRepository(),
+    orchestrator,
+    ensure,
+  );
+  const pregen = new PregenInstallPppoe(pppoeRepo, createPppoe, h.gr);
+  const pregenUseCase = new IngestGestionRealOrders(
+    h.gr, h.resolver, h.scheduling, h.config, h.state, h.projects, h.featureFlags,
+    h.priorities, h.categories, h.rbacUsers,
+    { defaultStageId: DEFAULT_STAGE_ID, apiReporterLogin: API_USER_LOGIN, now: () => new Date('2026-05-29T12:00:00Z') },
+    pregen,
+  );
+  return { ...h, pppoeRepo, orchestrator, pregenUseCase };
+}
+
+/** GrContract mínimo para sembrar `contractsByClient` (consulta del pppoeUsername histórico). */
+function pregenGrContract(
+  overrides: Partial<GrContract> & Pick<GrContract, 'grContratoId' | 'grClienteId'>,
+): GrContract {
+  return {
+    plan: '300MB',
+    status: 'Vigente',
+    startDate: null,
+    address: null,
+    lat: null,
+    lng: null,
+    pppoeUsername: null,
+    modificado: null,
+    fechaCreacion: null,
+    vendedor: null,
+    motivoBaja: null,
+    raw: {},
+    ...overrides,
+  };
 }
 
 describe('IngestGestionRealOrders', () => {
@@ -788,5 +865,204 @@ describe('IngestGestionRealOrders', () => {
     const task = await h.scheduling.findTaskByGrOrdenId('ok-net');
     expect(task!.projectId).toBe(fiberProject.id);
     expect(task!.title).not.toContain('REVISAR');
+  });
+
+  // ── K1: pre-generación de credenciales PPPoE en instalaciones ──────────────
+
+  describe('install-pppoe-pregen (K1)', () => {
+    /** Siembra el cliente/contrato canónico K1: "HERNANDEZ RONALD", contrato 45123. */
+    function seedRonald(h: PregenHarness): void {
+      h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'HERNANDEZ RONALD' });
+      h.resolver.seedContract('45123', { id: 'svc-1', plan: '300MB' });
+    }
+
+    it('flag ON: crea el PPPoE pre-provisionado (nasId null) y appendea las credenciales a la descripción', async () => {
+      const h = await makePregenHarness();
+      seedRonald(h);
+      h.gr.serviceOrders = [
+        order({ grOrdenId: 'k1-1', contrato: '45123', observaciones: 'Cliente pide turno a la tarde' }),
+      ];
+
+      const result = await h.pregenUseCase.execute();
+
+      expect(result.created).toBe(1);
+      // PPPoE pendiente de instalación: nasId null, contrato linkeado, profile configurado.
+      const rows = await h.pppoeRepo.findByContract('svc-1');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].username).toBe('ronaldhernandez45123');
+      expect(rows[0].password).toBe('ronald1234');
+      expect(rows[0].nasId).toBeNull();
+      expect(rows[0].profile).toBe(PREGEN_PROFILE);
+      expect(rows[0].status).toBe('enabled');
+      // Alta REAL en el RADIUS central, sin Framed-IP.
+      expect(h.orchestrator.createdUser('ronaldhernandez45123')).toEqual({
+        username: 'ronaldhernandez45123',
+        password: 'ronald1234',
+        plan: PREGEN_PROFILE,
+        framedIp: null,
+      });
+      // Descripción: observaciones (#16) + bloque de credenciales.
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-1');
+      expect(task!.description).toBe(
+        'Cliente pide turno a la tarde\n\n' +
+          '── Credenciales PPPoE ──\n' +
+          'Usuario: ronaldhernandez45123\n' +
+          'Clave: ronald1234\n' +
+          'Estado: pendiente de instalar',
+      );
+    });
+
+    it('flag ON + observaciones null: la descripción es SOLO el bloque de credenciales', async () => {
+      const h = await makePregenHarness();
+      seedRonald(h);
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-2', contrato: '45123', observaciones: null })];
+
+      await h.pregenUseCase.execute();
+
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-2');
+      expect(task!.description).toBe(
+        '── Credenciales PPPoE ──\n' +
+          'Usuario: ronaldhernandez45123\n' +
+          'Clave: ronald1234\n' +
+          'Estado: pendiente de instalar',
+      );
+    });
+
+    it('flag OFF (ausente): comportamiento actual INTACTO — sin PPPoE, sin bloque, sin alta RADIUS', async () => {
+      const h = await makePregenHarness({ flagOn: false });
+      seedRonald(h);
+      h.gr.serviceOrders = [
+        order({ grOrdenId: 'k1-off', contrato: '45123', observaciones: 'obs original' }),
+      ];
+
+      const result = await h.pregenUseCase.execute();
+
+      expect(result.created).toBe(1); // la tarea se crea igual (el flag K1 NO gatea el ingest)
+      expect(await h.pppoeRepo.findByContract('svc-1')).toHaveLength(0);
+      expect(h.orchestrator.createdUser('ronaldhernandez45123')).toBeUndefined();
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-off');
+      expect(task!.description).toBe('obs original');
+    });
+
+    it('flag OFF explícito (seeded false): idem — cero side-effects PPPoE', async () => {
+      const h = await makePregenHarness({ flagOn: false });
+      h.featureFlags.seed(PREGEN_FLAG_KEY, false);
+      seedRonald(h);
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-off2', contrato: '45123', observaciones: null })];
+
+      await h.pregenUseCase.execute();
+
+      expect(await h.pppoeRepo.findByContract('svc-1')).toHaveLength(0);
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-off2');
+      expect(task!.description).toBeNull(); // ni bloque ni string vacío — null como siempre
+    });
+
+    it('contrato que YA tiene PPPoE: no duplica; la descripción lleva el username existente SIN la clave', async () => {
+      const h = await makePregenHarness();
+      seedRonald(h);
+      await h.pppoeRepo.upsertByUsername({
+        username: 'usuario-preexistente',
+        password: 'clave-secreta-vieja',
+        profile: 'P1',
+        nasId: 'nas-9',
+        contractId: 'svc-1',
+        status: 'enabled',
+      });
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-3', contrato: '45123', observaciones: 'obs' })];
+
+      await h.pregenUseCase.execute();
+
+      // No se creó un segundo PPPoE ni hubo alta RADIUS.
+      expect(await h.pppoeRepo.findByContract('svc-1')).toHaveLength(1);
+      expect(h.orchestrator.createdUser('ronaldhernandez45123')).toBeUndefined();
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-3');
+      expect(task!.description).toBe(
+        'obs\n\n── Credenciales PPPoE ──\nUsuario: usuario-preexistente (ya existente)',
+      );
+      expect(task!.description).not.toContain('Clave');
+      expect(task!.description).not.toContain('clave-secreta-vieja');
+    });
+
+    it('idempotencia: re-ingest de la MISMA orden no duplica el PPPoE ni re-llama al RADIUS', async () => {
+      const h = await makePregenHarness();
+      seedRonald(h);
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-4', contrato: '45123' })];
+
+      const first = await h.pregenUseCase.execute();
+      expect(first.created).toBe(1);
+      const second = await h.pregenUseCase.execute();
+      expect(second.skippedDuplicate).toBe(1);
+
+      expect(await h.pppoeRepo.findByContract('svc-1')).toHaveLength(1);
+      expect(h.orchestrator.opsForCreate('ronaldhernandez45123')).toHaveLength(1);
+    });
+
+    it('GR trae pppoeUsername histórico distinto → GANA el de GR (username en RADIUS, fila y descripción)', async () => {
+      const h = await makePregenHarness();
+      seedRonald(h);
+      h.gr.contractsByClient['gr-cli-1'] = [
+        pregenGrContract({ grContratoId: '45123', grClienteId: 'gr-cli-1', pppoeUsername: 'nodo7-ronald' }),
+      ];
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-5', contrato: '45123', observaciones: null })];
+
+      await h.pregenUseCase.execute();
+
+      const rows = await h.pppoeRepo.findByContract('svc-1');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].username).toBe('nodo7-ronald');
+      expect(rows[0].password).toBe('ronald1234'); // la clave sigue siendo la generada
+      expect(h.orchestrator.createdUser('nodo7-ronald')).toMatchObject({ plan: PREGEN_PROFILE });
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-5');
+      expect(task!.description).toContain('Usuario: nodo7-ronald');
+    });
+
+    it('flag ON pero pppoeProfile SIN configurar (null): degrada a no-op — tarea igual, sin PPPoE ni bloque', async () => {
+      const h = await makePregenHarness({ profile: null });
+      seedRonald(h);
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-6', contrato: '45123', observaciones: 'obs' })];
+
+      const result = await h.pregenUseCase.execute();
+
+      expect(result.created).toBe(1);
+      expect(await h.pppoeRepo.findByContract('svc-1')).toHaveLength(0);
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-6');
+      expect(task!.description).toBe('obs');
+    });
+
+    it('needs-review (plan no reconocido) TAMBIÉN pre-genera: motivo REVISAR intacto + bloque appendeado', async () => {
+      const h = await makePregenHarness();
+      h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'HERNANDEZ RONALD' });
+      h.resolver.seedContract('45123', { id: 'svc-1', plan: 'FIBRA SIN NUMERO' });
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-7', contrato: '45123' })];
+
+      const result = await h.pregenUseCase.execute();
+
+      expect(result.unclassified).toBe(1);
+      expect(await h.pppoeRepo.findByContract('svc-1')).toHaveLength(1);
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-7');
+      // El motivo needs-review NO se pierde…
+      expect(task!.description).toContain('asignar tecnología');
+      // …y el bloque de credenciales viaja igual (la instalación va a suceder igual).
+      expect(task!.description).toContain('Usuario: ronaldhernandez45123');
+      expect(task!.description).toContain('Clave: ronald1234');
+    });
+
+    it('wireless TAMBIÉN pre-genera (fibra Y wireless necesitan PPPoE)', async () => {
+      const h = await makePregenHarness();
+      h.resolver.seedClient('gr-cli-1', { id: 'cust-1', name: 'PEREZ ANA' });
+      h.resolver.seedContract('777', { id: 'svc-1', plan: '50/25MB' });
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-8', contrato: '777' })];
+
+      const result = await h.pregenUseCase.execute();
+
+      expect(result.created).toBe(1);
+      const rows = await h.pppoeRepo.findByContract('svc-1');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].username).toBe('anaperez777');
+      expect(rows[0].password).toBe('ana1234');
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-8');
+      expect(task!.projectId).toBe('p-wifi');
+      expect(task!.description).toContain('Usuario: anaperez777');
+    });
   });
 });

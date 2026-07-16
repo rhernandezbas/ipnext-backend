@@ -12,6 +12,7 @@ import { IngestCatalogEntryMissingError } from '@domain/errors/scheduling';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
 import { SkippedOrderRef, UnmirroredReason } from '@application/dto/gestionRealIngest.dto';
 import { classifyTech } from './classifyTech';
+import { PregenInstallPppoe, renderPppoeCredentialsBlock } from './PregenInstallPppoe';
 
 const SYNC_ENTITY = 'gr-ingest';
 
@@ -32,6 +33,15 @@ const INGEST_CATEGORY_NAME = 'Instalación';
  * next scheduler tick — no redeploy. OFF → no-op (no GR call, no SyncState).
  */
 const INGEST_FLAG_KEY = 'gestion-real-ingest';
+
+/**
+ * install-pppoe-pregen (K1): flag de la PRE-GENERACIÓN de credenciales PPPoE en
+ * instalaciones. INDEPENDIENTE del master switch: gatea SOLO el side-effect
+ * PPPoE + el bloque de credenciales en la descripción, nunca el ingest en sí.
+ * Default OFF (seed por migración); chequeado POR RUN — se prende via
+ * /feature-flags sin redeploy. Requiere además `config.pppoeProfile` seteado.
+ */
+const PREGEN_FLAG_KEY = 'install-pppoe-pregen';
 
 const REVISAR_TITLE_PREFIX = '[REVISAR - Logística] Instalación';
 const REVISAR_DESCRIPTION = 'Plan no reconocido — asignar tecnología y proyecto manualmente';
@@ -114,6 +124,13 @@ export class IngestGestionRealOrders {
     private readonly categories: TaskCategoryRepository,
     private readonly rbacUsers: RbacUserRepository,
     opts: IngestOptions,
+    /**
+     * install-pppoe-pregen (K1): colaborador OPCIONAL (trailing, patrón
+     * CreatePppoeService) que pre-provisiona el PPPoE del contrato de cada
+     * instalación ingestada. Ausente (fixtures legacy / GR sin RADIUS wiring)
+     * → la pre-generación queda apagada aunque el flag esté ON.
+     */
+    private readonly pregenPppoe?: PregenInstallPppoe,
   ) {
     this.now = opts.now ?? (() => new Date());
     this.defaultStageId = opts.defaultStageId;
@@ -153,6 +170,11 @@ export class IngestGestionRealOrders {
 
     const config = await this.config.get();
 
+    // K1: profile RADIUS efectivo para la pre-generación de PPPoE en este run.
+    // Null = pre-generación apagada (flag OFF, colaborador ausente o profile sin
+    // configurar) → comportamiento actual INTACTO.
+    const pregenProfile = await this.resolvePregenProfile(config.pppoeProfile);
+
     const today = this.now();
     const fechaHasta = formatGrDate(today);
     const fechaDesde = formatGrDate(monthsBack(today, config.windowMonths));
@@ -175,6 +197,7 @@ export class IngestGestionRealOrders {
         priority.name,
         category.name,
         reporterId,
+        pregenProfile,
         counts,
       );
     }
@@ -197,6 +220,7 @@ export class IngestGestionRealOrders {
     priorityName: string,
     categoryName: string,
     reporterId: string | null,
+    pregenProfile: string | null,
     counts: IngestRunResult,
   ): Promise<void> {
     // 1-2. Resolve local FKs. A miss is expected until the mirror catches up;
@@ -254,11 +278,37 @@ export class IngestGestionRealOrders {
     // Needs-review tasks keep their REVISAR reason; normal tasks carry the GR
     // order comment (#16). Order matters: the needs-review reason must NOT be
     // clobbered by observaciones.
-    const description = isUnclassified
+    const baseDescription = isUnclassified
       ? REVISAR_DESCRIPTION
       : isProjectNotConfigured
         ? projectNotConfiguredDescription(tech as 'FIBER' | 'WIRELESS')
         : order.observaciones;
+
+    // K1 (install-pppoe-pregen): pre-provisionar el PPPoE del contrato ANTES de
+    // crear la tarea — el bloque de credenciales viaja en la descripción, así que
+    // tiene que existir al armarla. Aplica a TODAS las instalaciones CI con
+    // contrato resuelto (fibra Y wireless — la ONT también dial-in PPPoE — e
+    // incluso needs-review: la instalación va a suceder igual tras el arreglo
+    // manual). `order.contrato` es non-null acá (el contrato local se resolvió a
+    // partir de él), el guard es solo para TypeScript. Un outcome `failed` no
+    // produce bloque y NUNCA aborta la orden (la tarea se crea igual).
+    let pppoeBlock: string | null = null;
+    if (pregenProfile && this.pregenPppoe && order.contrato) {
+      const outcome = await this.pregenPppoe.execute({
+        contractId: contract.id,
+        grContratoId: order.contrato,
+        grClienteId: order.cliente,
+        clientName: client.name,
+        profile: pregenProfile,
+      });
+      pppoeBlock = renderPppoeCredentialsBlock(outcome);
+    }
+    // Sin bloque → descripción EXACTAMENTE como siempre (incluido null).
+    const description = pppoeBlock
+      ? baseDescription
+        ? `${baseDescription}\n\n${pppoeBlock}`
+        : pppoeBlock
+      : baseDescription;
 
     // 7. Resolve initial stage from the project's workflow; fall back to default.
     const stageId = await this.resolveStageId(projectId);
@@ -306,6 +356,29 @@ export class IngestGestionRealOrders {
 
     if (needsReview) counts.unclassified++;
     else counts.created++;
+  }
+
+  /**
+   * K1: profile RADIUS efectivo para la pre-generación de PPPoE, o null si la
+   * feature está apagada para este run. Tres gates, TODOS necesarios:
+   *  1. colaborador wired (composition root / harness de test),
+   *  2. flag `install-pppoe-pregen` ON (chequeado por run, como el master),
+   *  3. `config.pppoeProfile` configurado — un usuario del RADIUS central
+   *     NECESITA su grupo (radusergroup); sin profile la pre-provisión es
+   *     imposible y se degrada a no-op CON warning (visible en el log del tick).
+   */
+  private async resolvePregenProfile(configured: string | null): Promise<string | null> {
+    if (!this.pregenPppoe) return null;
+    const flag = await this.featureFlags.get(PREGEN_FLAG_KEY);
+    if (!flag?.enabled) return null;
+    if (!configured) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[gr-ingest] install-pppoe-pregen ON pero pppoeProfile sin configurar — pre-generación deshabilitada este run',
+      );
+      return null;
+    }
+    return configured;
   }
 
   /**

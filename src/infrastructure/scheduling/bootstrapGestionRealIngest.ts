@@ -9,8 +9,18 @@ import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFla
 import { PrismaTaskPriorityRepository } from '../adapters/prisma/PrismaTaskPriorityRepository';
 import { PrismaTaskCategoryRepository } from '../adapters/prisma/PrismaTaskCategoryRepository';
 import { PrismaRbacUserRepository } from '../adapters/prisma/PrismaRbacUserRepository';
+import { PrismaPppoeServiceRepository } from '../adapters/prisma/PrismaPppoeServiceRepository';
+import { PrismaNasRepository } from '../adapters/prisma/PrismaNasRepository';
+import { PrismaContractServiceRepository } from '../adapters/prisma/PrismaContractServiceRepository';
+import { PrismaServiceCatalogRepository } from '../adapters/prisma/PrismaServiceCatalogRepository';
+import { PrismaContractServiceEventRepository } from '../adapters/prisma/PrismaContractServiceEventRepository';
+import { RouterOsGateway } from '../adapters/routeros/RouterOsGateway';
+import { HttpRadiusOrchestratorGateway } from '../adapters/orchestrator/HttpRadiusOrchestratorGateway';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 import { IngestGestionRealOrders } from '@application/use-cases/IngestGestionRealOrders';
+import { CreatePppoeService } from '@application/use-cases/CreatePppoeService';
+import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
+import { PregenInstallPppoe } from '@application/use-cases/PregenInstallPppoe';
 import { API_USER_LOGIN } from '../bootstrap/bootstrapApiUser';
 import { GestionRealIngestScheduler } from './GestionRealIngestScheduler';
 
@@ -103,6 +113,35 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
     );
   }
 
+  // install-pppoe-pregen (K1): colaborador de pre-provisión PPPoE. Mismo wiring
+  // que la composición HTTP (app.ts): CreatePppoeService con la rama pre-provisión
+  // (nasId null) yendo al RADIUS central via el orchestrator. El orchestrator es
+  // opt-in igual que en app.ts: sin ORCHESTRATOR_BASE_URL el gateway falla AL
+  // USARSE con error claro → PregenInstallPppoe lo degrada a outcome 'failed'
+  // (la tarea se crea igual, sin bloque). FindFreeIp se omite a propósito: la
+  // pre-provisión jamás asigna IP (no hay NAS todavía).
+  const pppoeRepo = new PrismaPppoeServiceRepository();
+  const orchestrator = new HttpRadiusOrchestratorGateway({
+    baseUrl: config.orchestrator.baseUrl,
+    token: config.orchestrator.token,
+    timeoutMs: config.orchestrator.timeoutMs,
+  });
+  const ensureInternet = new EnsureInternetContractService(
+    new PrismaContractServiceRepository(),
+    new PrismaServiceCatalogRepository(),
+    new PrismaContractServiceEventRepository(),
+  );
+  const createPppoe = new CreatePppoeService(
+    pppoeRepo,
+    new RouterOsGateway(),
+    new PrismaNasRepository(),
+    orchestrator,
+    ensureInternet,
+    new PrismaServiceCatalogRepository(),
+    new PrismaContractServiceEventRepository(),
+  );
+  const pregenPppoe = new PregenInstallPppoe(pppoeRepo, createPppoe, client);
+
   const ingest = new IngestGestionRealOrders(
     client,
     resolver,
@@ -115,6 +154,7 @@ export async function bootstrapGestionRealIngest(): Promise<GestionRealIngestSch
     categories,
     rbacUsers,
     { defaultStageId, apiReporterLogin: API_USER_LOGIN },
+    pregenPppoe,
   );
 
   // PgAdvisoryLock uses a dedicated pg.Client so session advisory locks stay
