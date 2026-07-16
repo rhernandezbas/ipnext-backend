@@ -7,11 +7,14 @@ in-memory — NUNCA mockear Prisma. Path aliases siempre. NO `npm run build` ni 
 decide el usuario). Tests focalizados con `npx jest <ruta>`. Editar `schema.prisma` A MANO, sin
 `prisma format` (lección FIX-5 Fase A).
 
-**Estado**: 🟩 EN APPLY — design §14 RESUELTO (usuario + orquestador, 2026-07-16): filas 9/10 de la
-matriz confirmadas tal cual propuestas, `networkSiteId: null` limpia ambos campos, permiso =
-`(contracts, assign)` (reuso), AP retirado en el PATCH manual → 422, backfill de `callerId`
-descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "admin" — no existe ese
-`RbacRole` code; ver design §14.7 para la evidencia).
+**Estado**: ✅ APPLY COMPLETO — 8/8 batches, checklist 100% marcada. design §14 RESUELTO (usuario +
+orquestador, 2026-07-16): filas 9/10 de la matriz confirmadas tal cual propuestas, `networkSiteId:
+null` limpia ambos campos, permiso = `(contracts, assign)` (reuso), AP retirado en el PATCH manual
+→ 422, backfill de `callerId` descartado. Roles del seed: `super_admin` + `administrador`
+(corrección sobre "admin" — no existe ese `RbacRole` code; ver design §14.7 para la evidencia).
+Guards finales (Batch 8) verdes: pin Fase A intacto, 26 suites/206 tests del change sin regresión,
+`tsc --noEmit` limpio, diff de schema mínimo. Pendiente para el orquestador: correr la suite
+completa del proyecto y el rollout post-deploy (migraciones + prender el flag).
 
 ---
 
@@ -169,12 +172,27 @@ descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "
 
 ## Batch 8 — Guards finales + verificación
 
-- [ ] Correr pin de Fase A intacto (MIG-3): `PrismaClientMirrorRepository.upsertData.test.ts` (sin
-  cambios esperados — solo verificación).
-- [ ] Corrida conjunta focalizada: suites nuevas + `SyncUispMirror.*` + `uisp-composition` +
-  scheduler (sin regresión).
-- [ ] `npx tsc --noEmit` — 0 errores.
-- [ ] `git diff --stat main -- prisma/schema.prisma` — SOLO la línea de `apUispDeviceId` (sin churn).
+- [x] Correr pin de Fase A intacto (MIG-3): `PrismaClientMirrorRepository.upsertData.test.ts` — 9/9
+  verdes, sin cambios (pin intacto: GR sync sigue sin escribir networkSiteId/accessPointId).
+- [x] Corrida conjunta focalizada: 26 suites / 206 tests verdes — todas las suites nuevas del
+  change + `SyncUispMirror.*` + `uisp-composition` + `UispSyncScheduler` + `uisp.test.ts` +
+  `InMemoryUispClient` + `GetUispSiteDetail` + `UpdateContractLocation`/`UpdateContractName` +
+  `contractLocation.routes` (regresión). Sin regresión.
+- [x] `npx tsc --noEmit` — 0 errores (exit code 0, confirmado 2 veces consecutivas tras
+  regenerar el cliente Prisma — ver nota de entorno abajo).
+- [x] `git diff --stat main -- prisma/schema.prisma` — 4 líneas (1 campo + 3 de comentario JSDoc),
+  SOLO `apUispDeviceId`, sin churn de formato en el resto del archivo.
+
+**Nota de entorno (hallazgo, no bug del change)**: `node_modules` de este worktree es un symlink
+COMPARTIDO con el repo principal (`ipnext-backend/node_modules`). `prisma generate` escribe al
+mismo cliente compartido sin importar qué worktree lo invoque — si otro proceso/agente corre
+`prisma generate` (o `npm test`/`npm run typecheck`, que lo disparan via `pretest`/`pretypecheck`)
+contra OTRO schema mientras este apply está en curso, pisa el campo `apUispDeviceId` del cliente
+generado y `tsc`/tests fallan con "property does not exist" sin que el código del change haya
+cambiado. Pasó 2 veces durante este apply (batches 5 y 7). Mitigación aplicada: `npx prisma
+generate` inmediatamente antes de cada verificación que importaba. Guardado en Engram
+(`gotcha/worktree-shared-node-modules-prisma-generate`) para que el orquestador y otros agentes
+lo tengan presente al correr la suite completa o trabajar en paralelo sobre otro worktree.
 
 ---
 
