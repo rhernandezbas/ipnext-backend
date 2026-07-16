@@ -53,6 +53,20 @@ describe('UpdateIngestConfig', () => {
     expect(dto.sourceEstado).toBe('PEND');
   });
 
+  it('K1: updates pppoeProfile and round-trips it; null clears it (no project lookup)', async () => {
+    const { useCase, config, projects } = build();
+    const getSpy = jest.spyOn(projects, 'get');
+
+    const dto = await useCase.execute({ pppoeProfile: 'IP-Air-30-10' });
+    expect(dto.pppoeProfile).toBe('IP-Air-30-10');
+    expect((await config.get()).pppoeProfile).toBe('IP-Air-30-10');
+
+    const cleared = await useCase.execute({ pppoeProfile: null });
+    expect(cleared.pppoeProfile).toBeNull();
+    // pppoeProfile is a RADIUS group name, never a Project FK — no lookup.
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
   it('clears a mapping with null without performing a project lookup', async () => {
     const { useCase, projects } = build();
     const wifiId = await seedProject(projects, 'Wifi');

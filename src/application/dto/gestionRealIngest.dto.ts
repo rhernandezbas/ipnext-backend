@@ -40,6 +40,8 @@ export interface IngestConfigDTO {
   wirelessProjectId: string | null;
   /** Configured GR source order state (PEND | CONF | CERR | ANUL). */
   sourceEstado: string;
+  /** install-pppoe-pregen (K1): grupo/plan RADIUS para pre-provisionar PPPoE. Null = sin configurar. */
+  pppoeProfile: string | null;
 }
 
 export function toIngestConfigDTO(config: IngestConfig): IngestConfigDTO {
@@ -49,6 +51,7 @@ export function toIngestConfigDTO(config: IngestConfig): IngestConfigDTO {
     fiberProjectId: config.fiberProjectId,
     wirelessProjectId: config.wirelessProjectId,
     sourceEstado: config.sourceEstado,
+    pppoeProfile: config.pppoeProfile,
   };
 }
 
@@ -70,6 +73,8 @@ export const UpdateIngestConfigSchema = z
     fiberProjectId: z.string().min(1).nullable(),
     wirelessProjectId: z.string().min(1).nullable(),
     sourceEstado: z.enum(GR_SOURCE_ESTADOS),
+    /** K1: grupo RADIUS no vacío, o null para limpiar. */
+    pppoeProfile: z.string().min(1).nullable(),
   })
   .partial();
 

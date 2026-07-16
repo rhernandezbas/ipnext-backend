@@ -17,6 +17,15 @@ export interface IngestConfig {
    * Defaults to 'CONF' (confirmed orders).
    */
   sourceEstado: string;
+  /**
+   * install-pppoe-pregen (K1): plan/grupo RADIUS (radusergroup) usado al
+   * pre-provisionar el PPPoE de una instalación ingestada. No hay mapping
+   * determinístico plan GR ("300MB", "50/25MB") → grupo RADIUS ("IP-*"), así
+   * que es un default configurable en runtime (mismo patrón que los project
+   * FKs). Null = sin configurar → la pre-generación se DEGRADA a no-op aunque
+   * el flag esté ON (un usuario RADIUS sin grupo no puede existir).
+   */
+  pppoeProfile: string | null;
 }
 
 /**

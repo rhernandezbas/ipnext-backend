@@ -117,6 +117,7 @@ describe('gestionRealIngest.routes', () => {
       fiberProjectId: null,
       wirelessProjectId: null,
       sourceEstado: 'CONF',
+      pppoeProfile: null,
     });
   });
 
@@ -171,6 +172,38 @@ describe('gestionRealIngest.routes', () => {
       .send({ wirelessProjectId: null });
     expect(res.status).toBe(200);
     expect(res.body.wirelessProjectId).toBeNull();
+  });
+
+  // ── K1: pppoeProfile (grupo RADIUS para pre-provisión PPPoE) ──────────────
+
+  it('K1: PUT /config with pppoeProfile updates and round-trips it; null clears it', async () => {
+    const { app, config } = buildApp();
+
+    const set = await request(app)
+      .put('/api/gestion-real-ingest/config')
+      .set('Cookie', AUTH_COOKIE)
+      .send({ pppoeProfile: 'IP-Air-30-10' });
+    expect(set.status).toBe(200);
+    expect(set.body.pppoeProfile).toBe('IP-Air-30-10');
+    expect((await config.get()).pppoeProfile).toBe('IP-Air-30-10');
+
+    const cleared = await request(app)
+      .put('/api/gestion-real-ingest/config')
+      .set('Cookie', AUTH_COOKIE)
+      .send({ pppoeProfile: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.pppoeProfile).toBeNull();
+  });
+
+  it('K1: PUT /config with an empty pppoeProfile → 400 VALIDATION_ERROR', async () => {
+    const { app, config } = buildApp();
+    const res = await request(app)
+      .put('/api/gestion-real-ingest/config')
+      .set('Cookie', AUTH_COOKIE)
+      .send({ pppoeProfile: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect((await config.get()).pppoeProfile).toBeNull();
   });
 
   // ── GET /status ──────────────────────────────────────────────────────────

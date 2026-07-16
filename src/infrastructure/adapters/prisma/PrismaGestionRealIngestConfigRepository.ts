@@ -14,6 +14,7 @@ const DEFAULTS: IngestConfig = {
   fiberProjectId: null,
   wirelessProjectId: null,
   sourceEstado: 'CONF',
+  pppoeProfile: null,
 };
 
 interface ConfigRow {
@@ -22,6 +23,8 @@ interface ConfigRow {
   fiberProjectId: string | null;
   wirelessProjectId: string | null;
   sourceEstado: string;
+  /** install-pppoe-pregen (K1). `undefined` tolerado (row previa a la migración). */
+  pppoeProfile?: string | null;
 }
 
 function toConfig(row: ConfigRow): IngestConfig {
@@ -31,6 +34,7 @@ function toConfig(row: ConfigRow): IngestConfig {
     fiberProjectId: row.fiberProjectId,
     wirelessProjectId: row.wirelessProjectId,
     sourceEstado: row.sourceEstado,
+    pppoeProfile: row.pppoeProfile ?? null,
   };
 }
 
@@ -60,6 +64,7 @@ export class PrismaGestionRealIngestConfigRepository implements GestionRealInges
     if ('fiberProjectId' in patch) data.fiberProjectId = patch.fiberProjectId ?? null;
     if ('wirelessProjectId' in patch) data.wirelessProjectId = patch.wirelessProjectId ?? null;
     if (patch.sourceEstado !== undefined) data.sourceEstado = patch.sourceEstado;
+    if ('pppoeProfile' in patch) data.pppoeProfile = patch.pppoeProfile ?? null;
 
     const row: ConfigRow = await this.table.upsert({
       where: { id: SINGLETON_ID },

@@ -20,7 +20,18 @@ describe('GetIngestConfig', () => {
       fiberProjectId: 'p-fiber',
       wirelessProjectId: 'p-wifi',
       sourceEstado: 'CONF',
+      pppoeProfile: null,
     });
+  });
+
+  it('K1: exposes the configured pppoeProfile in the DTO', async () => {
+    const repo = new InMemoryGestionRealIngestConfigRepository();
+    await repo.update({ pppoeProfile: 'IP-Air-30-10' });
+    const useCase = new GetIngestConfig(repo);
+
+    const dto = await useCase.execute();
+
+    expect(dto.pppoeProfile).toBe('IP-Air-30-10');
   });
 
   it('returns defaults before any config is set', async () => {
@@ -35,6 +46,7 @@ describe('GetIngestConfig', () => {
       fiberProjectId: null,
       wirelessProjectId: null,
       sourceEstado: 'CONF',
+      pppoeProfile: null,
     });
   });
 });

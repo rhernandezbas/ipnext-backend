@@ -10,6 +10,7 @@ const DEFAULTS: IngestConfig = {
   fiberProjectId: null,
   wirelessProjectId: null,
   sourceEstado: 'CONF',
+  pppoeProfile: null,
 };
 
 /**
@@ -35,6 +36,9 @@ export class InMemoryGestionRealIngestConfigRepository implements GestionRealIng
       wirelessProjectId:
         'wirelessProjectId' in patch ? patch.wirelessProjectId! ?? null : current.wirelessProjectId,
       sourceEstado: patch.sourceEstado ?? current.sourceEstado,
+      // Nullable como los FKs: "omitido" (mantener) ≠ "null" (limpiar).
+      pppoeProfile:
+        'pppoeProfile' in patch ? patch.pppoeProfile! ?? null : current.pppoeProfile,
     };
     return { ...this.config };
   }

@@ -2257,6 +2257,9 @@ model GestionRealIngestConfig {
   wirelessProjectId String?
   wirelessProject   Project? @relation("GrIngestWireless", fields: [wirelessProjectId], references: [id], onDelete: SetNull)
   sourceEstado      String   @default("CONF")
+  /// install-pppoe-pregen (K1): grupo/plan RADIUS para pre-provisionar el PPPoE
+  /// de una instalación ingestada. Null = sin configurar (pre-generación no-op).
+  pppoeProfile      String?
   updatedAt         DateTime @updatedAt
 
   @@index([fiberProjectId])

@@ -12,6 +12,7 @@ describe('InMemoryGestionRealIngestConfigRepository', () => {
       fiberProjectId: null,
       wirelessProjectId: null,
       sourceEstado: 'CONF',
+      pppoeProfile: null,
     });
   });
 
@@ -29,6 +30,7 @@ describe('InMemoryGestionRealIngestConfigRepository', () => {
       fiberProjectId: 'p-fiber',
       wirelessProjectId: null,
       sourceEstado: 'CONF',
+      pppoeProfile: null,
     });
 
     const reread = await repo.get();
@@ -53,6 +55,30 @@ describe('InMemoryGestionRealIngestConfigRepository', () => {
     expect(after.windowMonths).toBe(6);
     expect(after.fiberProjectId).toBe('p-fiber');
     expect(after.intervalMs).toBe(90000);
+  });
+
+  // ── install-pppoe-pregen (K1): profile RADIUS default para la pre-provisión ──
+
+  it('K1: default pppoeProfile is null; update() persists a value and null clears it', async () => {
+    const repo = new InMemoryGestionRealIngestConfigRepository();
+
+    expect((await repo.get()).pppoeProfile).toBeNull();
+
+    const set = await repo.update({ pppoeProfile: 'IP-Air-30-10' });
+    expect(set.pppoeProfile).toBe('IP-Air-30-10');
+    expect((await repo.get()).pppoeProfile).toBe('IP-Air-30-10');
+
+    const cleared = await repo.update({ pppoeProfile: null });
+    expect(cleared.pppoeProfile).toBeNull();
+  });
+
+  it('K1: an omitted pppoeProfile key leaves the persisted value untouched', async () => {
+    const repo = new InMemoryGestionRealIngestConfigRepository();
+    await repo.update({ pppoeProfile: 'IP-Air-30-10' });
+
+    const after = await repo.update({ intervalMs: 90000 });
+
+    expect(after.pppoeProfile).toBe('IP-Air-30-10');
   });
 
   it('default sourceEstado is CONF; update() persists a new value', async () => {
