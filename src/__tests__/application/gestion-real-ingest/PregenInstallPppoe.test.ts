@@ -130,7 +130,9 @@ describe('PregenInstallPppoe', () => {
     expect((await fx.repo.findByContract('svc-1'))).toHaveLength(1);
   });
 
-  it('contrato CON PPPoE pending → también cuenta como existente (no duplica)', async () => {
+  it('FIX HIGH: contrato CON PPPoE pending (pregen previo fallido) → stale/pending, NUNCA "(ya existente)"', async () => {
+    // Una fila 'pending' NUNCA llegó al RADIUS: sus credenciales NO autentican.
+    // Presentarla como "existente" mandaría al técnico a campo con credenciales muertas.
     const fx = buildFixture();
     await fx.repo.upsertByUsername({
       username: 'pendiente-viejo',
@@ -143,8 +145,58 @@ describe('PregenInstallPppoe', () => {
 
     const outcome = await fx.uc.execute({ ...INPUT });
 
-    expect(outcome).toEqual({ status: 'existing', username: 'pendiente-viejo' });
+    expect(outcome).toEqual({ status: 'stale', username: 'pendiente-viejo', reason: 'pending' });
+    // No duplica ni re-aprovisiona por su cuenta (el retry es manual, página PPPoE).
     expect(fx.orchestrator.createdUser('ronaldhernandez45123')).toBeUndefined();
+    expect(await fx.repo.findByContract('svc-1')).toHaveLength(1);
+  });
+
+  it('FIX HIGH: username tomado por una fila DISABLED (baja soft) → stale/disabled, jamás "(ya existente)"', async () => {
+    // Reinstalación de un contrato dado de baja: el username determinístico colisiona
+    // con la fila disabled (la baja conserva el username). Ese usuario está suspendido
+    // o ausente del RADIUS — sus credenciales NO sirven para instalar.
+    const fx = buildFixture();
+    await fx.repo.upsertByUsername({
+      username: 'ronaldhernandez45123',
+      password: 'clave-de-la-baja',
+      profile: 'P1',
+      nasId: 'nas-3',
+      contractId: 'svc-1',
+      status: 'disabled',
+    });
+
+    const outcome = await fx.uc.execute({ ...INPUT });
+
+    expect(outcome).toEqual({
+      status: 'stale',
+      username: 'ronaldhernandez45123',
+      reason: 'disabled',
+    });
+    // La fila de la baja NO fue pisada ni re-aprovisionada.
+    const row = await fx.repo.findByUsername('ronaldhernandez45123');
+    expect(row!.status).toBe('disabled');
+    expect(row!.password).toBe('clave-de-la-baja');
+    expect(fx.orchestrator.createdUser('ronaldhernandez45123')).toBeUndefined();
+  });
+
+  it('FIX HIGH: username tomado por una fila PENDING ajena → stale/pending', async () => {
+    const fx = buildFixture();
+    await fx.repo.upsertByUsername({
+      username: 'ronaldhernandez45123',
+      password: 'p',
+      profile: 'P1',
+      nasId: null,
+      contractId: 'otro-contrato',
+      status: 'pending',
+    });
+
+    const outcome = await fx.uc.execute({ ...INPUT });
+
+    expect(outcome).toEqual({
+      status: 'stale',
+      username: 'ronaldhernandez45123',
+      reason: 'pending',
+    });
   });
 
   it('GR trae pppoeUsername histórico distinto → GANA el de GR; la clave sigue siendo la generada', async () => {
@@ -221,8 +273,37 @@ describe('PregenInstallPppoe', () => {
 
     expect(outcome).toEqual({ status: 'failed' });
     // CreatePppoeService deja la fila 'pending' (visible/reintentable) — contrato intacto.
+    // Acá la password generada es LEGÍTIMA (el usuario no existe en el RADIUS todavía):
+    // el retry manual re-aprovisiona con esa misma clave.
     const row = await fx.repo.findByUsername('ronaldhernandez45123');
     expect(row?.status).toBe('pending');
+  });
+
+  it('FIX MEDIUM: 409 del orchestrator (usuario vivo en el RADIUS, ausente del espejo) → stale/radius-desync y BORRA la fila espejo envenenada', async () => {
+    const fx = buildFixture();
+    // El usuario YA existe en el RADIUS central con su password real, pero el espejo no lo conoce.
+    await fx.orchestrator.createUser({
+      username: 'ronaldhernandez45123',
+      password: 'password-real-del-radius',
+      plan: 'IP-Air-30-10',
+      framedIp: null,
+    });
+
+    const outcome = await fx.uc.execute({ ...INPUT });
+
+    expect(outcome).toEqual({
+      status: 'stale',
+      username: 'ronaldhernandez45123',
+      reason: 'radius-desync',
+    });
+    // La fila espejo con la password INVENTADA no puede sobrevivir: envenenaría
+    // retry/changePassword (ningún flujo posterior debe confiar en esa clave).
+    expect(await fx.repo.findByUsername('ronaldhernandez45123')).toBeNull();
+    expect(await fx.repo.findByContract('svc-1')).toHaveLength(0);
+    // El usuario del RADIUS quedó INTACTO (password real preservada).
+    expect(fx.orchestrator.createdUser('ronaldhernandez45123')!.password).toBe(
+      'password-real-del-radius',
+    );
   });
 });
 
@@ -244,6 +325,50 @@ describe('renderPppoeCredentialsBlock', () => {
   it('existing → bloque con "(ya existente)" y SIN la clave', () => {
     const block = renderPppoeCredentialsBlock({ status: 'existing', username: 'usuario-viejo' });
     expect(block).toBe('── Credenciales PPPoE ──\nUsuario: usuario-viejo (ya existente)');
+    expect(block).not.toContain('Clave');
+  });
+
+  it('FIX HIGH: stale/disabled → advertencia de BAJA, sin clave y sin "(ya existente)"', () => {
+    const block = renderPppoeCredentialsBlock({
+      status: 'stale',
+      username: 'user-baja',
+      reason: 'disabled',
+    });
+    expect(block).toBe(
+      '── Credenciales PPPoE ──\n' +
+        'Usuario: user-baja\n' +
+        '⚠ Usuario previo dado de BAJA (estado disabled) — REVISAR en la página PPPoE antes de instalar',
+    );
+    expect(block).not.toContain('Clave');
+    expect(block).not.toContain('ya existente');
+  });
+
+  it('FIX HIGH: stale/pending → advertencia de aprovisionamiento pendiente, sin clave', () => {
+    const block = renderPppoeCredentialsBlock({
+      status: 'stale',
+      username: 'user-pend',
+      reason: 'pending',
+    });
+    expect(block).toBe(
+      '── Credenciales PPPoE ──\n' +
+        'Usuario: user-pend\n' +
+        '⚠ Aprovisionamiento previo PENDIENTE (no llegó al RADIUS) — reintentar desde la página PPPoE',
+    );
+    expect(block).not.toContain('Clave');
+    expect(block).not.toContain('ya existente');
+  });
+
+  it('FIX MEDIUM: stale/radius-desync → advertencia de usuario ya existente en el RADIUS central', () => {
+    const block = renderPppoeCredentialsBlock({
+      status: 'stale',
+      username: 'user-desync',
+      reason: 'radius-desync',
+    });
+    expect(block).toBe(
+      '── Credenciales PPPoE ──\n' +
+        'Usuario: user-desync\n' +
+        '⚠ El usuario ya existe en el RADIUS central — verificar credenciales manualmente',
+    );
     expect(block).not.toContain('Clave');
   });
 
