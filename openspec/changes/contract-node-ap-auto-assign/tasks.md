@@ -76,21 +76,25 @@ descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "
 ## Batch 4 — `AutoAssignContractNetwork` (CAS-2, AA-1..AA-4)
 
 ### T4.1 — test de la matriz (RED)
-- [ ] `src/__tests__/application/use-cases/AutoAssignContractNetwork.test.ts` con in-memory repos:
-  - matriz design §6 filas 1-10 (asigna virgen; pisa manual; igual → unchanged; no-match no toca;
-    ambiguo skip+warn; sin contractId fuera; N pppoe → enabled más reciente; disabled no deriva;
-    station missing excluida; AP missing se asigna igual; AP sin site escribe null).
+- [x] `src/__tests__/application/use-cases/AutoAssignContractNetwork.test.ts` con in-memory repos
+  (19 tests):
+  - matriz design §6 filas 1-11 (asigna virgen; pisa manual; igual → unchanged; no-match no toca;
+    sin contractId fuera; N pppoe → enabled más reciente; disabled no deriva; station missing
+    excluida; AP missing se asigna igual; AP sin site escribe null).
   - desempate §6.2 (missing pierde contra viva; lastSeenAt más reciente gana; empate → ambiguous).
   - cascada §4 (callerId gana; fallback RadiusEvent; contadores `macFromCallerId`/`macFromRadiusEvent`).
   - idempotencia (2ª corrida: assigned=0, unchanged=N, 0 writes — spy sobre el repo in-memory).
-  - métricas completas + `SyncState('contract-network-auto-assign')` con `ok: {json}`; catch interno
-    → `error: <msg>`.
+  - métricas completas (universo vacío) + `SyncState('contract-network-auto-assign')` con
+    `ok: {json}`; catch interno → `error: <msg>` + RE-LANZA (el scheduler decide, Batch 5).
 
 ### T4.2 — use case (GREEN)
-- [ ] `src/application/use-cases/AutoAssignContractNetwork.ts` — deps:
+- [x] `src/application/use-cases/AutoAssignContractNetwork.ts` — deps:
   `PppoeServiceRepository`, `RadiusEventRepository`, `UispDeviceRepository`, `AccessPointRepository`,
   `ContractRepository`, `SyncStateRepository`. Algoritmo design §5 (5 reads batch, Maps en memoria,
-  writes solo-diff secuenciales). `AutoAssignContractNetworkResult` (design §7).
+  writes solo-diff secuenciales). `AutoAssignContractNetworkResult` (design §7). NOTA: el universo
+  "evaluado" son TODOS los contratos con ≥1 PppoeService (contractId != null), no solo los que
+  tienen un candidato enabled — así un contrato con 0 pppoe enabled cuenta como `unresolved`
+  (matriz fila 8), consistente con el scenario spec AA-3 "disabled no deriva".
 
 ## Batch 5 — Scheduler + wiring (AA-5)
 
