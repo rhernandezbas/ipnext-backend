@@ -120,23 +120,25 @@ descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "
 ## Batch 6 — Picker manual: use cases (PICK-1, PICK-2)
 
 ### T6.1 — errores tipados
-- [ ] `src/domain/errors/networkAssignment.ts` — `NetworkSiteNotFoundError`,
+- [x] `src/domain/errors/networkAssignment.ts` — `NetworkSiteNotFoundError`,
   `AccessPointNotFoundError`, `AccessPointRetiredError`, `AccessPointNotInSiteError` (extienden
-  `DomainError`, con `code`). Export en el barrel si corresponde.
+  `DomainError`, con `code`). No hay barrel real de errores (`domain/errors/barrel.ts` es
+  `export {}`) — se importan directo del archivo, patrón del resto del proyecto. Estructural, sin
+  test dedicado (triangulación skip: se ejercitan via T6.2 con instanceof + code).
 
 ### T6.2 — `SetContractNetworkAssignment` (RED→GREEN)
-- [ ] TEST `src/__tests__/application/use-cases/SetContractNetworkAssignment.test.ts` — tabla design
-  §9.1 completa: 404 tipado; site/AP inexistente; AP retirado; AP∉site; autocompletar site desde AP;
-  mover site limpia AP incompatible; `networkSiteId: null` limpia ambos; `accessPointId: null`
-  limpia solo AP; DTO result.
-- [ ] `src/application/use-cases/SetContractNetworkAssignment.ts` — deps: `ContractRepository`,
+- [x] TEST `src/__tests__/application/use-cases/SetContractNetworkAssignment.test.ts` (11 tests) —
+  tabla design §9.1 completa: 404 tipado; site/AP inexistente; AP retirado; AP∉site; autocompletar
+  site desde AP; mover site limpia AP incompatible (+ caso "ya pertenece, se conserva");
+  `networkSiteId: null` limpia ambos; `accessPointId: null` limpia solo AP; DTO result shape.
+- [x] `src/application/use-cases/SetContractNetworkAssignment.ts` — deps: `ContractRepository`,
   `NetworkSiteRepository`, `AccessPointRepository`.
 
 ### T6.3 — `ListAssignableAccessPoints` (RED→GREEN)
-- [ ] TEST `src/__tests__/application/use-cases/ListAssignableAccessPoints.test.ts` — filtra
-  `missingSince`, filtro por `networkSiteId`, orden name asc, DTO shape.
-- [ ] `src/application/use-cases/ListAssignableAccessPoints.ts` + DTO `AccessPointOptionDto`
-  (`src/application/dto/`).
+- [x] TEST `src/__tests__/application/use-cases/ListAssignableAccessPoints.test.ts` (4 tests) —
+  filtra `missingSince`, filtro por `networkSiteId`, orden name asc, DTO shape.
+- [x] `src/application/use-cases/ListAssignableAccessPoints.ts` + DTO `AccessPointOptionDto`
+  (`src/application/dto/accessPoint.dto.ts`).
 
 ## Batch 7 — Rutas + permisos (PICK-3, MIG-2)
 
