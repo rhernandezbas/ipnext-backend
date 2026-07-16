@@ -10,6 +10,9 @@
 
 ## 📋 Pendientes
 
+### ✨ [FEAT] Inbox: enviar TEMPLATE desde el hilo con ventana de 24h expirada — PENDIENTE *(2026-07-16, decisión del usuario tras la consulta de la ventana 24h)*
+> Hoy el composer del inbox avisa "Ventana de 24h expirada — se necesita un template" pero NO deja hacer nada al respecto (Chatwoot sí: botón de template). Change: **picker de templates APROBADOS en el composer** cuando la ventana está expirada + mapeo de variables + envío (reusa `TwilioContentGateway`/`TemplateMessagingPort` del bulk) + el mensaje enviado ATERRIZA en el hilo (proyección estilo bulk→inbox del Bulk v2 C2). **Regla de plataforma (documentada, verificada):** la ventana de 24h la abre SOLO el mensaje INBOUND del cliente; los templates business-initiated NO la abren — por eso el picker es la única acción posible ahí. SDD + worktrees + TDD + review adversarial. Coordinar merges FE con el change "resolver conversaciones" (ambos tocan el inbox).
+
 ### ✨ [FEAT] Inbox: resolver conversaciones estilo Chatwoot (se va de la lista + tabs por estado) — EN PROGRESO (planificación) *(2026-07-16, pedido del usuario)*
 > El inbox de Prominense no tiene ciclo de vida de conversación: todas viven para siempre en la lista. Pedido del usuario: replicar la UX de Chatwoot — **"Resolver" saca la conversación de la vista activa** (animación limpia) con tabs/filtro por estado (Abiertas/Resueltas). Diseño esperado: estado ESPEJADO desde Chatwoot (fuente de verdad): acción "Resolver" en Prominense → API Chatwoot `toggle_status` → webhook `conversation_status_changed` actualiza el mirror → la lista filtra por status (explorar qué trae hoy el webhook/mirror — ¿`Conversation.status` existe?). FE: botón Resolver en el header del thread + tabs en la lista + motion de salida (Emil, reduced-motion) + reabrir desde Resueltas. BE: campo en el mirror + ruta de acción + manejo del webhook (disciplina `updateLocalFields`). SDD + worktrees + TDD + review adversarial.
 
