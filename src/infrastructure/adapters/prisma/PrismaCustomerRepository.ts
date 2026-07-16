@@ -251,6 +251,17 @@ export function buildClientListWhere(query: ListClientsQuery): Record<string, un
  * statuses/deuda (keys top-level). `''` cuenta como ausente (truthy-check,
  * mismo criterio que `segmentHasCriteria` — un some con `''` no matchearía
  * ningún contrato).
+ *
+ * ── node-segment fix wave (H1): contratos de BAJA no cuentan para el filtro ──
+ * `Contract.networkSiteId`/`accessPointId` NO se limpian al dar de baja: sin
+ * exclusión, un contrato VIEJO de baja en el nodo X matchearía el some y el
+ * cliente mudado/dado de baja recibiría el "aviso de corte del nodo X" de un
+ * nodo que ya no lo sirve. El `NOT status='baja'` (case-insensitive, molde
+ * `PrismaContractPairingReader`) vive DENTRO del mismo `some`: el contrato que
+ * matchea nodo/AP debe además estar vigente — un cliente con baja en X y
+ * contrato activo en Y entra por Y y NO por X. Aplica SOLO cuando hay nodo/AP
+ * en el segmento; un segmento sin nodo/AP genera un where byte-idéntico al
+ * previo (cero riesgo para statuses/deuda).
  */
 export function buildSegmentWhere(segment: CampaignSegmentFilter): Record<string, unknown> {
   const where: Record<string, unknown> = {};
@@ -274,6 +285,8 @@ export function buildSegmentWhere(segment: CampaignSegmentFilter): Record<string
       some: {
         ...(segment.networkSiteId ? { networkSiteId: segment.networkSiteId } : {}),
         ...(segment.accessPointId ? { accessPointId: segment.accessPointId } : {}),
+        // H1 — el contrato que matchea nodo/AP debe estar VIGENTE (ver doc arriba).
+        NOT: { status: { equals: 'baja', mode: 'insensitive' } },
       },
     };
   }

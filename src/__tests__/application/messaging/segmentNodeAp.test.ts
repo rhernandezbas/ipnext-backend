@@ -37,10 +37,12 @@ import type {
 } from '@domain/ports/CustomerRepository';
 import type { TemplateMessagingPort, TemplateDto } from '@domain/ports/TemplateMessagingPort';
 
-/** Contrato mínimo del fake — SOLO los 2 campos de asignación de red (Fase B). */
+/** Contrato mínimo del fake — asignación de red (Fase B) + status (H1: baja). */
 interface FakeContract {
   networkSiteId?: string | null;
   accessPointId?: string | null;
+  /** H1 — 'baja' (case-insensitive) NO cuenta para el filtro de red. Ausente = vigente. */
+  status?: string | null;
 }
 
 interface FakeClientRow extends CampaignRecipientCandidate {
@@ -53,8 +55,14 @@ interface FakeClientRow extends CampaignRecipientCandidate {
  * Mismo criterio que `contracts: { some: {...} }` de la query real: cada
  * condición pasada (nodo y/o AP) debe matchear EN ESTE contrato. '' cuenta
  * como ausente (mismo truthy-check que `buildSegmentWhere`).
+ *
+ * H1 (fix wave) — un contrato de BAJA no cuenta para el filtro de red (el
+ * `NOT status='baja'` case-insensitive del some real): `networkSiteId` nunca
+ * se limpia, así que sin esta exclusión un contrato viejo de baja en el nodo X
+ * seguiría matcheando al cliente mudado/dado de baja.
  */
 function contractMatchesNodeAp(contract: FakeContract, segment: CampaignSegmentFilter): boolean {
+  if (contract.status?.toLowerCase() === 'baja') return false;
   if (segment.networkSiteId && contract.networkSiteId !== segment.networkSiteId) return false;
   if (segment.accessPointId && contract.accessPointId !== segment.accessPointId) return false;
   return true;
@@ -223,6 +231,32 @@ describe('PreviewCampaignSegment — filtro por nodo/AP', () => {
 
     expect(withNulls.count).toBe(3); // c1 (ns-1), c3 (ns-2), c4 (sin contratos) — nodo NO filtra
     expect(withNulls).toEqual(without);
+  });
+
+  it('H1: contrato de BAJA en el nodo NO cuenta — el cliente mudado entra por su nodo NUEVO, no por el viejo', async () => {
+    // Cliente mudado: contrato VIEJO de baja en ns-x (networkSiteId nunca se
+    // limpia) + contrato vigente en ns-y. El aviso del nodo ns-x NO le llega;
+    // el del nodo ns-y SÍ.
+    const rows: FakeClientRow[] = [
+      makeRow({
+        clientId: 'mudado',
+        phone: '3364777777',
+        contracts: [
+          { networkSiteId: 'ns-x', accessPointId: 'ap-x', status: 'BAJA' }, // case-insensitive
+          { networkSiteId: 'ns-y', accessPointId: 'ap-y', status: 'Activo' },
+        ],
+      }),
+      makeRow({ clientId: 'vecino-x', phone: '3364888888', contracts: [{ networkSiteId: 'ns-x', status: 'Activo' }] }),
+    ];
+    const uc = new PreviewCampaignSegment(makeSegmentSource(rows));
+
+    const nodoViejo = await uc.execute({ statuses: [], networkSiteId: 'ns-x' });
+    const nodoNuevo = await uc.execute({ statuses: [], networkSiteId: 'ns-y' });
+
+    expect(nodoViejo.sample.map((s) => s.clientId)).toEqual(['vecino-x']); // el mudado NO
+    expect(nodoViejo.count).toBe(1);
+    expect(nodoNuevo.sample.map((s) => s.clientId)).toEqual(['mudado']); // entra por el nodo vigente
+    expect(nodoNuevo.count).toBe(1);
   });
 
   it('unión con manuales: manual del MISMO nodo no se doble-cuenta; manual de otro nodo se suma', async () => {

@@ -125,24 +125,32 @@ describe('buildSegmentWhere (T6.3 — SEG-1 + fix wave 2: FIX-11 opt-out / FIX-1
   // ── node-segment: filtro por nodo/AP vía relación a contratos ────────────────
   // UNA query con relation filter (`contracts: { some: {...} }`) — el join lo
   // resuelve Postgres, sin N+1 ni fetch de contratos en memoria.
-  it('node-segment: networkSiteId solo → contracts.some.networkSiteId (≥1 contrato del nodo)', () => {
+  //
+  // H1 (fix wave) — el `some` EXCLUYE contratos de baja en el MISMO some
+  // (`NOT status='baja'`, case-insensitive — molde PrismaContractPairingReader):
+  // `Contract.networkSiteId` no se limpia nunca, así que un contrato VIEJO de
+  // baja en el nodo X matchearía y el cliente mudado/dado de baja recibiría el
+  // "aviso de corte del nodo X" de un nodo que ya no lo sirve.
+  const NOT_BAJA = { NOT: { status: { equals: 'baja', mode: 'insensitive' } } };
+
+  it('node-segment: networkSiteId solo → contracts.some.networkSiteId (≥1 contrato NO-baja del nodo)', () => {
     const segment: CampaignSegmentFilter = { statuses: [], networkSiteId: 'ns-1' };
     expect(buildSegmentWhere(segment)).toEqual({
-      contracts: { some: { networkSiteId: 'ns-1' } },
+      contracts: { some: { networkSiteId: 'ns-1', ...NOT_BAJA } },
     });
   });
 
   it('node-segment: accessPointId solo → contracts.some.accessPointId (AP sin nodo es válido)', () => {
     const segment: CampaignSegmentFilter = { statuses: [], accessPointId: 'ap-9' };
     expect(buildSegmentWhere(segment)).toEqual({
-      contracts: { some: { accessPointId: 'ap-9' } },
+      contracts: { some: { accessPointId: 'ap-9', ...NOT_BAJA } },
     });
   });
 
-  it('node-segment: nodo+AP en UN SOLO some → ambos deben matchear en EL MISMO contrato', () => {
+  it('node-segment: nodo+AP en UN SOLO some → ambos deben matchear en EL MISMO contrato (no-baja)', () => {
     const segment: CampaignSegmentFilter = { statuses: [], networkSiteId: 'ns-1', accessPointId: 'ap-9' };
     expect(buildSegmentWhere(segment)).toEqual({
-      contracts: { some: { networkSiteId: 'ns-1', accessPointId: 'ap-9' } },
+      contracts: { some: { networkSiteId: 'ns-1', accessPointId: 'ap-9', ...NOT_BAJA } },
     });
   });
 
@@ -151,7 +159,30 @@ describe('buildSegmentWhere (T6.3 — SEG-1 + fix wave 2: FIX-11 opt-out / FIX-1
     expect(buildSegmentWhere(segment)).toEqual({
       status: { in: ['late'] },
       balanceDue: { gte: 1000 },
-      contracts: { some: { networkSiteId: 'ns-1' } },
+      contracts: { some: { networkSiteId: 'ns-1', ...NOT_BAJA } },
+    });
+  });
+
+  // H1 pin — la exclusión de baja vive DENTRO del some (mismo contrato), no como
+  // condición top-level: un cliente con contrato baja en el nodo X + contrato
+  // activo en el nodo Y debe entrar por Y (su some matchea) y NO por X (el único
+  // contrato de X es baja → el some no matchea ningún contrato). El shape con
+  // NOT-en-el-some es exactamente lo que garantiza ambas cosas a la vez.
+  it('H1: la exclusión de baja está DENTRO del some — nodo/AP y no-baja sobre el MISMO contrato', () => {
+    const where = buildSegmentWhere({ statuses: [], networkSiteId: 'ns-x' });
+    const some = (where['contracts'] as { some: Record<string, unknown> }).some;
+    expect(some['networkSiteId']).toBe('ns-x');
+    expect(some['NOT']).toEqual({ status: { equals: 'baja', mode: 'insensitive' } });
+    expect(where).not.toHaveProperty('NOT'); // NO es una condición top-level sobre Client
+  });
+
+  // L2 pin — combo FIX-12 (OR de balance-null) + nodo: conviven como AND
+  // top-level sin colisión de keys (el OR es del balance, contracts es del nodo).
+  it('L2: balanceMax sin piso (OR balance-null) + networkSiteId → ambas keys top-level, AND', () => {
+    const segment: CampaignSegmentFilter = { statuses: [], balanceMax: 5000, networkSiteId: 'ns-x' };
+    expect(buildSegmentWhere(segment)).toEqual({
+      OR: [{ balanceDue: { lte: 5000 } }, { balanceDue: null }],
+      contracts: { some: { networkSiteId: 'ns-x', ...NOT_BAJA } },
     });
   });
 
