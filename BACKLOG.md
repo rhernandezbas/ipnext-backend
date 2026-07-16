@@ -1000,6 +1000,8 @@
 
 ### 🔒 Seguridad / acción del usuario (URGENTE)
 
+- [ ] **`/api/notifications` montado SIN auth ni permisos** *(2026-07-16, hallazgo del plan de Noticias internas)*: `app.ts:1952` monta el router de notificaciones sin `auth` ni `requirePerm`, y el modelo `Notification` es GLOBAL sin `userId`. Cualquiera sin login puede leer/crear notificaciones por API directa. Cerrarla = agregar auth + decidir si las notificaciones pasan a ser per-user (el diseño de Noticias internas NO copió este patrón a propósito). Change chico BE.
+
 - [ ] **Revocar el PAT de GitHub** `ghp_GDHPEtPhz0...` usado para cargar los GitHub Secrets.
   → github.com/settings/tokens. Ya cumplió su función.
 - [ ] **Credenciales hardcodeadas en el skill `gestion-real-ipnext`** (CUIT `30708499850`, SECRET `IPNEXT@2023`).
