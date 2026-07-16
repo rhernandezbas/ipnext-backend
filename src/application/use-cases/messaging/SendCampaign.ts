@@ -119,19 +119,38 @@ export class SendCampaign {
   }
 
   private async processRecipient(campaign: Campaign, recipient: CampaignRecipient): Promise<void> {
-    // SEND-5 — re-check de opt-out INMEDIATAMENTE ANTES de enviar (puede haber
-    // cambiado entre CreateCampaign y el turno de este recipient en el worker).
-    const candidate = await this.customerRepo.findRecipientCandidate(recipient.clientId);
-    if (!candidate) {
-      await this.campaignRepo.updateRecipient(recipient.id, {
-        status: 'skipped',
-        error: 'Client no longer resolvable at send time',
-      });
-      return;
-    }
-    if (candidate.whatsappOptOutAt != null) {
-      await this.campaignRepo.updateRecipient(recipient.id, { status: 'opted_out' });
-      return;
+    let candidate: CampaignRecipientCandidate;
+
+    if (recipient.clientId === null) {
+      // bulk-csv-recipients (D5, CSV-3) — contacto crudo: no hay `Client` que
+      // re-chequear (SEND-5 NO aplica — el opt-out vive en `Client.whatsappOptOutAt`,
+      // Scope OUT). Se sintetiza un candidate SOLO para reusar
+      // `resolveCampaignVariables` sin duplicar su lógica; nunca se persiste. Con
+      // `balanceDue: null` la MISMA regla FIX-18 ya resuelve `''` (nunca "$0").
+      candidate = {
+        clientId: recipient.id,
+        name: recipient.contactName ?? '',
+        phone: null,
+        balanceDue: null,
+        whatsappOptOutAt: null,
+        status: 'no_cliente',
+      };
+    } else {
+      // SEND-5 — re-check de opt-out INMEDIATAMENTE ANTES de enviar (puede haber
+      // cambiado entre CreateCampaign y el turno de este recipient en el worker).
+      const found = await this.customerRepo.findRecipientCandidate(recipient.clientId);
+      if (!found) {
+        await this.campaignRepo.updateRecipient(recipient.id, {
+          status: 'skipped',
+          error: 'Client no longer resolvable at send time',
+        });
+        return;
+      }
+      if (found.whatsappOptOutAt != null) {
+        await this.campaignRepo.updateRecipient(recipient.id, { status: 'opted_out' });
+        return;
+      }
+      candidate = found;
     }
 
     const variables = resolveCampaignVariables(campaign.variableSpec, candidate);
@@ -186,7 +205,10 @@ export class SendCampaign {
       const renderedBody = renderTemplateBody(campaign.templateBody, variables);
       await this.inboxProjector.projectSentMessage({
         recipient,
-        candidate,
+        // bulk-csv-recipients (D6, PRJ-1) — `contactName` reemplaza `candidate`: para
+        // un vinculado es el `Client.name` fresco; para un crudo, el candidate
+        // sintetizado ya carga `recipient.contactName` en `.name` (D5).
+        contactName: candidate.name,
         renderedBody,
         sentAt,
         providerId: result.providerId,

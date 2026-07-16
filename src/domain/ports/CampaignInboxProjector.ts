@@ -1,5 +1,4 @@
 import type { CampaignRecipient } from '../entities/campaign';
-import type { CampaignRecipientCandidate } from './CustomerRepository';
 
 /**
  * messaging-bulk-inbox (F1, PROYECCIÓN) — port que proyecta un envío bulk YA
@@ -20,8 +19,13 @@ import type { CampaignRecipientCandidate } from './CustomerRepository';
 export interface ProjectSentMessageInput {
   /** El recipient YA marcado `sent` (id = clave de idempotencia del mensaje bulk). */
   recipient: CampaignRecipient;
-  /** El candidato fresco re-resuelto en `SendCampaign` (nombre/teléfono del contacto). */
-  candidate: CampaignRecipientCandidate;
+  /**
+   * bulk-csv-recipients (D6, PRJ-1) — REEMPLAZA a `candidate: CampaignRecipientCandidate`
+   * (ISP: el projector SOLO usaba `.name` del candidate, `PrismaCampaignInboxProjector.ts`
+   * pre-D6). `SendCampaign` pasa `candidate.name` fresco (vinculado) o
+   * `recipient.contactName` (crudo, CSV-3, sin `Client`).
+   */
+  contactName: string;
   /** Body renderizado del template (placeholders sustituidos) — contenido del ChatMessage. */
   renderedBody: string;
   /** ISO — mismo `sentAt` con que se persistió el recipient (ordena el hilo). */

@@ -28,7 +28,11 @@ function makeLookup(candidates: CampaignRecipientCandidate[]): CampaignRecipient
 
 async function seedCampaign(
   campaignRepo: CampaignRepository,
-  opts: { templateBody?: string | null; variableSpec?: CampaignVariableSpec; recipients: { clientId: string; phoneNormalized: string; phoneE164: string }[] },
+  opts: {
+    templateBody?: string | null;
+    variableSpec?: CampaignVariableSpec;
+    recipients: { clientId: string | null; contactName?: string | null; phoneNormalized: string; phoneE164: string }[];
+  },
 ) {
   const campaign = await campaignRepo.create({
     name: 'Recordatorio',
@@ -121,6 +125,38 @@ describe('SendCampaign — proyección al inbox (T3)', () => {
     const recipient = (await campaignRepo.listRecipients(campaign.id)).data[0]!;
     expect(recipient.status).toBe('sent');
     expect(recipient.conversationId).toBeNull();
+  });
+
+  // ── bulk-csv-recipients (D6/PRJ-1): contacto crudo aterriza en el inbox ───────
+  it('PRJ-1: contacto crudo (clientId null) proyecta con contactName del CSV — Conversation + ChatMessage + conversationId seteado', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const conversationRepo = new InMemoryConversationRepository();
+    const chatMessageRepo = new InMemoryChatMessageRepository();
+    const projector = new PrismaCampaignInboxProjector(conversationRepo, chatMessageRepo, campaignRepo);
+    const lookup = makeLookup([]); // universo vacío — el crudo no lo necesita
+    const uc = new SendCampaign(campaignRepo, lookup, new InMemoryTemplateMessagingGateway(), new ImmediateRateLimiter(), projector);
+
+    const campaign = await seedCampaign(campaignRepo, {
+      templateBody: 'Hola {{1}}',
+      variableSpec: { '1': { source: 'name' } },
+      recipients: [
+        { clientId: null, contactName: 'Ana (CSV)', phoneNormalized: '3364777777', phoneE164: '+5493364777777' },
+      ],
+    });
+
+    const result = await uc.execute({ campaignId: campaign.id });
+    expect(result.sentCount).toBe(1);
+
+    const conv = (await conversationRepo.list({ page: 1, limit: 10 })).data[0]!;
+    expect(conv.contactName).toBe('Ana (CSV)');
+    expect(conv.contactPhoneE164).toBe('+5493364777777');
+    const messages = await chatMessageRepo.listByConversation(conv.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.content).toBe('Hola Ana (CSV)');
+
+    const recipient = (await campaignRepo.listRecipients(campaign.id)).data[0]!;
+    expect(recipient.conversationId).toBe(conv.id);
+    expect(recipient.clientId).toBeNull();
   });
 });
 

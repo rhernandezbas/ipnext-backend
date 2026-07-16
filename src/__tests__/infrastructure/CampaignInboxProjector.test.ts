@@ -12,15 +12,10 @@ import { InMemoryCampaignRepository } from '@infrastructure/adapters/in-memory/I
 import { toWhatsAppE164 } from '@application/use-cases/messaging/toWhatsAppE164';
 import type { CampaignRepository } from '@domain/ports/CampaignRepository';
 import type { CampaignRecipient } from '@domain/entities/campaign';
-import type { CampaignRecipientCandidate } from '@domain/ports/CustomerRepository';
-
-function makeCandidate(overrides: Partial<CampaignRecipientCandidate> = {}): CampaignRecipientCandidate {
-  return { clientId: 'c1', name: 'Juan Pérez', phone: '3364000001', balanceDue: 1000, whatsappOptOutAt: null, ...overrides };
-}
 
 async function seedRecipient(
   campaignRepo: CampaignRepository,
-  row: { clientId: string; phoneNormalized: string; phoneE164: string },
+  row: { clientId: string | null; contactName?: string | null; phoneNormalized: string; phoneE164: string },
 ): Promise<CampaignRecipient> {
   const campaign = await campaignRepo.create({
     name: 'Recordatorio',
@@ -53,7 +48,7 @@ describe('PrismaCampaignInboxProjector (T2)', () => {
 
     await projector.projectSentMessage({
       recipient,
-      candidate: makeCandidate(),
+      contactName: 'Juan Pérez',
       renderedBody: 'Hola Juan, tenés una deuda de $1.000',
       sentAt: '2026-07-14T10:00:00.000Z',
       providerId: 'SM1',
@@ -91,7 +86,7 @@ describe('PrismaCampaignInboxProjector (T2)', () => {
     });
     const input = {
       recipient,
-      candidate: makeCandidate(),
+      contactName: 'Juan Pérez',
       renderedBody: 'Hola',
       sentAt: '2026-07-14T10:00:00.000Z',
       providerId: 'SM1',
@@ -111,8 +106,8 @@ describe('PrismaCampaignInboxProjector (T2)', () => {
     const r1 = await seedRecipient(campaignRepo, { clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' });
     const r2 = await seedRecipient(campaignRepo, { clientId: 'c2', phoneNormalized: '3364000001', phoneE164: '+5493364000001' });
 
-    await projector.projectSentMessage({ recipient: r1, candidate: makeCandidate({ clientId: 'c1' }), renderedBody: 'msg-1', sentAt: '2026-07-14T10:00:00.000Z', providerId: 'SM1' });
-    await projector.projectSentMessage({ recipient: r2, candidate: makeCandidate({ clientId: 'c2' }), renderedBody: 'msg-2', sentAt: '2026-07-14T11:00:00.000Z', providerId: 'SM2' });
+    await projector.projectSentMessage({ recipient: r1, contactName: 'Juan Pérez', renderedBody: 'msg-1', sentAt: '2026-07-14T10:00:00.000Z', providerId: 'SM1' });
+    await projector.projectSentMessage({ recipient: r2, contactName: 'Juan Pérez', renderedBody: 'msg-2', sentAt: '2026-07-14T11:00:00.000Z', providerId: 'SM2' });
 
     const list = await conversationRepo.list({ page: 1, limit: 10 });
     expect(list.data).toHaveLength(1); // una sola conversación para ese teléfono
@@ -142,7 +137,7 @@ describe('PrismaCampaignInboxProjector (T2)', () => {
 
     await projector.projectSentMessage({
       recipient,
-      candidate: makeCandidate({ phone: clientPhone15 }),
+      contactName: 'Juan Pérez',
       renderedBody: 'Hola',
       sentAt: '2026-07-14T10:00:00.000Z',
       providerId: 'SM1',
@@ -157,5 +152,32 @@ describe('PrismaCampaignInboxProjector (T2)', () => {
     expect(messages[0]!.direction).toBe('outbound');
     const persisted = (await campaignRepo.listRecipients(recipient.campaignId)).data[0]!;
     expect(persisted.conversationId).toBe(chatConv.id);
+  });
+
+  // ── bulk-csv-recipients (D6/PRJ-1): contacto crudo (clientId null) ────────────
+  it('PRJ-1: contacto crudo (clientId null) proyecta con el contactName pasado (del CSV), sin Client', async () => {
+    const { conversationRepo, chatMessageRepo, campaignRepo, projector } = build();
+    const recipient = await seedRecipient(campaignRepo, {
+      clientId: null,
+      contactName: 'Ana (CSV)',
+      phoneNormalized: '3364555555',
+      phoneE164: '+5493364555555',
+    });
+
+    await projector.projectSentMessage({
+      recipient,
+      contactName: 'Ana (CSV)',
+      renderedBody: 'Hola Ana',
+      sentAt: '2026-07-14T10:00:00.000Z',
+      providerId: 'SM9',
+    });
+
+    const list = await conversationRepo.list({ page: 1, limit: 10 });
+    expect(list.data).toHaveLength(1);
+    expect(list.data[0]!.contactName).toBe('Ana (CSV)');
+    expect(list.data[0]!.contactPhoneE164).toBe('+5493364555555');
+    const persisted = (await campaignRepo.listRecipients(recipient.campaignId)).data[0]!;
+    expect(persisted.conversationId).toBe(list.data[0]!.id);
+    expect(persisted.clientId).toBeNull();
   });
 });

@@ -225,7 +225,7 @@ async function seedCampaign(
   opts: {
     templateRef?: string;
     variableSpec?: CampaignVariableSpec;
-    recipients: { clientId: string; phoneNormalized: string; phoneE164: string }[];
+    recipients: { clientId: string | null; contactName?: string | null; phoneNormalized: string; phoneE164: string }[];
   },
 ) {
   const campaign = await campaignRepo.create({
@@ -758,5 +758,89 @@ describe('SendCampaign', () => {
     const recipient = (await inner.listRecipients(campaign.id)).data[0];
     // Clave del fix: NUNCA convertir un envío ACEPTADO en `failed` (sería resumible → re-envío).
     expect(recipient.status).not.toBe('failed');
+  });
+
+  // ── bulk-csv-recipients (D5, CSV-3): recipient crudo (clientId null) ──────────
+  describe('bulk-csv-recipients (D5/CSV-3): contacto crudo (clientId null)', () => {
+    it('crudo: NO llama findRecipientCandidate, variables {name: contactName, balanceDue: \'\'}, queda sent', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([]); // universo vacío — si lo llamara, no resolvería nada
+      const templatePort = new InMemoryTemplateMessagingGateway();
+      const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        variableSpec: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+        recipients: [
+          { clientId: null, contactName: 'Ana', phoneNormalized: '3364111111', phoneE164: '+5493364111111' },
+        ],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(lookup.findRecipientCandidate).not.toHaveBeenCalled();
+      expect(result.sentCount).toBe(1);
+      expect(templatePort.calls[0].variables).toEqual({ '1': 'Ana', '2': '' }); // NUNCA "$0"
+      const recipient = (await campaignRepo.listRecipients(campaign.id)).data[0]!;
+      expect(recipient.status).toBe('sent');
+      expect(recipient.providerId).toBeTruthy();
+    });
+
+    it('crudo sin contactName (defensivo, nunca debería pasar) → name resuelve a cadena vacía, no revienta', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([]);
+      const templatePort = new InMemoryTemplateMessagingGateway();
+      const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        variableSpec: { '1': { source: 'name' } },
+        recipients: [{ clientId: null, contactName: null, phoneNormalized: '3364111111', phoneE164: '+5493364111111' }],
+      });
+
+      await uc.execute({ campaignId: campaign.id });
+
+      expect(templatePort.calls[0].variables['1']).toBe('');
+    });
+
+    it('vinculado sigue con re-check SEND-5 intacto (no-regresión): opt-out POST-create → opted_out, sin llamar sendTemplate', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+      lookup.setOptOut('c1'); // opt-out DESPUÉS de "crear" (el candidate del lookup ya lo refleja)
+      const templatePort = new InMemoryTemplateMessagingGateway();
+      const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(lookup.findRecipientCandidate).toHaveBeenCalledWith('c1');
+      expect(templatePort.calls).toHaveLength(0);
+      const recipient = (await campaignRepo.listRecipients(campaign.id)).data[0]!;
+      expect(recipient.status).toBe('opted_out');
+      void result;
+    });
+
+    it('mixto: batch con 1 vinculado + 1 crudo → ambos quedan sent, cada uno con sus variables correctas', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1', name: 'Cliente Real', balanceDue: 5000 })]);
+      const templatePort = new InMemoryTemplateMessagingGateway();
+      const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        variableSpec: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+        recipients: [
+          { clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' },
+          { clientId: null, contactName: 'Contacto CSV', phoneNormalized: '3364222222', phoneE164: '+5493364222222' },
+        ],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(2);
+      const byTo = new Map(templatePort.calls.map((c) => [c.to, c.variables]));
+      expect(byTo.get('+5493364000001')).toEqual({ '1': 'Cliente Real', '2': '$5.000' });
+      expect(byTo.get('+5493364222222')).toEqual({ '1': 'Contacto CSV', '2': '' });
+    });
   });
 });

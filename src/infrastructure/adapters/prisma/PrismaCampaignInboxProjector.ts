@@ -24,13 +24,15 @@ export class PrismaCampaignInboxProjector implements CampaignInboxProjector {
   ) {}
 
   async projectSentMessage(input: ProjectSentMessageInput): Promise<void> {
-    const { recipient, candidate, renderedBody, sentAt } = input;
+    const { recipient, contactName, renderedBody, sentAt } = input;
 
     // Clave de matcheo = E164 CANÓNICO (recipient.phoneE164, ya es toWhatsAppE164 del
     // Client.phone al crear la campaña). NO normalizePhone (lossy con el "15" embebido
     // → duplicados sistemáticos cross-format: el bulk keyea distinto que el webhook de Chatwoot).
     const conversation = await this.conversationRepo.upsertBulkByPhone(recipient.phoneE164, {
-      contactName: candidate.name,
+      // bulk-csv-recipients (D6) — `contactName` reemplaza `candidate.name`: mismo
+      // dato (Client.name fresco para vinculados), + cubre el crudo (CSV-3).
+      contactName,
       contactPhone: recipient.phoneE164,
       // El bulk es un mensaje outbound recién enviado → bumpea el preview del inbox.
       lastMessageAt: sentAt,
