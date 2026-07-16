@@ -1,7 +1,7 @@
 import type { CampaignSegmentSource, ManualRecipientSource } from '@domain/ports/CustomerRepository';
 import type { PreviewSegmentInput, PreviewSegmentOutput } from '@application/dto/messaging-bulk.dto';
 import { assertHasRecipients } from './assertHasRecipients';
-import { resolveCombinedRecipients, normalizeManualClientIds } from './resolveCombinedRecipients';
+import { resolveCombinedRecipients, normalizeManualClientIds, normalizeManualContacts } from './resolveCombinedRecipients';
 
 /** Muestra acotada del preview (design §3.2) — no es el `count` real, solo una vidriera. */
 const SAMPLE_SIZE = 20;
@@ -29,20 +29,23 @@ export class PreviewCampaignSegment {
   async execute(input: PreviewSegmentInput): Promise<PreviewSegmentOutput> {
     // manual-recipients (MAN-5) — lista manual normalizada (dedup + sin vacíos).
     const manualClientIds = normalizeManualClientIds(input.manualClientIds);
+    // bulk-csv-recipients (CSV-6) — 4to dominio normalizado.
+    const manualContacts = normalizeManualContacts(input.manualContacts);
 
-    // MAN-2 (extiende FIX-8) — válido con segmento filtrado O lista manual no
-    // vacía; rechaza ANTES de tocar la fuente si ambos están vacíos.
-    assertHasRecipients(input, manualClientIds);
+    // MAN-2 (extiende FIX-8) — válido con segmento filtrado, O lista manual no
+    // vacía, O manualContacts no vacío; rechaza ANTES de tocar la fuente si los
+    // TRES están vacíos.
+    assertHasRecipients(input, manualClientIds, manualContacts);
 
-    // MAN-5 — cuenta la UNIÓN (segmento ∪ manuales) deduplicada por clientId Y por
-    // teléfono (FIX-1). FIX-2: `skipped` RECONCILIA las exclusiones del segmento MÁS
-    // las de la lista manual (opt-out/teléfono-inválido/duplicate-phone cross-set),
-    // sin doble-contar el overlap (el helper ya excluye del `manualSkipped` los
-    // manuales que hacen overlap por clientId con el segmento). Invariante:
-    // count (enviables) + Σ skipped = destinatarios únicos considerados.
-    const { resolved, segmentSkipped, manualSkipped, statusCounts } = await resolveCombinedRecipients({
+    // MAN-5 + bulk-csv-recipients (CSV-6) — cuenta la UNIÓN (segmento ∪ manuales ∪
+    // CSV) deduplicada por clientId Y por teléfono (FIX-1/CSV-4). FIX-2/CSV-6:
+    // `skipped` RECONCILIA las exclusiones de las 3 fuentes (opt-out/teléfono-
+    // inválido/duplicate-phone), sin doble-contar el overlap. Invariante: count
+    // (enviables) + Σ skipped = destinatarios únicos considerados.
+    const { resolved, segmentSkipped, manualSkipped, csvSkipped, statusCounts } = await resolveCombinedRecipients({
       segment: input,
       manualClientIds,
+      manualContacts,
       segmentSource: this.segmentSource,
       manualRecipientSource: this.manualRecipientSource,
     });
@@ -56,9 +59,9 @@ export class PreviewCampaignSegment {
         status: r.status,
       })),
       skipped: {
-        optedOut: segmentSkipped.optedOut + manualSkipped.optedOut,
-        duplicatePhone: segmentSkipped.duplicatePhone + manualSkipped.duplicatePhone,
-        invalidPhone: segmentSkipped.invalidPhone + manualSkipped.invalidPhone,
+        optedOut: segmentSkipped.optedOut + manualSkipped.optedOut + csvSkipped.optedOut,
+        duplicatePhone: segmentSkipped.duplicatePhone + manualSkipped.duplicatePhone + csvSkipped.duplicatePhone,
+        invalidPhone: segmentSkipped.invalidPhone + manualSkipped.invalidPhone + csvSkipped.invalidPhone,
       },
       statusCounts,
     };

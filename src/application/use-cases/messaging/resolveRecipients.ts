@@ -25,6 +25,21 @@ export interface ResolvedRecipient {
   status: string;
 }
 
+/**
+ * bulk-csv-recipients (D7, B2.1) — motivo de exclusión por-persona (spec.md
+ * vocabulario COMPLETO del wire). `sin_nombre` solo lo produce un contacto CSV
+ * (`resolveCombinedRecipients`) — un candidato con `Client` siempre trae `name`.
+ * Tipo COMPARTIDO entre `resolveRecipients` (segmento/manual) y
+ * `resolveCombinedRecipients` (CSV) para no duplicar el vocabulario.
+ */
+export type ExclusionReason = 'sin_nombre' | 'sin_telefono' | 'telefono_invalido' | 'opt_out' | 'duplicado';
+
+/** bulk-csv-recipients (D7, B2.1) — un candidato excluido + el motivo (detalle por-persona). */
+export interface ExcludedCandidate {
+  candidate: CampaignRecipientCandidate;
+  reason: ExclusionReason;
+}
+
 export interface ResolveRecipientsResult {
   resolved: ResolvedRecipient[];
   /** SEG-2 — excluidos por `whatsappOptOutAt != null`. */
@@ -38,6 +53,15 @@ export interface ResolveRecipientsResult {
    * dedup/teléfono-inválido, es decir sobre `resolved`) agrupados por `status`.
    */
   statusCounts: Record<string, number>;
+  /**
+   * bulk-csv-recipients (D7, B2.1) — ADITIVO: el detalle por-persona de CADA
+   * exclusión, con el motivo DIFERENCIADO (`sin_telefono` = phone vacío/ausente
+   * vs `telefono_invalido` = tenía dígitos pero `toWhatsAppE164` → `null`; antes
+   * ambos colapsaban en `excludedNoPhone`). Los contadores de arriba se DERIVAN
+   * de este detalle (backcompat exacto): `excludedNoPhone = |sin_telefono| +
+   * |telefono_invalido|`, `excludedOptOut = |opt_out|`, `dedupCollapsed = |duplicado|`.
+   */
+  excluded: ExcludedCandidate[];
 }
 
 /**
@@ -55,12 +79,28 @@ export function resolveRecipients(candidates: CampaignRecipientCandidate[]): Res
   let excludedOptOut = 0;
   let excludedNoPhone = 0;
   let dedupCollapsed = 0;
+  const excluded: ExcludedCandidate[] = [];
 
   const byNormalized = new Map<string, ResolvedRecipient>();
+  // bulk-csv-recipients (D7) — candidato ORIGINAL detrás del `ResolvedRecipient`
+  // sobreviviente actual, para poder reportar `duplicado` sobre el candidato
+  // EXACTO que pierde (incluido cuando el sobreviviente cambia por `clientId` menor).
+  const survivorCandidateByNormalized = new Map<string, CampaignRecipientCandidate>();
 
   for (const candidate of candidates) {
     if (candidate.whatsappOptOutAt != null) {
       excludedOptOut++;
+      excluded.push({ candidate, reason: 'opt_out' });
+      continue;
+    }
+
+    // bulk-csv-recipients (D7) — diferencia `sin_telefono` (ausente/vacío) de
+    // `telefono_invalido` (había dígitos pero no reconstruye un E164 válido).
+    // Ambos siguen sumando a `excludedNoPhone` (backcompat exacto).
+    const rawPhone = candidate.phone?.trim() ?? '';
+    if (rawPhone === '') {
+      excludedNoPhone++;
+      excluded.push({ candidate, reason: 'sin_telefono' });
       continue;
     }
 
@@ -68,6 +108,7 @@ export function resolveRecipients(candidates: CampaignRecipientCandidate[]): Res
     const phoneNormalized = normalizePhone(candidate.phone);
     if (phoneE164 === null || phoneNormalized === null) {
       excludedNoPhone++;
+      excluded.push({ candidate, reason: 'telefono_invalido' });
       continue;
     }
 
@@ -83,10 +124,17 @@ export function resolveRecipients(candidates: CampaignRecipientCandidate[]): Res
     const existing = byNormalized.get(phoneNormalized);
     if (!existing) {
       byNormalized.set(phoneNormalized, entry);
+      survivorCandidateByNormalized.set(phoneNormalized, candidate);
     } else {
       dedupCollapsed++;
       if (entry.clientId < existing.clientId) {
+        // el nuevo candidato tiene id menor y gana — el que sobrevivía hasta
+        // ahora pasa a `duplicado`.
+        excluded.push({ candidate: survivorCandidateByNormalized.get(phoneNormalized)!, reason: 'duplicado' });
         byNormalized.set(phoneNormalized, entry);
+        survivorCandidateByNormalized.set(phoneNormalized, candidate);
+      } else {
+        excluded.push({ candidate, reason: 'duplicado' });
       }
     }
   }
@@ -98,5 +146,5 @@ export function resolveRecipients(candidates: CampaignRecipientCandidate[]): Res
     statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1;
   }
 
-  return { resolved, excludedOptOut, excludedNoPhone, dedupCollapsed, statusCounts };
+  return { resolved, excludedOptOut, excludedNoPhone, dedupCollapsed, statusCounts, excluded };
 }

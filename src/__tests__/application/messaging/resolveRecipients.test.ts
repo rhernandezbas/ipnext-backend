@@ -105,6 +105,8 @@ describe('resolveRecipients', () => {
       excludedNoPhone: 0,
       dedupCollapsed: 0,
       statusCounts: {},
+      // bulk-csv-recipients (D7, B2.1) — campo ADITIVO nuevo, también vacío.
+      excluded: [],
     });
   });
 
@@ -158,5 +160,73 @@ describe('resolveRecipients', () => {
 
     expect(result.resolved[0].status).toBe('unknown');
     expect(result.statusCounts).toEqual({ unknown: 1 });
+  });
+
+  // ── bulk-csv-recipients (D7, B2.1) — detalle por-persona (`excluded`) ──────────
+  describe('D7: excluded — detalle por-persona con motivo diferenciado', () => {
+    it('opt-out → excluded trae {candidate, reason: "opt_out"}', () => {
+      const candidate = makeCandidate({ clientId: 'c1', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' });
+      const result = resolveRecipients([candidate]);
+
+      expect(result.excluded).toEqual([{ candidate, reason: 'opt_out' }]);
+    });
+
+    it('teléfono ausente/vacío → reason "sin_telefono" (diferenciado de basura)', () => {
+      const candidate = makeCandidate({ clientId: 'c1', phone: null });
+      const result = resolveRecipients([candidate]);
+
+      expect(result.excluded).toEqual([{ candidate, reason: 'sin_telefono' }]);
+      expect(result.excludedNoPhone).toBe(1); // backcompat: sigue sumando acá
+    });
+
+    it('teléfono con espacios en blanco (post-trim vacío) → "sin_telefono", NO "telefono_invalido"', () => {
+      const candidate = makeCandidate({ clientId: 'c1', phone: '   ' });
+      const result = resolveRecipients([candidate]);
+
+      expect(result.excluded).toEqual([{ candidate, reason: 'sin_telefono' }]);
+    });
+
+    it('teléfono con dígitos pero basura (toWhatsAppE164 → null) → reason "telefono_invalido"', () => {
+      const candidate = makeCandidate({ clientId: 'c1', phone: '123' });
+      const result = resolveRecipients([candidate]);
+
+      expect(result.excluded).toEqual([{ candidate, reason: 'telefono_invalido' }]);
+      expect(result.excludedNoPhone).toBe(1); // backcompat: sin_telefono + telefono_invalido
+    });
+
+    it('de-dup por teléfono → el PERDEDOR (id mayor) queda excluded con reason "duplicado"', () => {
+      const winner = makeCandidate({ clientId: 'c1', phone: '3364123456' });
+      const loser = makeCandidate({ clientId: 'c2', phone: '+5493364123456' }); // normaliza igual
+      const result = resolveRecipients([winner, loser]);
+
+      expect(result.resolved.map((r) => r.clientId)).toEqual(['c1']);
+      expect(result.excluded).toEqual([{ candidate: loser, reason: 'duplicado' }]);
+    });
+
+    it('de-dup: cuando el 2do candidato tiene id MENOR, gana y el PRIMERO (que sobrevivía) pasa a duplicado', () => {
+      const first = makeCandidate({ clientId: 'c2', phone: '3364123456' }); // llega primero, sobrevive momentáneamente
+      const second = makeCandidate({ clientId: 'c1', phone: '+5493364123456' }); // normaliza igual, id menor, gana
+
+      const result = resolveRecipients([first, second]);
+
+      expect(result.resolved.map((r) => r.clientId)).toEqual(['c1']);
+      // el excluido reportado es el candidato ORIGINAL 'first' (c2), no un objeto sintético
+      expect(result.excluded).toEqual([{ candidate: first, reason: 'duplicado' }]);
+    });
+
+    it('excludedNoPhone se DERIVA de sin_telefono + telefono_invalido en un lote mixto', () => {
+      const candidates = [
+        makeCandidate({ clientId: 'c1', phone: null }), // sin_telefono
+        makeCandidate({ clientId: 'c2', phone: '123' }), // telefono_invalido
+        makeCandidate({ clientId: 'c3', phone: '3364333333' }), // válido
+      ];
+      const result = resolveRecipients(candidates);
+
+      const sinTelefono = result.excluded.filter((e) => e.reason === 'sin_telefono').length;
+      const telefonoInvalido = result.excluded.filter((e) => e.reason === 'telefono_invalido').length;
+      expect(sinTelefono).toBe(1);
+      expect(telefonoInvalido).toBe(1);
+      expect(result.excludedNoPhone).toBe(sinTelefono + telefonoInvalido);
+    });
   });
 });
