@@ -34,10 +34,26 @@ import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
 import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
 import { ListRadiusAuthFailures } from '@application/use-cases/ListRadiusAuthFailures';
+import { ListRadiusSessionCures } from '@application/use-cases/ListRadiusSessionCures';
+import { CureStuckSession } from '@application/use-cases/CureStuckSession';
+import { InMemoryRadiusSessionCureEventRepository } from '@infrastructure/adapters/in-memory/InMemoryRadiusSessionCureEventRepository';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+
+/** radius-session-autocure BE-1: molde mínimo para los buildApp() de este archivo (no es el foco del test). */
+function buildSessionCureDeps() {
+  const cureEventRepo = new InMemoryRadiusSessionCureEventRepository();
+  return {
+    listRadiusSessionCures: new ListRadiusSessionCures(cureEventRepo),
+    cureStuckSession: new CureStuckSession(
+      new InMemoryRadiusOrchestratorGateway({}),
+      cureEventRepo,
+      { staleMs: 1_200_000, persistenceMs: 300_000, recencyMs: 120_000 },
+    ),
+  };
+}
 
 class EchoAuthProvider implements AuthProvider {
   async login() {
@@ -120,6 +136,7 @@ async function buildApp(): Promise<Fixture> {
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
+  const sessionCureDeps = buildSessionCureDeps();
   app.use('/api/radius', createRadiusRouter(
     new EchoAuthProvider(),
     undefined,
@@ -129,6 +146,8 @@ async function buildApp(): Promise<Fixture> {
     new ListRadiusEvents(radiusEventRepo),
     new ListNe8000PppoeAudit(pppoeRepo, radiusEventRepo, nasRepo),
     new ListRadiusAuthFailures(radiusAuthEventRepo),
+    sessionCureDeps.listRadiusSessionCures,
+    sessionCureDeps.cureStuckSession,
   ));
   app.use(errorHandler);
 
@@ -258,6 +277,7 @@ async function buildOrchSessionsApp(gateway: InMemoryRadiusOrchestratorGateway):
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
+  const orchSessionCureDeps = buildSessionCureDeps();
   app.use('/api/radius', createRadiusRouter(
     new EchoAuthProvider(),
     undefined,
@@ -267,6 +287,8 @@ async function buildOrchSessionsApp(gateway: InMemoryRadiusOrchestratorGateway):
     new ListRadiusEvents(radiusEventRepo),
     new ListNe8000PppoeAudit(pppoeRepo, radiusEventRepo, nasRepo),
     new ListRadiusAuthFailures(radiusAuthEventRepo),
+    orchSessionCureDeps.listRadiusSessionCures,
+    orchSessionCureDeps.cureStuckSession,
   ));
   app.use(errorHandler);
 
@@ -360,6 +382,7 @@ async function buildAuditApp(): Promise<{ app: express.Express; readUserId: stri
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
+  const auditSessionCureDeps = buildSessionCureDeps();
   app.use('/api/radius', createRadiusRouter(
     new EchoAuthProvider(),
     undefined,
@@ -369,6 +392,8 @@ async function buildAuditApp(): Promise<{ app: express.Express; readUserId: stri
     new ListRadiusEvents(radiusEventRepo),
     new ListNe8000PppoeAudit(pppoeRepo, radiusEventRepo, nasRepo),
     new ListRadiusAuthFailures(radiusAuthEventRepo),
+    auditSessionCureDeps.listRadiusSessionCures,
+    auditSessionCureDeps.cureStuckSession,
   ));
   app.use(errorHandler);
 

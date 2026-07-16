@@ -68,7 +68,7 @@ const buildPppoe = (): express.Express =>
   ));
 
 const buildRadius = (): express.Express =>
-  appWith('/api/radius', createRadiusRouter(fakeAuthProvider, undefined, passthroughPerm, f, f, f, f, f));
+  appWith('/api/radius', createRadiusRouter(fakeAuthProvider, undefined, passthroughPerm, f, f, f, f, f, f, f));
 
 const buildIClassClosure = (): express.Express =>
   appWith('/api/iclass', createIClassClosureRouter(f, f, f, f, null, null, f, f, f, f, f, f, pt, fakeAuthProvider));

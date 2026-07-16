@@ -97,3 +97,49 @@ export interface PaginatedRadiusAuthEventsDto {
     other:          number;
   };
 }
+
+// ── RadiusSessionCureEventDto (radius-session-autocure BE-1, REQ-CURE-5) ───────
+
+/**
+ * Fila de auditoría de un intento de curación de sesión RADIUS colgada (watcher o manual).
+ * Wire contract campo por campo (REQ-CURE-5/D8) — expuesto en GET /api/radius/session-cures.
+ */
+export interface RadiusSessionCureEventDto {
+  id: string;
+  username: string;
+  nasIp: string | null;
+  sessionId: string | null;
+  sessionStartedAt: string | null;  // ISO 8601
+  sessionLastUpdate: string | null; // ISO 8601
+  signalUsed: 'persistent_rejects' | 'stale_interim' | null;
+  trigger: 'auto' | 'manual';
+  action: 'both' | 'acct_close' | 'coa' | null;
+  outcome:
+    | 'cured' | 'already_cured' | 'skipped_alive' | 'skipped_ambiguous'
+    | 'skipped_no_session' | 'skipped_no_signal' | 'flagged_flapping' | 'failed';
+  reason: string | null;
+  actorName: string | null;
+  createdAt: string; // ISO 8601
+}
+
+export interface PaginatedRadiusSessionCureEventsDto {
+  data: RadiusSessionCureEventDto[];
+  total: number;
+  page: number;
+  limit: number;
+  hasNext: boolean;
+  /**
+   * Conteo por outcome, IGNORANDO el filtro `outcome` (chips del FE). Siempre incluye las 8
+   * claves del enum, defaulteando a 0.
+   */
+  countsByOutcome: {
+    cured: number;
+    already_cured: number;
+    skipped_alive: number;
+    skipped_ambiguous: number;
+    skipped_no_session: number;
+    skipped_no_signal: number;
+    flagged_flapping: number;
+    failed: number;
+  };
+}

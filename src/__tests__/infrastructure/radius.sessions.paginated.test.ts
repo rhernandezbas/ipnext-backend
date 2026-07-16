@@ -30,6 +30,10 @@ import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
 import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
 import { ListRadiusAuthFailures } from '@application/use-cases/ListRadiusAuthFailures';
+import { ListRadiusSessionCures } from '@application/use-cases/ListRadiusSessionCures';
+import { CureStuckSession } from '@application/use-cases/CureStuckSession';
+import { InMemoryRadiusSessionCureEventRepository } from '@infrastructure/adapters/in-memory/InMemoryRadiusSessionCureEventRepository';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
@@ -113,6 +117,12 @@ async function buildApp(opts?: { radiusRepo?: RadiusSessionRepository }): Promis
   const radiusEventRepo     = new InMemoryRadiusEventRepository();
   const radiusAuthEventRepo = new InMemoryRadiusAuthEventRepository();
   const nasRepo             = new InMemoryNasRepository();
+  const cureEventRepo       = new InMemoryRadiusSessionCureEventRepository();
+  const cureStuckSession    = new CureStuckSession(
+    new InMemoryRadiusOrchestratorGateway({}),
+    cureEventRepo,
+    { staleMs: 1_200_000, persistenceMs: 300_000, recencyMs: 120_000 },
+  );
 
   const app = express();
   app.use(cookieParser());
@@ -126,6 +136,8 @@ async function buildApp(opts?: { radiusRepo?: RadiusSessionRepository }): Promis
     new ListRadiusEvents(radiusEventRepo),
     new ListNe8000PppoeAudit(pppoeRepo, radiusEventRepo, nasRepo),
     new ListRadiusAuthFailures(radiusAuthEventRepo),
+    new ListRadiusSessionCures(cureEventRepo),
+    cureStuckSession,
   ));
   app.use(errorHandler);
 

@@ -25,6 +25,15 @@ export interface OrchestratorSession {
   bytesOut: number;
   /** MAC address del CPE (caller-id del NAS). `null` si el orchestrator no lo expone. */
   callerId: string | null;
+  /**
+   * radius-session-autocure (REQ-CURE-3/D9) — el `acctupdatetime` de radacct (ORCH-1 REQ-ORCH-1),
+   * parseado del `last_update` del wire. `null`/ausente si el orchestrator no lo expone
+   * (orchestrator viejo, deploy fuera de orden) — el watcher lo trata como gate fail-closed
+   * `skipped_no_signal`. Campo OPCIONAL (`?`) a propósito — extensión ADITIVA: cero firmas rotas
+   * en los ~10 sitios que ya construyen `OrchestratorSession` literales (S3.2). Precedente:
+   * `AccountingEventRow.lastUpdate` (línea ~118).
+   */
+  lastUpdate?: string | null;
 }
 
 export interface ChangePlanOptions {
@@ -183,6 +192,27 @@ export interface PostauthPage {
   nextPage: number | null;
 }
 
+// ── Curación de sesiones colgadas (radius-session-autocure BE-1, REQ-CURE-3/D9) ────────────────
+
+/** Un resultado de CoA Disconnect best-effort, ya mapeado a camelCase (wire: {nas_ip, status, detail}). */
+export interface CoAResult {
+  nasIp: string;
+  /** 'ack' | 'timeout' | 'nak' | ... — lowercase, informativo, nunca bloquea el cierre contable. */
+  status: string;
+  detail: string | null;
+}
+
+/**
+ * Resultado de `cureSession`, ya mapeado a camelCase. El wire REAL (ORCH-1, contrato
+ * implementado, commit d37de58) es snake_case: `{cured, already_closed, closed_at, coa}`.
+ */
+export interface CureSessionResult {
+  cured: boolean;
+  alreadyClosed: boolean;
+  closedAt: string | null;
+  coa: CoAResult[];
+}
+
 export interface RadiusOrchestratorGateway {
   /**
    * Crea el usuario en el RADIUS (radcheck + radusergroup + radreply Framed-IP-Address).
@@ -265,4 +295,14 @@ export interface RadiusOrchestratorGateway {
    * Usado por el ingest scheduler para llenar `RadiusAuthEvent`.
    */
   listPostauth(filters: ListPostauthFilters): Promise<PostauthPage>;
+
+  /**
+   * radius-session-autocure (REQ-CURE-3/D2/D9) — cura una sesión colgada: CoA Disconnect
+   * best-effort + cierre contable idempotente en radacct (ORCH-1).
+   * Corresponde a `POST /users/{username}/sessions/{sessionId}/cure` (sessionId con
+   * `encodeURIComponent`). Errores: 404 upstream → `OrchestratorRejectedError` (upstreamStatus
+   * 404 — el core lo mapea a outcome `failed` / reason `session_not_found`); red/5xx →
+   * `OrchestratorUnreachableError`.
+   */
+  cureSession(username: string, sessionId: string): Promise<CureSessionResult>;
 }

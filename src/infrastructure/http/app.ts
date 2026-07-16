@@ -449,6 +449,9 @@ import { PrismaRadiusEventRepository } from '../adapters/prisma/PrismaRadiusEven
 import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
 import { PrismaRadiusAuthEventRepository } from '../adapters/prisma/PrismaRadiusAuthEventRepository';
 import { ListRadiusAuthFailures } from '@application/use-cases/ListRadiusAuthFailures';
+import { PrismaRadiusSessionCureEventRepository } from '../adapters/prisma/PrismaRadiusSessionCureEventRepository';
+import { ListRadiusSessionCures } from '@application/use-cases/ListRadiusSessionCures';
+import { CureStuckSession } from '@application/use-cases/CureStuckSession';
 import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
 import { createLeadsRouter } from './routes/leads.routes';
 import { PrismaLeadRepository } from '../adapters/prisma/PrismaLeadRepository';
@@ -1356,6 +1359,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // RADIUS auth events (radpostauth) — read-only para el FE.
   const radiusAuthEventRepo = new PrismaRadiusAuthEventRepository();
   const listRadiusAuthFailures = new ListRadiusAuthFailures(radiusAuthEventRepo);
+  // radius-session-autocure BE-1 (REQ-CURE-5/6) — registro de curas + core compartido watcher/manual.
+  const radiusSessionCureEventRepo = new PrismaRadiusSessionCureEventRepository();
+  const listRadiusSessionCures = new ListRadiusSessionCures(radiusSessionCureEventRepo);
+  const cureStuckSession = new CureStuckSession(orchestrator, radiusSessionCureEventRepo, {
+    staleMs: config.radiusAutoCure.staleMs,
+    persistenceMs: config.radiusAutoCure.persistenceMs,
+    recencyMs: config.radiusAutoCure.recencyMs,
+  });
 
   const monitoringRepo = new PrismaMonitoringRepository();
   const getMonitoringStats = new GetMonitoringStats(monitoringRepo);
@@ -1969,7 +1980,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listHardwareAssets, createHardwareAsset, updateHardwareAsset, deleteHardwareAsset,
   ));
   app.use('/api/gpon', createGponRouter(listOlts, getOlt, listOnus, getOnu, listOnusByOlt, createOlt, createOnu, updateOnuStatus));
-  app.use('/api/radius', createRadiusRouter(authAdapter, sessionRepo, requirePerm, listRadiusSessions, disconnectSession, listRadiusEvents, listNe8000Audit, listRadiusAuthFailures));
+  app.use('/api/radius', createRadiusRouter(authAdapter, sessionRepo, requirePerm, listRadiusSessions, disconnectSession, listRadiusEvents, listNe8000Audit, listRadiusAuthFailures, listRadiusSessionCures, cureStuckSession));
   app.use('/api', createNasRouter(
     authAdapter,
     sessionRepo,

@@ -33,6 +33,10 @@ import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
 import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
 import { ListRadiusAuthFailures } from '@application/use-cases/ListRadiusAuthFailures';
+import { ListRadiusSessionCures } from '@application/use-cases/ListRadiusSessionCures';
+import { CureStuckSession } from '@application/use-cases/CureStuckSession';
+import { InMemoryRadiusSessionCureEventRepository } from '@infrastructure/adapters/in-memory/InMemoryRadiusSessionCureEventRepository';
+import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { InMemoryRadiusAuthEventRepository } from '@infrastructure/adapters/in-memory/InMemoryRadiusAuthEventRepository';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
@@ -121,6 +125,13 @@ async function buildApp(): Promise<Fixture> {
   const listRadiusEvents   = new ListRadiusEvents(radiusRepo);
   const listNe8000Audit    = new ListNe8000PppoeAudit(pppoeRepo, radiusRepo, nasRepo);
   const listRadiusAuthFailures = new ListRadiusAuthFailures(new InMemoryRadiusAuthEventRepository());
+  const cureEventRepo = new InMemoryRadiusSessionCureEventRepository();
+  const listRadiusSessionCures = new ListRadiusSessionCures(cureEventRepo);
+  const cureStuckSession = new CureStuckSession(
+    new InMemoryRadiusOrchestratorGateway({}),
+    cureEventRepo,
+    { staleMs: 1_200_000, persistenceMs: 300_000, recencyMs: 120_000 },
+  );
 
   const app = express();
   app.use(cookieParser());
@@ -134,6 +145,8 @@ async function buildApp(): Promise<Fixture> {
     listRadiusEvents,
     listNe8000Audit,
     listRadiusAuthFailures,
+    listRadiusSessionCures,
+    cureStuckSession,
   ));
   app.use(errorHandler);
 

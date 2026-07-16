@@ -86,11 +86,21 @@ describe('HttpRadiusOrchestratorGateway (Inc3b — cliente HTTP real, espeja la 
   it('listSessions → GET /users/{u}/sessions y mapea snake_case → camelCase', async () => {
     const { gw } = fakeHttp({
       get: jest.fn().mockResolvedValue({
-        data: [{ session_id: 's1', username: 'u', nas_ip: '10.60.0.38', framed_ip: '100.64.10.10', started_at: 'T', bytes_in: 10, bytes_out: 20, caller_id: '78:8A:20:96:6A:AE' }],
+        data: [{ session_id: 's1', username: 'u', nas_ip: '10.60.0.38', framed_ip: '100.64.10.10', started_at: 'T', bytes_in: 10, bytes_out: 20, caller_id: '78:8A:20:96:6A:AE', last_update: '2026-07-16T09:58:00Z' }],
       }),
     });
     const sessions = await gw.listSessions('u');
-    expect(sessions).toEqual([{ sessionId: 's1', username: 'u', nasIp: '10.60.0.38', framedIp: '100.64.10.10', startedAt: 'T', bytesIn: 10, bytesOut: 20, callerId: '78:8A:20:96:6A:AE' }]);
+    expect(sessions).toEqual([{ sessionId: 's1', username: 'u', nasIp: '10.60.0.38', framedIp: '100.64.10.10', startedAt: 'T', bytesIn: 10, bytesOut: 20, callerId: '78:8A:20:96:6A:AE', lastUpdate: '2026-07-16T09:58:00Z' }]);
+  });
+
+  it('radius-session-autocure REQ-CURE-3/D9: last_update ausente en el wire → lastUpdate null (orchestrator viejo, gate fail-closed río abajo)', async () => {
+    const { gw } = fakeHttp({
+      get: jest.fn().mockResolvedValue({
+        data: [{ session_id: 's1', username: 'u', nas_ip: '10.60.0.38', framed_ip: null, started_at: 'T', bytes_in: 0, bytes_out: 0, caller_id: null }],
+      }),
+    });
+    const sessions = await gw.listSessions('u');
+    expect(sessions[0]?.lastUpdate).toBeNull();
   });
 
   it('disconnectSessions → DELETE /users/{u}/sessions (CoA)', async () => {

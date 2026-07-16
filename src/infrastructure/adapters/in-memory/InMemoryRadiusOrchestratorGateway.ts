@@ -11,6 +11,7 @@ import {
   ListPostauthFilters,
   PostauthPage,
   AuthEventRow,
+  CureSessionResult,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -107,6 +108,17 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
   /** Eventos de auth (postauth) que devuelve listPostauth. Sembrable para tests del scheduler. */
   private readonly authEvents: AuthEventRow[];
 
+  /**
+   * radius-session-autocure (REQ-CURE-3/D9) — sessionIds sembrados para simular el 404 upstream
+   * (find_any_by_id no encuentra NADA — ni abierta ni cerrada). cureSession() los rechaza con
+   * OrchestratorRejectedError(404) en vez del alreadyClosed:true por defecto.
+   */
+  private readonly cureNotFoundSessionIds: Set<string>;
+  /** Status del CoA que devuelve cureSession por defecto ('ack' | 'timeout' | 'nak' | ...). */
+  private readonly cureCoaStatus: string;
+  /** Log de llamadas a cureSession, para aserciones (encodeURIComponent, orden, etc). */
+  public readonly cureCalls: { username: string; sessionId: string }[] = [];
+
   public readonly calls: UserCallLog[] = [];
   public readonly planCalls: PlanCallLog[] = [];
 
@@ -144,6 +156,14 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
      * Default: [].
      */
     authEvents?: AuthEventRow[];
+    /**
+     * radius-session-autocure (REQ-CURE-3/D9) — sessionIds para los que cureSession debe
+     * responder 404 (OrchestratorRejectedError) en vez del alreadyClosed:true por defecto:
+     * modela `find_any_by_id` sin match (ni abierta ni cerrada). Default: [].
+     */
+    cureNotFoundSessionIds?: string[];
+    /** Status del CoA que cureSession reporta por defecto ('ack' | 'timeout' | 'nak'). Default 'ack'. */
+    cureCoaStatus?: string;
   }) {
     this.unreachable = new Set(opts?.unreachable ?? []);
     this.failForPlanCode = new Set(opts?.failForPlanCode ?? []);
@@ -156,6 +176,8 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
     this.globalSessionsUnreachable = opts?.globalSessionsUnreachable ?? false;
     this.accountingEvents = [...(opts?.accountingEvents ?? [])];
     this.authEvents = [...(opts?.authEvents ?? [])];
+    this.cureNotFoundSessionIds = new Set(opts?.cureNotFoundSessionIds ?? []);
+    this.cureCoaStatus = opts?.cureCoaStatus ?? 'ack';
     for (const u of opts?.seed ?? []) {
       this.state.set(u.username, { plan: u.plan ?? '', suspended: u.suspended ?? false });
       if (u.sessions) this.sessions.set(u.username, u.sessions);
@@ -262,7 +284,10 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
 
   async listSessions(username: string): Promise<OrchestratorSession[]> {
     this.guardUser(username);
-    return this.sessions.get(username) ?? [];
+    // radius-session-autocure: copia defensiva — cureSession() hace splice() sobre el array
+    // INTERNO al cerrar una sesión; devolver la referencia viva rompía a los callers que iteran
+    // el resultado de listSessions() mientras curan cada sesión (mutar-durante-iterar).
+    return [...(this.sessions.get(username) ?? [])];
   }
 
   async disconnectSessions(username: string): Promise<void> {
@@ -380,6 +405,36 @@ export class InMemoryRadiusOrchestratorGateway implements RadiusOrchestratorGate
       page,
       pageSize,
       nextPage: hasMore ? page + 1 : null,
+    };
+  }
+
+  /**
+   * radius-session-autocure (REQ-CURE-3/D9) — modela la semántica REAL del endpoint cure:
+   *  - sessionId en `cureNotFoundSessionIds` → OrchestratorRejectedError(404) (find_any_by_id sin match).
+   *  - sessionId presente en las sesiones ABIERTAS del usuario → la cierra (splice del array
+   *    `sessions`, como el UPDATE real) y devuelve cured:true.
+   *  - sessionId AUSENTE de las sesiones abiertas (ya curada antes / el cron ganó la carrera) →
+   *    already_closed:true, NO throw (lección del fake de changeFramedIp, design D9).
+   *  - `unreachable` (mismo set que el resto de las ops) → OrchestratorUnreachableError.
+   */
+  async cureSession(username: string, sessionId: string): Promise<CureSessionResult> {
+    this.guardUser(username);
+    this.cureCalls.push({ username, sessionId });
+    if (this.cureNotFoundSessionIds.has(sessionId)) {
+      throw new OrchestratorRejectedError(404, { detail: `session ${sessionId} not found` });
+    }
+    const list = this.sessions.get(username) ?? [];
+    const idx = list.findIndex((s) => s.sessionId === sessionId);
+    if (idx === -1) {
+      return { cured: false, alreadyClosed: true, closedAt: null, coa: [{ nasIp: '', status: this.cureCoaStatus, detail: null }] };
+    }
+    const [closed] = list.splice(idx, 1);
+    this.sessions.set(username, list);
+    return {
+      cured: true,
+      alreadyClosed: false,
+      closedAt: new Date().toISOString(),
+      coa: [{ nasIp: closed?.nasIp ?? '', status: this.cureCoaStatus, detail: null }],
     };
   }
 

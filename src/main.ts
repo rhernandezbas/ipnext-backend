@@ -10,6 +10,7 @@ import { bootstrapUispSync } from './infrastructure/scheduling/bootstrapUispSync
 import { bootstrapRadiusAccountingIngest } from './infrastructure/scheduling/bootstrapRadiusAccountingIngest';
 import { bootstrapRadiusAuthIngest } from './infrastructure/scheduling/bootstrapRadiusAuthIngest';
 import { bootstrapPppoeAutoMove } from './infrastructure/scheduling/bootstrapPppoeAutoMove';
+import { bootstrapRadiusAutoCure } from './infrastructure/scheduling/bootstrapRadiusAutoCure';
 import { bootstrapChatMediaDownload } from './infrastructure/scheduling/bootstrapChatMediaDownload';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
@@ -83,6 +84,11 @@ void (async () => {
   void bootstrapPppoeAutoMove()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[pppoe-auto-move] bootstrap failed (server kept alive):', (err as Error).message));
+  // RADIUS session auto-cure watcher (radius-session-autocure BE-1) — opt-in, dark by default
+  // (flag 'radius-auto-cure').
+  void bootstrapRadiusAutoCure()
+    .then((scheduler) => scheduler?.start())
+    .catch((err) => console.error('[radius-auto-cure] bootstrap failed (server kept alive):', (err as Error).message));
   // messaging-inbox-v2-media (F1.5 fase A, Tanda 1) — reintento de descarga de media
   // entrante — opt-in, dark by default (flag 'chat-media-download').
   void bootstrapChatMediaDownload()

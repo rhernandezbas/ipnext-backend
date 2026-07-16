@@ -12,6 +12,8 @@ import {
   ListPostauthFilters,
   PostauthPage,
   AuthEventRow,
+  CureSessionResult,
+  CoAResult,
 } from '@domain/ports/RadiusOrchestratorGateway';
 import { OrchestratorUnreachableError, OrchestratorRejectedError } from '@domain/errors/pppoe';
 
@@ -163,6 +165,22 @@ export class HttpRadiusOrchestratorGateway implements RadiusOrchestratorGateway 
     return toAccountingPage(data);
   }
 
+  /**
+   * radius-session-autocure (REQ-CURE-3, S3.1-S3.4): POST /users/{username}/sessions/{sessionId}/cure.
+   * sessionId va con encodeURIComponent (puede traer caracteres no alfanuméricos). Wire snake_case
+   * real → se mapea a camelCase (already_closed→alreadyClosed, closed_at→closedAt, coa items
+   * nas_ip→nasIp). `coa` ausente en el wire → [] defensivo.
+   */
+  async cureSession(username: string, sessionId: string): Promise<CureSessionResult> {
+    const { data } = await this.call(() =>
+      this.http.post(
+        `/users/${encodeURIComponent(username)}/sessions/${encodeURIComponent(sessionId)}/cure`,
+        {},
+      ),
+    );
+    return toCureSessionResult(data);
+  }
+
   async listPostauth(filters: ListPostauthFilters): Promise<PostauthPage> {
     // Build query params — omit undefined values so they don't pollute the query string.
     const params: Record<string, string | number> = {};
@@ -199,6 +217,28 @@ function toSession(r: any): OrchestratorSession {
     bytesIn: r.bytes_in ?? 0,
     bytesOut: r.bytes_out ?? 0,
     callerId: r.caller_id ?? null,
+    // radius-session-autocure (REQ-CURE-3/D9): acctupdatetime, null si el orchestrator no lo expone.
+    lastUpdate: r.last_update ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toCoAResult(r: any): CoAResult {
+  return {
+    nasIp: r.nas_ip,
+    status: r.status,
+    detail: r.detail ?? null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toCureSessionResult(data: any): CureSessionResult {
+  const coa: unknown = data?.coa;
+  return {
+    cured: Boolean(data?.cured),
+    alreadyClosed: Boolean(data?.already_closed),
+    closedAt: data?.closed_at ?? null,
+    coa: Array.isArray(coa) ? (coa as unknown[]).map(toCoAResult) : [],
   };
 }
 

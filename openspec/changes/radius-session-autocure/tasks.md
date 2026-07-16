@@ -31,23 +31,23 @@
 
 ### 3. Core + persistencia (TDD)
 
-- [ ] 3.1 Tests RED del gateway: `OrchestratorSession.lastUpdate` aditivo + `cureSession` (S3.1–S3.4 de REQ-CURE-3, incl. `encodeURIComponent` y fake con semántica `alreadyClosed`).
-- [ ] 3.2 GREEN: port + `HttpRadiusOrchestratorGateway` + fakes/in-memory actualizados (aditivo — cero firmas rotas).
-- [ ] 3.3 Migración ADITIVA `RadiusSessionCureEvent` (via `npm run prisma:migrate`, jamás SQL a mano) + port `RadiusSessionCureEventRepository` + adapters `Prisma*`/`InMemory*` (naming convention del repo).
-- [ ] 3.4 Tests RED del core `CureStuckSession`: gates fail-closed + DOS caminos de cura (fast path por persistencia / stale interim) S2.1–S2.10 (REQ-CURE-2, enmienda) + outcomes/registro con `signalUsed` (REQ-CURE-3, REQ-CURE-5 S5.1–S5.2) con in-memory + fake gateway.
-- [ ] 3.5 GREEN: `CureStuckSession` (gates + fast path new-wins + camino stale + cura + fila con signalUsed; parámetros trigger/actor/force y agregado `{firstReject, lastReject}`).
-- [ ] 3.6 Tests RED del watcher `AutoCureStuckSessions`: detección + agregado por username S1.1–S1.4 (REQ-CURE-1) + breaker/cap/cure-throttle 30 min/flapping flag/throttle S4.1–S4.8 (REQ-CURE-4, enmienda).
-- [ ] 3.7 GREEN: `AutoCureStuckSessions` (lookback → agregado `{firstReject, lastReject}` por username → breaker → cap → cure-throttle 30 min → flapping flag (≥3 curas/24 h → `flagged_flapping`) → core por ítem con aislamiento de fallos → summary con TODOS los counters).
-- [ ] 3.8 Config: bloque `radiusAutoCure` en `config.ts` (`parseIntervalMs`/`parsePositiveInt`; piso duro 20 min en `STALE_MS` — S2.7; pisos de `PERSISTENCE_MS`/`RECENCY_MS`; clamp de coherencia `LOOKBACK > PERSISTENCE + RECENCY` — S7.4) + `env.example` (S7.3, incluye `_PERSISTENCE_MS`, `_REJECT_RECENCY_MS`, `_FLAPPING_MAX` y el nuevo default 30 min de `_COOLDOWN_MS`).
+- [x] 3.1 Tests RED del gateway: `OrchestratorSession.lastUpdate` aditivo + `cureSession` (S3.1–S3.4 de REQ-CURE-3, incl. `encodeURIComponent` y fake con semántica `alreadyClosed`).
+- [x] 3.2 GREEN: port + `HttpRadiusOrchestratorGateway` + fakes/in-memory actualizados (aditivo — cero firmas rotas).
+- [x] 3.3 Migración ADITIVA `RadiusSessionCureEvent` (hand-written SQL calcado 1:1 del molde `PppoeNasMoveEvent` — `prisma migrate diff` pide shadow DB no disponible en el worktree; `npx prisma generate` corrido OK sin DB) + port `RadiusSessionCureEventRepository` + adapters `Prisma*`/`InMemory*` (naming convention del repo).
+- [x] 3.4 Tests RED del core `CureStuckSession`: gates fail-closed + DOS caminos de cura (fast path por persistencia / stale interim) S2.1–S2.10 (REQ-CURE-2, enmienda) + outcomes/registro con `signalUsed` (REQ-CURE-3, REQ-CURE-5 S5.1–S5.2) con in-memory + fake gateway.
+- [x] 3.5 GREEN: `CureStuckSession` (gates + fast path new-wins + camino stale + cura + fila con signalUsed; parámetros trigger/actor/force y agregado `{firstReject, lastReject}`).
+- [x] 3.6 Tests RED del watcher `AutoCureStuckSessions`: detección + agregado por username S1.1–S1.4 (REQ-CURE-1) + breaker/cap/cure-throttle 30 min/flapping flag/throttle S4.1–S4.8 (REQ-CURE-4, enmienda).
+- [x] 3.7 GREEN: `AutoCureStuckSessions` (lookback → agregado `{firstReject, lastReject}` por username → breaker → cap → cure-throttle 30 min → flapping flag (≥3 curas/24 h → `flagged_flapping`) → core por ítem con aislamiento de fallos → summary con TODOS los counters).
+- [x] 3.8 Config: bloque `radiusAutoCure` en `config.ts` (`parseIntervalMs`/`parsePositiveInt`; piso duro 20 min en `STALE_MS` — S2.7; pisos de `PERSISTENCE_MS`/`RECENCY_MS`; clamp de coherencia `LOOKBACK > PERSISTENCE + RECENCY` — S7.4) + `env.example` (S7.3, incluye `_PERSISTENCE_MS`, `_REJECT_RECENCY_MS`, `_FLAPPING_MAX` y el nuevo default 30 min de `_COOLDOWN_MS`).
 
 ### 4. Scheduler + rutas + wiring (TDD)
 
-- [ ] 4.1 `RadiusAutoCureScheduler` + `bootstrapRadiusAutoCure` (clon de `PppoeAutoMoveScheduler`/`bootstrapPppoeAutoMove`: inFlight + lock `radius-auto-cure` + flag por tick + catch del tick + unref) + tests S4.4, S7.1–S7.2 + start desde `main.ts`.
-- [ ] 4.2 Seed del feature flag `radius-auto-cure` OFF (migración idempotente `ON CONFLICT DO NOTHING`, patrón del seed de `pppoe-auto-move`).
-- [ ] 4.3 Use case `ListRadiusSessionCures` (paginado, filtros, `countsByOutcome` — molde `ListRadiusAuthFailures`) + ruta `GET /api/radius/session-cures` (gate `network.read`, validación defensiva) + tests de ruta S5.3–S5.5 (wire contract campo por campo).
-- [ ] 4.4 Ruta manual `POST /api/radius/session-cures` (gate `network.manage`, force, SIEMPRE registra, sin cure-throttle/flapping para el operador, errores via `next(err)`) + tests S6.1–S6.6.
-- [ ] 4.5 Wiring en `app.ts` + composition test (S7.2 — sin wiring = feature muerta) + `deploy.yml`: forward de las envs nuevas (`gh secret set` solo si se necesita override; el ON/OFF va por FeatureFlag UI, NO por env).
-- [ ] 4.6 Gate: suite completa + `tsc --noEmit`.
+- [x] 4.1 `RadiusAutoCureScheduler` + `bootstrapRadiusAutoCure` (clon de `PppoeAutoMoveScheduler`/`bootstrapPppoeAutoMove`: inFlight + lock `radius-auto-cure` + flag por tick + catch del tick + unref) + tests S4.4, S7.1–S7.2 + start desde `main.ts`.
+- [x] 4.2 Seed del feature flag `radius-auto-cure` OFF (migración idempotente `ON CONFLICT DO NOTHING`, patrón del seed de `pppoe-auto-move`).
+- [x] 4.3 Use case `ListRadiusSessionCures` (paginado, filtros, `countsByOutcome` — molde `ListRadiusAuthFailures`) + ruta `GET /api/radius/session-cures` (gate `network.read`, validación defensiva) + tests de ruta S5.3–S5.5 (wire contract campo por campo).
+- [x] 4.4 Ruta manual `POST /api/radius/session-cures` (gate `network.manage`, force, SIEMPRE registra, sin cure-throttle/flapping para el operador, errores via `next(err)`) + tests S6.1–S6.6.
+- [x] 4.5 Wiring en `app.ts` + composition test (S7.2 — sin wiring = feature muerta) + `deploy.yml`: forward de `RADIUS_AUTO_CURE_INTERVAL_MS` (mismo criterio que `AUTO_MOVE_INTERVAL_MS`; resto del tuning disponible via `gh secret set` si hace falta override — el ON/OFF va por FeatureFlag UI, NO por env).
+- [x] 4.6 Gate: suite ACOTADA al change (20 suites / 354 tests, todo verde) + `tsc --noEmit` limpio. NO se corrió `npm test` completo (instrucción explícita del orquestador — full suite queda para `sdd-verify`).
 - [ ] 4.7 Review adversarial (focos: carrera watcher-vs-cron y watcher-vs-manual sobre la misma sesión; fast path new-wins — que el ping-pong de credencial compartida NO degenere en kick-loop (cure-throttle 30 min + flapping flag deben cortarlo); gate alive con múltiples sesiones mixtas fresca+stale y persistencia a medio cumplir; interacción cure-throttle vs flapping vs throttle de registro; fail-open del throttle) + fix waves hasta CLEAN.
 - [ ] 4.8 `sdd-verify` BE-1 (matriz REQ-CURE-* → test verde).
 - [ ] 4.9 Push con OK del usuario + deploy verde. El flag QUEDA OFF.

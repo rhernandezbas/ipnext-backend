@@ -8,6 +8,8 @@ import { DisconnectSession } from '@application/use-cases/DisconnectSession';
 import { ListRadiusEvents } from '@application/use-cases/ListRadiusEvents';
 import { ListNe8000PppoeAudit } from '@application/use-cases/ListNe8000PppoeAudit';
 import { ListRadiusAuthFailures } from '@application/use-cases/ListRadiusAuthFailures';
+import { ListRadiusSessionCures } from '@application/use-cases/ListRadiusSessionCures';
+import { CureStuckSession } from '@application/use-cases/CureStuckSession';
 import type { RadiusAuthReply } from '@domain/entities/radius-auth-event';
 
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
@@ -19,6 +21,11 @@ const VALID_ENFORCED       = new Set(['active', 'reduced', 'blocked']);
 const VALID_AUTH_REPLIES   = new Set(['Access-Accept', 'Access-Reject']);
 const VALID_AUTH_REASONS   = new Set(['session_stuck', 'user_not_found', 'other']);
 const VALID_SESSION_STATUS = new Set(['active', 'idle']);
+const VALID_CURE_OUTCOMES  = new Set([
+  'cured', 'already_cured', 'skipped_alive', 'skipped_ambiguous',
+  'skipped_no_session', 'skipped_no_signal', 'flagged_flapping', 'failed',
+]);
+const VALID_CURE_TRIGGERS  = new Set(['auto', 'manual']);
 
 /**
  * FIX5: parseIntPositive — devuelve el número si es un entero positivo válido; NaN si no.
@@ -69,8 +76,9 @@ function normalizeQueryParam(v: unknown): string | undefined | 'invalid' {
 /**
  * Sesiones RADIUS + Auditoría de red.
  *
- * `network.read`:   GET /sessions, GET /events, GET /ne8000/audit, GET /auth-failures
- * `network.manage`: DELETE /sessions/:id
+ * `network.read`:   GET /sessions, GET /events, GET /ne8000/audit, GET /auth-failures,
+ *                    GET /session-cures
+ * `network.manage`: DELETE /sessions/:id, POST /session-cures
  */
 export function createRadiusRouter(
   authProvider: AuthProvider,
@@ -81,6 +89,8 @@ export function createRadiusRouter(
   listRadiusEvents: ListRadiusEvents,
   listNe8000Audit: ListNe8000PppoeAudit,
   listRadiusAuthFailures: ListRadiusAuthFailures,
+  listRadiusSessionCures: ListRadiusSessionCures,
+  cureStuckSession: CureStuckSession,
 ): Router {
   const router = Router();
   const auth      = createAuthMiddleware(authProvider, sessionRepo);
@@ -285,6 +295,110 @@ export function createRadiusRouter(
       });
 
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── GET /session-cures — auditoría de curas de sesiones RADIUS colgadas ──────
+  // radius-session-autocure BE-1 (REQ-CURE-5). Espejo de /auth-failures: gate network.read +
+  // validación defensiva.
+  router.get('/session-cures', auth, canRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const q = req.query;
+
+      if (q['outcome'] !== undefined && !VALID_CURE_OUTCOMES.has(q['outcome'] as string)) {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'outcome inválido' });
+        return;
+      }
+      if (q['trigger'] !== undefined && !VALID_CURE_TRIGGERS.has(q['trigger'] as string)) {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'trigger must be auto | manual' });
+        return;
+      }
+
+      const page  = parseIntPositive(q['page']  as string | undefined);
+      const limit = parseIntPositive(q['limit'] as string | undefined);
+      if (page  === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'page must be a positive integer' }); return; }
+      if (limit === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'limit must be a positive integer' }); return; }
+
+      const from = parseDate(q['from'] as string | undefined);
+      const to   = parseDate(q['to']   as string | undefined);
+      if (from === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'from must be a valid ISO 8601 date' }); return; }
+      if (to   === 'invalid') { res.status(400).json({ code: 'VALIDATION_ERROR', message: 'to must be a valid ISO 8601 date' }); return; }
+
+      const result = await listRadiusSessionCures.execute({
+        username: q['username'] as string | undefined,
+        outcome:  q['outcome']  as string | undefined,
+        trigger:  q['trigger']  as string | undefined,
+        from,
+        to,
+        page,
+        limit,
+      });
+
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── POST /session-cures — cura MANUAL (escape hatch auditado) ────────────────
+  // radius-session-autocure BE-1 (REQ-CURE-6). Gate network.manage (espejo del disconnect
+  // manual). Ejecuta el MISMO core CureStuckSession que el watcher. Sin `force`: respeta los
+  // gates fail-closed (alive/ambiguous → 409 tipado, SIN curar). Con `force: true`: los saltea.
+  // SIEMPRE registra fila (incl. los 409) — el core ya lo garantiza (trigger 'manual' nunca
+  // pasa por el cure-throttle/flapping/throttle de registro).
+  router.post('/session-cures', auth, canManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const body = req.body as { username?: unknown; sessionId?: unknown; force?: unknown };
+
+      if (typeof body.username !== 'string' || body.username.trim() === '') {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'username es requerido' });
+        return;
+      }
+      if (body.sessionId !== undefined && typeof body.sessionId !== 'string') {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'sessionId debe ser string' });
+        return;
+      }
+      if (body.force !== undefined && typeof body.force !== 'boolean') {
+        res.status(400).json({ code: 'VALIDATION_ERROR', message: 'force debe ser boolean' });
+        return;
+      }
+
+      const force = body.force === true;
+      const actorName = req.user?.username ?? 'operador';
+
+      const result = await cureStuckSession.execute({
+        username: body.username,
+        trigger: 'manual',
+        actorName,
+        sessionId: body.sessionId as string | undefined,
+        force,
+      });
+
+      const responseBody = {
+        outcome: result.outcome,
+        reason: result.reason,
+        events: result.events.map((e) => ({
+          id: e.id, username: e.username, nasIp: e.nasIp, sessionId: e.sessionId,
+          sessionStartedAt: e.sessionStartedAt, sessionLastUpdate: e.sessionLastUpdate,
+          signalUsed: e.signalUsed, trigger: e.trigger, action: e.action, outcome: e.outcome,
+          reason: e.reason, actorName: e.actorName, createdAt: e.createdAt,
+        })),
+      };
+
+      // Sin force: alive/ambiguous son gates fail-closed que el operador puede saltear con una
+      // segunda confirmación explícita (force:true) — 409 tipado, NUNCA curan sin esa decisión.
+      if (!force && result.outcome === 'skipped_alive') {
+        res.status(409).json({ code: 'CURE_SKIPPED_ALIVE', message: result.reason, ...responseBody });
+        return;
+      }
+      if (!force && result.outcome === 'skipped_ambiguous') {
+        res.status(409).json({ code: 'CURE_SKIPPED_AMBIGUOUS', message: result.reason, ...responseBody });
+        return;
+      }
+
+      res.json(responseBody);
     } catch (err) {
       next(err);
     }

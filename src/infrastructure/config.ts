@@ -277,6 +277,90 @@ export const config = {
   },
 
   /**
+   * radius-session-autocure BE-1 (REQ-CURE-1/2/4) — watcher AutoCureStuckSessions. El ON/OFF
+   * real vive en el feature flag 'radius-auto-cure' (tabla FeatureFlag, seed OFF, chequeado
+   * POR TICK); estas envs solo CALIBRAN el tick. Parse seguro en todas: inválida/ausente →
+   * default, JAMÁS tumban el boot (mismo contrato defensivo que pppoeAutoMove/radiusAuthIngest).
+   */
+  radiusAutoCure: (() => {
+    const intervalMs = parseIntervalMs(process.env.RADIUS_AUTO_CURE_INTERVAL_MS, {
+      default: 60_000,
+      min: 15_000,
+      max: 86_400_000,
+    });
+    /**
+     * REQ-CURE-6/D6 — PISO DURO 20 min (validado: interim 600s clavado, 0 sesiones sanas >30min
+     * sin interim, <20min = falsos positivos masivos). Un fat-finger NO puede bajar este umbral
+     * por debajo de la evidencia — a diferencia de otros pisos, este NO es negociable.
+     */
+    const staleMs = parseIntervalMs(process.env.RADIUS_AUTO_CURE_STALE_MS, {
+      default: 1_200_000,
+      min: 1_200_000,
+      max: 86_400_000,
+    });
+    /** Enmienda fast-path — piso 2 min: evita curar por una ráfaga transitoria de redial. */
+    const persistenceMs = parseIntervalMs(process.env.RADIUS_AUTO_CURE_PERSISTENCE_MS, {
+      default: 300_000,
+      min: 120_000,
+      max: 86_400_000,
+    });
+    /** Enmienda fast-path — piso 30s: exige que el cliente SIGA intentando (rejects recientes). */
+    const recencyMs = parseIntervalMs(process.env.RADIUS_AUTO_CURE_REJECT_RECENCY_MS, {
+      default: 120_000,
+      min: 30_000,
+      max: 86_400_000,
+    });
+    /**
+     * S7.4 — coherencia de ventanas: el lookback DEBE poder observar la ventana completa del
+     * fast path (persistencia + recencia), si no un reject que arrancó la persistencia queda
+     * fuera del barrido antes de completarse. Clamp hacia arriba + WARN; NUNCA tumba el boot.
+     */
+    const minCoherentLookbackMs = persistenceMs + recencyMs;
+    const rawLookbackMs = parseIntervalMs(process.env.RADIUS_AUTO_CURE_LOOKBACK_MS, {
+      default: 900_000,
+      min: 15_000,
+      max: 86_400_000,
+    });
+    let lookbackMs = rawLookbackMs;
+    if (lookbackMs <= minCoherentLookbackMs) {
+      lookbackMs = minCoherentLookbackMs + 60_000;
+      console.warn(
+        `[config] RADIUS_AUTO_CURE_LOOKBACK_MS (${rawLookbackMs}ms) <= PERSISTENCE_MS+RECENCY_MS ` +
+        `(${minCoherentLookbackMs}ms) — clampado a ${lookbackMs}ms (S7.4, el fast path necesita ver su ventana completa).`,
+      );
+    }
+
+    return {
+      intervalMs,
+      lookbackMs,
+      staleMs,
+      persistenceMs,
+      recencyMs,
+      /** Breaker: candidatos únicos > umbral ⇒ ABORT del tick entero. Default 20. */
+      abortThreshold: parsePositiveInt(process.env.RADIUS_AUTO_CURE_ABORT_THRESHOLD, {
+        default: 20,
+        max: 100_000,
+      }),
+      /** Cap de curas por tick; el resto queda deferred. Default 5. */
+      maxPerTick: parsePositiveInt(process.env.RADIUS_AUTO_CURE_MAX_PER_TICK, {
+        default: 5,
+        max: 100_000,
+      }),
+      /** Cure-throttle anti-flapping: una cura por username cada COOLDOWN_MS máximo. Default 30min. */
+      cooldownMs: parseIntervalMs(process.env.RADIUS_AUTO_CURE_COOLDOWN_MS, {
+        default: 1_800_000,
+        min: 60_000,
+        max: 86_400_000,
+      }),
+      /** >= N curas del username en 24h (ventana fija) ⇒ flagged_flapping. Default 3. */
+      flappingMax: parsePositiveInt(process.env.RADIUS_AUTO_CURE_FLAPPING_MAX, {
+        default: 3,
+        max: 1000,
+      }),
+    };
+  })(),
+
+  /**
    * airOS SSH — inspección de antenas Ubiquiti airOS para detección de equipos del cliente.
    * Opt-in (NO fail-fast): si faltan credenciales, el gateway falla al USARSE con
    * AirOsUnreachableError (200 con warning), pero el resto de la app arranca igual.
