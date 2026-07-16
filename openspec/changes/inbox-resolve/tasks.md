@@ -12,20 +12,20 @@ design §Colisiones) — orden de merge libre. Ningún change BE en vuelo toca m
 
 ## Batch 1 — BE: filtro `status` en el listado (LS-1)
 
-- [ ] **T1 — InMemory: bucket filter** (LS-1)
+- [x] **T1 — InMemory: bucket filter** (LS-1)
   - Test RED: `src/__tests__/infrastructure/adapters/in-memory/InMemoryConversationRepository.test.ts`
     — bucket open (incluye `pending`, excluye `resolved`), resolved exacto, sin param = todo,
     combinable con `assigneeId`/`campaignId`, `total`/paginación sobre el filtrado.
   - Código: `ConversationListQuery.status?: 'open' | 'resolved'`
     (`src/domain/ports/ConversationRepository.ts`, doc de semántica de bucket en el JSDoc) +
     filtro en `InMemoryConversationRepository.list` (después de campaña, antes del sort).
-- [ ] **T2 — Prisma: mismo where** (LS-1)
+- [x] **T2 — Prisma: mismo where** (LS-1)
   - Test RED: patrón de `PrismaConversationRepository.orderBy.test.ts` — el `where` incluye
     `status: { not: 'resolved' }` para open y `status: 'resolved'` para resolved; ausente no
     agrega clave.
   - Código: `PrismaConversationRepository.list` — MISMO comment-block cross-ref al in-memory que
     ya usan assignment/campaña (los dos adapters no pueden divergir).
-- [ ] **T3 — use case passthrough** (LS-1)
+- [x] **T3 — use case passthrough** (LS-1)
   - Test RED: `src/__tests__/application/messaging/ListConversations.statusFilter.test.ts`
     (naming espejo de `ListConversations.campaignFilter.test.ts`) — el query llega al repo tal
     cual; DTO expone `status` (ya existente, asertar no-regresión).
@@ -33,16 +33,19 @@ design §Colisiones) — orden de merge libre. Ningún change BE en vuelo toca m
 
 ## Batch 2 — BE: ruta + reconciliación (LS-2, LS-3)
 
-- [ ] **T4 — parsing `?status=`** (LS-2)
+- [x] **T4 — parsing `?status=`** (LS-2)
   - Test RED: `src/__tests__/infrastructure/messaging.routes.test.ts` — `?status=open`,
     `?status=resolved`, `?status=banana` (ignorado), combinado con `assignment=mine`.
   - Código: `messaging.routes.ts` GET /conversations — `firstQueryValue` + whitelist
     `open|resolved` (mismo criterio que `assignment`). Guard `perms.read` intacto.
-- [ ] **T5 — reopen reconcilia (verificación)** (LS-3)
+- [x] **T5 — reopen reconcilia (verificación)** (LS-3)
   - Revisar `ReceiveChatwootWebhook.reconciliation.test.ts`: si el caso
     "resolved + `conversation_status_changed`(open) → mirror open, sin tocar assignee/area" no
     existe explícito, agregarlo (test-only; CERO código de producción — design D4).
-- [ ] **Gate Batch 1+2**: `npm test` completo BE verde.
+- [ ] **Gate Batch 1+2**: `npm test` completo BE verde. *(Lo corre el ORQUESTADOR serializado —
+  race conocido: worktrees comparten node_modules por junction y el pretest `prisma generate`
+  pisa tipos de gates paralelos. Tests dirigidos del change: 8 suites / 179 tests verdes +
+  `npx tsc --noEmit` limpio, 2026-07-16.)*
 
 ## Batch 3 — FE: tipos + API + tabs (API-1, TAB-1, TAB-4)
 

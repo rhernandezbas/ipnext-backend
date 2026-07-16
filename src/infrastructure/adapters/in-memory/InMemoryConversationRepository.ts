@@ -239,6 +239,14 @@ export class InMemoryConversationRepository implements ConversationRepository {
     if (query.campaignId) {
       filtered = filtered.filter((r) => r.campaigns.some((c) => c.id === query.campaignId));
     }
+    // inbox-resolve (LS-1) — filtro de ciclo de vida con semántica de BUCKET (ver
+    // JSDoc de `ConversationListQuery.status`). MUST mirror
+    // `PrismaConversationRepository.list`'s `where` construction exactly.
+    if (query.status === 'open') {
+      filtered = filtered.filter((r) => r.status !== 'resolved');
+    } else if (query.status === 'resolved') {
+      filtered = filtered.filter((r) => r.status === 'resolved');
+    }
 
     // INBOX-1: lastMessageAt DESC, nulls (never messaged) sorted last, id ASC as a
     // tiebreaker (§8). Postgres gives NO guarantee on row order for ties without a

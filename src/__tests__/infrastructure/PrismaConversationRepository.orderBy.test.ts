@@ -37,3 +37,45 @@ describe('PrismaConversationRepository — list (§8: orderBy con tiebreaker id 
     expect(call.orderBy).toEqual([{ lastMessageAt: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }]);
   });
 });
+
+describe('PrismaConversationRepository — list (inbox-resolve LS-1: where del filtro ?status=)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.conversation.findMany.mockResolvedValue([]);
+    mockPrisma.conversation.count.mockResolvedValue(0);
+  });
+
+  it("status: 'open' → where.status = { not: 'resolved' } (bucket ACTIVAS, MISMO where en findMany y count)", async () => {
+    const repo = new PrismaConversationRepository();
+    await repo.list({ status: 'open', page: 1, limit: 25 });
+
+    const findManyWhere = mockPrisma.conversation.findMany.mock.calls[0][0].where;
+    const countWhere = mockPrisma.conversation.count.mock.calls[0][0].where;
+    expect(findManyWhere).toEqual({ status: { not: 'resolved' } });
+    expect(countWhere).toEqual({ status: { not: 'resolved' } });
+  });
+
+  it("status: 'resolved' → where.status = 'resolved' (match exacto)", async () => {
+    const repo = new PrismaConversationRepository();
+    await repo.list({ status: 'resolved', page: 1, limit: 25 });
+
+    const findManyWhere = mockPrisma.conversation.findMany.mock.calls[0][0].where;
+    expect(findManyWhere).toEqual({ status: 'resolved' });
+  });
+
+  it('status ausente → where NO agrega la clave status (no-regresión)', async () => {
+    const repo = new PrismaConversationRepository();
+    await repo.list({ page: 1, limit: 25 });
+
+    const findManyWhere = mockPrisma.conversation.findMany.mock.calls[0][0].where;
+    expect(findManyWhere).not.toHaveProperty('status');
+  });
+
+  it("combinable: status='open' + assigneeId → AND de ambas claves en el where", async () => {
+    const repo = new PrismaConversationRepository();
+    await repo.list({ status: 'open', assigneeId: 'user-1', page: 1, limit: 25 });
+
+    const findManyWhere = mockPrisma.conversation.findMany.mock.calls[0][0].where;
+    expect(findManyWhere).toEqual({ assigneeId: 'user-1', status: { not: 'resolved' } });
+  });
+});

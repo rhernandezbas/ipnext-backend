@@ -73,6 +73,25 @@ export interface ConversationListQuery extends PaginatedQuery {
    * participan en la campaña `campaignId` (JOIN Conversation×CampaignRecipient).
    */
   campaignId?: string;
+  /**
+   * inbox-resolve (LS-1) — filtro de CICLO DE VIDA con semántica de BUCKET, no de
+   * match exacto para `'open'`. `Conversation.status` es String passthrough del
+   * vocabulario de Chatwoot (schema `@default("open")`) — por webhook pueden llegar
+   * `pending`/`snoozed`, que la UI de Prominense nunca setea pero el mirror puede
+   * tener igual.
+   *
+   * - `'open'` → bucket ACTIVAS: `status != 'resolved'` (incluye `open` y cualquier
+   *   passthrough no-resuelto como `pending`/`snoozed` — así ninguna fila queda
+   *   invisible para ambos buckets a la vez).
+   * - `'resolved'` → match EXACTO: `status === 'resolved'`.
+   * - Ausente → sin filtro (comportamiento actual intacto, back-compat — misma
+   *   convención "solo aplica cuando viene definido" que `assigneeId`/`campaignId`).
+   *
+   * Es un AND independiente, combinable con `assigneeId`/`unassigned`/`campaignId`
+   * sin precedencia especial. Ambos adapters (`InMemoryConversationRepository`,
+   * `PrismaConversationRepository`) MUST implementar la MISMA semántica.
+   */
+  status?: 'open' | 'resolved';
 }
 
 /**

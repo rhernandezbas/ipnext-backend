@@ -129,3 +129,53 @@ describe('ReceiveChatwootWebhook — FASE 2 reconciliación (T5)', () => {
     expect(existingAfter!.id).toBe(existing.id);
   });
 });
+
+/**
+ * inbox-resolve (T5, LS-3) — verificación (design D4): Chatwoot reabre solo una
+ * conversación resuelta cuando llega un mensaje inbound (o cualquier reopen manual
+ * del agente en el panel de Chatwoot) — SIEMPRE via `CONVERSATION_STATUS_CHANGED`,
+ * el mismo evento al que ya estamos suscriptos. CERO código de producción: el
+ * handler existente (`handleConversationStatusChanged`) ya reconcilia con
+ * `upsertByChatwootId({ chatwootConversationId, status })`, que por construcción
+ * NUNCA toca assigneeId/areaId (campos LOCAL-only — ver
+ * `InMemoryConversationRepository.upsertByChatwootId`). Este describe solo deja el
+ * escenario cubierto EXPLÍCITO, tal como pide la spec (no estaba antes: los tests
+ * de HOOK-4 existentes solo cubrían la dirección open→resolved).
+ */
+describe('ReceiveChatwootWebhook — LS-3 reopen automático reconcilia el mirror (inbox-resolve)', () => {
+  it('resuelta + conversation_status_changed(open) → mirror open, assignee/area/preview intactos', async () => {
+    const { uc, conversationRepo } = makeUseCase();
+    conversationRepo.seedUsers([{ id: 'user-1', name: 'Agente Uno' }]);
+    const conv = await conversationRepo.upsertByChatwootId({
+      chatwootConversationId: 900,
+      contactName: 'Cliente Resuelto',
+      status: 'resolved',
+      lastMessagePreview: 'gracias, todo resuelto',
+    });
+    await conversationRepo.updateLocalFields(conv.id, { assigneeId: 'user-1', areaId: 'area-1' });
+
+    await uc.execute('d-reopen-1', { event: 'conversation_status_changed', id: 900, status: 'open' });
+
+    const reopened = await conversationRepo.findByChatwootId(900);
+    expect(reopened!.status).toBe('open');
+    expect(reopened!.assigneeId).toBe('user-1'); // NO pisado
+    expect(reopened!.areaId).toBe('area-1'); // NO pisado
+    expect(reopened!.lastMessagePreview).toBe('gracias, todo resuelto'); // NO pisado
+    expect(reopened!.contactName).toBe('Cliente Resuelto'); // NO pisado
+  });
+
+  it('redelivery idempotente: el mismo evento status_changed(open) reprocesado dos veces no revierte ni duplica', async () => {
+    const { uc, conversationRepo } = makeUseCase();
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 901, status: 'resolved' });
+    const payload = { event: 'conversation_status_changed', id: 901, status: 'open' };
+
+    await uc.execute('d-reopen-2', payload);
+    // Redelivery con el MISMO delivery id (disciplina PROCESS-THEN-RECORD, HOOK-3).
+    await uc.execute('d-reopen-2', payload);
+
+    const reopened = await conversationRepo.findByChatwootId(901);
+    expect(reopened!.status).toBe('open');
+    const all = await conversationRepo.list({ page: 1, limit: 10 });
+    expect(all.data).toHaveLength(1); // sin duplicar
+  });
+});

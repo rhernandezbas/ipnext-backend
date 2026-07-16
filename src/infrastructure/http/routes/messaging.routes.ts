@@ -316,12 +316,17 @@ export function createMessagingRouter(
         const { page, limit } = req.query as Record<string, string | undefined>;
         const assignment = firstQueryValue(req.query['assignment']);
         const campaignId = firstQueryValue(req.query['campaignId']);
+        const status = firstQueryValue(req.query['status']);
         const query: ConversationListQuery = {
           page: page ? Number.parseInt(page, 10) : undefined,
           limit: limit ? Number.parseInt(limit, 10) : undefined,
         };
         // messaging-bulk-inbox (F1, etiqueta #1) — filtro por campaña (combinable con assignment).
         if (campaignId) query.campaignId = campaignId;
+        // inbox-resolve (LS-2) — whitelist 'open'|'resolved' (mismo criterio que
+        // `assignment` con valor no reconocido: se ignora, sin error). La semántica
+        // de bucket vive en el repo (ver `ConversationListQuery.status`).
+        if (status === 'open' || status === 'resolved') query.status = status;
         // F1.5-C2 — 'mine' resuelve req.user.id (poblado por `auth`, mismo patrón
         // que rbacUser.routes.ts/portfolio.routes.ts); 'unassigned' filtra
         // assigneeId=null; 'all'/ausente no aplica filtro alguno.
