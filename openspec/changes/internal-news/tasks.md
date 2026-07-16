@@ -20,54 +20,54 @@ in-memory — NUNCA mockear Prisma. Path aliases siempre. NO `npm run build` ni 
 ## Batch 1 — BE: RBAC + schema + migración (aditivo)
 
 ### T1.1 — módulo `news` en el dominio (NEWS-RBAC-1)
-- [ ] TEST (RED): scenario de tipado/uso — `requirePerm('news','read'|'manage')` compila y el
+- [x] TEST (RED): scenario de tipado/uso — `requirePerm('news','read'|'manage')` compila y el
   guard resuelve (puede pinnearse dentro del test de rutas del Batch 4; acá basta extender el
   test existente de `rbac.ts` si lo hay, o crear uno mínimo de `RBAC_MODULES` incluye `'news'`).
-- [ ] CÓDIGO: agregar `'news'` a `RBAC_MODULES` (`src/domain/entities/rbac.ts:98-144`), con
+- [x] CÓDIGO: agregar `'news'` a `RBAC_MODULES` (`src/domain/entities/rbac.ts:98-144`), con
   comentario del change. NO agregar action codes (`read`/`manage` ya existen — `rbac.ts:89-90`).
 
 ### T1.2 — `prisma/schema.prisma` (design §2)
-- [ ] Modelos `NewsCategory`, `NewsPost`, `NewsReadReceipt` EXACTOS al design §2 (FKs
+- [x] Modelos `NewsCategory`, `NewsPost`, `NewsReadReceipt` EXACTOS al design §2 (FKs
   Restrict/SetNull/Cascade, `@@unique([newsPostId, userId])`, índices `categoryId`/`archivedAt`/
   `[pinned, publishedAt]`) + back-relations en `RbacUser`.
-- [ ] Editar A MANO sin `prisma format` (lección FIX-5 contract-node-ap-catalog: churn masivo).
-- [ ] `npx prisma validate` + `npx prisma generate` (el cliente tipa `prisma.newsPost`).
-- [ ] Verificar churn: `git diff --stat main -- prisma/schema.prisma` ≈ solo las líneas nuevas.
+- [x] Editar A MANO sin `prisma format` (lección FIX-5 contract-node-ap-catalog: churn masivo).
+- [x] `npx prisma validate` + `npx prisma generate` (el cliente tipa `prisma.newsPost`).
+- [x] Verificar churn: `git diff --stat main -- prisma/schema.prisma` ≈ solo las líneas nuevas.
 
 ### T1.3 — migración + seed (NEWS-MIG-1)
-- [ ] Generar DDL con `prisma migrate diff --from-schema <HEAD> --to-schema <working> --script`
+- [x] Generar DDL con `prisma migrate diff --from-schema <HEAD> --to-schema <working> --script`
   (sin DB local) → `prisma/migrations/20260911000000_internal_news/migration.sql` (posterior a
   `20260910000000_add_accesspoint_and_contract_node_ap`).
-- [ ] Append del seed idempotente en el MISMO archivo (molde `20260704000000_ticket_area_catalog`
+- [x] Append del seed idempotente en el MISMO archivo (molde `20260704000000_ticket_area_catalog`
   + `20260904000100_messaging_permissions`): 4 categorías con color (design §8) `ON CONFLICT
   ("name") DO NOTHING`; módulo `news`/permisos/grants (`news.read` → 6 roles de sistema,
   `news.manage` → super_admin + administrador) `ON CONFLICT DO NOTHING`.
-- [ ] Revisar: solo CREATE TABLE / índices / FKs / INSERTs idempotentes. Sin DROP, sin backfill,
+- [x] Revisar: solo CREATE TABLE / índices / FKs / INSERTs idempotentes. Sin DROP, sin backfill,
   sin BEGIN/COMMIT.
 
 ## Batch 2 — BE: entities, errors, ports, adapters (NEWS-PORT-1/2/3)
 
 ### T2.1 — tests port parity (RED)
-- [ ] `src/__tests__/infrastructure/adapters/in-memory/InMemoryNewsPostRepository.test.ts`:
+- [x] `src/__tests__/infrastructure/adapters/in-memory/InMemoryNewsPostRepository.test.ts`:
   create/update, orden pinned+publishedAt, read-state por usuario, filtro categoría, archived
   default-excluida / `archived:true` solo-archivadas, markRead idempotente, countUnread excluye
   archivadas y leídas, setArchived set/clear.
-- [ ] `.../InMemoryNewsCategoryRepository.test.ts`: CRUD, findByName, countPosts.
+- [x] `.../InMemoryNewsCategoryRepository.test.ts`: CRUD, findByName, countPosts.
 
 ### T2.2 — implementación (GREEN)
-- [ ] `src/domain/entities/news.ts` (`NewsPost`, `NewsCategory`, `NewsPostWithReadState`).
-- [ ] `src/domain/errors/news.ts` (4 errores tipados, design §5.3 — calco `errors/tickets.ts`).
-- [ ] `src/domain/ports/NewsPostRepository.ts` + `NewsCategoryRepository.ts` (design §5.1).
-- [ ] `src/infrastructure/adapters/in-memory/InMemoryNewsPostRepository.ts` +
+- [x] `src/domain/entities/news.ts` (`NewsPost`, `NewsCategory`, `NewsPostWithReadState`).
+- [x] `src/domain/errors/news.ts` (4 errores tipados, design §5.3 — calco `errors/tickets.ts`).
+- [x] `src/domain/ports/NewsPostRepository.ts` + `NewsCategoryRepository.ts` (design §5.1).
+- [x] `src/infrastructure/adapters/in-memory/InMemoryNewsPostRepository.ts` +
   `InMemoryNewsCategoryRepository.ts` (naming `InMemory{X}Repository`).
-- [ ] `src/infrastructure/adapters/prisma/PrismaNewsPostRepository.ts` +
+- [x] `src/infrastructure/adapters/prisma/PrismaNewsPostRepository.ts` +
   `PrismaNewsCategoryRepository.ts` (naming `Prisma{X}Repository`; countUnread = COUNT con
   NOT EXISTS receipt; markRead = upsert/`ON CONFLICT DO NOTHING`).
 
 ## Batch 3 — BE: use cases (NEWS-UC-1/2/3/4)
 
 ### T3.1 — tests unit con in-memory (RED)
-- [ ] `src/__tests__/application/use-cases/` — un archivo por use case (o agrupados por entidad):
+- [x] `src/__tests__/application/use-cases/` — un archivo por use case (o agrupados por entidad):
   CreateNewsPost (autor estampado, categoría inexistente → error, publishedAt server-side, DTO
   curado), ListNewsPosts (items + unreadCount GLOBAL con filtro activo), GetNewsPost (404),
   UpdateNewsPost (patch parcial, 422 categoría), ArchiveNewsPost (set/clear, 404), MarkNewsRead
@@ -75,14 +75,14 @@ in-memory — NUNCA mockear Prisma. Path aliases siempre. NO `npm run build` ni 
   UpdateNewsCategory (404/conflict), DeleteNewsCategory (in-use → error).
 
 ### T3.2 — implementación (GREEN)
-- [ ] 11 use cases en `src/application/use-cases/` (verbo+sustantivo, dependen SOLO de ports).
-- [ ] `src/application/dto/news.dto.ts`: DTOs + Zod schemas (design §5.4; trim ANTES de min —
+- [x] 11 use cases en `src/application/use-cases/` (verbo+sustantivo, dependen SOLO de ports).
+- [x] `src/application/dto/news.dto.ts`: DTOs + Zod schemas (design §5.4; trim ANTES de min —
   molde `tickets.dto.ts:66-74`) + mappers entidad→DTO.
 
 ## Batch 4 — BE: rutas HTTP (NEWS-HTTP-1/2)
 
 ### T4.1 — test supertest (RED)
-- [ ] `src/__tests__/infrastructure/news.routes.test.ts` — fixture calco EXACTO de
+- [x] `src/__tests__/infrastructure/news.routes.test.ts` — fixture calco EXACTO de
   `ticketAreas.routes.test.ts:36-100` (EchoAuthProvider + RBAC in-memory, usuarios manage /
   read-only / sin permisos): 401 sin cookie; 403 sin `news.read` en GETs; 403 sin `news.manage`
   en TODAS las mutaciones + `?archived=true`; happy paths de las 11 rutas; 400 Zod; 404s; 409
@@ -90,26 +90,26 @@ in-memory — NUNCA mockear Prisma. Path aliases siempre. NO `npm run build` ni 
   `{ items, unreadCount }` y `{ count }`; `/unread-count` y `/categories` NO tragados por `/:id`.
 
 ### T4.2 — implementación (GREEN)
-- [ ] `src/infrastructure/http/routes/news.routes.ts` — factory
+- [x] `src/infrastructure/http/routes/news.routes.ts` — factory
   `createNewsRouter(authProvider, requirePerm, ...useCases)` (molde `ticketAreas.routes.ts:17-32`),
   rutas estáticas ANTES de `/:id`, mapeo de errores tipados + fallback `next(err)` SIEMPRE.
 
 ## Batch 5 — BE: wiring + composición (NEWS-HTTP-3/4)
 
 ### T5.1 — test composición (RED)
-- [ ] `src/__tests__/infrastructure/news-composition.test.ts`: (a) source-scan de `app.ts`
+- [x] `src/__tests__/infrastructure/news-composition.test.ts`: (a) source-scan de `app.ts`
   (`readFileSync` — molde `actions-composition.test.ts:13`): mount `/api/news` con `authAdapter`
   + `requirePerm` + instanciación de ambos repos Prisma; (b) supertest sobre router in-memory:
   happy + 403 real.
 
 ### T5.2 — wiring (GREEN)
-- [ ] `app.ts`: repos Prisma + 11 use cases + `app.use('/api/news', createNewsRouter(...))`.
-- [ ] Verificar NEWS-HTTP-4: `git diff --stat main` NO toca notifications (routes/use-cases/
+- [x] `app.ts`: repos Prisma + 11 use cases + `app.use('/api/news', createNewsRouter(...))`.
+- [x] Verificar NEWS-HTTP-4: `git diff --stat main` NO toca notifications (routes/use-cases/
   model/mount).
 
 ### T5.3 — verificación BE focalizada
-- [ ] `npx jest src/__tests__/infrastructure/adapters/in-memory/InMemoryNews* src/__tests__/application/use-cases/<news> src/__tests__/infrastructure/news*` verdes.
-- [ ] `npx tsc --noEmit` — 0 errores.
+- [x] `npx jest src/__tests__/infrastructure/adapters/in-memory/InMemoryNews* src/__tests__/application/use-cases/<news> src/__tests__/infrastructure/news*` verdes.
+- [x] `npx tsc --noEmit` — 0 errores.
 
 ---
 
