@@ -130,4 +130,30 @@ describe('GetCampaign', () => {
     expect(typeof result.recipients?.data[0].error).toBe('string');
     expect(result.recipients?.data[0].error).toBe('Provider rejected the message');
   });
+
+  // ── bulk-csv-recipients (PER-3): recipient crudo (clientId null) en el detalle ──
+  it('PER-3: detalle de campaña con un recipient crudo — clientId null + contactName, resto del shape intacto', async () => {
+    const repo = new InMemoryCampaignRepository();
+    const created = await repo.create({
+      name: 'Con contactos CSV',
+      templateRef: 'HXabc',
+      segment: { statuses: [] },
+      variableSpec: {},
+      total: 1,
+      createdById: 'user-1',
+    });
+    await repo.bulkCreateRecipients(created.id, [
+      { clientId: null, contactName: 'Ana', phoneNormalized: '3364111111', phoneE164: '+5493364111111' },
+    ]);
+    const uc = new GetCampaign(repo);
+
+    const result = await uc.execute({ campaignId: created.id, includeRecipients: true });
+
+    expect(result.recipients?.data[0]).toMatchObject({
+      clientId: null,
+      contactName: 'Ana',
+      phoneE164: '+5493364111111',
+      status: 'queued',
+    });
+  });
 });

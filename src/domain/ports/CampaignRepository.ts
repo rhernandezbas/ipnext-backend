@@ -38,7 +38,10 @@ export interface ListCampaignsQuery extends PaginatedQuery {}
 
 /** Una fila a insertar por `bulkCreateRecipients` — el resto lo completa el repo (id/status/createdAt). */
 export interface CampaignRecipientCreateRow {
-  clientId: string;
+  /** bulk-csv-recipients (PER-1/PER-2) — `null` para una fila contact (CSV-3). */
+  clientId: string | null;
+  /** bulk-csv-recipients (PER-2) — nombre del CSV; solo tiene sentido cuando `clientId` es `null`. */
+  contactName?: string | null;
   phoneNormalized: string;
   phoneE164: string;
 }

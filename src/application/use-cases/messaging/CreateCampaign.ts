@@ -8,7 +8,7 @@ import {
   EmptySegmentError,
 } from '@domain/errors/messaging-bulk';
 import { assertHasRecipients } from './assertHasRecipients';
-import { resolveCombinedRecipients, normalizeManualClientIds } from './resolveCombinedRecipients';
+import { resolveCombinedRecipients, normalizeManualClientIds, normalizeManualContacts } from './resolveCombinedRecipients';
 
 /**
  * messaging-bulk (F2, CAMP-1..CAMP-4) — crea una campaña en `pending` SIN
@@ -39,10 +39,13 @@ export class CreateCampaign {
   async execute(input: CreateCampaignInput): Promise<CreateCampaignOutput> {
     // manual-recipients (MAN-1) — lista manual normalizada (dedup + sin vacíos).
     const manualClientIds = normalizeManualClientIds(input.manualClientIds);
+    // bulk-csv-recipients (CSV-1) — 4to dominio normalizado (trim + descarta ruido).
+    const manualContacts = normalizeManualContacts(input.manualContacts);
 
-    // MAN-2 (extiende FIX-8) — una campaña es válida con segmento filtrado O lista
-    // manual no vacía; se rechaza ANTES de efectos SOLO si ambos están vacíos.
-    assertHasRecipients(input.segment, manualClientIds);
+    // MAN-2 (extiende FIX-8) — una campaña es válida con segmento filtrado, O lista
+    // manual no vacía, O manualContacts no vacío; se rechaza ANTES de efectos SOLO
+    // si los TRES están vacíos.
+    assertHasRecipients(input.segment, manualClientIds, manualContacts);
 
     // CAMP-2 — templateRef debe corresponder a un template approved. Un
     // templateRef inexistente en el proveedor se trata IGUAL que no-aprobado
@@ -62,12 +65,14 @@ export class CreateCampaign {
       throw new MissingTemplateVariablesError(missing);
     }
 
-    // MAN-1..MAN-4 — resuelve la UNIÓN (segmento ∪ manuales) deduplicada por
-    // clientId. Fail-loud (MAN-3) si algún manualClientId no existe; compliance
-    // (opt-out/teléfono/dedup) enforced por resolveRecipients en ambos sets.
+    // MAN-1..MAN-4 + bulk-csv-recipients (CSV-1..CSV-4) — resuelve la UNIÓN
+    // (segmento ∪ manuales ∪ contactos CSV) deduplicada por clientId Y por
+    // teléfono. Fail-loud (MAN-3) si algún manualClientId no existe; compliance
+    // (opt-out/teléfono/dedup) enforced por resolveRecipients/matchManualContacts.
     const { resolved } = await resolveCombinedRecipients({
       segment: input.segment,
       manualClientIds,
+      manualContacts,
       segmentSource: this.segmentSource,
       manualRecipientSource: this.manualRecipientSource,
     });
@@ -95,6 +100,10 @@ export class CreateCampaign {
       campaign.id,
       resolved.map((r) => ({
         clientId: r.clientId,
+        // bulk-csv-recipients (D1/PER-1) — `contactName` SOLO tiene sentido en
+        // filas sin `Client` (`clientId: null`, CSV-3); un vinculado (segmento/
+        // manual/CSV-matched) siempre resuelve el nombre desde `Client.name` fresco.
+        contactName: r.clientId === null ? r.name : null,
         phoneNormalized: r.phoneNormalized,
         phoneE164: r.phoneE164,
       })),

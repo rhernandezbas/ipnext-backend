@@ -358,4 +358,105 @@ describe('CreateCampaign', () => {
       expect(recipients.data.map((r) => r.clientId).sort()).toEqual(['A', 'B']);
     });
   });
+
+  // ── bulk-csv-recipients (CSV-1..CSV-3): 4to dominio, contactos crudos ────────
+  describe('bulk-csv-recipients (CSV-1..CSV-3): manualContacts', () => {
+    it('CSV-1 solo-CSV: segmento sin criterio + manualContacts → materializa los contactos, NO toca la fuente del segmento', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]); // universo vacío: ningún contacto matchea
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({
+          segment: { statuses: [] },
+          manualContacts: [
+            { name: 'Ana', phone: '11 2345-6789' },
+            { name: 'Beto', phone: '011 15-3456-7890' },
+          ],
+        }),
+      );
+
+      expect(result.status).toBe('pending');
+      expect(result.total).toBe(2);
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data.every((r) => r.clientId === null)).toBe(true);
+      expect(recipients.data.map((r) => r.contactName).sort()).toEqual(['Ana', 'Beto']);
+    });
+
+    it('CSV-1 unión: segmento + manual + CSV → materializa los 3 (no-cliente incluido)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111' })]);
+      const manualSource = makeManualSource([makeCandidate({ clientId: 'c2', phone: '3364222222' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource);
+
+      const result = await uc.execute(
+        makeInput({
+          segment: { statuses: ['late'] },
+          manualClientIds: ['c2'],
+          manualContacts: [{ name: 'Crudo', phone: '3364333333' }],
+        }),
+      );
+
+      expect(result.total).toBe(3);
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      // Array.sort() por default stringifica ('null' > 'c2' alfabéticamente) — el
+      // orden real no importa acá, solo el CONJUNTO de clientIds presentes.
+      expect(recipients.data.map((r) => r.clientId).sort()).toEqual(['c1', 'c2', null]);
+      const crudo = recipients.data.find((r) => r.clientId === null);
+      expect(crudo?.contactName).toBe('Crudo');
+    });
+
+    it('CSV-2: contacto CSV que vincula a un Client existente → materializa VINCULADO (clientId real, contactName null)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const client = makeCandidate({ clientId: 'k1', phone: '3364111111', name: 'Cliente Real' });
+      const segmentSource = makeSegmentSource([client]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({ segment: { statuses: [] }, manualContacts: [{ name: 'Como lo anotó el operador', phone: '3364111111' }] }),
+      );
+
+      expect(result.total).toBe(1);
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data[0]!.clientId).toBe('k1');
+      expect(recipients.data[0]!.contactName).toBeNull();
+    });
+
+    it('MAN-2/CSV-1: los TRES vacíos (segmento sin criterio + sin manuales + sin manualContacts) → UnfilteredSegmentError', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      await expect(
+        uc.execute(makeInput({ segment: { statuses: [] }, manualContacts: [] })),
+      ).rejects.toBeInstanceOf(UnfilteredSegmentError);
+      const list = await campaignRepo.list({});
+      expect(list.total).toBe(0);
+    });
+
+    it('CSV-3: fila con teléfono basura NO bloquea el create — se materializa solo la válida', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({
+          segment: { statuses: [] },
+          manualContacts: [
+            { name: 'Ana', phone: '11 2345-6789' },
+            { name: 'Beto', phone: 'no-es-numero' },
+          ],
+        }),
+      );
+
+      expect(result.total).toBe(1);
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data[0]!.contactName).toBe('Ana');
+    });
+  });
 });

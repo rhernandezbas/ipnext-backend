@@ -129,6 +129,45 @@ describe('InMemoryCampaignRepository', () => {
     expect(updated.sentAt).toBe('2026-07-13T00:00:00.000Z');
   });
 
+  // ── bulk-csv-recipients (D2/PER-2): idempotencia de filas contact (clientId null) ──
+  describe('bulk-csv-recipients (PER-2): filas contact (clientId null)', () => {
+    it('idempotencia de una fila contact: llamar DOS veces con la MISMA fila (clientId null) no duplica (dedup por phoneNormalized)', async () => {
+      const repo = new InMemoryCampaignRepository();
+      const campaign = await repo.create(makeCreateData());
+
+      const first = await repo.bulkCreateRecipients(campaign.id, [
+        { clientId: null, contactName: 'Ana', phoneNormalized: '3364111111', phoneE164: '+5493364111111' },
+      ]);
+      const second = await repo.bulkCreateRecipients(campaign.id, [
+        { clientId: null, contactName: 'Ana', phoneNormalized: '3364111111', phoneE164: '+5493364111111' },
+      ]);
+
+      expect(first).toHaveLength(1);
+      expect(second).toHaveLength(1);
+      expect(second[0].id).toBe(first[0].id); // misma fila, no una nueva
+
+      const listed = await repo.listRecipients(campaign.id);
+      expect(listed.total).toBe(1);
+    });
+
+    it('mezcla vinculadas + crudas: bulkCreateRecipients con AMBOS tipos en el mismo batch devuelve las dos, con sus campos', async () => {
+      const repo = new InMemoryCampaignRepository();
+      const campaign = await repo.create(makeCreateData());
+
+      const rows = await repo.bulkCreateRecipients(campaign.id, [
+        { clientId: 'c1', phoneNormalized: '3364111111', phoneE164: '+5493364111111' },
+        { clientId: null, contactName: 'Ana', phoneNormalized: '3364222222', phoneE164: '+5493364222222' },
+      ]);
+
+      expect(rows).toHaveLength(2);
+      const linked = rows.find((r) => r.clientId === 'c1');
+      const contact = rows.find((r) => r.clientId === null);
+      expect(linked?.contactName).toBeNull();
+      expect(contact?.contactName).toBe('Ana');
+      expect(contact?.status).toBe('queued');
+    });
+  });
+
   it('listRecipients filtra por statusIn', async () => {
     const repo = new InMemoryCampaignRepository();
     const campaign = await repo.create(makeCreateData());

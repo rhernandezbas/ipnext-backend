@@ -3023,8 +3023,15 @@ model CampaignRecipient {
   id                     String                   @id @default(uuid())
   campaignId             String
   campaign               Campaign                 @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  clientId               String
-  client                 Client                   @relation("ClientCampaignRecipients", fields: [clientId], references: [id], onDelete: Cascade)
+  // bulk-csv-recipients (PER-1) — migración ADITIVA: nullable para admitir filas
+  // "contact" (un contacto crudo del CSV que NO vinculó a ningún Client, CSV-3).
+  // @@unique([campaignId, clientId]) se CONSERVA: Postgres trata cada NULL como
+  // distinto en un unique index, así que N filas contact conviven sin problema.
+  clientId               String?
+  client                 Client?                  @relation("ClientCampaignRecipients", fields: [clientId], references: [id], onDelete: Cascade)
+  // bulk-csv-recipients (PER-1/D1) — snapshot del nombre tipeado en el CSV, SOLO
+  // presente en filas contact (clientId null); un vinculado usa Client.name fresco.
+  contactName            String?
   phoneNormalized        String                   // clave de de-dup (normalizePhone) — auditable
   phoneE164              String                   // el destino REAL enviado (whatsapp E164) — auditable
   status                 CampaignRecipientStatus  @default(queued)

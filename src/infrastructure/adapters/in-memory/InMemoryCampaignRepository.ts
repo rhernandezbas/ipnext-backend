@@ -98,6 +98,14 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
     return { data, total: all.length, page, limit };
   }
 
+  /**
+   * bulk-csv-recipients (PER-2) — la idempotencia pasa de `clientId` a
+   * `phoneNormalized`: el `@@unique[campaignId, clientId]` real NO protege filas
+   * contact (`clientId: null`, Postgres trata cada NULL como distinto). Molde del
+   * adapter Prisma (D2) — `phoneNormalized` es NOT NULL SIEMPRE y único dentro del
+   * set ya deduplicado por `resolveCombinedRecipients` (FIX-1/CSV-4), así que el
+   * cambio es transparente para las filas vinculadas (mismo resultado que antes).
+   */
   async bulkCreateRecipients(
     campaignId: string,
     rows: CampaignRecipientCreateRow[],
@@ -105,7 +113,7 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
     const result: CampaignRecipient[] = [];
     for (const row of rows) {
       const existing = Array.from(this.recipients.values()).find(
-        (r) => r.campaignId === campaignId && r.clientId === row.clientId,
+        (r) => r.campaignId === campaignId && r.phoneNormalized === row.phoneNormalized,
       );
       if (existing) {
         result.push({ ...existing });
@@ -115,6 +123,7 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
         id: randomUUID(),
         campaignId,
         clientId: row.clientId,
+        contactName: row.contactName ?? null,
         phoneNormalized: row.phoneNormalized,
         phoneE164: row.phoneE164,
         status: 'queued',

@@ -53,7 +53,8 @@ export function toCampaignRecipient(row: any): CampaignRecipient {
   return {
     id: row.id,
     campaignId: row.campaignId,
-    clientId: row.clientId,
+    clientId: row.clientId ?? null,
+    contactName: row.contactName ?? null,
     phoneNormalized: row.phoneNormalized,
     phoneE164: row.phoneE164,
     status: row.status,
@@ -134,25 +135,49 @@ export class PrismaCampaignRepository implements CampaignRepository, ActiveCampa
   }
 
   /**
-   * Idempotente por `@@unique[campaignId, clientId]` — `createMany` con
-   * `skipDuplicates` no re-inserta filas ya existentes; el re-fetch por
-   * `clientId IN (...)` devuelve el set completo (nuevas + ya existentes),
-   * mismo contrato que `InMemoryCampaignRepository.bulkCreateRecipients`.
+   * bulk-csv-recipients (D2/PER-2) — DOS gotchas sobre el `clientId` NOT NULL
+   * de antes:
+   *
+   * 1. **Idempotencia de filas contact**: `@@unique[campaignId, clientId]` +
+   *    `skipDuplicates` solo protege filas VINCULADAS — Postgres trata cada
+   *    `clientId: NULL` como distinto en el unique, así que `createMany` NUNCA
+   *    detectaría un contact repetido. Pre-filtramos por `phoneNormalized` YA
+   *    persistido en la campaña (idempotencia UNIVERSAL, incl. filas contact) —
+   *    query narrow (`select: {phoneNormalized}`), sin costo extra en el camino
+   *    feliz (campaña recién creada → 0 filas → set vacío).
+   * 2. **Re-fetch**: `clientId IN (...)` revienta/omite con `null` en la lista —
+   *    se re-fetchea por `phoneNormalized IN (...)` (NOT NULL SIEMPRE, único
+   *    dentro del set ya deduplicado por `resolveCombinedRecipients`).
+   *
+   * Mismo contrato que `InMemoryCampaignRepository.bulkCreateRecipients`
+   * (idempotente, devuelve nuevas + ya existentes).
    */
   async bulkCreateRecipients(campaignId: string, rows: CampaignRecipientCreateRow[]): Promise<CampaignRecipient[]> {
     if (rows.length === 0) return [];
-    await prisma.campaignRecipient.createMany({
-      data: rows.map((r) => ({
-        campaignId,
-        clientId: r.clientId,
-        phoneNormalized: r.phoneNormalized,
-        phoneE164: r.phoneE164,
-      })),
-      skipDuplicates: true,
+
+    const existing = await prisma.campaignRecipient.findMany({
+      where: { campaignId },
+      select: { phoneNormalized: true },
     });
-    const clientIds = rows.map((r) => r.clientId);
+    const existingPhones = new Set(existing.map((e) => e.phoneNormalized));
+    const toInsert = rows.filter((r) => !existingPhones.has(r.phoneNormalized));
+
+    if (toInsert.length > 0) {
+      await prisma.campaignRecipient.createMany({
+        data: toInsert.map((r) => ({
+          campaignId,
+          clientId: r.clientId,
+          contactName: r.contactName ?? null,
+          phoneNormalized: r.phoneNormalized,
+          phoneE164: r.phoneE164,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    const phoneNormalizedSet = rows.map((r) => r.phoneNormalized);
     const persisted = await prisma.campaignRecipient.findMany({
-      where: { campaignId, clientId: { in: clientIds } },
+      where: { campaignId, phoneNormalized: { in: phoneNormalizedSet } },
     });
     return persisted.map(toCampaignRecipient);
   }

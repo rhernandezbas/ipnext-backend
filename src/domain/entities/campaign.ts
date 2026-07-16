@@ -71,7 +71,19 @@ export interface Campaign {
 export interface CampaignRecipient {
   id: string;
   campaignId: string;
-  clientId: string;
+  /**
+   * bulk-csv-recipients (PER-1) — `null` para un contacto CSV crudo que NO
+   * vinculó a ningún `Client` (CSV-3). Migración aditiva sobre una columna que
+   * antes era NOT NULL; `@@unique([campaignId, clientId])` se conserva (Postgres
+   * trata cada NULL como distinto en un unique).
+   */
+  clientId: string | null;
+  /**
+   * bulk-csv-recipients (PER-1/D1) — snapshot del nombre tipeado en el CSV,
+   * SOLO presente en filas `clientId: null` (un vinculado usa `Client.name`
+   * fresco siempre, D4). Auditable igual que `phoneNormalized`/`phoneE164`.
+   */
+  contactName: string | null;
   /** Clave de de-dup (`normalizePhone` verbatim) — auditable. */
   phoneNormalized: string;
   /** Destino REAL enviado (`toWhatsAppE164`) — auditable. */
