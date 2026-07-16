@@ -362,6 +362,11 @@ import { ListNetworkSitesWithUisp } from '@application/use-cases/ListNetworkSite
 // UISP mirror routes
 import { createUispRouter } from './routes/uisp.routes';
 import { PrismaUispSiteRepository } from '../adapters/prisma/PrismaUispSiteRepository';
+// contract-node-ap-auto-assign (Fase B) — picker manual del nodo/AP de un contrato
+import { createAccessPointsRouter } from './routes/accessPoints.routes';
+import { PrismaAccessPointRepository } from '../adapters/prisma/PrismaAccessPointRepository';
+import { ListAssignableAccessPoints } from '@application/use-cases/ListAssignableAccessPoints';
+import { SetContractNetworkAssignment } from '@application/use-cases/SetContractNetworkAssignment';
 import { PrismaUispDeviceRepository } from '../adapters/prisma/PrismaUispDeviceRepository';
 import { ListUispSites } from '@application/use-cases/ListUispSites';
 import { GetUispSiteDetail } from '@application/use-cases/GetUispSiteDetail';
@@ -1436,8 +1441,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listContractTechnology, getContractTechnology, createContractTechnology,
     updateContractTechnology, deleteContractTechnology,
   ));
+  // contract-node-ap-auto-assign (Fase B, PICK-3) — picker manual del nodo/AP de un contrato.
+  const setContractNetworkAssignment = new SetContractNetworkAssignment(
+    contractRepo,
+    networkSiteRepo,
+    new PrismaAccessPointRepository(),
+  );
   // Global contracts listing — mounted at /api root, before the catch-all.
-  app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats, updateContractLocation, requirePerm));
+  app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats, updateContractLocation, requirePerm, setContractNetworkAssignment));
   // #43 — ServiceCatalog ABM + ContractService CRUD + Contract name, mounted at /api root.
   const serviceCatalogRepo     = new PrismaServiceCatalogRepository();
   const contractServiceRepo    = new PrismaContractServiceRepository();
@@ -1927,6 +1938,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/network-sites', createAuthMiddleware(authAdapter, sessionRepo), createNetworkSiteRouter(
     listNetworkSites, getNetworkSite, createNetworkSite, updateNetworkSite, deleteNetworkSite,
     listNetworkSitesWithUisp, assignIClassNodeToNetworkSite,
+  ));
+  // contract-node-ap-auto-assign (Fase B, PICK-3) — catálogo de APs asignables (picker manual).
+  // Gate network.read; auth aplicada al montar (patrón /api/network-sites, arriba).
+  const accessPointRepoForPicker = new PrismaAccessPointRepository();
+  const listAssignableAccessPoints = new ListAssignableAccessPoints(accessPointRepoForPicker);
+  app.use('/api/access-points', createAuthMiddleware(authAdapter, sessionRepo), createAccessPointsRouter(
+    listAssignableAccessPoints, requirePerm,
   ));
   app.use('/api/cpe', createCpeRouter(
     listCpeDevices, getCpeDevice, createCpeDevice, updateCpeDevice, deleteCpeDevice, assignCpeToClient,

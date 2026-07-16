@@ -143,25 +143,29 @@ descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "
 ## Batch 7 — Rutas + permisos (PICK-3, MIG-2)
 
 ### T7.1 — migración seed permiso
-- [ ] `prisma/migrations/20260916000100_contract_network_assign_permission/migration.sql` — INSERT
+- [x] `prisma/migrations/20260916000100_contract_network_assign_permission/migration.sql` — INSERT
   `(contracts, 'assign')` + grant a `super_admin` + `administrador` (design §14.7), TODO con
   `ON CONFLICT DO NOTHING` (patrón `20260908000100_messaging_bulk_permissions`).
-- [ ] TEST pin del SQL (INSERT presente, idempotente, sin DROP).
+- [x] TEST pin del SQL (`migration.contract_network_assign_permission.test.ts`, 5 tests) — INSERT
+  presente, grants a ambos roles, idempotente (ON CONFLICT en TODOS los INSERT), sin DROP/DELETE.
 
 ### T7.2 — `GET /api/access-points` (RED→GREEN)
-- [ ] TEST `src/__tests__/infrastructure/accessPoints.routes.test.ts` (supertest, repos in-memory) —
-  200 `{ data: [...] }` filtrado; `?networkSiteId=`; 401 sin auth; 403 sin `network.read`.
-- [ ] `src/infrastructure/http/routes/accessPoints.routes.ts` —
+- [x] TEST `src/__tests__/infrastructure/accessPoints.routes.test.ts` (supertest, repos in-memory,
+  4 tests) — 200 `{ data: [...] }` filtrado; `?networkSiteId=`; 401 sin auth; 403 sin `network.read`.
+- [x] `src/infrastructure/http/routes/accessPoints.routes.ts` —
   `createAccessPointsRouter(listAssignable, requirePerm?)`; mount en `app.ts` con
-  `createAuthMiddleware` (patrón `/api/network-sites`, `app.ts:1893`).
+  `createAuthMiddleware` (patrón `/api/network-sites`).
 
 ### T7.3 — `PATCH /api/contracts/:id/network-assignment` (RED→GREEN)
-- [ ] TEST `src/__tests__/infrastructure/contracts.networkAssignment.routes.test.ts` — 200 feliz;
-  400 body vacío/keys desconocidas (zod whitelist); 404 contrato; 422 por cada typed error; 403 sin
-  `contracts.assign`; 501 sin dep inyectada.
-- [ ] Extender `contracts.routes.ts` — dep opcional `setContractNetworkAssignment` + zod schema +
-  mapeo de errores (patrón EXACTO de `/contracts/:id/location`, incl. fallback `next(err)`).
-- [ ] Wiring en `app.ts` (`app.ts:1409`) — construir el use case y pasarlo al router.
+- [x] TEST `src/__tests__/infrastructure/contracts.networkAssignment.routes.test.ts` (11 tests) —
+  200 feliz; 400 body vacío/keys desconocidas (zod `.strict()` + `.refine` al-menos-una-key); 404
+  contrato; 422 por cada typed error; 403 sin `contracts.assign`; 401 sin auth; 501 sin dep
+  inyectada.
+- [x] Extender `contracts.routes.ts` — dep opcional `setContractNetworkAssignment` (6to param) +
+  zod schema + mapeo de errores (patrón EXACTO de `/contracts/:id/location`, incl. fallback
+  `next(err)`).
+- [x] Wiring en `app.ts` — construir el use case (`contractRepo` + `networkSiteRepo` reusados,
+  `PrismaAccessPointRepository` fresco) y pasarlo al router.
 
 ## Batch 8 — Guards finales + verificación
 
