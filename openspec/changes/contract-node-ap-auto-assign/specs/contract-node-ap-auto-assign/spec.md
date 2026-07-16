@@ -283,13 +283,13 @@ destructivas (DROP) ni backfill.
 
 ### Requirement: MIG-2 — seed idempotente del permiso
 La migración de permisos MUST insertar `RbacPermission (contracts, assign)` y su grant a
-`super_admin` con `ON CONFLICT DO NOTHING` (re-ejecutable sin error).
+`super_admin` y a `administrador` con `ON CONFLICT DO NOTHING` (re-ejecutable sin error).
 
 #### Scenario: seed presente e idempotente
 - Given el archivo de la migración de permisos
 - When se revisa su contenido
-- Then contiene el INSERT del permiso `(contracts, 'assign')`, el grant a `super_admin` y todos los
-  INSERT usan `ON CONFLICT DO NOTHING`
+- Then contiene el INSERT del permiso `(contracts, 'assign')`, el grant a `super_admin`, el grant a
+  `administrador` y todos los INSERT usan `ON CONFLICT DO NOTHING`
 
 ### Requirement: MIG-3 — GR sync sigue sin escribir los campos manuales
 El data-block de `PrismaClientMirrorRepository.upsertContract` MUST seguir SIN las keys

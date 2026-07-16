@@ -7,9 +7,11 @@ in-memory — NUNCA mockear Prisma. Path aliases siempre. NO `npm run build` ni 
 decide el usuario). Tests focalizados con `npx jest <ruta>`. Editar `schema.prisma` A MANO, sin
 `prisma format` (lección FIX-5 Fase A).
 
-**Estado**: ⬜ PENDIENTE (plan aprobado, apply no iniciado).
-**Pre-requisito**: re-confirmar con el usuario las preguntas abiertas del design §14 (filas 9/10 de
-la matriz, semántica de `networkSiteId: null`, permiso `contracts.assign`, roles del seed).
+**Estado**: 🟩 EN APPLY — design §14 RESUELTO (usuario + orquestador, 2026-07-16): filas 9/10 de la
+matriz confirmadas tal cual propuestas, `networkSiteId: null` limpia ambos campos, permiso =
+`(contracts, assign)` (reuso), AP retirado en el PATCH manual → 422, backfill de `callerId`
+descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "admin" — no existe ese
+`RbacRole` code; ver design §14.7 para la evidencia).
 
 ---
 
@@ -128,7 +130,7 @@ la matriz, semántica de `networkSiteId: null`, permiso `contracts.assign`, role
 
 ### T7.1 — migración seed permiso
 - [ ] `prisma/migrations/20260916000100_contract_network_assign_permission/migration.sql` — INSERT
-  `(contracts, 'assign')` + grant `super_admin` (+ roles que confirme el usuario), TODO con
+  `(contracts, 'assign')` + grant a `super_admin` + `administrador` (design §14.7), TODO con
   `ON CONFLICT DO NOTHING` (patrón `20260908000100_messaging_bulk_permissions`).
 - [ ] TEST pin del SQL (INSERT presente, idempotente, sin DROP).
 

@@ -196,9 +196,9 @@ Idempotente por construcción: segunda corrida con la misma data ⇒ todo `uncha
 
 ## 6. D5 — Semántica AUTO DURA: matriz de casos
 
-> **DECISIÓN A RE-CONFIRMAR CON EL USUARIO** (2026-07-16, confirmada en la sesión de planificación;
-> re-validar antes del apply): el sync escribe SIEMPRE que la derivación resuelva — **pisa lo que
-> haya, incluso una asignación manual**. Si NO resuelve, **no toca** (jamás nullea algo existente).
+> **DECISIÓN CONFIRMADA** (usuario + orquestador, 2026-07-16 — ver §14): el sync escribe SIEMPRE que
+> la derivación resuelva — **pisa lo que haya, incluso una asignación manual**. Si NO resuelve, **no
+> toca** (jamás nullea algo existente).
 
 ### 6.1 Matriz
 
@@ -212,8 +212,8 @@ Idempotente por construcción: segunda corrida con la misma data ⇒ todo `uncha
 | 6 | `PppoeService` sin `contractId` | fuera del universo (no se evalúa) | — |
 | 7 | Contrato con N pppoe | se evalúa SOLO el `status='enabled'` de `createdAt` más reciente; con 0 enabled ⇒ caso 4 | — |
 | 8 | Station con `missingSince != null` | excluida de candidatos (el mirror dice que ya no existe) ⇒ tiende a caso 4 | `unresolved` |
-| 9 | AP resuelto con `missingSince != null` | **SE ASIGNA IGUAL** — hay una station viva colgada de él: evidencia más fuerte que el marcador del catálogo (lag del mirror). El filtro `missingSince` es SOLO para el picker (§9). *(re-confirmar)* | `assigned` |
-| 10 | AP resuelto con `networkSiteId = null` (AP sin nodo linkeado) | escribe `accessPointId = ap.id` y `networkSiteId = null` — el par persistido SIEMPRE es coherente con el AP; puede nullear un site manual. *(re-confirmar — alternativa: preservar el site previo)* | `assigned` |
+| 9 | AP resuelto con `missingSince != null` | **SE ASIGNA IGUAL** — hay una station viva colgada de él: evidencia más fuerte que el marcador del catálogo (lag del mirror). El filtro `missingSince` es SOLO para el picker (§9). *(confirmado §14.1)* | `assigned` |
+| 10 | AP resuelto con `networkSiteId = null` (AP sin nodo linkeado) | escribe `accessPointId = ap.id` y `networkSiteId = null` — el par persistido SIEMPRE es coherente con el AP; puede nullear un site manual. *(confirmado §14.2)* | `assigned` |
 
 ### 6.2 Duplicados de MAC en `UispDevice` — política de desempate
 
@@ -299,7 +299,7 @@ Validaciones (errores tipados nuevos en `src/domain/errors/networkAssignment.ts`
 - `accessPointId` non-null con `networkSiteId` omitido → se autocompleta `networkSiteId = ap.networkSiteId`.
 - Solo `networkSiteId` non-null (AP omitido) → si el AP actual del contrato NO pertenece al nuevo
   site, se limpia (`accessPointId = null`).
-- `networkSiteId: null` explícito → limpia AMBOS (desasignar el nodo desasigna el AP). *(re-confirmar)*
+- `networkSiteId: null` explícito → limpia AMBOS (desasignar el nodo desasigna el AP). *(confirmado §14.3)*
 - `accessPointId: null` explícito → limpia solo el AP; el site queda.
 
 Devuelve `ContractNetworkAssignmentResult { id, networkSiteId, accessPointId }` (patrón
@@ -383,8 +383,9 @@ updateNetworkAssignment(id: string, data: { networkSiteId: string | null; access
    local): `ALTER TABLE "UispDevice" ADD COLUMN "apUispDeviceId" TEXT;`. Sin DROP, sin backfill (la
    columna se puebla sola en el próximo tick del sync). Sin `BEGIN/COMMIT`.
 2. `prisma/migrations/20260916000100_contract_network_assign_permission/migration.sql` — seed SQL a
-   mano (los seeds RBAC no salen de `migrate diff`): permiso `(contracts, assign)` + grant
-   `super_admin`, todo `ON CONFLICT DO NOTHING` (idempotente, patrón
+   mano (los seeds RBAC no salen de `migrate diff`): permiso `(contracts, assign)` + grant a
+   `super_admin` + `administrador` (§14.7 — corrección sobre "admin", que no es un `RbacRole` code en
+   este sistema), todo `ON CONFLICT DO NOTHING` (idempotente, patrón
    `20260908000100_messaging_bulk_permissions`).
 
 Timestamps posteriores a `20260910000000_add_accesspoint_and_contract_node_ap` (la última). Higiene
@@ -431,16 +432,41 @@ además nace con flag OFF ⇒ ningún write duro hasta prenderlo.
 muestras en la ficha de contrato → dejar prendido. El picker manual sirve desde el deploy (no
 depende del flag).
 
-## 14. Preguntas ABIERTAS (confirmar con el usuario antes del apply)
+## 14. Preguntas ABIERTAS — RESUELTAS (usuario + orquestador, 2026-07-16, confirmado antes del apply)
 
-1. **Matriz fila 9**: AP retirado (`missingSince != null`) pero con station viva colgada → ¿se asigna
-   igual (propuesto) o se salta como `unresolved`?
-2. **Matriz fila 10**: AP sin nodo (`ap.networkSiteId = null`) → ¿escribir `networkSiteId = null`
-   (par coherente, propuesto) o preservar el site previo del contrato?
-3. **Picker manual**: `networkSiteId: null` explícito ¿limpia también el AP (propuesto §9.1)?
-4. **Permiso**: ¿OK reusar la action existente `assign` como `contracts.assign` (propuesto, cero
-   cambios TS) o prefieren una action nueva `assign_network`?
-5. **Rechazo de AP retirado en el PATCH manual** (`AccessPointRetiredError`, propuesto §9.1) — ¿o
-   permitir asignarlo a mano?
-6. **Backfill de `callerId`** descartado (§4.2) — ¿confirmado que la cascada read-time alcanza?
-7. **Roles**: ¿qué roles además de `super_admin` reciben `contracts.assign` en el seed?
+1. **Matriz fila 9** (AP retirado `missingSince != null` con station viva colgada) → **DECISIÓN: se
+   asigna IGUAL**. La station realmente cuelga de ese AP — es evidencia de red más fuerte que el
+   marcador `missingSince` del catálogo (que solo refleja lag del mirror). Confirma el texto
+   propuesto en §6.1 fila 9; se retira la marca "(re-confirmar)".
+2. **Matriz fila 10** (AP sin nodo, `ap.networkSiteId = null`) → **DECISIÓN: par coherente** — se
+   escribe `accessPointId = ap.id` y `networkSiteId = null`. El par persistido en `Contract` SIEMPRE
+   refleja el AP resuelto, nunca un site "heredado" de una asignación previa que ya no aplica.
+   Confirma §6.1 fila 10; se retira la marca "(re-confirmar)".
+3. **Picker manual — `networkSiteId: null` explícito** → **DECISIÓN: limpia también el AP** (par
+   coherente, mismo principio que 2). Confirma §9.1 "desasignar nodo limpia todo"; se retira la marca
+   "(re-confirmar)".
+4. **Permiso** → **DECISIÓN: REUSO de la action existente `assign`** como `(contracts, assign)`. Cero
+   cambios de TS — `contracts` (RBAC_MODULES) y `assign` (KNOWN_ACTIONS) ya existen
+   (`src/domain/entities/rbac.ts:78,127`). Se descarta la action nueva `assign_network` (no agrega
+   granularidad real).
+5. **Rechazo de AP retirado en el PATCH manual** → **DECISIÓN: 422** (`AccessPointRetiredError`). El
+   operador humano NO puede asignar a mano un AP que el mirror da por retirado — a diferencia del
+   AUTO (regla 1), que tiene la señal extra de una station viva. Sin esa señal, el picker manual debe
+   ser conservador.
+6. **Backfill de `callerId`** → **DESCARTADO, CONFIRMADO**. La cascada read-time (§4.1) converge al
+   mismo resultado sin doble-escritura ni acoplar el auto-assign a un campo ajeno (`persist-caller-id`
+   sigue siendo el único escritor de `callerId`). Ver tradeoff completo en §4.2 — sigue vigente sin
+   cambios.
+7. **Roles del seed** → **DECISIÓN: `super_admin` + `administrador`**, CON UNA CORRECCIÓN sobre el
+   pedido original ("`super_admin` + `admin`"): **no existe un `RbacRole` con code `'admin'`** en este
+   sistema. Verificado en `prisma/migrations/20260529000000_auth_rbac_foundation/migration.sql`:
+   - Línea 121: `'admin'` es el `code` de un **`RbacModule`** ("Administración"), una tabla distinta.
+   - Líneas 147-152: los 6 `RbacRole.code` seedeados son `super_admin`, `administrador`,
+     `administracion`, `ventas`, `noc`, `tecnico` — **sin `'admin'`**.
+   - El equivalente semántico de "admin" en este sistema es **`administrador`** ("Dueño/jefe del
+     negocio"), confirmado por el propio comentario del seed (`prisma/seed.ts:374`: *"'administrador'
+     es el equivalente RBAC-system de 'admin'"*) y por el patrón EXACTO de la migración más reciente
+     comparable (`20260908000100_messaging_bulk_permissions`), que grantea sus permisos a
+     `super_admin` + `administrador`.
+   - **Migración 20260916000100 grantea `(contracts, assign)` a `super_admin` + `administrador`**,
+     mismo patrón, todo `ON CONFLICT DO NOTHING`.
