@@ -207,6 +207,8 @@ const statusMap: Record<string, number> = {
   SMARTOLT_UNREACHABLE: 502,
   SMARTOLT_REJECTED: 422,
   ONU_NOT_HUAWEI: 422,
+  // fix wave LOW-a: ONU detectada pero SmartOLT no ofrece authorize → conflicto de estado.
+  ONU_NOT_AUTHORIZABLE: 409,
   FIBER_VLAN_REQUIRED: 422,
   ONU_NOT_FOUND: 404,
   SMARTOLT_OLT_NOT_FOUND: 404,

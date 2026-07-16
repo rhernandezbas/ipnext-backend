@@ -51,6 +51,27 @@ describe('deriveWifiSsids', () => {
       ssid5: 'IPNEXT_COOPERATIVA_5',
     });
   });
+
+  it('FIX LOW-c: apellido vacío (nombre vacío o solo símbolos) → fallback IPNEXT_CLIENTE_*', () => {
+    expect(deriveWifiSsids('')).toEqual({
+      ssid24: 'IPNEXT_CLIENTE_2.4',
+      ssid5: 'IPNEXT_CLIENTE_5',
+    });
+    expect(deriveWifiSsids('*** ---')).toEqual({
+      ssid24: 'IPNEXT_CLIENTE_2.4',
+      ssid5: 'IPNEXT_CLIENTE_5',
+    });
+  });
+
+  it('FIX LOW-c: apellido largo se trunca para que NINGÚN ssid supere 32 bytes', () => {
+    // 26 chars — 'IPNEXT_' (7) + 26 + '_2.4' (4) = 37 > 32 sin truncar.
+    const ssids = deriveWifiSsids('ABCDEFGHIJKLMNOPQRSTUVWXYZ PEDRO');
+    expect(ssids.ssid24.length).toBeLessThanOrEqual(32);
+    expect(ssids.ssid5.length).toBeLessThanOrEqual(32);
+    // Mismo apellido truncado en AMBAS bandas (max 21 = 32 - 7 - 4).
+    expect(ssids.ssid24).toBe('IPNEXT_ABCDEFGHIJKLMNOPQRSTU_2.4');
+    expect(ssids.ssid5).toBe('IPNEXT_ABCDEFGHIJKLMNOPQRSTU_5');
+  });
 });
 
 describe('deriveWifiPassword', () => {
@@ -96,6 +117,33 @@ describe('deriveSpeedProfileNames', () => {
 
   it('plan sin números → null (best-effort: authorize sin speed profiles)', () => {
     expect(deriveSpeedProfileNames('CORPORATIVO')).toBeNull();
+    expect(deriveSpeedProfileNames('FIBRA')).toBeNull();
     expect(deriveSpeedProfileNames('')).toBeNull();
+  });
+
+  it('FIX H1: "1G" → null (unidad no soportada — 1M silencioso sería un cliente gigabit a 1 mega)', () => {
+    expect(deriveSpeedProfileNames('1G')).toBeNull();
+  });
+
+  it('FIX H1: números SIN unidad de velocidad se ignoran ("PROMO 2X1 300MB" → 300M, no 2M)', () => {
+    expect(deriveSpeedProfileNames('PROMO 2X1 300MB')).toEqual({
+      download: '300M',
+      upload: '300M',
+    });
+  });
+
+  it('FIX H1: un año en el nombre no es una velocidad ("PLAN 2025 300MB" → 300M, no 2025M)', () => {
+    expect(deriveSpeedProfileNames('PLAN 2025 300MB')).toEqual({
+      download: '300M',
+      upload: '300M',
+    });
+  });
+
+  it('FIX H1: sufijo "M" pelado también cuenta ("300M" → 300M)', () => {
+    expect(deriveSpeedProfileNames('300M')).toEqual({ download: '300M', upload: '300M' });
+  });
+
+  it('FIX H1: DOS velocidades distintas con unidad → AMBIGUO → null (mejor sin profile que errado)', () => {
+    expect(deriveSpeedProfileNames('300MB O 100MB')).toBeNull();
   });
 });

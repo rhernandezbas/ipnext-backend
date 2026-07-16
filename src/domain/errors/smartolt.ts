@@ -44,6 +44,22 @@ export class OnuNotHuaweiError extends DomainError {
 }
 
 /**
+ * Fix wave LOW-a: la ONU está detectada pero SmartOLT NO ofrece la acción
+ * authorize para ella (estado raro en el panel). Guard LOCAL: rechazar acá
+ * evita quemar un call del rate limit que va a fallar sí o sí.
+ * Code → HTTP: ONU_NOT_AUTHORIZABLE → 409.
+ */
+export class OnuNotAuthorizableError extends DomainError {
+  constructor(public readonly sn: string) {
+    super(
+      `La ONU '${sn}' no ofrece la acción authorize en SmartOLT — revisar su estado en el panel`,
+      'ONU_NOT_AUTHORIZABLE',
+    );
+    this.name = 'OnuNotAuthorizableError';
+  }
+}
+
+/**
  * Sin VLAN: ni el input la trae ni el catálogo del OLT tiene default
  * (CHIVILCOY X2: VLAN heterogénea por cliente — el operador DEBE elegirla).
  */

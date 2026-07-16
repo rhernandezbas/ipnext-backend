@@ -37,6 +37,7 @@ import { InMemoryGestionRealIngestConfigRepository } from '@infrastructure/adapt
 import type { UnconfiguredOnu } from '@domain/ports/OltProvisioningGateway';
 import {
   OnuNotHuaweiError,
+  OnuNotAuthorizableError,
   FiberVlanRequiredError,
   UnconfiguredOnuNotFoundError,
   OltProvisioningError,
@@ -295,7 +296,7 @@ describe('ProvisionFiberOnu — happy path Huawei (MERCEDES1)', () => {
     });
   });
 
-  it('OLT sin mgmtVlan (AGOTE) → paso mgmt_ip SALTADO, sin llamada setMgmtIp', async () => {
+  it('FIX H2: OLT sin mgmtVlan (AGOTE) → mgmt_ip SALTADO y TODA la cadena dependiente también (SmartOLT exige mgmt→tr069→wifi)', async () => {
     const fx = await buildFixture();
     fx.gateway.unconfigured = [huaweiOnu({ oltId: '7' })];
 
@@ -303,8 +304,37 @@ describe('ProvisionFiberOnu — happy path Huawei (MERCEDES1)', () => {
 
     if (result.dryRun) throw new Error('unreachable');
     expect(result.vlan).toBe(331);
-    expect(fx.gateway.calls.find(c => c.method === 'setMgmtIp')).toBeUndefined();
+    // SOLO authorize tocó SmartOLT: nada de quemar rate limit en pasos que van a fallar.
+    expect(fx.gateway.writeSequence()).toEqual(['authorizeOnu']);
     expect(result.steps.find(s => s.step === 'mgmt_ip')).toMatchObject({ status: 'skipped' });
+    for (const step of ['tr069', 'remote_wan', 'wifi_24', 'wifi_5'] as const) {
+      expect(result.steps.find(s => s.step === step)).toEqual({
+        step,
+        status: 'skipped',
+        detail: 'requiere MGMT IP (mgmtVlan no configurada para esta OLT)',
+      });
+    }
+  });
+
+  it('FIX H1: plan sin velocidad derivable → authorize SIN speed profiles + detail que lo dice', async () => {
+    const fx = await buildFixture();
+    fx.contracts.contracts.set('ctr-1', {
+      ...fx.contracts.contracts.get('ctr-1')!,
+      plan: 'CORPORATIVO PROMO 2X1',
+    });
+
+    const result = await fx.uc.execute({ contractId: 'ctr-1', onuSn: SN });
+
+    if (result.dryRun) throw new Error('unreachable');
+    const authorize = fx.gateway.calls.find(c => c.method === 'authorizeOnu');
+    expect(authorize).toMatchObject({
+      input: { downloadSpeedProfileName: null, uploadSpeedProfileName: null },
+    });
+    expect(result.steps.find(s => s.step === 'authorize')).toEqual({
+      step: 'authorize',
+      status: 'ok',
+      detail: 'sin speed profiles (plan "CORPORATIVO PROMO 2X1" no derivable) — ajustar a mano en SmartOLT',
+    });
   });
 });
 
@@ -343,7 +373,7 @@ describe('ProvisionFiberOnu — 5GHz best-effort (gotcha SmartOLT)', () => {
     expect(fx.gateway.writeSequence()).toEqual([]);
   });
 
-  it('paso intermedio (tr069) falla → best-effort: failed y el flujo continúa', async () => {
+  it('FIX H2: tr069 falla → los WIFIs se SALTAN (dependen de TR-069); remote_wan sí corre', async () => {
     const fx = await buildFixture();
     fx.gateway.failMethods = ['enableTr069'];
 
@@ -351,13 +381,36 @@ describe('ProvisionFiberOnu — 5GHz best-effort (gotcha SmartOLT)', () => {
 
     if (result.dryRun) throw new Error('unreachable');
     expect(result.steps.find(s => s.step === 'tr069')).toMatchObject({ status: 'failed' });
+    for (const step of ['wifi_24', 'wifi_5'] as const) {
+      expect(result.steps.find(s => s.step === step)).toEqual({
+        step,
+        status: 'skipped',
+        detail: 'requiere TR-069 (el paso tr069 no completó)',
+      });
+    }
     expect(fx.gateway.writeSequence()).toEqual([
       'authorizeOnu',
       'setMgmtIp',
       'allowRemoteWanAccess',
-      'setWifi:wifi_0/1',
-      'setWifi:wifi_0/5',
     ]);
+  });
+
+  it('FIX H2: mgmt_ip FALLA → tr069/remote_wan/wifis se SALTAN con el motivo', async () => {
+    const fx = await buildFixture();
+    fx.gateway.failMethods = ['setMgmtIp'];
+
+    const result = await fx.uc.execute({ contractId: 'ctr-1', onuSn: SN });
+
+    if (result.dryRun) throw new Error('unreachable');
+    expect(result.steps.find(s => s.step === 'mgmt_ip')).toMatchObject({ status: 'failed' });
+    for (const step of ['tr069', 'remote_wan', 'wifi_24', 'wifi_5'] as const) {
+      expect(result.steps.find(s => s.step === step)).toEqual({
+        step,
+        status: 'skipped',
+        detail: 'requiere MGMT IP (el paso mgmt_ip no completó)',
+      });
+    }
+    expect(fx.gateway.writeSequence()).toEqual(['authorizeOnu']);
   });
 });
 
@@ -368,7 +421,12 @@ describe('ProvisionFiberOnu — PPPoE (K1)', () => {
     const result = await fx.uc.execute({ contractId: 'ctr-1', onuSn: SN });
 
     if (result.dryRun) throw new Error('unreachable');
-    expect(result.pppoe).toEqual({ status: 'created', username: 'ronaldhernandez45123' });
+    // FIX H3: created viaja CON la clave (recién generada, legítima) — el FE la muestra.
+    expect(result.pppoe).toEqual({
+      status: 'created',
+      username: 'ronaldhernandez45123',
+      password: 'ronald1234',
+    });
     const row = await fx.pppoeRepo.findByUsername('ronaldhernandez45123');
     expect(row).toMatchObject({ contractId: 'ctr-1', nasId: null, profile: PROFILE, status: 'enabled' });
     expect(fx.orchestrator.createdUser('ronaldhernandez45123')).toMatchObject({
@@ -394,6 +452,44 @@ describe('ProvisionFiberOnu — PPPoE (K1)', () => {
     expect(result.pppoe).toEqual({ status: 'existing', username: 'usuario-k1' });
     expect(await fx.pppoeRepo.findByContract('ctr-1')).toHaveLength(1);
     expect(fx.orchestrator.createdUser('ronaldhernandez45123')).toBeUndefined();
+  });
+
+  it('FIX H3: contrato con PPPoE PENDING (pregen previo fallido) → stale CON reason propagado, jamás aplanado', async () => {
+    const fx = await buildFixture();
+    await fx.pppoeRepo.upsertByUsername({
+      username: 'pendiente-viejo',
+      password: 'clave-muerta',
+      profile: PROFILE,
+      nasId: null,
+      contractId: 'ctr-1',
+      status: 'pending',
+    });
+
+    const result = await fx.uc.execute({ contractId: 'ctr-1', onuSn: SN });
+
+    if (result.dryRun) throw new Error('unreachable');
+    expect(result.pppoe).toEqual({ status: 'stale', username: 'pendiente-viejo', reason: 'pending' });
+    // JAMÁS la clave de una fila stale en el response ni en la tarea (está muerta).
+    expect(JSON.stringify(result)).not.toContain('clave-muerta');
+  });
+
+  it('FIX LOW-d (pin): authorize falla DESPUÉS del pregen → el PPPoE pre-provisionado SOBREVIVE (semántica K1) y el retry lo reusa como existing', async () => {
+    const fx = await buildFixture();
+    fx.gateway.failMethods = ['authorizeOnu'];
+
+    await expect(fx.uc.execute({ contractId: 'ctr-1', onuSn: SN })).rejects.toThrow(
+      OltProvisioningError,
+    );
+    // La pre-provisión K1 es DURABLE: el usuario ya vive en el RADIUS central con su
+    // clave legítima — borrarla dejaría un fantasma. El retry la reusa, no la duplica.
+    const row = await fx.pppoeRepo.findByUsername('ronaldhernandez45123');
+    expect(row).toMatchObject({ contractId: 'ctr-1', status: 'enabled', nasId: null });
+
+    fx.gateway.failMethods = [];
+    const retry = await fx.uc.execute({ contractId: 'ctr-1', onuSn: SN });
+    if (retry.dryRun) throw new Error('unreachable');
+    expect(retry.pppoe).toEqual({ status: 'existing', username: 'ronaldhernandez45123' });
+    expect(await fx.pppoeRepo.findByContract('ctr-1')).toHaveLength(1);
   });
 
   it('pppoeProfile NO configurado → pppoe skipped, el aprovisionamiento de la ONU sigue', async () => {
@@ -472,6 +568,50 @@ describe('ProvisionFiberOnu — dryRun (plan sin calls)', () => {
       fx.uc.execute({ contractId: 'ctr-1', onuSn: 'ZTEGC1234567', dryRun: true }),
     ).rejects.toThrow(OnuNotHuaweiError);
   });
+
+  it('FIX M1: el dry-run NO muestra una clave WiFi que no va a ser — placeholder explícito', async () => {
+    const fx = await buildFixture();
+
+    const result = await fx.uc.execute({ contractId: 'ctr-1', onuSn: SN, dryRun: true });
+
+    if (!result.dryRun) throw new Error('unreachable');
+    // La clave real se sortea EN LA EJECUCIÓN; mostrar un sorteo acá haría que el
+    // operador apruebe una clave X y la ONU quede con Y.
+    expect(result.wifi.password).toBe('(se genera al ejecutar)');
+    const wifiCalls = result.plan.filter(p => p.call.includes('set_wifi_port_lan'));
+    expect(wifiCalls).toHaveLength(2);
+    for (const call of wifiCalls) {
+      expect(call.params['password']).toBe('(se genera al ejecutar)');
+    }
+    // Los SSIDs sí son definitivos (derivación determinística del cliente).
+    expect(result.wifi.ssid24).toBe('IPNEXT_HERNANDEZ_2.4');
+  });
+});
+
+describe('ProvisionFiberOnu — guards de la ONU (fix wave LOWs)', () => {
+  it('FIX LOW-a: ONU detectada pero SIN acción authorize → error tipado local, sin quemar el call', async () => {
+    const fx = await buildFixture();
+    fx.gateway.unconfigured = [huaweiOnu({ supportsAuthorize: false })];
+
+    await expect(fx.uc.execute({ contractId: 'ctr-1', onuSn: SN })).rejects.toThrow(
+      OnuNotAuthorizableError,
+    );
+    expect(fx.gateway.writeSequence()).toEqual([]);
+    // Tampoco corrió la pre-provisión PPPoE (guard previo a todo side-effect).
+    expect(await fx.pppoeRepo.findByContract('ctr-1')).toHaveLength(0);
+  });
+
+  it('FIX LOW-b: sn en minúsculas matchea case-insensitive y las calls usan el SN CANÓNICO de SmartOLT', async () => {
+    const fx = await buildFixture();
+
+    const result = await fx.uc.execute({ contractId: 'ctr-1', onuSn: 'hwtc11112222' });
+
+    if (result.dryRun) throw new Error('unreachable');
+    expect(result.onuSn).toBe(SN);
+    const authorize = fx.gateway.calls.find(c => c.method === 'authorizeOnu');
+    expect(authorize).toMatchObject({ input: { sn: SN } });
+    expect(fx.gateway.calls).toContainEqual({ method: 'enableTr069', sn: SN, profile: 'SmartOLT' });
+  });
 });
 
 describe('ProvisionFiberOnu — resultado auditable en la tarea', () => {
@@ -493,6 +633,61 @@ describe('ProvisionFiberOnu — resultado auditable en la tarea', () => {
     expect(description).toContain('WiFi 5: IPNEXT_HERNANDEZ_5');
     expect(description).toContain('Clave WiFi: 45123777');
     expect(description).toContain('authorize ✓');
+  });
+
+  it('FIX H3: created → el bloque incluye la sección PPPoE de K1 con Usuario+Clave+estado', async () => {
+    const fx = await buildFixture();
+
+    await fx.uc.execute({ contractId: 'ctr-1', onuSn: SN });
+
+    const description = fx.taskWriter.tasks[0]!.description!;
+    // Reusa renderPppoeCredentialsBlock (K1): el instalador ve la clave EN LA TAREA
+    // (pedido explícito del usuario — no es un leak accidental).
+    expect(description).toContain(
+      '── Credenciales PPPoE ──\n' +
+        'Usuario: ronaldhernandez45123\n' +
+        'Clave: ronald1234\n' +
+        'Estado: pendiente de instalar',
+    );
+  });
+
+  it('FIX H3: existing → sección PPPoE "(ya existente)" SIN la clave (no se conoce)', async () => {
+    const fx = await buildFixture();
+    await fx.pppoeRepo.upsertByUsername({
+      username: 'usuario-k1',
+      password: 'clave-secreta-vieja',
+      profile: PROFILE,
+      nasId: null,
+      contractId: 'ctr-1',
+      status: 'enabled',
+    });
+
+    await fx.uc.execute({ contractId: 'ctr-1', onuSn: SN });
+
+    const description = fx.taskWriter.tasks[0]!.description!;
+    expect(description).toContain('Usuario: usuario-k1 (ya existente)');
+    expect(description).not.toContain('clave-secreta-vieja');
+  });
+
+  it('FIX H3: stale → sección PPPoE con la advertencia ⚠ POR REASON, sin clave', async () => {
+    const fx = await buildFixture();
+    await fx.pppoeRepo.upsertByUsername({
+      username: 'pendiente-viejo',
+      password: 'clave-muerta',
+      profile: PROFILE,
+      nasId: null,
+      contractId: 'ctr-1',
+      status: 'pending',
+    });
+
+    await fx.uc.execute({ contractId: 'ctr-1', onuSn: SN });
+
+    const description = fx.taskWriter.tasks[0]!.description!;
+    expect(description).toContain('Usuario: pendiente-viejo');
+    expect(description).toContain(
+      '⚠ Aprovisionamiento previo PENDIENTE (no llegó al RADIUS) — reintentar desde la página PPPoE',
+    );
+    expect(description).not.toContain('clave-muerta');
   });
 
   it('el bloque refleja pasos fallidos (wifi_5 ✗ con el detalle)', async () => {

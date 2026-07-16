@@ -1,7 +1,9 @@
 /**
  * smartolt-provision (K2) — SmartOltHttpGateway contra un TRANSPORT FAKE
  * (AxiosInstance inyectado). REGLA DURA: jamás se toca ipnext.smartolt.com —
- * todos los shapes de acá vienen del intel verificado de la skill smartolt-ipnext.
+ * el shape de unconfigured_onus fue verificado contra la instancia real
+ * 2026-07-17 (read-only, review adversarial); el resto viene de la skill
+ * smartolt-ipnext, salvo authorize_onu (PARAMS SIN VERIFICAR — dry-run en vivo).
  *
  * Cubre:
  *  - X-Token por request + form-encoding de los POSTs.
@@ -257,6 +259,40 @@ describe('SmartOltHttpGateway — mapeo de errores', () => {
       code: 'SMARTOLT_REJECTED',
       detail: 'Invalid parameters',
     });
+  });
+
+  it('FIX M2: HTTP 200 con response_code de error (status true) → rejected, jamás "ok fantasma"', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/enable_tr069/', {
+      status: true,
+      response_code: 403,
+      error: 'API token has no permission',
+    });
+
+    await expect(gateway.enableTr069('HWTC11112222', 'SmartOLT')).rejects.toMatchObject({
+      name: 'OltProvisioningError',
+      reason: 'rejected',
+      detail: 'API token has no permission',
+    });
+  });
+
+  it('FIX M2: response_code también llega como STRING ("404") → rejected igual', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/set_onu_mgmt_ip_static_ip/', {
+      status: true,
+      response_code: '404',
+    });
+
+    await expect(gateway.setMgmtIp('HWTC11112222', 11)).rejects.toMatchObject({
+      reason: 'rejected',
+    });
+  });
+
+  it('FIX M2: response_code 200 con status true → OK (no todo response_code es error)', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/enable_tr069/', { status: true, response_code: 200 });
+
+    await expect(gateway.enableTr069('HWTC11112222', 'SmartOLT')).resolves.toBeUndefined();
   });
 
   it('HTTP 4xx (axios error con response) → rejected', async () => {

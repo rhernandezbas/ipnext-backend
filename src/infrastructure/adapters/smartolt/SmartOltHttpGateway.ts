@@ -32,7 +32,13 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/** Shape crudo de una fila de GET onu/unconfigured_onus (verificado en la skill smartolt-ipnext). */
+/**
+ * Shape crudo de una fila de GET onu/unconfigured_onus — verificado contra la
+ * instancia real 2026-07-17 (read-only, durante el review adversarial): key raíz
+ * `response`, campos sn/onu_type_name/onu_type_id/olt_id/board/port/pon_type/actions.
+ * (La skill smartolt-ipnext NO documenta este endpoint — fix M3: el crédito de la
+ * verificación estaba mal atribuido.)
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toUnconfiguredOnu(r: any): UnconfiguredOnu {
   const actions: unknown = r?.actions;
@@ -127,15 +133,27 @@ export class SmartOltHttpGateway implements OltProvisioningGateway {
       );
     }
 
-    // SmartOLT responde 200 con {status: false, error: "..."} en los rechazos.
-    const status = (data as { status?: unknown } | null)?.status;
-    if (status === false || status === 'false') {
-      const body = data as { error?: unknown; message?: unknown };
-      const detail =
-        (typeof body.error === 'string' && body.error) ||
-        (typeof body.message === 'string' && body.message) ||
-        'SmartOLT rechazó la operación (status false)';
-      throw new OltProvisioningError('rejected', detail);
+    // SmartOLT responde 200 con {status: false, error: "..."} en los rechazos —
+    // y (fix M2) la doc también promete `response_code`: un code de error con
+    // status true dejaría el paso "ok fantasma". Se chequean AMBOS.
+    const body = data as {
+      status?: unknown;
+      response_code?: unknown;
+      error?: unknown;
+      message?: unknown;
+    } | null;
+    const detail = (fallback: string): string =>
+      (typeof body?.error === 'string' && body.error) ||
+      (typeof body?.message === 'string' && body.message) ||
+      fallback;
+    if (body?.status === false || body?.status === 'false') {
+      throw new OltProvisioningError('rejected', detail('SmartOLT rechazó la operación (status false)'));
+    }
+    const rawCode = body?.response_code;
+    const code =
+      typeof rawCode === 'number' ? rawCode : typeof rawCode === 'string' ? Number.parseInt(rawCode, 10) : NaN;
+    if (Number.isInteger(code) && code >= 400) {
+      throw new OltProvisioningError('rejected', detail(`SmartOLT rechazó la operación (response_code ${code})`));
     }
     return data;
   }

@@ -460,6 +460,56 @@ describe('fiber.routes — POST /provision', () => {
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
   });
+
+  // ── FIX M4: mapeo de errores del gateway a través del errorHandler REAL ──────
+  it('FIX M4: SmartOLT rechaza el authorize → 422 SMARTOLT_REJECTED', async () => {
+    const fx = await buildApp();
+    fx.gateway.failMethods = ['authorizeOnu'];
+    const res = await asUser(
+      request(fx.app).post('/api/fiber/provision').send({ contractId: 'ctr-1', onuSn: SN }),
+      fx.managerUserId,
+    );
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('SMARTOLT_REJECTED');
+  });
+
+  it('FIX M4: SmartOLT caído → 502 SMARTOLT_UNREACHABLE (provision y picker)', async () => {
+    const fx = await buildApp();
+    fx.gateway.unreachable = true;
+
+    const provision = await asUser(
+      request(fx.app).post('/api/fiber/provision').send({ contractId: 'ctr-1', onuSn: SN }),
+      fx.managerUserId,
+    );
+    expect(provision.status).toBe(502);
+    expect(provision.body.code).toBe('SMARTOLT_UNREACHABLE');
+
+    const picker = await asUser(request(fx.app).get('/api/fiber/unconfigured-onus'), fx.readerUserId);
+    expect(picker.status).toBe(502);
+    expect(picker.body.code).toBe('SMARTOLT_UNREACHABLE');
+  });
+
+  it('FIX M4: sn no está en unconfigured_onus → 404 ONU_NOT_FOUND', async () => {
+    const fx = await buildApp();
+    fx.gateway.unconfigured = [];
+    const res = await asUser(
+      request(fx.app).post('/api/fiber/provision').send({ contractId: 'ctr-1', onuSn: SN }),
+      fx.managerUserId,
+    );
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('ONU_NOT_FOUND');
+  });
+
+  it('FIX LOW-a: ONU sin acción authorize → 409 ONU_NOT_AUTHORIZABLE', async () => {
+    const fx = await buildApp();
+    fx.gateway.unconfigured[0]!.supportsAuthorize = false;
+    const res = await asUser(
+      request(fx.app).post('/api/fiber/provision').send({ contractId: 'ctr-1', onuSn: SN }),
+      fx.managerUserId,
+    );
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ONU_NOT_AUTHORIZABLE');
+  });
 });
 
 describe('fiber.routes — catálogo de OLTs', () => {

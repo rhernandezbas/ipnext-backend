@@ -14,17 +14,30 @@ import {
 import { generatePppoeCredentials } from '@domain/services/pppoeCredentials';
 import {
   OnuNotHuaweiError,
+  OnuNotAuthorizableError,
   FiberVlanRequiredError,
   UnconfiguredOnuNotFoundError,
 } from '@domain/errors/smartolt';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
-import { PregenInstallPppoe } from './PregenInstallPppoe';
+import {
+  PregenInstallPppoe,
+  PregenInstallPppoeOutcome,
+  PregenStaleReason,
+  renderPppoeCredentialsBlock,
+} from './PregenInstallPppoe';
 
 /** Profile TR-069 default de la instancia IPNEXT (verificado en la skill smartolt). */
 const DEFAULT_TR069_PROFILE = 'SmartOLT';
 
 /** Header del bloque de auditoría en la descripción de la tarea (espejo del K1). */
 const BLOCK_HEADER = '── Aprovisionamiento ONU ──';
+
+/**
+ * Fix M1: la clave WiFi real se sortea AL EJECUTAR (RNG). El dry-run mostraba
+ * un sorteo propio → el operador aprobaba una clave X y la ONU quedaba con Y.
+ * El plan lleva este placeholder explícito, nunca una clave que no va a ser.
+ */
+const DRY_RUN_WIFI_PASSWORD_PLACEHOLDER = '(se genera al ejecutar)';
 
 /** Proyección del contrato que necesita el aprovisionamiento (cliente + plan + ids GR). */
 export interface FiberContractSnapshot {
@@ -76,14 +89,35 @@ export interface ProvisionStepResult {
 
 /**
  * Resumen del lado PPPoE (K1) del aprovisionamiento:
- *  - created/existing/stale → mapeo directo del outcome de PregenInstallPppoe.
- *  - failed  → la pre-provisión explotó (orchestrator caído, etc.) — no aborta la ONU.
- *  - skipped → sin `pppoeProfile` configurado o contrato sin número GR: no se puede
- *              pre-provisionar; si el contrato ya tenía un PPPoE enabled se reporta existing.
+ *  - created  → credenciales NUEVAS: viaja CON la clave (recién generada, legítima —
+ *               el FE la muestra y la tarea la lleva; pedido explícito del usuario).
+ *  - existing → username sin clave (no se conoce: solo el RADIUS la tiene).
+ *  - stale    → username + `reason` tipado del K1 (disabled/pending/radius-desync) —
+ *               fix H3: el reason NO se aplana, el FE muestra la advertencia correcta.
+ *               JAMÁS la clave (está muerta / no es la real).
+ *  - failed   → la pre-provisión explotó (orchestrator caído, etc.) — no aborta la ONU.
+ *  - skipped  → sin `pppoeProfile` configurado o contrato sin número GR: no se puede
+ *               pre-provisionar; si el contrato ya tenía un PPPoE enabled se reporta existing.
  */
 export type FiberPppoeSummary =
-  | { status: 'created' | 'existing' | 'stale'; username: string }
+  | { status: 'created'; username: string; password: string }
+  | { status: 'existing'; username: string }
+  | { status: 'stale'; username: string; reason: PregenStaleReason }
   | { status: 'failed' | 'skipped' };
+
+/** Mapea el resumen fiber al outcome K1 para reusar SU renderer (fix H3). */
+function toPregenOutcome(pppoe: FiberPppoeSummary): PregenInstallPppoeOutcome | null {
+  switch (pppoe.status) {
+    case 'created':
+      return { status: 'created', username: pppoe.username, password: pppoe.password };
+    case 'existing':
+      return { status: 'existing', username: pppoe.username };
+    case 'stale':
+      return { status: 'stale', username: pppoe.username, reason: pppoe.reason };
+    default:
+      return null; // failed/skipped: no hay credenciales que mostrar (semántica K1 'failed').
+  }
+}
 
 export interface PlannedCall {
   call: string;
@@ -130,28 +164,34 @@ const STEP_SYMBOLS: Record<ProvisionStepResult['status'], string> = {
 
 /**
  * Bloque de texto auditable que se appendea a la descripción de la tarea de
- * instalación (mismo espíritu que renderPppoeCredentialsBlock del K1): el
- * instalador ve sn, OLT/VLAN, credenciales WiFi y el estado por paso.
+ * instalación: el instalador ve sn, OLT/VLAN, credenciales WiFi, el estado por
+ * paso y — fix H3 — la sección PPPoE REUSANDO `renderPppoeCredentialsBlock` de
+ * K1 (created → Usuario+Clave+estado; existing → "(ya existente)" sin clave;
+ * stale → la advertencia ⚠ por reason; failed/skipped → sin sección).
  */
 export function renderOnuProvisioningBlock(params: {
   sn: string;
   oltLabel: string;
   vlan: number;
   wifi: WifiPlanView;
+  pppoe: FiberPppoeSummary;
   steps: ProvisionStepResult[];
 }): string {
   const pasos = params.steps
     .map(s => `${s.step} ${STEP_SYMBOLS[s.status]}${s.detail ? ` (${s.detail})` : ''}`)
     .join(' · ');
-  return (
+  let block =
     `${BLOCK_HEADER}\n` +
     `SN: ${params.sn}\n` +
     `OLT: ${params.oltLabel} · VLAN ${params.vlan}\n` +
     `WiFi 2.4: ${params.wifi.ssid24}\n` +
     `WiFi 5: ${params.wifi.ssid5}\n` +
     `Clave WiFi: ${params.wifi.password}\n` +
-    `Pasos: ${pasos}`
-  );
+    `Pasos: ${pasos}`;
+  const pregenOutcome = toPregenOutcome(params.pppoe);
+  const pppoeBlock = pregenOutcome ? renderPppoeCredentialsBlock(pregenOutcome) : null;
+  if (pppoeBlock) block += `\n${pppoeBlock}`;
+  return block;
 }
 
 /**
@@ -167,20 +207,32 @@ export function renderOnuProvisioningBlock(params: {
  *  5. PPPoE: reusa las credenciales K1 del contrato o pre-provisiona como K1
  *     (PregenInstallPppoe — nunca throw, outcome tipado). Requiere pppoeProfile
  *     configurado + grContratoId; si faltan → 'skipped' (la ONU se aprovisiona igual).
- *  6. Secuencia SmartOLT: authorize → mgmt ip (si mgmtVlan del catálogo; si no,
- *     skipped) → tr069 → remote wan → wifi 2.4 → wifi 5.
+ *  6. Secuencia SmartOLT: authorize → mgmt ip → tr069 → remote wan → wifi 2.4 → wifi 5.
  *     - authorize falla → ABORTA (nada quedó aprovisionado; el error tipado llega a la ruta).
- *     - pasos POSTERIORES fallan → best-effort: se registra 'failed' y se sigue
- *       (la ONU ya está autorizada; abortar dejaría peor estado que continuar).
+ *     - Fix H2 — DEPENDENCIA DURA de SmartOLT (skill smartolt-ipnext): tr069 exige
+ *       la MGMT IP previa, y los wifi exigen tr069. mgmt_ip no-ok (skipped por
+ *       mgmtVlan null — CHIVILCOY/AGOTE — o failed) → tr069/remote_wan/wifi_24/
+ *       wifi_5 se SALTAN con el motivo (no se quema rate limit en calls que van a
+ *       fallar sí o sí). tr069 no-ok → los wifi se saltan igual.
+ *     - Pasos dependientes que SÍ corren y fallan → best-effort: 'failed' y se
+ *       sigue (la ONU ya está autorizada; abortar dejaría peor estado).
  *       Gotcha 5GHz: wifi_0/5 no existe para los tipos Huawei de IPNEXT en SmartOLT
  *       → falla con "Invalid parameters" SIEMPRE, tolerada por diseño.
- *  7. Auditoría: appendea el bloque "── Aprovisionamiento ONU ──" a la descripción
- *     de la última tarea del contrato (best-effort — sin tarea no es error).
+ *  7. Auditoría: appendea el bloque "── Aprovisionamiento ONU ──" (incl. la sección
+ *     PPPoE de K1, fix H3) a la descripción de la última tarea del contrato
+ *     (best-effort — sin tarea no es error).
+ *
+ * Orphan PPPoE (fix LOW-d, semántica PINEADA por test): si el authorize falla
+ * DESPUÉS de la pre-provisión (paso 5), el PPPoE creado SOBREVIVE a propósito —
+ * es la semántica K1: el usuario ya vive en el RADIUS central con su clave
+ * legítima; borrarlo dejaría un fantasma en el RADIUS. El retry del
+ * aprovisionamiento lo reusa como 'existing' (jamás duplica).
  *
  * dryRun=true → CERO llamadas al gateway y CERO side-effects (ni PPPoE ni tarea):
  * devuelve el PLAN de calls que haría, para que el usuario lo apruebe. Nota: sin
  * el gateway no se conoce el OLT de la ONU, así que la VLAN default y el board/port
- * quedan "a resolver al ejecutar" cuando el input no trae vlan.
+ * quedan "a resolver al ejecutar" cuando el input no trae vlan. La clave WiFi del
+ * plan es un placeholder (fix M1): la real se sortea al ejecutar.
  */
 export class ProvisionFiberOnu {
   private readonly rng: () => number;
@@ -208,18 +260,30 @@ export class ProvisionFiberOnu {
     const contract = await this.contractLookup.findById(input.contractId);
     if (!contract) throw new ContractNotFoundError(input.contractId);
 
-    // Derivaciones puras: SSIDs, clave WiFi, speed profiles.
+    // Derivaciones puras: SSIDs y speed profiles (la clave WiFi se sortea SOLO al ejecutar).
     const ssids = deriveWifiSsids(contract.clientName);
-    const password = deriveWifiPassword(contract.grContratoId, this.rng);
-    const wifi: WifiPlanView = { ...ssids, password };
     const speed = deriveSpeedProfileNames(contract.plan);
 
-    if (input.dryRun) return this.buildPlan(input, contract, wifi, speed);
+    if (input.dryRun) {
+      // Fix M1: el plan JAMÁS muestra una clave que no va a ser — placeholder honesto.
+      const planWifi: WifiPlanView = { ...ssids, password: DRY_RUN_WIFI_PASSWORD_PLACEHOLDER };
+      return this.buildPlan(input, contract, planWifi, speed);
+    }
 
-    // 3. La ONU tiene que estar detectada y sin configurar.
+    const wifi: WifiPlanView = {
+      ...ssids,
+      password: deriveWifiPassword(contract.grContratoId, this.rng),
+    };
+
+    // 3. La ONU tiene que estar detectada y sin configurar. Fix LOW-b: el match de
+    //    SN es case-insensitive y de acá en más manda el SN CANÓNICO de SmartOLT.
     const onus = await this.gateway.listUnconfiguredOnus();
-    const onu = onus.find(o => o.sn === input.onuSn);
+    const wantedSn = input.onuSn.toUpperCase();
+    const onu = onus.find(o => o.sn.toUpperCase() === wantedSn);
     if (!onu) throw new UnconfiguredOnuNotFoundError(input.onuSn);
+    // Fix LOW-a: SmartOLT no ofrece authorize para esta ONU → rechazo local tipado,
+    // sin quemar un call del rate limit que va a fallar sí o sí.
+    if (!onu.supportsAuthorize) throw new OnuNotAuthorizableError(onu.sn);
 
     // 4. VLAN de servicio: input > default del catálogo > error tipado.
     const oltCfg = await this.oltConfigRepo.findBySmartoltOltId(onu.oltId);
@@ -239,6 +303,7 @@ export class ProvisionFiberOnu {
       oltLabel,
       vlan,
       wifi,
+      pppoe,
       steps,
     });
 
@@ -280,18 +345,56 @@ export class ProvisionFiberOnu {
       downloadSpeedProfileName: speed?.download ?? null,
       uploadSpeedProfileName: speed?.upload ?? null,
     });
-    steps.push({ step: 'authorize', status: 'ok' });
+    // Fix H1: sin speed profiles derivables el authorize sale SIN profile —
+    // mejor que uno errado, pero tiene que quedar VISIBLE para el ajuste manual.
+    steps.push(
+      speed
+        ? { step: 'authorize', status: 'ok' }
+        : {
+            step: 'authorize',
+            status: 'ok',
+            detail: `sin speed profiles (plan "${contract.plan}" no derivable) — ajustar a mano en SmartOLT`,
+          },
+    );
 
     // mgmt ip — solo si el catálogo conoce la VLAN de management del OLT.
+    let mgmt: ProvisionStepResult;
     if (oltCfg?.mgmtVlan != null) {
       const mgmtVlan = oltCfg.mgmtVlan;
-      steps.push(await this.bestEffort('mgmt_ip', () => this.gateway.setMgmtIp(onu.sn, mgmtVlan)));
+      mgmt = await this.bestEffort('mgmt_ip', () => this.gateway.setMgmtIp(onu.sn, mgmtVlan));
     } else {
-      steps.push({ step: 'mgmt_ip', status: 'skipped', detail: 'sin mgmt VLAN en el catálogo del OLT' });
+      mgmt = { step: 'mgmt_ip', status: 'skipped', detail: 'sin mgmt VLAN en el catálogo del OLT' };
+    }
+    steps.push(mgmt);
+
+    // Fix H2 — dependencia DURA de SmartOLT: tr069 exige la MGMT IP previa (y los
+    // wifi exigen tr069, más abajo). Sin mgmt ok, esos calls fallan SIEMPRE:
+    // saltarlos evita quemar rate limit y deja el motivo auditado en cada paso.
+    if (mgmt.status !== 'ok') {
+      const detail =
+        oltCfg?.mgmtVlan != null
+          ? 'requiere MGMT IP (el paso mgmt_ip no completó)'
+          : 'requiere MGMT IP (mgmtVlan no configurada para esta OLT)';
+      for (const step of ['tr069', 'remote_wan', 'wifi_24', 'wifi_5'] as const) {
+        steps.push({ step, status: 'skipped', detail });
+      }
+      return steps;
     }
 
-    steps.push(await this.bestEffort('tr069', () => this.gateway.enableTr069(onu.sn, this.tr069Profile)));
+    const tr069 = await this.bestEffort('tr069', () =>
+      this.gateway.enableTr069(onu.sn, this.tr069Profile),
+    );
+    steps.push(tr069);
     steps.push(await this.bestEffort('remote_wan', () => this.gateway.allowRemoteWanAccess(onu.sn)));
+
+    // Fix H2 — los wifi dependen del TR-069: sin él se saltan con el motivo.
+    if (tr069.status !== 'ok') {
+      const detail = 'requiere TR-069 (el paso tr069 no completó)';
+      steps.push({ step: 'wifi_24', status: 'skipped', detail });
+      steps.push({ step: 'wifi_5', status: 'skipped', detail });
+      return steps;
+    }
+
     steps.push(
       await this.bestEffort('wifi_24', () =>
         this.gateway.setWifi(onu.sn, { port: 'wifi_0/1', ssid: wifi.ssid24, password: wifi.password }),
@@ -351,8 +454,18 @@ export class ProvisionFiberOnu {
         clientName: contract.clientName,
         profile,
       });
-      if (outcome.status === 'failed') return { status: 'failed' };
-      return { status: outcome.status, username: outcome.username };
+      // Fix H3: mapeo SIN aplanar — created conserva la clave (recién generada,
+      // legítima) y stale conserva el reason (la advertencia correcta del K1).
+      switch (outcome.status) {
+        case 'created':
+          return { status: 'created', username: outcome.username, password: outcome.password };
+        case 'existing':
+          return { status: 'existing', username: outcome.username };
+        case 'stale':
+          return { status: 'stale', username: outcome.username, reason: outcome.reason };
+        default:
+          return { status: 'failed' };
+      }
     } catch (err) {
       // PregenInstallPppoe no lanza por contrato — esto cubre fallas del repo/config.
       // eslint-disable-next-line no-console
@@ -437,7 +550,14 @@ export class ProvisionFiberOnu {
 
   private async appendToInstallTask(
     contractId: string,
-    block: { sn: string; oltLabel: string; vlan: number; wifi: WifiPlanView; steps: ProvisionStepResult[] },
+    block: {
+      sn: string;
+      oltLabel: string;
+      vlan: number;
+      wifi: WifiPlanView;
+      pppoe: FiberPppoeSummary;
+      steps: ProvisionStepResult[];
+    },
   ): Promise<boolean> {
     try {
       const task = await this.taskWriter.findLatestByContract(contractId);
