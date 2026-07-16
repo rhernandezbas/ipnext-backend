@@ -47,6 +47,13 @@ export interface UispDevice {
   uptime: bigint | null;
   lastSeenAt: Date | null;
   missingSince: Date | null;
+  /**
+   * contract-node-ap-auto-assign (Fase B, MIR-1): UISP device id del AP al que está
+   * asociada esta station (`raw.attributes.apDevice.id`). Null para APs, routers y
+   * stations sin AP reportado (~1.2% del mirror). NO es una FK interna — es el
+   * `AccessPoint.uispDeviceId` (upsert key del catálogo Fase A) tal como lo entrega UISP.
+   */
+  apUispDeviceId: string | null;
   lastSyncAt: Date;
   createdAt: Date;
   updatedAt: Date;

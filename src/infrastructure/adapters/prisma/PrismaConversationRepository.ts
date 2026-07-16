@@ -300,6 +300,14 @@ export class PrismaConversationRepository implements ConversationRepository {
     if (query.campaignId) {
       where['campaignRecipients'] = { some: { campaignId: query.campaignId } };
     }
+    // inbox-resolve (LS-1) — filtro de ciclo de vida con semántica de BUCKET (ver
+    // JSDoc de `ConversationListQuery.status`). MUST mirror
+    // `InMemoryConversationRepository.list`'s filter exactly.
+    if (query.status === 'open') {
+      where['status'] = { not: 'resolved' };
+    } else if (query.status === 'resolved') {
+      where['status'] = 'resolved';
+    }
 
     const [rows, total] = await Promise.all([
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

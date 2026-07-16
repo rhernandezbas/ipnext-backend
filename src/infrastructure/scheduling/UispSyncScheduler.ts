@@ -1,10 +1,13 @@
 import type { SyncUispMirror } from '@application/use-cases/SyncUispMirror';
+import type { AutoAssignContractNetwork } from '@application/use-cases/AutoAssignContractNetwork';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import type { DistributedLock } from '@domain/ports/DistributedLock';
 import type { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 
 const LOCK_KEY = 'uisp-sync';
 const FLAG_KEY = 'uisp-sync';
+/** contract-node-ap-auto-assign (AA-5) — flag PROPIO, dark by default (ausente = deshabilitado). */
+const AUTO_ASSIGN_FLAG_KEY = 'contract-network-auto-assign';
 
 export interface UispSyncSchedulerOptions {
   intervalMs: number;
@@ -43,6 +46,13 @@ export class UispSyncScheduler {
     private readonly opts: UispSyncSchedulerOptions,
     /** Optional — when provided, a failed sync persists SyncState with lastResult='error: <msg>' */
     private readonly syncStateRepo?: SyncStateRepository,
+    /**
+     * contract-node-ap-auto-assign (AA-5) — optional 6th ctor arg (back-compat: every existing
+     * call-site keeps compiling). When provided AND its own flag is ON, runs right after a
+     * successful sync, still inside the advisory lock. Isolated try/catch: a throw here NEVER
+     * breaks the sync's own result (design §5).
+     */
+    private readonly autoAssign?: AutoAssignContractNetwork,
   ) {}
 
   start(): void {
@@ -101,6 +111,23 @@ export class UispSyncScheduler {
       try {
         const result = await this.sync.execute();
         this.log(`[uisp-sync] done — sites=${result.sitesUpserted} devices=${result.devicesUpserted} durationMs=${result.durationMs}`);
+
+        // contract-node-ap-auto-assign (AA-5) — post-sync step, STILL inside the lock. Isolated
+        // try/catch: a throw here NEVER breaks the sync's own result (only a console.warn).
+        if (this.autoAssign) {
+          try {
+            const autoAssignFlag = await this.flags.get(AUTO_ASSIGN_FLAG_KEY);
+            if (autoAssignFlag?.enabled) {
+              const aa = await this.autoAssign.execute();
+              this.log(
+                `[uisp-sync] auto-assign done — assigned=${aa.assigned} unchanged=${aa.unchanged} unresolved=${aa.unresolved} ambiguous=${aa.ambiguous}`,
+              );
+            }
+          } catch (aaErr) {
+            console.warn('[uisp-sync] auto-assign step failed:', aaErr);
+          }
+        }
+
         return { sitesUpserted: result.sitesUpserted, devicesUpserted: result.devicesUpserted };
       } catch (err) {
         const message = (err as Error).message;

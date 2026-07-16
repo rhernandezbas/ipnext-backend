@@ -2451,6 +2451,9 @@ model RbacUser {
   assignedConversations   Conversation[]         @relation("ConversationAssignee")
   // messaging-bulk (F2) — back-relation de las campañas disparadas por este usuario.
   createdCampaigns        Campaign[]             @relation("CampaignCreatedBy")
+  // internal-news — back-relations: noticias publicadas + acuses de lectura de este usuario.
+  newsPosts               NewsPost[]
+  newsReadReceipts        NewsReadReceipt[]
 
   @@index([login])
   @@index([iclassTeamLogin])
@@ -2601,6 +2604,10 @@ model UispDevice {
   uptime       BigInt?
   lastSeenAt   DateTime?
   missingSince DateTime?
+  /// contract-node-ap-auto-assign (Fase B, MIR-1): UISP device id del AP al que está asociada
+  /// esta station (raw.attributes.apDevice.id). NO es FK interna. Sin índice: se consume vía
+  /// listAll() -> Map en memoria, nunca WHERE por esta columna.
+  apUispDeviceId String?
   lastSyncAt   DateTime
   createdAt    DateTime  @default(now())
   updatedAt    DateTime
@@ -3039,4 +3046,51 @@ model CampaignRecipient {
   @@unique([campaignId, clientId])   // idempotencia de creación de recipients + resumible
   @@index([campaignId, status])       // progreso poleable + resume (WHERE status IN queued/failed)
   @@index([conversationId])           // etiqueta #1 — JOIN Conversation×CampaignRecipient
+}
+
+// =============================================
+// INTERNAL NEWS DOMAIN (internal-news) — tablón interno del equipo
+// =============================================
+
+// Categorías del tablón — catálogo propio editable, calco de TicketAreaCatalog.
+model NewsCategory {
+  id        String     @id @default(uuid())
+  name      String     @unique
+  color     String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  posts     NewsPost[]
+}
+
+model NewsPost {
+  id           String            @id @default(uuid())
+  title        String
+  body         String            // texto plano multiline (v1 — markdown queda out-of-scope)
+  categoryId   String
+  category     NewsCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  authorId     String?
+  author       RbacUser?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  authorName   String            // snapshot — sobrevive al borrado del usuario
+  pinned       Boolean           @default(false)
+  publishedAt  DateTime          @default(now())
+  archivedAt   DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  readReceipts NewsReadReceipt[]
+
+  @@index([categoryId])
+  @@index([archivedAt])
+  @@index([pinned, publishedAt])
+}
+
+model NewsReadReceipt {
+  id         String   @id @default(uuid())
+  newsPostId String
+  newsPost   NewsPost @relation(fields: [newsPostId], references: [id], onDelete: Cascade)
+  userId     String
+  user       RbacUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  readAt     DateTime @default(now())
+
+  @@unique([newsPostId, userId])
+  @@index([userId])
 }

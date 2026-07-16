@@ -36,7 +36,7 @@ function makeDevice(uispId: string, uispSiteId: string, role: string | null, ove
   return {
     id: '', uispId, uispSiteId, name: `Device ${uispId}`, model: 'M', modelName: null,
     type: null, role, mac: null, ip: null, firmware: null, status: 'active', signal: null,
-    uptime: null, lastSeenAt: null, missingSince: null, lastSyncAt: now, createdAt: now,
+    uptime: null, lastSeenAt: null, missingSince: null, apUispDeviceId: null, lastSyncAt: now, createdAt: now,
     updatedAt: now, ...overrides,
   };
 }

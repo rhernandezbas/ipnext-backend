@@ -140,4 +140,21 @@ describe('UISP composition root', () => {
     // The createNetworkSiteRouter call must include listNetworkSitesWithUisp as an arg
     expect(appSrc).toMatch(/createNetworkSiteRouter\([^)]*listNetworkSitesWithUisp[^)]*\)/s);
   });
+
+  // contract-node-ap-auto-assign (AA-5) — bootstrapUispSync.ts builds AutoAssignContractNetwork
+  // with the Prisma adapters (pppoe, RadiusEvent, Contract; reuses UispDevice/AccessPoint/SyncState).
+  it('bootstrapUispSync.ts constructs AutoAssignContractNetwork with the Prisma adapters', () => {
+    expect(bootstrapSrc).toContain('AutoAssignContractNetwork');
+    expect(bootstrapSrc).toContain('PrismaPppoeServiceRepository');
+    expect(bootstrapSrc).toContain('PrismaRadiusEventRepository');
+    expect(bootstrapSrc).toContain('PrismaContractRepository');
+    expect(bootstrapSrc).toMatch(/new AutoAssignContractNetwork\(/);
+  });
+
+  // Guard "tests verdes pero prod no asigna" (mismo patrón que el 6to arg de Fase A): si el
+  // autoAssign se cae en silencio del ctor de UispSyncScheduler, el scheduler nunca lo invoca
+  // en producción aunque todos los tests del use case sigan en verde.
+  it('bootstrapUispSync.ts passes autoAssign as the 6th arg to UispSyncScheduler', () => {
+    expect(bootstrapSrc).toMatch(/new UispSyncScheduler\([^)]*autoAssign[^)]*\)/s);
+  });
 });

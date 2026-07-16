@@ -133,7 +133,12 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
   }
 
   async list(): Promise<PppoeService[]> {
-    const rows = await model().findMany();
+    // review M1 (contract-node-ap-auto-assign): defensa en profundidad — findMany() SIN orderBy
+    // devuelve orden de heap de Postgres (puede cambiar con updates reales entre corridas).
+    // AutoAssignContractNetwork ya desempata por `id` si `createdAt` empata, así que esto no es
+    // estrictamente necesario para su correctitud, pero deja el propio `list()` determinístico
+    // para cualquier consumidor futuro.
+    const rows = await model().findMany({ orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
     return rows.map(toEntity);
   }
 

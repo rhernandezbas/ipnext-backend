@@ -245,6 +245,21 @@ import { GetTicketArea } from '@application/use-cases/GetTicketArea';
 import { CreateTicketArea } from '@application/use-cases/CreateTicketArea';
 import { UpdateTicketArea } from '@application/use-cases/UpdateTicketArea';
 import { DeleteTicketArea } from '@application/use-cases/DeleteTicketArea';
+// internal-news — tablón interno del equipo (BE Batch 5 wiring)
+import { PrismaNewsPostRepository } from '../adapters/prisma/PrismaNewsPostRepository';
+import { PrismaNewsCategoryRepository } from '../adapters/prisma/PrismaNewsCategoryRepository';
+import { createNewsRouter } from './routes/news.routes';
+import { ListNewsPosts } from '@application/use-cases/ListNewsPosts';
+import { GetNewsPost } from '@application/use-cases/GetNewsPost';
+import { CreateNewsPost } from '@application/use-cases/CreateNewsPost';
+import { UpdateNewsPost } from '@application/use-cases/UpdateNewsPost';
+import { ArchiveNewsPost } from '@application/use-cases/ArchiveNewsPost';
+import { MarkNewsRead } from '@application/use-cases/MarkNewsRead';
+import { GetNewsUnreadCount } from '@application/use-cases/GetNewsUnreadCount';
+import { ListNewsCategories } from '@application/use-cases/ListNewsCategories';
+import { CreateNewsCategory } from '@application/use-cases/CreateNewsCategory';
+import { UpdateNewsCategory } from '@application/use-cases/UpdateNewsCategory';
+import { DeleteNewsCategory } from '@application/use-cases/DeleteNewsCategory';
 // #79 — Ticket SLA timer config (singleton)
 import { PrismaTicketSlaConfigRepository } from '../adapters/prisma/PrismaTicketSlaConfigRepository';
 import { createTicketSlaConfigRouter } from './routes/ticketSlaConfig.routes';
@@ -347,6 +362,11 @@ import { ListNetworkSitesWithUisp } from '@application/use-cases/ListNetworkSite
 // UISP mirror routes
 import { createUispRouter } from './routes/uisp.routes';
 import { PrismaUispSiteRepository } from '../adapters/prisma/PrismaUispSiteRepository';
+// contract-node-ap-auto-assign (Fase B) — picker manual del nodo/AP de un contrato
+import { createAccessPointsRouter } from './routes/accessPoints.routes';
+import { PrismaAccessPointRepository } from '../adapters/prisma/PrismaAccessPointRepository';
+import { ListAssignableAccessPoints } from '@application/use-cases/ListAssignableAccessPoints';
+import { SetContractNetworkAssignment } from '@application/use-cases/SetContractNetworkAssignment';
 import { PrismaUispDeviceRepository } from '../adapters/prisma/PrismaUispDeviceRepository';
 import { ListUispSites } from '@application/use-cases/ListUispSites';
 import { GetUispSiteDetail } from '@application/use-cases/GetUispSiteDetail';
@@ -1339,6 +1359,22 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const listNotifications = new ListNotifications(notificationRepo);
   const markNotificationRead = new MarkNotificationRead(notificationRepo);
   const markAllNotificationsRead = new MarkAllNotificationsRead(notificationRepo);
+
+  // internal-news — tablón interno del equipo. Aditivo, dark (sin FE consumidor
+  // todavía) — NEWS-HTTP-4: nada de lo de arriba (notifications) se toca.
+  const newsCategoryRepo = new PrismaNewsCategoryRepository();
+  const newsPostRepo = new PrismaNewsPostRepository();
+  const listNewsPosts = new ListNewsPosts(newsPostRepo);
+  const getNewsPost = new GetNewsPost(newsPostRepo);
+  const createNewsPost = new CreateNewsPost(newsPostRepo, newsCategoryRepo);
+  const updateNewsPost = new UpdateNewsPost(newsPostRepo, newsCategoryRepo);
+  const archiveNewsPost = new ArchiveNewsPost(newsPostRepo);
+  const markNewsRead = new MarkNewsRead(newsPostRepo);
+  const getNewsUnreadCount = new GetNewsUnreadCount(newsPostRepo);
+  const listNewsCategories = new ListNewsCategories(newsCategoryRepo);
+  const createNewsCategory = new CreateNewsCategory(newsCategoryRepo);
+  const updateNewsCategory = new UpdateNewsCategory(newsCategoryRepo);
+  const deleteNewsCategory = new DeleteNewsCategory(newsCategoryRepo);
   const deleteNotification = new DeleteNotification(notificationRepo);
 
   // Routes
@@ -1407,8 +1443,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listContractTechnology, getContractTechnology, createContractTechnology,
     updateContractTechnology, deleteContractTechnology,
   ));
+  // contract-node-ap-auto-assign (Fase B, PICK-3) — picker manual del nodo/AP de un contrato.
+  const setContractNetworkAssignment = new SetContractNetworkAssignment(
+    contractRepo,
+    networkSiteRepo,
+    new PrismaAccessPointRepository(),
+  );
   // Global contracts listing — mounted at /api root, before the catch-all.
-  app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats, updateContractLocation, requirePerm));
+  app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats, updateContractLocation, requirePerm, setContractNetworkAssignment));
   // #43 — ServiceCatalog ABM + ContractService CRUD + Contract name, mounted at /api root.
   const serviceCatalogRepo     = new PrismaServiceCatalogRepository();
   const contractServiceRepo    = new PrismaContractServiceRepository();
@@ -1899,6 +1941,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listNetworkSites, getNetworkSite, createNetworkSite, updateNetworkSite, deleteNetworkSite,
     listNetworkSitesWithUisp, assignIClassNodeToNetworkSite,
   ));
+  // contract-node-ap-auto-assign (Fase B, PICK-3) — catálogo de APs asignables (picker manual).
+  // Gate network.read; auth aplicada al montar (patrón /api/network-sites, arriba).
+  const accessPointRepoForPicker = new PrismaAccessPointRepository();
+  const listAssignableAccessPoints = new ListAssignableAccessPoints(accessPointRepoForPicker);
+  app.use('/api/access-points', createAuthMiddleware(authAdapter, sessionRepo), createAccessPointsRouter(
+    listAssignableAccessPoints, requirePerm,
+  ));
   app.use('/api/cpe', createCpeRouter(
     listCpeDevices, getCpeDevice, createCpeDevice, updateCpeDevice, deleteCpeDevice, assignCpeToClient,
   ));
@@ -1952,6 +2001,23 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/monitoring', createMonitoringRouter(getMonitoringStats, listMonitoringDevices, listMonitoringAlerts, acknowledgeAlert));
   app.use('/api/search', createSearchRouter(globalSearch));
   app.use('/api/notifications', createNotificationsRouter(listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification));
+  // internal-news — /api/news carries auth + requirePerm on EVERY route (design §6.1),
+  // a deliberate contrast with the unguarded /api/notifications mount above.
+  app.use('/api/news', createNewsRouter(
+    authAdapter,
+    requirePerm,
+    listNewsPosts,
+    getNewsPost,
+    createNewsPost,
+    updateNewsPost,
+    archiveNewsPost,
+    markNewsRead,
+    getNewsUnreadCount,
+    listNewsCategories,
+    createNewsCategory,
+    updateNewsCategory,
+    deleteNewsCategory,
+  ));
 
   // IClass admin — SO type catalog sync + list (admin-only).
   app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter, syncIClassNodes, listIClassNodeCatalog));

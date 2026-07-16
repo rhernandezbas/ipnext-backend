@@ -44,6 +44,21 @@ export interface ContractLocationResult {
   gpsPlusCode: string | null;
 }
 
+/**
+ * contract-node-ap-auto-assign — result DTO shared by the AUTO assigner and the manual
+ * picker (SetContractNetworkAssignment). Never a raw Prisma entity.
+ */
+export interface ContractNetworkAssignmentResult {
+  id: string;
+  networkSiteId: string | null;
+  accessPointId: string | null;
+}
+
+export interface UpdateNetworkAssignmentInput {
+  networkSiteId: string | null;
+  accessPointId: string | null;
+}
+
 export interface ContractRepository {
   /** Global paginated listing across all clients, with optional filters. */
   list(query: ListContractsQuery): Promise<PaginatedResult<ContractListItem>>;
@@ -96,4 +111,24 @@ export interface ContractRepository {
    * Returns the updated location result, or null when the contract does not exist.
    */
   updateLocation(id: string, data: UpdateContractLocationInput): Promise<ContractLocationResult | null>;
+
+  /**
+   * contract-node-ap-auto-assign — batch read proyectado para el auto-assign (permite
+   * detectar "sin-cambio" sin traer el contrato completo). Ids inexistentes se OMITEN del
+   * resultado (nunca un error, nunca una fila con valores basura).
+   */
+  getNetworkAssignments(
+    contractIds: string[],
+  ): Promise<Array<{ id: string; networkSiteId: string | null; accessPointId: string | null }>>;
+
+  /**
+   * contract-node-ap-auto-assign — escribe SOLO networkSiteId/accessPointId (whitelist,
+   * jamás campos GR). Compartido por el auto-assign y el picker manual
+   * (SetContractNetworkAssignment). `null` limpia el campo. Devuelve `null` si el contrato
+   * no existe.
+   */
+  updateNetworkAssignment(
+    id: string,
+    data: UpdateNetworkAssignmentInput,
+  ): Promise<ContractNetworkAssignmentResult | null>;
 }

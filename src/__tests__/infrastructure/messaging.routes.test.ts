@@ -1383,6 +1383,68 @@ describe('GET /api/messaging/conversations — filtro ?assignment=', () => {
   });
 });
 
+// ─── GET /conversations?status=open|resolved (inbox-resolve, LS-2) ──────────────
+
+describe('GET /api/messaging/conversations — filtro ?status=', () => {
+  async function seedOpenPendingResolved(conversationRepo: InMemoryConversationRepository) {
+    const open = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 950, status: 'open', lastMessageAt: '2026-07-14T00:00:00.000Z' });
+    const pending = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 951, status: 'pending', lastMessageAt: '2026-07-15T00:00:00.000Z' });
+    const resolved = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 952, status: 'resolved', lastMessageAt: '2026-07-16T00:00:00.000Z' });
+    return { open, pending, resolved };
+  }
+
+  it('?status=open → 200 con SOLO las no-resueltas (bucket ACTIVAS, incluye pending)', async () => {
+    const { app, conversationRepo } = buildApp();
+    const { open, pending } = await seedOpenPendingResolved(conversationRepo);
+
+    const res = await request(app).get('/api/messaging/conversations?status=open');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id).sort()).toEqual([open.id, pending.id].sort());
+  });
+
+  it('?status=resolved → 200 con SOLO las resueltas', async () => {
+    const { app, conversationRepo } = buildApp();
+    const { resolved } = await seedOpenPendingResolved(conversationRepo);
+
+    const res = await request(app).get('/api/messaging/conversations?status=resolved');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id)).toEqual([resolved.id]);
+  });
+
+  it('?status=banana (valor desconocido) → 200 con TODAS, idéntico a sin param (se ignora, sin error)', async () => {
+    const { app, conversationRepo } = buildApp();
+    await seedOpenPendingResolved(conversationRepo);
+
+    const res = await request(app).get('/api/messaging/conversations?status=banana');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(3);
+  });
+
+  it('combinable con ?assignment=mine: status=open&assignment=mine → no-resueltas asignadas al usuario autenticado', async () => {
+    const { app, conversationRepo } = buildApp();
+    const { open, pending, resolved } = await seedOpenPendingResolved(conversationRepo);
+    await conversationRepo.updateLocalFields(open.id, { assigneeId: 'user-test' }); // allowAuth stampea req.user.id = 'user-test'
+    await conversationRepo.updateLocalFields(pending.id, { assigneeId: 'user-1' }); // otro agente
+    await conversationRepo.updateLocalFields(resolved.id, { assigneeId: 'user-test' });
+
+    const res = await request(app).get('/api/messaging/conversations?status=open&assignment=mine');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id)).toEqual([open.id]);
+  });
+
+  it('GET /conversations?status=open sin messaging:read → 403 (guard perms.read intacto)', async () => {
+    const { app } = buildApp({ readPerm: denyPerm });
+
+    const res = await request(app).get('/api/messaging/conversations?status=open');
+
+    expect(res.status).toBe(403);
+  });
+});
+
 // ─── GET /attachments/:id/file (messaging-inbox-v2-media, MEDIA-5) ──────────────
 
 describe('GET /api/messaging/attachments/:id/file', () => {

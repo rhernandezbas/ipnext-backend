@@ -93,6 +93,94 @@ describe('InMemoryConversationRepository', () => {
     expect(page.total).toBe(0);
   });
 
+  describe('inbox-resolve (LS-1) — filtro ?status= con semántica de bucket', () => {
+    async function seedThreeStatuses(repo: InMemoryConversationRepository) {
+      const open = await repo.upsertByChatwootId({
+        chatwootConversationId: 201,
+        contactName: 'Abierta',
+        status: 'open',
+        lastMessageAt: '2026-07-14T10:00:00.000Z',
+      });
+      const pending = await repo.upsertByChatwootId({
+        chatwootConversationId: 202,
+        contactName: 'Pendiente',
+        status: 'pending',
+        lastMessageAt: '2026-07-15T10:00:00.000Z',
+      });
+      const resolved = await repo.upsertByChatwootId({
+        chatwootConversationId: 203,
+        contactName: 'Resuelta',
+        status: 'resolved',
+        lastMessageAt: '2026-07-16T10:00:00.000Z',
+      });
+      return { open, pending, resolved };
+    }
+
+    it('bucket open incluye pending, excluye resolved', async () => {
+      const { open, pending } = await seedThreeStatuses(repo);
+
+      const page = await repo.list({ status: 'open' });
+
+      expect(page.data.map((c) => c.id).sort()).toEqual([open.id, pending.id].sort());
+      expect(page.total).toBe(2);
+    });
+
+    it('bucket resolved es match exacto', async () => {
+      const { resolved } = await seedThreeStatuses(repo);
+
+      const page = await repo.list({ status: 'resolved' });
+
+      expect(page.data.map((c) => c.id)).toEqual([resolved.id]);
+      expect(page.total).toBe(1);
+    });
+
+    it('sin status → sin filtro (no-regresión)', async () => {
+      await seedThreeStatuses(repo);
+
+      const page = await repo.list({});
+
+      expect(page.total).toBe(3);
+    });
+
+    it('combinable con asignación y campaña (AND de los tres filtros)', async () => {
+      const { open, pending, resolved } = await seedThreeStatuses(repo);
+      repo.seedUsers([{ id: 'user-1', name: 'Agente Uno' }]);
+      await repo.updateLocalFields(open.id, { assigneeId: 'user-1' });
+      await repo.updateLocalFields(pending.id, { assigneeId: 'user-1' });
+      await repo.updateLocalFields(resolved.id, { assigneeId: 'user-1' });
+      repo.linkCampaign(open.id, { id: 'camp-1', name: 'Campaña' });
+      repo.linkCampaign(resolved.id, { id: 'camp-1', name: 'Campaña' });
+      // pending queda asignada a user-1 pero SIN campaña → debe quedar afuera del AND.
+
+      const page = await repo.list({ status: 'open', assigneeId: 'user-1', campaignId: 'camp-1' });
+
+      expect(page.data.map((c) => c.id)).toEqual([open.id]);
+      expect(page.total).toBe(1);
+    });
+
+    it('paginación sobre el universo filtrado (total refleja el filtrado, no el global)', async () => {
+      for (let i = 0; i < 3; i++) {
+        await repo.upsertByChatwootId({
+          chatwootConversationId: 300 + i,
+          status: 'open',
+          lastMessageAt: `2026-07-1${i}T10:00:00.000Z`,
+        });
+      }
+      for (let i = 0; i < 5; i++) {
+        await repo.upsertByChatwootId({
+          chatwootConversationId: 310 + i,
+          status: 'resolved',
+          lastMessageAt: `2026-07-0${i + 1}T10:00:00.000Z`,
+        });
+      }
+
+      const page = await repo.list({ status: 'resolved', page: 1, limit: 2 });
+
+      expect(page.data).toHaveLength(2);
+      expect(page.total).toBe(5);
+    });
+  });
+
   describe('§8 — tiebreaker determinístico en empates de lastMessageAt (in-memory DEBE ordenar igual que Prisma)', () => {
     it('dos conversaciones con el MISMO lastMessageAt se ordenan por id ASC, no por orden de insercion', async () => {
       // Postgres sin una clave secundaria en ORDER BY no garantiza NADA sobre el

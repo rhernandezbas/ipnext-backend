@@ -26,6 +26,7 @@ function toEntity(row: {
   uptime: bigint | null;
   lastSeenAt: Date | null;
   missingSince: Date | null;
+  apUispDeviceId: string | null;
   lastSyncAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -47,6 +48,7 @@ function toEntity(row: {
     uptime: row.uptime,
     lastSeenAt: row.lastSeenAt,
     missingSince: row.missingSince,
+    apUispDeviceId: row.apUispDeviceId,
     lastSyncAt: row.lastSyncAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -74,6 +76,7 @@ export class PrismaUispDeviceRepository implements UispDeviceRepository {
         uptime: device.uptime,
         lastSeenAt: device.lastSeenAt,
         missingSince: device.missingSince,
+        apUispDeviceId: device.apUispDeviceId,
         lastSyncAt: device.lastSyncAt,
         updatedAt: now,
       },
@@ -91,6 +94,7 @@ export class PrismaUispDeviceRepository implements UispDeviceRepository {
         signal: device.signal,
         uptime: device.uptime,
         lastSeenAt: device.lastSeenAt,
+        apUispDeviceId: device.apUispDeviceId,
         lastSyncAt: device.lastSyncAt,
         updatedAt: now,
       },

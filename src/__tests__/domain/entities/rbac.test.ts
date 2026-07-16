@@ -24,8 +24,8 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 34 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging)', () => {
-    expect(RBAC_MODULES).toHaveLength(34);
+  it('contains exactly 35 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news)', () => {
+    expect(RBAC_MODULES).toHaveLength(35);
   });
 
   it('includes all 14 original module codes', () => {
@@ -75,6 +75,10 @@ describe('RBAC_MODULES constant', () => {
 
   it('includes the messaging module (messaging-inbox F1 — inbox WhatsApp/Chatwoot)', () => {
     expect(RBAC_MODULES).toContain('messaging');
+  });
+
+  it('includes the news module (internal-news — tablón interno del equipo)', () => {
+    expect(RBAC_MODULES).toContain('news');
   });
 
   it('is readonly (as const)', () => {

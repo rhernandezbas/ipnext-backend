@@ -6,6 +6,8 @@ import {
   ContractStats,
   UpdateContractLocationInput,
   ContractLocationResult,
+  ContractNetworkAssignmentResult,
+  UpdateNetworkAssignmentInput,
 } from '@domain/ports/ContractRepository';
 import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 import { prisma } from '../../database/prisma';
@@ -162,6 +164,53 @@ export class PrismaContractRepository implements ContractRepository {
       };
     } catch (err: unknown) {
       // P2025 — record to update not found
+      if ((err as { code?: string })?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
+  /**
+   * contract-node-ap-auto-assign — batch read proyectado (skip de sin-cambio en el
+   * auto-assign). Ids inexistentes se omiten naturalmente (WHERE id IN (...) los descarta).
+   */
+  async getNetworkAssignments(
+    contractIds: string[],
+  ): Promise<Array<{ id: string; networkSiteId: string | null; accessPointId: string | null }>> {
+    if (contractIds.length === 0) return [];
+    const rows = await prisma.contract.findMany({
+      where: { id: { in: contractIds } },
+      select: { id: true, networkSiteId: true, accessPointId: true },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      networkSiteId: r.networkSiteId ?? null,
+      accessPointId: r.accessPointId ?? null,
+    }));
+  }
+
+  /**
+   * contract-node-ap-auto-assign — escribe SOLO networkSiteId/accessPointId (whitelist).
+   * Compartido por el auto-assign y SetContractNetworkAssignment (picker manual).
+   */
+  async updateNetworkAssignment(
+    id: string,
+    data: UpdateNetworkAssignmentInput,
+  ): Promise<ContractNetworkAssignmentResult | null> {
+    try {
+      const row = await prisma.contract.update({
+        where: { id },
+        data: {
+          networkSiteId: data.networkSiteId,
+          accessPointId: data.accessPointId,
+        },
+        select: { id: true, networkSiteId: true, accessPointId: true },
+      });
+      return {
+        id: row.id,
+        networkSiteId: row.networkSiteId ?? null,
+        accessPointId: row.accessPointId ?? null,
+      };
+    } catch (err: unknown) {
       if ((err as { code?: string })?.code === 'P2025') return null;
       throw err;
     }

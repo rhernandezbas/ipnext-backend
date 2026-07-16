@@ -6,7 +6,11 @@ import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRep
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
 import { PrismaNetworkSiteRepository } from '../adapters/prisma/PrismaNetworkSiteRepository';
 import { PrismaAccessPointRepository } from '../adapters/prisma/PrismaAccessPointRepository';
+import { PrismaPppoeServiceRepository } from '../adapters/prisma/PrismaPppoeServiceRepository';
+import { PrismaRadiusEventRepository } from '../adapters/prisma/PrismaRadiusEventRepository';
+import { PrismaContractRepository } from '../adapters/prisma/PrismaContractRepository';
 import { SyncUispMirror } from '@application/use-cases/SyncUispMirror';
+import { AutoAssignContractNetwork } from '@application/use-cases/AutoAssignContractNetwork';
 import { UispSyncScheduler } from './UispSyncScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 
@@ -23,6 +27,10 @@ export async function bootstrapUispSync(intervalMs: number): Promise<UispSyncSch
   const { baseUrl, token } = config.uisp;
 
   let syncUseCase: SyncUispMirror | null = null;
+  // contract-node-ap-auto-assign (AA-5) — only meaningful when the mirror is configured (the
+  // scheduler already short-circuits on sync===null before ever reaching the auto-assign step,
+  // so building it only in this branch is not a behavior gap, just avoids a dead instance).
+  let autoAssignUseCase: AutoAssignContractNetwork | undefined;
 
   if (baseUrl && token) {
     const uispClient = new UispClient({ baseUrl, token });
@@ -32,6 +40,19 @@ export async function bootstrapUispSync(intervalMs: number): Promise<UispSyncSch
     const networkSiteRepo = new PrismaNetworkSiteRepository();
     const accessPointRepo = new PrismaAccessPointRepository();
     syncUseCase = new SyncUispMirror(uispClient, siteRepo, deviceRepo, syncStateRepo, networkSiteRepo, accessPointRepo);
+
+    const pppoeRepo = new PrismaPppoeServiceRepository();
+    const radiusEventRepo = new PrismaRadiusEventRepository();
+    const contractRepo = new PrismaContractRepository();
+    const autoAssignSyncStateRepo = new PrismaSyncStateRepository();
+    autoAssignUseCase = new AutoAssignContractNetwork(
+      pppoeRepo,
+      radiusEventRepo,
+      deviceRepo,
+      accessPointRepo,
+      contractRepo,
+      autoAssignSyncStateRepo,
+    );
   } else {
     console.warn('[uisp-sync] UISP_BASE_URL/UISP_TOKEN missing — sync will be skipped on each tick');
   }
@@ -41,5 +62,5 @@ export async function bootstrapUispSync(intervalMs: number): Promise<UispSyncSch
   // FIX-2a: pass syncStateRepo so errors are persisted and visible in GetUispSyncStatus
   const schedulerSyncStateRepo = new PrismaSyncStateRepository();
 
-  return new UispSyncScheduler(syncUseCase, flags, lock, { intervalMs }, schedulerSyncStateRepo);
+  return new UispSyncScheduler(syncUseCase, flags, lock, { intervalMs }, schedulerSyncStateRepo, autoAssignUseCase);
 }

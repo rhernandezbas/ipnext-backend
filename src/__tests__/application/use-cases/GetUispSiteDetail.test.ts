@@ -47,6 +47,7 @@ function makeDevice(uispId: string, uispSiteId: string): UispDevice {
     uptime: BigInt(125000),
     lastSeenAt: now,
     missingSince: null,
+    apUispDeviceId: null,
     lastSyncAt: now,
     createdAt: now,
     updatedAt: now,
