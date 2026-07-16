@@ -45,6 +45,17 @@ export interface TemplateSummaryDto {
 
 // ─── Segmentación — preview/conteo (SEG-1..SEG-5) ────────────────────────────
 
+/**
+ * bulk-csv-recipients (CSV-1) — un contacto crudo del CSV, PARALELO a `segment` y
+ * `manualClientIds` (mismo patrón que MAN-5). El BE es la AUTORIDAD de validación
+ * (D9): el FE solo filtra estructura/filas obviamente vacías, acá se valida
+ * `toWhatsAppE164` + se resuelve el vínculo por teléfono (D3).
+ */
+export interface ManualContactDto {
+  name: string;
+  phone: string;
+}
+
 export interface PreviewSegmentInput {
   statuses: string[];
   balanceMin?: number;
@@ -55,13 +66,23 @@ export interface PreviewSegmentInput {
    * (segmento ∪ manuales) deduplicada por `clientId`, sin doble-contar el overlap.
    */
   manualClientIds?: string[];
+  /**
+   * bulk-csv-recipients (CSV-1) — 4to dominio, PARALELO a `segment` y
+   * `manualClientIds`. `count` refleja la unión de las 3 fuentes.
+   */
+  manualContacts?: ManualContactDto[];
 }
 
 export interface PreviewSegmentSampleItemDto {
-  clientId: string;
+  /**
+   * bulk-csv-recipients (D11) — `null` para un contacto CSV crudo (sin `Client`
+   * vinculado). El FE del PreviewModal pasa a keyear filas con `clientId ??
+   * phoneE164`.
+   */
+  clientId: string | null;
   name: string;
   phoneE164: string;
-  /** messaging-bulk v1.1 (preview modal) — estado del cliente (`ResolvedRecipient.status`). */
+  /** messaging-bulk v1.1 (preview modal) — estado del cliente (`ResolvedRecipient.status`). `'no_cliente'` para un crudo. */
   status: string;
 }
 
@@ -88,29 +109,60 @@ export interface PreviewSegmentOutput {
 
 // ─── Paginado de destinatarios resueltos (messaging-bulk v1.1, ListSegmentRecipients) ──
 
+/** bulk-csv-recipients (D11) — qué vista pagina el endpoint (`recipients` = default, backcompat). */
+export type SegmentRecipientsView = 'recipients' | 'excluded';
+
 /**
  * v1.1 — input de `ListSegmentRecipients`: el MISMO segmento que
  * `PreviewSegmentInput` + paginado. El segmento NO está persistido: cada
  * llamada re-resuelve `listSegmentRecipients` y pagina el set YA resuelto
  * (post opt-out/dedup/teléfono-inválido) en memoria — no hay una tabla que
  * pagine del lado de la DB.
+ *
+ * bulk-csv-recipients (DET-1/DET-2) — hereda `manualContacts` de
+ * `PreviewSegmentInput` (cierra la deuda F4 documentada en el propio FE) + `view`
+ * para elegir entre la página de destinatarios o la de excluidos con detalle.
  */
-export interface ListSegmentRecipientsInput extends PreviewSegmentInput, PaginatedQuery {}
+export interface ListSegmentRecipientsInput extends PreviewSegmentInput, PaginatedQuery {
+  view?: SegmentRecipientsView;
+}
 
 /** v1.1 — un destinatario RESUELTO (receptor real), una página de este listado. */
 export interface SegmentRecipientItemDto {
-  clientId: string;
+  /** bulk-csv-recipients (D11) — `null` para un contacto CSV crudo (sin `Client`). */
+  clientId: string | null;
   name: string;
   phoneE164: string;
   status: string;
+  /** bulk-csv-recipients (DET-1) — de qué fuente vino ESTE destinatario resuelto. */
+  source: 'segment' | 'manual' | 'csv';
+}
+
+/**
+ * bulk-csv-recipients (DET-2) — un excluido con el motivo, paginado. `clientId`/
+ * `status` solo presentes cuando el excluido SÍ vinculó a un `Client` (opt-out o
+ * duplicado de un vinculado) — un `sin_nombre`/`sin_telefono`/`telefono_invalido`
+ * de un contacto crudo nunca resuelve `Client`.
+ */
+export interface ExcludedRecipientItemDto {
+  name: string;
+  phone: string;
+  reason: 'sin_nombre' | 'sin_telefono' | 'telefono_invalido' | 'opt_out' | 'duplicado';
+  source: 'segment' | 'manual' | 'csv';
+  clientId?: string;
+  status?: string;
 }
 
 /**
  * v1.1 — igual que `PaginatedResult<SegmentRecipientItemDto>` + los mismos
  * `skipped`/`statusCounts` que expone el preview (SEG-1..SEG-5), para que el
  * modal no tenga que combinar dos respuestas distintas.
+ *
+ * bulk-csv-recipients (DET-2) — con `view:'excluded'`, `data` es
+ * `ExcludedRecipientItemDto[]` en su lugar (unión discriminada por el `view` del
+ * input, NO por el shape de la respuesta — el caller ya sabe qué pidió).
  */
-export interface ListSegmentRecipientsOutput extends PaginatedResult<SegmentRecipientItemDto> {
+export interface ListSegmentRecipientsOutput extends PaginatedResult<SegmentRecipientItemDto | ExcludedRecipientItemDto> {
   skipped: {
     optedOut: number;
     duplicatePhone: number;
@@ -142,6 +194,13 @@ export interface CreateCampaignInput {
    * fail-loud (`ManualRecipientsNotFoundError`, MAN-3).
    */
   manualClientIds?: string[];
+  /**
+   * bulk-csv-recipients (CSV-1) — 4to dominio de destinatarios, PARALELO a
+   * `segment`/`manualClientIds`, combinable con cualquiera de los dos (o ambos).
+   * Cada contacto válido se vincula por teléfono a un `Client` existente
+   * (CSV-2) o se persiste crudo (`clientId: null`, CSV-3).
+   */
+  manualContacts?: ManualContactDto[];
   createdById: string;
 }
 
@@ -181,7 +240,10 @@ export interface CampaignDto extends CampaignSummaryDto {
 
 export interface CampaignRecipientDto {
   id: string;
-  clientId: string;
+  /** bulk-csv-recipients (PER-3) — `null` para un recipient crudo (sin `Client`, CSV-3). */
+  clientId: string | null;
+  /** bulk-csv-recipients (PER-3) — nombre del CSV, solo presente en filas `clientId: null`. */
+  contactName: string | null;
   phoneE164: string;
   status: CampaignRecipientStatusDto;
   /** HIST-3 — SANEADO, nunca el payload/response crudo del proveedor ni credenciales. */
@@ -228,6 +290,7 @@ export function toCampaignRecipientDto(recipient: CampaignRecipient): CampaignRe
   return {
     id: recipient.id,
     clientId: recipient.clientId,
+    contactName: recipient.contactName,
     phoneE164: recipient.phoneE164,
     status: toRecipientStatusDto(recipient.status),
     error: recipient.error,

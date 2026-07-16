@@ -242,6 +242,44 @@ export class InvalidManualRecipientsError extends DomainError {
   }
 }
 
+/**
+ * bulk-csv-recipients (CSV-5) — raised by the `/api/messaging/bulk` route parser
+ * (`toManualContacts`) when `manualContacts` is PRESENT but malformed: not an
+ * array, or an array carrying an item that isn't `{name: string, phone: string}`.
+ * Fail-loud (mismo criterio que `InvalidManualRecipientsError`): un item mal
+ * tipado NO se descarta en silencio. AUSENTE (`undefined`) sigue siendo válido
+ * (segmento/manual-only). Reusa `VALIDATION_ERROR` (→ 400).
+ */
+export class InvalidManualContactsError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'InvalidManualContactsError';
+  }
+}
+
+/**
+ * bulk-csv-recipients (CSV-5) — raised by `resolveCombinedRecipients` cuando la
+ * lista `manualContacts` NORMALIZADA (post trim/descarte de filas ambas-vacías)
+ * excede `MAX_MANUAL_CONTACTS`. Cota INDEPENDIENTE de `TooManyManualRecipientsError`
+ * (un CSV de miles de contactos NO es una curaduría legítima — mismo razonamiento
+ * FIX-3: protege el insert masivo y la memoria del match por teléfono). Rechazo
+ * fail-loud ANTES de tocar la DB o el universo de `Client`. Maps to 422.
+ */
+export class TooManyManualContactsError extends DomainError {
+  public readonly received: number;
+  public readonly max: number;
+
+  constructor(received: number, max: number) {
+    super(
+      `Manual contact list has ${received} contacts, exceeding the maximum of ${max}`,
+      'TOO_MANY_MANUAL_CONTACTS',
+    );
+    this.name = 'TooManyManualContactsError';
+    this.received = received;
+    this.max = max;
+  }
+}
+
 /** HIST-2 — raised by `GetCampaign` (and any lookup) when the id does not exist. */
 export class CampaignNotFoundError extends DomainError {
   constructor(id: string) {

@@ -187,6 +187,10 @@ const statusMap: Record<string, number> = {
   // rechazo limpio ANTES de reventar el límite de bind params de Postgres (mismo
   // criterio 422 que TOO_MANY_ATTACHMENTS — bien formada pero excede un tope).
   TOO_MANY_MANUAL_RECIPIENTS: 422,
+  // bulk-csv-recipients (CSV-5) — el 4to dominio (manualContacts) espeja el mismo
+  // criterio 422 que TOO_MANY_MANUAL_RECIPIENTS: cota independiente, rechazo ANTES
+  // de tocar la DB.
+  TOO_MANY_MANUAL_CONTACTS: 422,
   CAMPAIGN_NOT_FOUND: 404,
   CAMPAIGN_ALREADY_FINISHED: 409,
   // Change 3 (templates CRUD) — ver/crear/submit/borrar templates WhatsApp.
