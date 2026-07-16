@@ -45,7 +45,9 @@ export class InMemoryContractRepository implements ContractRepository {
     vendedor?: string | null;
     motivoBaja?: string | null;
     networkSiteId?: string | null;
+    networkSiteName?: string | null;
     accessPointId?: string | null;
+    accessPointName?: string | null;
   }): ContractListItem {
     const item: ContractListItem = {
       id: data.id ?? randomUUID(),
@@ -56,6 +58,12 @@ export class InMemoryContractRepository implements ContractRepository {
       status: data.status ?? 'active',
       technology: data.technology ?? null,
       startDate: data.startDate ?? new Date().toISOString(),
+      // contract-network-read — read-side projection, seeded directly (mirrors the
+      // Prisma adapter's joined `networkSite`/`accessPoint` relations).
+      networkSiteId: data.networkSiteId ?? null,
+      networkSiteName: data.networkSiteName ?? null,
+      accessPointId: data.accessPointId ?? null,
+      accessPointName: data.accessPointName ?? null,
     };
     this.items.push(item);
     this.vendedores.push(data.vendedor ?? null);

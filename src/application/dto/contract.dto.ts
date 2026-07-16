@@ -16,6 +16,15 @@ export interface ContractSummaryDto {
   status: string;
   technology: string | null;
   startDate: string;
+  /**
+   * contract-network-read — CURRENT node/AP assignment, so the FE picker (Fase B) can
+   * render what is already assigned instead of flying blind. All 4 fields are nullable;
+   * null means "sin asignar". Contrato acordado con el FE — nombres exactos.
+   */
+  networkSiteId: string | null;
+  networkSiteName: string | null;
+  accessPointId: string | null;
+  accessPointName: string | null;
 }
 
 export interface PaginatedContractsDto {

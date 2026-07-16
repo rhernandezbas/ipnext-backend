@@ -15,6 +15,16 @@ export interface ContractListItem {
   status: string;
   technology: string | null;
   startDate: string;
+  /**
+   * contract-network-read — CURRENT node/AP assignment (written by the auto-assign flag
+   * DARK or by the manual picker's PATCH /contracts/:id/network-assignment). Read-only
+   * projection for the listing; null/null when unassigned. Names are joined from
+   * NetworkSite.name / AccessPoint.name (never a raw Prisma entity).
+   */
+  networkSiteId: string | null;
+  networkSiteName: string | null;
+  accessPointId: string | null;
+  accessPointName: string | null;
 }
 
 export interface ListContractsQuery extends PaginatedQuery {

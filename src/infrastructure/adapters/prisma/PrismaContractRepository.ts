@@ -22,6 +22,12 @@ function toContractListItem(row: any): ContractListItem {
     status: row.status,
     technology: row.technology ?? null,
     startDate: row.startDate instanceof Date ? row.startDate.toISOString() : row.startDate,
+    // contract-network-read — CURRENT node/AP assignment, joined in the SAME query
+    // (no N+1). Names come from the NetworkSite/AccessPoint relations.
+    networkSiteId: row.networkSiteId ?? null,
+    networkSiteName: row.networkSite?.name ?? null,
+    accessPointId: row.accessPointId ?? null,
+    accessPointName: row.accessPoint?.name ?? null,
   };
 }
 
@@ -43,7 +49,13 @@ export class PrismaContractRepository implements ContractRepository {
     const [rows, total] = await Promise.all([
       prisma.contract.findMany({
         where,
-        include: { client: { select: { name: true } } },
+        // contract-network-read — join networkSite/accessPoint IN THE SAME query as
+        // client (anti-N+1: one round-trip, never a per-contract lookup).
+        include: {
+          client: { select: { name: true } },
+          networkSite: { select: { name: true } },
+          accessPoint: { select: { name: true } },
+        },
         orderBy: { startDate: 'desc' },
         skip: (page - 1) * limit,
         take: limit,

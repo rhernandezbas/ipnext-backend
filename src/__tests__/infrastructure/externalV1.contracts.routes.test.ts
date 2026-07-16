@@ -26,6 +26,10 @@ const FULL_CONTRACT_SUMMARY: ContractSummaryDto = {
   status: 'active',
   technology: null,          // null — should be derived from plan → 'Fiber'
   startDate: '2024-01-15T10:00:00.000Z',
+  networkSiteId: null,
+  networkSiteName: null,
+  accessPointId: null,
+  accessPointName: null,
 };
 
 /** Manual technology (FTTH) — must NOT be overridden even though plan speed is < 100. */
@@ -38,6 +42,10 @@ const MANUAL_TECH_CONTRACT: ContractSummaryDto = {
   status: 'active',
   technology: 'FTTH',        // manual value — must NOT be overridden by derived
   startDate: '2024-02-20T08:00:00.000Z',
+  networkSiteId: null,
+  networkSiteName: null,
+  accessPointId: null,
+  accessPointName: null,
 };
 
 /** Low-speed plan + null technology → should derive 'Wireless'. */
@@ -50,6 +58,10 @@ const LOW_SPEED_CONTRACT: ContractSummaryDto = {
   status: 'inactive',
   technology: null,          // null — should derive to 'Wireless'
   startDate: '2024-03-01T00:00:00.000Z',
+  networkSiteId: null,
+  networkSiteName: null,
+  accessPointId: null,
+  accessPointName: null,
 };
 
 // ─── Stub factories ────────────────────────────────────────────────────────
@@ -216,6 +228,24 @@ describe('GET /api/external/v1/contracts — DTO hygiene', () => {
     expect(contract).not.toHaveProperty('type');
     expect(contract).not.toHaveProperty('endDate');
     expect(contract).not.toHaveProperty('clientName');  // internal join field
+  });
+
+  it('contract-network-read (READ-4): does NOT leak the new node/AP assignment fields', async () => {
+    // FULL_CONTRACT_SUMMARY has networkSiteId/accessPointId = null, so also seed a
+    // populated case to prove the allow-list strips them even when they carry real values.
+    const populated = { ...FULL_CONTRACT_SUMMARY, networkSiteId: 'ns-1', networkSiteName: 'Nodo Centro', accessPointId: 'ap-1', accessPointName: 'AP Torre Norte' };
+    const app = buildApp(makeListContracts([populated]));
+    const res = await request(app)
+      .get('/api/external/v1/contracts')
+      .set('X-API-Key', TEST_KEY);
+
+    expect(res.status).toBe(200);
+    const contract = res.body.data[0];
+
+    expect(contract).not.toHaveProperty('networkSiteId');
+    expect(contract).not.toHaveProperty('networkSiteName');
+    expect(contract).not.toHaveProperty('accessPointId');
+    expect(contract).not.toHaveProperty('accessPointName');
   });
 
   it('response DOES contain required curated fields (id, code, clientId, plan, status, technology, startDate)', async () => {

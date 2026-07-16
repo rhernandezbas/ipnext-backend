@@ -38,6 +38,11 @@ export class ListContracts {
         status: mapContractStatus(s.status),
         technology: deriveTechnology(s.technology, s.plan),
         startDate: s.startDate,
+        // contract-network-read — pass-through of the current node/AP assignment.
+        networkSiteId: s.networkSiteId,
+        networkSiteName: s.networkSiteName,
+        accessPointId: s.accessPointId,
+        accessPointName: s.accessPointName,
       })),
       total: result.total,
       page: result.page,
