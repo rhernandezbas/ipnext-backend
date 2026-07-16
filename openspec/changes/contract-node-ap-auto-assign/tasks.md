@@ -196,6 +196,80 @@ lo tengan presente al correr la suite completa o trabajar en paralelo sobre otro
 
 ---
 
+## Review — Fix Wave (post-review adversarial, 2026-07-16)
+
+Review adversarial dejó 1 MEDIUM crítico-de-prender-flag (M1), 1 MEDIUM de cobertura (M2), LOWs y
+un INFO. Fix wave en worktree dedicado (`feat/node-ap-assign`), STRICT TDD (rojo→verde) en cada punto.
+
+- [x] **M1 — BLOQUEA prender el flag** — selección de candidato PPPoE no determinística. Root
+  cause: `AutoAssignContractNetwork.ts` desempataba `createdAt` con `>` estricto (empate ⇒ "gana
+  el primero de la lista") y `PrismaPppoeServiceRepository.list()` era `findMany()` SIN `orderBy`
+  (orden de heap de Postgres, cambia con updates reales) ⇒ dos pppoe `enabled` del mismo
+  `createdAt` (TIMESTAMP(3), típico de un ingest bulk) podían resolver a APs distintos y la
+  asignación OSCILABA de tick en tick sin que cambiara ningún dato real (churn/flapping sobre
+  `Contract` cada 5 min). Fix: desempate secundario ESTABLE por `id` en el use case (determinístico
+  sin importar el orden de `rows`) + `orderBy: [{createdAt:'asc'},{id:'asc'}]` en
+  `PrismaPppoeServiceRepository.list()` (defensa en profundidad). Test RED con un stub de
+  `PppoeServiceRepository.list()` que devuelve LAS MISMAS 2 filas (mismo id, mismo createdAt) en 2
+  órdenes distintas — reproducido el flapping revirtiendo el fix temporalmente (`git stash`) antes
+  de confirmarlo verde. Archivos: `src/application/use-cases/AutoAssignContractNetwork.ts`,
+  `src/infrastructure/adapters/prisma/PrismaPppoeServiceRepository.ts`,
+  `src/__tests__/application/use-cases/AutoAssignContractNetwork.test.ts` (+1 test).
+
+- [x] **M2 — cobertura de matriz** — 4 casos sin test ejercitados (promesa "matriz §6 completa" del
+  design). Agregados a `AutoAssignContractNetwork.test.ts` (describe "cobertura de matriz faltante
+  (review M2)", 4 tests): (1) station viva matchea por MAC pero `apUispDeviceId === null` →
+  unresolved; (2) `apUispDeviceId` que no existe en el catálogo AccessPoint → unresolved; (3)
+  device con `role != 'station'` y la MISMA MAC → excluido del match; (4) `callerId` presente pero
+  INVÁLIDO (no-MAC) → cae a la cascada RadiusEvent (distinto del test pre-existente que solo cubre
+  `callerId` AUSENTE). Los 4 pasan con el código de producción SIN CAMBIOS — es cobertura pura, NO
+  se encontró bug oculto. Nota de proceso: la primera versión de estos tests usaba MACs con
+  sufijo `M1`/`M2`/`M3`/`M4` (`M` no es hex válido) — `normalizeMac()` los rechazaba en silencio y
+  3 de los 4 "pasaban" por la razón equivocada (degeneraban al caso "sin MAC", no al caso
+  específico bajo prueba); corregido a sufijos hex válidos (`21`/`22`/`23`/`24`) antes de dar el
+  batch por cerrado.
+
+- [x] **L1 — `assigned++` solo si hay escritura real** — contaba `assigned++` incondicionalmente
+  tras invocar `updateNetworkAssignment`, aunque el port devuelve `null` cuando el contrato no
+  existe (carrera: borrado entre el read del universo y el write, o un `contractId` huérfano en
+  `PppoeService`). Fix: `const updated = await ...; if (updated) assigned++;`. Test RED con un
+  `contractId` nunca seedeado en `contractRepo` (universo con derivación completa pero contrato
+  fantasma) — `assigned` pasaba de 1 (bug) a 0 (fix). Archivo:
+  `src/application/use-cases/AutoAssignContractNetwork.ts`.
+
+- [x] **L4 — design §7 desalineado con el código** — el comentario de `contractsEvaluated` decía
+  "contratos con pppoe enabled candidato"; el código (y T4.2 de este mismo `tasks.md`) cuenta
+  TODOS los contratos con ≥1 `PppoeService` (`contractId != null`), no solo los que tienen un
+  candidato `enabled` — un contrato con 0 pppoe enabled SÍ cuenta y termina `unresolved` (fila 8).
+  Corregido el comentario en `design.md` §7 para que documente lo que el código realmente hace (no
+  al revés — el código quedó como estaba, es la semántica correcta y ya tiene test: fila 8).
+
+- [x] **INFO(c) — `console.warn` sin mockear ensuciaba el output del test** — el test "autoAssign
+  que LANZA" del scheduler no mockeaba `console.warn`, así que el catch aislado
+  (`[uisp-sync] auto-assign step failed: ...`) imprimía en cada corrida. Agregado
+  `jest.spyOn(console, 'warn').mockImplementation(() => undefined)` + `mockRestore()`. Archivo:
+  `src/__tests__/application/UispSyncScheduler.test.ts`.
+
+### Review — aceptados (documentados, SIN cambiar)
+
+- **L2** — el PATCH `/contracts/:id/network-assignment` usa `createAuthMiddleware(authProvider)`
+  SIN `sessionRepo` (auth stateless JWT-only, sin check de revocación). Verificado: es el patrón
+  del ROUTER completo — `createContractsRouter` nunca recibe `sessionRepo`, así que TODAS las
+  rutas de `contracts.routes.ts` (incl. `/contracts/:id/location`, preexistente) comparten esta
+  limitación. No es específico de este change — es deuda pre-existente del router. Anotado, no se
+  toca acá.
+- **L3** — la cascada de MAC (§4, CAS-2) elige el evento con `macAddress` NO-NULL más reciente
+  (online gana, luego `startedAt`), no "el más válido" en algún sentido semántico adicional — es
+  EXACTAMENTE la especificación CAS-1/CAS-2 del design. Conforme spec, no es un bug.
+- **L5** — `GET /api/access-points` no pagina. Decisión explícita design §9.2: ~544 filas hoy,
+  filtro `missingSince` en memoria, "cero cambios de port". Volumen actual no lo justifica.
+- **INFO(a)** — `PATCH .../network-assignment` con `networkSiteId: null` limpia AMBOS campos
+  (`accessPointId` incluido) aunque el body también traiga un `accessPointId` — decisión explícita
+  confirmada en design §14.3 ("desasignar el nodo desasigna el AP"). Comportamiento intencional,
+  no un bug de precedencia.
+
+---
+
 ## Deudas / fases siguientes (fuera de este change)
 - FE del picker (change coordinado en `ipnext-frontend`): dropdown nodo → AP sobre
   `GET /api/network-sites` + `GET /api/access-points` + el PATCH.

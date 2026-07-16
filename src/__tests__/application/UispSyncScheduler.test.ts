@@ -287,6 +287,10 @@ describe('UispSyncScheduler — auto-assign step (AA-5)', () => {
   });
 
   it('autoAssign que LANZA: el resultado del sync se reporta igual (aislado, no rompe el run)', async () => {
+    // review INFO(c): mockeamos console.warn — el catch aislado del scheduler lo llama a
+    // propósito (`[uisp-sync] auto-assign step failed: ...`), y sin el mock ensucia el output
+    // real del test runner con un warning esperado (no es una señal de fallo).
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     const flags = new InMemoryFeatureFlagRepository();
     flags.seed(FLAG_KEY, true);
     flags.seed(AUTO_ASSIGN_FLAG_KEY, true);
@@ -300,6 +304,7 @@ describe('UispSyncScheduler — auto-assign step (AA-5)', () => {
     expect(result.sitesUpserted).toBe(2);
     expect(result.devicesUpserted).toBe(9);
     expect(autoAssign.execute).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
   });
 
   it('ctor SIN autoAssign (6to arg omitido): no-op total, back-compat con todos los call-sites existentes', async () => {

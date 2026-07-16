@@ -237,7 +237,11 @@ Política, en orden:
 
 ```ts
 interface AutoAssignContractNetworkResult {
-  contractsEvaluated: number;   // contratos con pppoe enabled candidato
+  contractsEvaluated: number;   // review L4: contratos con ≥1 PppoeService (contractId != null) —
+                                 // el universo TOTAL (matriz fila 6), no solo los que tienen un
+                                 // candidato 'enabled'. Un contrato con 0 pppoe enabled SÍ cuenta
+                                 // acá y termina como `unresolved` (fila 8). Ver
+                                 // AutoAssignContractNetwork.ts:92-114 y tasks.md T4.2.
   assigned: number;             // escrituras efectivas (filas 1, 2, 9, 10)
   unchanged: number;            // derivó igual a lo persistido — sin write
   unresolved: number;           // algún eslabón no resolvió — no se tocó

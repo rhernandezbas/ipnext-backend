@@ -106,7 +106,20 @@ export class AutoAssignContractNetwork {
       let best: PppoeService | null = null;
       for (const row of rows) {
         if (row.status !== 'enabled') continue;
-        if (!best || row.createdAt > best.createdAt) best = row;
+        // review M1: desempate ESTABLE. `createdAt` es TIMESTAMP(3) — un ingest bulk deja filas
+        // empatadas al milisegundo con frecuencia — y `pppoeRepo.list()` NO garantiza orden (heap
+        // de Postgres, cambia con updates reales). Con SOLO `createdAt >` estricto, un empate
+        // resolvía "el primero de la lista", que es el mismo no-determinismo disfrazado ⇒ la
+        // asignación oscilaba entre corridas sin que cambiara ningún dato real (flapping).
+        // Fix: ante empate de `createdAt`, desempatar por `id` — determinístico sin importar el
+        // orden de `rows` (defensa en profundidad además del `orderBy` agregado en el adapter Prisma).
+        if (!best) {
+          best = row;
+        } else if (row.createdAt > best.createdAt) {
+          best = row;
+        } else if (row.createdAt === best.createdAt && row.id < best.id) {
+          best = row;
+        }
       }
       if (best) candidateByContract.set(contractId, best);
     }
@@ -207,8 +220,11 @@ export class AutoAssignContractNetwork {
         continue;
       }
 
-      await this.contractRepo.updateNetworkAssignment(contractId, derived);
-      assigned++;
+      // review L1: contá SOLO escrituras reales. `updateNetworkAssignment` devuelve null si el
+      // contrato no existe (carrera: borrado entre el read del universo y este write, o un
+      // contractId huérfano en PppoeService) — ese caso NO es un `assigned`.
+      const updated = await this.contractRepo.updateNetworkAssignment(contractId, derived);
+      if (updated) assigned++;
     }
 
     return {
