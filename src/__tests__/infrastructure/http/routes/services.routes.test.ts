@@ -81,6 +81,10 @@ describe('GET /api/contracts', () => {
       status: 'active',
       technology: 'Fiber',
       startDate: '2024-01-10T00:00:00.000Z',
+      networkSiteId: null,
+      networkSiteName: null,
+      accessPointId: null,
+      accessPointName: null,
     });
     expect(Object.keys(res.body).sort()).toEqual(['data', 'page', 'pageSize', 'total', 'totalPages']);
   });
