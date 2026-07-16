@@ -189,6 +189,25 @@ describe('resolveCombinedRecipients — 4to dominio (manualContacts, CSV-1..CSV-
     expect(result.resolved[0]!.clientId).toBe('aa');
   });
 
+  it('M1 (review fix wave): contacto crudo SIN match exacto pero que coincide por SUFIJO con un opt-out → excluido opt_out (NO vinculado — sin clientId/status, ownership sigue exact-match)', async () => {
+    const optedOutClient = makeCandidate({ clientId: 'k1', phone: '3364123456', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' });
+    const source = makeSegmentSource([optedOutClient]);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [{ name: 'Ana', phone: '03364-15-123456' }],
+      segmentSource: source,
+    });
+
+    expect(result.resolved).toHaveLength(0);
+    expect(result.csvSkipped.optedOut).toBe(1);
+    expect(result.csvSkipped.invalidPhone).toBe(0);
+    expect(result.excludedDetail).toEqual([
+      { name: 'Ana', phone: '03364-15-123456', reason: 'opt_out', source: 'csv' },
+    ]);
+  });
+
   // ── CSV-4: dedup cross-source con precedencia ─────────────────────────────────
   it('CSV-4: contacto duplica teléfono del segmento → 1 solo recipient (el del segmento), CSV excluido "duplicado"', async () => {
     const source = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late' })]);
@@ -282,6 +301,26 @@ describe('resolveCombinedRecipients — 4to dominio (manualContacts, CSV-1..CSV-
     expect(result.statusCounts).toEqual({ no_cliente: 1 });
     const totalSkipped = result.csvSkipped.optedOut + result.csvSkipped.duplicatePhone + result.csvSkipped.invalidPhone;
     expect(result.resolved.length + totalSkipped).toBe(3); // invariante: count + Σskipped = considerados
+  });
+
+  // ── L4 (review fix wave): orden determinístico de excludedDetail (pagina estable) ──
+  it('L4: excludedDetail sale ORDENADO determinísticamente por clientId (molde sortResolved), NO por orden de inserción — pagina estable aunque la fuente no garantice orden (sin ORDER BY, PrismaCustomerRepository.ts:429-438)', async () => {
+    const clientZ = makeCandidate({ clientId: 'z9', phone: '3364222222', whatsappOptOutAt: '2026-01-01T00:00:00.000Z', name: 'ContactoZ' });
+    const clientA = makeCandidate({ clientId: 'a1', phone: '3364111111', whatsappOptOutAt: '2026-01-01T00:00:00.000Z', name: 'ContactoA' });
+    const source = makeSegmentSource([clientZ, clientA]);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [
+        { name: 'ContactoZ', phone: '3364222222' }, // matchea z9 PRIMERO (orden de inserción del CSV)
+        { name: 'ContactoA', phone: '3364111111' }, // matchea a1 DESPUÉS
+      ],
+      segmentSource: source,
+    });
+
+    // Sin el sort, saldría ['z9', 'a1'] (orden de inserción). Con el sort, ['a1', 'z9'].
+    expect(result.excludedDetail.map((e) => e.clientId)).toEqual(['a1', 'z9']);
   });
 
   it('sin manualContacts (array vacío) → NO llama listSegmentRecipients con statuses:[] extra (no-regresión de queries)', async () => {

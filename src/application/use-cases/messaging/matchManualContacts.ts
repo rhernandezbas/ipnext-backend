@@ -1,5 +1,5 @@
 import type { CampaignRecipientCandidate, CampaignSegmentSource } from '@domain/ports/CustomerRepository';
-import { normalizePhone } from '@application/use-cases/recapture/matchActiveClient';
+import { normalizePhone, PHONE_MIN_SIGNIFICANT_DIGITS } from '@application/use-cases/recapture/matchActiveClient';
 import { toWhatsAppE164 } from './toWhatsAppE164';
 
 /** bulk-csv-recipients (CSV-1) — un contacto normalizado (trim, sin ambos-vacíos) del CSV. */
@@ -17,7 +17,7 @@ export interface ManualContactInput {
 export type ManualContactResolution =
   | { kind: 'linked'; candidate: CampaignRecipientCandidate; contactName: string }
   | { kind: 'raw'; name: string; phone: string; phoneNormalized: string; phoneE164: string }
-  | { kind: 'excluded'; name: string; phone: string; reason: 'sin_nombre' | 'sin_telefono' | 'telefono_invalido' };
+  | { kind: 'excluded'; name: string; phone: string; reason: 'sin_nombre' | 'sin_telefono' | 'telefono_invalido' | 'opt_out' };
 
 /**
  * bulk-csv-recipients (D3, B2.2) — matchea cada `manualContacts` contra el
@@ -43,6 +43,7 @@ export async function matchManualContacts(
 
   const universe = await segmentSource.listSegmentRecipients({ statuses: [] });
   const byPhone = buildClientPhoneIndex(universe);
+  const optOutSuffixes = buildOptOutSuffixIndex(universe);
 
   return contacts.map((contact): ManualContactResolution => {
     const name = contact.name;
@@ -61,6 +62,16 @@ export async function matchManualContacts(
 
     const matched = byPhone.get(phoneNormalized);
     if (matched) return { kind: 'linked', candidate: matched, contactName: name };
+
+    // M1 (review fix wave) — sin match EXACTO (D3), pero compliance es NO
+    // NEGOCIABLE: un crudo cuyo SUFIJO coincide con un Client opted-out se
+    // EXCLUYE igual, aunque NO se "vincula" (ownership sigue siendo exact-match,
+    // D3 intacto). Cubre el drift de formato documentado en
+    // matchActiveClient.ts:33-35 (el "15" móvil embebido que `normalizePhone`
+    // no quita) — ver `buildOptOutSuffixIndex` para el porqué de N=6.
+    if (optOutSuffixes.has(phoneNormalized.slice(-PHONE_MIN_SIGNIFICANT_DIGITS))) {
+      return { kind: 'excluded', name, phone, reason: 'opt_out' };
+    }
 
     return { kind: 'raw', name, phone, phoneNormalized, phoneE164 };
   });
@@ -94,4 +105,36 @@ function buildClientPhoneIndex(candidates: CampaignRecipientCandidate[]): Map<st
     }
   }
   return map;
+}
+
+/**
+ * M1 (review fix wave) — set de sufijos (últimos `PHONE_MIN_SIGNIFICANT_DIGITS`
+ * dígitos) de los `Client` CON opt-out, para el check de compliance de un
+ * contacto crudo que NO vinculó por match exacto (D3).
+ *
+ * ¿Por qué N=6 y NO el N=8 de `PHONE_SUFFIX_LENGTH` (`matchActiveClient`/
+ * `GetClientContextByPhone`)? Es el ÚNICO largo que sobrevive al peor caso de
+ * área AR de 4 dígitos (NSN=10 = área 4 + abonado 6): la ventana de 6 cae
+ * SIEMPRE dentro del abonado y nunca roza el área, así que un "15" embebido
+ * (que solo desplaza 2 posiciones el borde área/abonado, sin tocar el abonado
+ * en sí) no la desalinea. Verificado con área "3364" (4 díg): el cliente
+ * normaliza a `3364123456`, el mismo teléfono con "15" embebido normaliza a
+ * `336415123456` (gap documentado en `matchActiveClient.ts:33-35) — con N=8 los
+ * últimos 8 dígitos NO coinciden (`15123456` vs `64123456`, el "15" corrió la
+ * ventana), con N=6 SÍ (`123456` en ambos, el abonado puro). N=8 es el criterio
+ * correcto para D3/CTX-1 (match informativo/de OWNERSHIP, donde MENOS falsos
+ * positivos importa más); acá el sesgo es al revés — un falso positivo
+ * (sobre-excluir) es compliance-seguro, un falso negativo (dejar pasar un
+ * opt-out) NO lo es, así que un N más chico y más permisivo es la elección
+ * correcta para ESTE check puntual.
+ */
+function buildOptOutSuffixIndex(candidates: CampaignRecipientCandidate[]): Set<string> {
+  const suffixes = new Set<string>();
+  for (const candidate of candidates) {
+    if (candidate.whatsappOptOutAt == null) continue;
+    const key = normalizePhone(candidate.phone);
+    if (key === null) continue;
+    suffixes.add(key.slice(-PHONE_MIN_SIGNIFICANT_DIGITS));
+  }
+  return suffixes;
 }

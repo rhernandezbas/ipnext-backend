@@ -150,6 +150,37 @@ describe('matchManualContacts (D3)', () => {
     expect(result).toEqual([{ kind: 'linked', candidate: c1, contactName: 'Ana' }]);
   });
 
+  // ── M1 (review fix wave) — opt-out por sufijo para crudos ───────────────────
+  it('M1: contacto SIN match exacto (teléfono con "15" móvil embebido) que coincide por SUFIJO con un Client opted-out → excluded opt_out (protege compliance sin vincular ownership)', async () => {
+    // normalizePhone('3364123456') === '3364123456' (limpio, sin 15 embebido).
+    // normalizePhone('03364-15-123456') === '336415123456' (el "15" embebido NO
+    // se quita — matchActiveClient.ts:33-35, gap documentado) → el match EXACTO
+    // de D3 falla (mismo criterio que el test de la línea 64: NO vincula). Por
+    // SUFIJO de PHONE_MIN_SIGNIFICANT_DIGITS(6) SÍ coincide: el abonado
+    // "123456" es idéntico en ambos formatos. Verificado con un script standalone
+    // que N=8 (el de matchActiveClient/GetClientContextByPhone) NO alcanza acá
+    // (el "15" desplaza 2 posiciones el borde área/abonado de un área de 4
+    // dígitos) — 6 es el único largo que sobrevive al peor caso AR (NSN=10 =
+    // área 4 + abonado 6) sin rozar el área.
+    const optedOutClient = makeCandidate({ clientId: 'k1', phone: '3364123456', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' });
+    const source = makeSegmentSource([optedOutClient]);
+
+    const result = await matchManualContacts([{ name: 'Ana', phone: '03364-15-123456' }], source);
+
+    expect(result).toEqual([{ kind: 'excluded', name: 'Ana', phone: '03364-15-123456', reason: 'opt_out' }]);
+  });
+
+  it('M1: contacto crudo cuyo teléfono NO coincide (ni exacto ni por sufijo) con ningún opt-out → sigue "raw" (no sobre-excluye)', async () => {
+    const optedOutClient = makeCandidate({ clientId: 'k1', phone: '3364123456', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' });
+    const source = makeSegmentSource([optedOutClient]);
+
+    const result = await matchManualContacts([{ name: 'Beto', phone: '3364999999' }], source);
+
+    expect(result).toEqual([
+      { kind: 'raw', name: 'Beto', phone: '3364999999', phoneNormalized: '3364999999', phoneE164: '+5493364999999' },
+    ]);
+  });
+
   it('múltiples contactos → una SOLA llamada a listSegmentRecipients (batch, no N+1)', async () => {
     const source = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111' })]);
 

@@ -903,6 +903,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // stay registered here, BEFORE the global express.json() below (body-parser's
   // req._body guard makes the second global parse a no-op, same safety as :829).
   app.use('/api/messaging/webhook', rawBodyJsonParser());
+  // bulk-csv-recipients (fix wave, C1) — same "path-scoped parser BEFORE the
+  // global express.json()" pattern as the two overrides above. Without this,
+  // the global 100kb default 413s a realistic CSV (~2000 contacts already
+  // exceeds 100kb; the CSV-5 cap is 5000 rows) BEFORE it ever reaches
+  // /segment/preview, /segment/recipients or /campaigns — the feature is
+  // unusable and the TooManyManualContactsError 422 (the real business cap) is
+  // unreachable. 2mb covers 5000 rows × ~100 bytes/row (~500KB) with generous
+  // headroom. body-parser's req._body guard makes the second (global) parse a
+  // no-op, same safety net as the two overrides above.
+  app.use('/api/messaging/bulk', express.json({ limit: '2mb' }));
   app.use(express.json());
   app.use(cookieParser());
 

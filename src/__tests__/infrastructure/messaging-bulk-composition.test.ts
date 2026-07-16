@@ -136,4 +136,22 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
   it('(j) PrismaCampaignRepository importado desde el adapter correcto', () => {
     expect(appSrc).toMatch(/import\s*\{\s*PrismaCampaignRepository\s*\}\s*from\s*['"]\.\.\/adapters\/prisma\/PrismaCampaignRepository['"]/);
   });
+
+  // ── bulk-csv-recipients (fix wave, C1) — 413 ANTES de la ruta ────────────────
+  // El global `app.use(express.json())` (default 100kb) corría ANTES de cualquier
+  // override para /api/messaging/bulk: un CSV real (~2000 contactos ya pasan
+  // 100kb; el cap de negocio es 5000) recibía 413 del body-parser ANTES de llegar
+  // al router — /segment/preview, /segment/recipients y /campaigns quedaban
+  // inservibles, el 422 TOO_MANY_MANUAL_CONTACTS inalcanzable. Fix: molde EXACTO
+  // del path-scoped parser de tickets (:875)/messaging-inbox (:883) — un
+  // `express.json({ limit: '2mb' })` scoped a `/api/messaging/bulk` ANTES del
+  // global. `messagingBulk.dualParser.e2e.test.ts` prueba esto FUNCIONALMENTE
+  // (un payload real >100kb NO 413ea bajo el PROD ORDER real).
+  it('(k) C1 — path-scoped 2mb JSON parser para /api/messaging/bulk registrado ANTES del express.json() global (guard del 413)', () => {
+    const scopedIdx = appSrc.indexOf("app.use('/api/messaging/bulk', express.json({ limit: '2mb' }));");
+    const globalIdx = appSrc.indexOf('app.use(express.json());');
+    expect(scopedIdx).toBeGreaterThan(-1);
+    expect(globalIdx).toBeGreaterThan(-1);
+    expect(scopedIdx).toBeLessThan(globalIdx);
+  });
 });

@@ -137,10 +137,22 @@ function buildApp(opts: BuildAppOptions = {}) {
   const app = express();
   // bulk-csv-recipients (CSV-5) — el default de express.json() (100kb) se queda
   // corto para un `manualContacts` de miles de filas `{name, phone}` (a diferencia
-  // de `manualClientIds`, un array de strings cortos). Bump LOCAL de test para
-  // poder ejercitar el cap de negocio (422) sin que lo tape un 413 del body-parser
-  // — ver nota en el reporte del batch: el `app.ts` real (línea ~884, sin límite
-  // propio) tiene el MISMO techo y debería revisarse (fuera de alcance de este batch).
+  // de `manualClientIds`, un array de strings cortos). Bump LOCAL de test —
+  // legítimo para EJERCITAR la lógica de negocio (422, resolución) en aislamiento;
+  // NO pinea el comportamiento real de prod (ese es el trabajo de
+  // `messaging-bulk-composition.test.ts` (k) + `messagingBulk.dualParser.e2e.test.ts`).
+  //
+  // ── fix wave (C1, CRITICAL) ────────────────────────────────────────────────
+  // Este bump local en su momento TAPÓ un bug real: `app.ts` (línea ~884, antes
+  // del fix) montaba el `express.json()` global SIN límite propio para
+  // `/api/messaging/bulk` — un CSV real (~2000 filas ya pasan 100kb) recibía 413
+  // ANTES del router en prod, y el 422 de este mismo test file (CSV-5 (c)) era
+  // inalcanzable fuera de la suite. Fix: `app.ts` ahora registra un
+  // `express.json({ limit: '2mb' })` path-scoped a `/api/messaging/bulk` ANTES
+  // del global (molde tickets/messaging-inbox). Ese fix REAL está pineado por
+  // `messaging-bulk-composition.test.ts` (k) (estático, contra el source de
+  // `app.ts`) y probado FUNCIONALMENTE por `messagingBulk.dualParser.e2e.test.ts`
+  // (un payload >100kb NO 413ea bajo el PROD ORDER real).
   app.use(express.json({ limit: '2mb' }));
   app.use(
     '/api/messaging/bulk',

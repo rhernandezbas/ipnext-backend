@@ -206,7 +206,16 @@ export async function resolveCombinedRecipients(params: {
     const resolutions = await matchManualContacts(manualContacts, segmentSource);
     for (const res of resolutions) {
       if (res.kind === 'excluded') {
-        csvSkipped.invalidPhone++;
+        // M1 (review fix wave) — `matchManualContacts` ahora también puede
+        // devolver `reason: 'opt_out'` (crudo excluido por SUFIJO contra un
+        // Client opted-out, sin vincularse — D3 exact-match intacto). Ese
+        // motivo cuenta en `optedOut`, NO en `invalidPhone` (los otros 3
+        // reasons de fila — sin_nombre/sin_telefono/telefono_invalido — sí).
+        if (res.reason === 'opt_out') {
+          csvSkipped.optedOut++;
+        } else {
+          csvSkipped.invalidPhone++;
+        }
         csvExcludedDetail.push({ name: res.name, phone: res.phone, reason: res.reason, source: 'csv' });
         continue;
       }
@@ -310,7 +319,7 @@ export async function resolveCombinedRecipients(params: {
   const statusCounts: Record<string, number> = {};
   for (const r of resolved) statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1;
 
-  const excludedDetail = [...segmentExcludedDetail, ...manualExcludedDetail, ...csvExcludedDetail];
+  const excludedDetail = sortExcluded([...segmentExcludedDetail, ...manualExcludedDetail, ...csvExcludedDetail]);
 
   return {
     resolved: sortResolved(resolved),
@@ -336,6 +345,40 @@ function sortResolved(items: CombinedResolvedRecipient[]): CombinedResolvedRecip
     if (a.clientId !== null && b.clientId !== null) return a.clientId.localeCompare(b.clientId);
     if (a.clientId === null && b.clientId === null) return 0;
     return a.clientId === null ? 1 : -1;
+  });
+}
+
+/**
+ * bulk-csv-recipients (LOW L4, review fix wave) — orden determinístico de
+ * `excludedDetail`, molde `sortResolved`: `clientId` ascendente cuando está
+ * presente en AMBOS lados (un excluido SIN clientId — sin_nombre/sin_telefono/
+ * telefono_invalido/un crudo opt_out-por-sufijo, M1 — queda DESPUÉS); desempate
+ * por `phone`, `name`, `reason` (íntegramente determinístico ante cualquier
+ * empate, incluida la fila `sin_telefono` con `phone: ''` repetida).
+ *
+ * Sin este sort, `excludedDetail` hereda el orden de
+ * `listSegmentRecipients()` — SIN `orderBy` (`PrismaCustomerRepository.ts:
+ * 429-438`), Postgres NO garantiza el mismo orden entre dos `findMany` sin
+ * `ORDER BY`. Como `view:'excluded'` (`ListSegmentRecipients`) re-resuelve la
+ * unión completa en CADA página (no hay tabla persistida que paginar del lado
+ * de la DB — D11), dos requests de páginas distintas podían, en teoría,
+ * recibir el universo en orden distinto → duplicados/saltos al paginar. Barato:
+ * un solo `Array.sort` sobre un array ya en memoria (mismo criterio que
+ * `sortResolved`, sin query extra).
+ */
+function sortExcluded(items: ExcludedDetailEntry[]): ExcludedDetailEntry[] {
+  return [...items].sort((a, b) => {
+    if (a.clientId !== undefined && b.clientId !== undefined) {
+      const byClientId = a.clientId.localeCompare(b.clientId);
+      if (byClientId !== 0) return byClientId;
+    } else if (a.clientId !== undefined || b.clientId !== undefined) {
+      return a.clientId !== undefined ? -1 : 1;
+    }
+    const byPhone = a.phone.localeCompare(b.phone);
+    if (byPhone !== 0) return byPhone;
+    const byName = a.name.localeCompare(b.name);
+    if (byName !== 0) return byName;
+    return a.reason.localeCompare(b.reason);
   });
 }
 
