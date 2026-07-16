@@ -80,4 +80,13 @@ export interface RadiusEventRepository {
    * Devuelve la cantidad total de filas borradas.
    */
   deleteOlderThan(cutoff: Date, batchSize: number): Promise<number>;
+
+  /**
+   * contract-node-ap-auto-assign (CAS-1) — batch: para cada username, la macAddress del
+   * "mejor" evento — prefiere status='online' (stoppedAt IS NULL); si no hay online, el de
+   * startedAt más reciente. Solo considera eventos con macAddress != null. UNA query agregada
+   * para todo el lote, jamás N+1. El Map NO incluye entrada para usernames sin ningún evento
+   * con mac (ausente, no `undefined`).
+   */
+  latestMacByUsernames(usernames: string[]): Promise<Map<string, string>>;
 }

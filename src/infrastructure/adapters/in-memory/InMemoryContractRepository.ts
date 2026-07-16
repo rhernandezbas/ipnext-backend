@@ -7,6 +7,8 @@ import {
   ContractStats,
   UpdateContractLocationInput,
   ContractLocationResult,
+  ContractNetworkAssignmentResult,
+  UpdateNetworkAssignmentInput,
 } from '@domain/ports/ContractRepository';
 import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 
@@ -33,9 +35,18 @@ export class InMemoryContractRepository implements ContractRepository {
   private motivoBajas: (string | null)[] = [];
   /** client-geolocation — Prominense-owned GPS per contract id. */
   public locations: Record<string, ContractLocationResult> = {};
+  /** contract-node-ap-auto-assign — manual-only node/AP assignment per contract id. */
+  public networkAssignments: Record<string, ContractNetworkAssignmentResult> = {};
 
   /** Test seam: seed a contract list item. Returns the generated id. */
-  seed(data: Partial<ContractListItem> & { clientName: string; plan: string; vendedor?: string | null; motivoBaja?: string | null }): ContractListItem {
+  seed(data: Partial<ContractListItem> & {
+    clientName: string;
+    plan: string;
+    vendedor?: string | null;
+    motivoBaja?: string | null;
+    networkSiteId?: string | null;
+    accessPointId?: string | null;
+  }): ContractListItem {
     const item: ContractListItem = {
       id: data.id ?? randomUUID(),
       code: data.code ?? null,
@@ -52,6 +63,13 @@ export class InMemoryContractRepository implements ContractRepository {
     if (!(item.id in this.names)) this.names[item.id] = null;
     if (!(item.id in this.locations)) {
       this.locations[item.id] = { id: item.id, gpsLat: null, gpsLng: null, gpsPlusCode: null };
+    }
+    if (!(item.id in this.networkAssignments)) {
+      this.networkAssignments[item.id] = {
+        id: item.id,
+        networkSiteId: data.networkSiteId ?? null,
+        accessPointId: data.accessPointId ?? null,
+      };
     }
     return item;
   }
@@ -142,5 +160,27 @@ export class InMemoryContractRepository implements ContractRepository {
       gpsPlusCode: data.gpsPlusCode !== undefined ? data.gpsPlusCode : current.gpsPlusCode,
     };
     return { ...this.locations[id] };
+  }
+
+  async getNetworkAssignments(
+    contractIds: string[],
+  ): Promise<Array<{ id: string; networkSiteId: string | null; accessPointId: string | null }>> {
+    const idSet = new Set(contractIds);
+    return Object.values(this.networkAssignments)
+      .filter((a) => idSet.has(a.id))
+      .map((a) => ({ ...a }));
+  }
+
+  async updateNetworkAssignment(
+    id: string,
+    data: UpdateNetworkAssignmentInput,
+  ): Promise<ContractNetworkAssignmentResult | null> {
+    if (!(id in this.networkAssignments)) return null;
+    this.networkAssignments[id] = {
+      id,
+      networkSiteId: data.networkSiteId,
+      accessPointId: data.accessPointId,
+    };
+    return { ...this.networkAssignments[id] };
   }
 }

@@ -172,6 +172,51 @@ export class InMemoryRadiusEventRepository implements RadiusEventRepository {
     return result;
   }
 
+  /**
+   * CAS-1 — réplica JS de la semántica Prisma `DISTINCT ON (username) ... ORDER BY username,
+   * ("stoppedAt" IS NULL) DESC, "startedAt" DESC`: por username, gana el evento online
+   * (stoppedAt IS NULL); si no hay ninguno, el de startedAt más reciente. Solo eventos con
+   * macAddress != null entran en la comparación. Usernames sin ningún evento con mac quedan
+   * AUSENTES del Map.
+   */
+  async latestMacByUsernames(usernames: string[]): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (usernames.length === 0) return result;
+    const usernameSet = new Set(usernames);
+
+    const best = new Map<string, { isOnline: boolean; startedAt: string; mac: string }>();
+
+    for (const event of this.store.values()) {
+      if (!usernameSet.has(event.username)) continue;
+      if (event.macAddress === null) continue;
+
+      const isOnline = event.stoppedAt === null;
+      const current = best.get(event.username);
+
+      if (!current) {
+        best.set(event.username, { isOnline, startedAt: event.startedAt, mac: event.macAddress });
+        continue;
+      }
+      if (isOnline && !current.isOnline) {
+        best.set(event.username, { isOnline, startedAt: event.startedAt, mac: event.macAddress });
+        continue;
+      }
+      if (!isOnline && current.isOnline) {
+        continue; // el online ya ganador se mantiene
+      }
+      // Mismo "nivel" online/closed: gana el startedAt más reciente.
+      if (event.startedAt > current.startedAt) {
+        best.set(event.username, { isOnline, startedAt: event.startedAt, mac: event.macAddress });
+      }
+    }
+
+    for (const [username, entry] of best) {
+      result.set(username, entry.mac);
+    }
+
+    return result;
+  }
+
   async deleteOlderThan(cutoff: Date, batchSize: number): Promise<number> {
     const cutoffMs = cutoff.getTime();
     let deleted = 0;

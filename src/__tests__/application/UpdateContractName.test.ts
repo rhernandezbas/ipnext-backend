@@ -16,6 +16,8 @@ class StubContractRepo implements ContractRepository {
   }
   async listDistinctVendedores(): Promise<string[]> { throw new Error('not used'); }
   async updateLocation(): Promise<never> { throw new Error('not used'); }
+  async getNetworkAssignments(): Promise<never> { throw new Error('not used'); }
+  async updateNetworkAssignment(): Promise<never> { throw new Error('not used'); }
 }
 
 describe('UpdateContractName', () => {

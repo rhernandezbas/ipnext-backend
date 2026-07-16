@@ -58,17 +58,20 @@ descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "
 ## Batch 3 — Ports nuevos (CAS-1 + lectura/escritura de asignaciones)
 
 ### T3.1 — `RadiusEventRepository.latestMacByUsernames` (RED→GREEN)
-- [ ] TEST `src/__tests__/infrastructure/adapters/in-memory/InMemoryRadiusEventRepository.latestMac.test.ts`
+- [x] TEST `src/__tests__/infrastructure/adapters/in-memory/InMemoryRadiusEventRepository.latestMac.test.ts`
   — online gana; fallback más reciente; mac null ignorada; username ausente omitido; batch.
-- [ ] Port + `InMemoryRadiusEventRepository` (réplica JS de la semántica).
-- [ ] `PrismaRadiusEventRepository` — `$queryRaw` `DISTINCT ON (username) ... ORDER BY username,
+- [x] Port + `InMemoryRadiusEventRepository` (réplica JS de la semántica).
+- [x] `PrismaRadiusEventRepository` — `$queryRaw` `DISTINCT ON (username) ... ORDER BY username,
   ("stoppedAt" IS NULL) DESC, "startedAt" DESC`, `WHERE "macAddress" IS NOT NULL`, chunked 1000.
 
 ### T3.2 — `ContractRepository.getNetworkAssignments` + `updateNetworkAssignment` (RED→GREEN)
-- [ ] TEST sobre `InMemoryContractRepository` — proyección `{id, networkSiteId, accessPointId}`;
+- [x] TEST sobre `InMemoryContractRepository` — proyección `{id, networkSiteId, accessPointId}`;
   ids inexistentes omitidos; update escribe/limpia SOLO esos 2 campos; null si el contrato no existe.
-- [ ] Port (`ContractNetworkAssignmentResult`) + `InMemoryContractRepository` +
-  `PrismaContractRepository` (update whitelisteado, patrón `updateLocation`).
+  (`InMemoryContractRepository.networkAssignment.test.ts`, 7 tests.)
+- [x] Port (`ContractNetworkAssignmentResult`) + `InMemoryContractRepository` +
+  `PrismaContractRepository` (update whitelisteado, patrón `updateLocation`). Fix de 2 mocks
+  existentes de `ContractRepository` (`UpdateContractLocation.test.ts`, `UpdateContractName.test.ts`)
+  para satisfacer TS strict con los 2 métodos nuevos del port.
 
 ## Batch 4 — `AutoAssignContractNetwork` (CAS-2, AA-1..AA-4)
 

@@ -148,6 +148,37 @@ export class PrismaRadiusEventRepository implements RadiusEventRepository {
     return result;
   }
 
+  /**
+   * CAS-1 — para cada username, la macAddress del "mejor" evento: prefiere status online
+   * (stoppedAt IS NULL); si no hay online, el de startedAt más reciente. Solo eventos con
+   * macAddress IS NOT NULL. `DISTINCT ON (username)` + `ORDER BY username, ("stoppedAt" IS
+   * NULL) DESC, "startedAt" DESC` da EXACTAMENTE ese ganador en una sola pasada — ninguna
+   * fila con mac null entra en la comparación (WHERE), así que un usuario con eventos pero
+   * sin ningún mac queda ausente del resultado. Chunked de a 1000 usernames por query
+   * (protección ante lotes de ~5k) — NUNCA N+1.
+   */
+  async latestMacByUsernames(usernames: string[]): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (usernames.length === 0) return result;
+
+    const CHUNK_SIZE = 1000;
+    for (let i = 0; i < usernames.length; i += CHUNK_SIZE) {
+      const chunk = usernames.slice(i, i + CHUNK_SIZE);
+      const rows = await prisma.$queryRaw<Array<{ username: string; macAddress: string }>>`
+        SELECT DISTINCT ON (username) username, "macAddress"
+        FROM "RadiusEvent"
+        WHERE username = ANY(${chunk})
+          AND "macAddress" IS NOT NULL
+        ORDER BY username, ("stoppedAt" IS NULL) DESC, "startedAt" DESC
+      `;
+      for (const row of rows) {
+        result.set(row.username, row.macAddress);
+      }
+    }
+
+    return result;
+  }
+
   async deleteOlderThan(cutoff: Date, batchSize: number): Promise<number> {
     let totalDeleted = 0;
 
