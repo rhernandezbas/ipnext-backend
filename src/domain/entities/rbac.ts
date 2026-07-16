@@ -141,6 +141,9 @@ export const RBAC_MODULES = [
   'actions',
   // Inbox de mensajería omnicanal (messaging-inbox F1) — WhatsApp vía Chatwoot
   'messaging',
+  // internal-news — tablón interno del equipo. Usa las base actions read/manage
+  // sin agregar action codes nuevos (mismo criterio que 'uisp').
+  'news',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];
