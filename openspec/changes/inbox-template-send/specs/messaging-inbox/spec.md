@@ -165,6 +165,35 @@ renderedBody})`; (d) devolver `toChatMessageDto(record, [])` — NUNCA la fila c
 - When `execute(...)`
 - Then el envío procede igual (el use case NO valida `canReply` en ninguna dirección)
 
+### Requirement: TS-idempotencia (fix wave, H1, ALTO — decisión del usuario: idempotency-key
+server-side)
+
+`execute` MUST ganar un 5º parámetro opcional `idempotencyKey?: string | null` y un GUARD 0 que
+corre ANTES de los 5 guards de negocio (D9): si `idempotencyKey` está presente,
+`messageRepo.findByIdempotencyKey(idempotencyKey)` MUST evaluarse primero — HIT MUST devolver ESE
+mensaje (`{message, deduped:true}`) SIN invocar `conversationRepo`/`templatePort`/persistencia
+alguna. MISS o key ausente MUST seguir el flujo normal desde el guard 1. El retorno de `execute`
+CAMBIA de `ChatMessageDto` a `{message: ChatMessageDto, deduped: boolean}`. Post-envío,
+`upsertTemplateMessage` MUST recibir `idempotencyKey` pass-through (columna nueva `String? @unique`
+en `ChatMessage`, migración aditiva). El `@unique` de esa columna MUST actuar como backstop: si dos
+sends reales concurrentes con la MISMA key chocan al persistir, el repo MUST recuperar la fila
+ganadora (`findByIdempotencyKey`) y devolverla en vez de propagar un error o duplicar la fila.
+
+#### Scenario: mismo idempotencyKey dos veces → un solo envío real
+- Given una conversación válida, template aprobado, variables completas
+- When `execute(conv, ref, vars, sender, 'idem-1')` se llama DOS veces con la MISMA key
+- Then `templatePort.sendTemplate` se invoca UNA sola vez; existe UNA sola fila en el mirror; la
+  segunda llamada devuelve `deduped:true` con el MISMO `message` que la primera (`deduped:false`)
+
+#### Scenario: distinto idempotencyKey → dos envíos reales
+- When `execute(...)` se llama con `idempotencyKey` DISTINTA en cada invocación
+- Then `sendTemplate` se invoca dos veces y existen dos filas en el mirror
+
+#### Scenario: idempotencyKey ausente → comportamiento actual preservado
+- Given un caller que NO manda `idempotencyKey` (FE viejo)
+- When `execute(...)` se llama dos veces con los mismos argumentos de negocio
+- Then AMBAS invocaciones envían (sin dedup) — cero regresión sobre el comportamiento pre-fix
+
 ---
 
 ## Capability: HTTP — rutas nuevas en `createMessagingRouter`
@@ -173,14 +202,30 @@ renderedBody})`; (d) devolver `toChatMessageDto(record, [])` — NUNCA la fila c
 
 La ruta MUST estar gateada por `auth` + `perms.send` (el MISMO guard del envío actual —
 `requirePerm('messaging','send')`; documentado: NO existe permiso nuevo). Body JSON
-`{templateRef, variables?}`. MUST responder 400 `VALIDATION_ERROR` si `templateRef` está
-ausente/no-string/vacío, o si `variables` está presente y no es un objeto plano con valores
-string (ausente → `{}`). Handler async con try/catch → `next(err)`; los DomainErrors resuelven vía
-statusMap: 404 `CONVERSATION_NOT_FOUND`, 422 `CONVERSATION_PHONE_MISSING` /
-`TEMPLATE_NOT_APPROVED` / `MISSING_TEMPLATE_VARIABLES` / `TEMPLATE_SEND_REJECTED`, 503
-`TEMPLATE_PROVIDER_UNAVAILABLE` / `TEMPLATE_PROVIDER_MISCONFIGURED`. Éxito → 201 con el
-`ChatMessageDto` FLAT (mismo envelope que `POST .../messages`). `senderName` MUST salir de
+`{templateRef, variables?, idempotencyKey?}` (fix wave, H1). MUST responder 400
+`VALIDATION_ERROR` si `templateRef` está ausente/no-string/vacío, si `variables` está presente y no
+es un objeto plano con valores string (ausente → `{}`), o si `idempotencyKey` está presente y no es
+un string no-vacío (ausente → `null`, sin dedup). Handler async con try/catch → `next(err)`; los
+DomainErrors resuelven vía statusMap: 404 `CONVERSATION_NOT_FOUND`, 422 `CONVERSATION_PHONE_MISSING`
+/ `TEMPLATE_NOT_APPROVED` / `MISSING_TEMPLATE_VARIABLES` / `TEMPLATE_SEND_REJECTED`, 503
+`TEMPLATE_PROVIDER_UNAVAILABLE` / `TEMPLATE_PROVIDER_MISCONFIGURED`. Éxito con envío nuevo → 201;
+éxito con `idempotencyKey` que ya resolvió antes (`deduped:true`) → 200 — mismo `ChatMessageDto`
+FLAT en ambos casos (mismo envelope que `POST .../messages`). `senderName` MUST salir de
 `req.user?.username` (nunca del body). MUST NOT montarse multer ni el `sendRateLimiter` (JSON-only).
+
+#### Scenario: idempotencyKey — retry sin doble costo (fix wave, H1)
+- Given un POST previo exitoso con `idempotencyKey:'k1'`
+- When se reenvía el MISMO POST con la MISMA `idempotencyKey:'k1'`
+- Then 200 (no 201) con el MISMO body; el gateway fake registra UN solo `sendTemplate`; el hilo tiene
+  UNA sola fila
+
+#### Scenario: idempotencyKey distinta → envío nuevo independiente
+- When se envían dos POST con `idempotencyKey` DISTINTA
+- Then ambos responden 201, con dos filas en el hilo
+
+#### Scenario: idempotencyKey malformada
+- When POST con `idempotencyKey` no-string o string vacío
+- Then 400 `VALIDATION_ERROR`, use case nunca invocado
 
 #### Scenario: 401 sin sesión
 - When POST sin cookie de sesión
@@ -232,3 +277,34 @@ router).
 - When corre la suite completa del router messaging
 - Then todos los tests previos (webhook/list/get/messages/status/assignee/area/attachments)
   siguen verdes con la factory extendida
+
+---
+
+## Capability: fix wave (review adversarial) — H3/H4
+
+### Requirement: COMP-1 (H3, LOW) — pin de wiring sobre `createApp()` REAL
+
+Además del pin estático sobre el TEXTO de `app.ts` (HTTP-3), MUST existir al menos un test que
+booteé `createApp()` de verdad (sin DB viva — construcción síncrona, sin query eager) y ejercite
+`POST /conversations/:id/send-template` y `GET /send-templates` con supertest, verificando que
+responden 401 (no 404) sin sesión — prueba de que las rutas están MONTADAS en el DI graph real de
+producción, no solo en el `buildApp()` propio de `messaging.routes.test.ts`.
+
+#### Scenario: rutas nuevas montadas en la app real
+- Given `createApp()` sin sesión
+- When POST `/conversations/:id/send-template` o GET `/send-templates`
+- Then 401 (nunca 404) — control: una ruta inexistente de verdad SIGUE dando 404
+
+### Requirement: GUARD-PREC-1 (H4, LOW) — precedencia documentada entre guards de negocio
+
+Cuando DOS condiciones de guard fallan simultáneamente (ej. conversación sin teléfono resoluble Y
+`templateRef` no aprobado), MUST ganar el error del guard que aparece PRIMERO en el orden lineal
+PINNED de D9 — en ese ejemplo, guard 2 (`ConversationPhoneMissingError`) sobre guard 3
+(`TemplateNotApprovedError`), documentado explícitamente en el design y cubierto por un test.
+
+#### Scenario: teléfono ausente Y template pending a la vez
+- Given una conversación sin `contactPhone`/`contactPhoneE164` Y un `templateRef` con
+  `approvalStatus:'pending'`
+- When `execute(...)`
+- Then lanza `ConversationPhoneMissingError` (NUNCA `TemplateNotApprovedError`), cero llamadas a
+  `sendTemplate`

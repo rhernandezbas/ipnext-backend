@@ -24,6 +24,15 @@ import { toChatMessageDto, type ChatMessageDto } from '@application/dto/messagin
  *
  * Guard order PINNED (D9), cortando en la primera falla, SIN side effects (ni
  * persistencia ni `sendTemplate`) hasta el paso 5:
+ *   0. (fix wave, H1 — idempotency-key server-side) `idempotencyKey` presente →
+ *      `messageRepo.findByIdempotencyKey`. HIT → devuelve ESE mensaje
+ *      (`deduped:true`), CERO llamadas a `conversationRepo`/`templatePort`/
+ *      persistencia — es un retry semántico del MISMO request ya completado, no
+ *      un request nuevo a re-validar. Corre ANTES que TODO lo demás a propósito:
+ *      protege un timeout de red tras el accept de Twilio + reintento del
+ *      operador de generar un SEGUNDO WhatsApp real (doble costo). Ausente/no
+ *      match → sigue el flujo normal desde el paso 1 (comportamiento actual,
+ *      FE viejo que no manda la key).
  *   1. `conversationRepo.findById` → 404 `ConversationNotFoundError`.
  *   2. Teléfono: `contactPhoneE164` con fallback `toWhatsAppE164(contactPhone)`
  *      (cubre filas pre-backfill) → 422 `ConversationPhoneMissingError` si ambos null.
@@ -37,10 +46,24 @@ import { toChatMessageDto, type ChatMessageDto } from '@application/dto/messagin
  *      `TemplateProviderUnavailableError`/`TemplateProviderConfigError`) propagan
  *      tal cual — cero persistencia en falla.
  *   6. Post-OK: `renderTemplateBody` (reuso de `SendCampaign.ts`, pura/total) +
- *      `upsertTemplateMessage` (`providerMessageId = result.providerId`).
+ *      `upsertTemplateMessage` (`providerMessageId = result.providerId`,
+ *      `idempotencyKey` pass-through — el `@unique` de esa columna es el
+ *      backstop de carrera: dos requests concurrentes con la MISMA key que
+ *      AMBOS pasaron el guard 0 chocan ahí, y el repo recupera la fila
+ *      ganadora en vez de duplicar/500 — ver `PrismaChatMessageRepository`/
+ *      `InMemoryChatMessageRepository`).
  *   7. `bumpLastMessage` — SOLO preview, jamás `canReply`/`status` (D2/D5).
- *   8. `toChatMessageDto(record, [])` — nunca la fila cruda.
+ *   8. `{message: toChatMessageDto(record, []), deduped: false}` — nunca la
+ *      fila cruda. `deduped` distingue "devolví un mensaje YA enviado antes"
+ *      (guard 0) de "acabo de enviarlo ahora" — el route mapea esto a 200 vs
+ *      201 respectivamente.
  */
+export interface SendTemplateMessageResult {
+  message: ChatMessageDto;
+  /** H1 — true SOLO si el guard 0 (fast path) resolvió sin invocar sendTemplate. */
+  deduped: boolean;
+}
+
 export class SendTemplateMessage {
   constructor(
     private readonly conversationRepo: ConversationRepository,
@@ -54,7 +77,21 @@ export class SendTemplateMessage {
     variables: Record<string, string>,
     /** `req.user?.username` — NUNCA del body (D9). `null` cuando no hay agente identificable (ej. tests). */
     senderName?: string | null,
-  ): Promise<ChatMessageDto> {
+    /**
+     * H1 (fix wave) — key de idempotencia del request HTTP (UUID del FE,
+     * body `idempotencyKey`). `undefined`/`null` → sin dedup, comportamiento
+     * actual (FE viejo que no la manda).
+     */
+    idempotencyKey?: string | null,
+  ): Promise<SendTemplateMessageResult> {
+    // H1 — guard 0, fast path. Corre ANTES de CUALQUIER otro guard/side-effect.
+    if (idempotencyKey) {
+      const existing = await this.messageRepo.findByIdempotencyKey(idempotencyKey);
+      if (existing) {
+        return { message: toChatMessageDto(existing, []), deduped: true };
+      }
+    }
+
     const conversation = await this.conversationRepo.findById(conversationId);
     if (!conversation) throw new ConversationNotFoundError(conversationId);
 
@@ -88,6 +125,7 @@ export class SendTemplateMessage {
       content: renderedBody,
       senderName: senderName ?? null,
       chatwootCreatedAt: sentAt,
+      idempotencyKey: idempotencyKey ?? null,
     });
 
     // D2 — SOLO preview; jamás canReply/status (write-path separado, bumpLastMessage).
@@ -96,6 +134,6 @@ export class SendTemplateMessage {
       lastMessagePreview: renderedBody,
     });
 
-    return toChatMessageDto(record, []);
+    return { message: toChatMessageDto(record, []), deduped: false };
   }
 }

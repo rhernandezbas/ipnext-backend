@@ -93,6 +93,33 @@ describe('InMemoryConversationRepository', () => {
     expect(page.total).toBe(0);
   });
 
+  describe('§8 — tiebreaker determinístico en empates de lastMessageAt (in-memory DEBE ordenar igual que Prisma)', () => {
+    it('dos conversaciones con el MISMO lastMessageAt se ordenan por id ASC, no por orden de insercion', async () => {
+      // Postgres sin una clave secundaria en ORDER BY no garantiza NADA sobre el
+      // orden de filas empatadas — a diferencia del Array.prototype.sort de JS
+      // (estable desde ES2019), que preservaria el orden de insercion y
+      // enmascararia el bug acá. Mockeamos randomUUID para forzar que el id
+      // generado quede en el orden CONTRARIO al de insercion: solo un tiebreaker
+      // explícito por id puede hacer pasar la aserción de abajo.
+      mockRandomUUID.mockReturnValueOnce('bbbbbbbb-0000-0000-0000-000000000000');
+      mockRandomUUID.mockReturnValueOnce('aaaaaaaa-0000-0000-0000-000000000000');
+
+      const same = '2026-07-11T10:00:00.000Z';
+      await repo.upsertByChatwootId(input({ chatwootConversationId: 1, lastMessageAt: same, contactName: 'primero-insertado' }));
+      await repo.upsertByChatwootId(input({ chatwootConversationId: 2, lastMessageAt: same, contactName: 'segundo-insertado' }));
+
+      const page = await repo.list({ page: 1, limit: 10 });
+
+      // Insertion order was [id=bbb.., id=aaa..] — a bare stable sort would keep
+      // that order. An id ASC tiebreaker must reverse it to [aaa.., bbb..].
+      expect(page.data.map((c) => c.contactName)).toEqual(['segundo-insertado', 'primero-insertado']);
+    });
+  });
+
+  // inbox-template-send (fix wave, H2) — deliberadamente al FINAL del archivo (no
+  // justo después de "list returns an empty page") para NO compartir anchor de
+  // insercion con el describe `inbox-resolve (LS-1)` — ya mergeado a main en el
+  // mismo punto — y reducir el conflicto textual de rebase a un simple append.
   describe('inbox-template-send (PORT-2) — bumpLastMessage', () => {
     it('escribe SOLO lastMessageAt/lastMessagePreview — canReply/status/assigneeId quedan intactos (design D2)', async () => {
       const conv = await repo.upsertByChatwootId(
@@ -119,29 +146,6 @@ describe('InMemoryConversationRepository', () => {
       });
 
       expect(result).toBeNull();
-    });
-  });
-
-  describe('§8 — tiebreaker determinístico en empates de lastMessageAt (in-memory DEBE ordenar igual que Prisma)', () => {
-    it('dos conversaciones con el MISMO lastMessageAt se ordenan por id ASC, no por orden de insercion', async () => {
-      // Postgres sin una clave secundaria en ORDER BY no garantiza NADA sobre el
-      // orden de filas empatadas — a diferencia del Array.prototype.sort de JS
-      // (estable desde ES2019), que preservaria el orden de insercion y
-      // enmascararia el bug acá. Mockeamos randomUUID para forzar que el id
-      // generado quede en el orden CONTRARIO al de insercion: solo un tiebreaker
-      // explícito por id puede hacer pasar la aserción de abajo.
-      mockRandomUUID.mockReturnValueOnce('bbbbbbbb-0000-0000-0000-000000000000');
-      mockRandomUUID.mockReturnValueOnce('aaaaaaaa-0000-0000-0000-000000000000');
-
-      const same = '2026-07-11T10:00:00.000Z';
-      await repo.upsertByChatwootId(input({ chatwootConversationId: 1, lastMessageAt: same, contactName: 'primero-insertado' }));
-      await repo.upsertByChatwootId(input({ chatwootConversationId: 2, lastMessageAt: same, contactName: 'segundo-insertado' }));
-
-      const page = await repo.list({ page: 1, limit: 10 });
-
-      // Insertion order was [id=bbb.., id=aaa..] — a bare stable sort would keep
-      // that order. An id ASC tiebreaker must reverse it to [aaa.., bbb..].
-      expect(page.data.map((c) => c.contactName)).toEqual(['segundo-insertado', 'primero-insertado']);
     });
   });
 });

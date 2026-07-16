@@ -1892,6 +1892,88 @@ describe('POST /api/messaging/conversations/:id/send-template', () => {
     expect(updatedConv!.canReply).toBe(false);
   });
 
+  describe('H1 (fix wave, ALTO) — idempotencyKey server-side', () => {
+    it('mismo idempotencyKey dos veces → 201 en el primero, 200 en el segundo (sin re-enviar), MISMO body, UNA sola fila en el hilo', async () => {
+      const { app, conversationRepo, templatePort } = buildApp({ templates: [APPROVED_TEMPLATE] });
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 207, contactPhone: '+5491123456789' });
+
+      const first = await request(app)
+        .post(`/api/messaging/conversations/${conv.id}/send-template`)
+        .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' }, idempotencyKey: 'idem-http-1' });
+
+      expect(first.status).toBe(201);
+
+      const second = await request(app)
+        .post(`/api/messaging/conversations/${conv.id}/send-template`)
+        .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' }, idempotencyKey: 'idem-http-1' });
+
+      expect(second.status).toBe(200);
+      expect(second.body).toEqual(first.body);
+      expect(templatePort.calls).toHaveLength(1);
+
+      const messagesRes = await request(app).get(`/api/messaging/conversations/${conv.id}/messages`);
+      expect(messagesRes.body.data).toHaveLength(1);
+    });
+
+    it('distinto idempotencyKey → dos envíos 201 independientes, dos filas', async () => {
+      const { app, conversationRepo, templatePort } = buildApp({ templates: [APPROVED_TEMPLATE] });
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 208, contactPhone: '+5491123456789' });
+
+      const first = await request(app)
+        .post(`/api/messaging/conversations/${conv.id}/send-template`)
+        .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' }, idempotencyKey: 'idem-http-A' });
+      const second = await request(app)
+        .post(`/api/messaging/conversations/${conv.id}/send-template`)
+        .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' }, idempotencyKey: 'idem-http-B' });
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+      expect(templatePort.calls).toHaveLength(2);
+
+      const messagesRes = await request(app).get(`/api/messaging/conversations/${conv.id}/messages`);
+      expect(messagesRes.body.data).toHaveLength(2);
+    });
+
+    it('idempotencyKey ausente → comportamiento actual, 201 siempre (sin dedup, FE viejo)', async () => {
+      const { app, conversationRepo, templatePort } = buildApp({ templates: [APPROVED_TEMPLATE] });
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 209, contactPhone: '+5491123456789' });
+
+      const first = await request(app)
+        .post(`/api/messaging/conversations/${conv.id}/send-template`)
+        .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+      const second = await request(app)
+        .post(`/api/messaging/conversations/${conv.id}/send-template`)
+        .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+      expect(templatePort.calls).toHaveLength(2);
+    });
+
+    it('idempotencyKey no-string → 400 VALIDATION_ERROR, use case NUNCA invocado', async () => {
+      const { app, templatePort } = buildApp({ templates: [APPROVED_TEMPLATE] });
+
+      const res = await request(app)
+        .post('/api/messaging/conversations/conv-1/send-template')
+        .send({ templateRef: 'HX1', variables: {}, idempotencyKey: 42 });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(templatePort.calls).toHaveLength(0);
+    });
+
+    it('idempotencyKey string vacío → 400 VALIDATION_ERROR', async () => {
+      const { app } = buildApp({ templates: [APPROVED_TEMPLATE] });
+
+      const res = await request(app)
+        .post('/api/messaging/conversations/conv-1/send-template')
+        .send({ templateRef: 'HX1', variables: {}, idempotencyKey: '' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
   it('variables ausente → trata como {} (template sin variables declaradas se envía directo)', async () => {
     const noVarTemplate: TemplateDto = {
       contentSid: 'HX2',

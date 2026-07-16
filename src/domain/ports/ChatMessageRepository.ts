@@ -24,6 +24,15 @@ export interface ChatMessageRecord {
    * NULLs como distintos en el `@unique` — conviven N filas).
    */
   providerMessageId: string | null;
+  /**
+   * H1 (fix wave, idempotency-key server-side) — clave de idempotencia PROPIA
+   * del REQUEST HTTP (UUID generado por el FE al abrir el modal de confirmación),
+   * DISTINTA de `providerMessageId` (que es el SM sid de Twilio, solo se conoce
+   * DESPUÉS de que el envío fue aceptado). `null` para toda fila sin key (FE
+   * viejo que no la manda, o filas `chatwoot`/`bulk`). PG trata NULLs como
+   * distintos en el `@unique` — conviven N filas NULL.
+   */
+  idempotencyKey: string | null;
 }
 
 export interface UpsertChatMessageInput {
@@ -66,6 +75,12 @@ export interface UpsertTemplateChatMessageInput {
   content: string;
   senderName?: string | null;
   chatwootCreatedAt: string;
+  /**
+   * H1 (fix wave, idempotency-key server-side) — key del request HTTP original
+   * (ver `ChatMessageRecord.idempotencyKey`). `undefined`/`null` → columna NULL
+   * (comportamiento actual, sin dedup — FE viejo que no manda la key).
+   */
+  idempotencyKey?: string | null;
 }
 
 export interface ChatMessageRepository {
@@ -83,6 +98,16 @@ export interface ChatMessageRepository {
    * re-proyectar el MISMO SM sid nunca duplica la fila. Fila `origin:'agent_template'`.
    */
   upsertTemplateMessage(input: UpsertTemplateChatMessageInput): Promise<ChatMessageRecord>;
+  /**
+   * H1 (fix wave, idempotency-key server-side) — busca una fila YA proyectada
+   * por su `idempotencyKey` propio. Usado por `SendTemplateMessage` como FAST
+   * PATH (guard 0, ANTES de cualquier otro guard/side-effect): si esta key ya
+   * resolvió en un envío exitoso anterior, se devuelve ESA fila sin re-invocar
+   * `sendTemplate` — protege contra doble costo real en un retry de red tras el
+   * accept de Twilio. También usado como backstop de recuperación tras una
+   * colisión de `@unique` en carrera (dos sends concurrentes con la misma key).
+   */
+  findByIdempotencyKey(idempotencyKey: string): Promise<ChatMessageRecord | null>;
   /** INBOX-3 — full history, ordered by `chatwootCreatedAt` ASC (oldest first). */
   listByConversation(conversationId: string): Promise<ChatMessageRecord[]>;
   /**

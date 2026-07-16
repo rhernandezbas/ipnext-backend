@@ -2894,6 +2894,16 @@ model ChatMessage {
   // las filas chatwoot/bulk existentes quedan NULL (PG trata NULLs como distintos
   // en el UNIQUE — conviven N filas).
   providerMessageId String?      @unique
+  // H1 (fix wave, idempotency-key server-side) — clave de idempotencia PROPIA
+  // del request HTTP (UUID generado por el FE al abrir el confirm), DISTINTA de
+  // providerMessageId (que solo se conoce DESPUES de que Twilio acepta el envío).
+  // Protege contra doble costo real: un timeout de red tras el accept + retry del
+  // operador reusa la MISMA key → SendTemplateMessage devuelve el mensaje ya
+  // proyectado sin re-invocar sendTemplate. Nullable/aditiva: filas históricas y
+  // request de un FE viejo sin key quedan NULL (PG trata NULLs distintos en el
+  // UNIQUE — conviven N filas). El @unique es también el backstop de carrera: dos
+  // sends concurrentes con la misma key chocan acá, no duplican la fila.
+  idempotencyKey    String?      @unique
 
   @@index([conversationId, chatwootCreatedAt])
 }

@@ -39,6 +39,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       isPrivate: input.isPrivate ?? false,
       createdAt: new Date().toISOString(),
       providerMessageId: null,
+      idempotencyKey: null,
     };
     this.rows.push(row);
     return { ...row };
@@ -72,6 +73,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       isPrivate: false,
       createdAt: new Date().toISOString(),
       providerMessageId: null,
+      idempotencyKey: null,
     };
     this.rows.push(row);
     return { ...row };
@@ -81,6 +83,15 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
    * inbox-template-send (PORT-1) — idempotente por `providerMessageId` (SM sid de
    * Twilio). Un mensaje `outbound`/`origin:'agent_template'`/`chatwootMessageId:null`/
    * `campaignRecipientId:null`. Re-proyectar el MISMO sid actualiza la fila, NUNCA duplica.
+   *
+   * H1 (fix wave, idempotency-key server-side) — `idempotencyKey` se persiste SOLO
+   * en la rama de creación (set-once, mismo criterio que `origin`/`providerMessageId`:
+   * un re-upsert por el MISMO `providerMessageId` no la vuelve a tocar). Backstop de
+   * carrera: dos sends REALES concurrentes generan `providerMessageId` DISTINTOS (dos
+   * SM sid reales de Twilio) pero pueden compartir la MISMA `idempotencyKey` — la
+   * segunda `create` acá simula la colisión del `@unique` de Postgres y RECUPERA la
+   * fila ganadora en vez de duplicar (cross-ref: misma semántica en
+   * `PrismaChatMessageRepository.upsertTemplateMessage`, ambos adapters NO pueden divergir).
    */
   async upsertTemplateMessage(input: UpsertTemplateChatMessageInput): Promise<ChatMessageRecord> {
     const existing = this.rows.find((r) => r.providerMessageId === input.providerMessageId);
@@ -90,6 +101,11 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       existing.senderName = input.senderName ?? null;
       existing.chatwootCreatedAt = input.chatwootCreatedAt;
       return { ...existing };
+    }
+
+    if (input.idempotencyKey) {
+      const racedWinner = this.rows.find((r) => r.idempotencyKey === input.idempotencyKey);
+      if (racedWinner) return { ...racedWinner };
     }
 
     const row: ChatMessageRecord = {
@@ -105,9 +121,19 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       isPrivate: false,
       createdAt: new Date().toISOString(),
       providerMessageId: input.providerMessageId,
+      idempotencyKey: input.idempotencyKey ?? null,
     };
     this.rows.push(row);
     return { ...row };
+  }
+
+  /**
+   * H1 (fix wave, idempotency-key server-side) — fast-path lookup usado por
+   * `SendTemplateMessage` ANTES de invocar `sendTemplate` (guard 0).
+   */
+  async findByIdempotencyKey(idempotencyKey: string): Promise<ChatMessageRecord | null> {
+    const row = this.rows.find((r) => r.idempotencyKey === idempotencyKey);
+    return row ? { ...row } : null;
   }
 
   async listByConversation(conversationId: string): Promise<ChatMessageRecord[]> {

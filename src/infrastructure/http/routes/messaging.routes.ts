@@ -237,25 +237,41 @@ function parsePrivateFlag(body: Record<string, unknown> | undefined): boolean {
  * no-vacío; `variables` (si presente) DEBE ser un objeto plano de valores
  * string (ausente → `{}`, molde de la validación CAMP-3/D8 — el wire lleva
  * valores YA resueltos, no `CampaignVariableSpec`).
+ *
+ * H1 (fix wave, ALTO — decisión del usuario: idempotency-key server-side) —
+ * `idempotencyKey` (si presente) DEBE ser un string no-vacío; body wins sobre
+ * header (elegido por simplicidad de test, documentado en design D5). Ausente
+ * → `null` (comportamiento actual, FE viejo que no la manda todavía — el FE
+ * NUEVO SIEMPRE la manda, UUID generado al abrir el confirm).
  */
 function parseSendTemplateBody(
   body: Record<string, unknown> | undefined,
-): { ok: true; templateRef: string; variables: Record<string, string> } | { ok: false } {
+):
+  | { ok: true; templateRef: string; variables: Record<string, string>; idempotencyKey: string | null }
+  | { ok: false } {
   const rawTemplateRef = body?.['templateRef'];
   if (typeof rawTemplateRef !== 'string' || rawTemplateRef.trim() === '') return { ok: false };
 
   const rawVariables = body?.['variables'];
-  if (rawVariables === undefined) return { ok: true, templateRef: rawTemplateRef, variables: {} };
-  if (typeof rawVariables !== 'object' || rawVariables === null || Array.isArray(rawVariables)) {
-    return { ok: false };
+  let variables: Record<string, string> = {};
+  if (rawVariables !== undefined) {
+    if (typeof rawVariables !== 'object' || rawVariables === null || Array.isArray(rawVariables)) {
+      return { ok: false };
+    }
+    for (const [key, value] of Object.entries(rawVariables as Record<string, unknown>)) {
+      if (typeof value !== 'string') return { ok: false };
+      variables[key] = value;
+    }
   }
 
-  const variables: Record<string, string> = {};
-  for (const [key, value] of Object.entries(rawVariables as Record<string, unknown>)) {
-    if (typeof value !== 'string') return { ok: false };
-    variables[key] = value;
+  let idempotencyKey: string | null = null;
+  const rawIdempotencyKey = body?.['idempotencyKey'];
+  if (rawIdempotencyKey !== undefined) {
+    if (typeof rawIdempotencyKey !== 'string' || rawIdempotencyKey.trim() === '') return { ok: false };
+    idempotencyKey = rawIdempotencyKey;
   }
-  return { ok: true, templateRef: rawTemplateRef, variables };
+
+  return { ok: true, templateRef: rawTemplateRef, variables, idempotencyKey };
 }
 
 function computeDedupKey(payload: ChatwootWebhookPayload, signedTimestamp: string | undefined): string {
@@ -620,6 +636,10 @@ export function createMessagingRouter(
   // ─── POST /conversations/:id/send-template (send) — HTTP-1, design D10 ──────
   // JSON-only (sin multer ni sendRateLimiter — el DoS de media no aplica a un
   // template, sin adjuntos). `senderName` SIEMPRE de `req.user`, nunca del body.
+  // H1 (fix wave, ALTO) — `idempotencyKey` opcional del body; el status HTTP
+  // distingue 201 (envío nuevo) de 200 (retry con la MISMA key, sin re-enviar —
+  // `deduped:true` del use case). Body idéntico en ambos casos (el DTO del
+  // mensaje, flat) — solo cambia el status.
   router.post(
     '/conversations/:id/send-template',
     auth,
@@ -630,19 +650,21 @@ export function createMessagingRouter(
         const parsed = parseSendTemplateBody(body);
         if (!parsed.ok) {
           res.status(400).json({
-            error: 'templateRef must be a non-empty string; variables (if present) must be a plain object of strings',
+            error:
+              'templateRef must be a non-empty string; variables (if present) must be a plain object of strings; idempotencyKey (if present) must be a non-empty string',
             code: 'VALIDATION_ERROR',
           });
           return;
         }
         const senderName = req.user?.username ?? null;
-        const result = await sendTemplateMessage.execute(
+        const { message, deduped } = await sendTemplateMessage.execute(
           req.params['id'] as string,
           parsed.templateRef,
           parsed.variables,
           senderName,
+          parsed.idempotencyKey,
         );
-        res.status(201).json(result);
+        res.status(deduped ? 200 : 201).json(message);
       } catch (err) {
         next(err);
       }

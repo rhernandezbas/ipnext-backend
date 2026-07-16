@@ -199,8 +199,9 @@ describe('SendTemplateMessage', () => {
       const { conversationRepo, messageRepo, templatePort, uc } = makeHarness();
       const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 9, contactPhone: '+5491123456789' });
 
-      const dto = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1');
+      const { message: dto, deduped } = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1');
 
+      expect(deduped).toBe(false);
       expect(templatePort.calls).toEqual([
         { to: '+5491123456789', contentSid: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } },
       ]);
@@ -274,11 +275,65 @@ describe('SendTemplateMessage', () => {
       const { conversationRepo, messageRepo, uc } = makeHarness();
       const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 13, contactPhone: '+5491123456789' });
 
-      const dto = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' });
+      const { message: dto } = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' });
 
       expect(dto.senderName).toBeNull();
       const messages = await messageRepo.listByConversation(conv.id);
       expect(messages[0]!.senderName).toBeNull();
+    });
+  });
+
+  describe('TS-idempotencia (H1, fix wave — decisión del usuario: idempotency-key server-side)', () => {
+    it('mismo idempotencyKey dos veces → UN solo sendTemplate del gateway (spy), UNA fila, MISMA respuesta (segunda con deduped:true)', async () => {
+      const { conversationRepo, messageRepo, templatePort, uc } = makeHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 300, contactPhone: '+5491123456789' });
+
+      const first = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1', 'idem-key-1');
+      const second = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1', 'idem-key-1');
+
+      expect(templatePort.calls).toHaveLength(1);
+      expect(first.deduped).toBe(false);
+      expect(second.deduped).toBe(true);
+      expect(second.message).toEqual(first.message);
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages).toHaveLength(1);
+    });
+
+    it('distinto idempotencyKey → dos envíos reales, dos filas', async () => {
+      const { conversationRepo, messageRepo, templatePort, uc } = makeHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 301, contactPhone: '+5491123456789' });
+
+      await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1', 'idem-key-A');
+      await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1', 'idem-key-B');
+
+      expect(templatePort.calls).toHaveLength(2);
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages).toHaveLength(2);
+    });
+
+    it('idempotencyKey ausente → comportamiento actual preservado (FE viejo): cada llamada envía, sin dedup', async () => {
+      const { conversationRepo, templatePort, uc } = makeHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 302, contactPhone: '+5491123456789' });
+
+      const first = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' });
+      const second = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' });
+
+      expect(templatePort.calls).toHaveLength(2);
+      expect(first.deduped).toBe(false);
+      expect(second.deduped).toBe(false);
+    });
+  });
+
+  describe('H4 (fix wave, LOW) — precedencia de guards cruzada', () => {
+    it('conversación SIN teléfono Y template pending simultáneamente → gana ConversationPhoneMissingError (guard 2 corre ANTES que guard 3 de template, orden PINNED D9)', async () => {
+      const { conversationRepo, templatePort, uc } = makeHarness({ templates: [PENDING_TEMPLATE] });
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 303 }); // sin contactPhone
+
+      const err = await uc.execute(conv.id, 'HX9', {}).catch((e) => e);
+
+      expect(err).toBeInstanceOf(ConversationPhoneMissingError);
+      expect(err).not.toBeInstanceOf(TemplateNotApprovedError);
+      expect(templatePort.calls).toHaveLength(0);
     });
   });
 });

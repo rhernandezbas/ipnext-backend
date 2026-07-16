@@ -13,6 +13,7 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import request from 'supertest';
 
 describe('Messaging composition root (messaging-inbox F1, B6)', () => {
   let appSrc: string;
@@ -171,4 +172,97 @@ describe('Messaging composition root (messaging-inbox F1, B6)', () => {
     expect(window).toMatch(/new ListChatMessages\([^)]*chatAttachmentRepo/);
     expect(window).toMatch(/getChatAttachmentFile,/);
   });
+});
+
+/**
+ * H3 (fix wave, LOW — review adversarial) — a diferencia de TODO el resto de
+ * este archivo (assertion ESTÁTICA sobre el TEXTO de app.ts, molde repo-wide:
+ * pppoe/gigared/tickets-*-composition.test.ts, todos comentan "Booting
+ * createApp() needs a live DB"), este describe BOOTEA `createApp()` DE VERDAD
+ * y ejercita las rutas nuevas de `inbox-template-send` con supertest — sin
+ * armar un wiring propio (a diferencia de `messaging.routes.test.ts`, cuyo
+ * `buildApp()` local inyecta SUS PROPIOS repos in-memory y jamás detectaría un
+ * `createMessagingRouter(...)` roto o un arg desalineado en el `app.ts` real).
+ *
+ * Verificado empíricamente (2026-07-16, probe descartado tras confirmar):
+ * `createApp()` NO necesita una Postgres viva para CONSTRUIRSE — los repos
+ * Prisma son constructores síncronos sin query eager, y `pg.Pool`/`PrismaClient`
+ * conectan LAZY recién en la primera query real. El 401 de `auth` (sin cookie
+ * de sesión) resuelve ANTES de tocar la DB, así que alcanza como pin de wiring
+ * real sin requerir infraestructura extra en CI/worktree.
+ *
+ * Molde de env-var-injection: `config.messagingBulk.test.ts` (REQUIRED_VARS
+ * siempre presentes + `jest.resetModules()` para reimportar `app.ts` en
+ * aislamiento — `config.ts` corre `validateEnv()` como side-effect de import y
+ * llama `process.exit(1)` si falta alguna, así que las env vars se setean
+ * ANTES del `require` dinámico, nunca via `import` estático de nivel de archivo).
+ */
+describe('Messaging composition root — boot REAL de createApp() (H3, fix wave)', () => {
+  const ORIGINAL_ENV = process.env;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let app: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let prismaModule: any;
+
+  beforeAll(() => {
+    jest.resetModules();
+    process.env = {
+      ...ORIGINAL_ENV,
+      SPLYNX_API_URL: 'http://x',
+      SPLYNX_API_KEY: 'k',
+      SPLYNX_API_SECRET: 's',
+      JWT_SECRET: 'j',
+      PORT: '3000',
+    };
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const appModule = require('../../infrastructure/http/app');
+    app = appModule.createApp();
+    // Mismo registro de módulos "reseteado" que app.ts acaba de usar internamente
+    // (jest.resetModules() de arriba) — este require devuelve el MISMO singleton
+    // `prisma` que createApp() cableó, para poder desconectarlo en el afterAll.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    prismaModule = require('../../infrastructure/database/prisma');
+  });
+
+  // Residual conocido (verificado en node_modules/@prisma/adapter-pg): `$disconnect()`
+  // SÍ libera el estado del query engine, pero NO cierra el `pg.Pool` subyacente —
+  // `PrismaPg.dispose()` solo llama `pool.end()` si se construyó con
+  // `{disposeExternalPool: true}`, y `database/prisma.ts` (producción, correctamente:
+  // un server long-lived NO debe auto-cerrar su pool) no pasa esa opción. Esto puede
+  // dejar el timer de idle-connection del pool vivo el tiempo suficiente para que
+  // Jest, en ALGUNAS corridas (no todas — depende del scheduling), imprima "A worker
+  // process has failed to exit gracefully" al terminar este archivo. Es benigno:
+  // no falla ningún test, exit code sigue 0, y el proceso worker de Jest termina de
+  // todos modos al cerrar el archivo (el socket se libera a nivel OS). Cambiar
+  // `database/prisma.ts` para pasar `disposeExternalPool` está fuera de alcance de
+  // este fix wave (afectaría el ciclo de vida del singleton en producción).
+  afterAll(async () => {
+    process.env = ORIGINAL_ENV;
+    await prismaModule?.prisma?.$disconnect?.();
+  });
+
+  it('POST /api/messaging/conversations/:id/send-template existe y está detrás de auth REAL (401 sin cookie de sesión, NO 404)', async () => {
+    const res = await request(app)
+      .post('/api/messaging/conversations/conv-ghost/send-template')
+      .send({ templateRef: 'HX1', variables: {} });
+
+    // 401 (no 404) prueba que la ruta está MONTADA en el DI graph real de
+    // producción — anti-W6 (feature "wired" en el buildApp del test pero
+    // ausente/rota en app.ts pasaría desapercibida sin este boot real).
+    expect(res.status).toBe(401);
+  }, 20000);
+
+  it('GET /api/messaging/send-templates existe y está detrás de auth REAL (401 sin cookie de sesión, NO 404)', async () => {
+    const res = await request(app).get('/api/messaging/send-templates');
+
+    expect(res.status).toBe(401);
+  }, 20000);
+
+  it('control — una ruta que de verdad NO existe sigue dando 404 (el 401 de arriba no es un catch-all ciego)', async () => {
+    const res = await request(app).post(
+      '/api/messaging/conversations/conv-ghost/this-route-does-not-exist',
+    );
+
+    expect(res.status).toBe(404);
+  }, 20000);
 });

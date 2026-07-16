@@ -27,6 +27,7 @@ function toDomain(row: any): ChatMessageRecord {
     createdAt: toIso(row.createdAt),
     isPrivate: row.isPrivate ?? false,
     providerMessageId: row.providerMessageId ?? null,
+    idempotencyKey: row.idempotencyKey ?? null,
   };
 }
 
@@ -96,31 +97,67 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
    * SM sid de Twilio). Un mensaje `outbound`/`origin:'agent_template'`/
    * `chatwootMessageId:null`/`campaignRecipientId:null`. Cross-ref: MISMA semántica
    * que `InMemoryChatMessageRepository.upsertTemplateMessage` — no pueden divergir.
+   *
+   * H1 (fix wave, idempotency-key server-side) — `idempotencyKey` viaja SOLO en
+   * `create` (set-once, nunca se pisa en `update`). Backstop de carrera: dos sends
+   * REALES concurrentes generan `providerMessageId` DISTINTOS pero pueden compartir
+   * la MISMA `idempotencyKey` → el segundo `create` choca el `@unique` de
+   * `idempotencyKey` (Prisma `P2002`, `meta.target` incluye `'idempotencyKey'`).
+   * En vez de propagar un 500, se recupera la fila GANADORA por
+   * `findByIdempotencyKey` y se devuelve esa — cross-ref: misma semántica en
+   * `InMemoryChatMessageRepository.upsertTemplateMessage`. Cualquier OTRO error
+   * (incluido un P2002 en una columna distinta) propaga tal cual.
    */
   async upsertTemplateMessage(input: UpsertTemplateChatMessageInput): Promise<ChatMessageRecord> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row = await (prisma as any).chatMessage.upsert({
+        where: { providerMessageId: input.providerMessageId },
+        create: {
+          conversationId: input.conversationId,
+          chatwootMessageId: null,
+          origin: 'agent_template',
+          campaignRecipientId: null,
+          providerMessageId: input.providerMessageId,
+          idempotencyKey: input.idempotencyKey ?? null,
+          direction: 'outbound',
+          content: input.content,
+          senderName: input.senderName ?? null,
+          chatwootCreatedAt: new Date(input.chatwootCreatedAt),
+          isPrivate: false,
+        },
+        update: {
+          conversationId: input.conversationId,
+          content: input.content,
+          senderName: input.senderName ?? null,
+          chatwootCreatedAt: new Date(input.chatwootCreatedAt),
+        },
+      });
+      return toDomain(row);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      if (
+        input.idempotencyKey &&
+        err?.code === 'P2002' &&
+        Array.isArray(err?.meta?.target) &&
+        err.meta.target.includes('idempotencyKey')
+      ) {
+        const winner = await this.findByIdempotencyKey(input.idempotencyKey);
+        if (winner) return winner;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * H1 (fix wave, idempotency-key server-side) — fast-path lookup usado por
+   * `SendTemplateMessage` ANTES de invocar `sendTemplate` (guard 0), y como
+   * backstop de recuperación de `upsertTemplateMessage` tras una carrera.
+   */
+  async findByIdempotencyKey(idempotencyKey: string): Promise<ChatMessageRecord | null> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const row = await (prisma as any).chatMessage.upsert({
-      where: { providerMessageId: input.providerMessageId },
-      create: {
-        conversationId: input.conversationId,
-        chatwootMessageId: null,
-        origin: 'agent_template',
-        campaignRecipientId: null,
-        providerMessageId: input.providerMessageId,
-        direction: 'outbound',
-        content: input.content,
-        senderName: input.senderName ?? null,
-        chatwootCreatedAt: new Date(input.chatwootCreatedAt),
-        isPrivate: false,
-      },
-      update: {
-        conversationId: input.conversationId,
-        content: input.content,
-        senderName: input.senderName ?? null,
-        chatwootCreatedAt: new Date(input.chatwootCreatedAt),
-      },
-    });
-    return toDomain(row);
+    const row = await (prisma as any).chatMessage.findUnique({ where: { idempotencyKey } });
+    return row ? toDomain(row) : null;
   }
 
   async listByConversation(conversationId: string): Promise<ChatMessageRecord[]> {

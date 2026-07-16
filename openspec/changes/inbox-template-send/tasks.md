@@ -96,13 +96,62 @@ tasks.md de inbox-resolve dice "ningún change BE toca messaging" — quedó des
     (precedente anti-interleave).
 - [x] **Gate Batch 3**: `npm test` completo BE verde. NO `npm run build` (regla del repo).
 
+## Batch F — Fix wave (review adversarial post-Batch 3): 1 ALTO + 1 MEDIO + 2 LOW
+
+Disparado por el review adversarial sobre el estado EN PROD de Batch 1-3. Commit
+`fix(inbox-template): idempotency-key server-side + pins (review)`.
+
+- [x] **F1 — idempotencyKey server-side (H1, ALTO — decisión del usuario)** (TS-idempotencia)
+  - Contrato: `POST .../send-template` gana `idempotencyKey?: string` en el BODY (UUID del FE,
+    generado al abrir el confirm). Documentado en design D5 (reemplaza la mitigación solo-FE
+    original) + spec `TS-idempotencia`/HTTP-1 scenarios nuevos.
+  - Migración aditiva `20260921000000_chatmessage_idempotency_key` —
+    `ChatMessage.idempotencyKey String? @unique` (timestamp posterior a TODA migración hermana en
+    vuelo detectada: `bulk-csv-recipients-be` tenía `20260920000000`). Generada vía
+    `prisma migrate diff` estático (mismo criterio que T6, sin DB viva en el worktree).
+  - Port: `ChatMessageRecord.idempotencyKey` + `UpsertTemplateChatMessageInput.idempotencyKey?` +
+    método NUEVO `findByIdempotencyKey`. Ambos adapters (`InMemory`/`Prisma`) implementan la MISMA
+    semántica, incluido el backstop de carrera (P2002 en `idempotencyKey` → recupera la fila
+    ganadora en vez de 500/duplicar).
+  - Use case: guard 0 (fast path, ANTES de los guards 1-5 PINNED D9) + retorno
+    `{message, deduped}` (breaking change del retorno de `execute`, propagado a los 2 tests TS-6
+    que capturaban el DTO directo).
+  - Ruta: parsing de `idempotencyKey` (400 si presente y no-string-no-vacío) + status 200
+    (`deduped:true`) vs 201 (`deduped:false`), mismo body en ambos casos.
+  - Tests (RED→GREEN por capa): `InMemoryChatMessageRepository.test.ts` (+7),
+    `PrismaChatMessageRepository.upsertTemplateMessage.test.ts` (+7, incluye backstop de carrera
+    mockeando P2002), `SendTemplateMessage.test.ts` (+3 TS-idempotencia), `messaging.routes.test.ts`
+    (+5 H1).
+- [x] **F2 — nota de merge H2 (MEDIO)**: `git merge-tree` contra `main` predijo conflicto textual en
+  `InMemoryConversationRepository.test.ts` — `inbox-resolve` (YA en `main`, `abc85a34`) y este change
+  insertaron un `describe` nuevo en el MISMO anchor (justo después de `'list returns an empty page'`).
+  Mitigado: el describe `bumpLastMessage` se movió al FINAL del archivo (después de `§8 —
+  tiebreaker…`), anchor que `inbox-resolve` nunca tocó — el merge/rebase futuro contra `main` queda
+  como append simple, sin conflicto textual. Documentado en design §Colisiones. Verificado con
+  `git merge-tree` antes/después + suite del archivo sigue verde (10/10).
+- [x] **F3 — composition pin sobre `createApp()` real (H3, LOW)**: nuevo describe en
+  `messaging-composition.test.ts` que BOOTEA `createApp()` de verdad (verificado empíricamente: no
+  requiere DB viva para construirse) y ejercita `POST .../send-template` + `GET /send-templates`
+  con supertest — 401 sin sesión (no 404), + control de una ruta inexistente de verdad (404). Spec
+  `COMP-1`.
+- [x] **F4 — precedencia de guards cruzada (H4, LOW)**: 1 test en `SendTemplateMessage.test.ts` —
+  conversación sin teléfono Y template pending simultáneamente → gana `ConversationPhoneMissingError`
+  (guard 2, corre antes que guard 3 en el orden lineal PINNED D9). Documentado en design D9 + spec
+  `GUARD-PREC-1`.
+- [x] **Gate Batch F**: tests dirigidos de las 4 capas tocadas verdes + `npx prisma generate` fresco
+  + `tsc --noEmit` limpio. NO `npm run build`, NO suite completa (regla del fix wave).
+
 ## Batch 4 — FE: capa de datos (WAPI-1, ERR-1 códigos)
 
 - [ ] **T10 — api client**
   - Test RED: `src/__tests__/api/whatsapp.api.test.ts` — unwrap `{data}` del GET; POST flat con
-    `{templateRef, variables}`; template sin variables manda `variables:{}`.
+    `{templateRef, variables, idempotencyKey}`; template sin variables manda `variables:{}`.
   - Código: `listSendableTemplates` + `sendWhatsappTemplate` en `api/whatsapp.api.ts`; import de
     `TemplateSummaryDto` desde `types/messagingBulk.ts` (reuso, cero duplicación).
+  - **OJO (fix wave F1, contrato H1)**: `sendWhatsappTemplate` MUST aceptar `idempotencyKey` en el
+    payload — ver design D11 "CONTRATO H1 para el apply FE" (UUID generado al abrir el modal de
+    confirm, reusado en reintentos del MISMO intento, uno nuevo por cada apertura del panel). El BE
+    ya está en prod esperando este campo (opcional — sin él sigue funcionando, sin dedup).
 - [ ] **T11 — hooks**
   - Test RED: test de hooks (molde de los tests de `useWhatsapp`/`useBulkMessaging`) —
     `useSendableTemplates` gateado por `enabled` + staleTime; `useSendWhatsappTemplate`:

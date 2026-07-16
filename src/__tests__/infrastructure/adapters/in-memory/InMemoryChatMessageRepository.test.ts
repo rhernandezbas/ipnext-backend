@@ -161,6 +161,50 @@ describe('InMemoryChatMessageRepository', () => {
     });
   });
 
+  describe('H1 (fix wave, idempotency-key server-side) — idempotencyKey + findByIdempotencyKey', () => {
+    it('upsertTemplateMessage persiste el idempotencyKey recibido', async () => {
+      const created = await repo.upsertTemplateMessage(templateInput({ idempotencyKey: 'idem-1' }));
+      expect(created.idempotencyKey).toBe('idem-1');
+    });
+
+    it('idempotencyKey ausente → queda null (comportamiento actual, FE viejo sin key)', async () => {
+      const created = await repo.upsertTemplateMessage(templateInput());
+      expect(created.idempotencyKey).toBeNull();
+    });
+
+    it('findByIdempotencyKey resuelve la fila ya proyectada', async () => {
+      await repo.upsertTemplateMessage(templateInput({ idempotencyKey: 'idem-2' }));
+
+      const found = await repo.findByIdempotencyKey('idem-2');
+
+      expect(found?.content).toBe('Hola Juan, debés $5.000');
+    });
+
+    it('findByIdempotencyKey sin match → null', async () => {
+      expect(await repo.findByIdempotencyKey('nope')).toBeNull();
+    });
+
+    it('backstop de carrera: dos providerMessageId DISTINTOS (dos sends reales concurrentes) con la MISMA idempotencyKey → la segunda create recupera la fila GANADORA (la primera), no duplica ni pisa', async () => {
+      const first = await repo.upsertTemplateMessage(
+        templateInput({ providerMessageId: 'SM-race-A', idempotencyKey: 'idem-race' }),
+      );
+
+      const second = await repo.upsertTemplateMessage(
+        templateInput({
+          providerMessageId: 'SM-race-B',
+          idempotencyKey: 'idem-race',
+          content: 'segundo intento (perdedor de la carrera)',
+        }),
+      );
+
+      expect(second.id).toBe(first.id);
+      expect(second.providerMessageId).toBe('SM-race-A');
+      expect(second.content).toBe('Hola Juan, debés $5.000');
+      const all = await repo.listByConversation('conv-1');
+      expect(all).toHaveLength(1);
+    });
+  });
+
   describe('§8 — tiebreaker determinístico en empates de chatwootCreatedAt (in-memory DEBE ordenar igual que Prisma)', () => {
     it('dos mensajes con el MISMO chatwootCreatedAt se ordenan por id ASC, no por orden de insercion', async () => {
       // Same rationale as InMemoryConversationRepository's §8 test: Postgres gives
