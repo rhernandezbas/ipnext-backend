@@ -987,6 +987,8 @@
   el token. El botón "Eliminar tarea" se gatea SOLO en el front por rol → no es seguridad real.
   Pendiente: la página de permisos + enforcement en backend (el usuario lo hará después).
 
+- [ ] **Prender el flag `uisp-sync` en prod (+ rotar el token de UISP).** *(2026-07-16, rollout de la Fase A F2/F3)* La Fase A (catálogo de `AccessPoint` + campos nodo/AP en `Contract`) está EN PROD (`c0d7acb3`), pero el catálogo (74 nodos + 544 APs) SOLO se puebla si el sync `uisp-sync` está ON. Al deploy inicial (2026-06-10) estaba OFF. **Acción:** verificar el estado del flag y prenderlo; rotar el token de UISP (hoy hardcodeado en la skill `uisp-ipnext`) post-activación. **Bloquea la Fase B** (asignación nodo/AP: sin catálogo poblado no hay nodos/APs para asignar). El código está AISLADO → el sync no se rompe con el flag OFF.
+
 ### 🔴 Funcionales pendientes
 
 - [ ] **Sweep de handlers async con `throw err` → 504 latente (deuda sistémica).** *(2026-07-03, hallazgo del review del #504)* Hay **~75 `throw err;` en 16 routers**; en Express 4 sin `express-async-errors`, un `throw` en un handler `async` SIN `next` NO llega al `errorHandler` → la request queda COLGADA → proxy 504. Los de `pppoe.routes.ts` se barren dentro del #504; falta auditar los OTROS 15 routers: cualquier handler async-sin-next que pegue a orchestrator/Splynx/IClass/UISP y pueda recibir un error tipado alcanzable es un 504 dormido. **Fix:** `next` en la firma + `throw err`→`next(err)` (el `errorHandler` global ya mapea los codes). Sweep dedicado + un test "no cuelga" por ruta con integración externa.
