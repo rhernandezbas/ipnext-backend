@@ -18,12 +18,12 @@ descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "
 ## Batch 1 — Normalizador de MAC (MAC-1)
 
 ### T1.1 — test (RED)
-- [ ] `src/__tests__/domain/services/macNormalize.test.ts` — formatos válidos convergen
+- [x] `src/__tests__/domain/services/macNormalize.test.ts` — formatos válidos convergen
   (`AA:BB:..`/`aa-bb-..`/`aabb.ccdd.eeff`/`AABBCCDDEEFF` → `aabbccddeeff`); inválidas → null
   (null, vacía, corta, no-hex, IP `100.64.28.5`).
 
 ### T1.2 — helper (GREEN)
-- [ ] `src/domain/services/macNormalize.ts` — `normalizeMac(input: string | null | undefined):
+- [x] `src/domain/services/macNormalize.ts` — `normalizeMac(input: string | null | undefined):
   string | null` (strip `[:\-.\s]`, lowercase, exactamente 12 hex o null). Función NUEVA — NO tocar
   `macSearch.ts` (semántica distinta: search parcial vs identidad canónica; documentar en el header).
 
