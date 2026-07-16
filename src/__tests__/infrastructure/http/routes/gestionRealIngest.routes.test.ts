@@ -219,6 +219,7 @@ describe('gestionRealIngest.routes', () => {
       skippedUnmirrored: 0,
       unclassified: 0,
       skippedOrders: [],
+      pregen: { created: 0, existing: 0, stale: 0, failed: 0 },
     });
   });
 
@@ -237,6 +238,7 @@ describe('gestionRealIngest.routes', () => {
         skippedOrders: [
           { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
         ],
+        pregen: { created: 4, existing: 1, stale: 2, failed: 1 },
       }),
       itemsSynced: 5,
     });
@@ -251,6 +253,7 @@ describe('gestionRealIngest.routes', () => {
       skippedOrders: [
         { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
       ],
+      pregen: { created: 4, existing: 1, stale: 2, failed: 1 },
     });
   });
 

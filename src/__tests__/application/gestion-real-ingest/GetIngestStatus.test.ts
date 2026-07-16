@@ -15,6 +15,7 @@ describe('GetIngestStatus', () => {
       skippedUnmirrored: 0,
       unclassified: 0,
       skippedOrders: [],
+      pregen: { created: 0, existing: 0, stale: 0, failed: 0 },
     });
   });
 
@@ -49,6 +50,8 @@ describe('GetIngestStatus', () => {
       skippedOrders: [
         { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
       ],
+      // K1: rows previas al fix wave no traen pregen → degrada a ceros, jamás undefined.
+      pregen: { created: 0, existing: 0, stale: 0, failed: 0 },
     });
   });
 
@@ -73,7 +76,44 @@ describe('GetIngestStatus', () => {
       skippedUnmirrored: 0,
       unclassified: 0,
       skippedOrders: [],
+      pregen: { created: 0, existing: 0, stale: 0, failed: 0 },
     });
+  });
+
+  it('K1: round-trips the pregen counters from the persisted lastResult', async () => {
+    const state = new InMemorySyncStateRepository();
+    await state.save({
+      entity: 'gr-ingest',
+      cursor: null,
+      lastRunAt: new Date('2026-07-16T10:00:00.000Z'),
+      lastResult: JSON.stringify({
+        created: 2,
+        pregen: { created: 1, existing: 1, stale: 3, failed: 2 },
+      }),
+      itemsSynced: 2,
+    });
+    const useCase = new GetIngestStatus(state);
+
+    const dto = await useCase.execute();
+
+    expect(dto.pregen).toEqual({ created: 1, existing: 1, stale: 3, failed: 2 });
+  });
+
+  it('K1: degrades a malformed pregen blob to zero counters (never throws)', async () => {
+    const state = new InMemorySyncStateRepository();
+    await state.save({
+      entity: 'gr-ingest',
+      cursor: null,
+      lastRunAt: new Date('2026-07-16T10:00:00.000Z'),
+      lastResult: JSON.stringify({ created: 1, pregen: 'garbage' }),
+      itemsSynced: 1,
+    });
+    const useCase = new GetIngestStatus(state);
+
+    const dto = await useCase.execute();
+
+    expect(dto.created).toBe(1);
+    expect(dto.pregen).toEqual({ created: 0, existing: 0, stale: 0, failed: 0 });
   });
 
   it('degrades a malformed skippedOrders blob to an empty list (never throws)', async () => {

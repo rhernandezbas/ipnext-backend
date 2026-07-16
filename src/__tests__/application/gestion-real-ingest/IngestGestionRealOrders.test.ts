@@ -120,12 +120,16 @@ interface PregenHarness extends Harness {
 async function makePregenHarness(opts?: {
   flagOn?: boolean;
   profile?: string | null;
+  /** Usernames para los que el orchestrator simula estar caído (createUser lanza). */
+  orchestratorUnreachableFor?: string[];
 }): Promise<PregenHarness> {
   const h = await makeHarness();
   if (opts?.flagOn !== false) h.featureFlags.seed(PREGEN_FLAG_KEY, true);
   await h.config.update({ pppoeProfile: opts?.profile !== undefined ? opts.profile : PREGEN_PROFILE });
   const pppoeRepo = new InMemoryPppoeServiceRepository();
-  const orchestrator = new InMemoryRadiusOrchestratorGateway();
+  const orchestrator = new InMemoryRadiusOrchestratorGateway({
+    unreachable: opts?.orchestratorUnreachableFor,
+  });
   const ensure = new EnsureInternetContractService(
     new InMemoryContractServiceRepository(),
     new InMemoryServiceCatalogRepository(),
@@ -317,6 +321,7 @@ describe('IngestGestionRealOrders', () => {
       skippedUnmirrored: 0,
       unclassified: 0,
       skippedOrders: [],
+      pregen: { created: 0, existing: 0, stale: 0, failed: 0 },
     });
     expect(h.gr.serviceOrderCalls).toHaveLength(0);
     expect(await h.scheduling.findTaskByGrOrdenId('2000')).toBeNull();
@@ -383,6 +388,7 @@ describe('IngestGestionRealOrders', () => {
       skippedUnmirrored: 0,
       unclassified: 0,
       skippedOrders: [],
+      pregen: { created: 0, existing: 0, stale: 0, failed: 0 },
     });
   });
 
@@ -1063,6 +1069,92 @@ describe('IngestGestionRealOrders', () => {
       const task = await h.scheduling.findTaskByGrOrdenId('k1-8');
       expect(task!.projectId).toBe('p-wifi');
       expect(task!.description).toContain('Usuario: anaperez777');
+    });
+
+    // ── FIX WAVE (review adversarial) ─────────────────────────────────────────
+
+    it('FIX LOW+contadores: DOS OS del mismo run/mismo contrato → 1 solo PPPoE; pregen {created:1, existing:1} persistido en SyncState', async () => {
+      const h = await makePregenHarness();
+      seedRonald(h);
+      h.gr.serviceOrders = [
+        order({ grOrdenId: 'k1-c1', contrato: '45123', observaciones: null }),
+        order({ grOrdenId: 'k1-c2', contrato: '45123', observaciones: null }),
+      ];
+
+      const result = await h.pregenUseCase.execute();
+
+      expect(result.created).toBe(2); // dos tareas (una por OS)
+      expect(result.pregen).toEqual({ created: 1, existing: 1, stale: 0, failed: 0 });
+      // Una sola fila espejo y UNA sola alta RADIUS.
+      expect(await h.pppoeRepo.findByContract('svc-1')).toHaveLength(1);
+      expect(h.orchestrator.opsForCreate('ronaldhernandez45123')).toHaveLength(1);
+      // 1ª tarea: credenciales completas; 2ª: username existente SIN clave.
+      const task1 = await h.scheduling.findTaskByGrOrdenId('k1-c1');
+      expect(task1!.description).toContain('Clave: ronald1234');
+      const task2 = await h.scheduling.findTaskByGrOrdenId('k1-c2');
+      expect(task2!.description).toBe(
+        '── Credenciales PPPoE ──\nUsuario: ronaldhernandez45123 (ya existente)',
+      );
+      // Los contadores viajan al SyncState (los lee el status endpoint).
+      const saved = await h.state.get('gr-ingest');
+      const counts = JSON.parse(saved!.lastResult ?? '{}');
+      expect(counts.pregen).toEqual({ created: 1, existing: 1, stale: 0, failed: 0 });
+    });
+
+    it('FIX HIGH (ingest): reinstalación de contrato con PPPoE disabled del mismo username → advertencia BAJA, sin clave, contador stale', async () => {
+      const h = await makePregenHarness();
+      seedRonald(h);
+      // Baja soft previa: conserva el username determinístico → colisión asegurada.
+      await h.pppoeRepo.upsertByUsername({
+        username: 'ronaldhernandez45123',
+        password: 'clave-de-la-baja',
+        profile: 'P1',
+        nasId: 'nas-3',
+        contractId: 'svc-1',
+        status: 'disabled',
+      });
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-st', contrato: '45123', observaciones: 'obs' })];
+
+      const result = await h.pregenUseCase.execute();
+
+      expect(result.pregen).toEqual({ created: 0, existing: 0, stale: 1, failed: 0 });
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-st');
+      expect(task!.description).toContain('Usuario: ronaldhernandez45123');
+      expect(task!.description).toContain('dado de BAJA');
+      // JAMÁS presentar credenciales muertas como listas para instalar.
+      expect(task!.description).not.toContain('ya existente');
+      expect(task!.description).not.toContain('Clave');
+      expect(task!.description).not.toContain('clave-de-la-baja');
+      // La fila de la baja quedó intacta.
+      const row = await h.pppoeRepo.findByUsername('ronaldhernandez45123');
+      expect(row!.status).toBe('disabled');
+    });
+
+    it('FIX contadores: orchestrator caído + flag ON → pregen.failed visible (nada se acumula en silencio)', async () => {
+      const h = await makePregenHarness({ orchestratorUnreachableFor: ['ronaldhernandez45123'] });
+      seedRonald(h);
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-f', contrato: '45123', observaciones: 'obs' })];
+
+      const result = await h.pregenUseCase.execute();
+
+      expect(result.created).toBe(1); // la tarea se crea igual
+      expect(result.pregen).toEqual({ created: 0, existing: 0, stale: 0, failed: 1 });
+      // Sin bloque: no hay credenciales reales que mostrar.
+      const task = await h.scheduling.findTaskByGrOrdenId('k1-f');
+      expect(task!.description).toBe('obs');
+      // El contador queda persistido para el status endpoint.
+      const saved = await h.state.get('gr-ingest');
+      expect(JSON.parse(saved!.lastResult ?? '{}').pregen.failed).toBe(1);
+    });
+
+    it('FIX contadores: flag OFF → pregen todo en cero (shape estable del resultado)', async () => {
+      const h = await makePregenHarness({ flagOn: false });
+      seedRonald(h);
+      h.gr.serviceOrders = [order({ grOrdenId: 'k1-z', contrato: '45123' })];
+
+      const result = await h.pregenUseCase.execute();
+
+      expect(result.pregen).toEqual({ created: 0, existing: 0, stale: 0, failed: 0 });
     });
   });
 });

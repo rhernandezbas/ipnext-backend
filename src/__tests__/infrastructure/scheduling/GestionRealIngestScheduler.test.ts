@@ -64,6 +64,7 @@ describe('GestionRealIngestScheduler', () => {
       skippedUnmirrored: 0,
       unclassified: 0,
       skippedOrders: [],
+      pregen: { created: 0, existing: 0, stale: 0, failed: 0 },
     });
   });
 
@@ -78,6 +79,7 @@ describe('GestionRealIngestScheduler', () => {
         { grOrdenId: '17774', grClienteId: '205160', grContratoId: '12064', reason: 'client-unmirrored' },
         { grOrdenId: '17733', grClienteId: '100742', grContratoId: '12038', reason: 'contract-unmirrored' },
       ],
+      pregen: { created: 0, existing: 0, stale: 0, failed: 0 },
     });
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
@@ -110,6 +112,7 @@ describe('GestionRealIngestScheduler', () => {
       skippedUnmirrored: 12,
       unclassified: 0,
       skippedOrders,
+      pregen: { created: 0, existing: 0, stale: 0, failed: 0 },
     });
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {

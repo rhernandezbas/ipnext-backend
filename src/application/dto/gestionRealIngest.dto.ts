@@ -80,6 +80,25 @@ export const UpdateIngestConfigSchema = z
 
 export type UpdateIngestConfigInput = z.infer<typeof UpdateIngestConfigSchema>;
 
+// ── Pregen counters (install-pppoe-pregen K1, fix wave observabilidad) ──────
+
+/**
+ * Contadores del pregen de PPPoE por run. Sin esto, un orchestrator caído con
+ * el flag ON acumula filas `pending` EN SILENCIO — `failed`/`stale` en el
+ * status endpoint es la señal operativa. Las keys espejan 1:1 los outcomes de
+ * `PregenInstallPppoe` (created | existing | stale | failed).
+ */
+export interface PregenCounts {
+  created: number;
+  existing: number;
+  stale: number;
+  failed: number;
+}
+
+export function zeroPregenCounts(): PregenCounts {
+  return { created: 0, existing: 0, stale: 0, failed: 0 };
+}
+
 // ── Status DTO (REQ-STATUS-1) ───────────────────────────────────────────────
 
 export interface IngestStatusDTO {
@@ -90,6 +109,8 @@ export interface IngestStatusDTO {
   unclassified: number;
   /** GR refs of the orders skipped as unmirrored on the last run (REQ-SKIPLIST-2). */
   skippedOrders: SkippedOrderRef[];
+  /** K1: resultado del pregen de PPPoE del último run (ceros si el flag está OFF o la row es previa a K1). */
+  pregen: PregenCounts;
 }
 
 /**
@@ -104,9 +125,10 @@ interface RunCounts {
   skippedUnmirrored: number;
   unclassified: number;
   skippedOrders: SkippedOrderRef[];
+  pregen: PregenCounts;
 }
 
-const ZERO_COUNTS: Omit<RunCounts, 'skippedOrders'> = {
+const ZERO_COUNTS: Omit<RunCounts, 'skippedOrders' | 'pregen'> = {
   created: 0,
   skippedDuplicate: 0,
   skippedUnmirrored: 0,
@@ -135,7 +157,7 @@ function parseSkippedOrders(value: unknown): SkippedOrderRef[] {
 
 export function toIngestStatusDTO(state: SyncState | null): IngestStatusDTO {
   if (!state) {
-    return { lastRunAt: null, ...ZERO_COUNTS, skippedOrders: [] };
+    return { lastRunAt: null, ...ZERO_COUNTS, skippedOrders: [], pregen: zeroPregenCounts() };
   }
   return {
     lastRunAt: state.lastRunAt ? state.lastRunAt.toISOString() : null,
@@ -144,7 +166,7 @@ export function toIngestStatusDTO(state: SyncState | null): IngestStatusDTO {
 }
 
 function parseCounts(lastResult: string | null): RunCounts {
-  if (!lastResult) return { ...ZERO_COUNTS, skippedOrders: [] };
+  if (!lastResult) return { ...ZERO_COUNTS, skippedOrders: [], pregen: zeroPregenCounts() };
   try {
     const parsed = JSON.parse(lastResult) as Record<string, unknown>;
     return {
@@ -153,10 +175,26 @@ function parseCounts(lastResult: string | null): RunCounts {
       skippedUnmirrored: numberOrZero(parsed['skippedUnmirrored']),
       unclassified: numberOrZero(parsed['unclassified']),
       skippedOrders: parseSkippedOrders(parsed['skippedOrders']),
+      pregen: parsePregen(parsed['pregen']),
     };
   } catch {
-    return { ...ZERO_COUNTS, skippedOrders: [] };
+    return { ...ZERO_COUNTS, skippedOrders: [], pregen: zeroPregenCounts() };
   }
+}
+
+/**
+ * K1: parse defensivo de los contadores pregen. Rows previas a K1 (o un blob
+ * malformado) degradan a ceros — el status endpoint jamás 500ea por metadata.
+ */
+function parsePregen(value: unknown): PregenCounts {
+  if (typeof value !== 'object' || value === null) return zeroPregenCounts();
+  const v = value as Record<string, unknown>;
+  return {
+    created: numberOrZero(v['created']),
+    existing: numberOrZero(v['existing']),
+    stale: numberOrZero(v['stale']),
+    failed: numberOrZero(v['failed']),
+  };
 }
 
 function numberOrZero(value: unknown): number {

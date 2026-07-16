@@ -10,7 +10,12 @@ import { TaskCategoryRepository } from '@domain/ports/TaskCategoryRepository';
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { IngestCatalogEntryMissingError } from '@domain/errors/scheduling';
 import { GrServiceOrder } from '@domain/entities/gestionReal';
-import { SkippedOrderRef, UnmirroredReason } from '@application/dto/gestionRealIngest.dto';
+import {
+  SkippedOrderRef,
+  UnmirroredReason,
+  PregenCounts,
+  zeroPregenCounts,
+} from '@application/dto/gestionRealIngest.dto';
 import { classifyTech } from './classifyTech';
 import { PregenInstallPppoe, renderPppoeCredentialsBlock } from './PregenInstallPppoe';
 
@@ -76,6 +81,12 @@ export interface IngestRunResult {
   unclassified: number;
   /** First MAX_SKIPPED_REFS unmirrored skips (REQ-SKIPLIST-1); total in `skippedUnmirrored`. */
   skippedOrders: SkippedOrderRef[];
+  /**
+   * K1 (fix wave observabilidad): resultado del pregen de PPPoE por outcome.
+   * Ceros cuando el flag está OFF / el colaborador no está wired. Sin esto, un
+   * orchestrator caído con el flag ON acumula filas `pending` en silencio.
+   */
+  pregen: PregenCounts;
 }
 
 export interface IngestOptions {
@@ -144,6 +155,7 @@ export class IngestGestionRealOrders {
       skippedUnmirrored: 0,
       unclassified: 0,
       skippedOrders: [],
+      pregen: zeroPregenCounts(),
     };
 
     // Master switch (release flag). OFF → no-op. Checked per run so it can be
@@ -301,6 +313,8 @@ export class IngestGestionRealOrders {
         clientName: client.name,
         profile: pregenProfile,
       });
+      // Los outcomes espejan 1:1 las keys de PregenCounts (observabilidad K1).
+      counts.pregen[outcome.status]++;
       pppoeBlock = renderPppoeCredentialsBlock(outcome);
     }
     // Sin bloque → descripción EXACTAMENTE como siempre (incluido null).
