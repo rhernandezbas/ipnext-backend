@@ -15,73 +15,73 @@ superficie de colisión. Si C arranca antes de que F* termine: F* tiene priorida
 
 ## Batch B1 — Dominio/aplicación: normalización, guard, cap, errores (CSV-1, CSV-5)
 
-- [ ] **B1.1 — DTO `manualContacts`**
+- [x] **B1.1 — DTO `manualContacts`**
   - `CreateCampaignInput` / `PreviewSegmentInput` / `ListSegmentRecipientsInput` +
     `manualContacts?: Array<{name: string, phone: string}>` (`messaging-bulk.dto.ts`).
-- [ ] **B1.2 — `normalizeManualContacts`** (molde `normalizeManualClientIds`,
+- [x] **B1.2 — `normalizeManualContacts`** (molde `normalizeManualClientIds`,
   `resolveCombinedRecipients.ts:160-172`)
   - Test: trim de name/phone; descarta items con AMBOS vacíos; preserva orden.
-- [ ] **B1.3 — errores tipados + statusMap**
+- [x] **B1.3 — errores tipados + statusMap**
   - `InvalidManualContactsError` (400) + `TooManyManualContactsError` (422) en
     `domain/errors/messaging-bulk.ts` + `statusMap`/`domainErrorToCode`.
   - Test: cap `MAX_MANUAL_CONTACTS = 5000` chequeado ANTES de tocar la fuente (molde FIX-3,
     `resolveCombinedRecipients.ts:83-85`).
-- [ ] **B1.4 — `assertHasRecipients` con 3er componente** (CSV-1)
+- [x] **B1.4 — `assertHasRecipients` con 3er componente** (CSV-1)
   - Test: `{statuses:[]}` + sin manuales + `manualContacts` no vacío → NO lanza; todo vacío →
     `UnfilteredSegmentError` (no-regresión).
 
 ## Batch B2 — Resolución: detalle de exclusiones + vínculo por teléfono (D3, D7; CSV-2/4/6)
 
-- [ ] **B2.1 — `resolveRecipients` con detalle** (ADITIVO)
+- [x] **B2.1 — `resolveRecipients` con detalle** (ADITIVO)
   - Test: devuelve `excluded: [{candidate, reason}]` con `sin_telefono` vs `telefono_invalido`
     diferenciados; contadores existentes DERIVADOS (`excludedNoPhone = sin_telefono +
     telefono_invalido`) — aserciones actuales de `resolveRecipients.test.ts` intactas.
-- [ ] **B2.2 — match de contactos por teléfono**
+- [x] **B2.2 — match de contactos por teléfono**
   - Helper que arma `Map<normalizePhone(client.phone), candidate>` desde
     `segmentSource.listSegmentRecipients({statuses: []})` (escape hatch OPT-2,
     `PrismaCustomerRepository.ts:224-227`) y resuelve cada contacto:
     vinculado (candidate del Client) / crudo (`clientId: null`, status `no_cliente`).
   - Tests: match exacto (NO suffix); ambigüedad activo>baja, desempate clientId menor; opt-out del
     vinculado → excluido `opt_out`; baja → INCLUIDO con `status:'baja'`.
-- [ ] **B2.3 — `resolveCombinedRecipients` a 3 fuentes**
+- [x] **B2.3 — `resolveCombinedRecipients` a 3 fuentes**
   - Tests: precedencia segmento > manual > CSV por `phoneNormalized`; duplicado interno del CSV
     (primera aparición gana); contacto que vincula a un clientId ya presente → `duplicado`;
     `excludedDetail` plano con `source`; `resolved` items con `clientId|null` + `source` +
     `contactName`. Universo solo se consulta si `manualContacts` no vacío (no toca la fuente en
     flujos actuales — no-regresión de queries).
-- [ ] **B2.4 — `PreviewCampaignSegment` con contactos** (CSV-6)
+- [x] **B2.4 — `PreviewCampaignSegment` con contactos** (CSV-6)
   - Tests: `count` unión 3 fuentes; `skipped` reconcilia (buckets del wire actuales);
     `statusCounts.no_cliente`; invariante `count + Σskipped = considerados`; sample con
     `clientId: null` para crudos.
 
 ## Batch B3 — Persistencia: migración + repos (PER-1/2/3)
 
-- [ ] **B3.1 — migración Prisma** (PER-1)
+- [x] **B3.1 — migración Prisma** (PER-1)
   - `clientId String?` + relación opcional + `contactName String?`; `@@unique([campaignId,
     clientId])` se CONSERVA. `npm run prisma:migrate` (nombre sugerido:
     `campaign_recipient_contact_rows`). PROHIBIDO editar el SQL a mano.
   - Smoke: `messaging-bulk-inbox-migration.test.ts` como molde si aplica.
-- [ ] **B3.2 — entity + DTO nullable** (PER-3)
+- [x] **B3.2 — entity + DTO nullable** (PER-3)
   - `CampaignRecipient.clientId: string | null` + `contactName: string | null`
     (`campaign.ts:71-96`), `CampaignRecipientDto` idem, `toCampaignRecipientDto` mapea.
-- [ ] **B3.3 — `bulkCreateRecipients` filas contact** (PER-2)
+- [x] **B3.3 — `bulkCreateRecipients` filas contact** (PER-2)
   - `CampaignRecipientCreateRow.clientId: string | null` + `contactName?`.
   - `InMemoryCampaignRepository`: test PRIMERO — idempotencia de fila NULL por `phoneNormalized`;
     mezcla vinculadas+crudas.
   - `PrismaCampaignRepository`: pre-filtro `findMany({where:{campaignId},
     select:{phoneNormalized}})` + re-fetch por `phoneNormalized IN` (HOY rompe con null:
     `PrismaCampaignRepository.ts:153-156`); `contactName` en el `createMany`.
-- [ ] **B3.4 — `CreateCampaign` materializa contactos** (CSV-1/2/3)
+- [x] **B3.4 — `CreateCampaign` materializa contactos** (CSV-1/2/3)
   - Tests: solo-CSV crea con `clientId:null`+`contactName`; CSV vinculado crea con `clientId`;
     mixta 3 fuentes; no-regresión solo-segmento/solo-manual (aserciones existentes intactas).
 
 ## Batch B4 — Envío + proyección (CSV-3, PRJ-1)
 
-- [ ] **B4.1 — `SendCampaign` branch `clientId === null`**
+- [x] **B4.1 — `SendCampaign` branch `clientId === null`**
   - Tests (molde `SendCampaign.test.ts`): crudo → NO llama `findRecipientCandidate`, variables
     `{name: contactName, balanceDue: ''}`, queda `sent`; vinculado → re-check SEND-5 intacto
     (opt-out post-create → `opted_out`).
-- [ ] **B4.2 — `ProjectSentMessageInput.candidate` → `contactName`** (PRJ-1)
+- [x] **B4.2 — `ProjectSentMessageInput.candidate` → `contactName`** (PRJ-1)
   - Refactor port + `PrismaCampaignInboxProjector` (usa solo `.name` hoy,
     `PrismaCampaignInboxProjector.ts:35`) + fakes.
   - Tests (`SendCampaign.projection.test.ts` / `CampaignInboxProjector.test.ts`): crudo proyecta
@@ -90,21 +90,21 @@ superficie de colisión. Si C arranca antes de que F* termine: F* tiene priorida
 
 ## Batch B5 — Listado con detalle + rutas + wiring (DET-1/2/3)
 
-- [ ] **B5.1 — `ListSegmentRecipients` extendido**
+- [x] **B5.1 — `ListSegmentRecipients` extendido**
   - Constructor + 2do arg `manualRecipientSource` (opcional, molde `PreviewCampaignSegment.ts:22-27`);
     input con `manualClientIds`/`manualContacts`/`view`; guard → `assertHasRecipients`.
   - Tests: solo-manual 200 (fin deuda F4); unión mixta con `source`; `view:'excluded'` paginado
     (30 items, page 2/limit 20 → 10); no-regresión shape segment-only.
-- [ ] **B5.2 — rutas** (`messagingBulk.routes.ts`)
+- [x] **B5.2 — rutas** (`messagingBulk.routes.ts`)
   - `toManualContacts(raw)` fail-loud (molde `toManualClientIds`, `:67-78`); POST
     `/segment/preview`, `/segment/recipients`, `/campaigns` parsean `manualContacts`; `view` en
     `/segment/recipients` (POST y GET); GET NO acepta `manualContacts` (DET-3).
   - Tests seam (supertest, repos in-memory): 400 malformado; 422 cap; create solo-CSV 201;
     excluded view 200.
-- [ ] **B5.3 — wiring `app.ts`**
+- [x] **B5.3 — wiring `app.ts`**
   - `ListSegmentRecipients` recibe `customerAdapter` como manual source. Verificar aridad de los
     demás use cases sin cambios.
-- [ ] **B5.4 — gate BE completo**
+- [x] **B5.4 — gate BE completo**
   - Suite entera verde. Chequear que `GetCampaign`/`RecipientsTable` DTO con `clientId:null` no
     rompe serialización.
 
