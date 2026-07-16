@@ -97,11 +97,15 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
 
   // messaging-bulk v1.1 (preview modal paginado) — anti-W6: ListSegmentRecipients
   // NO debe quedar muerto (instanciado pero nunca pasado al router).
-  it('(f2) v1.1: ListSegmentRecipients instanciado con customerAdapter Y pasado dentro de la MISMA llamada de mount', () => {
+  //
+  // bulk-csv-recipients (DET-1) — gana el 2do arg `customerAdapter`
+  // (`manualRecipientSource`, cierra la deuda F4: solo-manual/solo-CSV en
+  // `/segment/recipients` deja de ser 400).
+  it('(f2) v1.1/bulk-csv-recipients: ListSegmentRecipients instanciado con customerAdapter x2 (segmentSource + manualRecipientSource) Y pasado dentro de la MISMA llamada de mount', () => {
     const idx = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(");
     const end = appSrc.indexOf('));', idx);
     const window = appSrc.slice(idx, end + '));'.length);
-    expect(window).toMatch(/new ListSegmentRecipients\(customerAdapter\)/);
+    expect(window).toMatch(/new ListSegmentRecipients\(customerAdapter,\s*customerAdapter\)/);
   });
 
   it('(g) CreateCampaign recibe 3 args — contradicción #2 (design §7 original tenía 2, sin templatePort)', () => {

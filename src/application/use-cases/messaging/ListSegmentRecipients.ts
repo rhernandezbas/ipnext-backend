@@ -1,26 +1,24 @@
-import type { CampaignSegmentSource } from '@domain/ports/CustomerRepository';
+import type { CampaignSegmentSource, ManualRecipientSource } from '@domain/ports/CustomerRepository';
 import type { ListSegmentRecipientsInput, ListSegmentRecipientsOutput } from '@application/dto/messaging-bulk.dto';
-import { resolveRecipients } from './resolveRecipients';
-import { assertSegmentIsFiltered } from './assertSegmentIsFiltered';
+import { assertHasRecipients } from './assertHasRecipients';
+import { resolveCombinedRecipients, normalizeManualClientIds, normalizeManualContacts } from './resolveCombinedRecipients';
 
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 25;
 
 /**
- * messaging-bulk v1.1 (preview modal paginado) — a.k.a. el "ver todos" del
- * preview. Molde `PreviewCampaignSegment`: MISMA resolución (delega en
- * `CampaignSegmentSource.listSegmentRecipients` + `resolveRecipients` para
- * opt-out/dedup/teléfono-inválido/statusCounts), pero en vez de recortar a
- * `SAMPLE_SIZE` devuelve el set `resolved` COMPLETO paginado.
+ * messaging-bulk v1.1 (preview modal paginado) + bulk-csv-recipients (D11,
+ * DET-1..DET-3) — a.k.a. el "ver todos" del preview, EXTENDIDO a la UNIÓN
+ * completa (segmento ∪ manualClientIds ∪ manualContacts, cierra la deuda F4
+ * documentada en el FE) + una 2da vista (`view:'excluded'`) con el detalle
+ * paginado de CADA exclusión (D7).
  *
  * El segmento NO está persistido — no hay tabla de "destinatarios de esta
- * campaña" para paginar del lado de la DB (la campaña recién se materializa
- * en `CreateCampaign`). Por eso CADA llamada re-resuelve
- * `listSegmentRecipients` (el universo completo del segmento) y pagina el
- * array YA resuelto en memoria — mismo tradeoff recall-over-pagination que
- * `listSegmentRecipients`/`listActiveContacts` ya documentan (design §4.2):
- * el universo de un segmento de bulk no es un `Client.findMany` paginado de
- * millones de filas, es la base de clientes activa/deudora/etc.
+ * campaña" para paginar del lado de la DB (la campaña recién se materializa en
+ * `CreateCampaign`). Por eso CADA llamada re-resuelve la unión completa (mismo
+ * tradeoff recall-over-pagination ya documentado, design §4.2) y pagina el
+ * array YA resuelto en memoria — el WIRE está SIEMPRE acotado por `limit`
+ * (nunca fetch-all en la respuesta), en AMBAS vistas.
  *
  * De solo lectura por construcción (SEG-5, mismo criterio que
  * `PreviewCampaignSegment`): no recibe ningún `CampaignRepository`.
@@ -28,40 +26,72 @@ const DEFAULT_LIMIT = 25;
  * Gate RBAC `messaging.bulk` se aplica en la ruta, no acá.
  */
 export class ListSegmentRecipients {
-  constructor(private readonly segmentSource: CampaignSegmentSource) {}
+  constructor(
+    private readonly segmentSource: CampaignSegmentSource,
+    // bulk-csv-recipients (DET-1) — OPCIONAL: molde `PreviewCampaignSegment` (MAN-5),
+    // requerido solo cuando el input trae `manualClientIds`. El wiring real
+    // (app.ts) SIEMPRE lo inyecta (misma instancia `customerAdapter`).
+    private readonly manualRecipientSource?: ManualRecipientSource,
+  ) {}
 
   async execute(input: ListSegmentRecipientsInput): Promise<ListSegmentRecipientsOutput> {
-    // Mismo guard que PreviewCampaignSegment/CreateCampaign — rechaza ANTES de
-    // tocar la fuente un segmento sin criterio real (apuntaría a toda la base).
-    assertSegmentIsFiltered(input);
+    const manualClientIds = normalizeManualClientIds(input.manualClientIds);
+    const manualContacts = normalizeManualContacts(input.manualContacts);
 
-    const candidates = await this.segmentSource.listSegmentRecipients({
-      statuses: input.statuses,
-      balanceMin: input.balanceMin,
-      balanceMax: input.balanceMax,
-    });
+    // bulk-csv-recipients (DET-1) — el guard pasa de `assertSegmentIsFiltered`
+    // (segment-only) a `assertHasRecipients`: un preview solo-manual o solo-CSV
+    // deja de ser 400 (cierra la deuda F4 documentada en el propio FE).
+    assertHasRecipients(input, manualClientIds, manualContacts);
 
-    const { resolved, excludedOptOut, excludedNoPhone, dedupCollapsed, statusCounts } = resolveRecipients(candidates);
+    const { resolved, excludedDetail, segmentSkipped, manualSkipped, csvSkipped, statusCounts } =
+      await resolveCombinedRecipients({
+        segment: input,
+        manualClientIds,
+        manualContacts,
+        segmentSource: this.segmentSource,
+        manualRecipientSource: this.manualRecipientSource,
+      });
 
     const page = input.page && input.page > 0 ? input.page : DEFAULT_PAGE;
     const limit = input.limit && input.limit > 0 ? input.limit : DEFAULT_LIMIT;
     const start = (page - 1) * limit;
-    const pageItems = resolved.slice(start, start + limit);
 
-    return {
-      data: pageItems.map((r) => ({
+    // bulk-csv-recipients (D11) — `view:'excluded'` (default `'recipients'`,
+    // backcompat exacto): UNA sola resolución (`resolveCombinedRecipients` de
+    // arriba), el `view` solo decide QUÉ array se pagina hacia el wire.
+    const view = input.view ?? 'recipients';
+    let data: ListSegmentRecipientsOutput['data'];
+    let total: number;
+    if (view === 'excluded') {
+      data = excludedDetail.slice(start, start + limit).map((e) => ({
+        name: e.name,
+        phone: e.phone,
+        reason: e.reason,
+        source: e.source,
+        ...(e.clientId !== undefined ? { clientId: e.clientId } : {}),
+        ...(e.status !== undefined ? { status: e.status } : {}),
+      }));
+      total = excludedDetail.length;
+    } else {
+      data = resolved.slice(start, start + limit).map((r) => ({
         clientId: r.clientId,
         name: r.name,
         phoneE164: r.phoneE164,
         status: r.status,
-      })),
-      total: resolved.length,
+        source: r.source,
+      }));
+      total = resolved.length;
+    }
+
+    return {
+      data,
+      total,
       page,
       limit,
       skipped: {
-        optedOut: excludedOptOut,
-        duplicatePhone: dedupCollapsed,
-        invalidPhone: excludedNoPhone,
+        optedOut: segmentSkipped.optedOut + manualSkipped.optedOut + csvSkipped.optedOut,
+        duplicatePhone: segmentSkipped.duplicatePhone + manualSkipped.duplicatePhone + csvSkipped.duplicatePhone,
+        invalidPhone: segmentSkipped.invalidPhone + manualSkipped.invalidPhone + csvSkipped.invalidPhone,
       },
       statusCounts,
     };

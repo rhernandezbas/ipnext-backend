@@ -25,7 +25,7 @@ import { ListTemplates } from '../../application/use-cases/messaging/ListTemplat
 import { PreviewCampaignSegment } from '../../application/use-cases/messaging/PreviewCampaignSegment';
 import { ListSegmentRecipients } from '../../application/use-cases/messaging/ListSegmentRecipients';
 import { CreateCampaign } from '../../application/use-cases/messaging/CreateCampaign';
-import { MAX_MANUAL_RECIPIENTS } from '../../application/use-cases/messaging/resolveCombinedRecipients';
+import { MAX_MANUAL_RECIPIENTS, MAX_MANUAL_CONTACTS } from '../../application/use-cases/messaging/resolveCombinedRecipients';
 import { GetCampaign } from '../../application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '../../application/use-cases/messaging/ListCampaigns';
 import { InMemoryCampaignRepository } from '../../infrastructure/adapters/in-memory/InMemoryCampaignRepository';
@@ -119,7 +119,8 @@ function buildApp(opts: BuildAppOptions = {}) {
 
   const listTemplates = new ListTemplates(templatePort);
   const previewCampaignSegment = new PreviewCampaignSegment(segmentSource, manualSource);
-  const listSegmentRecipients = new ListSegmentRecipients(segmentSource);
+  // bulk-csv-recipients (DET-1) — 2do arg manualRecipientSource (cierra deuda F4).
+  const listSegmentRecipients = new ListSegmentRecipients(segmentSource, manualSource);
   const createCampaign = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource);
   const getCampaign = new GetCampaign(campaignRepo);
   const listCampaigns = new ListCampaigns(campaignRepo);
@@ -134,7 +135,13 @@ function buildApp(opts: BuildAppOptions = {}) {
   };
 
   const app = express();
-  app.use(express.json());
+  // bulk-csv-recipients (CSV-5) — el default de express.json() (100kb) se queda
+  // corto para un `manualContacts` de miles de filas `{name, phone}` (a diferencia
+  // de `manualClientIds`, un array de strings cortos). Bump LOCAL de test para
+  // poder ejercitar el cap de negocio (422) sin que lo tape un 413 del body-parser
+  // — ver nota en el reporte del batch: el `app.ts` real (línea ~884, sin límite
+  // propio) tiene el MISMO techo y debería revisarse (fuera de alcance de este batch).
+  app.use(express.json({ limit: '2mb' }));
   app.use(
     '/api/messaging/bulk',
     createMessagingBulkRouter(
@@ -751,5 +758,127 @@ describe('/api/messaging/bulk — manualClientIds fail-loud (FIX-4)', () => {
     expect(res.status).toBe(201);
     const recipients = await campaignRepo.listRecipients(res.body.campaignId);
     expect(recipients.data.map((r) => r.clientId).sort()).toEqual(['c1', 's1']);
+  });
+});
+
+// ─── bulk-csv-recipients (CSV-1..CSV-6, DET-1..DET-3): 4to dominio vía HTTP ────
+describe('/api/messaging/bulk — bulk-csv-recipients (manualContacts)', () => {
+  it('CSV-5 (a): manualContacts malformado (phone no-string) → 400 VALIDATION_ERROR, no crea Campaign', async () => {
+    const { app, campaignRepo } = buildApp();
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      manualContacts: [{ name: 'Ana', phone: 123 }],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    const list = await campaignRepo.list({ page: 1, limit: 10 });
+    expect(list.total).toBe(0);
+  });
+
+  it('CSV-5 (b): manualContacts que NO es array → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      manualContacts: 'abc',
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('CSV-5 (b bis): POST /segment/preview con manualContacts malformado → 400 (mismo guard compartido)', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], manualContacts: [{ name: 'Ana' }] }); // sin phone
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('CSV-5 (c): manualContacts NORMALIZADO > MAX_MANUAL_CONTACTS → 422 TOO_MANY_MANUAL_CONTACTS, no crea Campaign', async () => {
+    const { app, campaignRepo } = buildApp();
+    const contacts = Array.from({ length: MAX_MANUAL_CONTACTS + 1 }, (_, i) => ({ name: `n${i}`, phone: `n${i}` }));
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      manualContacts: contacts,
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TOO_MANY_MANUAL_CONTACTS');
+    const list = await campaignRepo.list({ page: 1, limit: 10 });
+    expect(list.total).toBe(0);
+  });
+
+  it('CSV-1 — POST /campaigns solo-CSV (segmento sin criterio) → 201, materializa los contactos crudos', async () => {
+    const { app, campaignRepo } = buildApp({ segmentCandidates: [] });
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'Solo CSV',
+      templateRef: 'HXapproved',
+      segment: { statuses: [] },
+      manualContacts: [
+        { name: 'Ana', phone: '11 2345-6789' },
+        { name: 'Beto', phone: '011 15-3456-7890' },
+      ],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.total).toBe(2);
+    const recipients = await campaignRepo.listRecipients(res.body.campaignId);
+    expect(recipients.data.every((r) => r.clientId === null)).toBe(true);
+  });
+
+  it("view:'excluded' en POST /segment/recipients → 200 con el detalle por-persona paginado", async () => {
+    const { app } = buildApp({ segmentCandidates: [] });
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/recipients')
+      .send({
+        statuses: [],
+        manualContacts: [
+          { name: '', phone: '3364999999' }, // sin_nombre
+          { name: 'Beto', phone: 'no-es-numero' }, // telefono_invalido
+        ],
+        view: 'excluded',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.data[0]).toHaveProperty('reason');
+    expect(res.body.data[0]).toHaveProperty('name');
+    expect(res.body.data[0]).toHaveProperty('phone');
+    expect(res.body.total).toBe(2);
+  });
+
+  it("view por defecto ('recipients') en POST /segment/recipients con manualContacts — items traen source:'csv'", async () => {
+    const { app } = buildApp({ segmentCandidates: [] });
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/recipients')
+      .send({ statuses: [], manualContacts: [{ name: 'Ana', phone: '11 2345-6789' }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ clientId: null, source: 'csv', status: 'no_cliente' });
+  });
+
+  it('DET-1: solo-manual en POST /segment/recipients ya NO es 400 (cierra la deuda F4)', async () => {
+    const { app } = buildApp({ segmentCandidates: [], manualCandidates: [makeCandidate({ clientId: 'm1', phone: '3364999999' })] });
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/recipients')
+      .send({ statuses: [], manualClientIds: ['m1'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0]).toMatchObject({ clientId: 'm1', source: 'manual' });
+  });
+
+  it('GET /segment/recipients?view=excluded conserva el segmento por query (DET-3, sin manualContacts)', async () => {
+    const { app } = buildApp({ segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '123' })] }); // teléfono inválido
+    const res = await request(app)
+      .get('/api/messaging/bulk/segment/recipients')
+      .query({ statuses: 'late', view: 'excluded' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0]).toMatchObject({ reason: 'telefono_invalido', source: 'segment' });
   });
 });

@@ -21,9 +21,9 @@ import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign'
 import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
 import type { CampaignRunner } from '@infrastructure/scheduling/CampaignRunner';
-import type { PreviewSegmentInput, ListSegmentRecipientsInput, CreateCampaignInput } from '@application/dto/messaging-bulk.dto';
+import type { PreviewSegmentInput, ListSegmentRecipientsInput, CreateCampaignInput, ManualContactDto, SegmentRecipientsView } from '@application/dto/messaging-bulk.dto';
 import type { CampaignSegment, CampaignVariableSpec, CampaignRecipientStatus } from '@domain/entities/campaign';
-import { InvalidManualRecipientsError } from '@domain/errors/messaging-bulk';
+import { InvalidManualRecipientsError, InvalidManualContactsError } from '@domain/errors/messaging-bulk';
 
 /** Per-route permission guards (messaging.bulk / messaging.templates — RBAC-1/2). */
 export interface MessagingBulkRoutePerms {
@@ -75,6 +75,42 @@ function toManualClientIds(raw: unknown): string[] {
     }
   }
   return raw as string[];
+}
+
+/**
+ * bulk-csv-recipients (CSV-5) — parsea `manualContacts` del body, fail-loud
+ * (molde `toManualClientIds`/MAN-3):
+ *  - AUSENTE (`undefined`) → `[]` (segmento/manual-only, válido).
+ *  - PRESENTE pero NO array, o con algún item que no sea `{name: string, phone:
+ *    string}` → 400 explícito (`InvalidManualContactsError` → VALIDATION_ERROR).
+ * Filas vacías/whitespace NO son "item malo" — normalización del use case
+ * (`normalizeManualContacts`), no error de contrato.
+ */
+function toManualContacts(raw: unknown): ManualContactDto[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new InvalidManualContactsError('manualContacts debe ser un array de {name, phone}');
+  }
+  for (const el of raw) {
+    if (
+      el === null ||
+      typeof el !== 'object' ||
+      typeof (el as Record<string, unknown>)['name'] !== 'string' ||
+      typeof (el as Record<string, unknown>)['phone'] !== 'string'
+    ) {
+      throw new InvalidManualContactsError('manualContacts solo admite items {name: string, phone: string}');
+    }
+  }
+  return raw as ManualContactDto[];
+}
+
+/**
+ * bulk-csv-recipients (D11, DET-1/DET-2) — parsea `view` del body/query.
+ * Cualquier valor que NO sea exactamente `'excluded'` cae al default
+ * `'recipients'` (backcompat: un body/query viejo sin `view` sigue igual).
+ */
+function toSegmentRecipientsView(raw: unknown): SegmentRecipientsView {
+  return raw === 'excluded' ? 'excluded' : 'recipients';
 }
 
 /**
@@ -134,6 +170,8 @@ export function createMessagingBulkRouter(
           balanceMax: typeof body?.['balanceMax'] === 'number' ? (body!['balanceMax'] as number) : undefined,
           // manual-recipients (MAN-5) — el composer previsualiza la unión.
           manualClientIds: toManualClientIds(body?.['manualClientIds']),
+          // bulk-csv-recipients (CSV-6) — 4to dominio, PARALELO.
+          manualContacts: toManualContacts(body?.['manualContacts']),
         };
         const result = await previewCampaignSegment.execute(input);
         res.json(result);
@@ -173,6 +211,10 @@ export function createMessagingBulkRouter(
   // Molde de /segment/preview: MISMO filtrado (opt-out excluido + dedup +
   // teléfono válido), pero devuelve el set `resolved` COMPLETO paginado en vez
   // de una `sample` acotada — el modal del FE pagina server-side sobre esto.
+  //
+  // bulk-csv-recipients (DET-1/DET-2) — cierra la deuda F4: gana
+  // `manualClientIds` + `manualContacts` (unión completa) + `view` (paginar
+  // destinatarios O el detalle de excluidos con motivo).
   router.post(
     '/segment/recipients',
     auth,
@@ -186,6 +228,9 @@ export function createMessagingBulkRouter(
           balanceMax: typeof body?.['balanceMax'] === 'number' ? (body!['balanceMax'] as number) : undefined,
           page: typeof body?.['page'] === 'number' ? (body!['page'] as number) : undefined,
           limit: typeof body?.['limit'] === 'number' ? (body!['limit'] as number) : undefined,
+          manualClientIds: toManualClientIds(body?.['manualClientIds']),
+          manualContacts: toManualContacts(body?.['manualContacts']),
+          view: toSegmentRecipientsView(body?.['view']),
         };
         const result = await listSegmentRecipients.execute(input);
         res.json(result);
@@ -198,6 +243,10 @@ export function createMessagingBulkRouter(
   // ─── GET /segment/recipients (v1.1, deep-link opcional) — RBAC-1 ───────────
   // Mismo criterio que el GET /segment/preview (FIX-16): el segmento + la
   // página viajan como query-params para habilitar links/bookmarks al modal.
+  //
+  // bulk-csv-recipients (DET-3) — `view` SÍ viaja por query (escalar); `manualContacts`
+  // NO (payload arbitrario, límites de URL) — el flujo con contactos usa POST. El
+  // segmento sigue paridad EXACTA con el comportamiento previo.
   router.get(
     '/segment/recipients',
     auth,
@@ -208,6 +257,7 @@ export function createMessagingBulkRouter(
           statuses: queryStatuses(req.query['statuses']),
           balanceMin: parseOptionalInt(firstQueryValue(req.query['balanceMin'])),
           balanceMax: parseOptionalInt(firstQueryValue(req.query['balanceMax'])),
+          view: toSegmentRecipientsView(firstQueryValue(req.query['view'])),
           page: parseOptionalInt(firstQueryValue(req.query['page'])),
           limit: parseOptionalInt(firstQueryValue(req.query['limit'])),
         };
@@ -236,6 +286,8 @@ export function createMessagingBulkRouter(
           // manual-recipients (MAN-1) — lista manual PARALELA al segmento; el use
           // case dedup + valida existencia (MAN-3 fail-loud).
           manualClientIds: toManualClientIds(body?.['manualClientIds']),
+          // bulk-csv-recipients (CSV-1) — 4to dominio, PARALELO a segment/manualClientIds.
+          manualContacts: toManualContacts(body?.['manualContacts']),
           variablesMap: (body?.['variablesMap'] as CampaignVariableSpec | undefined) ?? {},
           // createdById SIEMPRE del usuario autenticado (auth, arriba) — nunca del
           // body del cliente (evita que cualquiera atribuya la campaña a otro).

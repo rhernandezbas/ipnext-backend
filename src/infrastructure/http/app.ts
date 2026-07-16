@@ -2711,10 +2711,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // ManualRecipientSource (misma instancia): el preview cuenta la unión
       // segmento ∪ lista manual cuando el composer la pasa.
       new PreviewCampaignSegment(customerAdapter, customerAdapter),
-      // v1.1 (preview modal paginado) — reusa customerAdapter (misma
-      // instancia que PreviewCampaignSegment, ya implementa
-      // CampaignSegmentSource), sin infra nueva.
-      new ListSegmentRecipients(customerAdapter),
+      // v1.1 (preview modal paginado) + bulk-csv-recipients (DET-1, cierra deuda
+      // F4) — reusa customerAdapter (misma instancia que PreviewCampaignSegment,
+      // ya implementa CampaignSegmentSource + ManualRecipientSource), sin infra nueva.
+      new ListSegmentRecipients(customerAdapter, customerAdapter),
       // 4 args — templatePort (CAMP-2, valida templateRef aprobado) +
       // manual-recipients (MAN-1): customerAdapter como ManualRecipientSource
       // (misma instancia) resuelve la lista manual combinable con el segmento.

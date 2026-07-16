@@ -8,7 +8,16 @@
  */
 import { ListSegmentRecipients } from '@application/use-cases/messaging/ListSegmentRecipients';
 import { UnfilteredSegmentError } from '@domain/errors/messaging-bulk';
-import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter } from '@domain/ports/CustomerRepository';
+import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter, ManualRecipientSource } from '@domain/ports/CustomerRepository';
+
+function makeManualSource(rows: FakeClientRow[]): ManualRecipientSource {
+  return {
+    findRecipientCandidatesByIds: async (ids: string[]) => {
+      const wanted = new Set(ids);
+      return rows.filter((r) => wanted.has(r.clientId));
+    },
+  };
+}
 
 interface FakeClientRow extends CampaignRecipientCandidate {
   status: string;
@@ -130,5 +139,84 @@ describe('ListSegmentRecipients', () => {
     const second = await uc.execute({ statuses: ['late'] });
 
     expect(first).toEqual(second);
+  });
+
+  // ── bulk-csv-recipients (DET-1..DET-3, D11): unión completa + vista excluded ──
+  describe('bulk-csv-recipients (DET-1..DET-3): manualClientIds/manualContacts/view', () => {
+    it('DET-1: solo-manual (segmento sin criterio) → 200, cierra la deuda F4 (antes 400 UNFILTERED_SEGMENT)', async () => {
+      const source = makeSegmentSource([]);
+      const manualSource = makeManualSource([makeRow({ clientId: 'c1', phone: '3364111111', status: 'active' })]);
+      const uc = new ListSegmentRecipients(source, manualSource);
+
+      const result = await uc.execute({ statuses: [], manualClientIds: ['c1'] });
+
+      expect(result.total).toBe(1);
+      expect(result.data[0]).toMatchObject({ clientId: 'c1', source: 'manual' });
+    });
+
+    it('DET-1: unión mixta segmento+manual+CSV — cada item trae SU source', async () => {
+      const source = makeSegmentSource([makeRow({ clientId: 'c1', phone: '3364111111', status: 'late' })]);
+      const manualSource = makeManualSource([makeRow({ clientId: 'c2', phone: '3364222222', status: 'active' })]);
+      const uc = new ListSegmentRecipients(source, manualSource);
+
+      const result = await uc.execute({
+        statuses: ['late'],
+        manualClientIds: ['c2'],
+        manualContacts: [{ name: 'Crudo', phone: '3364333333' }],
+      });
+
+      expect(result.total).toBe(3);
+      const bySource = new Map(result.data.map((r: any) => [r.source, r]));
+      expect(bySource.get('segment')).toMatchObject({ clientId: 'c1' });
+      expect(bySource.get('manual')).toMatchObject({ clientId: 'c2' });
+      expect(bySource.get('csv')).toMatchObject({ clientId: null, status: 'no_cliente' });
+    });
+
+    it("view:'excluded' — detalle paginado con reason por persona", async () => {
+      const source = makeSegmentSource([makeRow({ clientId: 'c1', phone: '3364111111', status: 'late' })]);
+      const uc = new ListSegmentRecipients(source);
+
+      const result = await uc.execute({
+        statuses: ['late'],
+        manualContacts: [
+          { name: '', phone: '3364999999' }, // sin_nombre
+          { name: 'Beto', phone: 'no-es-numero' }, // telefono_invalido
+          { name: 'Dup', phone: '3364111111' }, // duplicado del segmento
+        ],
+        view: 'excluded',
+      });
+
+      expect(result.data).toHaveLength(3);
+      const reasons = (result.data as any[]).map((d) => d.reason).sort();
+      expect(reasons).toEqual(['duplicado', 'sin_nombre', 'telefono_invalido']);
+    });
+
+    it("view:'excluded' — paginado (30 exclusiones, page 2/limit 20 → 10)", async () => {
+      const source = makeSegmentSource([]);
+      const uc = new ListSegmentRecipients(source);
+      const contacts = Array.from({ length: 30 }, () => ({ name: '', phone: '11111' })); // todas sin_nombre
+
+      const page2 = await uc.execute({ statuses: [], manualContacts: contacts, view: 'excluded', page: 2, limit: 20 });
+
+      expect(page2.data).toHaveLength(10);
+      expect(page2.total).toBe(30);
+      expect(page2.page).toBe(2);
+    });
+
+    it('no-regresión: body SIN view/manualClientIds/manualContacts (solo segmento) → shape y valores EXACTOS de antes', async () => {
+      const source = makeSegmentSource([
+        makeRow({ clientId: 'c1', phone: '3364111111', status: 'late' }),
+        makeRow({ clientId: 'c2', phone: '3364222222', status: 'active' }),
+      ]);
+      const uc = new ListSegmentRecipients(source);
+
+      const result = await uc.execute({ statuses: ['late'] });
+
+      expect(result.total).toBe(1);
+      expect(result.page).toBe(1);
+      expect(result.limit).toBe(25);
+      expect(result.skipped).toEqual({ optedOut: 0, duplicatePhone: 0, invalidPhone: 0 });
+      expect(result.data.map((r: any) => r.clientId)).toEqual(['c1']);
+    });
   });
 });
