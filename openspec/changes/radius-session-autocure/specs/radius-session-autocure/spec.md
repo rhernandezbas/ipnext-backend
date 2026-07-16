@@ -28,10 +28,10 @@ Antes de curar, el watcher DEBE verificar con `gateway.listSessions(username)` F
 
 ## REQ-CURE-3 — Curación vía gateway + extensión ADITIVA del port
 
-El gateway port DEBE extenderse ADITIVAMENTE: `OrchestratorSession.lastUpdate: string | null` (parseado del `last_update` del wire; `null` si el orchestrator no lo manda) y `cureSession(username, sessionId): Promise<{cured: boolean, alreadyClosed?: boolean}>` → `POST /users/{username}/sessions/{sessionId}/cure` (sessionId con `encodeURIComponent`). Errores upstream: 404 → error tipado (outcome `failed`, reason `session_not_found`); red/5xx → `OrchestratorUnreachableError`. Los fakes in-memory DEBEN modelar la semántica real (cure sobre sesión cerrada → `alreadyClosed`, no throw).
+El gateway port DEBE extenderse ADITIVAMENTE: `OrchestratorSession.lastUpdate: string | null` (parseado del `last_update` del wire; `null` si el orchestrator no lo manda) y `cureSession(username, sessionId): Promise<{cured: boolean, alreadyClosed: boolean, closedAt: string | null, coa: CoAResult[]}>` → `POST /users/{username}/sessions/{sessionId}/cure` (sessionId con `encodeURIComponent`). **El WIRE responde snake_case** (contrato implementado + contract test exact-match en ORCH, commit d37de58): `{cured, already_closed, closed_at, coa: [{nas_ip, status, detail}]}` con `status` lowercase (`'ack'|'timeout'|...`) — el gateway MAPEA `already_closed`→`alreadyClosed`, `closed_at`→`closedAt` y deriva `action: 'both'` si `coa.some(r => r.status === 'ack')`, si no `'acct_close'`. Errores upstream: 404 → error tipado (outcome `failed`, reason `session_not_found`); red/5xx → `OrchestratorUnreachableError`. Los fakes in-memory DEBEN modelar la semántica real (cure sobre sesión cerrada → `alreadyClosed`, no throw).
 
 - **S3.1** cure exitoso → outcome `cured`, action refleja lo ejecutado (`both` si el CoA upstream anduvo, `acct_close` si el CoA falló pero cerró).
-- **S3.2** cure con `alreadyClosed: true` (el cron ganó) → outcome `already_cured` — no-op limpio registrado, jamás error.
+- **S3.2** cure con `already_closed: true` en el wire (el cron ganó; el gateway lo expone como `alreadyClosed`) → outcome `already_cured` — no-op limpio registrado, jamás error.
 - **S3.3** orchestrator caído durante el cure → outcome `failed` con reason, el tick sigue con el próximo candidato (aislamiento por ítem).
 - **S3.4** sessionId con caracteres no alfanuméricos → la URL va con `encodeURIComponent` (test del gateway HTTP).
 

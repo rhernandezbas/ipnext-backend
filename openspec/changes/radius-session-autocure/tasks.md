@@ -17,7 +17,7 @@
 - [ ] 1.3 Tests RED del cierre contable: S2.1–S2.4, S2.7 (idempotencia con UPDATE condicionado, no check-then-act) sobre `SqlAlchemySessionRepository.close_stale` + `SessionControlService.cure_session`.
 - [ ] 1.4 GREEN: método `close_stale` en el port outbound `SessionRepository` + implementación SQLAlchemy (UPDATE con `WHERE acctstoptime IS NULL`, `COALESCE(acctupdatetime, NOW())`, `acctsessiontime` recalculado, `acctterminatecause='Admin-Reset'`) + `cure_session` en `SessionControlService` (CoA best-effort FUERA de la tx, molde `disconnect_all`).
 - [ ] 1.5 Tests RED + GREEN del CoA best-effort (S2.5) y del domain event `SessionCured` (S3.1–S3.2, molde `SessionDisconnected`).
-- [ ] 1.6 Router: `POST /{session_id}/cure` en `sessions.py` + `CureSessionCommand` inbound + schema de respuesta (`cured`, `alreadyClosed`, `stop_time`, `coa`) + test de ruta (S2.6 token).
+- [ ] 1.6 Router: `POST /{session_id}/cure` en `sessions.py` + `CureSessionCommand` inbound + schema de respuesta (`cured`, `already_closed`, `closed_at`, `coa` — snake_case, ver REQ-CURE-3) + test de ruta (S2.6 token).
 
 ### 2. Cron versionado + cierre ORCH-1
 
