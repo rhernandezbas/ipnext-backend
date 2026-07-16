@@ -424,8 +424,10 @@ export function createRadiusRouter(
  * puntual con reason 'orchestrator_unreachable', tanto en el `result.reason` top-level (camino
  * `finishSkip` — 0 sesiones evaluadas, p.ej. `listSessions` caído) como en cada fila individual
  * de `result.events` (camino `cureOne` — la sesión puntual falló al curar). Se chequean AMBOS
- * para cubrir el caso multi-sesión donde la PRIMERA sesión curó bien (top-level reason queda
- * null) pero una sesión POSTERIOR falló por orchestrator caído.
+ * porque este helper se evalúa SOLO cuando `result.outcome === 'failed'` (ninguna sesión curó):
+ * el caso real de fila-por-fila es `already_cured` + unreachable, o varias sesiones fallando por
+ * orchestrator caído. (Si ALGUNA hubiera curado, `deriveOverallOutcome` daría 'cured' → 200 con
+ * body honesto, y este helper ni se consulta.)
  */
 function isOrchestratorUnreachable(result: { reason: string | null; events: { reason: string | null }[] }): boolean {
   return result.reason === 'orchestrator_unreachable'
