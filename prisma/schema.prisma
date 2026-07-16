@@ -3132,3 +3132,23 @@ model NewsReadReceipt {
   @@unique([newsPostId, userId])
   @@index([userId])
 }
+
+// =============================================
+// SMARTOLT FIBER PROVISIONING (smartolt-provision, K2)
+// =============================================
+
+// Catálogo local de OLTs SmartOLT: VLAN de servicio default + VLAN de management
+// por OLT. Seed empírico por migración (MERCEDES1 / CHIVILCOY X2 / Estudiantes /
+// AGOTE X2); editable en runtime vía PUT /api/fiber/olts/:id.
+// serviceVlanDefault NULL = sin default (CHIVILCOY: VLAN heterogénea por cliente,
+// el operador la elige en cada aprovisionamiento). mgmtVlan NULL = desconocida →
+// el paso de mgmt IP se salta.
+model SmartOltOltConfig {
+  id                 String   @id @default(uuid())
+  smartoltOltId      String   @unique // id de la OLT en SmartOLT ("1", "3", "5", "7")
+  name               String
+  serviceVlanDefault Int?
+  mgmtVlan           Int?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}

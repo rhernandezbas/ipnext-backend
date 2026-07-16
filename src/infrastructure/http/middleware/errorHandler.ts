@@ -198,6 +198,18 @@ const statusMap: Record<string, number> = {
   // TEMPLATE_IN_USE: borrar un template retenido por una campaña activa (guard).
   TEMPLATE_NOT_FOUND: 404,
   TEMPLATE_IN_USE: 409,
+  // smartolt-provision (K2) — aprovisionamiento de ONUs fibra Huawei.
+  // OltProvisioningError trae el reason tipado; acá solo vive el mapeo code→status:
+  //   not_configured → 503 (envs SMARTOLT_* ausentes: feature apagada limpia)
+  //   unreachable    → 502 (misma semántica que ROUTER/ORCHESTRATOR_UNREACHABLE)
+  //   rejected       → 422 (SmartOLT respondió y rechazó — p.ej. "Invalid parameters")
+  SMARTOLT_NOT_CONFIGURED: 503,
+  SMARTOLT_UNREACHABLE: 502,
+  SMARTOLT_REJECTED: 422,
+  ONU_NOT_HUAWEI: 422,
+  FIBER_VLAN_REQUIRED: 422,
+  ONU_NOT_FOUND: 404,
+  SMARTOLT_OLT_NOT_FOUND: 404,
   // F1.5-C2 (asignación) — SetConversationArea reusa TicketAreaNotFoundError
   // (`@domain/errors/tickets`) para el area inexistente referenciado. El código
   // ya existía sin entrada explícita acá (ticketAreas.routes.ts lo intercepta

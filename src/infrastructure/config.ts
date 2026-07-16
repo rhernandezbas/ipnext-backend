@@ -475,6 +475,29 @@ export const config = {
   },
 
   /**
+   * smartolt-provision (K2) — API de SmartOLT (aprovisionamiento de ONUs fibra
+   * Huawei). Opt-in (NO fail-fast, patrón ORCHESTRATOR_*): sin baseUrl/token el
+   * SmartOltHttpGateway falla AL USARSE con SMARTOLT_NOT_CONFIGURED (503) y las
+   * rutas /api/fiber devuelven "feature apagada" limpia — el resto de la app
+   * arranca igual. El X-Token es SERVER-SIDE: nunca viaja al browser.
+   * - stepPauseMs: pausa entre calls consecutivos del flujo (rate limit 10/s de
+   *   SmartOLT). parsePositiveInt: inválido/<=0 → default 2000 (un fat-finger no
+   *   puede anular la pausa). Techo 60s (fat-finger de unidades).
+   */
+  smartolt: {
+    baseUrl: process.env.SMARTOLT_BASE_URL ?? '',
+    token: process.env.SMARTOLT_API_TOKEN ?? '',
+    stepPauseMs: parsePositiveInt(process.env.SMARTOLT_STEP_PAUSE_MS, {
+      default: 2000,
+      max: 60_000,
+    }),
+    timeoutMs: parsePositiveInt(process.env.SMARTOLT_TIMEOUT_MS, {
+      default: 15_000,
+      max: 300_000,
+    }),
+  },
+
+  /**
    * messaging-bulk (F2, Batch 8, SEND-4) — rate limiter proactivo del envío
    * masivo (~80 msg/s en prod, `TokenBucketRateLimiter`). Calibrable SIN
    * redeploy vía env: el límite real del plan Twilio se confirma recién en el

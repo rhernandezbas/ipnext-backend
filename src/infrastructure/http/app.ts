@@ -712,6 +712,19 @@ import { ChangePppoePlanService } from '@application/services/ChangePppoePlanSer
 import { RecordPppoeEnforceEvent } from '@application/use-cases/RecordPppoeEnforceEvent';
 // add-by-pppoe — inspección SSH de antena airOS para detección de equipos del contrato
 import { InspectPppoeDevices } from '@application/use-cases/InspectPppoeDevices';
+// smartolt-provision (K2) — aprovisionamiento automático de ONUs fibra Huawei vía SmartOLT
+import { createFiberRouter } from './routes/fiber.routes';
+import { SmartOltHttpGateway } from '../adapters/smartolt/SmartOltHttpGateway';
+import { PrismaSmartOltOltConfigRepository } from '../adapters/prisma/PrismaSmartOltOltConfigRepository';
+import {
+  ProvisionFiberOnu,
+  FiberContractSnapshot,
+  FiberInstallTaskWriter,
+} from '@application/use-cases/ProvisionFiberOnu';
+import { ListUnconfiguredOnus } from '@application/use-cases/ListUnconfiguredOnus';
+import { ListSmartOltOlts } from '@application/use-cases/ListSmartOltOlts';
+import { UpdateSmartOltOlt } from '@application/use-cases/UpdateSmartOltOlt';
+import { PregenInstallPppoe } from '@application/use-cases/PregenInstallPppoe';
 import { Ssh2AirOsGateway } from '../adapters/airos/Ssh2AirOsGateway';
 import { createInspectPppoeDevicesRouter } from './routes/inspectPppoeDevices.routes';
 import { ListPppoeAssignments } from '@application/use-cases/ListPppoeAssignments';
@@ -851,6 +864,48 @@ async function prismaContractClientNameLookup(
   });
   return row ? { id: row.id, clientId: row.clientId, clientName: row.client?.name ?? null } : null;
 }
+
+// smartolt-provision (K2) — contract lookup para ProvisionFiberOnu: cliente
+// (nombre + grClienteId) + plan + grContratoId en UN findUnique con JOIN al
+// Client (precedente prismaContractClientNameLookup, no N+1).
+async function prismaFiberContractLookup(id: string): Promise<FiberContractSnapshot | null> {
+  const row = await prisma.contract.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      plan: true,
+      grContratoId: true,
+      client: { select: { id: true, name: true, grClienteId: true } },
+    },
+  });
+  if (!row) return null;
+  return {
+    id: row.id,
+    plan: row.plan,
+    grContratoId: row.grContratoId ?? null,
+    clientId: row.client.id,
+    clientName: row.client.name,
+    grClienteId: row.client.grClienteId ?? null,
+  };
+}
+
+// smartolt-provision (K2) — resultado auditable: la ÚLTIMA tarea no archivada del
+// contrato (la de instalación del ingest K1 típicamente) recibe el bloque
+// "── Aprovisionamiento ONU ──" appendeado a su description. Best-effort en el
+// use case: sin tarea no es error.
+const prismaFiberInstallTaskWriter: FiberInstallTaskWriter = {
+  async findLatestByContract(contractId: string) {
+    const row = await prisma.scheduledTask.findFirst({
+      where: { contractId, archivedAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, description: true },
+    });
+    return row ? { id: row.id, description: row.description ?? null } : null;
+  },
+  async updateDescription(taskId: string, description: string) {
+    await prisma.scheduledTask.update({ where: { id: taskId }, data: { description } });
+  },
+};
 
 // #40 — ProjectKindLookup wiring: a single findUnique resolves both project
 // existence AND the isNetworkProject flag, so CreateTask's symmetric project↔kind
@@ -2503,6 +2558,53 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // la ruta no se monta y la feature queda muerta (lección W6 — composition test).
       transferPppoe,
     ));
+
+    // ─── smartolt-provision (K2) — aprovisionamiento de ONUs fibra Huawei ─────
+    // Vive DENTRO del bloque PPPoE a propósito: comparte pppoeRepo + createPppoeSvc
+    // (la pre-provisión K1 es LA MISMA instancia de lógica que usa el ingest).
+    // Opt-in: sin SMARTOLT_BASE_URL/SMARTOLT_API_TOKEN las rutas devuelven 503
+    // SMARTOLT_NOT_CONFIGURED; el ON/OFF runtime va por el flag 'fiber-auto-provision'
+    // (seed OFF, chequeado POR REQUEST). SIN cron — todo botón-driven.
+    {
+      const smartoltConfigured =
+        config.smartolt.baseUrl !== '' && config.smartolt.token !== '';
+      const smartoltGateway = new SmartOltHttpGateway({
+        baseUrl: config.smartolt.baseUrl,
+        token: config.smartolt.token,
+        timeoutMs: config.smartolt.timeoutMs,
+        stepPauseMs: config.smartolt.stepPauseMs,
+      });
+      const smartOltOltConfigRepo = new PrismaSmartOltOltConfigRepository();
+      // GR client best-effort para el username PPPoE histórico (mismo rol que en
+      // bootstrapGestionRealIngest): sin credenciales GR falla AL USARSE y
+      // PregenInstallPppoe cae al username generado — jamás bloquea.
+      const grClientForFiber = new GestionRealClient({
+        baseUrl: config.gestionReal.baseUrl,
+        cuit: config.gestionReal.cuit,
+        secret: config.gestionReal.secret,
+      });
+      const pregenForFiber = new PregenInstallPppoe(pppoeRepo, createPppoeSvc, grClientForFiber);
+      const provisionFiberOnu = new ProvisionFiberOnu(
+        smartoltGateway,
+        smartOltOltConfigRepo,
+        { findById: (id: string) => prismaFiberContractLookup(id) },
+        pppoeRepo,
+        pregenForFiber,
+        new PrismaGestionRealIngestConfigRepository(),
+        prismaFiberInstallTaskWriter,
+      );
+      app.use('/api/fiber', createFiberRouter(
+        authAdapter,
+        sessionRepo,
+        requirePerm,
+        featureFlagRepo,
+        smartoltConfigured,
+        new ListUnconfiguredOnus(smartoltGateway, smartOltOltConfigRepo),
+        provisionFiberOnu,
+        new ListSmartOltOlts(smartOltOltConfigRepo),
+        new UpdateSmartOltOlt(smartOltOltConfigRepo),
+      ));
+    }
   }
 
   // ─── add-by-pppoe — inspección SSH de antena airOS ────────────────────────
