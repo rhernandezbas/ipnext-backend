@@ -99,20 +99,23 @@ descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "
 ## Batch 5 — Scheduler + wiring (AA-5)
 
 ### T5.1 — test (RED)
-- [ ] Extender `src/__tests__/application/UispSyncScheduler.test.ts` — con flag
+- [x] Extender `src/__tests__/application/UispSyncScheduler.test.ts` — con flag
   `contract-network-auto-assign` ON: invoca autoAssign tras sync exitoso (dentro del lock); OFF o
   ausente: no invoca; autoAssign que lanza: el summary del sync se reporta igual + warning; ctor sin
-  autoAssign: no-op (back-compat).
+  autoAssign: no-op (back-compat). 5 tests nuevos. Fix de tipo pre-existente en `syncStub` (helper
+  usaba `Partial<Promise<...>>` en vez de `Partial<Awaited<ReturnType<...>>>` — nunca se había
+  ejercitado con un objeto de resultado hasta ahora).
 
 ### T5.2 — código (GREEN)
-- [ ] `UispSyncScheduler` — 6º ctor arg opcional `autoAssign?: AutoAssignContractNetwork` + step
+- [x] `UispSyncScheduler` — 6º ctor arg opcional `autoAssign?: AutoAssignContractNetwork` + step
   post-sync gated por flag, try/catch aislado (design §5).
-- [ ] `bootstrapUispSync.ts` — construir los repos Prisma
+- [x] `bootstrapUispSync.ts` — construir los repos Prisma
   (`PrismaPppoeServiceRepository`, `PrismaRadiusEventRepository`, `PrismaContractRepository`,
   reuso de `PrismaAccessPointRepository`/`PrismaUispDeviceRepository`/`PrismaSyncStateRepository`) +
-  `AutoAssignContractNetwork` → pasarlo al scheduler.
-- [ ] TEST pin: extender `uisp-composition.test.ts` — el 6º arg del scheduler no se cae en silencio
-  (guard "tests verdes pero prod no asigna", patrón Fase A).
+  `AutoAssignContractNetwork` → pasarlo al scheduler. Solo se construye dentro del branch
+  `baseUrl && token` (el scheduler ya corta en `sync===null` antes de llegar al paso auto-assign).
+- [x] TEST pin: extender `uisp-composition.test.ts` — el 6º arg del scheduler no se cae en silencio
+  (guard "tests verdes pero prod no asigna", patrón Fase A). 2 tests nuevos.
 
 ## Batch 6 — Picker manual: use cases (PICK-1, PICK-2)
 

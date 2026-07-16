@@ -7,14 +7,35 @@ import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-
 import { InMemorySyncStateRepository } from '../../infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import { UispUnavailableError } from '../../domain/errors/uisp';
 import type { SyncUispMirror } from '../../application/use-cases/SyncUispMirror';
+import type { AutoAssignContractNetwork, AutoAssignContractNetworkResult } from '../../application/use-cases/AutoAssignContractNetwork';
 
 const FLAG_KEY = 'uisp-sync';
+const AUTO_ASSIGN_FLAG_KEY = 'contract-network-auto-assign';
+
+function autoAssignStub(resultOrError?: Partial<AutoAssignContractNetworkResult> | Error): AutoAssignContractNetwork {
+  if (resultOrError instanceof Error) {
+    return { execute: jest.fn().mockRejectedValue(resultOrError) } as unknown as AutoAssignContractNetwork;
+  }
+  return {
+    execute: jest.fn().mockResolvedValue({
+      contractsEvaluated: 0,
+      assigned: 0,
+      unchanged: 0,
+      unresolved: 0,
+      ambiguous: 0,
+      macFromCallerId: 0,
+      macFromRadiusEvent: 0,
+      durationMs: 5,
+      ...resultOrError,
+    }),
+  } as unknown as AutoAssignContractNetwork;
+}
 
 function lockStub(acquired = true) {
   return { tryAcquire: jest.fn().mockResolvedValue(acquired), release: jest.fn().mockResolvedValue(undefined) } as never;
 }
 
-function syncStub(result?: Partial<ReturnType<SyncUispMirror['execute']>> | Error) {
+function syncStub(result?: Partial<Awaited<ReturnType<SyncUispMirror['execute']>>> | Error) {
   if (result instanceof Error) {
     return { execute: jest.fn().mockRejectedValue(result) } as unknown as SyncUispMirror;
   }
@@ -215,5 +236,82 @@ describe('UispSyncScheduler', () => {
     expect(r1.skipped).toBeUndefined();
     expect(r2.skipped).toBe(true);
     expect(blockingSync.execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+// contract-node-ap-auto-assign (AA-5) — post-sync auto-assign step, gated by its OWN flag,
+// isolated try/catch (a throw here must NEVER break the sync's own result), invoked INSIDE
+// the advisory lock scope (before `finally { release }`).
+describe('UispSyncScheduler — auto-assign step (AA-5)', () => {
+  it('flag ON: invoca autoAssign tras un sync exitoso, DENTRO del lock (antes de liberarlo)', async () => {
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed(FLAG_KEY, true);
+    flags.seed(AUTO_ASSIGN_FLAG_KEY, true);
+    const sync = syncStub();
+    const autoAssign = autoAssignStub({ assigned: 3, unresolved: 1 });
+    const lock = { tryAcquire: jest.fn().mockResolvedValue(true), release: jest.fn().mockResolvedValue(undefined) };
+    const s = new UispSyncScheduler(sync, flags, lock as never, { intervalMs: 1000, silent: true }, undefined, autoAssign);
+
+    await s.runOnce();
+
+    expect(autoAssign.execute).toHaveBeenCalledTimes(1);
+    const executeOrder = (autoAssign.execute as jest.Mock).mock.invocationCallOrder[0]!;
+    const releaseOrder = (lock.release as jest.Mock).mock.invocationCallOrder[0]!;
+    expect(executeOrder).toBeLessThan(releaseOrder);
+  });
+
+  it('flag OFF: NO invoca autoAssign', async () => {
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed(FLAG_KEY, true);
+    flags.seed(AUTO_ASSIGN_FLAG_KEY, false);
+    const sync = syncStub();
+    const autoAssign = autoAssignStub();
+    const s = new UispSyncScheduler(sync, flags, lockStub(true), { intervalMs: 1000, silent: true }, undefined, autoAssign);
+
+    await s.runOnce();
+
+    expect(autoAssign.execute).not.toHaveBeenCalled();
+  });
+
+  it('flag AUSENTE (nunca seedeado): NO invoca autoAssign — dark by default', async () => {
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed(FLAG_KEY, true);
+    // contract-network-auto-assign NUNCA seedeado.
+    const sync = syncStub();
+    const autoAssign = autoAssignStub();
+    const s = new UispSyncScheduler(sync, flags, lockStub(true), { intervalMs: 1000, silent: true }, undefined, autoAssign);
+
+    await s.runOnce();
+
+    expect(autoAssign.execute).not.toHaveBeenCalled();
+  });
+
+  it('autoAssign que LANZA: el resultado del sync se reporta igual (aislado, no rompe el run)', async () => {
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed(FLAG_KEY, true);
+    flags.seed(AUTO_ASSIGN_FLAG_KEY, true);
+    const sync = syncStub({ sitesUpserted: 2, devicesUpserted: 9 });
+    const autoAssign = autoAssignStub(new Error('auto-assign boom'));
+    const s = new UispSyncScheduler(sync, flags, lockStub(true), { intervalMs: 1000, silent: true }, undefined, autoAssign);
+
+    const result = await s.runOnce();
+
+    expect(result.error).toBeUndefined();
+    expect(result.sitesUpserted).toBe(2);
+    expect(result.devicesUpserted).toBe(9);
+    expect(autoAssign.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('ctor SIN autoAssign (6to arg omitido): no-op total, back-compat con todos los call-sites existentes', async () => {
+    const flags = new InMemoryFeatureFlagRepository();
+    flags.seed(FLAG_KEY, true);
+    flags.seed(AUTO_ASSIGN_FLAG_KEY, true);
+    const sync = syncStub();
+    const s = new UispSyncScheduler(sync, flags, lockStub(true), { intervalMs: 1000, silent: true });
+
+    const result = await s.runOnce();
+
+    expect(result.error).toBeUndefined();
+    expect(result.skipped).toBeUndefined();
   });
 });
