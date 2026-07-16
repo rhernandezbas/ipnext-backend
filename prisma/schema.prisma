@@ -2604,6 +2604,10 @@ model UispDevice {
   uptime       BigInt?
   lastSeenAt   DateTime?
   missingSince DateTime?
+  /// contract-node-ap-auto-assign (Fase B, MIR-1): UISP device id del AP al que está asociada
+  /// esta station (raw.attributes.apDevice.id). NO es FK interna. Sin índice: se consume vía
+  /// listAll() -> Map en memoria, nunca WHERE por esta columna.
+  apUispDeviceId String?
   lastSyncAt   DateTime
   createdAt    DateTime  @default(now())
   updatedAt    DateTime

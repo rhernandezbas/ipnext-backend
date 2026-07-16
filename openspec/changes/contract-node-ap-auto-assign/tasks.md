@@ -30,27 +30,29 @@ descartado. Roles del seed: `super_admin` + `administrador` (corrección sobre "
 ## Batch 2 — Eslabón station→AP en el mirror (MIR-1, MIR-2, MIG-1)
 
 ### T2.1 — tests (RED)
-- [ ] `src/__tests__/infrastructure/UispClient.apdevice.test.ts` — mapDevice con
+- [x] `src/__tests__/infrastructure/UispClient.apdevice.test.ts` — mapDevice con
   `attributes.apDevice.id` → `apUispDeviceId`; sin `attributes`/`apDevice`/`id` → null, sin throw
   (patrón `UispClient.address.test.ts`, http inyectado).
-- [ ] Extender test de `InMemoryUispDeviceRepository` — upsert persiste `apUispDeviceId` y re-linkea
-  en la misma fila.
+- [x] Extender test de `InMemoryUispDeviceRepository` — upsert persiste `apUispDeviceId` y re-linkea
+  en la misma fila. (+ pin de texto sobre `PrismaUispDeviceRepository.upsert` create/update.)
 
 ### T2.2 — código (GREEN)
-- [ ] `src/domain/entities/uisp.ts` — `apUispDeviceId: string | null` en `UispDevice` (+ JSDoc "NO
+- [x] `src/domain/entities/uisp.ts` — `apUispDeviceId: string | null` en `UispDevice` (+ JSDoc "NO
   es FK interna").
-- [ ] `UispClient.mapDevice` — extracción null-safe (design §3).
-- [ ] `PrismaUispDeviceRepository.upsert` (create + update) e `InMemoryUispDeviceRepository` —
+- [x] `UispClient.mapDevice` — extracción null-safe (design §3).
+- [x] `PrismaUispDeviceRepository.upsert` (create + update) e `InMemoryUispDeviceRepository` —
   incluir el campo. Revisar fixtures/factories de tests existentes que construyan `UispDevice`
-  (agregar el campo para que compile TS strict).
+  (agregar el campo para que compile TS strict). 9 fixtures actualizadas en 8 archivos de test
+  (uisp.test.ts x3, SyncUispMirror.*.test.ts x3, InMemoryUispClient.test.ts x2, uisp.routes.test.ts,
+  GetUispSiteDetail.test.ts) — `npx tsc --noEmit` 0 errores.
 
 ### T2.3 — schema + migración
-- [ ] `prisma/schema.prisma` — `apUispDeviceId String?` en `UispDevice` (a mano, sin format).
-- [ ] `npx prisma validate` + `npx prisma generate`.
-- [ ] Migración con `prisma migrate diff --from-schema <HEAD> --to-schema <working> --script` →
+- [x] `prisma/schema.prisma` — `apUispDeviceId String?` en `UispDevice` (a mano, sin format).
+- [x] `npx prisma validate` + `npx prisma generate`.
+- [x] Migración con `prisma migrate diff --from-schema <HEAD> --to-schema <working> --script` →
   `prisma/migrations/20260916000000_uispdevice_ap_link/migration.sql` (solo `ADD COLUMN`, sin
   BEGIN/COMMIT).
-- [ ] TEST: `src/__tests__/infrastructure/migration.uispdevice_ap_link.test.ts` — SQL aditivo, sin
+- [x] TEST: `src/__tests__/infrastructure/migration.uispdevice_ap_link.test.ts` — SQL aditivo, sin
   DROP (patrón `migration.networksite_uisp_link.test.ts`).
 
 ## Batch 3 — Ports nuevos (CAS-1 + lectura/escritura de asignaciones)

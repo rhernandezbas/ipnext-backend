@@ -61,6 +61,13 @@ function mapDevice(raw: Record<string, unknown>): UispDevice {
   const lastSeen = overview['lastSeen'];
   const lastSeenAt: Date | null = lastSeen != null ? new Date(lastSeen as string) : null;
 
+  // contract-node-ap-auto-assign (MIR-1): station→AP link, same payload as /devices — no
+  // extra UISP call. Null-safe: attributes/apDevice/id may each be absent (routers, APs
+  // themselves, or the ~1.2% of stations without a reported AP).
+  const attributes = (raw['attributes'] ?? {}) as Record<string, unknown>;
+  const apDevice = (attributes['apDevice'] ?? null) as Record<string, unknown> | null;
+  const apUispDeviceId: string | null = apDevice ? ((apDevice['id'] as string) ?? null) : null;
+
   const now = new Date();
   return {
     id: '',  // filled by repository on upsert
@@ -80,6 +87,7 @@ function mapDevice(raw: Record<string, unknown>): UispDevice {
     uptime,
     lastSeenAt,
     missingSince: null,
+    apUispDeviceId,
     lastSyncAt: now,
     createdAt: now,
     updatedAt: now,
