@@ -26,7 +26,7 @@ Que una sesión PPPoE colgada (fila de `radacct` con `acctstoptime IS NULL` cuyo
 
 ## Dirección decidida por el usuario (2026-07-16)
 
-**"Cura rápida + log auditable + versionar el cron como red de seguridad."** El watcher del BE cura en ~1-2 min lo que el cron cura en hasta 50; el cron QUEDA como safety net (cubre lo que el watcher no ve: sesiones colgadas sin rechazos, BE caído); todo intento de cura —del watcher o manual— queda registrado y visible en Prominense.
+**"Cura rápida + log auditable + versionar el cron como red de seguridad."** El watcher del BE cura en **~5-7 min desde la muerte de la sesión** (enmienda fast-path del mismo día: persistencia de rejects ≥5 min bajo política new-wins — ver design "Enmienda fast-path 5 min") lo que el cron cura en hasta 50; el cron QUEDA como safety net (cubre lo que el watcher no ve: sesiones colgadas sin rechazos, BE caído); todo intento de cura —del watcher o manual— queda registrado y visible en Prominense, con anti-flapping (cure-throttle 30 min + `flagged_flapping` ≥3 curas/24 h) para que new-wins no degenere en ping-pong con credenciales compartidas.
 
 ## Scope
 

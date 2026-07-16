@@ -50,43 +50,50 @@ Pipeline del tick:
 ```
 1. eventos = RadiusAuthEventRepository.list({ reason: 'session_stuck',
      from: now - LOOKBACK, page: 1, pageSize: 500 })          ← port EXISTENTE (RadiusAuthEventRepository.ts:39-51)
-2. candidatos = usernames únicos de esos eventos               ← dedupe intra-tick
-3. breaker: |candidatos| > ABORT_THRESHOLD → ABORT del tick    ← incidente masivo (NAS caído) ≠ sesión colgada
+2. agregado por username: { firstReject, lastReject }          ← dedupe intra-tick + INSUMO del fast path (D6)
+3. breaker: |usernames| > ABORT_THRESHOLD → ABORT del tick     ← incidente masivo (NAS caído) ≠ sesión colgada
 4. cap: procesar a lo sumo MAX_PER_TICK (resto → deferred)
 5. por username (aislamiento de fallos por ítem):
-   a. cooldown: último evento 'cured' del username < COOLDOWN_MS → skip (counter, sin fila)
-   b. sessions = gateway.listSessions(username)                 ← fresco, del orchestrator
-   c. gates FAIL-CLOSED (D6)
-   d. cura: gateway.cureSession(username, sessionId)  →  fila RadiusSessionCureEvent
+   a. cure-throttle anti-flapping: último 'cured' < COOLDOWN_MS (30 min) → skip (counter, sin fila)
+   b. flapping: ≥ FLAPPING_MAX eventos 'cured' del username en 24 h → fila `flagged_flapping`, NO curar (D7)
+   c. sessions = gateway.listSessions(username)                 ← fresco, del orchestrator
+   d. gates FAIL-CLOSED + DOS caminos de cura (D6, enmienda fast-path)
+   e. cura: gateway.cureSession(username, sessionId)  →  fila RadiusSessionCureEvent (con signalUsed)
 ```
 
 - **Detección = `RadiusAuthEvent` con `reason='session_stuck'`** ya ingeridos por `RadiusAuthIngestScheduler` (tick 60 s): cero queries nuevas contra el orchestrator/MariaDB para detectar. El filtro `reason` + `from` ya existe en el port (`RadiusAuthEventFilters`, `RadiusAuthEventRepository.ts:15-20`).
-- **LOOKBACK default 15 min** (`RADIUS_AUTO_CURE_LOOKBACK_MS`): cubre el atraso del ingest + ticks perdidos sin re-barrer histórico. Un evento stuck más viejo que el lookback ya lo curó el cron (ventana 50 min > lookback + threshold).
-- **Latencia esperada de cura**: reject → ingest (≤60 s) → tick watcher (≤60 s) + threshold 20 min de staleness ya cumplido al momento del reject en el caso típico → **~1-2 min** desde que el rechazo es visible, vs ~50 min worst-case del cron.
+- **LOOKBACK default 15 min** (`RADIUS_AUTO_CURE_LOOKBACK_MS`): cubre el atraso del ingest + ticks perdidos sin re-barrer histórico, y DEBE ser mayor que `PERSISTENCE_MS + RECENCY_MS` (la ventana del fast path vive DENTRO del lookback; defaults 15 > 5+2, con clamp de coherencia en config). Un evento stuck más viejo que el lookback ya lo curó el cron (ventana 50 min > lookback + threshold).
+- **Latencia esperada de cura (enmienda fast-path)**: la sesión muere en T0 → el cliente redialea y los rejects `session_stuck` arrancan ~T0 → persistencia cumplida en T0+5 min → ingest (≤60 s) + tick (≤60 s) ⇒ **cura en ~5-7 min desde la muerte de la sesión** (requisito del usuario: ~5 min). El camino `stale_interim` (cliente que dejó de redialear dentro del lookback) cura a los ~20-22 min, y el cron versionado sigue cubriendo el worst-case ~50 min como safety net para fantasmas SIN redial.
 
-## D6 — Gates FAIL-CLOSED de verificación (BE-1) — la regla de oro: ante la duda, NO curar
+## D6 — Verificación por username: DOS caminos de cura + gates FAIL-CLOSED (BE-1) — [ENMIENDA fast-path 2026-07-16]
 
-Por username, sobre `sessions = gateway.listSessions(username)` frescas:
+**Restricción DURA que motiva el diseño**: con `Acct-Interim-Interval = 600 s`, un umbral de staleness <20 min produce falsos positivos masivos (medido: 84 % de las sesiones sanas tienen frescura <10 min, 16 % entre 10-30 min). El requisito del usuario de reaccionar en **~5 minutos** NO se resuelve bajando ese umbral — se resuelve con un SEGUNDO camino de cura independiente de la señal de interim.
 
-| Condición | Acción | Outcome |
-|---|---|---|
-| 0 sesiones abiertas | el cron/otro ya curó, o cerró sola | skip `skipped_no_session` |
-| ALGUNA sesión con `lastUpdate` fresco (`now - lastUpdate < STALE_MS`) | usuario VIVO — el reject era doble login legítimo | skip `skipped_alive` |
-| sesiones abiertas en NAS DISTINTOS entre sí | posible doble login real / transitorio | skip `skipped_ambiguous` |
-| alguna sesión SIN `lastUpdate` en el wire (orchestrator viejo o sesión sin interim aún) | sin señal ⇒ sin cura | skip `skipped_no_signal` |
-| TODAS stale (`now - lastUpdate > STALE_MS`) y mismo NAS | curable → cure de cada sesión stale | `cured` / `already_cured` / `failed` |
+Por username, sobre `sessions = gateway.listSessions(username)` frescas y el agregado de rejects del tick (`firstReject`/`lastReject`), en este orden:
 
-- **`STALE_MS` default 1 200 000 (20 min), PISO DURO 20 min** (`RADIUS_AUTO_CURE_STALE_MS`): el umbral está VALIDADO con datos (interim 600 s; 0 sesiones sanas >30 min sin interim; <20 min = falsos positivos medidos). El piso impide que un fat-finger baje el gate a territorio de matar sesiones vivas. Techo 24 h. Parse patrón `parseIntervalMs` (config.ts:201-206).
-- **`skipped_no_signal` es la propiedad de orden de deploy**: BE-1 puede ir a prod ANTES que ORCH-1 sin daño — sin `lastUpdate` en el wire el watcher no cura nada y lo dice en la tabla.
+| # | Condición | Acción | Outcome / signalUsed |
+|---|---|---|---|
+| 1 | 0 sesiones abiertas | el cron/otro ya curó, o cerró sola | skip `skipped_no_session` |
+| 2 | sesiones abiertas en NAS DISTINTOS entre sí | ambigüedad real | skip `skipped_ambiguous` |
+| 3 | alguna sesión SIN `lastUpdate` en el wire (orchestrator viejo) | sin señal ⇒ sin cura | skip `skipped_no_signal` |
+| 4 | **FAST PATH**: `lastReject - firstReject >= PERSISTENCE_MS` (5 min) Y `now - lastReject <= RECENCY_MS` (2 min — el cliente SIGUE marcando) | curar TODAS las sesiones abiertas, SIN exigir staleness — el interim fresco NO bloquea | `cured` · `signalUsed='persistent_rejects'` |
+| 5 | sin persistencia + ALGUNA sesión fresca (`now - lastUpdate < STALE_MS`) | usuario posiblemente vivo, rejects aún no sostenidos | skip `skipped_alive` |
+| 6 | sin persistencia + TODAS stale (`> STALE_MS`) y mismo NAS | curable clásico | `cured` · `signalUsed='stale_interim'` |
+
+- **Justificación de seguridad del fast path (new-wins)**: `Simultaneous-Use := 1` está en los 81 grupos de `radgroupcheck` (TODOS = 1) — es POLÍTICA de red: no existe el doble-login legítimo. Un cliente que insiste ≥5 min contra un reject `session_stuck` ES el titular intentando conectarse → "el que marca gana". Costo del falso positivo (curar una sesión viva del mismo titular en otro dispositivo): micro-corte ~30 s + redial automático del otro dispositivo. Acotado y aceptado por decisión del usuario (2026-07-16).
+- **Los gates 1-3 aplican a AMBOS caminos**: `skipped_ambiguous` (NAS distintos) y `skipped_no_signal` bloquean también al fast path — fail-closed uniforme, y `no_signal` preserva la propiedad de orden de deploy (BE-1 antes que ORCH-1 ⇒ nada se cura, queda visible en la tabla). `skipped_alive` es el ÚNICO gate que el fast path saltea (el reject sostenido pesa más que el interim fresco).
+- **`PERSISTENCE_MS` default 300 000 (5 min), piso 2 min** (`RADIUS_AUTO_CURE_PERSISTENCE_MS`) y **`RECENCY_MS` default 120 000 (2 min), piso 30 s** (`RADIUS_AUTO_CURE_REJECT_RECENCY_MS`): la persistencia corta evita curar por una ráfaga transitoria de redial; la recencia exige que el cliente SIGA intentando (rejects viejos sin recencia = dejó de marcar → que decida el camino stale/cron). Restricción de coherencia: `LOOKBACK_MS > PERSISTENCE_MS + RECENCY_MS` (defaults 15 > 5+2 — validado con clamp en config).
+- **`STALE_MS` default 1 200 000 (20 min), PISO DURO 20 min** (`RADIUS_AUTO_CURE_STALE_MS`): el umbral está VALIDADO con datos (interim 600 s; 0 sesiones sanas >30 min sin interim). El piso impide que un fat-finger baje el gate a territorio de matar sesiones vivas SIN la evidencia de rejects sostenidos que sí tiene el fast path. Techo 24 h. Parse patrón `parseIntervalMs` (config.ts:201-206).
 - **El gate NO usa `startedAt` como fallback de señal**: una sesión sin interim no es diagnosticable desde acá — la cubre la regla horaria del cron (2 h). Fail-closed estricto.
 
-## D7 — Anti-tormenta: breaker + cap + cooldown + throttle (BE-1, molde AutoMovePppoe D-W2.5)
+## D7 — Anti-tormenta y anti-flapping: breaker + cap + cure-throttle + flapping flag + throttle de registro (BE-1, molde AutoMovePppoe D-W2.5) — [ENMIENDA 2026-07-16]
 
-- **Circuit breaker** `RADIUS_AUTO_CURE_ABORT_THRESHOLD` (default 20): más de N candidatos únicos en un tick ⇒ ABORT sin curar nada + WARN + `aborted: true` en el summary. Racional: hoy se curan 0-6/día; decenas de stuck simultáneos = NAS caído u outage (26 hoy, 23 del mismo NAS vialidad `10.60.0.10`) — eso NO se cura de a uno, se escala. Parse `parsePositiveInt` (molde config.ts:244-247).
+- **Circuit breaker** `RADIUS_AUTO_CURE_ABORT_THRESHOLD` (default 20): más de N candidatos únicos en un tick ⇒ ABORT sin curar nada + WARN + `aborted: true` en el summary. **SE MANTIENE con la enmienda fast-path**: decenas de stuck simultáneos = NAS caído u outage — eso NO se cura de a uno, se escala (el caso vialidad de hoy, 23 stuck del mismo NAS `10.60.0.10`, habría abortado el tick: comportamiento CORRECTO). Parse `parsePositiveInt` (molde config.ts:244-247).
 - **Cap por tick** `RADIUS_AUTO_CURE_MAX_PER_TICK` (default 5): resto queda `deferred` para el próximo tick (el evento sigue en el lookback).
-- **Cooldown post-cura** `RADIUS_AUTO_CURE_COOLDOWN_MS` (default 600 000 = 10 min): si el último evento `cured` del username es más nuevo, skip sin fila — evita re-procesar al mismo username mientras su evento stuck viejo sigue dentro del lookback (cinturón; el gate `no_session` ya lo cortaría).
-- **Throttle 6 h del REGISTRO** (molde exacto D-W2.2 / `pppoeNasMoveThrottle.ts` referenciado en `AutoMovePppoe.ts:17,588`): un `skipped_*`/`failed` IDÉNTICO (mismo outcome + mismo reason) al último evento del username con <6 h NO genera fila nueva (el chequeo igual ocurre; solo se throttlea el spam de la tabla). Los `cured` SIEMPRE registran. Check fail-open ante hiccup de DB (se registra igual).
-- **Tick** `RADIUS_AUTO_CURE_INTERVAL_MS` default 60 000 (molde `radiusAuthIngest`, config.ts:201-206: piso 15 s, techo 24 h, inválido→default, JAMÁS tumba el boot). **Flag** `radius-auto-cure` (FeatureFlag DB, seed OFF, chequeado EN CADA tick — prender/apagar sin deploy). **Lock** `radius-auto-cure` (PgAdvisoryLock). **Log estructurado por tick**: `{events, candidates, cured, alreadyCured, failed, skippedAlive, skippedAmbiguous, skippedNoSession, skippedNoSignal, skippedCooldown, deferred, throttled, aborted}`.
+- **Cure-throttle anti-flapping** `RADIUS_AUTO_CURE_COOLDOWN_MS` (default **1 800 000 = 30 min**, enmienda — antes 10 min): una cura por username cada 30 min MÁXIMO. Si el último evento `cured` del username es más nuevo, skip sin fila (`skippedCureThrottle`). Primera línea de defensa contra el ping-pong new-wins (dos dispositivos con la misma credencial curándose mutuamente).
+- **Flapping flag** (NUEVO): si el username acumula ≥ `RADIUS_AUTO_CURE_FLAPPING_MAX` (default 3) eventos `cured` en las últimas 24 h (ventana fija documentada) ⇒ NO curar más mientras la condición persista + fila `flagged_flapping` (throttled 6 h como todo skip) — VISIBLE en la UI de curas: 3+ curas/día del mismo username delata credencial compartida o sesión clonada, y eso es un caso de SOPORTE, no de auto-cura. La consulta es barata: `list({usernameExact, outcome:'cured', from: now-24h})` sobre índice existente.
+- **Throttle 6 h del REGISTRO** (molde exacto D-W2.2 / `pppoeNasMoveThrottle.ts` referenciado en `AutoMovePppoe.ts:17,588`): un `skipped_*`/`failed`/`flagged_flapping` IDÉNTICO (mismo outcome + mismo reason) al último evento del username con <6 h NO genera fila nueva (el chequeo igual ocurre; solo se throttlea el spam de la tabla). Los `cured` SIEMPRE registran. Check fail-open ante hiccup de DB (se registra igual).
+- **Tick** `RADIUS_AUTO_CURE_INTERVAL_MS` default 60 000 (molde `radiusAuthIngest`, config.ts:201-206: piso 15 s, techo 24 h, inválido→default, JAMÁS tumba el boot). **Flag** `radius-auto-cure` (FeatureFlag DB, seed OFF, chequeado EN CADA tick — prender/apagar sin deploy). **Lock** `radius-auto-cure` (PgAdvisoryLock). **Log estructurado por tick**: `{events, candidates, cured, alreadyCured, failed, skippedAlive, skippedAmbiguous, skippedNoSession, skippedNoSignal, skippedCureThrottle, flaggedFlapping, deferred, throttled, aborted}`.
 
 ## D8 — Registro: tabla `RadiusSessionCureEvent` + endpoints (BE-1)
 
@@ -99,10 +106,11 @@ model RadiusSessionCureEvent {
   nasIp             String?
   sessionId         String?   // acctsessionid de la sesión curada/evaluada
   sessionStartedAt  DateTime?
-  sessionLastUpdate DateTime? // la señal usada por el gate (null si no había)
+  sessionLastUpdate DateTime? // el interim al momento de evaluar (null si no había señal)
+  signalUsed        String?   // 'persistent_rejects' (fast path) | 'stale_interim' (camino clásico) — qué evidencia justificó la cura; null en skips (enmienda 2026-07-16)
   trigger           String    // 'auto' | 'manual'
   action            String?   // 'both' | 'acct_close' | 'coa' | null — qué se ejecutó efectivamente
-  outcome           String    // 'cured' | 'already_cured' | 'skipped_alive' | 'skipped_ambiguous' | 'skipped_no_session' | 'skipped_no_signal' | 'failed'
+  outcome           String    // 'cured' | 'already_cured' | 'skipped_alive' | 'skipped_ambiguous' | 'skipped_no_session' | 'skipped_no_signal' | 'flagged_flapping' | 'failed'
   reason            String?
   actorName         String?   // 'sistema' (auto) | nombre del operador (manual)
   createdAt         DateTime @default(now())
@@ -114,7 +122,7 @@ model RadiusSessionCureEvent {
 }
 ```
 
-- **`GET /api/radius/session-cures`** — GEMELO de `GET /auth-failures` (`radius.routes.ts:247-291`): mismo router (`/api/radius`, app.ts:1911), mismo guard `network.read` (`radius.routes.ts:72`), misma validación defensiva de query params (enums de outcome/trigger, `parseIntPositive`, `parseDate`). Filtros: `username?`, `outcome?`, `trigger?`, `from?`, `to?`, `page`, `limit` (default 50, cap 200 — molde `ListRadiusAuthFailures.ts:31-33`). **Wire contract campo por campo**: `{ data: [{ id, username, nasIp, sessionId, sessionStartedAt, sessionLastUpdate, trigger, action, outcome, reason, actorName, createdAt }], total, page, limit, hasNext, countsByOutcome }` — `countsByOutcome` espejo de `countsByReason` (`ListRadiusAuthFailures.ts:60-69`): ignora el filtro `outcome`, alimenta los chips del FE.
+- **`GET /api/radius/session-cures`** — GEMELO de `GET /auth-failures` (`radius.routes.ts:247-291`): mismo router (`/api/radius`, app.ts:1911), mismo guard `network.read` (`radius.routes.ts:72`), misma validación defensiva de query params (enums de outcome/trigger, `parseIntPositive`, `parseDate`). Filtros: `username?`, `outcome?`, `trigger?`, `from?`, `to?`, `page`, `limit` (default 50, cap 200 — molde `ListRadiusAuthFailures.ts:31-33`). **Wire contract campo por campo**: `{ data: [{ id, username, nasIp, sessionId, sessionStartedAt, sessionLastUpdate, signalUsed, trigger, action, outcome, reason, actorName, createdAt }], total, page, limit, hasNext, countsByOutcome }` — `countsByOutcome` espejo de `countsByReason` (`ListRadiusAuthFailures.ts:60-69`): ignora el filtro `outcome`, alimenta los chips del FE.
 - **`POST /api/radius/session-cures`** — cura MANUAL (escape hatch). Guard **`network.manage`** (espejo de `DELETE /sessions/:id`, `radius.routes.ts:73`). Body `{ username, sessionId, force? }`. Sin `force`: respeta los gates D6 — si da alive/ambiguous responde 409 tipado (`CURE_SKIPPED_ALIVE` / `CURE_SKIPPED_AMBIGUOUS`) SIN curar. Con `force: true` (el FE lo manda tras la SEGUNDA confirmación explícita): saltea los gates alive/ambiguous y cura igual — es la misma potestad que ya tiene el operador con el disconnect manual, más el cierre contable. SIEMPRE registra fila `trigger='manual'` + `actorName` del operador (incl. los 409: outcome `skipped_*`). El manual NO pasa por throttle (una acción deliberada siempre deja rastro).
 - **Use cases**: `CureStuckSession` (core: gates + cura + registro — lo comparten watcher y ruta manual) + `AutoCureStuckSessions` (orquesta el tick: lookback, breaker, cap, cooldown) + `ListRadiusSessionCures` (lectura). DIP estricta: dependen SOLO de ports (`RadiusAuthEventRepository`, `RadiusOrchestratorGateway`, `RadiusSessionCureEventRepository` nuevo, `FeatureFlagRepository`, `DistributedLock` en el scheduler). Tests con in-memory + fake del gateway.
 
@@ -142,10 +150,23 @@ model RadiusSessionCureEvent {
 | Riesgo | Mitigación |
 |---|---|
 | **Doble-curador (cron 20 min/30 min vs watcher)** | Idempotencia por diseño: `WHERE acctstoptime IS NULL` ⇒ el segundo hace no-op limpio (`already_cured`, visible en la tabla). El cron QUEDA documentado como safety net (D4) — no compiten, se complementan |
-| **Matar una sesión VIVA** | Gates fail-closed (D6) + umbral 20 min VALIDADO con datos (interim 600 s, 0 sesiones sanas >30 min) + piso duro de 20 min en la env + `skipped_alive`/`skipped_ambiguous` ante cualquier señal de vida o ambigüedad |
-| **Tormenta de curas (NAS caído genera N stuck)** | Breaker (>20 candidatos ⇒ abort del tick) + cap 5/tick + cooldown 10 min + throttle 6 h del registro (D7) |
+| **Matar una sesión VIVA** | Camino stale: gates fail-closed (D6) + umbral 20 min VALIDADO (interim 600 s, 0 sesiones sanas >30 min) + piso duro en la env. Fast path: desconectar una sesión viva es DELIBERADO bajo new-wins (`Simultaneous-Use=1` = política, no hay doble-login legítimo) — el costo es un micro-corte ~30 s + redial, acotado por persistencia 5 min + recencia 2 min + los gates ambiguous/no_signal que SÍ aplican |
+| **Ping-pong new-wins (credencial compartida / sesión clonada: dos dispositivos curándose mutuamente)** | Cure-throttle 30 min por username + flapping flag: ≥3 curas en 24 h ⇒ `flagged_flapping`, no se cura más ese día y queda VISIBLE en la UI (es caso de soporte, no de auto-cura) |
+| **Tormenta de curas (NAS caído genera N stuck)** | Breaker (>20 candidatos ⇒ abort del tick — SE MANTIENE con la enmienda) + cap 5/tick + cure-throttle 30 min + throttle 6 h del registro (D7) |
 | **HA / replicación MariaDB** | wsrep OFF ya medido; tarea EXPLÍCITA de apply ORCH-1: `SHOW SLAVE STATUS` en r1/r2 ANTES de habilitar el write en prod. Superficie acotada: mismo write-path (VIP + UoW) que los writes existentes a radcheck/radreply — lo nuevo es la tabla, no el camino |
 | **Presión del pool SQL / orchestrator** | Detección sobre el mirror local (`RadiusAuthEvent`) — cero barrido nuevo; por tick a lo sumo `MAX_PER_TICK` × (`listSessions` + `cure`) por username, queries por-índice con LIMIT |
 | **Deploy fuera de orden (BE antes que ORCH)** | `lastUpdate` ausente ⇒ fail-closed `skipped_no_signal` (nada se cura, queda visible); `cureSession` 404/405 ⇒ `failed` registrado. El flag nace DARK |
 | **Session id raro en la URL** | `encodeURIComponent` en el gateway + test con id con caracteres no alfanuméricos |
 | **Reject `session_stuck` sobre sesión que YA curó el cron entre ingest y tick** | Gate `skipped_no_session` (listSessions fresco) — no-op sin fila duplicada gracias al throttle |
+
+## Enmienda fast-path 5 min (2026-07-16, decisión del usuario)
+
+El usuario pidió reaccionar en **~5 minutos**, no 20. La versión original de este design solo curaba con staleness ≥20 min (D6 v1) → latencia real ~20-22 min. La enmienda lo resuelve SIN bajar el umbral de staleness (restricción DURA: con interim 600 s, <20 min = falsos positivos masivos — queda documentado en D6) agregando el **fast path por persistencia de rejects** como camino PRINCIPAL:
+
+1. **Fast path (D6 fila 4)**: rejects `session_stuck` sostenidos ≥5 min (primer y último reject separados ≥ `PERSISTENCE_MS`) con el último reciente (≤ `RECENCY_MS`) ⇒ curar YA, sin exigir staleness. Fundamento new-wins: `Simultaneous-Use=1` en los 81 grupos = política de red, el que marca gana; falso positivo = micro-corte ~30 s.
+2. **Slow path**: el camino `stale_interim` (≥20 min) queda para clientes que dejaron de redialear dentro del lookback, y el **cron versionado** (D4) sigue siendo la red de seguridad para fantasmas sin redial — sin cambios.
+3. **Anti-flapping (D7)**: cure-throttle 30 min por username (antes cooldown 10 min) + `flagged_flapping` con ≥3 curas/24 h (no curar más ese día, visible en UI — delata credencial compartida/clon).
+4. **El breaker de tormenta SE MANTIENE** (>20 candidatos/tick ⇒ abort): incidente de NAS ≠ curas masivas.
+5. `skipped_no_session` / `skipped_no_signal` / `skipped_ambiguous` aplican a ambos caminos; `skipped_alive` solo bloquea el camino stale. La columna `signalUsed` (`persistent_rejects` | `stale_interim`) distingue en la tabla/UI qué evidencia justificó cada cura.
+
+**ORCH-1 NO cambia**: el endpoint cure es agnóstico de la política — la decisión de CUÁNDO curar vive entera en BE-1.
