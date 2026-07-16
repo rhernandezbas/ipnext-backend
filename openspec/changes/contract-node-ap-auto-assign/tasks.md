@@ -1,0 +1,168 @@
+# Tasks — contract-node-ap-auto-assign (Fase B: auto-assign + picker manual BE)
+
+**Change**: contract-node-ap-auto-assign · **Phase**: tasks · **Project**: ipnext-backend
+**Reads**: `design.md`, `specs/contract-node-ap-auto-assign/spec.md`
+**Convención TDD**: cada tarea de código lista el TEST primero (red → green). Jest + adapters
+in-memory — NUNCA mockear Prisma. Path aliases siempre. NO `npm run build` ni `prisma migrate` (lo
+decide el usuario). Tests focalizados con `npx jest <ruta>`. Editar `schema.prisma` A MANO, sin
+`prisma format` (lección FIX-5 Fase A).
+
+**Estado**: ⬜ PENDIENTE (plan aprobado, apply no iniciado).
+**Pre-requisito**: re-confirmar con el usuario las preguntas abiertas del design §14 (filas 9/10 de
+la matriz, semántica de `networkSiteId: null`, permiso `contracts.assign`, roles del seed).
+
+---
+
+## Batch 1 — Normalizador de MAC (MAC-1)
+
+### T1.1 — test (RED)
+- [ ] `src/__tests__/domain/services/macNormalize.test.ts` — formatos válidos convergen
+  (`AA:BB:..`/`aa-bb-..`/`aabb.ccdd.eeff`/`AABBCCDDEEFF` → `aabbccddeeff`); inválidas → null
+  (null, vacía, corta, no-hex, IP `100.64.28.5`).
+
+### T1.2 — helper (GREEN)
+- [ ] `src/domain/services/macNormalize.ts` — `normalizeMac(input: string | null | undefined):
+  string | null` (strip `[:\-.\s]`, lowercase, exactamente 12 hex o null). Función NUEVA — NO tocar
+  `macSearch.ts` (semántica distinta: search parcial vs identidad canónica; documentar en el header).
+
+## Batch 2 — Eslabón station→AP en el mirror (MIR-1, MIR-2, MIG-1)
+
+### T2.1 — tests (RED)
+- [ ] `src/__tests__/infrastructure/UispClient.apdevice.test.ts` — mapDevice con
+  `attributes.apDevice.id` → `apUispDeviceId`; sin `attributes`/`apDevice`/`id` → null, sin throw
+  (patrón `UispClient.address.test.ts`, http inyectado).
+- [ ] Extender test de `InMemoryUispDeviceRepository` — upsert persiste `apUispDeviceId` y re-linkea
+  en la misma fila.
+
+### T2.2 — código (GREEN)
+- [ ] `src/domain/entities/uisp.ts` — `apUispDeviceId: string | null` en `UispDevice` (+ JSDoc "NO
+  es FK interna").
+- [ ] `UispClient.mapDevice` — extracción null-safe (design §3).
+- [ ] `PrismaUispDeviceRepository.upsert` (create + update) e `InMemoryUispDeviceRepository` —
+  incluir el campo. Revisar fixtures/factories de tests existentes que construyan `UispDevice`
+  (agregar el campo para que compile TS strict).
+
+### T2.3 — schema + migración
+- [ ] `prisma/schema.prisma` — `apUispDeviceId String?` en `UispDevice` (a mano, sin format).
+- [ ] `npx prisma validate` + `npx prisma generate`.
+- [ ] Migración con `prisma migrate diff --from-schema <HEAD> --to-schema <working> --script` →
+  `prisma/migrations/20260916000000_uispdevice_ap_link/migration.sql` (solo `ADD COLUMN`, sin
+  BEGIN/COMMIT).
+- [ ] TEST: `src/__tests__/infrastructure/migration.uispdevice_ap_link.test.ts` — SQL aditivo, sin
+  DROP (patrón `migration.networksite_uisp_link.test.ts`).
+
+## Batch 3 — Ports nuevos (CAS-1 + lectura/escritura de asignaciones)
+
+### T3.1 — `RadiusEventRepository.latestMacByUsernames` (RED→GREEN)
+- [ ] TEST `src/__tests__/infrastructure/adapters/in-memory/InMemoryRadiusEventRepository.latestMac.test.ts`
+  — online gana; fallback más reciente; mac null ignorada; username ausente omitido; batch.
+- [ ] Port + `InMemoryRadiusEventRepository` (réplica JS de la semántica).
+- [ ] `PrismaRadiusEventRepository` — `$queryRaw` `DISTINCT ON (username) ... ORDER BY username,
+  ("stoppedAt" IS NULL) DESC, "startedAt" DESC`, `WHERE "macAddress" IS NOT NULL`, chunked 1000.
+
+### T3.2 — `ContractRepository.getNetworkAssignments` + `updateNetworkAssignment` (RED→GREEN)
+- [ ] TEST sobre `InMemoryContractRepository` — proyección `{id, networkSiteId, accessPointId}`;
+  ids inexistentes omitidos; update escribe/limpia SOLO esos 2 campos; null si el contrato no existe.
+- [ ] Port (`ContractNetworkAssignmentResult`) + `InMemoryContractRepository` +
+  `PrismaContractRepository` (update whitelisteado, patrón `updateLocation`).
+
+## Batch 4 — `AutoAssignContractNetwork` (CAS-2, AA-1..AA-4)
+
+### T4.1 — test de la matriz (RED)
+- [ ] `src/__tests__/application/use-cases/AutoAssignContractNetwork.test.ts` con in-memory repos:
+  - matriz design §6 filas 1-10 (asigna virgen; pisa manual; igual → unchanged; no-match no toca;
+    ambiguo skip+warn; sin contractId fuera; N pppoe → enabled más reciente; disabled no deriva;
+    station missing excluida; AP missing se asigna igual; AP sin site escribe null).
+  - desempate §6.2 (missing pierde contra viva; lastSeenAt más reciente gana; empate → ambiguous).
+  - cascada §4 (callerId gana; fallback RadiusEvent; contadores `macFromCallerId`/`macFromRadiusEvent`).
+  - idempotencia (2ª corrida: assigned=0, unchanged=N, 0 writes — spy sobre el repo in-memory).
+  - métricas completas + `SyncState('contract-network-auto-assign')` con `ok: {json}`; catch interno
+    → `error: <msg>`.
+
+### T4.2 — use case (GREEN)
+- [ ] `src/application/use-cases/AutoAssignContractNetwork.ts` — deps:
+  `PppoeServiceRepository`, `RadiusEventRepository`, `UispDeviceRepository`, `AccessPointRepository`,
+  `ContractRepository`, `SyncStateRepository`. Algoritmo design §5 (5 reads batch, Maps en memoria,
+  writes solo-diff secuenciales). `AutoAssignContractNetworkResult` (design §7).
+
+## Batch 5 — Scheduler + wiring (AA-5)
+
+### T5.1 — test (RED)
+- [ ] Extender `src/__tests__/application/UispSyncScheduler.test.ts` — con flag
+  `contract-network-auto-assign` ON: invoca autoAssign tras sync exitoso (dentro del lock); OFF o
+  ausente: no invoca; autoAssign que lanza: el summary del sync se reporta igual + warning; ctor sin
+  autoAssign: no-op (back-compat).
+
+### T5.2 — código (GREEN)
+- [ ] `UispSyncScheduler` — 6º ctor arg opcional `autoAssign?: AutoAssignContractNetwork` + step
+  post-sync gated por flag, try/catch aislado (design §5).
+- [ ] `bootstrapUispSync.ts` — construir los repos Prisma
+  (`PrismaPppoeServiceRepository`, `PrismaRadiusEventRepository`, `PrismaContractRepository`,
+  reuso de `PrismaAccessPointRepository`/`PrismaUispDeviceRepository`/`PrismaSyncStateRepository`) +
+  `AutoAssignContractNetwork` → pasarlo al scheduler.
+- [ ] TEST pin: extender `uisp-composition.test.ts` — el 6º arg del scheduler no se cae en silencio
+  (guard "tests verdes pero prod no asigna", patrón Fase A).
+
+## Batch 6 — Picker manual: use cases (PICK-1, PICK-2)
+
+### T6.1 — errores tipados
+- [ ] `src/domain/errors/networkAssignment.ts` — `NetworkSiteNotFoundError`,
+  `AccessPointNotFoundError`, `AccessPointRetiredError`, `AccessPointNotInSiteError` (extienden
+  `DomainError`, con `code`). Export en el barrel si corresponde.
+
+### T6.2 — `SetContractNetworkAssignment` (RED→GREEN)
+- [ ] TEST `src/__tests__/application/use-cases/SetContractNetworkAssignment.test.ts` — tabla design
+  §9.1 completa: 404 tipado; site/AP inexistente; AP retirado; AP∉site; autocompletar site desde AP;
+  mover site limpia AP incompatible; `networkSiteId: null` limpia ambos; `accessPointId: null`
+  limpia solo AP; DTO result.
+- [ ] `src/application/use-cases/SetContractNetworkAssignment.ts` — deps: `ContractRepository`,
+  `NetworkSiteRepository`, `AccessPointRepository`.
+
+### T6.3 — `ListAssignableAccessPoints` (RED→GREEN)
+- [ ] TEST `src/__tests__/application/use-cases/ListAssignableAccessPoints.test.ts` — filtra
+  `missingSince`, filtro por `networkSiteId`, orden name asc, DTO shape.
+- [ ] `src/application/use-cases/ListAssignableAccessPoints.ts` + DTO `AccessPointOptionDto`
+  (`src/application/dto/`).
+
+## Batch 7 — Rutas + permisos (PICK-3, MIG-2)
+
+### T7.1 — migración seed permiso
+- [ ] `prisma/migrations/20260916000100_contract_network_assign_permission/migration.sql` — INSERT
+  `(contracts, 'assign')` + grant `super_admin` (+ roles que confirme el usuario), TODO con
+  `ON CONFLICT DO NOTHING` (patrón `20260908000100_messaging_bulk_permissions`).
+- [ ] TEST pin del SQL (INSERT presente, idempotente, sin DROP).
+
+### T7.2 — `GET /api/access-points` (RED→GREEN)
+- [ ] TEST `src/__tests__/infrastructure/accessPoints.routes.test.ts` (supertest, repos in-memory) —
+  200 `{ data: [...] }` filtrado; `?networkSiteId=`; 401 sin auth; 403 sin `network.read`.
+- [ ] `src/infrastructure/http/routes/accessPoints.routes.ts` —
+  `createAccessPointsRouter(listAssignable, requirePerm?)`; mount en `app.ts` con
+  `createAuthMiddleware` (patrón `/api/network-sites`, `app.ts:1893`).
+
+### T7.3 — `PATCH /api/contracts/:id/network-assignment` (RED→GREEN)
+- [ ] TEST `src/__tests__/infrastructure/contracts.networkAssignment.routes.test.ts` — 200 feliz;
+  400 body vacío/keys desconocidas (zod whitelist); 404 contrato; 422 por cada typed error; 403 sin
+  `contracts.assign`; 501 sin dep inyectada.
+- [ ] Extender `contracts.routes.ts` — dep opcional `setContractNetworkAssignment` + zod schema +
+  mapeo de errores (patrón EXACTO de `/contracts/:id/location`, incl. fallback `next(err)`).
+- [ ] Wiring en `app.ts` (`app.ts:1409`) — construir el use case y pasarlo al router.
+
+## Batch 8 — Guards finales + verificación
+
+- [ ] Correr pin de Fase A intacto (MIG-3): `PrismaClientMirrorRepository.upsertData.test.ts` (sin
+  cambios esperados — solo verificación).
+- [ ] Corrida conjunta focalizada: suites nuevas + `SyncUispMirror.*` + `uisp-composition` +
+  scheduler (sin regresión).
+- [ ] `npx tsc --noEmit` — 0 errores.
+- [ ] `git diff --stat main -- prisma/schema.prisma` — SOLO la línea de `apUispDeviceId` (sin churn).
+
+---
+
+## Deudas / fases siguientes (fuera de este change)
+- FE del picker (change coordinado en `ipnext-frontend`): dropdown nodo → AP sobre
+  `GET /api/network-sites` + `GET /api/access-points` + el PATCH.
+- Fase C: segment builder del bulk por `Contract.networkSiteId`/`accessPointId`.
+- Acción de usuario post-deploy: correr migraciones, prender flag `contract-network-auto-assign`,
+  leer métricas del primer run en `SyncState`.
+- Opcional futuro: trigger manual `POST` del auto-assign + backfill de `callerId` (descartado acá,
+  design §4.2).
