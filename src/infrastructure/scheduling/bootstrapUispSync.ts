@@ -5,6 +5,7 @@ import { PrismaUispDeviceRepository } from '../adapters/prisma/PrismaUispDeviceR
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFlagRepository';
 import { PrismaNetworkSiteRepository } from '../adapters/prisma/PrismaNetworkSiteRepository';
+import { PrismaAccessPointRepository } from '../adapters/prisma/PrismaAccessPointRepository';
 import { SyncUispMirror } from '@application/use-cases/SyncUispMirror';
 import { UispSyncScheduler } from './UispSyncScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
@@ -29,7 +30,8 @@ export async function bootstrapUispSync(intervalMs: number): Promise<UispSyncSch
     const deviceRepo = new PrismaUispDeviceRepository();
     const syncStateRepo = new PrismaSyncStateRepository();
     const networkSiteRepo = new PrismaNetworkSiteRepository();
-    syncUseCase = new SyncUispMirror(uispClient, siteRepo, deviceRepo, syncStateRepo, networkSiteRepo);
+    const accessPointRepo = new PrismaAccessPointRepository();
+    syncUseCase = new SyncUispMirror(uispClient, siteRepo, deviceRepo, syncStateRepo, networkSiteRepo, accessPointRepo);
   } else {
     console.warn('[uisp-sync] UISP_BASE_URL/UISP_TOKEN missing — sync will be skipped on each tick');
   }

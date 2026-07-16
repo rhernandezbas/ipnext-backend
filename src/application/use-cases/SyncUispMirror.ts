@@ -4,6 +4,7 @@ import type { UispDeviceRepository } from '@domain/ports/UispDeviceRepository';
 import type { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 import type { NetworkSiteRepository } from '@domain/ports/NetworkSiteRepository';
 import type { NetworkSite } from '@domain/entities/networkSite';
+import type { AccessPointRepository } from '@domain/ports/AccessPointRepository';
 
 export interface SyncUispMirrorResult {
   sitesUpserted: number;
@@ -14,6 +15,8 @@ export interface SyncUispMirrorResult {
   devicesReappeared: number;
   durationMs: number;
   networkSitesCreated: number;
+  accessPointsCreated: number;
+  accessPointsUpdated: number;
 }
 
 /**
@@ -38,6 +41,7 @@ export class SyncUispMirror {
     private readonly deviceRepo: UispDeviceRepository,
     private readonly syncStateRepo: SyncStateRepository,
     private readonly networkSiteRepo?: NetworkSiteRepository,
+    private readonly accessPointRepo?: AccessPointRepository,
   ) {}
 
   async execute(): Promise<SyncUispMirrorResult> {
@@ -172,6 +176,86 @@ export class SyncUispMirror {
       }
     }
 
+    // 9. Auto-import AccessPoints from UISP devices with role === 'ap'.
+    // Derived catalog (contract-node-ap-catalog): ONE AccessPoint per AP device, linked to
+    // its NetworkSite (nodo) by matching device.uispSiteId === NetworkSite.uispSiteId.
+    //
+    // Runs AFTER step 8 so NetworkSites created this tick are visible for the link resolve:
+    // we re-read NetworkSites (findAll → Map<uispSiteId, NetworkSite.id>) rather than reuse
+    // the pre-step-8 map, which would miss the just-created sites.
+    //
+    // Never auto-deletes (same discipline as the NetworkSite auto-import): retired APs are
+    // STAMPED with missingSince (FIX-2), never removed. A truncated/empty response leaves the
+    // catalog intact (anti-truncation guard). The whole step is isolated in try/catch (FIX-1)
+    // so a catalog failure degrades softly instead of aborting the sites/devices sync.
+    let accessPointsCreated = 0;
+    let accessPointsUpdated = 0;
+    if (this.accessPointRepo) {
+      // FIX-1: isolate the ENTIRE AP-catalog step in try/catch. A failure here — e.g. the
+      // AccessPoint table not yet migrated because the deploy raced ahead of the migration —
+      // must NOT abort the sync. Sites/devices are already persisted above and the SyncState
+      // "ok" (step 7, below) must still be written; otherwise the scheduler's catch reports
+      // "error, itemsSynced:0" every tick, masking a perfectly healthy sites/devices sync.
+      // Degrade softly: log a warning and continue. AP counters stay at whatever was reached (0).
+      try {
+        // Resolve nodo link: uispSiteId → NetworkSite.id (fresh read, includes step-8 creations).
+        let nsIdByUispSiteId = new Map<string, string>();
+        if (this.networkSiteRepo) {
+          const nsAll = await this.networkSiteRepo.findAll();
+          nsIdByUispSiteId = new Map(
+            nsAll
+              .filter(ns => ns.uispSiteId !== null)
+              .map(ns => [ns.uispSiteId as string, ns.id]),
+          );
+        }
+
+        // Pre-read existing APs (before the upsert loop) — the snapshot used to classify
+        // created vs updated AND to detect missing/reappeared (FIX-2), without complicating
+        // the port contract (upsert stays a simple upsert).
+        const existingAps = await this.accessPointRepo.findMany();
+        const existingApDeviceIds = new Set(existingAps.map(ap => ap.uispDeviceId));
+
+        // FIX-3: role match is case-insensitive — UISP occasionally returns 'AP'/'Ap'.
+        // FIX-4: a uispDeviceId repeated in the same response is counted once (the `seen` set),
+        //        so a duplicated device doesn't inflate the created/updated counters.
+        const currentApDeviceIds = new Set<string>();
+        const seen = new Set<string>();
+        for (const device of devices) {
+          if ((device.role ?? '').toLowerCase() !== 'ap') continue;
+          currentApDeviceIds.add(device.uispId);
+          const networkSiteId = nsIdByUispSiteId.get(device.uispSiteId) ?? null;
+          await this.accessPointRepo.upsertByUispDeviceId({
+            uispDeviceId: device.uispId,
+            networkSiteId,
+            name: device.name,
+            mac: device.mac,
+          });
+          if (seen.has(device.uispId)) continue;
+          seen.add(device.uispId);
+          if (existingApDeviceIds.has(device.uispId)) accessPointsUpdated++;
+          else accessPointsCreated++;
+        }
+
+        // FIX-2: stamp/clear missingSince on the AP catalog (mirror of the step-5 device
+        // discipline). Anti-truncation guard: if this tick surfaced ZERO role='ap' devices
+        // (empty or truncated response), do NOT mark the whole catalog missing — freezing an
+        // entire catalog on a proxy hiccup would be catastrophic (same guard as steps 4-6).
+        // The retired APs are only STAMPED here; Fase B's assignment selector filters them out.
+        if (currentApDeviceIds.size > 0) {
+          const missingApIds = existingAps
+            .filter(ap => !currentApDeviceIds.has(ap.uispDeviceId) && ap.missingSince === null)
+            .map(ap => ap.uispDeviceId);
+          const reappearedApIds = existingAps
+            .filter(ap => currentApDeviceIds.has(ap.uispDeviceId) && ap.missingSince !== null)
+            .map(ap => ap.uispDeviceId);
+          if (missingApIds.length > 0) await this.accessPointRepo.markMissing(missingApIds, syncAt);
+          if (reappearedApIds.length > 0) await this.accessPointRepo.clearMissing(reappearedApIds);
+        }
+      } catch (err) {
+        console.warn('[uisp-sync] AP catalog step failed:', err);
+      }
+    }
+
     const durationMs = Date.now() - startedAt;
 
     // 7. Persist SyncState
@@ -180,6 +264,8 @@ export class SyncUispMirror {
       devices: devices.length,
       missing: missingSiteIds.length + missingDeviceIds.length,
       networkSitesCreated,
+      accessPointsCreated,
+      accessPointsUpdated,
       durationMs,
     });
     await this.syncStateRepo.save({
@@ -199,6 +285,8 @@ export class SyncUispMirror {
       devicesReappeared: reappearedDeviceIds.length,
       durationMs,
       networkSitesCreated,
+      accessPointsCreated,
+      accessPointsUpdated,
     };
   }
 }

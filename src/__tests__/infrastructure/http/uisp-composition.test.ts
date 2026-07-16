@@ -14,8 +14,10 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { InMemoryUispSiteRepository } from '../../../infrastructure/adapters/in-memory/InMemoryUispSiteRepository';
 import { InMemoryUispDeviceRepository } from '../../../infrastructure/adapters/in-memory/InMemoryUispDeviceRepository';
+import { InMemoryAccessPointRepository } from '../../../infrastructure/adapters/in-memory/InMemoryAccessPointRepository';
 import type { UispSiteRepository } from '../../../domain/ports/UispSiteRepository';
 import type { UispDeviceRepository } from '../../../domain/ports/UispDeviceRepository';
+import type { AccessPointRepository } from '../../../domain/ports/AccessPointRepository';
 
 describe('UISP composition root', () => {
   let appSrc: string;
@@ -51,6 +53,23 @@ describe('UISP composition root', () => {
     expect(typeof repo.findByUispId).toBe('function');
     expect(typeof repo.markMissing).toBe('function');
     expect(typeof repo.clearMissing).toBe('function');
+  });
+
+  // Port parity: InMemoryAccessPointRepository satisfies AccessPointRepository (Bulk WhatsApp F2/F3)
+  it('InMemoryAccessPointRepository implements AccessPointRepository port', () => {
+    const repo: AccessPointRepository = new InMemoryAccessPointRepository();
+    expect(typeof repo.upsertByUispDeviceId).toBe('function');
+    expect(typeof repo.findMany).toBe('function');
+    expect(typeof repo.findByNetworkSiteId).toBe('function');
+    expect(typeof repo.findById).toBe('function');
+  });
+
+  // contract-node-ap-catalog: bootstrapUispSync.ts passes PrismaAccessPointRepository as 6th arg
+  // to SyncUispMirror. If this arg is ever silently dropped, the AP catalog stops seeding in
+  // production while in-memory tests stay green (same reasoning as the networkSiteRepo guard).
+  it('bootstrapUispSync.ts passes PrismaAccessPointRepository to SyncUispMirror constructor', () => {
+    expect(bootstrapSrc).toContain('PrismaAccessPointRepository');
+    expect(bootstrapSrc).toMatch(/new SyncUispMirror\([^)]*accessPointRepo[^)]*\)/s);
   });
 
   // app.ts mounts router at /api/uisp

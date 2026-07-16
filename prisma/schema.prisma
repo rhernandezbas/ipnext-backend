@@ -252,6 +252,13 @@ model Contract {
   name         String?         // #43 manual-only identifier. GR sync NEVER writes this.
   vendedor     String?         // GR `vendedor` — agente que dio de alta. Base de la cartera por agente.
   motivoBaja   String?         // GR `motivo_baja` — recapture-active-client-match, mirror field GR-owned, forward-only.
+  // contract-node-ap-catalog (Bulk WhatsApp F2/F3) — manual-only node/AP assignment for
+  // segmentation. GR sync NEVER writes these (excluded from PrismaClientMirrorRepository
+  // upsertContract data whitelist, same as name/gps/technology).
+  networkSiteId String?
+  networkSite   NetworkSite?    @relation(fields: [networkSiteId], references: [id], onDelete: SetNull)
+  accessPointId String?
+  accessPoint   AccessPoint?    @relation(fields: [accessPointId], references: [id], onDelete: SetNull)
   createdAt    DateTime        @default(now())
   client         Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   tasks          ScheduledTask[]
@@ -264,6 +271,8 @@ model Contract {
 
   @@index([clientId])
   @@index([status])
+  @@index([networkSiteId])
+  @@index([accessPointId])
 }
 
 model ClientLog {
@@ -1755,7 +1764,36 @@ model NetworkSite {
   // Back-relation: tareas de RED vinculadas a este nodo
   scheduledTasks ScheduledTask[]
 
+  // contract-node-ap-catalog (Bulk WhatsApp F2/F3) — back-relations
+  accessPoints AccessPoint[]
+  contracts    Contract[]
+
   @@index([uispSiteId])
+}
+
+/// Derived catalog of Access Points — UISP devices with role='ap'. Auto-seeded by
+/// SyncUispMirror from the UispDevice mirror (step 9); NOT hand-editable, the sync owns it.
+/// Each AP links to its NetworkSite (nodo) via networkSiteId, resolved by matching
+/// UispDevice.uispSiteId === NetworkSite.uispSiteId. Powers the Bulk WhatsApp F2/F3
+/// segmentation by node/AP. Never auto-deleted (retired APs are stamped missingSince).
+model AccessPoint {
+  id            String       @id @default(uuid())
+  /// UISP device UUID (UispDevice.uispId) — the upsert key. One AccessPoint per AP device.
+  uispDeviceId  String       @unique
+  networkSiteId String?
+  networkSite   NetworkSite? @relation(fields: [networkSiteId], references: [id], onDelete: SetNull)
+  name          String
+  mac           String?
+  // FIX-2: retired-AP marker — stamped by SyncUispMirror when the device vanishes from UISP
+  // or drops role='ap'. Null while live. Fase B's assignment selector filters these out.
+  missingSince  DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  // Back-relation: contratos asignados a este AP (Fase B)
+  contracts Contract[]
+
+  @@index([networkSiteId])
 }
 
 model NasServer {

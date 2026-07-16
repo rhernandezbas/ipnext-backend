@@ -45,6 +45,17 @@ describe('upsertContract data block pinning (#43)', () => {
     expect(dataBlock).not.toMatch(/(^|\s)technology\s*:/);
   });
 
+  // contract-node-ap-catalog (Bulk WhatsApp F2/F3): networkSiteId + accessPointId are manual-only.
+  // GR sync must NEVER write them, or the operator's node/AP segmentation assignment would be
+  // silently reset on every sync cycle. Same guard as name/technology above.
+  it('does NOT contain a networkSiteId: key (manual-only — contract-node-ap-catalog)', () => {
+    expect(dataBlock).not.toMatch(/(^|\s)networkSiteId\s*:/);
+  });
+
+  it('does NOT contain an accessPointId: key (manual-only — contract-node-ap-catalog)', () => {
+    expect(dataBlock).not.toMatch(/(^|\s)accessPointId\s*:/);
+  });
+
   it('canonicalizes status via mapContractStatus (symmetric with client mapStatus)', () => {
     // The NEW data must store the canonical enum, not the raw GR estado.
     expect(dataBlock).toMatch(/status:\s*mapContractStatus\(k\.status\)/);
