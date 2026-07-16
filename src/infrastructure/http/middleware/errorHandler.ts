@@ -152,6 +152,9 @@ const statusMap: Record<string, number> = {
   CONVERSATION_NOT_FOUND: 404,
   MESSAGING_WINDOW_EXPIRED: 422,
   CHATWOOT_UNAVAILABLE: 503,
+  // inbox-template-send (TS-2) — SendTemplateMessage no encuentra un E164 usable
+  // (ni contactPhoneE164 ni el fallback toWhatsAppE164(contactPhone)).
+  CONVERSATION_PHONE_MISSING: 422,
   // messaging-inbox-v2 (F1.5, RICH-1 #4) — client-context endpoint: clientId query
   // param not among the conversation's candidates.
   CLIENT_ID_NOT_A_CANDIDATE: 400,

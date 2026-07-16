@@ -14,20 +14,23 @@ tasks.md de inbox-resolve dice "ningún change BE toca messaging" — quedó des
 
 ## Batch 1 — BE: dominio + ports + fakes (MODEL-1, PORT-1, PORT-2, base TS-2)
 
-- [ ] **T1 — error nuevo `ConversationPhoneMissingError`** (TS-2)
+- [x] **T1 — error nuevo `ConversationPhoneMissingError`** (TS-2)
   - Test RED: en el test del use case (T4) — pero el archivo del error se crea acá para que
     compile: `domain/errors/messaging.ts` + code `CONVERSATION_PHONE_MISSING` en el statusMap
     (`errorHandler.ts`, 422) con test del errorHandler si existe patrón (mirar cómo se testeó
     `MESSAGING_WINDOW_EXPIRED`).
   - Actualizar el doc-comment de mapping del archivo de errores (fuente única statusMap).
-- [ ] **T2 — `ChatMessageRepository.upsertTemplateMessage` + in-memory** (PORT-1)
+  - Desvío: `MESSAGING_WINDOW_EXPIRED`/`CONVERSATION_NOT_FOUND` NO tienen test dedicado de
+    errorHandler (no existe `messaging.errorHandler.test.ts` — se verifican vía route tests).
+    Mismo criterio aplicado acá: sin test standalone, cubierto por TS-2/HTTP-1 (use case + rutas).
+- [x] **T2 — `ChatMessageRepository.upsertTemplateMessage` + in-memory** (PORT-1)
   - Test RED: `src/__tests__/infrastructure/adapters/in-memory/InMemoryChatMessageRepository.test.ts`
     (o el archivo existente del adapter) — idempotencia por `providerMessageId`, shape de la fila
     (`origin:'agent_template'`, `chatwootMessageId:null`, `campaignRecipientId:null`,
     `isPrivate:false`), aparece en `listByConversation` ordenado.
   - Código: `UpsertTemplateChatMessageInput` + método en el port (`domain/ports/
     ChatMessageRepository.ts`), `providerMessageId` en `ChatMessageRecord`, impl in-memory.
-- [ ] **T3 — `ConversationRepository.bumpLastMessage` + in-memory** (PORT-2)
+- [x] **T3 — `ConversationRepository.bumpLastMessage` + in-memory** (PORT-2)
   - Test RED: `InMemoryConversationRepository.test.ts` — escribe SOLO lastMessageAt/preview;
     canReply/status/assignee/area intactos; null si no existe.
   - Código: método en el port + impl in-memory. JSDoc: write-path separado, jamás toca el cache
@@ -35,7 +38,7 @@ tasks.md de inbox-resolve dice "ningún change BE toca messaging" — quedó des
 
 ## Batch 2 — BE: use case `SendTemplateMessage` (TS-1..TS-6)
 
-- [ ] **T4 — test RED completo del use case**
+- [x] **T4 — test RED completo del use case**
   - `src/__tests__/application/messaging/SendTemplateMessage.test.ts` con
     `InMemoryConversationRepository` + `InMemoryChatMessageRepository` +
     `InMemoryTemplateMessagingGateway` (NUNCA mock de Prisma):
@@ -45,24 +48,38 @@ tasks.md de inbox-resolve dice "ningún change BE toca messaging" — quedó des
     happy path (args exactos a `sendTemplate`, fila proyectada con `renderTemplateBody`, bump de
     preview, DTO devuelto); canReply/status intactos post-envío (D2); enviable con `canReply:true`;
     idempotencia del mirror por providerId; `senderName` pass-through.
-- [ ] **T5 — código mínimo del use case**
+  - Desvío: el escenario "fallback E164" (`contactPhoneE164:null` + `contactPhone` convertible)
+    es INALCANZABLE vía `InMemoryConversationRepository.upsertByChatwootId` (ese adapter SIEMPRE
+    deriva `contactPhoneE164` al escribir `contactPhone`, igual que Prisma) — se usó un fake
+    puntual conforme al PORT (`fixedConversationRepo`, no un mock de Prisma) para reproducir la
+    fila histórica pre-backfill.
+- [x] **T5 — código mínimo del use case**
   - `src/application/use-cases/messaging/SendTemplateMessage.ts` — orden de guards PINNED (TS-1),
     reuso de `renderTemplateBody` (import desde `./SendCampaign`), deps por ports (DIP).
-- [ ] **Gate Batch 1+2**: suites de application + adapters in-memory verdes.
+- [x] **Gate Batch 1+2**: suites de application + adapters in-memory verdes.
 
 ## Batch 3 — BE: migración + adapters Prisma + rutas + wiring (MODEL-1, HTTP-1..3)
 
-- [ ] **T6 — migración `providerMessageId`** (MODEL-1)
+- [x] **T6 — migración `providerMessageId`** (MODEL-1)
   - `npm run prisma:migrate` (nombre sugerido `chatmessage_provider_message_id`) — columna
     `String? @unique`. Jamás SQL a mano.
-- [ ] **T7 — adapters Prisma** (PORT-1, PORT-2)
+  - Desvío: sin `DATABASE_URL`/Postgres vivo en este worktree, `prisma migrate dev` no puede
+    correr (requiere conexión). Se usó `npx prisma migrate diff --from-schema <HEAD:schema.prisma>
+    --to-schema prisma/schema.prisma --script` (diff ESTÁTICO entre dos snapshots del schema, sin
+    tocar ninguna DB — sigue siendo el tooling de Prisma, CERO SQL a mano) para generar el SQL
+    exacto, timestamp `20260911000000` (posterior a `20260910000000`). Migración pendiente de
+    `prisma migrate deploy` en un entorno con DB real antes de mergear a producción.
+- [x] **T7 — adapters Prisma** (PORT-1, PORT-2)
   - Test RED: siguiendo el patrón de tests Prisma existente del feature
     (`PrismaConversationRepository.orderBy.test.ts` como molde de nivel de aserción) para el shape
     del upsert/update; si el patrón del repo es cubrirlos vía route-tests, documentarlo en el PR.
   - Código: `PrismaChatMessageRepository.upsertTemplateMessage` (upsert por `providerMessageId`) +
     `PrismaConversationRepository.bumpLastMessage` (update escueto de 2 campos). Comment-block
     cross-ref al in-memory (los adapters no pueden divergir).
-- [ ] **T8 — rutas + factory** (HTTP-1, HTTP-2)
+  - Nuevos: `PrismaConversationRepository.bumpLastMessage.test.ts` +
+    `PrismaChatMessageRepository.upsertTemplateMessage.test.ts` (mismo molde `.orderBy.test.ts`:
+    Prisma mockeado a nivel adapter-intention, pinea `where`/`data`/`create` exactos).
+- [x] **T8 — rutas + factory** (HTTP-1, HTTP-2)
   - Test RED: `src/__tests__/infrastructure/messaging.routes.test.ts` (o archivo nuevo
     `sendTemplate.routes.test.ts` espejo del patrón) — 401/403 en ambas rutas; 400 body malformado
     (templateRef ausente/no-string; variables con valor no-string) SIN invocar el use case; 201
@@ -70,11 +87,14 @@ tasks.md de inbox-resolve dice "ningún change BE toca messaging" — quedó des
     `/send-templates` 200 `{data}` con el catálogo del fake; no-regresión de las rutas previas
     con la factory extendida (HTTP-3).
   - Código: 2 rutas en `createMessagingRouter` (+2 args), parsing inline molde `/messages`.
-- [ ] **T9 — wiring `app.ts`** (HTTP-3)
+  - Desvío: se agregaron los 2 args nuevos AL FINAL de la firma de `createMessagingRouter` (no
+    intercalados) — mismo criterio append-only del design §Colisiones, minimiza el diff contra el
+    worktree paralelo `inbox-resolve-be`.
+- [x] **T9 — wiring `app.ts`** (HTTP-3)
   - `TwilioContentGateway` propio del bloque messaging + `ListMessagingTemplates` +
     `SendTemplateMessage` cableados. Sin variables compartidas con los bloques bulk/CRUD
     (precedente anti-interleave).
-- [ ] **Gate Batch 3**: `npm test` completo BE verde. NO `npm run build` (regla del repo).
+- [x] **Gate Batch 3**: `npm test` completo BE verde. NO `npm run build` (regla del repo).
 
 ## Batch 4 — FE: capa de datos (WAPI-1, ERR-1 códigos)
 

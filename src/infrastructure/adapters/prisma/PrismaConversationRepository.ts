@@ -6,6 +6,7 @@ import {
   UpsertConversationInput,
   UpsertBulkConversationInput,
   UpdateConversationLocalFieldsInput,
+  BumpLastMessageInput,
 } from '@domain/ports/ConversationRepository';
 import { PaginatedResult } from '@application/dto/pagination';
 import { toWhatsAppE164 } from '@application/use-cases/messaging/toWhatsAppE164';
@@ -247,6 +248,35 @@ export class PrismaConversationRepository implements ConversationRepository {
       // P2025 = record not found — the use case already validates existence via
       // findById before calling this, so this branch is defense-in-depth, not
       // the primary contract (mirrors the "return null on miss" convention).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((err as any)?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
+  /**
+   * inbox-template-send (PORT-2) — bump del preview tras un envío one-off de
+   * template. Escribe EXCLUSIVAMENTE lastMessageAt/lastMessagePreview — nunca
+   * `canReply`/`status`/`assigneeId`/`areaId` (design D2). Cross-ref: MISMA
+   * semántica que `InMemoryConversationRepository.bumpLastMessage`.
+   */
+  async bumpLastMessage(
+    conversationId: string,
+    patch: BumpLastMessageInput,
+  ): Promise<ConversationRecord | null> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row = await (prisma as any).conversation.update({
+        where: { id: conversationId },
+        data: {
+          lastMessageAt: new Date(patch.lastMessageAt),
+          lastMessagePreview: patch.lastMessagePreview,
+        },
+        include: CONVERSATION_INCLUDE,
+      });
+      return toDomain(row);
+    } catch (err) {
+      // P2025 = record not found — same "return null on miss" convention as updateLocalFields.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if ((err as any)?.code === 'P2025') return null;
       throw err;

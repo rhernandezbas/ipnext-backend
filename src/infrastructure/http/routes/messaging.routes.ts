@@ -27,6 +27,11 @@ import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssign
 import { ListTicketAreas } from '@application/use-cases/ListTicketAreas';
 import { ChatAttachmentNotFoundError, ChatAttachmentNotReadyError } from '@domain/errors/chatAttachment';
 import type { ConversationListQuery } from '@domain/ports/ConversationRepository';
+// inbox-template-send (HTTP-1/HTTP-2) — enviar template aprobado desde el hilo +
+// catálogo curado para el picker. `SendTemplateMessage` es el use case NUEVO;
+// `ListTemplates` es el MISMO use case que el catálogo bulk (reuso tal cual, D7).
+import { SendTemplateMessage } from '@application/use-cases/messaging/SendTemplateMessage';
+import { ListTemplates } from '@application/use-cases/messaging/ListTemplates';
 
 /**
  * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-5) — construye un header
@@ -226,6 +231,33 @@ function parsePrivateFlag(body: Record<string, unknown> | undefined): boolean {
   return raw === true || raw === 'true';
 }
 
+/**
+ * inbox-template-send (HTTP-1, design D10) — valida el body de
+ * `POST /conversations/:id/send-template`. `templateRef` DEBE ser un string
+ * no-vacío; `variables` (si presente) DEBE ser un objeto plano de valores
+ * string (ausente → `{}`, molde de la validación CAMP-3/D8 — el wire lleva
+ * valores YA resueltos, no `CampaignVariableSpec`).
+ */
+function parseSendTemplateBody(
+  body: Record<string, unknown> | undefined,
+): { ok: true; templateRef: string; variables: Record<string, string> } | { ok: false } {
+  const rawTemplateRef = body?.['templateRef'];
+  if (typeof rawTemplateRef !== 'string' || rawTemplateRef.trim() === '') return { ok: false };
+
+  const rawVariables = body?.['variables'];
+  if (rawVariables === undefined) return { ok: true, templateRef: rawTemplateRef, variables: {} };
+  if (typeof rawVariables !== 'object' || rawVariables === null || Array.isArray(rawVariables)) {
+    return { ok: false };
+  }
+
+  const variables: Record<string, string> = {};
+  for (const [key, value] of Object.entries(rawVariables as Record<string, unknown>)) {
+    if (typeof value !== 'string') return { ok: false };
+    variables[key] = value;
+  }
+  return { ok: true, templateRef: rawTemplateRef, variables };
+}
+
 function computeDedupKey(payload: ChatwootWebhookPayload, signedTimestamp: string | undefined): string {
   const conversationId = payload.conversation?.id ?? payload.id;
   switch (payload.event) {
@@ -276,6 +308,18 @@ export function createMessagingRouter(
   listAssignableUsers: ListAssignableUsers,
   /** F1.5-C2 (asignación) — catálogo de áreas, reusa el use case de tickets vía DI. Gateado por `perms.read`. */
   listTicketAreas: ListTicketAreas,
+  /**
+   * inbox-template-send (HTTP-1) — envía UN template aprobado desde el hilo YA
+   * abierto (D1, Twilio Content directo). Gateado por `perms.send` (MISMO
+   * permiso que el envío actual — sin permiso nuevo).
+   */
+  sendTemplateMessage: SendTemplateMessage,
+  /**
+   * inbox-template-send (HTTP-2) — catálogo curado para el picker del composer.
+   * Reusa `ListTemplates` TAL CUAL (mismo use case que `/bulk/templates`), pero
+   * gateado por `perms.send` (D7 — coherencia de capacidad, NO `messaging.templates`).
+   */
+  listSendableTemplates: ListTemplates,
 ): Router {
   const router = Router();
   const conditionalSendLimiter = conditionalSendRateLimiter(sendRateLimiter);
@@ -568,6 +612,56 @@ export function createMessagingRouter(
         }
         // MEDIA-6/ROB-1 — a repo/storage throw resolves with an immediate error
         // status, never hangs the request.
+        next(err);
+      }
+    },
+  );
+
+  // ─── POST /conversations/:id/send-template (send) — HTTP-1, design D10 ──────
+  // JSON-only (sin multer ni sendRateLimiter — el DoS de media no aplica a un
+  // template, sin adjuntos). `senderName` SIEMPRE de `req.user`, nunca del body.
+  router.post(
+    '/conversations/:id/send-template',
+    auth,
+    perms.send,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const body = req.body as Record<string, unknown> | undefined;
+        const parsed = parseSendTemplateBody(body);
+        if (!parsed.ok) {
+          res.status(400).json({
+            error: 'templateRef must be a non-empty string; variables (if present) must be a plain object of strings',
+            code: 'VALIDATION_ERROR',
+          });
+          return;
+        }
+        const senderName = req.user?.username ?? null;
+        const result = await sendTemplateMessage.execute(
+          req.params['id'] as string,
+          parsed.templateRef,
+          parsed.variables,
+          senderName,
+        );
+        res.status(201).json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /send-templates (send) — HTTP-2, design D7 ──────────────────────────
+  // Path DELIBERADAMENTE `/send-templates` (no `/templates`, que shadowearía el
+  // router CRUD montado en `/api/messaging/templates`). Gateado por `perms.send`
+  // (coherencia de capacidad: quien puede enviar puede ver el catálogo).
+  router.get(
+    '/send-templates',
+    auth,
+    perms.send,
+    async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const data = await listSendableTemplates.execute();
+        res.json({ data });
+      } catch (err) {
         next(err);
       }
     },

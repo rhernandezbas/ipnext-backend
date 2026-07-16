@@ -8,6 +8,7 @@ import {
   UpsertConversationInput,
   UpsertBulkConversationInput,
   UpdateConversationLocalFieldsInput,
+  BumpLastMessageInput,
 } from '@domain/ports/ConversationRepository';
 import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
 import { toWhatsAppE164 } from '@application/use-cases/messaging/toWhatsAppE164';
@@ -217,6 +218,24 @@ export class InMemoryConversationRepository implements ConversationRepository {
         row.areaColor = null;
       }
     }
+    row.updatedAt = new Date().toISOString();
+    return { ...row };
+  }
+
+  /**
+   * inbox-template-send (PORT-2) — bump del preview tras un envío one-off de
+   * template. Escribe EXCLUSIVAMENTE lastMessageAt/lastMessagePreview — jamás
+   * canReply/status/assigneeId/areaId/chatwootConversationId/origin (design D2).
+   */
+  async bumpLastMessage(
+    conversationId: string,
+    patch: BumpLastMessageInput,
+  ): Promise<ConversationRecord | null> {
+    const row = this.rows.find((r) => r.id === conversationId);
+    if (!row) return null;
+
+    row.lastMessageAt = patch.lastMessageAt;
+    row.lastMessagePreview = patch.lastMessagePreview;
     row.updatedAt = new Date().toISOString();
     return { ...row };
   }

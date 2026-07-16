@@ -4,6 +4,7 @@ import {
   ChatMessageRecord,
   UpsertChatMessageInput,
   UpsertBulkChatMessageInput,
+  UpsertTemplateChatMessageInput,
 } from '@domain/ports/ChatMessageRepository';
 
 /**
@@ -37,6 +38,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       chatwootCreatedAt: input.chatwootCreatedAt,
       isPrivate: input.isPrivate ?? false,
       createdAt: new Date().toISOString(),
+      providerMessageId: null,
     };
     this.rows.push(row);
     return { ...row };
@@ -69,6 +71,40 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       chatwootCreatedAt: input.chatwootCreatedAt,
       isPrivate: false,
       createdAt: new Date().toISOString(),
+      providerMessageId: null,
+    };
+    this.rows.push(row);
+    return { ...row };
+  }
+
+  /**
+   * inbox-template-send (PORT-1) — idempotente por `providerMessageId` (SM sid de
+   * Twilio). Un mensaje `outbound`/`origin:'agent_template'`/`chatwootMessageId:null`/
+   * `campaignRecipientId:null`. Re-proyectar el MISMO sid actualiza la fila, NUNCA duplica.
+   */
+  async upsertTemplateMessage(input: UpsertTemplateChatMessageInput): Promise<ChatMessageRecord> {
+    const existing = this.rows.find((r) => r.providerMessageId === input.providerMessageId);
+    if (existing) {
+      existing.conversationId = input.conversationId;
+      existing.content = input.content;
+      existing.senderName = input.senderName ?? null;
+      existing.chatwootCreatedAt = input.chatwootCreatedAt;
+      return { ...existing };
+    }
+
+    const row: ChatMessageRecord = {
+      id: randomUUID(),
+      conversationId: input.conversationId,
+      chatwootMessageId: null,
+      origin: 'agent_template',
+      campaignRecipientId: null,
+      direction: 'outbound',
+      content: input.content,
+      senderName: input.senderName ?? null,
+      chatwootCreatedAt: input.chatwootCreatedAt,
+      isPrivate: false,
+      createdAt: new Date().toISOString(),
+      providerMessageId: input.providerMessageId,
     };
     this.rows.push(row);
     return { ...row };

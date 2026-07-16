@@ -2889,6 +2889,11 @@ model ChatMessage {
   isPrivate         Boolean      @default(false)
   createdAt         DateTime     @default(now())
   attachments       ChatMessageAttachment[]
+  // inbox-template-send (MODEL-1) — SM sid de Twilio, clave de idempotencia del
+  // envío one-off de template desde el hilo (upsertTemplateMessage). Nullable:
+  // las filas chatwoot/bulk existentes quedan NULL (PG trata NULLs como distintos
+  // en el UNIQUE — conviven N filas).
+  providerMessageId String?      @unique
 
   @@index([conversationId, chatwootCreatedAt])
 }

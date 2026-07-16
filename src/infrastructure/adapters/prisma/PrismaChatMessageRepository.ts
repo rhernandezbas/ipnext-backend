@@ -3,6 +3,7 @@ import {
   ChatMessageRecord,
   UpsertChatMessageInput,
   UpsertBulkChatMessageInput,
+  UpsertTemplateChatMessageInput,
 } from '@domain/ports/ChatMessageRepository';
 import { prisma } from '../../database/prisma';
 
@@ -25,6 +26,7 @@ function toDomain(row: any): ChatMessageRecord {
     chatwootCreatedAt: toIso(row.chatwootCreatedAt),
     createdAt: toIso(row.createdAt),
     isPrivate: row.isPrivate ?? false,
+    providerMessageId: row.providerMessageId ?? null,
   };
 }
 
@@ -73,6 +75,38 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         chatwootMessageId: null,
         origin: 'bulk',
         campaignRecipientId: input.campaignRecipientId,
+        direction: 'outbound',
+        content: input.content,
+        senderName: input.senderName ?? null,
+        chatwootCreatedAt: new Date(input.chatwootCreatedAt),
+        isPrivate: false,
+      },
+      update: {
+        conversationId: input.conversationId,
+        content: input.content,
+        senderName: input.senderName ?? null,
+        chatwootCreatedAt: new Date(input.chatwootCreatedAt),
+      },
+    });
+    return toDomain(row);
+  }
+
+  /**
+   * inbox-template-send (PORT-1) — idempotente por `providerMessageId` (`@unique`,
+   * SM sid de Twilio). Un mensaje `outbound`/`origin:'agent_template'`/
+   * `chatwootMessageId:null`/`campaignRecipientId:null`. Cross-ref: MISMA semántica
+   * que `InMemoryChatMessageRepository.upsertTemplateMessage` — no pueden divergir.
+   */
+  async upsertTemplateMessage(input: UpsertTemplateChatMessageInput): Promise<ChatMessageRecord> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = await (prisma as any).chatMessage.upsert({
+      where: { providerMessageId: input.providerMessageId },
+      create: {
+        conversationId: input.conversationId,
+        chatwootMessageId: null,
+        origin: 'agent_template',
+        campaignRecipientId: null,
+        providerMessageId: input.providerMessageId,
         direction: 'outbound',
         content: input.content,
         senderName: input.senderName ?? null,

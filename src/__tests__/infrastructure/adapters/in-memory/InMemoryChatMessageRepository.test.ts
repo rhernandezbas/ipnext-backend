@@ -9,7 +9,7 @@ jest.mock('crypto', () => ({
 
 import * as crypto from 'crypto';
 import { InMemoryChatMessageRepository } from '@infrastructure/adapters/in-memory/InMemoryChatMessageRepository';
-import { UpsertChatMessageInput } from '@domain/ports/ChatMessageRepository';
+import { UpsertChatMessageInput, UpsertTemplateChatMessageInput } from '@domain/ports/ChatMessageRepository';
 
 const mockRandomUUID = crypto.randomUUID as unknown as jest.Mock;
 
@@ -20,6 +20,16 @@ function input(overrides: Partial<UpsertChatMessageInput> = {}): UpsertChatMessa
     direction: 'inbound',
     content: 'hola',
     chatwootCreatedAt: '2026-07-10T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function templateInput(overrides: Partial<UpsertTemplateChatMessageInput> = {}): UpsertTemplateChatMessageInput {
+  return {
+    conversationId: 'conv-1',
+    providerMessageId: 'SM123',
+    content: 'Hola Juan, debés $5.000',
+    chatwootCreatedAt: '2026-07-16T10:00:00.000Z',
     ...overrides,
   };
 }
@@ -102,6 +112,52 @@ describe('InMemoryChatMessageRepository', () => {
       const updated = await repo.upsertByChatwootMessageId(input({ isPrivate: true }));
 
       expect(updated.isPrivate).toBe(true);
+    });
+  });
+
+  describe('inbox-template-send (PORT-1) — upsertTemplateMessage', () => {
+    it('crea la fila con el shape correcto (origin agent_template, outbound, sin chatwootMessageId/campaignRecipientId)', async () => {
+      const created = await repo.upsertTemplateMessage(templateInput());
+
+      expect(created.origin).toBe('agent_template');
+      expect(created.direction).toBe('outbound');
+      expect(created.chatwootMessageId).toBeNull();
+      expect(created.campaignRecipientId).toBeNull();
+      expect(created.isPrivate).toBe(false);
+      expect(created.providerMessageId).toBe('SM123');
+      expect(created.content).toBe('Hola Juan, debés $5.000');
+      expect(created.id).toBeTruthy();
+    });
+
+    it('es idempotente por providerMessageId — re-ejecutar con el mismo sid NO duplica', async () => {
+      await repo.upsertTemplateMessage(templateInput());
+      await repo.upsertTemplateMessage(templateInput({ content: 're-proyectado' }));
+
+      const messages = await repo.listByConversation('conv-1');
+
+      expect(messages).toHaveLength(1);
+      expect(messages[0]!.content).toBe('re-proyectado');
+    });
+
+    it('la fila proyectada aparece en listByConversation ordenada junto a mensajes chatwoot previos (origin-agnóstico)', async () => {
+      await repo.upsertByChatwootMessageId(
+        input({ chatwootMessageId: 1, chatwootCreatedAt: '2026-07-16T09:00:00.000Z', content: 'previo' }),
+      );
+      await repo.upsertTemplateMessage(templateInput({ chatwootCreatedAt: '2026-07-16T10:00:00.000Z' }));
+
+      const messages = await repo.listByConversation('conv-1');
+
+      expect(messages.map((m) => m.content)).toEqual(['previo', 'Hola Juan, debés $5.000']);
+    });
+
+    it('senderName ausente → null (pass-through cuando presente)', async () => {
+      const withoutSender = await repo.upsertTemplateMessage(templateInput());
+      expect(withoutSender.senderName).toBeNull();
+
+      const withSender = await repo.upsertTemplateMessage(
+        templateInput({ providerMessageId: 'SM999', senderName: 'agente1' }),
+      );
+      expect(withSender.senderName).toBe('agente1');
     });
   });
 

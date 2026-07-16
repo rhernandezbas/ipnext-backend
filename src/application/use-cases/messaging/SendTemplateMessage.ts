@@ -1,0 +1,101 @@
+import type { ConversationRepository } from '@domain/ports/ConversationRepository';
+import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository';
+import type { TemplateMessagingPort } from '@domain/ports/TemplateMessagingPort';
+import { ConversationNotFoundError, ConversationPhoneMissingError } from '@domain/errors/messaging';
+import { TemplateNotApprovedError, MissingTemplateVariablesError } from '@domain/errors/messaging-bulk';
+import { toWhatsAppE164 } from './toWhatsAppE164';
+import { renderTemplateBody } from './SendCampaign';
+import { toChatMessageDto, type ChatMessageDto } from '@application/dto/messaging';
+
+/**
+ * inbox-template-send (TS-1..TS-6, design D9) — envía UN template WhatsApp
+ * aprobado desde el hilo YA abierto por el agente, vía Twilio Content directo
+ * (D1 — `TemplateMessagingPort`, el MISMO port/adapter/fake que el bulk, send-path
+ * LOCKED). Reemplaza el aviso estático de ventana expirada (`Composer.tsx:240-244`):
+ * un template es enviable SIEMPRE (dentro o fuera de la ventana de 24h) y NUNCA
+ * la abre (D2, regla de plataforma verificada por el usuario) — este use case
+ * jamás toca `canReply`/`status` de la conversación.
+ *
+ * Proyección propia (D3) — NUNCA reusa `upsertBulkMessage`/`CampaignInboxProjector`:
+ * acá SIEMPRE hay una `conversationId` concreta (la que el agente tiene abierta),
+ * a diferencia del bulk que resuelve por teléfono (podría aterrizar en otra
+ * conversación con duplicados del mismo E164). Idempotencia por `providerMessageId`
+ * (SM sid de Twilio, D5).
+ *
+ * Guard order PINNED (D9), cortando en la primera falla, SIN side effects (ni
+ * persistencia ni `sendTemplate`) hasta el paso 5:
+ *   1. `conversationRepo.findById` → 404 `ConversationNotFoundError`.
+ *   2. Teléfono: `contactPhoneE164` con fallback `toWhatsAppE164(contactPhone)`
+ *      (cubre filas pre-backfill) → 422 `ConversationPhoneMissingError` si ambos null.
+ *   3. `templatePort.listTemplates()` → template `approved` (criterio CAMP-2,
+ *      inexistente en el proveedor se trata igual que no-aprobado) → 422
+ *      `TemplateNotApprovedError`.
+ *   4. TODAS las variables declaradas presentes como keys (criterio CAMP-3;
+ *      extra no bloquean) → 422 `MissingTemplateVariablesError(missing)`.
+ *   5. `templatePort.sendTemplate` — SIN `sendWithRetry` (D6, interactivo, NO
+ *      batch worker). Errores tipados (`TemplateSendRejectedError`/
+ *      `TemplateProviderUnavailableError`/`TemplateProviderConfigError`) propagan
+ *      tal cual — cero persistencia en falla.
+ *   6. Post-OK: `renderTemplateBody` (reuso de `SendCampaign.ts`, pura/total) +
+ *      `upsertTemplateMessage` (`providerMessageId = result.providerId`).
+ *   7. `bumpLastMessage` — SOLO preview, jamás `canReply`/`status` (D2/D5).
+ *   8. `toChatMessageDto(record, [])` — nunca la fila cruda.
+ */
+export class SendTemplateMessage {
+  constructor(
+    private readonly conversationRepo: ConversationRepository,
+    private readonly templatePort: TemplateMessagingPort,
+    private readonly messageRepo: ChatMessageRepository,
+  ) {}
+
+  async execute(
+    conversationId: string,
+    templateRef: string,
+    variables: Record<string, string>,
+    /** `req.user?.username` — NUNCA del body (D9). `null` cuando no hay agente identificable (ej. tests). */
+    senderName?: string | null,
+  ): Promise<ChatMessageDto> {
+    const conversation = await this.conversationRepo.findById(conversationId);
+    if (!conversation) throw new ConversationNotFoundError(conversationId);
+
+    const phoneE164 = conversation.contactPhoneE164 ?? toWhatsAppE164(conversation.contactPhone);
+    if (!phoneE164) throw new ConversationPhoneMissingError(conversationId);
+
+    // TS-3 / CAMP-2 — templateRef inexistente se trata IGUAL que no-aprobado.
+    const templates = await this.templatePort.listTemplates();
+    const template = templates.find((t) => t.contentSid === templateRef);
+    if (!template || template.approvalStatus !== 'approved') {
+      throw new TemplateNotApprovedError(templateRef);
+    }
+
+    // TS-4 / CAMP-3 — variables extra no declaradas NO bloquean.
+    const declaredVariableNames = Object.keys(template.variables);
+    const missing = declaredVariableNames.filter((name) => !(name in variables));
+    if (missing.length > 0) {
+      throw new MissingTemplateVariablesError(missing);
+    }
+
+    // TS-5 — SIN sendWithRetry (D6). Nada persistido hasta acá.
+    const result = await this.templatePort.sendTemplate(phoneE164, templateRef, variables);
+
+    // TS-6 — post-OK: proyección al hilo + bump del preview.
+    const sentAt = new Date().toISOString();
+    const renderedBody = renderTemplateBody(template.body, variables);
+
+    const record = await this.messageRepo.upsertTemplateMessage({
+      conversationId: conversation.id,
+      providerMessageId: result.providerId,
+      content: renderedBody,
+      senderName: senderName ?? null,
+      chatwootCreatedAt: sentAt,
+    });
+
+    // D2 — SOLO preview; jamás canReply/status (write-path separado, bumpLastMessage).
+    await this.conversationRepo.bumpLastMessage(conversation.id, {
+      lastMessageAt: sentAt,
+      lastMessagePreview: renderedBody,
+    });
+
+    return toChatMessageDto(record, []);
+  }
+}

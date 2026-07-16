@@ -18,6 +18,12 @@ export interface ChatMessageRecord {
   createdAt: string;
   /** messaging-inbox-notes (F1.5 fase D, NOTE-1) — always present (defaults false). */
   isPrivate: boolean;
+  /**
+   * inbox-template-send (MODEL-1/PORT-1) — SM sid de Twilio, clave de idempotencia
+   * de `upsertTemplateMessage`. `null` para las filas `chatwoot`/`bulk` (PG trata
+   * NULLs como distintos en el `@unique` — conviven N filas).
+   */
+  providerMessageId: string | null;
 }
 
 export interface UpsertChatMessageInput {
@@ -45,6 +51,23 @@ export interface UpsertBulkChatMessageInput {
   senderName?: string | null;
 }
 
+/**
+ * inbox-template-send (PORT-1) — input para proyectar el envío one-off de un
+ * template disparado por un agente DESDE el hilo abierto (D3: NUNCA reusa
+ * `upsertBulkMessage`/`CampaignInboxProjector` — acá SIEMPRE hay una
+ * `conversationId` concreta, no se resuelve por teléfono). `direction` es
+ * SIEMPRE `'outbound'`, `origin:'agent_template'`, `chatwootMessageId:null`,
+ * `campaignRecipientId:null`, `isPrivate:false`.
+ */
+export interface UpsertTemplateChatMessageInput {
+  conversationId: string;
+  /** SM sid de Twilio — clave de idempotencia (upsert por este campo). */
+  providerMessageId: string;
+  content: string;
+  senderName?: string | null;
+  chatwootCreatedAt: string;
+}
+
 export interface ChatMessageRepository {
   /** Idempotent by `chatwootMessageId` (HOOK-4/INBOX-2) — re-processing the same message never duplicates. */
   upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord>;
@@ -54,6 +77,12 @@ export interface ChatMessageRepository {
    * (upsert) — best-effort/resumible: re-proyectar NO duplica la fila.
    */
   upsertBulkMessage(input: UpsertBulkChatMessageInput): Promise<ChatMessageRecord>;
+  /**
+   * inbox-template-send (PORT-1) — proyecta el envío one-off de un template al
+   * hilo YA abierto por el agente. IDEMPOTENTE por `providerMessageId` (upsert) —
+   * re-proyectar el MISMO SM sid nunca duplica la fila. Fila `origin:'agent_template'`.
+   */
+  upsertTemplateMessage(input: UpsertTemplateChatMessageInput): Promise<ChatMessageRecord>;
   /** INBOX-3 — full history, ordered by `chatwootCreatedAt` ASC (oldest first). */
   listByConversation(conversationId: string): Promise<ChatMessageRecord[]>;
   /**

@@ -121,6 +121,16 @@ export interface UpsertBulkConversationInput {
   lastMessagePreview?: string | null;
 }
 
+/**
+ * inbox-template-send (PORT-2) — patch para `bumpLastMessage`: escribe SOLO el
+ * preview del inbox tras un envío one-off de template. Deliberadamente NO lleva
+ * `canReply`/`status`: el template NUNCA abre la ventana de 24h (design D2).
+ */
+export interface BumpLastMessageInput {
+  lastMessageAt: string;
+  lastMessagePreview: string;
+}
+
 export interface ConversationRepository {
   findById(id: string): Promise<ConversationRecord | null>;
   findByChatwootId(chatwootConversationId: number): Promise<ConversationRecord | null>;
@@ -158,4 +168,14 @@ export interface ConversationRepository {
     conversationId: string,
     patch: UpdateConversationLocalFieldsInput,
   ): Promise<ConversationRecord | null>;
+  /**
+   * inbox-template-send (PORT-2) — write-path SEPARADO del bump de preview tras
+   * un envío one-off de template. Escribe EXCLUSIVAMENTE `lastMessageAt`/
+   * `lastMessagePreview` — `canReply`, `status`, `assigneeId`, `areaId`,
+   * `chatwootConversationId`, `origin` y todo lo demás quedan INTACTOS (misma
+   * disciplina de write-paths separados que `updateLocalFields`/`upsertBulkByPhone`:
+   * ningún camino nuevo puede pisar el cache de Chatwoot ni la regla de plataforma
+   * "el template no abre la ventana", design D2). `null` si la conversación no existe.
+   */
+  bumpLastMessage(conversationId: string, patch: BumpLastMessageInput): Promise<ConversationRecord | null>;
 }

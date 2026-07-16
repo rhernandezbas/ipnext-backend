@@ -756,6 +756,8 @@ import { GetInboxClientContext } from '@application/use-cases/messaging/GetInbox
 import { AssignConversation } from '@application/use-cases/messaging/AssignConversation';
 import { SetConversationArea } from '@application/use-cases/messaging/SetConversationArea';
 import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssignableUsers';
+// inbox-template-send (HTTP-1/HTTP-2) — enviar template aprobado desde el hilo.
+import { SendTemplateMessage } from '@application/use-cases/messaging/SendTemplateMessage';
 // ── messaging-bulk (F2) — envío masivo por template WhatsApp (Twilio directo) ─
 import { createMessagingBulkRouter } from './routes/messagingBulk.routes';
 import { TwilioContentGateway } from '../adapters/twilio/TwilioContentGateway';
@@ -2557,6 +2559,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       { ttlMinutes: config.gestionReal.balanceStaleTtlMinutes },
     );
 
+    // inbox-template-send (D7) — gateway Twilio PROPIO de este bloque (mismo
+    // config.twilio.*), self-contained, precedente del bloque templates-CRUD
+    // (línea ~2659): evita interleave con el bloque bulk en merges paralelos.
+    const sendTemplateGateway = new TwilioContentGateway({
+      accountSid: config.twilio.accountSid,
+      authToken: config.twilio.authToken,
+      messagingServiceSid: config.twilio.messagingServiceSid,
+    });
+
     app.use('/api/messaging', createMessagingRouter(
       // messaging-bulk (F2, Batch 6, OPT-2) — 6º arg `customerAdapter` (opcional):
       // ya implementa `CampaignSegmentSource & OptOutRegistry` (misma instancia
@@ -2596,6 +2607,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new SetConversationArea(conversationRepo, ticketAreaRepo),
       new ListAssignableUsers(rbacUserRepo, roleLookupForRecapture),
       listTicketAreas,
+      // inbox-template-send (HTTP-1/HTTP-2) — appended (design §Colisiones: nunca
+      // insertar en medio de la lista compartida con inbox-resolve).
+      new SendTemplateMessage(conversationRepo, sendTemplateGateway, chatMessageRepo),
+      new ListMessagingTemplates(sendTemplateGateway),
     ));
   }
 

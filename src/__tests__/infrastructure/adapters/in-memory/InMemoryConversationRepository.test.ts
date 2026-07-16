@@ -93,6 +93,35 @@ describe('InMemoryConversationRepository', () => {
     expect(page.total).toBe(0);
   });
 
+  describe('inbox-template-send (PORT-2) — bumpLastMessage', () => {
+    it('escribe SOLO lastMessageAt/lastMessagePreview — canReply/status/assigneeId quedan intactos (design D2)', async () => {
+      const conv = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 200, canReply: false, status: 'open' }),
+      );
+      await repo.updateLocalFields(conv.id, { assigneeId: 'u1' });
+
+      const updated = await repo.bumpLastMessage(conv.id, {
+        lastMessageAt: '2026-07-16T10:00:00.000Z',
+        lastMessagePreview: 'Hola Juan, debés $5.000',
+      });
+
+      expect(updated!.lastMessageAt).toBe('2026-07-16T10:00:00.000Z');
+      expect(updated!.lastMessagePreview).toBe('Hola Juan, debés $5.000');
+      expect(updated!.canReply).toBe(false);
+      expect(updated!.status).toBe('open');
+      expect(updated!.assigneeId).toBe('u1');
+    });
+
+    it('conversación inexistente → null', async () => {
+      const result = await repo.bumpLastMessage('ghost', {
+        lastMessageAt: '2026-07-16T10:00:00.000Z',
+        lastMessagePreview: 'x',
+      });
+
+      expect(result).toBeNull();
+    });
+  });
+
   describe('§8 — tiebreaker determinístico en empates de lastMessageAt (in-memory DEBE ordenar igual que Prisma)', () => {
     it('dos conversaciones con el MISMO lastMessageAt se ordenan por id ASC, no por orden de insercion', async () => {
       // Postgres sin una clave secundaria en ORDER BY no garantiza NADA sobre el

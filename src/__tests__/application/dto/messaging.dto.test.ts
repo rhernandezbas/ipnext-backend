@@ -20,6 +20,7 @@ function record(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRecord {
     chatwootCreatedAt: '2026-07-11T12:00:00.000Z',
     createdAt: '2026-07-11T12:00:00.000Z',
     isPrivate: false,
+    providerMessageId: null,
     ...overrides,
   };
 }

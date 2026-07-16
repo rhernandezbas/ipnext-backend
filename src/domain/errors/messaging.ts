@@ -2,7 +2,7 @@
  * messaging-inbox (F1) — typed domain errors for the WhatsApp/Chatwoot inbox.
  * HTTP mapping lives in errorHandler.ts statusMap (single source of truth):
  *   CONVERSATION_NOT_FOUND → 404 · MESSAGING_WINDOW_EXPIRED → 422 ·
- *   CHATWOOT_UNAVAILABLE → 503
+ *   CHATWOOT_UNAVAILABLE → 503 · CONVERSATION_PHONE_MISSING → 422
  *
  * INVALID_SIGNATURE/STALE_TIMESTAMP (401) are NOT here: the HMAC middleware
  * responds directly (idioma `apiKeyMiddleware`), never through DomainError.
@@ -13,6 +13,24 @@ export class ConversationNotFoundError extends DomainError {
   constructor(id: string) {
     super(`Conversation with id "${id}" not found`, 'CONVERSATION_NOT_FOUND');
     this.name = 'ConversationNotFoundError';
+  }
+}
+
+/**
+ * inbox-template-send (TS-2) — raised by `SendTemplateMessage` when NEITHER
+ * `conversation.contactPhoneE164` NOR the `toWhatsAppE164(conversation.contactPhone)`
+ * fallback resolve to a usable E164 destination. Distinct from
+ * `MessagingWindowExpiredError`: a template CAN be sent outside the 24h window
+ * (design D2) — this error is about having no phone to send it TO at all, not
+ * about window state. No side effects: `sendTemplate` is never called.
+ */
+export class ConversationPhoneMissingError extends DomainError {
+  constructor(conversationId: string) {
+    super(
+      `Conversation "${conversationId}" has no resolvable phone number (contactPhoneE164 and contactPhone both unusable)`,
+      'CONVERSATION_PHONE_MISSING',
+    );
+    this.name = 'ConversationPhoneMissingError';
   }
 }
 

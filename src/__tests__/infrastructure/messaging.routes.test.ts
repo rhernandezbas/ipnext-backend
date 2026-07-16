@@ -29,6 +29,11 @@ import { GetChatAttachmentFile } from '../../application/use-cases/messaging/Get
 import { AssignConversation } from '../../application/use-cases/messaging/AssignConversation';
 import { SetConversationArea } from '../../application/use-cases/messaging/SetConversationArea';
 import { ListAssignableUsers } from '../../application/use-cases/messaging/ListAssignableUsers';
+// inbox-template-send (HTTP-1/HTTP-2) — enviar template aprobado desde el hilo + catálogo curado.
+import { SendTemplateMessage } from '../../application/use-cases/messaging/SendTemplateMessage';
+import { ListTemplates } from '../../application/use-cases/messaging/ListTemplates';
+import { InMemoryTemplateMessagingGateway } from '../../infrastructure/adapters/in-memory/InMemoryTemplateMessagingGateway';
+import type { TemplateDto } from '../../domain/ports/TemplateMessagingPort';
 import { GetClientContracts } from '../../application/use-cases/GetClientContracts';
 import { GetClientInvoices } from '../../application/use-cases/GetClientInvoices';
 import { GetClientLogs } from '../../application/use-cases/GetClientLogs';
@@ -141,6 +146,9 @@ interface BuildAppOptions {
   assigneeLookup?: EntityLookup;
   /** Defaults to a lookup returning ['administrador'] for every user (non-technical). */
   roleLookup?: UserRoleLookup;
+  // ─── inbox-template-send (HTTP-1/HTTP-2) ────────────────────────────────────
+  templatePort?: InMemoryTemplateMessagingGateway;
+  templates?: TemplateDto[];
 }
 
 function buildApp(opts: BuildAppOptions = {}) {
@@ -172,6 +180,10 @@ function buildApp(opts: BuildAppOptions = {}) {
       findById: async (id: string) => (id in KNOWN_ASSIGNEES ? { id, name: KNOWN_ASSIGNEES[id] } : null),
     };
   const roleLookup: UserRoleLookup = opts.roleLookup ?? { listRoleCodes: async () => ['administrador'] };
+
+  // ─── inbox-template-send (HTTP-1/HTTP-2) ────────────────────────────────────
+  const templatePort = opts.templatePort ?? new InMemoryTemplateMessagingGateway({ templates: opts.templates });
+
   const getInboxClientContext = new GetInboxClientContext(
     conversationRepo,
     getClientContext,
@@ -217,6 +229,10 @@ function buildApp(opts: BuildAppOptions = {}) {
       new SetConversationArea(conversationRepo, areaRepo),
       new ListAssignableUsers(rbacUserRepo, roleLookup),
       new ListTicketAreas(areaRepo),
+      // inbox-template-send (HTTP-1/HTTP-2) — appended (design §Colisiones: nunca
+      // insertar en medio de la lista compartida con inbox-resolve).
+      new SendTemplateMessage(conversationRepo, templatePort, messageRepo),
+      new ListTemplates(templatePort),
     ),
   );
   app.use(errorHandler);
@@ -235,6 +251,7 @@ function buildApp(opts: BuildAppOptions = {}) {
     pppoeRepo,
     areaRepo,
     rbacUserRepo,
+    templatePort,
   };
 }
 
@@ -1671,5 +1688,258 @@ describe('GET /api/messaging/conversations/:id/client-context', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('matched');
     expect(res.body.client.id).toBe('b');
+  });
+});
+
+// ─── inbox-template-send (HTTP-1/HTTP-2) — enviar template desde el hilo ───────
+
+const APPROVED_TEMPLATE: TemplateDto = {
+  contentSid: 'HX1',
+  friendlyName: 'Recordatorio deuda',
+  language: 'es',
+  variables: { '1': 'nombre', '2': 'monto' },
+  approvalStatus: 'approved',
+  body: 'Hola {{1}}, debés {{2}}',
+};
+
+const PENDING_TEMPLATE: TemplateDto = {
+  contentSid: 'HX9',
+  friendlyName: 'Pendiente',
+  language: 'es',
+  variables: {},
+  approvalStatus: 'pending',
+  body: 'Pendiente',
+};
+
+describe('POST /api/messaging/conversations/:id/send-template', () => {
+  it('sin sesión (auth deniega) → 401', async () => {
+    const { app } = buildApp({ auth: denyAuth, templates: [APPROVED_TEMPLATE] });
+
+    const res = await request(app)
+      .post('/api/messaging/conversations/conv-1/send-template')
+      .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+    expect(res.status).toBe(401);
+  });
+
+  it('sin messaging:send → 403, use case NUNCA invocado', async () => {
+    const { app, templatePort } = buildApp({ sendPerm: denyPerm, templates: [APPROVED_TEMPLATE] });
+
+    const res = await request(app)
+      .post('/api/messaging/conversations/conv-1/send-template')
+      .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+    expect(res.status).toBe(403);
+    expect(templatePort.calls).toHaveLength(0);
+  });
+
+  it('con messaging:read pero NO messaging:send → 403 (mismo permiso que el envío actual)', async () => {
+    const { app } = buildApp({ readPerm: allowPerm, sendPerm: denyPerm, templates: [APPROVED_TEMPLATE] });
+
+    const res = await request(app)
+      .post('/api/messaging/conversations/conv-1/send-template')
+      .send({ templateRef: 'HX1', variables: {} });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('body vacío {} → 400 VALIDATION_ERROR, use case NUNCA invocado', async () => {
+    const { app, templatePort } = buildApp({ templates: [APPROVED_TEMPLATE] });
+
+    const res = await request(app).post('/api/messaging/conversations/conv-1/send-template').send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(templatePort.calls).toHaveLength(0);
+  });
+
+  it('templateRef no-string (número) → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildApp({ templates: [APPROVED_TEMPLATE] });
+
+    const res = await request(app)
+      .post('/api/messaging/conversations/conv-1/send-template')
+      .send({ templateRef: 42 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('variables con un valor no-string → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildApp({ templates: [APPROVED_TEMPLATE] });
+
+    const res = await request(app)
+      .post('/api/messaging/conversations/conv-1/send-template')
+      .send({ templateRef: 'HX1', variables: { '1': 7 } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('conversación inexistente → 404 CONVERSATION_NOT_FOUND', async () => {
+    const { app } = buildApp({ templates: [APPROVED_TEMPLATE] });
+
+    const res = await request(app)
+      .post('/api/messaging/conversations/ghost/send-template')
+      .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONVERSATION_NOT_FOUND');
+  });
+
+  it('conversación sin teléfono → 422 CONVERSATION_PHONE_MISSING', async () => {
+    const { app, conversationRepo } = buildApp({ templates: [APPROVED_TEMPLATE] });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 200 });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/send-template`)
+      .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('CONVERSATION_PHONE_MISSING');
+  });
+
+  it('template pending → 422 TEMPLATE_NOT_APPROVED', async () => {
+    const { app, conversationRepo } = buildApp({ templates: [APPROVED_TEMPLATE, PENDING_TEMPLATE] });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 201, contactPhone: '+5491123456789' });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/send-template`)
+      .send({ templateRef: 'HX9', variables: {} });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TEMPLATE_NOT_APPROVED');
+  });
+
+  it('variable faltante → 422 MISSING_TEMPLATE_VARIABLES con missing[]', async () => {
+    const { app, conversationRepo } = buildApp({ templates: [APPROVED_TEMPLATE] });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 202, contactPhone: '+5491123456789' });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/send-template`)
+      .send({ templateRef: 'HX1', variables: { '1': 'Juan' } });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('MISSING_TEMPLATE_VARIABLES');
+    expect(res.body.missing).toEqual(['2']);
+  });
+
+  it('proveedor rechaza (4xx per-mensaje) → 422 TEMPLATE_SEND_REJECTED', async () => {
+    const templatePort = new InMemoryTemplateMessagingGateway({
+      templates: [APPROVED_TEMPLATE],
+      rejectPhone: '+5491123456789',
+    });
+    const { app, conversationRepo } = buildApp({ templatePort });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 203, contactPhone: '+5491123456789' });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/send-template`)
+      .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TEMPLATE_SEND_REJECTED');
+  });
+
+  it('proveedor caído → 503 TEMPLATE_PROVIDER_UNAVAILABLE', async () => {
+    const templatePort = new InMemoryTemplateMessagingGateway({
+      templates: [APPROVED_TEMPLATE],
+      failNthWith429: 1,
+    });
+    const { app, conversationRepo } = buildApp({ templatePort });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 204, contactPhone: '+5491123456789' });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/send-template`)
+      .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('TEMPLATE_PROVIDER_UNAVAILABLE');
+  });
+
+  it('201 happy path — DTO flat outbound, visible por GET .../messages, preview bumpeado, composer sigue bloqueado (canReply intacto)', async () => {
+    const { app, conversationRepo } = buildApp({
+      templates: [APPROVED_TEMPLATE],
+      auth: (req: Request, _res: Response, next: NextFunction) => {
+        (req as any).user = { id: 'user-test', username: 'agente1', email: 'test@test.com' };
+        next();
+      },
+    });
+    const conv = await conversationRepo.upsertByChatwootId({
+      chatwootConversationId: 205,
+      contactPhone: '+5491123456789',
+      canReply: false,
+    });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/send-template`)
+      .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        direction: 'outbound',
+        content: 'Hola Juan, debés $5.000',
+        senderName: 'agente1',
+      }),
+    );
+
+    const messagesRes = await request(app).get(`/api/messaging/conversations/${conv.id}/messages`);
+    expect(messagesRes.body.data).toHaveLength(1);
+    expect(messagesRes.body.data[0].content).toBe('Hola Juan, debés $5.000');
+
+    const updatedConv = await conversationRepo.findById(conv.id);
+    expect(updatedConv!.lastMessagePreview).toBe('Hola Juan, debés $5.000');
+    // D2 — el template NUNCA abre la ventana: canReply sigue false.
+    expect(updatedConv!.canReply).toBe(false);
+  });
+
+  it('variables ausente → trata como {} (template sin variables declaradas se envía directo)', async () => {
+    const noVarTemplate: TemplateDto = {
+      contentSid: 'HX2',
+      friendlyName: 'Sin variables',
+      language: 'es',
+      variables: {},
+      approvalStatus: 'approved',
+      body: 'Hola, este es un mensaje fijo.',
+    };
+    const { app, conversationRepo } = buildApp({ templates: [noVarTemplate] });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 206, contactPhone: '+5491123456789' });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/send-template`)
+      .send({ templateRef: 'HX2' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.content).toBe('Hola, este es un mensaje fijo.');
+  });
+});
+
+describe('GET /api/messaging/send-templates', () => {
+  it('sin sesión → 401', async () => {
+    const { app } = buildApp({ auth: denyAuth });
+
+    const res = await request(app).get('/api/messaging/send-templates');
+
+    expect(res.status).toBe(401);
+  });
+
+  it('sin messaging:send → 403', async () => {
+    const { app } = buildApp({ sendPerm: denyPerm });
+
+    const res = await request(app).get('/api/messaging/send-templates');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('200 con el catálogo completo curado (approved Y pending, sendable correcto por item)', async () => {
+    const { app } = buildApp({ templates: [APPROVED_TEMPLATE, PENDING_TEMPLATE] });
+
+    const res = await request(app).get('/api/messaging/send-templates');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(2);
+    const approved = res.body.data.find((t: { contentSid: string }) => t.contentSid === 'HX1');
+    const pending = res.body.data.find((t: { contentSid: string }) => t.contentSid === 'HX9');
+    expect(approved.sendable).toBe(true);
+    expect(pending.sendable).toBe(false);
   });
 });
