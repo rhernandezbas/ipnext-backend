@@ -48,11 +48,16 @@ function session(username: string, over: Partial<OrchestratorSession> = {}): Orc
   };
 }
 
-function build(opts: { events: RadiusAuthEventUpsert[]; sessions?: Record<string, OrchestratorSession[]> }) {
+function build(opts: {
+  events: RadiusAuthEventUpsert[];
+  sessions?: Record<string, OrchestratorSession[]>;
+  /** sessionIds para los que cureSession() debe responder 404 (LOW-2: fuerza un 'failed' por-fila). */
+  cureNotFoundSessionIds?: string[];
+}) {
   const authRepo = new InMemoryRadiusAuthEventRepository();
   const cureEventRepo = new InMemoryRadiusSessionCureEventRepository({ now: () => NOW });
   const seed = Object.entries(opts.sessions ?? {}).map(([username, sessions]) => ({ username, sessions }));
-  const gateway = new InMemoryRadiusOrchestratorGateway({ seed });
+  const gateway = new InMemoryRadiusOrchestratorGateway({ seed, cureNotFoundSessionIds: opts.cureNotFoundSessionIds });
   const cureStuckSession = new CureStuckSession(gateway, cureEventRepo, CURE_TUNING);
   const watcher = new AutoCureStuckSessions(authRepo, cureEventRepo, cureStuckSession, TUNING, { now: () => NOW });
   return { authRepo, cureEventRepo, gateway, cureStuckSession, watcher };
@@ -198,5 +203,74 @@ describe('AutoCureStuckSessions', () => {
     const summary = await watcherZeroCap.run();
     expect(summary.deferred).toBe(1);
     expect(summary.cured).toBe(0);
+  });
+
+  it('FIX-1 (review adversarial MEDIUM-1): 5 flappers cure-throttled + 2 legítimas → las legítimas SÍ curan (el cap NO lo monopolizan los skips)', async () => {
+    const events: RadiusAuthEventUpsert[] = [];
+    const sessions: Record<string, OrchestratorSession[]> = {};
+    // 5 "flappers": authdate MÁS RECIENTE que las legítimas → el repo ordena DESC → quedan
+    // PRIMERO en el Map byUser. Cada uno tiene una cura 'cured' sembrada hace 5min (dentro del
+    // cooldown de 30min) → cure-throttle skip garantizado.
+    for (let i = 0; i < 5; i++) {
+      events.push(stuckEvent(`flap${i}`, new Date(NOW.getTime() - 1_000 - i * 100).toISOString()));
+    }
+    // 2 candidatas LEGÍTIMAS: authdate más viejo (pero dentro del lookback 15min) → quedan
+    // DESPUÉS en el Map. Sesión con lastUpdate default (30min stale, > staleMs 20min) → curan
+    // por el camino stale_interim SI llegan a evaluarse.
+    events.push(stuckEvent('legitA', new Date(NOW.getTime() - 500_000).toISOString()));
+    events.push(stuckEvent('legitB', new Date(NOW.getTime() - 510_000).toISOString()));
+    sessions.legitA = [session('legitA')];
+    sessions.legitB = [session('legitB')];
+
+    const { authRepo, watcher, cureEventRepo } = build({ events: [], sessions });
+    const seedRows = [];
+    for (let i = 0; i < 5; i++) {
+      seedRows.push({
+        username: `flap${i}`, nasIp: null, sessionId: null, sessionStartedAt: null, sessionLastUpdate: null,
+        signalUsed: null, trigger: 'auto' as const, action: null, outcome: 'cured' as const, reason: null, actorName: 'sistema',
+        createdAt: new Date(NOW.getTime() - 5 * 60 * 1000).toISOString(),
+      });
+    }
+    cureEventRepo.seed(seedRows);
+    await authRepo.upsertMany(events);
+
+    const summary = await watcher.run();
+    expect(summary.candidates).toBe(7);
+    expect(summary.skippedCureThrottle).toBe(5);
+    // Bug pre-fix: los 5 skips throttled agotaban maxPerTick=5 → legitA/legitB quedaban
+    // deferred y NUNCA se curaban (starvation). Fix: el throttle NO consume slot.
+    expect(summary.cured).toBe(2);
+    expect(summary.deferred).toBe(0);
+  });
+
+  it('FIX-2 (review adversarial LOW-2): tick multi-sesión que cura 1 y falla 1 → el summary cuenta AMBAS filas, no solo el outcome agregado (deriveOverallOutcome colapsa a "cured")', async () => {
+    // Dos sesiones del MISMO username en el MISMO NAS (pasan el gate ambiguous) — ambas stale
+    // (lastUpdate default) → camino stale_interim. sidB está en cureNotFoundSessionIds: el
+    // cureSession() de esa sesión puntual tira 404 → esa fila queda 'failed', la otra 'cured'.
+    const { authRepo, watcher, cureEventRepo } = build({
+      events: [],
+      sessions: {
+        userMulti: [
+          session('userMulti', { sessionId: 'sidA', nasIp: '10.60.0.10' }),
+          session('userMulti', { sessionId: 'sidB', nasIp: '10.60.0.10' }),
+        ],
+      },
+      cureNotFoundSessionIds: ['sidB'],
+    });
+    await authRepo.upsertMany([stuckEvent('userMulti', NOW.toISOString())]);
+
+    const summary = await watcher.run();
+
+    // Bug pre-fix: deriveOverallOutcome ve que "algo" curó → outcome agregado 'cured' →
+    // tally() solo sumaba cured++ y la fila 'failed' quedaba invisible en el log del tick
+    // (aunque SÍ persistida en DB). Fix: tally() cuenta por fila (result.events), no por
+    // el outcome agregado.
+    expect(summary.cured).toBe(1);
+    expect(summary.failed).toBe(1);
+
+    const rows = cureEventRepo.all().filter((e) => e.username === 'userMulti');
+    expect(rows).toHaveLength(2);
+    expect(rows.some((r) => r.outcome === 'cured' && r.sessionId === 'sidA')).toBe(true);
+    expect(rows.some((r) => r.outcome === 'failed' && r.sessionId === 'sidB')).toBe(true);
   });
 });

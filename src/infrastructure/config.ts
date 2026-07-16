@@ -346,16 +346,25 @@ export const config = {
         default: 5,
         max: 100_000,
       }),
-      /** Cure-throttle anti-flapping: una cura por username cada COOLDOWN_MS máximo. Default 30min. */
+      /**
+       * Cure-throttle anti-flapping: una cura por username cada COOLDOWN_MS máximo. Default 30min.
+       * LOW-1 (review adversarial): piso subido de 60s a 5min — 60s combinado con un flappingMax
+       * alto permitía "cured cada ~60s" (anti-kick-loop débil); 5min es un piso más sano.
+       */
       cooldownMs: parseIntervalMs(process.env.RADIUS_AUTO_CURE_COOLDOWN_MS, {
         default: 1_800_000,
-        min: 60_000,
+        min: 300_000,
         max: 86_400_000,
       }),
-      /** >= N curas del username en 24h (ventana fija) ⇒ flagged_flapping. Default 3. */
+      /**
+       * >= N curas del username en 24h (ventana fija) ⇒ flagged_flapping. Default 3.
+       * LOW-1 (review adversarial): techo bajado de 1000 a 20 — combinado con el piso viejo de
+       * cooldownMs (60s), un techo de 1000 delataba el flapping recién a las ~16h de curas cada
+       * 60s, demasiado tarde para cortar un kick-loop real. 20 es un techo razonable.
+       */
       flappingMax: parsePositiveInt(process.env.RADIUS_AUTO_CURE_FLAPPING_MAX, {
         default: 3,
-        max: 1000,
+        max: 20,
       }),
     };
   })(),

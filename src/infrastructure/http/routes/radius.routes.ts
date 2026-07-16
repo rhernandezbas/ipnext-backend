@@ -398,6 +398,17 @@ export function createRadiusRouter(
         return;
       }
 
+      // MEDIUM-2 (review adversarial): CureStuckSession.execute() atrapa
+      // OrchestratorUnreachableError INTERNAMENTE para poder grabar la fila de auditoría
+      // (finishSkip) — nunca lo relanza. Sin este mapeo, outcome:'failed' por orchestrator caído
+      // caía al res.json() de abajo = 200 mentiroso (el hermano DELETE /sessions ya mapea esto
+      // bien via next(err) → errorHandler → 502). La fila YA se grabó arriba; esto solo corrige
+      // el status code de la respuesta.
+      if (result.outcome === 'failed' && isOrchestratorUnreachable(result)) {
+        res.status(502).json({ code: 'ORCHESTRATOR_UNREACHABLE', message: result.reason, ...responseBody });
+        return;
+      }
+
       res.json(responseBody);
     } catch (err) {
       next(err);
@@ -405,4 +416,18 @@ export function createRadiusRouter(
   });
 
   return router;
+}
+
+/**
+ * MEDIUM-2 (review adversarial) — ¿el outcome:'failed' de un `CureStuckSession.execute()`
+ * viene de un orchestrator caído? `cureErrorReason()` (CureStuckSession.ts) etiqueta ese caso
+ * puntual con reason 'orchestrator_unreachable', tanto en el `result.reason` top-level (camino
+ * `finishSkip` — 0 sesiones evaluadas, p.ej. `listSessions` caído) como en cada fila individual
+ * de `result.events` (camino `cureOne` — la sesión puntual falló al curar). Se chequean AMBOS
+ * para cubrir el caso multi-sesión donde la PRIMERA sesión curó bien (top-level reason queda
+ * null) pero una sesión POSTERIOR falló por orchestrator caído.
+ */
+function isOrchestratorUnreachable(result: { reason: string | null; events: { reason: string | null }[] }): boolean {
+  return result.reason === 'orchestrator_unreachable'
+    || result.events.some((e) => e.reason === 'orchestrator_unreachable');
 }

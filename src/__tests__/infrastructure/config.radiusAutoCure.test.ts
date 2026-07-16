@@ -73,6 +73,23 @@ describe('config.radiusAutoCure', () => {
     expect(config.radiusAutoCure.flappingMax).toBe(5);
   });
 
+  it('FIX-4 (review adversarial LOW-1): RADIUS_AUTO_CURE_COOLDOWN_MS=60000 (piso viejo) → clampa a 5min (piso NUEVO, antikick-loop)', () => {
+    // El piso viejo de 60s permitía "cured cada ~60s" — un fat-finger o un override agresivo
+    // debilitaba el anti-kick-loop (cure-throttle demasiado corto). Piso nuevo: 5min.
+    process.env.RADIUS_AUTO_CURE_COOLDOWN_MS = '60000';
+    const { config } = require('../../infrastructure/config');
+    expect(config.radiusAutoCure.cooldownMs).toBe(300_000);
+  });
+
+  it('FIX-4 (review adversarial LOW-1): RADIUS_AUTO_CURE_FLAPPING_MAX=500 (techo viejo 1000) → clampa a 20 (techo NUEVO razonable)', () => {
+    // El techo viejo de 1000 combinado con el piso viejo de cooldownMs (60s) permitía delatar
+    // flapping recién a las ~16h de curas cada 60s — demasiado tarde para cortar un kick-loop.
+    // Techo nuevo: 20.
+    process.env.RADIUS_AUTO_CURE_FLAPPING_MAX = '500';
+    const { config } = require('../../infrastructure/config');
+    expect(config.radiusAutoCure.flappingMax).toBe(20);
+  });
+
   it('valores inválidos caen al default (boot OK, nunca revienta)', () => {
     process.env.RADIUS_AUTO_CURE_MAX_PER_TICK = 'abc';
     process.env.RADIUS_AUTO_CURE_COOLDOWN_MS = 'not-a-number';

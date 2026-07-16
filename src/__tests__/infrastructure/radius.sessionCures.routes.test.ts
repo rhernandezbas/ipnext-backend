@@ -65,7 +65,11 @@ function session(username: string, over: Partial<OrchestratorSession> = {}): Orc
   };
 }
 
-async function buildApp(extraSessions: Record<string, OrchestratorSession[]> = {}) {
+async function buildApp(
+  extraSessions: Record<string, OrchestratorSession[]> = {},
+  /** MEDIUM-2 (review adversarial): usernames para los que el gateway simula el orchestrator caído. */
+  unreachableUsernames: string[] = [],
+) {
   const roleRepo     = new InMemoryRbacRoleRepository();
   const userRoleRepo = new InMemoryRbacUserRoleRepository();
   const permRepo     = new InMemoryRbacPermissionRepository();
@@ -123,6 +127,7 @@ async function buildApp(extraSessions: Record<string, OrchestratorSession[]> = {
       { username: 'clienteStale', sessions: [session('clienteStale')] },
       ...Object.entries(extraSessions).map(([username, sessions]) => ({ username, sessions })),
     ],
+    unreachable: unreachableUsernames,
   });
   const cureStuckSession    = new CureStuckSession(gateway, cureEventRepo, CURE_TUNING);
 
@@ -244,8 +249,12 @@ describe('POST /api/radius/session-cures (network.manage, S6.1-S6.6)', () => {
   });
 
   it('S6.2: manual sin force sobre sesión con interim fresco → 409 CURE_SKIPPED_ALIVE + fila skipped_alive trigger manual', async () => {
+    // La ruta manual NO inyecta `now` (usa Date.now() real — correcto en producción: el gate
+    // alive/stale del operador debe medirse contra el reloj real). El test por eso NO puede
+    // hardcodear una fecha absoluta como "fresca" — el wall-clock avanza y la vuelve stale con
+    // el correr de los días. Se computa relativo a `Date.now()` en el momento del test.
     const { app, manageUserId, cureEventRepo } = await buildApp({
-      clienteFresco: [session('clienteFresco', { lastUpdate: '2026-07-16T11:59:30Z' })], // 30s fresco
+      clienteFresco: [session('clienteFresco', { lastUpdate: new Date(Date.now() - 30_000).toISOString() })], // 30s fresco
     });
     const res = await asUser(
       request(app).post('/api/radius/session-cures').send({ username: 'clienteFresco' }),
@@ -274,8 +283,9 @@ describe('POST /api/radius/session-cures (network.manage, S6.1-S6.6)', () => {
   });
 
   it('S6.3: manual con force:true sobre sesión fresca → 200 cured + fila con reason forced', async () => {
+    // Mismo motivo que S6.2: relativo a Date.now(), NO hardcodeado (la ruta usa el reloj real).
     const { app, manageUserId, cureEventRepo } = await buildApp({
-      clienteFresco3: [session('clienteFresco3', { lastUpdate: '2026-07-16T11:59:30Z' })],
+      clienteFresco3: [session('clienteFresco3', { lastUpdate: new Date(Date.now() - 30_000).toISOString() })],
     });
     const res = await asUser(
       request(app).post('/api/radius/session-cures').send({ username: 'clienteFresco3', force: true }),
@@ -301,5 +311,25 @@ describe('POST /api/radius/session-cures (network.manage, S6.1-S6.6)', () => {
     // pero AMBAS deben registrar fila igual (sin throttle en manual).
     await asUser(request(app).post('/api/radius/session-cures').send({ username: 'clienteStale' }), manageUserId);
     expect(cureEventRepo.all().filter((e) => e.username === 'clienteStale')).toHaveLength(2);
+  });
+
+  it('FIX-3 (review adversarial MEDIUM-2): orchestrator caído → 502 ORCHESTRATOR_UNREACHABLE (NO 200 mentiroso), la fila de auditoría SIGUE registrada', async () => {
+    const { app, manageUserId, cureEventRepo } = await buildApp({}, ['clienteCaido']);
+    const res = await asUser(
+      request(app).post('/api/radius/session-cures').send({ username: 'clienteCaido' }),
+      manageUserId,
+    );
+    // Bug pre-fix: CureStuckSession.execute atrapa OrchestratorUnreachableError internamente
+    // (finishSkip) y devuelve outcome:'failed' SIN lanzar — la ruta solo mapeaba
+    // skipped_alive/skipped_ambiguous a 409 y todo lo demás caía a res.json() = 200.
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('ORCHESTRATOR_UNREACHABLE');
+    expect(res.body.outcome).toBe('failed');
+    // La fila de auditoría se graba IGUAL (eso ya funcionaba bien — CureStuckSession siempre
+    // registra para trigger 'manual', el bug era solo el status code de la respuesta HTTP).
+    const row = cureEventRepo.all().find((e) => e.username === 'clienteCaido');
+    expect(row?.outcome).toBe('failed');
+    expect(row?.reason).toBe('orchestrator_unreachable');
+    expect(row?.trigger).toBe('manual');
   });
 });
