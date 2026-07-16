@@ -1,4 +1,5 @@
 import { InMemoryNewsCategoryRepository } from '@infrastructure/adapters/in-memory/InMemoryNewsCategoryRepository';
+import { InMemoryNewsPostRepository } from '@infrastructure/adapters/in-memory/InMemoryNewsPostRepository';
 import type { NewsCategoryRepository } from '@domain/ports/NewsCategoryRepository';
 
 describe('InMemoryNewsCategoryRepository', () => {
@@ -68,12 +69,38 @@ describe('InMemoryNewsCategoryRepository', () => {
     await expect(repo.delete('missing')).resolves.toBeUndefined();
   });
 
-  it('countPosts reflects usage (test seam: postCounts map)', async () => {
+  it('countPosts defaults to 0 when no post repo is attached', async () => {
     const repo = new InMemoryNewsCategoryRepository();
+    const cat = await repo.create({ name: 'General', color: '#64748b' });
+    expect(await repo.countPosts(cat.id)).toBe(0);
+  });
+
+  // review fix M3: countPosts used to be a hand-set `postCounts` seam. It now counts
+  // REAL posts against the paired InMemoryNewsPostRepository (attachPostRepo), matching
+  // PrismaNewsCategoryRepository.countPosts (COUNT against the newsPost table).
+  it('countPosts reflects REAL posts once a paired InMemoryNewsPostRepository is attached (M3)', async () => {
+    const repo = new InMemoryNewsCategoryRepository();
+    const postRepo = new InMemoryNewsPostRepository(repo);
+    repo.attachPostRepo(postRepo);
+
     const withPosts = await repo.create({ name: 'Red', color: '#6366f1' });
     const empty = await repo.create({ name: 'Vacía', color: '#000000' });
-    repo.postCounts[withPosts.id] = 2;
+    await postRepo.create({ title: 'T1', body: 'B', categoryId: withPosts.id, authorId: 'a', authorName: 'A' });
+    await postRepo.create({ title: 'T2', body: 'B', categoryId: withPosts.id, authorId: 'a', authorName: 'A' });
+
     expect(await repo.countPosts(withPosts.id)).toBe(2);
     expect(await repo.countPosts(empty.id)).toBe(0);
+  });
+
+  // review fix L10: list() didn't sort — parity gap vs PrismaNewsCategoryRepository.list
+  // (`orderBy: { name: 'asc' }`). One-liner fix, pinned here.
+  it('list orders by name ASC (parity with Prisma orderBy)', async () => {
+    const repo = new InMemoryNewsCategoryRepository();
+    await repo.create({ name: 'General', color: '#64748b' });
+    await repo.create({ name: 'Campañas', color: '#f59e0b' });
+    await repo.create({ name: 'Comercial', color: '#10b981' });
+
+    const names = (await repo.list()).map((c) => c.name);
+    expect(names).toEqual(['Campañas', 'Comercial', 'General']);
   });
 });

@@ -127,6 +127,9 @@ async function buildApp(): Promise<Fixture> {
 
   const categoryRepo = new InMemoryNewsCategoryRepository();
   const postRepo = new InMemoryNewsPostRepository(categoryRepo);
+  // review fix M3: countPosts (DeleteNewsCategory's in-use guard) counts REAL posts
+  // against the paired post repo instead of a hand-set seam.
+  categoryRepo.attachPostRepo(postRepo);
 
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
@@ -495,14 +498,25 @@ describe('POST /api/news/categories', () => {
     );
     expect(res.status).toBe(400);
   });
+
+  // review fix L6: CreateNewsCategorySchema.name gana .max(60).
+  it('400 nombre supera el máximo (60)', async () => {
+    const fx = await buildApp();
+    const res = await asUser(
+      request(fx.app).post('/api/news/categories').send({ name: 'x'.repeat(61), color: '#111111' }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
 });
 
 describe('DELETE /api/news/categories/:id', () => {
   it('409 in-use cuando tiene posts', async () => {
     const fx = await buildApp();
     const category = await fx.categoryRepo.create({ name: 'General', color: '#64748b' });
+    // review fix M3: el post real es lo que bloquea el delete — ya no hay seam postCounts.
     await fx.postRepo.create({ title: 'T', body: 'B', categoryId: category.id, authorId: 'a', authorName: 'A' });
-    fx.categoryRepo.postCounts[category.id] = 1;
 
     const res = await asUser(request(fx.app).delete(`/api/news/categories/${category.id}`), fx.manageUserId);
     expect(res.status).toBe(409);

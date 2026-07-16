@@ -88,7 +88,11 @@ devolver `NewsPostWithReadState` (entity + `read: boolean` según exista receipt
 
 ### Requirement: NEWS-PORT-3 — `NewsCategoryRepository` CRUD con countPosts
 El port MUST exponer `list`, `findById`, `findByName`, `create`, `update`, `delete`,
-`countPosts(id)`. `name` MUST ser único (case exacto, trim aplicado en DTO).
+`countPosts(id)`. `name` MUST ser único a nivel DB (constraint `NewsCategory_name_key`,
+case exacto), trim aplicado en DTO. `findByName` MUST comparar case-insensitive — más
+estricto que la letra original de este requirement (review fix L8, aceptado): evita que
+`CreateNewsCategory`/`UpdateNewsCategory` dejen crear "General" y "general" como categorías
+distintas, aunque el índice UNIQUE de Postgres solo no lo impediría.
 
 #### Scenario: countPosts refleja el uso
 - Given una categoría con 2 posts y otra con 0

@@ -19,8 +19,10 @@ export function toNewsCategoryDto(category: NewsCategory): NewsCategoryDto {
 
 // .trim() before .min(1): a name of " " would otherwise slip past the uniqueness
 // conflict check by carrying invisible whitespace (molde tickets.dto.ts:66-74).
+// .max(60) (review fix L6): no cap in the spec/design — 60 mirrors the sidebar-chip
+// / settings-list use of category names (short labels, not free text like a post title).
 export const CreateNewsCategorySchema = z.object({
-  name: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(60),
   color: HexColorSchema,
 });
 export const UpdateNewsCategorySchema = CreateNewsCategorySchema.partial();

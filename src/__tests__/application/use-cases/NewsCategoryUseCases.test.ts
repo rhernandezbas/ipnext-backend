@@ -7,6 +7,7 @@ import { CreateNewsCategory } from '@application/use-cases/CreateNewsCategory';
 import { UpdateNewsCategory } from '@application/use-cases/UpdateNewsCategory';
 import { DeleteNewsCategory } from '@application/use-cases/DeleteNewsCategory';
 import { InMemoryNewsCategoryRepository } from '@infrastructure/adapters/in-memory/InMemoryNewsCategoryRepository';
+import { InMemoryNewsPostRepository } from '@infrastructure/adapters/in-memory/InMemoryNewsPostRepository';
 import {
   NewsCategoryNotFoundError,
   NewsCategoryNameConflictError,
@@ -68,9 +69,13 @@ describe('UpdateNewsCategory', () => {
 
 describe('DeleteNewsCategory (NEWS-UC-4)', () => {
   it('lanza NewsCategoryInUseError si tiene posts y NO la borra', async () => {
+    // review fix M3: countPosts ahora cuenta posts REALES (no el seam postCounts) —
+    // se crea un post de verdad contra el InMemoryNewsPostRepository pareado.
     const repo = new InMemoryNewsCategoryRepository();
+    const postRepo = new InMemoryNewsPostRepository(repo);
+    repo.attachPostRepo(postRepo);
     const cat = await repo.create({ name: 'General', color: '#64748b' });
-    repo.postCounts[cat.id] = 1;
+    await postRepo.create({ title: 'T', body: 'B', categoryId: cat.id, authorId: 'a', authorName: 'A' });
     const useCase = new DeleteNewsCategory(repo);
 
     await expect(useCase.execute(cat.id)).rejects.toThrow(NewsCategoryInUseError);

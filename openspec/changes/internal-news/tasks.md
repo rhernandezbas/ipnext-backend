@@ -113,7 +113,61 @@ in-memory — NUNCA mockear Prisma. Path aliases siempre. NO `npm run build` ni 
 
 ---
 
-## ⛔ GATE — verificar merge de Change B antes de seguir
+## Review fixes (adversarial review — fix wave BE)
+
+TDD estricto (rojo → verde) por fix. `npx prisma generate` corrido fresco antes del `npx tsc
+--noEmit` final (race conocido de tipos entre worktrees).
+
+- [x] **M1** — `catch { return null; }` en `PrismaNewsPostRepository.update/setArchived`
+  (:71-73,106-108) y `PrismaNewsCategoryRepository.update` (:36-38) mentía 404 ante CUALQUIER
+  error (DB caída, P2002/P2003, ...). Fix: solo P2025 → `null`; todo lo demás se re-lanza.
+  Tests: `src/__tests__/infrastructure/PrismaNewsPostRepository.test.ts`,
+  `PrismaNewsCategoryRepository.test.ts` (mock de Prisma, molde
+  `PrismaServiceCatalogRepository.test.ts` FF-2 / `PrismaTaskAttachmentRepository.test.ts`).
+- [x] **M2** — `PrismaNewsCategoryRepository.delete` (:41-49) tragaba el P2003 (Restrict) si un
+  post nacía entre `countPosts` y el `delete` (TOCTOU) → 204 falso con la categoría VIVA. Fix:
+  P2025 → no-op idempotente (molde `PrismaTaskAttachmentRepository`); P2003 →
+  `NewsCategoryInUseError` (la ruta ya mapeaba 409); cualquier otro error se re-lanza. Test en
+  `PrismaNewsCategoryRepository.test.ts` (describe `.delete`).
+- [x] **M3** — `InMemoryNewsCategoryRepository.countPosts` era un seam manual (`postCounts`
+  seteado a mano en los tests), sin paridad real con Prisma. Fix: `countPosts` cuenta contra un
+  `PostCounter` (interfaz mínima `countByCategoryId`) implementado por
+  `InMemoryNewsPostRepository`, wireado post-construcción vía `attachPostRepo` (constructor
+  circular — el post repo ya toma el category repo en SU constructor para M4, así que el
+  category repo debe existir primero; el link inverso se setea después). Seam `postCounts`
+  eliminado del repo y de los 3 tests que lo usaban (`InMemoryNewsCategoryRepository.test.ts`,
+  `NewsCategoryUseCases.test.ts`, `news.routes.test.ts`) — ahora crean posts reales.
+- [x] **M4** — `InMemoryNewsPostRepository` embebía `category` como snapshot al crear/actualizar;
+  Prisma hace `include: { category: true }` en CADA query. Fix: `findById`/`list` resuelven la
+  categoría FRESCA contra `categoryRepo` en cada lectura (no confían en el snapshot guardado en
+  `items`). Test rojo→verde en `InMemoryNewsPostRepository.test.ts`: crear post → renombrar
+  categoría → `findById`/`list` muestran el nombre nuevo.
+- [x] **L5** — TOCTOU de `create`/`update` de categoría: un P2002 (UNIQUE name) que pasara la
+  validación `findByName` del use case salía como 500 sin mapear. Fix: ambos catchean P2002 →
+  `NewsCategoryNameConflictError` (la ruta ya mapeaba 409 vía `instanceof`). Tests en
+  `PrismaNewsCategoryRepository.test.ts`.
+- [x] **L6** — `CreateNewsCategorySchema.name` sin cota superior. Fix: `.max(60)` (sin valor en
+  spec/design — 60 elegido por consistencia con labels cortos tipo chip/settings-list, no texto
+  libre como el título de un post). Test 400 en `news.routes.test.ts`.
+- [x] **L7** — sin test ejecutable para NEWS-MIG-1. Fix: pin barato
+  `src/__tests__/infrastructure/migration.internal_news.test.ts` — escanea
+  `20260911000000_internal_news/migration.sql`: sin `DROP` destructivo, `ALTER TABLE` solo
+  `ADD CONSTRAINT` (FKs aditivas), y CADA `INSERT` del seed con `ON CONFLICT` en el mismo
+  statement. No requirió cambio de código (la migración ya cumplía) — verde inmediato, sirve de
+  regresión para sdd-verify.
+- [x] **L10** — `InMemoryNewsCategoryRepository.list()` no ordenaba; Prisma usa
+  `orderBy: { name: 'asc' }`. Era un one-liner → se fixeó (`.sort` por `name.localeCompare`).
+  Test en `InMemoryNewsCategoryRepository.test.ts`.
+
+### Aceptados sin cambio de código (LOWs no accionables en esta wave)
+- **L8** — `findByName` es case-insensitive; la letra original de NEWS-PORT-3 decía "case
+  exacto". Es MÁS estricto (evita "General"/"general" duplicados) y consistente con el resto del
+  código — se aceptó el comportamiento y se actualizó `specs/internal-news-be/spec.md` (NEWS-PORT-3)
+  para reflejarlo. Sin cambio de código.
+- **L9** — pin textual de mensajes de error: nivel de garantía coherente con el molde de la casa
+  (`errors/tickets.ts` et al.) — aceptado sin cambios.
+
+
 - [ ] `git log origin/main --oneline | rg "sidebar-comunicaciones"` (o PR mergeado) en
   `ipnext-frontend`. Si NO está mergeado → STOP, los batches 6-9 no arrancan.
 

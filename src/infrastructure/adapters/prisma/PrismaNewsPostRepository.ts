@@ -68,8 +68,13 @@ export class PrismaNewsPostRepository implements NewsPostRepository {
         include: { category: true },
       });
       return toEntity(row);
-    } catch {
-      return null;
+    } catch (err) {
+      // P2025 — genuine record-not-found (the only legitimate null path). Anything
+      // else (connection drop, constraint violation, ...) MUST surface — never
+      // silently null (review fix M1: a swallowed DB failure used to make the use
+      // case throw NewsPostNotFoundError, a false 404).
+      if ((err as { code?: string } | null)?.code === 'P2025') return null;
+      throw err;
     }
   }
 
@@ -103,8 +108,10 @@ export class PrismaNewsPostRepository implements NewsPostRepository {
         include: { category: true },
       });
       return toEntity(row);
-    } catch {
-      return null;
+    } catch (err) {
+      // Same contract as update() above (review fix M1).
+      if ((err as { code?: string } | null)?.code === 'P2025') return null;
+      throw err;
     }
   }
 

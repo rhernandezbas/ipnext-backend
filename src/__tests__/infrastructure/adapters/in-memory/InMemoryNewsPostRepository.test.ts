@@ -4,6 +4,7 @@
  * category + archived filters, markRead idempotency, countUnread, setArchived.
  */
 import { InMemoryNewsPostRepository } from '@infrastructure/adapters/in-memory/InMemoryNewsPostRepository';
+import { InMemoryNewsCategoryRepository } from '@infrastructure/adapters/in-memory/InMemoryNewsCategoryRepository';
 import type { NewsPostRepository, CreateNewsPostData } from '@domain/ports/NewsPostRepository';
 
 function baseInput(overrides: Partial<CreateNewsPostData> = {}): CreateNewsPostData {
@@ -178,5 +179,37 @@ describe('InMemoryNewsPostRepository', () => {
 
     await repo.setArchived(p1.id, true);
     expect(await repo.countUnread('u1')).toBe(1);
+  });
+
+  // ─── M4: category is resolved FRESH on every read, not a stale create-time snapshot ──
+
+  it('list/findById reflect a category rename made AFTER the post was created (M4)', async () => {
+    const categoryRepo = new InMemoryNewsCategoryRepository();
+    const repo = new InMemoryNewsPostRepository(categoryRepo);
+    const category = await categoryRepo.create({ name: 'General', color: '#64748b' });
+    const post = await repo.create(baseInput({ categoryId: category.id }));
+
+    // Sanity: create-time snapshot has the ORIGINAL name.
+    expect((await repo.findById(post.id, 'u1'))!.category.name).toBe('General');
+
+    await categoryRepo.update(category.id, { name: 'General renombrada' });
+
+    const found = await repo.findById(post.id, 'u1');
+    expect(found!.category.name).toBe('General renombrada');
+
+    const [listed] = await repo.list({}, 'u1');
+    expect(listed!.category.name).toBe('General renombrada');
+  });
+
+  it('countByCategoryId counts ALL posts referencing a category, archived or not (M3 pairing)', async () => {
+    const categoryRepo = new InMemoryNewsCategoryRepository();
+    const repo = new InMemoryNewsPostRepository(categoryRepo);
+    const category = await categoryRepo.create({ name: 'General', color: '#64748b' });
+    const p1 = await repo.create(baseInput({ categoryId: category.id }));
+    await repo.create(baseInput({ categoryId: category.id }));
+    await repo.setArchived(p1.id, true);
+
+    expect(repo.countByCategoryId(category.id)).toBe(2);
+    expect(repo.countByCategoryId('other-cat')).toBe(0);
   });
 });

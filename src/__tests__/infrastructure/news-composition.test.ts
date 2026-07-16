@@ -157,6 +157,8 @@ describe('internal-news composition root', () => {
 
     const categoryRepo = new InMemoryNewsCategoryRepository();
     const postRepo = new InMemoryNewsPostRepository(categoryRepo);
+    // review fix M3 — keep the fixture at parity with news.routes.test.ts's buildApp.
+    categoryRepo.attachPostRepo(postRepo);
     const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
     const app = express();
