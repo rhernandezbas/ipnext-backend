@@ -102,6 +102,17 @@ export interface CampaignSegmentFilter {
   statuses: string[];
   balanceMin?: number;
   balanceMax?: number;
+  /**
+   * node-segment — nodo (`NetworkSite.id`). Ausente/null/'' = sin filtro. El
+   * adapter resuelve "≥1 contrato del cliente en este nodo" (Prisma:
+   * `contracts: { some: {...} }` — ver `buildSegmentWhere`).
+   */
+  networkSiteId?: string | null;
+  /**
+   * node-segment — AP (`AccessPoint.id`), combinable con `networkSiteId` (si
+   * vienen ambos, matchean en EL MISMO contrato). Ausente/null/'' = sin filtro.
+   */
+  accessPointId?: string | null;
 }
 
 /**

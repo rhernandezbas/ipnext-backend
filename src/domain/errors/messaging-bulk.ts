@@ -258,6 +258,21 @@ export class InvalidManualContactsError extends DomainError {
 }
 
 /**
+ * node-segment — raised by the router's node/AP parser (`toNodeApFilter`, Zod)
+ * when `networkSiteId`/`accessPointId` is PRESENT but not a string (or null).
+ * Fail-loud (mismo criterio que `InvalidManualRecipientsError`): un id que
+ * viaje como number/objeto NO se descarta en silencio — silenciaría el filtro
+ * y la campaña apuntaría a más gente de la que el operador eligió. AUSENTE/
+ * null sigue siendo válido (= sin filtro). Reusa `VALIDATION_ERROR` (→ 400).
+ */
+export class InvalidNodeApFilterError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'InvalidNodeApFilterError';
+  }
+}
+
+/**
  * bulk-csv-recipients (CSV-5) — raised by `resolveCombinedRecipients` cuando la
  * lista `manualContacts` NORMALIZADA (post trim/descarte de filas ambas-vacías)
  * excede `MAX_MANUAL_CONTACTS`. Cota INDEPENDIENTE de `TooManyManualRecipientsError`

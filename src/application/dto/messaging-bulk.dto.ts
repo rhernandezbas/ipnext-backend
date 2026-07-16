@@ -61,6 +61,19 @@ export interface PreviewSegmentInput {
   balanceMin?: number;
   balanceMax?: number;
   /**
+   * node-segment — filtro por nodo (`NetworkSite.id`). Ausente/null/'' = sin
+   * filtro. Un cliente entra si tiene ≥1 contrato cuyo `networkSiteId` matchea;
+   * es AND con statuses/deuda. Nodo o AP SOLOS ya son un segmento válido (no
+   * exigen statuses/deuda) — el caso "aviso de corte a todos los del nodo X".
+   */
+  networkSiteId?: string | null;
+  /**
+   * node-segment — filtro por AP (`AccessPoint.id`), con o sin `networkSiteId`.
+   * Si vienen ambos, deben matchear en EL MISMO contrato. Ausente/null/'' = sin
+   * filtro.
+   */
+  accessPointId?: string | null;
+  /**
    * manual-recipients (MAN-5) — lista manual OPCIONAL, PARALELA al filtro del
    * segmento (NO parte de él). Cuando se pasa, `count` refleja la UNIÓN
    * (segmento ∪ manuales) deduplicada por `clientId`, sin doble-contar el overlap.

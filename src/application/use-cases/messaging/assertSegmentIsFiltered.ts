@@ -27,21 +27,32 @@ export interface SegmentCriteria {
   statuses: string[];
   balanceMin?: number;
   balanceMax?: number;
+  /** node-segment — nodo/AP también son criterio REAL por sí solos (ver abajo). */
+  networkSiteId?: string | null;
+  accessPointId?: string | null;
 }
 
 /**
  * Predicado PURO: ¿el segmento tiene un criterio de filtrado REAL? (al menos un
- * status, O piso `balanceMin > 0`, O techo `balanceMax > 0`). Extraído para que
- * `assertHasRecipients` (manual-recipients) y `resolveCombinedRecipients` puedan
- * decidir si resolver el segmento SIN duplicar la lógica FIX-8/FIX-8-edge, y sin
- * cambiar el comportamiento de `assertSegmentIsFiltered`.
+ * status, O piso `balanceMin > 0`, O techo `balanceMax > 0`, O un nodo/AP).
+ * Extraído para que `assertHasRecipients` (manual-recipients) y
+ * `resolveCombinedRecipients` puedan decidir si resolver el segmento SIN
+ * duplicar la lógica FIX-8/FIX-8-edge, y sin cambiar el comportamiento de
+ * `assertSegmentIsFiltered`.
+ *
+ * ── node-segment: nodo o AP SOLOS son segmento válido ───────────────────────
+ * "Todos los clientes del nodo X" es EL caso de uso estrella (aviso de corte/
+ * mantenimiento) — no exige statuses ni deuda. `''` NO cuenta (mismo
+ * truthy-check que `buildSegmentWhere`, que ignora strings vacíos: si contara
+ * acá pero no filtrara allá, un `{networkSiteId: ''}` apuntaría a TODA la base).
  */
 export function segmentHasCriteria(segment: SegmentCriteria): boolean {
   const hasStatuses = segment.statuses.length > 0;
   const hasMeaningfulBalance =
     (segment.balanceMin != null && segment.balanceMin > 0) ||
     (segment.balanceMax != null && segment.balanceMax > 0);
-  return hasStatuses || hasMeaningfulBalance;
+  const hasNodeAp = Boolean(segment.networkSiteId) || Boolean(segment.accessPointId);
+  return hasStatuses || hasMeaningfulBalance || hasNodeAp;
 }
 
 export function assertSegmentIsFiltered(segment: SegmentCriteria): void {

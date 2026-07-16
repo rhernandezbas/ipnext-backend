@@ -121,6 +121,51 @@ describe('buildSegmentWhere (T6.3 — SEG-1 + fix wave 2: FIX-11 opt-out / FIX-1
       OR: [{ balanceDue: { lte: 5000 } }, { balanceDue: null }],
     });
   });
+
+  // ── node-segment: filtro por nodo/AP vía relación a contratos ────────────────
+  // UNA query con relation filter (`contracts: { some: {...} }`) — el join lo
+  // resuelve Postgres, sin N+1 ni fetch de contratos en memoria.
+  it('node-segment: networkSiteId solo → contracts.some.networkSiteId (≥1 contrato del nodo)', () => {
+    const segment: CampaignSegmentFilter = { statuses: [], networkSiteId: 'ns-1' };
+    expect(buildSegmentWhere(segment)).toEqual({
+      contracts: { some: { networkSiteId: 'ns-1' } },
+    });
+  });
+
+  it('node-segment: accessPointId solo → contracts.some.accessPointId (AP sin nodo es válido)', () => {
+    const segment: CampaignSegmentFilter = { statuses: [], accessPointId: 'ap-9' };
+    expect(buildSegmentWhere(segment)).toEqual({
+      contracts: { some: { accessPointId: 'ap-9' } },
+    });
+  });
+
+  it('node-segment: nodo+AP en UN SOLO some → ambos deben matchear en EL MISMO contrato', () => {
+    const segment: CampaignSegmentFilter = { statuses: [], networkSiteId: 'ns-1', accessPointId: 'ap-9' };
+    expect(buildSegmentWhere(segment)).toEqual({
+      contracts: { some: { networkSiteId: 'ns-1', accessPointId: 'ap-9' } },
+    });
+  });
+
+  it('node-segment: AND con statuses + balanceMin>0 (keys top-level, Prisma los ANDea)', () => {
+    const segment: CampaignSegmentFilter = { statuses: ['late'], balanceMin: 1000, networkSiteId: 'ns-1' };
+    expect(buildSegmentWhere(segment)).toEqual({
+      status: { in: ['late'] },
+      balanceDue: { gte: 1000 },
+      contracts: { some: { networkSiteId: 'ns-1' } },
+    });
+  });
+
+  it('node-segment: null/undefined/"" NO agregan la key contracts (sin filtro nodo/AP)', () => {
+    expect(buildSegmentWhere({ statuses: ['late'], networkSiteId: null, accessPointId: null })).toEqual({
+      status: { in: ['late'] },
+    });
+    expect(buildSegmentWhere({ statuses: ['late'] })).toEqual({ status: { in: ['late'] } });
+    // '' — mismo criterio que segmentHasCriteria: string vacío = ausente (un
+    // some con '' no matchearía NINGÚN contrato y silenciaría la campaña).
+    expect(buildSegmentWhere({ statuses: ['late'], networkSiteId: '', accessPointId: '' })).toEqual({
+      status: { in: ['late'] },
+    });
+  });
 });
 
 // ── FIX-11 (raíz del review): el where + resolveRecipients JUNTOS reportan bien ──

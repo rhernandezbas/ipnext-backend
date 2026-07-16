@@ -241,6 +241,16 @@ export function buildClientListWhere(query: ListClientsQuery): Record<string, un
  * real (`balanceMin` ausente o 0) se INCLUYEN esos NULL (vía `OR balanceDue:null`)
  * — son deudores válidos aunque no tengamos el monto; cuando hay piso `> 0` se
  * EXCLUYEN (no se puede confirmar que su monto ≥ piso).
+ *
+ * ── node-segment: filtro por nodo/AP vía relación a contratos ────────────────
+ * `contracts: { some: {...} }` — un cliente entra si tiene ≥1 contrato cuyo
+ * `networkSiteId` matchea (y cuyo `accessPointId` matchea, si se pasó); ambos
+ * en el MISMO `some` = mismo contrato. Sigue siendo UNA query (el join lo
+ * resuelve Postgres sobre los índices de `Contract.networkSiteId`/
+ * `accessPointId` — sin N+1, sin fetch de contratos en memoria). AND con
+ * statuses/deuda (keys top-level). `''` cuenta como ausente (truthy-check,
+ * mismo criterio que `segmentHasCriteria` — un some con `''` no matchearía
+ * ningún contrato).
  */
 export function buildSegmentWhere(segment: CampaignSegmentFilter): Record<string, unknown> {
   const where: Record<string, unknown> = {};
@@ -258,6 +268,14 @@ export function buildSegmentWhere(segment: CampaignSegmentFilter): Record<string
     } else {
       where['balanceDue'] = range;
     }
+  }
+  if (segment.networkSiteId || segment.accessPointId) {
+    where['contracts'] = {
+      some: {
+        ...(segment.networkSiteId ? { networkSiteId: segment.networkSiteId } : {}),
+        ...(segment.accessPointId ? { accessPointId: segment.accessPointId } : {}),
+      },
+    };
   }
   return where;
 }

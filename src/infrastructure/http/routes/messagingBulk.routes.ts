@@ -14,6 +14,7 @@
  * `/bulk/templates`).
  */
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
+import { z } from 'zod';
 import { ListTemplates } from '@application/use-cases/messaging/ListTemplates';
 import { PreviewCampaignSegment } from '@application/use-cases/messaging/PreviewCampaignSegment';
 import { ListSegmentRecipients } from '@application/use-cases/messaging/ListSegmentRecipients';
@@ -23,7 +24,7 @@ import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
 import type { CampaignRunner } from '@infrastructure/scheduling/CampaignRunner';
 import type { PreviewSegmentInput, ListSegmentRecipientsInput, CreateCampaignInput, ManualContactDto, SegmentRecipientsView } from '@application/dto/messaging-bulk.dto';
 import type { CampaignSegment, CampaignVariableSpec, CampaignRecipientStatus } from '@domain/entities/campaign';
-import { InvalidManualRecipientsError, InvalidManualContactsError } from '@domain/errors/messaging-bulk';
+import { InvalidManualRecipientsError, InvalidManualContactsError, InvalidNodeApFilterError } from '@domain/errors/messaging-bulk';
 
 /** Per-route permission guards (messaging.bulk / messaging.templates — RBAC-1/2). */
 export interface MessagingBulkRoutePerms {
@@ -114,10 +115,42 @@ function toSegmentRecipientsView(raw: unknown): SegmentRecipientsView {
 }
 
 /**
+ * node-segment — validación Zod del filtro nodo/AP: strings opcionales/
+ * nullables (ausente o null = sin filtro). Un tipo inválido (number/objeto/
+ * array) se RECHAZA fail-loud (`InvalidNodeApFilterError` → 400
+ * VALIDATION_ERROR, mismo criterio que `toManualClientIds`/MAN-3): descartarlo
+ * en silencio dejaría el filtro sin efecto y la campaña apuntaría a MÁS gente
+ * de la que el operador eligió en el composer.
+ */
+const NodeApFilterSchema = z.object({
+  networkSiteId: z.string().nullish(),
+  accessPointId: z.string().nullish(),
+});
+
+/** node-segment — parsea `networkSiteId`/`accessPointId` de un objeto del body. */
+function toNodeApFilter(raw: Record<string, unknown> | undefined): {
+  networkSiteId?: string | null;
+  accessPointId?: string | null;
+} {
+  const parsed = NodeApFilterSchema.safeParse({
+    networkSiteId: raw?.['networkSiteId'],
+    accessPointId: raw?.['accessPointId'],
+  });
+  if (!parsed.success) {
+    throw new InvalidNodeApFilterError('networkSiteId/accessPointId deben ser strings (o null/ausente = sin filtro)');
+  }
+  return parsed.data;
+}
+
+/**
  * FIX-8 — mapea el `segment` del body a un `CampaignSegment` FIEL, sin inventar un
  * default "todos". Normaliza `statuses` a array y preserva `balanceMin/Max`. Un
  * body sin `segment` (o con `statuses` ausente) queda `{statuses:[]}` — que el
  * use case RECHAZA (UnfilteredSegmentError) en vez de resolver a toda la base.
+ *
+ * node-segment — `networkSiteId`/`accessPointId` se validan con Zod (fail-loud
+ * en tipos inválidos, ver `toNodeApFilter`); nodo/AP SOLOS ya son un segmento
+ * válido (el use case los acepta como criterio real).
  */
 function toCampaignSegment(raw: unknown): CampaignSegment {
   const seg = (raw ?? {}) as Record<string, unknown>;
@@ -125,6 +158,7 @@ function toCampaignSegment(raw: unknown): CampaignSegment {
     statuses: Array.isArray(seg['statuses']) ? (seg['statuses'] as unknown[]).filter((s): s is string => typeof s === 'string') : [],
     balanceMin: typeof seg['balanceMin'] === 'number' ? (seg['balanceMin'] as number) : undefined,
     balanceMax: typeof seg['balanceMax'] === 'number' ? (seg['balanceMax'] as number) : undefined,
+    ...toNodeApFilter(seg),
   };
 }
 
@@ -168,6 +202,8 @@ export function createMessagingBulkRouter(
           statuses: Array.isArray(body?.['statuses']) ? (body!['statuses'] as string[]) : [],
           balanceMin: typeof body?.['balanceMin'] === 'number' ? (body!['balanceMin'] as number) : undefined,
           balanceMax: typeof body?.['balanceMax'] === 'number' ? (body!['balanceMax'] as number) : undefined,
+          // node-segment — filtro nodo/AP (Zod, fail-loud en tipos inválidos).
+          ...toNodeApFilter(body),
           // manual-recipients (MAN-5) — el composer previsualiza la unión.
           manualClientIds: toManualClientIds(body?.['manualClientIds']),
           // bulk-csv-recipients (CSV-6) — 4to dominio, PARALELO.
@@ -198,6 +234,10 @@ export function createMessagingBulkRouter(
           statuses: queryStatuses(req.query['statuses']),
           balanceMin: parseOptionalInt(firstQueryValue(req.query['balanceMin'])),
           balanceMax: parseOptionalInt(firstQueryValue(req.query['balanceMax'])),
+          // node-segment — escalares por query (mismo criterio DET-3); un query
+          // param SIEMPRE es string, no necesita el gate Zod del body.
+          networkSiteId: firstQueryValue(req.query['networkSiteId']),
+          accessPointId: firstQueryValue(req.query['accessPointId']),
         };
         const result = await previewCampaignSegment.execute(input);
         res.json(result);
@@ -226,6 +266,8 @@ export function createMessagingBulkRouter(
           statuses: Array.isArray(body?.['statuses']) ? (body!['statuses'] as string[]) : [],
           balanceMin: typeof body?.['balanceMin'] === 'number' ? (body!['balanceMin'] as number) : undefined,
           balanceMax: typeof body?.['balanceMax'] === 'number' ? (body!['balanceMax'] as number) : undefined,
+          // node-segment — filtro nodo/AP (Zod, fail-loud en tipos inválidos).
+          ...toNodeApFilter(body),
           page: typeof body?.['page'] === 'number' ? (body!['page'] as number) : undefined,
           limit: typeof body?.['limit'] === 'number' ? (body!['limit'] as number) : undefined,
           manualClientIds: toManualClientIds(body?.['manualClientIds']),
@@ -257,6 +299,9 @@ export function createMessagingBulkRouter(
           statuses: queryStatuses(req.query['statuses']),
           balanceMin: parseOptionalInt(firstQueryValue(req.query['balanceMin'])),
           balanceMax: parseOptionalInt(firstQueryValue(req.query['balanceMax'])),
+          // node-segment — escalares por query (mismo criterio DET-3/FIX-16).
+          networkSiteId: firstQueryValue(req.query['networkSiteId']),
+          accessPointId: firstQueryValue(req.query['accessPointId']),
           view: toSegmentRecipientsView(firstQueryValue(req.query['view'])),
           page: parseOptionalInt(firstQueryValue(req.query['page'])),
           limit: parseOptionalInt(firstQueryValue(req.query['limit'])),

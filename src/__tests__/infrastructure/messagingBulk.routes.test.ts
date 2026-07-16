@@ -894,3 +894,175 @@ describe('/api/messaging/bulk — bulk-csv-recipients (manualContacts)', () => {
     expect(res.body.data[0]).toMatchObject({ reason: 'telefono_invalido', source: 'segment' });
   });
 });
+
+// ─── node-segment — filtro nodo/AP por las rutas (Zod + wiring al port) ─────────
+
+describe('/api/messaging/bulk — node-segment (networkSiteId/accessPointId)', () => {
+  it('POST /segment/preview con networkSiteId SOLO (sin statuses) → 200 y el filtro llega al port', async () => {
+    const { app, segmentSource } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: [], networkSiteId: 'ns-1' });
+
+    expect(res.status).toBe(200); // nodo solo ES segmento válido (no UNFILTERED_SEGMENT)
+    expect(res.body.count).toBe(1);
+    expect(segmentSource.listSegmentRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({ networkSiteId: 'ns-1' }),
+    );
+  });
+
+  it('POST /segment/preview con accessPointId (sin nodo) → 200 y el filtro llega al port', async () => {
+    const { app, segmentSource } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: [], accessPointId: 'ap-9' });
+
+    expect(res.status).toBe(200);
+    expect(segmentSource.listSegmentRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({ accessPointId: 'ap-9' }),
+    );
+  });
+
+  it('POST /segment/preview con networkSiteId NO-string (number) → 400 VALIDATION_ERROR, sin tocar la fuente', async () => {
+    const { app, segmentSource } = buildApp();
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], networkSiteId: 123 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(segmentSource.listSegmentRecipients).not.toHaveBeenCalled();
+  });
+
+  it('POST /segment/preview con accessPointId NO-string (objeto) → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], accessPointId: { id: 'ap-9' } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('POST /segment/preview con null explícito → 200 (null = sin filtro, backcompat)', async () => {
+    const { app, segmentSource } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], networkSiteId: null, accessPointId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(1);
+    expect(segmentSource.listSegmentRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({ statuses: ['late'] }),
+    );
+  });
+
+  it('GET /segment/preview?networkSiteId=ns-1 → 200 y el filtro llega al port (query escalar)', async () => {
+    const { app, segmentSource } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app)
+      .get('/api/messaging/bulk/segment/preview')
+      .query({ networkSiteId: 'ns-1' });
+
+    expect(res.status).toBe(200);
+    expect(segmentSource.listSegmentRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({ networkSiteId: 'ns-1' }),
+    );
+  });
+
+  it('POST /segment/recipients con nodo+AP → 200, el port recibe AMBOS (la tabla del modal honra el filtro)', async () => {
+    const { app, segmentSource } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/recipients')
+      .send({ statuses: [], networkSiteId: 'ns-1', accessPointId: 'ap-2' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(segmentSource.listSegmentRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({ networkSiteId: 'ns-1', accessPointId: 'ap-2' }),
+    );
+  });
+
+  it('POST /segment/recipients con networkSiteId NO-string → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/recipients')
+      .send({ statuses: ['late'], networkSiteId: 42 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('GET /segment/recipients?accessPointId=ap-9 → 200 y el filtro llega al port', async () => {
+    const { app, segmentSource } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app)
+      .get('/api/messaging/bulk/segment/recipients')
+      .query({ accessPointId: 'ap-9' });
+
+    expect(res.status).toBe(200);
+    expect(segmentSource.listSegmentRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({ accessPointId: 'ap-9' }),
+    );
+  });
+
+  it('POST /campaigns con segment.networkSiteId/accessPointId → 201 y el SNAPSHOT persiste ambos', async () => {
+    const { app, campaignRepo, segmentSource } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/campaigns')
+      .send({
+        name: 'Corte nodo ns-1',
+        templateRef: 'HXapproved',
+        segment: { statuses: [], networkSiteId: 'ns-1', accessPointId: 'ap-1' },
+        variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+      });
+
+    expect(res.status).toBe(201);
+    const persisted = await campaignRepo.findById(res.body.campaignId);
+    expect(persisted?.segment.networkSiteId).toBe('ns-1');
+    expect(persisted?.segment.accessPointId).toBe('ap-1');
+    expect(segmentSource.listSegmentRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({ networkSiteId: 'ns-1', accessPointId: 'ap-1' }),
+    );
+  });
+
+  it('POST /campaigns con segment.networkSiteId NO-string → 400 VALIDATION_ERROR, NO se crea campaña', async () => {
+    const { app, campaignRepo } = buildApp();
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/campaigns')
+      .send({
+        name: 'inválida',
+        templateRef: 'HXapproved',
+        segment: { statuses: ['late'], networkSiteId: 42 },
+        variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    const list = await campaignRepo.list({});
+    expect(list.total).toBe(0);
+  });
+});

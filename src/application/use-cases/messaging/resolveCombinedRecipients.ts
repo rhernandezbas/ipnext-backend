@@ -163,6 +163,10 @@ export async function resolveCombinedRecipients(params: {
       statuses: segment.statuses,
       balanceMin: segment.balanceMin,
       balanceMax: segment.balanceMax,
+      // node-segment — el filtro nodo/AP viaja al source (Prisma lo resuelve con
+      // `contracts: { some: {...} }`); AND con statuses/deuda, mismo criterio.
+      networkSiteId: segment.networkSiteId,
+      accessPointId: segment.accessPointId,
     });
     for (const c of candidates) segmentCandidateIds.add(c.clientId);
     const r = resolveRecipients(candidates);

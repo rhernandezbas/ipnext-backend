@@ -21,6 +21,18 @@ export interface CampaignSegment {
   statuses: string[];
   balanceMin?: number;
   balanceMax?: number;
+  /**
+   * node-segment — filtro por nodo (`NetworkSite.id`). Ausente/null/'' = sin
+   * filtro. Un cliente entra si tiene ≥1 contrato cuyo `networkSiteId` matchea
+   * (AND con statuses/deuda). Nodo o AP SOLOS ya son segmento válido — el caso
+   * "aviso de corte a TODOS los del nodo X".
+   */
+  networkSiteId?: string | null;
+  /**
+   * node-segment — filtro por AP (`AccessPoint.id`), con o sin nodo. Si vienen
+   * AMBOS, deben matchear en EL MISMO contrato. Ausente/null/'' = sin filtro.
+   */
+  accessPointId?: string | null;
 }
 
 /** v1 whitelist de fuentes para resolver una variable del template (design §3.3). */
