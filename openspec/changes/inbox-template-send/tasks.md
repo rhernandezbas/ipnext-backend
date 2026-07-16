@@ -1,0 +1,135 @@
+# Tasks — inbox-template-send
+
+**Change**: inbox-template-send · **Phase**: tasks
+**Repos**: BE = este worktree (`feat/inbox-template-send`); FE = `ipnext-frontend` (branch NUEVO
+`feat/inbox-template-send-fe` desde main — crear al arrancar el Batch 4).
+**TDD estricto**: test RED primero, mínimo código, refactor. Correr SOLO los archivos de test
+afectados durante el loop; `npm test` completo al cierre de cada batch.
+**Colisiones**: `inbox-resolve` (en vuelo) comparte archivos append-only con este change — mapa
+completo en design §Colisiones. Merge secuencial: rebase del segundo que llegue a main. OJO: el
+tasks.md de inbox-resolve dice "ningún change BE toca messaging" — quedó desactualizado.
+**Regla de plataforma (D2)**: el template NO abre la ventana — asertarlo explícito en TS-6/CTA-1.
+
+---
+
+## Batch 1 — BE: dominio + ports + fakes (MODEL-1, PORT-1, PORT-2, base TS-2)
+
+- [ ] **T1 — error nuevo `ConversationPhoneMissingError`** (TS-2)
+  - Test RED: en el test del use case (T4) — pero el archivo del error se crea acá para que
+    compile: `domain/errors/messaging.ts` + code `CONVERSATION_PHONE_MISSING` en el statusMap
+    (`errorHandler.ts`, 422) con test del errorHandler si existe patrón (mirar cómo se testeó
+    `MESSAGING_WINDOW_EXPIRED`).
+  - Actualizar el doc-comment de mapping del archivo de errores (fuente única statusMap).
+- [ ] **T2 — `ChatMessageRepository.upsertTemplateMessage` + in-memory** (PORT-1)
+  - Test RED: `src/__tests__/infrastructure/adapters/in-memory/InMemoryChatMessageRepository.test.ts`
+    (o el archivo existente del adapter) — idempotencia por `providerMessageId`, shape de la fila
+    (`origin:'agent_template'`, `chatwootMessageId:null`, `campaignRecipientId:null`,
+    `isPrivate:false`), aparece en `listByConversation` ordenado.
+  - Código: `UpsertTemplateChatMessageInput` + método en el port (`domain/ports/
+    ChatMessageRepository.ts`), `providerMessageId` en `ChatMessageRecord`, impl in-memory.
+- [ ] **T3 — `ConversationRepository.bumpLastMessage` + in-memory** (PORT-2)
+  - Test RED: `InMemoryConversationRepository.test.ts` — escribe SOLO lastMessageAt/preview;
+    canReply/status/assignee/area intactos; null si no existe.
+  - Código: método en el port + impl in-memory. JSDoc: write-path separado, jamás toca el cache
+    de Chatwoot (cita a D2).
+
+## Batch 2 — BE: use case `SendTemplateMessage` (TS-1..TS-6)
+
+- [ ] **T4 — test RED completo del use case**
+  - `src/__tests__/application/messaging/SendTemplateMessage.test.ts` con
+    `InMemoryConversationRepository` + `InMemoryChatMessageRepository` +
+    `InMemoryTemplateMessagingGateway` (NUNCA mock de Prisma):
+    404 conversación; 422 sin teléfono (y fallback `toWhatsAppE164` del contactPhone crudo);
+    422 template pending/inexistente; 422 variables faltantes (con `missing[]`);
+    rejected/unavailable/config propagan y CERO persistencia;
+    happy path (args exactos a `sendTemplate`, fila proyectada con `renderTemplateBody`, bump de
+    preview, DTO devuelto); canReply/status intactos post-envío (D2); enviable con `canReply:true`;
+    idempotencia del mirror por providerId; `senderName` pass-through.
+- [ ] **T5 — código mínimo del use case**
+  - `src/application/use-cases/messaging/SendTemplateMessage.ts` — orden de guards PINNED (TS-1),
+    reuso de `renderTemplateBody` (import desde `./SendCampaign`), deps por ports (DIP).
+- [ ] **Gate Batch 1+2**: suites de application + adapters in-memory verdes.
+
+## Batch 3 — BE: migración + adapters Prisma + rutas + wiring (MODEL-1, HTTP-1..3)
+
+- [ ] **T6 — migración `providerMessageId`** (MODEL-1)
+  - `npm run prisma:migrate` (nombre sugerido `chatmessage_provider_message_id`) — columna
+    `String? @unique`. Jamás SQL a mano.
+- [ ] **T7 — adapters Prisma** (PORT-1, PORT-2)
+  - Test RED: siguiendo el patrón de tests Prisma existente del feature
+    (`PrismaConversationRepository.orderBy.test.ts` como molde de nivel de aserción) para el shape
+    del upsert/update; si el patrón del repo es cubrirlos vía route-tests, documentarlo en el PR.
+  - Código: `PrismaChatMessageRepository.upsertTemplateMessage` (upsert por `providerMessageId`) +
+    `PrismaConversationRepository.bumpLastMessage` (update escueto de 2 campos). Comment-block
+    cross-ref al in-memory (los adapters no pueden divergir).
+- [ ] **T8 — rutas + factory** (HTTP-1, HTTP-2)
+  - Test RED: `src/__tests__/infrastructure/messaging.routes.test.ts` (o archivo nuevo
+    `sendTemplate.routes.test.ts` espejo del patrón) — 401/403 en ambas rutas; 400 body malformado
+    (templateRef ausente/no-string; variables con valor no-string) SIN invocar el use case; 201
+    happy + mensaje visible en `GET .../messages`; 422/503 tipados vía errorHandler; GET
+    `/send-templates` 200 `{data}` con el catálogo del fake; no-regresión de las rutas previas
+    con la factory extendida (HTTP-3).
+  - Código: 2 rutas en `createMessagingRouter` (+2 args), parsing inline molde `/messages`.
+- [ ] **T9 — wiring `app.ts`** (HTTP-3)
+  - `TwilioContentGateway` propio del bloque messaging + `ListMessagingTemplates` +
+    `SendTemplateMessage` cableados. Sin variables compartidas con los bloques bulk/CRUD
+    (precedente anti-interleave).
+- [ ] **Gate Batch 3**: `npm test` completo BE verde. NO `npm run build` (regla del repo).
+
+## Batch 4 — FE: capa de datos (WAPI-1, ERR-1 códigos)
+
+- [ ] **T10 — api client**
+  - Test RED: `src/__tests__/api/whatsapp.api.test.ts` — unwrap `{data}` del GET; POST flat con
+    `{templateRef, variables}`; template sin variables manda `variables:{}`.
+  - Código: `listSendableTemplates` + `sendWhatsappTemplate` en `api/whatsapp.api.ts`; import de
+    `TemplateSummaryDto` desde `types/messagingBulk.ts` (reuso, cero duplicación).
+- [ ] **T11 — hooks**
+  - Test RED: test de hooks (molde de los tests de `useWhatsapp`/`useBulkMessaging`) —
+    `useSendableTemplates` gateado por `enabled` + staleTime; `useSendWhatsappTemplate`:
+    onSuccess appendea al cache de mensajes (dedup por id) + invalida conversations root; keys
+    derivadas de `vars.convId`; `isPending` scoped por convId.
+  - Código: ambos hooks en `hooks/useWhatsapp.ts` (keys nuevas exportadas).
+- [ ] **T12 — mapSendError extendido** (ERR-1)
+  - Test RED: `src/__tests__/utils/mapSendError.test.ts` — 6 códigos nuevos + default intacto.
+  - Código: `utils/mapSendError.ts`.
+
+## Batch 5 — FE: UI (CTA-1, PICK-1, VAR-1, SEND-1, A11Y-1)
+
+- [ ] **T13 — CTA en el Composer** (CTA-1)
+  - Test RED: `Composer.test.tsx` (extender) — CTA SOLO en la rama expirada; ausente en
+    verificando/error/abierta/nota; composer sigue disabled tras un envío exitoso (mock del
+    panel).
+  - Código: `Composer.tsx` — botón + estado `templatePanelOpen` + mount del panel con
+    `key={conversationId}`.
+- [ ] **T14 — `TemplateSendPanel`: catálogo 4 ramas + picker** (PICK-1)
+  - Test RED: `TemplateSendPanel.test.tsx` — 4 ramas; solo `sendable` listados; retry en error.
+  - Código: componente nuevo en `WhatsappInboxPage/components/` + module.css (tokens del design
+    system del inbox).
+- [ ] **T15 — variables + preview + gate de confirm** (VAR-1, SEND-1 gate)
+  - Test RED: inputs por variable declarada con labels; preview vivo con valor tipeado y
+    pendiente señalizado; confirm disabled hasta completar; template sin variables habilita
+    directo.
+  - Código: sub-secciones del panel (helpers propios inspirados en `splitTemplateBody`/
+    `renderPreviewMessage` — NO importar los del bulk si el shape difiere; decidir en apply
+    import vs clon documentado).
+- [ ] **T16 — envío + éxito + errores + a11y** (SEND-1, ERR-1, A11Y-1)
+  - Test RED: happy path (POST correcto, mensaje en el hilo vía cache, cierre, foco al CTA,
+    announcement); isPending deshabilita confirm; error 422/503 → copy de `mapSendError` en
+    `role="alert"` con panel abierto; dialog a11y (role/aria-modal/labelledby, Esc, backdrop,
+    focus-return); flujo completable por teclado.
+  - Código: integración con `useSendWhatsappTemplate` + a11y molde `PreviewModal`. Motion según
+    Emil (transform+opacity, `prefers-reduced-motion`) — SOLO en esta task, no antes.
+- [ ] **Gate Batch 5**: suite FE completa verde.
+
+## Batch 6 — Cierre
+
+- [ ] **T17 — E2E vivo (innegociable, memoria `e2e-envelope-mock-mismatch`)**
+  - Contra el BE real (dev): catálogo desenvuelve `{data}`; POST feliz con un template aprobado
+    real (número de prueba); mensaje visible en el hilo y preview de la lista bumpeado; el
+    composer sigue bloqueado (ventana NO abierta); 422 real eligiendo template no aprobado vía
+    API cruda.
+- [ ] **T18 — colisión re-check + docs**
+  - `git log main..` de `inbox-resolve`: si ya mergeó, rebase y re-verificar `messaging.routes.ts`
+    / `ConversationRepository.ts` / archivos FE compartidos. Avisar al orquestador que el
+    "ningún change toca messaging" de inbox-resolve quedó stale.
+- [ ] **T19 — verify + archive** (fases sdd-verify / sdd-archive del ciclo)
