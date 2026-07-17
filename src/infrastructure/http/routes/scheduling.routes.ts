@@ -734,7 +734,26 @@ export function createSchedulingRouter(
     }
   });
 
-  router.put('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  // SECURITY (K3-FE review CRITICAL): onuSerial arms the fiber-auto-provision
+  // watcher — it auto-provisions REAL ONUs with no human in the loop. This PUT
+  // historically only had `auth` (no permission at all), and the FE gate on
+  // scheduling.write is cosmetic (bypassable via direct API call). Surgical
+  // fix: do NOT gate the whole route — operators edit title/address/assignee
+  // daily and that flow never required a permission; gating everything would
+  // break live flows. Instead, ONLY when the body carries the `onuSerial` key
+  // (present, even null — clearing also arms/disarms it) do we require
+  // scheduling:write via the same schedWrite guard used by
+  // POST /:id/status and /:id/archive. No key present → pass-through,
+  // byte-identical to the pre-fix behaviour.
+  const onuSerialPermGate: RequestHandler = (req, res, next) => {
+    if (req.body && typeof req.body === 'object' && 'onuSerial' in req.body) {
+      schedWrite(req, res, next);
+      return;
+    }
+    next();
+  };
+
+  router.put('/:id', auth, onuSerialPermGate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const parsed = UpdateTaskSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
