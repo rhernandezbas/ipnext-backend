@@ -103,6 +103,11 @@ export interface ScheduledTask {
   // #86 — archive flag. Null = not archived. Set only when generalStatus is closed/dismissed.
   archivedAt: string | null;
 
+  // K3 (fiber-auto-watcher) — serial de la ONU cargado por el técnico en la tarea de
+  // instalación. SIEMPRE normalizado UPPERCASE sin espacios al persistir. No exige
+  // prefijo HWTC (ZTE/VSOL se registran igual; el watcher solo auto-aprovisiona Huawei).
+  onuSerial: string | null;
+
   // iclass-status-sync — current IClass OS status code (opaque IClass id, e.g. "7").
   // Null until the scheduler first captures it. Only the code is stored; label/color
   // are resolved by JOIN to IClassStatusCatalog at read time (avoids stale denorm).

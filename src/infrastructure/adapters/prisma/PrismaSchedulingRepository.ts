@@ -140,6 +140,8 @@ export function toTask(row: any): ScheduledTask {
       : [],
     // #39 — project allows equipment retirement (false when no project FK)
     projectAllowsRetirement: row.project?.allowsEquipmentRetirement ?? false,
+    // K3 (fiber-auto-watcher) — serial de la ONU cargado por el técnico.
+    onuSerial: row.onuSerial ?? null,
     // #86 — archive flag. Null = not archived.
     archivedAt: row.archivedAt instanceof Date
       ? row.archivedAt.toISOString()
@@ -705,6 +707,8 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     // #66 — networkType + networkSiteName
     if (data.networkType !== undefined) update['networkType'] = data.networkType;
     if (data.networkSiteName !== undefined) update['networkSiteName'] = data.networkSiteName;
+    // K3 — serial de la ONU (ya normalizado por UpdateTask; null limpia)
+    if (data.onuSerial !== undefined) update['onuSerial'] = data.onuSerial;
     return update;
   }
 

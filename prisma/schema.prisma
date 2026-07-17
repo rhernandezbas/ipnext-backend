@@ -1369,6 +1369,14 @@ model ScheduledTask {
   iclassStatusCode      String?
   iclassStatusUpdatedAt DateTime?
 
+  // K3 (fiber-auto-watcher) — serial de la ONU cargado por el técnico en la tarea de
+  // instalación. Normalizado UPPERCASE sin espacios al persistir (UpdateTask). El watcher
+  // matchea este serial contra las ONUs sin configurar de SmartOLT. No exige prefijo HWTC.
+  onuSerial String?
+
+  // K3 — registro de intentos del watcher (anti-reintento infinito, sobrevive restarts)
+  fiberAutoProvisionAttempts FiberAutoProvisionAttempt[]
+
   // IClass closure loop — mirror of the closed SO, linked back by codigo↔sequenceNumber
   iclassClosedOrder IClassServiceOrder?
 
@@ -1402,6 +1410,28 @@ model ScheduledTask {
   @@index([ticketId])
   @@index([networkSiteId])
   @@index([archivedAt])
+  @@index([onuSerial])
+}
+
+// K3 (fiber-auto-watcher) — intento de auto-aprovisionamiento por (taskId, onuSn).
+// DECISIÓN: tabla chica dedicada (no un campo en la tarea) — el estado de reintentos
+// es del WATCHER, no de la tarea; sobrevive restarts y se borra en cascada con la tarea.
+// status: 'pending' (reintentable con backoff) | 'succeeded' | 'failed-final' (3 fallos,
+// no insistir) | 'manual-required' (VLAN manual / no-Huawei — nunca auto) | 'conflict'
+// (serial duplicado en 2+ tareas; se REANUDA solo si vuelve a ser único).
+model FiberAutoProvisionAttempt {
+  id            String        @id @default(uuid())
+  taskId        String
+  task          ScheduledTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  onuSn         String
+  attempts      Int           @default(0)
+  status        String        @default("pending")
+  lastError     String?
+  lastAttemptAt DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([taskId, onuSn])
 }
 
 // task-activity-log — append-only audit feed. One row per change on a task

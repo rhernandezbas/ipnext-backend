@@ -4,7 +4,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt' | 'iclassStatusCode' | 'iclassStatusUpdatedAt' | 'iclassStatus'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt' | 'iclassStatusCode' | 'iclassStatusUpdatedAt' | 'iclassStatus' | 'onuSerial'
 > {
   /** Discriminador de tipo de tarea. Por defecto 'customer' para retro-compatibilidad. */
   kind?: 'customer' | 'network';
@@ -38,6 +38,11 @@ export interface UpdateTaskInput extends Partial<CreateTaskInput> {
   // #41 — lifecycle state. When present, wins over isClosed (precedence D4).
   generalStatus?: TaskGeneralStatus;
   reviewedByInventory?: boolean;
+  /**
+   * K3 (fiber-auto-watcher) — serial de la ONU de la instalación. El use case
+   * lo normaliza SIEMPRE (UPPERCASE sin espacios) antes de persistir; null limpia.
+   */
+  onuSerial?: string | null;
 }
 
 /**

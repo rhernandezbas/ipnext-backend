@@ -96,6 +96,8 @@ const NEW_FIELDS_DEFAULTS = {
   iclassCityCode: null as string | null,
   // #86 — archive flag. null = not archived.
   archivedAt: null as string | null,
+  // K3 (fiber-auto-watcher) — serial de la ONU. null = sin serial cargado.
+  onuSerial: null as string | null,
   // iclass-status-sync
   iclassStatusCode: null as string | null,
   iclassStatusUpdatedAt: null as string | null,
@@ -464,6 +466,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ticketSubject: (data.ticketId != null ? (this.ticketSubjects.get(data.ticketId) ?? null) : null),
       // #86 — new tasks are never archived
       archivedAt: null,
+      // K3 — el serial de la ONU se carga DESPUÉS (PUT del técnico), nunca al crear.
+      onuSerial: null,
       // iclass-status-sync — not set at task creation
       iclassStatusCode: null,
       iclassStatusUpdatedAt: null,
@@ -523,6 +527,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       // #66 — networkType + networkSiteName
       ...(data.networkType !== undefined && { networkType: data.networkType }),
       ...(data.networkSiteName !== undefined && { networkSiteName: data.networkSiteName }),
+      // K3 — serial de la ONU (ya normalizado por UpdateTask; null limpia)
+      ...(data.onuSerial !== undefined && { onuSerial: data.onuSerial }),
       watcherIds,
     };
     return { ...this.tasks[index] };

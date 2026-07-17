@@ -48,6 +48,16 @@ export function isHuaweiSn(sn: string): boolean {
   return sn.toUpperCase().startsWith(HUAWEI_SN_PREFIX);
 }
 
+/**
+ * K3 (fiber-auto-watcher) — normalización CANÓNICA del serial de ONU:
+ * UPPERCASE + sin whitespace. El match del watcher contra unconfigured_onus
+ * y el registro de intentos usan SIEMPRE esta forma; un serial "sucio"
+ * persistido tal cual jamás matchearía.
+ */
+export function normalizeOnuSerial(raw: string): string {
+  return raw.replace(/\s+/g, '').toUpperCase();
+}
+
 /** MAYÚSCULAS + sin diacríticos (NFD strip U+0300–U+036F, Ñ→N) + solo [A-Z0-9]. */
 function normalizeApellido(raw: string): string {
   return raw

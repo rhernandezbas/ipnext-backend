@@ -7,6 +7,7 @@ import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRe
 import { IClassAutoAssigner } from '@domain/ports/IClassAutoAssigner';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
+import { normalizeOnuSerial } from '@domain/services/fiberProvisioning';
 
 export class UpdateTask {
   constructor(
@@ -31,6 +32,15 @@ export class UpdateTask {
     // Done before the snapshot so the diff sees a single canonical generalStatus change.
     if (data.generalStatus === undefined && data.isClosed !== undefined) {
       data = { ...data, generalStatus: data.isClosed ? 'closed' : 'open' };
+    }
+
+    // K3 (fiber-auto-watcher) — onuSerial SIEMPRE canónico al persistir (UPPERCASE, sin
+    // espacios): el watcher matchea contra este valor y un serial "sucio" jamás matchearía.
+    // Se normaliza ACÁ (no solo en el Zod de la ruta) para cubrir a cualquier caller interno.
+    // Vacío tras normalizar → null (equivale a limpiar).
+    if (typeof data.onuSerial === 'string') {
+      const normalized = normalizeOnuSerial(data.onuSerial);
+      data = { ...data, onuSerial: normalized === '' ? null : normalized };
     }
 
     // FK validation — only for FKs PRESENT in the partial body (not undefined)

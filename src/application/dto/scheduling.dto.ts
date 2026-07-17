@@ -163,6 +163,16 @@ const UpdateTaskBaseSchema = CreateTaskBaseSchema.extend({
   // #66 — networkSiteId is NOT updatable. It was previously accepted-and-ignored
   // (no repo maps it on update), which is a silent lie to the client. Changing a
   // red task's site was never in scope; removed to fail loud (400) instead.
+  // K3 (fiber-auto-watcher) — serial de la ONU: 8-24 alfanumérico TRAS normalizar
+  // (UPPERCASE, sin espacios — el técnico puede pegarlo con espacios/minúsculas).
+  // NO exige prefijo HWTC (ZTE/VSOL se registran igual; el watcher solo
+  // auto-aprovisiona Huawei). null = limpiar el serial.
+  onuSerial: z
+    .string()
+    .transform(s => s.replace(/\s+/g, '').toUpperCase())
+    .pipe(z.string().regex(/^[A-Z0-9]{8,24}$/, 'onuSerial: 8-24 caracteres alfanuméricos'))
+    .nullable()
+    .optional(),
 });
 
 // UpdateTaskSchema hereda nullable/optional para todos los FK — sin kind obligatorio.
