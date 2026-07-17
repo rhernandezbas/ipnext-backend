@@ -61,6 +61,12 @@ export interface FiberContractLookup {
  */
 export interface FiberInstallTaskWriter {
   findLatestByContract(contractId: string): Promise<{ id: string; description: string | null } | null>;
+  /**
+   * K3 fix wave M4 — lookup directo por id: el watcher CONOCE la tarea matcheada
+   * por serial y audita AHÍ (no en "la última del contrato", que puede ser un
+   * reclamo posterior). El wizard sigue usando findLatestByContract.
+   */
+  findById(taskId: string): Promise<{ id: string; description: string | null } | null>;
   updateDescription(taskId: string, description: string): Promise<void>;
 }
 
@@ -77,6 +83,12 @@ export interface ProvisionFiberOnuInput {
    * de la tarea. Ausente/'manual' = bloque K2 intacto (botón del wizard).
    */
   origin?: 'manual' | 'watcher';
+  /**
+   * K3 fix wave M4 — override del destino del bloque auditable: el watcher pasa
+   * la tarea MATCHEADA por serial. Ausente = semántica K2 (última tarea no
+   * archivada del contrato).
+   */
+  auditTaskId?: string;
 }
 
 export type ProvisionStepName =
@@ -316,7 +328,7 @@ export class ProvisionFiberOnu {
       pppoe,
       steps,
       origin: input.origin,
-    });
+    }, input.auditTaskId);
 
     return {
       dryRun: false,
@@ -570,9 +582,13 @@ export class ProvisionFiberOnu {
       steps: ProvisionStepResult[];
       origin?: 'manual' | 'watcher';
     },
+    auditTaskId?: string,
   ): Promise<boolean> {
     try {
-      const task = await this.taskWriter.findLatestByContract(contractId);
+      // M4 — el watcher audita en la tarea MATCHEADA; el wizard en la última del contrato.
+      const task = auditTaskId != null
+        ? await this.taskWriter.findById(auditTaskId)
+        : await this.taskWriter.findLatestByContract(contractId);
       if (!task) return false;
       const rendered = renderOnuProvisioningBlock(block);
       const description = task.description ? `${task.description}\n\n${rendered}` : rendered;

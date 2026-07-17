@@ -42,6 +42,8 @@ import { InMemoryGestionRealIngestConfigRepository } from '@infrastructure/adapt
 import { InMemoryFiberAutoProvisionTaskRepository } from '@infrastructure/adapters/in-memory/InMemoryFiberAutoProvisionTaskRepository';
 import { InMemoryFiberAutoProvisionAttemptRepository } from '@infrastructure/adapters/in-memory/InMemoryFiberAutoProvisionAttemptRepository';
 import type { UnconfiguredOnu } from '@domain/ports/OltProvisioningGateway';
+import type { FiberAutoProvisionAttempt } from '@domain/ports/FiberAutoProvisionAttemptRepository';
+import { OltProvisioningError, UnconfiguredOnuNotFoundError } from '@domain/errors/smartolt';
 
 const PROFILE = 'IP-FTTH-300';
 const SN = 'HWTC11112222';
@@ -373,5 +375,220 @@ describe('AutoProvisionFiberOnus — conflicto: dos tareas con el MISMO serial',
     expect(summary).toMatchObject({ matched: 1, provisioned: 1 });
     expect(await fx.attemptRepo.find('task-1', SN)).toMatchObject({ status: 'succeeded' });
     expect(fx.taskRepo.tasks[0]!.description!).toContain('(aprovisionada AUTOMÁTICAMENTE por el watcher)');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX WAVE — review adversarial sobre 93734a04 (C1, H2, M3, M4, L6, L7, L8)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('C1 (CRITICAL) — los estados terminales son INTOCABLES y salen de la ecuación de conflicto', () => {
+  it('reuso legítimo de ONU: tarea vieja succeeded + tarea nueva con el mismo serial → NO es conflicto, la NUEVA se aprovisiona', async () => {
+    const fx = await buildFixture();
+    fx.taskRepo.tasks.push({ id: 'task-a', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+    await fx.watcher.run(); // A aprovisionada → succeeded
+    expect(await fx.attemptRepo.find('task-a', SN)).toMatchObject({ status: 'succeeded' });
+
+    // La ONU se recicla para un cliente NUEVO (sigue/vuelve a estar unconfigured) y
+    // el técnico carga el MISMO serial en la tarea B.
+    fx.taskRepo.tasks.push({ id: 'task-b', contractId: 'ctr-2', onuSerial: SN, archivedAt: null, description: null });
+
+    const summary = await fx.watcher.run();
+
+    // B se aprovisiona (el par terminal de A NO participa de la ambigüedad).
+    expect(summary).toMatchObject({ matched: 2, provisioned: 1, skipped: 1 });
+    expect(await fx.attemptRepo.find('task-b', SN)).toMatchObject({ status: 'succeeded' });
+    // El succeeded de A quedó INTACTO — jamás pisado a conflict.
+    expect(await fx.attemptRepo.find('task-a', SN)).toMatchObject({ status: 'succeeded', attempts: 1 });
+    // Sin notas de conflicto en ninguna.
+    for (const task of fx.taskRepo.tasks) {
+      expect(task.description ?? '').not.toContain('BLOQUEADO');
+    }
+  });
+
+  it('escenario COMPLETO del review: succeeded jamás se vuelve reanudable — la ONU del cliente nuevo NO se configura con datos del viejo', async () => {
+    const fx = await buildFixture();
+    fx.taskRepo.tasks.push({ id: 'task-a', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+    await fx.watcher.run(); // A succeeded (1 authorize)
+
+    fx.taskRepo.tasks.push({ id: 'task-b', contractId: 'ctr-2', onuSerial: SN, archivedAt: null, description: null });
+    await fx.watcher.run(); // B succeeded (2do authorize) — sin conflicto
+
+    // El humano limpia el serial de B; la ONU se factory-resetea cualquier día
+    // y reaparece unconfigured. A es la ÚNICA candidata con ese serial.
+    fx.taskRepo.tasks[1]!.onuSerial = null;
+    const summary = await fx.watcher.run();
+
+    // A está succeeded → skip. JAMÁS un tercer authorize con los datos viejos de A.
+    expect(summary).toMatchObject({ matched: 1, provisioned: 0, skipped: 1 });
+    expect(fx.gateway.calls.filter(c => c.method === 'authorizeOnu')).toHaveLength(2);
+    expect(await fx.attemptRepo.find('task-a', SN)).toMatchObject({ status: 'succeeded' });
+  });
+
+  it('conflicto GENUINO con un tercero terminal: B y C conflictúan entre sí, el succeeded de A ni se toca ni recibe nota', async () => {
+    const fx = await buildFixture();
+    fx.taskRepo.tasks.push({ id: 'task-a', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+    await fx.watcher.run(); // A succeeded
+    const aDescription = fx.taskRepo.tasks[0]!.description;
+
+    fx.taskRepo.tasks.push({ id: 'task-b', contractId: 'ctr-2', onuSerial: SN, archivedAt: null, description: null });
+    fx.taskRepo.tasks.push({ id: 'task-c', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+
+    const summary = await fx.watcher.run();
+
+    expect(summary).toMatchObject({ matched: 3, provisioned: 0, skipped: 3 });
+    expect(await fx.attemptRepo.find('task-a', SN)).toMatchObject({ status: 'succeeded' });
+    expect(await fx.attemptRepo.find('task-b', SN)).toMatchObject({ status: 'conflict' });
+    expect(await fx.attemptRepo.find('task-c', SN)).toMatchObject({ status: 'conflict' });
+    // A no recibió la nota de conflicto (su description no cambió en este tick).
+    expect(fx.taskRepo.tasks[0]!.description).toBe(aDescription);
+    expect(fx.taskRepo.tasks[1]!.description!).toContain('BLOQUEADO');
+    expect(fx.taskRepo.tasks[2]!.description!).toContain('BLOQUEADO');
+  });
+});
+
+describe('H2 (HIGH) — tareas CERRADAS salen de candidatas (no solo las archivadas)', () => {
+  it('tarea cerrada-no-archivada con serial → fuera de candidatas, el gateway ni se toca', async () => {
+    const fx = await buildFixture();
+    fx.taskRepo.tasks.push({
+      id: 'task-1', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null,
+      generalStatus: 'closed',
+    });
+
+    const summary = await fx.watcher.run();
+
+    expect(summary.candidates).toBe(0);
+    expect(fx.gateway.calls).toHaveLength(0);
+  });
+
+  it('tarea dismissed con serial → fuera de candidatas', async () => {
+    const fx = await buildFixture();
+    fx.taskRepo.tasks.push({
+      id: 'task-1', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null,
+      generalStatus: 'dismissed',
+    });
+
+    const summary = await fx.watcher.run();
+
+    expect(summary.candidates).toBe(0);
+    expect(fx.gateway.calls).toHaveLength(0);
+  });
+});
+
+describe('M3 — la ambigüedad se evalúa sobre TODOS los matches del serial (con o sin contrato)', () => {
+  it('serial duplicado entre tarea CON contrato y tarea SIN contrato → conflicto: nota en ambas, NO aprovisiona', async () => {
+    const fx = await buildFixture();
+    fx.taskRepo.tasks.push({ id: 'task-1', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+    fx.taskRepo.tasks.push({ id: 'task-2', contractId: null, onuSerial: SN, archivedAt: null, description: null });
+
+    const summary = await fx.watcher.run();
+
+    expect(summary).toMatchObject({ matched: 2, provisioned: 0, skipped: 2 });
+    expect(fx.gateway.writeSequence()).toEqual([]);
+    for (const task of fx.taskRepo.tasks) {
+      expect(countOccurrences(task.description!, watcherNoteConflict(SN))).toBe(1);
+    }
+    expect(await fx.attemptRepo.find('task-1', SN)).toMatchObject({ status: 'conflict' });
+    expect(await fx.attemptRepo.find('task-2', SN)).toMatchObject({ status: 'conflict' });
+  });
+});
+
+describe('M4 — el bloque de éxito aterriza en la tarea MATCHEADA', () => {
+  it('contrato con tarea de instalación (matcheada) + tarea nueva de reclamo → las credenciales van a la MATCHEADA', async () => {
+    const fx = await buildFixture();
+    fx.taskRepo.tasks.push({ id: 'task-install', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+    // Tarea MÁS NUEVA del mismo contrato (findLatestByContract la devolvería a ELLA).
+    fx.taskRepo.tasks.push({ id: 'task-reclamo', contractId: 'ctr-1', onuSerial: null, archivedAt: null, description: 'Reclamo: señal intermitente' });
+
+    const summary = await fx.watcher.run();
+
+    expect(summary).toMatchObject({ provisioned: 1 });
+    expect(fx.taskRepo.tasks[0]!.description!).toContain('── Aprovisionamiento ONU ──');
+    expect(fx.taskRepo.tasks[0]!.description!).toContain('(aprovisionada AUTOMÁTICAMENTE por el watcher)');
+    // El reclamo NO recibió credenciales ajenas a su asunto.
+    expect(fx.taskRepo.tasks[1]!.description!).not.toContain('── Aprovisionamiento ONU ──');
+  });
+});
+
+describe('L6 — write-ahead: el attempt se persiste ANTES del provision', () => {
+  it('durante el provision el registro YA está en pending con attempts+1 (un crash a mitad no pierde el intento)', async () => {
+    const fx = await buildFixture();
+    fx.taskRepo.tasks.push({ id: 'task-1', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+    let recordDuringProvision: FiberAutoProvisionAttempt | null = null;
+    jest.spyOn(fx.provision, 'execute').mockImplementation(async () => {
+      recordDuringProvision = await fx.attemptRepo.find('task-1', SN);
+      throw new OltProvisioningError('unreachable', 'crash simulado');
+    });
+
+    await fx.watcher.run();
+
+    // El write-ahead quedó ANTES de ejecutar: tras un crash el backoff ya rige.
+    expect(recordDuringProvision).toMatchObject({ attempts: 1, status: 'pending' });
+    expect(await fx.attemptRepo.find('task-1', SN)).toMatchObject({ attempts: 1, status: 'pending' });
+  });
+});
+
+describe('L7 — el estado terminal se persiste ANTES de la nota (la nota es best-effort)', () => {
+  it('VLAN manual: cuando la nota se escribe el estado YA es manual-required; si la nota FALLA el tick no explota y no se duplica nada', async () => {
+    const fx = await buildFixture();
+    fx.gateway.unconfigured = [huaweiOnu({ oltId: '3' })]; // CHIVILCOY → VLAN manual
+    fx.taskRepo.tasks.push({ id: 'task-1', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+    let statusWhenNoteWritten: string | undefined;
+    const spy = jest.spyOn(fx.taskRepo, 'appendNote').mockImplementation(async (taskId: string) => {
+      statusWhenNoteWritten = (await fx.attemptRepo.find(taskId, SN))?.status;
+      throw new Error('db caída escribiendo la nota');
+    });
+
+    const first = await fx.watcher.run(); // NO debe rechazar
+
+    expect(statusWhenNoteWritten).toBe('manual-required');
+    expect(first).toMatchObject({ skipped: 1, failed: 0 });
+
+    // El estado quedó: el próximo tick NO re-intenta (aunque la nota se haya perdido).
+    spy.mockRestore();
+    const second = await fx.watcher.run();
+    expect(second).toMatchObject({ skipped: 1, provisioned: 0 });
+    expect(await fx.attemptRepo.find('task-1', SN)).toMatchObject({ status: 'manual-required' });
+  });
+
+  it('failed-final: el estado se persiste ANTES de la nota', async () => {
+    const fx = await buildFixture();
+    fx.gateway.failMethods = ['authorizeOnu'];
+    fx.taskRepo.tasks.push({ id: 'task-1', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+    let statusWhenNoteWritten: string | undefined;
+    const orig = fx.taskRepo.appendNote.bind(fx.taskRepo);
+    jest.spyOn(fx.taskRepo, 'appendNote').mockImplementation(async (taskId: string, note: string) => {
+      statusWhenNoteWritten = (await fx.attemptRepo.find(taskId, SN))?.status;
+      return orig(taskId, note);
+    });
+
+    await fx.watcher.run(); // intento 1
+    fx.clock.now = new Date(fx.clock.now.getTime() + BACKOFF_MS);
+    await fx.watcher.run(); // intento 2
+    fx.clock.now = new Date(fx.clock.now.getTime() + BACKOFF_MS);
+    await fx.watcher.run(); // intento 3 → failed-final + nota
+
+    expect(statusWhenNoteWritten).toBe('failed-final');
+  });
+});
+
+describe('L8 — carrera con el wizard: UnconfiguredOnuNotFoundError es skip transitorio', () => {
+  it('la ONU desapareció entre el listado y el provision → NO incrementa attempts, NO marca fallo, NO nota', async () => {
+    const fx = await buildFixture();
+    fx.taskRepo.tasks.push({ id: 'task-1', contractId: 'ctr-1', onuSerial: SN, archivedAt: null, description: null });
+    jest.spyOn(fx.provision, 'execute').mockRejectedValueOnce(new UnconfiguredOnuNotFoundError(SN));
+
+    const summary = await fx.watcher.run();
+
+    expect(summary).toMatchObject({ matched: 1, provisioned: 0, failed: 0, skipped: 1 });
+    const record = await fx.attemptRepo.find('task-1', SN);
+    expect(record?.attempts ?? 0).toBe(0); // el intento NO cuenta
+    expect(record?.status ?? 'pending').toBe('pending'); // jamás terminal por una carrera
+    expect(fx.taskRepo.tasks[0]!.description ?? '').not.toContain('⚠');
+
+    // El próximo tick la ONU ya no está unconfigured → ni siquiera matchea.
+    fx.gateway.unconfigured = [];
+    const next = await fx.watcher.run();
+    expect(next).toMatchObject({ matched: 0, failed: 0 });
   });
 });

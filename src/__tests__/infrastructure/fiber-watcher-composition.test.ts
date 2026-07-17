@@ -73,6 +73,18 @@ describe('fiber-auto-watcher composition root (K3)', () => {
     expect(window).toMatch(/max: 86_400_000/);
   });
 
+  it("H2: el repo Prisma de candidatas exige tarea ABIERTA (generalStatus 'open') además de no-archivada", () => {
+    const repoSrc = readFileSync(
+      join(INFRA, 'adapters', 'prisma', 'PrismaFiberAutoProvisionTaskRepository.ts'),
+      'utf8',
+    );
+    const idx = repoSrc.indexOf('listCandidates');
+    expect(idx).toBeGreaterThan(-1);
+    const window = repoSrc.slice(idx, idx + 400);
+    expect(window).toMatch(/archivedAt: null/);
+    expect(window).toMatch(/generalStatus: 'open'/);
+  });
+
   it('la migración es ADITIVA e idempotente: columna onuSerial + tabla de intentos + flag seed OFF', () => {
     expect(migrationSql).toMatch(/ALTER TABLE "ScheduledTask" ADD COLUMN IF NOT EXISTS "onuSerial" TEXT/);
     expect(migrationSql).toMatch(/CREATE TABLE IF NOT EXISTS "FiberAutoProvisionAttempt"/);

@@ -61,6 +61,11 @@ class FakeInstallTaskWriter implements FiberInstallTaskWriter {
     const t = [...this.tasks].reverse().find(x => x.contractId === contractId);
     return t ? { id: t.id, description: t.description } : null;
   }
+  // M4 — lookup directo por id (override del watcher; el wizard no lo usa).
+  async findById(taskId: string): Promise<{ id: string; description: string | null } | null> {
+    const t = this.tasks.find(x => x.id === taskId);
+    return t ? { id: t.id, description: t.description } : null;
+  }
   async updateDescription(taskId: string, description: string): Promise<void> {
     const t = this.tasks.find(x => x.id === taskId);
     if (t) t.description = description;

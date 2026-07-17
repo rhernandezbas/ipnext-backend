@@ -32,6 +32,9 @@ export type ActivityType =
   | 'estimated_hours_changed'
   | 'travel_time_changed'
   | 'notes_changed'
+  // K3 fix wave M5 — set/cambio/limpieza del serial de la ONU (el campo que arma
+  // el watcher de auto-aprovisionamiento: sin este evento no hay forensia).
+  | 'onu_serial_changed'
   | 'inventory_review_changed'
   | 'sent_to_iclass'
   | 'checklist_item_added'

@@ -8,7 +8,11 @@ import {
   FiberAutoProvisionAttemptRepository,
 } from '@domain/ports/FiberAutoProvisionAttemptRepository';
 import { normalizeOnuSerial } from '@domain/services/fiberProvisioning';
-import { FiberVlanRequiredError, OnuNotHuaweiError } from '@domain/errors/smartolt';
+import {
+  FiberVlanRequiredError,
+  OnuNotHuaweiError,
+  UnconfiguredOnuNotFoundError,
+} from '@domain/errors/smartolt';
 import { ProvisionFiberOnu } from './ProvisionFiberOnu';
 
 /** Máximo de intentos por (taskId, onuSn) — al 3er fallo se deja de insistir. */
@@ -137,21 +141,40 @@ export class AutoProvisionFiberOnus {
     for (const [sn, tasks] of matchesBySn) {
       summary.matched += tasks.length;
 
-      // Sin contrato no hay a quién aprovisionar — visible como skip.
-      const provisionable = tasks.filter(t => t.contractId != null);
-      summary.skipped += tasks.length - provisionable.length;
+      // C1 (fix wave CRITICAL) — los pares (taskId, sn) en estado TERMINAL salen de
+      // la ecuación ANTES del check de ambigüedad: el reuso legítimo de una ONU
+      // (tarea vieja succeeded + tarea nueva con el mismo serial) NO es conflicto —
+      // la nueva se aprovisiona y el estado terminal de la vieja queda INTOCABLE
+      // (jamás pisado a 'conflict', que es reanudable).
+      const active: FiberAutoProvisionCandidateTask[] = [];
+      for (const task of tasks) {
+        const record = await this.attemptRepo.find(task.id, sn);
+        if (record && record.status !== 'pending' && record.status !== 'conflict') {
+          summary.skipped++;
+          continue;
+        }
+        active.push(task);
+      }
 
-      if (provisionable.length > 1) {
-        // Conflicto: el MISMO serial en 2+ tareas → nota en ambas, jamás aprovisionar.
-        for (const task of provisionable) {
+      // M3 (fix wave) — la ambigüedad se evalúa sobre TODOS los matches ACTIVOS del
+      // serial, con o sin contrato; el contractId se valida recién DESPUÉS.
+      if (active.length > 1) {
+        for (const task of active) {
           await this.markConflict(task, sn);
           summary.skipped++;
         }
         continue;
       }
-      if (provisionable.length === 0) continue;
+      if (active.length === 0) continue;
 
-      await this.processMatch(provisionable[0]!, sn, summary);
+      const task = active[0]!;
+      if (task.contractId == null) {
+        // Sin contrato no hay a quién aprovisionar — visible como skip.
+        summary.skipped++;
+        continue;
+      }
+
+      await this.processMatch(task, sn, summary);
     }
 
     return summary;
@@ -166,8 +189,8 @@ export class AutoProvisionFiberOnus {
   ): Promise<void> {
     const record = await this.attemptRepo.find(task.id, sn);
 
-    // Estados terminales: no insistir jamás. 'conflict' NO es terminal: si el serial
-    // volvió a ser único (el humano resolvió), se reanuda acá mismo.
+    // Defensa en profundidad: run() ya excluyó los terminales del grouping (C1);
+    // 'conflict' NO es terminal — si el serial volvió a ser único, se reanuda acá.
     if (record && record.status !== 'pending' && record.status !== 'conflict') {
       summary.skipped++;
       return;
@@ -182,35 +205,53 @@ export class AutoProvisionFiberOnus {
       }
     }
 
-    const priorAttempts = record?.attempts ?? 0;
+    const attempts = (record?.attempts ?? 0) + 1;
+    // L6 (fix wave) — WRITE-AHEAD: el intento se persiste ANTES del provision. Un
+    // crash a mitad de la secuencia no pierde el intento — tras el restart el
+    // backoff ya rige y el contador no se resetea.
+    await this.saveAttempt(task.id, sn, attempts, 'pending', record?.lastError ?? null);
+
     try {
       await this.provisionFiberOnu.execute({
         contractId: task.contractId!,
         onuSn: sn,
         dryRun: false,
         origin: 'watcher',
+        // M4 — el bloque auditable va a la tarea MATCHEADA por serial, no a
+        // "la última del contrato" (que puede ser un reclamo posterior).
+        auditTaskId: task.id,
       });
       summary.provisioned++;
-      await this.saveAttempt(task.id, sn, priorAttempts + 1, 'succeeded', null);
+      await this.saveAttempt(task.id, sn, attempts, 'succeeded', null);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (err instanceof FiberVlanRequiredError) {
-        // CHIVILCOY: la VLAN es por cliente — el humano la elige SIEMPRE. Nunca auto.
+      if (err instanceof UnconfiguredOnuNotFoundError) {
+        // L8 (fix wave) — carrera con el wizard: la ONU dejó de estar unconfigured
+        // entre NUESTRO listado y el provision. No es un fallo del par: se restaura
+        // el registro previo (el write-ahead no cuenta como intento) y el próximo
+        // tick ya ni matchea.
         summary.skipped++;
-        await this.taskRepo.appendNote(task.id, WATCHER_NOTE_VLAN_MANUAL);
-        await this.saveAttempt(task.id, sn, priorAttempts, 'manual-required', message);
+        await this.attemptRepo.save(
+          record ?? { taskId: task.id, onuSn: sn, attempts: 0, status: 'pending', lastError: null, lastAttemptAt: null },
+        );
+      } else if (err instanceof FiberVlanRequiredError) {
+        // CHIVILCOY: la VLAN es por cliente — el humano la elige SIEMPRE. Nunca auto.
+        // L7 — el estado terminal se persiste ANTES de la nota (la nota es best-effort:
+        // si falla se pierde, pero el estado ya impide duplicar provisiones).
+        summary.skipped++;
+        await this.saveAttempt(task.id, sn, attempts, 'manual-required', message);
+        await this.appendNoteBestEffort(task.id, WATCHER_NOTE_VLAN_MANUAL);
       } else if (err instanceof OnuNotHuaweiError) {
         // El serial se registra igual (ZTE/VSOL), pero solo Huawei se auto-aprovisiona.
         summary.skipped++;
-        await this.taskRepo.appendNote(task.id, WATCHER_NOTE_NON_HUAWEI);
-        await this.saveAttempt(task.id, sn, priorAttempts, 'manual-required', message);
+        await this.saveAttempt(task.id, sn, attempts, 'manual-required', message);
+        await this.appendNoteBestEffort(task.id, WATCHER_NOTE_NON_HUAWEI);
       } else {
         // Transitorio (SmartOLT caído / rechazo puntual): backoff y hasta 3 intentos.
         summary.failed++;
-        const attempts = priorAttempts + 1;
         if (attempts >= this.maxAttempts) {
-          await this.taskRepo.appendNote(task.id, watcherNoteFailedFinal(attempts, message));
           await this.saveAttempt(task.id, sn, attempts, 'failed-final', message);
+          await this.appendNoteBestEffort(task.id, watcherNoteFailedFinal(attempts, message));
         } else {
           await this.saveAttempt(task.id, sn, attempts, 'pending', message);
         }
@@ -222,10 +263,25 @@ export class AutoProvisionFiberOnus {
 
   private async markConflict(task: FiberAutoProvisionCandidateTask, sn: string): Promise<void> {
     const record = await this.attemptRepo.find(task.id, sn);
-    // Nota ÚNICA: ya marcado conflict → no repetir la nota en cada tick.
-    if (record?.status === 'conflict') return;
-    await this.taskRepo.appendNote(task.id, watcherNoteConflict(sn));
+    // C1 — JAMÁS pisar un estado que no sea pending: 'conflict' ya tiene su nota
+    // (única), y los terminales (succeeded/failed-final/manual-required) son
+    // INTOCABLES — pisarlos a 'conflict' los volvería reanudables (el bug CRITICAL
+    // del review: la ONU del cliente nuevo configurada con datos del viejo).
+    if (record && record.status !== 'pending') return;
+    // L7 — estado ANTES de la nota.
     await this.saveAttempt(task.id, sn, record?.attempts ?? 0, 'conflict', 'serial duplicado en más de una tarea');
+    await this.appendNoteBestEffort(task.id, watcherNoteConflict(sn));
+  }
+
+  /** L7 — la nota es best-effort: si la DB falla escribiéndola, el tick NO explota
+   *  (el estado ya quedó persistido; la nota se pierde, jamás se duplica un provision). */
+  private async appendNoteBestEffort(taskId: string, note: string): Promise<void> {
+    try {
+      await this.taskRepo.appendNote(taskId, note);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[fiber-auto-watcher] no se pudo escribir la nota en la tarea (best-effort):', err);
+    }
   }
 
   private async saveAttempt(

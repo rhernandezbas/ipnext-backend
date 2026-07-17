@@ -11,6 +11,11 @@ export interface InMemoryFiberTask {
   onuSerial: string | null;
   archivedAt: string | null;
   description: string | null;
+  /**
+   * H2 (fix wave) — lifecycle de la tarea. El fake DEBE replicar el filtro real:
+   * solo las tareas ABIERTAS son candidatas. Ausente = 'open' (default de la DB).
+   */
+  generalStatus?: 'open' | 'closed' | 'dismissed';
 }
 
 /**
@@ -28,9 +33,16 @@ export class InMemoryFiberAutoProvisionTaskRepository
   // ── FiberAutoProvisionTaskRepository ────────────────────────────────────────
 
   async listCandidates(): Promise<FiberAutoProvisionCandidateTask[]> {
-    // Contrato del port: serial seteado + NO archivada (el filtro vive en el adapter).
+    // Contrato del port: serial seteado + NO archivada + ABIERTA (H2: una tarea
+    // cerrada con serial NO puede quedar armada para siempre). Filtro en el adapter,
+    // FIEL al de PrismaFiberAutoProvisionTaskRepository.
     return this.tasks
-      .filter(t => t.onuSerial != null && t.onuSerial !== '' && t.archivedAt === null)
+      .filter(t =>
+        t.onuSerial != null &&
+        t.onuSerial !== '' &&
+        t.archivedAt === null &&
+        (t.generalStatus ?? 'open') === 'open',
+      )
       .map(t => ({
         id: t.id,
         contractId: t.contractId,
@@ -49,6 +61,12 @@ export class InMemoryFiberAutoProvisionTaskRepository
 
   async findLatestByContract(contractId: string): Promise<{ id: string; description: string | null } | null> {
     const task = [...this.tasks].reverse().find(t => t.contractId === contractId && t.archivedAt === null);
+    return task ? { id: task.id, description: task.description } : null;
+  }
+
+  // M4 — lookup directo por id (el watcher audita en la tarea MATCHEADA).
+  async findById(taskId: string): Promise<{ id: string; description: string | null } | null> {
+    const task = this.tasks.find(t => t.id === taskId);
     return task ? { id: task.id, description: task.description } : null;
   }
 

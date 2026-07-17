@@ -78,6 +78,15 @@ const fiberInstallTaskWriter: FiberInstallTaskWriter = {
     });
     return row ? { id: row.id, description: row.description ?? null } : null;
   },
+  // K3 fix wave M4 — el watcher pasa auditTaskId (la tarea MATCHEADA por serial):
+  // el bloque auditable aterriza AHÍ, no en la última tarea del contrato.
+  async findById(taskId: string) {
+    const row = await prisma.scheduledTask.findUnique({
+      where: { id: taskId },
+      select: { id: true, description: true },
+    });
+    return row ? { id: row.id, description: row.description ?? null } : null;
+  },
   async updateDescription(taskId: string, description: string) {
     await prisma.scheduledTask.update({ where: { id: taskId }, data: { description } });
   },

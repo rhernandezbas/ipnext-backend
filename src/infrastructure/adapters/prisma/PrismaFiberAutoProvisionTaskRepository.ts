@@ -6,12 +6,14 @@ import { prisma } from '../../database/prisma';
 
 /**
  * K3 (fiber-auto-watcher) — acceso Prisma del watcher a las tareas.
- * Candidatas = onuSerial seteado + NO archivadas (índice ScheduledTask_onuSerial_idx).
+ * Candidatas = onuSerial seteado + NO archivadas + ABIERTAS (índice
+ * ScheduledTask_onuSerial_idx). H2 (fix wave): archivar es acción MANUAL — sin el
+ * filtro por generalStatus una tarea cerrada con serial quedaba armada para siempre.
  */
 export class PrismaFiberAutoProvisionTaskRepository implements FiberAutoProvisionTaskRepository {
   async listCandidates(): Promise<FiberAutoProvisionCandidateTask[]> {
     const rows = await (prisma as any).scheduledTask.findMany({
-      where: { onuSerial: { not: null }, archivedAt: null },
+      where: { onuSerial: { not: null }, archivedAt: null, generalStatus: 'open' },
       select: { id: true, contractId: true, onuSerial: true, description: true },
     });
     return rows.map((r: any) => ({

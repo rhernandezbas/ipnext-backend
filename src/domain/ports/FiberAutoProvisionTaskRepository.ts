@@ -16,8 +16,9 @@ export interface FiberAutoProvisionCandidateTask {
 
 export interface FiberAutoProvisionTaskRepository {
   /**
-   * Tareas con onuSerial seteado y archivedAt null. El filtro de archivado es
-   * CONTRATO del port (el adapter lo aplica en la query, no el use case).
+   * Tareas con onuSerial seteado, archivedAt null y ABIERTAS (generalStatus 'open' —
+   * H2: una tarea cerrada con serial no puede quedar armada para siempre). Los
+   * filtros son CONTRATO del port: el adapter los aplica en la query, no el use case.
    */
   listCandidates(): Promise<FiberAutoProvisionCandidateTask[]>;
   /**

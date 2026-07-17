@@ -53,6 +53,9 @@ export function computeUpdateTaskActivities(
   if (changed('generalStatus')) events.push({ type: 'status_changed', actor, fromValue: prev.generalStatus, toValue: data.generalStatus });
   else if (changed('isClosed')) events.push({ type: 'status_changed', actor, fromValue: prev.isClosed, toValue: data.isClosed });
   if (changed('reviewedByInventory')) events.push({ type: 'inventory_review_changed', actor, fromValue: prev.reviewedByInventory, toValue: data.reviewedByInventory });
+  // K3 fix wave M5 — onuSerial arma un cron que toca hardware: set/cambio/limpieza
+  // SIEMPRE auditados con valores (UpdateTask ya lo normalizó antes del snapshot).
+  if (changed('onuSerial')) events.push({ type: 'onu_serial_changed', actor, fromValue: prev.onuSerial, toValue: data.onuSerial });
 
   // ── Assignee → assigned / unassigned (with technician names for the diff) ──
   if (data.assigneeId !== undefined && data.assigneeId !== prev.assigneeId) {
