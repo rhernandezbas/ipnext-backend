@@ -71,6 +71,12 @@ export interface ProvisionFiberOnuInput {
   vlan?: number;
   /** true → NO llama al gateway: devuelve el PLAN de calls para aprobación. */
   dryRun?: boolean;
+  /**
+   * K3 (fiber-auto-watcher) — origen del aprovisionamiento. 'watcher' agrega la
+   * línea "(aprovisionada AUTOMÁTICAMENTE por el watcher)" al bloque auditable
+   * de la tarea. Ausente/'manual' = bloque K2 intacto (botón del wizard).
+   */
+  origin?: 'manual' | 'watcher';
 }
 
 export type ProvisionStepName =
@@ -176,6 +182,8 @@ export function renderOnuProvisioningBlock(params: {
   wifi: WifiPlanView;
   pppoe: FiberPppoeSummary;
   steps: ProvisionStepResult[];
+  /** K3 — 'watcher' agrega la línea de origen automático; ausente/'manual' = bloque K2 intacto. */
+  origin?: 'manual' | 'watcher';
 }): string {
   const pasos = params.steps
     .map(s => `${s.step} ${STEP_SYMBOLS[s.status]}${s.detail ? ` (${s.detail})` : ''}`)
@@ -188,6 +196,8 @@ export function renderOnuProvisioningBlock(params: {
     `WiFi 5: ${params.wifi.ssid5}\n` +
     `Clave WiFi: ${params.wifi.password}\n` +
     `Pasos: ${pasos}`;
+  // K3 — el instalador tiene que poder distinguir un auto-aprovisionamiento del botón.
+  if (params.origin === 'watcher') block += '\n(aprovisionada AUTOMÁTICAMENTE por el watcher)';
   const pregenOutcome = toPregenOutcome(params.pppoe);
   const pppoeBlock = pregenOutcome ? renderPppoeCredentialsBlock(pregenOutcome) : null;
   if (pppoeBlock) block += `\n${pppoeBlock}`;
@@ -305,6 +315,7 @@ export class ProvisionFiberOnu {
       wifi,
       pppoe,
       steps,
+      origin: input.origin,
     });
 
     return {
@@ -557,6 +568,7 @@ export class ProvisionFiberOnu {
       wifi: WifiPlanView;
       pppoe: FiberPppoeSummary;
       steps: ProvisionStepResult[];
+      origin?: 'manual' | 'watcher';
     },
   ): Promise<boolean> {
     try {

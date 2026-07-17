@@ -498,6 +498,21 @@ export const config = {
   },
 
   /**
+   * K3 (fiber-auto-watcher) — watcher full-auto de aprovisionamiento de ONUs fibra.
+   * El ON/OFF real vive en el feature flag 'fiber-auto-provision-watcher' (seed OFF,
+   * chequeado POR TICK, SEPARADO del flag del wizard); esta env solo CALIBRA el tick.
+   * Piso 60s (rate limit SmartOLT 1000/h — un tick por segundo lo fundiría), techo 24h.
+   * Parse seguro: inválida/ausente → default 5min, JAMÁS tumba el boot.
+   */
+  fiberAutoProvision: {
+    intervalMs: parseIntervalMs(process.env.FIBER_AUTO_PROVISION_INTERVAL_MS, {
+      default: 300_000,
+      min: 60_000,
+      max: 86_400_000,
+    }),
+  },
+
+  /**
    * messaging-bulk (F2, Batch 8, SEND-4) — rate limiter proactivo del envío
    * masivo (~80 msg/s en prod, `TokenBucketRateLimiter`). Calibrable SIN
    * redeploy vía env: el límite real del plan Twilio se confirma recién en el

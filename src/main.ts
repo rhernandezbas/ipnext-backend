@@ -12,6 +12,7 @@ import { bootstrapRadiusAuthIngest } from './infrastructure/scheduling/bootstrap
 import { bootstrapPppoeAutoMove } from './infrastructure/scheduling/bootstrapPppoeAutoMove';
 import { bootstrapRadiusAutoCure } from './infrastructure/scheduling/bootstrapRadiusAutoCure';
 import { bootstrapChatMediaDownload } from './infrastructure/scheduling/bootstrapChatMediaDownload';
+import { bootstrapAutoProvisionFiber } from './infrastructure/scheduling/bootstrapAutoProvisionFiber';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
 import { bootstrapSystemUsers } from './infrastructure/bootstrap/bootstrapSystemUsers';
@@ -94,6 +95,11 @@ void (async () => {
   void bootstrapChatMediaDownload()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[chat-media-download] bootstrap failed (server kept alive):', (err as Error).message));
+  // Watcher full-auto de fibra (K3 fiber-auto-watcher) — opt-in (envs SMARTOLT_*),
+  // dark by default (flag 'fiber-auto-provision-watcher', separado del flag del wizard).
+  void bootstrapAutoProvisionFiber()
+    .then((scheduler) => scheduler?.start())
+    .catch((err) => console.error('[fiber-auto-watcher] bootstrap failed (server kept alive):', (err as Error).message));
 
   // Start schedulers — both start dormant (gated by feature flags).
   iclassClosure?.start();
