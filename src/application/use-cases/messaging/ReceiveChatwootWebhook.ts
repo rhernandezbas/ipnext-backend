@@ -4,8 +4,13 @@ import type { WebhookDeliveryRepository } from '@domain/ports/WebhookDeliveryRep
 import type { ChatMessageAttachmentRepository } from '@domain/ports/ChatMessageAttachmentRepository';
 import type { ChatMediaDownloadTrigger } from '@domain/ports/ChatMediaDownloadTrigger';
 import type { CampaignSegmentSource, OptOutRegistry } from '@domain/ports/CustomerRepository';
+import type {
+  ConversationEventRepository,
+  RecordConversationEventInput,
+} from '@domain/ports/ConversationEventRepository';
 import { toWhatsAppE164 } from './toWhatsAppE164';
 import { deriveConversationPreview } from './conversationPreview';
+import { computeStatusTransition } from './conversationStatusTransition';
 
 /** OPT-2 — keywords que disparan el opt-out (case-insensitive, trim-tolerant, match EXACTO). */
 const OPT_OUT_KEYWORDS = new Set(['BAJA', 'STOP']);
@@ -130,6 +135,12 @@ export class ReceiveChatwootWebhook {
      * bulk) y registra el opt-out (OPT-1) cuando matchea.
      */
     private readonly optOutSource?: CampaignSegmentSource & OptOutRegistry,
+    /**
+     * conversation-events (Ola 2) — registro BEST-EFFORT de eventos disparados por Chatwoot/
+     * el cliente (actor SIEMPRE null). Opcional (call-sites 3/5/6-arg siguen compilando). Sin
+     * él, el webhook se comporta EXACTAMENTE como antes (cero regresión).
+     */
+    private readonly eventRepo?: ConversationEventRepository,
   ) {}
 
   async execute(deliveryId: string, payload: ChatwootWebhookPayload): Promise<void> {
@@ -184,6 +195,10 @@ export class ReceiveChatwootWebhook {
     // así el upsert de abajo cae sobre ELLA y NO crea un duplicado.
     await this.maybeAdoptBulkConversation(chatwootConversationId, sender?.phone_number);
 
+    // conversation-events (Ola 2) — detecta si este upsert va a CREAR la conversación (no
+    // existía ni fue adoptada como bulk): la primera vez que el cliente escribe, nace acá.
+    const existedBefore = (await this.conversationRepo.findByChatwootId(chatwootConversationId)) !== null;
+
     const conversation = await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId,
       contactName: sender?.name,
@@ -192,6 +207,11 @@ export class ReceiveChatwootWebhook {
       lastMessageAt: bumpsPreview ? createdAt : undefined,
       lastMessagePreview: bumpsPreview ? deriveConversationPreview(payload.content, mediaFileTypes) : undefined,
     });
+
+    // conversation-events (Ola 2) — evento 'created' (actor null: nació del cliente). Best-effort.
+    if (!existedBefore) {
+      await this.recordEventBestEffort({ conversationId: conversation.id, type: 'created' });
+    }
 
     // §7 — activity/template (direction===null) never persist. messaging-inbox-notes
     // (F1.5 fase D, NOTE-2) — private notes are NO LONGER discarded here: they persist
@@ -344,12 +364,40 @@ export class ReceiveChatwootWebhook {
     // del upsert, para que el upsert caiga sobre ella (mismo id) y no cree un duplicado.
     await this.maybeAdoptBulkConversation(chatwootConversationId, payload.meta?.sender?.phone_number);
 
-    await this.conversationRepo.upsertByChatwootId({
+    // conversation-events (Ola 2) — ¿va a CREAR? (no existía ni fue adoptada).
+    const existedBefore = (await this.conversationRepo.findByChatwootId(chatwootConversationId)) !== null;
+
+    const conversation = await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId,
       contactName: payload.meta?.sender?.name,
       contactPhone: payload.meta?.sender?.phone_number,
       status: payload.status,
     });
+
+    // conversation-events (Ola 2) — evento 'created' (actor null). Best-effort.
+    if (!existedBefore) {
+      await this.recordEventBestEffort({ conversationId: conversation.id, type: 'created' });
+    }
+  }
+
+  /**
+   * conversation-events (Ola 2) — registro BEST-EFFORT de un evento disparado por Chatwoot/el
+   * cliente (actor SIEMPRE null). Fail-open, nunca lanza: sin `eventRepo` inyectado o ante un
+   * hipo de DB → se loguea y sigue (el webhook SIEMPRE espeja/ackea 200). Misma disciplina que
+   * `maybeAdoptBulkConversation`/`captureAttachments`.
+   */
+  private async recordEventBestEffort(input: RecordConversationEventInput): Promise<void> {
+    if (!this.eventRepo) return;
+    try {
+      await this.eventRepo.record({ ...input, actorId: null });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[messaging] registro de ConversationEvent (webhook) falló (best-effort, el webhook igual ackea 200)', {
+        conversationId: input.conversationId,
+        type: input.type,
+        error: err instanceof Error ? err.message : err,
+      });
+    }
   }
 
   /**
@@ -391,9 +439,28 @@ export class ReceiveChatwootWebhook {
     const chatwootConversationId = payload.id;
     if (chatwootConversationId === undefined || payload.status === undefined) return;
 
-    await this.conversationRepo.upsertByChatwootId({
+    // conversation-events (Ola 2) — estado PREVIO para computar la transición resolved/reopened
+    // (actor null: Chatwoot-driven). El guard `prev != next` de `computeStatusTransition` hace
+    // esto ECHO-SAFE: cuando SetConversationStatus resuelve vía Chatwoot y Chatwoot reenvía el
+    // eco, el mirror ya está en 'resolved' → prev===next → sin resolvedAt duplicado ni evento.
+    const existing = await this.conversationRepo.findByChatwootId(chatwootConversationId);
+    const transition = existing
+      ? computeStatusTransition(existing.status, payload.status, existing.firstResolvedAt, new Date().toISOString())
+      : { patch: {}, event: null as null | { type: 'resolved' | 'reopened'; fromValue: string; toValue: string } };
+
+    const conversation = await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId,
       status: payload.status,
+      ...transition.patch,
     });
+
+    if (transition.event) {
+      await this.recordEventBestEffort({
+        conversationId: conversation.id,
+        type: transition.event.type,
+        fromValue: transition.event.fromValue,
+        toValue: transition.event.toValue,
+      });
+    }
   }
 }

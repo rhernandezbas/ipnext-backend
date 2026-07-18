@@ -1,11 +1,13 @@
 import type { ConversationRepository } from '@domain/ports/ConversationRepository';
 import type { ChatwootGateway } from '@domain/ports/ChatwootGateway';
+import type { ConversationEventRepository } from '@domain/ports/ConversationEventRepository';
 import {
   ConversationNotFoundError,
   ChatwootUnavailableError,
   InvalidConversationStatusError,
 } from '@domain/errors/messaging';
 import { toConversationListItemDto, type ConversationListItemDto } from '@application/dto/messaging';
+import { computeStatusTransition } from './conversationStatusTransition';
 
 const VALID_STATUSES = ['open', 'resolved', 'pending'] as const;
 type ConversationStatus = (typeof VALID_STATUSES)[number];
@@ -39,9 +41,20 @@ export class SetConversationStatus {
   constructor(
     private readonly conversationRepo: ConversationRepository,
     private readonly gateway: ChatwootGateway,
+    /**
+     * conversation-events (Ola 2) — registro BEST-EFFORT de la transición resolved/reopened.
+     * Opcional: los call-sites/tests de F1.5 que lo construyen con 2 args siguen compilando
+     * (mismo criterio que los deps opcionales de `ReceiveChatwootWebhook`). Sin él, sólo se
+     * pierde el evento (resolvedAt/firstResolvedAt SIEMPRE se escriben, van en el upsert).
+     */
+    private readonly eventRepo?: ConversationEventRepository,
   ) {}
 
-  async execute(conversationId: string, status: string): Promise<ConversationListItemDto> {
+  /**
+   * @param actorId usuario RBAC que dispara el cambio (req.user.id). Ausente → evento con
+   *   actorId null (no debería pasar desde la route autenticada, degrada seguro).
+   */
+  async execute(conversationId: string, status: string, actorId?: string | null): Promise<ConversationListItemDto> {
     if (!isValidStatus(status)) {
       throw new InvalidConversationStatusError(status);
     }
@@ -60,10 +73,43 @@ export class SetConversationStatus {
       throw new ChatwootUnavailableError();
     }
 
+    // conversation-events (Ola 2) — timestamps derivados del ciclo de resolución, escritos
+    // ATÓMICAMENTE junto al status (NO best-effort: si el upsert falla, la operación falla,
+    // como hoy). El evento (abajo) sí es best-effort.
+    const transition = computeStatusTransition(
+      conversation.status,
+      status,
+      conversation.firstResolvedAt,
+      new Date().toISOString(),
+    );
+
     const updated = await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId,
       status,
+      ...transition.patch,
     });
+
+    // conversation-events (Ola 2) — best-effort estilo el sync de lastPublicMessageDirection:
+    // un fallo al registrar el evento NUNCA tumba el cambio de estado (que ya cruzó a Chatwoot
+    // y ya se persistió en el mirror). Sólo se emite en una transición REAL (resolved/reopened).
+    if (transition.event && this.eventRepo) {
+      try {
+        await this.eventRepo.record({
+          conversationId,
+          type: transition.event.type,
+          actorId: actorId ?? null,
+          fromValue: transition.event.fromValue,
+          toValue: transition.event.toValue,
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[messaging] registro de ConversationEvent (status) falló (best-effort, la operación ya se persistió)', {
+          conversationId,
+          type: transition.event.type,
+          error: err instanceof Error ? err.message : err,
+        });
+      }
+    }
 
     return toConversationListItemDto(updated);
   }

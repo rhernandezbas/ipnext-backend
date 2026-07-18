@@ -100,6 +100,19 @@ export interface UpsertTemplateChatMessageInput {
   idempotencyKey?: string | null;
 }
 
+/**
+ * conversation-events (Ola 2, reports/traffic) — celda del heatmap de tráfico entrante:
+ * cantidad de mensajes INBOUND en un día-de-semana × hora dados. `dow` = 0 (domingo) … 6
+ * (sábado); `hour` = 0 … 23. Ambos en hora LOCAL de Argentina (America/Argentina/Buenos_Aires,
+ * UTC-3 fijo — sin DST desde 2009), para que el heatmap tenga sentido para el operador. Sólo
+ * se devuelven celdas con `count > 0`.
+ */
+export interface TrafficCell {
+  dow: number;
+  hour: number;
+  count: number;
+}
+
 export interface ChatMessageRepository {
   /** Idempotent by `chatwootMessageId` (HOOK-4/INBOX-2) — re-processing the same message never duplicates. */
   upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord>;
@@ -150,4 +163,11 @@ export interface ChatMessageRepository {
    * `conversationId` for the storage key (`messaging/{conversationId}/{attachmentId}.ext`).
    */
   findById(id: string): Promise<ChatMessageRecord | null>;
+  /**
+   * conversation-events (Ola 2, reports/traffic) — mensajes INBOUND cuyo `chatwootCreatedAt`
+   * cae en `[fromIso, toIso)`, agrupados por día-de-semana × hora en zona AR (ver
+   * `TrafficCell`). Anti-N+1: un solo GROUP BY en el adapter (jamás un scan por celda ni
+   * traer filas). Sólo celdas con `count > 0`.
+   */
+  inboundTrafficByDowHour(fromIso: string, toIso: string): Promise<TrafficCell[]>;
 }

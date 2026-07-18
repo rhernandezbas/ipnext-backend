@@ -677,7 +677,9 @@ export function createMessagingRouter(
         const body = req.body as Record<string, unknown> | undefined;
         const rawStatus = body?.['status'];
         const status = typeof rawStatus === 'string' ? rawStatus : '';
-        const result = await setConversationStatus.execute(req.params['id'] as string, status);
+        // conversation-events (Ola 2) — actor = usuario autenticado (req.user, poblado por `auth`)
+        // para atribuir el evento resolved/reopened.
+        const result = await setConversationStatus.execute(req.params['id'] as string, status, req.user?.id);
         res.json(result);
       } catch (err) {
         next(err);
@@ -701,7 +703,8 @@ export function createMessagingRouter(
           res.status(400).json({ error: 'assigneeId must be a non-empty string or null', code: 'VALIDATION_ERROR' });
           return;
         }
-        const result = await assignConversation.execute(req.params['id'] as string, parsed.value);
+        // conversation-events (Ola 2) — actor = usuario autenticado, para el evento assigned/unassigned.
+        const result = await assignConversation.execute(req.params['id'] as string, parsed.value, req.user?.id);
         res.json(result);
       } catch (err) {
         next(err);
@@ -722,7 +725,8 @@ export function createMessagingRouter(
           res.status(400).json({ error: 'areaId must be a non-empty string or null', code: 'VALIDATION_ERROR' });
           return;
         }
-        const result = await setConversationArea.execute(req.params['id'] as string, parsed.value);
+        // conversation-events (Ola 2) — actor = usuario autenticado, para el evento area_changed.
+        const result = await setConversationArea.execute(req.params['id'] as string, parsed.value, req.user?.id);
         res.json(result);
       } catch (err) {
         next(err);

@@ -5,7 +5,9 @@ import {
   UpsertChatMessageInput,
   UpsertBulkChatMessageInput,
   UpsertTemplateChatMessageInput,
+  TrafficCell,
 } from '@domain/ports/ChatMessageRepository';
+import { toArgentinaDowHour } from '@application/use-cases/messaging/reportsTimezone';
 import type { InMemoryConversationRepository } from './InMemoryConversationRepository';
 
 /**
@@ -243,6 +245,28 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
   async findById(id: string): Promise<ChatMessageRecord | null> {
     const row = this.rows.find((r) => r.id === id);
     return row ? { ...row } : null;
+  }
+
+  /**
+   * conversation-events (Ola 2, reports/traffic) — mensajes INBOUND en `[fromIso, toIso)`
+   * agrupados por día-de-semana × hora en zona AR (UTC-3, `toArgentinaDowHour`). MUST mirror
+   * `PrismaChatMessageRepository.inboundTrafficByDowHour`. Sólo celdas con count>0.
+   */
+  async inboundTrafficByDowHour(fromIso: string, toIso: string): Promise<TrafficCell[]> {
+    const from = new Date(fromIso).getTime();
+    const to = new Date(toIso).getTime();
+    const cells = new Map<string, TrafficCell>();
+    for (const r of this.rows) {
+      if (r.direction !== 'inbound') continue;
+      const t = new Date(r.chatwootCreatedAt).getTime();
+      if (t < from || t >= to) continue;
+      const { dow, hour } = toArgentinaDowHour(r.chatwootCreatedAt);
+      const key = `${dow}:${hour}`;
+      const cell = cells.get(key);
+      if (cell) cell.count += 1;
+      else cells.set(key, { dow, hour, count: 1 });
+    }
+    return Array.from(cells.values()).sort((a, b) => (a.dow - b.dow) || (a.hour - b.hour));
   }
 
   /**

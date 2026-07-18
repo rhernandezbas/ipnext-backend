@@ -90,6 +90,17 @@ export interface ConversationRecord {
    * soft-deleted NO cuenta; el listado del hilo SÍ la sigue mostrando (tombstone).
    */
   internalNoteCount: number;
+  /**
+   * conversation-events (Ola 2) — ÚLTIMA vez que la conversación pasó a `resolved`
+   * (ISO). Se LIMPIA a `null` al reabrir (refleja el estado ACTUAL). Lo mantiene
+   * `SetConversationStatus` + el webhook, atómico con el cambio de `status`.
+   */
+  resolvedAt: string | null;
+  /**
+   * conversation-events (Ola 2) — PRIMERA resolución histórica (ISO). NUNCA se limpia
+   * (base de "tiempo hasta primera resolución"). Backfill de históricas = `updatedAt` (aprox).
+   */
+  firstResolvedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -132,6 +143,11 @@ export interface ConversationListQuery extends PaginatedQuery {
    *   passthrough no-resuelto como `pending`/`snoozed` — así ninguna fila queda
    *   invisible para ambos buckets a la vez).
    * - `'resolved'` → match EXACTO: `status === 'resolved'`.
+   * - `'pending'` → conversation-events (Ola 2) — match EXACTO: `status === 'pending'`
+   *   (subconjunto del bucket `'open'`). Añadido para el tile `currentPending` de
+   *   `reports/overview`; misma semántica exacta que `'resolved'`. NO se acepta desde la
+   *   URL del listado (la whitelist de la route sólo deja `open`/`resolved`), sólo lo usan
+   *   los reports internamente.
    * - Ausente → sin filtro (comportamiento actual intacto, back-compat — misma
    *   convención "solo aplica cuando viene definido" que `assigneeId`/`campaignId`).
    *
@@ -139,7 +155,7 @@ export interface ConversationListQuery extends PaginatedQuery {
    * sin precedencia especial. Ambos adapters (`InMemoryConversationRepository`,
    * `PrismaConversationRepository`) MUST implementar la MISMA semántica.
    */
-  status?: 'open' | 'resolved';
+  status?: 'open' | 'resolved' | 'pending';
   /**
    * inbox-views (Ola 1, VIEW-1) — bucket "Sin atender": conversación NO-resuelta
    * (`status != 'resolved'`, mismo bucket LS-1 que `status:'open'`) cuyo
@@ -181,6 +197,15 @@ export interface UpsertConversationInput {
   canReply?: boolean;
   lastMessageAt?: string | null;
   lastMessagePreview?: string | null;
+  /**
+   * conversation-events (Ola 2) — timestamps derivados del ciclo de resolución, escritos
+   * ATÓMICAMENTE junto al `status` por `SetConversationStatus`/el webhook (misma convención
+   * "undefined = no tocar" del resto del input; `null` = limpiar, ej. `resolvedAt` al
+   * reabrir). NO son campos LOCAL-only tipo assignee/area: derivan de `status` (Chatwoot-
+   * sourced), así que co-viven acá y NUNCA los toca ningún otro camino (undefined = intactos).
+   */
+  resolvedAt?: string | null;
+  firstResolvedAt?: string | null;
 }
 
 /**
@@ -303,4 +328,12 @@ export interface ConversationRepository {
    * — misma "degradación segura" que el matcheo del bulk ya asume.
    */
   countByContactPhoneE164(phoneE164: string): Promise<ConversationStatusCounts>;
+  /**
+   * conversation-events (Ola 2, reports/overview) — cantidad de conversaciones cuyo
+   * `createdAt` cae en el rango SEMI-ABIERTO `[fromIso, toIso)`. Fuente COMPLETA de
+   * `createdInRange`: `createdAt` existe en TODA fila (a diferencia de contar eventos
+   * 'created', que sólo cubre lo registrado post-deploy y omite las históricas/bulk).
+   * Anti-N+1: un solo `COUNT`, jamás trae filas.
+   */
+  countCreatedBetween(fromIso: string, toIso: string): Promise<number>;
 }

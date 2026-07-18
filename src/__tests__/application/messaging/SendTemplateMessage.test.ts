@@ -43,6 +43,8 @@ function fixedConversationRepo(record: ConversationRecord): ConversationReposito
     countByContactPhoneE164: async () => ({ total: 0, open: 0, resolved: 0 }),
     // inbox-views (Ola 1) — SendTemplateMessage jamás cuenta vistas; stub neutro.
     count: async () => 0,
+    // conversation-events (Ola 2) — SendTemplateMessage jamás cuenta creaciones; stub neutro.
+    countCreatedBetween: async () => 0,
   };
 }
 
@@ -70,6 +72,9 @@ function makeConversationRecord(overrides: Partial<ConversationRecord> = {}): Co
     lastPublicMessageDirection: null,
     // messaging-inbox-notes (edit/delete) — sin notas en la fila histórica del fake.
     internalNoteCount: 0,
+    // conversation-events (Ola 2) — fila histórica sin resolución.
+    resolvedAt: null,
+    firstResolvedAt: null,
     createdAt: '2026-07-16T00:00:00.000Z',
     updatedAt: '2026-07-16T00:00:00.000Z',
     ...overrides,

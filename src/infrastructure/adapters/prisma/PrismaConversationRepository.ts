@@ -88,6 +88,9 @@ function toDomain(row: any): ConversationRecord {
     lastPublicMessageDirection: (row.lastPublicMessageDirection as 'inbound' | 'outbound' | null) ?? null,
     // messaging-inbox-notes (edit/delete, COUNT) — desnormalizado, mismo choke point.
     internalNoteCount: row.internalNoteCount ?? 0,
+    // conversation-events (Ola 2) — timestamps derivados del ciclo de resolución.
+    resolvedAt: toIso(row.resolvedAt),
+    firstResolvedAt: toIso(row.firstResolvedAt),
     createdAt: toIso(row.createdAt)!,
     updatedAt: toIso(row.updatedAt)!,
   };
@@ -131,6 +134,9 @@ function buildConversationWhere(query: ConversationListQuery): Record<string, un
     where['status'] = { not: 'resolved' };
   } else if (query.status === 'resolved') {
     where['status'] = 'resolved';
+  } else if (query.status === 'pending') {
+    // conversation-events (Ola 2) — match EXACTO (subconjunto de 'open'), para currentPending.
+    where['status'] = 'pending';
   }
   return where;
 }
@@ -156,6 +162,13 @@ function updateData(input: UpsertConversationInput): Record<string, unknown> {
     data['lastMessageAt'] = input.lastMessageAt === null ? null : new Date(input.lastMessageAt);
   }
   if (input.lastMessagePreview !== undefined) data['lastMessagePreview'] = input.lastMessagePreview;
+  // conversation-events (Ola 2) — resolvedAt/firstResolvedAt escritos atómicos con el status.
+  if (input.resolvedAt !== undefined) {
+    data['resolvedAt'] = input.resolvedAt === null ? null : new Date(input.resolvedAt);
+  }
+  if (input.firstResolvedAt !== undefined) {
+    data['firstResolvedAt'] = input.firstResolvedAt === null ? null : new Date(input.firstResolvedAt);
+  }
   return data;
 }
 
@@ -194,6 +207,10 @@ export class PrismaConversationRepository implements ConversationRepository {
         canReply: input.canReply ?? false,
         lastMessageAt: input.lastMessageAt ? new Date(input.lastMessageAt) : null,
         lastMessagePreview: input.lastMessagePreview ?? null,
+        // conversation-events (Ola 2) — normalmente null en la creación (una conversación
+        // nace 'open'); se pasan por completitud si el input los trajera.
+        resolvedAt: input.resolvedAt ? new Date(input.resolvedAt) : null,
+        firstResolvedAt: input.firstResolvedAt ? new Date(input.firstResolvedAt) : null,
         // F1.5-C2 — assigneeId/areaId deliberately absent: schema default (null),
         // never set from Chatwoot-sourced input.
       },
@@ -417,6 +434,17 @@ export class PrismaConversationRepository implements ConversationRepository {
   async count(query: ConversationListQuery): Promise<number> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (prisma as any).conversation.count({ where: buildConversationWhere(query) });
+  }
+
+  /**
+   * conversation-events (Ola 2, reports/overview) — `createdAt` en `[fromIso, toIso)`.
+   * Anti-N+1: un solo `COUNT`. MUST mirror `InMemoryConversationRepository.countCreatedBetween`.
+   */
+  async countCreatedBetween(fromIso: string, toIso: string): Promise<number> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (prisma as any).conversation.count({
+      where: { createdAt: { gte: new Date(fromIso), lt: new Date(toIso) } },
+    });
   }
 
   async list(query: ConversationListQuery): Promise<PaginatedResult<ConversationRecord>> {

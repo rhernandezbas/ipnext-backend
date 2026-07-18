@@ -130,7 +130,9 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     expect(idx).toBeGreaterThan(-1);
     const end = appSrc.indexOf('));', idx);
     const window = appSrc.slice(idx, end + '));'.length);
-    expect(window).toMatch(/new ReceiveChatwootWebhook\([^)]*,\s*customerAdapter\)/);
+    // conversation-events (Ola 2) — customerAdapter (6º) sigue presente; ahora seguido del
+    // conversationEventRepo (7º), sin romper OPT-2.
+    expect(window).toMatch(/new ReceiveChatwootWebhook\([^)]*,\s*customerAdapter,\s*conversationEventRepo\)/);
   });
 
   it('(j) PrismaCampaignRepository importado desde el adapter correcto', () => {

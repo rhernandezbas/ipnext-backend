@@ -4,6 +4,7 @@ import {
   UpsertChatMessageInput,
   UpsertBulkChatMessageInput,
   UpsertTemplateChatMessageInput,
+  TrafficCell,
 } from '@domain/ports/ChatMessageRepository';
 import { prisma } from '../../database/prisma';
 
@@ -368,5 +369,33 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
     }
     await this.syncInternalNoteCount(row.conversationId);
     return toDomain(row);
+  }
+
+  /**
+   * conversation-events (Ola 2, reports/traffic) — heatmap de tráfico entrante: mensajes
+   * INBOUND en `[fromIso, toIso)` agrupados por día-de-semana × hora en zona AR. Anti-N+1:
+   * un solo GROUP BY (jamás trae filas ni scanea por celda).
+   *
+   * TIMEZONE (ver `reportsTimezone.ts`): `chatwootCreatedAt` es `timestamp` naive-UTC;
+   * `AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires'` lo lleva a hora de pared
+   * AR (equivale al -3h del helper in-memory — sin DST). EXTRACT(DOW) = 0 (domingo)…6; HOUR =
+   * 0…23. El filtro por rango compara el instante crudo (`AT TIME ZONE 'UTC'` → timestamptz).
+   * MUST mirror `InMemoryChatMessageRepository.inboundTrafficByDowHour`.
+   */
+  async inboundTrafficByDowHour(fromIso: string, toIso: string): Promise<TrafficCell[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows: Array<{ dow: number; hour: number; count: number }> = await (prisma as any).$queryRaw`
+      SELECT
+        EXTRACT(DOW  FROM (m."chatwootCreatedAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS dow,
+        EXTRACT(HOUR FROM (m."chatwootCreatedAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires'))::int AS hour,
+        COUNT(*)::int AS count
+      FROM "ChatMessage" m
+      WHERE m."direction" = 'inbound'
+        AND (m."chatwootCreatedAt" AT TIME ZONE 'UTC') >= ${fromIso}::timestamptz
+        AND (m."chatwootCreatedAt" AT TIME ZONE 'UTC') <  ${toIso}::timestamptz
+      GROUP BY 1, 2
+      ORDER BY 1, 2
+    `;
+    return rows.map((r) => ({ dow: Number(r.dow), hour: Number(r.hour), count: Number(r.count) }));
   }
 }

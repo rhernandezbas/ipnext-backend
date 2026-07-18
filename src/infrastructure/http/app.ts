@@ -808,6 +808,12 @@ import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssign
 import { SendTemplateMessage } from '@application/use-cases/messaging/SendTemplateMessage';
 // inbox-views (Ola 1) — contadores por vista del inbox (badges de la sidebar).
 import { GetInboxViewCounts } from '@application/use-cases/messaging/GetInboxViewCounts';
+// conversation-events (Ola 2) — historial de transiciones + reports de agregación (cimiento Ola 3).
+import { PrismaConversationEventRepository } from '../adapters/prisma/PrismaConversationEventRepository';
+import { createMessagingReportsRouter } from './routes/messagingReports.routes';
+import { GetReportsOverview } from '@application/use-cases/messaging/GetReportsOverview';
+import { GetTrafficReport } from '@application/use-cases/messaging/GetTrafficReport';
+import { GetResolutionsReport } from '@application/use-cases/messaging/GetResolutionsReport';
 // ── messaging-bulk (F2) — envío masivo por template WhatsApp (Twilio directo) ─
 import { createMessagingBulkRouter } from './routes/messagingBulk.routes';
 import { TwilioContentGateway } from '../adapters/twilio/TwilioContentGateway';
@@ -2733,6 +2739,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     const conversationLabelRepo = new PrismaConversationLabelRepository();
     const chatMessageRepo = new PrismaChatMessageRepository();
     const webhookDeliveryRepo = new PrismaWebhookDeliveryRepository();
+    // conversation-events (Ola 2) — historial append-only de transiciones (cimiento de los reports).
+    const conversationEventRepo = new PrismaConversationEventRepository();
     // Opt-in config (design §9): if CHATWOOT_* is unset the gateway still builds, but
     // any call fails with ChatwootUnavailableError (503) — boot NEVER fails for this.
     const chatwootGateway = new HttpChatwootGateway({
@@ -2793,7 +2801,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // ya implementa `CampaignSegmentSource & OptOutRegistry` (misma instancia
       // que el resto del BE) — habilita la detección BAJA/STOP inbound. Sin esto
       // el opt-out inbound queda MUERTO en prod (lección W6).
-      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger, customerAdapter),
+      // conversation-events (Ola 2) — 7º arg `conversationEventRepo`: registra 'created'
+      // (actor null) y resolved/reopened Chatwoot-driven, best-effort.
+      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger, customerAdapter, conversationEventRepo),
       new ListConversations(conversationRepo),
       new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone, chatAttachmentRepo, chatMediaDownloadTrigger),
       new ListChatMessages(conversationRepo, chatMessageRepo, chatAttachmentRepo),
@@ -2805,7 +2815,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway, chatAttachmentRepo, chatMediaDownloadTrigger),
       // messaging-inbox-productivity (F1.5 fase C, STATUS-1) — resolver/reabrir/marcar
       // pendiente. Mismas instancias de conversationRepo/chatwootGateway, sin infra nueva.
-      new SetConversationStatus(conversationRepo, chatwootGateway),
+      // conversation-events (Ola 2) — 3er arg: registra resolved/reopened + resolvedAt/firstResolvedAt.
+      new SetConversationStatus(conversationRepo, chatwootGateway, conversationEventRepo),
       getInboxClientContext,
       getChatAttachmentFile,
       createChatwootSignatureMiddleware(),
@@ -2823,8 +2834,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // (línea ~2418) son reusados tal cual (mismas instancias que scheduling/
       // recapture) — sin duplicar wiring. `ticketAreaRepo`/`listTicketAreas` (línea
       // ~1081) también son las MISMAS instancias que /api/tickets/areas.
-      new AssignConversation(conversationRepo, userLookupForScheduling),
-      new SetConversationArea(conversationRepo, ticketAreaRepo),
+      // conversation-events (Ola 2) — 3er arg: registra assigned/unassigned / area_changed.
+      new AssignConversation(conversationRepo, userLookupForScheduling, conversationEventRepo),
+      new SetConversationArea(conversationRepo, ticketAreaRepo, conversationEventRepo),
       new ListAssignableUsers(rbacUserRepo, roleLookupForRecapture),
       listTicketAreas,
       // inbox-template-send (HTTP-1/HTTP-2) — appended (design §Colisiones: nunca
@@ -2859,6 +2871,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new CreateLabel(conversationLabelRepo),
       new UpdateLabel(conversationLabelRepo),
       new DeleteLabel(conversationLabelRepo),
+    ));
+
+    // ─── conversation-events (Ola 2) — reports de agregación (cimiento del dashboard Ola 3) ─
+    // Router SEPARADO montado en `/api/messaging/reports` DESPUÉS del principal (que no
+    // matchea `/reports/*` → cae acá, mismo patrón que `/bulk`). Gateado por `messaging:read`.
+    app.use('/api/messaging/reports', createMessagingReportsRouter(
+      new GetReportsOverview(conversationRepo, conversationEventRepo, new GetInboxViewCounts(conversationRepo)),
+      new GetTrafficReport(chatMessageRepo),
+      new GetResolutionsReport(conversationEventRepo),
+      createAuthMiddleware(authAdapter, sessionRepo),
+      { read: requirePerm('messaging', 'read') },
     ));
   }
 

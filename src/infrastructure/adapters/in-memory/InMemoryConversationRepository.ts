@@ -87,6 +87,10 @@ export class InMemoryConversationRepository implements ConversationRepository {
       if (input.canReply !== undefined) existing.canReply = input.canReply;
       if (input.lastMessageAt !== undefined) existing.lastMessageAt = input.lastMessageAt;
       if (input.lastMessagePreview !== undefined) existing.lastMessagePreview = input.lastMessagePreview;
+      // conversation-events (Ola 2) — timestamps de resolución escritos atómicos con status
+      // por SetConversationStatus/webhook. undefined = no tocar; null = limpiar (al reabrir).
+      if (input.resolvedAt !== undefined) existing.resolvedAt = input.resolvedAt;
+      if (input.firstResolvedAt !== undefined) existing.firstResolvedAt = input.firstResolvedAt;
       existing.updatedAt = new Date().toISOString();
       return { ...existing };
     }
@@ -120,6 +124,9 @@ export class InMemoryConversationRepository implements ConversationRepository {
       // messaging-inbox-notes (edit/delete) — arranca 0; lo mantiene
       // InMemoryChatMessageRepository vía syncInternalNoteCount.
       internalNoteCount: 0,
+      // conversation-events (Ola 2) — arrancan null; los mantiene SetConversationStatus/webhook.
+      resolvedAt: null,
+      firstResolvedAt: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -174,6 +181,9 @@ export class InMemoryConversationRepository implements ConversationRepository {
       lastPublicMessageDirection: null,
       // messaging-inbox-notes (edit/delete) — 0 hasta que el write-path lo sincronice.
       internalNoteCount: 0,
+      // conversation-events (Ola 2) — una conversación bulk nace 'open', sin resolución.
+      resolvedAt: null,
+      firstResolvedAt: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -306,6 +316,19 @@ export class InMemoryConversationRepository implements ConversationRepository {
   }
 
   /**
+   * conversation-events (Ola 2, reports/overview) — cuenta filas con `createdAt` en el rango
+   * SEMI-ABIERTO `[fromIso, toIso)`. MUST mirror `PrismaConversationRepository.countCreatedBetween`.
+   */
+  async countCreatedBetween(fromIso: string, toIso: string): Promise<number> {
+    const from = new Date(fromIso).getTime();
+    const to = new Date(toIso).getTime();
+    return this.rows.filter((r) => {
+      const t = new Date(r.createdAt).getTime();
+      return t >= from && t < to;
+    }).length;
+  }
+
+  /**
    * inbox-views (Ola 1, COUNT-1) — sync INTERNO del cache desnormalizado
    * `lastPublicMessageDirection`, llamado EXCLUSIVAMENTE por
    * `InMemoryChatMessageRepository` tras cada write de mensaje (espejo del
@@ -371,6 +394,9 @@ export class InMemoryConversationRepository implements ConversationRepository {
       filtered = filtered.filter((r) => r.status !== 'resolved');
     } else if (query.status === 'resolved') {
       filtered = filtered.filter((r) => r.status === 'resolved');
+    } else if (query.status === 'pending') {
+      // conversation-events (Ola 2) — match EXACTO (subconjunto de 'open'), para currentPending.
+      filtered = filtered.filter((r) => r.status === 'pending');
     }
     return filtered;
   }
