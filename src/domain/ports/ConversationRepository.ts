@@ -329,6 +329,23 @@ export interface ConversationRepository {
    */
   countByContactPhoneE164(phoneE164: string): Promise<ConversationStatusCounts>;
   /**
+   * previous-conversations (Ola 6a) — lista las OTRAS conversaciones del MISMO
+   * contacto (mismo `contactPhoneE164` CANÓNICO que usa `countByContactPhoneE164`
+   * — la clave de identidad del contacto en este modelo, ya que `Conversation` no
+   * tiene `clientId`), EXCLUYENDO `excludeConversationId` (la conversación actual).
+   * Ordenadas por `lastMessageAt` DESC (nulls last, `id` ASC tiebreaker — MISMO
+   * orden que `list`, ver §8) y truncadas a `limit`. Anti-N+1: trae labels/assignee
+   * por `include` en UNA query (nunca una query por fila), igual que `list`. Alimenta
+   * el panel "Conversaciones previas" del contexto del inbox. Ambos adapters
+   * (`InMemoryConversationRepository`, `PrismaConversationRepository`) MUST implementar
+   * la MISMA semántica.
+   */
+  listByContactPhoneE164(
+    phoneE164: string,
+    excludeConversationId: string,
+    limit: number,
+  ): Promise<ConversationRecord[]>;
+  /**
    * conversation-events (Ola 2, reports/overview) — cantidad de conversaciones cuyo
    * `createdAt` cae en el rango SEMI-ABIERTO `[fromIso, toIso)`. Fuente COMPLETA de
    * `createdInRange`: `createdAt` existe en TODA fila (a diferencia de contar eventos

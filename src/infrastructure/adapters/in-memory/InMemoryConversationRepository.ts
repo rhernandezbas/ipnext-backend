@@ -319,6 +319,30 @@ export class InMemoryConversationRepository implements ConversationRepository {
   }
 
   /**
+   * previous-conversations (Ola 6a) — otras conversaciones del MISMO contacto (por
+   * E164 canónico), excluyendo la actual, ordenadas por lastMessageAt DESC (nulls
+   * last, id ASC tiebreaker — MISMO comparador que `list`, §8) y truncadas a `limit`.
+   * MUST mirror `PrismaConversationRepository.listByContactPhoneE164`.
+   */
+  async listByContactPhoneE164(
+    phoneE164: string,
+    excludeConversationId: string,
+    limit: number,
+  ): Promise<ConversationRecord[]> {
+    const matches = this.rows.filter(
+      (r) => r.contactPhoneE164 === phoneE164 && r.id !== excludeConversationId,
+    );
+    const sorted = matches.slice().sort((a, b) => {
+      if (a.lastMessageAt === null && b.lastMessageAt === null) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      if (a.lastMessageAt === null) return 1;
+      if (b.lastMessageAt === null) return -1;
+      if (a.lastMessageAt !== b.lastMessageAt) return a.lastMessageAt < b.lastMessageAt ? 1 : -1;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    return sorted.slice(0, limit).map((r) => ({ ...r }));
+  }
+
+  /**
    * conversation-events (Ola 2, reports/overview) — cuenta filas con `createdAt` en el rango
    * SEMI-ABIERTO `[fromIso, toIso)`. MUST mirror `PrismaConversationRepository.countCreatedBetween`.
    */

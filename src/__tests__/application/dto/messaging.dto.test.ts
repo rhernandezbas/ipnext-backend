@@ -4,8 +4,9 @@
  * wire: `isPrivate` en dominio ↔ `private` en el DTO, mismo nombre que Chatwoot
  * usa en su propio wire). Nunca expone la entidad Prisma cruda.
  */
-import { toChatMessageDto } from '@application/dto/messaging';
+import { toChatMessageDto, toPreviousConversationDto } from '@application/dto/messaging';
 import type { ChatMessageRecord } from '@domain/ports/ChatMessageRepository';
+import type { ConversationRecord } from '@domain/ports/ConversationRepository';
 
 function record(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRecord {
   return {
@@ -117,5 +118,77 @@ describe('toChatMessageDto — atribución + flags (edit/delete)', () => {
       expect(dto.canEdit).toBe(false);
       expect(dto.canDelete).toBe(false);
     });
+  });
+});
+
+// ─── previous-conversations (Ola 6a) — toPreviousConversationDto (DTO liviano) ──
+
+function conversationRecord(overrides: Partial<ConversationRecord> = {}): ConversationRecord {
+  return {
+    id: 'conv-1',
+    chatwootConversationId: 10,
+    origin: 'chatwoot',
+    contactName: 'Juan',
+    contactPhone: '+5492324421234',
+    contactPhoneE164: '+5492324421234',
+    status: 'open',
+    canReply: true,
+    lastMessageAt: '2026-07-11T12:00:00.000Z',
+    lastMessagePreview: 'hola',
+    assigneeId: 'user-1',
+    assigneeName: 'Agente Uno',
+    areaId: null,
+    areaName: null,
+    areaColor: null,
+    campaigns: [],
+    labels: [{ id: 'l1', name: 'Urgente', color: '#ef4444' }],
+    lastPublicMessageDirection: 'inbound',
+    internalNoteCount: 0,
+    resolvedAt: null,
+    firstResolvedAt: null,
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-11T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('toPreviousConversationDto — previous-conversations (Ola 6a) DTO liviano', () => {
+  it('proyecta el subconjunto liviano (id/status/lastMessageAt/lastMessagePreview/assigneeName/unread/labels)', () => {
+    const dto = toPreviousConversationDto(conversationRecord());
+
+    expect(dto).toEqual({
+      id: 'conv-1',
+      status: 'open',
+      lastMessageAt: '2026-07-11T12:00:00.000Z',
+      lastMessagePreview: 'hola',
+      assigneeName: 'Agente Uno',
+      unread: true,
+      labels: [{ id: 'l1', name: 'Urgente', color: '#ef4444' }],
+    });
+  });
+
+  it('NO expone campos pesados/crudos del record (chatwootConversationId, contactPhone, canReply, campaigns, internalNoteCount, preview)', () => {
+    const dto = toPreviousConversationDto(conversationRecord());
+
+    expect(dto).not.toHaveProperty('chatwootConversationId');
+    expect(dto).not.toHaveProperty('contactPhone');
+    expect(dto).not.toHaveProperty('contactPhoneE164');
+    expect(dto).not.toHaveProperty('canReply');
+    expect(dto).not.toHaveProperty('campaigns');
+    expect(dto).not.toHaveProperty('internalNoteCount');
+    expect(dto).not.toHaveProperty('preview');
+  });
+
+  it('unread deriva de lastPublicMessageDirection === "inbound" (el cliente habló último, sin respuesta)', () => {
+    expect(toPreviousConversationDto(conversationRecord({ lastPublicMessageDirection: 'inbound' })).unread).toBe(true);
+    expect(toPreviousConversationDto(conversationRecord({ lastPublicMessageDirection: 'outbound' })).unread).toBe(false);
+    expect(toPreviousConversationDto(conversationRecord({ lastPublicMessageDirection: null })).unread).toBe(false);
+  });
+
+  it('assigneeName null cuando no hay asignado; labels [] cuando no tiene', () => {
+    const dto = toPreviousConversationDto(conversationRecord({ assigneeId: null, assigneeName: null, labels: [] }));
+
+    expect(dto.assigneeName).toBeNull();
+    expect(dto.labels).toEqual([]);
   });
 });

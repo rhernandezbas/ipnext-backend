@@ -808,6 +808,8 @@ import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssign
 import { SendTemplateMessage } from '@application/use-cases/messaging/SendTemplateMessage';
 // inbox-views (Ola 1) — contadores por vista del inbox (badges de la sidebar).
 import { GetInboxViewCounts } from '@application/use-cases/messaging/GetInboxViewCounts';
+// previous-conversations (Ola 6a) — lista de conversaciones previas del contacto (panel de contexto).
+import { ListPreviousConversations } from '@application/use-cases/messaging/ListPreviousConversations';
 // conversation-events (Ola 2) — historial de transiciones + reports de agregación (cimiento Ola 3).
 import { PrismaConversationEventRepository } from '../adapters/prisma/PrismaConversationEventRepository';
 import { createMessagingReportsRouter } from './routes/messagingReports.routes';
@@ -2858,6 +2860,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // (LOCAL-only, gate messaging:send). Appended (regla §Colisiones). Misma
       // instancia conversationRepo + el catálogo conversationLabelRepo.
       new SetConversationLabels(conversationRepo, conversationLabelRepo),
+      // previous-conversations (Ola 6a) — lista de conversaciones previas del
+      // contacto para el panel de contexto (GET /conversations/:id/previous, gate
+      // messaging:read). Misma instancia conversationRepo (reusa la clave E164
+      // canónica del contador convo-count). Appended (regla §Colisiones).
+      new ListPreviousConversations(conversationRepo),
     ));
 
     // conversation-labels (Ola 5) — CRUD del catálogo /api/messaging/labels (router

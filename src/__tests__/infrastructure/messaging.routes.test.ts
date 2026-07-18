@@ -40,6 +40,8 @@ import { SendTemplateMessage } from '../../application/use-cases/messaging/SendT
 import { ListTemplates } from '../../application/use-cases/messaging/ListTemplates';
 // inbox-views (Ola 1) — contadores por vista para los badges de la sidebar.
 import { GetInboxViewCounts } from '../../application/use-cases/messaging/GetInboxViewCounts';
+// previous-conversations (Ola 6a) — lista de conversaciones previas del contacto (panel de contexto).
+import { ListPreviousConversations } from '../../application/use-cases/messaging/ListPreviousConversations';
 import { InMemoryTemplateMessagingGateway } from '../../infrastructure/adapters/in-memory/InMemoryTemplateMessagingGateway';
 import type { TemplateDto } from '../../domain/ports/TemplateMessagingPort';
 import { GetClientContracts } from '../../application/use-cases/GetClientContracts';
@@ -275,6 +277,9 @@ function buildApp(opts: BuildAppOptions = {}) {
       opts.attachManage ?? noManage,
       // conversation-labels (Ola 5) — appended (regla §Colisiones).
       new SetConversationLabels(conversationRepo, labelRepo),
+      // previous-conversations (Ola 6a) — lista de previas del contacto (gate read).
+      // Appended (regla §Colisiones). Misma instancia conversationRepo.
+      new ListPreviousConversations(conversationRepo),
     ),
   );
   app.use(errorHandler);
@@ -2688,5 +2693,85 @@ describe('GET /api/messaging/conversations?labelId=', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data[0].labels).toEqual([]);
+  });
+});
+
+// ─── GET /conversations/:id/previous (previous-conversations, Ola 6a) ────────────
+
+describe('GET /api/messaging/conversations/:id/previous', () => {
+  it('sin messaging:read → 403, el use case NUNCA se invoca', async () => {
+    const { app, conversationRepo } = buildApp({ readPerm: denyPerm });
+    const spy = jest.spyOn(conversationRepo, 'listByContactPhoneE164');
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 700, contactPhone: '+5492324421234' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/previous`);
+
+    expect(res.status).toBe(403);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it(':id inexistente en el mirror → 404 CONVERSATION_NOT_FOUND', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/messaging/conversations/ghost/previous');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONVERSATION_NOT_FOUND');
+  });
+
+  it('contacto sin otras conversaciones → 200 { data: [] }', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 701, contactPhone: '+5492324421234' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/previous`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ data: [] });
+  });
+
+  it('200 con la lista de previas del mismo contacto (excluye la actual), ordenadas por lastMessageAt DESC, DTO liviano', async () => {
+    const { app, conversationRepo, labelRepo } = buildApp();
+    const urgente = await labelRepo.create({ name: 'Urgente', color: '#ef4444' });
+    const current = await conversationRepo.upsertByChatwootId({
+      chatwootConversationId: 710,
+      contactPhone: '+5492324421234',
+      lastMessageAt: '2026-07-16T10:00:00.000Z',
+    });
+    const older = await conversationRepo.upsertByChatwootId({
+      chatwootConversationId: 711,
+      contactPhone: '02324421234', // cross-format, mismo E164 canónico
+      status: 'resolved',
+      lastMessagePreview: 'gracias!',
+      lastMessageAt: '2026-07-10T10:00:00.000Z',
+    });
+    const newer = await conversationRepo.upsertByChatwootId({
+      chatwootConversationId: 712,
+      contactPhone: '+5492324421234',
+      lastMessageAt: '2026-07-14T10:00:00.000Z',
+    });
+    await conversationRepo.setLabels(newer.id, [urgente.id]);
+
+    const res = await request(app).get(`/api/messaging/conversations/${current.id}/previous`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id)).toEqual([newer.id, older.id]);
+    // DTO liviano — nunca el record crudo del mirror
+    expect(res.body.data[0]).not.toHaveProperty('chatwootConversationId');
+    expect(res.body.data[0].labels).toEqual([{ id: urgente.id, name: 'Urgente', color: '#ef4444' }]);
+    expect(res.body.data[1]).toMatchObject({ id: older.id, status: 'resolved', lastMessagePreview: 'gracias!' });
+  });
+
+  it('no cuelga cuando el repo lanza (ROB-1): responde 500 inmediato', async () => {
+    class ThrowingConversationRepo extends InMemoryConversationRepository {
+      override async listByContactPhoneE164(): Promise<never> {
+        throw new Error('db down');
+      }
+    }
+    const repo = new ThrowingConversationRepo();
+    const { app } = buildApp({ conversationRepo: repo });
+    const conv = await repo.upsertByChatwootId({ chatwootConversationId: 720, contactPhone: '+5492324421234' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/previous`);
+
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
   });
 });

@@ -427,6 +427,30 @@ export class PrismaConversationRepository implements ConversationRepository {
   }
 
   /**
+   * previous-conversations (Ola 6a) — otras conversaciones del contacto por E164
+   * canónico (índice `@@index([contactPhoneE164])`), excluyendo la actual, ordenadas
+   * por lastMessageAt DESC (nulls last, id ASC tiebreaker — MISMO orderBy que `list`)
+   * y truncadas a `limit`. Anti-N+1: UN solo `findMany` con `CONVERSATION_INCLUDE`
+   * (labels/assignee en el mismo roundtrip, jamás una query por fila). MUST mirror
+   * `InMemoryConversationRepository.listByContactPhoneE164`.
+   */
+  async listByContactPhoneE164(
+    phoneE164: string,
+    excludeConversationId: string,
+    limit: number,
+  ): Promise<ConversationRecord[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma as any).conversation.findMany({
+      where: { contactPhoneE164: phoneE164, id: { not: excludeConversationId } },
+      include: CONVERSATION_INCLUDE,
+      orderBy: [{ lastMessageAt: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+      take: limit,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return rows.map((r: any) => toDomain(r));
+  }
+
+  /**
    * inbox-views (Ola 1, COUNT-2) — count con el MISMO where que `list` (comparte
    * `buildConversationWhere`, una sola fuente de verdad). Anti-N+1: un único
    * `COUNT` agregado, jamás trae filas.

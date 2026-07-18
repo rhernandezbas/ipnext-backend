@@ -70,6 +70,34 @@ export interface ConversationListItemDto {
   internalNoteCount: number;
 }
 
+// ─── Previous conversations (previous-conversations, Ola 6a) ──────────────────
+// DTO LIVIANO para la lista "Conversaciones previas" del panel de contexto del
+// inbox (equivalente a Chatwoot's "Previous Conversations"). Es un SUBCONJUNTO
+// deliberado de `ConversationListItemDto` — solo lo útil para una fila COMPACTA —,
+// NUNCA el item pesado del inbox (sin `contactName`/`contactPhone`/`assignee`
+// anidado/`area`/`campaigns`/`internalNoteCount`). Incluye `labels` + `status`
+// (valiosos para pintar el chip/estado de cada previa) y `assigneeName` PLANO (no
+// el objeto `assignee` del item pesado — acá alcanza el nombre para una fila).
+export interface PreviousConversationDto {
+  id: string;
+  status: string;
+  lastMessageAt: string | null;
+  /** El preview del último mensaje. Nombre `lastMessagePreview` (NO el rename
+   * `preview` del item pesado) — este DTO no reusa ese wire. */
+  lastMessagePreview: string | null;
+  /** Nombre del agente asignado (plano, JOIN-derived), o `null` si sin asignar. */
+  assigneeName: string | null;
+  /**
+   * Derivado de `ConversationRecord.lastPublicMessageDirection === 'inbound'`: el
+   * cliente habló último y ningún agente respondió por WhatsApp (la MISMA señal
+   * "Sin atender"/unattended del inbox). Es el proxy HONESTO de "sin leer" que el
+   * mirror puede ofrecer — NO existe estado de lectura por-agente en el modelo.
+   */
+  unread: boolean;
+  /** Etiquetas de color de la previa (JOIN-derived), `[]` cuando no tiene. */
+  labels: ConversationLabelDto[];
+}
+
 // ─── Assignable users (F1.5-C2, dropdown) ────────────────────────────────────
 // Deliberately minimal — NEVER passwordHash/email/login/any auth-internal field.
 
@@ -378,6 +406,23 @@ export function toConversationListItemDto(record: ConversationRecord): Conversat
     labels: record.labels.map((l) => ({ id: l.id, name: l.name, color: l.color })),
     // messaging-inbox-notes (edit/delete) — desnormalizado en el record.
     internalNoteCount: record.internalNoteCount,
+  };
+}
+
+/**
+ * previous-conversations (Ola 6a) — proyecta el DTO LIVIANO de una conversación
+ * previa (ver `PreviousConversationDto`). Función pura del record; nunca leakea el
+ * shape crudo del mirror. `unread` deriva de `lastPublicMessageDirection === 'inbound'`.
+ */
+export function toPreviousConversationDto(record: ConversationRecord): PreviousConversationDto {
+  return {
+    id: record.id,
+    status: record.status,
+    lastMessageAt: record.lastMessageAt,
+    lastMessagePreview: record.lastMessagePreview,
+    assigneeName: record.assigneeName,
+    unread: record.lastPublicMessageDirection === 'inbound',
+    labels: record.labels.map((l) => ({ id: l.id, name: l.name, color: l.color })),
   };
 }
 

@@ -236,4 +236,86 @@ describe('InMemoryConversationRepository', () => {
       expect(result).toBeNull();
     });
   });
+
+  // previous-conversations (Ola 6a) — lista de OTRAS conversaciones del MISMO
+  // contacto (mismo `contactPhoneE164` canónico), para el panel de contexto del
+  // inbox. Espeja el orden de `list` (lastMessageAt DESC, nulls last, id ASC
+  // tiebreaker) y MUST no divergir de `PrismaConversationRepository.listByContactPhoneE164`.
+  describe('previous-conversations (Ola 6a) — listByContactPhoneE164', () => {
+    const E164 = '+5492324421234';
+
+    it('excluye la conversación actual (excludeConversationId)', async () => {
+      const current = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 1, contactPhone: '+5492324421234', lastMessageAt: '2026-07-16T10:00:00.000Z' }),
+      );
+      const other = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 2, contactPhone: '+5492324421234', lastMessageAt: '2026-07-10T10:00:00.000Z' }),
+      );
+
+      const result = await repo.listByContactPhoneE164(E164, current.id, 20);
+
+      expect(result.map((r) => r.id)).toEqual([other.id]);
+    });
+
+    it('ordena las previas por lastMessageAt DESC', async () => {
+      const current = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 1, contactPhone: '+5492324421234', lastMessageAt: '2026-07-16T10:00:00.000Z' }),
+      );
+      const older = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 2, contactPhone: '+5492324421234', lastMessageAt: '2026-07-10T10:00:00.000Z' }),
+      );
+      const newer = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 3, contactPhone: '+5492324421234', lastMessageAt: '2026-07-14T10:00:00.000Z' }),
+      );
+
+      const result = await repo.listByContactPhoneE164(E164, current.id, 20);
+
+      expect(result.map((r) => r.id)).toEqual([newer.id, older.id]);
+    });
+
+    it('respeta el limit (devuelve las N más recientes)', async () => {
+      const current = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 1, contactPhone: '+5492324421234', lastMessageAt: '2026-07-16T10:00:00.000Z' }),
+      );
+      await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 2, contactPhone: '+5492324421234', lastMessageAt: '2026-07-10T10:00:00.000Z' }),
+      );
+      const mid = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 3, contactPhone: '+5492324421234', lastMessageAt: '2026-07-12T10:00:00.000Z' }),
+      );
+      const recent = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 4, contactPhone: '+5492324421234', lastMessageAt: '2026-07-14T10:00:00.000Z' }),
+      );
+
+      const result = await repo.listByContactPhoneE164(E164, current.id, 2);
+
+      expect(result.map((r) => r.id)).toEqual([recent.id, mid.id]);
+    });
+
+    it('matchea por E164 canónico aunque los formatos crudos difieran (+549 / 0-troncal / 15 embebido)', async () => {
+      const current = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 1, contactPhone: '+5492324421234', lastMessageAt: '2026-07-16T10:00:00.000Z' }),
+      );
+      const troncal = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 2, contactPhone: '02324421234', lastMessageAt: '2026-07-10T10:00:00.000Z' }),
+      );
+      const embedded15 = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 3, contactPhone: '02324 15 421234', lastMessageAt: '2026-07-14T10:00:00.000Z' }),
+      );
+
+      const result = await repo.listByContactPhoneE164(E164, current.id, 20);
+
+      expect(result.map((r) => r.id).sort()).toEqual([troncal.id, embedded15.id].sort());
+    });
+
+    it('contacto sin otras conversaciones → []', async () => {
+      const solo = await repo.upsertByChatwootId(
+        input({ chatwootConversationId: 1, contactPhone: '+5492324421234', lastMessageAt: '2026-07-16T10:00:00.000Z' }),
+      );
+
+      const result = await repo.listByContactPhoneE164(E164, solo.id, 20);
+
+      expect(result).toEqual([]);
+    });
+  });
 });

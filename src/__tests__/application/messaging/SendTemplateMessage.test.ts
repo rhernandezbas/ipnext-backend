@@ -41,6 +41,8 @@ function fixedConversationRepo(record: ConversationRecord): ConversationReposito
     bumpLastMessage: async () => ({ ...record }),
     // convo-count — SendTemplateMessage nunca cuenta interacciones; stub neutro.
     countByContactPhoneE164: async () => ({ total: 0, open: 0, resolved: 0 }),
+    // previous-conversations (Ola 6a) — SendTemplateMessage jamás lista previas; stub neutro.
+    listByContactPhoneE164: async () => [],
     // inbox-views (Ola 1) — SendTemplateMessage jamás cuenta vistas; stub neutro.
     count: async () => 0,
     // conversation-events (Ola 2) — SendTemplateMessage jamás cuenta creaciones; stub neutro.

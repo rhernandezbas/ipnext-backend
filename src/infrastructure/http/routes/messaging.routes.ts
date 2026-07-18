@@ -25,6 +25,8 @@ import { DeleteInternalNote } from '@application/use-cases/messaging/DeleteInter
 import type { InternalNoteActor } from '@application/use-cases/messaging/internalNoteAuthorization';
 import { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
+// previous-conversations (Ola 6a) — lista de conversaciones previas del contacto (panel de contexto).
+import { ListPreviousConversations } from '@application/use-cases/messaging/ListPreviousConversations';
 import { GetChatAttachmentFile } from '@application/use-cases/messaging/GetChatAttachmentFile';
 import { AssignConversation } from '@application/use-cases/messaging/AssignConversation';
 import { SetConversationArea } from '@application/use-cases/messaging/SetConversationArea';
@@ -393,6 +395,14 @@ export function createMessagingRouter(
    * Appended (regla §Colisiones: jamás insertar en medio de la lista compartida).
    */
   setConversationLabels: SetConversationLabels,
+  /**
+   * previous-conversations (Ola 6a) — lista las OTRAS conversaciones del mismo
+   * contacto para el panel de contexto (equivalente a Chatwoot's "Previous
+   * Conversations"). Gateado por `perms.read` (mismo guard que el resto del panel
+   * de contexto — no hay permiso nuevo). Appended (regla §Colisiones: jamás
+   * insertar en medio de la lista compartida).
+   */
+  listPreviousConversations: ListPreviousConversations,
 ): Router {
   const router = Router();
   const conditionalSendLimiter = conditionalSendRateLimiter(sendRateLimiter);
@@ -547,6 +557,26 @@ export function createMessagingRouter(
           refresh: refresh === 'true' || refresh === '1',
         });
         res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /conversations/:id/previous (read) — previous-conversations (Ola 6a) ──
+  // Lista las OTRAS conversaciones del MISMO contacto (mismo E164 canónico que el
+  // contador convo-count), excluyendo la actual, ordenadas por lastMessageAt DESC
+  // y truncadas a un límite razonable. Mismo gate `messaging:read` que el resto del
+  // panel de contexto. `:id` inexistente → 404 CONVERSATION_NOT_FOUND (error tipado
+  // → next(err), mismo convenio que /client-context). Sin previas → { data: [] }.
+  router.get(
+    '/conversations/:id/previous',
+    auth,
+    perms.read,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const data = await listPreviousConversations.execute(req.params['id'] as string);
+        res.json({ data });
       } catch (err) {
         next(err);
       }
