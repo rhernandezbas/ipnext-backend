@@ -1,4 +1,18 @@
+import { z } from 'zod';
 import { NewsPostAttachment } from '@domain/entities/newsPostAttachment';
+
+/**
+ * N2 — validación del body JSON al adjuntar un LINK (POST /:id/attachments, rama sin archivos).
+ * Guarda de TIPO: garantiza que `url`/`filename` sean strings ANTES de que el use case haga
+ * `.trim()` — un `url` no-string ({}, array, number) reventaba con TypeError crudo → 500.
+ * Zod lo corta en 400 VALIDATION_ERROR. La semántica del esquema http(s) NO se valida acá:
+ * sigue en AttachLinkToNews → InvalidLinkAttachmentError (422), que queda intacta (ftp://…, etc.).
+ */
+export const AttachLinkBodySchema = z.object({
+  kind: z.literal('link'),
+  url: z.string(),
+  filename: z.string().optional(),
+});
 
 /**
  * N2 — DTO de salida de un adjunto de Noticia.

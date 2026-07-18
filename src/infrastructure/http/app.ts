@@ -257,7 +257,8 @@ import { AttachLinkToNews } from '@application/use-cases/AttachLinkToNews';
 import { GetNewsAttachmentFile } from '@application/use-cases/GetNewsAttachmentFile';
 import { DeleteNewsAttachment } from '@application/use-cases/DeleteNewsAttachment';
 import { BroadcastNewsToNoc } from '@application/use-cases/BroadcastNewsToNoc';
-import { BroadcastToNoc } from '@application/use-cases/nocBroadcast/BroadcastToNoc';
+// BroadcastToNoc (el motor N1) se importa una sola vez en el cluster nocBroadcast (N1/N3) más abajo;
+// N2 lo reutiliza desde ahí (mismo símbolo, file-scoped) para BroadcastNewsToNoc.
 import { ListNewsPosts } from '@application/use-cases/ListNewsPosts';
 import { GetNewsPost } from '@application/use-cases/GetNewsPost';
 import { CreateNewsPost } from '@application/use-cases/CreateNewsPost';
@@ -860,6 +861,7 @@ import { EvolutionApiHttpGateway } from '../adapters/evolution/EvolutionApiHttpG
 import { GetNocBroadcastConfig } from '@application/use-cases/nocBroadcast/GetNocBroadcastConfig';
 import { UpdateNocBroadcastConfig } from '@application/use-cases/nocBroadcast/UpdateNocBroadcastConfig';
 import { SendNocBroadcastTest } from '@application/use-cases/nocBroadcast/SendNocBroadcastTest';
+// Motor compartido: N3 (BroadcastTaskToNoc) y N2 (BroadcastNewsToNoc, wiring más arriba) lo reusan.
 import { BroadcastToNoc } from '@application/use-cases/nocBroadcast/BroadcastToNoc';
 import { BroadcastTaskToNoc } from '@application/use-cases/nocBroadcast/BroadcastTaskToNoc';
 import { ListCannedResponses } from '@application/use-cases/messaging/ListCannedResponses';

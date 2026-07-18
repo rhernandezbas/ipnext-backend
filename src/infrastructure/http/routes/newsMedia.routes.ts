@@ -6,6 +6,7 @@ import { AttachLinkToNews } from '@application/use-cases/AttachLinkToNews';
 import { GetNewsAttachmentFile } from '@application/use-cases/GetNewsAttachmentFile';
 import { DeleteNewsAttachment } from '@application/use-cases/DeleteNewsAttachment';
 import { BroadcastNewsToNoc } from '@application/use-cases/BroadcastNewsToNoc';
+import { AttachLinkBodySchema } from '@application/dto/newsAttachment.dto';
 import { NewsPostNotFoundError } from '@domain/errors/news';
 import {
   UnsupportedNewsAttachmentTypeError,
@@ -142,13 +143,21 @@ export function createNewsMediaRouter(
         return;
       }
       // sin archivos → ¿link? (body json)
-      const body = (req.body ?? {}) as { kind?: string; url?: string; filename?: string };
+      const body = (req.body ?? {}) as { kind?: string };
       if (body.kind === 'link') {
+        // Guarda de TIPO del body ANTES del use case: un `url` no-string ({}, array, number)
+        // reventaba con TypeError crudo en `.trim()` → 500. Zod lo corta en 400. El esquema
+        // http(s) se sigue validando en el dominio → 422 INVALID_LINK_ATTACHMENT (ftp://…, etc.).
+        const parsed = AttachLinkBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
         const dto = await useCases.attachLinkToNews.execute({
           newsPostId,
           uploadedById: req.user!.id,
-          url: body.url ?? '',
-          filename: body.filename,
+          url: parsed.data.url,
+          filename: parsed.data.filename,
         });
         res.status(201).json(dto);
         return;

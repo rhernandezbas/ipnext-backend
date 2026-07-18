@@ -244,6 +244,16 @@ describe('POST /api/news/:id/attachments (link JSON)', () => {
     const res = await asUser(request(app).post(`/api/news/${postId}/attachments`).send({ foo: 'bar' }), manageUserId);
     expect(res.status).toBe(400);
   });
+
+  it('link con url no-string → 400 VALIDATION_ERROR (no 500)', async () => {
+    const { app, postId, manageUserId } = await buildApp();
+    const res = await asUser(
+      request(app).post(`/api/news/${postId}/attachments`).send({ kind: 'link', url: { evil: 1 } }),
+      manageUserId,
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
 });
 
 describe('GET /api/news/attachments/:id/file', () => {
