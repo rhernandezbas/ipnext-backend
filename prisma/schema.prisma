@@ -2898,6 +2898,16 @@ model Conversation {
                                                           // NUNCA recalcula la ventana 24h local
   lastMessageAt          DateTime?
   lastMessagePreview     String?
+  // inbox-views (Ola 1, VIEW-1) — dirección del ÚLTIMO mensaje NO-privado
+  // ('inbound' | 'outbound' | NULL sin mensajes públicos). Cache DESNORMALIZADO
+  // mantenido por PrismaChatMessageRepository (choke point: los 5 write-paths de
+  // mensajes pasan por sus 3 upserts) — una nota interna (isPrivate) jamás lo
+  // toca (no cuenta como atención, misma disciplina que bumpsPreview/NOTE-3).
+  // Hace O(1) el filtro/count del bucket "Sin atender"; la alternativa por
+  // request (último mensaje por conversación) es un correlated subquery que
+  // Prisma no expresa sin $queryRaw o un N+1. Backfill en la migración
+  // 20260925000000 desde el último ChatMessage no-privado (DISTINCT ON).
+  lastPublicMessageDirection String?
 
   // F1.5-C2 (asignación) — assigneeId/areaId son campos EXCLUSIVAMENTE LOCALES del
   // mirror: Chatwoot NUNCA se entera de la asignación (no existe llamada upstream),
@@ -2925,6 +2935,8 @@ model Conversation {
   @@index([areaId])
   // messaging-bulk-inbox (F1) — matcheo por E164 canónico (upsertBulkByPhone / Fase 2).
   @@index([contactPhoneE164])
+  // inbox-views (Ola 1) — filtro/count del bucket "Sin atender" por request.
+  @@index([lastPublicMessageDirection])
 }
 
 // chatwootMessageId es único a nivel MENSAJE de Chatwoot — idempotencia de upsert (HOOK-4).

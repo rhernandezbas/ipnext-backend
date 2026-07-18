@@ -37,6 +37,43 @@ function toDomain(row: any): ChatMessageRecord {
  * in-memory port in use-case tests; this adapter is verified in integration.
  */
 export class PrismaChatMessageRepository implements ChatMessageRepository {
+  /**
+   * inbox-views (Ola 1, VIEW-1) — mantiene el cache desnormalizado
+   * `Conversation.lastPublicMessageDirection` tras CADA write de mensaje. Este
+   * adapter es el CHOKE POINT: los 5 write-paths de producción (webhook,
+   * fetch-on-open, send del agente, proyección bulk, template one-off) pasan
+   * TODOS por los 3 upserts de abajo — mantenerlo acá cubre cualquier caller
+   * presente o futuro por construcción.
+   *
+   * RECOMPUTE desde la DB (no "último write gana"): el último mensaje NO-privado
+   * por (chatwootCreatedAt DESC, id DESC) — orden invertido de `listByConversation`
+   * y mismo criterio que el `DISTINCT ON` del backfill de la migración — así un
+   * webhook fuera de orden o el batch del fetch-on-open convergen SIEMPRE al
+   * estado correcto. Una nota interna (isPrivate) queda excluida del recompute:
+   * jamás cuenta como atención (NOTE-3). Costo: un `findFirst` sobre el índice
+   * `[conversationId, chatwootCreatedAt]` + un update por write de mensaje —
+   * trivial en el volumen real de mensajería, y es lo que hace O(1) la lectura
+   * del bucket "Sin atender" (la alternativa por request es un correlated
+   * subquery que Prisma no expresa sin $queryRaw, o un N+1 por fila).
+   * Cross-ref: `InMemoryChatMessageRepository.syncConversationDirection` — ambos
+   * adapters NO pueden divergir. Degradación conocida: si un mensaje MIGRARA de
+   * conversación (no ocurre en ningún flujo real), la conversación vieja queda
+   * stale hasta su próximo write (mismo tradeoff que el in-memory).
+   */
+  private async syncConversationDirection(conversationId: string): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const latest = await (prisma as any).chatMessage.findFirst({
+      where: { conversationId, isPrivate: false },
+      orderBy: [{ chatwootCreatedAt: 'desc' }, { id: 'desc' }],
+      select: { direction: true },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (prisma as any).conversation.update({
+      where: { id: conversationId },
+      data: { lastPublicMessageDirection: latest?.direction ?? null },
+    });
+  }
+
   async upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = await (prisma as any).chatMessage.upsert({
@@ -59,6 +96,7 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         isPrivate: input.isPrivate ?? false,
       },
     });
+    await this.syncConversationDirection(input.conversationId);
     return toDomain(row);
   }
 
@@ -89,6 +127,8 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         chatwootCreatedAt: new Date(input.chatwootCreatedAt),
       },
     });
+    // inbox-views (VIEW-1) — el bulk también mueve el cache (outbound público).
+    await this.syncConversationDirection(input.conversationId);
     return toDomain(row);
   }
 
@@ -133,6 +173,11 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
           chatwootCreatedAt: new Date(input.chatwootCreatedAt),
         },
       });
+      // inbox-views (VIEW-1) — el template también mueve el cache (outbound
+      // público). En el path de recuperación de carrera (catch de abajo) NO se
+      // re-sincroniza: el upsert del ganador ya lo hizo (mismo criterio que el
+      // racedWinner del in-memory).
+      await this.syncConversationDirection(input.conversationId);
       return toDomain(row);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {

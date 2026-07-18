@@ -32,6 +32,8 @@ import type { ConversationListQuery } from '@domain/ports/ConversationRepository
 // `ListTemplates` es el MISMO use case que el catálogo bulk (reuso tal cual, D7).
 import { SendTemplateMessage } from '@application/use-cases/messaging/SendTemplateMessage';
 import { ListTemplates } from '@application/use-cases/messaging/ListTemplates';
+// inbox-views (Ola 1) — contadores por vista del inbox (badges de la sidebar).
+import { GetInboxViewCounts } from '@application/use-cases/messaging/GetInboxViewCounts';
 
 /**
  * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-5) — construye un header
@@ -336,6 +338,13 @@ export function createMessagingRouter(
    * gateado por `perms.send` (D7 — coherencia de capacidad, NO `messaging.templates`).
    */
   listSendableTemplates: ListTemplates,
+  /**
+   * inbox-views (Ola 1, COUNT-3) — contadores por vista para los badges de la
+   * sidebar (`GET /conversations/counts`). Appended (misma regla §Colisiones:
+   * jamás insertar en medio de la lista compartida). Gateado por `perms.read`
+   * (mismo guard que el listado — cuenta lo mismo que el listado muestra).
+   */
+  getInboxViewCounts: GetInboxViewCounts,
 ): Router {
   const router = Router();
   const conditionalSendLimiter = conditionalSendRateLimiter(sendRateLimiter);
@@ -377,6 +386,7 @@ export function createMessagingRouter(
         const assignment = firstQueryValue(req.query['assignment']);
         const campaignId = firstQueryValue(req.query['campaignId']);
         const status = firstQueryValue(req.query['status']);
+        const view = firstQueryValue(req.query['view']);
         const query: ConversationListQuery = {
           page: page ? Number.parseInt(page, 10) : undefined,
           limit: limit ? Number.parseInt(limit, 10) : undefined,
@@ -387,6 +397,15 @@ export function createMessagingRouter(
         // `assignment` con valor no reconocido: se ignora, sin error). La semántica
         // de bucket vive en el repo (ver `ConversationListQuery.status`).
         if (status === 'open' || status === 'resolved') query.status = status;
+        // inbox-views (Ola 1, VIEW-2) — `?view=unattended`: bucket "Sin atender"
+        // (NO-resuelta + último mensaje público inbound). Param PROPIO y no un
+        // valor más de `assignment` porque son ejes ORTOGONALES (una conversación
+        // asignada y sin responder sigue sin atender — `view=unattended&assignment=mine`
+        // debe poder expresarse); tampoco extiende `status` (unattended ya lleva su
+        // propio filtro de ciclo de vida y GANA sobre `status`, ver el port).
+        // Whitelist (mismo criterio que `status`/`assignment`): valor desconocido
+        // se ignora sin error. La semántica vive en el repo (`ConversationListQuery.unattended`).
+        if (view === 'unattended') query.unattended = true;
         // F1.5-C2 — 'mine' resuelve req.user.id (poblado por `auth`, mismo patrón
         // que rbacUser.routes.ts/portfolio.routes.ts); 'unassigned' filtra
         // assigneeId=null; 'all'/ausente no aplica filtro alguno.
@@ -396,6 +415,25 @@ export function createMessagingRouter(
           query.unassigned = true;
         }
         const result = await listConversations.execute(query);
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /conversations/counts (read) — inbox-views Ola 1, COUNT-3 ──────────
+  // CRÍTICO: registrada ANTES de '/conversations/:id' — Express matchea en orden
+  // de registro y ':id' capturaría el literal 'counts' (fetch-on-open de una
+  // conversación fantasma). `mine` se resuelve del user AUTENTICADO (req.user.id,
+  // poblado por `auth` — mismo patrón que `?assignment=mine`), jamás de un query param.
+  router.get(
+    '/conversations/counts',
+    auth,
+    perms.read,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const result = await getInboxViewCounts.execute(req.user?.id as string);
         res.json(result);
       } catch (err) {
         next(err);

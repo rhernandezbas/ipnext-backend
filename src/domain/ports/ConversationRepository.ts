@@ -51,6 +51,19 @@ export interface ConversationRecord {
    * (JOIN-derived del lazo CampaignRecipient). `[]` cuando no participa en ninguna.
    */
   campaigns: ConversationCampaignRef[];
+  /**
+   * inbox-views (Ola 1, VIEW-1) — dirección del ÚLTIMO mensaje NO-privado de la
+   * conversación (`'inbound'` = el cliente habló último, `'outbound'` = el último
+   * en hablar por WhatsApp fue un agente/sistema, `null` = sin mensajes públicos
+   * todavía). Cache DESNORMALIZADO mantenido por los write-paths de
+   * `ChatMessageRepository` (choke point: webhook/fetch-on-open/send/bulk/template
+   * TODOS pasan por sus 3 upserts) — una nota interna (`isPrivate`) JAMÁS lo toca
+   * (no cuenta como atención, misma disciplina que `bumpsPreview`/NOTE-3). Es lo
+   * que hace O(1) el filtro/contador "Sin atender": la alternativa (derivar el
+   * último mensaje por conversación en cada request) es un correlated subquery
+   * que Prisma no expresa sin $queryRaw o un N+1 por fila.
+   */
+  lastPublicMessageDirection: 'inbound' | 'outbound' | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -92,6 +105,17 @@ export interface ConversationListQuery extends PaginatedQuery {
    * `PrismaConversationRepository`) MUST implementar la MISMA semántica.
    */
   status?: 'open' | 'resolved';
+  /**
+   * inbox-views (Ola 1, VIEW-1) — bucket "Sin atender": conversación NO-resuelta
+   * (`status != 'resolved'`, mismo bucket LS-1 que `status:'open'`) cuyo
+   * `lastPublicMessageDirection === 'inbound'` (el cliente habló último y ningún
+   * agente respondió por WhatsApp; una nota interna NO atiende). `true` GANA
+   * sobre `status` (el bucket ya lleva su propio filtro de ciclo de vida — mismo
+   * molde de precedencia documentada que `assigneeId` sobre `unassigned`).
+   * Combinable en AND con `assigneeId`/`unassigned`/`campaignId`. Ambos adapters
+   * MUST implementar la MISMA semántica.
+   */
+  unattended?: boolean;
 }
 
 /**
@@ -194,6 +218,15 @@ export interface ConversationRepository {
    * with the assignment filter (Mine/Unassigned/All).
    */
   list(query: ConversationListQuery): Promise<PaginatedResult<ConversationRecord>>;
+  /**
+   * inbox-views (Ola 1, COUNT-2) — cantidad de conversaciones que matchean el
+   * MISMO `ConversationListQuery` que `list` (idéntica semántica de filtros —
+   * en ambos adapters `list` y `count` comparten el builder del where, una sola
+   * fuente de verdad: el número del badge SIEMPRE coincide con el total del
+   * listado). Anti-N+1: agregación en el adapter (`COUNT`), jamás trae filas.
+   * `page`/`limit` se ignoran (contar no pagina).
+   */
+  count(query: ConversationListQuery): Promise<number>;
   /**
    * F1.5-C2 (asignación) — actualiza EXCLUSIVAMENTE assigneeId/areaId (LOCAL,
    * nunca Chatwoot). Devuelve `null` si la conversación no existe — los use

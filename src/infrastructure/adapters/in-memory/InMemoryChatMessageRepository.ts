@@ -6,6 +6,7 @@ import {
   UpsertBulkChatMessageInput,
   UpsertTemplateChatMessageInput,
 } from '@domain/ports/ChatMessageRepository';
+import type { InMemoryConversationRepository } from './InMemoryConversationRepository';
 
 /**
  * In-memory ChatMessageRepository for use-case and route tests.
@@ -13,6 +14,41 @@ import {
  */
 export class InMemoryChatMessageRepository implements ChatMessageRepository {
   private rows: ChatMessageRecord[] = [];
+  private conversationRepo: InMemoryConversationRepository | null = null;
+
+  /**
+   * inbox-views (Ola 1, VIEW-1) — linkea el repo de conversaciones para mantener
+   * el cache desnormalizado `Conversation.lastPublicMessageDirection` tras CADA
+   * write de mensaje (espejo del recompute que `PrismaChatMessageRepository` hace
+   * contra la MISMA base — acá los "dos repos" son stores separados y necesitan
+   * el lazo explícito, mismo idioma live-link que `seedAreas`). Tests que no
+   * ejercitan la vista Sin atender pueden no linkear (no-op silencioso).
+   */
+  linkConversationRepo(repo: InMemoryConversationRepository): void {
+    this.conversationRepo = repo;
+  }
+
+  /**
+   * inbox-views (VIEW-1) — recompute del último mensaje NO-privado de la
+   * conversación por (chatwootCreatedAt DESC, id DESC) — el MISMO orden (invertido)
+   * que `listByConversation` usa ASC, y el mismo `DISTINCT ON ... ORDER BY ... DESC`
+   * del backfill de la migración. Recompute (y no "último write gana") para que un
+   * webhook fuera de orden o el batch del fetch-on-open converjan SIEMPRE al estado
+   * correcto. Degradación conocida: si un mensaje MIGRARA de conversación (no pasa
+   * en ningún flujo real), la conversación vieja queda stale hasta su próximo write
+   * — mismo tradeoff en el adapter Prisma, no pueden divergir.
+   */
+  private syncConversationDirection(conversationId: string): void {
+    if (!this.conversationRepo) return;
+    const latest = this.rows
+      .filter((r) => r.conversationId === conversationId && !r.isPrivate)
+      .sort((a, b) => {
+        const byDate = b.chatwootCreatedAt.localeCompare(a.chatwootCreatedAt);
+        if (byDate !== 0) return byDate;
+        return a.id < b.id ? 1 : a.id > b.id ? -1 : 0; // id DESC tiebreak
+      })[0];
+    this.conversationRepo.syncLastPublicMessageDirection(conversationId, latest?.direction ?? null);
+  }
 
   async upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord> {
     const existing = this.rows.find((r) => r.chatwootMessageId === input.chatwootMessageId);
@@ -23,6 +59,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       existing.senderName = input.senderName ?? null;
       existing.chatwootCreatedAt = input.chatwootCreatedAt;
       existing.isPrivate = input.isPrivate ?? false;
+      this.syncConversationDirection(input.conversationId);
       return { ...existing };
     }
 
@@ -42,6 +79,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       idempotencyKey: null,
     };
     this.rows.push(row);
+    this.syncConversationDirection(input.conversationId);
     return { ...row };
   }
 
@@ -57,6 +95,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       existing.content = input.content;
       existing.chatwootCreatedAt = input.chatwootCreatedAt;
       existing.senderName = input.senderName ?? null;
+      this.syncConversationDirection(input.conversationId);
       return { ...existing };
     }
 
@@ -76,6 +115,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       idempotencyKey: null,
     };
     this.rows.push(row);
+    this.syncConversationDirection(input.conversationId);
     return { ...row };
   }
 
@@ -100,6 +140,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       existing.content = input.content;
       existing.senderName = input.senderName ?? null;
       existing.chatwootCreatedAt = input.chatwootCreatedAt;
+      this.syncConversationDirection(input.conversationId);
       return { ...existing };
     }
 
@@ -124,6 +165,7 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       idempotencyKey: input.idempotencyKey ?? null,
     };
     this.rows.push(row);
+    this.syncConversationDirection(input.conversationId);
     return { ...row };
   }
 

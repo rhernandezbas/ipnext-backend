@@ -100,6 +100,9 @@ export class InMemoryConversationRepository implements ConversationRepository {
       areaName: null,
       areaColor: null,
       campaigns: [],
+      // inbox-views (VIEW-1) — arranca null (sin mensajes públicos); lo mantiene
+      // InMemoryChatMessageRepository vía syncLastPublicMessageDirection.
+      lastPublicMessageDirection: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -148,6 +151,8 @@ export class InMemoryConversationRepository implements ConversationRepository {
       areaName: null,
       areaColor: null,
       campaigns: [],
+      // inbox-views (VIEW-1) — null hasta que el write-path de mensajes lo sincronice.
+      lastPublicMessageDirection: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -253,13 +258,31 @@ export class InMemoryConversationRepository implements ConversationRepository {
     return { total: rows.length, open: rows.length - resolved, resolved };
   }
 
-  async list(query: ConversationListQuery): Promise<PaginatedResult<ConversationRecord>> {
-    const page = query.page && query.page > 0 ? query.page : 1;
-    const limit = query.limit && query.limit > 0 ? query.limit : 25;
+  /**
+   * inbox-views (Ola 1, COUNT-1) — sync INTERNO del cache desnormalizado
+   * `lastPublicMessageDirection`, llamado EXCLUSIVAMENTE por
+   * `InMemoryChatMessageRepository` tras cada write de mensaje (espejo del
+   * recompute que `PrismaChatMessageRepository` hace contra la tabla). NUNCA lo
+   * llama un use case — no es parte del port, es el lazo adapter↔adapter que
+   * simula el hecho de que en Postgres ambos "repos" comparten la misma DB.
+   */
+  syncLastPublicMessageDirection(conversationId: string, direction: 'inbound' | 'outbound' | null): void {
+    const row = this.rows.find((r) => r.id === conversationId);
+    if (!row) return;
+    row.lastPublicMessageDirection = direction;
+  }
 
+  /**
+   * inbox-views (Ola 1, COUNT-2) — ÚNICA fuente de verdad de los filtros del
+   * listado, compartida por `list` y `count` (espejo de `buildConversationWhere`
+   * en PrismaConversationRepository — MUST no divergir). Los counts por vista
+   * usan EXACTAMENTE esta semántica, así el número del badge siempre coincide
+   * con lo que el listado devuelve.
+   */
+  private applyFilters(query: ConversationListQuery): ConversationRecord[] {
     // F1.5-C2 — assignment filter (Mine/Unassigned/All). `assigneeId` truthy wins
     // over `unassigned` if both were somehow set (same precedence documented on
-    // the port), mirroring PrismaConversationRepository.list's `where` construction.
+    // the port), mirroring PrismaConversationRepository's `where` construction.
     let filtered = this.rows;
     if (query.assigneeId) {
       filtered = filtered.filter((r) => r.assigneeId === query.assigneeId);
@@ -271,14 +294,35 @@ export class InMemoryConversationRepository implements ConversationRepository {
     if (query.campaignId) {
       filtered = filtered.filter((r) => r.campaigns.some((c) => c.id === query.campaignId));
     }
-    // inbox-resolve (LS-1) — filtro de ciclo de vida con semántica de BUCKET (ver
-    // JSDoc de `ConversationListQuery.status`). MUST mirror
-    // `PrismaConversationRepository.list`'s `where` construction exactly.
-    if (query.status === 'open') {
+    // inbox-views (VIEW-1) — bucket "Sin atender": NO-resuelta + último mensaje
+    // público inbound. GANA sobre `status` (lleva su propio filtro de ciclo de
+    // vida — ver JSDoc del port). inbox-resolve (LS-1) — filtro de ciclo de vida
+    // con semántica de BUCKET (ver `ConversationListQuery.status`). MUST mirror
+    // `PrismaConversationRepository`'s `where` construction exactly.
+    if (query.unattended) {
+      filtered = filtered.filter((r) => r.status !== 'resolved' && r.lastPublicMessageDirection === 'inbound');
+    } else if (query.status === 'open') {
       filtered = filtered.filter((r) => r.status !== 'resolved');
     } else if (query.status === 'resolved') {
       filtered = filtered.filter((r) => r.status === 'resolved');
     }
+    return filtered;
+  }
+
+  /**
+   * inbox-views (Ola 1, COUNT-2) — count con la MISMA semántica de filtros que
+   * `list` (comparte `applyFilters`, una sola fuente de verdad). Anti-N+1: jamás
+   * pagina ni trae filas para contar.
+   */
+  async count(query: ConversationListQuery): Promise<number> {
+    return this.applyFilters(query).length;
+  }
+
+  async list(query: ConversationListQuery): Promise<PaginatedResult<ConversationRecord>> {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? query.limit : 25;
+
+    const filtered = this.applyFilters(query);
 
     // INBOX-1: lastMessageAt DESC, nulls (never messaged) sorted last, id ASC as a
     // tiebreaker (§8). Postgres gives NO guarantee on row order for ties without a

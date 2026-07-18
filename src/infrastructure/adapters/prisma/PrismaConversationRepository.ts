@@ -65,9 +65,48 @@ function toDomain(row: any): ConversationRecord {
     areaName: row.area?.name ?? null,
     areaColor: row.area?.color ?? null,
     campaigns: toCampaigns(row.campaignRecipients),
+    // inbox-views (VIEW-1) — cache desnormalizado mantenido por
+    // PrismaChatMessageRepository (choke point de escritura de mensajes).
+    lastPublicMessageDirection: (row.lastPublicMessageDirection as 'inbound' | 'outbound' | null) ?? null,
     createdAt: toIso(row.createdAt)!,
     updatedAt: toIso(row.updatedAt)!,
   };
+}
+
+/**
+ * inbox-views (Ola 1, COUNT-2) — ÚNICA fuente de verdad del `where` del listado,
+ * compartida por `list` y `count` (espejo de `applyFilters` en
+ * InMemoryConversationRepository — MUST no divergir). Los counts por vista usan
+ * EXACTAMENTE esta semántica, así el número del badge siempre coincide con el
+ * total que el listado devuelve.
+ */
+function buildConversationWhere(query: ConversationListQuery): Record<string, unknown> {
+  // F1.5-C2 — assignment filter (Mine/Unassigned/All). `assigneeId` truthy wins
+  // over `unassigned` (same precedence as InMemoryConversationRepository).
+  const where: Record<string, unknown> = {};
+  if (query.assigneeId) {
+    where['assigneeId'] = query.assigneeId;
+  } else if (query.unassigned) {
+    where['assigneeId'] = null;
+  }
+  // messaging-bulk-inbox (F1, etiqueta #1) — filtro por campaña vía el lazo
+  // CampaignRecipient (JOIN Conversation×CampaignRecipient). Combinable con asignación.
+  if (query.campaignId) {
+    where['campaignRecipients'] = { some: { campaignId: query.campaignId } };
+  }
+  // inbox-views (VIEW-1) — bucket "Sin atender": NO-resuelta + último mensaje
+  // público inbound. GANA sobre `status` (lleva su propio filtro de ciclo de vida,
+  // ver JSDoc del port). inbox-resolve (LS-1) — filtro de ciclo de vida con
+  // semántica de BUCKET. MUST mirror `InMemoryConversationRepository.applyFilters`.
+  if (query.unattended) {
+    where['status'] = { not: 'resolved' };
+    where['lastPublicMessageDirection'] = 'inbound';
+  } else if (query.status === 'open') {
+    where['status'] = { not: 'resolved' };
+  } else if (query.status === 'resolved') {
+    where['status'] = 'resolved';
+  }
+  return where;
 }
 
 /**
@@ -307,31 +346,21 @@ export class PrismaConversationRepository implements ConversationRepository {
     return { total, open: total - resolved, resolved };
   }
 
+  /**
+   * inbox-views (Ola 1, COUNT-2) — count con el MISMO where que `list` (comparte
+   * `buildConversationWhere`, una sola fuente de verdad). Anti-N+1: un único
+   * `COUNT` agregado, jamás trae filas.
+   */
+  async count(query: ConversationListQuery): Promise<number> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (prisma as any).conversation.count({ where: buildConversationWhere(query) });
+  }
+
   async list(query: ConversationListQuery): Promise<PaginatedResult<ConversationRecord>> {
     const page = query.page && query.page > 0 ? query.page : 1;
     const limit = query.limit && query.limit > 0 ? query.limit : 25;
 
-    // F1.5-C2 — assignment filter (Mine/Unassigned/All). `assigneeId` truthy wins
-    // over `unassigned` (same precedence as InMemoryConversationRepository.list).
-    const where: Record<string, unknown> = {};
-    if (query.assigneeId) {
-      where['assigneeId'] = query.assigneeId;
-    } else if (query.unassigned) {
-      where['assigneeId'] = null;
-    }
-    // messaging-bulk-inbox (F1, etiqueta #1) — filtro por campaña vía el lazo
-    // CampaignRecipient (JOIN Conversation×CampaignRecipient). Combinable con asignación.
-    if (query.campaignId) {
-      where['campaignRecipients'] = { some: { campaignId: query.campaignId } };
-    }
-    // inbox-resolve (LS-1) — filtro de ciclo de vida con semántica de BUCKET (ver
-    // JSDoc de `ConversationListQuery.status`). MUST mirror
-    // `InMemoryConversationRepository.list`'s filter exactly.
-    if (query.status === 'open') {
-      where['status'] = { not: 'resolved' };
-    } else if (query.status === 'resolved') {
-      where['status'] = 'resolved';
-    }
+    const where = buildConversationWhere(query);
 
     const [rows, total] = await Promise.all([
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -32,6 +32,8 @@ import { ListAssignableUsers } from '../../application/use-cases/messaging/ListA
 // inbox-template-send (HTTP-1/HTTP-2) — enviar template aprobado desde el hilo + catálogo curado.
 import { SendTemplateMessage } from '../../application/use-cases/messaging/SendTemplateMessage';
 import { ListTemplates } from '../../application/use-cases/messaging/ListTemplates';
+// inbox-views (Ola 1) — contadores por vista para los badges de la sidebar.
+import { GetInboxViewCounts } from '../../application/use-cases/messaging/GetInboxViewCounts';
 import { InMemoryTemplateMessagingGateway } from '../../infrastructure/adapters/in-memory/InMemoryTemplateMessagingGateway';
 import type { TemplateDto } from '../../domain/ports/TemplateMessagingPort';
 import { GetClientContracts } from '../../application/use-cases/GetClientContracts';
@@ -174,6 +176,10 @@ function buildApp(opts: BuildAppOptions = {}) {
   // InMemoryTicketRepository.seedAdmins), so only KNOWN_ASSIGNEES resolve a name.
   conversationRepo.seedAreas(areaRepo);
   conversationRepo.seedUsers(Object.entries(KNOWN_ASSIGNEES).map(([id, name]) => ({ id, name })));
+  // inbox-views (Ola 1) — espejo del wiring real: el adapter Prisma de ChatMessage
+  // SIEMPRE mantiene Conversation.lastPublicMessageDirection; in-memory lo hace vía
+  // este live-link (mismo idioma que seedAreas).
+  messageRepo.linkConversationRepo(conversationRepo);
   const assigneeLookup: EntityLookup =
     opts.assigneeLookup ??
     {
@@ -233,6 +239,9 @@ function buildApp(opts: BuildAppOptions = {}) {
       // insertar en medio de la lista compartida con inbox-resolve).
       new SendTemplateMessage(conversationRepo, templatePort, messageRepo),
       new ListTemplates(templatePort),
+      // inbox-views (Ola 1) — appended (misma regla §Colisiones: jamás insertar
+      // en medio de la lista compartida).
+      new GetInboxViewCounts(conversationRepo),
     ),
   );
   app.use(errorHandler);
@@ -1442,6 +1451,165 @@ describe('GET /api/messaging/conversations — filtro ?status=', () => {
     const res = await request(app).get('/api/messaging/conversations?status=open');
 
     expect(res.status).toBe(403);
+  });
+});
+
+// ─── inbox-views (Ola 1): ?view=unattended + GET /conversations/counts ──────────
+
+describe('GET /api/messaging/conversations — vista ?view=unattended (inbox-views VIEW-2)', () => {
+  /**
+   * Siembra 3 conversaciones vía los MISMOS write-paths de prod (upsert de
+   * conversación + upserts de mensaje — el link de buildApp mantiene el cache):
+   * - sinAtender: inbound último → EN el bucket
+   * - atendida: inbound + outbound posterior → fuera
+   * - resuelta: inbound último pero status resolved → fuera
+   */
+  async function seedViews(
+    conversationRepo: InMemoryConversationRepository,
+    messageRepo: InMemoryChatMessageRepository,
+  ) {
+    const sinAtender = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 970, lastMessageAt: '2026-07-15T10:00:00.000Z' });
+    await messageRepo.upsertByChatwootMessageId({
+      conversationId: sinAtender.id,
+      chatwootMessageId: 9700,
+      direction: 'inbound',
+      content: 'hola, sigo sin internet',
+      chatwootCreatedAt: '2026-07-15T10:00:00.000Z',
+    });
+
+    const atendida = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 971, lastMessageAt: '2026-07-15T11:00:00.000Z' });
+    await messageRepo.upsertByChatwootMessageId({
+      conversationId: atendida.id,
+      chatwootMessageId: 9710,
+      direction: 'inbound',
+      content: 'buenas',
+      chatwootCreatedAt: '2026-07-15T10:30:00.000Z',
+    });
+    await messageRepo.upsertByChatwootMessageId({
+      conversationId: atendida.id,
+      chatwootMessageId: 9711,
+      direction: 'outbound',
+      content: 'ya te ayudo',
+      chatwootCreatedAt: '2026-07-15T11:00:00.000Z',
+    });
+
+    const resuelta = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 972, status: 'resolved', lastMessageAt: '2026-07-15T12:00:00.000Z' });
+    await messageRepo.upsertByChatwootMessageId({
+      conversationId: resuelta.id,
+      chatwootMessageId: 9720,
+      direction: 'inbound',
+      content: 'gracias!',
+      chatwootCreatedAt: '2026-07-15T12:00:00.000Z',
+    });
+
+    return { sinAtender, atendida, resuelta };
+  }
+
+  it('?view=unattended → 200 con SOLO las no-resueltas cuyo último mensaje público es inbound', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp();
+    const { sinAtender } = await seedViews(conversationRepo, messageRepo);
+
+    const res = await request(app).get('/api/messaging/conversations?view=unattended');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id)).toEqual([sinAtender.id]);
+    expect(res.body.total).toBe(1);
+  });
+
+  it('una nota interna posterior del agente NO atiende — la conversación sigue en el bucket', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp();
+    const { sinAtender } = await seedViews(conversationRepo, messageRepo);
+    await messageRepo.upsertByChatwootMessageId({
+      conversationId: sinAtender.id,
+      chatwootMessageId: 9701,
+      direction: 'outbound',
+      content: 'ojo: verificar saldo antes de responder',
+      chatwootCreatedAt: '2026-07-15T13:00:00.000Z',
+      isPrivate: true,
+    });
+
+    const res = await request(app).get('/api/messaging/conversations?view=unattended');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id)).toEqual([sinAtender.id]);
+  });
+
+  it('?view=banana (valor desconocido) → se ignora, idéntico a sin param (whitelist, mismo criterio que ?status=)', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp();
+    await seedViews(conversationRepo, messageRepo);
+
+    const res = await request(app).get('/api/messaging/conversations?view=banana');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(3);
+  });
+
+  it('combinable con ?assignment=mine (Mías + Sin atender)', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp();
+    const { sinAtender, atendida } = await seedViews(conversationRepo, messageRepo);
+    await conversationRepo.updateLocalFields(sinAtender.id, { assigneeId: 'user-test' }); // allowAuth → req.user.id = 'user-test'
+    await conversationRepo.updateLocalFields(atendida.id, { assigneeId: 'user-test' });
+
+    const res = await request(app).get('/api/messaging/conversations?view=unattended&assignment=mine');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id)).toEqual([sinAtender.id]);
+  });
+});
+
+describe('GET /api/messaging/conversations/counts — contadores por vista (inbox-views COUNT-3)', () => {
+  it('sin messaging:read → 403 (mismo guard que el listado)', async () => {
+    const { app } = buildApp({ readPerm: denyPerm });
+
+    const res = await request(app).get('/api/messaging/conversations/counts');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('devuelve el shape EXACTO {mine, unattended, all, unassigned, resolved} coherente con el listado (y NO lo captura /conversations/:id)', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp();
+
+    // sinAtender (sin asignar, inbound último) + atendida (asignada a user-test,
+    // outbound último) + resuelta — mismos write-paths que prod.
+    const sinAtender = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 980, lastMessageAt: '2026-07-15T10:00:00.000Z' });
+    await messageRepo.upsertByChatwootMessageId({
+      conversationId: sinAtender.id,
+      chatwootMessageId: 9800,
+      direction: 'inbound',
+      content: 'hola',
+      chatwootCreatedAt: '2026-07-15T10:00:00.000Z',
+    });
+
+    const atendida = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 981, lastMessageAt: '2026-07-15T11:00:00.000Z' });
+    await conversationRepo.updateLocalFields(atendida.id, { assigneeId: 'user-test' }); // allowAuth → req.user.id
+    await messageRepo.upsertByChatwootMessageId({
+      conversationId: atendida.id,
+      chatwootMessageId: 9810,
+      direction: 'outbound',
+      content: 'te respondo enseguida',
+      chatwootCreatedAt: '2026-07-15T11:00:00.000Z',
+    });
+
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 982, status: 'resolved' });
+
+    const res = await request(app).get('/api/messaging/conversations/counts');
+
+    expect(res.status).toBe(200);
+    // Shape EXACTO del contrato (toEqual estricto: ni claves de más ni de menos —
+    // si /conversations/:id capturara 'counts', esto devolvería otra cosa).
+    expect(res.body).toEqual({ mine: 1, unattended: 1, all: 2, unassigned: 1, resolved: 1 });
+  });
+
+  it('mine se resuelve del user AUTENTICADO (req.user.id), no de un query param', async () => {
+    const { app, conversationRepo } = buildApp();
+    const ajena = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 990 });
+    await conversationRepo.updateLocalFields(ajena.id, { assigneeId: 'user-1' }); // OTRO agente
+
+    const res = await request(app).get('/api/messaging/conversations/counts?userId=user-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body.mine).toBe(0); // user-test no tiene nada asignado; el query param se ignora
+    expect(res.body.all).toBe(1);
   });
 });
 

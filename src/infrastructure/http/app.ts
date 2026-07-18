@@ -794,6 +794,8 @@ import { SetConversationArea } from '@application/use-cases/messaging/SetConvers
 import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssignableUsers';
 // inbox-template-send (HTTP-1/HTTP-2) — enviar template aprobado desde el hilo.
 import { SendTemplateMessage } from '@application/use-cases/messaging/SendTemplateMessage';
+// inbox-views (Ola 1) — contadores por vista del inbox (badges de la sidebar).
+import { GetInboxViewCounts } from '@application/use-cases/messaging/GetInboxViewCounts';
 // ── messaging-bulk (F2) — envío masivo por template WhatsApp (Twilio directo) ─
 import { createMessagingBulkRouter } from './routes/messagingBulk.routes';
 import { TwilioContentGateway } from '../adapters/twilio/TwilioContentGateway';
@@ -2808,6 +2810,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // insertar en medio de la lista compartida con inbox-resolve).
       new SendTemplateMessage(conversationRepo, sendTemplateGateway, chatMessageRepo),
       new ListMessagingTemplates(sendTemplateGateway),
+      // inbox-views (Ola 1) — contadores por vista (GET /conversations/counts),
+      // misma instancia conversationRepo (el count comparte el builder del where
+      // con el listado — una sola fuente de verdad). Appended (regla §Colisiones).
+      new GetInboxViewCounts(conversationRepo),
     ));
   }
 

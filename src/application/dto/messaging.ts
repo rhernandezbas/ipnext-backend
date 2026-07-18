@@ -197,6 +197,28 @@ export interface InboxConversationCountsDto {
   resolved: number;
 }
 
+/**
+ * inbox-views (Ola 1, COUNT-1) — contadores por VISTA del inbox (badges de la
+ * sidebar), shape EXACTO del wire de `GET /api/messaging/conversations/counts`.
+ * `mine`/`unattended`/`all`/`unassigned` cuentan SOLO NO-resueltas
+ * (`status != 'resolved'`, bucket LS-1); `resolved` va aparte (match exacto).
+ * NO confundir con `InboxConversationCountsDto` (convo-count: interacciones de
+ * UN contacto por teléfono, panel de contexto) — este es el agregado GLOBAL del
+ * inbox por vista.
+ */
+export interface InboxViewCountsDto {
+  /** No-resueltas asignadas al user autenticado. */
+  mine: number;
+  /** No-resueltas cuyo último mensaje público es inbound (Sin atender). */
+  unattended: number;
+  /** Todas las no-resueltas. */
+  all: number;
+  /** No-resueltas sin assignee. */
+  unassigned: number;
+  /** status === 'resolved' (bucket aparte, no solapa con los otros). */
+  resolved: number;
+}
+
 export interface InboxClientContextDto {
   status: 'matched' | 'ambiguous' | 'unknown';
   /** Only present for `ambiguous` WITHOUT a chosen `clientId` — never carries

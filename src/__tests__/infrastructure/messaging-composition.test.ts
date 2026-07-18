@@ -172,6 +172,16 @@ describe('Messaging composition root (messaging-inbox F1, B6)', () => {
     expect(window).toMatch(/new ListChatMessages\([^)]*chatAttachmentRepo/);
     expect(window).toMatch(/getChatAttachmentFile,/);
   });
+
+  // ─── inbox-views (Ola 1) — contadores por vista wiring ──────────────────────
+
+  it('(r) GetInboxViewCounts instanciado con el MISMO conversationRepo dentro de la llamada de mount (anti-W6: el count comparte builder de where con el listado)', () => {
+    const idx = appSrc.indexOf("app.use('/api/messaging', createMessagingRouter(");
+    expect(idx).toBeGreaterThan(-1);
+    const end = appSrc.indexOf('));', idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+    expect(window).toMatch(/new GetInboxViewCounts\(conversationRepo\)/);
+  });
 });
 
 /**
@@ -254,6 +264,12 @@ describe('Messaging composition root — boot REAL de createApp() (H3, fix wave)
 
   it('GET /api/messaging/send-templates existe y está detrás de auth REAL (401 sin cookie de sesión, NO 404)', async () => {
     const res = await request(app).get('/api/messaging/send-templates');
+
+    expect(res.status).toBe(401);
+  }, 20000);
+
+  it('GET /api/messaging/conversations/counts existe en el DI graph REAL y está detrás de auth (401 sin cookie, NO 404) — inbox-views Ola 1', async () => {
+    const res = await request(app).get('/api/messaging/conversations/counts');
 
     expect(res.status).toBe(401);
   }, 20000);

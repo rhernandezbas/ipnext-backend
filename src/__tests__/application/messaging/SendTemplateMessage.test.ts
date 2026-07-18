@@ -39,6 +39,8 @@ function fixedConversationRepo(record: ConversationRecord): ConversationReposito
     bumpLastMessage: async () => ({ ...record }),
     // convo-count — SendTemplateMessage nunca cuenta interacciones; stub neutro.
     countByContactPhoneE164: async () => ({ total: 0, open: 0, resolved: 0 }),
+    // inbox-views (Ola 1) — SendTemplateMessage jamás cuenta vistas; stub neutro.
+    count: async () => 0,
   };
 }
 
@@ -60,6 +62,8 @@ function makeConversationRecord(overrides: Partial<ConversationRecord> = {}): Co
     areaName: null,
     areaColor: null,
     campaigns: [],
+    // inbox-views (Ola 1) — sin mensajes públicos en la fila histórica del fake.
+    lastPublicMessageDirection: null,
     createdAt: '2026-07-16T00:00:00.000Z',
     updatedAt: '2026-07-16T00:00:00.000Z',
     ...overrides,
