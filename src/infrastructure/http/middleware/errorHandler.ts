@@ -155,6 +155,11 @@ const statusMap: Record<string, number> = {
   // inbox-template-send (TS-2) — SendTemplateMessage no encuentra un E164 usable
   // (ni contactPhoneE164 ni el fallback toWhatsAppE164(contactPhone)).
   CONVERSATION_PHONE_MISSING: 422,
+  // messaging-inbox-notes (edit/delete) — editar/eliminar una nota interna.
+  INTERNAL_NOTE_NOT_FOUND: 404,
+  NOT_AN_INTERNAL_NOTE: 422,
+  INTERNAL_NOTE_FORBIDDEN: 403,
+  INTERNAL_NOTE_ALREADY_DELETED: 409,
   // messaging-inbox-v2 (F1.5, RICH-1 #4) — client-context endpoint: clientId query
   // param not among the conversation's candidates.
   CLIENT_ID_NOT_A_CANDIDATE: 400,

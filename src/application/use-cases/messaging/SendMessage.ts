@@ -107,6 +107,13 @@ export class SendMessage {
      * — do not collapse the two into a single flag/branch.
      */
     isPrivate = false,
+    /**
+     * messaging-inbox-notes (edit/delete) — usuario RBAC autenticado (req.user.id).
+     * OPCIONAL y AL FINAL (back-compat con los call-sites de 4/5 args existentes). Se
+     * persiste como `authorId` SÓLO cuando `isPrivate` (una nota interna tiene autor;
+     * un mensaje público NO — su `senderName` es el echo de Chatwoot, no un usuario RBAC).
+     */
+    actorUserId?: string,
   ): Promise<ChatMessageDto> {
     const conversation = await this.conversationRepo.findById(conversationId);
     if (!conversation) throw new ConversationNotFoundError(conversationId);
@@ -159,6 +166,9 @@ export class SendMessage {
       senderName: sent.senderName,
       chatwootCreatedAt: sent.createdAt,
       isPrivate,
+      // messaging-inbox-notes (edit/delete) — captura el autor SÓLO en una nota interna.
+      // El repo lo persiste set-once en create; para un mensaje público queda null.
+      authorId: isPrivate ? (actorUserId ?? null) : null,
     });
 
     // fix-be #1 — SEND-5 re-diseñado: cada fila se crea con la metadata de CHATWOOT
@@ -225,6 +235,13 @@ export class SendMessage {
       });
     }
 
-    return toChatMessageDto(message, attachmentRecords);
+    // messaging-inbox-notes (edit/delete) — el autor recién creado ve su nota como
+    // editable/eliminable (authorId === actorUserId). Para un mensaje público el actor
+    // se omite (canEdit/canDelete = false, y además isPrivate=false ya lo garantiza).
+    return toChatMessageDto(
+      message,
+      attachmentRecords,
+      isPrivate ? { userId: actorUserId ?? null } : undefined,
+    );
   }
 }

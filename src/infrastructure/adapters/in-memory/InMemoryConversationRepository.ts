@@ -103,6 +103,9 @@ export class InMemoryConversationRepository implements ConversationRepository {
       // inbox-views (VIEW-1) — arranca null (sin mensajes públicos); lo mantiene
       // InMemoryChatMessageRepository vía syncLastPublicMessageDirection.
       lastPublicMessageDirection: null,
+      // messaging-inbox-notes (edit/delete) — arranca 0; lo mantiene
+      // InMemoryChatMessageRepository vía syncInternalNoteCount.
+      internalNoteCount: 0,
       createdAt: now,
       updatedAt: now,
     };
@@ -153,6 +156,8 @@ export class InMemoryConversationRepository implements ConversationRepository {
       campaigns: [],
       // inbox-views (VIEW-1) — null hasta que el write-path de mensajes lo sincronice.
       lastPublicMessageDirection: null,
+      // messaging-inbox-notes (edit/delete) — 0 hasta que el write-path lo sincronice.
+      internalNoteCount: 0,
       createdAt: now,
       updatedAt: now,
     };
@@ -270,6 +275,19 @@ export class InMemoryConversationRepository implements ConversationRepository {
     const row = this.rows.find((r) => r.id === conversationId);
     if (!row) return;
     row.lastPublicMessageDirection = direction;
+  }
+
+  /**
+   * messaging-inbox-notes (edit/delete, COUNT) — sync INTERNO del cache desnormalizado
+   * `internalNoteCount`, llamado EXCLUSIVAMENTE por `InMemoryChatMessageRepository` tras
+   * cada write que cambia notas (crear nota privada / soft-delete), espejo del recompute
+   * que `PrismaChatMessageRepository` hace con un UPDATE ... COUNT. NUNCA lo llama un use
+   * case (no es parte del port — es el lazo adapter↔adapter que simula la DB compartida).
+   */
+  syncInternalNoteCount(conversationId: string, count: number): void {
+    const row = this.rows.find((r) => r.id === conversationId);
+    if (!row) return;
+    row.internalNoteCount = count;
   }
 
   /**

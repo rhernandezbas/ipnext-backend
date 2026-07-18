@@ -2512,6 +2512,10 @@ model RbacUser {
   assignedConversations   Conversation[]         @relation("ConversationAssignee")
   // messaging-bulk (F2) — back-relation de las campañas disparadas por este usuario.
   createdCampaigns        Campaign[]             @relation("CampaignCreatedBy")
+  // messaging-inbox-notes (edit/delete) — back-relation de las notas internas escritas
+  // por este usuario (soft FK, SetNull on delete: borrar el usuario NO borra sus notas,
+  // sólo desasocia el autor → la nota queda editable/eliminable sólo por un supervisor).
+  authoredChatMessages    ChatMessage[]          @relation("ChatMessageAuthor")
   // internal-news — back-relations: noticias publicadas + acuses de lectura de este usuario.
   newsPosts               NewsPost[]
   newsReadReceipts        NewsReadReceipt[]
@@ -2909,6 +2913,14 @@ model Conversation {
   // 20260925000000 desde el último ChatMessage no-privado (DISTINCT ON).
   lastPublicMessageDirection String?
 
+  // messaging-inbox-notes (edit/delete, COUNT) — contador DESNORMALIZADO de notas
+  // internas VIVAS (isPrivate=true AND deletedAt IS NULL) de la conversación. Mantenido
+  // por PrismaChatMessageRepository (choke point de escritura de mensajes, MISMO patrón
+  // que lastPublicMessageDirection: recompute total, self-healing, fail-open). Backfill
+  // en la migración. Hace O(1) el indicador 📝+N de la lista del inbox, sin subquery/COUNT
+  // por request. Una nota soft-deleted (deletedAt != null) NO cuenta.
+  internalNoteCount      Int           @default(0)
+
   // F1.5-C2 (asignación) — assigneeId/areaId son campos EXCLUSIVAMENTE LOCALES del
   // mirror: Chatwoot NUNCA se entera de la asignación (no existe llamada upstream),
   // igual que status/canReply ya son locales-primero. NINGÚN camino de escritura
@@ -2984,8 +2996,25 @@ model ChatMessage {
   // UNIQUE — conviven N filas). El @unique es también el backstop de carrera: dos
   // sends concurrentes con la misma key chocan acá, no duplican la fila.
   idempotencyKey    String?      @unique
+  // messaging-inbox-notes (edit/delete, NOTE-EDIT) — autor RBAC de la nota interna
+  // (isPrivate). Nullable + onDelete SetNull: notas históricas y TODOS los mensajes
+  // públicos quedan NULL (un authorId NULL sólo es editable/eliminable por un supervisor
+  // con messaging:manage). Capturado por SendMessage SÓLO cuando isPrivate (el
+  // req.user.id del usuario RBAC autenticado, NUNCA el `senderName` del echo de Chatwoot).
+  // Set-once: el update idempotente del webhook (mismo chatwootMessageId) NO lo pisa.
+  authorId          String?
+  author            RbacUser?    @relation("ChatMessageAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  // Timestamp de la última edición de contenido de la nota (NULL = nunca editada). El
+  // DTO lo expone como el flag booleano `edited`.
+  editedAt          DateTime?
+  // Soft-delete de la nota interna (NULL = viva). La fila NUNCA se borra: el hilo la
+  // sigue devolviendo con deleted=true (tombstone en el FE); el contador la excluye.
+  deletedAt         DateTime?
 
   @@index([conversationId, chatwootCreatedAt])
+  // count de notas internas vivas por conversación (isPrivate=true AND deletedAt IS NULL).
+  @@index([conversationId, isPrivate])
+  @@index([authorId])
 }
 
 // messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MODEL-1) — adjuntos (fotos/videos/

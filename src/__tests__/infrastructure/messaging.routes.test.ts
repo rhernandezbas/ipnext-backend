@@ -22,6 +22,9 @@ import { ListConversations } from '../../application/use-cases/messaging/ListCon
 import { GetConversation } from '../../application/use-cases/messaging/GetConversation';
 import { ListMessages } from '../../application/use-cases/messaging/ListMessages';
 import { SendMessage } from '../../application/use-cases/messaging/SendMessage';
+// messaging-inbox-notes (edit/delete) — editar/soft-delete una nota interna.
+import { EditInternalNote } from '../../application/use-cases/messaging/EditInternalNote';
+import { DeleteInternalNote } from '../../application/use-cases/messaging/DeleteInternalNote';
 import { SetConversationStatus } from '../../application/use-cases/messaging/SetConversationStatus';
 import { GetClientContextByPhone } from '../../application/use-cases/messaging/GetClientContextByPhone';
 import { GetInboxClientContext } from '../../application/use-cases/messaging/GetInboxClientContext';
@@ -151,7 +154,23 @@ interface BuildAppOptions {
   // ─── inbox-template-send (HTTP-1/HTTP-2) ────────────────────────────────────
   templatePort?: InMemoryTemplateMessagingGateway;
   templates?: TemplateDto[];
+  // ─── messaging-inbox-notes (edit/delete) ────────────────────────────────────
+  /** Middleware que deja `req.messagingCanManage`. Default: supervisor=false (sólo el
+   * autor puede mutar su nota). Tests de supervisor pasan uno que setea `true`. */
+  attachManage?: RequestHandler;
 }
+
+/** messaging-inbox-notes (edit/delete) — default: NO supervisor (fail-closed). */
+const noManage: RequestHandler = (req, _res, next) => {
+  (req as any).messagingCanManage = false;
+  next();
+};
+
+/** messaging-inbox-notes (edit/delete) — supervisor (messaging:manage) para tests. */
+const withManage: RequestHandler = (req, _res, next) => {
+  (req as any).messagingCanManage = true;
+  next();
+};
 
 function buildApp(opts: BuildAppOptions = {}) {
   mockConfig.chatwoot.webhookSecret = WEBHOOK_SECRET;
@@ -242,6 +261,10 @@ function buildApp(opts: BuildAppOptions = {}) {
       // inbox-views (Ola 1) — appended (misma regla §Colisiones: jamás insertar
       // en medio de la lista compartida).
       new GetInboxViewCounts(conversationRepo),
+      // messaging-inbox-notes (edit/delete) — appended (misma regla §Colisiones).
+      new EditInternalNote(messageRepo),
+      new DeleteInternalNote(messageRepo),
+      opts.attachManage ?? noManage,
     ),
   );
   app.use(errorHandler);
@@ -2274,5 +2297,249 @@ describe('GET /api/messaging/send-templates', () => {
     const pending = res.body.data.find((t: { contentSid: string }) => t.contentSid === 'HX9');
     expect(approved.sendable).toBe(true);
     expect(pending.sendable).toBe(false);
+  });
+});
+
+// ─── PATCH/DELETE /conversations/:id/messages/:messageId — nota interna
+// (messaging-inbox-notes, edit/delete) ─────────────────────────────────────────────
+
+/** auth que setea un req.user.id concreto (para simular "otro usuario" ≠ autor). */
+const authAs = (id: string): RequestHandler => (req, _res, next) => {
+  (req as any).user = { id, email: `${id}@test.com`, username: id };
+  next();
+};
+
+/** Siembra una nota interna atribuida a `authorId` directo en el repo (control fino
+ * del autor sin depender de quién esté autenticado). */
+async function seedNote(
+  messageRepo: InMemoryChatMessageRepository,
+  conversationId: string,
+  opts: { chatwootMessageId: number; authorId: string | null; isPrivate?: boolean },
+) {
+  return messageRepo.upsertByChatwootMessageId({
+    conversationId,
+    chatwootMessageId: opts.chatwootMessageId,
+    direction: 'outbound',
+    content: 'nota original',
+    senderName: 'Agente',
+    chatwootCreatedAt: '2026-07-19T00:00:00.000Z',
+    isPrivate: opts.isPrivate ?? true,
+    authorId: opts.authorId,
+  });
+}
+
+describe('PATCH /api/messaging/conversations/:id/messages/:messageId (editar nota)', () => {
+  it('el AUTOR edita su nota → 200 con edited=true y el content nuevo', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-test') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 100 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/messages/${note.id}`)
+      .send({ content: 'nota editada' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('nota editada');
+    expect(res.body.edited).toBe(true);
+    expect(res.body.canEdit).toBe(true);
+  });
+
+  it('OTRO usuario sin manage → 403 INTERNAL_NOTE_FORBIDDEN', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-other') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 101 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'author-1' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/messages/${note.id}`)
+      .send({ content: 'hack' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('INTERNAL_NOTE_FORBIDDEN');
+    expect((await messageRepo.findById(note.id))!.content).toBe('nota original');
+  });
+
+  it('SUPERVISOR (messaging:manage) que no es el autor → 200', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('super'), attachManage: withManage });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 102 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'author-1' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/messages/${note.id}`)
+      .send({ content: 'moderada' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('moderada');
+  });
+
+  it('nota con authorId NULL → sólo el supervisor (sin manage → 403)', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('cualquiera') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 103 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: null });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/messages/${note.id}`)
+      .send({ content: 'x' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('editar un mensaje PÚBLICO → 422 NOT_AN_INTERNAL_NOTE', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('super'), attachManage: withManage });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 104 });
+    const pub = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: null, isPrivate: false });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/messages/${pub.id}`)
+      .send({ content: 'x' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NOT_AN_INTERNAL_NOTE');
+  });
+
+  it('content vacío → 400 VALIDATION_ERROR (zod)', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-test') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 105 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/messages/${note.id}`)
+      .send({ content: '   ' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('messageId inexistente → 404 INTERNAL_NOTE_NOT_FOUND', async () => {
+    const { app, conversationRepo } = buildApp({ auth: authAs('user-test') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 106 });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/messages/ghost`)
+      .send({ content: 'x' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('INTERNAL_NOTE_NOT_FOUND');
+  });
+
+  it('sin messaging:send → 403 (mismo gate que enviar, sin permiso separado)', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ sendPerm: denyPerm });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 107 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/messages/${note.id}`)
+      .send({ content: 'x' });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('DELETE /api/messaging/conversations/:id/messages/:messageId (soft-delete nota)', () => {
+  it('el AUTOR borra → 200 deleted=true, la fila NO se borra (tombstone en el hilo), baja el count', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-test') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 110 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+    expect((await conversationRepo.findById(conv.id))!.internalNoteCount).toBe(1);
+
+    const res = await request(app).delete(`/api/messaging/conversations/${conv.id}/messages/${note.id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(true);
+    expect(res.body.content).toBe('');
+    // sigue en el hilo (tombstone), pero el contador baja
+    const rows = await messageRepo.listByConversation(conv.id);
+    expect(rows).toHaveLength(1);
+    expect((await conversationRepo.findById(conv.id))!.internalNoteCount).toBe(0);
+  });
+
+  it('el listado del hilo SIGUE devolviendo la nota borrada con deleted=true (para el tombstone)', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-test') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 111 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+    await request(app).delete(`/api/messaging/conversations/${conv.id}/messages/${note.id}`);
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/messages`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].deleted).toBe(true);
+    expect(res.body.data[0].content).toBe('');
+  });
+
+  it('OTRO usuario sin manage → 403 INTERNAL_NOTE_FORBIDDEN', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-other') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 112 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'author-1' });
+
+    const res = await request(app).delete(`/api/messaging/conversations/${conv.id}/messages/${note.id}`);
+
+    expect(res.status).toBe(403);
+    expect((await messageRepo.findById(note.id))!.deletedAt).toBeNull();
+  });
+
+  it('borrar una nota YA borrada → 409 INTERNAL_NOTE_ALREADY_DELETED', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-test') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 113 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+    await request(app).delete(`/api/messaging/conversations/${conv.id}/messages/${note.id}`);
+
+    const res = await request(app).delete(`/api/messaging/conversations/${conv.id}/messages/${note.id}`);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('INTERNAL_NOTE_ALREADY_DELETED');
+  });
+});
+
+describe('nota interna end-to-end + contador en el listado (messaging-inbox-notes)', () => {
+  it('POST private:true atribuye la nota al usuario autenticado (authorId) y la deja editable (canEdit)', async () => {
+    const { app, conversationRepo } = buildApp({ auth: authAs('user-test') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 120 });
+
+    const res = await request(app)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .send({ content: 'mi nota', private: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body.authorId).toBe('user-test');
+    expect(res.body.canEdit).toBe(true);
+  });
+
+  it('GET /conversations expone internalNoteCount y sube/baja con crear/borrar notas', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-test') });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 121, lastMessageAt: '2026-07-01T00:00:00.000Z' });
+    await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+    await seedNote(messageRepo, conv.id, { chatwootMessageId: 2, authorId: 'user-test' });
+
+    const listed = await request(app).get('/api/messaging/conversations');
+    const item = listed.body.data.find((c: { id: string }) => c.id === conv.id);
+    expect(item.internalNoteCount).toBe(2);
+  });
+
+  it('GET messages: canEdit/canDelete correcto por actor (autor sí, otro sin manage no, supervisor sí)', async () => {
+    const conv0 = { chatwootConversationId: 122 };
+
+    // autor
+    {
+      const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-test') });
+      const conv = await conversationRepo.upsertByChatwootId(conv0);
+      await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+      const res = await request(app).get(`/api/messaging/conversations/${conv.id}/messages`);
+      expect(res.body.data[0].canEdit).toBe(true);
+      expect(res.body.data[0].canDelete).toBe(true);
+    }
+    // otro sin manage
+    {
+      const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('otro') });
+      const conv = await conversationRepo.upsertByChatwootId(conv0);
+      await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+      const res = await request(app).get(`/api/messaging/conversations/${conv.id}/messages`);
+      expect(res.body.data[0].canEdit).toBe(false);
+    }
+    // supervisor
+    {
+      const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('super'), attachManage: withManage });
+      const conv = await conversationRepo.upsertByChatwootId(conv0);
+      await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+      const res = await request(app).get(`/api/messaging/conversations/${conv.id}/messages`);
+      expect(res.body.data[0].canEdit).toBe(true);
+    }
   });
 });

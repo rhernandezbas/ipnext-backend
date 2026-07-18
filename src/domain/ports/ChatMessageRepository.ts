@@ -33,6 +33,17 @@ export interface ChatMessageRecord {
    * distintos en el `@unique` — conviven N filas NULL.
    */
   idempotencyKey: string | null;
+  /**
+   * messaging-inbox-notes (edit/delete) — usuario RBAC autor de la nota interna
+   * (`isPrivate`). `null` para TODA fila histórica y para todos los mensajes públicos
+   * (un `authorId` NULL sólo es editable/eliminable por un supervisor `messaging:manage`).
+   * Es el `req.user.id` autenticado, NUNCA el `senderName` del echo de Chatwoot.
+   */
+  authorId: string | null;
+  /** messaging-inbox-notes (edit/delete) — última edición de contenido (ISO). `null` = nunca editada. */
+  editedAt: string | null;
+  /** messaging-inbox-notes (edit/delete) — soft-delete (ISO). `null` = viva. La fila nunca se borra. */
+  deletedAt: string | null;
 }
 
 export interface UpsertChatMessageInput {
@@ -44,6 +55,12 @@ export interface UpsertChatMessageInput {
   chatwootCreatedAt: string;
   /** messaging-inbox-notes (F1.5 fase D, NOTE-1) — optional, defaults to false when absent. */
   isPrivate?: boolean;
+  /**
+   * messaging-inbox-notes (edit/delete) — autor RBAC. SET-ONCE: sólo se persiste en la
+   * rama CREATE del upsert (el `update` idempotente del webhook con el mismo
+   * chatwootMessageId NUNCA lo pisa). `SendMessage` sólo lo pasa cuando `isPrivate`.
+   */
+  authorId?: string | null;
 }
 
 /**
@@ -108,8 +125,25 @@ export interface ChatMessageRepository {
    * colisión de `@unique` en carrera (dos sends concurrentes con la misma key).
    */
   findByIdempotencyKey(idempotencyKey: string): Promise<ChatMessageRecord | null>;
-  /** INBOX-3 — full history, ordered by `chatwootCreatedAt` ASC (oldest first). */
+  /**
+   * INBOX-3 — full history, ordered by `chatwootCreatedAt` ASC (oldest first).
+   * messaging-inbox-notes (edit/delete) — SIGUE devolviendo las notas soft-deleted
+   * (`deletedAt != null`): el FE las muestra como tombstone (deleted=true). Es el
+   * contador `internalNoteCount` el que las excluye, NO este listado.
+   */
   listByConversation(conversationId: string): Promise<ChatMessageRecord[]>;
+  /**
+   * messaging-inbox-notes (edit/delete) — actualiza EXCLUSIVAMENTE `content` +
+   * `editedAt` de una nota interna (autorización ya validada por `EditInternalNote`).
+   * No cambia `internalNoteCount` (editar no crea ni borra). `null` si no existe.
+   */
+  updateContent(id: string, content: string, editedAt: string): Promise<ChatMessageRecord | null>;
+  /**
+   * messaging-inbox-notes (edit/delete) — soft-delete: setea `deletedAt`, NUNCA borra
+   * la fila. Recalcula `internalNoteCount` de la conversación (choke point, mismo
+   * patrón que `lastPublicMessageDirection`). `null` si no existe.
+   */
+  softDelete(id: string, deletedAt: string): Promise<ChatMessageRecord | null>;
   /**
    * messaging-inbox-v2-media (Tanda 1 · MEDIA-2) — resolves a message's own mirror
    * row by its (internal) id. `DownloadChatMessageAttachment` uses this to recover

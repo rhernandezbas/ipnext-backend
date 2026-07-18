@@ -68,6 +68,8 @@ function toDomain(row: any): ConversationRecord {
     // inbox-views (VIEW-1) — cache desnormalizado mantenido por
     // PrismaChatMessageRepository (choke point de escritura de mensajes).
     lastPublicMessageDirection: (row.lastPublicMessageDirection as 'inbound' | 'outbound' | null) ?? null,
+    // messaging-inbox-notes (edit/delete, COUNT) — desnormalizado, mismo choke point.
+    internalNoteCount: row.internalNoteCount ?? 0,
     createdAt: toIso(row.createdAt)!,
     updatedAt: toIso(row.updatedAt)!,
   };

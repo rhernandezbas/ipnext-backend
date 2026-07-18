@@ -785,6 +785,10 @@ import { GetConversation } from '@application/use-cases/messaging/GetConversatio
 // Aliased: `ListMessages` already names an unrelated notifications-inbox use case above (:318).
 import { ListMessages as ListChatMessages } from '@application/use-cases/messaging/ListMessages';
 import { SendMessage } from '@application/use-cases/messaging/SendMessage';
+// messaging-inbox-notes (edit/delete) — editar/soft-delete una nota interna.
+import { EditInternalNote } from '@application/use-cases/messaging/EditInternalNote';
+import { DeleteInternalNote } from '@application/use-cases/messaging/DeleteInternalNote';
+import { attachMessagingManage } from './middleware/attachMessagingManage';
 import { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
 import { GetClientContextByPhone } from '@application/use-cases/messaging/GetClientContextByPhone';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
@@ -2814,6 +2818,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // misma instancia conversationRepo (el count comparte el builder del where
       // con el listado — una sola fuente de verdad). Appended (regla §Colisiones).
       new GetInboxViewCounts(conversationRepo),
+      // messaging-inbox-notes (edit/delete) — editar/soft-delete una nota interna
+      // (misma instancia chatMessageRepo que el resto del bloque). `attachMessagingManage`
+      // resuelve `req.messagingCanManage` (supervisor = messaging:manage) contra el mismo
+      // rbacUserRepo que usa requirePerm. Appended (regla §Colisiones).
+      new EditInternalNote(chatMessageRepo),
+      new DeleteInternalNote(chatMessageRepo),
+      attachMessagingManage(rbacUserRepo),
     ));
   }
 

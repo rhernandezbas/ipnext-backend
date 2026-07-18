@@ -10,6 +10,7 @@
  */
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import multer from 'multer';
+import { z } from 'zod';
 import {
   ReceiveChatwootWebhook,
   ChatwootWebhookPayload,
@@ -18,6 +19,10 @@ import { ListConversations } from '@application/use-cases/messaging/ListConversa
 import { GetConversation } from '@application/use-cases/messaging/GetConversation';
 import { ListMessages } from '@application/use-cases/messaging/ListMessages';
 import { SendMessage } from '@application/use-cases/messaging/SendMessage';
+// messaging-inbox-notes (edit/delete) — editar/eliminar (soft-delete) una nota interna.
+import { EditInternalNote } from '@application/use-cases/messaging/EditInternalNote';
+import { DeleteInternalNote } from '@application/use-cases/messaging/DeleteInternalNote';
+import type { InternalNoteActor } from '@application/use-cases/messaging/internalNoteAuthorization';
 import { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
 import { GetChatAttachmentFile } from '@application/use-cases/messaging/GetChatAttachmentFile';
@@ -234,6 +239,26 @@ function parsePrivateFlag(body: Record<string, unknown> | undefined): boolean {
 }
 
 /**
+ * messaging-inbox-notes (edit/delete) — body de `PATCH /conversations/:id/messages/:messageId`.
+ * `content` DEBE ser un string NO vacío tras trim (mismo criterio "content vacío → 400" del
+ * POST de mensajes). Zod (decisión del usuario) — el resto del router valida inline, pero acá
+ * el body es un objeto tipado con una sola regla clara.
+ */
+const editInternalNoteBodySchema = z.object({
+  content: z.string().trim().min(1),
+});
+
+/**
+ * messaging-inbox-notes (edit/delete) — arma el actor para el use case desde el req:
+ * `userId` = req.user.id (poblado por `auth`); `hasManage` = req.messagingCanManage
+ * (poblado por `attachMessagingManage`, ver el wiring de la ruta). La autorización fina
+ * (autor O supervisor) vive DENTRO del use case, no en el gate.
+ */
+function internalNoteActor(req: Request): InternalNoteActor {
+  return { userId: req.user?.id as string, hasManage: req.messagingCanManage === true };
+}
+
+/**
  * inbox-template-send (HTTP-1, design D10) — valida el body de
  * `POST /conversations/:id/send-template`. `templateRef` DEBE ser un string
  * no-vacío; `variables` (si presente) DEBE ser un objeto plano de valores
@@ -345,6 +370,20 @@ export function createMessagingRouter(
    * (mismo guard que el listado — cuenta lo mismo que el listado muestra).
    */
   getInboxViewCounts: GetInboxViewCounts,
+  /**
+   * messaging-inbox-notes (edit/delete) — editar/soft-delete una nota interna. Gateados
+   * por `perms.send` a nivel ruta; la autorización FINA (autor O supervisor) vive DENTRO
+   * del use case. Appended (regla §Colisiones: jamás insertar en medio de la lista).
+   */
+  editInternalNote: EditInternalNote,
+  deleteInternalNote: DeleteInternalNote,
+  /**
+   * messaging-inbox-notes (edit/delete) — middleware NO-bloqueante que deja
+   * `req.messagingCanManage` (¿es supervisor `messaging:manage`?). Montado en las rutas de
+   * nota (GET messages / PATCH / DELETE) DESPUÉS del gate `messaging:read`/`send`. Inyectado
+   * (no construido acá) para testear con un flag controlado — mismo criterio que `perms`.
+   */
+  attachManage: RequestHandler,
 ): Router {
   const router = Router();
   const conditionalSendLimiter = conditionalSendRateLimiter(sendRateLimiter);
@@ -457,13 +496,21 @@ export function createMessagingRouter(
   );
 
   // ─── GET /conversations/:id/messages (read) — INBOX-3 ───────────────────────
+  // messaging-inbox-notes (edit/delete) — `attachManage` corre tras el gate read y deja
+  // `req.messagingCanManage`, así el DTO calcula canEdit/canDelete por mensaje contra el
+  // usuario actual (autor o supervisor). Las notas soft-deleted SIGUEN en la respuesta
+  // (deleted=true, tombstone) — el contador es el que las excluye, no este listado.
   router.get(
     '/conversations/:id/messages',
     auth,
     perms.read,
+    attachManage,
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        const data = await listMessages.execute(req.params['id'] as string);
+        const data = await listMessages.execute(req.params['id'] as string, {
+          userId: req.user?.id ?? null,
+          canManage: req.messagingCanManage === true,
+        });
         res.json({ data });
       } catch (err) {
         next(err);
@@ -532,8 +579,68 @@ export function createMessagingRouter(
           return;
         }
 
-        const result = await sendMessage.execute(req.params['id'] as string, content, files, isPrivate);
+        // messaging-inbox-notes (edit/delete) — pasa el autor (req.user.id) para que una
+        // nota interna (isPrivate) quede atribuida. `SendMessage` sólo lo persiste cuando
+        // isPrivate; un mensaje público lo ignora (mantiene el senderName del echo).
+        const result = await sendMessage.execute(
+          req.params['id'] as string,
+          content,
+          files,
+          isPrivate,
+          req.user?.id,
+        );
         res.status(201).json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── PATCH /conversations/:id/messages/:messageId (send) — editar nota interna ──
+  // messaging-inbox-notes (edit/delete). Gate `messaging:send` a nivel ruta (mismo
+  // permiso que enviar/notar — no hay uno separado). `attachManage` deja
+  // `req.messagingCanManage`; la autorización FINA (autor O supervisor) la hace el use
+  // case, que lanza errores tipados (404/422/403/409) mapeados por el errorHandler global.
+  router.patch(
+    '/conversations/:id/messages/:messageId',
+    auth,
+    perms.send,
+    attachManage,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const parsed = editInternalNoteBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'content must be a non-empty string', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        const result = await editInternalNote.execute(
+          req.params['messageId'] as string,
+          parsed.data.content,
+          internalNoteActor(req),
+        );
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── DELETE /conversations/:id/messages/:messageId (send) — soft-delete nota ────
+  // messaging-inbox-notes (edit/delete). Soft-delete: la fila NUNCA se borra (el hilo la
+  // sigue devolviendo con deleted=true); baja `internalNoteCount`. Misma autorización fina
+  // que el PATCH (autor O supervisor), dentro del use case.
+  router.delete(
+    '/conversations/:id/messages/:messageId',
+    auth,
+    perms.send,
+    attachManage,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const result = await deleteInternalNote.execute(
+          req.params['messageId'] as string,
+          internalNoteActor(req),
+        );
+        res.json(result);
       } catch (err) {
         next(err);
       }

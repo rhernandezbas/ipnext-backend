@@ -64,6 +64,8 @@ function makeConversationRecord(overrides: Partial<ConversationRecord> = {}): Co
     campaigns: [],
     // inbox-views (Ola 1) — sin mensajes públicos en la fila histórica del fake.
     lastPublicMessageDirection: null,
+    // messaging-inbox-notes (edit/delete) — sin notas en la fila histórica del fake.
+    internalNoteCount: 0,
     createdAt: '2026-07-16T00:00:00.000Z',
     updatedAt: '2026-07-16T00:00:00.000Z',
     ...overrides,

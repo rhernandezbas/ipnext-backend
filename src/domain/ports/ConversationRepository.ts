@@ -64,6 +64,14 @@ export interface ConversationRecord {
    * que Prisma no expresa sin $queryRaw o un N+1 por fila.
    */
   lastPublicMessageDirection: 'inbound' | 'outbound' | null;
+  /**
+   * messaging-inbox-notes (edit/delete, COUNT) — contador DESNORMALIZADO de notas
+   * internas VIVAS (`isPrivate=true AND deletedAt IS NULL`) de la conversación.
+   * Mantenido por los write-paths de `ChatMessageRepository` (choke point, MISMO
+   * patrón que `lastPublicMessageDirection`: recompute total, self-healing). Una nota
+   * soft-deleted NO cuenta; el listado del hilo SÍ la sigue mostrando (tombstone).
+   */
+  internalNoteCount: number;
   createdAt: string;
   updatedAt: string;
 }

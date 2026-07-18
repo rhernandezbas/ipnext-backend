@@ -49,6 +49,12 @@ export interface ConversationListItemDto {
    * (JOIN-derived del lazo CampaignRecipient). `[]` cuando no participa en ninguna.
    */
   campaigns: ConversationCampaignDto[];
+  /**
+   * messaging-inbox-notes (edit/delete, COUNT) — nº de notas internas VIVAS de la
+   * conversación (isPrivate=true AND deletedAt IS NULL). Alimenta el indicador 📝+N
+   * de la lista del inbox. Desnormalizado (Conversation.internalNoteCount), O(1).
+   */
+  internalNoteCount: number;
 }
 
 // ─── Assignable users (F1.5-C2, dropdown) ────────────────────────────────────
@@ -250,7 +256,51 @@ export interface ChatMessageDto {
   /** messaging-inbox-notes (F1.5 fase D, NOTE-5) — rename de wire vs el dominio
    * (`ChatMessageRecord.isPrivate`), mismo nombre que Chatwoot usa en su propio wire. */
   private: boolean;
+  /**
+   * messaging-inbox-notes (edit/delete) — usuario RBAC autor de la nota interna.
+   * `null` para mensajes públicos y notas históricas (sólo un supervisor puede tocarlas).
+   */
+  authorId: string | null;
+  /** messaging-inbox-notes (edit/delete) — `editedAt != null` (la nota fue editada). */
+  edited: boolean;
+  /**
+   * messaging-inbox-notes (edit/delete) — `deletedAt != null` (soft-deleted). Cuando
+   * es `true`, `content` viaja VACÍO (nunca se filtra el texto original): el FE renderiza
+   * el tombstone ("nota eliminada") a partir de este flag. La fila NO se filtra del hilo.
+   */
+  deleted: boolean;
+  /**
+   * messaging-inbox-notes (edit/delete) — computado contra el USUARIO ACTUAL: `true` si
+   * la nota es interna, NO está borrada, y el actor es el autor O un supervisor
+   * (`messaging:manage`). El FE muestra los controles editar/eliminar sólo si es `true`.
+   * `canDelete` usa la MISMA autorización que `canEdit`.
+   */
+  canEdit: boolean;
+  canDelete: boolean;
   attachments: ChatMessageAttachmentDto[];
+}
+
+/**
+ * messaging-inbox-notes (edit/delete) — contexto del actor para computar
+ * `canEdit`/`canDelete` en el mapper. `userId` = req.user.id autenticado;
+ * `canManage` = tiene `messaging:manage` (supervisor). Ausente → sin permisos (false).
+ */
+export interface ChatMessageActor {
+  userId?: string | null;
+  canManage?: boolean;
+}
+
+/**
+ * messaging-inbox-notes (edit/delete) — autorización canónica de mutación de una nota
+ * interna, ÚNICA fuente de verdad compartida por el mapper del DTO (canEdit/canDelete) y
+ * los use cases (EditInternalNote/DeleteInternalNote): sólo el autor O un supervisor
+ * (`canManage`); si `authorId` es NULL, sólo el supervisor. NO chequea isPrivate/deleted
+ * (eso lo hacen los guards del use case y el mapper por separado).
+ */
+export function actorMayMutateNote(authorId: string | null, actor?: ChatMessageActor): boolean {
+  if (!actor) return false;
+  if (actor.canManage === true) return true;
+  return authorId !== null && !!actor.userId && authorId === actor.userId;
 }
 
 // ─── Chat message attachment (messaging-inbox-v2-media, F1.5 fase A, Tanda 1 · MEDIA-4) ─
@@ -311,20 +361,37 @@ export function toConversationListItemDto(record: ConversationRecord): Conversat
     // messaging-bulk-inbox (F1, etiqueta #1) — JOIN-derived en el record; el mapper
     // solo proyecta (nunca leakea el shape crudo del ConversationRecord).
     campaigns: record.campaigns.map((c) => ({ id: c.id, name: c.name })),
+    // messaging-inbox-notes (edit/delete) — desnormalizado en el record.
+    internalNoteCount: record.internalNoteCount,
   };
 }
 
 export function toChatMessageDto(
   record: ChatMessageRecord,
   attachments: ChatMessageAttachmentRecord[] = [],
+  /**
+   * messaging-inbox-notes (edit/delete) — actor actual para computar canEdit/canDelete.
+   * Ausente → ambos false (mismo DTO, sin controles de edición — p.ej. un listado sin
+   * sesión no debería ocurrir, pero degrada seguro).
+   */
+  actor?: ChatMessageActor,
 ): ChatMessageDto {
+  const deleted = record.deletedAt !== null;
+  const mayMutate = record.isPrivate && !deleted && actorMayMutateNote(record.authorId, actor);
   return {
     id: record.id,
     direction: record.direction,
-    content: record.content,
+    // messaging-inbox-notes (edit/delete) — una nota borrada NUNCA expone su texto
+    // original: viaja vacío y el FE pinta el tombstone desde `deleted`.
+    content: deleted ? '' : record.content,
     senderName: record.senderName,
     sentAt: record.chatwootCreatedAt,
     private: record.isPrivate,
+    authorId: record.authorId,
+    edited: record.editedAt !== null,
+    deleted,
+    canEdit: mayMutate,
+    canDelete: mayMutate,
     attachments: attachments.map(toChatMessageAttachmentDto),
   };
 }

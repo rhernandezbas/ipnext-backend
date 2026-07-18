@@ -450,6 +450,62 @@ describe('SendMessage', () => {
     });
   });
 
+  describe('messaging-inbox-notes (edit/delete) — captura de autor + contador', () => {
+    /** harness con el lazo repo↔repo activo (necesario para el sync de internalNoteCount). */
+    function linkedHarness() {
+      const h = makeHarness();
+      h.messageRepo.linkConversationRepo(h.conversationRepo);
+      return h;
+    }
+
+    it('nota interna (isPrivate) → captura authorId = actorUserId; DTO.authorId + canEdit del autor', async () => {
+      const { conversationRepo, messageRepo, gateway, uc } = linkedHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 80, canReply: true });
+      gateway.sendMessageResult = {
+        id: 980, direction: 'outbound', content: 'nota', senderName: 'Agente', createdAt: '2026-07-11T15:00:00.000Z',
+      };
+
+      const dto = await uc.execute(conv.id, 'nota', [], true, 'agent-7');
+
+      expect(dto.authorId).toBe('agent-7');
+      expect(dto.canEdit).toBe(true); // el autor recién creado ya la puede editar
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages[0]!.authorId).toBe('agent-7');
+    });
+
+    it('mensaje PÚBLICO (isPrivate false) NO captura authorId aunque llegue actorUserId', async () => {
+      const { conversationRepo, messageRepo, gateway, uc } = linkedHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 81, canReply: true });
+      gateway.sendMessageResult = {
+        id: 981, direction: 'outbound', content: 'hola', senderName: 'Agente', createdAt: '2026-07-11T15:05:00.000Z',
+      };
+
+      const dto = await uc.execute(conv.id, 'hola', [], false, 'agent-7');
+
+      expect(dto.authorId).toBeNull();
+      expect(dto.canEdit).toBe(false);
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages[0]!.authorId).toBeNull();
+    });
+
+    it('crear una nota interna sube internalNoteCount; un mensaje público NO lo toca', async () => {
+      const { conversationRepo, gateway, uc } = linkedHarness();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 82, canReply: true });
+
+      gateway.sendMessageResult = {
+        id: 982, direction: 'outbound', content: 'nota', senderName: 'Agente', createdAt: '2026-07-11T15:10:00.000Z',
+      };
+      await uc.execute(conv.id, 'nota', [], true, 'agent-7');
+      expect((await conversationRepo.findById(conv.id))!.internalNoteCount).toBe(1);
+
+      gateway.sendMessageResult = {
+        id: 983, direction: 'outbound', content: 'publico', senderName: 'Agente', createdAt: '2026-07-11T15:11:00.000Z',
+      };
+      await uc.execute(conv.id, 'publico', [], false, 'agent-7');
+      expect((await conversationRepo.findById(conv.id))!.internalNoteCount).toBe(1); // sin cambios
+    });
+  });
+
   describe('messaging-inbox-polish (F1.5) — preview WhatsApp-style para el ÚLTIMO mensaje ENVIADO solo-media', () => {
     it('outbound solo-imagen (content vacío) → Conversation.lastMessagePreview = "📷 Imagen"', async () => {
       const { conversationRepo, gateway, uc } = makeHarness();

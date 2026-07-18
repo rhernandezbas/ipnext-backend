@@ -28,6 +28,9 @@ function toDomain(row: any): ChatMessageRecord {
     isPrivate: row.isPrivate ?? false,
     providerMessageId: row.providerMessageId ?? null,
     idempotencyKey: row.idempotencyKey ?? null,
+    authorId: row.authorId ?? null,
+    editedAt: row.editedAt ? toIso(row.editedAt) : null,
+    deletedAt: row.deletedAt ? toIso(row.deletedAt) : null,
   };
 }
 
@@ -106,6 +109,47 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
     }
   }
 
+  /**
+   * messaging-inbox-notes (edit/delete, COUNT) — recompute ATÓMICO del contador
+   * desnormalizado `Conversation.internalNoteCount` en UN solo statement (COUNT de
+   * notas VIVAS: isPrivate=true AND deletedAt IS NULL). MISMO criterio que
+   * `syncConversationDirection`: recompute total (self-healing, no incremental) +
+   * FAIL-OPEN (el ChatMessage ya commiteó — este cache jamás puede tumbar ese write) +
+   * `IS DISTINCT FROM` para no re-escribir la tupla si el count no cambió. Cross-ref:
+   * `InMemoryChatMessageRepository.syncInternalNoteCount` — no pueden divergir.
+   */
+  private async syncInternalNoteCount(conversationId: string): Promise<void> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (prisma as any).$executeRaw`
+        UPDATE "Conversation" c
+        SET "internalNoteCount" = (
+          SELECT COUNT(*)::int
+          FROM "ChatMessage" m
+          WHERE m."conversationId" = ${conversationId}
+            AND m."isPrivate" = true
+            AND m."deletedAt" IS NULL
+        )
+        WHERE c."id" = ${conversationId}
+          AND c."internalNoteCount" IS DISTINCT FROM (
+            SELECT COUNT(*)::int
+            FROM "ChatMessage" m
+            WHERE m."conversationId" = ${conversationId}
+              AND m."isPrivate" = true
+              AND m."deletedAt" IS NULL
+          )
+      `;
+    } catch (err) {
+      // FAIL-OPEN — mismo criterio que syncConversationDirection: el mensaje YA commiteó,
+      // el cache se auto-repara en el próximo write de la conversación.
+      // eslint-disable-next-line no-console
+      console.error(
+        '[messaging] sync de internalNoteCount falló (fail-open: el mensaje ya commiteó, self-heals en el próximo write)',
+        { conversationId, error: err instanceof Error ? err.message : err },
+      );
+    }
+  }
+
   async upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = await (prisma as any).chatMessage.upsert({
@@ -118,6 +162,10 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         senderName: input.senderName ?? null,
         chatwootCreatedAt: new Date(input.chatwootCreatedAt),
         isPrivate: input.isPrivate ?? false,
+        // messaging-inbox-notes (edit/delete) — authorId SET-ONCE en create (SendMessage
+        // sólo lo pasa cuando isPrivate). El `update` de abajo NO lo toca: el echo
+        // idempotente del webhook (mismo chatwootMessageId) jamás nulifica al autor.
+        authorId: input.authorId ?? null,
       },
       update: {
         conversationId: input.conversationId,
@@ -129,6 +177,8 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
       },
     });
     await this.syncConversationDirection(input.conversationId);
+    // messaging-inbox-notes (COUNT) — sólo una nota privada mueve el contador.
+    if (input.isPrivate) await this.syncInternalNoteCount(input.conversationId);
     return toDomain(row);
   }
 
@@ -254,6 +304,34 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
   async findById(id: string): Promise<ChatMessageRecord | null> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = await (prisma as any).chatMessage.findUnique({ where: { id } });
+    return row ? toDomain(row) : null;
+  }
+
+  /**
+   * messaging-inbox-notes (edit/delete) — content + editedAt. No toca el contador
+   * (editar no crea ni borra). Autorización ya validada por `EditInternalNote`.
+   */
+  async updateContent(id: string, content: string, editedAt: string): Promise<ChatMessageRecord | null> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = await (prisma as any).chatMessage.update({
+      where: { id },
+      data: { content, editedAt: new Date(editedAt) },
+    });
+    return row ? toDomain(row) : null;
+  }
+
+  /**
+   * messaging-inbox-notes (edit/delete) — soft-delete (setea deletedAt, NUNCA borra la
+   * fila) + recompute del contador (choke point). Autorización ya validada por
+   * `DeleteInternalNote`.
+   */
+  async softDelete(id: string, deletedAt: string): Promise<ChatMessageRecord | null> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = await (prisma as any).chatMessage.update({
+      where: { id },
+      data: { deletedAt: new Date(deletedAt) },
+    });
+    await this.syncInternalNoteCount(row.conversationId);
     return row ? toDomain(row) : null;
   }
 }

@@ -13,6 +13,13 @@ declare global {
   namespace Express {
     interface Request {
       user?: User;
+      /**
+       * messaging-inbox-notes (edit/delete) — poblado por `attachMessagingManage`:
+       * `true` si el usuario autenticado tiene `messaging:manage` (supervisor). Lo leen
+       * las rutas de nota interna (GET messages / PATCH / DELETE) para pasar `hasManage`
+       * a los use cases. Ausente fuera de esas rutas.
+       */
+      messagingCanManage?: boolean;
     }
   }
 }

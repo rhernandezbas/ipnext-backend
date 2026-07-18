@@ -92,6 +92,9 @@ describe('toChatMessageDto — attachments (MEDIA-4)', () => {
       isPrivate: false,
       providerMessageId: null,
       idempotencyKey: null,
+      authorId: null,
+      editedAt: null,
+      deletedAt: null,
       ...overrides,
     };
   }

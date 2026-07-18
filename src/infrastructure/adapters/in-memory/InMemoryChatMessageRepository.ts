@@ -55,6 +55,20 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
     this.conversationRepo.syncLastPublicMessageDirection(conversationId, latest?.direction ?? null);
   }
 
+  /**
+   * messaging-inbox-notes (edit/delete, COUNT) — recompute TOTAL del contador de notas
+   * internas VIVAS (isPrivate=true AND deletedAt=null) de la conversación, espejo del
+   * UPDATE ... COUNT del adapter Prisma. Self-healing (recalcula desde el store completo,
+   * no incremental). NUNCA pueden divergir.
+   */
+  private syncInternalNoteCount(conversationId: string): void {
+    if (!this.conversationRepo) return;
+    const count = this.rows.filter(
+      (r) => r.conversationId === conversationId && r.isPrivate && r.deletedAt === null,
+    ).length;
+    this.conversationRepo.syncInternalNoteCount(conversationId, count);
+  }
+
   async upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord> {
     const existing = this.rows.find((r) => r.chatwootMessageId === input.chatwootMessageId);
     if (existing) {
@@ -64,7 +78,10 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       existing.senderName = input.senderName ?? null;
       existing.chatwootCreatedAt = input.chatwootCreatedAt;
       existing.isPrivate = input.isPrivate ?? false;
+      // messaging-inbox-notes — authorId es SET-ONCE: el update idempotente del webhook
+      // (mismo chatwootMessageId) NO lo pisa (mismo criterio que origin/idempotencyKey).
       this.syncConversationDirection(input.conversationId);
+      if (existing.isPrivate) this.syncInternalNoteCount(input.conversationId);
       return { ...existing };
     }
 
@@ -82,9 +99,16 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       createdAt: new Date().toISOString(),
       providerMessageId: null,
       idempotencyKey: null,
+      // messaging-inbox-notes (edit/delete) — authorId sólo llega con una nota privada
+      // (SendMessage lo pasa cuando isPrivate); mensajes públicos quedan null.
+      authorId: input.authorId ?? null,
+      editedAt: null,
+      deletedAt: null,
     };
     this.rows.push(row);
     this.syncConversationDirection(input.conversationId);
+    // Sólo una nota privada mueve el contador (crear un mensaje público no lo toca).
+    if (row.isPrivate) this.syncInternalNoteCount(input.conversationId);
     return { ...row };
   }
 
@@ -118,6 +142,10 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       createdAt: new Date().toISOString(),
       providerMessageId: null,
       idempotencyKey: null,
+      // messaging-inbox-notes — un mensaje bulk NUNCA es una nota interna.
+      authorId: null,
+      editedAt: null,
+      deletedAt: null,
     };
     this.rows.push(row);
     this.syncConversationDirection(input.conversationId);
@@ -168,6 +196,10 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       createdAt: new Date().toISOString(),
       providerMessageId: input.providerMessageId,
       idempotencyKey: input.idempotencyKey ?? null,
+      // messaging-inbox-notes — un mensaje template one-off NUNCA es una nota interna.
+      authorId: null,
+      editedAt: null,
+      deletedAt: null,
     };
     this.rows.push(row);
     this.syncConversationDirection(input.conversationId);
@@ -200,5 +232,29 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
   async findById(id: string): Promise<ChatMessageRecord | null> {
     const row = this.rows.find((r) => r.id === id);
     return row ? { ...row } : null;
+  }
+
+  /**
+   * messaging-inbox-notes (edit/delete) — content + editedAt. NO cambia el contador
+   * (editar no crea ni borra una nota). Autorización ya validada por EditInternalNote.
+   */
+  async updateContent(id: string, content: string, editedAt: string): Promise<ChatMessageRecord | null> {
+    const row = this.rows.find((r) => r.id === id);
+    if (!row) return null;
+    row.content = content;
+    row.editedAt = editedAt;
+    return { ...row };
+  }
+
+  /**
+   * messaging-inbox-notes (edit/delete) — soft-delete: setea deletedAt, NUNCA borra la
+   * fila (el hilo la sigue devolviendo). Recalcula internalNoteCount (choke point).
+   */
+  async softDelete(id: string, deletedAt: string): Promise<ChatMessageRecord | null> {
+    const row = this.rows.find((r) => r.id === id);
+    if (!row) return null;
+    row.deletedAt = deletedAt;
+    this.syncInternalNoteCount(row.conversationId);
+    return { ...row };
   }
 }

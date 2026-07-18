@@ -2,7 +2,7 @@ import type { ConversationRepository } from '@domain/ports/ConversationRepositor
 import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository';
 import type { ChatMessageAttachmentRepository } from '@domain/ports/ChatMessageAttachmentRepository';
 import { ConversationNotFoundError } from '@domain/errors/messaging';
-import { toChatMessageDto, type ChatMessageDto } from '@application/dto/messaging';
+import { toChatMessageDto, type ChatMessageDto, type ChatMessageActor } from '@application/dto/messaging';
 
 /**
  * ListMessages (F1, design §4/§8, INBOX-3) — full chronological history (ASC,
@@ -22,13 +22,19 @@ export class ListMessages {
     private readonly attachmentRepo?: ChatMessageAttachmentRepository,
   ) {}
 
-  async execute(conversationId: string): Promise<ChatMessageDto[]> {
+  /**
+   * messaging-inbox-notes (edit/delete) — `actor` OPCIONAL (back-compat con los
+   * call-sites de 1 arg): el usuario actual, para computar `canEdit`/`canDelete` por
+   * mensaje (autor o supervisor). Las notas soft-deleted SIGUEN en el listado (deleted=true,
+   * tombstone) — es el contador el que las excluye, no este listado.
+   */
+  async execute(conversationId: string, actor?: ChatMessageActor): Promise<ChatMessageDto[]> {
     const conversation = await this.conversationRepo.findById(conversationId);
     if (!conversation) throw new ConversationNotFoundError(conversationId);
 
     const messages = await this.messageRepo.listByConversation(conversationId);
     if (!this.attachmentRepo || messages.length === 0) {
-      return messages.map((m) => toChatMessageDto(m));
+      return messages.map((m) => toChatMessageDto(m, [], actor));
     }
 
     const attachments = await this.attachmentRepo.listByMessageIds(messages.map((m) => m.id));
@@ -39,6 +45,6 @@ export class ListMessages {
       else byMessageId.set(a.messageId, [a]);
     }
 
-    return messages.map((m) => toChatMessageDto(m, byMessageId.get(m.id) ?? []));
+    return messages.map((m) => toChatMessageDto(m, byMessageId.get(m.id) ?? [], actor));
   }
 }

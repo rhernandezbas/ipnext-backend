@@ -92,3 +92,51 @@ export class InvalidConversationStatusError extends DomainError {
     this.name = 'InvalidConversationStatusError';
   }
 }
+
+/**
+ * messaging-inbox-notes (edit/delete) — la nota (ChatMessage) referida por
+ * `EditInternalNote`/`DeleteInternalNote` no existe. 404. Nombre PROPIO (no reusa
+ * `ConversationNotFoundError`) porque la entidad ausente es el MENSAJE, no la conversación.
+ */
+export class InternalNoteNotFoundError extends DomainError {
+  constructor(messageId: string) {
+    super(`Internal note with id "${messageId}" not found`, 'INTERNAL_NOTE_NOT_FOUND');
+    this.name = 'InternalNoteNotFoundError';
+  }
+}
+
+/**
+ * messaging-inbox-notes (edit/delete) — el mensaje existe pero NO es una nota interna
+ * (`isPrivate === false`): editar/eliminar sólo aplica a notas internas, jamás a un
+ * mensaje público (que además ya cruzó a WhatsApp y es inmutable). 422.
+ */
+export class NotAnInternalNoteError extends DomainError {
+  constructor(messageId: string) {
+    super(`Message "${messageId}" is not an internal note (only private notes can be edited/deleted)`, 'NOT_AN_INTERNAL_NOTE');
+    this.name = 'NotAnInternalNoteError';
+  }
+}
+
+/**
+ * messaging-inbox-notes (edit/delete) — el actor NO es el autor de la nota NI un
+ * supervisor (`messaging:manage`). 403. Si la nota tiene `authorId` NULL (histórica /
+ * autor desasociado), sólo un supervisor puede tocarla.
+ */
+export class InternalNoteForbiddenError extends DomainError {
+  constructor(messageId: string) {
+    super(`Not allowed to modify internal note "${messageId}" (must be its author or a supervisor)`, 'INTERNAL_NOTE_FORBIDDEN');
+    this.name = 'InternalNoteForbiddenError';
+  }
+}
+
+/**
+ * messaging-inbox-notes (edit/delete) — la nota ya está soft-deleted (`deletedAt != null`):
+ * no se puede volver a editar ni borrar. 409 (conflicto de estado, mismo criterio que
+ * CHAT_ATTACHMENT_NOT_READY / CAMPAIGN_ALREADY_FINISHED).
+ */
+export class InternalNoteAlreadyDeletedError extends DomainError {
+  constructor(messageId: string) {
+    super(`Internal note "${messageId}" is already deleted`, 'INTERNAL_NOTE_ALREADY_DELETED');
+    this.name = 'InternalNoteAlreadyDeletedError';
+  }
+}
