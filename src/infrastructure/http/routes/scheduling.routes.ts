@@ -60,6 +60,7 @@ import {
 } from '@domain/errors/checklist';
 import { RetireContractEquipment } from '@application/use-cases/RetireContractEquipment';
 import { ArchiveTask } from '@application/use-cases/ArchiveTask';
+import { BroadcastTaskToNoc } from '@application/use-cases/nocBroadcast/BroadcastTaskToNoc';
 import {
   TaskHasNoContractError,
   ProjectNotRetirementError,
@@ -138,6 +139,8 @@ export function createSchedulingRouter(
   requireHardDelete?: RequestHandler,
   /** Ola A + B — IClass OS action use cases (close + assign-team). Optional — routes only registered when provided. */
   iclassActionDeps?: IClassActionDeps,
+  /** N3 (network-task-broadcast) — "Send to WS" de una tarea de red al NOC. Optional — POST /:id/broadcast-noc solo se registra cuando se inyecta. Gated por scheduling:write (schedWrite). */
+  broadcastTaskToNoc?: BroadcastTaskToNoc,
 ): Router {
   const router = Router();
   const auth = createAuthMiddleware(authProvider);
@@ -603,6 +606,27 @@ export function createSchedulingRouter(
   }
 
   // ── End archive ───────────────────────────────────────────────────────────
+
+  // ── N3 — Send to WS: difundir una tarea de RED al canal NOC ───────────────
+  // MUST be registered BEFORE GET /:id so el catch-all no la ensombrezca.
+  // Gated por auth + scheduling:write (schedWrite es pass-through si se omite),
+  // el MISMO permiso que gobierna las mutaciones de tarea (status/archive).
+  // NOT best-effort: los errores del motor N1 (503 no configurado, 502 Evolution,
+  // 422 link base) y del dominio (404 TASK_NOT_FOUND, 422 TASK_NOT_BROADCASTABLE)
+  // burbujean al errorHandler global vía next(err).
+  if (broadcastTaskToNoc) {
+    router.post('/:id/broadcast-noc', auth, schedWrite, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const result = await broadcastTaskToNoc.execute(req.params['id'] as string);
+        res.status(200).json(result);
+      } catch (err) {
+        // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().
+        next(err);
+      }
+    });
+  }
+
+  // ── End Send to WS ────────────────────────────────────────────────────────
 
   router.get('/:id', auth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

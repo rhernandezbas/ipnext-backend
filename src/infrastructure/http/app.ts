@@ -851,6 +851,8 @@ import { EvolutionApiHttpGateway } from '../adapters/evolution/EvolutionApiHttpG
 import { GetNocBroadcastConfig } from '@application/use-cases/nocBroadcast/GetNocBroadcastConfig';
 import { UpdateNocBroadcastConfig } from '@application/use-cases/nocBroadcast/UpdateNocBroadcastConfig';
 import { SendNocBroadcastTest } from '@application/use-cases/nocBroadcast/SendNocBroadcastTest';
+import { BroadcastToNoc } from '@application/use-cases/nocBroadcast/BroadcastToNoc';
+import { BroadcastTaskToNoc } from '@application/use-cases/nocBroadcast/BroadcastTaskToNoc';
 import { ListCannedResponses } from '@application/use-cases/messaging/ListCannedResponses';
 import { CreateCannedResponse } from '@application/use-cases/messaging/CreateCannedResponse';
 import { UpdateCannedResponse } from '@application/use-cases/messaging/UpdateCannedResponse';
@@ -1982,6 +1984,19 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     },
   ));
 
+  // N3 (network-task-broadcast) — "Send to WS": motor N1 reusado para difundir una
+  // tarea de RED al canal NOC. Los adapters son stateless (leen la config singleton
+  // del DB al momento de enviar), así que una instancia dedicada acá es equivalente
+  // a la del bloque N1 de más abajo (/api/messaging/noc-broadcast).
+  const n3NocBroadcastConfigRepo = new PrismaNocBroadcastConfigRepository();
+  const broadcastTaskToNoc = new BroadcastTaskToNoc(
+    schedulingRepo,
+    new BroadcastToNoc(
+      n3NocBroadcastConfigRepo,
+      new EvolutionApiHttpGateway({ configRepo: n3NocBroadcastConfigRepo }),
+    ),
+  );
+
   app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authAdapter, stageRepo, {
     addChecklistItem: addChecklistItemUC,
     toggleChecklistItem: toggleChecklistItemUC,
@@ -1998,7 +2013,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     closeIClassServiceOrder,
     assignIClassTeam,
     requirePerm,
-  }));
+  }, broadcastTaskToNoc));
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);

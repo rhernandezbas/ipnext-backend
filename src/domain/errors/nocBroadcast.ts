@@ -39,3 +39,17 @@ export class NocBroadcastLinkBaseMissingError extends DomainError {
     this.name = 'NocBroadcastLinkBaseMissingError';
   }
 }
+
+/**
+ * N3 (network-task-broadcast) — se intentó difundir al NOC una tarea que NO es de
+ * red (kind !== 'network'). Sólo las tareas de RED se difunden al canal NOC. El
+ * statusMap lo mapea a 422 (request bien formada, semántica inválida para el recurso).
+ */
+export class TaskNotBroadcastableError extends DomainError {
+  constructor(
+    message = 'Solo las tareas de red se difunden al NOC',
+  ) {
+    super(message, 'TASK_NOT_BROADCASTABLE');
+    this.name = 'TaskNotBroadcastableError';
+  }
+}

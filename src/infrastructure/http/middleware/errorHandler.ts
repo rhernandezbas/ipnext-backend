@@ -241,6 +241,9 @@ const statusMap: Record<string, number> = {
   NOC_BROADCAST_NOT_CONFIGURED: 503,
   EVOLUTION_API_ERROR: 502,
   NOC_BROADCAST_LINK_BASE_MISSING: 422,
+  // N3 (network-task-broadcast) — difundir al NOC una tarea que no es de red → 422
+  // (request bien formada, semántica inválida: solo tareas kind='network' se difunden).
+  TASK_NOT_BROADCASTABLE: 422,
 };
 
 /** Express global error-handling middleware. */
