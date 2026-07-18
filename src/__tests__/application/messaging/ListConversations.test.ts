@@ -50,6 +50,7 @@ describe('ListConversations', () => {
       assignee: null, // F1.5-C2 — unassigned by default
       area: null, // F1.5-C2 — no area by default
       campaigns: [], // messaging-bulk-inbox (F1) — sin campañas por defecto
+      labels: [], // conversation-labels (Ola 5) — sin etiquetas por defecto
       internalNoteCount: 0, // messaging-inbox-notes (edit/delete) — sin notas por defecto
     });
     expect(result.total).toBe(3);

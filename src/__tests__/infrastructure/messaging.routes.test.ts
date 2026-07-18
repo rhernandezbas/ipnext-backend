@@ -31,6 +31,9 @@ import { GetInboxClientContext } from '../../application/use-cases/messaging/Get
 import { GetChatAttachmentFile } from '../../application/use-cases/messaging/GetChatAttachmentFile';
 import { AssignConversation } from '../../application/use-cases/messaging/AssignConversation';
 import { SetConversationArea } from '../../application/use-cases/messaging/SetConversationArea';
+// conversation-labels (Ola 5) — set del set de labels de una conversación (gate send).
+import { SetConversationLabels } from '../../application/use-cases/messaging/SetConversationLabels';
+import { InMemoryConversationLabelRepository } from '../../infrastructure/adapters/in-memory/InMemoryConversationLabelRepository';
 import { ListAssignableUsers } from '../../application/use-cases/messaging/ListAssignableUsers';
 // inbox-template-send (HTTP-1/HTTP-2) — enviar template aprobado desde el hilo + catálogo curado.
 import { SendTemplateMessage } from '../../application/use-cases/messaging/SendTemplateMessage';
@@ -147,6 +150,8 @@ interface BuildAppOptions {
   // ─── F1.5-C2 (asignación) ───────────────────────────────────────────────────
   areaRepo?: InMemoryTicketAreaCatalogRepository;
   rbacUserRepo?: InMemoryRbacUserRepository;
+  // ─── conversation-labels (Ola 5) ────────────────────────────────────────────
+  labelRepo?: InMemoryConversationLabelRepository;
   /** Defaults to a lookup that only knows KNOWN_ASSIGNEES ('user-1'/'user-2'). */
   assigneeLookup?: EntityLookup;
   /** Defaults to a lookup returning ['administrador'] for every user (non-technical). */
@@ -195,6 +200,9 @@ function buildApp(opts: BuildAppOptions = {}) {
   // InMemoryTicketRepository.seedAdmins), so only KNOWN_ASSIGNEES resolve a name.
   conversationRepo.seedAreas(areaRepo);
   conversationRepo.seedUsers(Object.entries(KNOWN_ASSIGNEES).map(([id, name]) => ({ id, name })));
+  // conversation-labels (Ola 5) — live-link del catálogo de labels (mismo idioma que seedAreas).
+  const labelRepo = opts.labelRepo ?? new InMemoryConversationLabelRepository();
+  conversationRepo.seedLabels(labelRepo);
   // inbox-views (Ola 1) — espejo del wiring real: el adapter Prisma de ChatMessage
   // SIEMPRE mantiene Conversation.lastPublicMessageDirection; in-memory lo hace vía
   // este live-link (mismo idioma que seedAreas).
@@ -265,6 +273,8 @@ function buildApp(opts: BuildAppOptions = {}) {
       new EditInternalNote(messageRepo),
       new DeleteInternalNote(messageRepo),
       opts.attachManage ?? noManage,
+      // conversation-labels (Ola 5) — appended (regla §Colisiones).
+      new SetConversationLabels(conversationRepo, labelRepo),
     ),
   );
   app.use(errorHandler);
@@ -283,6 +293,7 @@ function buildApp(opts: BuildAppOptions = {}) {
     pppoeRepo,
     areaRepo,
     rbacUserRepo,
+    labelRepo,
     templatePort,
   };
 }
@@ -2557,5 +2568,125 @@ describe('nota interna end-to-end + contador en el listado (messaging-inbox-note
       const res = await request(app).get(`/api/messaging/conversations/${conv.id}/messages`);
       expect(res.body.data[0].canEdit).toBe(true);
     }
+  });
+});
+
+// ─── PATCH /conversations/:id/labels (conversation-labels, Ola 5) ────────────────
+
+describe('PATCH /api/messaging/conversations/:id/labels', () => {
+  it('reemplaza el set de labels → 200 con el DTO (labels pobladas), LOCAL sin llamar a Chatwoot', async () => {
+    const { app, conversationRepo, labelRepo, gateway } = buildApp();
+    const urgente = await labelRepo.create({ name: 'Urgente', color: '#ef4444' });
+    const ventas = await labelRepo.create({ name: 'Ventas', color: '#22c55e' });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 500, status: 'open' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/labels`)
+      .send({ labelIds: [urgente.id, ventas.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.labels).toEqual([
+      { id: urgente.id, name: 'Urgente', color: '#ef4444' },
+      { id: ventas.id, name: 'Ventas', color: '#22c55e' },
+    ]);
+    expect(gateway.setStatusCalls).toHaveLength(0); // NUNCA llama a Chatwoot
+  });
+
+  it('reemplaza (no acumula): un segundo PATCH pisa el set anterior', async () => {
+    const { app, conversationRepo, labelRepo } = buildApp();
+    const a = await labelRepo.create({ name: 'A', color: '#111111' });
+    const b = await labelRepo.create({ name: 'B', color: '#222222' });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 501 });
+
+    await request(app).patch(`/api/messaging/conversations/${conv.id}/labels`).send({ labelIds: [a.id] });
+    const res = await request(app).patch(`/api/messaging/conversations/${conv.id}/labels`).send({ labelIds: [b.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.labels).toEqual([{ id: b.id, name: 'B', color: '#222222' }]);
+  });
+
+  it('labelIds: [] → 200, limpia todas las labels', async () => {
+    const { app, conversationRepo, labelRepo } = buildApp();
+    const a = await labelRepo.create({ name: 'A', color: '#111111' });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 502 });
+    await conversationRepo.setLabels(conv.id, [a.id]);
+
+    const res = await request(app).patch(`/api/messaging/conversations/${conv.id}/labels`).send({ labelIds: [] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.labels).toEqual([]);
+  });
+
+  it('labelIds ausente / no-array → 400 VALIDATION_ERROR', async () => {
+    const { app, conversationRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 503 });
+
+    const res = await request(app).patch(`/api/messaging/conversations/${conv.id}/labels`).send({});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('conversación inexistente → 404 CONVERSATION_NOT_FOUND', async () => {
+    const { app } = buildApp();
+    const res = await request(app).patch('/api/messaging/conversations/ghost/labels').send({ labelIds: [] });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONVERSATION_NOT_FOUND');
+  });
+
+  it('labelId inexistente en el set → 404 CONVERSATION_LABEL_NOT_FOUND, mirror SIN tocar', async () => {
+    const { app, conversationRepo, labelRepo } = buildApp();
+    const ok = await labelRepo.create({ name: 'OK', color: '#333333' });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 504 });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${conv.id}/labels`)
+      .send({ labelIds: [ok.id, 'ghost-label'] });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONVERSATION_LABEL_NOT_FOUND');
+    const still = await conversationRepo.findById(conv.id);
+    expect(still!.labels).toEqual([]); // atómico: NO aplicó parcialmente
+  });
+
+  it('con SOLO messaging:read (sin send) → 403', async () => {
+    const { app } = buildApp({ sendPerm: denyPerm });
+    const res = await request(app).patch('/api/messaging/conversations/conv-1/labels').send({ labelIds: [] });
+    expect(res.status).toBe(403);
+  });
+
+  it('sin sesión (auth deniega) → 401', async () => {
+    const { app } = buildApp({ auth: denyAuth });
+    const res = await request(app).patch('/api/messaging/conversations/conv-1/labels').send({ labelIds: [] });
+    expect(res.status).toBe(401);
+  });
+});
+
+// ─── GET /conversations?labelId= (conversation-labels, Ola 5) ────────────────────
+
+describe('GET /api/messaging/conversations?labelId=', () => {
+  it('filtra por label asignada y la fila expone `labels`', async () => {
+    const { app, conversationRepo, labelRepo } = buildApp();
+    const urgente = await labelRepo.create({ name: 'Urgente', color: '#ef4444' });
+    const a = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 600, contactName: 'A', lastMessageAt: '2026-07-10T10:00:00.000Z' });
+    const b = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 601, contactName: 'B', lastMessageAt: '2026-07-11T10:00:00.000Z' });
+    await conversationRepo.setLabels(a.id, [urgente.id]);
+
+    const res = await request(app).get('/api/messaging/conversations').query({ labelId: urgente.id });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((d: { id: string }) => d.id)).toEqual([a.id]);
+    expect(res.body.data[0].labels).toEqual([{ id: urgente.id, name: 'Urgente', color: '#ef4444' }]);
+    expect(res.body.total).toBe(1);
+    void b;
+  });
+
+  it('sin ?labelId lista todas; una conversación sin labels expone labels: []', async () => {
+    const { app, conversationRepo } = buildApp();
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 602, contactName: 'C', lastMessageAt: '2026-07-12T10:00:00.000Z' });
+
+    const res = await request(app).get('/api/messaging/conversations');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].labels).toEqual([]);
   });
 });

@@ -36,6 +36,8 @@ function fixedConversationRepo(record: ConversationRecord): ConversationReposito
     adoptBulkConversation: async () => null,
     list: async () => ({ data: [], total: 0, page: 1, limit: 25 }),
     updateLocalFields: async () => null,
+    // conversation-labels (Ola 5) — SendTemplateMessage jamás setea labels; stub neutro.
+    setLabels: async () => ({ ...record }),
     bumpLastMessage: async () => ({ ...record }),
     // convo-count — SendTemplateMessage nunca cuenta interacciones; stub neutro.
     countByContactPhoneE164: async () => ({ total: 0, open: 0, resolved: 0 }),
@@ -62,6 +64,8 @@ function makeConversationRecord(overrides: Partial<ConversationRecord> = {}): Co
     areaName: null,
     areaColor: null,
     campaigns: [],
+    // conversation-labels (Ola 5) — sin etiquetas en la fila histórica del fake.
+    labels: [],
     // inbox-views (Ola 1) — sin mensajes públicos en la fila histórica del fake.
     lastPublicMessageDirection: null,
     // messaging-inbox-notes (edit/delete) — sin notas en la fila histórica del fake.

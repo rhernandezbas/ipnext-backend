@@ -3,6 +3,7 @@ import {
   ConversationRecord,
   ConversationListQuery,
   ConversationCampaignRef,
+  ConversationLabelRef,
   ConversationStatusCounts,
   UpsertConversationInput,
   UpsertBulkConversationInput,
@@ -30,6 +31,9 @@ const CONVERSATION_INCLUDE = {
   // messaging-bulk-inbox (F1, etiqueta #1) — JOIN a las campañas via el lazo
   // CampaignRecipient (dedup por campaña en toDomain). Evita N+1 (un solo include).
   campaignRecipients: { select: { campaign: { select: { id: true, name: true } } } },
+  // conversation-labels (Ola 5) — JOIN a las labels via la join ConversationLabelAssignment.
+  // Un solo include, anti-N+1 (jamás una query por fila).
+  labelAssignments: { select: { label: { select: { id: true, name: true, color: true } } } },
 } as const;
 
 /** messaging-bulk-inbox (F1) — dedup de las campañas JOIN-derived (un recipient por campaña). */
@@ -42,6 +46,18 @@ function toCampaigns(recipients: any[] | undefined): ConversationCampaignRef[] {
     if (c && !seen.has(c.id)) seen.set(c.id, { id: c.id, name: c.name });
   }
   return Array.from(seen.values());
+}
+
+/** conversation-labels (Ola 5) — proyecta las labels JOIN-derived (id/name/color). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toLabels(assignments: any[] | undefined): ConversationLabelRef[] {
+  if (!assignments) return [];
+  const out: ConversationLabelRef[] = [];
+  for (const a of assignments) {
+    const l = a?.label;
+    if (l) out.push({ id: l.id, name: l.name, color: l.color });
+  }
+  return out;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -65,6 +81,8 @@ function toDomain(row: any): ConversationRecord {
     areaName: row.area?.name ?? null,
     areaColor: row.area?.color ?? null,
     campaigns: toCampaigns(row.campaignRecipients),
+    // conversation-labels (Ola 5) — JOIN-derived de ConversationLabelAssignment.
+    labels: toLabels(row.labelAssignments),
     // inbox-views (VIEW-1) — cache desnormalizado mantenido por
     // PrismaChatMessageRepository (choke point de escritura de mensajes).
     lastPublicMessageDirection: (row.lastPublicMessageDirection as 'inbound' | 'outbound' | null) ?? null,
@@ -95,6 +113,12 @@ function buildConversationWhere(query: ConversationListQuery): Record<string, un
   // CampaignRecipient (JOIN Conversation×CampaignRecipient). Combinable con asignación.
   if (query.campaignId) {
     where['campaignRecipients'] = { some: { campaignId: query.campaignId } };
+  }
+  // conversation-labels (Ola 5) — filtro por label asignada vía la join
+  // ConversationLabelAssignment. Combinable en AND. MUST mirror
+  // `InMemoryConversationRepository.applyFilters`.
+  if (query.labelId) {
+    where['labelAssignments'] = { some: { labelId: query.labelId } };
   }
   // inbox-views (VIEW-1) — bucket "Sin atender": NO-resuelta + último mensaje
   // público inbound. GANA sobre `status` (lleva su propio filtro de ciclo de vida,
@@ -294,6 +318,43 @@ export class PrismaConversationRepository implements ConversationRepository {
       if ((err as any)?.code === 'P2025') return null;
       throw err;
     }
+  }
+
+  /**
+   * conversation-labels (Ola 5) — REEMPLAZA el set de labels de la conversación en
+   * UNA transacción: borra todas las asignaciones actuales y crea las nuevas
+   * (`skipDuplicates` por si el caller repite ids, aunque el use case ya deduplica).
+   * LOCAL-only. Devuelve la conversación con el include estándar (labels frescas), o
+   * `null` si la conversación no existe (P2025/P2003 en el createMany por FK). El use
+   * case (`SetConversationLabels`) ya valida existencia de conversación + labels antes.
+   */
+  async setLabels(conversationId: string, labelIds: string[]): Promise<ConversationRecord | null> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (prisma as any).$transaction(async (tx: any) => {
+        await tx.conversationLabelAssignment.deleteMany({ where: { conversationId } });
+        if (labelIds.length > 0) {
+          await tx.conversationLabelAssignment.createMany({
+            data: labelIds.map((labelId) => ({ conversationId, labelId })),
+            skipDuplicates: true,
+          });
+        }
+      });
+    } catch (err) {
+      // P2025 (record not found) / P2003 (FK violation: conversation/label gone) →
+      // "return null on miss", misma convención que updateLocalFields.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const code = (err as any)?.code;
+      if (code === 'P2025' || code === 'P2003') return null;
+      throw err;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = await (prisma as any).conversation.findUnique({
+      where: { id: conversationId },
+      include: CONVERSATION_INCLUDE,
+    });
+    return row ? toDomain(row) : null;
   }
 
   /**

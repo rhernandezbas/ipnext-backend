@@ -33,6 +33,13 @@ export interface ConversationCampaignDto {
   name: string;
 }
 
+/** conversation-labels (Ola 5) — etiqueta de color asignada a la conversación. */
+export interface ConversationLabelDto {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export interface ConversationListItemDto {
   id: string;
   contactName: string | null;
@@ -49,6 +56,12 @@ export interface ConversationListItemDto {
    * (JOIN-derived del lazo CampaignRecipient). `[]` cuando no participa en ninguna.
    */
   campaigns: ConversationCampaignDto[];
+  /**
+   * conversation-labels (Ola 5) — etiquetas de color de la conversación (id/name/color),
+   * JOIN-derived del record. `[]` cuando no tiene ninguna. Alimenta los chips de la
+   * fila del inbox (mismo molde que `campaigns` — flat en el record, proyectado acá).
+   */
+  labels: ConversationLabelDto[];
   /**
    * messaging-inbox-notes (edit/delete, COUNT) — nº de notas internas VIVAS de la
    * conversación (isPrivate=true AND deletedAt IS NULL). Alimenta el indicador 📝+N
@@ -361,6 +374,8 @@ export function toConversationListItemDto(record: ConversationRecord): Conversat
     // messaging-bulk-inbox (F1, etiqueta #1) — JOIN-derived en el record; el mapper
     // solo proyecta (nunca leakea el shape crudo del ConversationRecord).
     campaigns: record.campaigns.map((c) => ({ id: c.id, name: c.name })),
+    // conversation-labels (Ola 5) — JOIN-derived en el record; el mapper solo proyecta.
+    labels: record.labels.map((l) => ({ id: l.id, name: l.name, color: l.color })),
     // messaging-inbox-notes (edit/delete) — desnormalizado en el record.
     internalNoteCount: record.internalNoteCount,
   };

@@ -2940,6 +2940,12 @@ model Conversation {
   messages               ChatMessage[]
   // messaging-bulk-inbox (F1) — lazo recipient↔Conversation (proyección + etiqueta #1).
   campaignRecipients     CampaignRecipient[]
+  // conversation-labels (Ola 5) — etiquetas de color N:M (catálogo ConversationLabel)
+  // vía la join EXPLÍCITA ConversationLabelAssignment (mismo criterio de join
+  // explícito que CampaignRecipient — no el M:N implícito de Prisma). Son LOCALES
+  // del mirror: Chatwoot NUNCA se entera (igual que assigneeId/areaId). Solo
+  // ConversationRepository.setLabels las escribe; ningún write-path de Chatwoot las toca.
+  labelAssignments       ConversationLabelAssignment[]
 
   // §9: DESC matches the actual INBOX-1 query (orderBy lastMessageAt DESC NULLS
   // LAST in PrismaConversationRepository.list) — same `sort: Desc` idiom already
@@ -2951,6 +2957,40 @@ model Conversation {
   @@index([contactPhoneE164])
   // inbox-views (Ola 1) — filtro/count del bucket "Sin atender" por request.
   @@index([lastPublicMessageDirection])
+}
+
+// conversation-labels (Ola 5) — CATÁLOGO editable de etiquetas de conversación
+// (calco de TicketAreaCatalog: name @unique + color hex con default token). El
+// FE pinta el chip con name + color. Borrar una label la quita de TODAS las
+// conversaciones (onDelete: Cascade en la join) — comportamiento de tag, a
+// diferencia de TicketAreaCatalog que bloquea el delete si está en uso.
+model ConversationLabel {
+  id          String                        @id @default(uuid())
+  name        String                        @unique
+  color       String                        @default("#6366f1")
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
+  assignments ConversationLabelAssignment[]
+
+  @@map("ConversationLabel")
+}
+
+// conversation-labels (Ola 5) — join EXPLÍCITA Conversation×ConversationLabel
+// (mismo criterio de join explícito que CampaignRecipient, no el M:N implícito de
+// Prisma). @@unique([conversationId, labelId]) hace idempotente la asignación;
+// ambos FKs Cascade (borrar la conversación o la label limpia la asignación).
+model ConversationLabelAssignment {
+  id             String            @id @default(uuid())
+  conversationId String
+  conversation   Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  labelId        String
+  label          ConversationLabel @relation(fields: [labelId], references: [id], onDelete: Cascade)
+  createdAt      DateTime          @default(now())
+
+  @@unique([conversationId, labelId])
+  @@index([conversationId])
+  @@index([labelId])
+  @@map("ConversationLabelAssignment")
 }
 
 // chatwootMessageId es único a nivel MENSAJE de Chatwoot — idempotencia de upsert (HOOK-4).

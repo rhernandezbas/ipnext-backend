@@ -94,6 +94,31 @@ export class InvalidConversationStatusError extends DomainError {
 }
 
 /**
+ * conversation-labels (Ola 5) — la label (ConversationLabel) referida por
+ * `UpdateLabel`/`DeleteLabel`/`SetConversationLabels` no existe. 404. En
+ * `SetConversationLabels` se lanza si CUALQUIER labelId del set no resuelve —
+ * la operación es atómica (no ignora ids desconocidos), mismo criterio que
+ * `SetConversationArea` valida el área antes de escribir.
+ */
+export class ConversationLabelNotFoundError extends DomainError {
+  constructor(id: string) {
+    super(`ConversationLabel with id "${id}" not found`, 'CONVERSATION_LABEL_NOT_FOUND');
+    this.name = 'ConversationLabelNotFoundError';
+  }
+}
+
+/**
+ * conversation-labels (Ola 5) — `CreateLabel`/`UpdateLabel` con un `name` que ya
+ * existe (chequeo case-insensitive, mismo criterio que `TicketAreaNameConflictError`). 409.
+ */
+export class ConversationLabelNameConflictError extends DomainError {
+  constructor(name: string) {
+    super(`A conversation label named "${name}" already exists`, 'CONVERSATION_LABEL_NAME_CONFLICT');
+    this.name = 'ConversationLabelNameConflictError';
+  }
+}
+
+/**
  * messaging-inbox-notes (edit/delete) — la nota (ChatMessage) referida por
  * `EditInternalNote`/`DeleteInternalNote` no existe. 404. Nombre PROPIO (no reusa
  * `ConversationNotFoundError`) porque la entidad ausente es el MENSAJE, no la conversación.

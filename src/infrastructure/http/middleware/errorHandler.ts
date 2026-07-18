@@ -165,6 +165,9 @@ const statusMap: Record<string, number> = {
   // update/delete de un id inexistente. VALIDATION_ERROR (400) ya está mapeado arriba.
   SHORTCUT_TAKEN: 409,
   CANNED_RESPONSE_NOT_FOUND: 404,
+  // conversation-labels (Ola 5) — CRUD del catálogo + set de labels por conversación.
+  CONVERSATION_LABEL_NOT_FOUND: 404,
+  CONVERSATION_LABEL_NAME_CONFLICT: 409,
   // messaging-inbox-v2 (F1.5, RICH-1 #4) — client-context endpoint: clientId query
   // param not among the conversation's candidates.
   CLIENT_ID_NOT_A_CANDIDATE: 400,

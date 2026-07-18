@@ -28,6 +28,9 @@ import { GetInboxClientContext } from '@application/use-cases/messaging/GetInbox
 import { GetChatAttachmentFile } from '@application/use-cases/messaging/GetChatAttachmentFile';
 import { AssignConversation } from '@application/use-cases/messaging/AssignConversation';
 import { SetConversationArea } from '@application/use-cases/messaging/SetConversationArea';
+// conversation-labels (Ola 5) — set del set de labels de una conversación (gate send).
+import { SetConversationLabels } from '@application/use-cases/messaging/SetConversationLabels';
+import { SetConversationLabelsSchema } from '@application/dto/messaging-labels.dto';
 import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssignableUsers';
 import { ListTicketAreas } from '@application/use-cases/ListTicketAreas';
 import { ChatAttachmentNotFoundError, ChatAttachmentNotReadyError } from '@domain/errors/chatAttachment';
@@ -384,6 +387,12 @@ export function createMessagingRouter(
    * (no construido acá) para testear con un flag controlado — mismo criterio que `perms`.
    */
   attachManage: RequestHandler,
+  /**
+   * conversation-labels (Ola 5) — reemplaza el set de labels de una conversación
+   * (LOCAL-only, gate `perms.send` — misma capacidad que asignar área/agente).
+   * Appended (regla §Colisiones: jamás insertar en medio de la lista compartida).
+   */
+  setConversationLabels: SetConversationLabels,
 ): Router {
   const router = Router();
   const conditionalSendLimiter = conditionalSendRateLimiter(sendRateLimiter);
@@ -424,6 +433,7 @@ export function createMessagingRouter(
         const { page, limit } = req.query as Record<string, string | undefined>;
         const assignment = firstQueryValue(req.query['assignment']);
         const campaignId = firstQueryValue(req.query['campaignId']);
+        const labelId = firstQueryValue(req.query['labelId']);
         const status = firstQueryValue(req.query['status']);
         const view = firstQueryValue(req.query['view']);
         const query: ConversationListQuery = {
@@ -432,6 +442,9 @@ export function createMessagingRouter(
         };
         // messaging-bulk-inbox (F1, etiqueta #1) — filtro por campaña (combinable con assignment).
         if (campaignId) query.campaignId = campaignId;
+        // conversation-labels (Ola 5) — filtro por label asignada (combinable en AND
+        // con assignment/campaña/status). Mismo builder del where que list/count.
+        if (labelId) query.labelId = labelId;
         // inbox-resolve (LS-2) — whitelist 'open'|'resolved' (mismo criterio que
         // `assignment` con valor no reconocido: se ignora, sin error). La semántica
         // de bucket vive en el repo (ver `ConversationListQuery.status`).
@@ -710,6 +723,30 @@ export function createMessagingRouter(
           return;
         }
         const result = await setConversationArea.execute(req.params['id'] as string, parsed.value);
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── PATCH /conversations/:id/labels (send) — conversation-labels (Ola 5) ────
+  // Reemplaza el set COMPLETO de labels (no acumula; `labelIds:[]` limpia todas).
+  // LOCAL-only, gate `messaging:send` (misma capacidad que asignar área/agente —
+  // no hay permiso separado). `labelId` inexistente → 404 CONVERSATION_LABEL_NOT_FOUND
+  // vía el error tipado (try/catch → next(err), mismo convenio que /status y /assignee).
+  router.patch(
+    '/conversations/:id/labels',
+    auth,
+    perms.send,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const parsed = SetConversationLabelsSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'labelIds must be an array of non-empty strings', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        const result = await setConversationLabels.execute(req.params['id'] as string, parsed.data.labelIds);
         res.json(result);
       } catch (err) {
         next(err);

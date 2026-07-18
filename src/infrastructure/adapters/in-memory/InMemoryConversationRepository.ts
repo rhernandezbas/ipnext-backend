@@ -5,6 +5,7 @@ import {
   ConversationRecord,
   ConversationListQuery,
   ConversationCampaignRef,
+  ConversationLabelRef,
   ConversationStatusCounts,
   UpsertConversationInput,
   UpsertBulkConversationInput,
@@ -12,6 +13,7 @@ import {
   BumpLastMessageInput,
 } from '@domain/ports/ConversationRepository';
 import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
+import { ConversationLabelRepository } from '@domain/ports/ConversationLabelRepository';
 import { toWhatsAppE164 } from '@application/use-cases/messaging/toWhatsAppE164';
 
 /** Minimal in-memory user shape for JOIN-derived assigneeName (F1.5-C2) — mirrors
@@ -36,6 +38,7 @@ export class InMemoryConversationRepository implements ConversationRepository {
   private rows: ConversationRecord[] = [];
   private users: Map<string, InMemoryConversationAssignee> = new Map();
   private areaRepo: TicketAreaCatalogRepository | null = null;
+  private labelRepo: ConversationLabelRepository | null = null;
 
   /** Seed users so the repo can resolve assigneeName from JOIN (F1.5-C2). */
   seedUsers(users: InMemoryConversationAssignee[]): void {
@@ -47,6 +50,15 @@ export class InMemoryConversationRepository implements ConversationRepository {
   /** Link a shared TicketAreaCatalogRepository so areaName/areaColor resolve via JOIN (F1.5-C2). */
   seedAreas(repo: TicketAreaCatalogRepository): void {
     this.areaRepo = repo;
+  }
+
+  /**
+   * conversation-labels (Ola 5) — link a shared ConversationLabelRepository so
+   * `setLabels` resolves name/color from the catalog (simula el JOIN
+   * ConversationLabelAssignment→ConversationLabel que el adapter Prisma hace por include).
+   */
+  seedLabels(repo: ConversationLabelRepository): void {
+    this.labelRepo = repo;
   }
 
   async findById(id: string): Promise<ConversationRecord | null> {
@@ -100,6 +112,8 @@ export class InMemoryConversationRepository implements ConversationRepository {
       areaName: null,
       areaColor: null,
       campaigns: [],
+      // conversation-labels (Ola 5) — LOCAL-only, always empty on create (Chatwoot write-path).
+      labels: [],
       // inbox-views (VIEW-1) — arranca null (sin mensajes públicos); lo mantiene
       // InMemoryChatMessageRepository vía syncLastPublicMessageDirection.
       lastPublicMessageDirection: null,
@@ -154,6 +168,8 @@ export class InMemoryConversationRepository implements ConversationRepository {
       areaName: null,
       areaColor: null,
       campaigns: [],
+      // conversation-labels (Ola 5) — LOCAL-only, empty on create (bulk write-path).
+      labels: [],
       // inbox-views (VIEW-1) — null hasta que el write-path de mensajes lo sincronice.
       lastPublicMessageDirection: null,
       // messaging-inbox-notes (edit/delete) — 0 hasta que el write-path lo sincronice.
@@ -234,6 +250,32 @@ export class InMemoryConversationRepository implements ConversationRepository {
   }
 
   /**
+   * conversation-labels (Ola 5) — REEMPLAZA el set de labels de la conversación
+   * (LOCAL-only). Resuelve name/color de cada labelId contra el catálogo linkeado
+   * (`seedLabels`) — simula el JOIN que el adapter Prisma resuelve por include.
+   * Los ids desconocidos (no debería haberlos: el use case ya valida) se descartan.
+   * Devuelve `null` si la conversación no existe. NUNCA toca ningún otro campo.
+   */
+  async setLabels(conversationId: string, labelIds: string[]): Promise<ConversationRecord | null> {
+    const row = this.rows.find((r) => r.id === conversationId);
+    if (!row) return null;
+
+    const uniqueIds = Array.from(new Set(labelIds));
+    const resolved: ConversationLabelRef[] = [];
+    if (uniqueIds.length > 0 && this.labelRepo) {
+      const labels = await this.labelRepo.findByIds(uniqueIds);
+      const byId = new Map(labels.map((l) => [l.id, l]));
+      for (const id of uniqueIds) {
+        const l = byId.get(id);
+        if (l) resolved.push({ id: l.id, name: l.name, color: l.color });
+      }
+    }
+    row.labels = resolved;
+    row.updatedAt = new Date().toISOString();
+    return { ...row, labels: [...row.labels] };
+  }
+
+  /**
    * inbox-template-send (PORT-2) — bump del preview tras un envío one-off de
    * template. Escribe EXCLUSIVAMENTE lastMessageAt/lastMessagePreview — jamás
    * canReply/status/assigneeId/areaId/chatwootConversationId/origin (design D2).
@@ -311,6 +353,12 @@ export class InMemoryConversationRepository implements ConversationRepository {
     // Conversation×CampaignRecipient). Combinable con el filtro de asignación.
     if (query.campaignId) {
       filtered = filtered.filter((r) => r.campaigns.some((c) => c.id === query.campaignId));
+    }
+    // conversation-labels (Ola 5) — filtro por label asignada (JOIN
+    // Conversation×ConversationLabelAssignment). Combinable en AND con el resto.
+    // MUST mirror `PrismaConversationRepository.buildConversationWhere`.
+    if (query.labelId) {
+      filtered = filtered.filter((r) => r.labels.some((l) => l.id === query.labelId));
     }
     // inbox-views (VIEW-1) — bucket "Sin atender": NO-resuelta + último mensaje
     // público inbound. GANA sobre `status` (lleva su propio filtro de ciclo de

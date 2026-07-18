@@ -15,6 +15,17 @@ export interface ConversationCampaignRef {
   name: string;
 }
 
+/**
+ * conversation-labels (Ola 5) — etiqueta asignada a una conversación, JOIN-derived
+ * de la join `ConversationLabelAssignment` (mismo criterio "flat/JOIN-derived en el
+ * record" que `campaigns`). El FE pinta el chip con `name` + `color`.
+ */
+export interface ConversationLabelRef {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export interface ConversationRecord {
   id: string;
   /** messaging-bulk-inbox (F1) — `null` para una conversación `origin:'bulk'` aún no adoptada por Chatwoot (Fase 2). */
@@ -51,6 +62,13 @@ export interface ConversationRecord {
    * (JOIN-derived del lazo CampaignRecipient). `[]` cuando no participa en ninguna.
    */
   campaigns: ConversationCampaignRef[];
+  /**
+   * conversation-labels (Ola 5) — etiquetas de esta conversación (JOIN-derived de
+   * `ConversationLabelAssignment`). `[]` cuando no tiene ninguna. LOCAL-only:
+   * ningún write-path de Chatwoot las toca (igual que assigneeId/areaId) — solo
+   * `setLabels` las escribe.
+   */
+  labels: ConversationLabelRef[];
   /**
    * inbox-views (Ola 1, VIEW-1) — dirección del ÚLTIMO mensaje NO-privado de la
    * conversación (`'inbound'` = el cliente habló último, `'outbound'` = el último
@@ -94,6 +112,15 @@ export interface ConversationListQuery extends PaginatedQuery {
    * participan en la campaña `campaignId` (JOIN Conversation×CampaignRecipient).
    */
   campaignId?: string;
+  /**
+   * conversation-labels (Ola 5) — filtra las conversaciones que tienen ASIGNADA la
+   * label `labelId` (JOIN Conversation×ConversationLabelAssignment). AND independiente,
+   * combinable con `assigneeId`/`unassigned`/`campaignId`/`status` sin precedencia
+   * especial. Ambos adapters (`InMemoryConversationRepository`,
+   * `PrismaConversationRepository`) MUST implementar la MISMA semántica vía el
+   * builder compartido del where (`buildConversationWhere`/`applyFilters`).
+   */
+  labelId?: string;
   /**
    * inbox-resolve (LS-1) — filtro de CICLO DE VIDA con semántica de BUCKET, no de
    * match exacto para `'open'`. `Conversation.status` es String passthrough del
@@ -245,6 +272,17 @@ export interface ConversationRepository {
     conversationId: string,
     patch: UpdateConversationLocalFieldsInput,
   ): Promise<ConversationRecord | null>;
+  /**
+   * conversation-labels (Ola 5) — REEMPLAZA por completo el set de labels de la
+   * conversación por `labelIds` (no acumula: las que no estén en el nuevo set se
+   * quitan; `[]` limpia todas). LOCAL-only (Chatwoot nunca las ve), SEPARADO de
+   * `upsertByChatwootId`/`updateLocalFields` — ningún write-path de Chatwoot puede
+   * tocarlas. Idempotente (la join tiene UNIQUE(conversationId,labelId)). Devuelve
+   * `null` si la conversación no existe; el use case (`SetConversationLabels`) ya
+   * valida existencia + que cada labelId exista antes de llamar. Asume `labelIds`
+   * ya deduplicados y validados por el use case.
+   */
+  setLabels(conversationId: string, labelIds: string[]): Promise<ConversationRecord | null>;
   /**
    * inbox-template-send (PORT-2) — write-path SEPARADO del bump de preview tras
    * un envío one-off de template. Escribe EXCLUSIVAMENTE `lastMessageAt`/

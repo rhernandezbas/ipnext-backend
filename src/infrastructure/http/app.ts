@@ -795,6 +795,14 @@ import { GetInboxClientContext } from '@application/use-cases/messaging/GetInbox
 // F1.5-C2 (asignación) — LOCAL-only (Chatwoot nunca se entera de assigneeId/areaId)
 import { AssignConversation } from '@application/use-cases/messaging/AssignConversation';
 import { SetConversationArea } from '@application/use-cases/messaging/SetConversationArea';
+// conversation-labels (Ola 5) — catálogo de etiquetas + asignación N:M por conversación.
+import { createMessagingLabelsRouter } from './routes/messagingLabels.routes';
+import { PrismaConversationLabelRepository } from '../adapters/prisma/PrismaConversationLabelRepository';
+import { ListLabels } from '@application/use-cases/messaging/ListLabels';
+import { CreateLabel } from '@application/use-cases/messaging/CreateLabel';
+import { UpdateLabel } from '@application/use-cases/messaging/UpdateLabel';
+import { DeleteLabel } from '@application/use-cases/messaging/DeleteLabel';
+import { SetConversationLabels } from '@application/use-cases/messaging/SetConversationLabels';
 import { ListAssignableUsers } from '@application/use-cases/messaging/ListAssignableUsers';
 // inbox-template-send (HTTP-1/HTTP-2) — enviar template aprobado desde el hilo.
 import { SendTemplateMessage } from '@application/use-cases/messaging/SendTemplateMessage';
@@ -2721,6 +2729,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // ─── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send ───────
   {
     const conversationRepo = new PrismaConversationRepository();
+    // conversation-labels (Ola 5) — catálogo de etiquetas (calco de ticketAreaRepo).
+    const conversationLabelRepo = new PrismaConversationLabelRepository();
     const chatMessageRepo = new PrismaChatMessageRepository();
     const webhookDeliveryRepo = new PrismaWebhookDeliveryRepository();
     // Opt-in config (design §9): if CHATWOOT_* is unset the gateway still builds, but
@@ -2832,6 +2842,23 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new EditInternalNote(chatMessageRepo),
       new DeleteInternalNote(chatMessageRepo),
       attachMessagingManage(rbacUserRepo),
+      // conversation-labels (Ola 5) — set del set de labels de una conversación
+      // (LOCAL-only, gate messaging:send). Appended (regla §Colisiones). Misma
+      // instancia conversationRepo + el catálogo conversationLabelRepo.
+      new SetConversationLabels(conversationRepo, conversationLabelRepo),
+    ));
+
+    // conversation-labels (Ola 5) — CRUD del catálogo /api/messaging/labels (router
+    // dedicado, molde ticketAreas.routes.ts). GET → messaging:read; POST/PUT/DELETE →
+    // messaging:manage. Path propio, no colisiona con el router principal /api/messaging
+    // (que no tiene ruta /labels; /conversations/:id/labels vive en otro subpath).
+    app.use('/api/messaging/labels', createMessagingLabelsRouter(
+      authAdapter,
+      requirePerm,
+      new ListLabels(conversationLabelRepo),
+      new CreateLabel(conversationLabelRepo),
+      new UpdateLabel(conversationLabelRepo),
+      new DeleteLabel(conversationLabelRepo),
     ));
   }
 
