@@ -13,6 +13,7 @@ import { bootstrapPppoeAutoMove } from './infrastructure/scheduling/bootstrapPpp
 import { bootstrapRadiusAutoCure } from './infrastructure/scheduling/bootstrapRadiusAutoCure';
 import { bootstrapChatMediaDownload } from './infrastructure/scheduling/bootstrapChatMediaDownload';
 import { bootstrapAutoProvisionFiber } from './infrastructure/scheduling/bootstrapAutoProvisionFiber';
+import { bootstrapSnoozeReactivation } from './infrastructure/scheduling/bootstrapSnoozeReactivation';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
 import { bootstrapSystemUsers } from './infrastructure/bootstrap/bootstrapSystemUsers';
@@ -100,6 +101,12 @@ void (async () => {
   void bootstrapAutoProvisionFiber()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[fiber-auto-watcher] bootstrap failed (server kept alive):', (err as Error).message));
+  // conversation-snooze (Ola 6c) — watcher que normaliza en DB las conversaciones snoozed
+  // vencidas — dark by default (flag 'snooze-reactivation'). Las vistas/counts ya son correctos
+  // sin él (derivación lazy); esto es sólo higiene de status + evento 'unsnoozed' limpio.
+  void bootstrapSnoozeReactivation()
+    .then((scheduler) => scheduler?.start())
+    .catch((err) => console.error('[snooze-reactivation] bootstrap failed (server kept alive):', (err as Error).message));
 
   // Start schedulers — both start dormant (gated by feature flags).
   iclassClosure?.start();

@@ -117,8 +117,18 @@ export interface ChatwootGateway {
    * Chatwoot's own status field. Same single-outcome-on-failure convention as
    * `sendMessage`/`registerWebhook`: ANY axios failure (network/timeout/4xx/5xx)
    * throws `ChatwootUnavailableError`.
+   *
+   * conversation-snooze (Ola 6c) — `'snoozed'` uses the SAME `toggle_status` endpoint the
+   * Chatwoot UI itself uses, passing `snoozed_until` (epoch seconds) so Chatwoot's own
+   * auto-reopen also fires. `snoozedUntil` (ISO) is REQUIRED when status is `'snoozed'` and
+   * IGNORED otherwise. Kept as a single method (not a separate `snooze`) because Chatwoot
+   * models it as one status transition, not a distinct operation.
    */
-  setStatus(chatwootConversationId: number, status: 'open' | 'resolved' | 'pending'): Promise<void>;
+  setStatus(
+    chatwootConversationId: number,
+    status: 'open' | 'resolved' | 'pending' | 'snoozed',
+    snoozedUntil?: string | null,
+  ): Promise<void>;
   /**
    * messaging-inbox-v2-media (Tanda 1 · MEDIA-2) — follows Chatwoot's `sourceUrl`
    * (`data_url`, a stable 301) WITHOUT forwarding any auth header (verified live: the

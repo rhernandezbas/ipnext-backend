@@ -87,7 +87,7 @@ describe('GetInboxViewCounts — contadores por vista (inbox-views COUNT-1)', ()
 
     const counts = await uc.execute('user-1');
 
-    expect(counts).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 2, resolved: 1, mentioned: 0 });
+    expect(counts).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 2, resolved: 1, mentioned: 0, snoozed: 0 });
   });
 
   it('mine depende del user — user-2 ve SU conversación asignada (triangulación)', async () => {
@@ -96,7 +96,7 @@ describe('GetInboxViewCounts — contadores por vista (inbox-views COUNT-1)', ()
 
     const counts = await uc.execute('user-2');
 
-    expect(counts).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 2, resolved: 1, mentioned: 0 });
+    expect(counts).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 2, resolved: 1, mentioned: 0, snoozed: 0 });
     // El mine de user-2 es la conv C (inbound last) — distinta de la B de user-1;
     // lo distinguimos vía un user sin nada asignado:
     const nobody = await uc.execute('user-ghost');
@@ -154,6 +154,21 @@ describe('GetInboxViewCounts — contadores por vista (inbox-views COUNT-1)', ()
     });
 
     const after = await uc.execute('user-1');
-    expect(after).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 1, resolved: 1, mentioned: 0 });
+    expect(after).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 1, resolved: 1, mentioned: 0, snoozed: 0 });
+  });
+
+  // ─── conversation-snooze (Ola 6c) — bucket snoozed + exclusión/reaparición lazy ─
+  it('snoozed VIGENTE cuenta en `snoozed`, NO en `all`; una VENCIDA cuenta en `all`, NO en `snoozed`', async () => {
+    const { conversationRepo } = await seedDataset(); // all=4, resolved=1 (sin snoozed)
+    const uc = new GetInboxViewCounts(conversationRepo);
+
+    // Vigente (futuro) → +1 snoozed, NO en all. Vencida (pasado) → +1 all (lazy open), NO en snoozed.
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 10, status: 'snoozed', snoozedUntil: new Date(Date.now() + 3_600_000).toISOString() });
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 11, status: 'snoozed', snoozedUntil: new Date(Date.now() - 3_600_000).toISOString() });
+
+    const counts = await uc.execute('user-1');
+
+    expect(counts.snoozed).toBe(1); // sólo la vigente
+    expect(counts.all).toBe(5); // los 4 originales + la vencida (reaparece como open); la vigente NO
   });
 });

@@ -47,6 +47,7 @@ describe('ListConversations', () => {
       lastMessageAt: '2026-07-10T10:00:00.000Z',
       preview: 'Mensaje reciente', // renamed from lastMessagePreview (design §5)
       status: 'open',
+      snoozedUntil: null, // conversation-snooze (Ola 6c) — sin snooze por defecto
       assignee: null, // F1.5-C2 — unassigned by default
       area: null, // F1.5-C2 — no area by default
       campaigns: [], // messaging-bulk-inbox (F1) — sin campañas por defecto

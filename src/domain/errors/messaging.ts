@@ -94,6 +94,23 @@ export class InvalidConversationStatusError extends DomainError {
 }
 
 /**
+ * conversation-snooze (Ola 6c) — raised by `SnoozeConversation` when `snoozedUntil` is not a
+ * parseable ISO-8601 timestamp OR is not strictly in the FUTURE (past/now → invalid: posponer
+ * al pasado no tiene sentido y dejaría la conversación fuera de las vistas para siempre).
+ * Reuses the codebase-wide `'VALIDATION_ERROR'` code (400 in errorHandler's statusMap), same
+ * convention as `InvalidConversationStatusError`. No side effects: Chatwoot is never called.
+ */
+export class InvalidSnoozeUntilError extends DomainError {
+  constructor(snoozedUntil: string) {
+    super(
+      `Invalid snoozedUntil: "${snoozedUntil}" (expected a valid ISO-8601 timestamp in the future)`,
+      'VALIDATION_ERROR',
+    );
+    this.name = 'InvalidSnoozeUntilError';
+  }
+}
+
+/**
  * conversation-labels (Ola 5) — la label (ConversationLabel) referida por
  * `UpdateLabel`/`DeleteLabel`/`SetConversationLabels` no existe. 404. En
  * `SetConversationLabels` se lanza si CUALQUIER labelId del set no resuelve —

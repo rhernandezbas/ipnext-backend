@@ -47,6 +47,8 @@ function fixedConversationRepo(record: ConversationRecord): ConversationReposito
     count: async () => 0,
     // conversation-events (Ola 2) — SendTemplateMessage jamás cuenta creaciones; stub neutro.
     countCreatedBetween: async () => 0,
+    // conversation-snooze (Ola 6c) — SendTemplateMessage jamás reactiva snoozes; stub neutro.
+    listExpiredSnoozed: async () => [],
   };
 }
 
@@ -77,6 +79,8 @@ function makeConversationRecord(overrides: Partial<ConversationRecord> = {}): Co
     // conversation-events (Ola 2) — fila histórica sin resolución.
     resolvedAt: null,
     firstResolvedAt: null,
+    // conversation-snooze (Ola 6c) — fila histórica sin snooze.
+    snoozedUntil: null,
     createdAt: '2026-07-16T00:00:00.000Z',
     updatedAt: '2026-07-16T00:00:00.000Z',
     ...overrides,

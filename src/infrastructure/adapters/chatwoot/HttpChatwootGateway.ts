@@ -224,9 +224,19 @@ export class HttpChatwootGateway implements ChatwootGateway {
    * wrapped-in-`this.call` convention as `sendMessage`/`registerWebhook` — ANY
    * failure (network/timeout/4xx/5xx) maps to `ChatwootUnavailableError`.
    */
-  async setStatus(chatwootConversationId: number, status: 'open' | 'resolved' | 'pending'): Promise<void> {
+  async setStatus(
+    chatwootConversationId: number,
+    status: 'open' | 'resolved' | 'pending' | 'snoozed',
+    snoozedUntil?: string | null,
+  ): Promise<void> {
+    // conversation-snooze (Ola 6c) — Chatwoot espera `snoozed_until` en EPOCH SEGUNDOS (mismo
+    // campo que usa su propia UI). Sólo se envía para status='snoozed' (ignorado en los demás).
+    const body: Record<string, unknown> = { status };
+    if (status === 'snoozed' && snoozedUntil) {
+      body['snoozed_until'] = Math.floor(new Date(snoozedUntil).getTime() / 1000);
+    }
     await this.call(() =>
-      this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/toggle_status`), { status }),
+      this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/toggle_status`), body),
     );
   }
 

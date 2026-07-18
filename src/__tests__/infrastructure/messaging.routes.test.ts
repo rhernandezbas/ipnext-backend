@@ -26,6 +26,8 @@ import { SendMessage } from '../../application/use-cases/messaging/SendMessage';
 import { EditInternalNote } from '../../application/use-cases/messaging/EditInternalNote';
 import { DeleteInternalNote } from '../../application/use-cases/messaging/DeleteInternalNote';
 import { SetConversationStatus } from '../../application/use-cases/messaging/SetConversationStatus';
+// conversation-snooze (Ola 6c) — posponer una conversación hasta un timestamp futuro.
+import { SnoozeConversation } from '../../application/use-cases/messaging/SnoozeConversation';
 import { GetClientContextByPhone } from '../../application/use-cases/messaging/GetClientContextByPhone';
 import { GetInboxClientContext } from '../../application/use-cases/messaging/GetInboxClientContext';
 import { GetChatAttachmentFile } from '../../application/use-cases/messaging/GetChatAttachmentFile';
@@ -295,6 +297,9 @@ function buildApp(opts: BuildAppOptions = {}) {
       new ListPreviousConversations(conversationRepo),
       // note-mentions (Ola 6b) — appended (regla §Colisiones).
       new MarkConversationMentionsRead(conversationRepo, mentionRepo),
+      // conversation-snooze (Ola 6c) — appended (regla §Colisiones). Sin eventRepo acá (el
+      // evento 'snoozed' se testea a nivel use case, SnoozeConversation.test.ts).
+      new SnoozeConversation(conversationRepo, gateway),
     ),
   );
   app.use(errorHandler);
@@ -1179,6 +1184,158 @@ describe('POST /api/messaging/conversations/:id/status', () => {
   });
 });
 
+// ─── POST /conversations/:id/snooze (conversation-snooze Ola 6c) ────────────────
+
+describe('POST /api/messaging/conversations/:id/snooze', () => {
+  function futureIso(msFromNow = 60 * 60 * 1000): string {
+    return new Date(Date.now() + msFromNow).toISOString();
+  }
+  function pastIso(msAgo = 60 * 60 * 1000): string {
+    return new Date(Date.now() - msAgo).toISOString();
+  }
+
+  it('snoozedUntil futuro → 200, status="snoozed" + snoozedUntil, llama a Chatwoot con snoozed', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 660, status: 'open' });
+    const until = futureIso();
+
+    const res = await request(app).post(`/api/messaging/conversations/${conv.id}/snooze`).send({ snoozedUntil: until });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: conv.id, status: 'snoozed', snoozedUntil: until });
+    expect(gateway.setStatusCalls).toEqual([{ chatwootConversationId: 660, status: 'snoozed', snoozedUntil: until }]);
+    const updated = await conversationRepo.findById(conv.id);
+    expect(updated!.status).toBe('snoozed');
+    expect(updated!.snoozedUntil).toBe(until);
+  });
+
+  it('snoozedUntil en el PASADO → 400 VALIDATION_ERROR sin llamar a Chatwoot', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 661, status: 'open' });
+
+    const res = await request(app).post(`/api/messaging/conversations/${conv.id}/snooze`).send({ snoozedUntil: pastIso() });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(gateway.setStatusCalls).toHaveLength(0);
+    expect((await conversationRepo.findById(conv.id))!.status).toBe('open');
+  });
+
+  it('snoozedUntil ausente/no-ISO → 400 VALIDATION_ERROR (Zod, sin llamar a Chatwoot)', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 662, status: 'open' });
+
+    const ausente = await request(app).post(`/api/messaging/conversations/${conv.id}/snooze`).send({});
+    expect(ausente.status).toBe(400);
+    expect(ausente.body.code).toBe('VALIDATION_ERROR');
+
+    const basura = await request(app).post(`/api/messaging/conversations/${conv.id}/snooze`).send({ snoozedUntil: 'mañana' });
+    expect(basura.status).toBe(400);
+
+    expect(gateway.setStatusCalls).toHaveLength(0);
+  });
+
+  it('conversación inexistente → 404 CONVERSATION_NOT_FOUND', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/api/messaging/conversations/ghost/snooze').send({ snoozedUntil: futureIso() });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CONVERSATION_NOT_FOUND');
+  });
+
+  it('Chatwoot inalcanzable → 503 CHATWOOT_UNAVAILABLE, mirror NO se toca', async () => {
+    const { app, conversationRepo, gateway } = buildApp();
+    gateway.failSetStatus = true;
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 663, status: 'open' });
+
+    const res = await request(app).post(`/api/messaging/conversations/${conv.id}/snooze`).send({ snoozedUntil: futureIso() });
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('CHATWOOT_UNAVAILABLE');
+    expect((await conversationRepo.findById(conv.id))!.status).toBe('open');
+  });
+
+  it('sin messaging:send → 403 (mismo permiso que /status, sin llamar a Chatwoot)', async () => {
+    const { app, conversationRepo, gateway } = buildApp({ sendPerm: denyPerm });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 664, status: 'open' });
+
+    const res = await request(app).post(`/api/messaging/conversations/${conv.id}/snooze`).send({ snoozedUntil: futureIso() });
+
+    expect(res.status).toBe(403);
+    expect(gateway.setStatusCalls).toHaveLength(0);
+  });
+
+  it('sin sesión (auth deniega) → 401', async () => {
+    const { app, conversationRepo } = buildApp({ auth: denyAuth });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 665, status: 'open' });
+    const res = await request(app).post(`/api/messaging/conversations/${conv.id}/snooze`).send({ snoozedUntil: futureIso() });
+    expect(res.status).toBe(401);
+  });
+});
+
+// ─── conversation-snooze (Ola 6c): ?view=snoozed + reaparición lazy + counts.snoozed ──
+
+describe('GET /api/messaging/conversations — vista ?view=snoozed + reaparición lazy (Ola 6c)', () => {
+  function futureIso(msFromNow = 60 * 60 * 1000): string {
+    return new Date(Date.now() + msFromNow).toISOString();
+  }
+  function pastIso(msAgo = 60 * 60 * 1000): string {
+    return new Date(Date.now() - msAgo).toISOString();
+  }
+
+  it('snoozed VIGENTE: en ?view=snoozed, FUERA de ?status=open', async () => {
+    const { app, conversationRepo } = buildApp();
+    const abierta = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 700, status: 'open', lastMessageAt: '2026-07-15T10:00:00.000Z' });
+    const pospuesta = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 701, status: 'snoozed', snoozedUntil: futureIso(), lastMessageAt: '2026-07-15T11:00:00.000Z' });
+
+    const snoozedView = await request(app).get('/api/messaging/conversations?view=snoozed');
+    expect(snoozedView.status).toBe(200);
+    expect(snoozedView.body.data.map((d: { id: string }) => d.id)).toEqual([pospuesta.id]);
+
+    const openView = await request(app).get('/api/messaging/conversations?status=open');
+    expect(openView.body.data.map((d: { id: string }) => d.id)).toEqual([abierta.id]);
+  });
+
+  it('snoozed VENCIDA: reaparece en ?status=open (lazy) y NO está en ?view=snoozed', async () => {
+    const { app, conversationRepo } = buildApp();
+    const vencida = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 710, status: 'snoozed', snoozedUntil: pastIso(), lastMessageAt: '2026-07-15T10:00:00.000Z' });
+
+    const openView = await request(app).get('/api/messaging/conversations?status=open');
+    expect(openView.body.data.map((d: { id: string }) => d.id)).toEqual([vencida.id]);
+
+    const snoozedView = await request(app).get('/api/messaging/conversations?view=snoozed');
+    expect(snoozedView.body.data).toHaveLength(0);
+  });
+
+  it('snoozed VIGENTE con último inbound NO cuenta en ?view=unattended (pospuesta)', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp();
+    const pospuesta = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 720, status: 'snoozed', snoozedUntil: futureIso(), lastMessageAt: '2026-07-15T10:00:00.000Z' });
+    await messageRepo.upsertByChatwootMessageId({
+      conversationId: pospuesta.id,
+      chatwootMessageId: 7200,
+      direction: 'inbound',
+      content: 'hola',
+      chatwootCreatedAt: '2026-07-15T10:00:00.000Z',
+    });
+
+    const res = await request(app).get('/api/messaging/conversations?view=unattended');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(0);
+  });
+
+  it('counts.snoozed cuenta SOLO las vigentes; la vencida suma en all/open, no en snoozed', async () => {
+    const { app, conversationRepo } = buildApp();
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 730, status: 'snoozed', snoozedUntil: futureIso() }); // vigente
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 731, status: 'snoozed', snoozedUntil: pastIso() }); // vencida → open
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 732, status: 'open' }); // open
+
+    const res = await request(app).get('/api/messaging/conversations/counts');
+
+    expect(res.status).toBe(200);
+    expect(res.body.snoozed).toBe(1); // sólo la vigente
+    expect(res.body.all).toBe(2); // la vencida (→open) + la open; la vigente NO
+  });
+});
+
 // ─── PATCH /conversations/:id/assignee (F1.5-C2, asignación) ────────────────────
 
 describe('PATCH /api/messaging/conversations/:id/assignee', () => {
@@ -1653,7 +1810,8 @@ describe('GET /api/messaging/conversations/counts — contadores por vista (inbo
     // Shape EXACTO del contrato (toEqual estricto: ni claves de más ni de menos —
     // si /conversations/:id capturara 'counts', esto devolvería otra cosa).
     // note-mentions (Ola 6b) — `mentioned` sumado al contrato: 0 acá (no se sembraron menciones).
-    expect(res.body).toEqual({ mine: 1, unattended: 1, all: 2, unassigned: 1, resolved: 1, mentioned: 0 });
+    // conversation-snooze (Ola 6c) — `snoozed` en el shape (0 acá: no hay pospuestas vigentes).
+    expect(res.body).toEqual({ mine: 1, unattended: 1, all: 2, unassigned: 1, resolved: 1, mentioned: 0, snoozed: 0 });
   });
 
   it('mine se resuelve del user AUTENTICADO (req.user.id), no de un query param', async () => {

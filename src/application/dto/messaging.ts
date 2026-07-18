@@ -47,6 +47,12 @@ export interface ConversationListItemDto {
   lastMessageAt: string | null;
   preview: string | null;
   status: string;
+  /**
+   * conversation-snooze (Ola 6c) — timestamp (ISO) hasta el que la conversación está POSPUESTA,
+   * o `null`. El FE muestra el chip "Pospuesta hasta …" y sabe que una `status:'snoozed'` con
+   * `snoozedUntil` vencido ya reaparece en Abiertas (derivación lazy en los buckets).
+   */
+  snoozedUntil: string | null;
   /** F1.5-C2 — LOCAL-only (Chatwoot never sees this). `null` = unassigned. */
   assignee: ConversationAssigneeDto | null;
   /** F1.5-C2 — LOCAL-only (Chatwoot never sees this). `null` = no area set. */
@@ -270,6 +276,12 @@ export interface InboxViewCountsDto {
    * que Chatwoot). Mismo filtro que `?view=mentioned` del listado → el badge nunca diverge.
    */
   mentioned: number;
+  /**
+   * conversation-snooze (Ola 6c) — POSPUESTAS VIGENTES: `status === 'snoozed' AND snoozedUntil > now`.
+   * Bucket aparte, no solapa con `all`/`unattended` (una snoozed vigente está EXCLUIDA de ésas por
+   * la derivación lazy); una snoozed VENCIDA cuenta como `open`/`all`, no acá.
+   */
+  snoozed: number;
 }
 
 export interface InboxClientContextDto {
@@ -398,6 +410,8 @@ export function toConversationListItemDto(record: ConversationRecord): Conversat
     lastMessageAt: record.lastMessageAt,
     preview: record.lastMessagePreview,
     status: record.status,
+    // conversation-snooze (Ola 6c) — passthrough del record (ya ISO en la frontera del port).
+    snoozedUntil: record.snoozedUntil,
     // F1.5-C2 — built from the JOIN-derived flat fields (assigneeName/areaName/
     // areaColor), same "flat on the record, nested on the wire" split as the
     // rest of this mapper (never leaks the raw ConversationRecord shape).

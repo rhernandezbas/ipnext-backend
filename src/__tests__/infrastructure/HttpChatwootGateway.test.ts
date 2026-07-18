@@ -422,6 +422,16 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
       });
     });
 
+    it('conversation-snooze (Ola 6c): status "snoozed" agrega snoozed_until en EPOCH SEGUNDOS', async () => {
+      const { http, gw } = fakeHttp();
+      const until = '2026-08-01T12:00:00.000Z';
+      await gw.setStatus(42, 'snoozed', until);
+      expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/toggle_status', {
+        status: 'snoozed',
+        snoozed_until: Math.floor(new Date(until).getTime() / 1000),
+      });
+    });
+
     it('error de red/4xx/5xx en el POST → ChatwootUnavailableError (mismo criterio SEND-3/ROB-1 que el resto del port)', async () => {
       const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
       await expect(gw.setStatus(42, 'open')).rejects.toBeInstanceOf(ChatwootUnavailableError);

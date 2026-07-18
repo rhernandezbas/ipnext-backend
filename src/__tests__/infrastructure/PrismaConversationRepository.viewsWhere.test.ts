@@ -24,6 +24,14 @@ const mockPrisma = prisma as unknown as {
   conversation: { findMany: jest.Mock; count: jest.Mock };
 };
 
+// conversation-snooze (Ola 6c) — Abiertas/Sin atender excluyen las POSPUESTAS VIGENTES vía un OR
+// NULL-safe. `now` es dinámico (`new Date()` en el builder) → `expect.any(Date)` en el `lte`.
+const notVigenteSnoozed = [
+  { status: { not: 'snoozed' } },
+  { snoozedUntil: null },
+  { snoozedUntil: { lte: expect.any(Date) } },
+];
+
 describe('PrismaConversationRepository — where del bucket Sin atender (VIEW-1)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -35,7 +43,7 @@ describe('PrismaConversationRepository — where del bucket Sin atender (VIEW-1)
     const repo = new PrismaConversationRepository();
     await repo.list({ unattended: true, page: 1, limit: 25 });
 
-    const expected = { status: { not: 'resolved' }, lastPublicMessageDirection: 'inbound' };
+    const expected = { status: { not: 'resolved' }, lastPublicMessageDirection: 'inbound', OR: notVigenteSnoozed };
     expect(mockPrisma.conversation.findMany.mock.calls[0][0].where).toEqual(expected);
     expect(mockPrisma.conversation.count.mock.calls[0][0].where).toEqual(expected);
   });
@@ -47,6 +55,7 @@ describe('PrismaConversationRepository — where del bucket Sin atender (VIEW-1)
     expect(mockPrisma.conversation.findMany.mock.calls[0][0].where).toEqual({
       status: { not: 'resolved' },
       lastPublicMessageDirection: 'inbound',
+      OR: notVigenteSnoozed,
     });
   });
 
@@ -58,6 +67,7 @@ describe('PrismaConversationRepository — where del bucket Sin atender (VIEW-1)
       assigneeId: 'user-1',
       status: { not: 'resolved' },
       lastPublicMessageDirection: 'inbound',
+      OR: notVigenteSnoozed,
     });
   });
 
@@ -66,6 +76,26 @@ describe('PrismaConversationRepository — where del bucket Sin atender (VIEW-1)
     await repo.list({ status: 'open', page: 1, limit: 25 });
 
     expect(mockPrisma.conversation.findMany.mock.calls[0][0].where).not.toHaveProperty('lastPublicMessageDirection');
+  });
+
+  it("conversation-snooze (Ola 6c): snoozed:true → where = { status:'snoozed', snoozedUntil:{gt: now} } (SOLO vigentes)", async () => {
+    const repo = new PrismaConversationRepository();
+    await repo.list({ snoozed: true, page: 1, limit: 25 });
+
+    expect(mockPrisma.conversation.findMany.mock.calls[0][0].where).toEqual({
+      status: 'snoozed',
+      snoozedUntil: { gt: expect.any(Date) },
+    });
+  });
+
+  it('conversation-snooze (Ola 6c): snoozed:true GANA sobre status/unattended (bucket propio)', async () => {
+    const repo = new PrismaConversationRepository();
+    await repo.list({ snoozed: true, status: 'open', unattended: true, page: 1, limit: 25 });
+
+    expect(mockPrisma.conversation.findMany.mock.calls[0][0].where).toEqual({
+      status: 'snoozed',
+      snoozedUntil: { gt: expect.any(Date) },
+    });
   });
 });
 
@@ -83,6 +113,7 @@ describe('PrismaConversationRepository — count(query) comparte el builder del 
     expect(mockPrisma.conversation.count.mock.calls[0][0].where).toEqual({
       assigneeId: null,
       status: { not: 'resolved' },
+      OR: notVigenteSnoozed,
     });
     // Contar JAMÁS trae filas (anti-N+1): findMany no se llama.
     expect(mockPrisma.conversation.findMany).not.toHaveBeenCalled();
@@ -95,6 +126,7 @@ describe('PrismaConversationRepository — count(query) comparte el builder del 
     expect(mockPrisma.conversation.count.mock.calls[0][0].where).toEqual({
       status: { not: 'resolved' },
       lastPublicMessageDirection: 'inbound',
+      OR: notVigenteSnoozed,
     });
   });
 });

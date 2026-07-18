@@ -16,7 +16,11 @@ export type ConversationEventType =
   | 'reopened'
   | 'assigned'
   | 'unassigned'
-  | 'area_changed';
+  | 'area_changed'
+  // conversation-snooze (Ola 6c) — 'snoozed': el agente pospuso la conversación (SnoozeConversation).
+  // 'unsnoozed': reactivación automática al vencer el snoozedUntil (ReactivateExpiredSnoozes / watcher).
+  | 'snoozed'
+  | 'unsnoozed';
 
 export interface RecordConversationEventInput {
   conversationId: string;

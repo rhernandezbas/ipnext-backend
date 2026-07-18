@@ -112,6 +112,9 @@ export class InMemoryConversationRepository implements ConversationRepository {
       // por SetConversationStatus/webhook. undefined = no tocar; null = limpiar (al reabrir).
       if (input.resolvedAt !== undefined) existing.resolvedAt = input.resolvedAt;
       if (input.firstResolvedAt !== undefined) existing.firstResolvedAt = input.firstResolvedAt;
+      // conversation-snooze (Ola 6c) — snoozedUntil atómico con status. undefined = no tocar;
+      // null = limpiar (al reactivar). MUST mirror PrismaConversationRepository.updateData.
+      if (input.snoozedUntil !== undefined) existing.snoozedUntil = input.snoozedUntil;
       existing.updatedAt = new Date().toISOString();
       return { ...existing };
     }
@@ -151,6 +154,8 @@ export class InMemoryConversationRepository implements ConversationRepository {
       // MUST mirror el `create` de PrismaConversationRepository (que ya los respeta).
       resolvedAt: input.resolvedAt ?? null,
       firstResolvedAt: input.firstResolvedAt ?? null,
+      // conversation-snooze (Ola 6c) — normalmente null en la creación; se respeta si el input lo trae.
+      snoozedUntil: input.snoozedUntil ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -208,6 +213,8 @@ export class InMemoryConversationRepository implements ConversationRepository {
       // conversation-events (Ola 2) — una conversación bulk nace 'open', sin resolución.
       resolvedAt: null,
       firstResolvedAt: null,
+      // conversation-snooze (Ola 6c) — una conversación bulk nace 'open', sin snooze.
+      snoozedUntil: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -377,6 +384,20 @@ export class InMemoryConversationRepository implements ConversationRepository {
   }
 
   /**
+   * conversation-snooze (Ola 6c, watcher) — snoozed VENCIDAS (status='snoozed' AND snoozedUntil
+   * != null AND snoozedUntil <= nowIso). NUNCA devuelve vigentes. Orden por snoozedUntil ASC
+   * (las más viejas primero). MUST mirror `PrismaConversationRepository.listExpiredSnoozed`.
+   */
+  async listExpiredSnoozed(nowIso: string, limit = 200): Promise<ConversationRecord[]> {
+    const now = new Date(nowIso).getTime();
+    return this.rows
+      .filter((r) => r.status === 'snoozed' && r.snoozedUntil !== null && new Date(r.snoozedUntil).getTime() <= now)
+      .sort((a, b) => (a.snoozedUntil! < b.snoozedUntil! ? -1 : a.snoozedUntil! > b.snoozedUntil! ? 1 : 0))
+      .slice(0, limit)
+      .map((r) => ({ ...r }));
+  }
+
+  /**
    * inbox-views (Ola 1, COUNT-1) — sync INTERNO del cache desnormalizado
    * `lastPublicMessageDirection`, llamado EXCLUSIVAMENTE por
    * `InMemoryChatMessageRepository` tras cada write de mensaje (espejo del
@@ -440,15 +461,28 @@ export class InMemoryConversationRepository implements ConversationRepository {
       const mentionRepo = this.mentionRepo;
       filtered = mentionRepo ? filtered.filter((r) => mentionRepo.hasUnreadMention(r.id, userId)) : [];
     }
+    // conversation-snooze (Ola 6c) — una conversación POSPUESTA VIGENTE (status='snoozed' AND
+    // snoozedUntil > now, non-null) queda FUERA de Abiertas/Sin atender/Todas; cuando vence
+    // (snoozedUntil <= now) o si snoozedUntil es null, vuelve a contar como `open` de forma
+    // LAZY (sin cron). MUST mirror `PrismaConversationRepository.buildConversationWhere`.
+    const now = Date.now();
+    const isVigenteSnoozed = (r: ConversationRecord): boolean =>
+      r.status === 'snoozed' && r.snoozedUntil !== null && new Date(r.snoozedUntil).getTime() > now;
+
     // inbox-views (VIEW-1) — bucket "Sin atender": NO-resuelta + último mensaje
     // público inbound. GANA sobre `status` (lleva su propio filtro de ciclo de
     // vida — ver JSDoc del port). inbox-resolve (LS-1) — filtro de ciclo de vida
-    // con semántica de BUCKET (ver `ConversationListQuery.status`). MUST mirror
-    // `PrismaConversationRepository`'s `where` construction exactly.
-    if (query.unattended) {
-      filtered = filtered.filter((r) => r.status !== 'resolved' && r.lastPublicMessageDirection === 'inbound');
+    // con semántica de BUCKET (ver `ConversationListQuery.status`). conversation-snooze
+    // (Ola 6c) — `snoozed` (vigentes) GANA sobre todo; `open`/`unattended` EXCLUYEN las
+    // vigentes. MUST mirror `PrismaConversationRepository`'s `where` construction exactly.
+    if (query.snoozed) {
+      filtered = filtered.filter(isVigenteSnoozed);
+    } else if (query.unattended) {
+      filtered = filtered.filter(
+        (r) => r.status !== 'resolved' && !isVigenteSnoozed(r) && r.lastPublicMessageDirection === 'inbound',
+      );
     } else if (query.status === 'open') {
-      filtered = filtered.filter((r) => r.status !== 'resolved');
+      filtered = filtered.filter((r) => r.status !== 'resolved' && !isVigenteSnoozed(r));
     } else if (query.status === 'resolved') {
       filtered = filtered.filter((r) => r.status === 'resolved');
     } else if (query.status === 'pending') {

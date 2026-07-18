@@ -101,6 +101,14 @@ export interface ConversationRecord {
    * (base de "tiempo hasta primera resolución"). Backfill de históricas = `updatedAt` (aprox).
    */
   firstResolvedAt: string | null;
+  /**
+   * conversation-snooze (Ola 6c) — timestamp (ISO) hasta el que la conversación está POSPUESTA.
+   * `status='snoozed' AND snoozedUntil > now` = VIGENTE (fuera de Abiertas/Sin atender, en el
+   * bucket `snoozed`). Cuando `snoozedUntil <= now` la conversación vuelve a contar como `open`
+   * de forma LAZY en los buckets (sin cron); el watcher (`ReactivateExpiredSnoozes`) además
+   * normaliza el status en DB a 'open' y limpia este campo a null. `null` = no pospuesta.
+   */
+  snoozedUntil: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -179,6 +187,15 @@ export interface ConversationListQuery extends PaginatedQuery {
    * vista comparte este mismo filtro → el badge nunca diverge del listado.
    */
   mentionedUserId?: string;
+  /**
+   * conversation-snooze (Ola 6c, VIEW `?view=snoozed`) — bucket de las POSPUESTAS VIGENTES:
+   * `status === 'snoozed' AND snoozedUntil > now` (non-null). Es un eje ORTOGONAL a `status`/
+   * `unattended` (mismo molde que `unattended`) y GANA sobre ellos cuando se combina. Una
+   * snoozed VENCIDA (snoozedUntil <= now) o con snoozedUntil null NO entra acá — cae en el
+   * bucket `open` (derivación lazy). Ambos adapters MUST implementar la MISMA semántica vía
+   * el builder compartido del where (`buildConversationWhere`/`applyFilters`).
+   */
+  snoozed?: boolean;
 }
 
 /**
@@ -218,6 +235,14 @@ export interface UpsertConversationInput {
    */
   resolvedAt?: string | null;
   firstResolvedAt?: string | null;
+  /**
+   * conversation-snooze (Ola 6c) — escrito ATÓMICAMENTE junto al `status` por
+   * `SnoozeConversation` (status='snoozed' + snoozedUntil futuro) y por el watcher
+   * `ReactivateExpiredSnoozes` (status='open' + snoozedUntil=null al vencer). Misma convención
+   * "undefined = no tocar" del resto del input; `null` = limpiar (al reactivar). Deriva de la
+   * acción de status, así que co-vive acá (no es LOCAL-only tipo assignee/area).
+   */
+  snoozedUntil?: string | null;
 }
 
 /**
@@ -365,4 +390,12 @@ export interface ConversationRepository {
    * Anti-N+1: un solo `COUNT`, jamás trae filas.
    */
   countCreatedBetween(fromIso: string, toIso: string): Promise<number>;
+  /**
+   * conversation-snooze (Ola 6c, watcher opción a) — conversaciones snoozed cuyo `snoozedUntil`
+   * YA venció (`status === 'snoozed' AND snoozedUntil != null AND snoozedUntil <= nowIso`).
+   * Fuente de los candidatos que `ReactivateExpiredSnoozes` normaliza (status='open',
+   * snoozedUntil=null, evento 'unsnoozed'). `limit` acota el trabajo por tick (default sano en
+   * el adapter). Ambos adapters MUST implementar la MISMA semántica. NUNCA devuelve las vigentes.
+   */
+  listExpiredSnoozed(nowIso: string, limit?: number): Promise<ConversationRecord[]>;
 }

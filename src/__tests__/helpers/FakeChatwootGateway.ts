@@ -106,11 +106,22 @@ export class FakeChatwootGateway implements ChatwootGateway {
   async registerWebhook(): Promise<void> {}
 
   // ─── messaging-inbox-productivity (F1.5 fase C, STATUS-1) ───────────────────
-  public setStatusCalls: Array<{ chatwootConversationId: number; status: string }> = [];
+  // conversation-snooze (Ola 6c) — `snoozedUntil` sólo se registra cuando el status es 'snoozed'
+  // (undefined en resolve/reopen/pending); así los asserts existentes de `{chatwootConversationId,
+  // status}` (toEqual estricto) siguen pasando sin una clave extra.
+  public setStatusCalls: Array<{ chatwootConversationId: number; status: string; snoozedUntil?: string | null }> = [];
   public failSetStatus = false;
 
-  async setStatus(chatwootConversationId: number, status: 'open' | 'resolved' | 'pending'): Promise<void> {
-    this.setStatusCalls.push({ chatwootConversationId, status });
+  async setStatus(
+    chatwootConversationId: number,
+    status: 'open' | 'resolved' | 'pending' | 'snoozed',
+    snoozedUntil?: string | null,
+  ): Promise<void> {
+    this.setStatusCalls.push(
+      status === 'snoozed'
+        ? { chatwootConversationId, status, snoozedUntil: snoozedUntil ?? null }
+        : { chatwootConversationId, status },
+    );
     if (this.failSetStatus) throw new Error('fake: Chatwoot unreachable (setStatus)');
   }
 

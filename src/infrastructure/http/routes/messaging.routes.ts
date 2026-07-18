@@ -24,6 +24,8 @@ import { EditInternalNote } from '@application/use-cases/messaging/EditInternalN
 import { DeleteInternalNote } from '@application/use-cases/messaging/DeleteInternalNote';
 import type { InternalNoteActor } from '@application/use-cases/messaging/internalNoteAuthorization';
 import { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
+// conversation-snooze (Ola 6c) — posponer una conversación hasta un timestamp futuro (gate send).
+import { SnoozeConversation } from '@application/use-cases/messaging/SnoozeConversation';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
 // previous-conversations (Ola 6a) — lista de conversaciones previas del contacto (panel de contexto).
 import { ListPreviousConversations } from '@application/use-cases/messaging/ListPreviousConversations';
@@ -256,6 +258,16 @@ const editInternalNoteBodySchema = z.object({
 });
 
 /**
+ * conversation-snooze (Ola 6c) — body de `POST /conversations/:id/snooze`. `snoozedUntil` DEBE
+ * ser un ISO-8601 válido (formato); la validación de FUTURO vive en `SnoozeConversation`
+ * (InvalidSnoozeUntilError → 400), así que un pasado con formato válido pasa Zod pero lo corta
+ * el use case (mismo 400 VALIDATION_ERROR). `offset:true` acepta tanto `...Z` como `...+00:00`.
+ */
+const snoozeBodySchema = z.object({
+  snoozedUntil: z.string().datetime({ offset: true }),
+});
+
+/**
  * messaging-inbox-notes (edit/delete) — arma el actor para el use case desde el req:
  * `userId` = req.user.id (poblado por `auth`); `hasManage` = req.messagingCanManage
  * (poblado por `attachMessagingManage`, ver el wiring de la ruta). La autorización fina
@@ -413,6 +425,12 @@ export function createMessagingRouter(
    * §Colisiones: jamás insertar en medio de la lista compartida).
    */
   markConversationMentionsRead: MarkConversationMentionsRead,
+  /**
+   * conversation-snooze (Ola 6c) — posponer una conversación hasta un timestamp futuro
+   * (`POST /conversations/:id/snooze`). Gate `perms.send` (misma capacidad que resolver/asignar
+   * — no hay permiso separado). Appended (regla §Colisiones: jamás insertar en medio de la lista).
+   */
+  snoozeConversation: SnoozeConversation,
 ): Router {
   const router = Router();
   const conditionalSendLimiter = conditionalSendRateLimiter(sendRateLimiter);
@@ -477,7 +495,10 @@ export function createMessagingRouter(
         // propio filtro de ciclo de vida y GANA sobre `status`, ver el port).
         // Whitelist (mismo criterio que `status`/`assignment`): valor desconocido
         // se ignora sin error. La semántica vive en el repo (`ConversationListQuery.unattended`).
+        // conversation-snooze (Ola 6c) — `?view=snoozed`: POSPUESTAS VIGENTES (status='snoozed'
+        // AND snoozedUntil>now). Mismo eje `view` (whitelist), semántica en `ConversationListQuery.snoozed`.
         if (view === 'unattended') query.unattended = true;
+        else if (view === 'snoozed') query.snoozed = true;
         // note-mentions (Ola 6b, VIEW) — `?view=mentioned`: conversaciones donde el user
         // AUTENTICADO tiene una @mención NO leída (req.user.id, jamás un query param — mismo
         // patrón que `?assignment=mine`). Whitelist (valor desconocido de `view` se ignora sin
@@ -726,6 +747,32 @@ export function createMessagingRouter(
         // conversation-events (Ola 2) — actor = usuario autenticado (req.user, poblado por `auth`)
         // para atribuir el evento resolved/reopened.
         const result = await setConversationStatus.execute(req.params['id'] as string, status, req.user?.id);
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── POST /conversations/:id/snooze (send) — conversation-snooze Ola 6c ──────
+  // Posponer una conversación hasta un timestamp FUTURO: desaparece de Abiertas/Sin
+  // atender y reaparece sola al vencer (derivación lazy en los buckets + watcher opcional).
+  // Gate `messaging:send` (misma capacidad que /status). Zod valida el FORMATO ISO del body;
+  // la validación de FUTURO (y not-found/Chatwoot) la hace el use case con errores tipados
+  // (InvalidSnoozeUntilError → 400, ConversationNotFoundError → 404, ChatwootUnavailableError → 503).
+  router.post(
+    '/conversations/:id/snooze',
+    auth,
+    perms.send,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const parsed = snoozeBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'snoozedUntil must be a valid ISO-8601 timestamp', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        // conversation-events (Ola 2) — actor = usuario autenticado, para el evento 'snoozed'.
+        const result = await snoozeConversation.execute(req.params['id'] as string, parsed.data.snoozedUntil, req.user?.id);
         res.json(result);
       } catch (err) {
         next(err);

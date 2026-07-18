@@ -2944,6 +2944,13 @@ model Conversation {
   resolvedAt             DateTime?
   firstResolvedAt        DateTime?
 
+  // conversation-snooze (Ola 6c) — timestamp hasta el que la conversación está POSPUESTA.
+  // status='snoozed' AND snoozedUntil>now = VIGENTE (fuera de Abiertas/Sin atender, en el bucket
+  // `snoozed`); al vencer (snoozedUntil<=now) reaparece como `open` de forma LAZY en los buckets
+  // (sin cron) y el watcher ReactivateExpiredSnoozes normaliza el status en DB a 'open' + null.
+  // La escribe SnoozeConversation/el watcher, atómica con el `status`. Backfill: null (aditiva).
+  snoozedUntil           DateTime?
+
   // F1.5-C2 (asignación) — assigneeId/areaId son campos EXCLUSIVAMENTE LOCALES del
   // mirror: Chatwoot NUNCA se entera de la asignación (no existe llamada upstream),
   // igual que status/canReply ya son locales-primero. NINGÚN camino de escritura
@@ -2985,6 +2992,10 @@ model Conversation {
   @@index([contactPhoneE164])
   // inbox-views (Ola 1) — filtro/count del bucket "Sin atender" por request.
   @@index([lastPublicMessageDirection])
+  // conversation-snooze (Ola 6c) — sirve el filtro/count del bucket `snoozed` (vigentes) y el
+  // `listExpiredSnoozed` del watcher (status='snoozed' AND snoozedUntil<=now); el planner lo
+  // combina con el filtro por status. Cardinalidad baja (pocas pospuestas a la vez).
+  @@index([snoozedUntil])
 }
 
 // conversation-labels (Ola 5) — CATÁLOGO editable de etiquetas de conversación

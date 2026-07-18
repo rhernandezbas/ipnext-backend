@@ -790,6 +790,8 @@ import { EditInternalNote } from '@application/use-cases/messaging/EditInternalN
 import { DeleteInternalNote } from '@application/use-cases/messaging/DeleteInternalNote';
 import { attachMessagingManage } from './middleware/attachMessagingManage';
 import { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
+// conversation-snooze (Ola 6c) — posponer una conversación hasta un timestamp futuro.
+import { SnoozeConversation } from '@application/use-cases/messaging/SnoozeConversation';
 import { GetClientContextByPhone } from '@application/use-cases/messaging/GetClientContextByPhone';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
 // F1.5-C2 (asignación) — LOCAL-only (Chatwoot nunca se entera de assigneeId/areaId)
@@ -2877,6 +2879,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // conversación (POST /conversations/:id/mentions/read, gate messaging:read). Appended
       // (regla §Colisiones). Mismas instancias conversationRepo + conversationMentionRepo.
       new MarkConversationMentionsRead(conversationRepo, conversationMentionRepo),
+      // conversation-snooze (Ola 6c) — posponer (gate messaging:send). Appended
+      // (regla §Colisiones). Mismas instancias conversationRepo/chatwootGateway; 3er arg
+      // conversationEventRepo registra el evento 'snoozed' (best-effort, Ola 2).
+      new SnoozeConversation(conversationRepo, chatwootGateway, conversationEventRepo),
     ));
 
     // conversation-labels (Ola 5) — CRUD del catálogo /api/messaging/labels (router

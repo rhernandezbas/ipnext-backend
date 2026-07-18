@@ -91,6 +91,8 @@ function toDomain(row: any): ConversationRecord {
     // conversation-events (Ola 2) — timestamps derivados del ciclo de resolución.
     resolvedAt: toIso(row.resolvedAt),
     firstResolvedAt: toIso(row.firstResolvedAt),
+    // conversation-snooze (Ola 6c) — timestamp hasta el que está pospuesta (o null).
+    snoozedUntil: toIso(row.snoozedUntil),
     createdAt: toIso(row.createdAt)!,
     updatedAt: toIso(row.updatedAt)!,
   };
@@ -129,15 +131,34 @@ function buildConversationWhere(query: ConversationListQuery): Record<string, un
   if (query.mentionedUserId) {
     where['mentions'] = { some: { mentionedUserId: query.mentionedUserId, readAt: null } };
   }
+  // conversation-snooze (Ola 6c) — una POSPUESTA VIGENTE (status='snoozed' AND snoozedUntil > now)
+  // queda FUERA de Abiertas/Sin atender; al vencer (o si snoozedUntil es null) vuelve a `open`
+  // de forma LAZY. Excluir las vigentes vía OR NULL-safe (un `NOT` compuesto trataría un
+  // snoozedUntil NULL como "no excluir" de forma frágil por la lógica trivaluada de SQL):
+  // NOT-resuelta AND (status != 'snoozed' OR snoozedUntil = null OR snoozedUntil <= now).
+  const now = new Date();
+  const notVigenteSnoozed = [
+    { status: { not: 'snoozed' } },
+    { snoozedUntil: null },
+    { snoozedUntil: { lte: now } },
+  ];
+
   // inbox-views (VIEW-1) — bucket "Sin atender": NO-resuelta + último mensaje
   // público inbound. GANA sobre `status` (lleva su propio filtro de ciclo de vida,
   // ver JSDoc del port). inbox-resolve (LS-1) — filtro de ciclo de vida con
-  // semántica de BUCKET. MUST mirror `InMemoryConversationRepository.applyFilters`.
-  if (query.unattended) {
+  // semántica de BUCKET. conversation-snooze (Ola 6c) — `snoozed` (vigentes) GANA sobre
+  // todo; `open`/`unattended` EXCLUYEN las vigentes. MUST mirror
+  // `InMemoryConversationRepository.applyFilters`.
+  if (query.snoozed) {
+    where['status'] = 'snoozed';
+    where['snoozedUntil'] = { gt: now };
+  } else if (query.unattended) {
     where['status'] = { not: 'resolved' };
     where['lastPublicMessageDirection'] = 'inbound';
+    where['OR'] = notVigenteSnoozed;
   } else if (query.status === 'open') {
     where['status'] = { not: 'resolved' };
+    where['OR'] = notVigenteSnoozed;
   } else if (query.status === 'resolved') {
     where['status'] = 'resolved';
   } else if (query.status === 'pending') {
@@ -174,6 +195,10 @@ function updateData(input: UpsertConversationInput): Record<string, unknown> {
   }
   if (input.firstResolvedAt !== undefined) {
     data['firstResolvedAt'] = input.firstResolvedAt === null ? null : new Date(input.firstResolvedAt);
+  }
+  // conversation-snooze (Ola 6c) — snoozedUntil atómico con el status (snooze / reactivación).
+  if (input.snoozedUntil !== undefined) {
+    data['snoozedUntil'] = input.snoozedUntil === null ? null : new Date(input.snoozedUntil);
   }
   return data;
 }
@@ -217,6 +242,8 @@ export class PrismaConversationRepository implements ConversationRepository {
         // nace 'open'); se pasan por completitud si el input los trajera.
         resolvedAt: input.resolvedAt ? new Date(input.resolvedAt) : null,
         firstResolvedAt: input.firstResolvedAt ? new Date(input.firstResolvedAt) : null,
+        // conversation-snooze (Ola 6c) — normalmente null en la creación; se respeta si el input lo trae.
+        snoozedUntil: input.snoozedUntil ? new Date(input.snoozedUntil) : null,
         // F1.5-C2 — assigneeId/areaId deliberately absent: schema default (null),
         // never set from Chatwoot-sourced input.
       },
@@ -475,6 +502,24 @@ export class PrismaConversationRepository implements ConversationRepository {
     return (prisma as any).conversation.count({
       where: { createdAt: { gte: new Date(fromIso), lt: new Date(toIso) } },
     });
+  }
+
+  /**
+   * conversation-snooze (Ola 6c, watcher) — snoozed VENCIDAS (status='snoozed' AND
+   * snoozedUntil <= now; el índice parcial `Conversation_snoozed_idx` sirve el filtro).
+   * Un `snoozedUntil` NULL nunca matchea `lte` (SQL trivaluado) → sólo las vencidas reales.
+   * MUST mirror `InMemoryConversationRepository.listExpiredSnoozed`.
+   */
+  async listExpiredSnoozed(nowIso: string, limit = 200): Promise<ConversationRecord[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma as any).conversation.findMany({
+      where: { status: 'snoozed', snoozedUntil: { lte: new Date(nowIso) } },
+      include: CONVERSATION_INCLUDE,
+      orderBy: { snoozedUntil: 'asc' },
+      take: limit,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return rows.map((r: any) => toDomain(r));
   }
 
   async list(query: ConversationListQuery): Promise<PaginatedResult<ConversationRecord>> {

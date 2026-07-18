@@ -146,6 +146,8 @@ function conversationRecord(overrides: Partial<ConversationRecord> = {}): Conver
     internalNoteCount: 0,
     resolvedAt: null,
     firstResolvedAt: null,
+    // conversation-snooze (Ola 6c) — campo requerido del record (null = no pospuesta).
+    snoozedUntil: null,
     createdAt: '2026-07-01T00:00:00.000Z',
     updatedAt: '2026-07-11T12:00:00.000Z',
     ...overrides,
