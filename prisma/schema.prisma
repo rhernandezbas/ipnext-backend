@@ -2296,6 +2296,21 @@ model GestionRealIngestConfig {
   @@index([wirelessProjectId])
 }
 
+/// N1 (noc-broadcast) — editable, single-row config for the NOC WhatsApp broadcast
+/// engine (Evolution API, unofficial WhatsApp on a Raspberry Pi). Molde
+/// GestionRealIngestConfig. Single row enforced via a constant id ("singleton").
+/// `evolutionApiKey` is a secret — the read DTO masks it (never serialized in full).
+model NocBroadcastConfig {
+  id                String   @id @default("singleton")
+  enabled           Boolean  @default(false)
+  evolutionBaseUrl  String   @default("")
+  evolutionApiKey   String   @default("")
+  evolutionInstance String   @default("")
+  targetChat        String   @default("")
+  appPublicUrl      String   @default("")
+  updatedAt         DateTime @updatedAt
+}
+
 // Single-row config for the Gestión Real client sync (intervalMs + estado codes).
 // `estados` is stored comma-joined (mirrors the GR_SYNC_ESTADOS env convention);
 // the string⇄string[] mapping lives in the adapters. No FKs, no indexes.

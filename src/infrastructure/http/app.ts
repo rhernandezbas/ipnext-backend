@@ -844,6 +844,13 @@ import { SubmitTemplateForApproval } from '@application/use-cases/messaging/Subm
 import { DeleteTemplate } from '@application/use-cases/messaging/DeleteTemplate';
 // Ola 4 (inbox-Chatwoot) — respuestas rápidas / macros (canned responses CRUD).
 import { createCannedResponsesRouter } from './routes/cannedResponses.routes';
+// N1 (noc-broadcast) — fundación de la difusión NOC vía Evolution API.
+import { createNocBroadcastRouter } from './routes/nocBroadcast.routes';
+import { PrismaNocBroadcastConfigRepository } from '../adapters/prisma/PrismaNocBroadcastConfigRepository';
+import { EvolutionApiHttpGateway } from '../adapters/evolution/EvolutionApiHttpGateway';
+import { GetNocBroadcastConfig } from '@application/use-cases/nocBroadcast/GetNocBroadcastConfig';
+import { UpdateNocBroadcastConfig } from '@application/use-cases/nocBroadcast/UpdateNocBroadcastConfig';
+import { SendNocBroadcastTest } from '@application/use-cases/nocBroadcast/SendNocBroadcastTest';
 import { ListCannedResponses } from '@application/use-cases/messaging/ListCannedResponses';
 import { CreateCannedResponse } from '@application/use-cases/messaging/CreateCannedResponse';
 import { UpdateCannedResponse } from '@application/use-cases/messaging/UpdateCannedResponse';
@@ -3008,6 +3015,28 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
         read: requirePerm('messaging', 'read'),
         manage: requirePerm('messaging', 'manage'),
       },
+    ));
+  }
+
+  // ─── N1 (noc-broadcast) — fundación de la difusión NOC vía Evolution API ─────
+  // Config singleton + endpoint de prueba (N2/N3 reusan el motor BroadcastToNoc,
+  // no este router). Montado en un prefijo MÁS específico que `/api/messaging`
+  // (registrado DESPUÉS: un request cae primero al router de messaging, no matchea
+  // ninguna ruta y llega acá — mismo fall-through que /canned-responses). El gateway
+  // lee la config del repo AL MOMENTO de enviar (editable en runtime vía PUT /config).
+  // RBAC: GET /config = messaging:read; PUT /config + POST /test = messaging:manage.
+  {
+    const nocBroadcastConfigRepo = new PrismaNocBroadcastConfigRepository();
+    const nocBroadcastGateway = new EvolutionApiHttpGateway({ configRepo: nocBroadcastConfigRepo });
+    app.use('/api/messaging/noc-broadcast', createNocBroadcastRouter(
+      authAdapter,
+      {
+        read: requirePerm('messaging', 'read'),
+        manage: requirePerm('messaging', 'manage'),
+      },
+      new GetNocBroadcastConfig(nocBroadcastConfigRepo),
+      new UpdateNocBroadcastConfig(nocBroadcastConfigRepo),
+      new SendNocBroadcastTest(nocBroadcastGateway),
     ));
   }
 

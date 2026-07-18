@@ -234,6 +234,13 @@ const statusMap: Record<string, number> = {
   // hace que el mismo error resuelva 404 en AMBOS routers, sin tocar
   // ticketAreas.routes.ts ni sus tests (nunca llegan al fallback global).
   TICKET_AREA_NOT_FOUND: 404,
+  // N1 (noc-broadcast) — difusión NOC vía Evolution API. NOT_CONFIGURED → 503
+  // (feature apagada/incompleta, molde SMARTOLT_NOT_CONFIGURED); EVOLUTION_API_ERROR
+  // → 502 (upstream Evolution/Pi falló, molde *_UNAVAILABLE); LINK_BASE_MISSING → 422
+  // (appPublicUrl vacío — request bien formada pero falta config para armar el link).
+  NOC_BROADCAST_NOT_CONFIGURED: 503,
+  EVOLUTION_API_ERROR: 502,
+  NOC_BROADCAST_LINK_BASE_MISSING: 422,
 };
 
 /** Express global error-handling middleware. */
