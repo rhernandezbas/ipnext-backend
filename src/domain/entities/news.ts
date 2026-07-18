@@ -22,6 +22,8 @@ export interface NewsPost {
   pinned: boolean;
   publishedAt: Date;
   archivedAt: Date | null;
+  /** N2 — última vez que la noticia se difundió al NOC (WhatsApp). null = nunca. */
+  lastBroadcastAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

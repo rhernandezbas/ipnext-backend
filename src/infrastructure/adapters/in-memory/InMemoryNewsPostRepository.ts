@@ -55,6 +55,7 @@ export class InMemoryNewsPostRepository implements NewsPostRepository {
       pinned: input.pinned ?? false,
       publishedAt: now,
       archivedAt: null,
+      lastBroadcastAt: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -130,6 +131,12 @@ export class InMemoryNewsPostRepository implements NewsPostRepository {
     return this.items.filter(
       (i) => i.archivedAt === null && !this.receipts.has(this.key(i.id, userId)),
     ).length;
+  }
+
+  async recordBroadcast(id: string): Promise<void> {
+    const index = this.items.findIndex((i) => i.id === id);
+    if (index === -1) return; // no-op si el post ya no existe (contrato del port)
+    this.items[index] = { ...this.items[index]!, lastBroadcastAt: new Date() };
   }
 
   /**

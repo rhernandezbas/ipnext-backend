@@ -249,6 +249,15 @@ import { DeleteTicketArea } from '@application/use-cases/DeleteTicketArea';
 import { PrismaNewsPostRepository } from '../adapters/prisma/PrismaNewsPostRepository';
 import { PrismaNewsCategoryRepository } from '../adapters/prisma/PrismaNewsCategoryRepository';
 import { createNewsRouter } from './routes/news.routes';
+// N2 — media (adjuntos) + difundir al NOC de las Noticias.
+import { PrismaNewsPostAttachmentRepository } from '../adapters/prisma/PrismaNewsPostAttachmentRepository';
+import { createNewsMediaRouter } from './routes/newsMedia.routes';
+import { AttachFilesToNews } from '@application/use-cases/AttachFilesToNews';
+import { AttachLinkToNews } from '@application/use-cases/AttachLinkToNews';
+import { GetNewsAttachmentFile } from '@application/use-cases/GetNewsAttachmentFile';
+import { DeleteNewsAttachment } from '@application/use-cases/DeleteNewsAttachment';
+import { BroadcastNewsToNoc } from '@application/use-cases/BroadcastNewsToNoc';
+import { BroadcastToNoc } from '@application/use-cases/nocBroadcast/BroadcastToNoc';
 import { ListNewsPosts } from '@application/use-cases/ListNewsPosts';
 import { GetNewsPost } from '@application/use-cases/GetNewsPost';
 import { CreateNewsPost } from '@application/use-cases/CreateNewsPost';
@@ -1491,8 +1500,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // todavía) — NEWS-HTTP-4: nada de lo de arriba (notifications) se toca.
   const newsCategoryRepo = new PrismaNewsCategoryRepository();
   const newsPostRepo = new PrismaNewsPostRepository();
-  const listNewsPosts = new ListNewsPosts(newsPostRepo);
-  const getNewsPost = new GetNewsPost(newsPostRepo);
+  // N2 — repo de adjuntos de noticia: inyectado en List/Get para que el DTO exponga los
+  // attachments; y en el media router de más abajo. El media router en sí se monta luego
+  // (necesita el gateway NOC + el storage MinIO, construidos más adelante).
+  const newsAttachmentRepo = new PrismaNewsPostAttachmentRepository();
+  const listNewsPosts = new ListNewsPosts(newsPostRepo, newsAttachmentRepo);
+  const getNewsPost = new GetNewsPost(newsPostRepo, newsAttachmentRepo);
   const createNewsPost = new CreateNewsPost(newsPostRepo, newsCategoryRepo);
   const updateNewsPost = new UpdateNewsPost(newsPostRepo, newsCategoryRepo);
   const archiveNewsPost = new ArchiveNewsPost(newsPostRepo);
@@ -2158,6 +2171,33 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     updateNewsCategory,
     deleteNewsCategory,
   ));
+
+  // N2 — media (adjuntos) + difundir al NOC de las Noticias. Router SEPARADO montado también
+  // en /api/news; los paths son disjuntos del router principal por método + nº de segmentos
+  // (ver comentario en newsMedia.routes.ts), así que el orden de montaje no importa. Reusa el
+  // MISMO storage MinIO que task-photos (bucket compartido, prefijo lógico news/{postId}/) y
+  // el motor N1 BroadcastToNoc (config leída del repo al momento de enviar).
+  {
+    const newsBroadcastConfigRepo = new PrismaNocBroadcastConfigRepository();
+    const newsBroadcastGateway = new EvolutionApiHttpGateway({ configRepo: newsBroadcastConfigRepo });
+    app.use('/api/news', createNewsMediaRouter(
+      {
+        attachFilesToNews: new AttachFilesToNews(newsAttachmentRepo, taskPhotoStorage, newsPostRepo),
+        attachLinkToNews: new AttachLinkToNews(newsAttachmentRepo, newsPostRepo),
+        getNewsAttachmentFile: new GetNewsAttachmentFile(newsAttachmentRepo, taskPhotoStorage),
+        deleteNewsAttachment: new DeleteNewsAttachment(newsAttachmentRepo, taskPhotoStorage),
+        broadcastNewsToNoc: new BroadcastNewsToNoc(
+          newsPostRepo,
+          new BroadcastToNoc(newsBroadcastConfigRepo, newsBroadcastGateway),
+        ),
+      },
+      {
+        authProvider: authAdapter,
+        requireRead: requirePerm('news', 'read'),
+        requireManage: requirePerm('news', 'manage'),
+      },
+    ));
+  }
 
   // IClass admin — SO type catalog sync + list (admin-only).
   app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter, syncIClassNodes, listIClassNodeCatalog));

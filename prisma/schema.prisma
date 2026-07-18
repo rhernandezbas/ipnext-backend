@@ -3350,7 +3350,8 @@ model NewsCategory {
 model NewsPost {
   id           String            @id @default(uuid())
   title        String
-  body         String            // texto plano multiline (v1 — markdown queda out-of-scope)
+  body         String            // texto MARKDOWN multiline (N2). El BE lo persiste tal cual;
+                                  // el FE lo renderiza. No cambia nada estructural (sigue siendo String).
   categoryId   String
   category     NewsCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   authorId     String?
@@ -3359,13 +3360,36 @@ model NewsPost {
   pinned       Boolean           @default(false)
   publishedAt  DateTime          @default(now())
   archivedAt   DateTime?
+  // N2 — última difusión al NOC (WhatsApp). null = nunca difundida.
+  lastBroadcastAt DateTime?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   readReceipts NewsReadReceipt[]
+  attachments  NewsPostAttachment[]
 
   @@index([categoryId])
   @@index([archivedAt])
   @@index([pinned, publishedAt])
+}
+
+// N2 — adjunto de una NewsPost. Espejo de ScheduledTaskAttachment (binario en el storage
+// bajo `storageKey`, prefijo news/{newsPostId}/) PERO con modo `link` (url externa, sin
+// binario) y SIN thumbnails/dimensiones. onDelete: Cascade ⟹ al borrar la noticia se borran
+// sus filas (el binario lo limpia el use case vía FileStorage).
+model NewsPostAttachment {
+  id           String   @id @default(uuid())
+  newsPostId   String
+  newsPost     NewsPost @relation(fields: [newsPostId], references: [id], onDelete: Cascade)
+  kind         String   // 'image' | 'file' | 'link'
+  storageKey   String?  // null para 'link'
+  filename     String?  // nombre de archivo (binario) o rótulo (link); puede ser null
+  mimeType     String?  // null para 'link'
+  sizeBytes    Int?     // null para 'link'
+  url          String?  // URL externa (solo 'link'); null para binarios
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  @@index([newsPostId])
 }
 
 model NewsReadReceipt {

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { NewsCategory, NewsPost } from '@domain/entities/news';
+import { NewsPostAttachmentDto } from '@application/dto/newsAttachment.dto';
 
 // 6-digit hex color (e.g. #6366f1) — same shape as tickets.dto.ts's HexColorSchema,
 // redefined locally since that one isn't exported.
@@ -42,7 +43,11 @@ export interface NewsPostDto {
   pinned: boolean;
   publishedAt: string;
   archivedAt: string | null;
+  /** N2 — última difusión al NOC (ISO) o null si nunca se difundió. */
+  lastBroadcastAt: string | null;
   read: boolean;
+  /** N2 — adjuntos (imágenes/archivos/links) de la noticia. Vacío si no tiene. */
+  attachments: NewsPostAttachmentDto[];
   createdAt: string;
   updatedAt: string;
 }
@@ -51,8 +56,16 @@ export interface NewsPostDto {
  * `read` is passed explicitly — callers with a `NewsPostWithReadState` pass
  * `post.read`; callers with a plain `NewsPost` (create/update/archive, which
  * don't carry per-user state) pass `false`.
+ *
+ * `attachments` defaults to `[]` so the mutation use cases (create/update/archive),
+ * which don't hydrate attachments, keep compiling untouched and simply return an
+ * empty list — the read paths (Get/List) pass the hydrated array explicitly.
  */
-export function toNewsPostDto(post: NewsPost, read: boolean): NewsPostDto {
+export function toNewsPostDto(
+  post: NewsPost,
+  read: boolean,
+  attachments: NewsPostAttachmentDto[] = [],
+): NewsPostDto {
   return {
     id: post.id,
     title: post.title,
@@ -63,7 +76,9 @@ export function toNewsPostDto(post: NewsPost, read: boolean): NewsPostDto {
     pinned: post.pinned,
     publishedAt: post.publishedAt.toISOString(),
     archivedAt: post.archivedAt ? post.archivedAt.toISOString() : null,
+    lastBroadcastAt: post.lastBroadcastAt ? post.lastBroadcastAt.toISOString() : null,
     read,
+    attachments,
     createdAt: post.createdAt.toISOString(),
     updatedAt: post.updatedAt.toISOString(),
   };
@@ -74,7 +89,10 @@ export interface ListNewsPostsResultDto {
   unreadCount: number;
 }
 
-// body: texto plano multiline v1 (design §3) — trim ANTES de min (molde tickets.dto.ts).
+// body: texto MARKDOWN multiline (N2). El BE lo persiste TAL CUAL (no parsea ni sanitiza
+// markdown acá); el FE es quien lo renderiza. Sigue siendo un string plano en el modelo —
+// no cambia nada estructural, sólo la interpretación en el cliente. trim ANTES de min
+// (molde tickets.dto.ts); max 20000 cubre un post largo con markdown.
 export const CreateNewsPostSchema = z.object({
   title: z.string().trim().min(1).max(200),
   body: z.string().trim().min(1).max(20000),
