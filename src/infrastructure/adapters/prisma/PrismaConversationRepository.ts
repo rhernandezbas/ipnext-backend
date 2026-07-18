@@ -123,6 +123,12 @@ function buildConversationWhere(query: ConversationListQuery): Record<string, un
   if (query.labelId) {
     where['labelAssignments'] = { some: { labelId: query.labelId } };
   }
+  // note-mentions (Ola 6b) — vista "Menciones": la conversación tiene alguna mención NO leída
+  // del usuario actual (subquery relacional sobre el índice (mentionedUserId, readAt)). AND
+  // independiente, sin acoplarse a `status`. MUST mirror `InMemoryConversationRepository.applyFilters`.
+  if (query.mentionedUserId) {
+    where['mentions'] = { some: { mentionedUserId: query.mentionedUserId, readAt: null } };
+  }
   // inbox-views (VIEW-1) — bucket "Sin atender": NO-resuelta + último mensaje
   // público inbound. GANA sobre `status` (lleva su propio filtro de ciclo de vida,
   // ver JSDoc del port). inbox-resolve (LS-1) — filtro de ciclo de vida con

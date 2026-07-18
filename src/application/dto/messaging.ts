@@ -264,6 +264,12 @@ export interface InboxViewCountsDto {
   unassigned: number;
   /** status === 'resolved' (bucket aparte, no solapa con los otros). */
   resolved: number;
+  /**
+   * note-mentions (Ola 6b) — conversaciones donde el user autenticado tiene alguna @mención
+   * NO leída (independiente del status: la vista Menciones muestra resueltas también, igual
+   * que Chatwoot). Mismo filtro que `?view=mentioned` del listado → el badge nunca diverge.
+   */
+  mentioned: number;
 }
 
 export interface InboxClientContextDto {

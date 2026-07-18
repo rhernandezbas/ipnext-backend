@@ -2524,6 +2524,12 @@ model RbacUser {
   // internal-news — back-relations: noticias publicadas + acuses de lectura de este usuario.
   newsPosts               NewsPost[]
   newsReadReceipts        NewsReadReceipt[]
+  // note-mentions (Ola 6b) — back-relations de @menciones: recibidas (aparecen en SU vista
+  // "Menciones") y hechas (notas donde este usuario nombró a otros). Cascade en las recibidas
+  // (una mención sin el usuario mencionado no tiene sentido); SetNull en las hechas (borrar
+  // el autor preserva la mención, sólo desasocia quién la escribió).
+  mentionsReceived        ConversationMention[]  @relation("ConversationMentionUser")
+  mentionsMade            ConversationMention[]  @relation("ConversationMentionByUser")
 
   @@index([login])
   @@index([iclassTeamLogin])
@@ -2965,6 +2971,9 @@ model Conversation {
   // del mirror: Chatwoot NUNCA se entera (igual que assigneeId/areaId). Solo
   // ConversationRepository.setLabels las escribe; ningún write-path de Chatwoot las toca.
   labelAssignments       ConversationLabelAssignment[]
+  // note-mentions (Ola 6b) — @menciones registradas en las notas internas de esta
+  // conversación. La vista "Menciones" filtra por `mentions.some({ mentionedUserId, readAt: null })`.
+  mentions               ConversationMention[]
 
   // §9: DESC matches the actual INBOX-1 query (orderBy lastMessageAt DESC NULLS
   // LAST in PrismaConversationRepository.list) — same `sort: Desc` idiom already
@@ -3043,6 +3052,38 @@ model ConversationEvent {
   @@index([actorId])
 }
 
+// note-mentions (Ola 6b) — @menciones en notas internas. Cuando un agente escribe una nota
+// interna con el token `@[nombre](userId)` (ver parseMentions), se registra UNA fila por
+// usuario mencionado. La vista "Menciones" del inbox lista las conversaciones donde el usuario
+// ACTUAL tiene alguna mención NO leída (readAt IS NULL). Aditiva, SIN backfill (no hubo
+// menciones hasta esta migración). El registro es BEST-EFFORT desde SendMessage: un fallo al
+// registrar menciones NO tumba la creación de la nota (misma disciplina que ConversationEvent).
+model ConversationMention {
+  id                String       @id @default(uuid())
+  conversationId    String
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  // La nota (ChatMessage) donde ocurrió la mención — parte del UNIQUE(message,user).
+  messageId         String
+  message           ChatMessage  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  // RbacUser mencionado (el que verá la conversación en su vista "Menciones"). Cascade: si el
+  // usuario se borra, la mención (que era PARA él) deja de tener sentido.
+  mentionedUserId   String
+  mentionedUser     RbacUser     @relation("ConversationMentionUser", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  // RbacUser autor de la nota (quién mencionó). Nullable + SetNull: borrar el autor preserva
+  // la mención, sólo desasocia quién la escribió (mismo criterio que ConversationEvent.actorId).
+  mentionedByUserId String?
+  mentionedBy       RbacUser?    @relation("ConversationMentionByUser", fields: [mentionedByUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime     @default(now())
+  // NULL = no leída (aparece en la vista "Menciones"); ISO al marcar leída (sale de la vista).
+  readAt            DateTime?
+
+  // Idempotencia: el mismo usuario nombrado dos veces en la misma nota registra 1 sola fila.
+  @@unique([messageId, mentionedUserId])
+  @@index([conversationId])
+  // Sirve el subquery de la vista/count "Menciones": menciones NO leídas por usuario.
+  @@index([mentionedUserId, readAt])
+}
+
 // chatwootMessageId es único a nivel MENSAJE de Chatwoot — idempotencia de upsert (HOOK-4).
 model ChatMessage {
   id                String       @id @default(uuid())
@@ -3073,6 +3114,9 @@ model ChatMessage {
   isPrivate         Boolean      @default(false)
   createdAt         DateTime     @default(now())
   attachments       ChatMessageAttachment[]
+  // note-mentions (Ola 6b) — @menciones registradas en ESTA nota interna (una fila por
+  // usuario mencionado). Cascade: borrar la nota borra sus menciones.
+  mentions          ConversationMention[]
   // inbox-template-send (MODEL-1) — SM sid de Twilio, clave de idempotencia del
   // envío one-off de template desde el hilo (upsertTemplateMessage). Nullable:
   // las filas chatwoot/bulk existentes quedan NULL (PG trata NULLs como distintos

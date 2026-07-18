@@ -20,6 +20,9 @@ import { AttachmentTooLargeError, UnsupportedAttachmentTypeError } from '@domain
 import { MAX_BYTES_BY_FILE_TYPE } from './DownloadChatMessageAttachment';
 import { toChatMessageDto, type ChatMessageDto } from '@application/dto/messaging';
 import { deriveConversationPreview } from './conversationPreview';
+import { parseMentions } from './parseMentions';
+import type { ConversationMentionRepository } from '@domain/ports/ConversationMentionRepository';
+import type { EntityLookup } from '@domain/ports/EntityLookup';
 
 type OutboundFileType = 'image' | 'video' | 'audio' | 'file';
 
@@ -93,6 +96,14 @@ export class SendMessage {
      * sites keep compiling; without it the mirror rows still get created `pending`,
      * they just never get auto-downloaded (the periodic scheduler still would). */
     private readonly downloadTrigger?: ChatMediaDownloadTrigger,
+    /**
+     * note-mentions (Ola 6b) — registro BEST-EFFORT de @menciones de una nota interna.
+     * OPCIONALES (call-sites de 4/5 args existentes siguen compilando). Sin AMBOS, la nota se
+     * crea igual pero no se registran menciones. `userLookup` valida que el userId mencionado
+     * EXISTA (RbacUser) — un id inventado en el token se ignora en silencio.
+     */
+    private readonly mentionRepo?: ConversationMentionRepository,
+    private readonly userLookup?: EntityLookup,
   ) {}
 
   async execute(
@@ -235,6 +246,14 @@ export class SendMessage {
       });
     }
 
+    // note-mentions (Ola 6b) — registrar las @menciones de la nota interna (BEST-EFFORT).
+    // Sólo en una nota (isPrivate) y sólo con el wiring de menciones presente. Corre DESPUÉS
+    // de que la nota ya se persistió y el echo ya salió: un fallo acá NUNCA debe tumbar la
+    // creación (`registerMentions` no propaga — misma disciplina que eventos/attachments).
+    if (isPrivate && this.mentionRepo && this.userLookup) {
+      await this.registerMentions(conversation.id, message.id, content, actorUserId ?? null);
+    }
+
     // messaging-inbox-notes (edit/delete) — el autor recién creado ve su nota como
     // editable/eliminable (authorId === actorUserId). Para un mensaje público el actor
     // se omite (canEdit/canDelete = false, y además isPrivate=false ya lo garantiza).
@@ -243,5 +262,40 @@ export class SendMessage {
       attachmentRecords,
       isPrivate ? { userId: actorUserId ?? null } : undefined,
     );
+  }
+
+  /**
+   * note-mentions (Ola 6b) — parsea el token `@[nombre](userId)` del contenido de la nota y
+   * registra UNA `ConversationMention` por cada usuario VÁLIDO. Ignora (en silencio):
+   *   - userIds que NO existen en RbacUser (id inventado en el token),
+   *   - la AUTO-mención (mencionarse a uno mismo no genera una notificación en tu propia vista),
+   *   - duplicados (`parseMentions` ya deduplica; el UNIQUE del repo es el backstop).
+   * TODO es best-effort: un fallo por mención se loguea y el loop sigue; el método NUNCA
+   * propaga (la nota YA se creó — jamás debe volverse un 500).
+   */
+  private async registerMentions(
+    conversationId: string,
+    messageId: string,
+    content: string,
+    mentionedByUserId: string | null,
+  ): Promise<void> {
+    const mentionRepo = this.mentionRepo;
+    const userLookup = this.userLookup;
+    if (!mentionRepo || !userLookup) return;
+
+    for (const mentionedUserId of parseMentions(content)) {
+      if (mentionedByUserId !== null && mentionedUserId === mentionedByUserId) continue; // auto-mención
+      try {
+        const user = await userLookup.findById(mentionedUserId);
+        if (!user) continue; // no existe en RbacUser → se ignora
+        await mentionRepo.record({ conversationId, messageId, mentionedUserId, mentionedByUserId });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(
+          '[messaging] SendMessage: registro de @mención falló (best-effort, la nota ya se creó)',
+          { conversationId, messageId, mentionedUserId, error: err instanceof Error ? err.message : err },
+        );
+      }
+    }
   }
 }

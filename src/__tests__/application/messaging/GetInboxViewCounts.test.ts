@@ -87,7 +87,7 @@ describe('GetInboxViewCounts — contadores por vista (inbox-views COUNT-1)', ()
 
     const counts = await uc.execute('user-1');
 
-    expect(counts).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 2, resolved: 1 });
+    expect(counts).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 2, resolved: 1, mentioned: 0 });
   });
 
   it('mine depende del user — user-2 ve SU conversación asignada (triangulación)', async () => {
@@ -96,7 +96,7 @@ describe('GetInboxViewCounts — contadores por vista (inbox-views COUNT-1)', ()
 
     const counts = await uc.execute('user-2');
 
-    expect(counts).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 2, resolved: 1 });
+    expect(counts).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 2, resolved: 1, mentioned: 0 });
     // El mine de user-2 es la conv C (inbound last) — distinta de la B de user-1;
     // lo distinguimos vía un user sin nada asignado:
     const nobody = await uc.execute('user-ghost');
@@ -154,6 +154,6 @@ describe('GetInboxViewCounts — contadores por vista (inbox-views COUNT-1)', ()
     });
 
     const after = await uc.execute('user-1');
-    expect(after).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 1, resolved: 1 });
+    expect(after).toEqual({ all: 4, mine: 1, unassigned: 2, unattended: 1, resolved: 1, mentioned: 0 });
   });
 });

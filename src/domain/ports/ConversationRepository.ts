@@ -167,6 +167,18 @@ export interface ConversationListQuery extends PaginatedQuery {
    * MUST implementar la MISMA semántica.
    */
   unattended?: boolean;
+  /**
+   * note-mentions (Ola 6b) — vista "Menciones": conversaciones donde el usuario
+   * `mentionedUserId` tiene al menos UNA mención NO leída (`ConversationMention` con
+   * `readAt IS NULL`). AND independiente (combinable con el resto sin precedencia especial),
+   * pero la route sólo lo setea para `?view=mentioned` (sin acoplarlo a `status`: la vista
+   * Menciones muestra la conversación aunque esté resuelta, igual que Chatwoot). Ambos adapters
+   * MUST implementar la MISMA semántica vía el builder compartido del where
+   * (`buildConversationWhere` en Prisma = subquery `mentions.some({...})`; `applyFilters`
+   * in-memory = consulta al `ConversationMentionRepository` live-linkeado). El count de la
+   * vista comparte este mismo filtro → el badge nunca diverge del listado.
+   */
+  mentionedUserId?: string;
 }
 
 /**

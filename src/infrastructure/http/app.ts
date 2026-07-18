@@ -810,6 +810,9 @@ import { SendTemplateMessage } from '@application/use-cases/messaging/SendTempla
 import { GetInboxViewCounts } from '@application/use-cases/messaging/GetInboxViewCounts';
 // previous-conversations (Ola 6a) — lista de conversaciones previas del contacto (panel de contexto).
 import { ListPreviousConversations } from '@application/use-cases/messaging/ListPreviousConversations';
+// note-mentions (Ola 6b) — @menciones en notas internas + vista "Menciones".
+import { PrismaConversationMentionRepository } from '../adapters/prisma/PrismaConversationMentionRepository';
+import { MarkConversationMentionsRead } from '@application/use-cases/messaging/MarkConversationMentionsRead';
 // conversation-events (Ola 2) — historial de transiciones + reports de agregación (cimiento Ola 3).
 import { PrismaConversationEventRepository } from '../adapters/prisma/PrismaConversationEventRepository';
 import { createMessagingReportsRouter } from './routes/messagingReports.routes';
@@ -2743,6 +2746,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     const webhookDeliveryRepo = new PrismaWebhookDeliveryRepository();
     // conversation-events (Ola 2) — historial append-only de transiciones (cimiento de los reports).
     const conversationEventRepo = new PrismaConversationEventRepository();
+    // note-mentions (Ola 6b) — @menciones en notas internas (registro + vista "Menciones").
+    const conversationMentionRepo = new PrismaConversationMentionRepository();
     // Opt-in config (design §9): if CHATWOOT_* is unset the gateway still builds, but
     // any call fails with ChatwootUnavailableError (503) — boot NEVER fails for this.
     const chatwootGateway = new HttpChatwootGateway({
@@ -2814,7 +2819,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // instancias que el camino de RECEPCIÓN de Tanda 1, sin infra nueva. `SendMessage`
       // ya NO recibe `taskPhotoStorage` directo (nunca escribe un buffer local a MinIO
       // — deja la fila `pending` y dispara el trigger, igual que webhook/fetch-on-open).
-      new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway, chatAttachmentRepo, chatMediaDownloadTrigger),
+      // note-mentions (Ola 6b) — 6º/7º args: registra @menciones de la nota interna
+      // (BEST-EFFORT). `userLookupForScheduling` valida que el userId del token EXISTA
+      // (RbacUser) antes de registrar — mismas instancias reusadas, sin infra nueva.
+      new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway, chatAttachmentRepo, chatMediaDownloadTrigger, conversationMentionRepo, userLookupForScheduling),
       // messaging-inbox-productivity (F1.5 fase C, STATUS-1) — resolver/reabrir/marcar
       // pendiente. Mismas instancias de conversationRepo/chatwootGateway, sin infra nueva.
       // conversation-events (Ola 2) — 3er arg: registra resolved/reopened + resolvedAt/firstResolvedAt.
@@ -2865,6 +2873,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // messaging:read). Misma instancia conversationRepo (reusa la clave E164
       // canónica del contador convo-count). Appended (regla §Colisiones).
       new ListPreviousConversations(conversationRepo),
+      // note-mentions (Ola 6b) — marca leídas las @menciones del user actual en una
+      // conversación (POST /conversations/:id/mentions/read, gate messaging:read). Appended
+      // (regla §Colisiones). Mismas instancias conversationRepo + conversationMentionRepo.
+      new MarkConversationMentionsRead(conversationRepo, conversationMentionRepo),
     ));
 
     // conversation-labels (Ola 5) — CRUD del catálogo /api/messaging/labels (router

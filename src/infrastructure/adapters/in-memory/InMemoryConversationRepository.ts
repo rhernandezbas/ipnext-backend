@@ -34,11 +34,22 @@ export interface InMemoryConversationAssignee {
  * never reference them, same "undefined = untouched" convention already
  * governing the Chatwoot-sourced fields) — only `updateLocalFields` writes them.
  */
+/**
+ * note-mentions (Ola 6b) — accessor SÍNCRONO mínimo que `applyFilters` usa para el filtro
+ * `mentionedUserId` de la vista "Menciones". Lo satisface
+ * `InMemoryConversationMentionRepository.hasUnreadMention` (fuera del port — es el lazo
+ * adapter↔adapter que en Postgres es una sola DB compartida).
+ */
+export interface InMemoryUnreadMentionLookup {
+  hasUnreadMention(conversationId: string, userId: string): boolean;
+}
+
 export class InMemoryConversationRepository implements ConversationRepository {
   private rows: ConversationRecord[] = [];
   private users: Map<string, InMemoryConversationAssignee> = new Map();
   private areaRepo: TicketAreaCatalogRepository | null = null;
   private labelRepo: ConversationLabelRepository | null = null;
+  private mentionRepo: InMemoryUnreadMentionLookup | null = null;
 
   /** Seed users so the repo can resolve assigneeName from JOIN (F1.5-C2). */
   seedUsers(users: InMemoryConversationAssignee[]): void {
@@ -59,6 +70,16 @@ export class InMemoryConversationRepository implements ConversationRepository {
    */
   seedLabels(repo: ConversationLabelRepository): void {
     this.labelRepo = repo;
+  }
+
+  /**
+   * note-mentions (Ola 6b) — live-link al repo de menciones (mismo idioma que `seedLabels`)
+   * para resolver el filtro `mentionedUserId` de la vista "Menciones" en `applyFilters`. Tests
+   * que no ejercitan la vista pueden no linkear: sin link, `mentionedUserId` degrada a "ninguna
+   * conversación matchea" (seguro — jamás muestra de más).
+   */
+  linkMentions(repo: InMemoryUnreadMentionLookup): void {
+    this.mentionRepo = repo;
   }
 
   async findById(id: string): Promise<ConversationRecord | null> {
@@ -409,6 +430,15 @@ export class InMemoryConversationRepository implements ConversationRepository {
     // MUST mirror `PrismaConversationRepository.buildConversationWhere`.
     if (query.labelId) {
       filtered = filtered.filter((r) => r.labels.some((l) => l.id === query.labelId));
+    }
+    // note-mentions (Ola 6b) — vista "Menciones": la conversación tiene alguna mención NO
+    // leída del usuario actual. Consulta el repo de menciones live-linkeado (sin link →
+    // ninguna matchea, degradación segura). AND independiente. MUST mirror
+    // `PrismaConversationRepository.buildConversationWhere`'s `mentions.some({...})`.
+    if (query.mentionedUserId) {
+      const userId = query.mentionedUserId;
+      const mentionRepo = this.mentionRepo;
+      filtered = mentionRepo ? filtered.filter((r) => mentionRepo.hasUnreadMention(r.id, userId)) : [];
     }
     // inbox-views (VIEW-1) — bucket "Sin atender": NO-resuelta + último mensaje
     // público inbound. GANA sobre `status` (lleva su propio filtro de ciclo de

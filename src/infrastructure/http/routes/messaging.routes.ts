@@ -44,6 +44,8 @@ import { SendTemplateMessage } from '@application/use-cases/messaging/SendTempla
 import { ListTemplates } from '@application/use-cases/messaging/ListTemplates';
 // inbox-views (Ola 1) — contadores por vista del inbox (badges de la sidebar).
 import { GetInboxViewCounts } from '@application/use-cases/messaging/GetInboxViewCounts';
+// note-mentions (Ola 6b) — marcar leídas las @menciones del user actual en una conversación.
+import { MarkConversationMentionsRead } from '@application/use-cases/messaging/MarkConversationMentionsRead';
 
 /**
  * messaging-inbox-v2-media (F1.5 fase A, Tanda 1 · MEDIA-5) — construye un header
@@ -403,6 +405,14 @@ export function createMessagingRouter(
    * insertar en medio de la lista compartida).
    */
   listPreviousConversations: ListPreviousConversations,
+  /**
+   * note-mentions (Ola 6b) — marca leídas las @menciones del user actual en una conversación
+   * (POST `/conversations/:id/mentions/read`). Gateado por `perms.read`: es estado de LECTURA
+   * propio del usuario (quién puede VER el inbox puede limpiar su propio badge de menciones —
+   * no muta la conversación ni envía nada, así que NO exige `messaging:send`). Appended (regla
+   * §Colisiones: jamás insertar en medio de la lista compartida).
+   */
+  markConversationMentionsRead: MarkConversationMentionsRead,
 ): Router {
   const router = Router();
   const conditionalSendLimiter = conditionalSendRateLimiter(sendRateLimiter);
@@ -468,6 +478,12 @@ export function createMessagingRouter(
         // Whitelist (mismo criterio que `status`/`assignment`): valor desconocido
         // se ignora sin error. La semántica vive en el repo (`ConversationListQuery.unattended`).
         if (view === 'unattended') query.unattended = true;
+        // note-mentions (Ola 6b, VIEW) — `?view=mentioned`: conversaciones donde el user
+        // AUTENTICADO tiene una @mención NO leída (req.user.id, jamás un query param — mismo
+        // patrón que `?assignment=mine`). Whitelist (valor desconocido de `view` se ignora sin
+        // error, igual que `unattended`). Ortogonal a `assignment`/`status` (no acopla ciclo de
+        // vida): la vista Menciones muestra la conversación aunque esté resuelta.
+        if (view === 'mentioned') query.mentionedUserId = req.user?.id as string;
         // F1.5-C2 — 'mine' resuelve req.user.id (poblado por `auth`, mismo patrón
         // que rbacUser.routes.ts/portfolio.routes.ts); 'unassigned' filtra
         // assigneeId=null; 'all'/ausente no aplica filtro alguno.
@@ -781,6 +797,29 @@ export function createMessagingRouter(
           return;
         }
         const result = await setConversationLabels.execute(req.params['id'] as string, parsed.data.labelIds);
+        res.json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── POST /conversations/:id/mentions/read (read) — note-mentions (Ola 6b) ──────
+  // Marca leídas las @menciones del user AUTENTICADO en esta conversación (sale de su vista
+  // "Menciones"). Gate `messaging:read` (estado de lectura propio del usuario, no envía ni
+  // muta la conversación). Path distinto de `/conversations/:id` (`:id` captura el id y luego
+  // el literal `mentions/read`) — no lo shadowea ni lo shadowea. `id` fantasma → 404 vía el
+  // error tipado del use case (try/catch → next(err), mismo convenio que /status y /assignee).
+  router.post(
+    '/conversations/:id/mentions/read',
+    auth,
+    perms.read,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const result = await markConversationMentionsRead.execute(
+          req.params['id'] as string,
+          req.user?.id as string,
+        );
         res.json(result);
       } catch (err) {
         next(err);

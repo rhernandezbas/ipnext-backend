@@ -42,6 +42,9 @@ import { ListTemplates } from '../../application/use-cases/messaging/ListTemplat
 import { GetInboxViewCounts } from '../../application/use-cases/messaging/GetInboxViewCounts';
 // previous-conversations (Ola 6a) — lista de conversaciones previas del contacto (panel de contexto).
 import { ListPreviousConversations } from '../../application/use-cases/messaging/ListPreviousConversations';
+// note-mentions (Ola 6b) — @menciones en notas internas + vista "Menciones".
+import { MarkConversationMentionsRead } from '../../application/use-cases/messaging/MarkConversationMentionsRead';
+import { InMemoryConversationMentionRepository } from '../../infrastructure/adapters/in-memory/InMemoryConversationMentionRepository';
 import { InMemoryTemplateMessagingGateway } from '../../infrastructure/adapters/in-memory/InMemoryTemplateMessagingGateway';
 import type { TemplateDto } from '../../domain/ports/TemplateMessagingPort';
 import { GetClientContracts } from '../../application/use-cases/GetClientContracts';
@@ -154,6 +157,8 @@ interface BuildAppOptions {
   rbacUserRepo?: InMemoryRbacUserRepository;
   // ─── conversation-labels (Ola 5) ────────────────────────────────────────────
   labelRepo?: InMemoryConversationLabelRepository;
+  // ─── note-mentions (Ola 6b) ──────────────────────────────────────────────────
+  mentionRepo?: InMemoryConversationMentionRepository;
   /** Defaults to a lookup that only knows KNOWN_ASSIGNEES ('user-1'/'user-2'). */
   assigneeLookup?: EntityLookup;
   /** Defaults to a lookup returning ['administrador'] for every user (non-technical). */
@@ -205,6 +210,11 @@ function buildApp(opts: BuildAppOptions = {}) {
   // conversation-labels (Ola 5) — live-link del catálogo de labels (mismo idioma que seedAreas).
   const labelRepo = opts.labelRepo ?? new InMemoryConversationLabelRepository();
   conversationRepo.seedLabels(labelRepo);
+  // note-mentions (Ola 6b) — live-link del repo de menciones (espejo del wiring real: en
+  // Postgres ambos comparten DB; acá el conversationRepo consulta al mentionRepo para resolver
+  // el filtro `mentionedUserId` de la vista "Menciones").
+  const mentionRepo = opts.mentionRepo ?? new InMemoryConversationMentionRepository();
+  conversationRepo.linkMentions(mentionRepo);
   // inbox-views (Ola 1) — espejo del wiring real: el adapter Prisma de ChatMessage
   // SIEMPRE mantiene Conversation.lastPublicMessageDirection; in-memory lo hace vía
   // este live-link (mismo idioma que seedAreas).
@@ -249,7 +259,10 @@ function buildApp(opts: BuildAppOptions = {}) {
       new ListConversations(conversationRepo),
       new GetConversation(conversationRepo, messageRepo, gateway, getClientContext, attachmentRepo),
       new ListMessages(conversationRepo, messageRepo, attachmentRepo),
-      new SendMessage(conversationRepo, messageRepo, gateway, attachmentRepo),
+      // note-mentions (Ola 6b) — SendMessage recibe el mentionRepo + el lookup de usuarios
+      // (reusa `assigneeLookup`, que conoce KNOWN_ASSIGNEES user-1/user-2) para registrar
+      // @menciones de la nota interna. Best-effort.
+      new SendMessage(conversationRepo, messageRepo, gateway, attachmentRepo, undefined, mentionRepo, assigneeLookup),
       new SetConversationStatus(conversationRepo, gateway),
       getInboxClientContext,
       new GetChatAttachmentFile(attachmentRepo, fileStorage),
@@ -280,6 +293,8 @@ function buildApp(opts: BuildAppOptions = {}) {
       // previous-conversations (Ola 6a) — lista de previas del contacto (gate read).
       // Appended (regla §Colisiones). Misma instancia conversationRepo.
       new ListPreviousConversations(conversationRepo),
+      // note-mentions (Ola 6b) — appended (regla §Colisiones).
+      new MarkConversationMentionsRead(conversationRepo, mentionRepo),
     ),
   );
   app.use(errorHandler);
@@ -299,6 +314,7 @@ function buildApp(opts: BuildAppOptions = {}) {
     areaRepo,
     rbacUserRepo,
     labelRepo,
+    mentionRepo,
     templatePort,
   };
 }
@@ -1605,7 +1621,7 @@ describe('GET /api/messaging/conversations/counts — contadores por vista (inbo
     expect(res.status).toBe(403);
   });
 
-  it('devuelve el shape EXACTO {mine, unattended, all, unassigned, resolved} coherente con el listado (y NO lo captura /conversations/:id)', async () => {
+  it('devuelve el shape EXACTO {mine, unattended, all, unassigned, resolved, mentioned} coherente con el listado (y NO lo captura /conversations/:id)', async () => {
     const { app, conversationRepo, messageRepo } = buildApp();
 
     // sinAtender (sin asignar, inbound último) + atendida (asignada a user-test,
@@ -1636,7 +1652,8 @@ describe('GET /api/messaging/conversations/counts — contadores por vista (inbo
     expect(res.status).toBe(200);
     // Shape EXACTO del contrato (toEqual estricto: ni claves de más ni de menos —
     // si /conversations/:id capturara 'counts', esto devolvería otra cosa).
-    expect(res.body).toEqual({ mine: 1, unattended: 1, all: 2, unassigned: 1, resolved: 1 });
+    // note-mentions (Ola 6b) — `mentioned` sumado al contrato: 0 acá (no se sembraron menciones).
+    expect(res.body).toEqual({ mine: 1, unattended: 1, all: 2, unassigned: 1, resolved: 1, mentioned: 0 });
   });
 
   it('mine se resuelve del user AUTENTICADO (req.user.id), no de un query param', async () => {
@@ -1649,6 +1666,108 @@ describe('GET /api/messaging/conversations/counts — contadores por vista (inbo
     expect(res.status).toBe(200);
     expect(res.body.mine).toBe(0); // user-test no tiene nada asignado; el query param se ignora
     expect(res.body.all).toBe(1);
+  });
+});
+
+// ─── note-mentions (Ola 6b): ?view=mentioned + counts.mentioned + POST mentions/read ──
+// (usa el helper `authAs` definido más abajo — const de módulo, ya inicializado cuando
+// corren estos `it`; simula al usuario mencionado ≠ autor.)
+
+describe('GET /api/messaging/conversations — vista ?view=mentioned (note-mentions Ola 6b)', () => {
+  it('lista SÓLO las conversaciones con una @mención NO leída del user autenticado', async () => {
+    const { app, conversationRepo, mentionRepo } = buildApp(); // auth → user-test
+    const conMencion = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 810, lastMessageAt: '2026-07-15T10:00:00.000Z' });
+    await mentionRepo.record({ conversationId: conMencion.id, messageId: 'x1', mentionedUserId: 'user-test' });
+    // otra sin mención + otra mencionando a OTRO user → ninguna debe aparecer
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 811 });
+    const ajena = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 812 });
+    await mentionRepo.record({ conversationId: ajena.id, messageId: 'y1', mentionedUserId: 'user-1' });
+
+    const res = await request(app).get('/api/messaging/conversations?view=mentioned');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((c: { id: string }) => c.id)).toEqual([conMencion.id]);
+  });
+
+  it('una mención YA leída NO aparece en la vista', async () => {
+    const { app, conversationRepo, mentionRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 820 });
+    await mentionRepo.record({ conversationId: conv.id, messageId: 'z1', mentionedUserId: 'user-test' });
+    await mentionRepo.markReadForUser(conv.id, 'user-test', '2026-07-15T12:00:00.000Z');
+
+    const res = await request(app).get('/api/messaging/conversations?view=mentioned');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+  });
+});
+
+describe('GET /api/messaging/conversations/counts — counts.mentioned (note-mentions Ola 6b)', () => {
+  it('cuenta las conversaciones con @mención NO leída del user autenticado', async () => {
+    const { app, conversationRepo, mentionRepo } = buildApp();
+    const a = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 830 });
+    await mentionRepo.record({ conversationId: a.id, messageId: 'm1', mentionedUserId: 'user-test' });
+    const b = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 831 });
+    await mentionRepo.record({ conversationId: b.id, messageId: 'm2', mentionedUserId: 'user-test' });
+
+    const res = await request(app).get('/api/messaging/conversations/counts');
+
+    expect(res.status).toBe(200);
+    expect(res.body.mentioned).toBe(2);
+  });
+});
+
+describe('POST /api/messaging/conversations/:id/mentions/read (note-mentions Ola 6b)', () => {
+  it('sin messaging:read → 403 (gate de lectura, es estado propio del usuario)', async () => {
+    const { app } = buildApp({ readPerm: denyPerm });
+    const res = await request(app).post('/api/messaging/conversations/conv-1/mentions/read');
+    expect(res.status).toBe(403);
+  });
+
+  it('conversación inexistente → 404', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/api/messaging/conversations/ghost-id/mentions/read');
+    expect(res.status).toBe(404);
+  });
+
+  it('marca leídas las menciones del user actual → {markedRead} y sale de su vista', async () => {
+    const { app, conversationRepo, mentionRepo } = buildApp();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 840 });
+    await mentionRepo.record({ conversationId: conv.id, messageId: 'm1', mentionedUserId: 'user-test' });
+
+    const readRes = await request(app).post(`/api/messaging/conversations/${conv.id}/mentions/read`);
+    expect(readRes.status).toBe(200);
+    expect(readRes.body).toEqual({ markedRead: 1 });
+
+    const viewRes = await request(app).get('/api/messaging/conversations?view=mentioned');
+    expect(viewRes.body.data).toEqual([]);
+  });
+
+  it('e2e: una nota con @[Agente Uno](user-1) hace que user-1 vea la conversación en su vista Menciones, y al marcar leída sale', async () => {
+    const conversationRepo = new InMemoryConversationRepository();
+    const messageRepo = new InMemoryChatMessageRepository();
+    const mentionRepo = new InMemoryConversationMentionRepository();
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 850, canReply: true });
+
+    // El AUTOR (user-test) escribe la nota interna mencionando a user-1 (KNOWN_ASSIGNEES).
+    const authorApp = buildApp({ conversationRepo, messageRepo, mentionRepo, auth: authAs('user-test') }).app;
+    const noteRes = await request(authorApp)
+      .post(`/api/messaging/conversations/${conv.id}/messages`)
+      .send({ content: 'ojo con esto @[Agente Uno](user-1)', private: true });
+    expect(noteRes.status).toBe(201);
+    expect(noteRes.body.private).toBe(true);
+
+    // El MENCIONADO (user-1) ve la conversación en su vista Menciones.
+    const mentionedApp = buildApp({ conversationRepo, messageRepo, mentionRepo, auth: authAs('user-1') }).app;
+    const viewRes = await request(mentionedApp).get('/api/messaging/conversations?view=mentioned');
+    expect(viewRes.status).toBe(200);
+    expect(viewRes.body.data.map((c: { id: string }) => c.id)).toEqual([conv.id]);
+
+    // Al abrir/marcar leída, sale de su vista.
+    const readRes = await request(mentionedApp).post(`/api/messaging/conversations/${conv.id}/mentions/read`);
+    expect(readRes.body).toEqual({ markedRead: 1 });
+    const after = await request(mentionedApp).get('/api/messaging/conversations?view=mentioned');
+    expect(after.body.data).toEqual([]);
   });
 });
 
