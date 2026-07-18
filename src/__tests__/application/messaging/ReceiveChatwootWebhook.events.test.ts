@@ -89,6 +89,35 @@ describe('ReceiveChatwootWebhook — conversation-events (Ola 2)', () => {
     expect(resolved).toHaveLength(1);
   });
 
+  it('LOW-1: status_changed="resolved" de una conversación INEXISTENTE (webhook desordenado) → se crea con resolvedAt/firstResolvedAt + evento "resolved"', async () => {
+    const { uc, conversationRepo, eventRepo } = makeUseCase();
+
+    // El conversation_created se perdió/llegó desordenado: el status_changed es el PRIMER
+    // webhook que ve el mirror. La conversación nace 'resolved'.
+    await uc.execute('d1', { event: 'conversation_status_changed', id: 555, status: 'resolved' });
+
+    const conv = await conversationRepo.findByChatwootId(555);
+    expect(conv).not.toBeNull();
+    expect(conv!.status).toBe('resolved');
+    expect(conv!.resolvedAt).not.toBeNull(); // invariante: resolved ⟹ resolvedAt
+    expect(conv!.firstResolvedAt).toBe(conv!.resolvedAt);
+
+    const events = await eventRepo.listByConversation(conv!.id);
+    expect(events.map((e) => e.type)).toEqual(['resolved']);
+    expect(events[0]).toMatchObject({ type: 'resolved', actorId: null, fromValue: 'open', toValue: 'resolved' });
+  });
+
+  it('LOW-1 contraparte: status_changed="open" de una conversación INEXISTENTE → se crea sin resolvedAt ni evento (no sobre-dispara)', async () => {
+    const { uc, conversationRepo, eventRepo } = makeUseCase();
+
+    await uc.execute('d1', { event: 'conversation_status_changed', id: 556, status: 'open' });
+
+    const conv = await conversationRepo.findByChatwootId(556);
+    expect(conv!.resolvedAt).toBeNull();
+    expect(conv!.firstResolvedAt).toBeNull();
+    expect(await eventRepo.listByConversation(conv!.id)).toHaveLength(0);
+  });
+
   it('best-effort: fallo al registrar el evento NO tumba el webhook (el mensaje se espeja igual)', async () => {
     const { uc, conversationRepo, messageRepo, eventRepo } = makeUseCase();
     eventRepo.failRecord = true;

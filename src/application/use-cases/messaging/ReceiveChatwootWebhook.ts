@@ -197,6 +197,19 @@ export class ReceiveChatwootWebhook {
 
     // conversation-events (Ola 2) — detecta si este upsert va a CREAR la conversación (no
     // existía ni fue adoptada como bulk): la primera vez que el cliente escribe, nace acá.
+    //
+    // LOW-2 (fix wave, DOCUMENTADO — no se toca): este probe es un `findByChatwootId` EXTRA por
+    // webhook (un SELECT indexado por el UNIQUE) sólo para saber si el upsert creará. Es el
+    // costo de detectar la creación sin cambiar la firma del port (`upsertByChatwootId` no
+    // devuelve un flag "created"). Aceptable para el cimiento; optimizable a futuro haciendo que
+    // el upsert devuelva `{ record, created }` (RETURNING xmax=0 en Postgres) y ahorrar el read.
+    //
+    // LOW-3 (fix wave, DOCUMENTADO — no se toca): probe + upsert NO son atómicos entre INSTANCIAS.
+    // Dos webhooks concurrentes de la MISMA conversación nueva (multi-instancia) podrían ver ambos
+    // `existedBefore=false` y emitir DOS eventos 'created' (o, en status-changed, computar la
+    // transición desde un read stale). Aceptable: los eventos son un cimiento BEST-EFFORT y el
+    // upsert sobre la fila Conversation ES idempotente (el UNIQUE colapsa a una sola fila). Un
+    // dedup real (unique parcial sobre (conversationId,'created') / advisory lock) es trabajo futuro.
     const existedBefore = (await this.conversationRepo.findByChatwootId(chatwootConversationId)) !== null;
 
     const conversation = await this.conversationRepo.upsertByChatwootId({
@@ -443,10 +456,21 @@ export class ReceiveChatwootWebhook {
     // (actor null: Chatwoot-driven). El guard `prev != next` de `computeStatusTransition` hace
     // esto ECHO-SAFE: cuando SetConversationStatus resuelve vía Chatwoot y Chatwoot reenvía el
     // eco, el mirror ya está en 'resolved' → prev===next → sin resolvedAt duplicado ni evento.
+    //
+    // LOW-1 (fix wave) — cuando la conversación NO existe todavía (`existing===null`): un
+    // `conversation_status_changed` es el PRIMER webhook que ve el mirror porque el
+    // `conversation_created` se perdió o llegó desordenado. El upsert la CREA con el status
+    // entrante; tratamos esa creación como una transición `'open'→status` (prev='open',
+    // firstResolvedAt=null). Así, si nace 'resolved', se setean resolvedAt/firstResolvedAt y se
+    // emite el evento 'resolved' — sin esto quedaría resolvedAt NULL (invisible para
+    // resolvedInRange/resolutions y violando el invariante "resolved ⟹ resolvedAt").
     const existing = await this.conversationRepo.findByChatwootId(chatwootConversationId);
-    const transition = existing
-      ? computeStatusTransition(existing.status, payload.status, existing.firstResolvedAt, new Date().toISOString())
-      : { patch: {}, event: null as null | { type: 'resolved' | 'reopened'; fromValue: string; toValue: string } };
+    const transition = computeStatusTransition(
+      existing?.status ?? 'open',
+      payload.status,
+      existing?.firstResolvedAt ?? null,
+      new Date().toISOString(),
+    );
 
     const conversation = await this.conversationRepo.upsertByChatwootId({
       chatwootConversationId,

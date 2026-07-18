@@ -124,9 +124,12 @@ export class InMemoryConversationRepository implements ConversationRepository {
       // messaging-inbox-notes (edit/delete) — arranca 0; lo mantiene
       // InMemoryChatMessageRepository vía syncInternalNoteCount.
       internalNoteCount: 0,
-      // conversation-events (Ola 2) — arrancan null; los mantiene SetConversationStatus/webhook.
-      resolvedAt: null,
-      firstResolvedAt: null,
+      // conversation-events (Ola 2) — normalmente null en la creación (nace 'open'), pero se
+      // respeta el input si lo trae: LOW-1 — un conversation_status_changed='resolved' que CREA
+      // la conversación (webhook desordenado) llega con resolvedAt/firstResolvedAt en el patch.
+      // MUST mirror el `create` de PrismaConversationRepository (que ya los respeta).
+      resolvedAt: input.resolvedAt ?? null,
+      firstResolvedAt: input.firstResolvedAt ?? null,
       createdAt: now,
       updatedAt: now,
     };
