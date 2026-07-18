@@ -821,6 +821,13 @@ import { CreateTemplate } from '@application/use-cases/messaging/CreateTemplate'
 import { GetTemplate } from '@application/use-cases/messaging/GetTemplate';
 import { SubmitTemplateForApproval } from '@application/use-cases/messaging/SubmitTemplateForApproval';
 import { DeleteTemplate } from '@application/use-cases/messaging/DeleteTemplate';
+// Ola 4 (inbox-Chatwoot) — respuestas rápidas / macros (canned responses CRUD).
+import { createCannedResponsesRouter } from './routes/cannedResponses.routes';
+import { ListCannedResponses } from '@application/use-cases/messaging/ListCannedResponses';
+import { CreateCannedResponse } from '@application/use-cases/messaging/CreateCannedResponse';
+import { UpdateCannedResponse } from '@application/use-cases/messaging/UpdateCannedResponse';
+import { DeleteCannedResponse } from '@application/use-cases/messaging/DeleteCannedResponse';
+import { PrismaCannedResponseRepository } from '../adapters/prisma/PrismaCannedResponseRepository';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -2901,6 +2908,30 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       {
         bulk: requirePerm('messaging', 'bulk'),
         templates: requirePerm('messaging', 'templates'),
+      },
+    ));
+  }
+
+  // ─── Ola 4 (inbox-Chatwoot) — respuestas rápidas / macros (canned responses) ─
+  // CRUD del catálogo de atajos de texto del composer. Montado en un prefijo MÁS
+  // específico que `/api/messaging` (registrado DESPUÉS: un GET a este path entra
+  // primero al router de messaging, no matchea ninguna ruta y cae acá — mismo
+  // fall-through que ya usan /templates y /bulk). El envío NO se toca: el FE inserta
+  // el `content` en el textarea y usa el POST /messages normal. RBAC doble capa:
+  // GET (lista/picker) = messaging:read (cualquier agente USA las respuestas);
+  // POST/PUT/DELETE (gestión) = messaging:manage (SOLO supervisores CREAN/editan —
+  // el MISMO permiso "supervisor" que ya gobierna las notas internas, sin acción nueva).
+  {
+    const cannedResponseRepo = new PrismaCannedResponseRepository();
+    app.use('/api/messaging/canned-responses', createCannedResponsesRouter(
+      new ListCannedResponses(cannedResponseRepo),
+      new CreateCannedResponse(cannedResponseRepo),
+      new UpdateCannedResponse(cannedResponseRepo),
+      new DeleteCannedResponse(cannedResponseRepo),
+      createAuthMiddleware(authAdapter, sessionRepo),
+      {
+        read: requirePerm('messaging', 'read'),
+        manage: requirePerm('messaging', 'manage'),
       },
     ));
   }

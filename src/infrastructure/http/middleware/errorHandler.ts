@@ -160,6 +160,11 @@ const statusMap: Record<string, number> = {
   NOT_AN_INTERNAL_NOTE: 422,
   INTERNAL_NOTE_FORBIDDEN: 403,
   INTERNAL_NOTE_ALREADY_DELETED: 409,
+  // Ola 4 (inbox-Chatwoot) — respuestas rápidas / macros (canned responses CRUD).
+  // SHORTCUT_TAKEN: shortcut normalizado ya existe (UNIQUE). CANNED_RESPONSE_NOT_FOUND:
+  // update/delete de un id inexistente. VALIDATION_ERROR (400) ya está mapeado arriba.
+  SHORTCUT_TAKEN: 409,
+  CANNED_RESPONSE_NOT_FOUND: 404,
   // messaging-inbox-v2 (F1.5, RICH-1 #4) — client-context endpoint: clientId query
   // param not among the conversation's candidates.
   CLIENT_ID_NOT_A_CANDIDATE: 400,

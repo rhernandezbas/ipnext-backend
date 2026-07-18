@@ -2516,6 +2516,8 @@ model RbacUser {
   // por este usuario (soft FK, SetNull on delete: borrar el usuario NO borra sus notas,
   // sólo desasocia el autor → la nota queda editable/eliminable sólo por un supervisor).
   authoredChatMessages    ChatMessage[]          @relation("ChatMessageAuthor")
+  // Ola 4 (inbox-Chatwoot) — respuestas rápidas creadas por este usuario (soft FK, SetNull).
+  cannedResponses         CannedResponse[]       @relation("CannedResponseCreatedBy")
   // internal-news — back-relations: noticias publicadas + acuses de lectura de este usuario.
   newsPosts               NewsPost[]
   newsReadReceipts        NewsReadReceipt[]
@@ -3162,6 +3164,20 @@ model CampaignRecipient {
 // =============================================
 
 // Categorías del tablón — catálogo propio editable, calco de TicketAreaCatalog.
+// Ola 4 (inbox-Chatwoot) — respuestas rápidas / macros (canned responses). Atajos de
+// texto reutilizables para el composer. `shortcut` es un slug lowercase ÚNICO (sin la
+// barra); el UNIQUE hace de índice de búsqueda por shortcut. `createdById` es la
+// atribución soft del autor (SetNull → borrar el usuario NO borra la respuesta).
+model CannedResponse {
+  id          String    @id @default(uuid())
+  shortcut    String    @unique
+  content     String
+  createdById String?
+  createdBy   RbacUser? @relation("CannedResponseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
 model NewsCategory {
   id        String     @id @default(uuid())
   name      String     @unique
