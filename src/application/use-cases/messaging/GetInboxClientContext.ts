@@ -1,4 +1,4 @@
-import type { ConversationRepository } from '@domain/ports/ConversationRepository';
+import type { ConversationRecord, ConversationRepository } from '@domain/ports/ConversationRepository';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { TicketRepository } from '@domain/ports/TicketRepository';
 import type { Contract } from '@domain/entities/customer';
@@ -8,6 +8,7 @@ import type {
   InboxClientContextDto,
   InboxClientSummaryDto,
   InboxContractSummaryDto,
+  InboxConversationCountsDto,
   InboxInvoiceSummaryDto,
   InboxLogSummaryDto,
   InboxTaskSummaryDto,
@@ -25,6 +26,7 @@ import {
   isBalanceOlderThanTtl,
 } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { GetClientContextByPhone } from './GetClientContextByPhone';
+import { toWhatsAppE164 } from './toWhatsAppE164';
 
 /**
  * fix-be #4 — severity ranking for `mostSevereServiceStatus` (lower = worse/more
@@ -116,29 +118,60 @@ export class GetInboxClientContext {
     const conversation = await this.conversationRepo.findById(conversationId);
     if (!conversation) throw new ConversationNotFoundError(conversationId);
 
-    const phoneContext = await this.getClientContextByPhone.execute(conversation.contactPhone);
+    // convo-count — el contador solo depende de la conversación (no del match),
+    // así que corre en paralelo con la resolución del teléfono (RICH-2, nada
+    // serializa a nadie) y acompaña a los TRES estados del contexto.
+    const [phoneContext, conversations] = await Promise.all([
+      this.getClientContextByPhone.execute(conversation.contactPhone),
+      this.safeConversationCounts(conversation),
+    ]);
 
     if (phoneContext.status === 'unknown') {
-      return { status: 'unknown' };
+      return { status: 'unknown', conversations };
     }
 
     if (phoneContext.status === 'ambiguous') {
       const chosenId = params?.clientId;
       if (!chosenId) {
-        return { status: 'ambiguous', candidates: phoneContext.clients };
+        return { status: 'ambiguous', candidates: phoneContext.clients, conversations };
       }
       const isCandidate = phoneContext.clients.some((c) => c.id === chosenId);
       if (!isCandidate) {
         throw new ClientIdNotACandidateError(chosenId, conversationId);
       }
       const client = await this.buildClientSummary(chosenId, params?.refresh === true);
-      return { status: 'matched', client };
+      return { status: 'matched', client, conversations };
     }
 
     // matched — GetClientContextByPhone guarantees exactly one entry here.
     const targetClientId = phoneContext.clients[0].id;
     const client = await this.buildClientSummary(targetClientId, params?.refresh === true);
-    return { status: 'matched', client };
+    return { status: 'matched', client, conversations };
+  }
+
+  /**
+   * convo-count — interacciones del contacto, agrupadas por su clave de identidad
+   * CANÓNICA (`contactPhoneE164`; fallback on-the-fly `toWhatsAppE164(contactPhone)`
+   * para filas pre-backfill). La asociación conversación↔cliente de este modelo
+   * ES el teléfono (Conversation no tiene clientId; el match del panel se deriva
+   * del contactPhone), así que "las conversaciones del cliente" = "las del E164".
+   *
+   * Sin clave reconstruible (número foráneo/malformado, E164 null): self-count —
+   * la única interacción atribuible con CERTEZA es esta conversación misma (no se
+   * agrupan strings crudos heterogéneos sin canónico; jamás contar de más).
+   * Falla del repo → ceros, el resto del panel sigue (disciplina RICH-2).
+   */
+  private async safeConversationCounts(conversation: ConversationRecord): Promise<InboxConversationCountsDto> {
+    try {
+      const phoneE164 = conversation.contactPhoneE164 ?? toWhatsAppE164(conversation.contactPhone);
+      if (phoneE164 !== null) {
+        return await this.conversationRepo.countByContactPhoneE164(phoneE164);
+      }
+      const isResolved = conversation.status === 'resolved';
+      return { total: 1, open: isResolved ? 0 : 1, resolved: isResolved ? 1 : 0 };
+    } catch {
+      return { total: 0, open: 0, resolved: 0 };
+    }
   }
 
   private async buildClientSummary(clientId: string, refresh: boolean): Promise<InboxClientSummaryDto> {

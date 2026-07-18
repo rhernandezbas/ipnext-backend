@@ -5,6 +5,7 @@ import {
   ConversationRecord,
   ConversationListQuery,
   ConversationCampaignRef,
+  ConversationStatusCounts,
   UpsertConversationInput,
   UpsertBulkConversationInput,
   UpdateConversationLocalFieldsInput,
@@ -238,6 +239,18 @@ export class InMemoryConversationRepository implements ConversationRepository {
     row.lastMessagePreview = patch.lastMessagePreview;
     row.updatedAt = new Date().toISOString();
     return { ...row };
+  }
+
+  /**
+   * convo-count — counts por status del contacto, agrupados por E164 canónico.
+   * MUST mirror `PrismaConversationRepository.countByContactPhoneE164` (groupBy
+   * por status): buckets con la MISMA semántica LS-1 que el filtro de `list`
+   * (`resolved` = match exacto; `open` = todo lo demás, incl. pending/snoozed).
+   */
+  async countByContactPhoneE164(phoneE164: string): Promise<ConversationStatusCounts> {
+    const rows = this.rows.filter((r) => r.contactPhoneE164 === phoneE164);
+    const resolved = rows.filter((r) => r.status === 'resolved').length;
+    return { total: rows.length, open: rows.length - resolved, resolved };
   }
 
   async list(query: ConversationListQuery): Promise<PaginatedResult<ConversationRecord>> {

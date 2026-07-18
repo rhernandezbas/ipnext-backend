@@ -3,6 +3,7 @@ import {
   ConversationRecord,
   ConversationListQuery,
   ConversationCampaignRef,
+  ConversationStatusCounts,
   UpsertConversationInput,
   UpsertBulkConversationInput,
   UpdateConversationLocalFieldsInput,
@@ -281,6 +282,29 @@ export class PrismaConversationRepository implements ConversationRepository {
       if ((err as any)?.code === 'P2025') return null;
       throw err;
     }
+  }
+
+  /**
+   * convo-count — anti-N+1: UNA agregación `groupBy(status)` sobre el índice
+   * `@@index([contactPhoneE164])`, jamás trae filas. Buckets con la MISMA
+   * semántica LS-1 que el filtro de `list` (`resolved` exacto; `open` = resto,
+   * incl. pending/snoozed passthrough) — MUST mirror
+   * `InMemoryConversationRepository.countByContactPhoneE164`.
+   */
+  async countByContactPhoneE164(phoneE164: string): Promise<ConversationStatusCounts> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const groups: Array<{ status: string; _count: { _all: number } }> = await (prisma as any).conversation.groupBy({
+      by: ['status'],
+      where: { contactPhoneE164: phoneE164 },
+      _count: { _all: true },
+    });
+    let total = 0;
+    let resolved = 0;
+    for (const g of groups) {
+      total += g._count._all;
+      if (g.status === 'resolved') resolved += g._count._all;
+    }
+    return { total, open: total - resolved, resolved };
   }
 
   async list(query: ConversationListQuery): Promise<PaginatedResult<ConversationRecord>> {

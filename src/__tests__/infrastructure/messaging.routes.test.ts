@@ -1728,7 +1728,28 @@ describe('GET /api/messaging/conversations/:id/client-context', () => {
     const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'unknown' });
+    // convo-count — el contador acompaña también al estado unknown (por teléfono).
+    expect(res.body).toEqual({ status: 'unknown', conversations: { total: 1, open: 1, resolved: 0 } });
+  });
+
+  it('convo-count (route) — matched incluye conversations {total, open, resolved} top-level, contadas por el teléfono del contacto', async () => {
+    const customer = makeMatchedCustomer({ id: 'c1', name: 'Juan Perez' });
+    const customerRepo = makeCustomerRepo(
+      [{ id: 'c1', name: 'Juan Perez', phone: '+5492324421234', email: null }],
+      { findById: jest.fn().mockResolvedValue(customer) },
+    );
+    const { app, conversationRepo } = buildApp({ customerRepo });
+    // Tres conversaciones del MISMO contacto (formatos distintos, mismo E164
+    // canónico): 1 abierta + 2 resueltas = 3 interacciones.
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 110, contactPhone: '+5492324421234' });
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 111, contactPhone: '02324421234', status: 'resolved' });
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 112, contactPhone: '2324 15 421234', status: 'resolved' });
+
+    const res = await request(app).get(`/api/messaging/conversations/${conv.id}/client-context`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('matched');
+    expect(res.body.conversations).toEqual({ total: 3, open: 1, resolved: 2 });
   });
 
   it('fix-be #7 [BAJO] clientId repetido en la query (?clientId=b&clientId=a, Express lo entrega como string[]) — normaliza al PRIMERO, no rompe la resolucion del candidato', async () => {

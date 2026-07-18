@@ -223,6 +223,9 @@ describe('GetInboxClientContext', () => {
         { id: 'a', name: 'Cliente A', status: 'active' },
         { id: 'b', name: 'Cliente B', status: 'active' },
       ],
+      // convo-count — presente también en ambiguous: son counts del mirror de
+      // mensajería (por teléfono), no datos de ningún candidato (RICH-1 intacto).
+      conversations: { total: 1, open: 1, resolved: 0 },
     });
     expect(findById).not.toHaveBeenCalled();
     expect(customerRepo.listContracts).not.toHaveBeenCalled();
@@ -270,7 +273,8 @@ describe('GetInboxClientContext', () => {
 
     const result = await uc.execute(conv.id);
 
-    expect(result).toEqual({ status: 'unknown' });
+    // convo-count — el contador acompaña también al estado unknown (por teléfono).
+    expect(result).toEqual({ status: 'unknown', conversations: { total: 1, open: 1, resolved: 0 } });
   });
 
   it('#6 conversationRepo.findById devuelve null — lanza ConversationNotFoundError', async () => {
@@ -756,6 +760,113 @@ describe('GetInboxClientContext', () => {
     expect(result.client?.closedTicketsCount).toBe(0);
     expect(result.client?.openTicketsCount).toBe(1);
     expect(result.client?.recentTickets).toHaveLength(1);
+  });
+
+  // ─── convo-count (contador de interacciones en el panel de contexto) ────────
+  // SEMÁNTICA HONESTA del modelo: el mirror crea UNA fila `Conversation` por
+  // conversación de Chatwoot (upsert por chatwootConversationId) y Chatwoot la
+  // REABRE in-place (status vuelve a 'open' por webhook) SIN dejar rastro de la
+  // transición — no hay resolvedAt ni tabla de eventos (conversation_status_changed
+  // solo se dedupea en WebhookDelivery, jamás se persiste como fila). Contar
+  // "ciclos abierto→resuelto" es IRRECONSTRUIBLE; el contador honesto es el COUNT
+  // de filas del contacto: total + buckets open/resolved con la MISMA semántica
+  // LS-1 del filtro del inbox (open = status != 'resolved', incluye pending/
+  // snoozed passthrough → total === open + resolved siempre).
+  // Agrupamiento: por contactPhoneE164 (la clave de identidad CANÓNICA del
+  // contacto que el repo ya usa en upsertBulkByPhone/adoptBulkConversation) — la
+  // asociación conversación↔cliente de este modelo ES el teléfono (no existe
+  // clientId en Conversation), así que "las del cliente" = "las del teléfono".
+
+  it('convo-count #1 contacto con 3 conversaciones en formatos distintos del MISMO teléfono (1 abierta, 2 resueltas) — agrupa por E164 canónico: total 3, open 1, resolved 2', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo });
+    // Los tres formatos canonicalizan a +5492324421234 (toWhatsAppE164).
+    const convA = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 30, contactPhone: '+5492324421234' }); // open (default)
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 31, contactPhone: '02324421234', status: 'resolved' });
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 32, contactPhone: '2324 15 421234', status: 'resolved' });
+
+    const result = await uc.execute(convA.id);
+
+    expect(result.status).toBe('matched');
+    expect(result.client?.id).toBe('c1');
+    expect(result.conversations).toEqual({ total: 3, open: 1, resolved: 2 });
+  });
+
+  it('convo-count #2 única conversación del contacto — el contador SIEMPRE la incluye a ella misma: total 1, open 1, resolved 0', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 33, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.conversations).toEqual({ total: 1, open: 1, resolved: 0 });
+  });
+
+  it('convo-count #3 conversación SIN cliente asociado (unknown) — el contador va por teléfono normalizado igual: presente junto al status unknown', async () => {
+    const customerRepo = makeCustomerRepo({ listActiveContacts: jest.fn().mockResolvedValue([]) });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 34, contactPhone: '+5492324999999' });
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 35, contactPhone: '+5492324999999', status: 'resolved' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.status).toBe('unknown');
+    expect(result.conversations).toEqual({ total: 2, open: 1, resolved: 1 });
+  });
+
+  it('convo-count #4 status pending (passthrough de Chatwoot) cuenta en el bucket open (misma semántica LS-1 del filtro del inbox) — total === open + resolved', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 36, contactPhone: '+5492324421234', status: 'pending' });
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 37, contactPhone: '+5492324421234', status: 'resolved' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.conversations).toEqual({ total: 2, open: 1, resolved: 1 });
+  });
+
+  it('convo-count #5 teléfono NO reconstruible a E164 (clave canónica null) — degrada al self-count honesto: solo ESTA conversación, con su propio status', async () => {
+    const customerRepo = makeCustomerRepo({ listActiveContacts: jest.fn().mockResolvedValue([]) });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo });
+    // '12345' no reconstruye un NSN AR de 10 dígitos → toWhatsAppE164 = null.
+    // Aunque exista OTRA fila con el mismo string crudo, sin clave canónica NO se
+    // agrupan strings heterogéneos: la única interacción atribuible con certeza
+    // es la conversación misma.
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 38, contactPhone: '12345', status: 'resolved' });
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 39, contactPhone: '12345' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.conversations).toEqual({ total: 1, open: 0, resolved: 1 });
+  });
+
+  it('convo-count #6 [aislamiento] countByContactPhoneE164 falla — el contador degrada a ceros y el resto del contexto (matched + client) sigue intacto', async () => {
+    const customer = makeCustomer({ id: 'c1', name: 'Juan' });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 40, contactPhone: '+5492324421234' });
+    jest.spyOn(conversationRepo, 'countByContactPhoneE164').mockRejectedValue(new Error('count down'));
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.status).toBe('matched');
+    expect(result.client?.id).toBe('c1');
+    expect(result.conversations).toEqual({ total: 0, open: 0, resolved: 0 });
   });
 
   it('states-be #6 [aislamiento] list closedOnly falla — recentClosedTickets vacio, el resto del DTO de tickets sigue intacto', async () => {

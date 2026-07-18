@@ -180,6 +180,23 @@ export interface InboxClientSummaryDto {
   recentLogs: InboxLogSummaryDto[];
 }
 
+/**
+ * convo-count — contador de interacciones del contacto ("cuántas veces abrió una
+ * conversación"). 1 interacción = 1 fila `Conversation` del contacto: el mirror
+ * tiene UNA fila por conversación de Chatwoot que se REABRE in-place SIN
+ * historial de transiciones (no hay resolvedAt ni tabla de eventos —
+ * `conversation_status_changed` solo se dedupea en WebhookDelivery), así que el
+ * COUNT de filas es el único contador que no miente. Buckets con la MISMA
+ * semántica LS-1 del filtro del inbox: `open` = `status != 'resolved'` (incluye
+ * `pending`/`snoozed` passthrough), `resolved` = exacto. Invariante:
+ * `total === open + resolved`.
+ */
+export interface InboxConversationCountsDto {
+  total: number;
+  open: number;
+  resolved: number;
+}
+
 export interface InboxClientContextDto {
   status: 'matched' | 'ambiguous' | 'unknown';
   /** Only present for `ambiguous` WITHOUT a chosen `clientId` — never carries
@@ -187,6 +204,17 @@ export interface InboxClientContextDto {
   candidates?: ClientContextClientDto[];
   /** `matched`, or the candidate already chosen via `?clientId=`. */
   client?: InboxClientSummaryDto;
+  /**
+   * convo-count — SIEMPRE presente (matched/ambiguous/unknown): la asociación
+   * conversación↔cliente de este modelo ES el teléfono (Conversation no tiene
+   * clientId; el match del panel se deriva del contactPhone), así que el contador
+   * se agrupa por `contactPhoneE164` canónico — computable aunque no haya cliente
+   * matcheado. En `ambiguous` no filtra datos de ningún candidato (RICH-1): son
+   * counts del mirror de mensajería que el agente ya ve en el inbox. Fallback sin
+   * clave E164 reconstruible: self-count (solo esta conversación). Degrada a
+   * ceros si el count falla (misma disciplina RICH-2 del resto del panel).
+   */
+  conversations: InboxConversationCountsDto;
 }
 
 // ─── Chat message ─────────────────────────────────────────────────────────────

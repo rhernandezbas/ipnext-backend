@@ -37,6 +37,8 @@ function fixedConversationRepo(record: ConversationRecord): ConversationReposito
     list: async () => ({ data: [], total: 0, page: 1, limit: 25 }),
     updateLocalFields: async () => null,
     bumpLastMessage: async () => ({ ...record }),
+    // convo-count — SendTemplateMessage nunca cuenta interacciones; stub neutro.
+    countByContactPhoneE164: async () => ({ total: 0, open: 0, resolved: 0 }),
   };
 }
 

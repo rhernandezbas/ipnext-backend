@@ -150,6 +150,23 @@ export interface BumpLastMessageInput {
   lastMessagePreview: string;
 }
 
+/**
+ * convo-count — contador de interacciones del contacto para el panel de contexto
+ * del inbox. 1 interacción = 1 fila `Conversation` (el mirror tiene UNA fila por
+ * conversación de Chatwoot, que se REABRE in-place sin historial de transiciones
+ * — no existe resolvedAt ni tabla de eventos — así que el COUNT de filas es el
+ * único contador honesto disponible). Buckets con la MISMA semántica LS-1 del
+ * filtro del inbox (`ConversationListQuery.status`):
+ * - `open` = `status != 'resolved'` (incluye `pending`/`snoozed` passthrough).
+ * - `resolved` = match EXACTO `status === 'resolved'`.
+ * Invariante: `total === open + resolved` (ninguna fila invisible para ambos).
+ */
+export interface ConversationStatusCounts {
+  total: number;
+  open: number;
+  resolved: number;
+}
+
 export interface ConversationRepository {
   findById(id: string): Promise<ConversationRecord | null>;
   findByChatwootId(chatwootConversationId: number): Promise<ConversationRecord | null>;
@@ -197,4 +214,14 @@ export interface ConversationRepository {
    * "el template no abre la ventana", design D2). `null` si la conversación no existe.
    */
   bumpLastMessage(conversationId: string, patch: BumpLastMessageInput): Promise<ConversationRecord | null>;
+  /**
+   * convo-count — counts por status de TODAS las conversaciones del contacto,
+   * agrupadas por `contactPhoneE164` (la clave de identidad CANÓNICA del contacto
+   * que este port ya usa en `upsertBulkByPhone`/`adoptBulkConversation`; indexada
+   * en el schema). Anti-N+1: agregación en el adapter (groupBy/count), JAMÁS
+   * traer filas. Degradación conocida y aceptada: filas hermanas con
+   * `contactPhoneE164 = null` (backfill best-effort pre-migración) no se cuentan
+   * — misma "degradación segura" que el matcheo del bulk ya asume.
+   */
+  countByContactPhoneE164(phoneE164: string): Promise<ConversationStatusCounts>;
 }
