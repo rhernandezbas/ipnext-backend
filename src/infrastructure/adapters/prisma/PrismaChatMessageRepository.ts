@@ -38,40 +38,72 @@ function toDomain(row: any): ChatMessageRecord {
  */
 export class PrismaChatMessageRepository implements ChatMessageRepository {
   /**
-   * inbox-views (Ola 1, VIEW-1) — mantiene el cache desnormalizado
-   * `Conversation.lastPublicMessageDirection` tras CADA write de mensaje. Este
-   * adapter es el CHOKE POINT: los 5 write-paths de producción (webhook,
-   * fetch-on-open, send del agente, proyección bulk, template one-off) pasan
-   * TODOS por los 3 upserts de abajo — mantenerlo acá cubre cualquier caller
-   * presente o futuro por construcción.
+   * inbox-views (Ola 1, VIEW-1 · fix wave M1/M2/L2) — mantiene el cache
+   * desnormalizado `Conversation.lastPublicMessageDirection` tras CADA write de
+   * mensaje. Este adapter es el CHOKE POINT: los 5 write-paths de producción
+   * (webhook, fetch-on-open, send del agente, proyección bulk, template one-off)
+   * pasan TODOS por los 3 upserts de abajo — mantenerlo acá cubre cualquier
+   * caller presente o futuro por construcción.
    *
-   * RECOMPUTE desde la DB (no "último write gana"): el último mensaje NO-privado
-   * por (chatwootCreatedAt DESC, id DESC) — orden invertido de `listByConversation`
-   * y mismo criterio que el `DISTINCT ON` del backfill de la migración — así un
-   * webhook fuera de orden o el batch del fetch-on-open convergen SIEMPRE al
-   * estado correcto. Una nota interna (isPrivate) queda excluida del recompute:
-   * jamás cuenta como atención (NOTE-3). Costo: un `findFirst` sobre el índice
-   * `[conversationId, chatwootCreatedAt]` + un update por write de mensaje —
-   * trivial en el volumen real de mensajería, y es lo que hace O(1) la lectura
-   * del bucket "Sin atender" (la alternativa por request es un correlated
-   * subquery que Prisma no expresa sin $queryRaw, o un N+1 por fila).
+   * M1 — recompute ATÓMICO en UN SOLO statement: CTE del último mensaje
+   * NO-privado por (chatwootCreatedAt DESC, id DESC — orden invertido de
+   * `listByConversation`, mismo criterio que el `DISTINCT ON` del backfill de la
+   * migración 20260925000000) + UPDATE. Un statement = snapshot consistente, SIN
+   * ventana read→write: la versión anterior (findFirst + update separados) podía
+   * quedar stale ante interleaving concurrente (webhook inbound ↔ send del
+   * agente → "Sin atender" mostrando una conversación ya atendida). Converge por
+   * recompute atómico: cada write recalcula desde la DB, nunca "último write
+   * gana". Sin mensajes públicos el subselect da NULL → SET NULL (comportamiento
+   * de siempre). Una nota interna (isPrivate) queda excluida: jamás cuenta como
+   * atención (NOTE-3).
+   *
+   * M2 — FAIL-OPEN (best-effort): este sync corre DESPUÉS de que el ChatMessage
+   * (la fuente de verdad) commiteó — y en SendMessage el WhatsApp REAL ya salió
+   * por el gateway. Si el sync explotara hacia arriba: 500 al operador → retry
+   * manual → mensaje DUPLICADO al cliente (el send normal NO tiene idempotency
+   * key). Por eso try/catch + console.error (mismo criterio fail-open que
+   * `maybeRegisterOptOut`/`captureAttachments`): el cache queda stale hasta el
+   * próximo write de la conversación, que lo self-heals (recompute total, no
+   * incremental).
+   *
+   * L2 — `IS DISTINCT FROM` (NULL-safe): si la dirección no cambió (ej. nota
+   * privada repetida) el UPDATE matchea 0 filas → no re-escribe la tupla. Nota:
+   * `$executeRaw` NO bumpea `updatedAt` (el `@updatedAt` de Prisma es
+   * client-side, no un trigger) — deliberado: el cache es metadata derivada, no
+   * "actividad" de la conversación.
+   *
    * Cross-ref: `InMemoryChatMessageRepository.syncConversationDirection` — ambos
-   * adapters NO pueden divergir. Degradación conocida: si un mensaje MIGRARA de
-   * conversación (no ocurre en ningún flujo real), la conversación vieja queda
-   * stale hasta su próximo write (mismo tradeoff que el in-memory).
+   * adapters NO pueden divergir (in-memory es síncrono single-threaded: atómico
+   * por construcción, sin fail-open porque no puede fallar). Degradación
+   * conocida: si un mensaje MIGRARA de conversación (no ocurre en ningún flujo
+   * real), la conversación vieja queda stale hasta su próximo write.
    */
   private async syncConversationDirection(conversationId: string): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const latest = await (prisma as any).chatMessage.findFirst({
-      where: { conversationId, isPrivate: false },
-      orderBy: [{ chatwootCreatedAt: 'desc' }, { id: 'desc' }],
-      select: { direction: true },
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (prisma as any).conversation.update({
-      where: { id: conversationId },
-      data: { lastPublicMessageDirection: latest?.direction ?? null },
-    });
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (prisma as any).$executeRaw`
+        WITH last AS (
+          SELECT m."direction"
+          FROM "ChatMessage" m
+          WHERE m."conversationId" = ${conversationId} AND m."isPrivate" = false
+          ORDER BY m."chatwootCreatedAt" DESC, m."id" DESC
+          LIMIT 1
+        )
+        UPDATE "Conversation" c
+        SET "lastPublicMessageDirection" = (SELECT "direction" FROM last)
+        WHERE c."id" = ${conversationId}
+          AND c."lastPublicMessageDirection" IS DISTINCT FROM (SELECT "direction" FROM last)
+      `;
+    } catch (err) {
+      // M2 — fail-open: el mensaje YA commiteó (y el WhatsApp real ya salió en el
+      // caso de SendMessage) — este cache jamás puede tumbar ese write. Se loguea
+      // y sigue; el próximo write de la conversación lo recomputa entero.
+      // eslint-disable-next-line no-console
+      console.error(
+        '[messaging] sync de lastPublicMessageDirection falló (fail-open: el mensaje ya commiteó, el cache self-heals en el próximo write)',
+        { conversationId, error: err instanceof Error ? err.message : err },
+      );
+    }
   }
 
   async upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord> {

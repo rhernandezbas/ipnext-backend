@@ -13,14 +13,11 @@ jest.mock('../../infrastructure/database/prisma', () => ({
     chatMessage: {
       upsert: jest.fn(),
       findUnique: jest.fn(),
-      // inbox-views (VIEW-1) — el adapter ahora recomputa lastPublicMessageDirection
-      // tras cada upsert (findFirst del último NO-privado + update de la Conversation).
-      // El comportamiento en sí está pineado en PrismaChatMessageRepository.syncDirection.test.ts.
-      findFirst: jest.fn(),
     },
-    conversation: {
-      update: jest.fn(),
-    },
+    // inbox-views (VIEW-1, fix wave M1) — el adapter recomputa lastPublicMessageDirection
+    // tras cada upsert con UN statement $executeRaw atómico (fail-open, M2). El
+    // comportamiento en sí está pineado en PrismaChatMessageRepository.syncDirection.test.ts.
+    $executeRaw: jest.fn(),
   },
 }));
 
@@ -28,8 +25,8 @@ import { prisma } from '../../infrastructure/database/prisma';
 import { PrismaChatMessageRepository } from '../../infrastructure/adapters/prisma/PrismaChatMessageRepository';
 
 const mockPrisma = prisma as unknown as {
-  chatMessage: { upsert: jest.Mock; findUnique: jest.Mock; findFirst: jest.Mock };
-  conversation: { update: jest.Mock };
+  chatMessage: { upsert: jest.Mock; findUnique: jest.Mock };
+  $executeRaw: jest.Mock;
 };
 
 describe('PrismaChatMessageRepository — upsertTemplateMessage (PORT-1)', () => {

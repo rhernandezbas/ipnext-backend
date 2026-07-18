@@ -29,14 +29,19 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
   }
 
   /**
-   * inbox-views (VIEW-1) — recompute del último mensaje NO-privado de la
-   * conversación por (chatwootCreatedAt DESC, id DESC) — el MISMO orden (invertido)
-   * que `listByConversation` usa ASC, y el mismo `DISTINCT ON ... ORDER BY ... DESC`
-   * del backfill de la migración. Recompute (y no "último write gana") para que un
-   * webhook fuera de orden o el batch del fetch-on-open converjan SIEMPRE al estado
-   * correcto. Degradación conocida: si un mensaje MIGRARA de conversación (no pasa
-   * en ningún flujo real), la conversación vieja queda stale hasta su próximo write
-   * — mismo tradeoff en el adapter Prisma, no pueden divergir.
+   * inbox-views (VIEW-1, fix wave M1) — recompute del último mensaje NO-privado
+   * de la conversación por (chatwootCreatedAt DESC, id DESC) — el MISMO orden
+   * (invertido) que `listByConversation` usa ASC, y el mismo `DISTINCT ON ...
+   * ORDER BY ... DESC` del backfill de la migración. Converge por recompute (no
+   * "último write gana"): cada write recalcula desde el store completo. Espejo de
+   * la semántica ATÓMICA del statement único de
+   * `PrismaChatMessageRepository.syncConversationDirection` — acá es síncrono
+   * single-threaded (atómico por construcción) y sin fail-open (no puede fallar);
+   * tampoco bumpea `updatedAt` (igual que el $executeRaw, que no pasa por el
+   * @updatedAt client-side de Prisma). Degradación conocida: si un mensaje
+   * MIGRARA de conversación (no pasa en ningún flujo real), la conversación vieja
+   * queda stale hasta su próximo write — mismo tradeoff en el adapter Prisma, no
+   * pueden divergir.
    */
   private syncConversationDirection(conversationId: string): void {
     if (!this.conversationRepo) return;
