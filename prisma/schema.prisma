@@ -2510,6 +2510,9 @@ model RbacUser {
   // F1.5-C2 (asignación) — back-relation de la asignación LOCAL de Conversation
   // (mirror WhatsApp, nunca sincronizada a Chatwoot).
   assignedConversations   Conversation[]         @relation("ConversationAssignee")
+  // conversation-events (Ola 2) — back-relation de las transiciones que este usuario
+  // disparó (soft FK, SetNull on delete: su historial sobrevive con actorId=null).
+  conversationEventsActed ConversationEvent[]    @relation("ConversationEventActor")
   // messaging-bulk (F2) — back-relation de las campañas disparadas por este usuario.
   createdCampaigns        Campaign[]             @relation("CampaignCreatedBy")
   // messaging-inbox-notes (edit/delete) — back-relation de las notas internas escritas
@@ -2923,6 +2926,18 @@ model Conversation {
   // por request. Una nota soft-deleted (deletedAt != null) NO cuenta.
   internalNoteCount      Int           @default(0)
 
+  // conversation-events (Ola 2) — timestamps DERIVADOS del ciclo de vida de resolución,
+  // cimiento de los reports (SLA / "tiempo hasta resolución"). `resolvedAt` = ÚLTIMA vez
+  // que la conversación pasó a `resolved` (se LIMPIA a null al reabrir — refleja el
+  // estado ACTUAL). `firstResolvedAt` = PRIMERA resolución histórica (NUNCA se limpia —
+  // "tiempo hasta primera resolución"). Ambos los mantiene `SetConversationStatus` (acción
+  // del agente) y el webhook `conversation_status_changed` (Chatwoot-driven), siempre sobre
+  // la MISMA transición real (prev != new) que emite el `ConversationEvent`. Backfill de la
+  // migración: para las ya `resolved` se setean ambos = `updatedAt` (APROXIMADO — es la
+  // mejor señal disponible para las históricas, no hubo tabla de eventos hasta ahora).
+  resolvedAt             DateTime?
+  firstResolvedAt        DateTime?
+
   // F1.5-C2 (asignación) — assigneeId/areaId son campos EXCLUSIVAMENTE LOCALES del
   // mirror: Chatwoot NUNCA se entera de la asignación (no existe llamada upstream),
   // igual que status/canReply ya son locales-primero. NINGÚN camino de escritura
@@ -2938,6 +2953,10 @@ model Conversation {
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
   messages               ChatMessage[]
+  // conversation-events (Ola 2) — historial append-only de transiciones (created/resolved/
+  // reopened/assigned/unassigned/area_changed). Fuente de verdad de "resueltas por día" y
+  // el resto de los reports de agregación por rango.
+  events                 ConversationEvent[]
   // messaging-bulk-inbox (F1) — lazo recipient↔Conversation (proyección + etiqueta #1).
   campaignRecipients     CampaignRecipient[]
   // conversation-labels (Ola 5) — etiquetas de color N:M (catálogo ConversationLabel)
@@ -2991,6 +3010,37 @@ model ConversationLabelAssignment {
   @@index([conversationId])
   @@index([labelId])
   @@map("ConversationLabelAssignment")
+}
+
+// conversation-events (Ola 2) — historial APPEND-ONLY de transiciones de una conversación.
+// Cimiento de los reports de Ola 3 (resueltas por día, tiempo hasta resolución, SLA): sin
+// esto sólo existe el estado ACTUAL y toda la historia es irreconstruible. NO se emiten
+// eventos históricos en el backfill (no hay data): sólo se registran de acá en adelante.
+model ConversationEvent {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  // 'created' | 'resolved' | 'reopened' | 'assigned' | 'unassigned' | 'area_changed'
+  // — String plano, mismo criterio que Conversation.status / ChatMessage.direction.
+  type           String
+  // Quién disparó la transición: el usuario RBAC autenticado (acción desde el inbox), o
+  // NULL si vino del webhook/sistema (el cliente, o Chatwoot). Soft FK, SetNull on delete:
+  // borrar el usuario NO borra su historial, sólo desasocia el actor.
+  actorId        String?
+  actor          RbacUser?    @relation("ConversationEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  // Valores viejo→nuevo de la transición (ej. assignee viejo→nuevo, área vieja→nueva, o
+  // status prev→next). Ambos nullable — un 'created' no tiene from/to, un 'unassigned' tiene
+  // to=null. Strings planos (ids o status), nunca entidades.
+  fromValue      String?
+  toValue        String?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+  // reports por rango: 'resolved'/'created' entre [from,to) — el índice compuesto sirve el
+  // filtro por type + el rango de createdAt de un solo golpe.
+  @@index([type, createdAt])
+  @@index([createdAt])
+  @@index([actorId])
 }
 
 // chatwootMessageId es único a nivel MENSAJE de Chatwoot — idempotencia de upsert (HOOK-4).
