@@ -205,6 +205,41 @@ describe('InMemoryChatMessageRepository', () => {
     });
   });
 
+  describe('messaging-inbox-notes (edit/delete) — content local vs re-espejo de Chatwoot (HIGH)', () => {
+    it('una nota EDITADA localmente (editedAt != null) NO es pisada por un re-upsert con el content viejo de Chatwoot', async () => {
+      // crea la nota (mirror del envío) con el content original
+      const note = await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 1, isPrivate: true, content: 'hello' }));
+      // la editamos localmente (fuente de verdad LOCAL — Chatwoot no manda ediciones)
+      await repo.updateContent(note.id, 'goodbye', '2026-07-20T00:00:00.000Z');
+
+      // GetConversation.syncFromChatwoot re-espeja TODOS los mensajes con el content
+      // ORIGINAL de Chatwoot en CADA apertura → esto NO debe revertir la edición.
+      await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 1, isPrivate: true, content: 'hello' }));
+
+      const stored = await repo.findById(note.id);
+      expect(stored!.content).toBe('goodbye'); // sobrevive
+      expect(stored!.editedAt).toBe('2026-07-20T00:00:00.000Z'); // intacto
+    });
+
+    it('control: un mensaje NO editado (editedAt == null) SÍ refleja el nuevo content en el re-upsert', async () => {
+      const msg = await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 2, content: 'v1' }));
+      await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 2, content: 'v2 (edición de Chatwoot)' }));
+
+      const stored = await repo.findById(msg.id);
+      expect(stored!.content).toBe('v2 (edición de Chatwoot)');
+    });
+  });
+
+  describe('messaging-inbox-notes (edit/delete) — updateContent/softDelete contrato null (LOW-3)', () => {
+    it('updateContent sobre un id inexistente → null (no throw)', async () => {
+      expect(await repo.updateContent('ghost', 'x', '2026-07-20T00:00:00.000Z')).toBeNull();
+    });
+
+    it('softDelete sobre un id inexistente → null (no throw)', async () => {
+      expect(await repo.softDelete('ghost', '2026-07-20T00:00:00.000Z')).toBeNull();
+    });
+  });
+
   describe('§8 — tiebreaker determinístico en empates de chatwootCreatedAt (in-memory DEBE ordenar igual que Prisma)', () => {
     it('dos mensajes con el MISMO chatwootCreatedAt se ordenan por id ASC, no por orden de insercion', async () => {
       // Same rationale as InMemoryConversationRepository's §8 test: Postgres gives

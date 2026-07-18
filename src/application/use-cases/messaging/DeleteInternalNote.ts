@@ -10,8 +10,11 @@ import { assertInternalNoteMutable, type InternalNoteActor } from './internalNot
  * repo, la nota borrada deja de contar).
  *
  * MISMA autorización y MISMO orden de guards que EditInternalNote (autor O supervisor;
- * authorId NULL → sólo supervisor): existe (404) → es nota interna (422) → NO ya
- * borrada (409) → autorizado (403).
+ * authorId NULL → sólo supervisor): existe + pertenece a la conversación del path (404) →
+ * es nota interna (422) → NO ya borrada (409) → autorizado (403).
+ *
+ * LOW-2 — valida que la nota pertenezca a `conversationId` (mismo criterio que
+ * EditInternalNote: mismatch → 404, no revela existencia en otra conversación).
  */
 export class DeleteInternalNote {
   constructor(
@@ -19,16 +22,18 @@ export class DeleteInternalNote {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async execute(messageId: string, actor: InternalNoteActor): Promise<ChatMessageDto> {
+  async execute(conversationId: string, messageId: string, actor: InternalNoteActor): Promise<ChatMessageDto> {
     const message = await this.messageRepo.findById(messageId);
-    if (!message) throw new InternalNoteNotFoundError(messageId);
+    // LOW-2 — mismo 404 para "no existe" y "existe en otra conversación".
+    if (!message || message.conversationId !== conversationId) throw new InternalNoteNotFoundError(messageId);
 
     assertInternalNoteMutable(message, actor);
 
     const deletedAt = this.now().toISOString();
     const updated = await this.messageRepo.softDelete(messageId, deletedAt);
-    const record = updated ?? { ...message, deletedAt };
+    // LOW-3 — TOCTOU: borrada entre findById y update → repo devuelve null → 404, no 500.
+    if (!updated) throw new InternalNoteNotFoundError(messageId);
     // DTO: deleted=true, content vacío (el mapper lo blankea) — el FE muestra el tombstone.
-    return toChatMessageDto(record, [], { userId: actor.userId, canManage: actor.hasManage });
+    return toChatMessageDto(updated, [], { userId: actor.userId, canManage: actor.hasManage });
   }
 }

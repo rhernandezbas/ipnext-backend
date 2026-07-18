@@ -2421,6 +2421,22 @@ describe('PATCH /api/messaging/conversations/:id/messages/:messageId (editar not
     expect(res.body.code).toBe('INTERNAL_NOTE_NOT_FOUND');
   });
 
+  // LOW-2 — la nota debe pertenecer a la conversación del path.
+  it('nota de OTRA conversación (conversationId del path no matchea) → 404, no la edita', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp({ auth: authAs('user-test'), attachManage: withManage });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 108 });
+    const otra = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 109 });
+    const note = await seedNote(messageRepo, conv.id, { chatwootMessageId: 1, authorId: 'user-test' });
+
+    const res = await request(app)
+      .patch(`/api/messaging/conversations/${otra.id}/messages/${note.id}`)
+      .send({ content: 'cross-conv' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('INTERNAL_NOTE_NOT_FOUND');
+    expect((await messageRepo.findById(note.id))!.content).toBe('nota original');
+  });
+
   it('sin messaging:send → 403 (mismo gate que enviar, sin permiso separado)', async () => {
     const { app, conversationRepo, messageRepo } = buildApp({ sendPerm: denyPerm });
     const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 107 });

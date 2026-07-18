@@ -74,12 +74,23 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
     if (existing) {
       existing.conversationId = input.conversationId;
       existing.direction = input.direction;
-      existing.content = input.content;
+      // messaging-inbox-notes (HIGH) — una nota EDITADA localmente (editedAt != null) es la
+      // fuente de verdad LOCAL: Chatwoot no manda ediciones y `GetConversation.syncFromChatwoot`
+      // re-espeja el content ORIGINAL en CADA apertura (INBOX-2) → si lo pisáramos, la edición
+      // se revertiría permanentemente. Protegemos `content` (y `editedAt`, que ya no se toca)
+      // igual que `deletedAt`/`authorId`. Una nota NO editada sí refleja cambios de Chatwoot.
+      if (existing.editedAt === null) {
+        existing.content = input.content;
+      }
       existing.senderName = input.senderName ?? null;
       existing.chatwootCreatedAt = input.chatwootCreatedAt;
       existing.isPrivate = input.isPrivate ?? false;
       // messaging-inbox-notes — authorId es SET-ONCE: el update idempotente del webhook
       // (mismo chatwootMessageId) NO lo pisa (mismo criterio que origin/idempotencyKey).
+      // LOW-1 (documentado, edge raro): si un webhook message_created GANA la carrera al
+      // upsert local del send (llega antes de que SendMessage persista authorId), la fila
+      // queda con authorId null → la nota sólo la edita/borra un supervisor. No se fuerza
+      // completar authorId acá para no reintroducir un write en el hot path del webhook.
       this.syncConversationDirection(input.conversationId);
       if (existing.isPrivate) this.syncInternalNoteCount(input.conversationId);
       return { ...existing };

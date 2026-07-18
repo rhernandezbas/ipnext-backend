@@ -151,6 +151,29 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
   }
 
   async upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord> {
+    // messaging-inbox-notes (HIGH) — una nota EDITADA localmente (editedAt != null) es la
+    // fuente de verdad LOCAL: `GetConversation.syncFromChatwoot` re-espeja el content
+    // ORIGINAL de Chatwoot en CADA apertura (INBOX-2) vía este upsert, y la rama UPDATE
+    // pisaría `content` → la edición se revertiría en DB. Pre-leemos `editedAt`: si la fila
+    // ya fue editada por nosotros, la rama UPDATE OMITE `content` (y `editedAt` ya no se
+    // tocaba). Una nota NO editada sí refleja los cambios de Chatwoot (cero regresión).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const existing = await (prisma as any).chatMessage.findUnique({
+      where: { chatwootMessageId: input.chatwootMessageId },
+      select: { editedAt: true },
+    });
+    const preserveLocalEdit = !!existing && existing.editedAt !== null;
+
+    const updateData: Record<string, unknown> = {
+      conversationId: input.conversationId,
+      direction: input.direction,
+      senderName: input.senderName ?? null,
+      chatwootCreatedAt: new Date(input.chatwootCreatedAt),
+      isPrivate: input.isPrivate ?? false,
+    };
+    // Sólo espejamos `content` cuando la fila NO fue editada localmente.
+    if (!preserveLocalEdit) updateData['content'] = input.content;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = await (prisma as any).chatMessage.upsert({
       where: { chatwootMessageId: input.chatwootMessageId },
@@ -163,18 +186,13 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         chatwootCreatedAt: new Date(input.chatwootCreatedAt),
         isPrivate: input.isPrivate ?? false,
         // messaging-inbox-notes (edit/delete) — authorId SET-ONCE en create (SendMessage
-        // sólo lo pasa cuando isPrivate). El `update` de abajo NO lo toca: el echo
-        // idempotente del webhook (mismo chatwootMessageId) jamás nulifica al autor.
+        // sólo lo pasa cuando isPrivate). El `update` NO lo toca: el echo idempotente del
+        // webhook (mismo chatwootMessageId) jamás nulifica al autor. LOW-1 (documentado):
+        // si un webhook message_created gana la carrera al upsert local del send, authorId
+        // queda null → la nota sólo la edita/borra un supervisor (edge raro, no se fuerza).
         authorId: input.authorId ?? null,
       },
-      update: {
-        conversationId: input.conversationId,
-        direction: input.direction,
-        content: input.content,
-        senderName: input.senderName ?? null,
-        chatwootCreatedAt: new Date(input.chatwootCreatedAt),
-        isPrivate: input.isPrivate ?? false,
-      },
+      update: updateData,
     });
     await this.syncConversationDirection(input.conversationId);
     // messaging-inbox-notes (COUNT) — sólo una nota privada mueve el contador.
@@ -312,12 +330,21 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
    * (editar no crea ni borra). Autorización ya validada por `EditInternalNote`.
    */
   async updateContent(id: string, content: string, editedAt: string): Promise<ChatMessageRecord | null> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const row = await (prisma as any).chatMessage.update({
-      where: { id },
-      data: { content, editedAt: new Date(editedAt) },
-    });
-    return row ? toDomain(row) : null;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row = await (prisma as any).chatMessage.update({
+        where: { id },
+        data: { content, editedAt: new Date(editedAt) },
+      });
+      return row ? toDomain(row) : null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      // LOW-3 — TOCTOU: la fila se borró entre el findById del use case y este update.
+      // P2025 (record not found) → null (contrato del port, que el in-memory ya respeta),
+      // NUNCA un 500. Cualquier otro error propaga.
+      if (err?.code === 'P2025') return null;
+      throw err;
+    }
   }
 
   /**
@@ -326,12 +353,20 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
    * `DeleteInternalNote`.
    */
   async softDelete(id: string, deletedAt: string): Promise<ChatMessageRecord | null> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const row = await (prisma as any).chatMessage.update({
-      where: { id },
-      data: { deletedAt: new Date(deletedAt) },
-    });
+    let row;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      row = await (prisma as any).chatMessage.update({
+        where: { id },
+        data: { deletedAt: new Date(deletedAt) },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      // LOW-3 — TOCTOU: borrada entre findById y update → P2025 → null, nunca 500.
+      if (err?.code === 'P2025') return null;
+      throw err;
+    }
     await this.syncInternalNoteCount(row.conversationId);
-    return row ? toDomain(row) : null;
+    return toDomain(row);
   }
 }

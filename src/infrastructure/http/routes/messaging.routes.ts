@@ -614,6 +614,7 @@ export function createMessagingRouter(
           return;
         }
         const result = await editInternalNote.execute(
+          req.params['id'] as string,
           req.params['messageId'] as string,
           parsed.data.content,
           internalNoteActor(req),
@@ -637,6 +638,7 @@ export function createMessagingRouter(
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const result = await deleteInternalNote.execute(
+          req.params['id'] as string,
           req.params['messageId'] as string,
           internalNoteActor(req),
         );
