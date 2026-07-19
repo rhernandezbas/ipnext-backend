@@ -262,6 +262,7 @@ import { BroadcastNewsToNoc } from '@application/use-cases/BroadcastNewsToNoc';
 import { ListNewsPosts } from '@application/use-cases/ListNewsPosts';
 import { GetNewsPost } from '@application/use-cases/GetNewsPost';
 import { CreateNewsPost } from '@application/use-cases/CreateNewsPost';
+import { CreateExternalNews } from '@application/use-cases/CreateExternalNews';
 import { UpdateNewsPost } from '@application/use-cases/UpdateNewsPost';
 import { ArchiveNewsPost } from '@application/use-cases/ArchiveNewsPost';
 import { MarkNewsRead } from '@application/use-cases/MarkNewsRead';
@@ -3144,10 +3145,30 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // The write reuses the internal `createTicket` (FK+ownership), `rbacUserRepo` (resolves
   // the system "api" reporter by login) and `ticketAreaRepo` (area-by-name), plus a
   // dedicated rate limiter (the API key can now WRITE — public write needs a ceiling).
+  //
+  // external-news — the 2nd external WRITE (POST /news). Reuses `createNewsPost` +
+  // `newsCategoryRepo` (category-by-name) + `rbacUserRepo` (system "api" author). The
+  // N2 block's AttachLinkToNews/BroadcastNewsToNoc instances are block-scoped, so a fresh
+  // pair is built here (same wiring: PrismaNocBroadcastConfigRepository + EvolutionApiHttpGateway).
+  const externalNewsBroadcastConfigRepo = new PrismaNocBroadcastConfigRepository();
+  const externalNewsBroadcastGateway = new EvolutionApiHttpGateway({ configRepo: externalNewsBroadcastConfigRepo });
+  const createExternalNews = new CreateExternalNews(
+    newsCategoryRepo,
+    createNewsPost,
+    new AttachLinkToNews(newsAttachmentRepo, newsPostRepo),
+    new BroadcastNewsToNoc(
+      newsPostRepo,
+      new BroadcastToNoc(externalNewsBroadcastConfigRepo, externalNewsBroadcastGateway),
+    ),
+  );
   app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail, listContracts, {
     createTicket,
     rbacUserRepo,
     ticketAreaRepo,
+    rateLimiter: createExternalWriteRateLimiter(),
+  }, {
+    createExternalNews,
+    rbacUserRepo,
     rateLimiter: createExternalWriteRateLimiter(),
   }));
 

@@ -4,6 +4,7 @@ import { NewsPostRepository } from '@domain/ports/NewsPostRepository';
 import { createNewsPostAttachment } from '@domain/entities/newsPostAttachment';
 import { NewsPostNotFoundError } from '@domain/errors/news';
 import { InvalidLinkAttachmentError } from '@domain/errors/newsAttachment';
+import { isValidHttpUrl } from '@domain/services/httpUrl';
 import {
   NewsPostAttachmentDto,
   toNewsPostAttachmentDto,
@@ -33,7 +34,7 @@ export class AttachLinkToNews {
     if (!post) throw new NewsPostNotFoundError(input.newsPostId);
 
     const url = (input.url ?? '').trim();
-    if (!/^https?:\/\/.+/i.test(url)) {
+    if (!isValidHttpUrl(url)) {
       throw new InvalidLinkAttachmentError();
     }
 

@@ -13,6 +13,17 @@ import { ReferenceNotFoundError, ContractCustomerMismatchError } from '@domain/e
 import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
 import { API_USER_LOGIN } from '@infrastructure/bootstrap/bootstrapApiUser';
+import {
+  CreateExternalNews,
+  CreateExternalNewsResult,
+  ExternalNewsWhatsappResult,
+} from '@application/use-cases/CreateExternalNews';
+import { NewsCategoryNotFoundError } from '@domain/errors/news';
+import {
+  InvalidLinkAttachmentError,
+  TooManyNewsAttachmentsError,
+} from '@domain/errors/newsAttachment';
+import { NewsPostAttachmentDto } from '@application/dto/newsAttachment.dto';
 
 /**
  * Curated external DTO — only safe, non-sensitive fields.
@@ -127,6 +138,76 @@ export function toExternalTicketDto(t: Ticket): ExternalTicketDto {
   };
 }
 
+// Length caps for the external NEWS write surface — same rationale as the ticket
+// caps above (bound a PUBLIC write endpoint against storage abuse). Mirror the
+// internal CreateNewsPostSchema bounds (title 1..200, body 1..20000 markdown).
+const MAX_NEWS_TITLE_LEN = 200;
+const MAX_NEWS_BODY_LEN = 20000;
+// L2 — per-link caps (symmetric with title/body). A key holder could otherwise inject
+// unbounded text via link.url / link.title. 2048 is the de-facto safe URL length.
+const MAX_LINK_URL_LEN = 2048;
+const MAX_LINK_TITLE_LEN = 200;
+
+/**
+ * Curated external view of a news attachment (L4). The internal NewsPostAttachmentDto
+ * carries `uploadedById` (= the system "api" user id) and `newsPostId` (redundant with
+ * the post id) — neither belongs on a PUBLIC response. Explicit allow-list.
+ */
+export interface ExternalNewsAttachmentDto {
+  id: string;
+  kind: 'image' | 'file' | 'link';
+  filename: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  url: string | null;
+  fileUrl: string | null;
+  createdAt: string;
+}
+
+function toExternalNewsAttachmentDto(a: NewsPostAttachmentDto): ExternalNewsAttachmentDto {
+  return {
+    id: a.id,
+    kind: a.kind,
+    filename: a.filename,
+    mimeType: a.mimeType,
+    sizeBytes: a.sizeBytes,
+    url: a.url,
+    fileUrl: a.fileUrl,
+    createdAt: a.createdAt,
+  };
+}
+
+/**
+ * Curated external DTO for a created news post — allow-list, safe fields only.
+ * EXCLUDES internal fields: authorId/authorName (always the system api user), body
+ * (echoing ~20kb of markdown back is pointless), categoryId/lastBroadcastAt/read/
+ * archivedAt/updatedAt. `category` is the NAME (not the id). `attachments` are the
+ * REDUCED external view (no uploadedById/newsPostId). Future fields on the source
+ * result are NOT auto-included (future-field-safe).
+ */
+export interface ExternalNewsDto {
+  id: string;
+  title: string;
+  /** Category NAME (not id). */
+  category: string;
+  pinned: boolean;
+  publishedAt: string;
+  attachments: ExternalNewsAttachmentDto[];
+  whatsapp: ExternalNewsWhatsappResult;
+}
+
+export function toExternalNewsDto(r: CreateExternalNewsResult): ExternalNewsDto {
+  return {
+    id: r.post.id,
+    title: r.post.title,
+    category: r.post.category.name,
+    pinned: r.post.pinned,
+    publishedAt: r.post.publishedAt,
+    attachments: r.attachments.map(toExternalNewsAttachmentDto),
+    whatsapp: r.whatsapp,
+  };
+}
+
 /**
  * Dependencies for the external WRITE surface. OPTIONAL on the router: POST
  * /tickets is mounted only when present. Grouped so app.ts wires them explicitly
@@ -141,11 +222,25 @@ export interface ExternalV1TicketDeps {
   rateLimiter?: RequestHandler;
 }
 
+/**
+ * Dependencies for the external NEWS write surface (external-news). OPTIONAL on the
+ * router: POST /news is mounted only when present. Same mould as ExternalV1TicketDeps
+ * so app.ts wires it explicitly and a composition-root test can pin the wiring.
+ */
+export interface ExternalV1NewsDeps {
+  createExternalNews: CreateExternalNews;
+  /** Resolves the system "api" author by login (→ 503 if not provisioned). */
+  rbacUserRepo: RbacUserRepository;
+  /** Rate limiter applied ONLY to POST /news. Optional for in-memory tests. */
+  rateLimiter?: RequestHandler;
+}
+
 export function createExternalV1Router(
   listClients: ListClients,
   getClientDetail: GetClientDetail,
   listContracts?: ListContracts,
   ticketDeps?: ExternalV1TicketDeps,
+  newsDeps?: ExternalV1NewsDeps,
 ): Router {
   const router = Router();
 
@@ -331,6 +426,143 @@ export function createExternalV1Router(
         }
         // Contract does not belong to the customer → 422.
         if (err instanceof ContractCustomerMismatchError) {
+          res.status(422).json({ error: err.message, code: err.code });
+          return;
+        }
+        next(err);
+      }
+    });
+  }
+
+  // ── POST /news — 2nd WRITE on the external API (external-news) ────────────────
+  // Machine-to-machine: authored by the system "Api" user (resolved by login). Reuses
+  // CreateExternalNews, which resolves the category BY NAME (→ 422 if unknown), validates
+  // links up-front (all-or-nothing on the 4xx path), and broadcasts to WhatsApp BEST-EFFORT
+  // (known nocBroadcast errors surface as whatsapp.sent=false, they do NOT fail the request).
+  // 400 = type/shape validation; 422 = domain (category/link/too-many). Mounted only when
+  // newsDeps is wired.
+  if (newsDeps) {
+    const { createExternalNews, rbacUserRepo, rateLimiter } = newsDeps;
+    const writeGuards: RequestHandler[] = rateLimiter ? [rateLimiter] : [];
+    router.post('/news', ...writeGuards, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const title = typeof body['title'] === 'string' ? body['title'].trim() : '';
+        const newsBody = typeof body['body'] === 'string' ? body['body'].trim() : '';
+        const category = typeof body['category'] === 'string' ? body['category'].trim() : '';
+
+        // Required-field validation (400) — title, body and category are mandatory.
+        const missing: string[] = [];
+        if (!title) missing.push('title');
+        if (!newsBody) missing.push('body');
+        if (!category) missing.push('category');
+        if (missing.length > 0) {
+          res.status(400).json({
+            error: `Missing or invalid required fields: ${missing.join(', ')}`,
+            code: 'VALIDATION_ERROR',
+          });
+          return;
+        }
+
+        // Length caps (400) — bound the public write surface against storage abuse.
+        if (title.length > MAX_NEWS_TITLE_LEN || newsBody.length > MAX_NEWS_BODY_LEN) {
+          res.status(400).json({
+            error: `Field too long: title <= ${MAX_NEWS_TITLE_LEN}, body <= ${MAX_NEWS_BODY_LEN} chars`,
+            code: 'VALIDATION_ERROR',
+          });
+          return;
+        }
+
+        // pinned — optional boolean (400 if present and not a boolean; no coercion).
+        let pinned = false;
+        if (body['pinned'] !== undefined) {
+          if (typeof body['pinned'] !== 'boolean') {
+            res.status(400).json({ error: 'pinned must be a boolean', code: 'VALIDATION_ERROR' });
+            return;
+          }
+          pinned = body['pinned'];
+        }
+
+        // sendToWhatsapp — optional boolean (400 if present and not a boolean).
+        let sendToWhatsapp = false;
+        if (body['sendToWhatsapp'] !== undefined) {
+          if (typeof body['sendToWhatsapp'] !== 'boolean') {
+            res.status(400).json({ error: 'sendToWhatsapp must be a boolean', code: 'VALIDATION_ERROR' });
+            return;
+          }
+          sendToWhatsapp = body['sendToWhatsapp'];
+        }
+
+        // links — optional array of { url: string, title?: string }. TYPE/shape checks
+        // are 400 here; the DOMAIN checks (count > 20, non-http(s) scheme) are 422 and
+        // live in the use case (thrown as TooManyNewsAttachments / InvalidLinkAttachment).
+        const links: { url: string; title?: string }[] = [];
+        if (body['links'] !== undefined) {
+          if (!Array.isArray(body['links'])) {
+            res.status(400).json({ error: 'links must be an array', code: 'VALIDATION_ERROR' });
+            return;
+          }
+          for (const raw of body['links']) {
+            const item = (raw ?? {}) as Record<string, unknown>;
+            if (typeof item['url'] !== 'string') {
+              res.status(400).json({ error: 'each link.url must be a string', code: 'VALIDATION_ERROR' });
+              return;
+            }
+            // L2 — cap url length (400) BEFORE the use case validates the http(s) shape.
+            if (item['url'].length > MAX_LINK_URL_LEN) {
+              res.status(400).json({
+                error: `link.url too long (max ${MAX_LINK_URL_LEN} chars)`,
+                code: 'VALIDATION_ERROR',
+              });
+              return;
+            }
+            if (item['title'] !== undefined && typeof item['title'] !== 'string') {
+              res.status(400).json({ error: 'each link.title must be a string', code: 'VALIDATION_ERROR' });
+              return;
+            }
+            if (typeof item['title'] === 'string' && item['title'].length > MAX_LINK_TITLE_LEN) {
+              res.status(400).json({
+                error: `link.title too long (max ${MAX_LINK_TITLE_LEN} chars)`,
+                code: 'VALIDATION_ERROR',
+              });
+              return;
+            }
+            const linkTitle = typeof item['title'] === 'string' ? item['title'] : undefined;
+            links.push(linkTitle !== undefined ? { url: item['url'], title: linkTitle } : { url: item['url'] });
+          }
+        }
+
+        // Resolve the system "Api" author — bootstrapped UNCONDITIONALLY in main
+        // (bootstrapSystemUsers). If absent, the platform is misconfigured → 503.
+        const reporter = await rbacUserRepo.findByLogin(API_USER_LOGIN);
+        if (!reporter) {
+          res.status(503).json({
+            error: 'System reporter not provisioned',
+            code: 'REPORTER_UNAVAILABLE',
+          });
+          return;
+        }
+
+        const result = await createExternalNews.execute({
+          title,
+          body: newsBody,
+          category,
+          pinned,
+          links,
+          sendToWhatsapp,
+          authorId: reporter.id,
+          authorName: reporter.name,
+        });
+
+        res.status(201).json(toExternalNewsDto(result));
+      } catch (err) {
+        // Domain errors from the orchestration → 422 (well-formed request, invalid
+        // reference/semantics). Each `code` is a wire contract.
+        if (
+          err instanceof NewsCategoryNotFoundError ||
+          err instanceof InvalidLinkAttachmentError ||
+          err instanceof TooManyNewsAttachmentsError
+        ) {
           res.status(422).json({ error: err.message, code: err.code });
           return;
         }
