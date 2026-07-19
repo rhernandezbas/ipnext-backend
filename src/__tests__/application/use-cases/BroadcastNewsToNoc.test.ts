@@ -43,9 +43,9 @@ async function build(appPublicUrl = 'http://190.7.234.37:7778') {
 }
 
 describe('BroadcastNewsToNoc', () => {
-  it('post existente → 📢 title + link /admin/news?post={id}; stamps lastBroadcastAt', async () => {
+  it('post existente → 📢 title + link /admin/news?post={id}; stamps lastBroadcastAt + actor', async () => {
     const { uc, gateway, postRepo, postId } = await build();
-    const result = await uc.execute(postId, 'u1');
+    const result = await uc.execute(postId, 'u1', 'Tino');
 
     expect(result).toEqual({
       sent: true,
@@ -56,25 +56,28 @@ describe('BroadcastNewsToNoc', () => {
     ]);
     const post = await postRepo.findById(postId, 'u1');
     expect(post!.lastBroadcastAt).not.toBeNull();
+    // noc-broadcast-traceability — el actorName llega al repo y queda en la noticia.
+    expect(post!.lastBroadcastByName).toBe('Tino');
   });
 
   it('post inexistente → NewsPostNotFoundError, gateway nunca llamado', async () => {
     const { uc, gateway } = await build();
-    await expect(uc.execute('ghost', 'u1')).rejects.toBeInstanceOf(NewsPostNotFoundError);
+    await expect(uc.execute('ghost', 'u1', 'Tino')).rejects.toBeInstanceOf(NewsPostNotFoundError);
     expect(gateway.sent).toHaveLength(0);
   });
 
-  it('propaga NocBroadcastNotConfiguredError (503) y NO estampa lastBroadcastAt', async () => {
+  it('propaga NocBroadcastNotConfiguredError (503) y NO estampa lastBroadcastAt/actor', async () => {
     const { uc, gateway, postRepo, postId } = await build();
     gateway.error = new NocBroadcastNotConfiguredError();
-    await expect(uc.execute(postId, 'u1')).rejects.toBeInstanceOf(NocBroadcastNotConfiguredError);
+    await expect(uc.execute(postId, 'u1', 'Tino')).rejects.toBeInstanceOf(NocBroadcastNotConfiguredError);
     const post = await postRepo.findById(postId, 'u1');
     expect(post!.lastBroadcastAt).toBeNull();
+    expect(post!.lastBroadcastByName).toBeNull();
   });
 
   it('propaga EvolutionApiError (502)', async () => {
     const { uc, gateway, postId } = await build();
     gateway.error = new EvolutionApiError('boom');
-    await expect(uc.execute(postId, 'u1')).rejects.toBeInstanceOf(EvolutionApiError);
+    await expect(uc.execute(postId, 'u1', 'Tino')).rejects.toBeInstanceOf(EvolutionApiError);
   });
 });

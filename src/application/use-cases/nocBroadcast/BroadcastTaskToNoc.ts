@@ -1,4 +1,5 @@
 import { SchedulingRepository } from '@domain/ports/SchedulingRepository';
+import { ActorContext, TaskActivityRecorder } from '@domain/ports/TaskActivityRecorder';
 import { TaskNotFoundError } from '@domain/errors/scheduling';
 import { TaskNotBroadcastableError } from '@domain/errors/nocBroadcast';
 import { BroadcastToNoc, BroadcastToNocResult } from './BroadcastToNoc';
@@ -17,24 +18,42 @@ import { BroadcastToNoc, BroadcastToNocResult } from './BroadcastToNoc';
  * NOT best-effort: es disparado por un botón, así que los errores del motor
  * (NOC_BROADCAST_NOT_CONFIGURED 503, EVOLUTION_API_ERROR 502, LINK_BASE_MISSING 422)
  * PROPAGAN sin envolverse — el front muestra el fallo.
+ *
+ * noc-broadcast-traceability — DESPUÉS de un envío exitoso deja rastro:
+ *   1. estampa lastBroadcastAt/lastBroadcastByName en la tarea (badge "Última difusión"),
+ *   2. registra un evento 'noc_broadcast_sent' en el feed de Actividad (best-effort interno
+ *      del recorder — nunca aborta la operación).
+ * Si el envío falla (throw antes), NADA se estampa ni registra.
  */
 export class BroadcastTaskToNoc {
   constructor(
     private readonly scheduling: SchedulingRepository,
     private readonly broadcast: BroadcastToNoc,
+    /** Opcional: si se inyecta, emite un evento 'noc_broadcast_sent' en el feed (best-effort). */
+    private readonly recorder?: TaskActivityRecorder,
   ) {}
 
-  async execute(taskId: string): Promise<BroadcastToNocResult> {
+  async execute(taskId: string, actor: ActorContext): Promise<BroadcastToNocResult> {
     const task = await this.scheduling.getTask(taskId);
     if (!task) throw new TaskNotFoundError(taskId);
     if (task.kind !== 'network') throw new TaskNotBroadcastableError();
 
-    return this.broadcast.execute({
+    const result = await this.broadcast.execute({
       kind: 'network_task',
       title: task.title,
       // null → undefined: el motor trata etiqueta ausente/blanca como "[Red]".
       contextLabel: task.networkSiteName ?? undefined,
       relativePath: `/admin/scheduling/tasks/${taskId}`,
     });
+
+    // Solo tras un envío exitoso (arriba propaga en el path de error): dejar rastro.
+    // El stamp propaga salvo P2025 (tarea borrada); el recorder es best-effort internamente.
+    await this.scheduling.recordTaskBroadcast(taskId, actor.actorName);
+    await this.recorder?.record(taskId, 'noc_broadcast_sent', {
+      actor,
+      metadata: { link: result.link },
+    });
+
+    return result;
   }
 }

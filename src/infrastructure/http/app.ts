@@ -2011,6 +2011,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       n3NocBroadcastConfigRepo,
       new EvolutionApiHttpGateway({ configRepo: n3NocBroadcastConfigRepo }),
     ),
+    // noc-broadcast-traceability — mismo recorder que usan AssignIClassTeam/AddTaskComment;
+    // emite el evento 'noc_broadcast_sent' en el feed de Actividad (best-effort).
+    taskActivityRecorder,
   );
 
   app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authAdapter, stageRepo, {

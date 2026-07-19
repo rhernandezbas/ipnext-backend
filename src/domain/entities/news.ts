@@ -24,6 +24,8 @@ export interface NewsPost {
   archivedAt: Date | null;
   /** N2 — última vez que la noticia se difundió al NOC (WhatsApp). null = nunca. */
   lastBroadcastAt: Date | null;
+  /** noc-broadcast-traceability — nombre (snapshot) del actor de la última difusión. null = nunca. */
+  lastBroadcastByName: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

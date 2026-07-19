@@ -19,6 +19,7 @@ interface NewsPostRow {
   publishedAt: Date;
   archivedAt: Date | null;
   lastBroadcastAt: Date | null;
+  lastBroadcastByName: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -36,6 +37,7 @@ function toEntity(row: NewsPostRow): NewsPost {
     publishedAt: row.publishedAt,
     archivedAt: row.archivedAt,
     lastBroadcastAt: row.lastBroadcastAt ?? null,
+    lastBroadcastByName: row.lastBroadcastByName ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -150,10 +152,16 @@ export class PrismaNewsPostRepository implements NewsPostRepository {
     });
   }
 
-  /** N2 — estampa lastBroadcastAt = now. Absorbe P2025 (post borrado) como no-op. */
-  async recordBroadcast(id: string): Promise<void> {
+  /**
+   * N2 / noc-broadcast-traceability — estampa lastBroadcastAt = now Y lastBroadcastByName =
+   * actorName. Absorbe P2025 (post borrado) como no-op.
+   */
+  async recordBroadcast(id: string, actorName: string): Promise<void> {
     try {
-      await prisma.newsPost.update({ where: { id }, data: { lastBroadcastAt: new Date() } });
+      await prisma.newsPost.update({
+        where: { id },
+        data: { lastBroadcastAt: new Date(), lastBroadcastByName: actorName },
+      });
     } catch (err) {
       if ((err as { code?: string } | null)?.code === 'P2025') return;
       throw err;

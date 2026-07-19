@@ -96,6 +96,9 @@ const NEW_FIELDS_DEFAULTS = {
   iclassCityCode: null as string | null,
   // #86 — archive flag. null = not archived.
   archivedAt: null as string | null,
+  // noc-broadcast-traceability — última difusión al NOC + actor. null = nunca difundida.
+  lastBroadcastAt: null as string | null,
+  lastBroadcastByName: null as string | null,
   // K3 (fiber-auto-watcher) — serial de la ONU. null = sin serial cargado.
   onuSerial: null as string | null,
   // iclass-status-sync
@@ -466,6 +469,9 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ticketSubject: (data.ticketId != null ? (this.ticketSubjects.get(data.ticketId) ?? null) : null),
       // #86 — new tasks are never archived
       archivedAt: null,
+      // noc-broadcast-traceability — nunca difundida al crear.
+      lastBroadcastAt: null,
+      lastBroadcastByName: null,
       // K3 — el serial de la ONU se carga DESPUÉS (PUT del técnico), nunca al crear.
       onuSerial: null,
       // iclass-status-sync — not set at task creation
@@ -716,6 +722,17 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     if (index === -1) return false;
     this.tasks.splice(index, 1);
     return true;
+  }
+
+  // noc-broadcast-traceability — estampa lastBroadcastAt = now + actor. No-op si no existe.
+  async recordTaskBroadcast(taskId: string, actorName: string): Promise<void> {
+    const index = this.tasks.findIndex(t => t.id === taskId);
+    if (index === -1) return; // no-op si la tarea ya no existe (contrato del port)
+    this.tasks[index] = {
+      ...this.tasks[index]!,
+      lastBroadcastAt: new Date().toISOString(),
+      lastBroadcastByName: actorName,
+    };
   }
 
   async moveTaskToStageIfForward(taskId: string, targetStageId: string): Promise<{ moved: boolean }> {

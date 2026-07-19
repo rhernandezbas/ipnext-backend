@@ -52,6 +52,9 @@ export interface NewsPostRepository {
   markRead(postId: string, userId: string): Promise<void>;
   /** Count of non-archived posts with no read receipt from this user. */
   countUnread(userId: string): Promise<number>;
-  /** N2 — stamp lastBroadcastAt = now after a successful NOC broadcast. No-op if the post is gone. */
-  recordBroadcast(id: string): Promise<void>;
+  /**
+   * N2 / noc-broadcast-traceability — stamp lastBroadcastAt = now AND lastBroadcastByName =
+   * actorName after a successful NOC broadcast. No-op if the post is gone.
+   */
+  recordBroadcast(id: string, actorName: string): Promise<void>;
 }

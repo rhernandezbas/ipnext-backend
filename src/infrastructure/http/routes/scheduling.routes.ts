@@ -617,7 +617,7 @@ export function createSchedulingRouter(
   if (broadcastTaskToNoc) {
     router.post('/:id/broadcast-noc', auth, schedWrite, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        const result = await broadcastTaskToNoc.execute(req.params['id'] as string);
+        const result = await broadcastTaskToNoc.execute(req.params['id'] as string, actorOf(req));
         res.status(200).json(result);
       } catch (err) {
         // Express 4: un throw async no llega al errorHandler — la request cuelga. Fallback SIEMPRE via next().

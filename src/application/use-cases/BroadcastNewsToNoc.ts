@@ -20,7 +20,7 @@ export class BroadcastNewsToNoc {
     private readonly broadcast: BroadcastToNoc,
   ) {}
 
-  async execute(postId: string, userId: string): Promise<BroadcastToNocResult> {
+  async execute(postId: string, userId: string, actorName: string): Promise<BroadcastToNocResult> {
     const post = await this.posts.findById(postId, userId);
     if (!post) throw new NewsPostNotFoundError(postId);
 
@@ -30,8 +30,8 @@ export class BroadcastNewsToNoc {
       relativePath: `/admin/news?post=${post.id}`,
     });
 
-    // Solo si el envío no lanzó: registrar la difusión.
-    await this.posts.recordBroadcast(post.id);
+    // Solo si el envío no lanzó: registrar la difusión + el actor (badge "Última difusión").
+    await this.posts.recordBroadcast(post.id, actorName);
     return result;
   }
 }

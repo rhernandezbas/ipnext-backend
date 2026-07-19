@@ -4,7 +4,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt' | 'iclassStatusCode' | 'iclassStatusUpdatedAt' | 'iclassStatus' | 'onuSerial'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt' | 'lastBroadcastAt' | 'lastBroadcastByName' | 'iclassStatusCode' | 'iclassStatusUpdatedAt' | 'iclassStatus' | 'onuSerial'
 > {
   /** Discriminador de tipo de tarea. Por defecto 'customer' para retro-compatibilidad. */
   kind?: 'customer' | 'network';
@@ -91,6 +91,13 @@ export interface SchedulingRepository {
 
   // RV — Revisado por Inventario (change 6, F3 traceability)
   setInventoryReview(taskId: string, reviewed: boolean, actorId: string | null): Promise<ScheduledTask | null>;
+
+  /**
+   * noc-broadcast-traceability — estampa lastBroadcastAt = now() y lastBroadcastByName =
+   * actorName tras una difusión exitosa de la tarea al canal NOC. No-op si la tarea ya no
+   * existe (mismo contrato que otros stamps: P2025 absorbido).
+   */
+  recordTaskBroadcast(taskId: string, actorName: string): Promise<void>;
 
   // Gestión Real installation-order ingest (gestion-real-installation-ingest)
   /** Find a task previously ingested from the given GR order id. Null when none. */

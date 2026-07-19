@@ -189,7 +189,7 @@ export function createNewsMediaRouter(
   // NOC_BROADCAST_LINK_BASE_MISSING → 422) bajan al errorHandler global vía next(err).
   router.post('/:id/broadcast', auth, deps.requireManage, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const result = await useCases.broadcastNewsToNoc.execute(req.params['id'] as string, req.user!.id);
+      const result = await useCases.broadcastNewsToNoc.execute(req.params['id'] as string, req.user!.id, req.user!.username);
       res.json(result);
     } catch (err) {
       if (err instanceof NewsPostNotFoundError) {

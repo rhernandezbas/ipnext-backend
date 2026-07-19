@@ -103,6 +103,11 @@ export interface ScheduledTask {
   // #86 — archive flag. Null = not archived. Set only when generalStatus is closed/dismissed.
   archivedAt: string | null;
 
+  // noc-broadcast-traceability — última difusión de la tarea al canal NOC (WhatsApp) +
+  // nombre (snapshot) del actor que la disparó. Null = nunca difundida.
+  lastBroadcastAt: string | null;
+  lastBroadcastByName: string | null;
+
   // K3 (fiber-auto-watcher) — serial de la ONU cargado por el técnico en la tarea de
   // instalación. SIEMPRE normalizado UPPERCASE sin espacios al persistir. No exige
   // prefijo HWTC (ZTE/VSOL se registran igual; el watcher solo auto-aprovisiona Huawei).

@@ -48,7 +48,9 @@ export type ActivityType =
   | 'iclass_team_assigned'
   // IClass auto-assign (Ola A — best-effort, triggered by UpdateTask)
   | 'iclass_team_auto_assigned'
-  | 'iclass_team_auto_assign_failed';
+  | 'iclass_team_auto_assign_failed'
+  // noc-broadcast-traceability — la tarea de RED se difundió al canal NOC (WhatsApp).
+  | 'noc_broadcast_sent';
 
 export interface TaskActivity {
   id: string;

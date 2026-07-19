@@ -121,6 +121,10 @@ describe('scheduling.routes — POST /:id/broadcast-noc (N3)', () => {
     expect(gateway.sent).toEqual([
       `📧 [Red · Nodo Agote] Revisar OLT saturada\n🔗 ${BASE}/admin/scheduling/tasks/net-1`,
     ]);
+    // noc-broadcast-traceability — la ruta pasa el actor del req.user (FakeAuthProvider → 'test').
+    const task = await repo.getTask('net-1');
+    expect(task!.lastBroadcastByName).toBe('test');
+    expect(task!.lastBroadcastAt).not.toBeNull();
   });
 
   it('network task without a node → message falls back to "[Red]"', async () => {

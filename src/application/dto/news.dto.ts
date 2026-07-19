@@ -45,6 +45,8 @@ export interface NewsPostDto {
   archivedAt: string | null;
   /** N2 — última difusión al NOC (ISO) o null si nunca se difundió. */
   lastBroadcastAt: string | null;
+  /** noc-broadcast-traceability — nombre del actor de la última difusión o null. */
+  lastBroadcastByName: string | null;
   read: boolean;
   /** N2 — adjuntos (imágenes/archivos/links) de la noticia. Vacío si no tiene. */
   attachments: NewsPostAttachmentDto[];
@@ -77,6 +79,7 @@ export function toNewsPostDto(
     publishedAt: post.publishedAt.toISOString(),
     archivedAt: post.archivedAt ? post.archivedAt.toISOString() : null,
     lastBroadcastAt: post.lastBroadcastAt ? post.lastBroadcastAt.toISOString() : null,
+    lastBroadcastByName: post.lastBroadcastByName ?? null,
     read,
     attachments,
     createdAt: post.createdAt.toISOString(),

@@ -182,7 +182,7 @@ export class CreateExternalNews {
       return { requested: false, sent: false };
     }
     try {
-      const result = await this.broadcastNewsToNoc.execute(postId, input.authorId);
+      const result = await this.broadcastNewsToNoc.execute(postId, input.authorId, input.authorName);
       return { requested: true, sent: true, link: result.link };
     } catch (err) {
       // Best-effort: a KNOWN broadcast failure does NOT roll back the created post —

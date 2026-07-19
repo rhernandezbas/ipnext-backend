@@ -146,6 +146,11 @@ export function toTask(row: any): ScheduledTask {
     archivedAt: row.archivedAt instanceof Date
       ? row.archivedAt.toISOString()
       : (row.archivedAt ?? null),
+    // noc-broadcast-traceability — última difusión al NOC + actor (snapshot).
+    lastBroadcastAt: row.lastBroadcastAt instanceof Date
+      ? row.lastBroadcastAt.toISOString()
+      : (row.lastBroadcastAt ?? null),
+    lastBroadcastByName: row.lastBroadcastByName ?? null,
     // Task timestamps — the frontend type declares these non-nullable; the
     // Edad column in TasksTableView crashes with "NaN días" if they are missing.
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
@@ -734,6 +739,22 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       return toTask(row);
     } catch {
       return null;
+    }
+  }
+
+  // ── noc-broadcast-traceability ───────────────────────────────────────────
+
+  async recordTaskBroadcast(taskId: string, actorName: string): Promise<void> {
+    try {
+      await (prisma.scheduledTask as any).update({
+        where: { id: taskId },
+        data: { lastBroadcastAt: new Date(), lastBroadcastByName: actorName },
+      });
+    } catch (err) {
+      // P2025 — la tarea ya no existe: no-op (mismo contrato que los demás stamps).
+      // Cualquier otro error (conexión, constraint) SÍ propaga.
+      if ((err as { code?: string } | null)?.code === 'P2025') return;
+      throw err;
     }
   }
 

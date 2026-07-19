@@ -1324,6 +1324,11 @@ model ScheduledTask {
   // #86 — archive flag. Only closed/dismissed tasks can be archived. Null = not archived.
   archivedAt DateTime?
 
+  // noc-broadcast-traceability — última difusión de la tarea al canal NOC (WhatsApp) +
+  // nombre (snapshot) del actor que la disparó. Null = nunca difundida.
+  lastBroadcastAt     DateTime?
+  lastBroadcastByName String?
+
   // RV — inventory team review flag
   reviewedByInventory       Boolean   @default(false)
   reviewedByInventoryAt     DateTime?
@@ -3362,6 +3367,8 @@ model NewsPost {
   archivedAt   DateTime?
   // N2 — última difusión al NOC (WhatsApp). null = nunca difundida.
   lastBroadcastAt DateTime?
+  // noc-broadcast-traceability — nombre (snapshot) del actor de la última difusión al NOC.
+  lastBroadcastByName String?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   readReceipts NewsReadReceipt[]

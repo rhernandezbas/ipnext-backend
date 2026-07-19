@@ -146,7 +146,7 @@ async function buildApp(opts: { appPublicUrl?: string } = {}) {
   app.use('/api/news', router);
   app.use(errorHandler);
 
-  return { app, gateway, postId: post.id, manageUserId, readUserId, noPermUserId };
+  return { app, gateway, postRepo, postId: post.id, manageUserId, readUserId, noPermUserId };
 }
 
 const asUser = (req: request.Test, userId: string): request.Test => req.set('Cookie', `auth_token=${userId}`);
@@ -326,6 +326,15 @@ describe('POST /api/news/:id/broadcast', () => {
     expect(res.body.link).toBe(`http://190.7.234.37:7778/admin/news?post=${postId}`);
     expect(gateway.sent[0]).toContain('📢 Corte Zona Norte');
     expect(gateway.sent[0]).toContain(`/admin/news?post=${postId}`);
+  });
+
+  it('noc-broadcast-traceability — estampa lastBroadcastByName con el username del req.user', async () => {
+    const { app, postId, manageUserId, postRepo } = await buildApp();
+    await asUser(request(app).post(`/api/news/${postId}/broadcast`), manageUserId);
+    // EchoAuthProvider.getSession resuelve username = 'test' → la ruta lo pasa como actorName.
+    const post = await postRepo.findById(postId, manageUserId);
+    expect(post!.lastBroadcastByName).toBe('test');
+    expect(post!.lastBroadcastAt).not.toBeNull();
   });
 
   it('sin news:manage → 403', async () => {
