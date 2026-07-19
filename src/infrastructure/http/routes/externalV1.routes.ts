@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
+import multer from 'multer';
 import { Customer } from '@domain/entities/customer';
 import { ClientNotFoundError } from '@domain/errors';
 import { ListClients } from '@application/use-cases/ListClients';
@@ -22,6 +23,7 @@ import { NewsCategoryNotFoundError } from '@domain/errors/news';
 import {
   InvalidLinkAttachmentError,
   TooManyNewsAttachmentsError,
+  UnsupportedNewsAttachmentTypeError,
 } from '@domain/errors/newsAttachment';
 import { NewsPostAttachmentDto } from '@application/dto/newsAttachment.dto';
 
@@ -147,6 +149,56 @@ const MAX_NEWS_BODY_LEN = 20000;
 // unbounded text via link.url / link.title. 2048 is the de-facto safe URL length.
 const MAX_LINK_URL_LEN = 2048;
 const MAX_LINK_TITLE_LEN = 200;
+
+// Multipart limits for POST /news binary uploads. This is a PUBLIC (api-key) write, so
+// the ceilings are TIGHTER than the internal newsMedia.routes: 10 MiB/file, at most 10
+// files under `files`, AND a 40 MiB TOTAL-batch cap (below). Note: the per-post COMBINED
+// cupo (links + files ≤ 20) still lives in the use case — this only bounds FILES/request.
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_FILES = 10;
+const FILES_FIELD = 'files';
+
+/**
+ * fix-be #1 [ALTO] — sin este cap, `MAX_FILE_BYTES × MAX_FILES` (10MB × 10) deja pasar
+ * hasta 100 MB en RAM por request (multer memoryStorage) sobre una superficie PÚBLICA:
+ * un DoS de memoria trivial. Este techo del TOTAL del lote (40 MB) corta ANTES de llegar
+ * al handler. Mismo patrón que `MAX_TOTAL_BATCH_BYTES` en messaging.routes.ts.
+ */
+const MAX_TOTAL_BATCH_BYTES = 40 * 1024 * 1024;
+
+/**
+ * Unified boolean parser for POST /news (works for JSON and multipart WITHOUT branching
+ * on content-type): a real boolean (JSON) OR the strings "true"/"false" (multipart
+ * form-fields arrive as strings). Returns the boolean, `undefined` if absent, or the
+ * sentinel `'INVALID'` if present but not coercible (→ 400).
+ */
+function parseUnifiedBoolean(raw: unknown): boolean | undefined | 'INVALID' {
+  if (raw === undefined) return undefined;
+  if (typeof raw === 'boolean') return raw;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  return 'INVALID';
+}
+
+/**
+ * Unified links parser for POST /news: an array (JSON) OR a JSON STRING that parses to
+ * an array (multipart). Returns the array, `undefined` if absent, or `null` if present
+ * but not an array / not a JSON-string-of-array (→ 400). Per-item shape is validated by
+ * the caller (url string ≤ 2048, title string ≤ 200) — unchanged from the JSON contract.
+ */
+function parseUnifiedLinks(raw: unknown): unknown[] | undefined | null {
+  if (raw === undefined) return undefined;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
 
 /**
  * Curated external view of a news attachment (L4). The internal NewsPostAttachmentDto
@@ -444,7 +496,48 @@ export function createExternalV1Router(
   if (newsDeps) {
     const { createExternalNews, rbacUserRepo, rateLimiter } = newsDeps;
     const writeGuards: RequestHandler[] = rateLimiter ? [rateLimiter] : [];
-    router.post('/news', ...writeGuards, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+
+    // Multer for the OPTIONAL multipart mode — same mould as newsMedia.routes. On a JSON
+    // request it is NOT multipart, so multer calls next() WITHOUT touching req.body (already
+    // parsed by express.json). Its limit errors are translated to clean 4xx (never 500).
+    const upload = multer({
+      storage: multer.memoryStorage(),
+      limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES },
+    });
+    const uploadFiles: RequestHandler = (req, res, next) => {
+      upload.array(FILES_FIELD, MAX_FILES)(req, res, (err: unknown) => {
+        if (!err) {
+          // fix-be #1 [ALTO] — cap del tamaño TOTAL del lote (no solo por archivo).
+          const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+          const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+          if (totalBytes > MAX_TOTAL_BATCH_BYTES) {
+            res.status(413).json({
+              error: `The combined size of all files exceeds the ${Math.floor(MAX_TOTAL_BATCH_BYTES / (1024 * 1024))}MB total batch limit`,
+              code: 'BATCH_TOO_LARGE',
+            });
+            return;
+          }
+          next();
+          return;
+        }
+        if (err instanceof multer.MulterError) {
+          if (err.code === 'LIMIT_FILE_SIZE') {
+            res.status(413).json({ error: 'One of the files exceeds the 10MB limit', code: 'FILE_TOO_LARGE' });
+            return;
+          }
+          if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+            res.status(400).json({ error: `At most ${MAX_FILES} files are allowed under the "files" field`, code: 'TOO_MANY_FILES' });
+            return;
+          }
+          res.status(400).json({ error: err.message, code: 'UPLOAD_ERROR' });
+          return;
+        }
+        next(err);
+      });
+    };
+
+    // Multer wrapper sits AFTER the rate limiter, BEFORE the handler.
+    router.post('/news', ...writeGuards, uploadFiles, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const body = (req.body ?? {}) as Record<string, unknown>;
         const title = typeof body['title'] === 'string' ? body['title'].trim() : '';
@@ -473,36 +566,35 @@ export function createExternalV1Router(
           return;
         }
 
-        // pinned — optional boolean (400 if present and not a boolean; no coercion).
-        let pinned = false;
-        if (body['pinned'] !== undefined) {
-          if (typeof body['pinned'] !== 'boolean') {
-            res.status(400).json({ error: 'pinned must be a boolean', code: 'VALIDATION_ERROR' });
-            return;
-          }
-          pinned = body['pinned'];
+        // pinned — optional boolean. Unified: real boolean (JSON) OR "true"/"false"
+        // (multipart form-field). Present-but-not-coercible → 400.
+        const pinnedParsed = parseUnifiedBoolean(body['pinned']);
+        if (pinnedParsed === 'INVALID') {
+          res.status(400).json({ error: 'pinned must be a boolean', code: 'VALIDATION_ERROR' });
+          return;
         }
+        const pinned = pinnedParsed ?? false;
 
-        // sendToWhatsapp — optional boolean (400 if present and not a boolean).
-        let sendToWhatsapp = false;
-        if (body['sendToWhatsapp'] !== undefined) {
-          if (typeof body['sendToWhatsapp'] !== 'boolean') {
-            res.status(400).json({ error: 'sendToWhatsapp must be a boolean', code: 'VALIDATION_ERROR' });
-            return;
-          }
-          sendToWhatsapp = body['sendToWhatsapp'];
+        // sendToWhatsapp — optional boolean (same unified parsing as pinned).
+        const sendToWhatsappParsed = parseUnifiedBoolean(body['sendToWhatsapp']);
+        if (sendToWhatsappParsed === 'INVALID') {
+          res.status(400).json({ error: 'sendToWhatsapp must be a boolean', code: 'VALIDATION_ERROR' });
+          return;
         }
+        const sendToWhatsapp = sendToWhatsappParsed ?? false;
 
-        // links — optional array of { url: string, title?: string }. TYPE/shape checks
-        // are 400 here; the DOMAIN checks (count > 20, non-http(s) scheme) are 422 and
-        // live in the use case (thrown as TooManyNewsAttachments / InvalidLinkAttachment).
+        // links — optional array of { url: string, title?: string }. Unified: an array
+        // (JSON) OR a JSON STRING that parses to an array (multipart). TYPE/shape checks
+        // are 400 here; the DOMAIN checks (combined count > 20, non-http(s) scheme) are 422
+        // and live in the use case (TooManyNewsAttachments / InvalidLinkAttachment).
         const links: { url: string; title?: string }[] = [];
-        if (body['links'] !== undefined) {
-          if (!Array.isArray(body['links'])) {
-            res.status(400).json({ error: 'links must be an array', code: 'VALIDATION_ERROR' });
-            return;
-          }
-          for (const raw of body['links']) {
+        const linksParsed = parseUnifiedLinks(body['links']);
+        if (linksParsed === null) {
+          res.status(400).json({ error: 'links must be an array (or a JSON string of an array)', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        if (linksParsed !== undefined) {
+          for (const raw of linksParsed) {
             const item = (raw ?? {}) as Record<string, unknown>;
             if (typeof item['url'] !== 'string') {
               res.status(400).json({ error: 'each link.url must be a string', code: 'VALIDATION_ERROR' });
@@ -532,6 +624,16 @@ export function createExternalV1Router(
           }
         }
 
+        // files — binary uploads from multer (multipart mode). Absent/empty in JSON mode.
+        // Mapped to the use case's AttachNewsFile shape; type validation lives in the use
+        // case (UnsupportedNewsAttachmentTypeError → 415) so a bad file never creates a post.
+        const uploaded = (req.files as Express.Multer.File[] | undefined) ?? [];
+        const files = uploaded.map((f) => ({
+          buffer: f.buffer,
+          originalName: f.originalname,
+          mimeType: f.mimetype,
+        }));
+
         // Resolve the system "Api" author — bootstrapped UNCONDITIONALLY in main
         // (bootstrapSystemUsers). If absent, the platform is misconfigured → 503.
         const reporter = await rbacUserRepo.findByLogin(API_USER_LOGIN);
@@ -549,6 +651,7 @@ export function createExternalV1Router(
           category,
           pinned,
           links,
+          files,
           sendToWhatsapp,
           authorId: reporter.id,
           authorName: reporter.name,
@@ -556,6 +659,12 @@ export function createExternalV1Router(
 
         res.status(201).json(toExternalNewsDto(result));
       } catch (err) {
+        // An unsupported binary type is a well-formed request with an unacceptable
+        // payload → 415 (mirrors the internal newsMedia route). Its `code` is a wire contract.
+        if (err instanceof UnsupportedNewsAttachmentTypeError) {
+          res.status(415).json({ error: err.message, code: err.code });
+          return;
+        }
         // Domain errors from the orchestration → 422 (well-formed request, invalid
         // reference/semantics). Each `code` is a wire contract.
         if (

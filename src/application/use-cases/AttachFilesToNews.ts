@@ -39,14 +39,14 @@ const FILE_MIME_TO_EXT: Record<string, string> = {
   'text/markdown': 'md',
 };
 
-interface Classification {
+export interface NewsFileClassification {
   kind: NewsPostAttachmentKind; // 'image' | 'file'
   ext: string;
   mimeType: string;
 }
 
 /** Extensión `.md` primero (robusto al MIME que manda el browser), luego allowlist de MIME. */
-function classify(originalName: string, mimeType: string): Classification | null {
+function classify(originalName: string, mimeType: string): NewsFileClassification | null {
   if (/\.md$/i.test(originalName)) {
     return { kind: 'file', ext: 'md', mimeType: 'text/markdown' };
   }
@@ -63,6 +63,28 @@ export interface AttachNewsFile {
   buffer: Buffer;
   originalName: string;
   mimeType: string;
+}
+
+/**
+ * Valida TODO el lote de archivos SIN escribir nada: rechaza 0-byte y tipos no
+ * permitidos (imágenes / .md / pdf) con `UnsupportedNewsAttachmentTypeError`. Devuelve
+ * las clasificaciones (kind/ext/mimeType normalizado) en el MISMO orden de entrada.
+ *
+ * Función PURA exportada para poder validar upfront desde otros orquestadores (ej.
+ * CreateExternalNews, que NO debe crear el post si un archivo tiene tipo inválido). El
+ * `execute` de AttachFilesToNews la reusa internamente — comportamiento idéntico.
+ */
+export function validateNewsFilesBatch(files: AttachNewsFile[]): NewsFileClassification[] {
+  const classified: NewsFileClassification[] = [];
+  for (const file of files) {
+    if (!(file.buffer.length > 0)) {
+      throw new UnsupportedNewsAttachmentTypeError(file.mimeType);
+    }
+    const c = classify(file.originalName, file.mimeType);
+    if (!c) throw new UnsupportedNewsAttachmentTypeError(file.mimeType);
+    classified.push(c);
+  }
+  return classified;
 }
 
 export interface AttachFilesToNewsInput {
@@ -96,16 +118,8 @@ export class AttachFilesToNews {
     const post = await this.posts.findById(input.newsPostId, input.uploadedById);
     if (!post) throw new NewsPostNotFoundError(input.newsPostId);
 
-    // 2) Validación UPFRONT del lote — antes de escribir nada.
-    const classified: Classification[] = [];
-    for (const file of input.files) {
-      if (!(file.buffer.length > 0)) {
-        throw new UnsupportedNewsAttachmentTypeError(file.mimeType);
-      }
-      const c = classify(file.originalName, file.mimeType);
-      if (!c) throw new UnsupportedNewsAttachmentTypeError(file.mimeType);
-      classified.push(c);
-    }
+    // 2) Validación UPFRONT del lote — antes de escribir nada (tipo + 0 bytes).
+    const classified = validateNewsFilesBatch(input.files);
 
     // 3) cupo por noticia
     const existing = await this.attachments.countByNewsPostId(input.newsPostId);

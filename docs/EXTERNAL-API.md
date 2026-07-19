@@ -138,21 +138,43 @@ Body (JSON) — **todos requeridos**:
 ### `POST /news` — crear una noticia  *(rate-limited)*
 
 Crea una noticia en el tablón interno, a nombre del usuario de sistema `api`. Soporta **cuerpo en
-Markdown**, **adjuntos de tipo link**, y **difusión opcional al canal NOC de WhatsApp** — el que usa
-la API decide si difunde con el campo `sendToWhatsapp`.
+Markdown**, **adjuntos de tipo link**, **archivos binarios** (imágenes / PDF / `.md`), y **difusión
+opcional al canal NOC de WhatsApp** — el que usa la API decide si difunde con el campo `sendToWhatsapp`.
 
-Body (JSON):
+**Dos modos de envío** (el endpoint parsea los campos igual en ambos):
+
+- **`application/json`** — el modo clásico (links + Markdown). Sigue funcionando **exactamente igual**.
+- **`multipart/form-data`** — para subir **archivos binarios**. Los campos escalares van como
+  form-fields (strings), `links` va como **un string JSON** de un array, y los binarios van en el
+  campo repetido **`files`**.
+
+Body (JSON o form-fields multipart):
 
 | Campo            | Tipo    | Req. | Reglas |
 |------------------|---------|------|--------|
 | `title`          | string  | ✅   | 1..200 chars |
 | `body`           | string  | ✅   | **Markdown**, 1..20000 chars |
 | `category`       | string  | ✅   | **nombre** de la categoría (debe existir) |
-| `pinned`         | boolean | —    | default `false` |
-| `links`          | array   | —    | `[{ "url": "https://…", "title"?: "..." }]`; máx **20**; `url` debe ser `http(s)`; `title` es el rótulo del adjunto |
-| `sendToWhatsapp` | boolean | —    | default `false`. Si `true`, difunde la noticia al canal NOC |
+| `pinned`         | boolean | —    | default `false`. En multipart: el string `"true"`/`"false"` |
+| `links`          | array   | —    | `[{ "url": "https://…", "title"?: "..." }]`; `url` `http(s)` ≤2048; `title` ≤200. En multipart: un **string JSON** del array |
+| `files`          | binario | —    | solo **multipart**; campo repetido. Tipos: `jpg`, `png`, `webp`, `gif`, `pdf`, `md`. Máx **10 MB por archivo**, **10 archivos** y **40 MB en total** por request |
+| `sendToWhatsapp` | boolean | —    | default `false`. Si `true`, difunde la noticia al canal NOC. En multipart: `"true"`/`"false"` |
 
-Ejemplo:
+> **Cupo combinado**: `links` + `files` no puede superar **20 adjuntos** por noticia (`422
+> TOO_MANY_NEWS_ATTACHMENTS`). En la respuesta, `attachments` lista **primero los links, luego los
+> archivos**; cada binario trae `fileUrl` (ruta BE-proxy que sirve el archivo) y `url: null`.
+
+> **`fileUrl` es INTERNO**: la ruta que sirve el binario (`/api/news/attachments/{id}/file`) está
+> gateada por sesión del panel (cookie + permiso `news:read`), **no** por esta API key. Un consumidor
+> externo NO puede descargar el archivo con su token — el `fileUrl` es para que lo consuman los usuarios
+> del panel NOC (que es donde se ven las noticias). El caller externo crea la noticia; el binario lo
+> mira el equipo internamente. Si necesitás que el sistema externo también LEA los archivos, se puede
+> exponer un GET gateado por API key (no está en v1).
+
+> **Booleanos lenient**: `pinned`/`sendToWhatsapp` aceptan el boolean real (JSON) o exactamente los
+> strings `"true"`/`"false"` (multipart, y también en JSON por consistencia). Cualquier otro valor → 400.
+
+Ejemplo (JSON):
 ```json
 {
   "title": "Corte programado zona Centro",
@@ -202,10 +224,14 @@ Errores (fallan el request):
 
 | Status | code | Cuándo |
 |--------|------|--------|
-| 400 | `VALIDATION_ERROR` | falta `title`/`body`/`category`, largo excedido, `pinned`/`sendToWhatsapp` no-boolean, `links` no-array, o `link.url`/`link.title` no-string |
+| 400 | `VALIDATION_ERROR` | falta `title`/`body`/`category`, largo excedido, `pinned`/`sendToWhatsapp` no-boolean (ni `"true"`/`"false"`), `links` no-array (ni JSON-string de array), o `link.url`/`link.title` no-string |
+| 413 | `FILE_TOO_LARGE` | un archivo de `files` supera **10 MB** |
+| 413 | `BATCH_TOO_LARGE` | la suma de todos los `files` supera **40 MB** por request |
+| 400 | `TOO_MANY_FILES` | más de **10** archivos bajo el campo `files` |
+| 415 | `UNSUPPORTED_NEWS_ATTACHMENT_TYPE` | un archivo no es `jpg`/`png`/`webp`/`gif`/`pdf`/`md` (o pesa 0 bytes) |
 | 422 | `NEWS_CATEGORY_NOT_FOUND` | la `category` (nombre) no existe |
 | 422 | `INVALID_LINK_ATTACHMENT` | un `url` no es `http(s)` |
-| 422 | `TOO_MANY_NEWS_ATTACHMENTS` | más de 20 links |
+| 422 | `TOO_MANY_NEWS_ATTACHMENTS` | `links` + `files` combinados superan 20 |
 | 503 | `REPORTER_UNAVAILABLE` | el usuario de sistema `api` no está aprovisionado |
 | 429 | `RATE_LIMITED` | superó el límite de escritura |
 
@@ -214,10 +240,9 @@ Errores (fallan el request):
 > reintento ciego puede duplicarla. Ante un `500`, verificá antes de reintentar. Los `4xx` sí son
 > all-or-nothing (no crean nada).
 
-> **Nota sobre adjuntos**: la API externa v1 acepta adjuntos de tipo **link** (referencian recursos
-> por URL). La subida de **archivos binarios** (imágenes, PDF, `.md` como archivo) existe en el endpoint
-> INTERNO del panel (`POST /api/news/:id/attachments`, multipart) y puede exponerse en la API externa
-> como variante multipart si hace falta. Para contenido Markdown, va directo en el campo `body`.
+> **Nota sobre adjuntos**: la API externa v1 acepta **links** (referencian recursos por URL, en
+> ambos modos) y **archivos binarios** (imágenes, PDF, `.md` como archivo) vía **multipart**. Para
+> contenido Markdown, va directo en el campo `body`. El modo JSON no sube binarios — usá multipart.
 
 ---
 
@@ -254,4 +279,23 @@ curl -X POST https://<host>/api/external/v1/news \
     "category": "Red",
     "sendToWhatsapp": true
   }'
+```
+
+### `curl` de ejemplo — crear noticia con archivos (multipart)
+
+`Content-Type: multipart/form-data` lo pone `curl` solo con `-F`. Los escalares van como form-fields,
+`links` como un **string JSON**, y cada binario como `-F "files=@ruta"` (repetible, hasta 10 archivos / 10 MB c/u / 40 MB total):
+
+```bash
+curl -X POST https://<host>/api/external/v1/news \
+  -H "X-API-Key: $EXTERNAL_API_KEY" \
+  -F "title=Corte programado zona Centro" \
+  -F "body=## Mantenimiento
+Sábado 02:00–04:00 por obra de fibra." \
+  -F "category=Red" \
+  -F "pinned=true" \
+  -F "sendToWhatsapp=true" \
+  -F 'links=[{"url":"https://status.prominense.com/incidents/42","title":"Estado"}]' \
+  -F "files=@/ruta/plano-obra.pdf" \
+  -F "files=@/ruta/mapa.png"
 ```

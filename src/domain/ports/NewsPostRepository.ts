@@ -41,6 +41,13 @@ export interface NewsPostRepository {
   /** Ordered pinned DESC, publishedAt DESC. Excludes archived by default. */
   list(filters: NewsPostListFilters, userId: string): Promise<NewsPostWithReadState[]>;
   setArchived(id: string, archived: boolean): Promise<NewsPost | null>;
+  /**
+   * HARD delete a post (row + cascade: `NewsPostAttachment` and `NewsReadReceipt` have
+   * `onDelete: Cascade`). Distinct from `setArchived` (soft). Idempotent: deleting a
+   * missing post is a no-op, NOT an error. Used as the compensation step when an
+   * orchestrator must undo a just-created post (all-or-nothing on the 5xx path).
+   */
+  delete(id: string): Promise<void>;
   /** Idempotent upsert — repeated calls for the same (post, user) leave ONE receipt. */
   markRead(postId: string, userId: string): Promise<void>;
   /** Count of non-archived posts with no read receipt from this user. */

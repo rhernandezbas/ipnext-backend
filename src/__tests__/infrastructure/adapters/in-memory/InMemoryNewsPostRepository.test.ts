@@ -35,8 +35,27 @@ describe('InMemoryNewsPostRepository', () => {
     expect(typeof repo.findById).toBe('function');
     expect(typeof repo.list).toBe('function');
     expect(typeof repo.setArchived).toBe('function');
+    expect(typeof repo.delete).toBe('function');
     expect(typeof repo.markRead).toBe('function');
     expect(typeof repo.countUnread).toBe('function');
+  });
+
+  // ─── delete: HARD delete + receipt cascade + idempotencia ──────────────────────
+
+  it('delete removes the post AND cascades its read receipts; idempotent on missing id', async () => {
+    const repo = new InMemoryNewsPostRepository();
+    const post = await repo.create(baseInput());
+    await repo.markRead(post.id, 'u1');
+    expect(repo.receipts.size).toBe(1);
+
+    await repo.delete(post.id);
+
+    expect(await repo.findById(post.id, 'u1')).toBeNull();
+    expect(await repo.list({}, 'u1')).toHaveLength(0);
+    expect(repo.receipts.size).toBe(0); // cascade emulation
+    // idempotent: deleting a missing/already-deleted post is a no-op, not an error
+    await expect(repo.delete(post.id)).resolves.toBeUndefined();
+    await expect(repo.delete('never-existed')).resolves.toBeUndefined();
   });
 
   it('create stamps id + publishedAt (now) + defaults pinned to false', async () => {

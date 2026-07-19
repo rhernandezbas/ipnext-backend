@@ -12,11 +12,13 @@ import { createApiKeyMiddleware } from '../../infrastructure/http/middleware/api
 import { CreateExternalNews } from '../../application/use-cases/CreateExternalNews';
 import { CreateNewsPost } from '../../application/use-cases/CreateNewsPost';
 import { AttachLinkToNews } from '../../application/use-cases/AttachLinkToNews';
+import { AttachFilesToNews } from '../../application/use-cases/AttachFilesToNews';
 import { BroadcastNewsToNoc } from '../../application/use-cases/BroadcastNewsToNoc';
 import { BroadcastToNoc } from '../../application/use-cases/nocBroadcast/BroadcastToNoc';
 import { InMemoryNewsPostRepository } from '../../infrastructure/adapters/in-memory/InMemoryNewsPostRepository';
 import { InMemoryNewsCategoryRepository } from '../../infrastructure/adapters/in-memory/InMemoryNewsCategoryRepository';
 import { InMemoryNewsPostAttachmentRepository } from '../../infrastructure/adapters/in-memory/InMemoryNewsPostAttachmentRepository';
+import { InMemoryFileStorage } from '../../infrastructure/adapters/in-memory/InMemoryFileStorage';
 import { InMemoryNocBroadcastConfigRepository } from '../../infrastructure/adapters/in-memory/InMemoryNocBroadcastConfigRepository';
 import { InMemoryRbacUserRepository } from '../../infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { NocBroadcastGateway } from '../../domain/ports/NocBroadcastGateway';
@@ -55,6 +57,7 @@ async function buildApp(opts: BuildOpts = {}) {
   const categoryRepo = new InMemoryNewsCategoryRepository();
   const postRepo = new InMemoryNewsPostRepository(categoryRepo);
   const attachmentRepo = new InMemoryNewsPostAttachmentRepository();
+  const storage = new InMemoryFileStorage();
   await categoryRepo.create({ name: 'General', color: '#64748b' });
 
   const config = new InMemoryNocBroadcastConfigRepository();
@@ -67,6 +70,8 @@ async function buildApp(opts: BuildOpts = {}) {
     new CreateNewsPost(postRepo, categoryRepo),
     new AttachLinkToNews(attachmentRepo, postRepo),
     new BroadcastNewsToNoc(postRepo, new BroadcastToNoc(config, gateway)),
+    new AttachFilesToNews(attachmentRepo, storage, postRepo),
+    postRepo,
   );
 
   const rbacUserRepo = new InMemoryRbacUserRepository();
@@ -341,5 +346,208 @@ describe('POST /api/external/v1/news (external-news — 2nd external WRITE)', ()
       sent: false,
       error: 'NOC_BROADCAST_NOT_CONFIGURED',
     });
+  });
+});
+
+// ── multipart/form-data mode (binary file uploads) ───────────────────────────
+// The endpoint is DUAL-MODE: the JSON tests above still pass unchanged; these
+// exercise the multipart path (form-fields + `files` for binaries + `links` as a
+// JSON string). Field parsing is unified (no branch on content-type).
+describe('POST /api/external/v1/news — multipart mode (binary uploads)', () => {
+  const JPG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+
+  it('multipart with a valid image → 201, attachment kind=image (fileUrl set, url null)', async () => {
+    const { app, postRepo } = await buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Corte multipart')
+      .field('body', 'Detalle **markdown**')
+      .field('category', 'General')
+      .attach('files', JPG, { filename: 'foto.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.title).toBe('Corte multipart');
+    expect(res.body.category).toBe('General');
+    expect(res.body.attachments).toHaveLength(1);
+    expect(res.body.attachments[0].kind).toBe('image');
+    expect(res.body.attachments[0].url).toBeNull();
+    expect(res.body.attachments[0].fileUrl).toContain('/api/news/attachments/');
+    expect(await postRepo.list({}, 'x')).toHaveLength(1);
+  });
+
+  it('multipart with links as a JSON string + a file → both attached (links FIRST)', async () => {
+    const { app } = await buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Con links y file')
+      .field('body', 'Detalle')
+      .field('category', 'General')
+      .field('links', JSON.stringify([{ url: 'https://x.com/a', title: 'Nota A' }]))
+      .attach('files', JPG, { filename: 'foto.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.attachments).toHaveLength(2);
+    expect(res.body.attachments[0].kind).toBe('link');
+    expect(res.body.attachments[0].url).toBe('https://x.com/a');
+    expect(res.body.attachments[0].filename).toBe('Nota A');
+    expect(res.body.attachments[1].kind).toBe('image');
+  });
+
+  it('multipart with pinned/sendToWhatsapp as the string "true" → coerced to boolean', async () => {
+    const { app, gateway } = await buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Pinned string')
+      .field('body', 'Detalle')
+      .field('category', 'General')
+      .field('pinned', 'true')
+      .field('sendToWhatsapp', 'true')
+      .attach('files', JPG, { filename: 'foto.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.pinned).toBe(true);
+    expect(res.body.whatsapp.sent).toBe(true);
+    expect(gateway.sent).toHaveLength(1);
+  });
+
+  it('multipart with pinned as a non-boolean string ("yes") → 400 VALIDATION_ERROR', async () => {
+    const { app } = await buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Bad pinned')
+      .field('body', 'Detalle')
+      .field('category', 'General')
+      .field('pinned', 'yes');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('multipart with an unsupported file type → 415 UNSUPPORTED_NEWS_ATTACHMENT_TYPE', async () => {
+    const { app, postRepo } = await buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Bad file')
+      .field('body', 'Detalle')
+      .field('category', 'General')
+      .attach('files', Buffer.from('x'), { filename: 'a.exe', contentType: 'application/x-msdownload' });
+
+    expect(res.status).toBe(415);
+    expect(res.body.code).toBe('UNSUPPORTED_NEWS_ATTACHMENT_TYPE');
+    // all-or-nothing: no post created on the 4xx path
+    expect(await postRepo.list({}, 'x')).toHaveLength(0);
+  });
+
+  it('multipart batch total over 40 MB (per-file ok) → 413 BATCH_TOO_LARGE', async () => {
+    const { app, postRepo } = await buildApp();
+    // 5 archivos de 9 MB c/u = 45 MB > 40 MB, cada uno < 10 MB (per-file ok) y < 10 archivos.
+    const nineMb = Buffer.alloc(9 * 1024 * 1024, 0x41);
+    let req = request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Batch too large')
+      .field('body', 'Detalle')
+      .field('category', 'General');
+    for (let i = 0; i < 5; i++) {
+      req = req.attach('files', nineMb, { filename: `f${i}.jpg`, contentType: 'image/jpeg' });
+    }
+    const res = await req;
+    expect(res.status).toBe(413);
+    expect(res.body.code).toBe('BATCH_TOO_LARGE');
+    // all-or-nothing: el cap corta ANTES del handler → no se crea nada
+    expect(await postRepo.list({}, 'x')).toHaveLength(0);
+  });
+
+  it('multipart over 10 files → 400 TOO_MANY_FILES (techo bajado a 10)', async () => {
+    const { app } = await buildApp();
+    let req = request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Eleven files')
+      .field('body', 'Detalle')
+      .field('category', 'General');
+    for (let i = 0; i < 11; i++) {
+      req = req.attach('files', JPG, { filename: `f${i}.jpg`, contentType: 'image/jpeg' });
+    }
+    const res = await req;
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('TOO_MANY_FILES');
+  });
+
+  it('multipart file over 10 MiB → 413 FILE_TOO_LARGE', async () => {
+    const { app } = await buildApp();
+    const big = Buffer.alloc(10 * 1024 * 1024 + 1, 0x41);
+    const res = await request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Big')
+      .field('body', 'Detalle')
+      .field('category', 'General')
+      .attach('files', big, { filename: 'big.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(413);
+    expect(res.body.code).toBe('FILE_TOO_LARGE');
+  });
+
+  it('multipart well over the file ceiling (21 files) → 400 TOO_MANY_FILES', async () => {
+    const { app } = await buildApp();
+    let req = request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Too many')
+      .field('body', 'Detalle')
+      .field('category', 'General');
+    for (let i = 0; i < 21; i++) {
+      req = req.attach('files', JPG, { filename: `f${i}.jpg`, contentType: 'image/jpeg' });
+    }
+    const res = await req;
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('TOO_MANY_FILES');
+  });
+
+  it('multipart combined links + files > 20 → 422 TOO_MANY_NEWS_ATTACHMENTS', async () => {
+    const { app } = await buildApp();
+    const links = Array.from({ length: 15 }, (_, i) => ({ url: `https://x.com/${i}` }));
+    let req = request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Combined')
+      .field('body', 'Detalle')
+      .field('category', 'General')
+      .field('links', JSON.stringify(links));
+    for (let i = 0; i < 10; i++) {
+      req = req.attach('files', JPG, { filename: `f${i}.jpg`, contentType: 'image/jpeg' });
+    }
+    const res = await req;
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TOO_MANY_NEWS_ATTACHMENTS');
+  });
+
+  it('multipart with links as an invalid JSON string → 400 VALIDATION_ERROR', async () => {
+    const { app } = await buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .field('title', 'Bad links')
+      .field('body', 'Detalle')
+      .field('category', 'General')
+      .field('links', 'not-json');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('JSON mode still works unchanged (no multipart) → 201', async () => {
+    const { app } = await buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/news')
+      .set('X-API-Key', TEST_KEY)
+      .send({ ...validPayload, pinned: true });
+    expect(res.status).toBe(201);
+    expect(res.body.pinned).toBe(true);
+    expect(res.body.attachments).toEqual([]);
   });
 });

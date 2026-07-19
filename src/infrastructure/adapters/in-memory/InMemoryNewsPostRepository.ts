@@ -122,6 +122,15 @@ export class InMemoryNewsPostRepository implements NewsPostRepository {
     return { ...updated };
   }
 
+  async delete(id: string): Promise<void> {
+    // HARD delete + cascade emulation: drop the post and its read receipts (mirrors the
+    // DB's onDelete: Cascade). Idempotent — a missing post is a no-op, never an error.
+    this.items = this.items.filter((i) => i.id !== id);
+    for (const key of this.receipts.keys()) {
+      if (key.startsWith(`${id}|`)) this.receipts.delete(key);
+    }
+  }
+
   async markRead(postId: string, userId: string): Promise<void> {
     // Map.set on an existing key overwrites in place — dedup is structural, not a check.
     this.receipts.set(this.key(postId, userId), { postId, userId, readAt: new Date() });

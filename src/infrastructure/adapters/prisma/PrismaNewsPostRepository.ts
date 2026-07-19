@@ -117,6 +117,20 @@ export class PrismaNewsPostRepository implements NewsPostRepository {
     }
   }
 
+  /**
+   * HARD delete — the DB cascades to NewsPostAttachment + NewsReadReceipt rows
+   * (onDelete: Cascade). Absorbs P2025 (already gone) as a no-op so the compensation
+   * path is idempotent; any other DB error surfaces.
+   */
+  async delete(id: string): Promise<void> {
+    try {
+      await prisma.newsPost.delete({ where: { id } });
+    } catch (err) {
+      if ((err as { code?: string } | null)?.code === 'P2025') return;
+      throw err;
+    }
+  }
+
   /** Upsert on the (newsPostId, userId) unique constraint — idempotent by construction. */
   async markRead(postId: string, userId: string): Promise<void> {
     await prisma.newsReadReceipt.upsert({

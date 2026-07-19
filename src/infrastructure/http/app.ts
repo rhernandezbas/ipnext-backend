@@ -3160,6 +3160,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       newsPostRepo,
       new BroadcastToNoc(externalNewsBroadcastConfigRepo, externalNewsBroadcastGateway),
     ),
+    // external-news-files — binary uploads reuse the MinIO storage (news/{postId}/ prefix).
+    new AttachFilesToNews(newsAttachmentRepo, taskPhotoStorage, newsPostRepo),
+    // Compensation port — hard-delete the post if the attach phase fails (all-or-nothing 5xx).
+    newsPostRepo,
   );
   app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail, listContracts, {
     createTicket,
