@@ -349,7 +349,13 @@ interface TwilioContentAndApprovalsResponse {
 }
 
 function normalizeApprovalStatus(status: string | undefined): TemplateDto['approvalStatus'] {
-  if (status === 'approved' || status === 'pending' || status === 'rejected' || status === 'unsubmitted') return status;
+  const s = status?.toLowerCase();
+  if (s === 'approved') return 'approved';
+  // Twilio marca 'received' una solicitud recién enviada a Meta (en revisión) ANTES de
+  // pasar a 'pending'; ambos son "en revisión" para el operador → se colapsan a 'pending'
+  // (antes 'received' caía al default 'unsubmitted' y se veía "Borrador" incorrectamente).
+  if (s === 'pending' || s === 'received') return 'pending';
+  if (s === 'rejected') return 'rejected';
   return 'unsubmitted';
 }
 

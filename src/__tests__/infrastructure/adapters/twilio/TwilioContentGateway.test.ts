@@ -78,6 +78,28 @@ describe('TwilioContentGateway — listTemplates', () => {
     expect((config as { auth: { username: string; password: string } }).auth).toEqual({ username: 'ACtest', password: 'secret' });
   });
 
+  // template-received-status — Twilio marca 'received' la solicitud recién enviada a Meta
+  // (en revisión) ANTES de 'pending'; debe verse como 'pending', no colapsar a
+  // 'unsubmitted' (que el FE pintaba "Borrador"). También tolera casing.
+  it("approval_requests.status 'received' (en revisión) → approvalStatus 'pending'", async () => {
+    const { gateway } = makeGateway({
+      get: jest.fn().mockResolvedValueOnce({
+        data: {
+          contents: [
+            { sid: 'HXrecv', friendly_name: 'Ipnext_ventas1', language: 'es', variables: {}, approval_requests: { status: 'received' } },
+            { sid: 'HXrecvUpper', friendly_name: 'otro', language: 'es', variables: {}, approval_requests: { status: 'RECEIVED' } },
+          ],
+          meta: { next_page_url: null },
+        },
+      }),
+    });
+
+    const templates = await gateway.listTemplates();
+
+    expect(templates[0]!.approvalStatus).toBe('pending');
+    expect(templates[1]!.approvalStatus).toBe('pending');
+  });
+
   // ── messaging-bulk v1.1 — `body` (texto plano del template) ─────────────────
   it('v1.1: template SIN `types` (u otro tipo sin body) → body vacío, nunca undefined', async () => {
     const { gateway } = makeGateway({
