@@ -139,6 +139,33 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     expect(appSrc).toMatch(/import\s*\{\s*PrismaCampaignRepository\s*\}\s*from\s*['"]\.\.\/adapters\/prisma\/PrismaCampaignRepository['"]/);
   });
 
+  // ── bulk-granular-perms — re-chequeo en el envío + resolver de acciones ───────
+  it('(l) bulk-granular-perms: AuthorizeCampaignSend(campaignRepo) + resolveBulkActions wired en la MISMA llamada de mount', () => {
+    const idx = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(");
+    const end = appSrc.indexOf('));', idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+    expect(window).toMatch(/new AuthorizeCampaignSend\(campaignRepo\)/);
+    expect(window).toMatch(/resolveBulkActions,/);
+  });
+
+  it('(m) bulk-granular-perms: AuthorizeCampaignSend importado + resolveBulkActions bypassa super_admin con ["*"]', () => {
+    expect(appSrc).toMatch(
+      /import\s*\{\s*AuthorizeCampaignSend\s*\}\s*from\s*['"]@application\/use-cases\/messaging\/AuthorizeCampaignSend['"]/,
+    );
+    // el resolver mapea super_admin → ['*'] y filtra las acciones del módulo messaging.
+    expect(appSrc).toMatch(/return \['\*'\]/);
+    expect(appSrc).toMatch(/p\.moduleCode === 'messaging'/);
+  });
+
+  // ── F3 (defense-in-depth) — el sentinel '*' SOLO puede venir de la rama super_admin ─
+  it('(n) F3: el resolver data-driven filtra el sentinel del set de acciones (no lo deja colar de un action literal)', () => {
+    expect(appSrc).toMatch(
+      /import\s*\{[^}]*BULK_SUPER_ADMIN_SENTINEL[^}]*\}\s*from\s*['"]@domain\/services\/bulkRecipientAuthorization['"]/,
+    );
+    // tras mapear las acciones del módulo messaging, se descarta el sentinel.
+    expect(appSrc).toMatch(/\.filter\(\s*\(a\)\s*=>.*!==\s*BULK_SUPER_ADMIN_SENTINEL/);
+  });
+
   // ── bulk-csv-recipients (fix wave, C1) — 413 ANTES de la ruta ────────────────
   // El global `app.use(express.json())` (default 100kb) corría ANTES de cualquier
   // override para /api/messaging/bulk: un CSV real (~2000 contactos ya pasan

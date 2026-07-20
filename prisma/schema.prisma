@@ -3268,6 +3268,11 @@ model Campaign {
   variableSpec  Json              @default("{}") // cómo se llenan las variables del template
                                   // por-destinatario: { "1": {source:'name'}, "2": {source:'balanceDue'},
                                   // "3": {source:'literal', value:'…'} }
+  // bulk-granular-perms — snapshot de los estados de cliente presentes en los
+  // destinatarios (distinct, sin números crudos) + si hubo números crudos, para
+  // el re-chequeo de permisos granulares al disparar el envío (POST /:id/send).
+  recipientStatuses String[]      @default([])
+  hasRawRecipients  Boolean       @default(false)
   status        CampaignStatus    @default(pending)
   total         Int               @default(0)   // destinatarios resueltos al crear
   sentCount     Int               @default(0)

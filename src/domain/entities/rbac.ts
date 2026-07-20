@@ -85,6 +85,16 @@ export const KNOWN_ACTIONS = [
   // messaging-bulk (F2) — disparar/ver campañas masivas + listar/usar templates
   'bulk',
   'templates',
+  // bulk-granular-perms — permisos granulares del envío masivo por ESTADO de
+  // cliente + para NÚMEROS crudos. Se suman a 'bulk' (acceso): una campaña se
+  // BLOQUEA si el usuario no tiene permiso para algún estado/tipo presente en
+  // los destinatarios (segmento + nodo/AP + manuales + números).
+  'bulk_active',
+  'bulk_late',
+  'bulk_blocked',
+  'bulk_inactive',
+  'bulk_baja',
+  'bulk_numbers',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.

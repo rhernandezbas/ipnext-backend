@@ -6,7 +6,9 @@ import {
   TemplateNotApprovedError,
   MissingTemplateVariablesError,
   EmptySegmentError,
+  BulkRecipientsNotPermittedError,
 } from '@domain/errors/messaging-bulk';
+import { forbiddenBulkTargets } from '@domain/services/bulkRecipientAuthorization';
 import { assertHasRecipients } from './assertHasRecipients';
 import { resolveCombinedRecipients, normalizeManualClientIds, normalizeManualContacts } from './resolveCombinedRecipients';
 
@@ -83,6 +85,30 @@ export class CreateCampaign {
       throw new EmptySegmentError();
     }
 
+    // bulk-granular-perms — BLOQUEO: si el usuario no tiene permiso para ALGÚN
+    // estado/tipo presente en la unión resuelta (todos los destinatarios: segmento
+    // + nodo/AP + manuales + números), se rechaza la campaña completa (no se
+    // filtra). super_admin trae `'*'` en el set → nunca prohíbe. `undefined` →
+    // sin enforcement (la ruta SIEMPRE lo pasa en prod; es el borde de seguridad).
+    if (input.allowedBulkActions !== undefined) {
+      const allowed = input.allowedBulkActions instanceof Set
+        ? input.allowedBulkActions
+        : new Set(input.allowedBulkActions);
+      const forbidden = forbiddenBulkTargets(allowed, resolved);
+      if (forbidden.length > 0) {
+        throw new BulkRecipientsNotPermittedError(forbidden);
+      }
+    }
+
+    // bulk-granular-perms — snapshot de los estados presentes (distinct, SIN los
+    // números crudos: esos van en `hasRawRecipients`) para el re-chequeo en el
+    // envío (POST /:id/send), donde el sender puede ser otro usuario con menos
+    // permisos que el creador.
+    const recipientStatuses = [
+      ...new Set(resolved.filter((r) => r.clientId !== null).map((r) => r.status)),
+    ].sort((a, b) => a.localeCompare(b));
+    const hasRawRecipients = resolved.some((r) => r.clientId === null);
+
     const campaign = await this.campaignRepo.create({
       name: input.name,
       templateRef: input.templateRef,
@@ -92,6 +118,8 @@ export class CreateCampaign {
       templateBody: template.body,
       segment: input.segment,
       variableSpec: input.variablesMap,
+      recipientStatuses,
+      hasRawRecipients,
       total: resolved.length,
       createdById: input.createdById,
     });

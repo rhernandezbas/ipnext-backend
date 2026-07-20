@@ -847,6 +847,8 @@ import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign'
 import { SendCampaign } from '@application/use-cases/messaging/SendCampaign';
 import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
+import { AuthorizeCampaignSend } from '@application/use-cases/messaging/AuthorizeCampaignSend';
+import { BULK_SUPER_ADMIN_SENTINEL } from '@domain/services/bulkRecipientAuthorization';
 // ── Change 3 (templates CRUD) — VER/CREAR/SUBMIT/BORRAR templates WhatsApp ─────
 import { createMessagingTemplatesRouter } from './routes/templates.routes';
 import { CreateTemplate } from '@application/use-cases/messaging/CreateTemplate';
@@ -3003,6 +3005,25 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     const sendCampaign = new SendCampaign(campaignRepo, customerAdapter, templatePort, rateLimiter, campaignInboxProjector);
     const campaignRunner = new CampaignRunner(sendCampaign, campaignRepo, new PgAdvisoryLock());
 
+    // bulk-granular-perms — resuelve las acciones `messaging` del usuario (o
+    // ['*'] si super_admin) desde el MISMO rbacUserRepo que usa requirePerm.
+    // Molde `hasRecaptureAssign`. Fail-closed: sin userId → set vacío (bloquea).
+    const resolveBulkActions = async (userId: string): Promise<string[]> => {
+      if (!userId) return [];
+      const roles = await rbacUserRepo.listRolesForUser(userId);
+      if (roles.some((r) => r.code === 'super_admin')) return ['*'];
+      const perms = await rbacUserRepo.listPermissionsForUser(userId);
+      // F3 (defense-in-depth) — el sentinel '*' SOLO debe venir de la rama
+      // super_admin de arriba; un action literal '*' (VarChar sin constraint) en
+      // la DB NO debe conceder bypass total a un no-super-admin.
+      return perms
+        .filter((p) => p.moduleCode === 'messaging')
+        .map((p) => p.action)
+        // cast a string: `PermissionAction` (union tipado) nunca incluye '*', pero la
+        // columna es VarChar sin constraint → en runtime un action '*' SÍ es posible.
+        .filter((a) => (a as string) !== BULK_SUPER_ADMIN_SENTINEL);
+    };
+
     app.use('/api/messaging/bulk', createMessagingBulkRouter(
       new ListMessagingTemplates(templatePort),
       // manual-recipients (MAN-5) — customerAdapter también implementa
@@ -3025,6 +3046,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
         bulk: requirePerm('messaging', 'bulk'),
         templates: requirePerm('messaging', 'templates'),
       },
+      // bulk-granular-perms — re-chequeo en el envío (lee el snapshot de la campaña)
+      // + resolver de acciones del usuario (APPENDED, no rompe el gate perms.bulk).
+      new AuthorizeCampaignSend(campaignRepo),
+      resolveBulkActions,
     ));
   }
 

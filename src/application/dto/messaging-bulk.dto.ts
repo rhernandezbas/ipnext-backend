@@ -214,6 +214,15 @@ export interface CreateCampaignInput {
    * (CSV-2) o se persiste crudo (`clientId: null`, CSV-3).
    */
   manualContacts?: ManualContactDto[];
+  /**
+   * bulk-granular-perms — acciones `messaging` que el usuario TIENE (`bulk_active`,
+   * `bulk_blocked`, `bulk_numbers`, …), o `['*']`/`Set(['*'])` para super_admin.
+   * La RUTA las resuelve (vía `rbacUserRepo`) y las pasa; el use case BLOQUEA la
+   * campaña si falta permiso para algún estado/tipo presente en los destinatarios.
+   * OPCIONAL: `undefined` → sin enforcement (backcompat de tests/callers directos;
+   * la ruta SIEMPRE lo pasa en prod, que es el borde de seguridad real).
+   */
+  allowedBulkActions?: Set<string> | string[];
   createdById: string;
 }
 

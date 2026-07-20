@@ -6,7 +6,7 @@ import {
   IClassSoTypeInactiveError,
   IClassNodeNotAssignableError,
 } from '@domain/errors/iclass';
-import { MissingTemplateVariablesError, TemplateInUseByCampaignError, ManualRecipientsNotFoundError } from '@domain/errors/messaging-bulk';
+import { MissingTemplateVariablesError, TemplateInUseByCampaignError, ManualRecipientsNotFoundError, BulkRecipientsNotPermittedError } from '@domain/errors/messaging-bulk';
 
 /** Shape of a domain error mapped to a transport-agnostic result. */
 export interface DomainErrorCode {
@@ -35,6 +35,12 @@ export interface DomainErrorCode {
    * exactamente cuáles selecciones son inválidas).
    */
   missingClientIds?: string[];
+  /**
+   * bulk-granular-perms — surfaced from `BulkRecipientsNotPermittedError`: las
+   * etiquetas de estado/tipo prohibidos (`'blocked'`, `'baja'`, `'números'`…)
+   * para que el FE muestre exactamente qué bloqueó el envío masivo.
+   */
+  forbidden?: string[];
 }
 
 /**
@@ -73,6 +79,9 @@ export function domainErrorToCode(err: unknown): DomainErrorCode | null {
   }
   if (err instanceof ManualRecipientsNotFoundError) {
     result.missingClientIds = err.missingClientIds;
+  }
+  if (err instanceof BulkRecipientsNotPermittedError) {
+    result.forbidden = err.forbidden;
   }
   return result;
 }

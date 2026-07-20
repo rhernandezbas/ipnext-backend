@@ -37,6 +37,7 @@ import { ListTemplates } from '../../application/use-cases/messaging/ListTemplat
 import { PreviewCampaignSegment } from '../../application/use-cases/messaging/PreviewCampaignSegment';
 import { ListSegmentRecipients } from '../../application/use-cases/messaging/ListSegmentRecipients';
 import { CreateCampaign } from '../../application/use-cases/messaging/CreateCampaign';
+import { AuthorizeCampaignSend } from '../../application/use-cases/messaging/AuthorizeCampaignSend';
 import { GetCampaign } from '../../application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '../../application/use-cases/messaging/ListCampaigns';
 import { InMemoryCampaignRepository } from '../../infrastructure/adapters/in-memory/InMemoryCampaignRepository';
@@ -89,6 +90,8 @@ function buildProdReplica() {
   const campaignRunner = new CampaignRunner(sendCampaign, campaignRepo, lock);
 
   const perms: MessagingBulkRoutePerms = { bulk: allowPerm, templates: allowPerm };
+  const authorizeCampaignSend = new AuthorizeCampaignSend(campaignRepo);
+  const resolveBulkActions = async (_userId: string): Promise<string[]> => ['*'];
 
   app.use(
     '/api/messaging/bulk',
@@ -102,6 +105,8 @@ function buildProdReplica() {
       listCampaigns,
       allowAuth,
       perms,
+      authorizeCampaignSend,
+      resolveBulkActions,
     ),
   );
   app.use(errorHandler);

@@ -209,6 +209,9 @@ const statusMap: Record<string, number> = {
   // criterio 422 que TOO_MANY_MANUAL_RECIPIENTS: cota independiente, rechazo ANTES
   // de tocar la DB.
   TOO_MANY_MANUAL_CONTACTS: 422,
+  // bulk-granular-perms — el usuario no tiene permiso para algún estado/tipo
+  // presente en los destinatarios del envío masivo: se BLOQUEA la campaña → 403.
+  BULK_RECIPIENTS_NOT_PERMITTED: 403,
   CAMPAIGN_NOT_FOUND: 404,
   CAMPAIGN_ALREADY_FINISHED: 409,
   // Change 3 (templates CRUD) — ver/crear/submit/borrar templates WhatsApp.
@@ -298,6 +301,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     // manualClientIds no existen para que el FE señale las selecciones inválidas.
     if (mapped?.missingClientIds !== undefined) {
       body['missingClientIds'] = mapped.missingClientIds;
+    }
+    // bulk-granular-perms — BulkRecipientsNotPermittedError expone las etiquetas
+    // de estado/tipo prohibidos (para que el FE muestre exactamente qué bloqueó).
+    if (mapped?.forbidden !== undefined) {
+      body['forbidden'] = mapped.forbidden;
     }
     res.status(status).json(body);
     return;

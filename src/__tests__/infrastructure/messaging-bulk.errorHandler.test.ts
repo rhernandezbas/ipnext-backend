@@ -15,6 +15,7 @@ import {
   EmptySegmentError,
   CampaignNotFoundError,
   CampaignAlreadyFinishedError,
+  BulkRecipientsNotPermittedError,
 } from '@domain/errors/messaging-bulk';
 
 function appThrowing(err: unknown) {
@@ -67,5 +68,12 @@ describe('errorHandler statusMap — códigos nuevos de messaging-bulk (T2.3)', 
     const res = await request(appThrowing(new CampaignAlreadyFinishedError('camp-1'))).get('/boom');
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('CAMPAIGN_ALREADY_FINISHED');
+  });
+
+  it('BULK_RECIPIENTS_NOT_PERMITTED → 403 con forbidden surfaced (bulk-granular-perms)', async () => {
+    const res = await request(appThrowing(new BulkRecipientsNotPermittedError(['blocked', 'números']))).get('/boom');
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('BULK_RECIPIENTS_NOT_PERMITTED');
+    expect(res.body.forbidden).toEqual(['blocked', 'números']);
   });
 });

@@ -144,12 +144,19 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 47 valid action codes (4 base + 28 prior sub-actions + 5 tv granular + 1 delete_hard #85 + 1 hard_delete #86 + 2 iclass-os-actions + 1 pppoe.cut Fase C + 1 recapture.assign + 1 transfer service-transfer + 1 send messaging-inbox + 2 bulk/templates messaging-bulk)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(47);
+  it('contains exactly 53 valid action codes (47 prior + 6 bulk-granular-perms: bulk_active/late/blocked/inactive/baja/numbers)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(53);
   });
 
   it("includes bulk (messaging-bulk F2 — disparar/ver campañas masivas)", () => {
     expect(KNOWN_ACTIONS).toContain('bulk');
+  });
+
+  it('includes the 6 bulk-granular-perms actions (envío masivo por estado de cliente + números)', () => {
+    const granular = ['bulk_active', 'bulk_late', 'bulk_blocked', 'bulk_inactive', 'bulk_baja', 'bulk_numbers'];
+    for (const action of granular) {
+      expect(KNOWN_ACTIONS).toContain(action);
+    }
   });
 
   it("includes templates (messaging-bulk F2 — listar/usar templates de WhatsApp)", () => {

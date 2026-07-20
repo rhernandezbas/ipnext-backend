@@ -11,7 +11,7 @@
  */
 import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign';
 import { InMemoryCampaignRepository } from '@infrastructure/adapters/in-memory/InMemoryCampaignRepository';
-import { TemplateNotApprovedError, MissingTemplateVariablesError, EmptySegmentError, UnfilteredSegmentError, ManualRecipientsNotFoundError } from '@domain/errors/messaging-bulk';
+import { TemplateNotApprovedError, MissingTemplateVariablesError, EmptySegmentError, UnfilteredSegmentError, ManualRecipientsNotFoundError, BulkRecipientsNotPermittedError } from '@domain/errors/messaging-bulk';
 import type { CampaignSegmentSource, CampaignRecipientCandidate, ManualRecipientSource } from '@domain/ports/CustomerRepository';
 import type { TemplateMessagingPort, TemplateDto } from '@domain/ports/TemplateMessagingPort';
 import type { CreateCampaignInput } from '@application/dto/messaging-bulk.dto';
@@ -457,6 +457,105 @@ describe('CreateCampaign', () => {
       expect(result.total).toBe(1);
       const recipients = await campaignRepo.listRecipients(result.campaignId);
       expect(recipients.data[0]!.contactName).toBe('Ana');
+    });
+  });
+
+  // ── bulk-granular-perms: BLOQUEO por estado de cliente + números crudos ───────
+  describe('bulk-granular-perms (allowedBulkActions)', () => {
+    it('unión con un blocked y creador SIN bulk_blocked → BulkRecipientsNotPermittedError con ["blocked"], nada persistido', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'blocked' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      let caught: unknown;
+      try {
+        await uc.execute(makeInput({ segment: { statuses: ['blocked'] }, allowedBulkActions: new Set(['bulk']) }));
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(BulkRecipientsNotPermittedError);
+      expect((caught as BulkRecipientsNotPermittedError).forbidden).toEqual(['blocked']);
+      const list = await campaignRepo.list({});
+      expect(list.total).toBe(0);
+    });
+
+    it('con TODOS los permisos de los estados presentes → OK', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'blocked' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({ segment: { statuses: ['blocked'] }, allowedBulkActions: new Set(['bulk', 'bulk_blocked']) }),
+      );
+      expect(result.status).toBe('pending');
+    });
+
+    it('números crudos (manualContacts) sin bulk_numbers → throw con ["números"]', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      let caught: unknown;
+      try {
+        await uc.execute(
+          makeInput({
+            segment: { statuses: [] },
+            manualContacts: [{ name: 'Ana', phone: '11 2345-6789' }],
+            allowedBulkActions: new Set(['bulk']),
+          }),
+        );
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(BulkRecipientsNotPermittedError);
+      expect((caught as BulkRecipientsNotPermittedError).forbidden).toEqual(['números']);
+    });
+
+    it('super_admin (set con "*") → OK aunque falten permisos de estado', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'blocked' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({ segment: { statuses: ['blocked'] }, allowedBulkActions: new Set(['*']) }),
+      );
+      expect(result.status).toBe('pending');
+    });
+
+    it('allowedBulkActions undefined → sin enforcement (backcompat), NO bloquea', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'blocked' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(makeInput({ segment: { statuses: ['blocked'] } }));
+      expect(result.status).toBe('pending');
+    });
+
+    it('persiste el snapshot recipientStatuses (distinct, sin crudos) + hasRawRecipients', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([
+        makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late' }),
+        makeCandidate({ clientId: 'c2', phone: '3364222222', status: 'blocked' }),
+      ]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({
+          segment: { statuses: ['late', 'blocked'] },
+          manualContacts: [{ name: 'Crudo', phone: '11 2345-6789' }],
+          allowedBulkActions: new Set(['*']),
+        }),
+      );
+
+      const persisted = await campaignRepo.findById(result.campaignId);
+      expect(persisted?.recipientStatuses.sort()).toEqual(['blocked', 'late']);
+      expect(persisted?.hasRawRecipients).toBe(true);
     });
   });
 });

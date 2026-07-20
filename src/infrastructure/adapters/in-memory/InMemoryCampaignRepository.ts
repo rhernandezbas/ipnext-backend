@@ -38,6 +38,8 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
       templateBody: data.templateBody ?? null,
       segment: data.segment,
       variableSpec: data.variableSpec,
+      recipientStatuses: data.recipientStatuses ?? [],
+      hasRawRecipients: data.hasRawRecipients ?? false,
       status: 'pending',
       total: data.total,
       sentCount: 0,

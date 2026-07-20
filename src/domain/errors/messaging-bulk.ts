@@ -295,6 +295,27 @@ export class TooManyManualContactsError extends DomainError {
   }
 }
 
+/**
+ * bulk-granular-perms — raised by `CreateCampaign` (al crear) y por la ruta de
+ * envío (`AuthorizeCampaignSend`, re-chequeo en send) cuando el usuario NO tiene
+ * permiso para ALGÚN estado/tipo presente en los destinatarios (envío masivo
+ * granular). Se BLOQUEA la campaña completa (no se filtra). Lleva la lista de
+ * prohibidos (`forbidden`: etiquetas de estado + `'números'`) para que el FE la
+ * muestre. Maps to 403 en el statusMap del errorHandler. Nothing is persisted.
+ */
+export class BulkRecipientsNotPermittedError extends DomainError {
+  public readonly forbidden: string[];
+
+  constructor(forbidden: string[]) {
+    super(
+      `No tenés permiso para enviar a: ${forbidden.join(', ')}`,
+      'BULK_RECIPIENTS_NOT_PERMITTED',
+    );
+    this.name = 'BulkRecipientsNotPermittedError';
+    this.forbidden = forbidden;
+  }
+}
+
 /** HIST-2 — raised by `GetCampaign` (and any lookup) when the id does not exist. */
 export class CampaignNotFoundError extends DomainError {
   constructor(id: string) {

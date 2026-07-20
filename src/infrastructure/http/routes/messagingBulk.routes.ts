@@ -21,6 +21,7 @@ import { ListSegmentRecipients } from '@application/use-cases/messaging/ListSegm
 import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign';
 import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
+import { AuthorizeCampaignSend } from '@application/use-cases/messaging/AuthorizeCampaignSend';
 import type { CampaignRunner } from '@infrastructure/scheduling/CampaignRunner';
 import type { PreviewSegmentInput, ListSegmentRecipientsInput, CreateCampaignInput, ManualContactDto, SegmentRecipientsView } from '@application/dto/messaging-bulk.dto';
 import type { CampaignSegment, CampaignVariableSpec, CampaignRecipientStatus } from '@domain/entities/campaign';
@@ -31,6 +32,14 @@ export interface MessagingBulkRoutePerms {
   bulk: RequestHandler;
   templates: RequestHandler;
 }
+
+/**
+ * bulk-granular-perms — resuelve las acciones `messaging` que el usuario TIENE
+ * (`bulk_active`, `bulk_blocked`, `bulk_numbers`, …), o `['*']` para super_admin.
+ * Lo cablea `app.ts` desde el MISMO `rbacUserRepo` que usa `requirePermission`.
+ * Se usa en create + send para BLOQUEAR estados/tipos sin permiso.
+ */
+export type MessagingBulkActionsResolver = (userId: string) => Promise<string[]>;
 
 /**
  * fix-be #7 molde (`messaging.routes.ts`) — Express tipa una query key repetida
@@ -172,6 +181,11 @@ export function createMessagingBulkRouter(
   listCampaigns: ListCampaigns,
   auth: RequestHandler,
   perms: MessagingBulkRoutePerms,
+  // bulk-granular-perms — APPENDED (regla §Colisiones): re-chequeo de permisos
+  // granulares en el envío + resolver de las acciones `messaging` del usuario.
+  // El gate `perms.bulk` (acceso) NO cambia — esto se suma encima.
+  authorizeCampaignSend: AuthorizeCampaignSend,
+  resolveBulkActions: MessagingBulkActionsResolver,
 ): Router {
   const router = Router();
 
@@ -334,6 +348,10 @@ export function createMessagingBulkRouter(
           // bulk-csv-recipients (CSV-1) — 4to dominio, PARALELO a segment/manualClientIds.
           manualContacts: toManualContacts(body?.['manualContacts']),
           variablesMap: (body?.['variablesMap'] as CampaignVariableSpec | undefined) ?? {},
+          // bulk-granular-perms — acciones `messaging` del usuario (o ['*'] si
+          // super_admin); el use case BLOQUEA la campaña si falta permiso para
+          // algún estado/tipo presente en los destinatarios resueltos.
+          allowedBulkActions: new Set(await resolveBulkActions(req.user?.id as string)),
           // createdById SIEMPRE del usuario autenticado (auth, arriba) — nunca del
           // body del cliente (evita que cualquiera atribuya la campaña a otro).
           createdById: req.user?.id as string,
@@ -354,6 +372,14 @@ export function createMessagingBulkRouter(
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const campaignId = req.params['id'] as string;
+        // bulk-granular-perms — re-chequeo COMPLETO ANTES de disparar el envío:
+        // el sender puede tener MENOS permisos que el creador. Lee el snapshot
+        // persistido (recipientStatuses + hasRawRecipients) y bloquea (403) si
+        // falta permiso para algún estado/tipo. super_admin (['*']) nunca bloquea.
+        await authorizeCampaignSend.execute({
+          campaignId,
+          allowedBulkActions: new Set(await resolveBulkActions(req.user?.id as string)),
+        });
         const result = await campaignRunner.start(campaignId);
         if (!result.accepted) {
           // FIX-15 — el lock es GLOBAL (una campaña a la vez, CAMPAIGN_LOCK_KEY):

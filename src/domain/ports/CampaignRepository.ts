@@ -19,6 +19,14 @@ export interface CampaignCreateData {
   variableSpec: CampaignVariableSpec;
   /** Total de destinatarios YA resuelto (SEG-1..SEG-4) al momento de crear. */
   total: number;
+  /**
+   * bulk-granular-perms — estados de cliente presentes en la unión resuelta
+   * (distinct, sin los números crudos) + si hubo números crudos. Poblados por
+   * `CreateCampaign` para el re-chequeo de permisos en el envío. Opcionales para
+   * no romper fixtures de tests ya verdes (default `[]`/`false`).
+   */
+  recipientStatuses?: string[];
+  hasRawRecipients?: boolean;
   createdById: string;
 }
 

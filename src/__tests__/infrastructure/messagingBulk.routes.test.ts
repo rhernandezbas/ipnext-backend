@@ -25,6 +25,7 @@ import { ListTemplates } from '../../application/use-cases/messaging/ListTemplat
 import { PreviewCampaignSegment } from '../../application/use-cases/messaging/PreviewCampaignSegment';
 import { ListSegmentRecipients } from '../../application/use-cases/messaging/ListSegmentRecipients';
 import { CreateCampaign } from '../../application/use-cases/messaging/CreateCampaign';
+import { AuthorizeCampaignSend } from '../../application/use-cases/messaging/AuthorizeCampaignSend';
 import { MAX_MANUAL_RECIPIENTS, MAX_MANUAL_CONTACTS } from '../../application/use-cases/messaging/resolveCombinedRecipients';
 import { GetCampaign } from '../../application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '../../application/use-cases/messaging/ListCampaigns';
@@ -107,6 +108,13 @@ interface BuildAppOptions {
   manualCandidates?: CampaignRecipientCandidate[];
   campaignRepo?: InMemoryCampaignRepository;
   sendCampaign?: CampaignSender;
+  /**
+   * bulk-granular-perms — acciones `messaging` que devuelve el resolver del router.
+   * Default `['*']` (super_admin-equivalente) → todos los tests previos siguen
+   * verdes sin tocarse. Un test que quiera EJERCITAR el bloqueo granular pasa un
+   * subset (ej. `['bulk']` sin `bulk_blocked`).
+   */
+  bulkActions?: string[];
 }
 
 function buildApp(opts: BuildAppOptions = {}) {
@@ -128,6 +136,11 @@ function buildApp(opts: BuildAppOptions = {}) {
   const lock = new InMemoryDistributedLock();
   const sendCampaign: CampaignSender = opts.sendCampaign ?? { execute: jest.fn().mockResolvedValue(undefined) };
   const campaignRunner = new CampaignRunner(sendCampaign, campaignRepo, lock);
+
+  // bulk-granular-perms — AuthorizeCampaignSend real (lee el snapshot de la campaña)
+  // + resolver de acciones. Default ['*'] = super_admin → los tests previos no cambian.
+  const authorizeCampaignSend = new AuthorizeCampaignSend(campaignRepo);
+  const resolveBulkActions = async (_userId: string): Promise<string[]> => opts.bulkActions ?? ['*'];
 
   const perms: MessagingBulkRoutePerms = {
     bulk: opts.bulkPerm ?? allowPerm,
@@ -166,6 +179,8 @@ function buildApp(opts: BuildAppOptions = {}) {
       listCampaigns,
       allowAuth,
       perms,
+      authorizeCampaignSend,
+      resolveBulkActions,
     ),
   );
   app.use(errorHandler);
@@ -1064,5 +1079,152 @@ describe('/api/messaging/bulk — node-segment (networkSiteId/accessPointId)', (
     expect(res.body.code).toBe('VALIDATION_ERROR');
     const list = await campaignRepo.list({});
     expect(list.total).toBe(0);
+  });
+});
+
+// ─── bulk-granular-perms — gate por estado de cliente + números crudos ──────────
+describe('/api/messaging/bulk — bulk-granular-perms (BLOQUEO por estado/tipo)', () => {
+  it('POST /campaigns con destinatario blocked y usuario SIN bulk_blocked → 403 BULK_RECIPIENTS_NOT_PERMITTED con forbidden, NO crea campaña', async () => {
+    const { app, campaignRepo } = buildApp({
+      bulkActions: ['bulk'], // acceso, pero SIN bulk_blocked
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'blocked' })],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'aviso corte', templateRef: 'HXapproved', segment: { statuses: ['blocked'] },
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('BULK_RECIPIENTS_NOT_PERMITTED');
+    expect(res.body.forbidden).toEqual(['blocked']);
+    const list = await campaignRepo.list({ page: 1, limit: 10 });
+    expect(list.total).toBe(0);
+  });
+
+  it('POST /campaigns con destinatario blocked y usuario CON bulk_blocked → 201', async () => {
+    const { app } = buildApp({
+      bulkActions: ['bulk', 'bulk_blocked'],
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'blocked' })],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'aviso corte', templateRef: 'HXapproved', segment: { statuses: ['blocked'] },
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.total).toBe(1);
+  });
+
+  it('POST /campaigns super_admin (resolver → ["*"]) con blocked → 201 (bypass total)', async () => {
+    const { app } = buildApp({
+      bulkActions: ['*'],
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'blocked' })],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: ['blocked'] },
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /campaigns solo-números (manualContacts) SIN bulk_numbers → 403 forbidden ["números"]', async () => {
+    const { app, campaignRepo } = buildApp({ bulkActions: ['bulk'], segmentCandidates: [] });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x', templateRef: 'HXapproved', segment: { statuses: [] },
+      manualContacts: [{ name: 'Ana', phone: '11 2345-6789' }],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('BULK_RECIPIENTS_NOT_PERMITTED');
+    expect(res.body.forbidden).toEqual(['números']);
+    const list = await campaignRepo.list({ page: 1, limit: 10 });
+    expect(list.total).toBe(0);
+  });
+
+  it('POST /campaigns/:id/send: campaña con estado blocked, sender SIN bulk_blocked → 403 (re-chequeo en send)', async () => {
+    const { app, campaignRepo } = buildApp({ bulkActions: ['bulk'] });
+    // campaña YA creada (por alguien con permiso) con el snapshot de estados.
+    const campaign = await campaignRepo.create({
+      name: 'creada por un admin', templateRef: 'HXapproved', segment: { statuses: ['blocked'] },
+      variableSpec: {}, total: 1, createdById: 'admin', recipientStatuses: ['blocked'], hasRawRecipients: false,
+    });
+
+    const res = await request(app).post(`/api/messaging/bulk/campaigns/${campaign.id}/send`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('BULK_RECIPIENTS_NOT_PERMITTED');
+    expect(res.body.forbidden).toEqual(['blocked']);
+    const fresh = await campaignRepo.findById(campaign.id);
+    expect(fresh?.status).toBe('pending'); // no se disparó el envío
+  });
+
+  it('POST /campaigns/:id/send: mismo snapshot, sender CON bulk_blocked → 202 (envío aceptado)', async () => {
+    const { app, campaignRepo } = buildApp({ bulkActions: ['bulk', 'bulk_blocked'] });
+    const campaign = await campaignRepo.create({
+      name: 'creada por un admin', templateRef: 'HXapproved', segment: { statuses: ['blocked'] },
+      variableSpec: {}, total: 1, createdById: 'admin', recipientStatuses: ['blocked'], hasRawRecipients: false,
+    });
+
+    const res = await request(app).post(`/api/messaging/bulk/campaigns/${campaign.id}/send`);
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ campaignId: campaign.id, accepted: true });
+  });
+
+  it('POST /campaigns/:id/send: F1 campaña pre-migración (snapshot vacío) + total>0 + sender NO-super-admin → 403 fail-closed (no BYPASS)', async () => {
+    const { app, campaignRepo } = buildApp({ bulkActions: ['bulk'] });
+    // campaña con el DEFAULT del snapshot (como una creada ANTES de la migración) PERO con destinatarios.
+    const campaign = await campaignRepo.create({
+      name: 'vieja', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      variableSpec: {}, total: 3, createdById: 'admin', recipientStatuses: [], hasRawRecipients: false,
+    });
+
+    const res = await request(app).post(`/api/messaging/bulk/campaigns/${campaign.id}/send`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('BULK_RECIPIENTS_NOT_PERMITTED');
+    expect(res.body.forbidden).toEqual(['desconocido']);
+    const fresh = await campaignRepo.findById(campaign.id);
+    expect(fresh?.status).toBe('pending'); // no se disparó el envío
+  });
+
+  it('POST /campaigns/:id/send: MISMA campaña pre-migración + super_admin (["*"]) → 202 (envía)', async () => {
+    const { app, campaignRepo } = buildApp({ bulkActions: ['*'] });
+    const campaign = await campaignRepo.create({
+      name: 'vieja', templateRef: 'HXapproved', segment: { statuses: ['late'] },
+      variableSpec: {}, total: 3, createdById: 'admin', recipientStatuses: [], hasRawRecipients: false,
+    });
+
+    const res = await request(app).post(`/api/messaging/bulk/campaigns/${campaign.id}/send`);
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ campaignId: campaign.id, accepted: true });
+  });
+
+  it('POST /campaigns persiste el snapshot recipientStatuses + hasRawRecipients de la unión', async () => {
+    const { app, campaignRepo } = buildApp({
+      bulkActions: ['*'],
+      segmentCandidates: [
+        makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late' }),
+        makeCandidate({ clientId: 'c2', phone: '3364222222', status: 'blocked' }),
+      ],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'mixta', templateRef: 'HXapproved', segment: { statuses: ['late', 'blocked'] },
+      manualContacts: [{ name: 'Crudo', phone: '11 2345-6789' }],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(201);
+    const persisted = await campaignRepo.findById(res.body.campaignId);
+    expect(persisted?.recipientStatuses.sort()).toEqual(['blocked', 'late']);
+    expect(persisted?.hasRawRecipients).toBe(true);
   });
 });

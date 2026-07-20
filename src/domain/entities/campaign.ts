@@ -67,6 +67,16 @@ export interface Campaign {
   templateBody: string | null;
   segment: CampaignSegment;
   variableSpec: CampaignVariableSpec;
+  /**
+   * bulk-granular-perms — snapshot de los ESTADOS de cliente presentes en los
+   * destinatarios resueltos al crear (distinct, `active`/`late`/…), EXCLUYENDO
+   * los números crudos (esos van en `hasRawRecipients`). El re-chequeo de
+   * permisos en el envío (`AuthorizeCampaignSend`) reconstruye destinatarios
+   * sintéticos desde acá (el creador pudo tener permisos que el sender no tiene).
+   */
+  recipientStatuses: string[];
+  /** bulk-granular-perms — hubo ≥1 destinatario número crudo (`clientId: null`) al crear. */
+  hasRawRecipients: boolean;
   status: CampaignStatus;
   total: number;
   sentCount: number;
