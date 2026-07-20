@@ -343,14 +343,22 @@ export function resolveCampaignVariables(
   candidate: CampaignRecipientCandidate,
 ): Record<string, string> {
   const variables: Record<string, string> = {};
+  // var-fallback — señal de destinatario CRUDO (sin `Client`): el candidate
+  // sintético que `processRecipient` arma para un recipient `clientId: null` lleva
+  // `status: 'no_cliente'` (D5). Esa es la señal — NO `candidate.clientId`, que en el
+  // sintético se setea al `recipient.id`. Solo para un crudo el `entry.fallback` (si
+  // está seteado, NO vacío) pisa el dato ausente; un vinculado lo ignora siempre.
+  const isRaw = candidate.status === 'no_cliente';
   for (const [key, entry] of Object.entries(variableSpec)) {
     switch (entry.source) {
       case 'name':
-        variables[key] = candidate.name;
+        variables[key] = isRaw && entry.fallback ? entry.fallback : candidate.name;
         break;
-      case 'balanceDue':
-        variables[key] = candidate.balanceDue == null ? '' : formatArs(candidate.balanceDue);
+      case 'balanceDue': {
+        const real = candidate.balanceDue == null ? '' : formatArs(candidate.balanceDue);
+        variables[key] = isRaw && entry.fallback ? entry.fallback : real;
         break;
+      }
       case 'literal':
         variables[key] = entry.value ?? '';
         break;

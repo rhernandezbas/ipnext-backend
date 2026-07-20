@@ -16,7 +16,7 @@
  * (T4.1) salvo donde el escenario necesita control fino de reintentos/rate
  * limit — ahí se usa un `TemplateMessagingPort`/`RateLimiter` espía inline.
  */
-import { SendCampaign, formatArs } from '@application/use-cases/messaging/SendCampaign';
+import { SendCampaign, formatArs, resolveCampaignVariables } from '@application/use-cases/messaging/SendCampaign';
 import { InMemoryCampaignRepository } from '@infrastructure/adapters/in-memory/InMemoryCampaignRepository';
 import { InMemoryTemplateMessagingGateway } from '@infrastructure/adapters/in-memory/InMemoryTemplateMessagingGateway';
 import { ImmediateRateLimiter } from '@infrastructure/adapters/in-memory/ImmediateRateLimiter';
@@ -841,6 +841,98 @@ describe('SendCampaign', () => {
       const byTo = new Map(templatePort.calls.map((c) => [c.to, c.variables]));
       expect(byTo.get('+5493364000001')).toEqual({ '1': 'Cliente Real', '2': '$5.000' });
       expect(byTo.get('+5493364222222')).toEqual({ '1': 'Contacto CSV', '2': '' });
+    });
+  });
+
+  // ── var-fallback: fallback POR VARIABLE para destinatarios SIN cliente ───────
+  // El fallback SOLO aplica a un candidate CRUDO (status 'no_cliente' — el que
+  // SendCampaign sintetiza para un recipient `clientId: null`, D5). Un vinculado
+  // (status ≠ 'no_cliente') SIEMPRE usa su dato real e IGNORA el fallback. El
+  // fallback GANA sobre el nombre tipeado del crudo cuando está seteado (NO vacío).
+  describe('var-fallback: fallback por variable para destinatarios sin cliente', () => {
+    const raw = (o: Partial<CampaignRecipientCandidate> = {}): CampaignRecipientCandidate =>
+      makeCandidate({ status: 'no_cliente', name: 'Nombre Tipeado', balanceDue: null, ...o });
+    const linked = (o: Partial<CampaignRecipientCandidate> = {}): CampaignRecipientCandidate =>
+      makeCandidate({ status: 'active', name: 'Cliente Real', balanceDue: 50000, ...o });
+
+    it('crudo + name + fallback → usa el fallback', () => {
+      const vars = resolveCampaignVariables({ '1': { source: 'name', fallback: 'cliente' } }, raw());
+      expect(vars['1']).toBe('cliente');
+    });
+
+    it('crudo + name SIN fallback → usa el nombre tipeado (candidate.name)', () => {
+      const vars = resolveCampaignVariables({ '1': { source: 'name' } }, raw({ name: '3364111111' }));
+      expect(vars['1']).toBe('3364111111');
+    });
+
+    it('crudo + name + fallback vacío → usa el nombre tipeado (el fallback debe ser NO vacío para ganar)', () => {
+      const vars = resolveCampaignVariables({ '1': { source: 'name', fallback: '' } }, raw({ name: 'Ana' }));
+      expect(vars['1']).toBe('Ana');
+    });
+
+    it('VINCULADO + name + fallback → IGNORA el fallback, usa el nombre REAL del cliente', () => {
+      const vars = resolveCampaignVariables({ '1': { source: 'name', fallback: 'cliente' } }, linked({ name: 'Juan Pérez' }));
+      expect(vars['1']).toBe('Juan Pérez');
+    });
+
+    it('crudo + balanceDue + fallback → usa el fallback', () => {
+      const vars = resolveCampaignVariables({ '1': { source: 'balanceDue', fallback: '—' } }, raw());
+      expect(vars['1']).toBe('—');
+    });
+
+    it('crudo + balanceDue SIN fallback → cadena vacía (regla FIX-18, NUNCA "$0")', () => {
+      const vars = resolveCampaignVariables({ '1': { source: 'balanceDue' } }, raw());
+      expect(vars['1']).toBe('');
+    });
+
+    it('VINCULADO + balanceDue + fallback → IGNORA el fallback, usa el monto REAL formateado', () => {
+      const vars = resolveCampaignVariables({ '1': { source: 'balanceDue', fallback: '—' } }, linked({ balanceDue: 50000 }));
+      expect(vars['1']).toBe('$50.000');
+    });
+
+    it('literal → sin cambios (crudo o vinculado): usa entry.value, ignora fallback', () => {
+      const spec = { '1': { source: 'literal' as const, value: 'fijo', fallback: 'IGNORADO' } };
+      expect(resolveCampaignVariables(spec, raw())['1']).toBe('fijo');
+      expect(resolveCampaignVariables(spec, linked())['1']).toBe('fijo');
+    });
+
+    it('via SendCampaign: recipient crudo (clientId null) + name/balanceDue con fallback → el fallback GANA en el envío', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([]); // universo vacío — no hay Client que resolver
+      const templatePort = new InMemoryTemplateMessagingGateway();
+      const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        variableSpec: {
+          '1': { source: 'name', fallback: 'cliente' },
+          '2': { source: 'balanceDue', fallback: 'consultá tu deuda' },
+        },
+        recipients: [{ clientId: null, contactName: 'Ana', phoneNormalized: '3364111111', phoneE164: '+5493364111111' }],
+      });
+
+      await uc.execute({ campaignId: campaign.id });
+
+      // el candidate sintético lleva status 'no_cliente' → el fallback pisa el nombre tipeado y el balanceDue vacío
+      expect(templatePort.calls[0].variables).toEqual({ '1': 'cliente', '2': 'consultá tu deuda' });
+    });
+
+    it('via SendCampaign: recipient VINCULADO ignora el fallback aunque esté seteado (usa su dato real)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1', name: 'Cliente Real', balanceDue: 5000 })]);
+      const templatePort = new InMemoryTemplateMessagingGateway();
+      const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        variableSpec: {
+          '1': { source: 'name', fallback: 'cliente' },
+          '2': { source: 'balanceDue', fallback: '—' },
+        },
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      await uc.execute({ campaignId: campaign.id });
+
+      expect(templatePort.calls[0].variables).toEqual({ '1': 'Cliente Real', '2': '$5.000' });
     });
   });
 });

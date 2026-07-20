@@ -558,4 +558,41 @@ describe('CreateCampaign', () => {
       expect(persisted?.hasRawRecipients).toBe(true);
     });
   });
+
+  // ── var-fallback: `fallback` opcional por entry en variablesMap ──────────────
+  describe('var-fallback (variablesMap.fallback opcional)', () => {
+    it('variablesMap con `fallback` por entry se acepta y se persiste verbatim en variableSpec', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({
+          variablesMap: {
+            '1': { source: 'name', fallback: 'cliente' },
+            '2': { source: 'balanceDue', fallback: '—' },
+          },
+        }),
+      );
+
+      expect(result.status).toBe('pending');
+      const persisted = await campaignRepo.findById(result.campaignId);
+      expect(persisted?.variableSpec['1']).toEqual({ source: 'name', fallback: 'cliente' });
+      expect(persisted?.variableSpec['2']).toEqual({ source: 'balanceDue', fallback: '—' });
+    });
+
+    it('variablesMap SIN `fallback` sigue siendo válido (backcompat, entry sin la clave)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(makeInput()); // variablesMap por defecto, sin fallback
+      expect(result.status).toBe('pending');
+      const persisted = await campaignRepo.findById(result.campaignId);
+      expect(persisted?.variableSpec['1']).toEqual({ source: 'name' });
+      expect(persisted?.variableSpec['2']).toEqual({ source: 'balanceDue' });
+    });
+  });
 });

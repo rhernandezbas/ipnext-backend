@@ -42,6 +42,15 @@ export interface CampaignVariableSpecEntry {
   source: CampaignVariableSource;
   /** Requerido cuando `source === 'literal'`; ignorado para 'name'/'balanceDue'. */
   value?: string;
+  /**
+   * var-fallback — valor a usar SOLO para destinatarios SIN cliente (el candidate
+   * crudo/sintético con `status: 'no_cliente'`, `SendCampaign`) cuando la fuente
+   * es `'name'`/`'balanceDue'`. Cuando está seteado (NO vacío) GANA sobre el
+   * nombre tipeado / el balance vacío del crudo. Un destinatario VINCULADO lo
+   * IGNORA (siempre usa su dato real). Ignorado para `'literal'` (ya es fijo para
+   * todos vía `value`). Persistido en el JSON `variableSpec` (sin migración).
+   */
+  fallback?: string;
 }
 
 /**
