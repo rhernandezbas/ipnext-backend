@@ -402,14 +402,118 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
   });
 
   describe('registerWebhook', () => {
-    it('POST /api/v1/accounts/:id/webhooks con url, subscriptions y secret', async () => {
+    it('POST /api/v1/accounts/:id/webhooks con url, subscriptions (incl. message_updated, chatwoot-hub-sendpath D2.c/D6) y secret', async () => {
       const { http, gw } = fakeHttp();
       await gw.registerWebhook('https://be.ipnext.com.ar/api/messaging/webhook', 'shh');
       expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/webhooks', {
         url: 'https://be.ipnext.com.ar/api/messaging/webhook',
-        subscriptions: ['message_created', 'conversation_created', 'conversation_status_changed'],
+        subscriptions: [
+          'message_created',
+          'conversation_created',
+          'conversation_status_changed',
+          'message_updated',
+        ],
         secret: 'shh',
       });
+    });
+  });
+
+  describe('sendTemplateMessage (chatwoot-hub-sendpath design D2.a, CHW-1)', () => {
+    it('POST .../conversations/:cid/messages con content/message_type:"outgoing"/template_params EXACTO (processed_params 1:1 sin transformación) y devuelve chatwootMessageId=data.id', async () => {
+      const { http, gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({
+          data: { id: 555, message_type: 1, content: 'Hola Juan, tu factura vence el 5', created_at: 1751001000 },
+        }),
+      });
+
+      const result = await gw.sendTemplateMessage(42, {
+        name: 'deuda_v1',
+        language: 'es',
+        processedParams: { '1': 'Juan', '2': '$5.000' },
+        content: 'Hola Juan, tu factura vence el 5',
+      });
+
+      expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/messages', {
+        content: 'Hola Juan, tu factura vence el 5',
+        message_type: 'outgoing',
+        template_params: {
+          name: 'deuda_v1',
+          language: 'es',
+          processed_params: { '1': 'Juan', '2': '$5.000' },
+        },
+      });
+      expect(result).toEqual({ chatwootMessageId: 555, content: 'Hola Juan, tu factura vence el 5' });
+    });
+
+    it('error de red/timeout/4xx/5xx → ChatwootUnavailableError (mismo criterio único del port, CHW-7)', async () => {
+      const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
+      await expect(
+        gw.sendTemplateMessage(42, { name: 'x', language: 'es', processedParams: {}, content: 'x' }),
+      ).rejects.toBeInstanceOf(ChatwootUnavailableError);
+    });
+  });
+
+  describe('createConversationWithTemplate (chatwoot-hub-sendpath design D2.b, CHW-2)', () => {
+    it('POST /conversations con {inbox_id, source_id:"whatsapp:"+phoneE164, message:{content, template_params}} — UNA sola llamada, sin POST de contacto separado (CHW-2)', async () => {
+      const { http, gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({
+          data: {
+            id: 500,
+            messages: [{ id: 777, message_type: 1, content: 'Hola Juan, este es tu recordatorio', created_at: 1751001100 }],
+          },
+        }),
+      });
+
+      const result = await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        name: 'Juan Perez',
+        templateName: 'deuda_v1',
+        language: 'es',
+        processedParams: { '1': 'Juan' },
+        content: 'Hola Juan, este es tu recordatorio',
+      });
+
+      expect(http.post).toHaveBeenCalledTimes(1);
+      expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations', {
+        inbox_id: '1',
+        source_id: 'whatsapp:+5493511234567',
+        message: {
+          content: 'Hola Juan, este es tu recordatorio',
+          template_params: { name: 'deuda_v1', language: 'es', processed_params: { '1': 'Juan' } },
+        },
+      });
+      expect(result).toEqual({ chatwootConversationId: 500, chatwootMessageId: 777 });
+    });
+
+    it('teléfono con contacto ya existente (mismo source_id) — reusa sin duplicar (CHW-2 scenario), igual UNA sola llamada', async () => {
+      const { http, gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({
+          data: { id: 501, messages: [{ id: 778, message_type: 1, content: 'hola de nuevo', created_at: 1751001200 }] },
+        }),
+      });
+
+      await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        templateName: 'deuda_v1',
+        language: 'es',
+        processedParams: {},
+        content: 'hola de nuevo',
+      });
+
+      expect(http.post).toHaveBeenCalledTimes(1);
+    });
+
+    it('error de red/timeout/4xx/5xx → ChatwootUnavailableError (mismo criterio único del port, CHW-7)', async () => {
+      const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
+      await expect(
+        gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        }),
+      ).rejects.toBeInstanceOf(ChatwootUnavailableError);
     });
   });
 

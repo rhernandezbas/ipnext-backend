@@ -146,4 +146,40 @@ export interface ChatwootGateway {
     url: string,
     options?: { maxBytes?: number },
   ): Promise<{ buffer: Buffer; contentType: string }>;
+  /**
+   * chatwoot-hub-sendpath (design D2.a, CHW-1) — envía un template WhatsApp sobre una
+   * conversación YA EXISTENTE (path del hilo, `SendTemplateMessage` flag ON). `name`/
+   * `language` deben coincidir con el `friendly_name`/`language` del template en el
+   * catálogo `channel.content_templates` de Chatwoot (matcher verificado en vivo,
+   * exploración §5) — vienen del `TemplateDto` que YA resolvió el gate de aprobación
+   * (D7), no de un lookup nuevo. `processedParams` mapea 1:1 sin transformación (mismo
+   * `Record<string,string>` que hoy le mandamos a Twilio). `content` es el texto
+   * renderizado a mostrar en el hilo. Cualquier falla de axios (red/timeout/4xx/5xx)
+   * MUST lanzar `ChatwootUnavailableError` (mismo criterio único del resto del port,
+   * CHW-7) — un template inexistente/fuera-de-ventana responde 201 igual (Chatwoot lo
+   * marca `failed` async, ver `setStatus`/webhook `message_updated`, D6).
+   */
+  sendTemplateMessage(
+    chatwootConversationId: number,
+    params: { name: string; language: string; processedParams: Record<string, string>; content: string },
+  ): Promise<{ chatwootMessageId: number; content: string }>;
+  /**
+   * chatwoot-hub-sendpath (design D2.b, CHW-2) — find-or-create ATÓMICO de
+   * contacto+conversación+primer mensaje (path bulk, `SendCampaign` flag ON, recipient
+   * SIN `chatwootConversationId` previo). El adapter se apoya ÚNICAMENTE en el
+   * find-or-create de Chatwoot por `source_id` EXACTO (`'whatsapp:'+phoneE164`,
+   * verificado en vivo exploración §6) — MUST NOT implementar una búsqueda propia de
+   * contacto por teléfono antes de este POST (CHW-2, reuso de contacto ya existente sin
+   * duplicar). `name` es best-effort/reservado para el caso en que Chatwoot exija
+   * `contact_id` (find-or-create de contacto previo) — el camino verificado no lo
+   * necesita. Mismo criterio único de fallo que el resto del port (`ChatwootUnavailableError`).
+   */
+  createConversationWithTemplate(params: {
+    phoneE164: string;
+    name?: string | null;
+    templateName: string;
+    language: string;
+    processedParams: Record<string, string>;
+    content: string;
+  }): Promise<{ chatwootConversationId: number; chatwootMessageId: number }>;
 }

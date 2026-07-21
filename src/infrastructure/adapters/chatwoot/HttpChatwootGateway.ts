@@ -212,10 +212,86 @@ export class HttpChatwootGateway implements ChatwootGateway {
     await this.call(() =>
       this.http.post(this.accountPath('/webhooks'), {
         url,
-        subscriptions: ['message_created', 'conversation_created', 'conversation_status_changed'],
+        // chatwoot-hub-sendpath (design D2.c/D6) — 'message_updated' agregado para que
+        // `content_attributes.external_error` (falla async de un template) llegue a
+        // nuestro webhook (`ReceiveChatwootWebhook.handleMessageUpdated`, Batch 5).
+        subscriptions: [
+          'message_created',
+          'conversation_created',
+          'conversation_status_changed',
+          'message_updated',
+        ],
         secret,
       }),
     );
+  }
+
+  /**
+   * chatwoot-hub-sendpath (design D2.a, CHW-1) — envía un template WhatsApp sobre una
+   * conversación YA EXISTENTE (path del hilo). Reusa `accountPath`/`this.call`/
+   * `toMessageDto` — cero código de manejo de error nuevo (mismo criterio único CHW-7).
+   * `processedParams` mapea 1:1 sin transformación a `processed_params` (verificado en
+   * vivo, exploración §5).
+   */
+  async sendTemplateMessage(
+    chatwootConversationId: number,
+    params: { name: string; language: string; processedParams: Record<string, string>; content: string },
+  ): Promise<{ chatwootMessageId: number; content: string }> {
+    const body = {
+      content: params.content,
+      message_type: 'outgoing',
+      template_params: {
+        name: params.name,
+        language: params.language,
+        processed_params: params.processedParams,
+      },
+    };
+    const { data } = await this.call(() =>
+      this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/messages`), body),
+    );
+    const message = toMessageDto(data);
+    return { chatwootMessageId: message.id, content: message.content };
+  }
+
+  /**
+   * chatwoot-hub-sendpath (design D2.b, CHW-2) — find-or-create ATÓMICO de
+   * contacto+conversación+primer mensaje (path bulk). UNA sola llamada: el
+   * `before_action :contact_inbox` de Chatwoot resuelve el find-or-create por
+   * `source_id` EXACTO (`'whatsapp:'+phoneE164`, verificado en vivo exploración §6) y
+   * crea el primer mensaje en la MISMA transacción — el adapter MUST NOT implementar
+   * una búsqueda propia de contacto antes de este POST (CHW-2). `chatwootMessageId` se
+   * extrae del último mensaje de la respuesta (intento síncrono, D2.b riesgo #3): si
+   * Chatwoot no lo expusiera de forma fiable, el eco `message_created` del webhook
+   * igual pobla el mirror — degradación aceptada, sin código adicional en este batch.
+   */
+  async createConversationWithTemplate(params: {
+    phoneE164: string;
+    name?: string | null;
+    templateName: string;
+    language: string;
+    processedParams: Record<string, string>;
+    content: string;
+  }): Promise<{ chatwootConversationId: number; chatwootMessageId: number }> {
+    const body = {
+      inbox_id: this.inboxId,
+      source_id: `whatsapp:${params.phoneE164}`,
+      message: {
+        content: params.content,
+        template_params: {
+          name: params.templateName,
+          language: params.language,
+          processed_params: params.processedParams,
+        },
+      },
+    };
+    const { data } = await this.call(() => this.http.post(this.accountPath('/conversations'), body));
+    const raw = data as RawChatwootConversationCreate;
+    const lastMessage =
+      raw.messages && raw.messages.length > 0 ? toMessageDto(raw.messages[raw.messages.length - 1]) : null;
+    return {
+      chatwootConversationId: raw.id,
+      chatwootMessageId: lastMessage?.id ?? NaN,
+    };
   }
 
   /**
@@ -393,6 +469,18 @@ function toMessageDto(raw: unknown): ChatwootMessageDto {
     private: r.private === true ? true : undefined,
     attachments: r.attachments && r.attachments.length > 0 ? r.attachments.map(toAttachmentDto) : undefined,
   };
+}
+
+/**
+ * chatwoot-hub-sendpath (design D2.b) — shape de la respuesta de
+ * `POST /conversations` (find-or-create atómico). `messages` trae el primer mensaje
+ * creado en la MISMA transacción (Chatwoot expone el recurso Conversation con sus
+ * mensajes recientes anidados) — de acá se extrae el `chatwootMessageId` (intento
+ * síncrono, ver comentario de `createConversationWithTemplate`).
+ */
+interface RawChatwootConversationCreate {
+  id: number;
+  messages?: RawChatwootMessage[];
 }
 
 interface RawChatwootContact {

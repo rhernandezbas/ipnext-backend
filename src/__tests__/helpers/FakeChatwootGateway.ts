@@ -150,4 +150,56 @@ export class FakeChatwootGateway implements ChatwootGateway {
     if (found) return found;
     return { buffer: Buffer.from('fake-binary'), contentType: 'application/octet-stream' };
   }
+
+  // ─── chatwoot-hub-sendpath (design D2.a, CHW-1) — sendTemplateMessage ───────
+  /** Result returned by the NEXT `sendTemplateMessage()` call when `failSendTemplateMessage` is false. */
+  public sendTemplateMessageResult: { chatwootMessageId: number; content: string } | null = null;
+  public failSendTemplateMessage = false;
+  public sendTemplateMessageCalls: Array<{
+    chatwootConversationId: number;
+    name: string;
+    language: string;
+    processedParams: Record<string, string>;
+    content: string;
+  }> = [];
+
+  async sendTemplateMessage(
+    chatwootConversationId: number,
+    params: { name: string; language: string; processedParams: Record<string, string>; content: string },
+  ): Promise<{ chatwootMessageId: number; content: string }> {
+    this.sendTemplateMessageCalls.push({ chatwootConversationId, ...params });
+    if (this.failSendTemplateMessage) throw new Error('fake: Chatwoot unreachable (sendTemplateMessage)');
+    if (this.sendTemplateMessageResult) return this.sendTemplateMessageResult;
+    return { chatwootMessageId: 999, content: params.content };
+  }
+
+  // ─── chatwoot-hub-sendpath (design D2.b, CHW-2) — createConversationWithTemplate ──
+  /** Result returned by the NEXT `createConversationWithTemplate()` call when `failCreateConversationWithTemplate` is false. */
+  public createConversationWithTemplateResult: { chatwootConversationId: number; chatwootMessageId: number } | null =
+    null;
+  public failCreateConversationWithTemplate = false;
+  public createConversationWithTemplateCalls: Array<{
+    phoneE164: string;
+    name?: string | null;
+    templateName: string;
+    language: string;
+    processedParams: Record<string, string>;
+    content: string;
+  }> = [];
+
+  async createConversationWithTemplate(params: {
+    phoneE164: string;
+    name?: string | null;
+    templateName: string;
+    language: string;
+    processedParams: Record<string, string>;
+    content: string;
+  }): Promise<{ chatwootConversationId: number; chatwootMessageId: number }> {
+    this.createConversationWithTemplateCalls.push({ ...params });
+    if (this.failCreateConversationWithTemplate) {
+      throw new Error('fake: Chatwoot unreachable (createConversationWithTemplate)');
+    }
+    if (this.createConversationWithTemplateResult) return this.createConversationWithTemplateResult;
+    return { chatwootConversationId: 888, chatwootMessageId: 999 };
+  }
 }
