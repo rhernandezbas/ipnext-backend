@@ -93,9 +93,26 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       // upsert local del send (llega antes de que SendMessage persista authorId), la fila
       // queda con authorId null → la nota sólo la edita/borra un supervisor. No se fuerza
       // completar authorId acá para no reintroducir un write en el hot path del webhook.
+      // chatwoot-hub-sendpath (F1, fix wave) — idempotencyKey SET-ONCE-IF-NULL: si el eco
+      // `message_created` GANÓ la carrera y CREÓ la fila SIN key, el UPDATE del use case (ON)
+      // la setea acá — sin esto el retry del operador (guard 0 miss) haría un SEGUNDO WhatsApp
+      // real. NUNCA pisa una key ya existente con otra (set-once): sólo escribe si estaba null.
+      if (existing.idempotencyKey === null && input.idempotencyKey != null) {
+        existing.idempotencyKey = input.idempotencyKey;
+      }
       this.syncConversationDirection(input.conversationId);
       if (existing.isPrivate) this.syncInternalNoteCount(input.conversationId);
       return { ...existing };
+    }
+
+    // chatwoot-hub-sendpath (F1, fix wave) — modela el @unique de `idempotencyKey` en Postgres:
+    // dos requests concurrentes con la MISMA key pero DISTINTO chatwootMessageId chocan el unique
+    // en el CREATE. El adapter Prisma recupera la fila GANADORA por key (P2002 catch); acá se
+    // modela igual (sin esto el in-memory crearía un duplicado en silencio → divergiría del
+    // Prisma). Cross-ref: mismo patrón que `upsertTemplateMessage`.
+    if (input.idempotencyKey != null) {
+      const racedWinner = this.rows.find((r) => r.idempotencyKey === input.idempotencyKey);
+      if (racedWinner) return { ...racedWinner };
     }
 
     const row: ChatMessageRecord = {

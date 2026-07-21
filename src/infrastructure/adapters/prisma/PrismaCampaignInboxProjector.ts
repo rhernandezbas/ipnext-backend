@@ -69,16 +69,28 @@ export class PrismaCampaignInboxProjector implements CampaignInboxProjector {
       chatwootConversationId,
       contactName,
       contactPhone,
+      // F7 (fix wave) — bumpea lastMessageAt/preview (mismo criterio que `projectSentMessage`, el
+      // path OFF): sin esto la conversación quedaba al FONDO del inbox (lastMessageAt null),
+      // invisible al operador. El body renderizado alimenta el preview (mismo dato que el ChatMessage).
+      lastMessageAt: sentAt,
+      lastMessagePreview: renderedBody,
     });
 
-    await this.chatMessageRepo.upsertByChatwootMessageId({
-      conversationId: conversation.id,
-      chatwootMessageId,
-      direction: 'outbound',
-      content: renderedBody,
-      senderName: null,
-      chatwootCreatedAt: sentAt,
-    });
+    // F6 (fix wave) — sólo upsertea el ChatMessage cuando HAY un chatwootMessageId real. Con null
+    // (el gateway no lo pudo extraer), se SALTEA el mensaje: el eco `message_created` del webhook lo
+    // repone (converge por la misma UNIQUE). La Conversation + el link recipient->conversación (abajo)
+    // SIEMPRE se ejecutan, así el link NUNCA se pierde (antes: NaN rompía este upsert y mataba el
+    // updateRecipient del paso 3 a mitad).
+    if (chatwootMessageId !== null) {
+      await this.chatMessageRepo.upsertByChatwootMessageId({
+        conversationId: conversation.id,
+        chatwootMessageId,
+        direction: 'outbound',
+        content: renderedBody,
+        senderName: null,
+        chatwootCreatedAt: sentAt,
+      });
+    }
 
     await this.campaignRepo.updateRecipient(recipient.id, { conversationId: conversation.id });
   }

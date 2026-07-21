@@ -49,8 +49,13 @@ export interface ProjectChatwootTemplateSendInput {
   contactPhone: string;
   /** id REAL de Chatwoot (find-or-create atómico, CHW-2) — clave de upsert de la Conversation. */
   chatwootConversationId: number;
-  /** id REAL del primer mensaje de Chatwoot — clave de dedup con el eco del webhook (CHW-4/D5). */
-  chatwootMessageId: number;
+  /**
+   * id REAL del primer mensaje de Chatwoot — clave de dedup con el eco del webhook (CHW-4/D5).
+   * F6 (fix wave) — `number | null`: si el gateway no pudo extraer el id del create, el projector
+   * SALTEA el upsert del ChatMessage pero SIEMPRE crea la Conversation + preserva el link
+   * recipient->conversacion (el eco `message_created` repone el mensaje).
+   */
+  chatwootMessageId: number | null;
   /** Body renderizado del template (placeholders sustituidos) — contenido del ChatMessage. */
   renderedBody: string;
   /** ISO — mismo `sentAt` con que se persistió el recipient (ordena el hilo). */

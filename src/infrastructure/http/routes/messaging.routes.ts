@@ -329,6 +329,14 @@ function computeDedupKey(payload: ChatwootWebhookPayload, signedTimestamp: strin
       return `conversation_status_changed:${conversationId}:${payload.status}:${signedTimestamp ?? ''}`;
     case 'conversation_created':
       return `conversation_created:${conversationId}`;
+    case 'message_updated':
+      // F3 (fix wave) — clave por MENSAJE (`payload.id`), NO por conversación: distintos
+      // message_updated de la MISMA conversación deben tener claves distintas (el default viejo
+      // `${event}:${conversationId}` los colapsaba → sólo el primero se procesaba). Discriminador
+      // por presencia de `external_error`: un update SIN error (delivered/read, no-op) NO debe
+      // dedupear un update POSTERIOR del MISMO mensaje CON error (el failed) — si no, el badge se
+      // pierde. `!= null` cubre null/undefined y trata número/objeto (F2) como "hay error".
+      return `message_updated:${payload.id}:${payload.content_attributes?.external_error != null ? 'failed' : 'ok'}`;
     default:
       return `${payload.event}:${conversationId}`;
   }

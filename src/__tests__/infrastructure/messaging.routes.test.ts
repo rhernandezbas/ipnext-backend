@@ -48,6 +48,8 @@ import { ListPreviousConversations } from '../../application/use-cases/messaging
 import { MarkConversationMentionsRead } from '../../application/use-cases/messaging/MarkConversationMentionsRead';
 import { InMemoryConversationMentionRepository } from '../../infrastructure/adapters/in-memory/InMemoryConversationMentionRepository';
 import { InMemoryTemplateMessagingGateway } from '../../infrastructure/adapters/in-memory/InMemoryTemplateMessagingGateway';
+// F10 (fix wave) — variante del router con SendTemplateMessage cableado con chatwootGateway+flag.
+import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import type { TemplateDto } from '../../domain/ports/TemplateMessagingPort';
 import { GetClientContracts } from '../../application/use-cases/GetClientContracts';
 import { GetClientInvoices } from '../../application/use-cases/GetClientInvoices';
@@ -168,6 +170,12 @@ interface BuildAppOptions {
   // ─── inbox-template-send (HTTP-1/HTTP-2) ────────────────────────────────────
   templatePort?: InMemoryTemplateMessagingGateway;
   templates?: TemplateDto[];
+  /**
+   * F10 (fix wave) — cablea `SendTemplateMessage` con `chatwootGateway` (el `gateway` del harness)
+   * + un `FeatureFlagRepository` con el flag `messaging-send-via-chatwoot` en ON. Ejercita el
+   * contrato NUEVO (path Chatwoot) end-to-end por la ruta real (422 CONVERSATION_NOT_LINKED).
+   */
+  sendTemplateViaChatwoot?: boolean;
   // ─── messaging-inbox-notes (edit/delete) ────────────────────────────────────
   /** Middleware que deja `req.messagingCanManage`. Default: supervisor=false (sólo el
    * autor puede mutar su nota). Tests de supervisor pasan uno que setea `true`. */
@@ -281,7 +289,15 @@ function buildApp(opts: BuildAppOptions = {}) {
       new ListTicketAreas(areaRepo),
       // inbox-template-send (HTTP-1/HTTP-2) — appended (design §Colisiones: nunca
       // insertar en medio de la lista compartida con inbox-resolve).
-      new SendTemplateMessage(conversationRepo, templatePort, messageRepo),
+      // F10 (fix wave) — con `sendTemplateViaChatwoot`, se cablea el path Chatwoot (gateway + flag ON);
+      // sin el opt, backcompat exacto (deps ausentes → flag OFF, path Twilio-directo).
+      opts.sendTemplateViaChatwoot
+        ? new SendTemplateMessage(conversationRepo, templatePort, messageRepo, gateway, (() => {
+            const flags = new InMemoryFeatureFlagRepository();
+            flags.seed('messaging-send-via-chatwoot', true);
+            return flags;
+          })())
+        : new SendTemplateMessage(conversationRepo, templatePort, messageRepo),
       new ListTemplates(templatePort),
       // inbox-views (Ola 1) — appended (misma regla §Colisiones: jamás insertar
       // en medio de la lista compartida).
@@ -568,6 +584,73 @@ describe('POST /api/messaging/webhook — dedup por contenido firmado (H10, anti
       .send(payload);
     expect(second.status).toBe(200);
     expect((await conversationRepo.findByChatwootId(211))?.status).toBe('open'); // dedup held despite header mismatch
+  });
+
+  // F3 (fix wave) — `computeDedupKey` colapsaba TODOS los `message_updated` de una conversación
+  // bajo la MISMA clave (`message_updated:${conversationId}`), así que sólo el primero se procesaba.
+  it('F3: dos message_updated de la MISMA conversación (mensajes distintos, el 2do con external_error) → AMBOS procesados, el 2do marca failed', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp();
+    const timestamp = String(NOW_SEC);
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 950 });
+    const iso = new Date(NOW_MS).toISOString();
+    for (const mid of [8001, 8002]) {
+      await messageRepo.upsertByChatwootMessageId({
+        conversationId: conv.id,
+        chatwootMessageId: mid,
+        direction: 'outbound',
+        content: `msg ${mid}`,
+        chatwootCreatedAt: iso,
+      });
+    }
+
+    const post = async (payload: Record<string, unknown>) => {
+      const rawBody = Buffer.from(JSON.stringify(payload));
+      const res = await request(app)
+        .post('/api/messaging/webhook')
+        .set('x-chatwoot-signature', sign(rawBody, timestamp))
+        .set('x-chatwoot-timestamp', timestamp)
+        .send(payload);
+      expect(res.status).toBe(200);
+    };
+
+    // 1er message_updated: mensaje 8001, SIN error (delivered/read, no-op)
+    await post({ event: 'message_updated', id: 8001, conversation: { id: 950 } });
+    // 2do message_updated: mensaje 8002 (MISMA conversación), CON external_error
+    await post({ event: 'message_updated', id: 8002, conversation: { id: 950 }, content_attributes: { external_error: 'Template not found' } });
+
+    const messages = await messageRepo.listByConversation(conv.id);
+    const m8002 = messages.find((m) => m.chatwootMessageId === 8002)!;
+    expect(m8002.deliveryStatus).toBe('failed'); // antes: deduped por clave de conversación → null
+    const m8001 = messages.find((m) => m.chatwootMessageId === 8001)!;
+    expect(m8001.deliveryStatus).toBeNull();
+  });
+
+  it('F3: MISMO mensaje — un message_updated sin error (no-op) NO dedupea un message_updated POSTERIOR con error (el failed no se pierde)', async () => {
+    const { app, conversationRepo, messageRepo } = buildApp();
+    const timestamp = String(NOW_SEC);
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 951 });
+    await messageRepo.upsertByChatwootMessageId({
+      conversationId: conv.id,
+      chatwootMessageId: 8100,
+      direction: 'outbound',
+      content: 'x',
+      chatwootCreatedAt: new Date(NOW_MS).toISOString(),
+    });
+
+    const post = async (payload: Record<string, unknown>) => {
+      const rawBody = Buffer.from(JSON.stringify(payload));
+      await request(app)
+        .post('/api/messaging/webhook')
+        .set('x-chatwoot-signature', sign(rawBody, timestamp))
+        .set('x-chatwoot-timestamp', timestamp)
+        .send(payload);
+    };
+
+    await post({ event: 'message_updated', id: 8100, conversation: { id: 951 } }); // sin error (no-op)
+    await post({ event: 'message_updated', id: 8100, conversation: { id: 951 }, content_attributes: { external_error: 'Template not found' } });
+
+    const m = (await messageRepo.listByConversation(conv.id))[0]!;
+    expect(m.deliveryStatus).toBe('failed'); // antes: mismo key de conversación → 2do deduped → failed perdido
   });
 
   it('dos message_created REALMENTE distintos (message.id distinto) NO se pisan entre si', async () => {
@@ -2457,6 +2540,37 @@ describe('POST /api/messaging/conversations/:id/send-template', () => {
     expect(updatedConv!.lastMessagePreview).toBe('Hola Juan, debés $5.000');
     // D2 — el template NUNCA abre la ventana: canReply sigue false.
     expect(updatedConv!.canReply).toBe(false);
+  });
+
+  // F10 (fix wave) — cobertura de RUTA del contrato NUEVO (path Chatwoot) por el errorHandler REAL.
+  describe('F10 (fix wave) — contrato nuevo por la ruta real', () => {
+    it('flag ON + conversación sin chatwootConversationId (mirror bulk) → 422 CONVERSATION_NOT_LINKED end-to-end (errorHandler real)', async () => {
+      const { app, conversationRepo, gateway } = buildApp({ templates: [APPROVED_TEMPLATE], sendTemplateViaChatwoot: true });
+      // Único camino del port para un chatwootConversationId:null (mirror 'bulk' nunca adoptado).
+      const conv = await conversationRepo.upsertBulkByPhone('+5491123456789', { contactName: 'Ana' });
+
+      const res = await request(app)
+        .post(`/api/messaging/conversations/${conv.id}/send-template`)
+        .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('CONVERSATION_NOT_LINKED');
+      // guard corta ANTES del gateway: cero POST a Chatwoot.
+      expect((gateway as FakeChatwootGateway).sendTemplateMessageCalls).toHaveLength(0);
+    });
+
+    it('el DTO de la respuesta del envío incluye deliveryStatus/deliveryError (pin del wire shape, D6)', async () => {
+      const { app, conversationRepo } = buildApp({ templates: [APPROVED_TEMPLATE] });
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 260, contactPhone: '+5491123456789' });
+
+      const res = await request(app)
+        .post(`/api/messaging/conversations/${conv.id}/send-template`)
+        .send({ templateRef: 'HX1', variables: { '1': 'Juan', '2': '$5.000' } });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveProperty('deliveryStatus', null);
+      expect(res.body).toHaveProperty('deliveryError', null);
+    });
   });
 
   describe('H1 (fix wave, ALTO) — idempotencyKey server-side', () => {

@@ -125,7 +125,10 @@ export class SendTemplateMessage {
 
     // chatwoot-hub-sendpath (D1/D3) — resuelto POR INVOCACIÓN, nunca cacheado.
     // `featureFlags` AUSENTE (backcompat, wiring de B6 pendiente) → SIEMPRE OFF.
-    const viaChat = (await this.featureFlags?.get('messaging-send-via-chatwoot'))?.enabled === true;
+    // F5 (fix wave) — la lectura NO debe agregar superficie de fallo nueva al hot path: si el
+    // repo de flags EXPLOTA (hipo de DB), se loguea y se defaultea a OFF (path Twilio-directo de
+    // siempre) en vez de volar el envío. El flag es un kill-switch, no una dependencia crítica.
+    const viaChat = await this.resolveViaChat();
 
     // guard 2 — PINNED en su posición original (H4/D9 de inbox-template-send: debe
     // correr ANTES del gate de aprobación/template, en AMBOS flags). El flag sólo
@@ -214,5 +217,22 @@ export class SendTemplateMessage {
     });
 
     return { message: toChatMessageDto(record, []), deduped: false };
+  }
+
+  /**
+   * chatwoot-hub-sendpath (F5, fix wave) — lee el flag `messaging-send-via-chatwoot` de forma
+   * FAIL-SAFE: cualquier error del repo se loguea y resuelve a OFF (path Twilio-directo). Sin
+   * este wrap, un hipo de DB al leer el flag volaba el envío entero (regresión de robustez).
+   */
+  private async resolveViaChat(): Promise<boolean> {
+    try {
+      return (await this.featureFlags?.get('messaging-send-via-chatwoot'))?.enabled === true;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[messaging] lectura del flag messaging-send-via-chatwoot falló (fail-safe OFF, envío por el path de siempre)', {
+        error: err instanceof Error ? err.message : err,
+      });
+      return false;
+    }
   }
 }

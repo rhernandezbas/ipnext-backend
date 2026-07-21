@@ -247,6 +247,61 @@ describe('chatwoot-hub-sendpath (D9, B4.3) — projectChatwootTemplateSend', () 
     expect(messages).toHaveLength(1); // NO duplica
   });
 
+  // F7 (fix wave) — el path ON no bumpeaba lastMessageAt/preview de la Conversation → la
+  // conversación quedaba al FONDO del inbox (invisible). El path OFF (projectSentMessage) SÍ bumpea.
+  it('F7: bumpea lastMessageAt (sentAt) + preview (renderedBody) de la Conversation', async () => {
+    const { conversationRepo, projector, campaignRepo } = build();
+    const recipient = await seedRecipient(campaignRepo, {
+      clientId: 'c1',
+      phoneNormalized: '3364000001',
+      phoneE164: '+5493364000001',
+    });
+
+    await projector.projectChatwootTemplateSend({
+      recipient,
+      contactName: 'Juan Pérez',
+      contactPhone: '+5493364000001',
+      chatwootConversationId: 960,
+      chatwootMessageId: 9600,
+      renderedBody: 'Hola Juan, debés $1.000',
+      sentAt: '2026-07-21T10:00:00.000Z',
+    });
+
+    const conv = await conversationRepo.findByChatwootId(960);
+    expect(conv!.lastMessageAt).toBe('2026-07-21T10:00:00.000Z');
+    expect(conv!.lastMessagePreview).toBe('Hola Juan, debés $1.000');
+  });
+
+  // F6 (fix wave) — chatwootMessageId null (el gateway no pudo extraer el id del create): SALTEA
+  // el upsert del ChatMessage pero SIEMPRE crea la Conversation + setea recipient.conversationId
+  // (el link NO se pierde; el eco `message_created` repone el mensaje después).
+  it('F6: chatwootMessageId null → SALTEA el ChatMessage pero crea la Conversation + preserva el link recipient→conversación', async () => {
+    const { conversationRepo, chatMessageRepo, campaignRepo, projector } = build();
+    const recipient = await seedRecipient(campaignRepo, {
+      clientId: 'c1',
+      phoneNormalized: '3364000001',
+      phoneE164: '+5493364000001',
+    });
+
+    await projector.projectChatwootTemplateSend({
+      recipient,
+      contactName: 'Juan Pérez',
+      contactPhone: '+5493364000001',
+      chatwootConversationId: 970,
+      chatwootMessageId: null,
+      renderedBody: 'Hola',
+      sentAt: '2026-07-21T10:00:00.000Z',
+    });
+
+    const conv = await conversationRepo.findByChatwootId(970);
+    expect(conv).not.toBeNull(); // Conversation creada IGUAL (bump de preview incluido)
+    expect(conv!.lastMessagePreview).toBe('Hola');
+    const messages = await chatMessageRepo.listByConversation(conv!.id);
+    expect(messages).toHaveLength(0); // ChatMessage SALTEADO (el eco lo repone)
+    const persisted = (await campaignRepo.listRecipients(recipient.campaignId)).data[0]!;
+    expect(persisted.conversationId).toBe(conv!.id); // link preservado
+  });
+
   it('contacto crudo (clientId null) también proyecta con el contactName/contactPhone pasados y preserva el lazo recipient→conversación', async () => {
     const { conversationRepo, campaignRepo, projector } = build();
     const recipient = await seedRecipient(campaignRepo, {

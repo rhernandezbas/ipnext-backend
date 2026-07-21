@@ -165,7 +165,7 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const existing = await (prisma as any).chatMessage.findUnique({
       where: { chatwootMessageId: input.chatwootMessageId },
-      select: { editedAt: true },
+      select: { editedAt: true, idempotencyKey: true },
     });
     const preserveLocalEdit = !!existing && existing.editedAt !== null;
 
@@ -178,31 +178,56 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
     };
     // Sólo espejamos `content` cuando la fila NO fue editada localmente.
     if (!preserveLocalEdit) updateData['content'] = input.content;
+    // chatwoot-hub-sendpath (F1, fix wave) — idempotencyKey SET-ONCE-IF-NULL en el UPDATE: si
+    // el eco `message_created` GANÓ la carrera y CREÓ la fila SIN key, seteámosla acá (sin esto
+    // el retry del operador — guard 0 miss — haría un SEGUNDO WhatsApp real). Sólo si la fila la
+    // tiene null (pre-read) Y el input trae una: JAMÁS pisa una key existente con otra (set-once).
+    if (input.idempotencyKey != null && (!existing || existing.idempotencyKey == null)) {
+      updateData['idempotencyKey'] = input.idempotencyKey;
+    }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const row = await (prisma as any).chatMessage.upsert({
-      where: { chatwootMessageId: input.chatwootMessageId },
-      create: {
-        conversationId: input.conversationId,
-        chatwootMessageId: input.chatwootMessageId,
-        direction: input.direction,
-        content: input.content,
-        senderName: input.senderName ?? null,
-        chatwootCreatedAt: new Date(input.chatwootCreatedAt),
-        isPrivate: input.isPrivate ?? false,
-        // messaging-inbox-notes (edit/delete) — authorId SET-ONCE en create (SendMessage
-        // sólo lo pasa cuando isPrivate). El `update` NO lo toca: el echo idempotente del
-        // webhook (mismo chatwootMessageId) jamás nulifica al autor. LOW-1 (documentado):
-        // si un webhook message_created gana la carrera al upsert local del send, authorId
-        // queda null → la nota sólo la edita/borra un supervisor (edge raro, no se fuerza).
-        authorId: input.authorId ?? null,
-        // chatwoot-hub-sendpath (D5) — idempotencyKey SET-ONCE en create, mismo criterio
-        // que authorId: `updateData` (abajo) NUNCA incluye esta clave, así que el eco
-        // idempotente del webhook (que no la manda) jamás la pisa.
-        idempotencyKey: input.idempotencyKey ?? null,
-      },
-      update: updateData,
-    });
+    let row;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      row = await (prisma as any).chatMessage.upsert({
+        where: { chatwootMessageId: input.chatwootMessageId },
+        create: {
+          conversationId: input.conversationId,
+          chatwootMessageId: input.chatwootMessageId,
+          direction: input.direction,
+          content: input.content,
+          senderName: input.senderName ?? null,
+          chatwootCreatedAt: new Date(input.chatwootCreatedAt),
+          isPrivate: input.isPrivate ?? false,
+          // messaging-inbox-notes (edit/delete) — authorId SET-ONCE en create (SendMessage
+          // sólo lo pasa cuando isPrivate). El `update` NO lo toca: el echo idempotente del
+          // webhook (mismo chatwootMessageId) jamás nulifica al autor. LOW-1 (documentado):
+          // si un webhook message_created gana la carrera al upsert local del send, authorId
+          // queda null → la nota sólo la edita/borra un supervisor (edge raro, no se fuerza).
+          authorId: input.authorId ?? null,
+          // chatwoot-hub-sendpath (D5) — idempotencyKey SET-ONCE en create.
+          idempotencyKey: input.idempotencyKey ?? null,
+        },
+        update: updateData,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      // chatwoot-hub-sendpath (F1, fix wave) — carrera del @unique(idempotencyKey): dos requests
+      // concurrentes con la MISMA key pero DISTINTO chatwootMessageId chocan el unique en el
+      // CREATE (o al setear la key en el UPDATE). En vez de propagar un 500, se recupera la fila
+      // GANADORA por key (mismo patrón que `upsertTemplateMessage`). Cualquier OTRO error
+      // (incluido un P2002 en otra columna) propaga tal cual. El sync del ganador ya corrió.
+      if (
+        input.idempotencyKey &&
+        err?.code === 'P2002' &&
+        Array.isArray(err?.meta?.target) &&
+        err.meta.target.includes('idempotencyKey')
+      ) {
+        const winner = await this.findByIdempotencyKey(input.idempotencyKey);
+        if (winner) return winner;
+      }
+      throw err;
+    }
     await this.syncConversationDirection(input.conversationId);
     // messaging-inbox-notes (COUNT) — sólo una nota privada mueve el contador.
     if (input.isPrivate) await this.syncInternalNoteCount(input.conversationId);

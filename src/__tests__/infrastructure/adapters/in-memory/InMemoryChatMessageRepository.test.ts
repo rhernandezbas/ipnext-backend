@@ -228,6 +228,47 @@ describe('InMemoryChatMessageRepository', () => {
       expect(updated.idempotencyKey).toBe('idem-y');
       expect(updated.content).toBe('echo del webhook (sin idempotencyKey)');
     });
+
+    // F1 (fix wave) — SET-ONCE-IF-NULL: el eco `message_created` puede GANAR la carrera y
+    // CREAR la fila SIN key ANTES de que el use case (SendTemplateMessage ON) upsertee con la
+    // key. Si el UPDATE no seteara la key, el retry del operador (guard 0 miss) haría un
+    // SEGUNDO WhatsApp real. El UPDATE debe setear la key SI la fila la tiene null y el input
+    // trae una — pero JAMÁS pisar una key ya existente con otra.
+    it('el eco crea la fila SIN key y luego el use case upsertea CON key → la key queda seteada (findByIdempotencyKey la encuentra)', async () => {
+      // eco: crea sin key
+      const echo = await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 600 }));
+      expect(echo.idempotencyKey).toBeNull();
+
+      // use case: upsertea el MISMO chatwootMessageId ahora con la key
+      const updated = await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 600, idempotencyKey: 'K-set-once' }));
+      expect(updated.idempotencyKey).toBe('K-set-once');
+
+      const found = await repo.findByIdempotencyKey('K-set-once');
+      expect(found).not.toBeNull();
+      expect(found!.chatwootMessageId).toBe(600);
+    });
+
+    it('una fila que YA tiene key NO es pisada por un UPDATE con OTRA key (set-once, nunca overwrite)', async () => {
+      await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 601, idempotencyKey: 'K-original' }));
+      await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 601, idempotencyKey: 'K-otra' }));
+
+      expect(await repo.findByIdempotencyKey('K-original')).not.toBeNull(); // preservada
+      expect(await repo.findByIdempotencyKey('K-otra')).toBeNull(); // NUNCA seteada
+    });
+
+    // F1 (fix wave) — carrera del @unique(idempotencyKey): dos requests concurrentes con la
+    // MISMA key pero DISTINTO chatwootMessageId chocan el unique en el CREATE. El adapter Prisma
+    // recupera la fila ganadora por key (P2002 catch); el in-memory DEBE modelar esa uniqueness
+    // (antes creaba un duplicado en silencio → divergía del Prisma).
+    it('CREATE con una key que YA existe en otra fila (distinto chatwootMessageId) → recupera la GANADORA, NO duplica (modela el @unique)', async () => {
+      const first = await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 700, idempotencyKey: 'K-race' }));
+      const second = await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 701, idempotencyKey: 'K-race' }));
+
+      expect(second.id).toBe(first.id); // la misma fila ganadora
+      expect(second.chatwootMessageId).toBe(700);
+      const all = await repo.listByConversation('conv-1');
+      expect(all.filter((m) => m.idempotencyKey === 'K-race')).toHaveLength(1); // una sola
+    });
   });
 
   describe('messaging-inbox-notes (edit/delete) — content local vs re-espejo de Chatwoot (HIGH)', () => {

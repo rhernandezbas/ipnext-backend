@@ -47,6 +47,7 @@ import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memor
 import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
 import { FakeCampaignInboxProjector } from '../../helpers/FakeCampaignInboxProjector';
 import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
+import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 
 /** PRNG determinística (mulberry32) — shuffle reproducible, sin flakiness en CI. */
 function mulberry32(seed: number): () => number {
@@ -115,6 +116,40 @@ class UnstableOrderCampaignRepository implements CampaignRepository {
   // ORDER BY, no al keyset (que siempre ordena). Se delega al inner estable.
   listRecipientsKeyset(campaignId: string, filter: ListRecipientsKeysetFilter): Promise<CampaignRecipient[]> {
     return this.inner.listRecipientsKeyset(campaignId, filter);
+  }
+}
+
+/**
+ * F9 (fix wave) — wrapper que ACOTA cada página keyset a `pageSize` filas (default 2), forzando
+ * MÚLTIPLES batches con pocos recipients. Ejercita el flip del flag ENTRE batches usando el
+ * mecanismo REAL de `drainQueue` (que lee el flag una vez por batch). Compone el
+ * `InMemoryCampaignRepository` real; sólo intercepta el `limit` del keyset.
+ */
+class SmallKeysetCampaignRepository implements CampaignRepository {
+  constructor(private readonly inner: InMemoryCampaignRepository, private readonly pageSize = 2) {}
+  create(data: CampaignCreateData): Promise<Campaign> {
+    return this.inner.create(data);
+  }
+  findById(id: string): Promise<Campaign | null> {
+    return this.inner.findById(id);
+  }
+  update(id: string, patch: CampaignPatch): Promise<Campaign> {
+    return this.inner.update(id, patch);
+  }
+  list(query: ListCampaignsQuery): Promise<PaginatedResult<Campaign>> {
+    return this.inner.list(query);
+  }
+  bulkCreateRecipients(campaignId: string, rows: CampaignRecipientCreateRow[]): Promise<CampaignRecipient[]> {
+    return this.inner.bulkCreateRecipients(campaignId, rows);
+  }
+  updateRecipient(id: string, patch: CampaignRecipientPatch): Promise<CampaignRecipient> {
+    return this.inner.updateRecipient(id, patch);
+  }
+  listRecipients(campaignId: string, filter?: ListRecipientsFilter): Promise<PaginatedResult<CampaignRecipient>> {
+    return this.inner.listRecipients(campaignId, filter);
+  }
+  listRecipientsKeyset(campaignId: string, filter: ListRecipientsKeysetFilter): Promise<CampaignRecipient[]> {
+    return this.inner.listRecipientsKeyset(campaignId, { ...filter, limit: Math.min(filter.limit, this.pageSize) });
   }
 }
 
@@ -1229,6 +1264,162 @@ describe('SendCampaign', () => {
 
       expect(rateLimiter.acquire).toHaveBeenCalledTimes(5);
       expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(5);
+    });
+
+    // F6 (fix wave) — el gateway no pudo extraer el chatwootMessageId del create (null). El
+    // recipient DEBE quedar `sent` igual, `projectChatwootTemplateSend` se invoca con null (el
+    // link no se pierde; el eco repone el mensaje), y `providerId` es TRAZABLE, nunca "NaN"/"null".
+    it('F6: createConversationWithTemplate devuelve chatwootMessageId null → recipient sent, providerId trazable (no NaN/null), projectChatwootTemplateSend con null', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1', name: 'Juan Pérez' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [APPROVED_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      chatwootGateway.createConversationWithTemplateResult = { chatwootConversationId: 900, chatwootMessageId: null };
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const projector = new FakeCampaignInboxProjector();
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        projector,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        templateBody: 'Hola {{1}}',
+        variableSpec: { '1': { source: 'name' } },
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(1);
+      const recipient = (await campaignRepo.listRecipients(campaign.id)).data[0]!;
+      expect(recipient.status).toBe('sent');
+      expect(recipient.providerId).not.toBe('NaN');
+      expect(recipient.providerId).not.toBe('null');
+      expect(recipient.providerId).toContain('chatwoot-pending');
+      expect(projector.projectChatwootTemplateSendCalls).toHaveLength(1);
+      expect(projector.projectChatwootTemplateSendCalls[0]!.chatwootMessageId).toBeNull();
+    });
+
+    // F5 (fix wave) — la lectura del flag por-batch NO debe agregar superficie de fallo: si el
+    // repo de flags EXPLOTA, se defaultea a OFF (Twilio-directo) y el batch entero drena, en vez
+    // de abortar el run (regresión de robustez vs HEAD~6).
+    it('F5: featureFlags.get EXPLOTA → drena el batch ENTERO por OFF (Twilio-directo), sin abortar', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const candidates = Array.from({ length: 3 }, (_, i) => makeCandidate({ clientId: `c${i + 1}` }));
+      const lookup = makeLookup(candidates);
+      const templatePort = new InMemoryTemplateMessagingGateway();
+      const chatwootGateway = new FakeChatwootGateway();
+      const throwingFlags: FeatureFlagRepository = {
+        list: async () => [],
+        get: async () => {
+          throw new Error('feature flag repo caído');
+        },
+        setEnabled: async () => {
+          throw new Error('feature flag repo caído');
+        },
+      };
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        throwingFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        recipients: candidates.map((c, i) => ({
+          clientId: c.clientId,
+          phoneNormalized: `336400000${i}`,
+          phoneE164: `+549336400000${i}`,
+        })),
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(3);
+      expect(templatePort.calls).toHaveLength(3); // Twilio-directo por los 3 (path OFF)
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(0);
+    });
+
+    // F9 (fix wave, CHW-3) — flip a mitad de campaña por el mecanismo REAL de batches. 5 recipients,
+    // páginas keyset de 2 (SmallKeysetCampaignRepository): batch 1 (recipients 1-2) con flag OFF →
+    // Twilio; el flag flipea a ON entre batches → batches 2-3 (recipients 3-5) vía Chatwoot.
+    it('F9/CHW-3: 5 recipients en 2+ batches, OFF al arrancar (2 por Twilio) → flip ON entre batches (3-5 por Chatwoot); sentCount=5, cero reprocesos, cero duplicados', async () => {
+      const inner = new InMemoryCampaignRepository();
+      const campaignRepo = new SmallKeysetCampaignRepository(inner, 2);
+      const candidates = Array.from({ length: 5 }, (_, i) => makeCandidate({ clientId: `c${i + 1}`, name: `Cliente ${i + 1}` }));
+      const lookup = makeLookup(candidates);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [APPROVED_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      const projector = new FakeCampaignInboxProjector();
+
+      // OFF en el 1er batch (get #1), ON del 2do en adelante (get #2, #3, …) — el flip ocurre
+      // ENTRE batches (drainQueue lee el flag una vez por batch).
+      let flagReads = 0;
+      const flippingFlags: FeatureFlagRepository = {
+        list: async () => [],
+        get: async (key: string) => {
+          flagReads++;
+          return { key, enabled: flagReads > 1, updatedAt: new Date().toISOString() };
+        },
+        setEnabled: async () => {
+          throw new Error('n/a');
+        },
+      };
+
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        projector,
+        undefined,
+        chatwootGateway,
+        flippingFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        templateBody: 'Hola {{1}}',
+        variableSpec: { '1': { source: 'name' } },
+        recipients: candidates.map((c, i) => ({
+          clientId: c.clientId,
+          phoneNormalized: `336400010${i}`,
+          phoneE164: `+549336400010${i}`,
+        })),
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(5);
+      // batch 1 (OFF): 2 recipients por Twilio-directo (el ORDEN exacto lo fija el keyset por
+      // [createdAt,id], que no es la inserción — se asserta por conteo + cobertura, no por orden).
+      expect(templatePort.calls).toHaveLength(2);
+      expect(projector.projectSentMessageCalls).toHaveLength(2);
+      // batches 2-3 (ON): los 3 restantes vía Chatwoot.
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(3);
+      expect(projector.projectChatwootTemplateSendCalls).toHaveLength(3);
+
+      // cero reprocesos / cero duplicados: los 2 phones OFF y los 3 ON son DISJUNTOS y cubren los 5.
+      const twilioPhones = templatePort.calls.map((c) => c.to);
+      const chatwootPhones = chatwootGateway.createConversationWithTemplateCalls.map((c) => c.phoneE164);
+      const allPhones = candidates.map((_, i) => `+549336400010${i}`);
+      expect(new Set([...twilioPhones, ...chatwootPhones])).toEqual(new Set(allPhones)); // cobertura total
+      expect(twilioPhones.filter((p) => chatwootPhones.includes(p))).toHaveLength(0); // ninguno en ambos paths
+
+      const recipients = (await campaignRepo.listRecipients(campaign.id)).data;
+      expect(recipients.filter((r) => r.status === 'sent')).toHaveLength(5); // los 5 sent exactamente
     });
   });
 });

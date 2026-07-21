@@ -91,7 +91,10 @@ export interface ChatwootWebhookPayload {
    * `undelivered` sólo se detectan por `external_error` poblado; `delivered`/`read`
    * llegan indistinguibles (mismo evento, sin este campo) y quedan INVISIBLES por diseño.
    */
-  content_attributes?: { external_error?: string | null } | null;
+  // F2 (fix wave) — el tipo era `string | null`, pero Chatwoot puede mandar un NÚMERO
+  // (código Twilio, ej. 63016) o un OBJETO. `unknown` refleja el wire real; `curateDeliveryError`
+  // coacciona con seguridad (nunca `raw.trim()` sobre un no-string → TypeError → 500 → retry storm).
+  content_attributes?: { external_error?: unknown } | null;
 }
 
 const WEBHOOK_SOURCE = 'chatwoot';
@@ -102,11 +105,28 @@ const WEBHOOK_SOURCE = 'chatwoot';
 const MAX_DELIVERY_ERROR_LENGTH = 500;
 
 /**
- * chatwoot-hub-sendpath (D6, HIST-3) — sanea `external_error` antes de persistirlo: trimea y
- * acota longitud. NUNCA guarda headers/body crudos (no es ese tipo de payload en origen).
+ * chatwoot-hub-sendpath (D6, HIST-3) — sanea `external_error` antes de persistirlo: coacciona a
+ * string de forma SEGURA, trimea y acota longitud. NUNCA guarda headers/body crudos.
+ *
+ * F2 (fix wave) — `raw` es `unknown`: Chatwoot puede mandar un NÚMERO (código Twilio, ej. 63016)
+ * o un OBJETO. Un `raw.trim()` directo sobre un no-string tiraba TypeError → 500 → retry storm.
+ * Coacción: string tal cual; primitivo → `String(raw)`; objeto/array → `JSON.stringify` con
+ * fallback a `String(raw)` (nunca lanza).
  */
-function curateDeliveryError(raw: string): string {
-  const trimmed = raw.trim();
+function curateDeliveryError(raw: unknown): string {
+  let str: string;
+  if (typeof raw === 'string') {
+    str = raw;
+  } else if (typeof raw === 'number' || typeof raw === 'boolean' || typeof raw === 'bigint') {
+    str = String(raw);
+  } else {
+    try {
+      str = JSON.stringify(raw);
+    } catch {
+      str = String(raw);
+    }
+  }
+  const trimmed = str.trim();
   return trimmed.length > MAX_DELIVERY_ERROR_LENGTH ? trimmed.slice(0, MAX_DELIVERY_ERROR_LENGTH) : trimmed;
 }
 
@@ -168,23 +188,35 @@ export class ReceiveChatwootWebhook {
     const alreadySeen = await this.deliveryRepo.hasSeen(WEBHOOK_SOURCE, deliveryId);
     if (alreadySeen) return; // HOOK-3 — already processed, ack without reprocessing
 
-    await this.process(payload); // may throw — delivery NOT recorded yet (ROB-2)
+    // ROB-2 — `process` puede lanzar (delivery NO se recorda → Chatwoot reintenta). F4 (fix wave)
+    // — además puede devolver `false` (SIN lanzar) para pedir que la delivery NO se recorde: un
+    // `message_updated` cuya fila aún no está espejada (o cuyo repo explotó) debe re-entregarse.
+    const shouldRecord = await this.process(payload);
 
-    await this.deliveryRepo.recordIfNew(WEBHOOK_SOURCE, deliveryId); // recorded ONLY after success
+    if (shouldRecord) await this.deliveryRepo.recordIfNew(WEBHOOK_SOURCE, deliveryId); // recorded ONLY after success
   }
 
-  private async process(payload: ChatwootWebhookPayload): Promise<void> {
+  /**
+   * Devuelve `true` si la delivery debe registrarse como vista (procesada), `false` si NO (para
+   * que Chatwoot reintente — F4). Los handlers que lanzan (message_created/conversation_*) NO
+   * llegan al `return` → `process` propaga y `execute` no recorda (ROB-2). Sólo `handleMessageUpdated`
+   * traga sus errores y decide vía el boolean.
+   */
+  private async process(payload: ChatwootWebhookPayload): Promise<boolean> {
     switch (payload.event) {
       case 'message_created':
-        return this.handleMessageCreated(payload);
+        await this.handleMessageCreated(payload);
+        return true;
       case 'conversation_created':
-        return this.handleConversationCreated(payload);
+        await this.handleConversationCreated(payload);
+        return true;
       case 'conversation_status_changed':
-        return this.handleConversationStatusChanged(payload);
+        await this.handleConversationStatusChanged(payload);
+        return true;
       case 'message_updated':
         return this.handleMessageUpdated(payload);
       default:
-        return; // HOOK-5 — unsubscribed event type, ignored without error
+        return true; // HOOK-5 — unsubscribed event type, ignored without error (recordar: no reprocesar)
     }
   }
 
@@ -197,26 +229,36 @@ export class ReceiveChatwootWebhook {
    * (paridad con hoy, Decisión B — no es regresión).
    *
    * NUNCA lanza (HOOK-5): fail-open, mismo criterio que `maybeRegisterOptOut`/
-   * `maybeAdoptBulkConversation` — un hipo de DB acá no debe volar el ack 200 del
-   * webhook ni hacer que Chatwoot reintente indefinidamente un evento ya visto.
+   * `maybeAdoptBulkConversation` — un hipo de DB acá no debe volar el ack 200 del webhook.
+   *
+   * Devuelve un boolean (F4, fix wave) = "¿registrar la delivery como vista?":
+   * - `true`  → no-op legítimo (malformed / delivered-read / vacío) o `failed` YA marcado.
+   * - `false` → la fila AÚN no está espejada (`markDeliveryFailed` devolvió null) o el repo
+   *   EXPLOTÓ. NO se marca vista para que Chatwoot RE-ENTREGUE cuando el `message_created` ya
+   *   haya creado la fila. (Antes: se marcaba vista siempre → un update fuera de orden perdía el
+   *   `failed` para siempre; un repo caído lo perdía también.)
    */
-  private async handleMessageUpdated(payload: ChatwootWebhookPayload): Promise<void> {
-    if (payload.id === undefined) return; // malformed payload — no-op, never throws
+  private async handleMessageUpdated(payload: ChatwootWebhookPayload): Promise<boolean> {
+    if (payload.id === undefined) return true; // malformed payload — no-op, se recorda (nunca será válido en retry)
 
     const externalError = payload.content_attributes?.external_error;
-    if (externalError === undefined || externalError === null) return; // delivered/read — indistinguible, no-op
-
-    const curated = curateDeliveryError(externalError);
-    if (curated.length === 0) return; // vacío tras trim — tratado igual que ausente
+    if (externalError === undefined || externalError === null) return true; // delivered/read — indistinguible, no-op
 
     try {
-      await this.messageRepo.markDeliveryFailedByChatwootMessageId(payload.id, curated);
+      // F2 (fix wave) — curación DENTRO del try (coacción segura + defensa en profundidad).
+      const curated = curateDeliveryError(externalError);
+      if (curated.length === 0) return true; // vacío tras trim — tratado igual que ausente (no-op, se recorda)
+
+      const updated = await this.messageRepo.markDeliveryFailedByChatwootMessageId(payload.id, curated);
+      // F4 — null = fila aún no espejada → NO recordar (retry re-entrega tras el message_created).
+      return updated !== null;
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.error('[messaging] markDeliveryFailedByChatwootMessageId falló (fail-open, el webhook igual ackea 200)', {
+      console.error('[messaging] markDeliveryFailedByChatwootMessageId falló (fail-open: ackea 200 pero NO marca vista, el retry recupera)', {
         chatwootMessageId: payload.id,
         error: err instanceof Error ? err.message : err,
       });
+      return false; // F4 — repo error: fail-open (no lanza) PERO sin marcar vista, que el retry recupere
     }
   }
 

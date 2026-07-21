@@ -173,6 +173,12 @@ export interface ChatwootGateway {
    * duplicar). `name` es best-effort/reservado para el caso en que Chatwoot exija
    * `contact_id` (find-or-create de contacto previo) — el camino verificado no lo
    * necesita. Mismo criterio único de fallo que el resto del port (`ChatwootUnavailableError`).
+   *
+   * F6 (fix wave) — `chatwootMessageId` es `number | null`: si la respuesta del create no expone
+   * el message id de forma fiable, el adapter devuelve `null` (NUNCA `NaN`, que Prisma Int rechaza).
+   * Con null, `SendCampaign`/`PrismaCampaignInboxProjector` SALTEAN el upsert del mensaje pero
+   * SIEMPRE crean la Conversation + preservan el link recipient->conversacion; el eco
+   * `message_created` del webhook repone el mensaje despues.
    */
   createConversationWithTemplate(params: {
     phoneE164: string;
@@ -181,5 +187,5 @@ export interface ChatwootGateway {
     language: string;
     processedParams: Record<string, string>;
     content: string;
-  }): Promise<{ chatwootConversationId: number; chatwootMessageId: number }>;
+  }): Promise<{ chatwootConversationId: number; chatwootMessageId: number | null }>;
 }

@@ -271,12 +271,19 @@ export class HttpChatwootGateway implements ChatwootGateway {
     language: string;
     processedParams: Record<string, string>;
     content: string;
-  }): Promise<{ chatwootConversationId: number; chatwootMessageId: number }> {
+  }): Promise<{ chatwootConversationId: number; chatwootMessageId: number | null }> {
+    // F11 (fix wave, quirúrgico) — normalización defensiva del teléfono: Chatwoot resuelve el
+    // find-or-create por `source_id` EXACTO, así que un `whatsapp:` duplicado o espacios embebidos
+    // NO matchearían el contacto (crearían uno nuevo / romperían la resolución). Strippeamos ambos.
+    const normalizedPhone = params.phoneE164.replace(/\s+/g, '').replace(/^whatsapp:/i, '');
     const body = {
       inbox_id: this.inboxId,
-      source_id: `whatsapp:${params.phoneE164}`,
+      source_id: `whatsapp:${normalizedPhone}`,
       message: {
         content: params.content,
+        // F11 (fix wave) — message_type:'outgoing' (simetría con `sendTemplateMessage`): el eco
+        // `message_created` cae como direction:'outbound' normal, reusable por upsertByChatwootMessageId.
+        message_type: 'outgoing',
         template_params: {
           name: params.templateName,
           language: params.language,
@@ -290,7 +297,10 @@ export class HttpChatwootGateway implements ChatwootGateway {
       raw.messages && raw.messages.length > 0 ? toMessageDto(raw.messages[raw.messages.length - 1]) : null;
     return {
       chatwootConversationId: raw.id,
-      chatwootMessageId: lastMessage?.id ?? NaN,
+      // F6 (fix wave) — `?? null`, NUNCA `NaN`: si el create no expone el message id (messages
+      // vacío/ausente, o sin `id`), Prisma Int rechazaría NaN y el in-memory divergiría
+      // (NaN!==NaN). Con null, la proyección saltea el mensaje pero preserva el link; el eco repone.
+      chatwootMessageId: lastMessage != null && typeof lastMessage.id === 'number' ? lastMessage.id : null,
     };
   }
 

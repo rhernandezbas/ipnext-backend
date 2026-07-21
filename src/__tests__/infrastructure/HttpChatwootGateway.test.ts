@@ -479,10 +479,33 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
         source_id: 'whatsapp:+5493511234567',
         message: {
           content: 'Hola Juan, este es tu recordatorio',
+          // F11 (fix wave) — message_type:'outgoing' (simetría con sendTemplateMessage): el eco
+          // cae como direction:'outbound' normal, reusable por upsertByChatwootMessageId.
+          message_type: 'outgoing',
           template_params: { name: 'deuda_v1', language: 'es', processed_params: { '1': 'Juan' } },
         },
       });
       expect(result).toEqual({ chatwootConversationId: 500, chatwootMessageId: 777 });
+    });
+
+    // F11 (fix wave, quirúrgico) — normalización defensiva del teléfono: strippea espacios y un
+    // prefijo `whatsapp:` duplicado ANTES de armar el source_id (Chatwoot resuelve el find-or-create
+    // por source_id EXACTO — un `whatsapp:whatsapp:+…` o con espacios NO matchearía el contacto).
+    it('F11: teléfono con espacios y prefijo whatsapp: duplicado → source_id canónico (un solo prefijo, sin espacios)', async () => {
+      const { http, gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({ data: { id: 600, messages: [{ id: 900, message_type: 1, content: 'x', created_at: 1751001100 }] } }),
+      });
+
+      await gw.createConversationWithTemplate({
+        phoneE164: 'whatsapp: +54 9351 1234567 ',
+        templateName: 'x',
+        language: 'es',
+        processedParams: {},
+        content: 'x',
+      });
+
+      const body = (http.post as jest.Mock).mock.calls[0][1];
+      expect(body.source_id).toBe('whatsapp:+5493511234567');
     });
 
     it('teléfono con contacto ya existente (mismo source_id) — reusa sin duplicar (CHW-2 scenario), igual UNA sola llamada', async () => {
@@ -514,6 +537,41 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
           content: 'x',
         }),
       ).rejects.toBeInstanceOf(ChatwootUnavailableError);
+    });
+
+    // F6 (fix wave) — si la respuesta no expone el message id (messages vacío/ausente), el retorno
+    // debe ser `chatwootMessageId: null`, NUNCA `NaN` (Prisma Int rechaza NaN → rompe la proyección
+    // a mitad; el in-memory diverge por NaN!==NaN). El eco `message_created` repone el mensaje.
+    it('F6: respuesta sin message id extraíble (messages vacío) → chatwootMessageId null (NO NaN)', async () => {
+      const { gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({ data: { id: 502, messages: [] } }),
+      });
+
+      const result = await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        templateName: 'x',
+        language: 'es',
+        processedParams: {},
+        content: 'x',
+      });
+
+      expect(result).toEqual({ chatwootConversationId: 502, chatwootMessageId: null });
+    });
+
+    it('F6: respuesta SIN clave messages → chatwootMessageId null (NO NaN)', async () => {
+      const { gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({ data: { id: 503 } }),
+      });
+
+      const result = await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        templateName: 'x',
+        language: 'es',
+        processedParams: {},
+        content: 'x',
+      });
+
+      expect(result).toEqual({ chatwootConversationId: 503, chatwootMessageId: null });
     });
   });
 

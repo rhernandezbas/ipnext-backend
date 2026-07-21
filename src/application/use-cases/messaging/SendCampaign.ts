@@ -127,7 +127,9 @@ export class SendCampaign {
 
       // D4 — flag leído UNA vez por batch, NUNCA por recipient (evita martillar
       // la DB en el hot loop; staleness < 1s a ~80 msg/s es indistinguible).
-      const viaChat = (await this.featureFlags?.get('messaging-send-via-chatwoot'))?.enabled === true;
+      // F5 (fix wave) — FAIL-SAFE: un error del repo de flags NO debe abortar el drain entero;
+      // se loguea y se defaultea a OFF (Twilio-directo). El flag es kill-switch, no dependencia crítica.
+      const viaChat = await this.resolveViaChat();
       if (viaChat && !templateDescriptor) {
         templateDescriptor = await this.resolveTemplateDescriptor(campaign.templateRef);
       }
@@ -138,6 +140,23 @@ export class SendCampaign {
 
       const last = batch[batch.length - 1];
       cursor = { createdAt: last.createdAt, id: last.id };
+    }
+  }
+
+  /**
+   * chatwoot-hub-sendpath (F5, fix wave) — lee el flag `messaging-send-via-chatwoot` de forma
+   * FAIL-SAFE: cualquier error del repo se loguea y resuelve a OFF (Twilio-directo), sin abortar
+   * el drain del batch. Sin este wrap, un hipo de DB al leer el flag reventaba la corrida entera.
+   */
+  private async resolveViaChat(): Promise<boolean> {
+    try {
+      return (await this.featureFlags?.get('messaging-send-via-chatwoot'))?.enabled === true;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SendCampaign] lectura del flag messaging-send-via-chatwoot falló (fail-safe OFF, drena por el path de siempre)', {
+        error: err instanceof Error ? err.message : err,
+      });
+      return false;
     }
   }
 
@@ -207,7 +226,8 @@ export class SendCampaign {
     // chatwoot-hub-sendpath (D9) — sólo poblado en el path ON: ids REALES de
     // Chatwoot devueltos por `createConversationWithTemplate`, necesarios para
     // `projectChatwootTemplateSend` (upsert por id real, converge con el eco).
-    let chatwootIds: { chatwootConversationId: number; chatwootMessageId: number } | undefined;
+    // F6 (fix wave) — `chatwootMessageId` es `number | null` (el gateway puede no extraerlo).
+    let chatwootIds: { chatwootConversationId: number; chatwootMessageId: number | null } | undefined;
     try {
       await this.rateLimiter.acquire(); // SEND-4 — proactivo, UNA vez por recipient, ANTES del send (ambos paths)
 
@@ -230,8 +250,16 @@ export class SendCampaign {
         });
         chatwootIds = created;
         // auditoría — mismo campo `providerId` que el path OFF, ahora con el
-        // chatwootMessageId (D4).
-        result = { providerId: String(created.chatwootMessageId), status: 'accepted' };
+        // chatwootMessageId (D4). F6 (fix wave) — si el gateway no pudo extraer el message id
+        // (null), `providerId` es TRAZABLE (`chatwoot-pending:<conversationId>`), NUNCA "NaN"/"null"
+        // (String(NaN)==='NaN', String(null)==='null' ensuciaban la auditoría). El eco lo repone.
+        result = {
+          providerId:
+            created.chatwootMessageId !== null
+              ? String(created.chatwootMessageId)
+              : `chatwoot-pending:${created.chatwootConversationId}`,
+          status: 'accepted',
+        };
       }
     } catch (err) {
       // FIX-2 — una falla SISTÉMICA de auth/config (token rotado, accountSid
@@ -272,7 +300,7 @@ export class SendCampaign {
     result: SendTemplateResult,
     sentAt: string,
     viaChat: boolean,
-    chatwootIds?: { chatwootConversationId: number; chatwootMessageId: number },
+    chatwootIds?: { chatwootConversationId: number; chatwootMessageId: number | null },
   ): Promise<void> {
     if (!this.inboxProjector) return;
     try {

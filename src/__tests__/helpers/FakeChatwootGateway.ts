@@ -174,9 +174,13 @@ export class FakeChatwootGateway implements ChatwootGateway {
   }
 
   // ─── chatwoot-hub-sendpath (design D2.b, CHW-2) — createConversationWithTemplate ──
-  /** Result returned by the NEXT `createConversationWithTemplate()` call when `failCreateConversationWithTemplate` is false. */
-  public createConversationWithTemplateResult: { chatwootConversationId: number; chatwootMessageId: number } | null =
-    null;
+  /** Result returned by the NEXT `createConversationWithTemplate()` call when `failCreateConversationWithTemplate` is false.
+   * F6 (fix wave) — `chatwootMessageId` es `number | null`: configurable a null para probar el
+   * seam donde el gateway no pudo extraer el id (Prisma rechaza NaN → antes rompía la proyección). */
+  public createConversationWithTemplateResult: {
+    chatwootConversationId: number;
+    chatwootMessageId: number | null;
+  } | null = null;
   public failCreateConversationWithTemplate = false;
   public createConversationWithTemplateCalls: Array<{
     phoneE164: string;
@@ -194,7 +198,7 @@ export class FakeChatwootGateway implements ChatwootGateway {
     language: string;
     processedParams: Record<string, string>;
     content: string;
-  }): Promise<{ chatwootConversationId: number; chatwootMessageId: number }> {
+  }): Promise<{ chatwootConversationId: number; chatwootMessageId: number | null }> {
     this.createConversationWithTemplateCalls.push({ ...params });
     if (this.failCreateConversationWithTemplate) {
       throw new Error('fake: Chatwoot unreachable (createConversationWithTemplate)');

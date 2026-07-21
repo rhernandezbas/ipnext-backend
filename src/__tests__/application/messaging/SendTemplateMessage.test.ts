@@ -21,6 +21,18 @@ import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memor
 import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
 import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
 import type { ConversationRepository, ConversationRecord } from '@domain/ports/ConversationRepository';
+import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+
+/** F5 (fix wave) — flag repo que EXPLOTA en `get` (hipo de DB) para probar el fail-safe OFF. */
+const throwingFeatureFlags: FeatureFlagRepository = {
+  list: async () => [],
+  get: async () => {
+    throw new Error('feature flag repo caído');
+  },
+  setEnabled: async () => {
+    throw new Error('feature flag repo caído');
+  },
+};
 
 /**
  * TS-2 fallback scenario ("pre-backfill" row: `contactPhoneE164:null` but
@@ -426,6 +438,32 @@ describe('SendTemplateMessage', () => {
       expect(await messageRepo.listByConversation(conv.id)).toHaveLength(1);
     });
 
+    it('F1 (fix wave): el eco GANA la carrera (crea la fila SIN key ANTES del send) → el retry del operador con la MISMA key es dedupeado por guard 0, CERO segundo POST a Chatwoot', async () => {
+      const { conversationRepo, messageRepo, chatwootGateway, featureFlags, uc } = makeHarness();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 510, contactPhone: '+5491123456789' });
+      chatwootGateway.sendTemplateMessageResult = { chatwootMessageId: 4242, content: 'Hola Juan, debés $5.000' };
+
+      // el eco `message_created` del webhook LLEGA PRIMERO y crea la fila SIN idempotencyKey
+      await messageRepo.upsertByChatwootMessageId({
+        conversationId: conv.id,
+        chatwootMessageId: 4242,
+        direction: 'outbound',
+        content: 'Hola Juan, debés $5.000',
+        chatwootCreatedAt: new Date().toISOString(),
+      });
+
+      // primer envío con key K — el use case upsertea el MISMO 4242, ahora seteando la key
+      const first = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1', 'K-eco-race');
+      expect(first.deduped).toBe(false);
+
+      // retry del operador con la MISMA key → guard 0 la encuentra → dedup, sin segundo POST
+      const retry = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1', 'K-eco-race');
+      expect(retry.deduped).toBe(true);
+      expect(chatwootGateway.sendTemplateMessageCalls).toHaveLength(1); // UN solo envío real
+      expect(await messageRepo.listByConversation(conv.id)).toHaveLength(1); // una sola fila
+    });
+
     it('CHW-4: convergencia del eco — pre-write + un upsertByChatwootMessageId manual con el MISMO chatwootMessageId → UNA sola fila', async () => {
       const { conversationRepo, messageRepo, chatwootGateway, featureFlags, uc } = makeHarness();
       featureFlags.seed('messaging-send-via-chatwoot', true);
@@ -484,6 +522,23 @@ describe('SendTemplateMessage', () => {
       expect(updated!.canReply).toBe(false);
       expect(updated!.status).toBe('open');
       expect(updated!.lastMessagePreview).toBe('Hola Juan, debés $5.000');
+    });
+  });
+
+  describe('F5 (fix wave) — la lectura del flag NO agrega superficie de fallo (fail-safe OFF)', () => {
+    it('featureFlags.get EXPLOTA → el envío NO se vuela: cae al path OFF (Twilio-directo), persiste por providerMessageId', async () => {
+      const { conversationRepo, messageRepo, templatePort, chatwootGateway } = makeHarness();
+      const uc = new SendTemplateMessage(conversationRepo, templatePort, messageRepo, chatwootGateway, throwingFeatureFlags);
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 520, contactPhone: '+5491123456789' });
+
+      const { message } = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1');
+
+      expect(templatePort.calls).toHaveLength(1); // path OFF: envío por Twilio
+      expect(chatwootGateway.sendTemplateMessageCalls).toHaveLength(0); // cero POST a Chatwoot
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages[0]!.providerMessageId).toBeTruthy();
+      expect(messages[0]!.chatwootMessageId).toBeNull();
+      expect(message.content).toBe('Hola Juan, debés $5.000');
     });
   });
 
