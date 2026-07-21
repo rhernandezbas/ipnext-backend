@@ -1,10 +1,12 @@
 import type { CampaignRepository, CampaignPatch } from '@domain/ports/CampaignRepository';
 import type { CampaignRecipientLookup, CampaignRecipientCandidate } from '@domain/ports/CustomerRepository';
-import type { TemplateMessagingPort } from '@domain/ports/TemplateMessagingPort';
+import type { TemplateMessagingPort, TemplateDto } from '@domain/ports/TemplateMessagingPort';
 import type { RateLimiter } from '@domain/ports/RateLimiter';
 import type { Campaign, CampaignRecipient, CampaignVariableSpec } from '@domain/entities/campaign';
 import type { SendTemplateResult } from '@domain/ports/TemplateMessagingPort';
 import type { CampaignInboxProjector } from '@domain/ports/CampaignInboxProjector';
+import type { ChatwootGateway } from '@domain/ports/ChatwootGateway';
+import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { CampaignNotFoundError, TemplateProviderConfigError } from '@domain/errors/messaging-bulk';
 import { sendWithRetry, CampaignRetryOptions } from './campaignBackoff';
 
@@ -63,6 +65,15 @@ export class SendCampaign {
      */
     private readonly inboxProjector?: CampaignInboxProjector,
     private readonly backoffOpts?: CampaignRetryOptions,
+    /**
+     * chatwoot-hub-sendpath (D1/D4) — OPCIONALES (backcompat, mismo molde que
+     * `inboxProjector`/`backoffOpts`): AUSENTES → el flag SIEMPRE resuelve a OFF
+     * (`featureFlags?.get(...)` es `undefined`), comportamiento actual intacto sin
+     * tocar `app.ts` (wiring real en B6). Cuando `app.ts` los cablea, SIEMPRE van
+     * juntos (el flag sin gateway sería un wiring roto).
+     */
+    private readonly chatwootGateway?: ChatwootGateway,
+    private readonly featureFlags?: FeatureFlagRepository,
   ) {}
 
   async execute(input: SendCampaignInput): Promise<Campaign> {
@@ -100,6 +111,11 @@ export class SendCampaign {
    */
   private async drainQueue(campaign: Campaign): Promise<void> {
     let cursor: { createdAt: string; id: string } | undefined;
+    // chatwoot-hub-sendpath (D7) — descriptor resuelto LAZY: recién la PRIMERA vez
+    // que un batch resuelve el flag ON, y cacheado para el resto del run (nunca
+    // vuelve a pedir `listTemplates` por batch/recipient). Si el flag NUNCA está
+    // ON durante la corrida, jamás se pide — backcompat OFF sin deps nuevas.
+    let templateDescriptor: TemplateDto | undefined;
 
     for (;;) {
       const batch = await this.campaignRepo.listRecipientsKeyset(campaign.id, {
@@ -109,8 +125,15 @@ export class SendCampaign {
       });
       if (batch.length === 0) break;
 
+      // D4 — flag leído UNA vez por batch, NUNCA por recipient (evita martillar
+      // la DB en el hot loop; staleness < 1s a ~80 msg/s es indistinguible).
+      const viaChat = (await this.featureFlags?.get('messaging-send-via-chatwoot'))?.enabled === true;
+      if (viaChat && !templateDescriptor) {
+        templateDescriptor = await this.resolveTemplateDescriptor(campaign.templateRef);
+      }
+
       for (const recipient of batch) {
-        await this.processRecipient(campaign, recipient);
+        await this.processRecipient(campaign, recipient, viaChat, templateDescriptor);
       }
 
       const last = batch[batch.length - 1];
@@ -118,7 +141,32 @@ export class SendCampaign {
     }
   }
 
-  private async processRecipient(campaign: Campaign, recipient: CampaignRecipient): Promise<void> {
+  /**
+   * chatwoot-hub-sendpath (D7) — resuelve `{friendlyName, language}` contra el
+   * MISMO `templatePort.listTemplates()` (Twilio Content API directo, CHW-6: el
+   * gate de aprobación es NUESTRO, nunca el de Chatwoot que marca todo
+   * `approved` a ciegas). Re-afirma la aprobación AL SEND-TIME (no sólo al
+   * create). Ausente/no-aprobado → ABORTA el run entero (mismo criterio
+   * sistémico que FIX-2/`TemplateProviderConfigError`: NO quema recipients,
+   * el llamador de `drainQueue` corta ANTES de tocar el batch).
+   */
+  private async resolveTemplateDescriptor(templateRef: string): Promise<TemplateDto> {
+    const templates = await this.templatePort.listTemplates();
+    const descriptor = templates.find((t) => t.contentSid === templateRef);
+    if (!descriptor || descriptor.approvalStatus !== 'approved') {
+      throw new TemplateProviderConfigError(
+        `Template "${templateRef}" no está aprobado (o no existe) en el proveedor — requerido para el envío vía Chatwoot`,
+      );
+    }
+    return descriptor;
+  }
+
+  private async processRecipient(
+    campaign: Campaign,
+    recipient: CampaignRecipient,
+    viaChat: boolean,
+    templateDescriptor: TemplateDto | undefined,
+  ): Promise<void> {
     let candidate: CampaignRecipientCandidate;
 
     if (recipient.clientId === null) {
@@ -156,12 +204,35 @@ export class SendCampaign {
     const variables = resolveCampaignVariables(campaign.variableSpec, candidate);
 
     let result: SendTemplateResult;
+    // chatwoot-hub-sendpath (D9) — sólo poblado en el path ON: ids REALES de
+    // Chatwoot devueltos por `createConversationWithTemplate`, necesarios para
+    // `projectChatwootTemplateSend` (upsert por id real, converge con el eco).
+    let chatwootIds: { chatwootConversationId: number; chatwootMessageId: number } | undefined;
     try {
-      await this.rateLimiter.acquire(); // SEND-4 — proactivo, UNA vez por recipient, ANTES del send
-      result = await sendWithRetry(
-        () => this.templatePort.sendTemplate(recipient.phoneE164, campaign.templateRef, variables),
-        this.backoffOpts,
-      );
+      await this.rateLimiter.acquire(); // SEND-4 — proactivo, UNA vez por recipient, ANTES del send (ambos paths)
+
+      if (!viaChat) {
+        result = await sendWithRetry(
+          () => this.templatePort.sendTemplate(recipient.phoneE164, campaign.templateRef, variables),
+          this.backoffOpts,
+        );
+      } else {
+        // D4/CHW-2 — SIN sendWithRetry (SEND-3 modified): el throttle real de
+        // reintento lo maneja Sidekiq de Chatwoot, no este loop.
+        const renderedBody = renderTemplateBody(campaign.templateBody, variables);
+        const created = await this.chatwootGateway!.createConversationWithTemplate({
+          phoneE164: recipient.phoneE164,
+          name: candidate.name,
+          templateName: templateDescriptor!.friendlyName,
+          language: templateDescriptor!.language,
+          processedParams: variables,
+          content: renderedBody,
+        });
+        chatwootIds = created;
+        // auditoría — mismo campo `providerId` que el path OFF, ahora con el
+        // chatwootMessageId (D4).
+        result = { providerId: String(created.chatwootMessageId), status: 'accepted' };
+      }
     } catch (err) {
       // FIX-2 — una falla SISTÉMICA de auth/config (token rotado, accountSid
       // vacío) NO es per-destinatario: PROPAGAR para ABORTAR el run (campaña
@@ -169,6 +240,7 @@ export class SendCampaign {
       // a este (y a los miles siguientes) a `failed` terminal.
       if (err instanceof TemplateProviderConfigError) throw err;
       // best-effort (SEND-2): un fallo por-destinatario NUNCA aborta el resto del batch.
+      // CHW-7 (bulk) — un fallo de Chatwoot cae acá IGUAL que uno de Twilio.
       await this.persistRecipientFailed(recipient.id, err);
       return;
     }
@@ -183,7 +255,7 @@ export class SendCampaign {
     // messaging-bulk-inbox (F1) — proyección al inbox DESPUÉS del `sent`, best-effort
     // e AISLADA: su fallo se loguea y se sigue (JAMÁS re-marca `failed` → jamás re-envía).
     // Sin projector inyectado (5º arg ausente) es un no-op → backcompat exacto.
-    await this.projectToInbox(campaign, recipient, candidate, variables, result, sentAt);
+    await this.projectToInbox(campaign, recipient, candidate, variables, result, sentAt, viaChat, chatwootIds);
   }
 
   /**
@@ -199,20 +271,36 @@ export class SendCampaign {
     variables: Record<string, string>,
     result: SendTemplateResult,
     sentAt: string,
+    viaChat: boolean,
+    chatwootIds?: { chatwootConversationId: number; chatwootMessageId: number },
   ): Promise<void> {
     if (!this.inboxProjector) return;
     try {
       const renderedBody = renderTemplateBody(campaign.templateBody, variables);
-      await this.inboxProjector.projectSentMessage({
-        recipient,
-        // bulk-csv-recipients (D6, PRJ-1) — `contactName` reemplaza `candidate`: para
-        // un vinculado es el `Client.name` fresco; para un crudo, el candidate
-        // sintetizado ya carga `recipient.contactName` en `.name` (D5).
-        contactName: candidate.name,
-        renderedBody,
-        sentAt,
-        providerId: result.providerId,
-      });
+      if (!viaChat) {
+        await this.inboxProjector.projectSentMessage({
+          recipient,
+          // bulk-csv-recipients (D6, PRJ-1) — `contactName` reemplaza `candidate`: para
+          // un vinculado es el `Client.name` fresco; para un crudo, el candidate
+          // sintetizado ya carga `recipient.contactName` en `.name` (D5).
+          contactName: candidate.name,
+          renderedBody,
+          sentAt,
+          providerId: result.providerId,
+        });
+      } else {
+        // chatwoot-hub-sendpath (D9) — upsert por id REAL de Chatwoot (converge con
+        // el eco del webhook), NUNCA `projectSentMessage` (phone-keyed, path OFF).
+        await this.inboxProjector.projectChatwootTemplateSend({
+          recipient,
+          contactName: candidate.name,
+          contactPhone: recipient.phoneE164,
+          chatwootConversationId: chatwootIds!.chatwootConversationId,
+          chatwootMessageId: chatwootIds!.chatwootMessageId,
+          renderedBody,
+          sentAt,
+        });
+      }
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(

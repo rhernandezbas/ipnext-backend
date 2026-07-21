@@ -42,6 +42,11 @@ import type {
 import { RESUME_PAGE_SIZE } from '@application/use-cases/messaging/SendCampaign';
 import type { Campaign } from '@domain/entities/campaign';
 import type { PaginatedResult } from '@application/dto/pagination';
+// chatwoot-hub-sendpath (B4) — flag-aware: envío/proyección vía ChatwootGateway.
+import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
+import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
+import { FakeCampaignInboxProjector } from '../../helpers/FakeCampaignInboxProjector';
+import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
 
 /** PRNG determinística (mulberry32) — shuffle reproducible, sin flakiness en CI. */
 function mulberry32(seed: number): () => number {
@@ -224,6 +229,9 @@ async function seedCampaign(
   campaignRepo: CampaignRepository,
   opts: {
     templateRef?: string;
+    // chatwoot-hub-sendpath (B4) — opcional, backcompat: los tests existentes no
+    // lo pasan (queda `null`, `renderTemplateBody` resuelve `''`, sin cambios).
+    templateBody?: string | null;
     variableSpec?: CampaignVariableSpec;
     recipients: { clientId: string | null; contactName?: string | null; phoneNormalized: string; phoneE164: string }[];
   },
@@ -231,6 +239,7 @@ async function seedCampaign(
   const campaign = await campaignRepo.create({
     name: 'Test campaign',
     templateRef: opts.templateRef ?? 'HXtest',
+    templateBody: opts.templateBody ?? null,
     segment: { statuses: ['late'] },
     variableSpec: opts.variableSpec ?? {},
     total: opts.recipients.length,
@@ -933,6 +942,293 @@ describe('SendCampaign', () => {
       await uc.execute({ campaignId: campaign.id });
 
       expect(templatePort.calls[0].variables).toEqual({ '1': 'Cliente Real', '2': '$5.000' });
+    });
+  });
+
+  // ── chatwoot-hub-sendpath (B4, D4) — flag ON: envío vía ChatwootGateway ─────
+  describe('chatwoot-hub-sendpath (B4, D4) — flag ON: envío vía ChatwootGateway', () => {
+    const APPROVED_DESCRIPTOR: TemplateDto = {
+      contentSid: 'HXtest',
+      friendlyName: 'Recordatorio deuda',
+      language: 'es',
+      variables: {},
+      approvalStatus: 'approved',
+      body: 'irrelevante (SendCampaign usa campaign.templateBody, no template.body)',
+    };
+
+    /** Selectivo por teléfono — el fake compartido sólo soporta fallo global. */
+    class SelectiveFailChatwootGateway extends FakeChatwootGateway {
+      constructor(private readonly failPhone: string) {
+        super();
+      }
+      async createConversationWithTemplate(
+        params: Parameters<FakeChatwootGateway['createConversationWithTemplate']>[0],
+      ) {
+        if (params.phoneE164 === this.failPhone) {
+          throw new Error(`fake: Chatwoot unreachable for ${params.phoneE164}`);
+        }
+        return super.createConversationWithTemplate(params);
+      }
+    }
+
+    it('flag ON pero DEPS wireadas (no ausentes) — sin seedear el flag en true, sigue OFF byte-idéntico (CHW-3)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway();
+      const chatwootGateway = new FakeChatwootGateway();
+      const featureFlags = new InMemoryFeatureFlagRepository(); // sin seed → get() = null → OFF
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(1);
+      expect(templatePort.calls).toHaveLength(1); // path Twilio-directo, intacto
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(0);
+    });
+
+    it('SEND-2/CHW-2 modified: primer envío bajo ON (sin chatwootConversationId previo) → createConversationWithTemplate con args exactos + persistRecipientSent(providerId=String(chatwootMessageId)) + projectChatwootTemplateSend (NUNCA projectSentMessage)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1', name: 'Juan Pérez', balanceDue: 50000 })]);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [APPROVED_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      chatwootGateway.createConversationWithTemplateResult = { chatwootConversationId: 900, chatwootMessageId: 9000 };
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const projector = new FakeCampaignInboxProjector();
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        projector,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        templateBody: 'Hola {{1}}, tenés una deuda de {{2}}',
+        variableSpec: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(1);
+      expect(templatePort.calls).toHaveLength(0); // CERO llamada a sendTemplate (Twilio-directo)
+      expect(chatwootGateway.createConversationWithTemplateCalls).toEqual([
+        {
+          phoneE164: '+5493364000001',
+          name: 'Juan Pérez',
+          templateName: 'Recordatorio deuda',
+          language: 'es',
+          processedParams: { '1': 'Juan Pérez', '2': '$50.000' },
+          content: 'Hola Juan Pérez, tenés una deuda de $50.000',
+        },
+      ]);
+
+      const recipient = (await campaignRepo.listRecipients(campaign.id)).data[0]!;
+      expect(recipient.status).toBe('sent');
+      expect(recipient.providerId).toBe('9000');
+
+      expect(projector.projectSentMessageCalls).toHaveLength(0);
+      expect(projector.projectChatwootTemplateSendCalls).toHaveLength(1);
+      expect(projector.projectChatwootTemplateSendCalls[0]).toMatchObject({
+        chatwootConversationId: 900,
+        chatwootMessageId: 9000,
+        contactPhone: '+5493364000001',
+        contactName: 'Juan Pérez',
+        renderedBody: 'Hola Juan Pérez, tenés una deuda de $50.000',
+      });
+    });
+
+    it('D7: descriptor no resuelve/no aprobado en el proveedor con ON → ABORTA el run (TemplateProviderConfigError), CERO recipients quemados a failed (siguen queued)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const candidates = Array.from({ length: 3 }, (_, i) => makeCandidate({ clientId: `c${i + 1}` }));
+      const lookup = makeLookup(candidates);
+      const templatePort = new InMemoryTemplateMessagingGateway(); // sin templates → HXtest no resuelve
+      const chatwootGateway = new FakeChatwootGateway();
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        recipients: candidates.map((c, i) => ({
+          clientId: c.clientId,
+          phoneNormalized: `336400000${i}`,
+          phoneE164: `+549336400000${i}`,
+        })),
+      });
+
+      await expect(uc.execute({ campaignId: campaign.id })).rejects.toBeInstanceOf(TemplateProviderConfigError);
+
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(0);
+      const recipients = await campaignRepo.listRecipients(campaign.id, { limit: 100 });
+      expect(recipients.data.every((r) => r.status === 'queued')).toBe(true);
+      expect(recipients.data.some((r) => r.status === 'failed')).toBe(false);
+    });
+
+    it('SEND-3 modified: SIN sendWithRetry en el path ON — un fallo del gateway Chatwoot NO reintenta, cae directo a failed', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [APPROVED_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      chatwootGateway.failCreateConversationWithTemplate = true;
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        // backoffOpts CON reintentos configurados — para probar que el path ON los IGNORA.
+        { sleep: async () => {}, random: () => 0, maxRetries: 3 },
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(1); // UN solo intento, sin retry
+      expect(result.failedCount).toBe(1);
+      expect(result.sentCount).toBe(0);
+      const recipient = (await campaignRepo.listRecipients(campaign.id)).data[0]!;
+      expect(recipient.status).toBe('failed');
+      expect(recipient.error).toBeTruthy();
+    });
+
+    it('CHW-7 (bulk): Chatwoot caído para UN recipient → ese failed con error saneado, el resto sigue (FIX-5/SEND-2 sin cambios de contrato)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const candidates = [makeCandidate({ clientId: 'c1' }), makeCandidate({ clientId: 'c2' }), makeCandidate({ clientId: 'c3' })];
+      const lookup = makeLookup(candidates);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [APPROVED_DESCRIPTOR] });
+      const failPhone = '+5493364000002';
+      const chatwootGateway = new SelectiveFailChatwootGateway(failPhone);
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        recipients: [
+          { clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' },
+          { clientId: 'c2', phoneNormalized: '3364000002', phoneE164: failPhone },
+          { clientId: 'c3', phoneNormalized: '3364000003', phoneE164: '+5493364000003' },
+        ],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.status).toBe('done'); // NO abortó
+      expect(result.sentCount).toBe(2);
+      expect(result.failedCount).toBe(1);
+      const recipients = await campaignRepo.listRecipients(campaign.id);
+      const failed = recipients.data.find((r) => r.clientId === 'c2')!;
+      expect(failed.status).toBe('failed');
+      expect(failed.error).toBeTruthy();
+      expect(failed.error).not.toMatch(/headers|Authorization|Bearer/i); // HIST-3 — nada crudo
+    });
+
+    it('D4: el flag se lee UNA vez por BATCH (no por recipient) — 60 recipients (3 páginas de 25) → featureFlags.get llamado 3 veces, no 60', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const TOTAL = 60;
+      const candidates = Array.from({ length: TOTAL }, (_, i) => makeCandidate({ clientId: `c${String(i).padStart(3, '0')}` }));
+      const lookup = makeLookup(candidates);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [APPROVED_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const getSpy = jest.spyOn(featureFlags, 'get');
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        recipients: candidates.map((c, i) => ({
+          clientId: c.clientId,
+          phoneNormalized: `33640${String(i).padStart(5, '0')}`,
+          phoneE164: `+54933640${String(i).padStart(5, '0')}`,
+        })),
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(TOTAL);
+      expect(getSpy).toHaveBeenCalledTimes(Math.ceil(TOTAL / RESUME_PAGE_SIZE)); // 3, NUNCA 60
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(TOTAL);
+    });
+
+    it('SEND-4: rateLimiter.acquire() se llama IGUAL en el path ON (contrato sin cambios)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const candidates = Array.from({ length: 5 }, (_, i) => makeCandidate({ clientId: `c${i + 1}` }));
+      const lookup = makeLookup(candidates);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [APPROVED_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const rateLimiter: RateLimiter = { acquire: jest.fn(async () => {}) };
+      const uc = new SendCampaign(campaignRepo, lookup, templatePort, rateLimiter, undefined, undefined, chatwootGateway, featureFlags);
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        recipients: candidates.map((c, i) => ({
+          clientId: c.clientId,
+          phoneNormalized: `336400000${i}`,
+          phoneE164: `+549336400000${i}`,
+        })),
+      });
+
+      await uc.execute({ campaignId: campaign.id });
+
+      expect(rateLimiter.acquire).toHaveBeenCalledTimes(5);
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(5);
     });
   });
 });

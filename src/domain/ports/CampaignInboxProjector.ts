@@ -34,6 +34,38 @@ export interface ProjectSentMessageInput {
   providerId: string | null;
 }
 
+/**
+ * chatwoot-hub-sendpath (D9) — input de la proyección al inbox del path ON
+ * (`SendCampaign` vía `chatwootGateway.createConversationWithTemplate`, CHW-2).
+ * A diferencia de `ProjectSentMessageInput` (phone-keyed, crea `origin:'bulk'`
+ * con `chatwootConversationId:null`), acá SIEMPRE hay un id REAL de Chatwoot
+ * (find-or-create atómico YA resuelto por el gateway) — la Conversation se
+ * upsertea por ESE id, no por teléfono.
+ */
+export interface ProjectChatwootTemplateSendInput {
+  /** El recipient YA marcado `sent` — mismo criterio que `ProjectSentMessageInput.recipient`. */
+  recipient: CampaignRecipient;
+  contactName: string;
+  contactPhone: string;
+  /** id REAL de Chatwoot (find-or-create atómico, CHW-2) — clave de upsert de la Conversation. */
+  chatwootConversationId: number;
+  /** id REAL del primer mensaje de Chatwoot — clave de dedup con el eco del webhook (CHW-4/D5). */
+  chatwootMessageId: number;
+  /** Body renderizado del template (placeholders sustituidos) — contenido del ChatMessage. */
+  renderedBody: string;
+  /** ISO — mismo `sentAt` con que se persistió el recipient (ordena el hilo). */
+  sentAt: string;
+}
+
 export interface CampaignInboxProjector {
   projectSentMessage(input: ProjectSentMessageInput): Promise<void>;
+  /**
+   * chatwoot-hub-sendpath (D9) — proyección al inbox para el path ON. Mismo
+   * contrato best-effort/AISLADO que `projectSentMessage`: `SendCampaign` la
+   * invoca DESPUÉS de persistir el `sent` y captura cualquier excepción — un
+   * fallo de la proyección JAMÁS re-marca el recipient `failed`. Idempotente
+   * por `chatwootConversationId`/`chatwootMessageId` (upserts), converge con
+   * el eco del webhook sin duplicar.
+   */
+  projectChatwootTemplateSend(input: ProjectChatwootTemplateSendInput): Promise<void>;
 }

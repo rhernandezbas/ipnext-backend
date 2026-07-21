@@ -181,3 +181,95 @@ describe('PrismaCampaignInboxProjector (T2)', () => {
     expect(persisted.clientId).toBeNull();
   });
 });
+
+describe('chatwoot-hub-sendpath (D9, B4.3) — projectChatwootTemplateSend', () => {
+  it('upsertea la Conversation por el chatwootConversationId REAL + ChatMessage por chatwootMessageId + setea recipient.conversationId', async () => {
+    const { conversationRepo, chatMessageRepo, campaignRepo, projector } = build();
+    const recipient = await seedRecipient(campaignRepo, {
+      clientId: 'c1',
+      phoneNormalized: '3364000001',
+      phoneE164: '+5493364000001',
+    });
+
+    await projector.projectChatwootTemplateSend({
+      recipient,
+      contactName: 'Juan Pérez',
+      contactPhone: '+5493364000001',
+      chatwootConversationId: 900,
+      chatwootMessageId: 9000,
+      renderedBody: 'Hola Juan, debés $1.000',
+      sentAt: '2026-07-21T10:00:00.000Z',
+    });
+
+    const conv = await conversationRepo.findByChatwootId(900);
+    expect(conv).not.toBeNull();
+    expect(conv!.contactName).toBe('Juan Pérez');
+    expect(conv!.contactPhoneE164).toBe('+5493364000001');
+
+    const messages = await chatMessageRepo.listByConversation(conv!.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      direction: 'outbound',
+      content: 'Hola Juan, debés $1.000',
+      chatwootMessageId: 9000,
+    });
+
+    const persisted = (await campaignRepo.listRecipients(recipient.campaignId)).data[0]!;
+    expect(persisted.conversationId).toBe(conv!.id);
+  });
+
+  it('CHW-4/D5: converge con el eco del webhook — re-proyectar el MISMO chatwootConversationId/chatwootMessageId NO duplica', async () => {
+    const { conversationRepo, chatMessageRepo, campaignRepo, projector } = build();
+    const recipient = await seedRecipient(campaignRepo, {
+      clientId: 'c1',
+      phoneNormalized: '3364000001',
+      phoneE164: '+5493364000001',
+    });
+    const input = {
+      recipient,
+      contactName: 'Juan Pérez',
+      contactPhone: '+5493364000001',
+      chatwootConversationId: 901,
+      chatwootMessageId: 9001,
+      renderedBody: 'Hola',
+      sentAt: '2026-07-21T10:00:00.000Z',
+    };
+
+    await projector.projectChatwootTemplateSend(input);
+    // simula el eco `message_created` del webhook llegando después, mismo id — el
+    // upsert de la Conversation converge por la MISMA @unique (chatwootConversationId).
+    await conversationRepo.upsertByChatwootId({ chatwootConversationId: 901, contactName: 'Juan Pérez (webhook)' });
+    await projector.projectChatwootTemplateSend(input);
+
+    const list = await conversationRepo.list({ page: 1, limit: 10 });
+    expect(list.data).toHaveLength(1); // NO duplica
+    const messages = await chatMessageRepo.listByConversation(list.data[0]!.id);
+    expect(messages).toHaveLength(1); // NO duplica
+  });
+
+  it('contacto crudo (clientId null) también proyecta con el contactName/contactPhone pasados y preserva el lazo recipient→conversación', async () => {
+    const { conversationRepo, campaignRepo, projector } = build();
+    const recipient = await seedRecipient(campaignRepo, {
+      clientId: null,
+      contactName: 'Ana (CSV)',
+      phoneNormalized: '3364555555',
+      phoneE164: '+5493364555555',
+    });
+
+    await projector.projectChatwootTemplateSend({
+      recipient,
+      contactName: 'Ana (CSV)',
+      contactPhone: '+5493364555555',
+      chatwootConversationId: 902,
+      chatwootMessageId: 9002,
+      renderedBody: 'Hola Ana',
+      sentAt: '2026-07-21T10:00:00.000Z',
+    });
+
+    const conv = await conversationRepo.findByChatwootId(902);
+    expect(conv!.contactName).toBe('Ana (CSV)');
+    const persisted = (await campaignRepo.listRecipients(recipient.campaignId)).data[0]!;
+    expect(persisted.conversationId).toBe(conv!.id);
+    expect(persisted.clientId).toBeNull();
+  });
+});

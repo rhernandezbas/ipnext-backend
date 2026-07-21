@@ -1,4 +1,8 @@
-import type { CampaignInboxProjector, ProjectSentMessageInput } from '@domain/ports/CampaignInboxProjector';
+import type {
+  CampaignInboxProjector,
+  ProjectSentMessageInput,
+  ProjectChatwootTemplateSendInput,
+} from '@domain/ports/CampaignInboxProjector';
 import type { ConversationRepository } from '@domain/ports/ConversationRepository';
 import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository';
 import type { CampaignRepository } from '@domain/ports/CampaignRepository';
@@ -43,6 +47,36 @@ export class PrismaCampaignInboxProjector implements CampaignInboxProjector {
       conversationId: conversation.id,
       campaignRecipientId: recipient.id,
       content: renderedBody,
+      chatwootCreatedAt: sentAt,
+    });
+
+    await this.campaignRepo.updateRecipient(recipient.id, { conversationId: conversation.id });
+  }
+
+  /**
+   * chatwoot-hub-sendpath (D9) — proyección del path ON: upsertea la Conversation
+   * por el id REAL de Chatwoot (`upsertByChatwootId`, converge con el eco del
+   * webhook `message_created` — MISMA UNIQUE, sin duplicar), proyecta el
+   * ChatMessage por `chatwootMessageId` (`upsertByChatwootMessageId`, CHW-4) y
+   * preserva el lazo recipient→conversación (etiqueta #1, mismo criterio que
+   * `projectSentMessage`).
+   */
+  async projectChatwootTemplateSend(input: ProjectChatwootTemplateSendInput): Promise<void> {
+    const { recipient, contactName, contactPhone, chatwootConversationId, chatwootMessageId, renderedBody, sentAt } =
+      input;
+
+    const conversation = await this.conversationRepo.upsertByChatwootId({
+      chatwootConversationId,
+      contactName,
+      contactPhone,
+    });
+
+    await this.chatMessageRepo.upsertByChatwootMessageId({
+      conversationId: conversation.id,
+      chatwootMessageId,
+      direction: 'outbound',
+      content: renderedBody,
+      senderName: null,
       chatwootCreatedAt: sentAt,
     });
 

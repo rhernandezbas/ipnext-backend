@@ -84,6 +84,9 @@ describe('SendCampaign — proyección al inbox (T3)', () => {
       projectSentMessage: jest.fn(async () => {
         throw new Error('DB hiccup proyectando al inbox');
       }),
+      // chatwoot-hub-sendpath (B4) — no ejercitado por este test (flag OFF), sólo
+      // para satisfacer el port (ambos métodos son requeridos).
+      projectChatwootTemplateSend: jest.fn(async () => {}),
     };
     const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
     const templatePort = new InMemoryTemplateMessagingGateway();
