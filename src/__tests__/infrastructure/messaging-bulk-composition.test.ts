@@ -60,8 +60,13 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     const window = appSrc.slice(idx, end);
     // messaging-bulk-inbox (F1, lección W6) — el projector NO debe quedar muerto:
     // SendCampaign lo recibe como 5º arg, o el bulk NUNCA deja rastro en el inbox.
+    // chatwoot-hub-sendpath (D1/D4, B6) — MODIFIED: gana 7º/8º arg
+    // (chatwootGatewayForBulk/featureFlagRepoForBulk, backoffOpts explícito
+    // undefined como 6º) — pineado en detalle por
+    // `messaging-composition.test.ts` (describe dedicado B6), acá sólo se
+    // actualiza el regex para no quedar roto/desactualizado.
     expect(window).toMatch(
-      /new SendCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*rateLimiter,\s*campaignInboxProjector\)/,
+      /new SendCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*rateLimiter,\s*campaignInboxProjector,\s*undefined,\s*chatwootGatewayForBulk,\s*featureFlagRepoForBulk\)/,
     );
     expect(window).toMatch(/new CampaignRunner\(sendCampaign,\s*campaignRepo,\s*new PgAdvisoryLock\(\)\)/);
   });

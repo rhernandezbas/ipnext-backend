@@ -185,6 +185,94 @@ describe('Messaging composition root (messaging-inbox F1, B6)', () => {
 });
 
 /**
+ * chatwoot-hub-sendpath (D1, B6.1) — composition-root que PINEA el wiring del canal
+ * ON: sin este test, el flag `messaging-send-via-chatwoot` queda MUERTO en prod
+ * (lección W6) — `SendTemplateMessage`/`SendCampaign` compilan con los args
+ * opcionales AUSENTES y nadie se entera hasta el smoke. Molde de assertion estática
+ * (`appSrc`/window) idéntico al resto de este archivo — estos 2 use cases NUNCA
+ * exponen sus args de constructor por HTTP, así que el pin real es sobre el TEXTO
+ * de `app.ts`, no sobre una instancia introspeccionada en runtime.
+ */
+describe('Messaging composition root (chatwoot-hub-sendpath, B6) — flag + chatwootGateway wiring', () => {
+  let appSrc: string;
+  let sendTemplateMessageSrc: string;
+  let sendCampaignSrc: string;
+  let messagingBlockWindow: string;
+  let bulkBlockWindow: string;
+
+  beforeAll(() => {
+    appSrc = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'http', 'app.ts'), 'utf8');
+    sendTemplateMessageSrc = readFileSync(
+      join(__dirname, '..', '..', 'application', 'use-cases', 'messaging', 'SendTemplateMessage.ts'),
+      'utf8',
+    );
+    sendCampaignSrc = readFileSync(
+      join(__dirname, '..', '..', 'application', 'use-cases', 'messaging', 'SendCampaign.ts'),
+      'utf8',
+    );
+
+    const messagingBlockStart = appSrc.indexOf('// ─── messaging-inbox (F1) — Chatwoot webhook ingest');
+    const messagingMountIdx = appSrc.indexOf("app.use('/api/messaging', createMessagingRouter(", messagingBlockStart);
+    const messagingMountEnd = appSrc.indexOf('));', messagingMountIdx);
+    // ventana ampliada: desde el inicio del bloque HASTA el cierre del mount (incluye
+    // la construcción de `chatwootGateway`/`featureFlagRepo` Y la llamada a
+    // `new SendTemplateMessage(...)`, que vive DENTRO de los args del mount).
+    messagingBlockWindow = appSrc.slice(messagingBlockStart, messagingMountEnd + '));'.length);
+
+    const bulkBlockStart = appSrc.indexOf('// ─── messaging-bulk (F2) — envío masivo por template WhatsApp (Twilio directo) ─');
+    const bulkMountIdx = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(", bulkBlockStart);
+    // `new SendCampaign(...)` vive ANTES del mount (top-level statement del bloque, no
+    // un arg del router) — ventana hasta el inicio del mount alcanza.
+    bulkBlockWindow = appSrc.slice(bulkBlockStart, bulkMountIdx);
+  });
+
+  it('(a) SendTemplateMessage recibe chatwootGateway + featureFlagRepo (4º/5º arg, AMBOS o ninguno)', () => {
+    expect(messagingBlockWindow).toMatch(
+      /new SendTemplateMessage\(\s*conversationRepo,\s*sendTemplateGateway,\s*chatMessageRepo,\s*chatwootGateway,\s*featureFlagRepo\s*\)/,
+    );
+  });
+
+  it('(b) SendCampaign recibe chatwootGatewayForBulk + featureFlagRepoForBulk (7º/8º arg, backoffOpts explícito undefined)', () => {
+    expect(bulkBlockWindow).toMatch(
+      /new SendCampaign\(\s*campaignRepo,\s*customerAdapter,\s*templatePort,\s*rateLimiter,\s*campaignInboxProjector,\s*undefined,\s*chatwootGatewayForBulk,\s*featureFlagRepoForBulk\s*\)/,
+    );
+  });
+
+  it('(c) el chatwootGateway de SendTemplateMessage es la MISMA instancia que consumen GetConversation/SendMessage — un solo HttpChatwootGateway en todo el bloque messaging', () => {
+    expect(messagingBlockWindow).toMatch(/new GetConversation\([^)]*chatwootGateway/);
+    expect(messagingBlockWindow).toMatch(/new SendMessage\([^)]*chatwootGateway/);
+    const instances = messagingBlockWindow.match(/new HttpChatwootGateway\(/g) ?? [];
+    expect(instances).toHaveLength(1); // NO un segundo cliente para el hilo
+  });
+
+  it('(d) SendTemplateMessage y SendCampaign leen el MISMO key de flag `messaging-send-via-chatwoot` (fuente, no wiring)', () => {
+    expect(sendTemplateMessageSrc).toMatch(/featureFlags\?\.get\(['"]messaging-send-via-chatwoot['"]\)/);
+    expect(sendCampaignSrc).toMatch(/featureFlags\?\.get\(['"]messaging-send-via-chatwoot['"]\)/);
+  });
+
+  it('(e) featureFlagRepo (bloque messaging) es scope-local — instanciado UNA vez DENTRO del bloque, no reusa el de IClass dispatch (línea ~1191)', () => {
+    const instances = messagingBlockWindow.match(/new PrismaFeatureFlagRepository\(\)/g) ?? [];
+    expect(instances).toHaveLength(1);
+  });
+
+  it('(f) chatwootGatewayForBulk es self-contained (propio HttpChatwootGateway del bloque bulk, mismo config.chatwoot.*) y featureFlagRepoForBulk es OTRA instancia (nunca comparte variable con el bloque messaging)', () => {
+    expect(bulkBlockWindow).toMatch(/const chatwootGatewayForBulk = new HttpChatwootGateway\(\{/);
+    expect(bulkBlockWindow).toMatch(/baseUrl:\s*config\.chatwoot\.baseUrl/);
+    const gatewayInstances = bulkBlockWindow.match(/new HttpChatwootGateway\(/g) ?? [];
+    expect(gatewayInstances).toHaveLength(1);
+    const flagInstances = bulkBlockWindow.match(/new PrismaFeatureFlagRepository\(\)/g) ?? [];
+    expect(flagInstances).toHaveLength(1);
+  });
+
+  it('(g) RIESGO pineado — jamás chatwootGateway sin featureFlagRepo (ni viceversa) en ninguno de los 2 use cases', () => {
+    // Un `new SendTemplateMessage(` con chatwootGateway pero SIN featureFlagRepo
+    // como 5º arg NO debe existir en absoluto.
+    expect(appSrc).not.toMatch(/new SendTemplateMessage\([^)]*chatwootGateway\s*\)/);
+    expect(appSrc).not.toMatch(/new SendCampaign\([^)]*chatwootGatewayForBulk\s*\)/);
+  });
+});
+
+/**
  * H3 (fix wave, LOW — review adversarial) — a diferencia de TODO el resto de
  * este archivo (assertion ESTÁTICA sobre el TEXTO de app.ts, molde repo-wide:
  * pppoe/gigared/tickets-*-composition.test.ts, todos comentan "Booting

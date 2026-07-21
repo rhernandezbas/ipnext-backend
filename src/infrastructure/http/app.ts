@@ -2874,6 +2874,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       authToken: config.twilio.authToken,
       messagingServiceSid: config.twilio.messagingServiceSid,
     });
+    // chatwoot-hub-sendpath (D1/D10, B6) — flag repo scope-local a ESTE bloque (molde
+    // de los bootstraps de scheduling): NO reusa el `featureFlagRepo` de IClass
+    // dispatch (línea ~1191, otro flag) ni comparte instancia con el bloque bulk
+    // (`featureFlagRepoForBulk`, más abajo) — precedente anti-interleave de
+    // inbox-template-send. SIEMPRE se cablea JUNTO con `chatwootGateway` (línea
+    // ~2825, MISMA instancia que ya consumen GetConversation/SendMessage) en
+    // SendTemplateMessage — flag ON sin gateway sería comportamiento indefinido
+    // (riesgo pineado por el composition-root test de abajo).
+    const featureFlagRepo = new PrismaFeatureFlagRepository();
 
     app.use('/api/messaging', createMessagingRouter(
       // messaging-bulk (F2, Batch 6, OPT-2) — 6º arg `customerAdapter` (opcional):
@@ -2923,7 +2932,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       listTicketAreas,
       // inbox-template-send (HTTP-1/HTTP-2) — appended (design §Colisiones: nunca
       // insertar en medio de la lista compartida con inbox-resolve).
-      new SendTemplateMessage(conversationRepo, sendTemplateGateway, chatMessageRepo),
+      new SendTemplateMessage(conversationRepo, sendTemplateGateway, chatMessageRepo, chatwootGateway, featureFlagRepo),
       new ListMessagingTemplates(sendTemplateGateway),
       // inbox-views (Ola 1) — contadores por vista (GET /conversations/counts),
       // misma instancia conversationRepo (el count comparte el builder del where
@@ -3000,9 +3009,24 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new PrismaChatMessageRepository(),
       campaignRepo,
     );
+    // chatwoot-hub-sendpath (D1/D2.b, B6) — gateway Chatwoot self-contained del
+    // bloque bulk (mismo precedente que el gateway Twilio propio de la línea
+    // ~2987): evita interleave con el bloque messaging en merges paralelos. Flag
+    // repo también scope-local — SIEMPRE cableado JUNTO con
+    // `chatwootGatewayForBulk` (nunca uno sin el otro, mismo riesgo que el bloque
+    // messaging).
+    const chatwootGatewayForBulk = new HttpChatwootGateway({
+      baseUrl: config.chatwoot.baseUrl,
+      accountId: config.chatwoot.accountId,
+      inboxId: config.chatwoot.inboxId,
+      apiToken: config.chatwoot.apiToken,
+    });
+    const featureFlagRepoForBulk = new PrismaFeatureFlagRepository();
     // customerAdapter (línea ~872) YA implementa CampaignSegmentSource +
     // CampaignRecipientLookup (Batch 6) — misma instancia, sin duplicar wiring.
-    const sendCampaign = new SendCampaign(campaignRepo, customerAdapter, templatePort, rateLimiter, campaignInboxProjector);
+    // `backoffOpts` (6º arg) explícito `undefined` para no correr los 2 args
+    // opcionales nuevos (D1) — el gateway/flag van al FINAL de la firma.
+    const sendCampaign = new SendCampaign(campaignRepo, customerAdapter, templatePort, rateLimiter, campaignInboxProjector, undefined, chatwootGatewayForBulk, featureFlagRepoForBulk);
     const campaignRunner = new CampaignRunner(sendCampaign, campaignRepo, new PgAdvisoryLock());
 
     // bulk-granular-perms — resuelve las acciones `messaging` del usuario (o
