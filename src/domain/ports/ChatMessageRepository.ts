@@ -138,6 +138,16 @@ export interface ChatMessageRepository {
   /** Idempotent by `chatwootMessageId` (HOOK-4/INBOX-2) — re-processing the same message never duplicates. */
   upsertByChatwootMessageId(input: UpsertChatMessageInput): Promise<ChatMessageRecord>;
   /**
+   * chatwoot-hub-sendpath (D6, CHW-5) — proyecta un `message_updated` con
+   * `content_attributes.external_error` poblado: marca `deliveryStatus='failed'` +
+   * `deliveryError` (curado, sin headers/body crudos — HIST-3) en la fila linkeada por
+   * `chatwootMessageId`. IDEMPOTENTE: re-invocar con el mismo id y error no duplica ni
+   * rompe. `null` si la fila todavía no está en el mirror (el `message_created` que la
+   * crea no llegó/procesó aún) — no-op seguro, `ReceiveChatwootWebhook` nunca lanza por
+   * esto. Resto de los campos de la fila queda intacto.
+   */
+  markDeliveryFailedByChatwootMessageId(chatwootMessageId: number, error: string): Promise<ChatMessageRecord | null>;
+  /**
    * messaging-bulk-inbox (F1, PROYECCIÓN) — proyecta el mensaje bulk enviado como
    * un `ChatMessage` `outbound`/`origin:'bulk'`. IDEMPOTENTE por `campaignRecipientId`
    * (upsert) — best-effort/resumible: re-proyectar NO duplica la fila.

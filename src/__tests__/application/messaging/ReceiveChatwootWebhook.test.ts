@@ -990,4 +990,91 @@ describe('ReceiveChatwootWebhook', () => {
       expect(updated!.areaId).toBe('area-1'); // NO pisado
     });
   });
+
+  describe('chatwoot-hub-sendpath (B5, CHW-5) — message_updated → deliveryStatus failed', () => {
+    it('con content_attributes.external_error no-vacío → deliveryStatus=failed + deliveryError saneado (trim)', async () => {
+      const { uc, conversationRepo, messageRepo } = makeUseCase();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 900, status: 'open' });
+      await messageRepo.upsertByChatwootMessageId({
+        conversationId: conv.id,
+        chatwootMessageId: 777,
+        direction: 'outbound',
+        content: 'Hola, debés $5.000',
+        chatwootCreatedAt: new Date().toISOString(),
+      });
+
+      await uc.execute('d-mu-1', {
+        event: 'message_updated',
+        id: 777,
+        content_attributes: { external_error: '  Template not found  ' },
+      });
+
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages).toHaveLength(1); // no duplica
+      expect(messages[0]!.deliveryStatus).toBe('failed');
+      expect(messages[0]!.deliveryError).toBe('Template not found'); // trimeado
+    });
+
+    it('SIN external_error (delivered/read, indistinguibles) → no-op, deliveryStatus no cambia', async () => {
+      const { uc, conversationRepo, messageRepo } = makeUseCase();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 901, status: 'open' });
+      await messageRepo.upsertByChatwootMessageId({
+        conversationId: conv.id,
+        chatwootMessageId: 778,
+        direction: 'outbound',
+        content: 'Hola',
+        chatwootCreatedAt: new Date().toISOString(),
+      });
+
+      await uc.execute('d-mu-2', { event: 'message_updated', id: 778 });
+
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages[0]!.deliveryStatus).toBeNull();
+      expect(messages[0]!.deliveryError).toBeNull();
+    });
+
+    it('external_error vacío tras trim (string en blanco) → no-op', async () => {
+      const { uc, conversationRepo, messageRepo } = makeUseCase();
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 902, status: 'open' });
+      await messageRepo.upsertByChatwootMessageId({
+        conversationId: conv.id,
+        chatwootMessageId: 779,
+        direction: 'outbound',
+        content: 'Hola',
+        chatwootCreatedAt: new Date().toISOString(),
+      });
+
+      await uc.execute('d-mu-3', { event: 'message_updated', id: 779, content_attributes: { external_error: '   ' } });
+
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages[0]!.deliveryStatus).toBeNull();
+    });
+
+    it('fila ausente en el mirror (mensaje aún no proyectado) → no-op seguro, sin lanzar', async () => {
+      const { uc } = makeUseCase();
+
+      await expect(
+        uc.execute('d-mu-4', { event: 'message_updated', id: 99999, content_attributes: { external_error: 'Template not found' } }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('handleMessageUpdated NUNCA lanza (HOOK-5) — el webhook ackea 200 aunque el repo explote', async () => {
+      class ThrowingMessageRepo extends InMemoryChatMessageRepository {
+        override async markDeliveryFailedByChatwootMessageId(): Promise<never> {
+          throw new Error('db hipo');
+        }
+      }
+      const conversationRepo = new InMemoryConversationRepository();
+      const messageRepo = new ThrowingMessageRepo();
+      const deliveryRepo = new InMemoryWebhookDeliveryRepository();
+      const uc = new ReceiveChatwootWebhook(conversationRepo, messageRepo, deliveryRepo);
+
+      await expect(
+        uc.execute('d-mu-5', { event: 'message_updated', id: 1, content_attributes: { external_error: 'boom' } }),
+      ).resolves.toBeUndefined();
+
+      // process() no lanzó → la delivery SÍ se recordó (ack real, no un reintento infinito)
+      expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-5')).toBe(true);
+    });
+  });
 });

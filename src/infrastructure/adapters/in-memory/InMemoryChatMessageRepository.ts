@@ -173,6 +173,20 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
   }
 
   /**
+   * chatwoot-hub-sendpath (D6, B5.2, CHW-5) — marca `deliveryStatus='failed'` +
+   * `deliveryError` en la fila linkeada por `chatwootMessageId`. Idempotente
+   * (re-invocar sobre el mismo id no duplica, sólo actualiza el error); `null` si
+   * la fila todavía no está en el mirror. Resto de los campos queda intacto.
+   */
+  async markDeliveryFailedByChatwootMessageId(chatwootMessageId: number, error: string): Promise<ChatMessageRecord | null> {
+    const row = this.rows.find((r) => r.chatwootMessageId === chatwootMessageId);
+    if (!row) return null;
+    row.deliveryStatus = 'failed';
+    row.deliveryError = error;
+    return { ...row };
+  }
+
+  /**
    * inbox-template-send (PORT-1) — idempotente por `providerMessageId` (SM sid de
    * Twilio). Un mensaje `outbound`/`origin:'agent_template'`/`chatwootMessageId:null`/
    * `campaignRecipientId:null`. Re-proyectar el MISMO sid actualiza la fila, NUNCA duplica.

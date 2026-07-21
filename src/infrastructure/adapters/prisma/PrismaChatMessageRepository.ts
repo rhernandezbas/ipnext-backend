@@ -304,6 +304,29 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
   }
 
   /**
+   * chatwoot-hub-sendpath (D6, B5.2, CHW-5) — marca `deliveryStatus='failed'` +
+   * `deliveryError` en la fila linkeada por `chatwootMessageId` (`@unique`). `null`
+   * si la fila todavía no está en el mirror (P2025, `message_created` no llegó/procesó
+   * aún) — mismo criterio LOW-3 que `updateContent`/`softDelete`, nunca un 500.
+   * Cualquier otro error propaga. Cross-ref: `InMemoryChatMessageRepository.
+   * markDeliveryFailedByChatwootMessageId`, ambos adapters NO pueden divergir.
+   */
+  async markDeliveryFailedByChatwootMessageId(chatwootMessageId: number, error: string): Promise<ChatMessageRecord | null> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row = await (prisma as any).chatMessage.update({
+        where: { chatwootMessageId },
+        data: { deliveryStatus: 'failed', deliveryError: error },
+      });
+      return toDomain(row);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      if (err?.code === 'P2025') return null;
+      throw err;
+    }
+  }
+
+  /**
    * H1 (fix wave, idempotency-key server-side) — fast-path lookup usado por
    * `SendTemplateMessage` ANTES de invocar `sendTemplate` (guard 0), y como
    * backstop de recuperación de `upsertTemplateMessage` tras una carrera.

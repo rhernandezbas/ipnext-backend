@@ -85,9 +85,30 @@ export interface ChatwootWebhookPayload {
   meta?: { sender?: { name?: string | null; phone_number?: string | null } | null };
   /** MEDIA-1 — top-level, same nesting level as `content`/`conversation`/`sender` (see RawChatwootAttachment doc). */
   attachments?: RawChatwootAttachment[];
+  /**
+   * chatwoot-hub-sendpath (D6, CHW-5) — sólo relevante en `message_updated`. Verificado
+   * (exploración §3): `Message#webhook_data` NO expone `status`, así que `failed`/
+   * `undelivered` sólo se detectan por `external_error` poblado; `delivered`/`read`
+   * llegan indistinguibles (mismo evento, sin este campo) y quedan INVISIBLES por diseño.
+   */
+  content_attributes?: { external_error?: string | null } | null;
 }
 
 const WEBHOOK_SOURCE = 'chatwoot';
+
+/** chatwoot-hub-sendpath (D6, HIST-3) — máximo de un `deliveryError` curado; Chatwoot manda
+ * strings cortos (ej. `'Template not found'`, o un código Twilio como 63016 — catálogo, NO
+ * PII), nunca un payload HTTP crudo, pero acotamos igual como defensa en profundidad. */
+const MAX_DELIVERY_ERROR_LENGTH = 500;
+
+/**
+ * chatwoot-hub-sendpath (D6, HIST-3) — sanea `external_error` antes de persistirlo: trimea y
+ * acota longitud. NUNCA guarda headers/body crudos (no es ese tipo de payload en origen).
+ */
+function curateDeliveryError(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.length > MAX_DELIVERY_ERROR_LENGTH ? trimmed.slice(0, MAX_DELIVERY_ERROR_LENGTH) : trimmed;
+}
 
 /** H1 — accepts Chatwoot's real webhook STRING enum and the GET API's numeric enum. */
 function mapMessageTypeToDirection(messageType: number | string | undefined): 'inbound' | 'outbound' | null {
@@ -160,8 +181,42 @@ export class ReceiveChatwootWebhook {
         return this.handleConversationCreated(payload);
       case 'conversation_status_changed':
         return this.handleConversationStatusChanged(payload);
+      case 'message_updated':
+        return this.handleMessageUpdated(payload);
       default:
         return; // HOOK-5 — unsubscribed event type, ignored without error
+    }
+  }
+
+  /**
+   * chatwoot-hub-sendpath (D6, CHW-5) — detecta un `message_updated` con
+   * `content_attributes.external_error` poblado y marca `deliveryStatus='failed'` en el
+   * mirror, linkeado por `chatwootMessageId` (`payload.id`, NO por SM sid — el mirror ya
+   * es UNIQUE por ese campo, CHW-4). Sin `external_error` (o vacío tras trim) → no-op:
+   * `delivered`/`read` viajan en el MISMO evento sin este campo y son indistinguibles
+   * (paridad con hoy, Decisión B — no es regresión).
+   *
+   * NUNCA lanza (HOOK-5): fail-open, mismo criterio que `maybeRegisterOptOut`/
+   * `maybeAdoptBulkConversation` — un hipo de DB acá no debe volar el ack 200 del
+   * webhook ni hacer que Chatwoot reintente indefinidamente un evento ya visto.
+   */
+  private async handleMessageUpdated(payload: ChatwootWebhookPayload): Promise<void> {
+    if (payload.id === undefined) return; // malformed payload — no-op, never throws
+
+    const externalError = payload.content_attributes?.external_error;
+    if (externalError === undefined || externalError === null) return; // delivered/read — indistinguible, no-op
+
+    const curated = curateDeliveryError(externalError);
+    if (curated.length === 0) return; // vacío tras trim — tratado igual que ausente
+
+    try {
+      await this.messageRepo.markDeliveryFailedByChatwootMessageId(payload.id, curated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[messaging] markDeliveryFailedByChatwootMessageId falló (fail-open, el webhook igual ackea 200)', {
+        chatwootMessageId: payload.id,
+        error: err instanceof Error ? err.message : err,
+      });
     }
   }
 

@@ -265,6 +265,42 @@ describe('InMemoryChatMessageRepository', () => {
     });
   });
 
+  describe('chatwoot-hub-sendpath (B5, CHW-5) — markDeliveryFailedByChatwootMessageId', () => {
+    it('fila existente → deliveryStatus=failed + deliveryError seteados, resto intacto', async () => {
+      const created = await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 900, content: 'Hola, debés $5.000' }));
+
+      const updated = await repo.markDeliveryFailedByChatwootMessageId(900, 'Template not found');
+
+      expect(updated).not.toBeNull();
+      expect(updated!.deliveryStatus).toBe('failed');
+      expect(updated!.deliveryError).toBe('Template not found');
+      // resto intacto (mismo id/content/conversationId que antes)
+      expect(updated!.id).toBe(created.id);
+      expect(updated!.content).toBe('Hola, debés $5.000');
+      expect(updated!.conversationId).toBe('conv-1');
+    });
+
+    it('fila ausente → retorna null, CERO error', async () => {
+      const result = await repo.markDeliveryFailedByChatwootMessageId(99999, 'Template not found');
+
+      expect(result).toBeNull();
+    });
+
+    it('llamada repetida (mismo id) es idempotente — sin duplicar filas ni pisar otros campos', async () => {
+      await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 901, senderName: 'agente1' }));
+
+      await repo.markDeliveryFailedByChatwootMessageId(901, 'primer error');
+      const second = await repo.markDeliveryFailedByChatwootMessageId(901, 'segundo error (retry del webhook)');
+
+      expect(second!.deliveryStatus).toBe('failed');
+      expect(second!.deliveryError).toBe('segundo error (retry del webhook)');
+      expect(second!.senderName).toBe('agente1'); // no tocado
+
+      const all = await repo.listByConversation('conv-1');
+      expect(all.filter((m) => m.chatwootMessageId === 901)).toHaveLength(1); // no duplica
+    });
+  });
+
   describe('§8 — tiebreaker determinístico en empates de chatwootCreatedAt (in-memory DEBE ordenar igual que Prisma)', () => {
     it('dos mensajes con el MISMO chatwootCreatedAt se ordenan por id ASC, no por orden de insercion', async () => {
       // Same rationale as InMemoryConversationRepository's §8 test: Postgres gives
