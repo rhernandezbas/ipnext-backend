@@ -160,6 +160,9 @@ const statusMap: Record<string, number> = {
   // inbox-template-send (TS-2) — SendTemplateMessage no encuentra un E164 usable
   // (ni contactPhoneE164 ni el fallback toWhatsAppE164(contactPhone)).
   CONVERSATION_PHONE_MISSING: 422,
+  // chatwoot-hub-sendpath (D3, CHW-1) — flag ON pero la conversación no tiene
+  // chatwootConversationId (mirror origin:'bulk' nunca adoptado).
+  CONVERSATION_NOT_LINKED: 422,
   // messaging-inbox-notes (edit/delete) — editar/eliminar una nota interna.
   INTERNAL_NOTE_NOT_FOUND: 404,
   NOT_AN_INTERNAL_NOTE: 422,

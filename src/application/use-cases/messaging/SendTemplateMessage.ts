@@ -1,7 +1,14 @@
 import type { ConversationRepository } from '@domain/ports/ConversationRepository';
-import type { ChatMessageRepository } from '@domain/ports/ChatMessageRepository';
+import type { ChatMessageRepository, ChatMessageRecord } from '@domain/ports/ChatMessageRepository';
 import type { TemplateMessagingPort } from '@domain/ports/TemplateMessagingPort';
-import { ConversationNotFoundError, ConversationPhoneMissingError } from '@domain/errors/messaging';
+import type { ChatwootGateway } from '@domain/ports/ChatwootGateway';
+import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+import {
+  ConversationNotFoundError,
+  ConversationPhoneMissingError,
+  ConversationNotLinkedError,
+  ChatwootUnavailableError,
+} from '@domain/errors/messaging';
 import { TemplateNotApprovedError, MissingTemplateVariablesError } from '@domain/errors/messaging-bulk';
 import { toWhatsAppE164 } from './toWhatsAppE164';
 import { renderTemplateBody } from './SendCampaign';
@@ -21,6 +28,18 @@ import { toChatMessageDto, type ChatMessageDto } from '@application/dto/messagin
  * a diferencia del bulk que resuelve por teléfono (podría aterrizar en otra
  * conversación con duplicados del mismo E164). Idempotencia por `providerMessageId`
  * (SM sid de Twilio, D5).
+ *
+ * chatwoot-hub-sendpath (D1/D3) — FLAG-AWARE: `messaging-send-via-chatwoot`
+ * (`FeatureFlagRepository.get`, resuelto POR INVOCACIÓN, nunca cacheado) rebautiza
+ * el guard 2 y los pasos 5/6. OFF (default, o `chatwootGateway`/`featureFlags`
+ * AUSENTES — backcompat, molde `SendCampaign`): comportamiento BYTE-IDÉNTICO al
+ * de siempre (CHW-3). ON: guard 2 exige `conversation.chatwootConversationId`
+ * (en vez de teléfono) y el envío/persistencia van por `ChatwootGateway`/
+ * `upsertByChatwootMessageId` (CHW-1/CHW-4/D5) — el MISMO método que el eco del
+ * webhook, así que ambos caminos convergen en una sola fila. El gate de
+ * aprobación (guard 3) y el orden guard1→guard2→guard3→guard4 quedan INTACTOS en
+ * AMBOS paths (H4, orden PINNED D9 de inbox-template-send) — el flag sólo cambia
+ * QUÉ hace el guard 2 y el paso 5/6, nunca su POSICIÓN relativa.
  *
  * Guard order PINNED (D9), cortando en la primera falla, SIN side effects (ni
  * persistencia ni `sendTemplate`) hasta el paso 5:
@@ -69,6 +88,15 @@ export class SendTemplateMessage {
     private readonly conversationRepo: ConversationRepository,
     private readonly templatePort: TemplateMessagingPort,
     private readonly messageRepo: ChatMessageRepository,
+    /**
+     * chatwoot-hub-sendpath (D1/D3) — OPCIONALES (backcompat, mismo molde que el
+     * `inboxProjector` opcional de `SendCampaign`): AUSENTES → el flag SIEMPRE
+     * resuelve a OFF (`featureFlags?.get(...)` es `undefined`), comportamiento
+     * actual intacto sin tocar `app.ts` (wiring real en B6). Cuando `app.ts` los
+     * cablea, SIEMPRE van juntos (el flag sin gateway sería un wiring roto).
+     */
+    private readonly chatwootGateway?: ChatwootGateway,
+    private readonly featureFlags?: FeatureFlagRepository,
   ) {}
 
   async execute(
@@ -95,10 +123,23 @@ export class SendTemplateMessage {
     const conversation = await this.conversationRepo.findById(conversationId);
     if (!conversation) throw new ConversationNotFoundError(conversationId);
 
-    const phoneE164 = conversation.contactPhoneE164 ?? toWhatsAppE164(conversation.contactPhone);
-    if (!phoneE164) throw new ConversationPhoneMissingError(conversationId);
+    // chatwoot-hub-sendpath (D1/D3) — resuelto POR INVOCACIÓN, nunca cacheado.
+    // `featureFlags` AUSENTE (backcompat, wiring de B6 pendiente) → SIEMPRE OFF.
+    const viaChat = (await this.featureFlags?.get('messaging-send-via-chatwoot'))?.enabled === true;
+
+    // guard 2 — PINNED en su posición original (H4/D9 de inbox-template-send: debe
+    // correr ANTES del gate de aprobación/template, en AMBOS flags). El flag sólo
+    // cambia QUÉ valida: teléfono (OFF) vs link a Chatwoot (ON, CHW-1).
+    let phoneE164: string | null = null;
+    if (!viaChat) {
+      phoneE164 = conversation.contactPhoneE164 ?? toWhatsAppE164(conversation.contactPhone);
+      if (!phoneE164) throw new ConversationPhoneMissingError(conversationId);
+    } else if (conversation.chatwootConversationId == null) {
+      throw new ConversationNotLinkedError(conversationId);
+    }
 
     // TS-3 / CAMP-2 — templateRef inexistente se trata IGUAL que no-aprobado.
+    // CHW-6 — este gate es NUESTRO (Twilio Content API directo), INTACTO sin importar el flag.
     const templates = await this.templatePort.listTemplates();
     const template = templates.find((t) => t.contentSid === templateRef);
     if (!template || template.approvalStatus !== 'approved') {
@@ -112,23 +153,61 @@ export class SendTemplateMessage {
       throw new MissingTemplateVariablesError(missing);
     }
 
-    // TS-5 — SIN sendWithRetry (D6). Nada persistido hasta acá.
-    const result = await this.templatePort.sendTemplate(phoneE164, templateRef, variables);
+    let record: ChatMessageRecord;
+    let sentAt: string;
+    let renderedBody: string;
 
-    // TS-6 — post-OK: proyección al hilo + bump del preview.
-    const sentAt = new Date().toISOString();
-    const renderedBody = renderTemplateBody(template.body, variables);
+    if (!viaChat) {
+      // TS-5 — SIN sendWithRetry (D6). Nada persistido hasta acá.
+      const result = await this.templatePort.sendTemplate(phoneE164!, templateRef, variables);
 
-    const record = await this.messageRepo.upsertTemplateMessage({
-      conversationId: conversation.id,
-      providerMessageId: result.providerId,
-      content: renderedBody,
-      senderName: senderName ?? null,
-      chatwootCreatedAt: sentAt,
-      idempotencyKey: idempotencyKey ?? null,
-    });
+      // TS-6 — post-OK: proyección al hilo + bump del preview.
+      sentAt = new Date().toISOString();
+      renderedBody = renderTemplateBody(template.body, variables);
 
-    // D2 — SOLO preview; jamás canReply/status (write-path separado, bumpLastMessage).
+      record = await this.messageRepo.upsertTemplateMessage({
+        conversationId: conversation.id,
+        providerMessageId: result.providerId,
+        content: renderedBody,
+        senderName: senderName ?? null,
+        chatwootCreatedAt: sentAt,
+        idempotencyKey: idempotencyKey ?? null,
+      });
+    } else {
+      // D3/CHW-1 — `content` se necesita ANTES del POST a Chatwoot; `renderTemplateBody`
+      // es pura/total (sin side effects) — reordenarla antes del send es inocuo (design D3).
+      renderedBody = renderTemplateBody(template.body, variables);
+
+      let sendResult: { chatwootMessageId: number; content: string };
+      try {
+        sendResult = await this.chatwootGateway!.sendTemplateMessage(conversation.chatwootConversationId!, {
+          name: template.friendlyName,
+          language: template.language,
+          processedParams: variables,
+          content: renderedBody,
+        });
+      } catch {
+        // CHW-7 — cualquier falla del gateway (red/timeout/4xx/5xx) → ChatwootUnavailableError,
+        // CERO persistencia (mismo criterio de mapeo que SendMessage.ts).
+        throw new ChatwootUnavailableError();
+      }
+
+      sentAt = new Date().toISOString();
+
+      // CHW-4/D5 — MISMO método que el eco del webhook (`message_created`): converge
+      // por `chatwootMessageId`, jamás duplica. `idempotencyKey` SET-ONCE (guard 0 ON).
+      record = await this.messageRepo.upsertByChatwootMessageId({
+        conversationId: conversation.id,
+        chatwootMessageId: sendResult.chatwootMessageId,
+        direction: 'outbound',
+        content: renderedBody,
+        senderName: senderName ?? null,
+        chatwootCreatedAt: sentAt,
+        idempotencyKey: idempotencyKey ?? null,
+      });
+    }
+
+    // D2 (inbox-template-send) — SOLO preview; jamás canReply/status, sin importar el flag.
     await this.conversationRepo.bumpLastMessage(conversation.id, {
       lastMessageAt: sentAt,
       lastMessagePreview: renderedBody,

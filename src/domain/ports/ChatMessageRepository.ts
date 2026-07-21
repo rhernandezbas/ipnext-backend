@@ -73,6 +73,15 @@ export interface UpsertChatMessageInput {
    * chatwootMessageId NUNCA lo pisa). `SendMessage` sólo lo pasa cuando `isPrivate`.
    */
   authorId?: string | null;
+  /**
+   * chatwoot-hub-sendpath (D5) — key de idempotencia del REQUEST HTTP (mismo campo
+   * que `UpsertTemplateChatMessageInput.idempotencyKey`, H1), pasada por
+   * `SendTemplateMessage`/`SendCampaign` en el path ON. SET-ONCE: sólo se persiste
+   * en la rama CREATE — el `update` idempotente del eco (`message_created`, que NO
+   * manda `idempotencyKey`) NUNCA la pisa (mismo criterio que `authorId`). `undefined`/
+   * `null` → columna NULL (webhook/GetConversation, que nunca la conocen).
+   */
+  idempotencyKey?: string | null;
 }
 
 /**

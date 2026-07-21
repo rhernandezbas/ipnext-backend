@@ -7,11 +7,18 @@
  * Fakes in-memory (NUNCA mock de Prisma, convención del repo).
  */
 import { SendTemplateMessage } from '@application/use-cases/messaging/SendTemplateMessage';
-import { ConversationNotFoundError, ConversationPhoneMissingError } from '@domain/errors/messaging';
+import {
+  ConversationNotFoundError,
+  ConversationPhoneMissingError,
+  ConversationNotLinkedError,
+  ChatwootUnavailableError,
+} from '@domain/errors/messaging';
 import { TemplateNotApprovedError, MissingTemplateVariablesError, TemplateSendRejectedError, TemplateProviderUnavailableError } from '@domain/errors/messaging-bulk';
 import { InMemoryConversationRepository } from '@infrastructure/adapters/in-memory/InMemoryConversationRepository';
 import { InMemoryChatMessageRepository } from '@infrastructure/adapters/in-memory/InMemoryChatMessageRepository';
 import { InMemoryTemplateMessagingGateway } from '@infrastructure/adapters/in-memory/InMemoryTemplateMessagingGateway';
+import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
+import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
 import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
 import type { ConversationRepository, ConversationRecord } from '@domain/ports/ConversationRepository';
 
@@ -113,8 +120,13 @@ function makeHarness(opts: { templates?: TemplateDto[]; rejectPhone?: string; fa
     rejectPhone: opts.rejectPhone,
     failNthWith429: opts.failNthWith429,
   });
-  const uc = new SendTemplateMessage(conversationRepo, templatePort, messageRepo);
-  return { conversationRepo, messageRepo, templatePort, uc };
+  // chatwoot-hub-sendpath (B3) — inyectados en TODOS los harnesses; `featureFlags`
+  // queda SIN seedear por default (flag OFF), así que los tests existentes (que no
+  // tocan estos 2 nuevos campos) siguen byte-idénticos (CHW-3).
+  const chatwootGateway = new FakeChatwootGateway();
+  const featureFlags = new InMemoryFeatureFlagRepository();
+  const uc = new SendTemplateMessage(conversationRepo, templatePort, messageRepo, chatwootGateway, featureFlags);
+  return { conversationRepo, messageRepo, templatePort, chatwootGateway, featureFlags, uc };
 }
 
 describe('SendTemplateMessage', () => {
@@ -344,6 +356,134 @@ describe('SendTemplateMessage', () => {
       expect(templatePort.calls).toHaveLength(2);
       expect(first.deduped).toBe(false);
       expect(second.deduped).toBe(false);
+    });
+  });
+
+  describe('chatwoot-hub-sendpath (B3, D3) — flag ON: envío vía ChatwootGateway', () => {
+    it('CHW-1/PORT-1: chatwootConversationId presente → llama chatwootGateway.sendTemplateMessage con args exactos y persiste por chatwootMessageId, CERO llamada a upsertTemplateMessage', async () => {
+      const { conversationRepo, messageRepo, chatwootGateway, featureFlags, uc } = makeHarness();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 500, contactPhone: '+5491123456789' });
+      chatwootGateway.sendTemplateMessageResult = { chatwootMessageId: 777, content: 'Hola Juan, debés $5.000' };
+      const upsertTemplateSpy = jest.spyOn(messageRepo, 'upsertTemplateMessage');
+
+      const { message: dto, deduped } = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1');
+
+      expect(deduped).toBe(false);
+      expect(chatwootGateway.sendTemplateMessageCalls).toEqual([
+        {
+          chatwootConversationId: 500,
+          name: 'Recordatorio deuda',
+          language: 'es',
+          processedParams: { '1': 'Juan', '2': '$5.000' },
+          content: 'Hola Juan, debés $5.000',
+        },
+      ]);
+      expect(upsertTemplateSpy).not.toHaveBeenCalled();
+
+      const messages = await messageRepo.listByConversation(conv.id);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toEqual(
+        expect.objectContaining({
+          origin: 'chatwoot',
+          direction: 'outbound',
+          content: 'Hola Juan, debés $5.000',
+          chatwootMessageId: 777,
+          providerMessageId: null,
+          senderName: 'agente1',
+        }),
+      );
+      expect(dto.content).toBe('Hola Juan, debés $5.000');
+
+      const updatedConv = await conversationRepo.findById(conv.id);
+      expect(updatedConv!.lastMessagePreview).toBe('Hola Juan, debés $5.000');
+    });
+
+    it('CHW-1: chatwootConversationId null (mirror bulk nunca adoptado) → 422 ConversationNotLinkedError, CERO llamada al gateway', async () => {
+      const { conversationRepo, chatwootGateway, featureFlags, uc } = makeHarness();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      // Único camino del port para producir chatwootConversationId:null (mirror 'bulk').
+      const conv = await conversationRepo.upsertBulkByPhone('+5491123456789', { contactName: 'Ana' });
+
+      await expect(uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' })).rejects.toBeInstanceOf(
+        ConversationNotLinkedError,
+      );
+      expect(chatwootGateway.sendTemplateMessageCalls).toHaveLength(0);
+    });
+
+    it('guard 0 (idempotencyKey) funciona IGUAL con flag ON — mismo key dos veces → UN solo sendTemplateMessage, segunda deduped:true', async () => {
+      const { conversationRepo, messageRepo, chatwootGateway, featureFlags, uc } = makeHarness();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 501, contactPhone: '+5491123456789' });
+
+      const first = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1', 'idem-chat-1');
+      const second = await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' }, 'agente1', 'idem-chat-1');
+
+      expect(chatwootGateway.sendTemplateMessageCalls).toHaveLength(1);
+      expect(first.deduped).toBe(false);
+      expect(second.deduped).toBe(true);
+      expect(second.message).toEqual(first.message);
+      expect(await messageRepo.listByConversation(conv.id)).toHaveLength(1);
+    });
+
+    it('CHW-4: convergencia del eco — pre-write + un upsertByChatwootMessageId manual con el MISMO chatwootMessageId → UNA sola fila', async () => {
+      const { conversationRepo, messageRepo, chatwootGateway, featureFlags, uc } = makeHarness();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 502, contactPhone: '+5491123456789' });
+      chatwootGateway.sendTemplateMessageResult = { chatwootMessageId: 555, content: 'Hola Juan, debés $5.000' };
+
+      await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' });
+      // simula el eco `message_created` del webhook llegando después, mismo id.
+      await messageRepo.upsertByChatwootMessageId({
+        conversationId: conv.id,
+        chatwootMessageId: 555,
+        direction: 'outbound',
+        content: 'Hola Juan, debés $5.000',
+        chatwootCreatedAt: new Date().toISOString(),
+      });
+
+      expect(await messageRepo.listByConversation(conv.id)).toHaveLength(1);
+    });
+
+    it('CHW-6: el gate de aprobación corre IGUAL con flag ON — template pending → TemplateNotApprovedError, cero POST a Chatwoot', async () => {
+      const { conversationRepo, chatwootGateway, featureFlags, uc } = makeHarness();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 503, contactPhone: '+5491123456789' });
+
+      await expect(uc.execute(conv.id, 'HX9', {})).rejects.toBeInstanceOf(TemplateNotApprovedError);
+      expect(chatwootGateway.sendTemplateMessageCalls).toHaveLength(0);
+    });
+
+    it('CHW-7: Chatwoot caído → ChatwootUnavailableError propaga (503), mirror EXACTAMENTE como estaba, cero persistencia', async () => {
+      const { conversationRepo, messageRepo, chatwootGateway, featureFlags, uc } = makeHarness();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      chatwootGateway.failSendTemplateMessage = true;
+      const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 504, contactPhone: '+5491123456789' });
+
+      await expect(uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' })).rejects.toBeInstanceOf(
+        ChatwootUnavailableError,
+      );
+      expect(await messageRepo.listByConversation(conv.id)).toHaveLength(0);
+      const stillConv = await conversationRepo.findById(conv.id);
+      expect(stillConv!.lastMessagePreview).toBeNull();
+    });
+
+    it('bumpLastMessage corre en el path ON — canReply/status siguen intactos (regresión D2 de inbox-template-send)', async () => {
+      const { conversationRepo, featureFlags, uc } = makeHarness();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const conv = await conversationRepo.upsertByChatwootId({
+        chatwootConversationId: 505,
+        contactPhone: '+5491123456789',
+        canReply: false,
+        status: 'open',
+      });
+
+      await uc.execute(conv.id, 'HX1', { '1': 'Juan', '2': '$5.000' });
+
+      const updated = await conversationRepo.findById(conv.id);
+      expect(updated!.canReply).toBe(false);
+      expect(updated!.status).toBe('open');
+      expect(updated!.lastMessagePreview).toBe('Hola Juan, debés $5.000');
     });
   });
 

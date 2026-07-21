@@ -35,6 +35,25 @@ export class ConversationPhoneMissingError extends DomainError {
 }
 
 /**
+ * chatwoot-hub-sendpath (D3, CHW-1) — raised by `SendTemplateMessage` when the
+ * feature flag `messaging-send-via-chatwoot` is ON but the conversation has NO
+ * `chatwootConversationId` (a mirror `origin:'bulk'` never adopted by Chatwoot —
+ * a thread the agent opens from the inbox ALWAYS has one). Distinct from
+ * `ConversationPhoneMissingError` (that guard is for the OFF/Twilio-directo
+ * path, which targets a phone number, not a Chatwoot conversation id). No side
+ * effects: `chatwootGateway.sendTemplateMessage` is never called.
+ */
+export class ConversationNotLinkedError extends DomainError {
+  constructor(conversationId: string) {
+    super(
+      `Conversation "${conversationId}" has no linked Chatwoot conversation (chatwootConversationId is null)`,
+      'CONVERSATION_NOT_LINKED',
+    );
+    this.name = 'ConversationNotLinkedError';
+  }
+}
+
+/**
  * SEND-2 — raised when the last inbound message of a conversation is older than
  * 24h (or there never was an inbound message). No side effects: SendMessage
  * MUST NOT call Chatwoot when this is thrown.

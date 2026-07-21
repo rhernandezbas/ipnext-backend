@@ -205,6 +205,31 @@ describe('InMemoryChatMessageRepository', () => {
     });
   });
 
+  describe('chatwoot-hub-sendpath (D5) — idempotencyKey SET-ONCE en upsertByChatwootMessageId', () => {
+    it('create con idempotencyKey → columna poblada', async () => {
+      const created = await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 555, idempotencyKey: 'idem-x' }));
+
+      expect(created.idempotencyKey).toBe('idem-x');
+    });
+
+    it('idempotencyKey ausente en el create → queda null (webhook/GetConversation, que nunca la conocen)', async () => {
+      const created = await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 556 }));
+
+      expect(created.idempotencyKey).toBeNull();
+    });
+
+    it('update idempotente del MISMO chatwootMessageId SIN key (simulando el eco del webhook) → la key original persiste intacta', async () => {
+      await repo.upsertByChatwootMessageId(input({ chatwootMessageId: 557, idempotencyKey: 'idem-y' }));
+
+      const updated = await repo.upsertByChatwootMessageId(
+        input({ chatwootMessageId: 557, content: 'echo del webhook (sin idempotencyKey)' }),
+      );
+
+      expect(updated.idempotencyKey).toBe('idem-y');
+      expect(updated.content).toBe('echo del webhook (sin idempotencyKey)');
+    });
+  });
+
   describe('messaging-inbox-notes (edit/delete) — content local vs re-espejo de Chatwoot (HIGH)', () => {
     it('una nota EDITADA localmente (editedAt != null) NO es pisada por un re-upsert con el content viejo de Chatwoot', async () => {
       // crea la nota (mirror del envío) con el content original

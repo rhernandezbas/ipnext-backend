@@ -196,6 +196,10 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         // si un webhook message_created gana la carrera al upsert local del send, authorId
         // queda null → la nota sólo la edita/borra un supervisor (edge raro, no se fuerza).
         authorId: input.authorId ?? null,
+        // chatwoot-hub-sendpath (D5) — idempotencyKey SET-ONCE en create, mismo criterio
+        // que authorId: `updateData` (abajo) NUNCA incluye esta clave, así que el eco
+        // idempotente del webhook (que no la manda) jamás la pisa.
+        idempotencyKey: input.idempotencyKey ?? null,
       },
       update: updateData,
     });

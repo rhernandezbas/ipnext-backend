@@ -111,7 +111,9 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       isPrivate: input.isPrivate ?? false,
       createdAt: new Date().toISOString(),
       providerMessageId: null,
-      idempotencyKey: null,
+      // chatwoot-hub-sendpath (D5) — SET-ONCE: sólo se escribe en el CREATE. La rama
+      // UPDATE de arriba NUNCA toca `existing.idempotencyKey` (mismo criterio que authorId).
+      idempotencyKey: input.idempotencyKey ?? null,
       // messaging-inbox-notes (edit/delete) — authorId sólo llega con una nota privada
       // (SendMessage lo pasa cuando isPrivate); mensajes públicos quedan null.
       authorId: input.authorId ?? null,
