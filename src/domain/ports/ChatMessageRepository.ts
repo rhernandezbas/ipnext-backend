@@ -44,6 +44,18 @@ export interface ChatMessageRecord {
   editedAt: string | null;
   /** messaging-inbox-notes (edit/delete) — soft-delete (ISO). `null` = viva. La fila nunca se borra. */
   deletedAt: string | null;
+  /**
+   * chatwoot-hub-sendpath (D6) — proyección de `message_updated`/`content_attributes.
+   * external_error` del webhook de Chatwoot. `null` (default = entregado a Chatwoot /
+   * desconocido) | `'failed'`. `delivered`/`read` siguen INVISIBLES (paridad con hoy,
+   * decisión B — no es regresión): el payload de Chatwoot no los distingue.
+   */
+  deliveryStatus: 'failed' | null;
+  /**
+   * chatwoot-hub-sendpath (D6) — error curado (trim/acota, NUNCA headers/body crudos de
+   * Chatwoot — HIST-3) cuando `deliveryStatus === 'failed'`. `null` en cualquier otro caso.
+   */
+  deliveryError: string | null;
 }
 
 export interface UpsertChatMessageInput {

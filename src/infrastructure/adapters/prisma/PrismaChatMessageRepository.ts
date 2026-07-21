@@ -32,6 +32,10 @@ function toDomain(row: any): ChatMessageRecord {
     authorId: row.authorId ?? null,
     editedAt: row.editedAt ? toIso(row.editedAt) : null,
     deletedAt: row.deletedAt ? toIso(row.deletedAt) : null,
+    // chatwoot-hub-sendpath (D6) — poblado por `markDeliveryFailedByChatwootMessageId`
+    // (Batch 5); acá sólo se espeja lo que la fila ya tenga.
+    deliveryStatus: row.deliveryStatus ?? null,
+    deliveryError: row.deliveryError ?? null,
   };
 }
 

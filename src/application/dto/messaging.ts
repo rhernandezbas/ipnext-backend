@@ -337,6 +337,14 @@ export interface ChatMessageDto {
   canEdit: boolean;
   canDelete: boolean;
   attachments: ChatMessageAttachmentDto[];
+  /**
+   * chatwoot-hub-sendpath (D6) — passthrough tal cual de `ChatMessageRecord.deliveryStatus`.
+   * `null` (default) | `'failed'`. Aditivo — el FE renderiza el badge `failed` desde este
+   * campo del mirror que ya poll-ea; el contrato de request/response de envío no cambia.
+   */
+  deliveryStatus: 'failed' | null;
+  /** chatwoot-hub-sendpath (D6) — passthrough de `ChatMessageRecord.deliveryError`, ya curado. */
+  deliveryError: string | null;
 }
 
 /**
@@ -473,5 +481,8 @@ export function toChatMessageDto(
     canEdit: mayMutate,
     canDelete: mayMutate,
     attachments: attachments.map(toChatMessageAttachmentDto),
+    // chatwoot-hub-sendpath (D6) — tal cual, sin transformación (aditivo).
+    deliveryStatus: record.deliveryStatus,
+    deliveryError: record.deliveryError,
   };
 }

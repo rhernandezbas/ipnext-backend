@@ -117,6 +117,9 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       authorId: input.authorId ?? null,
       editedAt: null,
       deletedAt: null,
+      // chatwoot-hub-sendpath (D6) — recién creada, sin fallo detectado todavía.
+      deliveryStatus: null,
+      deliveryError: null,
     };
     this.rows.push(row);
     this.syncConversationDirection(input.conversationId);
@@ -159,6 +162,8 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       authorId: null,
       editedAt: null,
       deletedAt: null,
+      deliveryStatus: null,
+      deliveryError: null,
     };
     this.rows.push(row);
     this.syncConversationDirection(input.conversationId);
@@ -213,6 +218,8 @@ export class InMemoryChatMessageRepository implements ChatMessageRepository {
       authorId: null,
       editedAt: null,
       deletedAt: null,
+      deliveryStatus: null,
+      deliveryError: null,
     };
     this.rows.push(row);
     this.syncConversationDirection(input.conversationId);

@@ -3177,6 +3177,14 @@ model ChatMessage {
   // Soft-delete de la nota interna (NULL = viva). La fila NUNCA se borra: el hilo la
   // sigue devolviendo con deleted=true (tombstone en el FE); el contador la excluye.
   deletedAt         DateTime?
+  // chatwoot-hub-sendpath (D6) — proyección de `message_updated`/`content_attributes.
+  // external_error` de Chatwoot: `null` (default = entregado/desconocido) | 'failed'.
+  // delivered/read quedan INVISIBLES (paridad con hoy, decisión B — no es regresión).
+  // Aditiva/nullable, sin default: no afecta filas existentes ni ningún path OFF.
+  deliveryStatus    String?
+  // chatwoot-hub-sendpath (D6) — error saneado (curate: trim/acota, NUNCA headers/body
+  // crudos de Chatwoot, HIST-3) cuando deliveryStatus='failed'. `null` en cualquier otro caso.
+  deliveryError     String?
 
   @@index([conversationId, chatwootCreatedAt])
   // count de notas internas vivas por conversación (isPrivate=true AND deletedAt IS NULL).

@@ -26,9 +26,25 @@ function record(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRecord {
     authorId: null,
     editedAt: null,
     deletedAt: null,
+    deliveryStatus: null,
+    deliveryError: null,
     ...overrides,
   };
 }
+
+describe('toChatMessageDto — chatwoot-hub-sendpath (D6) — deliveryStatus/deliveryError', () => {
+  it('default (deliveryStatus/deliveryError null) → DTO expone ambos en null', () => {
+    const dto = toChatMessageDto(record());
+    expect(dto.deliveryStatus).toBeNull();
+    expect(dto.deliveryError).toBeNull();
+  });
+
+  it("deliveryStatus:'failed' + deliveryError poblado → DTO los expone TAL CUAL (aditivo, D6)", () => {
+    const dto = toChatMessageDto(record({ deliveryStatus: 'failed', deliveryError: 'Template not found' }));
+    expect(dto.deliveryStatus).toBe('failed');
+    expect(dto.deliveryError).toBe('Template not found');
+  });
+});
 
 describe('toChatMessageDto — NOTE-5 (private)', () => {
   it('mensaje privado (isPrivate:true) → DTO.private === true', () => {

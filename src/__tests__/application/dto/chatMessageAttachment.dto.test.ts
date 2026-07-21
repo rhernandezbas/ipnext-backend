@@ -95,6 +95,8 @@ describe('toChatMessageDto — attachments (MEDIA-4)', () => {
       authorId: null,
       editedAt: null,
       deletedAt: null,
+      deliveryStatus: null,
+      deliveryError: null,
       ...overrides,
     };
   }
