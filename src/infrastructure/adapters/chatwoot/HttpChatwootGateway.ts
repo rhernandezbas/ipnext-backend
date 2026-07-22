@@ -3,6 +3,7 @@ import FormData from 'form-data';
 import {
   ChatwootConversationDto,
   ChatwootGateway,
+  ChatwootLabelDto,
   ChatwootMessageDto,
   ChatwootMessageAttachmentDto,
   OutboundAttachmentFile,
@@ -348,6 +349,49 @@ export class HttpChatwootGateway implements ChatwootGateway {
       return { buffer: Buffer.from(response.data), contentType };
     });
   }
+
+  /**
+   * campaign-chatwoot-label (design D1.b/D2, CLBL-1) — catálogo REAL de labels de
+   * la cuenta. Reusa `accountPath`/`this.call`/`extractRows` — cero infra nueva de
+   * error (mismo criterio único del resto del port).
+   */
+  async listAccountLabels(): Promise<ChatwootLabelDto[]> {
+    const { data } = await this.call(() => this.http.get(this.accountPath('/labels')));
+    return extractRows(data).map(toLabelDto);
+  }
+
+  /**
+   * campaign-chatwoot-label (design D1.b/D2, CLBL-2) — crea la ficha COMPLETA del
+   * label en el catálogo. La respuesta puede venir envuelta (`{payload:{...}}`) o
+   * plana (`{...}`) según la versión del jbuilder — `data.payload ?? data` cubre
+   * ambas sin asumir una sola forma.
+   */
+  async createAccountLabel(params: { title: string; color: string }): Promise<ChatwootLabelDto> {
+    const { data } = await this.call(() =>
+      this.http.post(this.accountPath('/labels'), { title: params.title, color: params.color }),
+    );
+    return toLabelDto(data.payload ?? data);
+  }
+
+  /**
+   * campaign-chatwoot-label (design D2, CLBL-3/CLBL-4/CLBL-5) — GET-unión-POST
+   * idempotente DENTRO del adapter: Chatwoot REEMPLAZA el set completo de tags en
+   * el POST (`Labelable#update_labels`, no es aditivo) — por eso el adapter lee
+   * los títulos actuales, arma la UNIÓN (dedup, order-stable) y postea el set
+   * COMPLETO. Así JAMÁS pisa labels puestos a mano por un agente ni el label de
+   * otra campaña previa sobre la misma conversación. La unión de un set consigo
+   * mismo es un no-op → reintentos/re-aplicaciones idempotentes.
+   */
+  async addConversationLabels(chatwootConversationId: number, labels: string[]): Promise<void> {
+    await this.call(async () => {
+      const cur = await this.http.get(this.accountPath(`/conversations/${chatwootConversationId}/labels`));
+      const existing = extractRows(cur.data).filter((t): t is string => typeof t === 'string');
+      const union = Array.from(new Set([...existing, ...labels]));
+      await this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/labels`), {
+        labels: union,
+      });
+    });
+  }
 }
 
 /**
@@ -502,4 +546,20 @@ interface RawChatwootContact {
 function toContactDto(raw: unknown): { id: number; name: string | null; phone: string | null } {
   const r = raw as RawChatwootContact;
   return { id: r.id, name: r.name ?? null, phone: r.phone_number ?? null };
+}
+
+/**
+ * campaign-chatwoot-label (design D2) — molde `toConversationDto`/`toContactDto`:
+ * mapeo curado del payload jbuilder del catálogo de labels. Descarta cualquier
+ * campo extra (ej. `id`, `description`, `show_on_sidebar`) — el DTO de dominio es
+ * `{title,color}` (D1.a).
+ */
+interface RawChatwootLabel {
+  title: string;
+  color: string;
+}
+
+function toLabelDto(raw: unknown): ChatwootLabelDto {
+  const r = raw as RawChatwootLabel;
+  return { title: r.title, color: r.color };
 }

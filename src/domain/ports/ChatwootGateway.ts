@@ -85,6 +85,17 @@ export interface OutboundAttachmentFile {
   contentType: string;
 }
 
+/**
+ * campaign-chatwoot-label (design D1.a) — ficha de un label del catálogo REAL de
+ * Chatwoot (`GET/POST /accounts/2/labels`). Sin `id` (YAGNI, D1.a): los tags de
+ * conversación se aplican y resuelven POR TÍTULO (`addConversationLabels`), nunca
+ * por id — un `id` acá sería un campo muerto.
+ */
+export interface ChatwootLabelDto {
+  title: string;
+  color: string;
+}
+
 export interface ChatwootGateway {
   listConversations(): Promise<ChatwootConversationDto[]>;
   getConversation(chatwootConversationId: number): Promise<ChatwootConversationDto>;
@@ -188,4 +199,28 @@ export interface ChatwootGateway {
     processedParams: Record<string, string>;
     content: string;
   }): Promise<{ chatwootConversationId: number; chatwootMessageId: number | null }>;
+  /**
+   * campaign-chatwoot-label (design D1.b, CLBL-1) — catálogo REAL de labels de la
+   * cuenta (`GET /accounts/2/labels`). Alimenta el picker del composer FE. Mismo
+   * criterio único de fallo del resto del port: cualquier error de axios
+   * (red/timeout/4xx/5xx) → `ChatwootUnavailableError`.
+   */
+  listAccountLabels(): Promise<ChatwootLabelDto[]>;
+  /**
+   * campaign-chatwoot-label (design D1.b, CLBL-2) — crea la ficha COMPLETA de un
+   * label en el catálogo (`POST /accounts/2/labels`, requiere administrator del
+   * lado Chatwoot). Un `title` duplicado (unique por cuenta) responde 4xx → cae en
+   * el mismo `ChatwootUnavailableError` (limitación conocida, D2/D8: no se
+   * distingue un 409 semántico).
+   */
+  createAccountLabel(params: { title: string; color: string }): Promise<ChatwootLabelDto>;
+  /**
+   * campaign-chatwoot-label (design D1.c/D2, CLBL-3/CLBL-4/CLBL-5) — agrega
+   * `labels` (el DELTA a agregar, NO el set completo) a una conversación. La
+   * mecánica GET-unión-POST (Chatwoot REEMPLAZA el set completo en el POST de
+   * tags — `Labelable#update_labels`) vive DENTRO del adapter: el use case NO
+   * sabe que Chatwoot reemplaza, solo pide "agregá este label". Idempotente
+   * (unión de un set consigo mismo = no-op) — reintentos/re-aplicaciones seguras.
+   */
+  addConversationLabels(chatwootConversationId: number, labels: string[]): Promise<void>;
 }

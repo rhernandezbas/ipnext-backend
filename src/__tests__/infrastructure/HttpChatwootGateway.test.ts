@@ -625,6 +625,94 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
     });
   });
 
+  describe('listAccountLabels (campaign-chatwoot-label design D1/D2, CLBL-1)', () => {
+    it('GET /api/v1/accounts/:id/labels y mapea {payload:[{id,title,color}]} → [{title,color}] (drop id)', async () => {
+      const { http, gw } = fakeHttp({
+        get: jest.fn().mockResolvedValue({
+          data: { payload: [{ id: 1, title: 'cobranzas', color: '#34E200' }] },
+        }),
+      });
+      const result = await gw.listAccountLabels();
+      expect(http.get).toHaveBeenCalledWith('/api/v1/accounts/2/labels');
+      expect(result).toEqual([{ title: 'cobranzas', color: '#34E200' }]);
+    });
+
+    it('error de red/timeout/4xx/5xx → ChatwootUnavailableError (mismo criterio único del port)', async () => {
+      const { gw } = fakeHttp({ get: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
+      await expect(gw.listAccountLabels()).rejects.toBeInstanceOf(ChatwootUnavailableError);
+    });
+  });
+
+  describe('createAccountLabel (campaign-chatwoot-label design D1/D2, CLBL-2)', () => {
+    it('POST /api/v1/accounts/:id/labels con body {title,color} EXACTO → DTO mapeado desde data.payload ?? data', async () => {
+      const { http, gw } = fakeHttp({
+        post: jest.fn().mockResolvedValue({
+          data: { payload: { id: 9, title: 'promo-julio', color: '#FF0000' } },
+        }),
+      });
+      const result = await gw.createAccountLabel({ title: 'promo-julio', color: '#FF0000' });
+      expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/labels', {
+        title: 'promo-julio',
+        color: '#FF0000',
+      });
+      expect(result).toEqual({ title: 'promo-julio', color: '#FF0000' });
+    });
+
+    it('título rechazado por Chatwoot (duplicado, 4xx) → propaga ChatwootUnavailableError sin persistir nada', async () => {
+      const err = Object.assign(new Error('Request failed with status code 422'), {
+        isAxiosError: true,
+        response: { status: 422, data: { message: 'Title has already been taken' } },
+      });
+      const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(err) });
+      await expect(gw.createAccountLabel({ title: 'cobranzas', color: '#34E200' })).rejects.toBeInstanceOf(
+        ChatwootUnavailableError,
+      );
+    });
+  });
+
+  describe('addConversationLabels (campaign-chatwoot-label design D2, CLBL-3) — GET-unión-POST idempotente', () => {
+    it('GET actuales [\'cobranzas\'] + add [\'promo-julio\'] → POST {labels:[\'cobranzas\',\'promo-julio\']} (une, preserva pre-existentes, order-stable, dedup)', async () => {
+      const { http, gw } = fakeHttp({
+        get: jest.fn().mockResolvedValue({ data: { payload: ['cobranzas'] } }),
+        post: jest.fn().mockResolvedValue({ data: {} }),
+      });
+
+      await gw.addConversationLabels(42, ['promo-julio']);
+
+      expect(http.get).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/labels');
+      expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/labels', {
+        labels: ['cobranzas', 'promo-julio'],
+      });
+    });
+
+    it('GET actuales [\'julio\'] + add [\'julio\'] → POST {labels:[\'julio\']} (idempotente, sin duplicar)', async () => {
+      const { http, gw } = fakeHttp({
+        get: jest.fn().mockResolvedValue({ data: { payload: ['julio'] } }),
+        post: jest.fn().mockResolvedValue({ data: {} }),
+      });
+
+      await gw.addConversationLabels(42, ['julio']);
+
+      expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/labels', {
+        labels: ['julio'],
+      });
+    });
+
+    it('falla el GET → ChatwootUnavailableError, nunca llega a postear', async () => {
+      const { http, gw } = fakeHttp({ get: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
+      await expect(gw.addConversationLabels(42, ['julio'])).rejects.toBeInstanceOf(ChatwootUnavailableError);
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('falla el POST → ChatwootUnavailableError', async () => {
+      const { gw } = fakeHttp({
+        get: jest.fn().mockResolvedValue({ data: { payload: [] } }),
+        post: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')),
+      });
+      await expect(gw.addConversationLabels(42, ['julio'])).rejects.toBeInstanceOf(ChatwootUnavailableError);
+    });
+  });
+
   describe('constructor', () => {
     it('sin http inyectado, arma axios.create con baseURL y header api_access_token', () => {
       // No lanza y queda usable — el axios real se ejercita indirectamente en los tests de arriba

@@ -1,6 +1,7 @@
 import type {
   ChatwootGateway,
   ChatwootConversationDto,
+  ChatwootLabelDto,
   ChatwootMessageDto,
   ChatwootMessageAttachmentDto,
   OutboundAttachmentFile,
@@ -205,5 +206,42 @@ export class FakeChatwootGateway implements ChatwootGateway {
     }
     if (this.createConversationWithTemplateResult) return this.createConversationWithTemplateResult;
     return { chatwootConversationId: 888, chatwootMessageId: 999 };
+  }
+
+  // ─── campaign-chatwoot-label (design D1/D2, CLBL-1) — listAccountLabels ────
+  /** Poblar antes de llamar `listAccountLabels()`. */
+  public accountLabelsResult: ChatwootLabelDto[] = [];
+
+  async listAccountLabels(): Promise<ChatwootLabelDto[]> {
+    return this.accountLabelsResult;
+  }
+
+  // ─── campaign-chatwoot-label (design D1/D2, CLBL-2) — createAccountLabel ───
+  /** Resultado devuelto por la PRÓXIMA `createAccountLabel()` cuando `failCreateAccountLabel` es false. */
+  public createAccountLabelResult: ChatwootLabelDto | null = null;
+  public failCreateAccountLabel = false;
+  public createAccountLabelCalls: Array<{ title: string; color: string }> = [];
+
+  async createAccountLabel(params: { title: string; color: string }): Promise<ChatwootLabelDto> {
+    this.createAccountLabelCalls.push({ ...params });
+    if (this.failCreateAccountLabel) throw new Error('fake: Chatwoot unreachable (createAccountLabel)');
+    if (this.createAccountLabelResult) return this.createAccountLabelResult;
+    return { title: params.title, color: params.color };
+  }
+
+  // ─── campaign-chatwoot-label (design D1.c/D2, CLBL-3/4/5) — addConversationLabels ──
+  /**
+   * El fake **NO** hace la unión (D2 — esa mecánica GET-unión-POST vive DENTRO
+   * del adapter real): solo registra el DELTA que se le pidió agregar, tal cual.
+   * La preservación de pre-existentes/idempotencia se prueba a nivel ADAPTER
+   * (`HttpChatwootGateway.test.ts`), no acá — el seam de `SendCampaign` solo
+   * verifica que se pidió agregar el label correcto.
+   */
+  public addConversationLabelsCalls: Array<{ chatwootConversationId: number; labels: string[] }> = [];
+  public failAddConversationLabels = false;
+
+  async addConversationLabels(chatwootConversationId: number, labels: string[]): Promise<void> {
+    this.addConversationLabelsCalls.push({ chatwootConversationId, labels: [...labels] });
+    if (this.failAddConversationLabels) throw new Error('fake: Chatwoot unreachable (addConversationLabels)');
   }
 }
