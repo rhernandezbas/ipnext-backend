@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ContractServiceView } from '@domain/entities/contract-service';
+import type { TvEventType } from '@domain/ports/TvActivationEventRepository';
 
 // ── ServiceCatalog ───────────────────────────────────────────────────────────
 
@@ -146,12 +147,16 @@ export function toContractServiceHistoryItemDto(
  */
 export function tvEventToServiceEvent(tvEvent: {
   id: string;
-  eventType: 'alta' | 'baja' | 'reactivacion';
+  eventType: TvEventType;
   cic: string | null;
   actorName: string;
   createdAt: string;
   reason?: string | null;
 }): ServiceEventDto {
+  // gigared-tv-identity-hardening (D7/B5) — 'transferencia' has no dedicated per-contract
+  // representation (this same operation already surfaces here via the ContractServiceEventRepository
+  // 'modified'/changeKind transfer-out|transfer-in merge, above); it falls back to 'activated'
+  // (neutral default) below rather than being filtered out or crashing the mapper.
   const typeMap: Record<string, 'activated' | 'deactivated' | 'reactivated'> = {
     alta:         'activated',
     baja:         'deactivated',

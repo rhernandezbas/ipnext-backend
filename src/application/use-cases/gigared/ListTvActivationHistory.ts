@@ -1,4 +1,4 @@
-import type { TvActivationEventRepository } from '@domain/ports/TvActivationEventRepository';
+import type { TvActivationEventRepository, TvEventType } from '@domain/ports/TvActivationEventRepository';
 import type { TvActivationEventDto } from '@application/dto/gigared.dto';
 
 export interface ListTvActivationHistoryFilter {
@@ -43,7 +43,7 @@ function toDto(e: {
   customerName: string | null;
   actorId: string | null;
   actorName: string;
-  eventType: 'alta' | 'baja' | 'reactivacion';
+  eventType: TvEventType;
   cic: string | null;
   internalId: string | null;
   seq: number | null;

@@ -4,6 +4,7 @@ import type { ContractServiceView } from '@domain/entities/contract-service';
 import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
 import type { ClientTvCancellationRepository } from '@domain/ports/ClientTvCancellationRepository';
 import type { ContractServiceEventRepository } from '@domain/ports/ContractServiceEventRepository';
+import type { TvActivationEventRepository } from '@domain/ports/TvActivationEventRepository';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import {
@@ -146,6 +147,12 @@ export class TransferTvToCustomer {
     private readonly catalogRepo: ServiceCatalogRepository,
     private readonly tvCancellation: ClientTvCancellationRepository,
     private readonly eventRepo?: ContractServiceEventRepository,
+    /**
+     * service-transfer (TV-3, D7) — dependencia OPCIONAL, DISTINTA de `eventRepo` (el log
+     * por-contrato). Cuando está presente, graba DOS eventos `transferencia` en el Historial TV
+     * GLOBAL (best-effort, nunca aborta la transferencia). Ver Paso 7b.
+     */
+    private readonly activationEventRepo?: TvActivationEventRepository,
   ) {}
 
   async execute(sourceCustomerId: string, input: TransferTvInput): Promise<TransferTvResult> {
@@ -404,12 +411,18 @@ export class TransferTvToCustomer {
 
     // Paso 7 — auditoría transversal (best-effort, patrón UpdatePppoeService): transfer-out en el
     // contrato origen y transfer-in en el destino, con snapshot legible de-quién-a-quién.
+    // Nombres + contrato origen resuelto se hoistean: el Paso 7b (TV-3) los reutiliza — misma
+    // fuente de verdad, DEPENDENCIA distinta (activationEventRepo, nunca this.eventRepo).
+    const sourceName = source.name ?? sourceCustomerId;
+    const targetName = target.name ?? input.targetCustomerId;
+    // MEDIUM-3b — precedencia INVERTIDA: la fila realmente inactivada manda; el input es
+    // solo el fallback (p.ej. slot origen irresoluble pero contrato validado por 3b).
+    const outContractId = resolvedSourceContractId ?? input.sourceContractId;
+
     if (this.eventRepo) {
       try {
         const catalog = await this.catalogRepo.getByName('TV');
         if (catalog) {
-          const sourceName = source.name ?? sourceCustomerId;
-          const targetName = target.name ?? input.targetCustomerId;
           const base = {
             serviceCatalogId: catalog.id,
             eventType: 'modified' as const,
@@ -422,9 +435,6 @@ export class TransferTvToCustomer {
             // MEDIUM-5: la ficha lee las notes — "de quién a quién" tiene que ser legible.
             notes: `CIC ${cic} — de ${sourceName} a ${targetName}`,
           };
-          // MEDIUM-3b — precedencia INVERTIDA: la fila realmente inactivada manda; el input es
-          // solo el fallback (p.ej. slot origen irresoluble pero contrato validado por 3b).
-          const outContractId = resolvedSourceContractId ?? input.sourceContractId;
           if (outContractId) {
             await this.eventRepo.record({ ...base, contractId: outContractId, changeKind: 'transfer-out' });
           } else {
@@ -436,6 +446,45 @@ export class TransferTvToCustomer {
         }
       } catch (err) {
         console.warn('[gigared] transfer: fallo grabando eventos de historial (best-effort)', err);
+      }
+    }
+
+    // Paso 7b — service-transfer (TV-3, D7): Historial TV GLOBAL. Dos eventos `transferencia`,
+    // uno por cliente involucrado — el log por-contrato de arriba (eventRepo) NO alimenta
+    // `ListTvActivationHistory`/`GET .../activation-history`, así que sin esto una transferencia
+    // exitosa queda invisible ahí (caso Centeno/Vacherand real). Best-effort, DEPENDENCIA
+    // DISTINTA de this.eventRepo — un fallo JAMÁS aborta la transferencia (try/catch por evento,
+    // así el fallo del destino no le impide al origen su propio intento). Se graba siempre que
+    // llegamos hasta acá: fresh recién aliasado+verificado, o resume ya verificado en un run
+    // previo — independiente de severed/targetCleared/localSource/localTarget.
+    if (this.activationEventRepo) {
+      try {
+        await this.activationEventRepo.record({
+          clientId:    input.targetCustomerId,
+          actorId:     input.actorId ?? null,
+          actorName:   input.actorName ?? '',
+          eventType:   'transferencia',
+          cic,
+          internalId:  targetInternalId,
+          contractId:  input.targetContractId,
+          reason:      `Recibido por transferencia de ${sourceName}`,
+        });
+      } catch (err) {
+        console.warn('[gigared] transfer: fallo grabando evento transferencia (destino, best-effort)', err);
+      }
+      try {
+        await this.activationEventRepo.record({
+          clientId:    sourceCustomerId,
+          actorId:     input.actorId ?? null,
+          actorName:   input.actorName ?? '',
+          eventType:   'transferencia',
+          cic,
+          internalId:  sourceInternalId,
+          contractId:  outContractId ?? null,
+          reason:      `Transferido a ${targetName}`,
+        });
+      } catch (err) {
+        console.warn('[gigared] transfer: fallo grabando evento transferencia (origen, best-effort)', err);
       }
     }
 

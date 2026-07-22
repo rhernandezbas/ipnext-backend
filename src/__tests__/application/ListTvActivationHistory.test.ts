@@ -56,3 +56,26 @@ describe('ListTvActivationHistory — reason field in DTO (#133-BE)', () => {
     expect(dto.reason).toBeNull();
   });
 });
+
+// gigared-tv-identity-hardening (D7/B5) — 'transferencia' es un eventType válido de punta a punta.
+describe('ListTvActivationHistory — eventType "transferencia" (D7/B5)', () => {
+  it('fila con eventType "transferencia" — el DTO la expone SIN filtrar', async () => {
+    const repo = new InMemoryTvActivationEventRepository();
+    await repo.record({ ...BASE_EVENT, eventType: 'transferencia', cic: '0000000001' });
+
+    const uc = new ListTvActivationHistory(repo);
+    const [dto] = await uc.executeByClient('client-1');
+
+    expect(dto.eventType).toBe('transferencia');
+  });
+
+  it('execute() global filter también expone "transferencia" sin filtrar', async () => {
+    const repo = new InMemoryTvActivationEventRepository();
+    await repo.record({ ...BASE_EVENT, eventType: 'transferencia', cic: '0000000001' });
+
+    const uc = new ListTvActivationHistory(repo);
+    const [dto] = await uc.execute({ customerId: 'client-1' });
+
+    expect(dto.eventType).toBe('transferencia');
+  });
+});

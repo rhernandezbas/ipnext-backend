@@ -7,7 +7,13 @@
  * Lives in the domain layer. Zero imports from @infrastructure/* or Prisma.
  */
 
-export type TvEventType = 'alta' | 'baja' | 'reactivacion';
+/**
+ * gigared-tv-identity-hardening (D7/B5) — 'transferencia' cubre el evento que
+ * `TransferTvToCustomer` graba en el Historial TV GLOBAL (keyed a AMBOS clientes, origen y
+ * destino) tras una transferencia exitosa (fresh o resume). Columna `eventType` ya es `String`
+ * libre en el schema — CERO migración.
+ */
+export type TvEventType = 'alta' | 'baja' | 'reactivacion' | 'transferencia';
 
 export interface RecordTvActivationEventInput {
   clientId: string;

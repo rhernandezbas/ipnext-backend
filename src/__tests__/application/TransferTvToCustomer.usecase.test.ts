@@ -22,6 +22,7 @@ import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-m
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { InMemoryClientTvCancellationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository';
 import { InMemoryContractServiceEventRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceEventRepository';
+import type { TvActivationEventRepository } from '@domain/ports/TvActivationEventRepository';
 
 const CIC = '0000000001';
 
@@ -96,12 +97,27 @@ const DEFAULT_CUSTOMERS = {
 };
 const DEFAULT_CONTRACTS = { 'C-A': 'cust-A', 'C-B': 'cust-B' };
 
+/** service-transfer (TV-3) — fake `TvActivationEventRepository` seam, spies on record(). */
+function fakeActivationEventRepo(): TvActivationEventRepository {
+  return {
+    record: jest.fn(async (input) => ({
+      id: 'evt', customerName: null, seq: null, cic: null, internalId: null, contractId: null, reason: null,
+      ...input,
+      createdAt: new Date().toISOString(),
+    })),
+    listByClient: jest.fn(async () => []),
+    list: jest.fn(async () => []),
+    listByContract: jest.fn(async () => []),
+  };
+}
+
 interface Ctx {
   port: GigaredPort;
   cs: InMemoryContractServiceRepository;
   catalog: InMemoryServiceCatalogRepository;
   tvCancellation: InMemoryClientTvCancellationRepository;
   events: InMemoryContractServiceEventRepository;
+  activationEventRepo: TvActivationEventRepository;
   tvCatalogId: string;
   uc: TransferTvToCustomer;
 }
@@ -112,6 +128,7 @@ async function buildCtx(opts: {
   contracts?: Record<string, string>;
   seedSourceRow?: boolean;
   withEvents?: boolean;
+  withActivationEventRepo?: boolean;
 } = {}): Promise<Ctx> {
   const port = opts.port ?? transferPort();
   const cs = new InMemoryContractServiceRepository();
@@ -129,6 +146,7 @@ async function buildCtx(opts: {
   }
   const tvCancellation = new InMemoryClientTvCancellationRepository();
   const events = new InMemoryContractServiceEventRepository();
+  const activationEventRepo = fakeActivationEventRepo();
   const uc = new TransferTvToCustomer(
     port,
     customers(opts.customers ?? DEFAULT_CUSTOMERS),
@@ -137,8 +155,9 @@ async function buildCtx(opts: {
     catalog,
     tvCancellation,
     (opts.withEvents ?? true) ? events : undefined,
+    (opts.withActivationEventRepo ?? true) ? activationEventRepo : undefined,
   );
-  return { port, cs, catalog, tvCancellation, events, tvCatalogId: cat.id, uc };
+  return { port, cs, catalog, tvCancellation, events, activationEventRepo, tvCatalogId: cat.id, uc };
 }
 
 let warnSpy: jest.SpyInstance;
@@ -734,6 +753,69 @@ describe('TransferTvToCustomer — MEDIUM-2: clearCancelled(destino) visible en 
     expect(result.severed).toBe(true);
     expect(result.localSource).toBe('synced');
     expect(result.localTarget).toBe('synced');
+  });
+});
+
+describe('TransferTvToCustomer — service-transfer TV-3: evento transferencia en el Historial TV global', () => {
+  it('transferencia fresh exitosa → graba DOS eventos transferencia (destino + origen), reason legible, cic', async () => {
+    const ctx = await buildCtx();
+    await ctx.uc.execute('cust-A', {
+      targetCustomerId: 'cust-B', targetContractId: 'C-B', actorId: 'op-1', actorName: 'caro',
+    });
+
+    const record = ctx.activationEventRepo.record as jest.Mock;
+    expect(record).toHaveBeenCalledTimes(2);
+
+    const destinoCall = record.mock.calls.find((c) => c[0].clientId === 'cust-B')![0];
+    expect(destinoCall).toMatchObject({
+      clientId:    'cust-B',
+      eventType:   'transferencia',
+      internalId:  'cust-B',
+      contractId:  'C-B',
+      cic:         CIC,
+      actorId:     'op-1',
+      actorName:   'caro',
+    });
+    expect(destinoCall.reason).toEqual(expect.any(String));
+    expect(destinoCall.reason.length).toBeGreaterThan(0);
+
+    const origenCall = record.mock.calls.find((c) => c[0].clientId === 'cust-A')![0];
+    expect(origenCall).toMatchObject({
+      clientId:   'cust-A',
+      eventType:  'transferencia',
+      internalId: 'cust-A',
+      cic:        CIC,
+      actorId:    'op-1',
+      actorName:  'caro',
+    });
+    expect(origenCall.reason).toEqual(expect.any(String));
+    expect(origenCall.reason.length).toBeGreaterThan(0);
+  });
+
+  it('modo RESUME (retry post-parcial) re-graba los DOS eventos transferencia (append-only)', async () => {
+    const ctx = await buildCtx();
+    jest.spyOn(ctx.tvCancellation, 'markCancelled').mockRejectedValueOnce(new Error('db down'));
+    await ctx.uc.execute('cust-A', { targetCustomerId: 'cust-B', targetContractId: 'C-B' });
+    const record = ctx.activationEventRepo.record as jest.Mock;
+    expect(record).toHaveBeenCalledTimes(2);
+
+    // Retry (resume): setInternalId NO se re-llama, pero los eventos transferencia SÍ se re-graban.
+    await ctx.uc.execute('cust-A', { targetCustomerId: 'cust-B', targetContractId: 'C-B' });
+    expect(record).toHaveBeenCalledTimes(4);
+  });
+
+  it('activationEventRepo.record rechaza → la transferencia COMPLETA igual, sin excepción propagada', async () => {
+    const ctx = await buildCtx();
+    (ctx.activationEventRepo.record as jest.Mock).mockRejectedValue(new Error('event store down'));
+
+    const result = await ctx.uc.execute('cust-A', { targetCustomerId: 'cust-B', targetContractId: 'C-B' });
+    expect(result).toEqual({ cic: CIC, severed: true, targetCleared: true, localSource: 'synced', localTarget: 'synced' });
+  });
+
+  it('SIN activationEventRepo inyectado → comportamiento BYTE-IDÉNTICO (cero llamadas nuevas)', async () => {
+    const ctx = await buildCtx({ withActivationEventRepo: false });
+    const result = await ctx.uc.execute('cust-A', { targetCustomerId: 'cust-B', targetContractId: 'C-B' });
+    expect(result).toEqual({ cic: CIC, severed: true, targetCleared: true, localSource: 'synced', localTarget: 'synced' });
   });
 });
 
