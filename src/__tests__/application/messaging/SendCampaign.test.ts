@@ -1607,6 +1607,40 @@ describe('SendCampaign', () => {
       expect(chatwootGateway.addConversationLabelsCalls).toHaveLength(0); // pero CERO labeling
     });
 
+    it('F1 (fix wave, MEDIUM): campaign.chatwootLabel=\'\' (string vacío, data vieja ya persistida) → addConversationLabels NUNCA invocado (el gate colapsa vacío/whitespace, no solo null)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [LABEL_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      chatwootGateway.createConversationWithTemplateResult = { chatwootConversationId: 900, chatwootMessageId: 9000 };
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        // simula data vieja persistida ANTES del fix de ruta F1(a) (`''` en vez de
+        // `null`) — el use case NO debe re-consultar la ruta, solo el gate acá cuenta.
+        chatwootLabel: '',
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(1);
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(1); // el envío SÍ ocurrió
+      expect(chatwootGateway.addConversationLabelsCalls).toHaveLength(0); // pero CERO labeling
+    });
+
     it('CLBL-8: flag OFF (Twilio-directo) aunque chatwootLabel esté seteado → addConversationLabels NUNCA invocado', async () => {
       const campaignRepo = new InMemoryCampaignRepository();
       const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);

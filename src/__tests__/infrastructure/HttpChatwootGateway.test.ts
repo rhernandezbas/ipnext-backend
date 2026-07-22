@@ -711,6 +711,24 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
       });
       await expect(gw.addConversationLabels(42, ['julio'])).rejects.toBeInstanceOf(ChatwootUnavailableError);
     });
+
+    it('F2 (fix wave, LOW hardening): GET responde un shape desconocido ({labels:[...]}, ni payload ni data.payload ni array) → ChatwootUnavailableError, POST NUNCA llamado (nunca pisa el set con un parse-miss silencioso)', async () => {
+      const { http, gw } = fakeHttp({
+        get: jest.fn().mockResolvedValue({ data: { labels: ['vip', 'cobranzas'] } }),
+      });
+      await expect(gw.addConversationLabels(42, ['promo-julio'])).rejects.toBeInstanceOf(ChatwootUnavailableError);
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it('F2 (fix wave): GET responde `{payload: []}` (vacío LEGÍTIMO, sigue siendo un shape conocido) → no lanza, POST con solo el label nuevo', async () => {
+      const { http, gw } = fakeHttp({
+        get: jest.fn().mockResolvedValue({ data: { payload: [] } }),
+      });
+      await gw.addConversationLabels(42, ['promo-julio']);
+      expect(http.post).toHaveBeenCalledWith('/api/v1/accounts/2/conversations/42/labels', {
+        labels: ['promo-julio'],
+      });
+    });
   });
 
   describe('constructor', () => {

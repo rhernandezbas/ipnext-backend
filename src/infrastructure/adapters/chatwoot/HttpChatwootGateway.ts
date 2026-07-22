@@ -385,7 +385,10 @@ export class HttpChatwootGateway implements ChatwootGateway {
   async addConversationLabels(chatwootConversationId: number, labels: string[]): Promise<void> {
     await this.call(async () => {
       const cur = await this.http.get(this.accountPath(`/conversations/${chatwootConversationId}/labels`));
-      const existing = extractRows(cur.data).filter((t): t is string => typeof t === 'string');
+      // fix wave (F2 [LOW hardening]) — `extractRowsStrict`, NO el `extractRows` laxo
+      // compartido: acá un shape no reconocido NO puede degradar a `[]` silencioso
+      // (ver comentario de la función).
+      const existing = extractRowsStrict(cur.data).filter((t): t is string => typeof t === 'string');
       const union = Array.from(new Set([...existing, ...labels]));
       await this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/labels`), {
         labels: union,
@@ -406,6 +409,39 @@ function extractRows(data: unknown): unknown[] {
   if (nested && Array.isArray(nested.payload)) return nested.payload as unknown[];
   if (asRecord && Array.isArray(asRecord.payload)) return asRecord.payload as unknown[];
   return Array.isArray(data) ? (data as unknown[]) : [];
+}
+
+/**
+ * campaign-chatwoot-label (fix wave, F2 [LOW hardening]) — variante ESTRICTA de
+ * `extractRows`, usada SOLO por `addConversationLabels` (el GET-unión-POST/RMW,
+ * D2). Los demás consumidores de `extractRows` (`listConversations`,
+ * `listMessages`, `searchContact`, `listAccountLabels`) son READ-ONLY puro: ahí
+ * un shape inesperado degradando a `[]` es best-effort aceptable, comportamiento
+ * PREEXISTENTE e intacto (ver test "payload ausente/no-array → []").
+ *
+ * El RMW es distinto: un parse-miss silencioso acá es INDISTINGUIBLE de "la
+ * conversación no tiene labels", y el POST subsiguiente postearía el set
+ * COMPLETO con solo el delta nuevo — PISANDO cualquier label manual (de un
+ * agente) o de una campaña previa sobre la misma conversación. Por eso, un
+ * shape que NO matchea ninguno de los 3 conocidos (`{payload:[...]}`,
+ * `{data:{payload:[...]}}`, array plano) Y que NO es un objeto vacío legítimo
+ * (`{}`, `null`, `undefined` — el molde defensivo pre-existente) debe abortar
+ * el RMW entero: el `throw` de acá es capturado por `this.call` (que envuelve
+ * TODA la callback de `addConversationLabels`) y re-mapeado a
+ * `ChatwootUnavailableError` — mismo criterio de resultado único del port.
+ * `{payload: []}` SIGUE siendo un caso vacío VÁLIDO (matchea el shape conocido
+ * arriba, con array vacío) — no confundir con el "objeto sin ninguna clave".
+ */
+function extractRowsStrict(data: unknown): unknown[] {
+  const asRecord = data as Record<string, unknown> | null | undefined;
+  const nested = asRecord?.data as Record<string, unknown> | undefined;
+  if (nested && Array.isArray(nested.payload)) return nested.payload as unknown[];
+  if (asRecord && Array.isArray(asRecord.payload)) return asRecord.payload as unknown[];
+  if (Array.isArray(data)) return data as unknown[];
+  if (asRecord == null || Object.keys(asRecord).length === 0) return [];
+  throw new Error(
+    'Chatwoot: shape de respuesta no reconocido para labels de conversación (esperado {payload:[...]}/{data:{payload:[...]}}/array)',
+  );
 }
 
 /** epoch seconds (convención wire de Chatwoot) → ISO 8601, o null si ausente. */

@@ -173,6 +173,20 @@ function toNodeApFilter(raw: Record<string, unknown> | undefined): {
  * en tipos inválidos, ver `toNodeApFilter`); nodo/AP SOLOS ya son un segmento
  * válido (el use case los acepta como criterio real).
  */
+/**
+ * campaign-chatwoot-label (fix wave, F1(a) [MEDIUM]) — colapsa un `chatwootLabel`
+ * vacío/solo-espacios a `undefined` ANTES de llegar a `CreateCampaign`. Sin este
+ * trim, `''`/`'  '` eran strings VÁLIDOS (pasaban este parseo) y el `?? null` de
+ * `CreateCampaign.ts` NO colapsa `''` (solo `undefined`/`null`) — se persistía tal
+ * cual, esquivando el gate `chatwootLabel == null` de `SendCampaign.applyChatwootLabel`
+ * en CADA recipient (round-trips fantasma a Chatwoot con label en blanco). Un valor
+ * no-string sigue devolviendo `undefined` (comportamiento previo intacto).
+ */
+function toChatwootLabel(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  return raw.trim().length > 0 ? raw : undefined;
+}
+
 function toCampaignSegment(raw: unknown): CampaignSegment {
   const seg = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -403,8 +417,9 @@ export function createMessagingBulkRouter(
           templateRef: typeof body?.['templateRef'] === 'string' ? (body['templateRef'] as string) : '',
           templateName: typeof body?.['templateName'] === 'string' ? (body['templateName'] as string) : undefined,
           // campaign-chatwoot-label (CLBL-6) — pass-through puro; no-string (ausente
-          // o mal tipado) → `undefined`, sin romper el resto del parseo.
-          chatwootLabel: typeof body?.['chatwootLabel'] === 'string' ? (body['chatwootLabel'] as string) : undefined,
+          // o mal tipado) → `undefined`, sin romper el resto del parseo. fix wave
+          // F1(a) — vacío/solo-espacios TAMBIÉN colapsa a `undefined` (ver `toChatwootLabel`).
+          chatwootLabel: toChatwootLabel(body?.['chatwootLabel']),
           // FIX-8 — NO defaultear a "todos": segmento fiel; el use case rechaza uno sin criterio.
           segment: toCampaignSegment(body?.['segment']),
           // manual-recipients (MAN-1) — lista manual PARALELA al segmento; el use

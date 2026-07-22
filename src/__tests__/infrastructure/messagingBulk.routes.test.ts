@@ -486,6 +486,25 @@ describe('/api/messaging/bulk — happy-path del seam (FIX-13)', () => {
     expect(persisted?.chatwootLabel).toBeNull();
   });
 
+  // ── fix wave F1(a) [MEDIUM] — label vacío/whitespace esquiva el gate null ──
+  it('F1: POST /campaigns con chatwootLabel whitespace-only (\'  \') → colapsa a undefined en el parseo, persiste null (201 igual)', async () => {
+    const { app, campaignRepo } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'Recordatorio julio',
+      templateRef: 'HXapproved',
+      segment: { statuses: ['late'] },
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+      chatwootLabel: '   ',
+    });
+
+    expect(res.status).toBe(201);
+    const persisted = await campaignRepo.findById(res.body.campaignId);
+    expect(persisted?.chatwootLabel).toBeNull();
+  });
+
   it('POST /campaigns/:id/send → 202 {accepted:true} con el lock libre', async () => {
     const { app, campaignRepo } = buildApp();
     const campaign = await campaignRepo.create({
@@ -1332,6 +1351,24 @@ describe('/api/messaging/bulk — GET/POST /chatwoot-labels (CLBL-1/2/7)', () =>
     const res = await request(app).get('/api/messaging/bulk/chatwoot-labels');
 
     expect(res.status).toBe(403);
+  });
+
+  // ── fix wave F3 [LOW test] — espejo a nivel ruta del 503 del POST (:1386+) ──
+  it('F3: GET /chatwoot-labels con el gateway caído → 503 CHATWOOT_UNAVAILABLE', async () => {
+    // molde de la mirror test del POST más abajo — mismo mapeo REAL de
+    // errorHandler (statusMap), NO un 500 genérico.
+    class RejectingChatwootGateway extends FakeChatwootGateway {
+      async listAccountLabels(): Promise<ChatwootLabelDto[]> {
+        throw new ChatwootUnavailableError();
+      }
+    }
+    const chatwootGateway = new RejectingChatwootGateway();
+    const { app } = buildApp({ chatwootGateway });
+
+    const res = await request(app).get('/api/messaging/bulk/chatwoot-labels');
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('CHATWOOT_UNAVAILABLE');
   });
 
   it('POST /chatwoot-labels {title,color} válido → 201 con el DTO creado', async () => {

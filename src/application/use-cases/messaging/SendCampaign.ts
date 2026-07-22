@@ -350,6 +350,12 @@ export class SendCampaign {
    * sigue, JAMÁS re-marca `failed` ni toca `sentCount` (el envío ya está `sent`).
    *
    * Gate 1 — sin `campaign.chatwootLabel` → no-op (blast radius nulo, CLBL-8 implícito).
+   * fix wave (F1(b) [MEDIUM], cinturón y tiradores) — el gate colapsa TAMBIÉN
+   * `''`/whitespace-only, no solo `null`/`undefined`: la ruta ya lo normaliza
+   * (`toChatwootLabel`, F1(a)), pero data VIEJA (persistida antes del fix) o un
+   * `campaignRepo.create` invocado directo (fuera de la ruta) podría dejar `''`
+   * guardado — sin este `.trim()` cada recipient dispararía un GET+POST fantasma
+   * a Chatwoot con un label en blanco.
    * Gate 2 — sin `chatwootIds` (flag OFF/Twilio-directo) o sin `chatwootGateway`
    * wireado → no-op (CLBL-8 "flag OFF durante todo el envío").
    *
@@ -363,7 +369,7 @@ export class SendCampaign {
     recipient: CampaignRecipient,
     chatwootIds?: { chatwootConversationId: number; chatwootMessageId: number | null },
   ): Promise<void> {
-    if (campaign.chatwootLabel == null) return;
+    if (!campaign.chatwootLabel?.trim()) return;
     if (!chatwootIds || !this.chatwootGateway) return;
     try {
       await this.chatwootGateway.addConversationLabels(chatwootIds.chatwootConversationId, [campaign.chatwootLabel]);
