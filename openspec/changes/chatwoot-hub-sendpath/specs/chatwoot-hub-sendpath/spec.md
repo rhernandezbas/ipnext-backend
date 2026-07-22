@@ -91,14 +91,32 @@ equivalente a `failed` con error saneado (extiende HIST-3 modified). `delivered`
 INVISIBLES (paridad con hoy, Decisión B — no regresión).
 
 Cuando el mirror AÚN no tiene la fila (el `message_created` de ese mismo mensaje no corrió
-todavía, o llegó desordenado) o el repo tira un error transitorio de DB, el handler MUST
-**lanzar** — NUNCA absorber el error en un `no-op` con ack 200. La ruta HTTP responde 500
-(catch→next(err), sin caso especial), que es la ÚNICA señal a la que Chatwoot (Sidekiq) reacciona
-para reintentar la entrega (nunca al contenido del body — un 200 "silencioso" jamás genera un
-retry, sin importar qué se decida internamente sobre marcar la delivery vista). El reintento de
-Chatwoot vuelve a invocar el mismo handler; si para entonces el `message_created` ya corrió, el
-mirror queda `failed` y la delivery recién ahí se marca vista. Simetría exacta con
-`handleMessageCreated`, que ya deja propagar sus propios errores de repo (ROB-2).
+todavía, o llegó desordenado), el handler MUST clasificar la fila-ausente por la MISMA
+derivación de `direction` (`mapMessageTypeToDirection` sobre `message_type`) que usa
+`handleMessageCreated` (§7) — NUNCA tratar toda ausencia como la misma clase:
+- `direction!==null` (inbound/outbound) → TRANSITORIO: el handler MUST **lanzar**
+  `MessageNotMirroredYetError` (`MESSAGE_NOT_MIRRORED_YET`, mapeado a **503**) — NUNCA absorber
+  en un no-op con ack 200. La ruta HTTP responde 503 (catch→next(err), sin caso especial), que es
+  una señal non-2xx a la que Chatwoot (Sidekiq) reacciona para reintentar la entrega (nunca al
+  contenido del body — un 200 "silencioso" jamás genera un retry). El reintento de Chatwoot
+  vuelve a invocar el mismo handler; si para entonces el `message_created` ya corrió, el mirror
+  queda `failed` y la delivery recién ahí se marca vista. Simetría exacta con
+  `handleMessageCreated`, que ya deja propagar sus propios errores de repo (ROB-2). El retry está
+  acotado por la retry policy de Sidekiq de Chatwoot (backoff con tope, no infinito) y ASUME que
+  cada reintento llega re-firmado con un `X-Chatwoot-Timestamp` fresco — la misma dependencia con
+  la ventana anti-replay ±5min de `chatwootSignatureMiddleware` que ya asume el dedup de
+  `conversation_status_changed` (`messaging.routes.ts` ~línea 181-204); si Chatwoot reenviara el
+  timestamp original sin refirmar, un reintento que tarde >5min moriría 401 antes de llegar acá.
+- `direction===null` (activity/template/`message_type` ausente o desconocido) →
+  **EXCLUIDA, PERMANENTE**: `handleMessageCreated` JAMÁS persiste una fila para esa clase (§7),
+  así que la ausencia nunca se resuelve reintentando. El handler MUST tratarla como no-op (loguea
+  una vez, WARN) — la ruta responde 200 y la delivery se marca vista en el primer intento. Antes
+  de esta exclusión, cada reintento de Chatwoot volvía a producir el mismo error — un storm hasta
+  agotar la retry policy de Sidekiq sin recuperar nada.
+
+Un repo-error genuino de DB (excepción real de `markDeliveryFailedByChatwootMessageId`, no un
+`null` de retorno) sigue propagando sin try/catch — Error plano → 500 genérico (no la condición
+anticipada de arriba, no amerita el código 503 tipado).
 
 #### Scenario: template no sincronizado en Chatwoot (sync stale/no corrió)
 - Given un template real que NO está en `channel.content_templates` de Chatwoot (job de sync
@@ -114,16 +132,26 @@ mirror queda `failed` y la delivery recién ahí se marca vista. Simetría exact
 - Then el mirror NO cambia de status (delivered/read siguen sin ser observables) y la ruta
   responde 200 (no-op ackeado), incluso si la fila del mensaje aún no existe en el mirror
 
-#### Scenario: `message_updated` con `external_error` y fila AÚN no espejada — retriable
-- Given un `message_updated` con `external_error` poblado cuyo `chatwootMessageId` todavía no
-  tiene fila en el mirror (el `message_created` de ese mensaje no corrió aún, o llegó desordenado)
+#### Scenario: `message_updated` con `external_error` y fila AÚN no espejada (clase inbound/outbound) — retriable, tipado
+- Given un `message_updated` con `external_error` poblado, `message_type` de clase inbound/outbound
+  (`mapMessageTypeToDirection` no-null), cuyo `chatwootMessageId` todavía no tiene fila en el
+  mirror (el `message_created` de ese mensaje no corrió aún, o llegó desordenado)
 - When llega el webhook
-- Then `ReceiveChatwootWebhook` LANZA y la ruta responde 500 (retriable) — la delivery NO se
-  marca vista
+- Then `ReceiveChatwootWebhook` LANZA `MessageNotMirroredYetError` y la ruta responde **503**
+  con `code:'MESSAGE_NOT_MIRRORED_YET'` (retriable) — la delivery NO se marca vista
 - When Chatwoot reintenta la MISMA entrega (backoff de Sidekiq) después de que el
   `message_created` ya haya creado la fila
 - Then el mirror para ese `chatwootMessageId` queda `failed` con error saneado y la delivery
   queda vista (200)
+
+#### Scenario: `message_updated` con `external_error` y fila AÚN no espejada (clase activity/template) — permanente, no-op
+- Given un `message_updated` con `external_error` poblado cuyo `message_type` es activity/template
+  (o ausente/desconocido — `mapMessageTypeToDirection` resuelve `null`), cuyo `chatwootMessageId`
+  no tiene fila en el mirror
+- When llega el webhook
+- Then `ReceiveChatwootWebhook` NO lanza — `handleMessageCreated` nunca persiste una fila para
+  esta clase (§7), así que la ausencia es permanente. La ruta responde 200 directo, la delivery
+  se marca vista en el primer intento (cero retry) y se loguea el motivo (warn)
 
 ### Requirement: CHW-6 — el gate de aprobación real es NUESTRO, no de Chatwoot
 

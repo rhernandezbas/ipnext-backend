@@ -298,8 +298,8 @@ Promise<ChatMessageRecord | null>` (idempotente; `null` si la fila no está en e
 - **Mecanismo de retry (F4-bis, re-review — CORRIGE una versión previa rota)**: cuando la fila AÚN
   no está espejada (`markDeliveryFailedByChatwootMessageId` devuelve `null`) o el repo tira un error
   transitorio de DB, `handleMessageUpdated` **LANZA** (sin try/catch propio). `execute()` no lo
-  ataja → la ruta HTTP hace `catch → next(err) → 500` → Chatwoot (Sidekiq) reintenta la entrega con
-  backoff, la ÚNICA señal a la que reacciona (nunca al contenido del body: un 200 con un flag
+  ataja → la ruta HTTP hace `catch → next(err) → non-2xx` → Chatwoot (Sidekiq) reintenta la entrega
+  con backoff, la ÚNICA señal a la que reacciona (nunca al contenido del body: un 200 con un flag
   interno "no marcar vista" no logra ningún retry). Al lanzar antes del `return`, `execute()`
   tampoco llega a `recordIfNew`: la delivery no queda vista, así que el reintento de Chatwoot
   vuelve a ejecutar este mismo handler — para entonces el `message_created` ya debería haber
@@ -308,6 +308,44 @@ Promise<ChatMessageRecord | null>` (idempotente; `null` si la fila no está en e
   este fix intentó resolverlo con un `boolean` de retorno decidiendo si recordar la delivery —
   no funcionaba: `execute()` es `void` y la ruta responde 200 siempre, así que Chatwoot nunca
   reintentaba y el badge `failed` se perdía en silencio. Se descartó a favor de lanzar.)
+- **F4-ter (re-review #2) — la fila-ausente NO es una única clase; exclusión de la clase
+  PERMANENTE y tipado de la retriable**: `handleMessageUpdated` deriva la clase del mensaje del
+  MISMO payload (`message_type`) con el MISMO helper `mapMessageTypeToDirection` que usa
+  `handleMessageCreated` (§7) — nunca duplica el criterio.
+  - `direction!==null` (inbound/outbound, 0/1 o `'incoming'`/`'outgoing'`) → TRANSITORIO real: el
+    `message_created` de ESE mismo mensaje corrió tarde o fuera de orden. Lanza
+    `MessageNotMirroredYetError` (`domain/errors/messaging.ts`, code `MESSAGE_NOT_MIRRORED_YET`),
+    mapeado en `errorHandler`'s statusMap a **503** — non-2xx, así que Chatwoot igual reintenta,
+    pero YA NO cae en el `[UNHANDLED ERROR]`/`INTERNAL_ERROR` genérico (el errorHandler corta en
+    el branch de `DomainError`, `errorHandler.ts:269`, antes de `console.error`/500 genérico de
+    `:316`); se loguea `console.warn` (no `.error`) porque es una condición ANTICIPADA, no un
+    fallo inesperado.
+  - `direction===null` (2/`'activity'`, 3/`'template'`, `message_type` ausente o desconocido) →
+    **EXCLUIDA, PERMANENTE**: `handleMessageCreated` JAMÁS persiste una fila para esa clase (§7),
+    así que la ausencia nunca se va a resolver reintentando. Antes de F4-ter, esta clase lanzaba
+    IGUAL que la transitoria — cada reintento de Chatwoot volvía a pegar el mismo error, un storm
+    inútil hasta agotar la retry policy de Sidekiq **sin recuperar nada** (no hay ningún estado
+    futuro en el que la fila vaya a aparecer). Ahora es no-op: se loguea `console.warn` una vez
+    con el motivo y la delivery se marca vista (200) en el primer intento — misma decisión que ya
+    tomó `handleMessageCreated` para ese mensaje.
+  - Un repo-error genuino (excepción real de `markDeliveryFailedByChatwootMessageId`, no un
+    retorno `null`) sigue siendo un `Error` plano → 500 `[UNHANDLED ERROR]` genérico — no es la
+    condición anticipada de arriba, no amerita el tipo 503.
+  - **Bound del retry transitorio**: el reintento NO es infinito — está acotado por la retry
+    policy de Sidekiq de Chatwoot (reintentos con backoff hasta un tope, fuera del control de
+    este repo). Si el `message_created` correspondiente demora más que ese tope, el `failed` se
+    pierde igual (riesgo residual documentado, no nuevo — ya existía en F4-bis).
+  - **Dependencia con la ventana anti-replay ±5min** (`chatwootSignatureMiddleware`): el mecanismo
+    de retry ASUME que Chatwoot re-firma cada reintento con un `X-Chatwoot-Timestamp` FRESCO (no
+    reenvía el mismo request firmado original) — el mismo supuesto que ya asume el dedup de
+    `conversation_status_changed` (comentario H10/#10 residual en `messaging.routes.ts` ~línea
+    181-204: "a request captured within the ±5min anti-replay window can be resent..."). Si
+    Chatwoot alguna vez reintentara reenviando el timestamp ORIGINAL sin refirmar, un reintento
+    que tarde >5min en llegar moriría con 401 (`INVALID_SIGNATURE`/`STALE_TIMESTAMP`, respondido
+    directo por el middleware HMAC, nunca llega a `ReceiveChatwootWebhook`) — el `MessageNotMirroredYetError`
+    503 nunca se vería, sería un 401 silencioso. Esto es un SUPUESTO, no algo verificado
+    exhaustivamente contra el comportamiento real de reintentos de Sidekiq de Chatwoot — se anota
+    como punto a confirmar en el Smoke test del Runbook (paso 5 abajo).
 - **Sanitización** (HIST-3): `external_error` es un string corto de Chatwoot (ej. `'Template not found'`,
   o un mensaje con `code` numérico de Twilio como 63016 — catálogo, NO PII), no un payload HTTP crudo.
   `curate` trimea/acota y nunca guarda headers/body crudos.
@@ -462,8 +500,11 @@ design recomienda **delta-sobre-delta** (menos fricción, el archivado es deuda 
     al send-time → aborta run (`TemplateProviderConfigError`); rate-limiter se llama igual; FIX-5 intacto.
   - `ReceiveChatwootWebhook`: `message_updated` con `external_error` → `deliveryStatus='failed'` linkeado
     por `chatwootMessageId`; sin `external_error` → no-op (200), incluso con fila ausente; CON
-    `external_error` y fila ausente (o repo-error) → LANZA (500, retriable — ROB-2); el retry de
-    Chatwoot tras el `message_created` marca `failed` + delivery vista (F4-bis).
+    `external_error` y fila ausente de una clase inbound/outbound (o repo-error) → LANZA
+    `MessageNotMirroredYetError` (503, retriable, tipado — F4-ter); CON `external_error` y fila
+    ausente de una clase activity/template/`message_type` desconocido → no-op PERMANENTE (200,
+    vista, cero retry — F4-ter, exclusión); el retry de Chatwoot tras el `message_created` marca
+    `failed` + delivery vista (F4-bis/F4-ter).
 - **Composition-root assertions** (D1): ambos use cases reciben flag repo + chatwoot gateway; misma
   instancia de gateway que el inbox; mismo key de flag.
 - **Rutas** (supertest, repos in-memory): el contrato HTTP no cambia (201/200 dedup, DTO flat) con el
@@ -491,7 +532,13 @@ design recomienda **delta-sobre-delta** (menos fricción, el archivado es deuda 
    sin esto todo template real → `external_error:'Template not found'`.
 5. **Smoke test con flag ON (1 conversación)**: flip ON → enviar template desde el hilo → confirmar que
    (a) aparece en el hilo de Chatwoot; (b) el mirror upsertea por `chatwootMessageId`; (c) un template
-   deliberadamente inválido aflora `deliveryStatus='failed'` vía `message_updated`.
+   deliberadamente inválido aflora `deliveryStatus='failed'` vía `message_updated`; (d) **supuesto
+   verificable (F4-ter)** — si el escenario transitorio (fila-ausente) se puede forzar (ej. delay
+   artificial del `message_created`), confirmar que el reintento de Chatwoot llega con un
+   `X-Chatwoot-Timestamp` FRESCO (no el original re-enviado) — si el reintento pasa la ventana
+   ±5min y Chatwoot lo re-firma, `chatwootSignatureMiddleware` lo deja pasar (200/503 según
+   corresponda); si NO re-firma, un reintento tardío moriría 401 antes de llegar al use case,
+   silenciosamente. No bloqueante para el rollout (best-effort), pero documentar el resultado.
 6. **Flip gradual**: ON para send-desde-hilo primero; luego un **bulk chico** (5-10 destinatarios) y
    verificar el hilo + `recipient.conversationId` + la cola Sidekiq de Chatwoot (Riesgo 2, throughput).
 7. **Rollback**: togglear el flag **OFF** → revierte a Twilio-directo al instante, **sin deploy**.
