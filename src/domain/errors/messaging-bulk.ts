@@ -316,6 +316,69 @@ export class BulkRecipientsNotPermittedError extends DomainError {
   }
 }
 
+/**
+ * bulk-task-recipients (TASK-2, D3) — raised by `assertTaskStagesEligible`
+ * (invoked by `PreviewCampaignSegment`/`ListSegmentRecipients`/`CreateCampaign`
+ * BEFORE resolving clients) when one or more of the operator-provided
+ * `taskStageIds` are NOT in the mapped set (`messaging-task-stage-config`,
+ * `listMappedStageIds()`) — including the case where the config is totally
+ * empty. Fail-loud: the BE is the authority, the composer only OFFERS mapped
+ * stages but a bad/stale id must never be silently dropped. Carries the
+ * ineligible ids so the FE can point exactly at the invalid selections.
+ * Nothing is persisted. Maps to 422 (well-formed request referencing
+ * non-eligible stages — same class as `MANUAL_RECIPIENTS_NOT_FOUND`).
+ */
+export class TaskStageNotEligibleError extends DomainError {
+  public readonly ineligibleStageIds: string[];
+
+  constructor(ineligibleStageIds: string[]) {
+    super(
+      `Task stage id(s) not eligible as bulk-recipient criteria: ${ineligibleStageIds.join(', ')}`,
+      'TASK_STAGE_NOT_ELIGIBLE',
+    );
+    this.name = 'TaskStageNotEligibleError';
+    this.ineligibleStageIds = ineligibleStageIds;
+  }
+}
+
+/**
+ * bulk-task-recipients (TASK-4, D3) — raised by `resolveCombinedRecipients`
+ * when the DISTINCT `clientId` set resolved by `taskStageIds` exceeds
+ * `MAX_TASK_STATE_RECIPIENTS` (10000 — double the manual/csv caps: this
+ * universe is COMPUTED from open tasks, not hand-curated). Rejected BEFORE
+ * hydrating any candidate. Maps to 422 with an actionable message ("acotá los
+ * estados seleccionados").
+ */
+export class TooManyTaskStateRecipientsError extends DomainError {
+  public readonly received: number;
+  public readonly max: number;
+
+  constructor(received: number, max: number) {
+    super(
+      `El estado/los estados de tarea seleccionados resuelven a ${received} clientes, superando el máximo de ${max}. Acotá los estados seleccionados.`,
+      'TOO_MANY_TASK_STATE_RECIPIENTS',
+    );
+    this.name = 'TooManyTaskStateRecipientsError';
+    this.received = received;
+    this.max = max;
+  }
+}
+
+/**
+ * bulk-task-recipients (TASK-1, D5) — raised by the `/api/messaging/bulk`
+ * route parser (`toTaskStageIds`) when `taskStageIds` is PRESENT but
+ * malformed: not an array, or an array carrying a non-string element.
+ * Fail-loud (mismo criterio que `InvalidManualRecipientsError`/
+ * `InvalidManualContactsError`): ABSENT (`undefined`) stays valid
+ * (segment/manual/csv-only campaign). Reuses `VALIDATION_ERROR` (→ 400).
+ */
+export class InvalidTaskStageIdsError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'InvalidTaskStageIdsError';
+  }
+}
+
 /** HIST-2 — raised by `GetCampaign` (and any lookup) when the id does not exist. */
 export class CampaignNotFoundError extends DomainError {
   constructor(id: string) {

@@ -263,6 +263,13 @@ const statusMap: Record<string, number> = {
   // bulk-task-recipients (B2.7) — config-CRUD del 5to dominio "Tarea": stageId inexistente
   // en `replaceMappedStages` (FK P2003 traducido, todo-o-nada, config previa preservada).
   TASK_STAGE_NOT_FOUND: 422,
+  // bulk-task-recipients (B4.1, TASK-2/TASK-4) — wire del 5to dominio "Tarea" en
+  // resolveCombinedRecipients: subset de `taskStageIds` no elegible contra el
+  // mapeo (422, autoridad BE) y cota `MAX_TASK_STATE_RECIPIENTS` excedida (422,
+  // mensaje accionable). `InvalidTaskStageIdsError` reusa VALIDATION_ERROR (400,
+  // ya mapeado arriba).
+  TASK_STAGE_NOT_ELIGIBLE: 422,
+  TOO_MANY_TASK_STATE_RECIPIENTS: 422,
 };
 
 /** Express global error-handling middleware. */

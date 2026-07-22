@@ -84,6 +84,15 @@ export interface PreviewSegmentInput {
    * `manualClientIds`. `count` refleja la unión de las 3 fuentes.
    */
   manualContacts?: ManualContactDto[];
+  /**
+   * bulk-task-recipients (TASK-1) — 5to dominio, PARALELO a `segment`/
+   * `manualClientIds`/`manualContacts`: clientes con ≥1 tarea ABIERTA en un
+   * `Stage` mapeado (`messaging-task-stage-config`). `count` refleja la unión
+   * de las 4 fuentes. A diferencia de `manualContacts`, SÍ viaja por query en
+   * los deep-links GET (D5 — es una lista corta de ids de catálogo, como
+   * `statuses`, no un payload arbitrario).
+   */
+  taskStageIds?: string[];
 }
 
 export interface PreviewSegmentSampleItemDto {
@@ -118,6 +127,14 @@ export interface PreviewSegmentOutput {
    * `status` del cliente. Ej. `{active:120, late:900}`.
    */
   statusCounts: Record<string, number>;
+  /**
+   * bulk-task-recipients (TASK-3, TASK-7) — chip agregado: tareas ABIERTAS en
+   * los `taskStageIds` pedidos que NO tienen `customerId` (tareas de red,
+   * `kind:'network'`) — NUNCA un drop silencioso. `0` cuando `taskStageIds`
+   * está vacío/ausente. OPCIONAL en este batch (B4): el resolver que lo
+   * calcula se wirea en B5 — todo caller real siempre lo expone.
+   */
+  noCustomerCount?: number;
 }
 
 // ─── Paginado de destinatarios resueltos (messaging-bulk v1.1, ListSegmentRecipients) ──
@@ -147,8 +164,12 @@ export interface SegmentRecipientItemDto {
   name: string;
   phoneE164: string;
   status: string;
-  /** bulk-csv-recipients (DET-1) — de qué fuente vino ESTE destinatario resuelto. */
-  source: 'segment' | 'manual' | 'csv';
+  /**
+   * bulk-csv-recipients (DET-1) — de qué fuente vino ESTE destinatario
+   * resuelto. bulk-task-recipients agrega `'task'` (5to dominio, precedencia
+   * MENOR — solo se muestra si el destinatario NO vino de otra fuente).
+   */
+  source: 'segment' | 'manual' | 'csv' | 'task';
 }
 
 /**
@@ -161,7 +182,8 @@ export interface ExcludedRecipientItemDto {
   name: string;
   phone: string;
   reason: 'sin_nombre' | 'sin_telefono' | 'telefono_invalido' | 'opt_out' | 'duplicado';
-  source: 'segment' | 'manual' | 'csv';
+  /** bulk-task-recipients agrega `'task'` (5to dominio, molde DET-1). */
+  source: 'segment' | 'manual' | 'csv' | 'task';
   clientId?: string;
   status?: string;
 }
@@ -182,6 +204,8 @@ export interface ListSegmentRecipientsOutput extends PaginatedResult<SegmentReci
     invalidPhone: number;
   };
   statusCounts: Record<string, number>;
+  /** bulk-task-recipients (TASK-3, TASK-7) — ver `PreviewSegmentOutput`. */
+  noCustomerCount?: number;
 }
 
 // ─── Creación de campaña (CAMP-1..CAMP-4) ────────────────────────────────────
@@ -214,6 +238,14 @@ export interface CreateCampaignInput {
    * (CSV-2) o se persiste crudo (`clientId: null`, CSV-3).
    */
   manualContacts?: ManualContactDto[];
+  /**
+   * bulk-task-recipients (TASK-1) — 5to dominio de destinatarios, PARALELO a
+   * `segment`/`manualClientIds`/`manualContacts`, combinable con cualquiera de
+   * los otros 3. Cada `stageId` DEBE estar mapeado como elegible
+   * (`messaging-task-stage-config`) — el use case valida ANTES de resolver
+   * clientes (TASK-2, `assertTaskStagesEligible`), 422 si no.
+   */
+  taskStageIds?: string[];
   /**
    * bulk-granular-perms — acciones `messaging` que el usuario TIENE (`bulk_active`,
    * `bulk_blocked`, `bulk_numbers`, …), o `['*']`/`Set(['*'])` para super_admin.

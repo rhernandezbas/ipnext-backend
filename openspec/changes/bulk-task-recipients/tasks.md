@@ -163,14 +163,14 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
 
 ## Batch 4 — Wire del 5to dominio: parser, DTOs, guard de elegibilidad, errores (TASK-1, TASK-2 guard, D3, D5)
 
-- [ ] **4.1** Errores nuevos en `src/domain/errors/messaging-bulk.ts` (ESTOS 3, distintos del de B2.7
+- [x] **4.1** Errores nuevos en `src/domain/errors/messaging-bulk.ts` (ESTOS 3, distintos del de B2.7
   — ver desvío #3): `TaskStageNotEligibleError` (`TASK_STAGE_NOT_ELIGIBLE`, lleva
   `ineligibleStageIds: string[]`), `TooManyTaskStateRecipientsError` (`TOO_MANY_TASK_STATE_RECIPIENTS`,
   `received/max`, mensaje accionable "acotá los estados seleccionados"), `InvalidTaskStageIdsError`
   (reusa `VALIDATION_ERROR`, molde `InvalidManualRecipientsError`). statusMap
   (`errorHandler.ts`): `TASK_STAGE_NOT_ELIGIBLE: 422`, `TOO_MANY_TASK_STATE_RECIPIENTS: 422`. Sin
   test standalone (cubiertos por 4.2/5.x, mismo criterio que el resto de la familia).
-- [ ] **4.2** RED+GREEN `assertTaskStagesEligible`
+- [x] **4.2** RED+GREEN `assertTaskStagesEligible`
   (`src/application/use-cases/messaging/assertTaskStagesEligible.ts`, molde
   `assertHasRecipients.ts:16-24`), test
   `src/__tests__/application/messaging/assertTaskStagesEligible.test.ts`:
@@ -184,7 +184,7 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
   - Test: config vacía (`listMappedStageIds()` → `[]`), pide `['cualquiera']` → throw (TASK-2
     scenario "config vacía + request → 422").
   - Test: `taskStageIds: []` → resuelve sin llamar `configRepo` (verificable con spy count 0).
-- [ ] **4.3** `toTaskStageIds(raw)` en `messagingBulk.routes.ts` (molde `toManualClientIds:77-88`):
+- [x] **4.3** `toTaskStageIds(raw)` en `messagingBulk.routes.ts` (molde `toManualClientIds:77-88`):
   ausente → `[]`; no-array o item no-string → `InvalidTaskStageIdsError` (400 `VALIDATION_ERROR`).
   - Test (extiende `src/__tests__/infrastructure/messagingBulk.routes.test.ts`): body
     `taskStageIds: 'no-es-array'` en POST `/segment/preview`, POST `/segment/recipients`, POST
@@ -195,14 +195,14 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
     (mismo helper que `statuses`, `:62-65` — es una lista de ids cortos, no un payload libre).
     Test: `GET /segment/preview?taskStageIds=stageA&taskStageIds=stageB` parsea a
     `['stageA','stageB']`.
-- [ ] **4.4** DTOs (`src/application/dto/messaging-bulk.dto.ts`): `taskStageIds?: string[]` en
+- [x] **4.4** DTOs (`src/application/dto/messaging-bulk.dto.ts`): `taskStageIds?: string[]` en
   `PreviewSegmentInput` (lo hereda `ListSegmentRecipientsInput`) y `CreateCampaignInput`. Unión
   `source` de `SegmentRecipientItemDto`/`ExcludedRecipientItemDto` gana `'task'`.
   `PreviewSegmentOutput`/`ListSegmentRecipientsOutput` ganan `noCustomerCount: number`. Wire de
   handlers: `taskStageIds: toTaskStageIds(body?.['taskStageIds'])` en los 3 POST (`/segment/preview`,
   `/segment/recipients`, `/campaigns`) + `queryStatuses(...)` en los 2 GET (4.3). Sin test propio de
   tipos — verificado por 4.3/5.x/6.x (`tsc --noEmit` + los tests de ruta).
-- [ ] **4.5** `assertHasRecipients` (`assertHasRecipients.ts`) gana 4to parámetro `taskStageIds:
+- [x] **4.5** `assertHasRecipients` (`assertHasRecipients.ts`) gana 4to parámetro `taskStageIds:
   string[] = []`: válido si `manualClientIds.length>0` O `manualContacts.length>0` O
   `taskStageIds.length>0` O segmento con criterio real; se rechaza (`UnfilteredSegmentError`) SOLO
   si los CUATRO están vacíos.
@@ -210,7 +210,7 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
     filtrado, sin manual, sin csv, con `taskStageIds: ['stageA']` → NO lanza (campaña
     solo-tarea válida). Los 3 casos existentes (manual-only/csv-only/segmento-only) siguen verdes
     SIN editar sus aserciones (no-regresión).
-- [ ] **Gate B4**: suites 4.2/4.3/4.5 verdes + `assertHasRecipients.test.ts` existente sin editar
+- [x] **Gate B4**: suites 4.2/4.3/4.5 verdes + `assertHasRecipients.test.ts` existente sin editar
   aserciones previas; `tsc --noEmit` limpio.
 
 ## Batch 5 — Branch `task` en `resolveCombinedRecipients` + snapshot inmutable (TASK-3..TASK-9, D3 cap, D4, D7)

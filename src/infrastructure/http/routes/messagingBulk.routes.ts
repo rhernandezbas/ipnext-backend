@@ -25,7 +25,7 @@ import { AuthorizeCampaignSend } from '@application/use-cases/messaging/Authoriz
 import type { CampaignRunner } from '@infrastructure/scheduling/CampaignRunner';
 import type { PreviewSegmentInput, ListSegmentRecipientsInput, CreateCampaignInput, ManualContactDto, SegmentRecipientsView } from '@application/dto/messaging-bulk.dto';
 import type { CampaignSegment, CampaignVariableSpec, CampaignRecipientStatus } from '@domain/entities/campaign';
-import { InvalidManualRecipientsError, InvalidManualContactsError, InvalidNodeApFilterError } from '@domain/errors/messaging-bulk';
+import { InvalidManualRecipientsError, InvalidManualContactsError, InvalidNodeApFilterError, InvalidTaskStageIdsError } from '@domain/errors/messaging-bulk';
 
 /** Per-route permission guards (messaging.bulk / messaging.templates — RBAC-1/2). */
 export interface MessagingBulkRoutePerms {
@@ -121,6 +121,28 @@ function toManualContacts(raw: unknown): ManualContactDto[] {
  */
 function toSegmentRecipientsView(raw: unknown): SegmentRecipientsView {
   return raw === 'excluded' ? 'excluded' : 'recipients';
+}
+
+/**
+ * bulk-task-recipients (TASK-1, D5) — parsea `taskStageIds` del body, fail-loud
+ * (molde `toManualClientIds`/MAN-3):
+ *  - AUSENTE (`undefined`) → `[]` (segmento/manual/csv-only, válido — no
+ *    participa del 5to dominio).
+ *  - PRESENTE pero NO array, o con algún elemento no-string → 400 explícito
+ *    (`InvalidTaskStageIdsError` → VALIDATION_ERROR). Un id que viaje como
+ *    number/objeto desaparecería mudo — contradice la filosofía fail-loud.
+ */
+function toTaskStageIds(raw: unknown): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new InvalidTaskStageIdsError('taskStageIds debe ser un array de strings');
+  }
+  for (const el of raw) {
+    if (typeof el !== 'string') {
+      throw new InvalidTaskStageIdsError('taskStageIds solo admite ids string (elemento no-string recibido)');
+    }
+  }
+  return raw as string[];
 }
 
 /**
@@ -222,6 +244,8 @@ export function createMessagingBulkRouter(
           manualClientIds: toManualClientIds(body?.['manualClientIds']),
           // bulk-csv-recipients (CSV-6) — 4to dominio, PARALELO.
           manualContacts: toManualContacts(body?.['manualContacts']),
+          // bulk-task-recipients (TASK-1) — 5to dominio, PARALELO.
+          taskStageIds: toTaskStageIds(body?.['taskStageIds']),
         };
         const result = await previewCampaignSegment.execute(input);
         res.json(result);
@@ -252,6 +276,10 @@ export function createMessagingBulkRouter(
           // param SIEMPRE es string, no necesita el gate Zod del body.
           networkSiteId: firstQueryValue(req.query['networkSiteId']),
           accessPointId: firstQueryValue(req.query['accessPointId']),
+          // bulk-task-recipients (D5) — paridad de deep-link: `taskStageIds` SÍ
+          // viaja por query (lista corta de ids de catálogo, molde `statuses`),
+          // a diferencia de `manualClientIds`/`manualContacts` (payload arbitrario).
+          taskStageIds: queryStatuses(req.query['taskStageIds']),
         };
         const result = await previewCampaignSegment.execute(input);
         res.json(result);
@@ -286,6 +314,8 @@ export function createMessagingBulkRouter(
           limit: typeof body?.['limit'] === 'number' ? (body!['limit'] as number) : undefined,
           manualClientIds: toManualClientIds(body?.['manualClientIds']),
           manualContacts: toManualContacts(body?.['manualContacts']),
+          // bulk-task-recipients (TASK-1) — 5to dominio, PARALELO.
+          taskStageIds: toTaskStageIds(body?.['taskStageIds']),
           view: toSegmentRecipientsView(body?.['view']),
         };
         const result = await listSegmentRecipients.execute(input);
@@ -316,6 +346,8 @@ export function createMessagingBulkRouter(
           // node-segment — escalares por query (mismo criterio DET-3/FIX-16).
           networkSiteId: firstQueryValue(req.query['networkSiteId']),
           accessPointId: firstQueryValue(req.query['accessPointId']),
+          // bulk-task-recipients (D5) — paridad de deep-link (ver GET /segment/preview).
+          taskStageIds: queryStatuses(req.query['taskStageIds']),
           view: toSegmentRecipientsView(firstQueryValue(req.query['view'])),
           page: parseOptionalInt(firstQueryValue(req.query['page'])),
           limit: parseOptionalInt(firstQueryValue(req.query['limit'])),
@@ -347,6 +379,8 @@ export function createMessagingBulkRouter(
           manualClientIds: toManualClientIds(body?.['manualClientIds']),
           // bulk-csv-recipients (CSV-1) — 4to dominio, PARALELO a segment/manualClientIds.
           manualContacts: toManualContacts(body?.['manualContacts']),
+          // bulk-task-recipients (TASK-1) — 5to dominio, PARALELO.
+          taskStageIds: toTaskStageIds(body?.['taskStageIds']),
           variablesMap: (body?.['variablesMap'] as CampaignVariableSpec | undefined) ?? {},
           // bulk-granular-perms — acciones `messaging` del usuario (o ['*'] si
           // super_admin); el use case BLOQUEA la campaña si falta permiso para

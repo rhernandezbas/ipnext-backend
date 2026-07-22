@@ -1228,3 +1228,118 @@ describe('/api/messaging/bulk — bulk-granular-perms (BLOQUEO por estado/tipo)'
     expect(persisted?.hasRawRecipients).toBe(true);
   });
 });
+
+// ─── bulk-task-recipients (B4.3/B4.4, TASK-1, D5) — wire de taskStageIds ─────────
+// El use case (PreviewCampaignSegment/ListSegmentRecipients/CreateCampaign)
+// TODAVÍA no consume `taskStageIds` (eso es B5.3) — estos tests pinean el
+// PARSER fail-loud (`toTaskStageIds`) + que el valor parseado llegue INTACTO
+// al input del use case, vía spy sobre `execute` (molde: no hay port
+// observable acá, el consumo real es B5).
+describe('/api/messaging/bulk — taskStageIds (B4, parser fail-loud + wire)', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('POST /segment/preview con taskStageIds:"no-es-array" → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], taskStageIds: 'no-es-array' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('POST /segment/recipients con taskStageIds con un elemento no-string → 400 VALIDATION_ERROR', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/recipients')
+      .send({ statuses: ['late'], taskStageIds: ['stageA', 123] });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('POST /campaigns con taskStageIds malformado (objeto, no array) → 400 VALIDATION_ERROR, no crea Campaign', async () => {
+    const { app, campaignRepo } = buildApp();
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x',
+      templateRef: 'HXapproved',
+      segment: { statuses: ['late'] },
+      taskStageIds: { foo: 'bar' },
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    const list = await campaignRepo.list({ page: 1, limit: 10 });
+    expect(list.total).toBe(0);
+  });
+
+  it('taskStageIds AUSENTE → sigue siendo válido, no participa (no-regresión, TASK-1 escenario 1)', async () => {
+    const { app } = buildApp();
+    const res = await request(app).post('/api/messaging/bulk/segment/preview').send({ statuses: ['late'] });
+    expect(res.status).toBe(200);
+  });
+
+  it('POST /segment/preview con taskStageIds bien formado → llega INTACTO al input de PreviewCampaignSegment.execute', async () => {
+    const { app } = buildApp();
+    const executeSpy = jest.spyOn(PreviewCampaignSegment.prototype, 'execute');
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], taskStageIds: ['stageA', 'stageB'] });
+
+    expect(res.status).toBe(200);
+    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({ taskStageIds: ['stageA', 'stageB'] }));
+  });
+
+  it('GET /segment/preview?taskStageIds=stageA&taskStageIds=stageB parsea a un array (paridad de deep-link, D5)', async () => {
+    const { app } = buildApp();
+    const executeSpy = jest.spyOn(PreviewCampaignSegment.prototype, 'execute');
+
+    const res = await request(app)
+      .get('/api/messaging/bulk/segment/preview')
+      .query({ statuses: ['late'], taskStageIds: ['stageA', 'stageB'] });
+
+    expect(res.status).toBe(200);
+    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({ taskStageIds: ['stageA', 'stageB'] }));
+  });
+
+  it('POST /segment/recipients con taskStageIds bien formado → llega INTACTO al input de ListSegmentRecipients.execute', async () => {
+    const { app } = buildApp();
+    const executeSpy = jest.spyOn(ListSegmentRecipients.prototype, 'execute');
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/recipients')
+      .send({ statuses: ['late'], taskStageIds: ['stageA'] });
+
+    expect(res.status).toBe(200);
+    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({ taskStageIds: ['stageA'] }));
+  });
+
+  it('GET /segment/recipients?taskStageIds=stageA parsea a un array (paridad de deep-link, D5)', async () => {
+    const { app } = buildApp();
+    const executeSpy = jest.spyOn(ListSegmentRecipients.prototype, 'execute');
+
+    const res = await request(app)
+      .get('/api/messaging/bulk/segment/recipients')
+      .query({ statuses: ['late'], taskStageIds: ['stageA'] });
+
+    expect(res.status).toBe(200);
+    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({ taskStageIds: ['stageA'] }));
+  });
+
+  it('POST /campaigns con taskStageIds bien formado → llega INTACTO al input de CreateCampaign.execute', async () => {
+    const { app } = buildApp();
+    const executeSpy = jest.spyOn(CreateCampaign.prototype, 'execute');
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'x',
+      templateRef: 'HXapproved',
+      segment: { statuses: ['late'] },
+      taskStageIds: ['stageA'],
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(201);
+    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({ taskStageIds: ['stageA'] }));
+  });
+});

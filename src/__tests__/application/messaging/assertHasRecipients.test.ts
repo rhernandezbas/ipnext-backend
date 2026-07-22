@@ -29,3 +29,23 @@ describe('assertHasRecipients (3er componente: manualContacts)', () => {
     expect(() => assertHasRecipients({ statuses: [] }, ['c1'], [])).not.toThrow();
   });
 });
+
+/**
+ * bulk-task-recipients (B4.5, TASK-1) — `assertHasRecipients` gana un 4to
+ * componente: `taskStageIds`. Válido si `manualClientIds.length>0` O
+ * `manualContacts.length>0` O `taskStageIds.length>0` O segmento con criterio
+ * real; se rechaza (`UnfilteredSegmentError`) SOLO si los CUATRO están vacíos.
+ */
+describe('assertHasRecipients (4to componente: taskStageIds)', () => {
+  it('sin segmento + sin manuales + sin csv + taskStageIds NO vacío → NO lanza (campaña solo-tarea válida)', () => {
+    expect(() => assertHasRecipients({ statuses: [] }, [], [], ['stageA'])).not.toThrow();
+  });
+
+  it('los CUATRO vacíos (taskStageIds OMITIDO, default) → UnfilteredSegmentError', () => {
+    expect(() => assertHasRecipients({ statuses: [] }, [], [])).toThrow(UnfilteredSegmentError);
+  });
+
+  it('los CUATRO vacíos EXPLÍCITOS (taskStageIds: []) → UnfilteredSegmentError', () => {
+    expect(() => assertHasRecipients({ statuses: [] }, [], [], [])).toThrow(UnfilteredSegmentError);
+  });
+});
