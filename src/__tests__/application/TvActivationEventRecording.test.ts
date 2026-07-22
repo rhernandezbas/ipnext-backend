@@ -17,6 +17,7 @@ import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-me
 
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
 import type { CancelTvResult } from '@application/dto/gigared.dto';
+import { GigaredNotFoundError } from '@domain/errors/gigared';
 
 function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
   return {
@@ -139,7 +140,15 @@ describe('RegisterGigaredAccount — records alta event (seq=0)', () => {
   });
 
   it('best-effort: recorder throws but register still succeeds', async () => {
-    const port = fakePort();
+    // B2 (D2) — el probe getAccountByInternalId corre ANTES del pool-pick; debe 404ear (todavía
+    // no hay nada estampado) para ejercitar el flujo COMPLETO (register→activate→setInternalId)
+    // que esta aserción verifica, en vez de la rama "recovered" (mine-stamped).
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ internalId: null })]), // B1: pool LIMPIO
+      getAccountByInternalId: jest.fn()
+        .mockRejectedValueOnce(new GigaredNotFoundError())
+        .mockResolvedValue(fakeAccount()),
+    });
     const throwingRepo = {
       record: jest.fn(async () => { throw new Error('DB down'); }),
       listByClient: jest.fn(async () => []),

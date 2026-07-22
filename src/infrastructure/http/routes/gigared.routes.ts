@@ -392,7 +392,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
 
       // #5 BE — thread actor from req.user for the TV activation event recording.
       const actor = req.user ? { actorId: req.user.id, actorName: req.user.username } : { actorId: null, actorName: '' };
-      const account = await deps.registerAccount.execute(req.params['id'] as string, {
+      const result = await deps.registerAccount.execute(req.params['id'] as string, {
         firstName: b.firstName,
         lastName: b.lastName,
         email: b.email,
@@ -401,7 +401,10 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         actorId:   actor.actorId,
         actorName: actor.actorName,
       });
-      res.status(201).json(account);
+      // B3 (D3) — 207 = parcial: el partner-write no se confirmó o el reconcile local falló.
+      // `recovered` es observability-only, NO gatea el status (espejo transfer/link/addService).
+      const partial = !result.partnerCreated || result.localReconciled === 'failed';
+      res.status(partial ? 207 : 201).json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'register');
     }

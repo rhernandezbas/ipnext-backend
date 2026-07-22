@@ -175,7 +175,18 @@ export class RegisterGigaredAccount {
       actorId?: string | null;
       actorName?: string;
     },
-  ): Promise<{ account: GigaredAccount; credentialsPersisted: boolean; recovered: boolean }> {
+  ): Promise<{
+    account: GigaredAccount;
+    /** B3 (D3) — espejo de `gigared:'ok'` en AddTvService/link: SIEMPRE true si `execute` no tiró
+     *  (si el partner-write falla de verdad, `execute` lanza y nunca llega a construir el result). */
+    partnerCreated: boolean;
+    /** B3 (D3) — campo INDEPENDIENTE de `credentialsPersisted` (Desvíos #5): 'failed' únicamente
+     *  cuando el bloque de reconcile local tira; 'synced' si no hay nada que reconciliar
+     *  (wantsPersist=false) o si el reconcile corrió sin excepción. */
+    localReconciled: 'synced' | 'failed';
+    credentialsPersisted: boolean;
+    recovered: boolean;
+  }> {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
 
@@ -240,6 +251,10 @@ export class RegisterGigaredAccount {
     // creates/asegura the managed TV row (status inactive when there are no packs yet) and we
     // ALWAYS write the credentials onto it. M7: the result flags whether it actually persisted.
     let credentialsPersisted = false;
+    // B3 (D3) — localReconciled: campo INDEPENDIENTE de credentialsPersisted (Desvíos #5). 'failed'
+    // SOLO cuando el bloque de reconcile tira; sin nada que reconciliar (wantsPersist=false) es
+    // trivialmente 'synced' (nada falló).
+    let localReconciled: 'synced' | 'failed' = 'synced';
     if (wantsPersist && this.csRepo && this.catalogRepo) {
       try {
         const { contractServiceId } = await reconcileTvContractService({
@@ -263,6 +278,7 @@ export class RegisterGigaredAccount {
         // eslint-disable-next-line no-console
         console.warn('[gigared] register: TV credential persistence failed (best-effort)', err);
         credentialsPersisted = false;
+        localReconciled = 'failed';
       }
     }
 
@@ -286,6 +302,9 @@ export class RegisterGigaredAccount {
       }
     }
 
-    return { account, credentialsPersisted, recovered };
+    // B3 (D3) — partnerCreated es SIEMPRE true acá: si el write al partner falló de verdad,
+    // `resolveGigaredAccount` ya lanzó y esta línea nunca se alcanza (espejo de `gigared:'ok'`
+    // en AddTvService/link — ver Desvíos, ambos también son constantes-si-no-tiró).
+    return { account, partnerCreated: true, localReconciled, credentialsPersisted, recovered };
   }
 }

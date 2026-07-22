@@ -966,6 +966,97 @@ describe('#115 POST /register — contractId requerido + identidad deriva del co
 });
 
 // ---------------------------------------------------------------------------
+// B3 (D3) — 207 en POST /register, espejo exacto de link/addService. Result shape:
+// { account, partnerCreated, localReconciled:'synced'|'failed', credentialsPersisted, recovered }.
+// partial = !partnerCreated || localReconciled === 'failed' → 207; else 201.
+// ---------------------------------------------------------------------------
+describe('POST /customers/:id/register — 207 partial + result shape (B3, D3)', () => {
+  it('happy path completo → 201 { partnerCreated:true, localReconciled:"synced", recovered:false }', async () => {
+    const port = fakePort({ getAccountByInternalId: probeMissThenFound(fakeAccount()) });
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ partnerCreated: true, localReconciled: 'synced', recovered: false });
+  });
+
+  it('recovery mine-stamped con reconcile OK → 201 recovered:true (recovered NO gatea el status)', async () => {
+    // seq=0 (sin tvCancellation seedeado) → internal_id vigente = 'cust-1' (pelado).
+    const stamped = fakeAccount({ cic: '0000005555', internalId: 'cust-1' });
+    const port = fakePort({ getAccountByInternalId: jest.fn(async () => stamped) });
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ partnerCreated: true, localReconciled: 'synced', recovered: true });
+  });
+
+  it('reconcile local falla → 207 { partnerCreated:true, localReconciled:"failed" }', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    jest.spyOn(csRepo, 'add').mockRejectedValue(new Error('db down'));
+    const port = fakePort({ getAccountByInternalId: probeMissThenFound(fakeAccount()) });
+    const app = await buildApp({ port, csRepo });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(207);
+    expect(res.body).toMatchObject({ partnerCreated: true, localReconciled: 'failed' });
+  });
+
+  it('TvPoolPoisonedError (B1) → 422 { code:"TV_POOL_POISONED", poisonedCount }', async () => {
+    const port = fakePort({
+      getAccountByInternalId: probeMissThenFound(fakeAccount()), // probe 404 -> sigue al pool-pick
+      listAccounts: jest.fn(async () => [fakeAccount({ internalId: 'foreign-1' })]), // TODO envenenado
+    });
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TV_POOL_POISONED');
+    expect(res.body.poisonedCount).toBe(1);
+  });
+
+  it('TvIdentityStampUnverifiedError (B1) → 503 { code:"TV_IDENTITY_UNVERIFIED", cic, internalId }', async () => {
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: 'CLEANX', internalId: null })]),
+      getAccountByInternalId: jest.fn()
+        .mockRejectedValueOnce(new GigaredNotFoundError()) // probe: 404
+        .mockResolvedValue(fakeAccount({ cic: 'OTHER-CIC' })), // post-stamp: mismatch
+    });
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('TV_IDENTITY_UNVERIFIED');
+    expect(res.body.cic).toBe('CLEANX');
+    expect(res.body.internalId).toBe('cust-1');
+  });
+
+  it('TvEmailOwnedByOtherError (B2) → 409 { code:"TV_EMAIL_OWNED_BY_OTHER", email, ownedByInternalId }', async () => {
+    const register = jest.fn(async () => { throw new GigaredRejectedError('Conflict', 'email already in use'); });
+    const listAccounts = jest.fn(async (filter?: { status?: string; email?: string }) => {
+      if (filter?.email) return [fakeAccount({ internalId: 'cust-OTHER' })];
+      return [fakeAccount({ cic: 'POOLCIC', internalId: null })];
+    });
+    const port = fakePort({
+      register, listAccounts,
+      getAccountByInternalId: probeMissThenFound(fakeAccount()),
+    });
+    const app = await buildApp({ port });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('TV_EMAIL_OWNED_BY_OTHER');
+    expect(res.body.ownedByInternalId).toBe('cust-OTHER');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // #131 PARTE B — W2: seam test — actor threaded from req.user to tvEventRepo
 // POST /customers/:id/services for a re-alta (inactive TV row) records 'reactivacion'
 // with the operator's actorName. Verifies the route→use-case→reconcile→tvEventRepo seam.
