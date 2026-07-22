@@ -15,6 +15,12 @@ export interface CampaignCreateData {
   templateName?: string | null;
   /** messaging-bulk-inbox (F1) — body de texto del template capturado en CreateCampaign. */
   templateBody?: string | null;
+  /**
+   * campaign-chatwoot-label (CLBL-6) — `title` del label REAL de Chatwoot
+   * elegido opcionalmente al crear. Pass-through: se persiste tal cual, sin
+   * re-consultar el catálogo (Decisión D). Ausente/`null` → `null`.
+   */
+  chatwootLabel?: string | null;
   segment: CampaignSegment;
   variableSpec: CampaignVariableSpec;
   /** Total de destinatarios YA resuelto (SEG-1..SEG-4) al momento de crear. */

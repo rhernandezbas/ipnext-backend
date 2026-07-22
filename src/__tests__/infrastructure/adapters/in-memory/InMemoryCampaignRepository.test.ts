@@ -32,6 +32,17 @@ describe('InMemoryCampaignRepository', () => {
     expect(campaign.id).toEqual(expect.any(String));
   });
 
+  // ── campaign-chatwoot-label (CLBL-6): campo aditivo pass-through ──
+  it('create persiste chatwootLabel tal cual (pass-through, sin catálogo); ausente queda null', async () => {
+    const repo = new InMemoryCampaignRepository();
+
+    const withLabel = await repo.create(makeCreateData({ chatwootLabel: 'promo-julio' }));
+    const withoutLabel = await repo.create(makeCreateData());
+
+    expect(withLabel.chatwootLabel).toBe('promo-julio');
+    expect(withoutLabel.chatwootLabel).toBeNull();
+  });
+
   it('findById devuelve la campaña creada; null para un id inexistente', async () => {
     const repo = new InMemoryCampaignRepository();
     const created = await repo.create(makeCreateData());

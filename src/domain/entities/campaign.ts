@@ -74,6 +74,15 @@ export interface Campaign {
    * inbox. `null` en campañas viejas (pre-feature) o templates sin body de texto.
    */
   templateBody: string | null;
+  /**
+   * campaign-chatwoot-label (CLBL-6) — `title` del label REAL de Chatwoot
+   * (catálogo `GET/POST /accounts/2/labels`) elegido opcionalmente al crear la
+   * campaña. Pass-through puro (Decisión D): NO se re-valida contra el catálogo
+   * acá; el enganche best-effort de `SendCampaign` lo aplica post-`sent` vía
+   * `ChatwootGateway.addConversationLabels`. `null` = sin label (comportamiento
+   * actual exacto, blast radius nulo).
+   */
+  chatwootLabel: string | null;
   segment: CampaignSegment;
   variableSpec: CampaignVariableSpec;
   /**
