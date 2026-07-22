@@ -332,10 +332,44 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
   mismo gotcha ya documentado en B1/B2/B5). NO `npm run build` (regla del repo — CLAUDE.md). Commit
   `265fbfc4`.
 
-## Batch F (reservado) — Fix wave post-review adversarial
+## Batch F — Fix wave post-review adversarial (COMPLETO)
 
-Sin tasks pre-definidas — se completa tras el review adversarial de B1-B6, molde `chatwoot-hub-
-sendpath` Batch F (severidad ALTO/MEDIO/LOW por finding).
+Review consolidado: R1 NEEDS-FIX, R2 CLEAN con recomendaciones. TDD estricto en las 4: test rojo
+que reproduce ANTES del fix, síncrono.
+
+- [x] **F1 [HIGH]** — `isClosed=false` dejaba pasar tareas DESCARTADAS (`generalStatus:'dismissed'`
+  tiene `isClosed===false` también, `messaging.ts:227-228`). Fix completo: predicado `generalStatus:
+  'open'` en `PrismaTaskRecipientSource.ts` (findMany Y count) + `InMemoryTaskRecipientSource.ts`
+  (`TaskFixture` gana `generalStatus`, filtro espeja exacto) + índice `@@index([stageId,
+  generalStatus, customerId])` en `schema.prisma` + migración `20261019000000_task_stage_recipient_
+  config/migration.sql` reescrita en el lugar (nunca llegó a prod ni a main) + `design.md`
+  (§0/D1/D2) y `specs/messaging-bulk/spec.md` (TASK-3) documentan el hallazgo. Tests rojo→verde: 2
+  nuevos en `InMemoryTaskRecipientSource.test.ts` (dismissed no entra / no cuenta en
+  `noCustomerCount`) + 1 en `PrismaTaskRecipientSource.test.ts` (shape pin `generalStatus:'open'`,
+  nunca `isClosed`).
+- [x] **F2 [MED]** — doble-conteo de excluidos en el overlap: el branch `task` filtraba los
+  clientIds resueltos solo contra `byClientId` (admitidos), no contra los EXCLUIDOS de
+  segmento/manual/csv — un opted-out con tarea abierta se re-procesaba (doble `optedOut`, fila
+  duplicada en `excludedDetail`). Fix: `resolveCombinedRecipients.ts` gana `manualCandidateIds`/
+  `csvLinkedCandidateIds` (molde `segmentCandidateIds`) — el filtro del branch task ahora excluye
+  contra las 3 fuentes YA procesadas (admitidas Y excluidas), no solo `byClientId`. Test rojo→verde:
+  1 nuevo (opted-out del segmento + tarea abierta → `optedOut` UNA vez, `excludedDetail` UNA fila,
+  `manualRecipientSource` NUNCA se hidrata para ese candidato).
+- [x] **F3 [MED R2, test-only]** — 422 de elegibilidad/cap A NIVEL RUTA sin cobertura HTTP (solo
+  unit). 2 tests nuevos en `messagingBulk.routes.test.ts` (describe propio, fix wave) usando
+  `opts.mappedTaskStages`/`opts.taskClientIds`: stage no elegible → 422 `TASK_STAGE_NOT_ELIGIBLE`;
+  cap excedido (10001 ids) → 422 `TOO_MANY_TASK_STATE_RECIPIENTS`. Ambos VERDES en el primer run —
+  confirma R2 (CLEAN, sin bug de producción).
+- [x] **F4 [LOW] higiene**: (a) comentario stale en `messagingBulk.routes.test.ts` ("TODAVÍA no
+  consume `taskStageIds`... B5.3") corregido — falso desde B5/B6; (b) guard en
+  `InMemoryTaskStageRecipientConfigRepository.getMappedStages()`: un `stageId` mapeado fuera del
+  catálogo ahora lanza `TaskStageNotFoundError` claro en vez de un `TypeError` crudo. Test
+  rojo→verde: 1 nuevo (`TaskStageNotFoundError`, no `TypeError`).
+
+**Gate F**: `npx jest` completo síncrono → **954/960 suites (6 skip pre-existentes), 9420/9508
+tests (88 skip pre-existentes), 0 failures** (+7 tests nuevos vs. el gate B6: 2 F1-inmemory + 1
+F1-prisma + 1 F2 + 2 F3 + 1 F4). `npx tsc --noEmit` limpio (tras `npx prisma generate`). Commits:
+código+tests F1/F2/F3 + higiene/docs F4 (ver git log).
 
 ---
 
