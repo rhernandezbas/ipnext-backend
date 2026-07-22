@@ -93,8 +93,12 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     expect(window).toMatch(/new ListMessagingTemplates\(templatePort\)/);
     // manual-recipients — Preview y Create reciben customerAdapter TAMBIÉN como
     // ManualRecipientSource (misma instancia): 2 args en Preview, 4 en Create.
-    expect(window).toMatch(/new PreviewCampaignSegment\(customerAdapter,\s*customerAdapter\)/);
-    expect(window).toMatch(/new CreateCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*customerAdapter\)/);
+    // bulk-task-recipients (D3/D5, B6) — MODIFIED: Preview/Create ganan 2 args
+    // OPCIONALES más AL FINAL (taskRecipientSource/taskStageConfigRepo, 5to
+    // dominio) — anti-W6, sin esto el dominio "Tarea" queda cableado a la nada
+    // en prod (lección ya citada en el propio design).
+    expect(window).toMatch(/new PreviewCampaignSegment\(customerAdapter,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo\)/);
+    expect(window).toMatch(/new CreateCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo\)/);
     expect(window).toMatch(/^\s*campaignRunner,\s*$/m);
     expect(window).toMatch(/new GetCampaign\(campaignRepo\)/);
     expect(window).toMatch(/new ListCampaigns\(campaignRepo\)/);
@@ -106,11 +110,34 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
   // bulk-csv-recipients (DET-1) — gana el 2do arg `customerAdapter`
   // (`manualRecipientSource`, cierra la deuda F4: solo-manual/solo-CSV en
   // `/segment/recipients` deja de ser 400).
-  it('(f2) v1.1/bulk-csv-recipients: ListSegmentRecipients instanciado con customerAdapter x2 (segmentSource + manualRecipientSource) Y pasado dentro de la MISMA llamada de mount', () => {
+  //
+  // bulk-task-recipients (D3/D5, B6) — MODIFIED: gana los mismos 2 args
+  // opcionales al final que Preview/Create (taskRecipientSource/taskStageConfigRepo).
+  it('(f2) v1.1/bulk-csv-recipients/bulk-task-recipients: ListSegmentRecipients instanciado con customerAdapter x2 + taskRecipientSource + taskStageConfigRepo Y pasado dentro de la MISMA llamada de mount', () => {
     const idx = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(");
     const end = appSrc.indexOf('));', idx);
     const window = appSrc.slice(idx, end + '));'.length);
-    expect(window).toMatch(/new ListSegmentRecipients\(customerAdapter,\s*customerAdapter\)/);
+    expect(window).toMatch(/new ListSegmentRecipients\(customerAdapter,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo\)/);
+  });
+
+  // bulk-task-recipients (D2, D6, B6) — anti-W6: los 2 adapters Prisma del 5to
+  // dominio deben existir como instancias REALES dentro del bloque bulk, no
+  // solo mencionadas en los constructores de arriba (eso probaría un typo que
+  // referencia una variable inexistente, no wiring real).
+  it('(o) bulk-task-recipients: PrismaTaskRecipientSource + PrismaTaskStageRecipientConfigRepository instanciados en el bloque bulk (scope-local, anti-interleave con el bloque de config nuevo)', () => {
+    expect(appSrc).toMatch(
+      /import\s*\{\s*PrismaTaskRecipientSource\s*\}\s*from\s*['"]\.\.\/adapters\/prisma\/PrismaTaskRecipientSource['"]/,
+    );
+    expect(appSrc).toMatch(
+      /import\s*\{\s*PrismaTaskStageRecipientConfigRepository\s*\}\s*from\s*['"]\.\.\/adapters\/prisma\/PrismaTaskStageRecipientConfigRepository['"]/,
+    );
+    const idx = appSrc.indexOf('// ─── messaging-bulk (F2)');
+    expect(idx).toBeGreaterThan(-1);
+    const end = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(", idx);
+    expect(end).toBeGreaterThan(idx);
+    const window = appSrc.slice(idx, end);
+    expect(window).toMatch(/const taskRecipientSource = new PrismaTaskRecipientSource\(\)/);
+    expect(window).toMatch(/const taskStageConfigRepo = new PrismaTaskStageRecipientConfigRepository\(\)/);
   });
 
   it('(g) CreateCampaign recibe 3 args — contradicción #2 (design §7 original tenía 2, sin templatePort)', () => {

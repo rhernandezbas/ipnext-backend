@@ -872,6 +872,15 @@ import { CreateCannedResponse } from '@application/use-cases/messaging/CreateCan
 import { UpdateCannedResponse } from '@application/use-cases/messaging/UpdateCannedResponse';
 import { DeleteCannedResponse } from '@application/use-cases/messaging/DeleteCannedResponse';
 import { PrismaCannedResponseRepository } from '../adapters/prisma/PrismaCannedResponseRepository';
+// bulk-task-recipients (D2, D6, B6) — 5to dominio de destinatarios "Tarea":
+// resolver Prisma (TaskRecipientSource) + repo Prisma del config-CRUD
+// (TaskStageRecipientConfigRepository), sus use cases de config y el router
+// self-contained `/api/messaging/config/task-stages`.
+import { PrismaTaskRecipientSource } from '../adapters/prisma/PrismaTaskRecipientSource';
+import { PrismaTaskStageRecipientConfigRepository } from '../adapters/prisma/PrismaTaskStageRecipientConfigRepository';
+import { GetTaskStageRecipientConfig } from '@application/use-cases/GetTaskStageRecipientConfig';
+import { UpdateTaskStageRecipientConfig } from '@application/use-cases/UpdateTaskStageRecipientConfig';
+import { createTaskStageConfigRouter } from './routes/taskStageConfig.routes';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -3022,6 +3031,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       apiToken: config.chatwoot.apiToken,
     });
     const featureFlagRepoForBulk = new PrismaFeatureFlagRepository();
+    // bulk-task-recipients (D2, D6, B6) — adapters Prisma del 5to dominio de
+    // destinatarios ("Tarea"), scope-local al bloque bulk (mismo precedente
+    // que `chatwootGatewayForBulk`/`featureFlagRepoForBulk`): instancia PROPIA,
+    // NO comparte variable con el bloque de config nuevo de abajo (anti-interleave
+    // en merges paralelos). El repo/source son stateless — cualquiera de las 2
+    // instancias es funcionalmente equivalente.
+    const taskRecipientSource = new PrismaTaskRecipientSource();
+    const taskStageConfigRepo = new PrismaTaskStageRecipientConfigRepository();
     // customerAdapter (línea ~872) YA implementa CampaignSegmentSource +
     // CampaignRecipientLookup (Batch 6) — misma instancia, sin duplicar wiring.
     // `backoffOpts` (6º arg) explícito `undefined` para no correr los 2 args
@@ -3053,15 +3070,19 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // manual-recipients (MAN-5) — customerAdapter también implementa
       // ManualRecipientSource (misma instancia): el preview cuenta la unión
       // segmento ∪ lista manual cuando el composer la pasa.
-      new PreviewCampaignSegment(customerAdapter, customerAdapter),
+      // bulk-task-recipients (D3/D5, B6) — 2 args OPCIONALES más AL FINAL
+      // (taskRecipientSource/taskStageConfigRepo, 5to dominio "Tarea").
+      new PreviewCampaignSegment(customerAdapter, customerAdapter, taskRecipientSource, taskStageConfigRepo),
       // v1.1 (preview modal paginado) + bulk-csv-recipients (DET-1, cierra deuda
       // F4) — reusa customerAdapter (misma instancia que PreviewCampaignSegment,
       // ya implementa CampaignSegmentSource + ManualRecipientSource), sin infra nueva.
-      new ListSegmentRecipients(customerAdapter, customerAdapter),
+      // bulk-task-recipients (D3/D5, B6) — mismos 2 args opcionales al final.
+      new ListSegmentRecipients(customerAdapter, customerAdapter, taskRecipientSource, taskStageConfigRepo),
       // 4 args — templatePort (CAMP-2, valida templateRef aprobado) +
       // manual-recipients (MAN-1): customerAdapter como ManualRecipientSource
       // (misma instancia) resuelve la lista manual combinable con el segmento.
-      new CreateCampaign(campaignRepo, customerAdapter, templatePort, customerAdapter),
+      // bulk-task-recipients (D3/D5, B6) — mismos 2 args opcionales al final.
+      new CreateCampaign(campaignRepo, customerAdapter, templatePort, customerAdapter, taskRecipientSource, taskStageConfigRepo),
       campaignRunner,
       new GetCampaign(campaignRepo),
       new ListCampaigns(campaignRepo),
@@ -3147,6 +3168,29 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new GetNocBroadcastConfig(nocBroadcastConfigRepo),
       new UpdateNocBroadcastConfig(nocBroadcastConfigRepo),
       new SendNocBroadcastTest(nocBroadcastGateway),
+    ));
+  }
+
+  // ─── bulk-task-recipients (D6, B6) — config-CRUD del 5to dominio "Tarea" ────
+  // Router self-contained (molde exacto del bloque N1 de arriba, /noc-broadcast):
+  // montado en un prefijo MÁS específico que `/api/messaging` (registrado
+  // DESPUÉS: un request cae primero al router de messaging, no matchea ninguna
+  // ruta y llega acá — mismo fall-through que /noc-broadcast/canned-responses).
+  // Instancia PROPIA del repo (NO reusa `taskStageConfigRepo` del bloque bulk de
+  // arriba, mismo criterio anti-interleave que ese bloque documenta) — el repo
+  // es stateless (D2), cualquiera de las 2 instancias es funcionalmente
+  // equivalente. RBAC: GET = messaging:read (card de Ajustes Y tab del
+  // composer); PUT = messaging:manage (solo supervisores editan el mapeo).
+  {
+    const taskStageConfigRepoForRoute = new PrismaTaskStageRecipientConfigRepository();
+    app.use('/api/messaging/config/task-stages', createTaskStageConfigRouter(
+      authAdapter,
+      {
+        read: requirePerm('messaging', 'read'),
+        manage: requirePerm('messaging', 'manage'),
+      },
+      new GetTaskStageRecipientConfig(taskStageConfigRepoForRoute),
+      new UpdateTaskStageRecipientConfig(taskStageConfigRepoForRoute),
     ));
   }
 
