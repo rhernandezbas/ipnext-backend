@@ -191,6 +191,53 @@ del seq (ex-B1) y su fix condicional (ex-B1b). El guard #81 de register queda in
 teórico real pero **la forense probó que NO participó en este incidente**. Queda como NOTA de deuda,
 no como task de este change.
 
+### Fix wave — hardening quirúrgico post-review (F1–F5)
+
+Consolidado de 2 revisores adversariales sobre B1–B8. Los fixes de plata/contaminación (F1–F4)
+tienen su propio test rojo→verde; F5 son quirúrgicos.
+
+- **F1 (HIGH, plata) — doble registro al partner en RE-ALTA al reintentar.** `RegisterGigaredAccount`
+  incrementaba el `seq` (monotónico, `incrementSeq`) ANTES del intento: un retry tras fallar el verify
+  avanzaba el seq de nuevo → el probe buscaba un `internal_id` NUNCA estampado → miss → SEGUNDO
+  register real (doble cobro). Fix: acuñado **DIFERIDO** — el candidato = `getSeq()+1` (sin persistir);
+  el avance se persiste vía `ensureSeqAtLeast` (idempotente, jamás retrocede) recién tras
+  register+stamp+verify OK, **después** de `clearCancelled` (orden load-bearing: si el clear falla, el
+  seq NO avanza → el retry recomputa el MISMO candidato y converge vía probe). Puerto
+  `ClientTvActivationRepository` gana `ensureSeqAtLeast(clientId, n)` (espejo in-memory + Prisma
+  read-then-conditional-set, single-writer). Invariante pineado: *el seq persistido sólo avanza tras
+  identidad verificada; los retries convergen sin re-registrar.*
+- **F2 (MED) — el probe confiaba sin verificar identidad.** El probe declaraba `recovered` sin chequear
+  `probed.internalId === internalId`. Con alias append-only, el probe de A podía resolver al CIC que HOY
+  es de B (post-transfer) → contaminación cruzada. Fix: exigir match del `internalId` primario; mismatch
+  → seguir el flujo normal (pool).
+- **F3 (MED) — readback-404 salía como 404 permanente.** El `getAccountByInternalId` post-stamp estaba
+  FUERA del try → un 404 componía con F1 (invitaba a reenviar). Fix: capturar el 404 del readback →
+  `TvIdentityStampUnverifiedError` (503 retriable); el retry se auto-completa vía probe (F1/F2).
+- **F4 (HIGH) — `transferencia` como ALTA fantasma en la ficha por-contrato.** El fallback mentiroso
+  `?? 'activated'` + el merge sin filtrar duplicaban la transferencia (transfer-in real vía CSE + alta
+  fantasma vía tv-event), rompiendo la disyunción documentada. Fix: FILTRAR `'transferencia'` del merge
+  por-contrato (la vista ya la muestra vía CSE transfer-in/out) + mapeo EXHAUSTIVO con `never`-check
+  (un `TvEventType` futuro no mapeado = error de compilación, no un 'activated' silencioso). El evento
+  GLOBAL (`ListTvActivationHistory`) queda intacto.
+- **F5 (LOWs, quirúrgicos)**: (a) el filtro del pool separa cic-falsy (→ NO disponible, `NoCicAvailable`
+  si no hay ninguno usable) de envenenado (tiene `internalId`) → `poisonedCount` honesto; (b) guarda
+  `isUnstamped` unificada (undefined = null = '' = LIMPIO, alineada con el discriminador y el shape del
+  adapter); (c) disyunción muerta del 207 (`!partnerCreated` constante) simplificada a
+  `localReconciled==='failed'`; (d) discriminador por email con selección EXPLÍCITA (preferir
+  `internalId===mío`, luego huérfano sin estampar) en vez de `matches[0]` a ciegas.
+
+**Trade-offs ACEPTADOS (no se corrigen — decisión documentada):**
+
+- **(F5e) breadcrumb `renewCic:{cic}` visible en el `motivo` de la baja = ACEPTADO.** El sufijo
+  estructurado (`· renewCic:{cic}`, D-baja) viaja en el `reason` que la ficha puede mostrar al operador.
+  El valor forense (dejar rastro de la futura mina/deuda, hoy el newCic no figura en ningún lado) supera
+  el costo cosmético de un sufijo técnico visible. Resuelve el Open Question de D-baja: el reason-suffix
+  ALCANZA; promover a columna `recycledCic` queda para v2 sólo si el report de minas se vuelve first-class.
+- **(F5f) tiebreaker oldest-wins durante una transferencia parcial = ACEPTADO (spec-compliant).** Mientras
+  una transferencia está a medio aplicar (partner transferido pero severing/slots locales pendientes), el
+  desempate oldest-wins puede mostrar transitoriamente al dueño VIEJO. Es spec-compliant y se resuelve solo
+  en el `resume` (el retro es el mismo POST, modo resume). No se agrega estado extra para un estado transitorio.
+
 ## Data Flow — RegisterGigaredAccount (con fix #1)
 
     customerLookup ─→ contractLookup (ownership+grContratoId) ─→ pwd/email det. ─→ seq/internalId
@@ -300,8 +347,9 @@ o vía el report (deuda) si hace falta.
 
 ## Open Questions
 
-- [ ] D-baja: ¿el `renewCic:{cic}` en `reason` alcanza como breadcrumb, o el report de minas (deuda)
-  justifica promoverlo a columna dedicada `recycledCic` en v2? (Hoy: reason-suffix, cero migración.)
+- [x] D-baja: ¿el `renewCic:{cic}` en `reason` alcanza como breadcrumb? **RESUELTO (F5e, ACEPTADO)**:
+  sí alcanza; el reason-suffix visible es un trade-off aceptado (valor forense > costo cosmético).
+  Promover a columna dedicada `recycledCic` queda para v2 sólo si el report de minas se vuelve first-class.
 - [ ] D1 (OPCIONAL): apellidos compuestos ("DE LA CRUZ …") → el split de un solo token captura sólo
   parte del apellido → email sub-óptimo pero determinístico. ¿Normalizar si el hardening entra, o v2?
 - [ ] Deuda cardeada: report read-only de CICs envenenados del pool (reusa el filtro del D-pool).
