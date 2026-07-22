@@ -118,13 +118,13 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
 
 ## Batch 3 — Config CRUD `/api/messaging/config/task-stages` (TSC-3, TSC-4, D6)
 
-- [ ] **3.1** RED+GREEN `GetTaskStageRecipientConfig`
+- [x] **3.1** RED+GREEN `GetTaskStageRecipientConfig`
   (`src/application/use-cases/GetTaskStageRecipientConfig.ts`, molde `GetNocBroadcastConfig.ts`,
   test `src/__tests__/application/GetTaskStageRecipientConfig.test.ts`): `execute(): Promise<{
   stages: MappedStage[] }>` → delega en `configRepo.getMappedStages()`.
   - Test: 0 stages mapeados → `{ stages: [] }` (TSC-3 scenario "config vacía").
   - Test: N stages mapeados → `{ stages }` hidratado tal cual el repo devuelve.
-- [ ] **3.2** RED+GREEN `UpdateTaskStageRecipientConfig`
+- [x] **3.2** RED+GREEN `UpdateTaskStageRecipientConfig`
   (`src/application/use-cases/UpdateTaskStageRecipientConfig.ts`, molde
   `UpdateNocBroadcastConfig.ts`, test `src/__tests__/application/UpdateTaskStageRecipientConfig.test.ts`):
   `execute({stageIds}): Promise<{ stages: MappedStage[] }>`.
@@ -141,7 +141,7 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
     redundante (ver desvío #2 al final).
   - Test: `execute({stageIds:['s1','s1','s2']})` → llama a `replaceMappedStages(['s1','s2'])`
     (dedup verificado por spy/mock del repo).
-- [ ] **3.3** Router `createTaskStageConfigRouter`
+- [x] **3.3** Router `createTaskStageConfigRouter`
   (`src/infrastructure/http/routes/taskStageConfig.routes.ts`, molde
   `createNocBroadcastRouter`/`nocBroadcast.routes.ts:30-76`), test
   `src/__tests__/infrastructure/http/routes/taskStageConfig.routes.test.ts` (supertest, repos
@@ -159,7 +159,7 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
     scenario "payload malformado"). Test: usuario con SOLO `messaging.read` (sin `manage`) → 403
     (TSC-4 scenario "manage es estrictamente más restrictivo"). Test: `stageId` inexistente → el
     error tipado de 3.2 llega mapeado a 422 vía el errorHandler global.
-- [ ] **Gate B3**: suites 3.1/3.2/3.3 verdes.
+- [x] **Gate B3**: suites 3.1/3.2/3.3 verdes.
 
 ## Batch 4 — Wire del 5to dominio: parser, DTOs, guard de elegibilidad, errores (TASK-1, TASK-2 guard, D3, D5)
 
