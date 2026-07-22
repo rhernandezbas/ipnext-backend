@@ -82,6 +82,30 @@ export class ChatwootUnavailableError extends DomainError {
 }
 
 /**
+ * chatwoot-hub-sendpath (D6, CHW-5, F4-ter — fix quirúrgico re-review #2) — raised by
+ * `ReceiveChatwootWebhook.handleMessageUpdated` when a `message_updated` carries a populated
+ * `content_attributes.external_error` for a `chatwootMessageId` whose CLASS is expected to be
+ * mirrored (`direction` inbound/outbound, the SAME `mapMessageTypeToDirection` criterion
+ * `handleMessageCreated` uses — §7), but the row doesn't exist YET
+ * (`markDeliveryFailedByChatwootMessageId` returned `null`): the `message_created` echo for that
+ * same message hasn't run, or ran out of order. This is the ANTICIPATED, well-understood
+ * TRANSIENT race — Chatwoot (Sidekiq) re-delivers the SAME event on any non-2xx, and by then the
+ * row should exist. Distinct from an unexpected DB error (still a plain `Error`, falls to the
+ * generic 500 `[UNHANDLED ERROR]`) and distinct from a message-type whose class NEVER gets
+ * mirrored (activity/template/unknown, `direction===null`) — that absence is PERMANENT, handled
+ * as a no-op, never throws this (or anything).
+ */
+export class MessageNotMirroredYetError extends DomainError {
+  constructor(chatwootMessageId: number) {
+    super(
+      `[messaging] message_updated failed no aplicable: fila ${chatwootMessageId} aún no espejada — retriable`,
+      'MESSAGE_NOT_MIRRORED_YET',
+    );
+    this.name = 'MessageNotMirroredYetError';
+  }
+}
+
+/**
  * messaging-inbox-v2 (F1.5, RICH-1 #4) — raised by GetInboxClientContext when
  * `?clientId=` is provided on an `ambiguous` conversation but does NOT belong
  * to that conversation's candidate set (resolved from the contact phone). This

@@ -8,6 +8,7 @@ import type {
   ConversationEventRepository,
   RecordConversationEventInput,
 } from '@domain/ports/ConversationEventRepository';
+import { MessageNotMirroredYetError } from '@domain/errors/messaging';
 import { toWhatsAppE164 } from './toWhatsAppE164';
 import { deriveConversationPreview } from './conversationPreview';
 import { computeStatusTransition } from './conversationStatusTransition';
@@ -162,12 +163,20 @@ function toIsoTimestamp(raw: string | number | undefined): string {
  * F4-bis (re-review) — EXCEPTION, by design (ROB-2 symmetry with `handleMessageCreated`):
  * `message_updated` with a populated `external_error` that CAN'T be applied yet (the row
  * isn't mirrored, or the repo throws a transient DB error) DOES throw. `execute` never
- * catches it, so the route's `catch → next(err)` turns it into a 500 — the ONLY signal
+ * catches it, so the route's `catch → next(err)` turns it into a non-2xx — the ONLY signal
  * Chatwoot (Sidekiq) actually reacts to for a retry (it never re-delivers based on a 200
  * body). Swallowing that error here (the F4 fix-wave's approach: return a boolean, always
  * ack 200) looked like it triggered a re-delivery but didn't — Chatwoot ignores 2xx
  * regardless of payload, so the `failed` badge was silently lost. Throwing is the only
  * real mechanism.
+ *
+ * F4-ter (re-review #2) — REFINES the exception above: a row-absent `message_updated` is
+ * NOT a single class. `handleMessageUpdated` derives whether THIS message's class is one
+ * `handleMessageCreated` ever mirrors (`mapMessageTypeToDirection`, the SAME helper, §7).
+ * inbound/outbound → genuinely transient (throws `MessageNotMirroredYetError`, 503,
+ * retriable). activity/template/unknown → PERMANENT (that class is NEVER mirrored) — a
+ * warn-logged no-op, ack 200, delivery marked seen; retrying it forever would just storm
+ * Chatwoot's Sidekiq policy for nothing.
  */
 export class ReceiveChatwootWebhook {
   constructor(
@@ -240,13 +249,31 @@ export class ReceiveChatwootWebhook {
    * F4-bis (re-review) — SIMETRÍA ROB-2 con `handleMessageCreated`: cuando el error SÍ aplica
    * pero no puede APLICARSE todavía (fila aún no espejada — `markDeliveryFailedByChatwootMessageId`
    * devuelve `null`), o el repo tira un error transitorio de DB, este método LANZA sin atajarlo.
-   * `execute` deja que la excepción suba → la ruta HTTP hace `catch → next(err) → 500` → Chatwoot
-   * (Sidekiq) reintenta la entrega (SÓLO reacciona a non-2xx, nunca al contenido del body — un
-   * `return`/boolean interno que la ruta igual convierte en 200 NO logra un retry real, eso era
-   * el bug del F4 original). Al lanzar, `execute` tampoco llega a `recordIfNew`: la delivery NO
-   * queda vista, así que el reintento de Chatwoot vuelve a ejecutar este mismo handler (la clave
-   * de dedup por mensaje+discriminador de F3, `message_updated:{id}:failed`, es la MISMA en la
-   * re-entrega, así que no hay drift de key entre intentos).
+   * `execute` deja que la excepción suba → la ruta HTTP hace `catch → next(err) → {503|500}` →
+   * Chatwoot (Sidekiq) reintenta la entrega (SÓLO reacciona a non-2xx, nunca al contenido del
+   * body — un `return`/boolean interno que la ruta igual convierte en 200 NO logra un retry
+   * real, eso era el bug del F4 original). Al lanzar, `execute` tampoco llega a `recordIfNew`: la
+   * delivery NO queda vista, así que el reintento de Chatwoot vuelve a ejecutar este mismo
+   * handler (la clave de dedup por mensaje+discriminador de F3, `message_updated:{id}:failed`, es
+   * la MISMA en la re-entrega, así que no hay drift de key entre intentos).
+   *
+   * F4-ter (re-review #2) — SIMETRÍA VERDADERA: la fila-ausente NO es una única clase. Se deriva
+   * del MISMO payload (`message_type`, MISMO helper `mapMessageTypeToDirection` que usa
+   * `handleMessageCreated`) si esta clase de mensaje ALGUNA VEZ va a espejarse:
+   * - `direction!==null` (inbound/outbound) → TRANSITORIO real: el `message_created` de ESE mismo
+   *   mensaje corrió tarde o fuera de orden — lanza `MessageNotMirroredYetError` (503, retriable,
+   *   `domain/errors/messaging.ts`; NO cae al `[UNHANDLED ERROR]` genérico — ver
+   *   `errorHandler.ts` DomainError branch, :269).
+   * - `direction===null` (activity/template/`message_type` ausente o desconocido, §7) →
+   *   `handleMessageCreated` JAMÁS persiste una fila para esa clase — la ausencia es PERMANENTE,
+   *   nunca va a resolverse con un retry. Antes de este fix, CADA reintento de Chatwoot para un
+   *   `external_error` sobre una activity/template volvía a lanzar (storm hasta agotar la retry
+   *   policy de Sidekiq sin recuperar nada). Ahora es no-op: se loguea una vez (warn) y la
+   *   delivery se marca vista (200) — misma decisión que ya tomó `handleMessageCreated` para ese
+   *   mensaje.
+   * Un repo-error genuino (excepción real, no un `null` de retorno) sigue sin try/catch propio:
+   * propaga tal cual, Error plano → 500 `[UNHANDLED ERROR]` (no es la condición anticipada de
+   * arriba, no amerita el tipo 503).
    */
   private async handleMessageUpdated(payload: ChatwootWebhookPayload): Promise<void> {
     if (payload.id === undefined) return; // malformed payload — no-op, nunca será un retry válido
@@ -258,14 +285,33 @@ export class ReceiveChatwootWebhook {
     const curated = curateDeliveryError(externalError);
     if (curated.length === 0) return; // vacío tras trim — tratado igual que ausente, no-op
 
-    // F4-bis — SIN try/catch: un repo-error transitorio debe propagar tal cual (ver docstring).
+    // F4-bis/F4-ter — SIN try/catch: un repo-error transitorio (excepción real) debe propagar
+    // tal cual (Error plano → 500 genérico, ver docstring); sólo el retorno `null` (fila ausente)
+    // se clasifica más abajo.
     const updated = await this.messageRepo.markDeliveryFailedByChatwootMessageId(payload.id, curated);
     if (updated === null) {
-      // Fila aún no espejada (el `message_created` de este mismo mensaje todavía no corrió) —
-      // retriable: Chatwoot reintentará y, para entonces, la fila ya debería existir.
-      throw new Error(
-        `[messaging] message_updated failed no aplicable: fila ${payload.id} aún no espejada — retriable`,
+      // F4-ter — misma derivación EXACTA que `handleMessageCreated` (§7): si esta clase de
+      // mensaje nunca se espeja, la fila ausente es PERMANENTE, no un race transitorio.
+      const direction = mapMessageTypeToDirection(payload.message_type);
+      if (direction === null) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[messaging] message_updated failed para una clase que handleMessageCreated nunca espeja ' +
+            '(activity/template/message_type ausente o desconocido) — permanente, no-op, delivery vista',
+          { chatwootMessageId: payload.id, messageType: payload.message_type },
+        );
+        return; // permanente: la fila jamás va a existir — no-op, delivery se marca vista (200)
+      }
+
+      // F4-ter/#3 — warn, NUNCA console.error: es la condición ANTICIPADA y retriable (Chatwoot
+      // reintentará), no un fallo inesperado. El errorHandler tampoco la loguea como
+      // `[UNHANDLED ERROR]` (DomainError branch corta antes de esa línea).
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[messaging] message_updated failed retriable: fila aún no espejada (message_created en vuelo o fuera de orden)',
+        { chatwootMessageId: payload.id, messageType: payload.message_type },
       );
+      throw new MessageNotMirroredYetError(payload.id);
     }
   }
 

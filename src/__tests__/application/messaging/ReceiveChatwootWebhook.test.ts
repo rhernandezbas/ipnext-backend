@@ -23,6 +23,7 @@ import { InMemoryChatMessageRepository } from '@infrastructure/adapters/in-memor
 import { InMemoryWebhookDeliveryRepository } from '@infrastructure/adapters/in-memory/InMemoryWebhookDeliveryRepository';
 import { InMemoryChatMessageAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemoryChatMessageAttachmentRepository';
 import type { ChatMediaDownloadTrigger } from '@domain/ports/ChatMediaDownloadTrigger';
+import { MessageNotMirroredYetError } from '@domain/errors/messaging';
 
 function makeUseCase() {
   const conversationRepo = new InMemoryConversationRepository();
@@ -1050,16 +1051,39 @@ describe('ReceiveChatwootWebhook', () => {
       expect(messages[0]!.deliveryStatus).toBeNull();
     });
 
-    // F4-bis (re-review) — CORRIGE F4: el F4 original tragaba este caso y devolvía un boolean
-    // interno que NUNCA generaba un retry real (`execute` es `void`, la ruta responde 200
-    // SIEMPRE — Chatwoot/Sidekiq sólo reacciona a non-2xx). Simetría ROB-2 con
-    // `handleMessageCreated`: la fila aún no espejada es RETRIABLE → LANZA.
-    it('F4-bis: fila ausente en el mirror (mensaje aún no proyectado) + external_error → RECHAZA (retriable, ROB-2) y la delivery NO queda vista', async () => {
+    // F4-ter (re-review #2, hallazgo #1/#3) — CORRIGE F4-bis: NO toda fila-ausente es la misma
+    // clase. Antes de este fix, un `message_type` activity/template (2/'activity', 3/'template')
+    // con `external_error` LANZABA igual que uno inbound/outbound — pero `handleMessageCreated`
+    // (§7) JAMÁS espeja esa clase, así que la fila NUNCA iba a aparecer: cada reintento de
+    // Chatwoot volvía a lanzar, un storm hasta agotar la retry policy de Sidekiq sin recuperar
+    // nada. La derivación usa el MISMO `mapMessageTypeToDirection` que `handleMessageCreated`.
+    it('F4-ter (a): message_type=3 (template) + external_error + fila ausente → PERMANENTE: resuelve (no-op), vista, cero throw', async () => {
       const { uc, deliveryRepo } = makeUseCase();
 
       await expect(
-        uc.execute('d-mu-4', { event: 'message_updated', id: 99999, content_attributes: { external_error: 'Template not found' } }),
-      ).rejects.toThrow(/fila 99999 aún no espejada/);
+        uc.execute('d-mu-4-permanent', {
+          event: 'message_updated',
+          id: 99998,
+          message_type: 3,
+          content_attributes: { external_error: 'Template not found' },
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-4-permanent')).toBe(true); // vista — jamás va a existir la fila
+    });
+
+    it('F4-ter (b): message_type=1 (outgoing) + external_error + fila ausente → TRANSITORIO: RECHAZA con MessageNotMirroredYetError (retriable) y la delivery NO queda vista', async () => {
+      const { uc, deliveryRepo } = makeUseCase();
+      const call = uc.execute('d-mu-4', {
+        event: 'message_updated',
+        id: 99999,
+        message_type: 1,
+        content_attributes: { external_error: 'Template not found' },
+      });
+
+      await expect(call).rejects.toThrow(MessageNotMirroredYetError);
+      await expect(call).rejects.toMatchObject({ code: 'MESSAGE_NOT_MIRRORED_YET' });
+      await expect(call).rejects.toThrow(/fila 99999 aún no espejada/);
 
       expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-4')).toBe(false); // NO vista → Chatwoot puede reintentar
     });
@@ -1121,22 +1145,25 @@ describe('ReceiveChatwootWebhook', () => {
       expect(messages[0]!.deliveryError).toBe('{"code":1}');
     });
 
-    // F4-bis (re-review) — message_updated (con error) llega ANTES que message_created (fila
-    // aún no espejada) → 1er intento RECHAZA (retriable) y NO se marca vista. El eco
-    // `message_created` (en vuelo, llega después) crea la fila. Chatwoot (Sidekiq) re-entrega el
-    // MISMO evento tras el 500 anterior — el segundo `execute()` de abajo NO es un re-invoke "a
-    // mano porque sí": ES esa re-entrega real (misma deliveryId + mismo payload), que ahora sí
-    // encuentra la fila y marca `failed` + vista.
-    it('F4-bis: message_updated antes que message_created RECHAZA (retriable); el reintento de Chatwoot (mismo evento, tras el eco message_created) marca failed + vista', async () => {
+    // F4-bis/F4-ter (re-review #2) — message_updated (con error) llega ANTES que message_created
+    // (fila aún no espejada) → 1er intento RECHAZA (retriable, MessageNotMirroredYetError) y NO
+    // se marca vista. El eco `message_created` (en vuelo, llega después) crea la fila. Chatwoot
+    // (Sidekiq) re-entrega el MISMO evento tras el 503 anterior — el segundo `execute()` de abajo
+    // NO es un re-invoke "a mano porque sí": ES esa re-entrega real (misma deliveryId + mismo
+    // payload), que ahora sí encuentra la fila y marca `failed` + vista. `message_type:'outgoing'`
+    // en el payload (F4-ter) es la clase que SÍ se espera espejar — el caso genuinamente
+    // transitorio, distinto del permanente (activity/template) cubierto por el test F4-ter (a).
+    it('F4-bis/F4-ter: message_updated antes que message_created RECHAZA (retriable); el reintento de Chatwoot (mismo evento, tras el eco message_created) marca failed + vista', async () => {
       const { uc, conversationRepo, messageRepo, deliveryRepo } = makeUseCase();
       const chatwootRetry = {
         event: 'message_updated',
         id: 555,
+        message_type: 'outgoing',
         content_attributes: { external_error: 'Template not found' },
       };
 
-      // 1er intento: la fila NO existe todavía → RECHAZA → la ruta real respondería 500
-      await expect(uc.execute('d-mu-order', chatwootRetry)).rejects.toThrow(/fila 555 aún no espejada/);
+      // 1er intento: la fila NO existe todavía → RECHAZA (503, MessageNotMirroredYetError)
+      await expect(uc.execute('d-mu-order', chatwootRetry)).rejects.toThrow(MessageNotMirroredYetError);
       expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-order')).toBe(false); // NO vista
 
       // el eco message_created (async, en vuelo) crea la fila

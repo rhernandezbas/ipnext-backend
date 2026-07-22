@@ -653,18 +653,20 @@ describe('POST /api/messaging/webhook — dedup por contenido firmado (H10, anti
     expect(m.deliveryStatus).toBe('failed'); // antes: mismo key de conversación → 2do deduped → failed perdido
   });
 
-  // F4-bis (re-review) — pin del contrato HTTP REAL: Chatwoot (Sidekiq) sólo re-entrega un webhook
-  // ante una respuesta non-2xx, nunca por el contenido del body. El F4 original devolvía un
-  // boolean interno que la ruta igual convertía en 200 SIEMPRE — ningún retry real ocurría. Con el
-  // fix (ROB-2), la fila aún no espejada hace que `execute()` lance → la ruta responde 500 →
-  // Chatwoot reintenta; el MISMO POST reenviado tras espejar la fila (message_created) responde
-  // 200 y el mensaje queda `failed`.
-  it('F4-bis: message_updated con external_error y fila NO espejada → 500 (retriable); el mismo POST reenviado tras el message_created → 200 y failed', async () => {
+  // F4-ter (re-review #2) — pin del contrato HTTP REAL: Chatwoot (Sidekiq) sólo re-entrega un
+  // webhook ante una respuesta non-2xx, nunca por el contenido del body. Con el fix (ROB-2), la
+  // fila aún no espejada (clase inbound/outbound, `message_type:'outgoing'` — SÍ se espera que
+  // `handleMessageCreated` la espeje eventualmente) hace que `execute()` lance
+  // `MessageNotMirroredYetError` → la ruta responde **503** (typed, ya no el 500 genérico del
+  // F4-bis original) → Chatwoot reintenta; el MISMO POST reenviado tras espejar la fila
+  // (message_created) responde 200 y el mensaje queda `failed`.
+  it('F4-ter: message_updated con external_error y fila NO espejada → 503 MESSAGE_NOT_MIRRORED_YET (retriable); el mismo POST reenviado tras el message_created → 200 y failed', async () => {
     const { app, conversationRepo, messageRepo } = buildApp();
     const timestamp = String(NOW_SEC);
     const payload = {
       event: 'message_updated',
       id: 7001,
+      message_type: 'outgoing',
       conversation: { id: 960 },
       content_attributes: { external_error: 'Template not found' },
     };
@@ -675,7 +677,8 @@ describe('POST /api/messaging/webhook — dedup por contenido firmado (H10, anti
       .set('x-chatwoot-signature', sign(rawBody, timestamp))
       .set('x-chatwoot-timestamp', timestamp)
       .send(payload);
-    expect(first.status).toBe(500); // fila aún no espejada → retriable, Chatwoot reintenta
+    expect(first.status).toBe(503); // fila aún no espejada → retriable, tipado, Chatwoot reintenta
+    expect(first.body.code).toBe('MESSAGE_NOT_MIRRORED_YET');
 
     // el eco message_created (llega después, orden real async) espeja la fila
     const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 960, status: 'open' });
@@ -687,7 +690,7 @@ describe('POST /api/messaging/webhook — dedup por contenido firmado (H10, anti
       chatwootCreatedAt: new Date(NOW_MS).toISOString(),
     });
 
-    // Chatwoot (Sidekiq) re-entrega el MISMO evento (idéntico payload/deliveryId derivado) tras el 500 anterior
+    // Chatwoot (Sidekiq) re-entrega el MISMO evento (idéntico payload/deliveryId derivado) tras el 503 anterior
     const retry = await request(app)
       .post('/api/messaging/webhook')
       .set('x-chatwoot-signature', sign(rawBody, timestamp))
@@ -698,6 +701,32 @@ describe('POST /api/messaging/webhook — dedup por contenido firmado (H10, anti
     const messages = await messageRepo.listByConversation(conv.id);
     const m = messages.find((msg) => msg.chatwootMessageId === 7001)!;
     expect(m.deliveryStatus).toBe('failed');
+  });
+
+  // F4-ter (re-review #2, hallazgo #1) — la clase PERMANENTE (activity/template,
+  // direction===null) NUNCA se espeja por `handleMessageCreated` (§7): la fila jamás va a
+  // existir. Antes de este fix, cada reintento de Chatwoot volvía a pegar 500 sin recuperar
+  // nada — storm hasta agotar la retry policy de Sidekiq. Ahora es un no-op: 200 directo, cero
+  // retry, delivery vista en el primer intento.
+  it('F4-ter: message_updated con external_error, message_type=template (activity/template) y fila NO espejada → 200 directo (permanente, no-op) sin storm de reintentos', async () => {
+    const { app } = buildApp();
+    const timestamp = String(NOW_SEC);
+    const payload = {
+      event: 'message_updated',
+      id: 7002,
+      message_type: 'template',
+      conversation: { id: 961 },
+      content_attributes: { external_error: 'Template not found' },
+    };
+    const rawBody = Buffer.from(JSON.stringify(payload));
+
+    const res = await request(app)
+      .post('/api/messaging/webhook')
+      .set('x-chatwoot-signature', sign(rawBody, timestamp))
+      .set('x-chatwoot-timestamp', timestamp)
+      .send(payload);
+
+    expect(res.status).toBe(200); // permanente: jamás va a existir la fila, no amerita retry
   });
 
   it('dos message_created REALMENTE distintos (message.id distinto) NO se pisan entre si', async () => {

@@ -163,6 +163,11 @@ const statusMap: Record<string, number> = {
   // chatwoot-hub-sendpath (D3, CHW-1) — flag ON pero la conversación no tiene
   // chatwootConversationId (mirror origin:'bulk' nunca adoptado).
   CONVERSATION_NOT_LINKED: 422,
+  // chatwoot-hub-sendpath (D6, CHW-5, F4-ter) — message_updated con external_error cuya fila
+  // (clase inbound/outbound) aún no está espejada: condición ANTICIPADA y retriable, no un
+  // error de DB genérico → 503 (non-2xx, Chatwoot/Sidekiq reintenta igual) en vez de caer al
+  // 500 [UNHANDLED ERROR] genérico.
+  MESSAGE_NOT_MIRRORED_YET: 503,
   // messaging-inbox-notes (edit/delete) — editar/eliminar una nota interna.
   INTERNAL_NOTE_NOT_FOUND: 404,
   NOT_AN_INTERNAL_NOTE: 422,

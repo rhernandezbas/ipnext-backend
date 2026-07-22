@@ -3,6 +3,7 @@ import {
   ChatwootUnavailableError,
   ClientIdNotACandidateError,
   ConversationNotFoundError,
+  MessageNotMirroredYetError,
   MessagingWindowExpiredError,
 } from '@domain/errors/messaging';
 
@@ -63,6 +64,26 @@ describe('ChatwootUnavailableError', () => {
 
   it('is an instance of DomainError', () => {
     expect(new ChatwootUnavailableError()).toBeInstanceOf(DomainError);
+  });
+});
+
+describe('MessageNotMirroredYetError', () => {
+  it('sets code to MESSAGE_NOT_MIRRORED_YET', () => {
+    expect(new MessageNotMirroredYetError(555).code).toBe('MESSAGE_NOT_MIRRORED_YET');
+  });
+
+  it.each([555, 99999])('interpolates the given chatwootMessageId "%s" into the message', (id) => {
+    expect(new MessageNotMirroredYetError(id).message).toBe(
+      `[messaging] message_updated failed no aplicable: fila ${id} aún no espejada — retriable`,
+    );
+  });
+
+  it('sets name to MessageNotMirroredYetError', () => {
+    expect(new MessageNotMirroredYetError(555).name).toBe('MessageNotMirroredYetError');
+  });
+
+  it('is an instance of DomainError', () => {
+    expect(new MessageNotMirroredYetError(555)).toBeInstanceOf(DomainError);
   });
 });
 
