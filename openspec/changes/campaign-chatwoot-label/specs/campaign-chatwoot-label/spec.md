@@ -27,8 +27,10 @@ MUST lanzar `ChatwootUnavailableError`.
 
 ### Requirement: CLBL-2 — `createAccountLabel`, ficha completa
 Port MUST ganar `createAccountLabel({title,color})` (`POST /accounts/2/labels`). `POST
-/chatwoot-labels` MUST invocarlo vía `CreateChatwootLabel`, pass-through (formato no verificado,
-nota). Rechazo (incl. duplicado) MUST propagar `ChatwootUnavailableError`.
+/chatwoot-labels` MUST invocarlo vía `CreateChatwootLabel`, que MUST validar LOCALMENTE
+título no-vacío (trim) y color `#hex` ANTES de llamar al gateway (`InvalidChatwootLabelError`
+→ 400 `VALIDATION_ERROR`, convención del repo — cero llamadas a Chatwoot en ese caso).
+Rechazo del lado Chatwoot (incl. duplicado) MUST propagar `ChatwootUnavailableError`.
 
 #### Scenario: label creado, y rechazo propaga
 - Given `{title:'promo-julio',color:'#FF0000'}` válido, y por separado un título que Chatwoot
@@ -36,6 +38,13 @@ nota). Rechazo (incl. duplicado) MUST propagar `ChatwootUnavailableError`.
 - When `POST /chatwoot-labels` corre para cada caso
 - Then el válido responde 201 con `{title,color}` (D1.a, sin `id`); el rechazado propaga
   `ChatwootUnavailableError` sin persistir nada
+
+#### Scenario: entrada inválida se corta local, sin tocar Chatwoot
+- Given `{title:'   ',color:'#FF0000'}` (título vacío tras trim) y por separado
+  `{title:'promo',color:'rojo'}` (color no-hex)
+- When `POST /chatwoot-labels` corre para cada caso
+- Then ambos responden 400 `VALIDATION_ERROR` (`InvalidChatwootLabelError`) y el gateway
+  NUNCA fue invocado (cero round-trips a Chatwoot)
 
 ### Requirement: CLBL-3 — `addConversationLabels`, GET-unión-POST idempotente
 Port MUST ganar `addConversationLabels(id, labels: string[])`: GET actuales → unión → POST

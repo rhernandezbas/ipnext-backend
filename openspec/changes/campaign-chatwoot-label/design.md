@@ -111,7 +111,7 @@ async addConversationLabels(chatwootConversationId: number, labels: string[]): P
   await this.call(async () => {
     // 1) GET títulos actuales — {payload:[<title strings>]} (explore §1)
     const cur = await this.http.get(this.accountPath(`/conversations/${chatwootConversationId}/labels`));
-    const existing = extractRows(cur.data).filter((t): t is string => typeof t === 'string');
+    const existing = extractRowsStrict(cur.data).filter((t): t is string => typeof t === 'string');
     // 2) unión de conjuntos (idempotente, order-stable, dedup)
     const union = Array.from(new Set([...existing, ...labels]));
     // 3) POST set COMPLETO — reemplaza, pero como es la unión NUNCA pisa labels manuales/de otra campaña
@@ -120,7 +120,11 @@ async addConversationLabels(chatwootConversationId: number, labels: string[]): P
 }
 ```
 
-- Reusa `accountPath` (`:120`), `this.call` (`:124`), `extractRows` (`:359`) — cero infra nueva de error.
+- Reusa `accountPath` (`:120`), `this.call` (`:124`); el GET del RMW usa `extractRowsStrict` (fix wave F2):
+  un shape de respuesta DESCONOCIDO (no `{payload:[...]}`/`{data:{payload}}`/array) LANZA → aborta el RMW
+  ANTES del POST — jamás se postea una unión construida sobre un parse-miss (que pisaría labels manuales).
+  Los consumidores read-only (`listConversations`/`listMessages`/`searchContact`/`listAccountLabels`)
+  siguen con `extractRows` tolerante. `{payload:[]}`/`[]` = vacío legítimo, no lanza.
 - **Endpoints** (explore §1, verificados): catálogo `GET/POST /api/v1/accounts/{id}/labels`; tags de
   conversación `GET/POST /conversations/{cid}/labels` con `{labels:[...]}`.
 - **Idempotente**: `union(existing, [x])` con `x ∈ existing` = no-op → reintentos/re-runs seguros.

@@ -164,16 +164,6 @@ function toNodeApFilter(raw: Record<string, unknown> | undefined): {
 }
 
 /**
- * FIX-8 — mapea el `segment` del body a un `CampaignSegment` FIEL, sin inventar un
- * default "todos". Normaliza `statuses` a array y preserva `balanceMin/Max`. Un
- * body sin `segment` (o con `statuses` ausente) queda `{statuses:[]}` — que el
- * use case RECHAZA (UnfilteredSegmentError) en vez de resolver a toda la base.
- *
- * node-segment — `networkSiteId`/`accessPointId` se validan con Zod (fail-loud
- * en tipos inválidos, ver `toNodeApFilter`); nodo/AP SOLOS ya son un segmento
- * válido (el use case los acepta como criterio real).
- */
-/**
  * campaign-chatwoot-label (fix wave, F1(a) [MEDIUM]) — colapsa un `chatwootLabel`
  * vacío/solo-espacios a `undefined` ANTES de llegar a `CreateCampaign`. Sin este
  * trim, `''`/`'  '` eran strings VÁLIDOS (pasaban este parseo) y el `?? null` de
@@ -187,6 +177,16 @@ function toChatwootLabel(raw: unknown): string | undefined {
   return raw.trim().length > 0 ? raw : undefined;
 }
 
+/**
+ * FIX-8 — mapea el `segment` del body a un `CampaignSegment` FIEL, sin inventar un
+ * default "todos". Normaliza `statuses` a array y preserva `balanceMin/Max`. Un
+ * body sin `segment` (o con `statuses` ausente) queda `{statuses:[]}` — que el
+ * use case RECHAZA (UnfilteredSegmentError) en vez de resolver a toda la base.
+ *
+ * node-segment — `networkSiteId`/`accessPointId` se validan con Zod (fail-loud
+ * en tipos inválidos, ver `toNodeApFilter`); nodo/AP SOLOS ya son un segmento
+ * válido (el use case los acepta como criterio real).
+ */
 function toCampaignSegment(raw: unknown): CampaignSegment {
   const seg = (raw ?? {}) as Record<string, unknown>;
   return {
