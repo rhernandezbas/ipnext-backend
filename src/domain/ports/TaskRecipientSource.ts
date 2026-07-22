@@ -8,8 +8,10 @@
 export interface TaskRecipientSource {
   /**
    * DISTINCT `clientId` of `ScheduledTask` rows with `stageId IN (stageIds)`,
-   * `isClosed = false`, `customerId != null`. Network tasks (`customerId` null) are
-   * EXCLUDED here — they are not a config error, just not resolvable to a client.
+   * `generalStatus = 'open'` (fix wave F1 — NEVER the legacy `isClosed` flag: a
+   * `dismissed` task has `isClosed === false` too), `customerId != null`. Network
+   * tasks (`customerId` null) are EXCLUDED here — they are not a config error, just
+   * not resolvable to a client.
    */
   listClientIdsByOpenTaskStages(stageIds: string[]): Promise<string[]>;
   /**

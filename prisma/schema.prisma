@@ -1437,7 +1437,12 @@ model ScheduledTask {
   // estado de tarea: index-only scan para el DISTINCT(customerId) y para el count de
   // customerId IS NULL. Aditivo, NO reemplaza el @@index([stageId]) existente (otros paths
   // de scheduling lo usan).
-  @@index([stageId, isClosed, customerId])
+  // fix wave (F1, HIGH) — el leaf es generalStatus, NUNCA isClosed: el flag legacy es
+  // engañoso (una tarea generalStatus:'dismissed' tiene isClosed===false, se colaba como
+  // destinatario). Reescrito en el lugar (migración aditiva ya existente, jamás llegó a
+  // prod ni a main) — molde de la ÚNICA otra query de "tareas abiertas" del repo
+  // (PrismaFiberAutoProvisionTaskRepository.ts:16, filtra por generalStatus:'open').
+  @@index([stageId, generalStatus, customerId])
 }
 
 // K3 (fiber-auto-watcher) — intento de auto-aprovisionamiento por (taskId, onuSn).
