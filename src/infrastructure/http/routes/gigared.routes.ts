@@ -401,9 +401,12 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         actorId:   actor.actorId,
         actorName: actor.actorName,
       });
-      // B3 (D3) — 207 = parcial: el partner-write no se confirmó o el reconcile local falló.
-      // `recovered` es observability-only, NO gatea el status (espejo transfer/link/addService).
-      const partial = !result.partnerCreated || result.localReconciled === 'failed';
+      // B3 (D3) — 207 = parcial: el ÚNICO gatillo es el reconcile local (localReconciled==='failed').
+      // F5(c) — la disyunción con `!result.partnerCreated` era muerta: partnerCreated es true por
+      // construcción (si el write al partner falla de verdad, execute lanza y nunca construye el
+      // result → no se llega a esta línea), así que `!partnerCreated` es constante false. `recovered`
+      // es observability-only, NO gatea el status (espejo transfer/link/addService).
+      const partial = result.localReconciled === 'failed';
       res.status(partial ? 207 : 201).json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'register');

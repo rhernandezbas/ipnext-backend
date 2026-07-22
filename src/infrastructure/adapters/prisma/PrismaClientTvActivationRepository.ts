@@ -37,4 +37,21 @@ export class PrismaClientTvActivationRepository implements ClientTvActivationRep
     });
     return row.tvActivationSeq;
   }
+
+  /**
+   * F1 — sube el seq a `n` sólo si el almacenado es menor (nunca retrocede). Idempotente.
+   * Espejo EXACTO del in-memory: lee el actual y hace un set condicional (no `increment`, porque
+   * el objetivo es un piso absoluto, no un delta). El mirror es single-writer para esta columna
+   * (GR sync jamás la escribe), así que el read-then-set no compite con otro escritor.
+   */
+  async ensureSeqAtLeast(clientId: string, n: number): Promise<void> {
+    const current = await this.getSeq(clientId);
+    if (n > current) {
+      await this.table.update({
+        where: { id: clientId },
+        data: { tvActivationSeq: n },
+        select: { tvActivationSeq: true },
+      });
+    }
+  }
 }

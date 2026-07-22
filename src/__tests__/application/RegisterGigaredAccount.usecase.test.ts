@@ -28,6 +28,8 @@ import { deterministicTvPassword, deterministicTvEmail } from '@infrastructure/s
 import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
+import { InMemoryClientTvCancellationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository';
+import { InMemoryClientTvActivationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvActivationRepository';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -120,6 +122,31 @@ const minInput = (contractId = 'contract-1') => ({
  */
 function poolOf(cic: string) {
   return jest.fn(async () => [fakeAccount({ cic, internalId: null })]);
+}
+
+/**
+ * F1 — puerto Gigared CON ESTADO para los tests de re-alta idempotente. El partner "recuerda" los
+ * stamps (setInternalId escribe en un Map internalId→cic; getAccountByInternalId lee de ahí). Modela
+ * el ciclo real de retry: el intento 1 estampa la cuenta pero el readback post-stamp puede 404ear
+ * transitorio (lag de replicación → TvIdentityStampUnverifiedError vía F3); el intento 2 (retry) la
+ * reancla vía probe. `readbackFailsOnce` gatilla ese 404 transitorio en el PRIMER readback post-stamp.
+ */
+function statefulRealtaPort(opts: { poolCic: string; readbackFailsOnce?: boolean }) {
+  const stamps = new Map<string, string>(); // internalId -> cic
+  let readbackPending = opts.readbackFailsOnce ?? false;
+  const register = jest.fn(async () => {});
+  const activate = jest.fn(async () => {});
+  const setInternalId = jest.fn(async (cic: string, internalId: string) => { stamps.set(internalId, cic); });
+  const getAccountByInternalId = jest.fn(async (internalId: string) => {
+    if (!stamps.has(internalId)) throw new GigaredNotFoundError();
+    // El primer readback post-stamp 404ea transitorio (la identidad aún no confirma); los probes
+    // posteriores (el retry) sí la encuentran.
+    if (readbackPending) { readbackPending = false; throw new GigaredNotFoundError(); }
+    return fakeAccount({ cic: stamps.get(internalId)!, internalId });
+  });
+  const listAccounts = jest.fn(async () => [fakeAccount({ cic: opts.poolCic, internalId: null })]);
+  const port = fakePort({ register, activate, setInternalId, getAccountByInternalId, listAccounts });
+  return { port, register, activate, setInternalId, getAccountByInternalId, listAccounts };
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +265,23 @@ describe('RegisterGigaredAccount — FIX 1 + W2: guard cic falsy / índice fuera
     expect((err as TvPoolPoisonedError).code).toBe('TV_POOL_POISONED');
   });
 
+  it('F5(a): pool con ÚNICA cuenta de cic vacío pero SIN estampar (internalId null) → NoCicAvailableError, NO TvPoolPoisonedError', async () => {
+    // F5(a) — un entry sin cic NO es "veneno" (veneno = tiene internal_id de un dueño ajeno). Si el
+    // único problema del pool son entries sin cic (cero envenenados), es indistinto de "no hay CIC
+    // disponible" → NoCicAvailableError, no TvPoolPoisonedError. `poisonedCount` sólo cuenta los que
+    // tienen internal_id seteado.
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: '', internalId: null })]),
+    });
+    const pick = (_n: number) => 0;
+    const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup(), undefined, undefined, undefined, undefined, undefined, pick);
+
+    const err = await uc.execute('cust-1', minInput()).catch(e => e);
+    expect(err).toBeInstanceOf(NoCicAvailableError);
+    expect(err).not.toBeInstanceOf(TvPoolPoisonedError);
+    expect(port.register).not.toHaveBeenCalled();
+  });
+
   it('W2: pick devuelve índice fuera de rango (pool.length) → NoCicAvailableError, no TypeError', async () => {
     // Ambas entradas deben ser LIMPIAS (internalId: null): con el anti-poison de B1, el `pick`
     // indexa sobre el subconjunto `clean`, no sobre el pool crudo — si no fueran limpias, el pool
@@ -331,7 +375,12 @@ describe('RegisterGigaredAccount — B1 D-pool: anti-envenenamiento del pool', (
     expect(await csRepo.getByPair('contract-1', tvId)).toBeNull();
   });
 
-  it('post-stamp 404: el readback lanza GigaredNotFoundError → propaga, sin fila local', async () => {
+  // F3 (INVERSIÓN JUSTIFICADA) — antes este readback-404 post-stamp salía como GigaredNotFoundError
+  // (404 permanente, "not found", que invitaba a reenviar y componía con el doble registro de F1).
+  // El readback post-stamp está DENTRO del try ahora: un 404 acá = identidad SIN CONFIRMAR (el stamp
+  // pudo persistir con lag de replicación), la MISMA condición que un cic mismatch →
+  // TvIdentityStampUnverifiedError (503, retriable). El retry se auto-completa vía probe (F1/F2).
+  it('F3: post-stamp 404: el readback lanza GigaredNotFoundError → TvIdentityStampUnverifiedError (503), sin fila local', async () => {
     const csRepo = new InMemoryContractServiceRepository();
     const catalog = new InMemoryServiceCatalogRepository();
     const cat = await catalog.create({ name: 'TV', label: 'TV', active: true, sortOrder: 0 });
@@ -347,8 +396,9 @@ describe('RegisterGigaredAccount — B1 D-pool: anti-envenenamiento del pool', (
       undefined, undefined, undefined, pickFirst,
     );
 
-    await expect(uc.execute('cust-1', minInput('contract-1')))
-      .rejects.toBeInstanceOf(GigaredNotFoundError);
+    const err = await uc.execute('cust-1', minInput('contract-1')).catch(e => e);
+    expect(err).toBeInstanceOf(TvIdentityStampUnverifiedError);
+    expect((err as TvIdentityStampUnverifiedError).code).toBe('TV_IDENTITY_UNVERIFIED');
 
     const tvId = (await catalog.getByName('TV'))!.id;
     expect(await csRepo.getByPair('contract-1', tvId)).toBeNull();
@@ -387,6 +437,37 @@ describe('RegisterGigaredAccount — B2 D2: recovery/probe idempotente', () => {
     expect(port.setInternalId).toHaveBeenCalledTimes(0);
     expect(result.recovered).toBe(true);
     expect(result.account.cic).toBe('STAMPED1');
+  });
+
+  it('F2: el probe resuelve una cuenta con internalId AJENO → NO confía, registra normal en el CIC limpio (recovered:false)', async () => {
+    // F2 — con alias append-only, getAccountByInternalId(MI-id) puede resolver a un CIC que HOY es de
+    // OTRO cliente (post-transfer). El probe SÓLO debe reanclar si probed.internalId === el MÍO; si no,
+    // NO es mía → seguir el flujo normal (pool), nunca reconciliar sobre una cuenta ajena.
+    const myInternalId = currentTvInternalId('cust-1', 0);
+    const alien = fakeAccount({ cic: 'ALIEN-CIC', internalId: 'cust-OTHER' }); // hoy es de B (post-transfer)
+    const register = jest.fn(async () => {});
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: 'CLEAN-F2', internalId: null })]),
+      register,
+      getAccountByInternalId: jest.fn()
+        // 1ra llamada (el PROBE) resuelve una cuenta AJENA → NO es mía.
+        .mockResolvedValueOnce(alien)
+        // 2da (readback post-stamp) resuelve MI cuenta recién estampada en el CIC limpio.
+        .mockResolvedValue(fakeAccount({ cic: 'CLEAN-F2', internalId: myInternalId })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const result = await uc.execute('cust-1', minInput());
+
+    expect(result.recovered).toBe(false);
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({ cic: 'CLEAN-F2' }));
+    expect(port.setInternalId).toHaveBeenCalledWith('CLEAN-F2', myInternalId);
+    expect(result.account.cic).toBe('CLEAN-F2');
+    expect(result.account.cic).not.toBe('ALIEN-CIC');
   });
 
   it('404 happy path: el probe no encuentra nada → sigue al pool-pick (B1), secuencia completa una vez cada uno; recovered:false', async () => {
@@ -520,7 +601,7 @@ describe('RegisterGigaredAccount — B2 D2: recovery/probe idempotente', () => {
     expect(listAccounts).toHaveBeenCalledTimes(1); // SOLO la del pool-pick, jamás la de {email}
   });
 
-  it('idempotencia end-to-end: 2do execute() sobre cuenta ya estampada → 0 llamadas nuevas a register/activate/setInternalId, 0 consumo del pool', async () => {
+  it('idempotencia end-to-end (seq=0, ya estampada): 2do execute() → 0 llamadas nuevas a register/activate/setInternalId, 0 consumo del pool', async () => {
     const myInternalId = currentTvInternalId('cust-1', 0);
     const stamped = fakeAccount({ cic: 'IDEMP1', internalId: myInternalId });
     const listAccounts = jest.fn(async () => [fakeAccount({ cic: 'POOLCIC', internalId: null })]);
@@ -540,6 +621,71 @@ describe('RegisterGigaredAccount — B2 D2: recovery/probe idempotente', () => {
     expect(port.activate).toHaveBeenCalledTimes(0);
     expect(port.setInternalId).toHaveBeenCalledTimes(0);
     expect(listAccounts).not.toHaveBeenCalled(); // 0 consumo del pool en NINGUNA de las 2 corridas
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1 — re-alta idempotente con acuñado DIFERIDO del seq (fix del DOBLE REGISTRO / doble cobro).
+// El seq persistido SÓLO avanza tras identidad verificada en el partner; un retry recomputa el
+// MISMO candidato (getSeq()+1) y converge vía probe en vez de mintear una identidad fresca que
+// re-registraría. Requiere los repos de activation + cancellation inyectados.
+// ---------------------------------------------------------------------------
+
+describe('RegisterGigaredAccount — F1: re-alta idempotente, seq diferido', () => {
+  it('F1(a): re-alta, verify falla DESPUÉS del stamp → retry reancla vía probe, CERO segundo register, seq persiste al final', async () => {
+    const { port, register } = statefulRealtaPort({ poolCic: 'POOL-F1A', readbackFailsOnce: true });
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1'); // re-alta: el cliente venía de baja
+    const activation = new InMemoryClientTvActivationRepository();
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, tvCancellation, activation, undefined, pickFirst,
+    );
+
+    // intento 1: register + stamp corren, pero el readback post-stamp 404ea transitorio → 503.
+    const err = await uc.execute('cust-1', minInput('contract-1')).catch(e => e);
+    expect(err).toBeInstanceOf(TvIdentityStampUnverifiedError);
+    expect(register).toHaveBeenCalledTimes(1);
+    // El seq NO se persistió: la identidad no quedó confirmada. El candidato del retry será el MISMO.
+    expect(await activation.getSeq('cust-1')).toBe(0);
+
+    // intento 2 (retry): el probe recomputa el MISMO candidato y encuentra la cuenta ya estampada.
+    const result = await uc.execute('cust-1', minInput('contract-1'));
+    expect(register).toHaveBeenCalledTimes(1); // ← el fix: NO hay segundo register (antes: 2 = doble cobro)
+    expect(result.recovered).toBe(true);
+    expect(result.account.cic).toBe('POOL-F1A');
+    // El seq recién se acuña ahora, tras verify OK.
+    expect(await activation.getSeq('cust-1')).toBe(1);
+  });
+
+  it('F1(b) idempotencia e2e (reescrito, repos inyectados): clearCancelled falla → el seq NO avanza → retry converge, CERO segundo register', async () => {
+    // Reescribe el viejo test que MENTÍA (sin repos de activation → seq=0 trivial). Pin del ORDEN
+    // load-bearing (clearCancelled ANTES de persistir el seq): si el clear del flag falla (best-effort),
+    // el seq NO se persiste → el retry recomputa el MISMO candidato y reancla vía probe, en vez de
+    // mintear una identidad fresca que re-registraría al partner (doble cobro).
+    const { port, register, listAccounts } = statefulRealtaPort({ poolCic: 'POOL-F1B' });
+    const tvCancellation = new InMemoryClientTvCancellationRepository();
+    tvCancellation.seedCancelled('cust-1');
+    // clearCancelled SIEMPRE falla (best-effort): el flag queda seteado y el seq NO debe avanzar.
+    jest.spyOn(tvCancellation, 'clearCancelled').mockRejectedValue(new Error('clear flaky'));
+    const activation = new InMemoryClientTvActivationRepository();
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, tvCancellation, activation, undefined, pickFirst,
+    );
+
+    // 1er execute: re-alta completa (register real), verify OK. clearCancelled falla → seq NO persiste.
+    const r1 = await uc.execute('cust-1', minInput('contract-1'));
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(r1.recovered).toBe(false);
+    expect(await activation.getSeq('cust-1')).toBe(0); // clear falló → seq NO avanzó (sin drift)
+
+    // 2do execute (retry): candidato = getSeq()+1 = 1 (MISMO) → el probe encuentra la ya estampada.
+    const r2 = await uc.execute('cust-1', minInput('contract-1'));
+    expect(register).toHaveBeenCalledTimes(1); // ← CERO segundo register (converge, no doble cobro)
+    expect(r2.recovered).toBe(true);
+    expect(r2.account.cic).toBe('POOL-F1B');
+    expect(listAccounts).toHaveBeenCalledTimes(1); // el pool sólo se consumió en el 1er intento
   });
 });
 

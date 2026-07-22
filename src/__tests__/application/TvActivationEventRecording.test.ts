@@ -88,7 +88,16 @@ describe('RegisterGigaredAccount — records alta event (seq=0)', () => {
   });
 
   it('records eventType=reactivacion when seq>0 (client was cancelled, re-alta)', async () => {
-    const port = fakePort();
+    // F2 — el probe de una re-alta (seq=1 → internal_id 'cust-1-1') debe 404ear (todavía no hay nada
+    // estampado con ESE internal_id) para ejercitar el flujo real de registro; el default de fakePort
+    // devolvía una cuenta con internal_id 'cust-1' (≠ 'cust-1-1'), que el probe post-F2 ya NO acepta
+    // como propia (evita contaminación cruzada). Pool LIMPIO + readback OK = alta re-registrada.
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ internalId: null })]), // B1: pool LIMPIO
+      getAccountByInternalId: jest.fn()
+        .mockRejectedValueOnce(new GigaredNotFoundError()) // probe: nada estampado aún
+        .mockResolvedValue(fakeAccount({ internalId: 'cust-1-1' })), // readback post-stamp OK
+    });
     const tvCancellation = new InMemoryClientTvCancellationRepository();
     // mark the client as cancelled so seq will be incremented
     await tvCancellation.markCancelled('cust-1');

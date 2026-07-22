@@ -11,4 +11,12 @@ export interface ClientTvActivationRepository {
   getSeq(clientId: string): Promise<number>;
   /** Incrementa el seq de forma atómica y devuelve el NUEVO valor. */
   incrementSeq(clientId: string): Promise<number>;
+  /**
+   * gigared-tv-identity-hardening (F1) — avance DIFERIDO del seq: lo lleva AL MENOS a `n`
+   * (nunca lo retrocede si el almacenado ya es >= n). Idempotente. Se persiste recién tras
+   * verificar la identidad en el partner (register+stamp+verify OK), no antes del intento —
+   * así los retries recomputan el MISMO candidato (candidato = getSeq()+1) y convergen sin
+   * re-registrar. GR sync NUNCA escribe esta columna.
+   */
+  ensureSeqAtLeast(clientId: string, n: number): Promise<void>;
 }

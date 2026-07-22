@@ -145,6 +145,30 @@ export function toContractServiceHistoryItemDto(
  * TV event types: alta→activated, baja→deactivated, reactivacion→reactivated.
  * The CIC is preserved; occurredAt = createdAt.
  */
+/**
+ * gigared-tv-identity-hardening (F4) — mapeo EXHAUSTIVO del eventType TV al del ServiceEventDto.
+ * SIN fallback silencioso: un `TvEventType` nuevo sin case rompe la compilación (el `never` del
+ * default), en vez de degradar a un 'activated' fantasma. 'transferencia' NO tiene representación
+ * por-contrato (la ficha ya la muestra vía el par CSE transfer-out/transfer-in); ListContract
+ * ServiceHistory la FILTRA antes de este mapper, así que llegar acá con 'transferencia' es un bug
+ * del caller y se hace ruidoso (throw), no silencioso.
+ */
+function tvEventTypeToServiceEventType(t: TvEventType): 'activated' | 'deactivated' | 'reactivated' {
+  switch (t) {
+    case 'alta':         return 'activated';
+    case 'baja':         return 'deactivated';
+    case 'reactivacion': return 'reactivated';
+    case 'transferencia':
+      throw new Error(
+        "tvEventToServiceEvent: 'transferencia' no tiene representación por-contrato (debe filtrarse antes; se muestra vía CSE transfer-in/out)",
+      );
+    default: {
+      const _exhaustive: never = t;
+      return _exhaustive;
+    }
+  }
+}
+
 export function tvEventToServiceEvent(tvEvent: {
   id: string;
   eventType: TvEventType;
@@ -153,18 +177,9 @@ export function tvEventToServiceEvent(tvEvent: {
   createdAt: string;
   reason?: string | null;
 }): ServiceEventDto {
-  // gigared-tv-identity-hardening (D7/B5) — 'transferencia' has no dedicated per-contract
-  // representation (this same operation already surfaces here via the ContractServiceEventRepository
-  // 'modified'/changeKind transfer-out|transfer-in merge, above); it falls back to 'activated'
-  // (neutral default) below rather than being filtered out or crashing the mapper.
-  const typeMap: Record<string, 'activated' | 'deactivated' | 'reactivated'> = {
-    alta:         'activated',
-    baja:         'deactivated',
-    reactivacion: 'reactivated',
-  };
   return {
     id:         tvEvent.id,
-    eventType:  typeMap[tvEvent.eventType] ?? 'activated',
+    eventType:  tvEventTypeToServiceEventType(tvEvent.eventType),
     occurredAt: tvEvent.createdAt,
     actorName:  tvEvent.actorName,
     cic:        tvEvent.cic,

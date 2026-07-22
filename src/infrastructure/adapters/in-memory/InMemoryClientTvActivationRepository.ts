@@ -23,4 +23,10 @@ export class InMemoryClientTvActivationRepository implements ClientTvActivationR
     this.seqs.set(clientId, next);
     return next;
   }
+
+  /** F1 — sube el seq a `n` sólo si el almacenado es menor (nunca retrocede). Idempotente. */
+  async ensureSeqAtLeast(clientId: string, n: number): Promise<void> {
+    const current = this.seqs.get(clientId) ?? 0;
+    if (n > current) this.seqs.set(clientId, n);
+  }
 }

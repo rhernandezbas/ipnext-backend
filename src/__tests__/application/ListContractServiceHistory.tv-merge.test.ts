@@ -79,6 +79,39 @@ describe('ListContractServiceHistory -- #131 TV merge (CSE + tvActivationEvents)
     expect(item.events[1]!.cic).toBeNull();
   });
 
+  // gigared-tv-identity-hardening F4 — un tv_activation_event 'transferencia' NO debe aparecer como
+  // "Alta" fantasma en la ficha POR-CONTRATO: la transferencia ya se muestra acá vía el par CSE
+  // transfer-out/transfer-in (changeKind). Antes el mapper la degradaba a 'activated' (?? fallback)
+  // y la MISMA transferencia se duplicaba (transfer-in real vía CSE + alta fantasma vía tv-event),
+  // rompiendo el invariante de disyunción CSE↔tv_activation_events. El evento GLOBAL queda intacto.
+  it('T-131-F4: TV fila con evento transferencia NO muestra alta fantasma (transfer sólo vía CSE transfer-in)', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catId  = seedTvCatalog(csRepo);
+    await csRepo.add({ contractId: 'C-TR', serviceCatalogId: catId, tvLogin: 'GIGA-TR', tvPassword: 'secret' });
+
+    // El evento 'transferencia' que TransferTvToCustomer (B5) graba en tv_activation_events.
+    const trDate = new Date('2026-07-20T12:00:00Z');
+    const tvEventRepo = new InMemoryTvActivationEventRepository({ now: () => trDate });
+    await tvEventRepo.record({ clientId: 'CLI-TR', contractId: 'C-TR', actorId: 'a1', actorName: 'operador', eventType: 'transferencia', cic: 'CIC-TR' });
+
+    // La MISMA transferencia YA se ve en la ficha vía el par CSE (transfer-in).
+    const cinDate = new Date('2026-07-20T12:00:01Z');
+    const cseRepo = new InMemoryContractServiceEventRepository({ now: () => cinDate });
+    await cseRepo.record({ contractId: 'C-TR', serviceCatalogId: catId, eventType: 'modified', changeKind: 'transfer-in', oldValue: 'Origen SA', newValue: 'Destino SA', actorName: 'operador' });
+
+    const uc = new ListContractServiceHistory(csRepo, cseRepo, tvEventRepo);
+    const result = await uc.execute('C-TR');
+
+    expect(result).toHaveLength(1);
+    const item = result[0]!;
+    // NO alta fantasma: cero eventos 'activated' provenientes del tv-event transferencia.
+    expect(item.events.filter(e => e.eventType === 'activated')).toHaveLength(0);
+    // La ficha muestra SÓLO el transfer-in real (vía CSE).
+    expect(item.events).toHaveLength(1);
+    expect(item.events[0]!.eventType).toBe('modified');
+    expect(item.events[0]!.changeKind).toBe('transfer-in');
+  });
+
   it('T-131-D: TV fila sin eventos en ninguna fuente usa sintesis legacy (actorName vacio)', async () => {
     const csRepo      = new InMemoryContractServiceRepository();
     const catId       = seedTvCatalog(csRepo);

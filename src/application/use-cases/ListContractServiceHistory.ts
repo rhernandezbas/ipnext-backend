@@ -72,7 +72,14 @@ export class ListContractServiceHistory {
     const hasTV = views.some(isTvRow);
     if (hasTV && this.tvEventRepo) {
       const raw = await this.tvEventRepo.listByContract(contractId);
-      tvEvents = raw.map(tvEventToServiceEvent);
+      // gigared-tv-identity-hardening (F4) — FILTRAR 'transferencia' de la ficha POR-CONTRATO: la
+      // transferencia ya se muestra acá vía el par CSE transfer-out/transfer-in (changeKind, arriba),
+      // así que incluir además el tv_activation_event 'transferencia' la duplicaría como un "Alta"
+      // fantasma y rompería el invariante de disyunción (L88-91). El evento GLOBAL
+      // (ListTvActivationHistory) NO se toca: 'transferencia' se filtra sólo en ESTA vista.
+      tvEvents = raw
+        .filter(e => e.eventType !== 'transferencia')
+        .map(tvEventToServiceEvent);
     }
 
     return views.map(view => {
