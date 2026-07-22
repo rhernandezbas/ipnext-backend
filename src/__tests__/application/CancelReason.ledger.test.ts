@@ -79,7 +79,12 @@ describe('#127 RemoveContractService - reason in deactivated event', () => {
 });
 
 describe('#127 CancelTvJobRunner - reason in baja event', () => {
-  it('baja event stores reason when runner receives it', async () => {
+  // gigared-tv-identity-hardening (D-baja/B6) — makeResult()'s DEFAULT `renew` is
+  // `{oldCic:'OLD', newCic:'NEW'}` (renewAttempted:true), so both assertions below now carry
+  // the "· renewCic:NEW" breadcrumb (B6: the newCic that renewCic just recycled into the pool is
+  // no longer silently discarded). The "no suffix" case is covered separately in
+  // CancelTvJobRunner.test.ts's dedicated D-baja/B6 describe (renew: null).
+  it('baja event stores reason when runner receives it (+ renewCic breadcrumb, B6)', async () => {
     const eventRepo = new InMemoryTvActivationEventRepository();
     const result = makeResult({ cic: 'CIC001' });
     const runner = new CancelTvJobRunner(makeCancelTv(result), makeCancelStatus(), eventRepo);
@@ -87,16 +92,16 @@ describe('#127 CancelTvJobRunner - reason in baja event', () => {
     const events = eventRepo.all();
     expect(events).toHaveLength(1);
     expect(events[0]!.eventType).toBe('baja');
-    expect(events[0]!.reason).toBe('baja voluntaria');
+    expect(events[0]!.reason).toBe('baja voluntaria · renewCic:NEW');
   });
-  it('baja event stores null reason when not provided', async () => {
+  it('baja event reason is ONLY the renewCic breadcrumb when no user reason was provided (B6)', async () => {
     const eventRepo = new InMemoryTvActivationEventRepository();
     const result = makeResult({ cic: 'CIC001' });
     const runner = new CancelTvJobRunner(makeCancelTv(result), makeCancelStatus(), eventRepo);
     await runner.run('cust-1', 'contract-99', { actorId: null, actorName: 'sys' });
     const events = eventRepo.all();
     expect(events).toHaveLength(1);
-    expect(events[0]!.reason).toBeNull();
+    expect(events[0]!.reason).toBe('renewCic:NEW');
   });
 });
 

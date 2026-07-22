@@ -2499,7 +2499,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getConfig:          new GetGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     updateConfig:       new UpdateGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     getSummary:         new GetGigaredSummary(gigaredClient),
-    listAccounts:       new ListGigaredAccounts(gigaredClient),
+    // gigared-tv-identity-hardening (D4/B7) — local-first owner resolution: resolves a
+    // transferred account's clientId from the local managed ContractService row instead of
+    // the partner's append-only alias (Centeno/Vacherand). Both deps optional; wiring them
+    // here activates local-first for the operators' list.
+    listAccounts:       new ListGigaredAccounts(gigaredClient, contractServiceRepo, serviceCatalogRepo),
     getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup, gigaredTvCancellation),
     linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
     // #5 BE — pass eventRepo so register records 'alta'/'reactivacion' best-effort.
@@ -2514,8 +2518,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getTvCredentials:   new GetTvCredentials(gigaredCustomerLookup, new PrismaTvCredentialsReader()),
     // service-transfer — transferencia de TV entre clientes (EPIC Titularidad F1). Mismas deps
     // compartidas del bloque + el singleton del historial (contractServiceEventRepo, ~1332) para
-    // los eventos transfer-out/in en ambos contratos.
-    transferTv:         new TransferTvToCustomer(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, contractServiceEventRepo),
+    // los eventos transfer-out/in en ambos contratos + (D7/B7) gigaredTvActivationEventRepo
+    // (~2494, MISMO singleton que Register/Cancel) para el evento 'transferencia' en el
+    // Historial TV global.
+    transferTv:         new TransferTvToCustomer(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, contractServiceEventRepo, gigaredTvActivationEventRepo),
     requireRead:        requirePerm('tv', 'read'),
     // #50 — granular TV permissions (replace generic tv.write).
     requireLink:        requirePerm('tv', 'link'),
