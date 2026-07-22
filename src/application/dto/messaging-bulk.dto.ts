@@ -191,6 +191,13 @@ export interface CreateCampaignInput {
   /** ContentSid Twilio (HX…). */
   templateRef: string;
   templateName?: string;
+  /**
+   * campaign-chatwoot-label (CLBL-6) — `title` de un label REAL de Chatwoot
+   * elegido OPCIONALMENTE al crear. Pass-through puro (Decisión D): CERO
+   * validación/re-consulta contra el catálogo acá — se persiste tal cual.
+   * Ausente/`undefined` → `Campaign.chatwootLabel` queda `null`.
+   */
+  chatwootLabel?: string;
   segment: CampaignSegment;
   /**
    * Nombre del spec (CAMP-1/CAMP-3). Mismo campo que `CampaignVariableSpec` del
