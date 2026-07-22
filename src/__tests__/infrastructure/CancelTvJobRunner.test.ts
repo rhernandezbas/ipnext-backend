@@ -120,6 +120,51 @@ describe('CancelTvJobRunner (#5B) — baja event carries cic', () => {
   });
 });
 
+// gigared-tv-identity-hardening (D-baja/B6) — the newCic that renewCic recycled into the pool
+// (the future mina) is appended to the 'baja' event's reason — a grep-able breadcrumb for a
+// future poisoned-CIC forensic report (#72's root cause).
+describe('CancelTvJobRunner (D-baja/B6) — newCic del renewCic en el evento baja', () => {
+  it('renew:{newCic} + SIN motivo del usuario → reason = solo el tag "renewCic:{newCic}"', async () => {
+    const eventRepo = new InMemoryTvActivationEventRepository();
+    const result = makeResult({ renew: { oldCic: '0006230159', newCic: '0006938875' } });
+    const runner = new CancelTvJobRunner(makeCancelTv(result), makeCancelStatus(), eventRepo);
+
+    await runner.run('cust-1', 'contract-99');
+
+    expect(eventRepo.all()[0]!.reason).toBe('renewCic:0006938875');
+  });
+
+  it('renew:{newCic} + CON motivo del usuario → reason = "{motivo} · renewCic:{newCic}" (motivo preservado primero)', async () => {
+    const eventRepo = new InMemoryTvActivationEventRepository();
+    const result = makeResult({ renew: { oldCic: '0006230159', newCic: '0006938875' } });
+    const runner = new CancelTvJobRunner(makeCancelTv(result), makeCancelStatus(), eventRepo);
+
+    await runner.run('cust-1', 'contract-99', undefined, 'Mudanza');
+
+    expect(eventRepo.all()[0]!.reason).toBe('Mudanza · renewCic:0006938875');
+  });
+
+  it('renew:null (no corrió / falló) + CON motivo → reason = el motivo del usuario TAL CUAL (legacy, sin sufijo)', async () => {
+    const eventRepo = new InMemoryTvActivationEventRepository();
+    const result = makeResult({ renew: null });
+    const runner = new CancelTvJobRunner(makeCancelTv(result), makeCancelStatus(), eventRepo);
+
+    await runner.run('cust-1', 'contract-99', undefined, 'Mudanza');
+
+    expect(eventRepo.all()[0]!.reason).toBe('Mudanza');
+  });
+
+  it('renew:null + SIN motivo → reason = null (legacy, comportamiento actual intacto)', async () => {
+    const eventRepo = new InMemoryTvActivationEventRepository();
+    const result = makeResult({ renew: null });
+    const runner = new CancelTvJobRunner(makeCancelTv(result), makeCancelStatus(), eventRepo);
+
+    await runner.run('cust-1', 'contract-99');
+
+    expect(eventRepo.all()[0]!.reason).toBeNull();
+  });
+});
+
 describe('RegisterGigaredAccount (#5B regression) — alta/reactivacion still carry cic', () => {
   /**
    * The RegisterGigaredAccount event recording path is already covered in

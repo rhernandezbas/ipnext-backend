@@ -54,6 +54,12 @@ export class CancelTvJobRunner {
       // #5 BE / #5B — record the 'baja' event best-effort (never abort the status write above).
       // #5B: pass result.cic (the CIC of the account at the time of the baja) and contractId
       // so history shows which CIC and contract were involved in each baja.
+      // gigared-tv-identity-hardening (D-baja/B6) — the newCic that renewCic just recycled into
+      // the `unregistered` pool (the future poisoned CIC, D-pool) is otherwise discarded — the
+      // last time it happened, the forensic reconstruction of the Centeno/Vacherand incident had
+      // to be pure archaeology because nothing recorded it. Append it as a grep-able
+      // `renewCic:{newCic}` suffix (no migration — `reason` is an existing free-text column),
+      // preserving the user's own baja reason (#127) as the first segment when present.
       if (this.eventRepo) {
         try {
           await this.eventRepo.record({
@@ -63,7 +69,8 @@ export class CancelTvJobRunner {
             eventType:  'baja',
             cic:        result.cic,
             contractId: contractId,
-            reason:     reason ?? null,
+            reason:     [reason ?? null, result.renew?.newCic ? `renewCic:${result.renew.newCic}` : null]
+                          .filter(Boolean).join(' · ') || null,
           });
         } catch (evErr) {
           // eslint-disable-next-line no-console
