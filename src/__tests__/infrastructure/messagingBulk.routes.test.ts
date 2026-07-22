@@ -1264,11 +1264,18 @@ describe('/api/messaging/bulk — bulk-granular-perms (BLOQUEO por estado/tipo)'
 });
 
 // ─── bulk-task-recipients (B4.3/B4.4, TASK-1, D5) — wire de taskStageIds ─────────
-// El use case (PreviewCampaignSegment/ListSegmentRecipients/CreateCampaign)
-// TODAVÍA no consume `taskStageIds` (eso es B5.3) — estos tests pinean el
+// El use case (PreviewCampaignSegment/ListSegmentRecipients/CreateCampaign) YA
+// consume `taskStageIds` de punta a punta (B5/B6, verde) — estos tests pinean el
 // PARSER fail-loud (`toTaskStageIds`) + que el valor parseado llegue INTACTO
-// al input del use case, vía spy sobre `execute` (molde: no hay port
-// observable acá, el consumo real es B5).
+// al input del use case, vía spy sobre `execute` (molde: no hay port observable
+// acá a nivel ruta). La RESOLUCIÓN real (candidatos/skip/dedup/precedencia) está
+// cubierta por `resolveCombinedRecipients.test.ts`; la elegibilidad/cap A NIVEL
+// RUTA (422 real, vía el `errorHandler` real) está cubierta por el describe de
+// abajo (fix wave, F3).
+//
+// [fix wave, F4, higiene] — el comentario original decía "TODAVÍA no consume
+// `taskStageIds` (eso es B5.3)", que quedó FALSO tras B5/B6 completarse
+// (corregido acá — texto stale, no afectaba comportamiento).
 describe('/api/messaging/bulk — taskStageIds (B4, parser fail-loud + wire)', () => {
   afterEach(() => {
     jest.restoreAllMocks();
@@ -1375,5 +1382,37 @@ describe('/api/messaging/bulk — taskStageIds (B4, parser fail-loud + wire)', (
 
     expect(res.status).toBe(201);
     expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({ taskStageIds: ['stageA'] }));
+  });
+});
+
+// ─── fix wave (F3, MED R2, test-only) — 422 de elegibilidad y cap A NIVEL RUTA ──
+// `assertTaskStagesEligible`/`MAX_TASK_STATE_RECIPIENTS` ya están cubiertos a
+// nivel unit (`assertTaskStagesEligible.test.ts`/`resolveCombinedRecipients.test.ts`)
+// pero NUNCA a nivel HTTP — estos 2 tests pinean que el `errorHandler` REAL
+// traduce esos errores tipados a 422 con el `code` correcto cuando la request
+// llega por la ruta real (supertest), usando `opts.mappedTaskStages`/
+// `opts.taskClientIds` que `buildApp` ya soporta.
+describe('/api/messaging/bulk — taskStageIds: 422 a nivel ruta (fix wave, F3)', () => {
+  it('POST /segment/preview con un stage NO mapeado → 422 TASK_STAGE_NOT_ELIGIBLE', async () => {
+    const { app } = buildApp({ mappedTaskStages: ['stageA'] });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], taskStageIds: ['stageZ'] });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TASK_STAGE_NOT_ELIGIBLE');
+  });
+
+  it('POST /segment/preview con el set distinct de tareas > MAX_TASK_STATE_RECIPIENTS → 422 TOO_MANY_TASK_STATE_RECIPIENTS', async () => {
+    const tooMany = Array.from({ length: 10001 }, (_, i) => `c${i}`);
+    const { app } = buildApp({ mappedTaskStages: ['stageA'], taskClientIds: tooMany });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/segment/preview')
+      .send({ statuses: ['late'], taskStageIds: ['stageA'] });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TOO_MANY_TASK_STATE_RECIPIENTS');
   });
 });

@@ -38,6 +38,16 @@ export class InMemoryTaskStageRecipientConfigRepository implements TaskStageReci
   async getMappedStages(): Promise<MappedStage[]> {
     return Array.from(this.mapped).map((stageId) => {
       const entry = this.catalog[stageId];
+      // fix wave (F4, LOW, higiene) — guard defensivo: un stageId mapeado que ya NO
+      // está en el catálogo (fixture inconsistente — inalcanzable vía
+      // `replaceMappedStages`, que SÍ valida, pero alcanzable vía el 2do arg del
+      // constructor) rechaza con un error CLARO, no un `TypeError` crudo
+      // (`Cannot read properties of undefined`).
+      if (!entry) {
+        throw new TaskStageNotFoundError(
+          `getMappedStages: stageId '${stageId}' está mapeado pero no existe en el catálogo`,
+        );
+      }
       return {
         stageId,
         stageName: entry.name,

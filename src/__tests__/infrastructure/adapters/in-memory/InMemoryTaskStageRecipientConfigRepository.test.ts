@@ -7,6 +7,7 @@
  */
 import { InMemoryTaskStageRecipientConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryTaskStageRecipientConfigRepository';
 import { MappedStage } from '@domain/ports/TaskStageRecipientConfigRepository';
+import { TaskStageNotFoundError } from '@domain/errors/messaging-task-stage-config';
 
 const CATALOG = {
   A: { name: 'Nuevo', code: 'nuevo', color: '#111111', workflowId: 'wf-1', workflowName: 'Instalaciones' },
@@ -64,5 +65,14 @@ describe('InMemoryTaskStageRecipientConfigRepository', () => {
         workflowName: 'Reclamos',
       },
     ]);
+  });
+
+  it('fix wave (F4, LOW, higiene) — getMappedStages() con un stageId mapeado FUERA del catálogo → error claro (TaskStageNotFoundError), NO un TypeError crudo', async () => {
+    // Estado inconsistente inalcanzable vía replaceMappedStages (que SÍ valida contra
+    // el catálogo) — pero alcanzable vía el 2do arg del constructor (fixture directa),
+    // molde de un catálogo desactualizado respecto al Set mapeado. Guard defensivo.
+    const repo = new InMemoryTaskStageRecipientConfigRepository(CATALOG, ['A', 'stage-fantasma']);
+
+    await expect(repo.getMappedStages()).rejects.toBeInstanceOf(TaskStageNotFoundError);
   });
 });
