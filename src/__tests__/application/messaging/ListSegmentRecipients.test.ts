@@ -7,8 +7,10 @@
  * SEG-5 de solo lectura, mismo criterio que el preview).
  */
 import { ListSegmentRecipients } from '@application/use-cases/messaging/ListSegmentRecipients';
-import { UnfilteredSegmentError } from '@domain/errors/messaging-bulk';
+import { UnfilteredSegmentError, TaskStageNotEligibleError } from '@domain/errors/messaging-bulk';
 import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter, ManualRecipientSource } from '@domain/ports/CustomerRepository';
+import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import type { TaskStageRecipientConfigRepository } from '@domain/ports/TaskStageRecipientConfigRepository';
 
 function makeManualSource(rows: FakeClientRow[]): ManualRecipientSource {
   return {
@@ -31,6 +33,23 @@ function makeSegmentSource(rows: FakeClientRow[]): CampaignSegmentSource {
         .filter((r) => segment.balanceMin == null || (r.balanceDue ?? 0) >= segment.balanceMin)
         .filter((r) => segment.balanceMax == null || (r.balanceDue ?? 0) <= segment.balanceMax);
     },
+  };
+}
+
+/** bulk-task-recipients (B5.3) — fake narrow del 5to dominio "Tarea" (resolución). */
+function makeTaskSource(clientIds: string[], noCustomerCount = 0): TaskRecipientSource {
+  return {
+    listClientIdsByOpenTaskStages: async () => clientIds,
+    countOpenTasksWithoutCustomer: async () => noCustomerCount,
+  };
+}
+
+/** bulk-task-recipients (B5.3) — fake narrow de la config de elegibilidad. */
+function makeTaskStageConfigRepo(mapped: string[]): TaskStageRecipientConfigRepository {
+  return {
+    listMappedStageIds: async () => mapped,
+    getMappedStages: async () => [],
+    replaceMappedStages: async () => undefined,
   };
 }
 
@@ -217,6 +236,45 @@ describe('ListSegmentRecipients', () => {
       expect(result.limit).toBe(25);
       expect(result.skipped).toEqual({ optedOut: 0, duplicatePhone: 0, invalidPhone: 0 });
       expect(result.data.map((r: any) => r.clientId)).toEqual(['c1']);
+    });
+  });
+
+  // ── bulk-task-recipients (TASK-1, TASK-2): 5to dominio taskStageIds ──────────
+  describe('bulk-task-recipients (TASK-1, TASK-2): taskStageIds', () => {
+    it('TASK-2: taskStageIds NO mapeado → TaskStageNotEligibleError, rechaza ANTES de tocar la fuente', async () => {
+      const source = makeSegmentSource([]);
+      const listSpy = jest.spyOn(source, 'listSegmentRecipients');
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const uc = new ListSegmentRecipients(source, undefined, undefined, taskConfigRepo);
+
+      await expect(
+        uc.execute({ statuses: [], taskStageIds: ['stageA', 'stageB'] }),
+      ).rejects.toBeInstanceOf(TaskStageNotEligibleError);
+      expect(listSpy).not.toHaveBeenCalled();
+    });
+
+    it('TASK-1: solo-tarea (segmento sin criterio) → 200 con el destinatario resuelto por tarea, source:"task"', async () => {
+      const source = makeSegmentSource([]);
+      const manualSource = makeManualSource([makeRow({ clientId: 'c1', phone: '3364111111', status: 'active' })]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const taskSource = makeTaskSource(['c1']);
+      const uc = new ListSegmentRecipients(source, manualSource, taskSource, taskConfigRepo);
+
+      const result = await uc.execute({ statuses: [], taskStageIds: ['stageA'] });
+
+      expect(result.total).toBe(1);
+      expect(result.data[0]).toMatchObject({ clientId: 'c1', source: 'task' });
+    });
+
+    it('noCustomerCount: expone el chip agregado de tareas de red sin cliente', async () => {
+      const source = makeSegmentSource([]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const taskSource = makeTaskSource([], 5);
+      const uc = new ListSegmentRecipients(source, undefined, taskSource, taskConfigRepo);
+
+      const result = await uc.execute({ statuses: [], taskStageIds: ['stageA'] });
+
+      expect(result.noCustomerCount).toBe(5);
     });
   });
 });

@@ -215,13 +215,13 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
 
 ## Batch 5 — Branch `task` en `resolveCombinedRecipients` + snapshot inmutable (TASK-3..TASK-9, D3 cap, D4, D7)
 
-- [ ] **5.1** `RecipientSource` (`resolveCombinedRecipients.ts:44`) gana `'task'` →
+- [x] **5.1** `RecipientSource` (`resolveCombinedRecipients.ts:44`) gana `'task'` →
   `'segment'|'manual'|'csv'|'task'`. `CombinedRecipientsResult` gana `taskSkipped:
   RecipientSkipCounts` + `noCustomerCount: number`. `resolveCombinedRecipients` gana params
   `taskStageIds: string[]` (requerido, molde `manualContacts`) + `taskRecipientSource?:
   TaskRecipientSource` (opcional, molde `manualRecipientSource`) + `MAX_TASK_STATE_RECIPIENTS =
   10000` (exportado, molde `MAX_MANUAL_RECIPIENTS`).
-- [ ] **5.2** **Reordenamiento estructural requerido** (guía concreta de implementación, no está
+- [x] **5.2** **Reordenamiento estructural requerido** (guía concreta de implementación, no está
   al detalle de línea en el design): la resolución+hidratación de `task` NO puede vivir en
   "sección 3" en paralelo al CSV — necesita `byClientId`/`seenPhones` **YA poblados** por los
   `admit()` de segmento+manual+csv (D4 "filtra los ya presentes en byClientId"), y esos solo están
@@ -257,7 +257,7 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
     - Regresión: TODAS las suites existentes de SEG/MAN/CSV en este archivo siguen verdes SIN editar
       una sola aserción (`taskStageIds: []` por default en los tests viejos → comportamiento
       byte-idéntico, TASK-1 scenario "no-regresión").
-- [ ] **5.3** `PreviewCampaignSegment`/`ListSegmentRecipients`/`CreateCampaign` — inyectan
+- [x] **5.3** `PreviewCampaignSegment`/`ListSegmentRecipients`/`CreateCampaign` — inyectan
   `taskRecipientSource?: TaskRecipientSource` + `taskStageConfigRepo?:
   TaskStageRecipientConfigRepository` (2 args OPCIONALES nuevos AL FINAL de cada constructor, molde
   `manualRecipientSource`, no rompen la aridad de tests ya verdes). Cada `execute`: llama
@@ -274,7 +274,7 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
     - `manualClientIds:['c1']` + `taskStageIds:['stageA']` (mapeado, c2 con tarea abierta) → crea 2
       recipients: c1 `source:'manual'`, c2 `source:'task'` (TASK-1 scenario "combinación con
       manual").
-- [ ] **5.4** Snapshot inmutable (TASK-8, D7) — `CreateCampaign` materializa `resolved` (incl. los de
+- [x] **5.4** Snapshot inmutable (TASK-8, D7) — `CreateCampaign` materializa `resolved` (incl. los de
   `source:'task'`) como `CampaignRecipient` con `clientId` SIEMPRE seteado (camino "vinculado",
   molde `contactName: null` para task — nunca crudo). `SendCampaign` NO CAMBIA (ya opera sobre
   `CampaignRecipient.clientId != null`).
@@ -285,13 +285,13 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
     materializados no cambian, ninguna re-resolución ocurre (TASK-8 scenario 1). Ídem cerrando la
     tarea del cliente DESPUÉS del create (TASK-8 scenario 2) — ambos verificables re-leyendo
     `campaignRepo` sin volver a invocar `CreateCampaign`.
-- [ ] **5.5** bulk-granular-perms automático (TASK-9, D5 "sin código nuevo") — test que confirma que
+- [x] **5.5** bulk-granular-perms automático (TASK-9, D5 "sin código nuevo") — test que confirma que
   un cliente `status:'blocked'` resuelto ÚNICAMENTE por `taskStageIds`, con un operador sin
   `messaging.bulk_blocked`, dispara `BulkRecipientsNotPermittedError` (403) al crear — SIN tocar
   `forbiddenBulkTargets`/`CreateCampaign.ts:93-101` (extiende `CreateCampaign.test.ts`, confirma que
   el mecanismo existente ya cubre `source:'task'` porque lee `status` del candidato hidratado, no el
   `source`).
-- [ ] **Gate B5**: `resolveCombinedRecipients.test.ts` + los 3 use-case tests, verdes. Suites SEG/MAN/
+- [x] **Gate B5**: `resolveCombinedRecipients.test.ts` + los 3 use-case tests, verdes. Suites SEG/MAN/
   CSV preexistentes verdes SIN una sola aserción editada (cero regresión, D9).
 
 ## Batch 6 — Wiring `app.ts` + composition-root (D6, D9)

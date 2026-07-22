@@ -1,6 +1,8 @@
 import type { CampaignRepository } from '@domain/ports/CampaignRepository';
 import type { CampaignSegmentSource, ManualRecipientSource } from '@domain/ports/CustomerRepository';
 import type { TemplateMessagingPort } from '@domain/ports/TemplateMessagingPort';
+import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import type { TaskStageRecipientConfigRepository } from '@domain/ports/TaskStageRecipientConfigRepository';
 import type { CreateCampaignInput, CreateCampaignOutput } from '@application/dto/messaging-bulk.dto';
 import {
   TemplateNotApprovedError,
@@ -10,6 +12,7 @@ import {
 } from '@domain/errors/messaging-bulk';
 import { forbiddenBulkTargets } from '@domain/services/bulkRecipientAuthorization';
 import { assertHasRecipients } from './assertHasRecipients';
+import { assertTaskStagesEligible } from './assertTaskStagesEligible';
 import { resolveCombinedRecipients, normalizeManualClientIds, normalizeManualContacts } from './resolveCombinedRecipients';
 
 /**
@@ -36,6 +39,10 @@ export class CreateCampaign {
     // manual-recipients (MAN-1) — OPCIONAL para no romper la aridad de los tests
     // ya verdes (3 args). El wiring real (app.ts) SIEMPRE lo inyecta.
     private readonly manualRecipientSource?: ManualRecipientSource,
+    // bulk-task-recipients (D3, D5) — 2 args OPCIONALES nuevos AL FINAL (molde
+    // `manualRecipientSource`, no rompen la aridad de los tests ya verdes).
+    private readonly taskRecipientSource?: TaskRecipientSource,
+    private readonly taskStageConfigRepo?: TaskStageRecipientConfigRepository,
   ) {}
 
   async execute(input: CreateCampaignInput): Promise<CreateCampaignOutput> {
@@ -43,11 +50,16 @@ export class CreateCampaign {
     const manualClientIds = normalizeManualClientIds(input.manualClientIds);
     // bulk-csv-recipients (CSV-1) — 4to dominio normalizado (trim + descarta ruido).
     const manualContacts = normalizeManualContacts(input.manualContacts);
+    // bulk-task-recipients (TASK-1) — 5to dominio, PARALELO.
+    const taskStageIds = input.taskStageIds ?? [];
 
     // MAN-2 (extiende FIX-8) — una campaña es válida con segmento filtrado, O lista
-    // manual no vacía, O manualContacts no vacío; se rechaza ANTES de efectos SOLO
-    // si los TRES están vacíos.
-    assertHasRecipients(input.segment, manualClientIds, manualContacts);
+    // manual no vacía, O manualContacts no vacío, O taskStageIds no vacío; se
+    // rechaza ANTES de efectos SOLO si los CUATRO están vacíos.
+    assertHasRecipients(input.segment, manualClientIds, manualContacts, taskStageIds);
+    // bulk-task-recipients (TASK-2, D3) — elegibilidad ANTES de resolver clientes
+    // (guard de pre-vuelo, junto a assertHasRecipients — NO dentro del resolver).
+    await assertTaskStagesEligible(taskStageIds, this.taskStageConfigRepo);
 
     // CAMP-2 — templateRef debe corresponder a un template approved. Un
     // templateRef inexistente en el proveedor se trata IGUAL que no-aprobado
@@ -67,16 +79,20 @@ export class CreateCampaign {
       throw new MissingTemplateVariablesError(missing);
     }
 
-    // MAN-1..MAN-4 + bulk-csv-recipients (CSV-1..CSV-4) — resuelve la UNIÓN
-    // (segmento ∪ manuales ∪ contactos CSV) deduplicada por clientId Y por
-    // teléfono. Fail-loud (MAN-3) si algún manualClientId no existe; compliance
-    // (opt-out/teléfono/dedup) enforced por resolveRecipients/matchManualContacts.
+    // MAN-1..MAN-4 + bulk-csv-recipients (CSV-1..CSV-4) + bulk-task-recipients
+    // (TASK-1..TASK-9) — resuelve la UNIÓN (segmento ∪ manuales ∪ contactos CSV ∪
+    // tarea) deduplicada por clientId Y por teléfono. Fail-loud (MAN-3) si algún
+    // manualClientId no existe; compliance (opt-out/teléfono/dedup) enforced por
+    // resolveRecipients/matchManualContacts. `resolved` (D7) se congela DEBAJO,
+    // en `bulkCreateRecipients` — el envío jamás re-resuelve (TASK-8).
     const { resolved } = await resolveCombinedRecipients({
       segment: input.segment,
       manualClientIds,
       manualContacts,
+      taskStageIds,
       segmentSource: this.segmentSource,
       manualRecipientSource: this.manualRecipientSource,
+      taskRecipientSource: this.taskRecipientSource,
     });
 
     // CAMP-4 — cero destinatarios (segmento + manual resueltos a nada) se rechaza,

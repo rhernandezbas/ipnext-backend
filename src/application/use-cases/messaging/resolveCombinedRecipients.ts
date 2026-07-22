@@ -2,10 +2,12 @@ import type {
   CampaignSegmentSource,
   ManualRecipientSource,
 } from '@domain/ports/CustomerRepository';
+import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
 import {
   ManualRecipientsNotFoundError,
   TooManyManualRecipientsError,
   TooManyManualContactsError,
+  TooManyTaskStateRecipientsError,
 } from '@domain/errors/messaging-bulk';
 import { resolveRecipients, ResolvedRecipient, ExclusionReason, ExcludedCandidate } from './resolveRecipients';
 import { segmentHasCriteria, SegmentCriteria } from './assertSegmentIsFiltered';
@@ -33,6 +35,15 @@ export const MAX_MANUAL_RECIPIENTS = 5000;
  */
 export const MAX_MANUAL_CONTACTS = 5000;
 
+/**
+ * bulk-task-recipients (TASK-4, D3) — cota superior del SET de `clientId`
+ * DISTINCT resuelto por `taskStageIds` (chequeada sobre el resultado CRUDO del
+ * port, ANTES de filtrar overlap/hidratar). El DOBLE de los caps manual/csv
+ * (5000): este universo es COMPUTADO desde tareas abiertas, no hand-curated —
+ * un stage con miles de tareas históricas es un escenario real, no abuso.
+ */
+export const MAX_TASK_STATE_RECIPIENTS = 10000;
+
 /** FIX-2 — desglose de exclusiones (opt-out/dedup-teléfono/teléfono-inválido). */
 export interface RecipientSkipCounts {
   optedOut: number;
@@ -40,8 +51,12 @@ export interface RecipientSkipCounts {
   invalidPhone: number;
 }
 
-/** bulk-csv-recipients (D7/D11) — de qué dominio vino un destinatario/exclusión resuelto. */
-export type RecipientSource = 'segment' | 'manual' | 'csv';
+/**
+ * bulk-csv-recipients (D7/D11) + bulk-task-recipients (D4) — de qué dominio
+ * vino un destinatario/exclusión resuelto. `'task'` es el 5to dominio, APPEND
+ * al final (precedencia MENOR: segmento > manual > csv > task).
+ */
+export type RecipientSource = 'segment' | 'manual' | 'csv' | 'task';
 
 /**
  * bulk-csv-recipients (D7/D11) — un destinatario de la UNIÓN de las 3 fuentes.
@@ -96,11 +111,27 @@ export interface CombinedRecipientsResult {
    * `duplicatePhone`. Mismos buckets del wire que segmento/manual (backcompat).
    */
   csvSkipped: RecipientSkipCounts;
+  /**
+   * bulk-task-recipients (TASK-7) — exclusiones del 5to dominio (`taskStageIds`):
+   * opt-out/teléfono-inválido/duplicado (incl. dedup cross-source por teléfono,
+   * molde `manualSkipped`/`csvSkipped`), calculadas SEPARADAS del resto.
+   * `{optedOut:0,duplicatePhone:0,invalidPhone:0}` cuando `taskStageIds` está
+   * vacío/ausente (no-regresión).
+   */
+  taskSkipped: RecipientSkipCounts;
   /** Conteo por `status` sobre la UNIÓN (receptores reales) — `no_cliente` para los crudos. */
   statusCounts: Record<string, number>;
   /**
+   * bulk-task-recipients (TASK-3, TASK-7) — chip agregado HONESTO: tareas
+   * ABIERTAS en los `taskStageIds` pedidos sin `customerId` (tareas de red) —
+   * NUNCA un drop silencioso, independiente de `taskSkipped` (no es un skip de
+   * teléfono). `0` cuando `taskStageIds` está vacío/ausente.
+   */
+  noCustomerCount: number;
+  /**
    * bulk-csv-recipients (D7) — detalle por-persona de TODAS las exclusiones,
-   * de las 3 fuentes (segmento + manual + CSV), en el orden en que se resolvieron.
+   * de las 4 fuentes (segmento + manual + CSV + tarea), en el orden en que se
+   * resolvieron.
    */
   excludedDetail: ExcludedDetailEntry[];
 }
@@ -135,8 +166,24 @@ export async function resolveCombinedRecipients(params: {
   manualContacts: ManualContactInput[];
   segmentSource: CampaignSegmentSource;
   manualRecipientSource?: ManualRecipientSource;
+  /**
+   * bulk-task-recipients (TASK-1) — 5to dominio, PARALELO a `manualClientIds`/
+   * `manualContacts`. OPCIONAL con default `[]` (no-regresión: los callers/tests
+   * que no lo mencionan se comportan BYTE-IDÉNTICO a antes de este change).
+   */
+  taskStageIds?: string[];
+  /** bulk-task-recipients (D2) — opcional, molde `manualRecipientSource`. */
+  taskRecipientSource?: TaskRecipientSource;
 }): Promise<CombinedRecipientsResult> {
-  const { segment, manualClientIds, manualContacts, segmentSource, manualRecipientSource } = params;
+  const {
+    segment,
+    manualClientIds,
+    manualContacts,
+    segmentSource,
+    manualRecipientSource,
+    taskStageIds = [],
+    taskRecipientSource,
+  } = params;
 
   // FIX-3 — cota superior ANTES de tocar la DB (segmento o manual): un payload
   // multi-miles reventaría el límite de bind params de Postgres → 500. Rechazo
@@ -320,10 +367,76 @@ export async function resolveCombinedRecipients(params: {
     admit(c);
   }
 
+  // 5. bulk-task-recipients (D3, D4, TASK-1..TASK-9) — 5to dominio "Tarea":
+  // clientes con ≥1 tarea ABIERTA en un `Stage` mapeado. Corre DESPUÉS de los
+  // 3 loops de arriba a PROPÓSITO (D-B5.2): necesita `byClientId`/`seenPhones`
+  // YA poblados para (a) filtrar el overlap con seg∪manual∪csv (silencioso,
+  // conservan su source por precedencia) y (b) dedupear cross-source por
+  // teléfono (molde CSV-4). Precedencia MENOR: task solo "posee" a los
+  // resueltos ÚNICAMENTE por tarea.
+  const taskSkipped: RecipientSkipCounts = { optedOut: 0, duplicatePhone: 0, invalidPhone: 0 };
+  const taskExcludedDetail: ExcludedDetailEntry[] = [];
+  if (taskStageIds.length > 0) {
+    if (!taskRecipientSource) {
+      // Defensivo — nunca ocurre en el wiring real (app.ts inyecta PrismaTaskRecipientSource).
+      throw new Error('resolveCombinedRecipients: taskRecipientSource requerido para taskStageIds');
+    }
+    // 1. Distinct crudo del port.
+    const taskClientIds = await taskRecipientSource.listClientIdsByOpenTaskStages(taskStageIds);
+    // 2. Cap — ANTES de filtrar overlap/hidratar (TASK-4, sobre el set crudo).
+    if (taskClientIds.length > MAX_TASK_STATE_RECIPIENTS) {
+      throw new TooManyTaskStateRecipientsError(taskClientIds.length, MAX_TASK_STATE_RECIPIENTS);
+    }
+    // 3. Filtra los ya presentes en la unión (overlap seg∪manual∪csv, silencioso).
+    const newClientIds = taskClientIds.filter((id) => !byClientId.has(id));
+    if (newClientIds.length > 0) {
+      if (!manualRecipientSource) {
+        // Defensivo — nunca ocurre en el wiring real (app.ts inyecta customerAdapter
+        // como ManualRecipientSource, misma instancia que hidrata el dominio manual).
+        throw new Error('resolveCombinedRecipients: manualRecipientSource requerido para hidratar taskStageIds');
+      }
+      // 4. Hidrata (CERO port nuevo, D2) + compliance (opt-out/teléfono/dedup interno).
+      const candidates = await manualRecipientSource.findRecipientCandidatesByIds(newClientIds);
+      const r = resolveRecipients(candidates);
+      taskSkipped.optedOut = r.excludedOptOut;
+      taskSkipped.invalidPhone = r.excludedNoPhone;
+      taskSkipped.duplicatePhone = r.dedupCollapsed;
+      taskExcludedDetail.push(...r.excluded.map((e) => toExcludedDetail(e, 'task')));
+
+      // 5. admit() propio — dedup cross-source por teléfono (molde CSV `:307-321`).
+      for (const c of r.resolved) {
+        if (byClientId.has(c.clientId)) continue; // defensivo (overlap ya filtrado en el paso 3)
+        if (seenPhones.has(c.phoneNormalized)) {
+          taskSkipped.duplicatePhone++;
+          taskExcludedDetail.push({
+            name: c.name,
+            phone: c.phoneE164,
+            reason: 'duplicado',
+            source: 'task',
+            clientId: c.clientId,
+            status: c.status,
+          });
+          continue;
+        }
+        admit({ ...c, source: 'task' });
+      }
+    }
+  }
+
+  // 6. Chip agregado — independiente de taskSkipped (NO es un skip de teléfono).
+  const noCustomerCount = taskStageIds.length > 0 && taskRecipientSource
+    ? await taskRecipientSource.countOpenTasksWithoutCustomer(taskStageIds)
+    : 0;
+
   const statusCounts: Record<string, number> = {};
   for (const r of resolved) statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1;
 
-  const excludedDetail = sortExcluded([...segmentExcludedDetail, ...manualExcludedDetail, ...csvExcludedDetail]);
+  const excludedDetail = sortExcluded([
+    ...segmentExcludedDetail,
+    ...manualExcludedDetail,
+    ...csvExcludedDetail,
+    ...taskExcludedDetail,
+  ]);
 
   return {
     resolved: sortResolved(resolved),
@@ -332,7 +445,9 @@ export async function resolveCombinedRecipients(params: {
     segmentSkipped,
     manualSkipped,
     csvSkipped,
+    taskSkipped,
     statusCounts,
+    noCustomerCount,
     excludedDetail,
   };
 }

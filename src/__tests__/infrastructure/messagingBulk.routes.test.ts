@@ -35,6 +35,8 @@ import { CampaignRunner, CampaignSender, CAMPAIGN_LOCK_KEY } from '../../infrast
 import type { CampaignSegmentSource, CampaignRecipientCandidate, ManualRecipientSource } from '../../domain/ports/CustomerRepository';
 import type { TemplateMessagingPort, TemplateDto } from '../../domain/ports/TemplateMessagingPort';
 import type { Campaign } from '../../domain/entities/campaign';
+import type { TaskRecipientSource } from '../../domain/ports/TaskRecipientSource';
+import type { TaskStageRecipientConfigRepository } from '../../domain/ports/TaskStageRecipientConfigRepository';
 
 // ─── Fakes (T3.2/T3.3 pattern — inline mínimo, NO InMemoryCustomerRepository) ────
 
@@ -48,6 +50,30 @@ function makeManualSource(candidates: CampaignRecipientCandidate[]): ManualRecip
     findRecipientCandidatesByIds: jest.fn(async (ids: string[]) =>
       candidates.filter((c) => ids.includes(c.clientId)),
     ),
+  };
+}
+
+/**
+ * bulk-task-recipients (B4/B5) — fakes narrow del 5to dominio "Tarea". Default
+ * PERMISIVO (`['stageA','stageB']` mapeados, sin clientIds resueltos): las
+ * suites B4 de este archivo solo pinean el WIRE del parser (`taskStageIds`
+ * llega intacto al input del use case), no la resolución en sí (eso es B5,
+ * `resolveCombinedRecipients.test.ts`) — con `taskClientIds:[]` el dominio
+ * tarea contribuye 0 recipients sin romper ninguna aserción `count`/`total`
+ * preexistente.
+ */
+function makeTaskSource(clientIds: string[] = []): TaskRecipientSource {
+  return {
+    listClientIdsByOpenTaskStages: jest.fn(async () => clientIds),
+    countOpenTasksWithoutCustomer: jest.fn(async () => 0),
+  };
+}
+
+function makeTaskStageConfigRepo(mapped: string[] = ['stageA', 'stageB']): TaskStageRecipientConfigRepository {
+  return {
+    listMappedStageIds: jest.fn(async () => mapped),
+    getMappedStages: jest.fn(async () => []),
+    replaceMappedStages: jest.fn(async () => undefined),
   };
 }
 
@@ -115,6 +141,10 @@ interface BuildAppOptions {
    * subset (ej. `['bulk']` sin `bulk_blocked`).
    */
   bulkActions?: string[];
+  /** bulk-task-recipients — clientIds que el 5to dominio "Tarea" resuelve (default: ninguno). */
+  taskClientIds?: string[];
+  /** bulk-task-recipients — set de stages elegibles (default: `['stageA','stageB']`). */
+  mappedTaskStages?: string[];
 }
 
 function buildApp(opts: BuildAppOptions = {}) {
@@ -125,11 +155,15 @@ function buildApp(opts: BuildAppOptions = {}) {
   // criterio que app.ts, donde customerAdapter sirve ambos ports).
   const manualSource = makeManualSource(opts.manualCandidates ?? []);
 
+  // bulk-task-recipients (B4/B5) — 5to dominio, default permisivo (ver comentario del fake).
+  const taskSource = makeTaskSource(opts.taskClientIds ?? []);
+  const taskStageConfigRepo = makeTaskStageConfigRepo(opts.mappedTaskStages ?? ['stageA', 'stageB']);
+
   const listTemplates = new ListTemplates(templatePort);
-  const previewCampaignSegment = new PreviewCampaignSegment(segmentSource, manualSource);
+  const previewCampaignSegment = new PreviewCampaignSegment(segmentSource, manualSource, taskSource, taskStageConfigRepo);
   // bulk-csv-recipients (DET-1) — 2do arg manualRecipientSource (cierra deuda F4).
-  const listSegmentRecipients = new ListSegmentRecipients(segmentSource, manualSource);
-  const createCampaign = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource);
+  const listSegmentRecipients = new ListSegmentRecipients(segmentSource, manualSource, taskSource, taskStageConfigRepo);
+  const createCampaign = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource, taskSource, taskStageConfigRepo);
   const getCampaign = new GetCampaign(campaignRepo);
   const listCampaigns = new ListCampaigns(campaignRepo);
 

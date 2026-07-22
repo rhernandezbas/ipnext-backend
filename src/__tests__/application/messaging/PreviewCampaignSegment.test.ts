@@ -7,8 +7,10 @@
  */
 import { PreviewCampaignSegment } from '@application/use-cases/messaging/PreviewCampaignSegment';
 import { MAX_MANUAL_RECIPIENTS } from '@application/use-cases/messaging/resolveCombinedRecipients';
-import { UnfilteredSegmentError, ManualRecipientsNotFoundError, TooManyManualRecipientsError } from '@domain/errors/messaging-bulk';
+import { UnfilteredSegmentError, ManualRecipientsNotFoundError, TooManyManualRecipientsError, TaskStageNotEligibleError } from '@domain/errors/messaging-bulk';
 import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter, ManualRecipientSource } from '@domain/ports/CustomerRepository';
+import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import type { TaskStageRecipientConfigRepository } from '@domain/ports/TaskStageRecipientConfigRepository';
 
 interface FakeClientRow extends CampaignRecipientCandidate {
   status: string;
@@ -44,6 +46,23 @@ function makeSegmentSource(rows: FakeClientRow[]): CampaignSegmentSource {
         .filter((r) => segment.balanceMin == null || (r.balanceDue ?? 0) >= segment.balanceMin)
         .filter((r) => segment.balanceMax == null || (r.balanceDue ?? 0) <= segment.balanceMax);
     },
+  };
+}
+
+/** bulk-task-recipients (B5.3) — fake narrow del 5to dominio "Tarea" (resolución). */
+function makeTaskSource(clientIds: string[], noCustomerCount = 0): TaskRecipientSource {
+  return {
+    listClientIdsByOpenTaskStages: async () => clientIds,
+    countOpenTasksWithoutCustomer: async () => noCustomerCount,
+  };
+}
+
+/** bulk-task-recipients (B5.3) — fake narrow de la config de elegibilidad. */
+function makeTaskStageConfigRepo(mapped: string[]): TaskStageRecipientConfigRepository {
+  return {
+    listMappedStageIds: async () => mapped,
+    getMappedStages: async () => [],
+    replaceMappedStages: async () => undefined,
   };
 }
 
@@ -461,5 +480,75 @@ describe('PreviewCampaignSegment', () => {
     const second = await uc.execute({ statuses: ['late'] });
 
     expect(first).toEqual(second);
+  });
+
+  // ── bulk-task-recipients (TASK-1, TASK-2): 5to dominio taskStageIds ──────────
+  describe('bulk-task-recipients (TASK-1, TASK-2): taskStageIds', () => {
+    it('TASK-2: taskStageIds NO mapeado → TaskStageNotEligibleError propagado (seam completo, 422 ANTES de resolver clientes)', async () => {
+      const source = makeSegmentSource([]);
+      const listSpy = jest.spyOn(source, 'listSegmentRecipients');
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const uc = new PreviewCampaignSegment(source, undefined, undefined, taskConfigRepo);
+
+      await expect(
+        uc.execute({ statuses: [], taskStageIds: ['stageA', 'stageB'] }),
+      ).rejects.toBeInstanceOf(TaskStageNotEligibleError);
+      expect(listSpy).not.toHaveBeenCalled();
+    });
+
+    it('TASK-1: combinación con manual — manualClientIds:["c1"] + taskStageIds:["stageA"] (mapeado, c2 con tarea abierta) → 2 recipients: c1 manual, c2 task', async () => {
+      const source = makeSegmentSource([]);
+      const manualSource = makeManualSource([
+        makeRow({ clientId: 'c1', phone: '3364111111', status: 'active' }),
+        makeRow({ clientId: 'c2', phone: '3364222222', status: 'active' }),
+      ]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const taskSource = makeTaskSource(['c2']);
+      const uc = new PreviewCampaignSegment(source, manualSource, taskSource, taskConfigRepo);
+
+      const result = await uc.execute({ statuses: [], manualClientIds: ['c1'], taskStageIds: ['stageA'] });
+
+      expect(result.count).toBe(2);
+    });
+
+    it('noCustomerCount: expone el chip agregado de tareas de red sin cliente', async () => {
+      const source = makeSegmentSource([]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const taskSource = makeTaskSource([], 4);
+      const uc = new PreviewCampaignSegment(source, undefined, taskSource, taskConfigRepo);
+
+      const result = await uc.execute({ statuses: [], taskStageIds: ['stageA'] });
+
+      expect(result.noCustomerCount).toBe(4);
+    });
+
+    it('taskSkipped se SUMA a skipped de salida (opt-out resuelto por tarea)', async () => {
+      const source = makeSegmentSource([]);
+      const manualSource = makeManualSource([
+        makeRow({ clientId: 'c1', phone: '3364111111', status: 'active', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+      ]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const taskSource = makeTaskSource(['c1']);
+      const uc = new PreviewCampaignSegment(source, manualSource, taskSource, taskConfigRepo);
+
+      const result = await uc.execute({ statuses: [], taskStageIds: ['stageA'] });
+
+      expect(result.count).toBe(0);
+      expect(result.skipped.optedOut).toBe(1);
+    });
+
+    it('no-regresión: sin taskStageIds → noCustomerCount:0, taskSkipped no afecta skipped (byte-idéntico)', async () => {
+      const source = makeSegmentSource([
+        makeRow({ clientId: 'c1', phone: '3364111111', status: 'late', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+        makeRow({ clientId: 'c2', phone: '3364222222', status: 'late' }),
+      ]);
+      const uc = new PreviewCampaignSegment(source);
+
+      const result = await uc.execute({ statuses: ['late'] });
+
+      expect(result.count).toBe(1);
+      expect(result.skipped).toEqual({ optedOut: 1, duplicatePhone: 0, invalidPhone: 0 });
+      expect(result.noCustomerCount).toBe(0);
+    });
   });
 });

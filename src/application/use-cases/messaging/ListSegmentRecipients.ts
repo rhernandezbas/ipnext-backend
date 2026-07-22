@@ -1,6 +1,9 @@
 import type { CampaignSegmentSource, ManualRecipientSource } from '@domain/ports/CustomerRepository';
+import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import type { TaskStageRecipientConfigRepository } from '@domain/ports/TaskStageRecipientConfigRepository';
 import type { ListSegmentRecipientsInput, ListSegmentRecipientsOutput } from '@application/dto/messaging-bulk.dto';
 import { assertHasRecipients } from './assertHasRecipients';
+import { assertTaskStagesEligible } from './assertTaskStagesEligible';
 import { resolveCombinedRecipients, normalizeManualClientIds, normalizeManualContacts } from './resolveCombinedRecipients';
 
 const DEFAULT_PAGE = 1;
@@ -32,24 +35,34 @@ export class ListSegmentRecipients {
     // requerido solo cuando el input trae `manualClientIds`. El wiring real
     // (app.ts) SIEMPRE lo inyecta (misma instancia `customerAdapter`).
     private readonly manualRecipientSource?: ManualRecipientSource,
+    // bulk-task-recipients (D3, D5) — 2 args OPCIONALES nuevos AL FINAL (molde
+    // `PreviewCampaignSegment`).
+    private readonly taskRecipientSource?: TaskRecipientSource,
+    private readonly taskStageConfigRepo?: TaskStageRecipientConfigRepository,
   ) {}
 
   async execute(input: ListSegmentRecipientsInput): Promise<ListSegmentRecipientsOutput> {
     const manualClientIds = normalizeManualClientIds(input.manualClientIds);
     const manualContacts = normalizeManualContacts(input.manualContacts);
+    // bulk-task-recipients (TASK-1) — 5to dominio, PARALELO.
+    const taskStageIds = input.taskStageIds ?? [];
 
     // bulk-csv-recipients (DET-1) — el guard pasa de `assertSegmentIsFiltered`
-    // (segment-only) a `assertHasRecipients`: un preview solo-manual o solo-CSV
-    // deja de ser 400 (cierra la deuda F4 documentada en el propio FE).
-    assertHasRecipients(input, manualClientIds, manualContacts);
+    // (segment-only) a `assertHasRecipients`: un preview solo-manual, solo-CSV o
+    // solo-tarea deja de ser 400 (cierra la deuda F4 documentada en el propio FE).
+    assertHasRecipients(input, manualClientIds, manualContacts, taskStageIds);
+    // bulk-task-recipients (TASK-2, D3) — elegibilidad ANTES de resolver clientes.
+    await assertTaskStagesEligible(taskStageIds, this.taskStageConfigRepo);
 
-    const { resolved, excludedDetail, segmentSkipped, manualSkipped, csvSkipped, statusCounts } =
+    const { resolved, excludedDetail, segmentSkipped, manualSkipped, csvSkipped, taskSkipped, statusCounts, noCustomerCount } =
       await resolveCombinedRecipients({
         segment: input,
         manualClientIds,
         manualContacts,
+        taskStageIds,
         segmentSource: this.segmentSource,
         manualRecipientSource: this.manualRecipientSource,
+        taskRecipientSource: this.taskRecipientSource,
       });
 
     const page = input.page && input.page > 0 ? input.page : DEFAULT_PAGE;
@@ -89,11 +102,14 @@ export class ListSegmentRecipients {
       page,
       limit,
       skipped: {
-        optedOut: segmentSkipped.optedOut + manualSkipped.optedOut + csvSkipped.optedOut,
-        duplicatePhone: segmentSkipped.duplicatePhone + manualSkipped.duplicatePhone + csvSkipped.duplicatePhone,
-        invalidPhone: segmentSkipped.invalidPhone + manualSkipped.invalidPhone + csvSkipped.invalidPhone,
+        optedOut: segmentSkipped.optedOut + manualSkipped.optedOut + csvSkipped.optedOut + taskSkipped.optedOut,
+        duplicatePhone:
+          segmentSkipped.duplicatePhone + manualSkipped.duplicatePhone + csvSkipped.duplicatePhone + taskSkipped.duplicatePhone,
+        invalidPhone:
+          segmentSkipped.invalidPhone + manualSkipped.invalidPhone + csvSkipped.invalidPhone + taskSkipped.invalidPhone,
       },
       statusCounts,
+      noCustomerCount,
     };
   }
 }

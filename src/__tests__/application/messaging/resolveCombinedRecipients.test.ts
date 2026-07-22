@@ -8,9 +8,11 @@ import {
   resolveCombinedRecipients,
   normalizeManualContacts,
   MAX_MANUAL_CONTACTS,
+  MAX_TASK_STATE_RECIPIENTS,
 } from '@application/use-cases/messaging/resolveCombinedRecipients';
-import { TooManyManualContactsError } from '@domain/errors/messaging-bulk';
+import { TooManyManualContactsError, TooManyTaskStateRecipientsError } from '@domain/errors/messaging-bulk';
 import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter, ManualRecipientSource } from '@domain/ports/CustomerRepository';
+import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
 
 function makeCandidate(overrides: Partial<CampaignRecipientCandidate> = {}): CampaignRecipientCandidate {
   return {
@@ -36,6 +38,19 @@ function makeSegmentSource(universe: CampaignRecipientCandidate[]): CampaignSegm
 function makeManualSource(candidates: CampaignRecipientCandidate[]): ManualRecipientSource {
   return {
     findRecipientCandidatesByIds: async (ids: string[]) => candidates.filter((c) => ids.includes(c.clientId)),
+  };
+}
+
+/**
+ * bulk-task-recipients (B5.2) — fake narrow del 5to dominio "Tarea". El
+ * DISTINCT/isClosed/customerId-null ya está garantizado por el PORT (tested
+ * en `InMemoryTaskRecipientSource`, B2.4) — acá alcanza con devolver
+ * directamente el resultado YA distinct que el port prometería.
+ */
+function makeTaskSource(clientIds: string[], noCustomerCount = 0): TaskRecipientSource {
+  return {
+    listClientIdsByOpenTaskStages: jest.fn(async () => clientIds),
+    countOpenTasksWithoutCustomer: jest.fn(async () => noCustomerCount),
   };
 }
 
@@ -337,5 +352,251 @@ describe('resolveCombinedRecipients — 4to dominio (manualContacts, CSV-1..CSV-
     // UNA sola llamada — la del segmento (statuses:['late']); manualContacts vacío no dispara la 2da (universo).
     expect(listSpy).toHaveBeenCalledTimes(1);
     expect(listSpy).toHaveBeenCalledWith({ statuses: ['late'], balanceMin: undefined, balanceMax: undefined });
+  });
+});
+
+/**
+ * bulk-task-recipients (B5.2, TASK-1..TASK-9, D3/D4) — branch `task`, 5to
+ * dominio de destinatarios. APPEND al final de la unión (segmento > manual >
+ * csv > task) — corre DESPUÉS de los 3 loops de unión existentes (necesita
+ * `byClientId`/`seenPhones` YA poblados para el overlap/dedup cross-source).
+ */
+describe('resolveCombinedRecipients — 5to dominio (taskStageIds, TASK-1..TASK-9)', () => {
+  it('TASK-1 (no-regresión): omitir taskStageIds/taskRecipientSource → comportamiento BYTE-IDÉNTICO a antes (sin llamar ningún task source)', async () => {
+    const source = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late' })]);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: ['late'] },
+      manualClientIds: [],
+      manualContacts: [],
+      segmentSource: source,
+    });
+
+    expect(result.resolved).toHaveLength(1);
+    expect(result.resolved[0]!.source).toBe('segment');
+    expect(result.taskSkipped).toEqual({ optedOut: 0, duplicatePhone: 0, invalidPhone: 0 });
+    expect(result.noCustomerCount).toBe(0);
+  });
+
+  it('TASK-3 escenario 1: el port devuelve el clientId YA distinct → aparece UNA vez en resolved con source:"task"', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'active' })]);
+    const taskSource = makeTaskSource(['c1']);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA', 'stageB'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(1);
+    expect(result.resolved[0]).toMatchObject({ clientId: 'c1', source: 'task' });
+    expect(taskSource.listClientIdsByOpenTaskStages).toHaveBeenCalledWith(['stageA', 'stageB']);
+  });
+
+  it('TASK-3 escenario 2: stage mapeado sin tareas abiertas (port devuelve []) → 0 por ese origen, sin error', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const taskSource = makeTaskSource([]);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageC'],
+      segmentSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(0);
+  });
+
+  it('TASK-3 escenario 3: tareas de red sin cliente (excluidas por el port) → noCustomerCount refleja el conteo exacto, sin generar recipient', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const taskSource = makeTaskSource([], 3);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(0);
+    expect(result.noCustomerCount).toBe(3);
+    expect(taskSource.countOpenTasksWithoutCustomer).toHaveBeenCalledWith(['stageA']);
+  });
+
+  it('TASK-3 escenario 4: tarea cerrada (filtrada por el port) → el cliente NO entra por el dominio tarea', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const taskSource = makeTaskSource([]); // la única tarea del cliente está cerrada → el port ya no la incluye
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(0);
+  });
+
+  it('TASK-4: distinct > MAX_TASK_STATE_RECIPIENTS → TooManyTaskStateRecipientsError ANTES de hidratar (nunca llama manualRecipientSource)', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([]);
+    const hydrateSpy = jest.spyOn(manualSource, 'findRecipientCandidatesByIds');
+    const ids = Array.from({ length: MAX_TASK_STATE_RECIPIENTS + 1 }, (_, i) => `c${i}`);
+    const taskSource = makeTaskSource(ids);
+
+    await expect(
+      resolveCombinedRecipients({
+        segment: { statuses: [] },
+        manualClientIds: [],
+        manualContacts: [],
+        taskStageIds: ['stageA'],
+        segmentSource,
+        manualRecipientSource: manualSource,
+        taskRecipientSource: taskSource,
+      }),
+    ).rejects.toBeInstanceOf(TooManyTaskStateRecipientsError);
+    expect(hydrateSpy).not.toHaveBeenCalled();
+  });
+
+  it('TASK-5 escenario 1: cliente resuelto por tarea sin teléfono válido → excluido, taskExcludedDetail con telefono_invalido', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: 'no-es-numero' })]);
+    const taskSource = makeTaskSource(['c1']);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(0);
+    expect(result.taskSkipped.invalidPhone).toBe(1);
+    expect(result.excludedDetail).toEqual([
+      expect.objectContaining({ clientId: 'c1', reason: 'telefono_invalido', source: 'task' }),
+    ]);
+  });
+
+  it('TASK-5 escenario 2: cliente opt-out resuelto por tarea → excluido con opt_out', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([
+      makeCandidate({ clientId: 'c1', phone: '3364111111', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+    ]);
+    const taskSource = makeTaskSource(['c1']);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(0);
+    expect(result.taskSkipped.optedOut).toBe(1);
+    expect(result.excludedDetail).toEqual([
+      expect.objectContaining({ clientId: 'c1', reason: 'opt_out', source: 'task' }),
+    ]);
+  });
+
+  it('TASK-6 escenario 1: cliente en segmento Y con tarea en stage tildado → UNA vez con source:"segment" (task NO lo posee)', async () => {
+    const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late' })]);
+    const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late' })]);
+    const taskSource = makeTaskSource(['c1']);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: ['late'] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(1);
+    expect(result.resolved[0]).toMatchObject({ clientId: 'c1', source: 'segment' });
+  });
+
+  it('TASK-6 escenario 2: cliente ÚNICAMENTE por tarea → source:"task"', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([makeCandidate({ clientId: 'c9', phone: '3364999999', status: 'active' })]);
+    const taskSource = makeTaskSource(['c9']);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toEqual([
+      expect.objectContaining({ clientId: 'c9', source: 'task' }),
+    ]);
+  });
+
+  it('cross-source: teléfono de un resuelto-por-tarea YA visto por otra fuente → duplicado (taskSkipped.duplicatePhone), NO se materializa 2 veces', async () => {
+    const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late' })]);
+    // c2 es un clientId DISTINTO pero con el MISMO teléfono normalizado que c1 (dedup cross-source por teléfono, molde CSV-4).
+    const manualSource = makeManualSource([makeCandidate({ clientId: 'c2', phone: '3364111111', status: 'active' })]);
+    const taskSource = makeTaskSource(['c2']);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: ['late'] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(1);
+    expect(result.resolved[0]).toMatchObject({ clientId: 'c1', source: 'segment' });
+    expect(result.taskSkipped.duplicatePhone).toBe(1);
+  });
+
+  it('TASK-7: preview con 2 válidos + 1 opt-out (tarea) + tareas de red sin cliente → count 2, taskSkipped.optedOut:1, noCustomerCount:3', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([
+      makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'active' }),
+      makeCandidate({ clientId: 'c2', phone: '3364222222', status: 'late' }),
+      makeCandidate({ clientId: 'c3', phone: '3364333333', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+    ]);
+    const taskSource = makeTaskSource(['c1', 'c2', 'c3'], 3);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA', 'stageB'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(2);
+    expect(result.resolved.every((r) => r.source === 'task')).toBe(true);
+    expect(result.taskSkipped.optedOut).toBe(1);
+    expect(result.noCustomerCount).toBe(3);
   });
 });

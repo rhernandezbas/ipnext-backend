@@ -1,6 +1,9 @@
 import type { CampaignSegmentSource, ManualRecipientSource } from '@domain/ports/CustomerRepository';
+import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import type { TaskStageRecipientConfigRepository } from '@domain/ports/TaskStageRecipientConfigRepository';
 import type { PreviewSegmentInput, PreviewSegmentOutput } from '@application/dto/messaging-bulk.dto';
 import { assertHasRecipients } from './assertHasRecipients';
+import { assertTaskStagesEligible } from './assertTaskStagesEligible';
 import { resolveCombinedRecipients, normalizeManualClientIds, normalizeManualContacts } from './resolveCombinedRecipients';
 
 /** Muestra acotada del preview (design §3.2) — no es el `count` real, solo una vidriera. */
@@ -24,6 +27,10 @@ export class PreviewCampaignSegment {
     // manual-recipients (MAN-5) — OPCIONAL: los tests/wiring segment-only quedan
     // intactos (1 arg). Requerido solo cuando el input trae `manualClientIds`.
     private readonly manualRecipientSource?: ManualRecipientSource,
+    // bulk-task-recipients (D3, D5) — 2 args OPCIONALES nuevos AL FINAL (molde
+    // `manualRecipientSource`, no rompen la aridad de los tests ya verdes).
+    private readonly taskRecipientSource?: TaskRecipientSource,
+    private readonly taskStageConfigRepo?: TaskStageRecipientConfigRepository,
   ) {}
 
   async execute(input: PreviewSegmentInput): Promise<PreviewSegmentOutput> {
@@ -31,24 +38,32 @@ export class PreviewCampaignSegment {
     const manualClientIds = normalizeManualClientIds(input.manualClientIds);
     // bulk-csv-recipients (CSV-6) — 4to dominio normalizado.
     const manualContacts = normalizeManualContacts(input.manualContacts);
+    // bulk-task-recipients (TASK-1) — 5to dominio, PARALELO.
+    const taskStageIds = input.taskStageIds ?? [];
 
     // MAN-2 (extiende FIX-8) — válido con segmento filtrado, O lista manual no
-    // vacía, O manualContacts no vacío; rechaza ANTES de tocar la fuente si los
-    // TRES están vacíos.
-    assertHasRecipients(input, manualClientIds, manualContacts);
+    // vacía, O manualContacts no vacío, O taskStageIds no vacío; rechaza ANTES
+    // de tocar la fuente si los CUATRO están vacíos.
+    assertHasRecipients(input, manualClientIds, manualContacts, taskStageIds);
+    // bulk-task-recipients (TASK-2, D3) — elegibilidad ANTES de resolver clientes.
+    await assertTaskStagesEligible(taskStageIds, this.taskStageConfigRepo);
 
-    // MAN-5 + bulk-csv-recipients (CSV-6) — cuenta la UNIÓN (segmento ∪ manuales ∪
-    // CSV) deduplicada por clientId Y por teléfono (FIX-1/CSV-4). FIX-2/CSV-6:
-    // `skipped` RECONCILIA las exclusiones de las 3 fuentes (opt-out/teléfono-
-    // inválido/duplicate-phone), sin doble-contar el overlap. Invariante: count
-    // (enviables) + Σ skipped = destinatarios únicos considerados.
-    const { resolved, segmentSkipped, manualSkipped, csvSkipped, statusCounts } = await resolveCombinedRecipients({
-      segment: input,
-      manualClientIds,
-      manualContacts,
-      segmentSource: this.segmentSource,
-      manualRecipientSource: this.manualRecipientSource,
-    });
+    // MAN-5 + bulk-csv-recipients (CSV-6) + bulk-task-recipients (TASK-7) —
+    // cuenta la UNIÓN (segmento ∪ manuales ∪ CSV ∪ tarea) deduplicada por
+    // clientId Y por teléfono (FIX-1/CSV-4). `skipped` RECONCILIA las
+    // exclusiones de las 4 fuentes (opt-out/teléfono-inválido/duplicate-phone),
+    // sin doble-contar el overlap. Invariante: count (enviables) + Σ skipped =
+    // destinatarios únicos considerados.
+    const { resolved, segmentSkipped, manualSkipped, csvSkipped, taskSkipped, statusCounts, noCustomerCount } =
+      await resolveCombinedRecipients({
+        segment: input,
+        manualClientIds,
+        manualContacts,
+        taskStageIds,
+        segmentSource: this.segmentSource,
+        manualRecipientSource: this.manualRecipientSource,
+        taskRecipientSource: this.taskRecipientSource,
+      });
 
     return {
       count: resolved.length,
@@ -59,11 +74,14 @@ export class PreviewCampaignSegment {
         status: r.status,
       })),
       skipped: {
-        optedOut: segmentSkipped.optedOut + manualSkipped.optedOut + csvSkipped.optedOut,
-        duplicatePhone: segmentSkipped.duplicatePhone + manualSkipped.duplicatePhone + csvSkipped.duplicatePhone,
-        invalidPhone: segmentSkipped.invalidPhone + manualSkipped.invalidPhone + csvSkipped.invalidPhone,
+        optedOut: segmentSkipped.optedOut + manualSkipped.optedOut + csvSkipped.optedOut + taskSkipped.optedOut,
+        duplicatePhone:
+          segmentSkipped.duplicatePhone + manualSkipped.duplicatePhone + csvSkipped.duplicatePhone + taskSkipped.duplicatePhone,
+        invalidPhone:
+          segmentSkipped.invalidPhone + manualSkipped.invalidPhone + csvSkipped.invalidPhone + taskSkipped.invalidPhone,
       },
       statusCounts,
+      noCustomerCount,
     };
   }
 }

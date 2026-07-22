@@ -11,10 +11,12 @@
  */
 import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign';
 import { InMemoryCampaignRepository } from '@infrastructure/adapters/in-memory/InMemoryCampaignRepository';
-import { TemplateNotApprovedError, MissingTemplateVariablesError, EmptySegmentError, UnfilteredSegmentError, ManualRecipientsNotFoundError, BulkRecipientsNotPermittedError } from '@domain/errors/messaging-bulk';
+import { TemplateNotApprovedError, MissingTemplateVariablesError, EmptySegmentError, UnfilteredSegmentError, ManualRecipientsNotFoundError, BulkRecipientsNotPermittedError, TaskStageNotEligibleError } from '@domain/errors/messaging-bulk';
 import type { CampaignSegmentSource, CampaignRecipientCandidate, ManualRecipientSource } from '@domain/ports/CustomerRepository';
 import type { TemplateMessagingPort, TemplateDto } from '@domain/ports/TemplateMessagingPort';
 import type { CreateCampaignInput } from '@application/dto/messaging-bulk.dto';
+import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import type { TaskStageRecipientConfigRepository } from '@domain/ports/TaskStageRecipientConfigRepository';
 
 function makeSegmentSource(candidates: CampaignRecipientCandidate[]): CampaignSegmentSource {
   return { listSegmentRecipients: jest.fn().mockResolvedValue(candidates) };
@@ -61,6 +63,23 @@ function makeCandidate(overrides: Partial<CampaignRecipientCandidate> = {}): Cam
     balanceDue: 1000,
     whatsappOptOutAt: null,
     ...overrides,
+  };
+}
+
+/** bulk-task-recipients (B5.3) — fake narrow del 5to dominio "Tarea" (resolución). */
+function makeTaskSource(clientIds: string[], noCustomerCount = 0): TaskRecipientSource {
+  return {
+    listClientIdsByOpenTaskStages: jest.fn(async () => clientIds),
+    countOpenTasksWithoutCustomer: jest.fn(async () => noCustomerCount),
+  };
+}
+
+/** bulk-task-recipients (B5.3) — fake narrow de la config de elegibilidad. */
+function makeTaskStageConfigRepo(mapped: string[]): TaskStageRecipientConfigRepository {
+  return {
+    listMappedStageIds: jest.fn(async () => mapped),
+    getMappedStages: jest.fn(async () => []),
+    replaceMappedStages: jest.fn(async () => undefined),
   };
 }
 
@@ -593,6 +612,112 @@ describe('CreateCampaign', () => {
       const persisted = await campaignRepo.findById(result.campaignId);
       expect(persisted?.variableSpec['1']).toEqual({ source: 'name' });
       expect(persisted?.variableSpec['2']).toEqual({ source: 'balanceDue' });
+    });
+  });
+
+  // ── bulk-task-recipients (TASK-1, TASK-2, TASK-8, TASK-9): 5to dominio "Tarea" ──
+  describe('bulk-task-recipients (TASK-1, TASK-2, TASK-8, TASK-9): taskStageIds', () => {
+    it('TASK-2: taskStageIds NO mapeado → TaskStageNotEligibleError, nada persistido', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort, undefined, undefined, taskConfigRepo);
+
+      await expect(
+        uc.execute(makeInput({ segment: { statuses: [] }, taskStageIds: ['stageA', 'stageB'] })),
+      ).rejects.toBeInstanceOf(TaskStageNotEligibleError);
+      const list = await campaignRepo.list({});
+      expect(list.total).toBe(0);
+    });
+
+    it('TASK-1: combinación con manual — manualClientIds:["c1"] + taskStageIds:["stageA"] (mapeado, c2 con tarea abierta) → materializa 2 recipients', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]);
+      const manualSource = makeManualSource([
+        makeCandidate({ clientId: 'c1', phone: '3364111111' }),
+        makeCandidate({ clientId: 'c2', phone: '3364222222' }),
+      ]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const taskSource = makeTaskSource(['c2']);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource, taskSource, taskConfigRepo);
+
+      const result = await uc.execute(
+        makeInput({ segment: { statuses: [] }, manualClientIds: ['c1'], taskStageIds: ['stageA'] }),
+      );
+
+      expect(result.total).toBe(2);
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data.map((r) => r.clientId).sort()).toEqual(['c1', 'c2']);
+    });
+
+    it('TASK-8 escenario 1: snapshot inmutable — desmapear el stage DESPUÉS del create NO altera los recipients ya materializados', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]);
+      const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: '3364111111' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const taskSource = makeTaskSource(['c1']);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource, taskSource, taskConfigRepo);
+
+      const result = await uc.execute(makeInput({ segment: { statuses: [] }, taskStageIds: ['stageA'] }));
+      expect(result.total).toBe(1);
+
+      // El admin desmapea stageA de la config DESPUÉS del create (sin re-invocar CreateCampaign).
+      await taskConfigRepo.replaceMappedStages([]);
+
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.total).toBe(1); // sin cambios — snapshot ya congelado, ninguna re-resolución ocurre
+      expect(recipients.data[0]!.clientId).toBe('c1');
+    });
+
+    it('TASK-8 escenario 2: cerrar la tarea del cliente DESPUÉS del create NO altera los recipients ya materializados', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]);
+      const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: '3364111111' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      // taskSource MUTABLE: simula que la tarea se cierra DESPUÉS del create (el port ya no la devolvería).
+      let openClientIds = ['c1'];
+      const taskSource: TaskRecipientSource = {
+        listClientIdsByOpenTaskStages: jest.fn(async () => openClientIds),
+        countOpenTasksWithoutCustomer: jest.fn(async () => 0),
+      };
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource, taskSource, taskConfigRepo);
+
+      const result = await uc.execute(makeInput({ segment: { statuses: [] }, taskStageIds: ['stageA'] }));
+      expect(result.total).toBe(1);
+
+      openClientIds = []; // la tarea se cierra
+
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.total).toBe(1); // snapshot ya congelado — el envío NUNCA re-resuelve (SEND-5 solo re-chequea el CLIENTE)
+      expect(recipients.data[0]!.clientId).toBe('c1');
+    });
+
+    it('TASK-9: cliente status:"blocked" resuelto ÚNICAMENTE por taskStageIds + operador SIN bulk_blocked → BulkRecipientsNotPermittedError (el mecanismo existente ya cubre source:"task", sin código nuevo)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]);
+      const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'blocked' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const taskConfigRepo = makeTaskStageConfigRepo(['stageA']);
+      const taskSource = makeTaskSource(['c1']);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource, taskSource, taskConfigRepo);
+
+      let caught: unknown;
+      try {
+        await uc.execute(
+          makeInput({ segment: { statuses: [] }, taskStageIds: ['stageA'], allowedBulkActions: new Set(['bulk']) }),
+        );
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(BulkRecipientsNotPermittedError);
+      expect((caught as BulkRecipientsNotPermittedError).forbidden).toEqual(['blocked']);
+      const list = await campaignRepo.list({});
+      expect(list.total).toBe(0);
     });
   });
 });
