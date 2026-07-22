@@ -3295,6 +3295,9 @@ model Campaign {
   name          String            // nombre humano ("Recordatorio deuda julio")
   templateRef   String            // ContentSid Twilio (HX…) — enviable
   templateName  String?           // friendly_name legible del template
+  // campaign-chatwoot-label (CLBL-6) — title del label REAL de Chatwoot elegido
+  // opcionalmente al crear la campaña (pass-through, sin catálogo local).
+  chatwootLabel String?
   // messaging-bulk-inbox (F1) — texto plano del template capturado en CreateCampaign
   // (TemplateDto.body), para renderizar el body real del mensaje al proyectar al inbox.
   templateBody  String?

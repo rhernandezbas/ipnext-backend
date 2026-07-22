@@ -114,6 +114,22 @@ export class InvalidTemplateInputError extends DomainError {
 }
 
 /**
+ * campaign-chatwoot-label (5.1, molde `InvalidTemplateInputError`) — raised by
+ * `CreateChatwootLabel` on invalid LOCAL operator input (`title` vacío/whitespace,
+ * `color` que no matchea `#RGB`/`#RRGGBB`). Validación barata ANTES de tocar el
+ * gateway — NO re-consulta el catálogo (D5.a, distinta de la Decisión D que
+ * aplica al PICK en `CreateCampaign`). Reusa el código genérico `VALIDATION_ERROR`
+ * (mismo convenio que `InvalidTemplateInputError`/`RoleValidationError` — ya
+ * mapeado a 400 en el statusMap).
+ */
+export class InvalidChatwootLabelError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'InvalidChatwootLabelError';
+  }
+}
+
+/**
  * CAMP-2 — raised by `CreateCampaign` when `templateRef` does not correspond to
  * an `approved` template (either `pending`/`rejected`, or not found at all in
  * `TemplateMessagingPort.listTemplates()` — treated identically, no evidence of

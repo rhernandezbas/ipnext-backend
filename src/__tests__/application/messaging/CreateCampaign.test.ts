@@ -720,4 +720,43 @@ describe('CreateCampaign', () => {
       expect(list.total).toBe(0);
     });
   });
+
+  // ── campaign-chatwoot-label (CLBL-6): pass-through de chatwootLabel ──────────
+  describe('campaign-chatwoot-label (CLBL-6): chatwootLabel pass-through', () => {
+    it('input CON chatwootLabel → persiste el valor TAL CUAL, cero llamada a chatwootGateway (Decisión D)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(makeInput({ chatwootLabel: 'promo-julio' }));
+
+      const persisted = await campaignRepo.findById(result.campaignId);
+      expect(persisted?.chatwootLabel).toBe('promo-julio');
+    });
+
+    it('input SIN chatwootLabel → persiste `null`, sin cambios (ausencia intacta)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(makeInput());
+
+      const persisted = await campaignRepo.findById(result.campaignId);
+      expect(persisted?.chatwootLabel).toBeNull();
+    });
+
+    it('chatwootLabel que NO existe en ningún catálogo → igual persiste (pass-through, cero validación)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1', phone: '3364111111' })]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(makeInput({ chatwootLabel: 'label-borrado' }));
+
+      const persisted = await campaignRepo.findById(result.campaignId);
+      expect(persisted?.chatwootLabel).toBe('label-borrado');
+    });
+  });
 });

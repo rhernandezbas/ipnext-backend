@@ -3,6 +3,7 @@ import FormData from 'form-data';
 import {
   ChatwootConversationDto,
   ChatwootGateway,
+  ChatwootLabelDto,
   ChatwootMessageDto,
   ChatwootMessageAttachmentDto,
   OutboundAttachmentFile,
@@ -348,6 +349,52 @@ export class HttpChatwootGateway implements ChatwootGateway {
       return { buffer: Buffer.from(response.data), contentType };
     });
   }
+
+  /**
+   * campaign-chatwoot-label (design D1.b/D2, CLBL-1) — catálogo REAL de labels de
+   * la cuenta. Reusa `accountPath`/`this.call`/`extractRows` — cero infra nueva de
+   * error (mismo criterio único del resto del port).
+   */
+  async listAccountLabels(): Promise<ChatwootLabelDto[]> {
+    const { data } = await this.call(() => this.http.get(this.accountPath('/labels')));
+    return extractRows(data).map(toLabelDto);
+  }
+
+  /**
+   * campaign-chatwoot-label (design D1.b/D2, CLBL-2) — crea la ficha COMPLETA del
+   * label en el catálogo. La respuesta puede venir envuelta (`{payload:{...}}`) o
+   * plana (`{...}`) según la versión del jbuilder — `data.payload ?? data` cubre
+   * ambas sin asumir una sola forma.
+   */
+  async createAccountLabel(params: { title: string; color: string }): Promise<ChatwootLabelDto> {
+    const { data } = await this.call(() =>
+      this.http.post(this.accountPath('/labels'), { title: params.title, color: params.color }),
+    );
+    return toLabelDto(data.payload ?? data);
+  }
+
+  /**
+   * campaign-chatwoot-label (design D2, CLBL-3/CLBL-4/CLBL-5) — GET-unión-POST
+   * idempotente DENTRO del adapter: Chatwoot REEMPLAZA el set completo de tags en
+   * el POST (`Labelable#update_labels`, no es aditivo) — por eso el adapter lee
+   * los títulos actuales, arma la UNIÓN (dedup, order-stable) y postea el set
+   * COMPLETO. Así JAMÁS pisa labels puestos a mano por un agente ni el label de
+   * otra campaña previa sobre la misma conversación. La unión de un set consigo
+   * mismo es un no-op → reintentos/re-aplicaciones idempotentes.
+   */
+  async addConversationLabels(chatwootConversationId: number, labels: string[]): Promise<void> {
+    await this.call(async () => {
+      const cur = await this.http.get(this.accountPath(`/conversations/${chatwootConversationId}/labels`));
+      // fix wave (F2 [LOW hardening]) — `extractRowsStrict`, NO el `extractRows` laxo
+      // compartido: acá un shape no reconocido NO puede degradar a `[]` silencioso
+      // (ver comentario de la función).
+      const existing = extractRowsStrict(cur.data).filter((t): t is string => typeof t === 'string');
+      const union = Array.from(new Set([...existing, ...labels]));
+      await this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/labels`), {
+        labels: union,
+      });
+    });
+  }
 }
 
 /**
@@ -362,6 +409,39 @@ function extractRows(data: unknown): unknown[] {
   if (nested && Array.isArray(nested.payload)) return nested.payload as unknown[];
   if (asRecord && Array.isArray(asRecord.payload)) return asRecord.payload as unknown[];
   return Array.isArray(data) ? (data as unknown[]) : [];
+}
+
+/**
+ * campaign-chatwoot-label (fix wave, F2 [LOW hardening]) — variante ESTRICTA de
+ * `extractRows`, usada SOLO por `addConversationLabels` (el GET-unión-POST/RMW,
+ * D2). Los demás consumidores de `extractRows` (`listConversations`,
+ * `listMessages`, `searchContact`, `listAccountLabels`) son READ-ONLY puro: ahí
+ * un shape inesperado degradando a `[]` es best-effort aceptable, comportamiento
+ * PREEXISTENTE e intacto (ver test "payload ausente/no-array → []").
+ *
+ * El RMW es distinto: un parse-miss silencioso acá es INDISTINGUIBLE de "la
+ * conversación no tiene labels", y el POST subsiguiente postearía el set
+ * COMPLETO con solo el delta nuevo — PISANDO cualquier label manual (de un
+ * agente) o de una campaña previa sobre la misma conversación. Por eso, un
+ * shape que NO matchea ninguno de los 3 conocidos (`{payload:[...]}`,
+ * `{data:{payload:[...]}}`, array plano) Y que NO es un objeto vacío legítimo
+ * (`{}`, `null`, `undefined` — el molde defensivo pre-existente) debe abortar
+ * el RMW entero: el `throw` de acá es capturado por `this.call` (que envuelve
+ * TODA la callback de `addConversationLabels`) y re-mapeado a
+ * `ChatwootUnavailableError` — mismo criterio de resultado único del port.
+ * `{payload: []}` SIGUE siendo un caso vacío VÁLIDO (matchea el shape conocido
+ * arriba, con array vacío) — no confundir con el "objeto sin ninguna clave".
+ */
+function extractRowsStrict(data: unknown): unknown[] {
+  const asRecord = data as Record<string, unknown> | null | undefined;
+  const nested = asRecord?.data as Record<string, unknown> | undefined;
+  if (nested && Array.isArray(nested.payload)) return nested.payload as unknown[];
+  if (asRecord && Array.isArray(asRecord.payload)) return asRecord.payload as unknown[];
+  if (Array.isArray(data)) return data as unknown[];
+  if (asRecord == null || Object.keys(asRecord).length === 0) return [];
+  throw new Error(
+    'Chatwoot: shape de respuesta no reconocido para labels de conversación (esperado {payload:[...]}/{data:{payload:[...]}}/array)',
+  );
 }
 
 /** epoch seconds (convención wire de Chatwoot) → ISO 8601, o null si ausente. */
@@ -502,4 +582,20 @@ interface RawChatwootContact {
 function toContactDto(raw: unknown): { id: number; name: string | null; phone: string | null } {
   const r = raw as RawChatwootContact;
   return { id: r.id, name: r.name ?? null, phone: r.phone_number ?? null };
+}
+
+/**
+ * campaign-chatwoot-label (design D2) — molde `toConversationDto`/`toContactDto`:
+ * mapeo curado del payload jbuilder del catálogo de labels. Descarta cualquier
+ * campo extra (ej. `id`, `description`, `show_on_sidebar`) — el DTO de dominio es
+ * `{title,color}` (D1.a).
+ */
+interface RawChatwootLabel {
+  title: string;
+  color: string;
+}
+
+function toLabelDto(raw: unknown): ChatwootLabelDto {
+  const r = raw as RawChatwootLabel;
+  return { title: r.title, color: r.color };
 }

@@ -132,6 +132,9 @@ export class CreateCampaign {
       // messaging-bulk-inbox (F1) — captura el body de texto del template (TemplateDto.body,
       // '' si el proveedor no declaró texto plano) para renderizar el mensaje real al proyectar.
       templateBody: template.body,
+      // campaign-chatwoot-label (CLBL-6) — pass-through PURO (Decisión D): CERO
+      // validación/re-consulta contra el catálogo de Chatwoot acá. Ausente → null.
+      chatwootLabel: input.chatwootLabel ?? null,
       segment: input.segment,
       variableSpec: input.variablesMap,
       recipientStatuses,

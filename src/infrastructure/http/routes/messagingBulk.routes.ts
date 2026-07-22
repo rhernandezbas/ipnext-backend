@@ -22,6 +22,9 @@ import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign'
 import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
 import { AuthorizeCampaignSend } from '@application/use-cases/messaging/AuthorizeCampaignSend';
+// campaign-chatwoot-label (Batch 5, D5) — catálogo de labels.
+import type { ListChatwootLabels } from '@application/use-cases/messaging/ListChatwootLabels';
+import type { CreateChatwootLabel } from '@application/use-cases/messaging/CreateChatwootLabel';
 import type { CampaignRunner } from '@infrastructure/scheduling/CampaignRunner';
 import type { PreviewSegmentInput, ListSegmentRecipientsInput, CreateCampaignInput, ManualContactDto, SegmentRecipientsView } from '@application/dto/messaging-bulk.dto';
 import type { CampaignSegment, CampaignVariableSpec, CampaignRecipientStatus } from '@domain/entities/campaign';
@@ -31,6 +34,15 @@ import { InvalidManualRecipientsError, InvalidManualContactsError, InvalidNodeAp
 export interface MessagingBulkRoutePerms {
   bulk: RequestHandler;
   templates: RequestHandler;
+  /**
+   * campaign-chatwoot-label (D5, CLBL-7) — gate de `POST /chatwoot-labels`
+   * (crear un label ES una acción de gestión, tier supervisor — reusa el
+   * permiso existente `messaging.manage`, CERO seed nuevo). OPCIONAL (Batch 5
+   * corre ANTES del wiring real de `app.ts`, Batch 6 — backcompat: los
+   * callers previos que arman el objeto `perms` sin `manage` siguen
+   * compilando; sin él, `POST /chatwoot-labels` queda sin montar, ver abajo).
+   */
+  manage?: RequestHandler;
 }
 
 /**
@@ -174,6 +186,20 @@ function toNodeApFilter(raw: Record<string, unknown> | undefined): {
 }
 
 /**
+ * campaign-chatwoot-label (fix wave, F1(a) [MEDIUM]) — colapsa un `chatwootLabel`
+ * vacío/solo-espacios a `undefined` ANTES de llegar a `CreateCampaign`. Sin este
+ * trim, `''`/`'  '` eran strings VÁLIDOS (pasaban este parseo) y el `?? null` de
+ * `CreateCampaign.ts` NO colapsa `''` (solo `undefined`/`null`) — se persistía tal
+ * cual, esquivando el gate `chatwootLabel == null` de `SendCampaign.applyChatwootLabel`
+ * en CADA recipient (round-trips fantasma a Chatwoot con label en blanco). Un valor
+ * no-string sigue devolviendo `undefined` (comportamiento previo intacto).
+ */
+function toChatwootLabel(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  return raw.trim().length > 0 ? raw : undefined;
+}
+
+/**
  * FIX-8 — mapea el `segment` del body a un `CampaignSegment` FIEL, sin inventar un
  * default "todos". Normaliza `statuses` a array y preserva `balanceMin/Max`. Un
  * body sin `segment` (o con `statuses` ausente) queda `{statuses:[]}` — que el
@@ -208,6 +234,13 @@ export function createMessagingBulkRouter(
   // El gate `perms.bulk` (acceso) NO cambia — esto se suma encima.
   authorizeCampaignSend: AuthorizeCampaignSend,
   resolveBulkActions: MessagingBulkActionsResolver,
+  // campaign-chatwoot-label (Batch 5, D5) — APPENDED al final (nunca en medio,
+  // regla §Colisiones). OPCIONALES: Batch 5 corre ANTES del wiring real de
+  // `app.ts` (Batch 6) — backcompat total con el caller actual (que aún NO los
+  // pasa). Ausentes → las rutas `/chatwoot-labels` simplemente NO se montan
+  // (mismo comportamiento de HOY, sin la feature — 404, no un crash).
+  listChatwootLabels?: ListChatwootLabels,
+  createChatwootLabel?: CreateChatwootLabel,
 ): Router {
   const router = Router();
 
@@ -225,6 +258,49 @@ export function createMessagingBulkRouter(
       }
     },
   );
+
+  // ─── GET /chatwoot-labels (CLBL-1) — RBAC: messaging.templates ─────────────
+  // campaign-chatwoot-label (D5) — OPCIONAL: sin `listChatwootLabels` wireado
+  // (Batch 5 corre antes de `app.ts`, Batch 6), la ruta simplemente NO se monta.
+  if (listChatwootLabels) {
+    router.get(
+      '/chatwoot-labels',
+      auth,
+      perms.templates,
+      async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+          const data = await listChatwootLabels.execute();
+          res.json({ data });
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ─── POST /chatwoot-labels (CLBL-2) — RBAC: messaging.manage (CLBL-7) ──────
+  // campaign-chatwoot-label (D5) — crear un label ES gestión (tier supervisor),
+  // NO `messaging.bulk`. OPCIONAL: sin `createChatwootLabel` Y `perms.manage`
+  // wireados (Batch 5 corre antes de `app.ts`, Batch 6), la ruta NO se monta.
+  if (createChatwootLabel && perms.manage) {
+    router.post(
+      '/chatwoot-labels',
+      auth,
+      perms.manage,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+          const body = req.body as Record<string, unknown> | undefined;
+          const result = await createChatwootLabel.execute({
+            title: typeof body?.['title'] === 'string' ? (body['title'] as string) : '',
+            color: typeof body?.['color'] === 'string' ? (body['color'] as string) : '',
+          });
+          res.status(201).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
 
   // ─── POST /segment/preview (SEG-1..SEG-5) — RBAC-1: messaging.bulk ─────────
   router.post(
@@ -372,6 +448,10 @@ export function createMessagingBulkRouter(
           name: typeof body?.['name'] === 'string' ? (body['name'] as string) : '',
           templateRef: typeof body?.['templateRef'] === 'string' ? (body['templateRef'] as string) : '',
           templateName: typeof body?.['templateName'] === 'string' ? (body['templateName'] as string) : undefined,
+          // campaign-chatwoot-label (CLBL-6) — pass-through puro; no-string (ausente
+          // o mal tipado) → `undefined`, sin romper el resto del parseo. fix wave
+          // F1(a) — vacío/solo-espacios TAMBIÉN colapsa a `undefined` (ver `toChatwootLabel`).
+          chatwootLabel: toChatwootLabel(body?.['chatwootLabel']),
           // FIX-8 — NO defaultear a "todos": segmento fiel; el use case rechaza uno sin criterio.
           segment: toCampaignSegment(body?.['segment']),
           // manual-recipients (MAN-1) — lista manual PARALELA al segmento; el use

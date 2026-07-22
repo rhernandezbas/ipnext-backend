@@ -284,6 +284,11 @@ export class SendCampaign {
     // e AISLADA: su fallo se loguea y se sigue (JAMÁS re-marca `failed` → jamás re-envía).
     // Sin projector inyectado (5º arg ausente) es un no-op → backcompat exacto.
     await this.projectToInbox(campaign, recipient, candidate, variables, result, sentAt, viaChat, chatwootIds);
+
+    // campaign-chatwoot-label (D4, CLBL-4/5/8) — etiquetado best-effort DESPUÉS de
+    // todo lo anterior, MISMO contrato aislado que `projectToInbox`: nunca re-marca
+    // `failed`, nunca toca `sentCount` (el envío ya está `sent`).
+    await this.applyChatwootLabel(campaign, recipient, chatwootIds);
   }
 
   /**
@@ -333,6 +338,45 @@ export class SendCampaign {
       // eslint-disable-next-line no-console
       console.error(
         `[SendCampaign] proyección al inbox falló para recipient ${recipient.id} (best-effort/aislada, el envío ya está 'sent'):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
+   * campaign-chatwoot-label (D4, CLBL-4/5/8) — etiqueta la conversación de Chatwoot
+   * con `campaign.chatwootLabel`, DESPUÉS de `persistRecipientSent`/`projectToInbox`.
+   * MISMO molde que `projectToInbox` (aislado/best-effort): un fallo se loguea y se
+   * sigue, JAMÁS re-marca `failed` ni toca `sentCount` (el envío ya está `sent`).
+   *
+   * Gate 1 — sin `campaign.chatwootLabel` → no-op (blast radius nulo, CLBL-8 implícito).
+   * fix wave (F1(b) [MEDIUM], cinturón y tiradores) — el gate colapsa TAMBIÉN
+   * `''`/whitespace-only, no solo `null`/`undefined`: la ruta ya lo normaliza
+   * (`toChatwootLabel`, F1(a)), pero data VIEJA (persistida antes del fix) o un
+   * `campaignRepo.create` invocado directo (fuera de la ruta) podría dejar `''`
+   * guardado — sin este `.trim()` cada recipient dispararía un GET+POST fantasma
+   * a Chatwoot con un label en blanco.
+   * Gate 2 — sin `chatwootIds` (flag OFF/Twilio-directo) o sin `chatwootGateway`
+   * wireado → no-op (CLBL-8 "flag OFF durante todo el envío").
+   *
+   * `createConversationWithTemplate` es find-or-create ATÓMICO (D2.b): el mismo
+   * `chatwootIds.chatwootConversationId` cubre TANTO un hilo nuevo COMO uno ya
+   * existente — no hay bifurcación de código (CLBL-5 "hilo existente" queda
+   * satisfecho GRATIS, sin lógica adicional acá).
+   */
+  private async applyChatwootLabel(
+    campaign: Campaign,
+    recipient: CampaignRecipient,
+    chatwootIds?: { chatwootConversationId: number; chatwootMessageId: number | null },
+  ): Promise<void> {
+    if (!campaign.chatwootLabel?.trim()) return;
+    if (!chatwootIds || !this.chatwootGateway) return;
+    try {
+      await this.chatwootGateway.addConversationLabels(chatwootIds.chatwootConversationId, [campaign.chatwootLabel]);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[SendCampaign] etiquetado Chatwoot falló para recipient ${recipient.id} (campaignId=${campaign.id}, conversationId=${chatwootIds.chatwootConversationId}, label=${campaign.chatwootLabel}) — best-effort/aislado:`,
         err instanceof Error ? err.message : err,
       );
     }

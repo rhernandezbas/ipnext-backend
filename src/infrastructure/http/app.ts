@@ -848,6 +848,9 @@ import { SendCampaign } from '@application/use-cases/messaging/SendCampaign';
 import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
 import { AuthorizeCampaignSend } from '@application/use-cases/messaging/AuthorizeCampaignSend';
+// campaign-chatwoot-label (Batch 6, D5.d) — catálogo de labels de Chatwoot.
+import { ListChatwootLabels } from '@application/use-cases/messaging/ListChatwootLabels';
+import { CreateChatwootLabel } from '@application/use-cases/messaging/CreateChatwootLabel';
 import { BULK_SUPER_ADMIN_SENTINEL } from '@domain/services/bulkRecipientAuthorization';
 // ── Change 3 (templates CRUD) — VER/CREAR/SUBMIT/BORRAR templates WhatsApp ─────
 import { createMessagingTemplatesRouter } from './routes/templates.routes';
@@ -3090,11 +3093,22 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       {
         bulk: requirePerm('messaging', 'bulk'),
         templates: requirePerm('messaging', 'templates'),
+        // campaign-chatwoot-label (D5.c, CLBL-7) — tier supervisor, reusa el
+        // MISMO permiso que ya gobierna canned-responses/config/catálogo local
+        // de ConversationLabel (cero seed nuevo).
+        manage: requirePerm('messaging', 'manage'),
       },
       // bulk-granular-perms — re-chequeo en el envío (lee el snapshot de la campaña)
       // + resolver de acciones del usuario (APPENDED, no rompe el gate perms.bulk).
       new AuthorizeCampaignSend(campaignRepo),
       resolveBulkActions,
+      // campaign-chatwoot-label (D5.d, lección W6) — APPENDED al final de la
+      // firma: ambos use cases construidos con `chatwootGatewayForBulk`, la
+      // MISMA instancia que recibe `SendCampaign` como 7º arg (:3029) — el pin
+      // crítico. Sin este pin el labeling del send-path y el catálogo listado
+      // acá pegarían a cuentas Chatwoot distintas sin error visible.
+      new ListChatwootLabels(chatwootGatewayForBulk),
+      new CreateChatwootLabel(chatwootGatewayForBulk),
     ));
   }
 

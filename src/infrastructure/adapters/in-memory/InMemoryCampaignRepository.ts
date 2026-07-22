@@ -36,6 +36,7 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
       templateRef: data.templateRef,
       templateName: data.templateName ?? null,
       templateBody: data.templateBody ?? null,
+      chatwootLabel: data.chatwootLabel ?? null,
       segment: data.segment,
       variableSpec: data.variableSpec,
       recipientStatuses: data.recipientStatuses ?? [],
