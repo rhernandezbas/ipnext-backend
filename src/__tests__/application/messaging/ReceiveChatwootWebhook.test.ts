@@ -1050,12 +1050,31 @@ describe('ReceiveChatwootWebhook', () => {
       expect(messages[0]!.deliveryStatus).toBeNull();
     });
 
-    it('fila ausente en el mirror (mensaje aún no proyectado) → no-op seguro, sin lanzar', async () => {
-      const { uc } = makeUseCase();
+    // F4-bis (re-review) — CORRIGE F4: el F4 original tragaba este caso y devolvía un boolean
+    // interno que NUNCA generaba un retry real (`execute` es `void`, la ruta responde 200
+    // SIEMPRE — Chatwoot/Sidekiq sólo reacciona a non-2xx). Simetría ROB-2 con
+    // `handleMessageCreated`: la fila aún no espejada es RETRIABLE → LANZA.
+    it('F4-bis: fila ausente en el mirror (mensaje aún no proyectado) + external_error → RECHAZA (retriable, ROB-2) y la delivery NO queda vista', async () => {
+      const { uc, deliveryRepo } = makeUseCase();
 
       await expect(
         uc.execute('d-mu-4', { event: 'message_updated', id: 99999, content_attributes: { external_error: 'Template not found' } }),
+      ).rejects.toThrow(/fila 99999 aún no espejada/);
+
+      expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-4')).toBe(false); // NO vista → Chatwoot puede reintentar
+    });
+
+    // F4-bis (re-review) — SIN external_error, aunque la fila esté ausente, sigue siendo el
+    // no-op de siempre (delivered/read son indistinguibles y no dependen de que la fila exista):
+    // 200, delivery vista. Pin explícito para no confundir este caso con el de arriba.
+    it('SIN external_error (delivered/read) y fila AUSENTE → sigue siendo no-op visto (200), NUNCA lanza', async () => {
+      const { uc, deliveryRepo } = makeUseCase();
+
+      await expect(
+        uc.execute('d-mu-noerr-norow', { event: 'message_updated', id: 424242 }),
       ).resolves.toBeUndefined();
+
+      expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-noerr-norow')).toBe(true);
     });
 
     // F2 (fix wave) — Chatwoot puede mandar `external_error` como NÚMERO (código Twilio, ej. 63016)
@@ -1102,21 +1121,25 @@ describe('ReceiveChatwootWebhook', () => {
       expect(messages[0]!.deliveryError).toBe('{"code":1}');
     });
 
-    // F4 (fix wave) — message_updated (con error) llega ANTES que message_created (fila aún no
-    // espejada) → markDeliveryFailed devuelve null → la delivery NO debe registrarse como vista,
-    // para que el retry de Chatwoot la re-entregue cuando la fila ya exista.
-    it('F4: message_updated antes que message_created → NO se marca vista → el retry (tras el created) marca failed', async () => {
+    // F4-bis (re-review) — message_updated (con error) llega ANTES que message_created (fila
+    // aún no espejada) → 1er intento RECHAZA (retriable) y NO se marca vista. El eco
+    // `message_created` (en vuelo, llega después) crea la fila. Chatwoot (Sidekiq) re-entrega el
+    // MISMO evento tras el 500 anterior — el segundo `execute()` de abajo NO es un re-invoke "a
+    // mano porque sí": ES esa re-entrega real (misma deliveryId + mismo payload), que ahora sí
+    // encuentra la fila y marca `failed` + vista.
+    it('F4-bis: message_updated antes que message_created RECHAZA (retriable); el reintento de Chatwoot (mismo evento, tras el eco message_created) marca failed + vista', async () => {
       const { uc, conversationRepo, messageRepo, deliveryRepo } = makeUseCase();
-
-      // 1er intento: la fila NO existe todavía
-      await uc.execute('d-mu-order', {
+      const chatwootRetry = {
         event: 'message_updated',
         id: 555,
         content_attributes: { external_error: 'Template not found' },
-      });
+      };
+
+      // 1er intento: la fila NO existe todavía → RECHAZA → la ruta real respondería 500
+      await expect(uc.execute('d-mu-order', chatwootRetry)).rejects.toThrow(/fila 555 aún no espejada/);
       expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-order')).toBe(false); // NO vista
 
-      // message_created crea la fila
+      // el eco message_created (async, en vuelo) crea la fila
       const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 920, status: 'open' });
       await messageRepo.upsertByChatwootMessageId({
         conversationId: conv.id,
@@ -1126,22 +1149,21 @@ describe('ReceiveChatwootWebhook', () => {
         chatwootCreatedAt: new Date().toISOString(),
       });
 
-      // Chatwoot reintenta el MISMO message_updated (misma deliveryId) → ahora sí marca failed
-      await uc.execute('d-mu-order', {
-        event: 'message_updated',
-        id: 555,
-        content_attributes: { external_error: 'Template not found' },
-      });
+      // Chatwoot reintenta EL MISMO evento (misma deliveryId, mismo payload) tras el 500 anterior
+      await expect(uc.execute('d-mu-order', chatwootRetry)).resolves.toBeUndefined();
       expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-order')).toBe(true); // ahora sí vista
 
       const messages = await messageRepo.listByConversation(conv.id);
       expect(messages[0]!.deliveryStatus).toBe('failed');
     });
 
-    // F4 (fix wave) — repo ERROR (no ausencia): fail-open (ackea 200, no lanza) PERO SIN marcar
-    // vista, para que el retry de Chatwoot recupere. (Antes se marcaba vista → Chatwoot no
-    // reintentaba → badge perdido.)
-    it('F4: handleMessageUpdated NUNCA lanza (HOOK-5) pero un repo que EXPLOTA NO marca la delivery vista (retry recupera)', async () => {
+    // F4-bis (re-review) — CORRIGE el test invertido del F4 original: ANTES de F4 este test
+    // afirmaba (correctamente) `hasSeen===true` porque `handleMessageUpdated` tragaba el error;
+    // F4 lo invirtió a `hasSeen===false` con `.resolves.toBeUndefined()` (fail-open sin lanzar) —
+    // un mecanismo que NUNCA generaba el retry real (la ruta responde 200 sin importar el
+    // boolean). El contrato correcto: un repo-error transitorio RECHAZA (simetría ROB-2 con
+    // `handleMessageCreated`, que ya dejaba propagar sus propios errores de repo).
+    it('F4-bis: repo error transitorio en markDeliveryFailedByChatwootMessageId RECHAZA (ROB-2) y la delivery NO queda vista', async () => {
       class ThrowingMessageRepo extends InMemoryChatMessageRepository {
         override async markDeliveryFailedByChatwootMessageId(): Promise<never> {
           throw new Error('db hipo');
@@ -1154,9 +1176,9 @@ describe('ReceiveChatwootWebhook', () => {
 
       await expect(
         uc.execute('d-mu-5', { event: 'message_updated', id: 1, content_attributes: { external_error: 'boom' } }),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow('db hipo');
 
-      // fail-open: no lanzó (200) pero la delivery NO quedó vista → el retry de Chatwoot la recupera
+      // RECHAZA → la ruta real respondería 500 → Chatwoot reintenta; la delivery NO queda vista
       expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-5')).toBe(false);
     });
   });

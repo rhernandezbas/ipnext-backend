@@ -156,8 +156,18 @@ function toIsoTimestamp(raw: string | number | undefined): string {
  * throws, silently discarding Chatwoot's retry — the one copy of that event that
  * would ever succeed is gone for good.
  *
- * Never throws on a malformed or unsubscribed event (HOOK-5) — degrades to a no-op
- * so the webhook route can always ack 200 without risking Chatwoot's retry storm.
+ * Never throws on a malformed payload or an unsubscribed event type (HOOK-5) — degrades to
+ * a no-op so the webhook route can always ack 200 without risking Chatwoot's retry storm.
+ *
+ * F4-bis (re-review) — EXCEPTION, by design (ROB-2 symmetry with `handleMessageCreated`):
+ * `message_updated` with a populated `external_error` that CAN'T be applied yet (the row
+ * isn't mirrored, or the repo throws a transient DB error) DOES throw. `execute` never
+ * catches it, so the route's `catch → next(err)` turns it into a 500 — the ONLY signal
+ * Chatwoot (Sidekiq) actually reacts to for a retry (it never re-delivers based on a 200
+ * body). Swallowing that error here (the F4 fix-wave's approach: return a boolean, always
+ * ack 200) looked like it triggered a re-delivery but didn't — Chatwoot ignores 2xx
+ * regardless of payload, so the `failed` badge was silently lost. Throwing is the only
+ * real mechanism.
  */
 export class ReceiveChatwootWebhook {
   constructor(
@@ -188,35 +198,33 @@ export class ReceiveChatwootWebhook {
     const alreadySeen = await this.deliveryRepo.hasSeen(WEBHOOK_SOURCE, deliveryId);
     if (alreadySeen) return; // HOOK-3 — already processed, ack without reprocessing
 
-    // ROB-2 — `process` puede lanzar (delivery NO se recorda → Chatwoot reintenta). F4 (fix wave)
-    // — además puede devolver `false` (SIN lanzar) para pedir que la delivery NO se recorde: un
-    // `message_updated` cuya fila aún no está espejada (o cuyo repo explotó) debe re-entregarse.
-    const shouldRecord = await this.process(payload);
+    // ROB-2 — `process` puede lanzar (delivery NO se recorda → la ruta responde 500 → Chatwoot
+    // reintenta). F4-bis (re-review) — el boolean del F4 original SE QUITÓ: `execute` es `void` y
+    // la ruta siempre respondía 200, así que "no recordar" nunca generaba el retry que se
+    // documentaba. `handleMessageUpdated` ahora LANZA en los mismos casos (fila aún no espejada /
+    // repo-error), simétrico con cómo ya se comportaban `handleMessageCreated`/`handleConversation*`.
+    await this.process(payload);
 
-    if (shouldRecord) await this.deliveryRepo.recordIfNew(WEBHOOK_SOURCE, deliveryId); // recorded ONLY after success
+    await this.deliveryRepo.recordIfNew(WEBHOOK_SOURCE, deliveryId); // recorded ONLY after success
   }
 
   /**
-   * Devuelve `true` si la delivery debe registrarse como vista (procesada), `false` si NO (para
-   * que Chatwoot reintente — F4). Los handlers que lanzan (message_created/conversation_*) NO
-   * llegan al `return` → `process` propaga y `execute` no recorda (ROB-2). Sólo `handleMessageUpdated`
-   * traga sus errores y decide vía el boolean.
+   * Despacha por tipo de evento. Todos los handlers pueden lanzar (ROB-2): la excepción sube sin
+   * atajarse por `process`, `execute` no llega a `recordIfNew` y la ruta HTTP hace
+   * `catch → next(err) → 500`, la señal real que Chatwoot usa para reintentar la entrega.
    */
-  private async process(payload: ChatwootWebhookPayload): Promise<boolean> {
+  private async process(payload: ChatwootWebhookPayload): Promise<void> {
     switch (payload.event) {
       case 'message_created':
-        await this.handleMessageCreated(payload);
-        return true;
+        return this.handleMessageCreated(payload);
       case 'conversation_created':
-        await this.handleConversationCreated(payload);
-        return true;
+        return this.handleConversationCreated(payload);
       case 'conversation_status_changed':
-        await this.handleConversationStatusChanged(payload);
-        return true;
+        return this.handleConversationStatusChanged(payload);
       case 'message_updated':
         return this.handleMessageUpdated(payload);
       default:
-        return true; // HOOK-5 — unsubscribed event type, ignored without error (recordar: no reprocesar)
+        return; // HOOK-5 — unsubscribed event type, ignored without error
     }
   }
 
@@ -226,39 +234,38 @@ export class ReceiveChatwootWebhook {
    * mirror, linkeado por `chatwootMessageId` (`payload.id`, NO por SM sid — el mirror ya
    * es UNIQUE por ese campo, CHW-4). Sin `external_error` (o vacío tras trim) → no-op:
    * `delivered`/`read` viajan en el MISMO evento sin este campo y son indistinguibles
-   * (paridad con hoy, Decisión B — no es regresión).
+   * (paridad con hoy, Decisión B — no es regresión). Un payload malformado (`id` ausente)
+   * también es no-op: nunca será un retry válido, reintentarlo no cambia nada.
    *
-   * NUNCA lanza (HOOK-5): fail-open, mismo criterio que `maybeRegisterOptOut`/
-   * `maybeAdoptBulkConversation` — un hipo de DB acá no debe volar el ack 200 del webhook.
-   *
-   * Devuelve un boolean (F4, fix wave) = "¿registrar la delivery como vista?":
-   * - `true`  → no-op legítimo (malformed / delivered-read / vacío) o `failed` YA marcado.
-   * - `false` → la fila AÚN no está espejada (`markDeliveryFailed` devolvió null) o el repo
-   *   EXPLOTÓ. NO se marca vista para que Chatwoot RE-ENTREGUE cuando el `message_created` ya
-   *   haya creado la fila. (Antes: se marcaba vista siempre → un update fuera de orden perdía el
-   *   `failed` para siempre; un repo caído lo perdía también.)
+   * F4-bis (re-review) — SIMETRÍA ROB-2 con `handleMessageCreated`: cuando el error SÍ aplica
+   * pero no puede APLICARSE todavía (fila aún no espejada — `markDeliveryFailedByChatwootMessageId`
+   * devuelve `null`), o el repo tira un error transitorio de DB, este método LANZA sin atajarlo.
+   * `execute` deja que la excepción suba → la ruta HTTP hace `catch → next(err) → 500` → Chatwoot
+   * (Sidekiq) reintenta la entrega (SÓLO reacciona a non-2xx, nunca al contenido del body — un
+   * `return`/boolean interno que la ruta igual convierte en 200 NO logra un retry real, eso era
+   * el bug del F4 original). Al lanzar, `execute` tampoco llega a `recordIfNew`: la delivery NO
+   * queda vista, así que el reintento de Chatwoot vuelve a ejecutar este mismo handler (la clave
+   * de dedup por mensaje+discriminador de F3, `message_updated:{id}:failed`, es la MISMA en la
+   * re-entrega, así que no hay drift de key entre intentos).
    */
-  private async handleMessageUpdated(payload: ChatwootWebhookPayload): Promise<boolean> {
-    if (payload.id === undefined) return true; // malformed payload — no-op, se recorda (nunca será válido en retry)
+  private async handleMessageUpdated(payload: ChatwootWebhookPayload): Promise<void> {
+    if (payload.id === undefined) return; // malformed payload — no-op, nunca será un retry válido
 
     const externalError = payload.content_attributes?.external_error;
-    if (externalError === undefined || externalError === null) return true; // delivered/read — indistinguible, no-op
+    if (externalError === undefined || externalError === null) return; // delivered/read — indistinguible, no-op
 
-    try {
-      // F2 (fix wave) — curación DENTRO del try (coacción segura + defensa en profundidad).
-      const curated = curateDeliveryError(externalError);
-      if (curated.length === 0) return true; // vacío tras trim — tratado igual que ausente (no-op, se recorda)
+    // F2 (fix wave) — coacción segura (nunca lanza por un `external_error` no-string).
+    const curated = curateDeliveryError(externalError);
+    if (curated.length === 0) return; // vacío tras trim — tratado igual que ausente, no-op
 
-      const updated = await this.messageRepo.markDeliveryFailedByChatwootMessageId(payload.id, curated);
-      // F4 — null = fila aún no espejada → NO recordar (retry re-entrega tras el message_created).
-      return updated !== null;
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[messaging] markDeliveryFailedByChatwootMessageId falló (fail-open: ackea 200 pero NO marca vista, el retry recupera)', {
-        chatwootMessageId: payload.id,
-        error: err instanceof Error ? err.message : err,
-      });
-      return false; // F4 — repo error: fail-open (no lanza) PERO sin marcar vista, que el retry recupere
+    // F4-bis — SIN try/catch: un repo-error transitorio debe propagar tal cual (ver docstring).
+    const updated = await this.messageRepo.markDeliveryFailedByChatwootMessageId(payload.id, curated);
+    if (updated === null) {
+      // Fila aún no espejada (el `message_created` de este mismo mensaje todavía no corrió) —
+      // retriable: Chatwoot reintentará y, para entonces, la fila ya debería existir.
+      throw new Error(
+        `[messaging] message_updated failed no aplicable: fila ${payload.id} aún no espejada — retriable`,
+      );
     }
   }
 
