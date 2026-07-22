@@ -536,8 +536,25 @@ model Stage {
   // iclass-intermediate-states — IClass status codes mapped to THIS stage (auto-move target)
   iclassStatusCatalogs IClassStatusCatalog[] @relation("StatusCatalogProminenseStage")
 
+  // bulk-task-recipients (D1) — mapeo opcional: este Stage es elegible como criterio de
+  // destinatarios del bulk WhatsApp (dominio "Tarea"). Cascade: borrar el Stage limpia el
+  // mapeo solo, sin job de limpieza.
+  whatsappTaskStageRecipientConfig WhatsappTaskStageRecipientConfig?
+
   @@unique([workflowId, code])
   @@index([workflowId, order])
+}
+
+/// bulk-task-recipients (D1, TSC-1) — set de Stages elegibles como criterio de destinatarios
+/// del bulk WhatsApp (dominio "Tarea"). Una fila POR stage mapeado (NO `stageIds String[]`
+/// crudo): la FK real evita ids huérfanos y `onDelete: Cascade` limpia el mapeo solo al
+/// borrar el Stage. `@unique` en stageId = idempotencia del mapeo (nunca 2 filas del mismo
+/// stage).
+model WhatsappTaskStageRecipientConfig {
+  id        String   @id @default(uuid())
+  stageId   String   @unique
+  stage     Stage    @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
 }
 
 model ProjectCategory {
@@ -1416,6 +1433,11 @@ model ScheduledTask {
   @@index([networkSiteId])
   @@index([archivedAt])
   @@index([onuSerial])
+  // bulk-task-recipients (D1) — covering index para la resolución de destinatarios por
+  // estado de tarea: index-only scan para el DISTINCT(customerId) y para el count de
+  // customerId IS NULL. Aditivo, NO reemplaza el @@index([stageId]) existente (otros paths
+  // de scheduling lo usan).
+  @@index([stageId, isClosed, customerId])
 }
 
 // K3 (fiber-auto-watcher) — intento de auto-aprovisionamiento por (taskId, onuSn).
