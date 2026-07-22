@@ -57,8 +57,11 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
 
 // #70 — the lookup also reports grClienteId (kept for back-compat; #115 already migrated
 // the register identity to grContratoId, but other use cases may still read it).
-const customerLookup = (exists: boolean, grClienteId: string | null = '243200') => ({
-  findById: async (id: string) => (exists ? { id, grClienteId } : null),
+// B8 (D1) — `name` viaja opcional: RegisterGigaredAccount ahora deriva firstName/lastName (y el
+// email) de `customer.name` (split APELLIDO-primero), no del input. Default undefined degrada al
+// fallback determinístico ('cliente') — sólo importa para los tests que assertan el email exacto.
+const customerLookup = (exists: boolean, grClienteId: string | null = '243200', name?: string) => ({
+  findById: async (id: string) => (exists ? { id, grClienteId, name } : null),
 });
 
 /**
@@ -503,7 +506,9 @@ describe('RegisterGigaredAccount (#47)', () => {
       }),
     });
     // #115 — contractId REQUERIDO; la password se genera desde grContratoId='243200' → ip243200.
-    const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupWithGr(true));
+    // B8 (D1) — el customer.name trae 'Pérez' como primer token para que la aserción de email
+    // (derivada del apellido del CLIENTE, no del input) siga siendo válida.
+    const uc = new RegisterGigaredAccount(port, customerLookup(true, '243200', 'Pérez Juan'), contractLookupWithGr(true));
     const result = await uc.execute('cust-1', {
       firstName: 'Juan', lastName: 'Pérez', email: 'e@x.com',
       // cic omitido — #109: viene del pool automáticamente.
@@ -882,8 +887,9 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
     tvCancellation.seedCancelled('cust-1');
 
     // grContratoId='2432' → re-alta mail = hernandez24321@gmail.com
+    // B8 (D1) — customer.name trae 'Hernández' como primer token (apellido derivado).
     const uc = new RegisterGigaredAccount(
-      port, customerLookup(true, '999'), contractLookupWithGr(true, 'cust-1', '2432'),
+      port, customerLookup(true, '999', 'Hernández Ronald'), contractLookupWithGr(true, 'cust-1', '2432'),
       undefined, undefined, tvCancellation, activation,
     );
     await uc.execute('cust-1', {

@@ -19,6 +19,7 @@ import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import { deterministicTvEmail, deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from './lookups';
 import { reconcileTvContractService } from './reconcileTvContractService';
+import { splitCustomerName } from './splitCustomerName';
 
 /**
  * The Gigared Play login impacted on the local TV row (#65): `GIGA{abonado}`,
@@ -55,6 +56,10 @@ export function tvLoginFromAccount(account: GigaredAccount): string | null {
  *   - email       = deterministicTvEmail(lastName, grContratoId, seq) → `{apellido}{grId}{seq}@gmail.com`
  * #118 — la primera alta (seq=0) también deriva el email server-side del grContratoId.
  * El input.email del FE se ignora: la fuente única de identidad TV es grContratoId (email + password).
+ *
+ * B8 (D1, hardening OPCIONAL) — el `lastName` de la fórmula de arriba (y el `firstName` que viaja a
+ * `gigared.register`) son BE-authoritative: se derivan de `customer.name` vía `splitCustomerName`
+ * (split APELLIDO-primero), NUNCA de `input.firstName`/`input.lastName`.
  */
 export class RegisterGigaredAccount {
   constructor(
@@ -159,7 +164,13 @@ export class RegisterGigaredAccount {
   async execute(
     customerId: string,
     input: {
+      /**
+       * B8 (D1, hardening OPCIONAL) — IGNORADO por el use case. El nombre es BE-authoritative:
+       * se deriva de `customer.name` (split APELLIDO-primero, `splitCustomerName`) SIEMPRE, nunca
+       * del body. Se mantiene en el shape por tolerancia de deploy (el FE actual todavía lo manda).
+       */
       firstName: string;
+      /** B8 (D1) — IGNORADO, ver `firstName`. */
       lastName: string;
       email: string;
       /** #109 — ignorado si se provee; el CIC se asigna automáticamente del pool. */
@@ -189,6 +200,13 @@ export class RegisterGigaredAccount {
   }> {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
+
+    // B8 (D1, hardening OPCIONAL) — nombre BE-authoritative: firstName/lastName SIEMPRE derivan
+    // del customer resuelto (split APELLIDO-primero), NUNCA de input.firstName/input.lastName.
+    // Cierra un vector de corrupción TEÓRICO (la forense probó que el body-name no fue el vector
+    // del incidente real — ver design D-pool/D1); input.firstName/lastName quedan en el tipo por
+    // tolerancia de deploy pero el código no los lee.
+    const { firstName, lastName } = splitCustomerName(customer.name);
 
     // #115 — validate ownership of the target contract ALWAYS before any Gigared write.
     // A foreign/absent contractId → ContractNotFoundError (404), Gigared never touched.
@@ -225,14 +243,20 @@ export class RegisterGigaredAccount {
     // la primera alta usaba el email que mandaba el FE, que era derivado del grClienteId, lo que
     // generaba una inconsistencia con la clave (que ya derivaba del grContratoId desde el #115).
     // Ahora la fuente única de la identidad TV es grContratoId: email + password determinísticos.
-    const email = deterministicTvEmail(input.lastName, grContratoId, seq);
+    // B8 (D1) — el lastName usado es el DERIVADO del customer (split), no input.lastName.
+    const email = deterministicTvEmail(lastName, grContratoId, seq);
 
     // #115 — wantsPersist: el contrato YA está validado arriba (ownership siempre chequeado).
     // La condición de persistencia se reduce a la presencia de los repos locales.
     const wantsPersist = !!this.csRepo && !!this.catalogRepo;
 
     // B1 (pool anti-poison) + B2 (recovery/probe idempotente) — ver `resolveGigaredAccount`.
-    const { cic, account, recovered } = await this.resolveGigaredAccount(internalId, email, password, input);
+    // B8 (D1) — firstName/lastName pasados acá son los DERIVADOS del customer, no los del input.
+    const { cic, account, recovered } = await this.resolveGigaredAccount(internalId, email, password, {
+      firstName,
+      lastName,
+      sendActivationEmail: input.sendActivationEmail,
+    });
 
     // #72 — clearCancelled best-effort: el cliente volvió a tener TV (re-registro exitoso).
     // Se intenta siempre que el register + link fue exitoso. Un error aquí NO aborta.

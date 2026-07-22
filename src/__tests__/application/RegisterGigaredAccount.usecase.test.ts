@@ -74,11 +74,15 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
 /**
  * Customer lookup minimal — grClienteId puede existir pero ya NO se usa para el alta TV.
  * Lo mantenemos en el shape (otros use cases lo usan); el alta lo ignora.
+ *
+ * B8 (D1) — `name` viaja opcional para los tests que ejercitan la derivación BE-authoritative
+ * del nombre (`splitCustomerName`). Default neutro ('CLIENTE TEST') para no romper los tests
+ * que no lo necesitan (Desvíos #4).
  */
-function fakeCustomerLookup(found = true, grClienteId = '999999') {
+function fakeCustomerLookup(found = true, grClienteId = '999999', name = 'CLIENTE TEST') {
   return {
     findById: async (id: string) =>
-      found ? { id, grClienteId } : null,
+      found ? { id, grClienteId, name } : null,
   };
 }
 
@@ -589,7 +593,9 @@ describe('RegisterGigaredAccount #115 — identidad TV deriva del grContratoId d
 
     const uc = new RegisterGigaredAccount(
       port,
-      fakeCustomerLookup(true, '999999'),
+      // B8 (D1): el email deriva de customer.name (split), NO de input.lastName — el name acá
+      // trae 'López' como primer token para que la aserción de email siga siendo válida.
+      fakeCustomerLookup(true, '999999', 'López Ana'),
       fakeContractLookup({ grContratoId: '204382' }),
       undefined, undefined,
       tvCancellation,
@@ -600,7 +606,8 @@ describe('RegisterGigaredAccount #115 — identidad TV deriva del grContratoId d
     await uc.execute('cust-1', { ...minInput('contract-1'), lastName: 'López' });
 
     const callArg = (register.mock.calls[0] as unknown[])[0] as { email: string };
-    // seq=1 → email = deterministicTvEmail('López', '204382', 1)
+    // seq=1 → email = deterministicTvEmail('López', '204382', 1) — 'López' ahora viene del
+    // customer.name resuelto (split D1), no del input.
     expect(callArg.email).toBe(deterministicTvEmail('López', '204382', 1));
     // NO el derivado del grClienteId
     expect(callArg.email).not.toBe(deterministicTvEmail('López', '999999', 1));
@@ -696,7 +703,8 @@ describe('RegisterGigaredAccount #118 — alta nueva (seq=0): email server-side 
     });
     const uc = new RegisterGigaredAccount(
       port,
-      fakeCustomerLookup(true, '999999'),
+      // B8 (D1): 'Pérez' ahora entra vía customer.name (split), no vía input.lastName.
+      fakeCustomerLookup(true, '999999', 'Pérez Juan'),
       fakeContractLookup({ grContratoId: '204382' }),
       undefined, undefined, undefined, undefined, undefined, pickFirst,
     );
@@ -722,7 +730,8 @@ describe('RegisterGigaredAccount #118 — alta nueva (seq=0): email server-side 
     });
     const uc = new RegisterGigaredAccount(
       port,
-      fakeCustomerLookup(true, '999999'),
+      // B8 (D1): 'García' ahora entra vía customer.name (split), no vía input.lastName.
+      fakeCustomerLookup(true, '999999', 'García Luis'),
       fakeContractLookup({ grContratoId: '204382' }),
       undefined, undefined, undefined, undefined, undefined, pickFirst,
     );
@@ -735,5 +744,89 @@ describe('RegisterGigaredAccount #118 — alta nueva (seq=0): email server-side 
     // Confirmar que NINGUNO deriva del grClienteId
     expect(callArg.email).not.toContain('999999');
     expect(callArg.password).not.toContain('999999');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B8 (D1, OPCIONAL hardening) — nombre BE-authoritative: el register deriva firstName/lastName
+// del customer resuelto (split APELLIDO-primero), NUNCA del body. Forensics probó que el body-name
+// NO fue el vector del incidente — este batch cierra un vector TEÓRICO, no el confirmado.
+// ---------------------------------------------------------------------------
+
+describe('RegisterGigaredAccount — B8 (D1, OPCIONAL): nombre BE-authoritative', () => {
+  it('body con nombre AJENO → la cuenta se crea con el nombre del CLIENTE (split), NUNCA con el del input', async () => {
+    const register = jest.fn(async () => {});
+    const port = fakePort({
+      listAccounts: poolOf('CICB8-1'),
+      register,
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'CICB8-1' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port,
+      // El customer resuelto es CENTENO MIGUEL ANGEL — el input trae otra persona.
+      fakeCustomerLookup(true, '999999', 'CENTENO MIGUEL ANGEL'),
+      fakeContractLookup({ grContratoId: '204382' }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    await uc.execute('cust-1', {
+      ...minInput('contract-1'),
+      firstName: 'VACHERAND',
+      lastName: 'SILVIO GABRIEL',
+    });
+
+    const callArg = (register.mock.calls[0] as unknown[])[0] as { firstName: string; lastName: string };
+    expect(callArg).toEqual(
+      expect.objectContaining({ firstName: 'MIGUEL ANGEL', lastName: 'CENTENO' }),
+    );
+    expect(callArg.firstName).not.toBe('VACHERAND');
+    expect(callArg.lastName).not.toBe('SILVIO GABRIEL');
+  });
+
+  it('deterministicTvEmail se invoca con el lastName DERIVADO del customer, no el del input', async () => {
+    const register = jest.fn(async () => {});
+    const port = fakePort({
+      listAccounts: poolOf('CICB8-2'),
+      register,
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'CICB8-2' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(true, '999999', 'CENTENO MIGUEL ANGEL'),
+      fakeContractLookup({ grContratoId: '204382' }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    await uc.execute('cust-1', {
+      ...minInput('contract-1'),
+      firstName: 'VACHERAND',
+      lastName: 'SILVIO GABRIEL',
+    });
+
+    const callArg = (register.mock.calls[0] as unknown[])[0] as { email: string };
+    // email deriva de deterministicTvEmail('CENTENO', grContratoId, seq=0) — el apellido del
+    // CUSTOMER, NUNCA 'SILVIO GABRIEL' (el lastName del input, que además ni siquiera es un
+    // apellido válido en la convención APELLIDO-primero).
+    expect(callArg.email).toBe(deterministicTvEmail('CENTENO', '204382', 0));
+  });
+
+  it('customer.name con 1 solo token → firstName=lastName; register recibe eso', async () => {
+    const register = jest.fn(async () => {});
+    const port = fakePort({
+      listAccounts: poolOf('CICB8-3'),
+      register,
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'CICB8-3' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port,
+      fakeCustomerLookup(true, '999999', 'MADONNA'),
+      fakeContractLookup({ grContratoId: '204382' }),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    await uc.execute('cust-1', minInput('contract-1'));
+
+    const callArg = (register.mock.calls[0] as unknown[])[0] as { firstName: string; lastName: string };
+    expect(callArg).toEqual(expect.objectContaining({ firstName: 'MADONNA', lastName: 'MADONNA' }));
   });
 });
