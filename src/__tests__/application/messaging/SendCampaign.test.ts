@@ -267,6 +267,9 @@ async function seedCampaign(
     // chatwoot-hub-sendpath (B4) — opcional, backcompat: los tests existentes no
     // lo pasan (queda `null`, `renderTemplateBody` resuelve `''`, sin cambios).
     templateBody?: string | null;
+    // campaign-chatwoot-label (CLBL-6) — opcional, backcompat: ausente → `null`
+    // (comportamiento actual intacto, sin enganche de labeling).
+    chatwootLabel?: string | null;
     variableSpec?: CampaignVariableSpec;
     recipients: { clientId: string | null; contactName?: string | null; phoneNormalized: string; phoneE164: string }[];
   },
@@ -275,6 +278,7 @@ async function seedCampaign(
     name: 'Test campaign',
     templateRef: opts.templateRef ?? 'HXtest',
     templateBody: opts.templateBody ?? null,
+    chatwootLabel: opts.chatwootLabel ?? null,
     segment: { statuses: ['late'] },
     variableSpec: opts.variableSpec ?? {},
     total: opts.recipients.length,
@@ -1420,6 +1424,291 @@ describe('SendCampaign', () => {
 
       const recipients = (await campaignRepo.listRecipients(campaign.id)).data;
       expect(recipients.filter((r) => r.status === 'sent')).toHaveLength(5); // los 5 sent exactamente
+    });
+  });
+
+  // ── campaign-chatwoot-label (D4, CLBL-4/5/8) — applyChatwootLabel en processRecipient ──
+  describe('campaign-chatwoot-label (D4, CLBL-4/5/8): applyChatwootLabel', () => {
+    const LABEL_DESCRIPTOR: TemplateDto = {
+      contentSid: 'HXtest',
+      friendlyName: 'Recordatorio deuda',
+      language: 'es',
+      variables: {},
+      approvalStatus: 'approved',
+      body: 'Hola {{1}}',
+    };
+
+    /** Cuenta las llamadas a `addConversationLabels` y falla en la Nº indicada (1-based),
+     * SIN importar a qué recipient corresponde — modela "Chatwoot caído para 1 de N" sin
+     * depender del orden de procesamiento (que el keyset no garantiza de forma legible acá). */
+    class NthLabelCallFailsChatwootGateway extends FakeChatwootGateway {
+      private nextConversationId = 900;
+      private labelCallCount = 0;
+      constructor(private readonly failOnCallNumber: number | null = null) {
+        super();
+      }
+
+      async createConversationWithTemplate(
+        params: Parameters<FakeChatwootGateway['createConversationWithTemplate']>[0],
+      ): Promise<{ chatwootConversationId: number; chatwootMessageId: number | null }> {
+        await super.createConversationWithTemplate(params);
+        const id = this.nextConversationId++;
+        return { chatwootConversationId: id, chatwootMessageId: id * 10 };
+      }
+
+      async addConversationLabels(chatwootConversationId: number, labels: string[]): Promise<void> {
+        this.labelCallCount++;
+        this.addConversationLabelsCalls.push({ chatwootConversationId, labels: [...labels] });
+        if (this.failOnCallNumber !== null && this.labelCallCount === this.failOnCallNumber) {
+          throw new Error('fake: Chatwoot unreachable (addConversationLabels)');
+        }
+      }
+    }
+
+    it('CLBL-4/5: hilo NUEVO (find-or-create crea) — post-sent invoca addConversationLabels(cid, [label]) UNA vez', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [LABEL_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      chatwootGateway.createConversationWithTemplateResult = { chatwootConversationId: 900, chatwootMessageId: 9000 };
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        chatwootLabel: 'promo-julio',
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(1);
+      expect(chatwootGateway.addConversationLabelsCalls).toEqual([{ chatwootConversationId: 900, labels: ['promo-julio'] }]);
+      const recipient = (await campaignRepo.listRecipients(campaign.id)).data[0]!;
+      expect(recipient.status).toBe('sent');
+    });
+
+    it('CLBL-5: hilo YA EXISTENTE (find-or-create resuelve un id preexistente) — misma invocación, sin bifurcación de código', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [LABEL_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      // id "preexistente" — simula que Chatwoot encontró (no creó) la conversación.
+      chatwootGateway.createConversationWithTemplateResult = { chatwootConversationId: 555, chatwootMessageId: 5550 };
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        chatwootLabel: 'promo-julio',
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(1);
+      expect(chatwootGateway.addConversationLabelsCalls).toEqual([{ chatwootConversationId: 555, labels: ['promo-julio'] }]);
+    });
+
+    it('CLBL-4: Chatwoot caído en 1 de 3 al etiquetar — los 3 quedan `sent`, campaña `done`, error logueado, NUNCA re-marca failed ni toca sentCount', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const candidates = [makeCandidate({ clientId: 'c1' }), makeCandidate({ clientId: 'c2' }), makeCandidate({ clientId: 'c3' })];
+      const lookup = makeLookup(candidates);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [LABEL_DESCRIPTOR] });
+      const chatwootGateway = new NthLabelCallFailsChatwootGateway(2); // falla la 2da llamada, sin importar cuál recipient
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        chatwootLabel: 'promo-julio',
+        recipients: [
+          { clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' },
+          { clientId: 'c2', phoneNormalized: '3364000002', phoneE164: '+5493364000002' },
+          { clientId: 'c3', phoneNormalized: '3364000003', phoneE164: '+5493364000003' },
+        ],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.status).toBe('done');
+      expect(result.sentCount).toBe(3);
+      expect(result.failedCount).toBe(0);
+      const recipients = (await campaignRepo.listRecipients(campaign.id)).data;
+      expect(recipients.every((r) => r.status === 'sent')).toBe(true); // NINGUNO re-marcado failed
+      expect(chatwootGateway.addConversationLabelsCalls).toHaveLength(3); // se INTENTÓ para los 3
+      expect(
+        consoleErrorSpy.mock.calls.some((call) => String(call[0]).includes('etiquetado Chatwoot')),
+      ).toBe(true); // logueado, best-effort
+
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('campaign.chatwootLabel=null → addConversationLabels NUNCA invocado (blast radius nulo)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [LABEL_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      chatwootGateway.createConversationWithTemplateResult = { chatwootConversationId: 900, chatwootMessageId: 9000 };
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        // chatwootLabel ausente → null (default del helper)
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(1);
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(1); // el envío SÍ ocurrió
+      expect(chatwootGateway.addConversationLabelsCalls).toHaveLength(0); // pero CERO labeling
+    });
+
+    it('CLBL-8: flag OFF (Twilio-directo) aunque chatwootLabel esté seteado → addConversationLabels NUNCA invocado', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway();
+      const chatwootGateway = new FakeChatwootGateway();
+      const featureFlags = new InMemoryFeatureFlagRepository(); // sin seed → OFF
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign } = await seedCampaign(campaignRepo, {
+        chatwootLabel: 'promo-julio',
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(1);
+      expect(templatePort.calls).toHaveLength(1); // Twilio-directo, sin cambios
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(0);
+      expect(chatwootGateway.addConversationLabelsCalls).toHaveLength(0);
+    });
+
+    it('CLBL-8: resume — recipient ya `sent` de una corrida previa NO se reprocesa, cero nueva llamada a addConversationLabels', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' }), makeCandidate({ clientId: 'c2' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [LABEL_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      chatwootGateway.createConversationWithTemplateResult = { chatwootConversationId: 900, chatwootMessageId: 9000 };
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign, recipients } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        chatwootLabel: 'promo-julio',
+        recipients: [
+          { clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' },
+          { clientId: 'c2', phoneNormalized: '3364000002', phoneE164: '+5493364000002' },
+        ],
+      });
+      // simula una corrida previa YA terminada para c1 (sin label — campaña vieja o corrida
+      // interrumpida antes de este feature): resume NO debe reprocesarlo ni re-etiquetarlo.
+      await campaignRepo.updateRecipient(recipients[0]!.id, { status: 'sent', providerId: 'SM-old1', sentAt: '2026-01-01T00:00:00.000Z' });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(2); // el viejo + el nuevo, conteo REAL
+      // SOLO el recipient nuevo (c2) pasó por applyChatwootLabel — el ya-sent quedó intacto.
+      expect(chatwootGateway.addConversationLabelsCalls).toHaveLength(1);
+      expect(chatwootGateway.createConversationWithTemplateCalls).toHaveLength(1);
+    });
+
+    it('recipient `failed` reintentado SÍ pasa por applyChatwootLabel (idempotente vía GET-unión-POST del adapter, D2)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+      const templatePort = new InMemoryTemplateMessagingGateway({ templates: [LABEL_DESCRIPTOR] });
+      const chatwootGateway = new FakeChatwootGateway();
+      chatwootGateway.createConversationWithTemplateResult = { chatwootConversationId: 900, chatwootMessageId: 9000 };
+      const featureFlags = new InMemoryFeatureFlagRepository();
+      featureFlags.seed('messaging-send-via-chatwoot', true);
+      const uc = new SendCampaign(
+        campaignRepo,
+        lookup,
+        templatePort,
+        new ImmediateRateLimiter(),
+        undefined,
+        undefined,
+        chatwootGateway,
+        featureFlags,
+      );
+
+      const { campaign, recipients } = await seedCampaign(campaignRepo, {
+        templateRef: 'HXtest',
+        chatwootLabel: 'promo-julio',
+        recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+      });
+      // simula un intento previo fallido (Chatwoot caído en el envío) — SIGUE en el
+      // filtro `['queued','failed']`, se reprocesa completo en esta corrida.
+      await campaignRepo.updateRecipient(recipients[0]!.id, { status: 'failed', error: 'intento previo caído' });
+
+      const result = await uc.execute({ campaignId: campaign.id });
+
+      expect(result.sentCount).toBe(1);
+      expect(result.failedCount).toBe(0);
+      expect(chatwootGateway.addConversationLabelsCalls).toHaveLength(1);
     });
   });
 });
