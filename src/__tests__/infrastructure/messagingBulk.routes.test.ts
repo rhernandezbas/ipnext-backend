@@ -29,6 +29,12 @@ import { AuthorizeCampaignSend } from '../../application/use-cases/messaging/Aut
 import { MAX_MANUAL_RECIPIENTS, MAX_MANUAL_CONTACTS } from '../../application/use-cases/messaging/resolveCombinedRecipients';
 import { GetCampaign } from '../../application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '../../application/use-cases/messaging/ListCampaigns';
+// campaign-chatwoot-label (Batch 5) — catálogo de labels.
+import { ListChatwootLabels } from '../../application/use-cases/messaging/ListChatwootLabels';
+import { CreateChatwootLabel } from '../../application/use-cases/messaging/CreateChatwootLabel';
+import { FakeChatwootGateway } from '../helpers/FakeChatwootGateway';
+import { ChatwootUnavailableError } from '../../domain/errors/messaging';
+import type { ChatwootLabelDto } from '../../domain/ports/ChatwootGateway';
 import { InMemoryCampaignRepository } from '../../infrastructure/adapters/in-memory/InMemoryCampaignRepository';
 import { InMemoryDistributedLock } from '../../infrastructure/adapters/in-memory/InMemoryDistributedLock';
 import { CampaignRunner, CampaignSender, CAMPAIGN_LOCK_KEY } from '../../infrastructure/scheduling/CampaignRunner';
@@ -102,6 +108,8 @@ const denyPerm: RequestHandler = (_req, res) => {
 interface BuildAppOptions {
   bulkPerm?: RequestHandler;
   templatesPerm?: RequestHandler;
+  /** campaign-chatwoot-label (CLBL-7) — gate de `POST /chatwoot-labels`. Default `allowPerm`. */
+  managePerm?: RequestHandler;
   templates?: TemplateDto[];
   segmentCandidates?: CampaignRecipientCandidate[];
   /** manual-recipients — universo de clientes resolvibles por la lista manual. */
@@ -115,6 +123,8 @@ interface BuildAppOptions {
    * subset (ej. `['bulk']` sin `bulk_blocked`).
    */
   bulkActions?: string[];
+  /** campaign-chatwoot-label (Batch 5) — gateway compartido por ListChatwootLabels/CreateChatwootLabel. */
+  chatwootGateway?: FakeChatwootGateway;
 }
 
 function buildApp(opts: BuildAppOptions = {}) {
@@ -142,9 +152,17 @@ function buildApp(opts: BuildAppOptions = {}) {
   const authorizeCampaignSend = new AuthorizeCampaignSend(campaignRepo);
   const resolveBulkActions = async (_userId: string): Promise<string[]> => opts.bulkActions ?? ['*'];
 
+  // campaign-chatwoot-label (Batch 5) — mismo gateway compartido por AMBOS use
+  // cases (molde D5.d: en prod es `chatwootGatewayForBulk`, la MISMA instancia
+  // que `SendCampaign`; acá alcanza con una sola instancia local del fake).
+  const chatwootGateway = opts.chatwootGateway ?? new FakeChatwootGateway();
+  const listChatwootLabels = new ListChatwootLabels(chatwootGateway);
+  const createChatwootLabel = new CreateChatwootLabel(chatwootGateway);
+
   const perms: MessagingBulkRoutePerms = {
     bulk: opts.bulkPerm ?? allowPerm,
     templates: opts.templatesPerm ?? allowPerm,
+    manage: opts.managePerm ?? allowPerm,
   };
 
   const app = express();
@@ -181,11 +199,14 @@ function buildApp(opts: BuildAppOptions = {}) {
       perms,
       authorizeCampaignSend,
       resolveBulkActions,
+      // campaign-chatwoot-label (5.4) — APPENDED al final (nunca en medio).
+      listChatwootLabels,
+      createChatwootLabel,
     ),
   );
   app.use(errorHandler);
 
-  return { app, campaignRepo, templatePort, segmentSource, campaignRunner, lock };
+  return { app, campaignRepo, templatePort, segmentSource, campaignRunner, lock, chatwootGateway };
 }
 
 async function seedDoneCampaign(campaignRepo: InMemoryCampaignRepository): Promise<Campaign> {
@@ -409,6 +430,60 @@ describe('/api/messaging/bulk — happy-path del seam (FIX-13)', () => {
       balanceMin: undefined,
       balanceMax: undefined,
     });
+  });
+
+  // ── campaign-chatwoot-label (CLBL-6): parseo de chatwootLabel en POST /campaigns ──
+  it('POST /campaigns con chatwootLabel (string) → parseado y persistido tal cual', async () => {
+    const { app, campaignRepo } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'Recordatorio julio',
+      templateRef: 'HXapproved',
+      segment: { statuses: ['late'] },
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+      chatwootLabel: 'promo-julio',
+    });
+
+    expect(res.status).toBe(201);
+    const persisted = await campaignRepo.findById(res.body.campaignId);
+    expect(persisted?.chatwootLabel).toBe('promo-julio');
+  });
+
+  it('POST /campaigns SIN chatwootLabel (ausente) → persiste `null`, sin romper el resto del parseo', async () => {
+    const { app, campaignRepo } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'Recordatorio julio',
+      templateRef: 'HXapproved',
+      segment: { statuses: ['late'] },
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+    });
+
+    expect(res.status).toBe(201);
+    const persisted = await campaignRepo.findById(res.body.campaignId);
+    expect(persisted?.chatwootLabel).toBeNull();
+  });
+
+  it('POST /campaigns con chatwootLabel NO-string (ej. number) → `undefined`, sin romper el resto del parseo (201 igual)', async () => {
+    const { app, campaignRepo } = buildApp({
+      segmentCandidates: [makeCandidate({ clientId: 'c1', phone: '3364111111' })],
+    });
+
+    const res = await request(app).post('/api/messaging/bulk/campaigns').send({
+      name: 'Recordatorio julio',
+      templateRef: 'HXapproved',
+      segment: { statuses: ['late'] },
+      variablesMap: { '1': { source: 'name' }, '2': { source: 'balanceDue' } },
+      chatwootLabel: 12345,
+    });
+
+    expect(res.status).toBe(201);
+    const persisted = await campaignRepo.findById(res.body.campaignId);
+    expect(persisted?.chatwootLabel).toBeNull();
   });
 
   it('POST /campaigns/:id/send → 202 {accepted:true} con el lock libre', async () => {
@@ -1226,5 +1301,106 @@ describe('/api/messaging/bulk — bulk-granular-perms (BLOQUEO por estado/tipo)'
     const persisted = await campaignRepo.findById(res.body.campaignId);
     expect(persisted?.recipientStatuses.sort()).toEqual(['blocked', 'late']);
     expect(persisted?.hasRawRecipients).toBe(true);
+  });
+});
+
+// ─── campaign-chatwoot-label (Batch 5, CLBL-1/2/7) — /chatwoot-labels ──────────
+describe('/api/messaging/bulk — GET/POST /chatwoot-labels (CLBL-1/2/7)', () => {
+  it('GET /chatwoot-labels → 200 {data:[{title,color}]}', async () => {
+    const chatwootGateway = new FakeChatwootGateway();
+    chatwootGateway.accountLabelsResult = [
+      { title: 'promo-julio', color: '#FF0000' },
+      { title: 'cobranzas', color: '#00FF00' },
+    ];
+    const { app } = buildApp({ chatwootGateway });
+
+    const res = await request(app).get('/api/messaging/bulk/chatwoot-labels');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      data: [
+        { title: 'promo-julio', color: '#FF0000' },
+        { title: 'cobranzas', color: '#00FF00' },
+      ],
+    });
+  });
+
+  it('CLBL-7: GET /chatwoot-labels SIN messaging.templates → 403, sin invocar el port', async () => {
+    const chatwootGateway = new FakeChatwootGateway();
+    const { app } = buildApp({ chatwootGateway, templatesPerm: denyPerm });
+
+    const res = await request(app).get('/api/messaging/bulk/chatwoot-labels');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /chatwoot-labels {title,color} válido → 201 con el DTO creado', async () => {
+    const chatwootGateway = new FakeChatwootGateway();
+    const { app } = buildApp({ chatwootGateway });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/chatwoot-labels')
+      .send({ title: 'promo-julio', color: '#FF0000' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ title: 'promo-julio', color: '#FF0000' });
+    expect(chatwootGateway.createAccountLabelCalls).toEqual([{ title: 'promo-julio', color: '#FF0000' }]);
+  });
+
+  it('CLBL-7: POST /chatwoot-labels con SOLO messaging.templates (sin messaging.manage) → 403, sin invocar el port', async () => {
+    const chatwootGateway = new FakeChatwootGateway();
+    const { app } = buildApp({ chatwootGateway, templatesPerm: allowPerm, managePerm: denyPerm });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/chatwoot-labels')
+      .send({ title: 'promo-julio', color: '#FF0000' });
+
+    expect(res.status).toBe(403);
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  it('POST /chatwoot-labels con title vacío → 400 VALIDATION_ERROR, NO invoca el gateway', async () => {
+    const chatwootGateway = new FakeChatwootGateway();
+    const { app } = buildApp({ chatwootGateway });
+
+    const res = await request(app).post('/api/messaging/bulk/chatwoot-labels').send({ title: '', color: '#FF0000' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  it('POST /chatwoot-labels con color no-hex → 400 VALIDATION_ERROR, NO invoca el gateway', async () => {
+    const chatwootGateway = new FakeChatwootGateway();
+    const { app } = buildApp({ chatwootGateway });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/chatwoot-labels')
+      .send({ title: 'promo-julio', color: 'rojo' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  it('POST /chatwoot-labels con título válido pero Chatwoot rechaza (ej. duplicado) → 503 CHATWOOT_UNAVAILABLE', async () => {
+    // molde D2/D8: el adapter REAL (`HttpChatwootGateway`) mapea CUALQUIER rechazo de
+    // Chatwoot (incl. duplicado) a `ChatwootUnavailableError` — el fake genérico
+    // (`failCreateAccountLabel`) tira un Error plano, así que acá se sub-clasea para
+    // ejercitar el mapeo REAL de errorHandler (statusMap), no un 500 genérico.
+    class RejectingChatwootGateway extends FakeChatwootGateway {
+      async createAccountLabel(): Promise<ChatwootLabelDto> {
+        throw new ChatwootUnavailableError();
+      }
+    }
+    const chatwootGateway = new RejectingChatwootGateway();
+    const { app } = buildApp({ chatwootGateway });
+
+    const res = await request(app)
+      .post('/api/messaging/bulk/chatwoot-labels')
+      .send({ title: 'promo-julio', color: '#FF0000' });
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('CHATWOOT_UNAVAILABLE');
   });
 });
