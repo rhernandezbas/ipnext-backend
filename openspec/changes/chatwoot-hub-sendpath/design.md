@@ -290,10 +290,24 @@ Promise<ChatMessageRecord | null>` (idempotente; `null` si la fila no está en e
 - `handleMessageUpdated`: si `payload.id != null` y `content_attributes.external_error` está poblado y
   no-vacío → `messageRepo.markDeliveryFailedByChatwootMessageId(payload.id, curate(external_error))`.
   Sin `external_error` (o vacío) → no-op (delivered/read caen acá y son indistinguibles — se ignoran).
-  Nunca lanza (HOOK-5, degrada a no-op; el webhook siempre ackea 200).
+  Payload malformado (`id` ausente) → no-op (nunca será un retry válido).
 - **Linkeo**: por `chatwootMessageId` (`payload.id`), NO por SM sid — el mirror ya es UNIQUE por
-  `chatwootMessageId` (proposal §B). Ordering: `message_created` (crea la fila) precede a
-  `message_updated` (la falla), así que la fila existe; si no, el no-op es seguro.
+  `chatwootMessageId` (proposal §B). Ordering esperado: `message_created` (crea la fila) precede a
+  `message_updated` (la falla) — pero el orden NO está garantizado (Chatwoot puede entregar fuera
+  de orden, o el `message_created` puede demorar).
+- **Mecanismo de retry (F4-bis, re-review — CORRIGE una versión previa rota)**: cuando la fila AÚN
+  no está espejada (`markDeliveryFailedByChatwootMessageId` devuelve `null`) o el repo tira un error
+  transitorio de DB, `handleMessageUpdated` **LANZA** (sin try/catch propio). `execute()` no lo
+  ataja → la ruta HTTP hace `catch → next(err) → 500` → Chatwoot (Sidekiq) reintenta la entrega con
+  backoff, la ÚNICA señal a la que reacciona (nunca al contenido del body: un 200 con un flag
+  interno "no marcar vista" no logra ningún retry). Al lanzar antes del `return`, `execute()`
+  tampoco llega a `recordIfNew`: la delivery no queda vista, así que el reintento de Chatwoot
+  vuelve a ejecutar este mismo handler — para entonces el `message_created` ya debería haber
+  corrido y la fila existe. Simetría exacta con `handleMessageCreated`, que ya dejaba propagar sus
+  propios errores de repo (ROB-2) sin necesitar un mecanismo especial. (Una iteración anterior de
+  este fix intentó resolverlo con un `boolean` de retorno decidiendo si recordar la delivery —
+  no funcionaba: `execute()` es `void` y la ruta responde 200 siempre, así que Chatwoot nunca
+  reintentaba y el badge `failed` se perdía en silencio. Se descartó a favor de lanzar.)
 - **Sanitización** (HIST-3): `external_error` es un string corto de Chatwoot (ej. `'Template not found'`,
   o un mensaje con `code` numérico de Twilio como 63016 — catálogo, NO PII), no un payload HTTP crudo.
   `curate` trimea/acota y nunca guarda headers/body crudos.
@@ -447,7 +461,9 @@ design recomienda **delta-sobre-delta** (menos fricción, el archivado es deuda 
     `createConversationWithTemplate` por recipient + `projectChatwootTemplateSend`; descriptor no-approved
     al send-time → aborta run (`TemplateProviderConfigError`); rate-limiter se llama igual; FIX-5 intacto.
   - `ReceiveChatwootWebhook`: `message_updated` con `external_error` → `deliveryStatus='failed'` linkeado
-    por `chatwootMessageId`; sin `external_error` → no-op; fila ausente → no-op; nunca lanza.
+    por `chatwootMessageId`; sin `external_error` → no-op (200), incluso con fila ausente; CON
+    `external_error` y fila ausente (o repo-error) → LANZA (500, retriable — ROB-2); el retry de
+    Chatwoot tras el `message_created` marca `failed` + delivery vista (F4-bis).
 - **Composition-root assertions** (D1): ambos use cases reciben flag repo + chatwoot gateway; misma
   instancia de gateway que el inbox; mismo key de flag.
 - **Rutas** (supertest, repos in-memory): el contrato HTTP no cambia (201/200 dedup, DTO flat) con el

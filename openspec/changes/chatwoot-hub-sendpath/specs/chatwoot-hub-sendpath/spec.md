@@ -90,6 +90,16 @@ poblado, resolver el mirror por `chatwootMessageId` (ya persistido, CHW-4) y pro
 equivalente a `failed` con error saneado (extiende HIST-3 modified). `delivered`/`read` siguen
 INVISIBLES (paridad con hoy, Decisión B — no regresión).
 
+Cuando el mirror AÚN no tiene la fila (el `message_created` de ese mismo mensaje no corrió
+todavía, o llegó desordenado) o el repo tira un error transitorio de DB, el handler MUST
+**lanzar** — NUNCA absorber el error en un `no-op` con ack 200. La ruta HTTP responde 500
+(catch→next(err), sin caso especial), que es la ÚNICA señal a la que Chatwoot (Sidekiq) reacciona
+para reintentar la entrega (nunca al contenido del body — un 200 "silencioso" jamás genera un
+retry, sin importar qué se decida internamente sobre marcar la delivery vista). El reintento de
+Chatwoot vuelve a invocar el mismo handler; si para entonces el `message_created` ya corrió, el
+mirror queda `failed` y la delivery recién ahí se marca vista. Simetría exacta con
+`handleMessageCreated`, que ya deja propagar sus propios errores de repo (ROB-2).
+
 #### Scenario: template no sincronizado en Chatwoot (sync stale/no corrió)
 - Given un template real que NO está en `channel.content_templates` de Chatwoot (job de sync
   manual sin correr, riesgo #1 proposal) y flag ON
@@ -101,7 +111,19 @@ INVISIBLES (paridad con hoy, Decisión B — no regresión).
 #### Scenario: `message_updated` sin `external_error` (delivered/read)
 - Given un `message_updated` sin cambio detectable en `external_error`
 - When llega el webhook
-- Then el mirror NO cambia de status (delivered/read siguen sin ser observables)
+- Then el mirror NO cambia de status (delivered/read siguen sin ser observables) y la ruta
+  responde 200 (no-op ackeado), incluso si la fila del mensaje aún no existe en el mirror
+
+#### Scenario: `message_updated` con `external_error` y fila AÚN no espejada — retriable
+- Given un `message_updated` con `external_error` poblado cuyo `chatwootMessageId` todavía no
+  tiene fila en el mirror (el `message_created` de ese mensaje no corrió aún, o llegó desordenado)
+- When llega el webhook
+- Then `ReceiveChatwootWebhook` LANZA y la ruta responde 500 (retriable) — la delivery NO se
+  marca vista
+- When Chatwoot reintenta la MISMA entrega (backoff de Sidekiq) después de que el
+  `message_created` ya haya creado la fila
+- Then el mirror para ese `chatwootMessageId` queda `failed` con error saneado y la delivery
+  queda vista (200)
 
 ### Requirement: CHW-6 — el gate de aprobación real es NUESTRO, no de Chatwoot
 
