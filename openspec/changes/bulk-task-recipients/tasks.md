@@ -296,33 +296,41 @@ del delta bulk — no se tocan entre sí). B5 depende de B4 (usa los errores/DTO
 
 ## Batch 6 — Wiring `app.ts` + composition-root (D6, D9)
 
-- [ ] **6.1** RED — extender `src/__tests__/infrastructure/messaging-bulk-composition.test.ts`
-  (bootea `createApp()` real): afirma que `PreviewCampaignSegment`/`ListSegmentRecipients`/
-  `CreateCampaign` reciben una instancia de `TaskRecipientSource` Y de
-  `TaskStageRecipientConfigRepository` (molde de las aserciones de 6.1 en `chatwoot-hub-sendpath`) —
-  sin esto el 5to dominio queda cableado a la nada en prod (lección W6, ya citada en el propio
-  design).
-- [ ] **6.2** RED — nuevo `src/__tests__/infrastructure/task-stage-config-composition.test.ts` (molde
-  `nocBroadcast.routes.test.ts`): bootea `createApp()`, verifica que `GET/PUT
-  /api/messaging/config/task-stages` responden (no 404) y que los gates `messaging.read`/
-  `messaging.manage` están aplicados.
-- [ ] **6.3** GREEN — `app.ts`, bloque bulk (~`:3051-3077`, molde del bloque ya existente de esta
-  sección): instancia `const taskStageConfigRepo = new PrismaTaskStageRecipientConfigRepository()` +
-  `const taskRecipientSource = new PrismaTaskRecipientSource()` (scope-local al bloque bulk, mismo
-  precedente que `chatwootGatewayForBulk`/`featureFlagRepoForBulk` — NO comparte variable con el
-  bloque de config nuevo abajo, anti-interleave); inyecta ambos como args nuevos AL FINAL de
-  `PreviewCampaignSegment`/`ListSegmentRecipients`/`CreateCampaign` (molde `customerAdapter` como
-  `ManualRecipientSource`, misma instancia reusada donde aplica).
-- [ ] **6.4** GREEN — `app.ts`, bloque NUEVO self-contained (molde exacto del bloque N1
-  `:3131-3151`, montado en un prefijo MÁS específico que `/api/messaging` — mismo fall-through que
-  `/noc-broadcast`): `const taskStageConfigRepoForRoute = new PrismaTaskStageRecipientConfigRepository()`
-  (puede ser la MISMA instancia de 6.3 si se saca del scope del bloque bulk hacia arriba, o una
-  nueva — cualquiera es válida porque el repo es stateless; documentar la elección en un comentario,
-  molde `n3NocBroadcastConfigRepo` vs el bloque N1 original que SÍ reusa variable). `app.use(
+- [x] **6.1** RED — extendido `src/__tests__/infrastructure/messaging-bulk-composition.test.ts`:
+  (f)/(f2) reescritas al pin EXACTO de 4/6 args (antes anclaban `)` justo tras el 2do/4to arg —
+  hubieran quedado desactualizadas sin editarlas, molde exacto de cómo `chatwoot-hub-sendpath` ya
+  reescribió el test (e) para `SendCampaign`); (o) NUEVO — pinea que `taskRecipientSource`/
+  `taskStageConfigRepo` existen como consts REALES (`new PrismaTaskRecipientSource()`/
+  `new PrismaTaskStageRecipientConfigRepository()`) dentro del bloque bulk, no solo mencionadas en
+  los constructores. **Desvío**: "bootea `createApp()` real" del texto de la tarea NO aplica — este
+  repo NUNCA bootea `createApp()` en tests de composition-root (requiere DB viva, ver
+  `ticket-comments-composition.test.ts`/`task-general-status-composition.test.ts`); el patrón
+  establecido es lectura estática de `app.ts` via `readFileSync`, igual que el resto del archivo que
+  se estaba extendiendo.
+- [x] **6.2** RED — nuevo `src/__tests__/infrastructure/task-stage-config-composition.test.ts`: guard
+  ESTÁTICO (mismo desvío que 6.1 — molde real `ticket-comments-composition.test.ts`, NO
+  `nocBroadcast.routes.test.ts` que sí bootea un router directo con supertest; ESE test ya existe
+  desde B3 como `taskStageConfig.routes.test.ts` y cubre el comportamiento funcional GET/PUT/gates/
+  Zod/422 — este archivo solo pinea que `app.ts` REALMENTE monta el router). 5 tests: (a) import,
+  (b) mount path, (c) use cases wired con el repo, (d) gates read/manage, (e) adapter instanciado.
+- [x] **6.3** GREEN — `app.ts` bloque bulk: `const taskRecipientSource = new PrismaTaskRecipientSource()`
+  + `const taskStageConfigRepo = new PrismaTaskStageRecipientConfigRepository()` (scope-local,
+  comentario anti-interleave); inyectados como 3er/4to arg de `PreviewCampaignSegment`/
+  `ListSegmentRecipients` y 5to/6to arg de `CreateCampaign`.
+- [x] **6.4** GREEN — `app.ts` bloque NUEVO self-contained (molde exacto N1/`/noc-broadcast`,
+  montado DESPUÉS de ese bloque): `const taskStageConfigRepoForRoute = new
+  PrismaTaskStageRecipientConfigRepository()` (instancia PROPIA, no reusa la del bloque bulk —
+  documentado en comentario, elección libre porque el repo es stateless). `app.use(
   '/api/messaging/config/task-stages', createTaskStageConfigRouter(authAdapter, { read:
   requirePerm('messaging','read'), manage: requirePerm('messaging','manage') }, new
-  GetTaskStageRecipientConfig(repo), new UpdateTaskStageRecipientConfig(repo)))`.
-- [ ] **Gate B6**: `npm test` completo BE verde. NO `npm run build` (regla del repo — CLAUDE.md).
+  GetTaskStageRecipientConfig(taskStageConfigRepoForRoute), new
+  UpdateTaskStageRecipientConfig(taskStageConfigRepoForRoute)))`.
+- [x] **Gate B6**: `npx jest` completo síncrono → **954/960 suites (6 skip pre-existentes), 9413/9501
+  tests (88 skip pre-existentes), 0 failures** (+6 tests nuevos vs. el gate B5: 5 de
+  `task-stage-config-composition.test.ts` + 1 de `messaging-bulk-composition.test.ts` (o); (f)/(f2)
+  reescritas, no sumaron tests nuevos). `npx tsc --noEmit` limpio (tras `npx prisma generate` —
+  mismo gotcha ya documentado en B1/B2/B5). NO `npm run build` (regla del repo — CLAUDE.md). Commit
+  `265fbfc4`.
 
 ## Batch F (reservado) — Fix wave post-review adversarial
 
