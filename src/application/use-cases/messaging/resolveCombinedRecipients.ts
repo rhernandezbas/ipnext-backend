@@ -205,6 +205,19 @@ export async function resolveCombinedRecipients(params: {
   let segmentSkipped: RecipientSkipCounts = { optedOut: 0, duplicatePhone: 0, invalidPhone: 0 };
   let segmentExcludedDetail: ExcludedDetailEntry[] = [];
   const segmentCandidateIds = new Set<string>();
+  /**
+   * fix wave (F2, MED) — TODOS los clientId de la lista manual YA PROCESADOS por el
+   * dominio manual (admitidos Y excluidos, ej. opt-out) — molde `segmentCandidateIds`.
+   * Usado (junto con `segmentCandidateIds`/`csvLinkedCandidateIds`) para que el branch
+   * `task` no re-procese un candidato que otra fuente ya excluyó (evitaba doble-conteo
+   * de `optedOut` y una fila duplicada en `excludedDetail`, `:391` antes del fix).
+   */
+  const manualCandidateIds = new Set<string>();
+  /**
+   * fix wave (F2, MED) — TODOS los clientId CSV que matchearon a un `Client` vinculado
+   * (`'linked'`), admitidos Y excluidos — molde `segmentCandidateIds`.
+   */
+  const csvLinkedCandidateIds = new Set<string>();
   if (segmentHasCriteria(segment)) {
     const candidates = await segmentSource.listSegmentRecipients({
       statuses: segment.statuses,
@@ -240,6 +253,9 @@ export async function resolveCombinedRecipients(params: {
     if (missing.length > 0) {
       throw new ManualRecipientsNotFoundError(missing);
     }
+    // fix wave (F2) — TODOS los candidatos manuales (admitidos Y excluidos) quedan
+    // registrados para que el branch `task` no los re-procese.
+    for (const c of candidates) manualCandidateIds.add(c.clientId);
     const manualNonOverlap = candidates.filter((c) => !segmentCandidateIds.has(c.clientId));
     const r = resolveRecipients(manualNonOverlap);
     manualResolved = r.resolved;
@@ -272,6 +288,9 @@ export async function resolveCombinedRecipients(params: {
       }
       if (res.kind === 'linked') {
         const { candidate } = res;
+        // fix wave (F2) — registrado ANTES del check de opt-out/teléfono: un csv
+        // linked EXCLUIDO también debe contar como "ya procesado" para el branch `task`.
+        csvLinkedCandidateIds.add(candidate.clientId);
         if (candidate.whatsappOptOutAt != null) {
           csvSkipped.optedOut++;
           csvExcludedDetail.push({
@@ -387,8 +406,21 @@ export async function resolveCombinedRecipients(params: {
     if (taskClientIds.length > MAX_TASK_STATE_RECIPIENTS) {
       throw new TooManyTaskStateRecipientsError(taskClientIds.length, MAX_TASK_STATE_RECIPIENTS);
     }
-    // 3. Filtra los ya presentes en la unión (overlap seg∪manual∪csv, silencioso).
-    const newClientIds = taskClientIds.filter((id) => !byClientId.has(id));
+    // 3. Filtra los ya presentes/procesados por seg∪manual∪csv (overlap, silencioso).
+    // fix wave (F2, MED) — CONTRA TODOS los candidateIds ya PROCESADOS de esas 3
+    // fuentes (admitidos Y EXCLUIDOS), no solo los admitidos (`byClientId`): un
+    // candidato EXCLUIDO (ej. opt-out) por el segmento/manual/csv que TAMBIÉN tiene
+    // una tarea abierta NO debe re-procesarse acá — antes del fix se re-hidrataba y
+    // se contaba una SEGUNDA vez en `taskSkipped` + una fila duplicada en
+    // `excludedDetail` (source:'task'). Mismo criterio D-pattern que el filtro manual
+    // (`:243`, filtra contra `segmentCandidateIds`, no contra los resueltos).
+    const newClientIds = taskClientIds.filter(
+      (id) =>
+        !byClientId.has(id) &&
+        !segmentCandidateIds.has(id) &&
+        !manualCandidateIds.has(id) &&
+        !csvLinkedCandidateIds.has(id),
+    );
     if (newClientIds.length > 0) {
       if (!manualRecipientSource) {
         // Defensivo — nunca ocurre en el wiring real (app.ts inyecta customerAdapter

@@ -575,6 +575,38 @@ describe('resolveCombinedRecipients — 5to dominio (taskStageIds, TASK-1..TASK-
     expect(result.taskSkipped.duplicatePhone).toBe(1);
   });
 
+  it('fix wave (F2, MED) — cliente EXCLUIDO del segmento (opt-out) + tarea abierta en stage pedido → optedOut UNA vez, excludedDetail UNA fila (source segment)', async () => {
+    const segmentSource = makeSegmentSource([
+      makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+    ]);
+    // c1 TAMBIÉN existe en el universo "manual" (usado para hidratar el dominio task) —
+    // molde real: `manualRecipientSource`/`customerAdapter` consultan el MISMO universo
+    // de `Client` que el segmento, por id.
+    const manualSource = makeManualSource([
+      makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'late', whatsappOptOutAt: '2026-01-01T00:00:00.000Z' }),
+    ]);
+    const hydrateSpy = jest.spyOn(manualSource, 'findRecipientCandidatesByIds');
+    const taskSource = makeTaskSource(['c1']);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: ['late'] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved).toHaveLength(0);
+    expect(result.segmentSkipped.optedOut).toBe(1);
+    expect(result.taskSkipped).toEqual({ optedOut: 0, duplicatePhone: 0, invalidPhone: 0 }); // NO doble-conteo
+    expect(result.excludedDetail).toHaveLength(1); // UNA fila, no dos
+    expect(result.excludedDetail[0]).toMatchObject({ clientId: 'c1', source: 'segment', reason: 'opt_out' });
+    // el port de tarea NUNCA se hidrata para un candidato ya procesado por otra fuente
+    expect(hydrateSpy).not.toHaveBeenCalled();
+  });
+
   it('TASK-7: preview con 2 válidos + 1 opt-out (tarea) + tareas de red sin cliente → count 2, taskSkipped.optedOut:1, noCustomerCount:3', async () => {
     const segmentSource = makeSegmentSource([]);
     const manualSource = makeManualSource([
