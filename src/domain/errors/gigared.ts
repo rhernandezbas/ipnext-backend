@@ -177,6 +177,24 @@ export class TvIdentityStampUnverifiedError extends DomainError {
 }
 
 /**
+ * B2 (D2) — register: el email determinístico (grContratoId + seq) ya está asociado a una cuenta
+ * cuyo `internal_id` NO es el mío (una colisión genuina, o un huérfano histórico envenenado —
+ * mismo email, `internal_id` de un dueño anterior). El recovery NUNCA auto-toca una cuenta bindeada
+ * a otro cliente — `setInternalId` no se llama. Router 409 TV_EMAIL_OWNED_BY_OTHER (distinto de
+ * CIC_ALREADY_LINKED, que es por CIC, no por email). El operador resuelve vía link/transfer manual.
+ */
+export class TvEmailOwnedByOtherError extends DomainError {
+  constructor(
+    public readonly email: string,
+    public readonly ownedByInternalId: string,
+    message = 'El email determinístico de TV ya pertenece a otra cuenta',
+  ) {
+    super(message, 'TV_EMAIL_OWNED_BY_OTHER');
+    this.name = 'TvEmailOwnedByOtherError';
+  }
+}
+
+/**
  * C2 — link by CIC: the partner CIC does not exist upstream (GET /accounts/{cic} → 404).
  * Distinct from GIGARED_NOT_FOUND so the front-end can show a CIC-specific message → router 404.
  */

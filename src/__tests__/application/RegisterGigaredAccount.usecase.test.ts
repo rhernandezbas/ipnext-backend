@@ -17,7 +17,10 @@ import {
   GrContractIdRequiredError,
   TvPoolPoisonedError,
   TvIdentityStampUnverifiedError,
+  TvEmailOwnedByOtherError,
   GigaredNotFoundError,
+  GigaredRejectedError,
+  GigaredUnavailableError,
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
@@ -38,11 +41,23 @@ function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
   return { ...base, ...over };
 }
 
+/**
+ * B2 (D2) — el register hace un PROBE `getAccountByInternalId` ANTES del pool-pick (idempotencia).
+ * Este archivo es EXCLUSIVO de RegisterGigaredAccount (ningún otro use case usa este `fakePort`),
+ * así que el default puede reflejar el probe realista: la 1ra llamada (el probe) 404ea — todavía no
+ * hay nada estampado — y las siguientes (el readback post-stamp) resuelven al account final.
+ */
+function probeMissThenFound(final: GigaredAccount = fakeAccount()): jest.Mock {
+  return jest.fn()
+    .mockRejectedValueOnce(new GigaredNotFoundError())
+    .mockResolvedValue(final);
+}
+
 function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
   return {
     getSummary:            jest.fn(),
     listAccounts:          jest.fn(async () => []),
-    getAccountByInternalId: jest.fn(async () => fakeAccount()),
+    getAccountByInternalId: probeMissThenFound(),
     getAccountByCic:       jest.fn(async () => fakeAccount()),
     register:              jest.fn(async () => {}),
     activate:              jest.fn(async () => {}),
@@ -140,7 +155,7 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
     ];
     const port = fakePort({
       listAccounts: jest.fn(async () => poolAccounts),
-      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'B' })),
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'B' })),
     });
     const pick = (_n: number) => 1;
 
@@ -158,7 +173,7 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
     const singleAccount = fakeAccount({ cic: 'ONLY1', internalId: null }); // B1: LIMPIA
     const port = fakePort({
       listAccounts: jest.fn(async () => [singleAccount]),
-      getAccountByInternalId: jest.fn(async () => singleAccount),
+      getAccountByInternalId: probeMissThenFound(singleAccount),
     });
     const pick = (_n: number) => 0;
 
@@ -248,7 +263,7 @@ describe('RegisterGigaredAccount — B1 D-pool: anti-envenenamiento del pool', (
     const clean = fakeAccount({ cic: 'B', internalId: null });
     const port = fakePort({
       listAccounts: jest.fn(async () => [poisoned, clean]),
-      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'B' })),
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'B' })),
     });
     const uc = new RegisterGigaredAccount(
       port, fakeCustomerLookup(), fakeContractLookup(),
@@ -295,8 +310,9 @@ describe('RegisterGigaredAccount — B1 D-pool: anti-envenenamiento del pool', (
     const port = fakePort({
       listAccounts: jest.fn(async () => [fakeAccount({ cic: 'CLEAN1', internalId: null })]),
       // El readback resuelve a un CIC DISTINTO del que se acaba de estampar (append-only:
-      // el internal_id ya resolvía al dueño histórico).
-      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'OTRO-CIC' })),
+      // el internal_id ya resolvía al dueño histórico). probeMissThenFound: el PROBE (1ra
+      // llamada) 404ea igual — lo que importa acá es el readback POST-STAMP (2da llamada).
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'OTRO-CIC' })),
     });
     const uc = new RegisterGigaredAccount(
       port, fakeCustomerLookup(), fakeContractLookup(), csRepo, catalog,
@@ -336,6 +352,194 @@ describe('RegisterGigaredAccount — B1 D-pool: anti-envenenamiento del pool', (
 });
 
 // ---------------------------------------------------------------------------
+// B2 — D2: recovery/probe idempotente (sin unlink) + TvEmailOwnedByOtherError.
+// Orden de guardas PINNED: probe -> pool-filter (B1) -> register-path -> post-stamp verify (B1)
+// -> catch por instancia (GigaredRejectedError) -> discriminador por email -> 3 ramas + rethrow.
+// ---------------------------------------------------------------------------
+
+describe('RegisterGigaredAccount — B2 D2: recovery/probe idempotente', () => {
+  it('mine-stamped: el probe encuentra MI internalId → skip pool/register/activate/setInternalId, solo reconcile local; recovered:true', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const cat = await catalog.create({ name: 'TV', label: 'TV', active: true, sortOrder: 0 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (csRepo as any).catalog[cat.id] = { name: cat.name, label: cat.label };
+
+    const myInternalId = currentTvInternalId('cust-1', 0);
+    const stamped = fakeAccount({ cic: 'STAMPED1', internalId: myInternalId });
+    const port = fakePort({
+      getAccountByInternalId: jest.fn(async () => stamped), // el probe la encuentra de entrada
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(), csRepo, catalog,
+      undefined, undefined, undefined, pickFirst,
+    );
+
+    const result = await uc.execute('cust-1', minInput('contract-1'));
+
+    expect(port.listAccounts).not.toHaveBeenCalled(); // el pool NUNCA se consulta
+    expect(port.register).toHaveBeenCalledTimes(0);
+    expect(port.activate).toHaveBeenCalledTimes(0);
+    expect(port.setInternalId).toHaveBeenCalledTimes(0);
+    expect(result.recovered).toBe(true);
+    expect(result.account.cic).toBe('STAMPED1');
+  });
+
+  it('404 happy path: el probe no encuentra nada → sigue al pool-pick (B1), secuencia completa una vez cada uno; recovered:false', async () => {
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: 'FRESH1', internalId: null })]),
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'FRESH1' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const result = await uc.execute('cust-1', minInput());
+
+    expect(port.register).toHaveBeenCalledTimes(1);
+    expect(port.activate).toHaveBeenCalledTimes(1);
+    expect(port.setInternalId).toHaveBeenCalledTimes(1);
+    expect(port.getAccountByInternalId).toHaveBeenCalledTimes(2); // probe + post-stamp readback
+    expect(result.recovered).toBe(false);
+  });
+
+  it('orphan MÍA (email dup, CIC limpio): register rechaza, listAccounts({email}) matchea con internalId vacío → reanuda activate+setInternalId SIN re-registrar; recovered:true', async () => {
+    const orphanCic = 'ORPHAN1';
+    const orphanMatch = fakeAccount({ cic: orphanCic, internalId: '' });
+    const register = jest.fn(async () => { throw new GigaredRejectedError('Conflict', 'email already in use'); });
+    const listAccounts = jest.fn(async (filter?: { status?: string; email?: string }) => {
+      if (filter?.email) return [orphanMatch];
+      return [fakeAccount({ cic: 'POOLCIC', internalId: null })];
+    });
+    const port = fakePort({
+      listAccounts, register,
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: orphanCic })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const result = await uc.execute('cust-1', minInput());
+
+    expect(register).toHaveBeenCalledTimes(1); // NUNCA re-llamado
+    expect(port.activate).toHaveBeenCalledWith(expect.objectContaining({ cic: orphanCic }));
+    expect(port.setInternalId).toHaveBeenCalledWith(orphanCic, expect.any(String));
+    expect(result.recovered).toBe(true);
+  });
+
+  it('MÍA vía email (ya estampada): register rechaza, listAccounts({email}) matchea con MI internalId → solo reconcile local, setInternalId NUNCA se llama', async () => {
+    const myInternalId = currentTvInternalId('cust-1', 0);
+    const mineMatch = fakeAccount({ cic: 'MINE1', internalId: myInternalId });
+    const register = jest.fn(async () => { throw new GigaredRejectedError('Conflict', 'email already in use'); });
+    const setInternalId = jest.fn(async () => {});
+    const listAccounts = jest.fn(async (filter?: { status?: string; email?: string }) => {
+      if (filter?.email) return [mineMatch];
+      return [fakeAccount({ cic: 'POOLCIC', internalId: null })];
+    });
+    const port = fakePort({
+      listAccounts, register, setInternalId,
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'MINE1' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const result = await uc.execute('cust-1', minInput());
+
+    expect(setInternalId).not.toHaveBeenCalled();
+    expect(result.recovered).toBe(true);
+    expect(result.account.cic).toBe('MINE1');
+  });
+
+  it('AJENA (email pertenece a OTRO / huérfano histórico envenenado): register rechaza, listAccounts({email}) matchea con internalId de otro → TvEmailOwnedByOtherError, setInternalId NUNCA, cero reconcile local', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const cat = await catalog.create({ name: 'TV', label: 'TV', active: true, sortOrder: 0 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (csRepo as any).catalog[cat.id] = { name: cat.name, label: cat.label };
+
+    const otherMatch = fakeAccount({ cic: 'OTHER1', internalId: 'cust-OTHER' });
+    const register = jest.fn(async () => { throw new GigaredRejectedError('Conflict', 'email already in use'); });
+    const setInternalId = jest.fn(async () => {});
+    const listAccounts = jest.fn(async (filter?: { status?: string; email?: string }) => {
+      if (filter?.email) return [otherMatch];
+      return [fakeAccount({ cic: 'POOLCIC', internalId: null })];
+    });
+    const port = fakePort({ listAccounts, register, setInternalId });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(), csRepo, catalog,
+      undefined, undefined, undefined, pickFirst,
+    );
+
+    const err = await uc.execute('cust-1', minInput('contract-1')).catch(e => e);
+
+    expect(err).toBeInstanceOf(TvEmailOwnedByOtherError);
+    expect((err as TvEmailOwnedByOtherError).code).toBe('TV_EMAIL_OWNED_BY_OTHER');
+    expect(setInternalId).not.toHaveBeenCalled();
+    const tvId = (await catalog.getByName('TV'))!.id;
+    expect(await csRepo.getByPair('contract-1', tvId)).toBeNull();
+  });
+
+  it('sin match por email (no recuperable) → re-lanza el GigaredRejectedError ORIGINAL tal cual', async () => {
+    const originalErr = new GigaredRejectedError('Conflict', 'email already in use');
+    const register = jest.fn(async () => { throw originalErr; });
+    const listAccounts = jest.fn(async (filter?: { status?: string; email?: string }) => {
+      if (filter?.email) return [];
+      return [fakeAccount({ cic: 'POOLCIC', internalId: null })];
+    });
+    const port = fakePort({ listAccounts, register });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const err = await uc.execute('cust-1', minInput()).catch(e => e);
+    expect(err).toBe(originalErr); // el MISMO objeto, no uno nuevo
+  });
+
+  it('error de infra (GigaredUnavailableError, NO GigaredRejectedError) en register → propaga directo, listAccounts({email}) NUNCA se llama', async () => {
+    const listAccounts = jest.fn(async (filter?: { status?: string; email?: string }) => {
+      if (filter?.email) return [fakeAccount({ internalId: '' })]; // trampa: si esto se llama, hay un bug
+      return [fakeAccount({ cic: 'POOLCIC', internalId: null })];
+    });
+    const register = jest.fn(async () => { throw new GigaredUnavailableError(); });
+    const port = fakePort({ listAccounts, register });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    await expect(uc.execute('cust-1', minInput())).rejects.toBeInstanceOf(GigaredUnavailableError);
+    expect(listAccounts).toHaveBeenCalledTimes(1); // SOLO la del pool-pick, jamás la de {email}
+  });
+
+  it('idempotencia end-to-end: 2do execute() sobre cuenta ya estampada → 0 llamadas nuevas a register/activate/setInternalId, 0 consumo del pool', async () => {
+    const myInternalId = currentTvInternalId('cust-1', 0);
+    const stamped = fakeAccount({ cic: 'IDEMP1', internalId: myInternalId });
+    const listAccounts = jest.fn(async () => [fakeAccount({ cic: 'POOLCIC', internalId: null })]);
+    const port = fakePort({
+      listAccounts,
+      getAccountByInternalId: jest.fn(async () => stamped), // SIEMPRE la encuentra (ya estampada)
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    await uc.execute('cust-1', minInput());
+    await uc.execute('cust-1', minInput()); // 2do, idéntico — mismo fake port, contador acumulado
+
+    expect(port.register).toHaveBeenCalledTimes(0);
+    expect(port.activate).toHaveBeenCalledTimes(0);
+    expect(port.setInternalId).toHaveBeenCalledTimes(0);
+    expect(listAccounts).not.toHaveBeenCalled(); // 0 consumo del pool en NINGUNA de las 2 corridas
+  });
+});
+
+// ---------------------------------------------------------------------------
 // #115 — Nueva conducta: identidad deriva del grContratoId (NO del grClienteId)
 // ---------------------------------------------------------------------------
 
@@ -348,7 +552,7 @@ describe('RegisterGigaredAccount #115 — identidad TV deriva del grContratoId d
     const port = fakePort({
       listAccounts: poolOf('CIC01'),
       register,
-      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC01' })),
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'CIC01' })),
     });
     const uc = new RegisterGigaredAccount(
       port,
@@ -376,7 +580,7 @@ describe('RegisterGigaredAccount #115 — identidad TV deriva del grContratoId d
     const port = fakePort({
       listAccounts: poolOf('CIC02'),
       register,
-      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC02' })),
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'CIC02' })),
     });
 
     const tvCancellation = new InMemoryClientTvCancellationRepository();
@@ -458,7 +662,7 @@ describe('RegisterGigaredAccount #115 — identidad TV deriva del grContratoId d
     const port = fakePort({
       listAccounts: poolOf('CIC06'),
       setInternalId,
-      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC06' })),
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'CIC06' })),
     });
     const uc = new RegisterGigaredAccount(
       port,
@@ -488,7 +692,7 @@ describe('RegisterGigaredAccount #118 — alta nueva (seq=0): email server-side 
     const port = fakePort({
       listAccounts: poolOf('CIC10'),
       register,
-      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC10' })),
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'CIC10' })),
     });
     const uc = new RegisterGigaredAccount(
       port,
@@ -514,7 +718,7 @@ describe('RegisterGigaredAccount #118 — alta nueva (seq=0): email server-side 
     const port = fakePort({
       listAccounts: poolOf('CIC11'),
       register,
-      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'CIC11' })),
+      getAccountByInternalId: probeMissThenFound(fakeAccount({ cic: 'CIC11' })),
     });
     const uc = new RegisterGigaredAccount(
       port,

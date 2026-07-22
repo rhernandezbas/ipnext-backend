@@ -378,12 +378,22 @@ describe('RegisterGigaredAccount (#47)', () => {
     // fakePort devuelve [fakeAccount()] cuyo CIC default es '0000000001'.
     // B1 (D-pool): la entrada debe ser LIMPIA (internalId: null) para que el anti-poison no la descarte.
     const pool = fakeAccount({ cic: '0000000001', internalId: null });
+    // B2 (D2) — el register ahora hace un PROBE getAccountByInternalId ANTES del pool-pick. La 1ra
+    // llamada (el probe) NO debe empujar 'get' al array (no es la lectura que este test rastrea) y
+    // debe 404ear (todavía no hay nada estampado) para llegar al pool-pick; solo la 2da llamada
+    // (el readback post-stamp) es el 'get' que la aserción de orden espera.
+    let getCalls = 0;
     const port = fakePort({
       listAccounts: jest.fn(async () => [pool]),
       register: jest.fn(async () => { calls.push('register'); }),
       activate: jest.fn(async () => { calls.push('activate'); }),
       setInternalId: jest.fn(async () => { calls.push('setInternalId'); }),
-      getAccountByInternalId: jest.fn(async () => { calls.push('get'); return fakeAccount(); }),
+      getAccountByInternalId: jest.fn(async () => {
+        getCalls += 1;
+        if (getCalls === 1) throw new GigaredNotFoundError(); // probe: todavía no estampado
+        calls.push('get');
+        return fakeAccount();
+      }),
     });
     // #115 — contractId REQUERIDO; la password se genera desde grContratoId='243200' → ip243200.
     const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupWithGr(true));
@@ -406,7 +416,12 @@ describe('RegisterGigaredAccount (#47)', () => {
 
   // #115 — la password la genera el use case desde grContratoId (antes grClienteId del cliente).
   it('#115 generates the password SERVER-SIDE from grContratoId (ip{grContratoId} padded)', async () => {
-    const port = fakePort();
+    // B2 — probe 404 primero para ejercitar el flujo completo (no la rama "recovered").
+    const port = fakePort({
+      getAccountByInternalId: jest.fn()
+        .mockRejectedValueOnce(new GigaredNotFoundError())
+        .mockResolvedValue(fakeAccount()),
+    });
     // grContratoId='12' → ip12 < 8 chars → padded to ip120000
     const uc = new RegisterGigaredAccount(port, customerLookup(true), contractLookupWithGr(true, 'cust-1', '12'));
     await uc.execute('cust-1', {

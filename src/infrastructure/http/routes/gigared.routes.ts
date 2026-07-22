@@ -39,6 +39,7 @@ import {
   NoCicAvailableError,
   TvPoolPoisonedError,
   TvIdentityStampUnverifiedError,
+  TvEmailOwnedByOtherError,
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
@@ -183,6 +184,13 @@ function sendGigaredError(res: Response, err: unknown): boolean {
   // vínculo irreversible (mapping append-only del CUA) → 409, espejo de CIC_ALREADY_LINKED.
   if (err instanceof TvAlreadyLinkedError) {
     res.status(409).json({ error: err.message, code: err.code, cic: err.cic });
+    return true;
+  }
+  // B2 (D2) — el email determinístico ya está bindeado a OTRO customer (colisión genuina o
+  // huérfano histórico envenenado) — el recovery NUNCA auto-toca esa cuenta. Sin test standalone
+  // del branch (ejercitado end-to-end en B3), mismo criterio que B1.
+  if (err instanceof TvEmailOwnedByOtherError) {
+    res.status(409).json({ error: err.message, code: err.code, email: err.email, ownedByInternalId: err.ownedByInternalId });
     return true;
   }
   return false;

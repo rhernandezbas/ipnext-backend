@@ -11,6 +11,9 @@ import {
   NoCicAvailableError,
   TvPoolPoisonedError,
   TvIdentityStampUnverifiedError,
+  TvEmailOwnedByOtherError,
+  GigaredNotFoundError,
+  GigaredRejectedError,
 } from '@domain/errors/gigared';
 import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import { deterministicTvEmail, deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
@@ -72,6 +75,87 @@ export class RegisterGigaredAccount {
     private readonly pick?: (poolLength: number) => number,
   ) {}
 
+  /**
+   * B2 (D2) — recovery/probe idempotente sobre el pool anti-envenenamiento (B1). Resuelve el
+   * `cic`/`account` partner-side SIN tocar el reconcile local. Orden de guardas PINNED (spec/design
+   * D2): probe -> pool-filter (B1) -> register-path -> post-stamp verify (B1) -> catch por
+   * instancia (GigaredRejectedError) -> discriminador por email -> 3 ramas (resume/mía/ajena) +
+   * rethrow. Extraído a helper para que cada rama termine en un `return` explícito — así el
+   * compilador (no una convención frágil de banderas) garantiza que `cic`/`account` siempre quedan
+   * asignados antes de usarse.
+   */
+  private async resolveGigaredAccount(
+    internalId: string,
+    email: string,
+    password: string,
+    input: { firstName: string; lastName: string; sendActivationEmail: boolean },
+  ): Promise<{ cic: string; account: GigaredAccount; recovered: boolean }> {
+    // D2 — probe previo: si el partner YA resuelve MI internal_id, este es un retry idempotente
+    // sobre una cuenta ya estampada — NO tocar el pool ni re-registrar, solo reconciliar local.
+    let probed: GigaredAccount | null = null;
+    try {
+      probed = await this.gigared.getAccountByInternalId(internalId);
+    } catch (err) {
+      if (!(err instanceof GigaredNotFoundError)) throw err;
+    }
+    if (probed) {
+      return { cic: probed.cic, account: probed, recovered: true };
+    }
+
+    // 404 -> B1: pool-pick filtrado (anti-envenenamiento).
+    const pool = await this.gigared.listAccounts({ status: 'unregistered' });
+    if (pool.length === 0) throw new NoCicAvailableError();
+    const clean = pool.filter(e => e.cic && (e.internalId === null || e.internalId === ''));
+    if (clean.length === 0) throw new TvPoolPoisonedError(pool.length);
+    const pickFn = this.pick ?? ((n: number) => Math.floor(Math.random() * n));
+    const poolEntry = clean[pickFn(clean.length)];
+    // FIX 1 / W2: guard cic falsy (cic === '' o undefined) y índice fuera de rango (poolEntry === undefined).
+    // En ambos casos el error de dominio es NoCicAvailableError, no un TypeError opaco.
+    if (!poolEntry?.cic) throw new NoCicAvailableError();
+    let cic = poolEntry.cic;
+    let recovered = false;
+
+    try {
+      await this.gigared.register({
+        firstName: input.firstName,
+        lastName: input.lastName,
+        email,
+        cic,
+        password,
+        sendActivationEmail: input.sendActivationEmail,
+      });
+    } catch (err) {
+      if (!(err instanceof GigaredRejectedError)) throw err;
+      // D2 — discriminador por email: register rechazó (duplicado). Buscamos quién es dueño hoy
+      // del email determinístico para decidir si podemos reanudar, completar local, o rechazar.
+      const matches = await this.gigared.listAccounts({ email });
+      const match = matches[0];
+      if (!match) throw err; // sin match -> re-lanzar el GIGARED_REJECTED original tal cual
+      if (match.internalId === internalId) {
+        // MÍA (ya estampada vía email) -> completar solo local; setInternalId NUNCA se llama.
+        return { cic: match.cic, account: match, recovered: true };
+      }
+      if (match.internalId === '' || match.internalId == null) {
+        // Huérfana MÍA (register corrió, el stamp no) -> reanudar activate+setInternalId+verify.
+        cic = match.cic;
+        recovered = true;
+      } else {
+        // Ajena (o huérfano histórico envenenado) -> jamás auto-tocar una cuenta bindeada a otro.
+        throw new TvEmailOwnedByOtherError(email, match.internalId);
+      }
+    }
+
+    await this.gigared.activate({ cic, email });
+    await this.gigared.setInternalId(cic, internalId);
+    const account = await this.gigared.getAccountByInternalId(internalId);
+    // B1 (D-pool, part 2) — post-stamp verification: el readback DEBE resolver al CIC recién
+    // estampado. Si 404ea o resuelve OTRO cic (el internal_id append-only ya ataba a un dueño
+    // histórico), NO reconciliar una fila local sobre una identidad sin confirmar — el retry
+    // (probe de este mismo helper) la completa idempotentemente.
+    if (account.cic !== cic) throw new TvIdentityStampUnverifiedError(cic, internalId);
+    return { cic, account, recovered };
+  }
+
   async execute(
     customerId: string,
     input: {
@@ -91,7 +175,7 @@ export class RegisterGigaredAccount {
       actorId?: string | null;
       actorName?: string;
     },
-  ): Promise<{ account: GigaredAccount; credentialsPersisted: boolean }> {
+  ): Promise<{ account: GigaredAccount; credentialsPersisted: boolean; recovered: boolean }> {
     const customer = await this.customerLookup.findById(customerId);
     if (!customer) throw new ClientNotFoundError(customerId);
 
@@ -113,30 +197,13 @@ export class RegisterGigaredAccount {
       throw new GrContractIdRequiredError(input.contractId);
     }
 
-    // #109 — pick a CIC automatically from the unregistered pool. Pool empty → 422.
-    // The `pick` injector makes this testable without Math.random.
-    //
-    // B1 (D-pool, root cause confirmado — engram `gigared/root-cause-cic-envenenado`): el partner
-    // recicla CICs vía `renewCic` (CancelTv) que vuelven al pool `unregistered` cargando el
-    // `internal_id` del dueño ANTERIOR (imposible de limpiar, #72 — el partner rechaza el
-    // internal_id vacío). Elegir AL AZAR sobre el pool crudo puede heredar esa identidad ajena. El
-    // listado del pool YA trae el `internalId` por cuenta (GigaredPort.ts), así que el filtrado es
-    // en memoria, SIN llamadas extra al partner.
-    const pool = await this.gigared.listAccounts({ status: 'unregistered' });
-    if (pool.length === 0) throw new NoCicAvailableError();
-    const clean = pool.filter(e => e.cic && (e.internalId === null || e.internalId === ''));
-    if (clean.length === 0) throw new TvPoolPoisonedError(pool.length);
-    const pickFn = this.pick ?? ((n: number) => Math.floor(Math.random() * n));
-    const poolEntry = clean[pickFn(clean.length)];
-    // FIX 1 / W2: guard cic falsy (cic === '' o undefined) y índice fuera de rango (poolEntry === undefined).
-    // En ambos casos el error de dominio es NoCicAvailableError, no un TypeError opaco.
-    if (!poolEntry?.cic) throw new NoCicAvailableError();
-    const cic = poolEntry.cic;
-
     // #81 — resolver el seq A USAR para esta alta. SOLO en re-alta (cliente que venía de baja y hay
     // activation repo) se incrementa el seq → identidad fresca. La primera alta queda en seq=0
     // (back-compat: internal_id pelado + el mail que mandó el FE). La señal honesta de "re-alta" es
     // el flag local de baja (#72): si está seteado, el partner ya quemó la identidad anterior.
+    //
+    // B2 (D2) — seq/internalId/email se resuelven ANTES del probe/pool-pick (se movió desde después
+    // del pool-pick): el probe idempotente necesita MI internalId para consultar al partner.
     let seq = 0;
     if (this.activation && this.tvCancellation && (await this.tvCancellation.isCancelled(customerId))) {
       seq = await this.activation.incrementSeq(customerId);
@@ -153,23 +220,8 @@ export class RegisterGigaredAccount {
     // La condición de persistencia se reduce a la presencia de los repos locales.
     const wantsPersist = !!this.csRepo && !!this.catalogRepo;
 
-    await this.gigared.register({
-      firstName: input.firstName,
-      lastName: input.lastName,
-      email,
-      cic,
-      password,
-      sendActivationEmail: input.sendActivationEmail,
-    });
-    await this.gigared.activate({ cic, email });
-    await this.gigared.setInternalId(cic, internalId);
-    const account = await this.gigared.getAccountByInternalId(internalId);
-    // B1 (D-pool, part 2) — post-stamp verification: the readback MUST resolve to the CIC we just
-    // stamped. If it 404s (caught above by getAccountByInternalId itself, which throws
-    // GigaredNotFoundError) or resolves to a DIFFERENT cic (the append-only internal_id already
-    // bound to a historical owner), do NOT reconcile a local row on an unconfirmed identity — the
-    // D2 recovery/probe completes the retry idempotently.
-    if (account.cic !== cic) throw new TvIdentityStampUnverifiedError(cic, internalId);
+    // B1 (pool anti-poison) + B2 (recovery/probe idempotente) — ver `resolveGigaredAccount`.
+    const { cic, account, recovered } = await this.resolveGigaredAccount(internalId, email, password, input);
 
     // #72 — clearCancelled best-effort: el cliente volvió a tener TV (re-registro exitoso).
     // Se intenta siempre que el register + link fue exitoso. Un error aquí NO aborta.
@@ -234,6 +286,6 @@ export class RegisterGigaredAccount {
       }
     }
 
-    return { account, credentialsPersisted };
+    return { account, credentialsPersisted, recovered };
   }
 }

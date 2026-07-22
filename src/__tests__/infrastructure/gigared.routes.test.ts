@@ -62,6 +62,21 @@ function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
   }
   return merged;
 }
+/**
+ * B2 (D2) — el register ahora hace un PROBE `getAccountByInternalId` ANTES del pool-pick
+ * (idempotencia). El default de `fakePort()` resuelve SIEMPRE (lo consumen GetGigaredCustomerAccount/
+ * LinkCustomerToCic/etc., que esperan éxito en la ÚNICA llamada que hacen) — no se puede tocar sin
+ * romper esos describes. Los tests de POST /register que SÍ necesitan ejercitar el flujo COMPLETO
+ * (register→activate→setInternalId) deben overridear `getAccountByInternalId` con este helper:
+ * la 1ra llamada (el probe) 404ea (no hay nada estampado todavía) y las siguientes (el readback
+ * post-stamp) resuelven al account final.
+ */
+function probeMissThenFound(final: GigaredAccount): jest.Mock {
+  return jest.fn()
+    .mockRejectedValueOnce(new GigaredNotFoundError())
+    .mockResolvedValue(final);
+}
+
 function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
   return {
     getSummary: jest.fn(async () => ({ accounts: { registered: 1, unregistered: 2, total: 3 }, services: [] })),
@@ -327,7 +342,7 @@ describe('gigared.routes — granular TV RBAC guards (#50)', () => {
   });
 
   it('#65 default: POST /register sends sendActivationEmail=false (ficticio)', async () => {
-    const port = fakePort();
+    const port = fakePort({ getAccountByInternalId: probeMissThenFound(fakeAccount()) });
     const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
@@ -515,7 +530,10 @@ describe('gigared.routes — happy + 207 (#47)', () => {
   });
 
   it('POST /register → 201', async () => {
-    const app = await buildApp();
+    // B2 — probe (getAccountByInternalId) 404 primero para ejercitar el flujo COMPLETO
+    // (register→activate→setInternalId), no la rama "recovered" del D2.
+    const port = fakePort({ getAccountByInternalId: probeMissThenFound(fakeAccount()) });
+    const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
       // #115 — contractId requerido
@@ -579,7 +597,8 @@ describe('#70/#115 POST /register — password generada server-side desde grCont
   it('register SIN password en el body → 201 con la determinística ip{grContratoId} reenviada a Gigared', async () => {
     const register = jest.fn(async () => {});
     // grContratoId='204382' → password='ip204382' (8 chars, no padding needed)
-    const app = await buildApp({ port: fakePort({ register }), grContratoId: '204382' });
+    // B2 — probe 404 primero para ejercitar el flujo completo (no la rama "recovered").
+    const app = await buildApp({ port: fakePort({ register, getAccountByInternalId: probeMissThenFound(fakeAccount()) }), grContratoId: '204382' });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
@@ -591,7 +610,7 @@ describe('#70/#115 POST /register — password generada server-side desde grCont
 
   it('grContratoId corto → la determinística se paddea a 8 (ip12 → ip120000)', async () => {
     const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }), grContratoId: '12' });
+    const app = await buildApp({ port: fakePort({ register, getAccountByInternalId: probeMissThenFound(fakeAccount()) }), grContratoId: '12' });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
@@ -601,7 +620,7 @@ describe('#70/#115 POST /register — password generada server-side desde grCont
 
   it('body CON password → se IGNORA: se usa SIEMPRE la determinística desde el contrato (tolera FE viejo)', async () => {
     const register = jest.fn(async () => {});
-    const app = await buildApp({ port: fakePort({ register }), grContratoId: '204382' });
+    const app = await buildApp({ port: fakePort({ register, getAccountByInternalId: probeMissThenFound(fakeAccount()) }), grContratoId: '204382' });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'otracosa99', contractId: 'C1' });
@@ -655,6 +674,9 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
   it('#47g: GigaredUnavailableError with detail → 503 body carries detail (transparency)', async () => {
     const port = fakePort({
       register: jest.fn(async () => { throw new GigaredUnavailableError('Gigared API is unavailable', 'CUA no respondió a tiempo'); }),
+      // B2 — probe 404 primero: si no, la cuenta "recovered" trivial esquivaría el register y
+      // nunca llegaría a lanzar el GigaredUnavailableError que este test necesita observar.
+      getAccountByInternalId: probeMissThenFound(fakeAccount()),
     });
     const app = await buildApp({ port });
     const res = await request(app)
@@ -824,7 +846,11 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
   // Verifica que sendGigaredError mapea NoCicAvailableError al status 422 correcto.
   it('#109 W1: POST /register con pool vacío → 422 NO_CIC_AVAILABLE', async () => {
     // listAccounts devuelve [] → use case lanza NoCicAvailableError → ruta debe responder 422.
-    const port = fakePort({ listAccounts: jest.fn(async () => []) });
+    // B2 — probe 404 primero: si no, "recovered" trivial esquivaría el pool-pick por completo.
+    const port = fakePort({
+      listAccounts: jest.fn(async () => []),
+      getAccountByInternalId: probeMissThenFound(fakeAccount()),
+    });
     const app = await buildApp({ port });
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')

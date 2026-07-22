@@ -14,6 +14,7 @@ import {
   CicAlreadyLinkedError,
   TvPoolPoisonedError,
   TvIdentityStampUnverifiedError,
+  TvEmailOwnedByOtherError,
 } from '@domain/errors/gigared';
 
 describe('Gigared domain errors (#47)', () => {
@@ -101,5 +102,15 @@ describe('Gigared domain errors (#47)', () => {
     expect(e.name).toBe('TvIdentityStampUnverifiedError');
     expect(e.cic).toBe('0000001234');
     expect(e.internalId).toBe('cust-1');
+  });
+
+  // B2 — D2: recovery/probe idempotente — el email determinístico ya pertenece a OTRO customer.
+  it('TvEmailOwnedByOtherError → code TV_EMAIL_OWNED_BY_OTHER, carries email + ownedByInternalId', () => {
+    const e = new TvEmailOwnedByOtherError('perez204382@gmail.com', 'cust-OTHER');
+    expect(e).toBeInstanceOf(DomainError);
+    expect(e.code).toBe('TV_EMAIL_OWNED_BY_OTHER');
+    expect(e.name).toBe('TvEmailOwnedByOtherError');
+    expect(e.email).toBe('perez204382@gmail.com');
+    expect(e.ownedByInternalId).toBe('cust-OTHER');
   });
 });
