@@ -65,7 +65,10 @@ function fakeAccount(over: Partial<GigaredAccount> = {}): GigaredAccount {
 function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
   return {
     getSummary: jest.fn(async () => ({ accounts: { registered: 1, unregistered: 2, total: 3 }, services: [] })),
-    listAccounts: jest.fn(async () => [fakeAccount()]),
+    // B1 (D-pool): el pool DEFAULT debe ser LIMPIO (internalId: null) — de lo contrario el
+    // anti-poison lo descarta y cualquier POST /register sin listAccounts override rompe con
+    // TvPoolPoisonedError.
+    listAccounts: jest.fn(async () => [fakeAccount({ internalId: null })]),
     getAccountByInternalId: jest.fn(async () => fakeAccount()),
     getAccountByCic: jest.fn(async () => fakeAccount({ internalId: '' })),
     register: jest.fn(async () => {}), activate: jest.fn(async () => {}), setInternalId: jest.fn(async () => {}),

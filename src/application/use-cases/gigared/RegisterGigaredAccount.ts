@@ -6,7 +6,12 @@ import type { ClientTvActivationRepository } from '@domain/ports/ClientTvActivat
 import type { TvActivationEventRepository } from '@domain/ports/TvActivationEventRepository';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
-import { GrContractIdRequiredError, NoCicAvailableError } from '@domain/errors/gigared';
+import {
+  GrContractIdRequiredError,
+  NoCicAvailableError,
+  TvPoolPoisonedError,
+  TvIdentityStampUnverifiedError,
+} from '@domain/errors/gigared';
 import { currentTvInternalId } from '@domain/gigared/tvIdentity';
 import { deterministicTvEmail, deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from './lookups';
@@ -110,10 +115,19 @@ export class RegisterGigaredAccount {
 
     // #109 — pick a CIC automatically from the unregistered pool. Pool empty → 422.
     // The `pick` injector makes this testable without Math.random.
+    //
+    // B1 (D-pool, root cause confirmado — engram `gigared/root-cause-cic-envenenado`): el partner
+    // recicla CICs vía `renewCic` (CancelTv) que vuelven al pool `unregistered` cargando el
+    // `internal_id` del dueño ANTERIOR (imposible de limpiar, #72 — el partner rechaza el
+    // internal_id vacío). Elegir AL AZAR sobre el pool crudo puede heredar esa identidad ajena. El
+    // listado del pool YA trae el `internalId` por cuenta (GigaredPort.ts), así que el filtrado es
+    // en memoria, SIN llamadas extra al partner.
     const pool = await this.gigared.listAccounts({ status: 'unregistered' });
     if (pool.length === 0) throw new NoCicAvailableError();
+    const clean = pool.filter(e => e.cic && (e.internalId === null || e.internalId === ''));
+    if (clean.length === 0) throw new TvPoolPoisonedError(pool.length);
     const pickFn = this.pick ?? ((n: number) => Math.floor(Math.random() * n));
-    const poolEntry = pool[pickFn(pool.length)];
+    const poolEntry = clean[pickFn(clean.length)];
     // FIX 1 / W2: guard cic falsy (cic === '' o undefined) y índice fuera de rango (poolEntry === undefined).
     // En ambos casos el error de dominio es NoCicAvailableError, no un TypeError opaco.
     if (!poolEntry?.cic) throw new NoCicAvailableError();
@@ -150,6 +164,12 @@ export class RegisterGigaredAccount {
     await this.gigared.activate({ cic, email });
     await this.gigared.setInternalId(cic, internalId);
     const account = await this.gigared.getAccountByInternalId(internalId);
+    // B1 (D-pool, part 2) — post-stamp verification: the readback MUST resolve to the CIC we just
+    // stamped. If it 404s (caught above by getAccountByInternalId itself, which throws
+    // GigaredNotFoundError) or resolves to a DIFFERENT cic (the append-only internal_id already
+    // bound to a historical owner), do NOT reconcile a local row on an unconfirmed identity — the
+    // D2 recovery/probe completes the retry idempotently.
+    if (account.cic !== cic) throw new TvIdentityStampUnverifiedError(cic, internalId);
 
     // #72 — clearCancelled best-effort: el cliente volvió a tener TV (re-registro exitoso).
     // Se intenta siempre que el register + link fue exitoso. Un error aquí NO aborta.

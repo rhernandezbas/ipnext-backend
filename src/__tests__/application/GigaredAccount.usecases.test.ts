@@ -34,7 +34,10 @@ function fakePort(over: Partial<GigaredPort> = {}): GigaredPort {
   const summary: GigaredSummary = { accounts: { registered: 1, unregistered: 2, total: 3 }, services: [] };
   return {
     getSummary: jest.fn(async () => summary),
-    listAccounts: jest.fn(async () => [fakeAccount()]),
+    // B1 (D-pool): el pool DEFAULT debe ser LIMPIO (internalId: null) — de lo contrario el
+    // anti-poison lo descarta y CUALQUIER RegisterGigaredAccount test que no overridee
+    // listAccounts explícitamente rompe con TvPoolPoisonedError.
+    listAccounts: jest.fn(async () => [fakeAccount({ internalId: null })]),
     getAccountByInternalId: jest.fn(async () => fakeAccount()),
     getAccountByCic: jest.fn(async () => fakeAccount({ internalId: null })),
     register: jest.fn(async () => {}),
@@ -373,7 +376,8 @@ describe('RegisterGigaredAccount (#47)', () => {
     const calls: string[] = [];
     // #109 — el pool (listAccounts con status:'unregistered') provee el CIC automáticamente.
     // fakePort devuelve [fakeAccount()] cuyo CIC default es '0000000001'.
-    const pool = fakeAccount({ cic: '0000000001' });
+    // B1 (D-pool): la entrada debe ser LIMPIA (internalId: null) para que el anti-poison no la descarte.
+    const pool = fakeAccount({ cic: '0000000001', internalId: null });
     const port = fakePort({
       listAccounts: jest.fn(async () => [pool]),
       register: jest.fn(async () => { calls.push('register'); }),
@@ -449,6 +453,9 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
   it('persists tvLogin=GIGA{gigaredId} + tvPassword on the TV row when account has services', async () => {
     await seedTvCatalog();
     const port = fakePort({
+      // B1 (D-pool): el pool debe ofrecer una entrada LIMPIA con el MISMO cic que el post-stamp
+      // readback resuelve — si no, el anti-poison / la verificación post-stamp cortan antes.
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: '0000001234', internalId: null })]),
       getAccountByInternalId: jest.fn(async () =>
         fakeAccount({ cic: '0000001234', gigaredId: '2432', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
     });
@@ -472,6 +479,7 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
     await seedTvCatalog();
     // The hallmark of an alta fresca: the account exists but the partner returns no services yet.
     const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: '0000001234', internalId: null })]),
       getAccountByInternalId: jest.fn(async () =>
         fakeAccount({ cic: '0000001234', gigaredId: '2432', internalId: 'cust-1', services: [] })),
     });
@@ -506,6 +514,7 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
     jest.spyOn(cs, 'add').mockRejectedValue(new Error('db down'));
     jest.spyOn(cs, 'update').mockRejectedValue(new Error('db down'));
     const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: '0000001234', internalId: null })]),
       getAccountByInternalId: jest.fn(async () =>
         fakeAccount({ cic: '0000001234', gigaredId: '2432', internalId: 'cust-1', services: [{ id: '129', name: 'Gigared Play Full' }] })),
     });
@@ -521,6 +530,7 @@ describe('RegisterGigaredAccount (#65 — persist TV credentials)', () => {
   it('M7 — #115: with contractId + csRepo + catalogRepo → credentials are persisted (credentialsPersisted:true)', async () => {
     await seedTvCatalog();
     const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: '0000001234', internalId: null })]),
       getAccountByInternalId: jest.fn(async () =>
         fakeAccount({ cic: '0000001234', gigaredId: '2432', internalId: 'cust-1', services: [] })),
     });
@@ -613,6 +623,7 @@ describe('LinkCustomerToCic (#72 — clearCancelled on link)', () => {
 describe('RegisterGigaredAccount (#72 — clearCancelled on register)', () => {
   it('successful register → clearCancelled called (client gets TV back)', async () => {
     const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: '0000001234', internalId: null })]),
       getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: '0000001234', internalId: 'cust-1' })),
     });
     const tvCancellation = new InMemoryClientTvCancellationRepository();
@@ -655,7 +666,9 @@ describe('RegisterGigaredAccount (#72 — clearCancelled on register)', () => {
  * (port.listAccounts as jest.Mock).mockResolvedValue([...]) de forma explícita y legible.
  * W3 fix: antes se heredaba el listAccounts del fakePort base (pool de 1 implícito, accidental).
  */
-const STATEFUL_DEFAULT_POOL: GigaredAccount[] = [fakeAccount({ cic: '0000000001' })];
+// B1 (D-pool): la entrada del pool default DEBE ser LIMPIA (internalId: null) — el anti-poison
+// descarta cualquier entrada con internal_id no vacío antes de que el `pick` la vea.
+const STATEFUL_DEFAULT_POOL: GigaredAccount[] = [fakeAccount({ cic: '0000000001', internalId: null })];
 
 function statefulFakePort(seeded: Record<string, GigaredAccount> = {}): GigaredPort {
   const byInternalId = new Map<string, GigaredAccount>(Object.entries(seeded));
@@ -713,7 +726,8 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
       'cust-1': fakeAccount({ cic: '0000000001', internalId: 'cust-1', services: [] }),
     });
     // Override listAccounts para que el pool tenga un CIC nuevo (el quemado ya está en seeded).
-    (port.listAccounts as jest.Mock).mockResolvedValue([fakeAccount({ cic: poolCic })]);
+    // B1 (D-pool): LIMPIA (internalId: null) — de lo contrario el anti-poison la descarta.
+    (port.listAccounts as jest.Mock).mockResolvedValue([fakeAccount({ cic: poolCic, internalId: null })]);
 
     const activation = new InMemoryClientTvActivationRepository();
     const tvCancellation = new InMemoryClientTvCancellationRepository();
@@ -767,7 +781,8 @@ describe('RegisterGigaredAccount (#81 — identidad secuencial)', () => {
       'cust-1-1': fakeAccount({ internalId: 'cust-1-1' }),
     });
     // Override listAccounts: pool tiene un CIC nuevo disponible.
-    (port.listAccounts as jest.Mock).mockResolvedValue([fakeAccount({ cic: poolCic })]);
+    // B1 (D-pool): LIMPIA (internalId: null) — de lo contrario el anti-poison la descarta.
+    (port.listAccounts as jest.Mock).mockResolvedValue([fakeAccount({ cic: poolCic, internalId: null })]);
 
     const activation = new InMemoryClientTvActivationRepository();
     activation.seedSeq('cust-1', 1); // ya hubo una reactivación

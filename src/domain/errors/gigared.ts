@@ -140,6 +140,43 @@ export class NoCicAvailableError extends DomainError {
 }
 
 /**
+ * B1 (D-pool) — register: TODOS los CICs del pool `unregistered` traen un `internal_id` no vacío
+ * (residuo de un `renewCic` de una baja previa, #72 — el partner rechaza el internal_id vacío, así
+ * que el CIC reciclado queda "envenenado" para siempre). Es la causa raíz confirmada del incidente
+ * Centeno/Vacherand (engram `gigared/root-cause-cic-envenenado`): el register elegía un CIC AL AZAR
+ * sin filtrar, y podía heredar la identidad del dueño viejo. Router 422 TV_POOL_POISONED — misma
+ * familia que NO_CIC_AVAILABLE (condición de DATOS, no transitoria: reintentar no ayuda hasta
+ * limpiar el pool). NINGÚN write al partner ocurre cuando este error se lanza.
+ */
+export class TvPoolPoisonedError extends DomainError {
+  constructor(
+    public readonly poisonedCount: number,
+    message = 'El pool de CICs de TV está envenenado — ningún CIC disponible está limpio',
+  ) {
+    super(message, 'TV_POOL_POISONED');
+    this.name = 'TvPoolPoisonedError';
+  }
+}
+
+/**
+ * B1 (D-pool) — register: tras `setInternalId`, el readback `getAccountByInternalId(internalId)`
+ * NO resuelve al CIC recién estampado (el `internal_id` append-only ya apuntaba a otro dueño
+ * histórico, o el readback 404ea). Cortar ACÁ antes de escribir la fila local a medias — el
+ * recovery/probe (D2) completa el retry de forma idempotente. Router 503 TV_IDENTITY_UNVERIFIED
+ * (el reintento se auto-completa, a diferencia de TV_POOL_POISONED que es una condición de datos).
+ */
+export class TvIdentityStampUnverifiedError extends DomainError {
+  constructor(
+    public readonly cic: string,
+    public readonly internalId: string,
+    message = 'No se pudo verificar que el CIC estampado resuelve a la identidad esperada',
+  ) {
+    super(message, 'TV_IDENTITY_UNVERIFIED');
+    this.name = 'TvIdentityStampUnverifiedError';
+  }
+}
+
+/**
  * C2 — link by CIC: the partner CIC does not exist upstream (GET /accounts/{cic} → 404).
  * Distinct from GIGARED_NOT_FOUND so the front-end can show a CIC-specific message → router 404.
  */

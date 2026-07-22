@@ -37,6 +37,8 @@ import {
   GrClientIdRequiredError,
   GrContractIdRequiredError,
   NoCicAvailableError,
+  TvPoolPoisonedError,
+  TvIdentityStampUnverifiedError,
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
@@ -157,6 +159,20 @@ function sendGigaredError(res: Response, err: unknown): boolean {
   // #109 — pool de CICs agotado: no hay cuenta unregistered disponible → 422.
   if (err instanceof NoCicAvailableError) {
     res.status(422).json({ error: err.message, code: err.code });
+    return true;
+  }
+  // B1 (D-pool) — el pool unregistered no tiene NINGÚN CIC limpio (todos envenenados por un
+  // renewCic previo, #72): condición de DATOS, no transitoria → 422, misma familia que
+  // NO_CIC_AVAILABLE. Sin test standalone del branch (ejercitado end-to-end en B3).
+  if (err instanceof TvPoolPoisonedError) {
+    res.status(422).json({ error: err.message, code: err.code, poisonedCount: err.poisonedCount });
+    return true;
+  }
+  // B1 (D-pool, part 2) — el readback post-stamp no confirmó la identidad recién estampada
+  // (append-only: ya resolvía a otro dueño, o 404). El retry se auto-completa vía el recovery
+  // de B2 → 503 (transitorio, a diferencia de TV_POOL_POISONED). Sin test standalone (B3).
+  if (err instanceof TvIdentityStampUnverifiedError) {
+    res.status(503).json({ error: err.message, code: err.code, cic: err.cic, internalId: err.internalId });
     return true;
   }
   if (err instanceof TvNotLinkedError) {

@@ -15,11 +15,16 @@ import {
   NoCicAvailableError,
   GrClientIdRequiredError,
   GrContractIdRequiredError,
+  TvPoolPoisonedError,
+  TvIdentityStampUnverifiedError,
+  GigaredNotFoundError,
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
 import { deterministicTvPassword, deterministicTvEmail } from '@infrastructure/security/gigaredPassword';
 import { currentTvInternalId } from '@domain/gigared/tvIdentity';
+import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -89,9 +94,13 @@ const minInput = (contractId = 'contract-1') => ({
   contractId,
 });
 
-/** Pool de una cuenta para que el use case no falle en NoCicAvailableError. */
+/**
+ * Pool de una cuenta para que el use case no falle en NoCicAvailableError.
+ * B1 (D-pool): la cuenta debe ser LIMPIA (internalId: null) — de lo contrario el anti-poison la
+ * descarta y el pool queda TODO envenenado (TvPoolPoisonedError) en vez de proceder al happy path.
+ */
 function poolOf(cic: string) {
-  return jest.fn(async () => [fakeAccount({ cic })]);
+  return jest.fn(async () => [fakeAccount({ cic, internalId: null })]);
 }
 
 // ---------------------------------------------------------------------------
@@ -122,10 +131,12 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
   });
 
   it('(b) pool con 3 cuentas → usa la elegida por el selector inyectado (índice 1 → cic "B")', async () => {
+    // B1 (D-pool): las 3 deben ser LIMPIAS (internalId: null) para que el anti-poison no las
+    // descarte — el `clean` filtrado preserva el orden, así que el índice 1 sigue siendo "B".
     const poolAccounts: GigaredAccount[] = [
-      fakeAccount({ cic: 'A' }),
-      fakeAccount({ cic: 'B' }),
-      fakeAccount({ cic: 'C' }),
+      fakeAccount({ cic: 'A', internalId: null }),
+      fakeAccount({ cic: 'B', internalId: null }),
+      fakeAccount({ cic: 'C', internalId: null }),
     ];
     const port = fakePort({
       listAccounts: jest.fn(async () => poolAccounts),
@@ -144,7 +155,7 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
   });
 
   it('(b) pool con 1 cuenta → selector elige índice 0 (único disponible)', async () => {
-    const singleAccount = fakeAccount({ cic: 'ONLY1' });
+    const singleAccount = fakeAccount({ cic: 'ONLY1', internalId: null }); // B1: LIMPIA
     const port = fakePort({
       listAccounts: jest.fn(async () => [singleAccount]),
       getAccountByInternalId: jest.fn(async () => singleAccount),
@@ -170,13 +181,19 @@ describe('RegisterGigaredAccount #109 — CIC automático del pool', () => {
 });
 
 // ---------------------------------------------------------------------------
-// FIX 1 — CIC vacío (cic: '') en el pool → NoCicAvailableError
-// FIX W2 — pick fuera de rango → NoCicAvailableError (no TypeError opaco)
+// FIX 1 — CIC vacío (cic: '') en el pool → con B1 (D-pool), el filtro `clean` exige `e.cic`
+// truthy, así que una entrada con cic:'' queda descartada IGUAL que una envenenada. Si es la
+// ÚNICA entrada del pool, `clean` queda vacío → TvPoolPoisonedError (422), NO NoCicAvailableError
+// (ese código sigue reservado a "pool.length === 0", el pool crudo vacío — ver #109(a)). Ambos
+// tests se actualizan para reflejar esta consecuencia NATURAL del anti-poison (no un cambio
+// arbitrario): desde la perspectiva del subconjunto "limpio", un cic vacío es tan inutilizable
+// como uno envenenado.
+// FIX W2 — pick fuera de rango sobre `clean` → NoCicAvailableError (no TypeError opaco), sin cambios.
 // ---------------------------------------------------------------------------
 
 describe('RegisterGigaredAccount — FIX 1 + W2: guard cic falsy / índice fuera de rango', () => {
 
-  it('FIX 1: pool con cuenta de cic vacío ("") → NoCicAvailableError (no pasa a Gigared)', async () => {
+  it('FIX 1 (B1): pool con ÚNICA cuenta de cic vacío ("") → TvPoolPoisonedError (no pasa a Gigared)', async () => {
     const port = fakePort({
       listAccounts: jest.fn(async () => [fakeAccount({ cic: '' })]),
     });
@@ -184,13 +201,13 @@ describe('RegisterGigaredAccount — FIX 1 + W2: guard cic falsy / índice fuera
     const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup(), undefined, undefined, undefined, undefined, undefined, pick);
 
     await expect(uc.execute('cust-1', minInput()))
-      .rejects.toBeInstanceOf(NoCicAvailableError);
+      .rejects.toBeInstanceOf(TvPoolPoisonedError);
 
     expect(port.register).not.toHaveBeenCalled();
     expect(port.activate).not.toHaveBeenCalled();
   });
 
-  it('FIX 1: error lanzado tiene code NO_CIC_AVAILABLE (no TypeError)', async () => {
+  it('FIX 1 (B1): error lanzado tiene code TV_POOL_POISONED (no TypeError)', async () => {
     const port = fakePort({
       listAccounts: jest.fn(async () => [fakeAccount({ cic: '' })]),
     });
@@ -198,12 +215,15 @@ describe('RegisterGigaredAccount — FIX 1 + W2: guard cic falsy / índice fuera
     const uc = new RegisterGigaredAccount(port, fakeCustomerLookup(), fakeContractLookup(), undefined, undefined, undefined, undefined, undefined, pick);
 
     const err = await uc.execute('cust-1', minInput()).catch(e => e);
-    expect(err).toBeInstanceOf(NoCicAvailableError);
-    expect((err as NoCicAvailableError).code).toBe('NO_CIC_AVAILABLE');
+    expect(err).toBeInstanceOf(TvPoolPoisonedError);
+    expect((err as TvPoolPoisonedError).code).toBe('TV_POOL_POISONED');
   });
 
   it('W2: pick devuelve índice fuera de rango (pool.length) → NoCicAvailableError, no TypeError', async () => {
-    const pool = [fakeAccount({ cic: 'X1' }), fakeAccount({ cic: 'X2' })];
+    // Ambas entradas deben ser LIMPIAS (internalId: null): con el anti-poison de B1, el `pick`
+    // indexa sobre el subconjunto `clean`, no sobre el pool crudo — si no fueran limpias, el pool
+    // ya sería TODO envenenado y el test dejaría de ejercitar el guard de índice fuera de rango.
+    const pool = [fakeAccount({ cic: 'X1', internalId: null }), fakeAccount({ cic: 'X2', internalId: null })];
     const port = fakePort({
       listAccounts: jest.fn(async () => pool),
     });
@@ -214,6 +234,104 @@ describe('RegisterGigaredAccount — FIX 1 + W2: guard cic falsy / índice fuera
       .rejects.toBeInstanceOf(NoCicAvailableError);
 
     expect(port.register).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B1 — D-pool: anti-envenenamiento del pool (fix #1, la causa raíz confirmada,
+// engram `gigared/root-cause-cic-envenenado`) + verificación post-stamp.
+// ---------------------------------------------------------------------------
+
+describe('RegisterGigaredAccount — B1 D-pool: anti-envenenamiento del pool', () => {
+  it('pool mixto (1 envenenado + 1 limpio) → usa el limpio, NUNCA el envenenado', async () => {
+    const poisoned = fakeAccount({ cic: 'A', internalId: 'ca4023a2' }); // dueño viejo, residuo de renewCic
+    const clean = fakeAccount({ cic: 'B', internalId: null });
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [poisoned, clean]),
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'B' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const result = await uc.execute('cust-1', minInput());
+
+    expect(port.register).toHaveBeenCalledWith(expect.objectContaining({ cic: 'B' }));
+    expect(port.register).not.toHaveBeenCalledWith(expect.objectContaining({ cic: 'A' }));
+    expect(port.activate).toHaveBeenCalledWith(expect.objectContaining({ cic: 'B' }));
+    expect(port.setInternalId).toHaveBeenCalledWith('B', expect.any(String));
+    expect(result.account.cic).toBe('B');
+  });
+
+  it('pool TODO envenenado → TvPoolPoisonedError, CERO writes al partner', async () => {
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [
+        fakeAccount({ cic: 'A', internalId: 'foreign-1' }),
+        fakeAccount({ cic: 'B', internalId: 'foreign-2' }),
+      ]),
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(),
+      undefined, undefined, undefined, undefined, undefined, pickFirst,
+    );
+
+    const err = await uc.execute('cust-1', minInput()).catch(e => e);
+
+    expect(err).toBeInstanceOf(TvPoolPoisonedError);
+    expect((err as TvPoolPoisonedError).code).toBe('TV_POOL_POISONED');
+    expect(port.register).toHaveBeenCalledTimes(0);
+    expect(port.activate).toHaveBeenCalledTimes(0);
+    expect(port.setInternalId).toHaveBeenCalledTimes(0);
+  });
+
+  it('post-stamp mismatch: el readback tras setInternalId resuelve OTRO cic → TvIdentityStampUnverifiedError, sin fila local', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const cat = await catalog.create({ name: 'TV', label: 'TV', active: true, sortOrder: 0 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (csRepo as any).catalog[cat.id] = { name: cat.name, label: cat.label };
+
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: 'CLEAN1', internalId: null })]),
+      // El readback resuelve a un CIC DISTINTO del que se acaba de estampar (append-only:
+      // el internal_id ya resolvía al dueño histórico).
+      getAccountByInternalId: jest.fn(async () => fakeAccount({ cic: 'OTRO-CIC' })),
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(), csRepo, catalog,
+      undefined, undefined, undefined, pickFirst,
+    );
+
+    const err = await uc.execute('cust-1', minInput('contract-1')).catch(e => e);
+
+    expect(err).toBeInstanceOf(TvIdentityStampUnverifiedError);
+    expect((err as TvIdentityStampUnverifiedError).code).toBe('TV_IDENTITY_UNVERIFIED');
+    const tvId = (await catalog.getByName('TV'))!.id;
+    expect(await csRepo.getByPair('contract-1', tvId)).toBeNull();
+  });
+
+  it('post-stamp 404: el readback lanza GigaredNotFoundError → propaga, sin fila local', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    const catalog = new InMemoryServiceCatalogRepository();
+    const cat = await catalog.create({ name: 'TV', label: 'TV', active: true, sortOrder: 0 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (csRepo as any).catalog[cat.id] = { name: cat.name, label: cat.label };
+
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: 'CLEAN2', internalId: null })]),
+      getAccountByInternalId: jest.fn(async () => { throw new GigaredNotFoundError(); }),
+    });
+    const uc = new RegisterGigaredAccount(
+      port, fakeCustomerLookup(), fakeContractLookup(), csRepo, catalog,
+      undefined, undefined, undefined, pickFirst,
+    );
+
+    await expect(uc.execute('cust-1', minInput('contract-1')))
+      .rejects.toBeInstanceOf(GigaredNotFoundError);
+
+    const tvId = (await catalog.getByName('TV'))!.id;
+    expect(await csRepo.getByPair('contract-1', tvId)).toBeNull();
   });
 });
 

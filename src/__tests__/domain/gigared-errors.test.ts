@@ -12,6 +12,8 @@ import {
   TvCatalogMissingError,
   CicNotFoundError,
   CicAlreadyLinkedError,
+  TvPoolPoisonedError,
+  TvIdentityStampUnverifiedError,
 } from '@domain/errors/gigared';
 
 describe('Gigared domain errors (#47)', () => {
@@ -81,5 +83,23 @@ describe('Gigared domain errors (#47)', () => {
     expect(e.code).toBe('CIC_ALREADY_LINKED');
     expect(e.name).toBe('CicAlreadyLinkedError');
     expect(e.linkedInternalId).toBe('cust-OTHER');
+  });
+
+  // B1 — D-pool: anti-envenenamiento del pool (root cause del incidente Centeno/Vacherand).
+  it('TvPoolPoisonedError → code TV_POOL_POISONED, carries poisonedCount', () => {
+    const e = new TvPoolPoisonedError(3);
+    expect(e).toBeInstanceOf(DomainError);
+    expect(e.code).toBe('TV_POOL_POISONED');
+    expect(e.name).toBe('TvPoolPoisonedError');
+    expect(e.poisonedCount).toBe(3);
+  });
+
+  it('TvIdentityStampUnverifiedError → code TV_IDENTITY_UNVERIFIED, carries cic + internalId', () => {
+    const e = new TvIdentityStampUnverifiedError('0000001234', 'cust-1');
+    expect(e).toBeInstanceOf(DomainError);
+    expect(e.code).toBe('TV_IDENTITY_UNVERIFIED');
+    expect(e.name).toBe('TvIdentityStampUnverifiedError');
+    expect(e.cic).toBe('0000001234');
+    expect(e.internalId).toBe('cust-1');
   });
 });
