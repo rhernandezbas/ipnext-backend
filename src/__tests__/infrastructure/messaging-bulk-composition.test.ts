@@ -188,4 +188,46 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     expect(globalIdx).toBeGreaterThan(-1);
     expect(scopedIdx).toBeLessThan(globalIdx);
   });
+
+  // ── campaign-chatwoot-label (Batch 6, D5.d) — catálogo de labels wireado ───
+  // Anti-"feature muerta en prod" (lección W6 otra vez): las rutas
+  // `/chatwoot-labels` del router factory son OPCIONALES (Batch 5, backcompat)
+  // — SOLO se registran si `app.ts` les pasa una instancia. Sin este wiring,
+  // `applyChatwootLabel` en `SendCampaign` sigue sin efecto observable Y el
+  // catálogo queda inalcanzable vía HTTP pese a estar implementado.
+  it('(o) campaign-chatwoot-label: ListChatwootLabels/CreateChatwootLabel importados desde @application/use-cases/messaging', () => {
+    expect(appSrc).toMatch(
+      /import\s*\{\s*ListChatwootLabels\s*\}\s*from\s*['"]@application\/use-cases\/messaging\/ListChatwootLabels['"]/,
+    );
+    expect(appSrc).toMatch(
+      /import\s*\{\s*CreateChatwootLabel\s*\}\s*from\s*['"]@application\/use-cases\/messaging\/CreateChatwootLabel['"]/,
+    );
+  });
+
+  it('(p) campaign-chatwoot-label: ambos use cases construidos con chatwootGatewayForBulk EXACTO (misma instancia que recibe SendCampaign como 7º arg, D5.d — el pin crítico) y APPENDED al final de la firma del mount', () => {
+    const idx = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(");
+    const end = appSrc.indexOf('));', idx);
+    expect(idx).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+
+    expect(window).toMatch(/new ListChatwootLabels\(chatwootGatewayForBulk\)/);
+    expect(window).toMatch(/new CreateChatwootLabel\(chatwootGatewayForBulk\)/);
+
+    // APPENDED al final de la firma (regla anti-colisión): deben aparecer
+    // DESPUÉS de `resolveBulkActions` (el arg más reciente, bulk-granular-perms).
+    const resolveIdx = window.indexOf('resolveBulkActions');
+    const listIdx = window.indexOf('new ListChatwootLabels(chatwootGatewayForBulk)');
+    const createIdx = window.indexOf('new CreateChatwootLabel(chatwootGatewayForBulk)');
+    expect(resolveIdx).toBeGreaterThan(-1);
+    expect(listIdx).toBeGreaterThan(resolveIdx);
+    expect(createIdx).toBeGreaterThan(listIdx);
+  });
+
+  it('(q) campaign-chatwoot-label: perms.manage presente en la ventana de mount (CLBL-7, tier supervisor — reusa messaging.manage, cero seed nuevo)', () => {
+    const idx = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(");
+    const end = appSrc.indexOf('));', idx);
+    const window = appSrc.slice(idx, end + '));'.length);
+    expect(window).toMatch(/manage:\s*requirePerm\(\s*'messaging',\s*'manage'\s*\)/);
+  });
 });
