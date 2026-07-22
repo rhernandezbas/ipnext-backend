@@ -260,6 +260,9 @@ const statusMap: Record<string, number> = {
   // N3 (network-task-broadcast) — difundir al NOC una tarea que no es de red → 422
   // (request bien formada, semántica inválida: solo tareas kind='network' se difunden).
   TASK_NOT_BROADCASTABLE: 422,
+  // bulk-task-recipients (B2.7) — config-CRUD del 5to dominio "Tarea": stageId inexistente
+  // en `replaceMappedStages` (FK P2003 traducido, todo-o-nada, config previa preservada).
+  TASK_STAGE_NOT_FOUND: 422,
 };
 
 /** Express global error-handling middleware. */
