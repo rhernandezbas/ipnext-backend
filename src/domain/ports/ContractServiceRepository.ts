@@ -16,6 +16,15 @@ export interface ContractServiceRepository {
    * "CIC 1234") and handle dirty data (two active rows recording the same cic).
    */
   findActiveByCatalogAndNotesPrefix(serviceCatalogId: string, notesPrefix: string): Promise<ContractServiceView[]>;
+  /**
+   * gigared-tv-identity-hardening (D4) — batch owner resolver for the operators' accounts list.
+   * Returns the ACTIVE managed rows of `serviceCatalogId` whose notes reference any of the
+   * given `cics` (Prisma: prefix scan, OR of `startsWith`; the caller re-validates the EXACT
+   * cic via `cicFromNotes` when building its lookup map — a prefix collision like "CIC 12"
+   * matching "CIC 123" must NOT be trusted as-is). ONE query for the whole batch — N+1 FORBIDDEN
+   * (this powers `GET /api/gigared/accounts`, an operators' list endpoint).
+   */
+  findActiveTvOwnersByCics(serviceCatalogId: string, cics: string[]): Promise<{ notes: string; clientId: string }[]>;
   add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView>;
   update(id: string, data: { status?: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView | null>;
   /** Returns true when a row was deleted, false when the id did not exist (idempotent caller). */

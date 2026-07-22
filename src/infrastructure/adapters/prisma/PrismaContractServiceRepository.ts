@@ -58,6 +58,24 @@ export class PrismaContractServiceRepository implements ContractServiceRepositor
     return rows.map(toView);
   }
 
+  // gigared-tv-identity-hardening (D4/B4) — batch owner resolver for ListGigaredAccounts
+  // local-first. UNA findMany (N+1 PROHIBIDO — endpoint de operadores): OR de startsWith por
+  // cada cic (prefix scan; el caller re-valida el cic EXACTO con cicFromNotes al armar su
+  // lookup map) + select con el JOIN a contract para traer el clientId sin lookup por fila.
+  async findActiveTvOwnersByCics(serviceCatalogId: string, cics: string[]): Promise<{ notes: string; clientId: string }[]> {
+    if (cics.length === 0) return [];
+    const rows = await (prisma as any).contractService.findMany({
+      where: {
+        serviceCatalogId,
+        status: 'active',
+        OR: cics.map((c) => ({ notes: { startsWith: `CIC ${c}` } })),
+      },
+      select: { notes: true, contract: { select: { clientId: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((row: any) => ({ notes: row.notes ?? '', clientId: row.contract.clientId }));
+  }
+
   async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView> {
     try {
       const row = await (prisma as any).contractService.create({

@@ -2,6 +2,9 @@
  * #47 — proxy/account use cases: summary, list, getCustomerAccount (NotFound→linked:false),
  * link (setInternalId→getAccount), register (order register→activate→setInternalId).
  */
+import type { ContractServiceRepository } from '@domain/ports/ContractServiceRepository';
+import type { ServiceCatalogRepository } from '@domain/ports/ServiceCatalogRepository';
+import type { ServiceCatalog } from '@domain/entities/service-catalog';
 import { GetGigaredSummary } from '@application/use-cases/gigared/GetGigaredSummary';
 import { ListGigaredAccounts } from '@application/use-cases/gigared/ListGigaredAccounts';
 import { GetGigaredCustomerAccount } from '@application/use-cases/gigared/GetGigaredCustomerAccount';
@@ -113,6 +116,110 @@ describe('ListGigaredAccounts (#3 — clientId derivation at application layer)'
     });
     const result = await new ListGigaredAccounts(port).execute({});
     expect(result.accounts[0]!.clientId).toBeNull();
+  });
+});
+
+// gigared-tv-identity-hardening (D4/B4) — local-first owner resolution + fallback.
+describe('ListGigaredAccounts (D4/B4 — local-first + fallback)', () => {
+  const TV_CATALOG: ServiceCatalog = {
+    id: 'cat-tv', name: 'TV', label: null, active: true, sortOrder: 0,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  function fakeCsRepo(rows: { notes: string; clientId: string }[] = []): ContractServiceRepository {
+    return {
+      getById: jest.fn(async () => null),
+      getByPair: jest.fn(async () => null),
+      listByContract: jest.fn(async () => []),
+      findActiveByCatalogAndNotesPrefix: jest.fn(async () => []),
+      findActiveTvOwnersByCics: jest.fn(async () => rows),
+      add: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(async () => false),
+    } as unknown as ContractServiceRepository;
+  }
+
+  function fakeCatalogRepo(tvCatalog: ServiceCatalog | null): ServiceCatalogRepository {
+    return {
+      list: jest.fn(async () => []),
+      getById: jest.fn(async () => null),
+      getByName: jest.fn(async () => tvCatalog),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(async () => false),
+      countInUse: jest.fn(async () => 0),
+    } as unknown as ServiceCatalogRepository;
+  }
+
+  it('sin csRepo/catalogRepo (legacy, 2 args) → comportamiento BYTE-IDÉNTICO alias-only', async () => {
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: '0000000001', internalId: 'custA', clientId: 'custA' })]),
+    });
+    const result = await new ListGigaredAccounts(port).execute({});
+    expect(result.accounts[0]!.clientId).toBe('custA');
+  });
+
+  it('con fila local activa para el cic → clientId es el del contrato LOCAL, no el alias', async () => {
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [
+        fakeAccount({ cic: '0000000001', internalId: 'old-owner', clientId: 'old-owner' }),
+      ]),
+    });
+    const csRepo = fakeCsRepo([{ notes: 'CIC 0000000001 · Pack', clientId: 'new-owner' }]);
+    const catalogRepo = fakeCatalogRepo(TV_CATALOG);
+
+    const result = await new ListGigaredAccounts(port, csRepo, catalogRepo).execute({});
+    expect(result.accounts[0]!.clientId).toBe('new-owner');
+  });
+
+  it('SIN fila local para el cic → fallback al clientId alias-derivado', async () => {
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [
+        fakeAccount({ cic: '0000000001', internalId: 'custA', clientId: 'custA' }),
+      ]),
+    });
+    const csRepo = fakeCsRepo([]); // sin match
+    const catalogRepo = fakeCatalogRepo(TV_CATALOG);
+
+    const result = await new ListGigaredAccounts(port, csRepo, catalogRepo).execute({});
+    expect(result.accounts[0]!.clientId).toBe('custA');
+  });
+
+  it('batch mezclado de N cuentas → findActiveTvOwnersByCics se llama UNA sola vez (N+1 PROHIBIDO)', async () => {
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [
+        fakeAccount({ cic: '0000000001', internalId: 'custA', clientId: 'custA' }),
+        fakeAccount({ cic: '0000000002', internalId: 'custB', clientId: 'custB' }),
+        fakeAccount({ cic: '0000000003', internalId: 'custC', clientId: 'custC' }),
+      ]),
+    });
+    const csRepo = fakeCsRepo([{ notes: 'CIC 0000000002 · Pack', clientId: 'new-owner-2' }]);
+    const catalogRepo = fakeCatalogRepo(TV_CATALOG);
+
+    const result = await new ListGigaredAccounts(port, csRepo, catalogRepo).execute({});
+
+    expect(csRepo.findActiveTvOwnersByCics).toHaveBeenCalledTimes(1);
+    expect(csRepo.findActiveTvOwnersByCics).toHaveBeenCalledWith(
+      'cat-tv',
+      ['0000000001', '0000000002', '0000000003'],
+    );
+    expect(result.accounts.find((a) => a.cic === '0000000001')!.clientId).toBe('custA');
+    expect(result.accounts.find((a) => a.cic === '0000000002')!.clientId).toBe('new-owner-2');
+    expect(result.accounts.find((a) => a.cic === '0000000003')!.clientId).toBe('custC');
+  });
+
+  it('sin catalogRepo.getByName("TV") resolviendo (null) → degrada a alias-only, sin tirar', async () => {
+    const port = fakePort({
+      listAccounts: jest.fn(async () => [
+        fakeAccount({ cic: '0000000001', internalId: 'custA', clientId: 'custA' }),
+      ]),
+    });
+    const csRepo = fakeCsRepo([{ notes: 'CIC 0000000001 · Pack', clientId: 'should-not-apply' }]);
+    const catalogRepo = fakeCatalogRepo(null);
+
+    const result = await new ListGigaredAccounts(port, csRepo, catalogRepo).execute({});
+    expect(result.accounts[0]!.clientId).toBe('custA');
+    expect(csRepo.findActiveTvOwnersByCics).not.toHaveBeenCalled();
   });
 });
 

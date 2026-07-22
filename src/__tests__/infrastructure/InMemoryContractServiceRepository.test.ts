@@ -93,4 +93,51 @@ describe('InMemoryContractServiceRepository (port parity)', () => {
       expect(await repo.findActiveByCatalogAndNotesPrefix('S2', 'CIC 123')).toEqual([]);
     });
   });
+
+  // gigared-tv-identity-hardening (D4/B4) — batch owner resolver for ListGigaredAccounts
+  // local-first. Exact cic match (unlike the prefix scan above), clientId resolved via the
+  // injectable contractId→clientId map (mirrors setContractClient on the events repo).
+  describe('findActiveTvOwnersByCics', () => {
+    it('devuelve SOLO las filas activas cuyo cic EXACTO está en la lista, con el clientId del contrato', async () => {
+      const withRow = await repo.add({ contractId: 'C1', serviceCatalogId: 'S2', notes: 'CIC 123 · Pack A' });
+      // Otra cuenta sin fila local — no debe aparecer.
+      await repo.add({ contractId: 'C2', serviceCatalogId: 'S2', notes: 'CIC 999 · Pack B' });
+      repo.contractClients[withRow.contractId] = 'client-A';
+
+      const rows = await repo.findActiveTvOwnersByCics('S2', ['123', '456']);
+      expect(rows).toEqual([{ notes: 'CIC 123 · Pack A', clientId: 'client-A' }]);
+    });
+
+    it('match EXACTO — "CIC 12" NO sobre-matchea "CIC 123"', async () => {
+      await repo.add({ contractId: 'C1', serviceCatalogId: 'S2', notes: 'CIC 123 · Pack A' });
+      const rows = await repo.findActiveTvOwnersByCics('S2', ['12']);
+      expect(rows).toEqual([]);
+    });
+
+    it('dos filas activas con el MISMO cic exacto (dirty data) — la más vieja por createdAt gana', async () => {
+      const first = await repo.add({ contractId: 'C1', serviceCatalogId: 'S2', notes: 'CIC 123 · Pack A' });
+      const second = await repo.add({ contractId: 'C2', serviceCatalogId: 'S2', notes: 'CIC 123 · Pack B' });
+      repo.contractClients[first.contractId] = 'client-old';
+      repo.contractClients[second.contractId] = 'client-new';
+
+      const rows = await repo.findActiveTvOwnersByCics('S2', ['123']);
+      expect(rows).toEqual([
+        { notes: 'CIC 123 · Pack A', clientId: 'client-old' },
+        { notes: 'CIC 123 · Pack B', clientId: 'client-new' },
+      ]);
+    });
+
+    it('fila status:"inactive" con el cic — NO aparece (origen inactivado por transfer)', async () => {
+      const row = await repo.add({ contractId: 'C1', serviceCatalogId: 'S2', notes: 'CIC 123 · Pack A' });
+      await repo.update(row.id, { status: 'inactive' });
+      repo.contractClients[row.contractId] = 'client-A';
+
+      expect(await repo.findActiveTvOwnersByCics('S2', ['123'])).toEqual([]);
+    });
+
+    it('sin cics → array vacío, sin tocar las filas', async () => {
+      await repo.add({ contractId: 'C1', serviceCatalogId: 'S2', notes: 'CIC 123 · Pack A' });
+      expect(await repo.findActiveTvOwnersByCics('S2', [])).toEqual([]);
+    });
+  });
 });

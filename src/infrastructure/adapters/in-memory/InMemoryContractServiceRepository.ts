@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { ContractServiceView } from '@domain/entities/contract-service';
 import { ContractServiceRepository } from '@domain/ports/ContractServiceRepository';
 import { ContractServiceDuplicateError } from '@domain/errors/contractServices';
+import { cicFromNotes } from '@application/use-cases/gigared/reconcileTvContractService';
 
 interface Row {
   id: string;
@@ -24,6 +25,12 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
   private rows: Row[] = [];
   /** Test seam: catalog name/label keyed by serviceCatalogId, used to join the view. */
   public catalog: Record<string, { name: string; label: string | null }> = {};
+  /**
+   * gigared-tv-identity-hardening (D4) — test seam: contractId → clientId, mirrors the
+   * Prisma adapter's `contract: { select: { clientId: true } }` JOIN. Used exclusively by
+   * findActiveTvOwnersByCics; unseeded contractIds resolve to ''.
+   */
+  public contractClients: Record<string, string> = {};
 
   private toView(row: Row): ContractServiceView {
     const cat = this.catalog[row.serviceCatalogId];
@@ -72,6 +79,24 @@ export class InMemoryContractServiceRepository implements ContractServiceReposit
       )
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .map(r => this.toView(r));
+  }
+
+  // gigared-tv-identity-hardening (D4/B4) — batch owner resolver for ListGigaredAccounts
+  // local-first. Exact cic match (cicFromNotes, unlike the prefix scan above) — the caller
+  // (ListGigaredAccounts) ALSO re-validates via cicFromNotes when building its lookup map, so
+  // this exact filter is a harmless double-check, never a source of drift. ONE pass over rows,
+  // no per-account query (N+1 FORBIDDEN — mirrors the Prisma adapter's single findMany).
+  async findActiveTvOwnersByCics(serviceCatalogId: string, cics: string[]): Promise<{ notes: string; clientId: string }[]> {
+    if (cics.length === 0) return [];
+    const wanted = new Set(cics);
+    return this.rows
+      .filter(r =>
+        r.serviceCatalogId === serviceCatalogId &&
+        r.status === 'active' &&
+        wanted.has(cicFromNotes(r.notes) ?? ''),
+      )
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map(r => ({ notes: r.notes ?? '', clientId: this.contractClients[r.contractId] ?? '' }));
   }
 
   async add(data: { contractId: string; serviceCatalogId: string; notes?: string | null; tvLogin?: string | null; tvPassword?: string | null }): Promise<ContractServiceView> {
