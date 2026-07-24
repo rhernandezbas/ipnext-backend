@@ -509,7 +509,14 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
 
         if (telegramGateway) {
           const ackText = alert ? 'Tomado ✅' : 'Alerta no encontrada';
-          await telegramGateway.answerCallbackQuery(callbackQuery.id, ackText);
+          try {
+            await telegramGateway.answerCallbackQuery(callbackQuery.id, ackText);
+          } catch {
+            // F-D3 (fix wave, MEDIUM) — best-effort UX nicety (stops Telegram's
+            // client-side button spinner). The ACK itself already persisted
+            // above; a flake HERE must not 500 the webhook — that would make
+            // Telegram retry a callback whose ack already succeeded.
+          }
         }
 
         res.status(200).json({ ok: true });

@@ -104,4 +104,22 @@ describe('NotifyAlert (Fase D, noc-alert-telegram)', () => {
     expect(stored?.telegramChatId).toBeNull();
     expect(stored?.telegramMessageId).toBeNull();
   });
+
+  // F-D1 (fix wave, HIGH) — spam de Telegram al cutover: Grafana re-evalúa y el
+  // sensor de fibra re-postea 'firing' cada ~30min para el MISMO incidente
+  // (mismo source+fingerprint, upsert in place — ver computeNocAlertIngest).
+  // Sin este guard, cada re-fire mandaba un mensaje NUEVO y pisaba el
+  // telegramMessageId guardado, en vez de dejar el mensaje original quieto.
+  it('alerta firing que YA tiene telegramChatId/telegramMessageId (ya notificada) → notify() NO se invoca de nuevo', async () => {
+    const repo = new InMemoryNocAlertRepository();
+    const alert = seedAlert(repo, { telegramChatId: 'chat-42', telegramMessageId: 'msg-99' });
+    const notifier = new FakeAlertNotifier();
+    const featureFlagRepo = new InMemoryFeatureFlagRepository();
+    featureFlagRepo.seed(TELEGRAM_SEND_FLAG, true);
+    const useCase = new NotifyAlert(repo, notifier, featureFlagRepo);
+
+    await useCase.execute(alert);
+
+    expect(notifier.notifyCalls).toHaveLength(0);
+  });
 });

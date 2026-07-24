@@ -31,12 +31,16 @@ import { AlertNotifier } from '@domain/ports/AlertNotifier';
  * is OPTIONAL (3rd param) so every pre-Fase-D call site/test (composeAlertsModule
  * before D, the 6 existing 2-arg construction sites) keeps compiling untouched —
  * omitting it is equivalent to "no Telegram wired", same as the SSE `eventBus`
- * always being present. `editAck` fires ONLY on the ack that actually changed
- * state (`wasAlreadyAcked` checked BEFORE calling `repo.acknowledge`, since the
- * repo's own idempotency (F4) makes a second `acknowledge()` call a silent
- * no-op) — spec.md "Double acknowledge is idempotent across channels": a second
- * ack attempt from the OTHER channel must NOT fire a second `editAck` (the
- * message already reads "tomado por X" from the first one).
+ * always being present.
+ *
+ * F-D4 (fix wave) — `editAck`/`publish` fire ONLY when `repo.acknowledge`
+ * itself reports `changed: true`, NOT from a `before = findById` pre-check.
+ * The pre-check version had a real race: two callers (doble-tap del mismo
+ * botón, o panel+Telegram casi simultáneos) could BOTH read "not yet acked"
+ * before either had persisted, so BOTH fired `editAck`/published `acked` for
+ * what was really a single logical ack. Deciding from the repo's own
+ * atomic-enough result (F4's idempotency lives THERE, not here) closes that
+ * window — spec.md "Double acknowledge is idempotent across channels".
  */
 export class AcknowledgeAlert {
   constructor(
@@ -46,16 +50,22 @@ export class AcknowledgeAlert {
   ) {}
 
   async execute(id: string, by: string, at: string, note?: string): Promise<NocAlert | null> {
-    const before = await this.repo.findById(id);
-    const wasAlreadyAcked = before?.acknowledged === true;
+    const result = await this.repo.acknowledge(id, by, at, note);
+    if (!result) return null;
+    const { alert, changed } = result;
 
-    const alert = await this.repo.acknowledge(id, by, at, note);
-    if (!alert) return null;
+    if (changed) {
+      this.publisher.publish({ type: 'acked', alert });
 
-    this.publisher.publish({ type: 'acked', alert });
-
-    if (!wasAlreadyAcked && this.notifier && alert.telegramChatId && alert.telegramMessageId) {
-      await this.notifier.editAck(alert);
+      if (this.notifier && alert.telegramChatId && alert.telegramMessageId) {
+        try {
+          await this.notifier.editAck(alert);
+        } catch {
+          // F-D5 (fix wave) — best-effort: the ack already persisted and
+          // published above; a notifier flake here must not surface as a
+          // 500 over state that's already committed.
+        }
+      }
     }
 
     return alert;

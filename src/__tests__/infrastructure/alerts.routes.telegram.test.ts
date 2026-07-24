@@ -38,6 +38,13 @@ class FakeTelegramGateway implements Pick<TelegramGateway, 'answerCallbackQuery'
   }
 }
 
+// F-D3 (fix wave, MEDIUM) — simula un flake de la Telegram Bot API.
+class ThrowingTelegramGateway implements Pick<TelegramGateway, 'answerCallbackQuery'> {
+  async answerCallbackQuery(): Promise<void> {
+    throw new Error('Telegram API flake');
+  }
+}
+
 function seedAlert(repo: InMemoryNocAlertRepository, overrides: Partial<NocAlert> = {}): NocAlert {
   const alert: NocAlert = {
     id: 'alert-1',
@@ -82,10 +89,18 @@ interface Fixture {
 }
 
 function buildApp(): Fixture {
+  const telegramGateway = new FakeTelegramGateway();
+  const { app, repo } = buildAppWithGateway(telegramGateway);
+  return { app, repo, telegramGateway };
+}
+
+/** F-D3 (fix wave) — test seam to swap in a gateway that throws (Telegram flake). */
+function buildAppWithGateway(
+  telegramGateway: Pick<TelegramGateway, 'answerCallbackQuery'>,
+): { app: express.Express; repo: InMemoryNocAlertRepository } {
   const repo = new InMemoryNocAlertRepository();
   const publisher = new NoOpAlertEventPublisher();
   const featureFlagRepo = new InMemoryFeatureFlagRepository();
-  const telegramGateway = new FakeTelegramGateway();
 
   const deps: AlertsRouterDeps = {
     ingestAlert: new IngestAlert(repo, publisher),
@@ -104,7 +119,7 @@ function buildApp(): Fixture {
   app.use('/api/alerts', createAlertsRouter(deps));
   app.use(errorHandler);
 
-  return { app, repo, telegramGateway };
+  return { app, repo };
 }
 
 function callback(alertId: string, username = 'noc_operator') {
@@ -212,5 +227,23 @@ describe('POST /api/alerts/telegram/webhook (Fase D, noc-alert-telegram)', () =>
     expect(res.status).toBe(200);
     const stored = await repo.findById('alert-1');
     expect(stored?.acknowledged).toBe(false);
+  });
+
+  // F-D3 (fix wave, MEDIUM) — answerCallbackQuery colgado sobre el gateway crudo
+  // sin try/catch: un flake de Telegram tiraba, se iba por next(err) → 500, y
+  // Telegram reintentaba el webhook aunque el ACK YA se había persistido.
+  it('answerCallbackQuery falla (flake de Telegram) → el webhook responde 2xx igual, el ACK ya persistió', async () => {
+    const { app, repo } = buildAppWithGateway(new ThrowingTelegramGateway());
+    seedAlert(repo);
+
+    const res = await request(app)
+      .post('/api/alerts/telegram/webhook')
+      .set('X-Telegram-Bot-Api-Secret-Token', WEBHOOK_SECRET)
+      .send(callback('alert-1'));
+
+    expect(res.status).toBeGreaterThanOrEqual(200);
+    expect(res.status).toBeLessThan(300);
+    const stored = await repo.findById('alert-1');
+    expect(stored?.acknowledged).toBe(true);
   });
 });

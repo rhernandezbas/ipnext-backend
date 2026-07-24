@@ -121,18 +121,24 @@ export class PrismaNocAlertRepository implements NocAlertRepository {
     return rows.map(toNocAlert);
   }
 
-  async acknowledge(id: string, by: string, at: string, note?: string): Promise<NocAlert | null> {
+  async acknowledge(id: string, by: string, at: string, note?: string): Promise<{ alert: NocAlert; changed: boolean } | null> {
     const existingRow = await (prisma as any).nocAlert.findUnique({ where: { id } });
     if (!existingRow) return null;
 
     // F4 (fix wave) — ACK is idempotent: MTTA = time to the FIRST ack. Mirrors
     // InMemoryNocAlertRepository.acknowledge — see that file for the rationale.
     if (existingRow.acknowledged) {
-      return toNocAlert(existingRow);
+      return { alert: toNocAlert(existingRow), changed: false };
     }
 
-    const row = await (prisma as any).nocAlert.update({
-      where: { id },
+    // F-D4 (fix wave) — CONDITIONAL update (`updateMany` scoped to
+    // `acknowledged: false`, molde `PrismaContractInventoryRepository.transferToContract`)
+    // instead of a bare `update`: two concurrent acks can both pass the
+    // `findUnique` check above before either persists — the WHERE clause is
+    // what actually decides who wins, not the read. `count === 0` means we
+    // lost that race (the other caller's write landed first).
+    const result = await (prisma as any).nocAlert.updateMany({
+      where: { id, acknowledged: false },
       data: {
         acknowledged: true,
         ackBy: by,
@@ -141,7 +147,9 @@ export class PrismaNocAlertRepository implements NocAlertRepository {
         updatedAt: new Date(at),
       },
     });
-    return toNocAlert(row);
+
+    const row = await (prisma as any).nocAlert.findUnique({ where: { id } });
+    return { alert: toNocAlert(row), changed: result.count > 0 };
   }
 
   async attachTelegramMessage(id: string, chatId: string, messageId: string): Promise<NocAlert | null> {

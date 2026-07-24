@@ -38,6 +38,17 @@ export class NotifyAlert {
     const flag = await this.featureFlagRepo.get(TELEGRAM_SEND_FLAG);
     if (!(flag?.enabled ?? false)) return;
 
+    // F-D1 (fix wave, HIGH) — `IngestAlert` publishes 'firing' on EVERY upsert
+    // for the same (source, fingerprint), not just the first one (Grafana
+    // re-evaluates, the fiber sensor re-posts every ~30min for the same
+    // incident — see computeNocAlertIngest's "upsert in place" rule). Without
+    // this guard, each re-fire sent a BRAND NEW Telegram message and
+    // clobbered the stored messageId — spam at every re-evaluation cycle.
+    // A NEW incident (resurrection, resolved→firing) gets a fresh notify:
+    // computeNocAlertIngest resets these two fields to null on resurrection
+    // (F-D2) specifically so this check does NOT block it.
+    if (alert.telegramChatId && alert.telegramMessageId) return;
+
     const result = await this.notifier.notify(alert);
     if (result) {
       await this.repo.attachTelegramMessage(alert.id, result.chatId, result.messageId);
