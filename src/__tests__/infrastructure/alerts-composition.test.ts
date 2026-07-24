@@ -89,8 +89,19 @@ describe('Alerts composition root (noc-alerts-hub Fase A)', () => {
     });
 
     it('(n) AcknowledgeAlert recibe el MISMO telegramNotifier que se le pasa al router', () => {
-      expect(moduleSrc).toMatch(/new AcknowledgeAlert\(\s*repo\s*,\s*eventBus\s*,\s*telegramNotifier\s*\)/);
+      // F2 (noc-alerts-config) — AcknowledgeAlert ahora toma un 4to param
+      // (deps.auditEventRepo) — el regex ya NO exige `)` pegado a
+      // telegramNotifier, solo que repo/eventBus/telegramNotifier sigan
+      // siendo los primeros tres args, en ese orden.
+      expect(moduleSrc).toMatch(/new AcknowledgeAlert\(\s*repo\s*,\s*eventBus\s*,\s*telegramNotifier\s*,/);
       expect(moduleSrc).toMatch(/telegramGateway(\s*,|\s*:\s*telegramGateway)/);
+    });
+
+    // F2 (noc-alerts-config) — structured ACK audit shares app.ts's single
+    // auditEventRepo instance (not a 2nd PrismaAuditEventRepository wiring).
+    it('(q) AcknowledgeAlert recibe deps.auditEventRepo (auditoría estructurada del ACK, F2)', () => {
+      expect(moduleSrc).toMatch(/new AcknowledgeAlert\([^)]*deps\.auditEventRepo/);
+      expect(appSrc).toMatch(/composeAlertsModule\(\{[^}]*auditEventRepo[^}]*\}\)/);
     });
 
     it('(o) telegramBotToken/telegramChatId/telegramWebhookSecret salen de config.alerts', () => {
@@ -134,6 +145,63 @@ describe('Alerts composition root (noc-alerts-hub Fase A)', () => {
 
   it('(i) ingestKey de grafana sale de config.alerts.grafanaIngestKey', () => {
     expect(moduleSrc).toMatch(/config\.alerts\.grafanaIngestKey/);
+  });
+});
+
+describe('Fase F1 (noc-alerts-config) — umbrales editables (`noc-alert-thresholds`)', () => {
+  let moduleSrc: string;
+  let routesSrc: string;
+
+  beforeAll(() => {
+    moduleSrc = readFileSync(
+      join(__dirname, '..', '..', 'infrastructure', 'http', 'composeAlertsModule.ts'),
+      'utf8',
+    );
+    routesSrc = readFileSync(
+      join(__dirname, '..', '..', 'infrastructure', 'http', 'routes', 'alerts.routes.ts'),
+      'utf8',
+    );
+  });
+
+  it('composeAlertsModule instancia PrismaNocAlertThresholdsConfigRepository + Get/UpdateAlertThresholds', () => {
+    expect(moduleSrc).toMatch(/new PrismaNocAlertThresholdsConfigRepository\(\)/);
+    expect(moduleSrc).toMatch(/new GetAlertThresholds\(/);
+    expect(moduleSrc).toMatch(/new UpdateAlertThresholds\(/);
+  });
+
+  it('GET /thresholds usa auth DUAL (fiberIngestKey O sesión+monitoring.manage)', () => {
+    expect(routesSrc).toMatch(/router\.get\(\s*['"]\/thresholds['"]\s*,\s*thresholdsReadAuth/);
+    expect(routesSrc).toMatch(/createThresholdsReadAuth\(/);
+  });
+
+  it("PUT /thresholds usa SOLO auth+managePerm (monitoring.manage) — la vía machine NO puede editar", () => {
+    expect(routesSrc).toMatch(/router\.put\(\s*['"]\/thresholds['"]\s*,\s*auth\s*,\s*managePerm/);
+  });
+});
+
+describe('Migración 20261022000000_noc_alert_thresholds — tabla + seed idempotente', () => {
+  let sql: string;
+
+  beforeAll(() => {
+    sql = readFileSync(
+      join(__dirname, '..', '..', '..', 'prisma', 'migrations', '20261022000000_noc_alert_thresholds', 'migration.sql'),
+      'utf8',
+    );
+  });
+
+  it('crea la tabla NocAlertThresholdsConfig con los 5 campos del contrato Rust', () => {
+    expect(sql).toMatch(/CREATE TABLE "NocAlertThresholdsConfig"/);
+    expect(sql).toMatch(/"critDbm"/);
+    expect(sql).toMatch(/"warnDbm"/);
+    expect(sql).toMatch(/"deltaAlert"/);
+    expect(sql).toMatch(/"ponMinAbon"/);
+    expect(sql).toMatch(/"ponDelta"/);
+  });
+
+  it('seedea la fila singleton con los defaults de /etc/fibra_report.conf, idempotente', () => {
+    expect(sql).toMatch(/INSERT INTO "NocAlertThresholdsConfig"/);
+    expect(sql).toMatch(/'singleton',\s*-30,\s*-27,\s*2\.0,\s*2,\s*1\.5/);
+    expect(sql).toMatch(/ON CONFLICT DO NOTHING/);
   });
 });
 

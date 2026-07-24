@@ -15,6 +15,26 @@ import type { AuditEventRepository } from '@domain/ports/AuditEventRepository';
 
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/**
+ * F2 (noc-alerts-config) — M2M-only alert surfaces (sensors/Grafana ingest,
+ * Telegram's own servers hitting the webhook) never carry a `req.user` — the
+ * generic row this middleware would write is a dead `action=null,
+ * entityType=null, actorLogin='anonymous'` entry, not filterable/attributable
+ * to anything. `POST /api/alerts/telegram/webhook`'s real mutation (the ACK)
+ * already gets a RICH structured event straight from `AcknowledgeAlert`
+ * (entityType='NocAlert', entityId, actor, channel — see its doc comment).
+ * `POST /api/alerts/ingest/:source` has no structured equivalent (out of
+ * scope here) but is excluded anyway — same M2M reasoning, and ingestion
+ * volume would otherwise flood the audit log with noise no admin can use.
+ * Prefix match on the ORIGINAL url (not parsed params) — cheap, no route
+ * table dependency.
+ */
+const EXCLUDED_MUTATION_PATH_PREFIXES = ['/api/alerts/ingest/', '/api/alerts/telegram/webhook'];
+
+function isExcludedFromGenericAudit(url: string): boolean {
+  return EXCLUDED_MUTATION_PATH_PREFIXES.some(prefix => url.startsWith(prefix));
+}
+
 /** Keys whose values are replaced with '***' before persisting (case-insensitive). */
 const SENSITIVE_KEYS = new Set([
   'password',
@@ -81,7 +101,7 @@ function extractErrorMessage(body: unknown): string | null {
 export function auditMutationsMiddleware(repo: AuditEventRepository): RequestHandler {
   return function auditMutations(req: Request, res: Response, next: NextFunction): void {
     const url = req.originalUrl || req.url || '';
-    if (!MUTATION_METHODS.has(req.method) || !url.startsWith('/api')) {
+    if (!MUTATION_METHODS.has(req.method) || !url.startsWith('/api') || isExcludedFromGenericAudit(url)) {
       next();
       return;
     }

@@ -46,6 +46,19 @@ describe('GET /api/admin/audit-events', () => {
     expect(res.body.items[0].method).toBe('DELETE');
   });
 
+  // F2 (noc-alerts-config) — closes the query→use-case→repo round trip for
+  // `entityType` at the HTTP layer (the use-case/repo levels already had
+  // coverage — ListAuditEvents.test.ts "filters by entityType" — this test
+  // confirms the querystring actually reaches it, e.g. so the FE can filter
+  // `entityType=NocAlert` on the audit log page).
+  it('filters by entityType (viaje completo querystring→use-case→repo)', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/admin/audit-events?entityType=RbacRole');
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.items[0].entityType).toBe('RbacRole');
+  });
+
   it('returns 403 when the guard denies', async () => {
     const { app } = buildApp({ allow: false });
     const res = await request(app).get('/api/admin/audit-events');

@@ -137,6 +137,49 @@ describe('auditMutationsMiddleware', () => {
   });
 });
 
+describe('auditMutationsMiddleware — exclusion de rutas M2M de alerts (F2, noc-alerts-config)', () => {
+  // F2 — /api/alerts/ingest/:source y /api/alerts/telegram/webhook son M2M
+  // (sensores/Telegram, sin req.user): la fila GENÉRICA (action=null,
+  // actorLogin='anonymous') no aporta nada filtrable. El ACK estructurado
+  // (AcknowledgeAlert) es la fuente de verdad para /telegram/webhook; el
+  // ingest no tiene equivalente estructurado (fuera de alcance F2) pero
+  // igual se excluye por ser el mismo tipo de ruta M2M.
+  function buildAlertsApp() {
+    const app = express();
+    app.use(express.json());
+    const repo = new InMemoryAuditEventRepository();
+    app.use(auditMutationsMiddleware(repo));
+    app.post('/api/alerts/ingest/fiber-collector', (_req, res) => { res.status(201).json({ ok: true }); });
+    app.post('/api/alerts/telegram/webhook', (_req, res) => { res.status(200).json({ ok: true }); });
+    app.post('/api/alerts/some-alert-id/acknowledge', (_req, res) => { res.status(200).json({ ok: true }); });
+    return { app, repo };
+  }
+
+  it('NO audita POST /api/alerts/ingest/:source (M2M, ninguna fila genérica)', async () => {
+    const { app, repo } = buildAlertsApp();
+    await request(app).post('/api/alerts/ingest/fiber-collector').send({ fingerprint: 'fp-1' });
+    await flush();
+    const page = await repo.list({ page: 1, pageSize: 10 });
+    expect(page.total).toBe(0);
+  });
+
+  it('NO audita POST /api/alerts/telegram/webhook (M2M, ninguna fila genérica)', async () => {
+    const { app, repo } = buildAlertsApp();
+    await request(app).post('/api/alerts/telegram/webhook').send({});
+    await flush();
+    const page = await repo.list({ page: 1, pageSize: 10 });
+    expect(page.total).toBe(0);
+  });
+
+  it('SÍ sigue auditando otras mutaciones de /api/alerts (ej. acknowledge) si no hay dedupe explícito', async () => {
+    const { app, repo } = buildAlertsApp();
+    await request(app).post('/api/alerts/some-alert-id/acknowledge').send({});
+    await flush();
+    const page = await repo.list({ page: 1, pageSize: 10 });
+    expect(page.total).toBe(1);
+  });
+});
+
 describe('maskSensitive', () => {
   it('replaces sensitive values with *** at the top level', () => {
     expect(maskSensitive({ password: 'x', a: 1 })).toEqual({ password: '***', a: 1 });
