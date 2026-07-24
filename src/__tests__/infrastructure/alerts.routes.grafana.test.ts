@@ -78,7 +78,7 @@ async function buildApp() {
   const publisher = new NoOpAlertEventPublisher();
   const ingestAlert = new IngestAlert(repo, publisher);
   const listAlerts = new ListAlerts(repo);
-  const acknowledgeAlert = new AcknowledgeAlert(repo);
+  const acknowledgeAlert = new AcknowledgeAlert(repo, publisher);
   const flagRepo = new InMemoryFeatureFlagRepository();
   flagRepo.seed('noc-alerts-hub-enabled', true);
   const grafanaSource = new GrafanaWebhookSource();
@@ -269,7 +269,7 @@ describe('POST /api/alerts/ingest/grafana — B5 mapeo + delegación a IngestAle
 
     const ingestAlert = new IngestAlert(flakyRepo, publisher);
     const listAlerts = new ListAlerts(realRepo);
-    const acknowledgeAlert = new AcknowledgeAlert(realRepo);
+    const acknowledgeAlert = new AcknowledgeAlert(realRepo, publisher);
     const flagRepo = new InMemoryFeatureFlagRepository();
     flagRepo.seed('noc-alerts-hub-enabled', true);
     const grafanaSource = new GrafanaWebhookSource();
@@ -346,7 +346,7 @@ describe('POST /api/alerts/ingest/grafana — B5 mapeo + delegación a IngestAle
 
     const ingestAlert = new IngestAlert(deadRepo, publisher);
     const listAlerts = new ListAlerts(realRepo);
-    const acknowledgeAlert = new AcknowledgeAlert(realRepo);
+    const acknowledgeAlert = new AcknowledgeAlert(realRepo, publisher);
     const flagRepo = new InMemoryFeatureFlagRepository();
     flagRepo.seed('noc-alerts-hub-enabled', true);
     const grafanaSource = new GrafanaWebhookSource();
