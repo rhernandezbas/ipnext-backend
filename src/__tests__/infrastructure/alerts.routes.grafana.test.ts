@@ -6,7 +6,15 @@
  * alerts.routes.test.ts. B7 — auth 401/rate-limit/kill-switch YA están
  * cubiertos genéricamente en alerts.routes.test.ts (con la key de
  * fiber-collector) — acá solo se cubre lo NUEVO: mapeo del shape de Grafana,
- * malformado→400 vía la ruta real, y N alertas agrupadas→N filas.
+ * sobre malformado→400 vía la ruta real, y N alertas agrupadas→N filas.
+ *
+ * FIX WAVE (review adversarial de B) — decisión revisada: la ingesta de un
+ * webhook agrupado ya NO es atómica. Un elemento individual malformado
+ * (F-B3) o un fallo del repo aislado a UN elemento (F-B2) ya no tumban el
+ * batch entero ni devuelven 400/500 con la persistencia parcial oculta —
+ * cada elemento se procesa en aislamiento y se reporta (`results`), 201 si
+ * todo salió bien, 207 si hubo algún skip/error mezclado con éxitos.
+ * `fingerprint` ausente (F-B4) ya no es un caso de error — se deriva.
  */
 import request from 'supertest';
 import express from 'express';
@@ -178,16 +186,136 @@ describe('POST /api/alerts/ingest/grafana — B5 mapeo + delegación a IngestAle
     expect(await repo.list({})).toHaveLength(0);
   });
 
-  it('elemento sin fingerprint → 400, no crea ningún NocAlert (ni siquiera los válidos del mismo batch)', async () => {
+  // F-B4 (fix wave) — decisión revisada: fingerprint ausente YA NO es
+  // malformado, se deriva uno estable. Este test antes esperaba 400; ahora
+  // el elemento se ingiere igual (201), con un fingerprint derivado.
+  it('elemento sin fingerprint → 201, se ingiere con un fingerprint derivado (F-B4, no 400)', async () => {
     const { app, repo } = await buildApp();
-    const bad = grafanaWebhook();
-    const badAlerts = bad['alerts'] as Array<Record<string, unknown>>;
-    delete badAlerts[0]?.['fingerprint'];
+    const bodyOk = grafanaWebhook();
+    const okAlerts = bodyOk['alerts'] as Array<Record<string, unknown>>;
+    delete okAlerts[0]?.['fingerprint'];
 
-    const res = await request(app).post('/api/alerts/ingest/grafana').set('X-API-Key', GRAFANA_KEY).send(bad);
+    const res = await request(app).post('/api/alerts/ingest/grafana').set('X-API-Key', GRAFANA_KEY).send(bodyOk);
 
-    expect(res.status).toBe(400);
-    expect(await repo.list({})).toHaveLength(0);
+    expect(res.status).toBe(201);
+    const stored = await repo.list({});
+    expect(stored).toHaveLength(1);
+    expect(typeof stored[0]?.fingerprint).toBe('string');
+    expect(stored[0]?.fingerprint.length).toBeGreaterThan(0);
+  });
+
+  // F-B3 (fix wave, MEDIUM) — decisión revisada: un elemento estructuralmente
+  // inválido (status inválido) ya NO tira todo el webhook a 400 — se
+  // SKIPPEA + reporta, el resto del batch se ingiere igual.
+  it('un elemento con status inválido en un batch de 5 → los 4 válidos se ingieren (207), el inválido se reporta skipped', async () => {
+    const { app, repo } = await buildApp();
+
+    const res = await request(app)
+      .post('/api/alerts/ingest/grafana')
+      .set('X-API-Key', GRAFANA_KEY)
+      .send({
+        status: 'firing',
+        alerts: [
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r0' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-0' },
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r1' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-1' },
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r2' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-2' },
+          { status: 'bogus-status', labels: { alertname: 'HighCpu', router: 'r3' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-3' },
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r4' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-4' },
+        ],
+      });
+
+    expect(res.status).toBe(207);
+    const stored = await repo.list({});
+    expect(stored).toHaveLength(4);
+    expect(stored.map((a) => a.fingerprint).sort()).toEqual(['fp-0', 'fp-1', 'fp-2', 'fp-4']);
+
+    const body = res.body as { data: unknown[]; results: Array<{ index: number; status: string; fingerprint?: string; error?: string }> };
+    expect(body.data).toHaveLength(4);
+    expect(body.results).toHaveLength(5);
+    const skippedResult = body.results.find((r) => r.index === 3);
+    expect(skippedResult?.status).toBe('skipped');
+    expect(skippedResult?.error).toMatch(/status/i);
+    const okResults = body.results.filter((r) => r.status === 'ok');
+    expect(okResults).toHaveLength(4);
+  });
+
+  // F-B2 (fix wave, HIGH — fan-out parcial) — un fallo del REPO al ingerir
+  // UN elemento (no un problema de mapeo) no debe tumbar a sus hermanos ni
+  // devolver un 500 pelado con persistencia parcial oculta.
+  it('el repo tira en el 2º elemento de 3 → los otros 2 se persisten Y la respuesta reporta el fallo del 2º (no 500 pelado)', async () => {
+    const roleRepo = new InMemoryRbacRoleRepository();
+    const userRoleRepo = new InMemoryRbacUserRoleRepository();
+    const permRepo = new InMemoryRbacPermissionRepository();
+    const rolePermRepo = new InMemoryRbacRolePermissionRepository();
+    const userRepo = new InMemoryRbacUserRepository(userRoleRepo, roleRepo);
+    const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
+    void permRepo;
+    void rolePermRepo;
+
+    const realRepo = new InMemoryNocAlertRepository();
+    const publisher = new NoOpAlertEventPublisher();
+
+    // Wrapper: throws for ONE specific fingerprint, delegates the rest to the
+    // real in-memory repo — simulates a transient repo failure isolated to a
+    // single element.
+    const flakyRepo: typeof realRepo = Object.assign(Object.create(Object.getPrototypeOf(realRepo)), realRepo);
+    const originalUpsert = realRepo.upsertByFingerprint.bind(realRepo);
+    flakyRepo.upsertByFingerprint = async (input) => {
+      if (input.fingerprint === 'fp-boom') {
+        throw new Error('simulated repo failure for fp-boom');
+      }
+      return originalUpsert(input);
+    };
+
+    const ingestAlert = new IngestAlert(flakyRepo, publisher);
+    const listAlerts = new ListAlerts(realRepo);
+    const acknowledgeAlert = new AcknowledgeAlert(realRepo);
+    const flagRepo = new InMemoryFeatureFlagRepository();
+    flagRepo.seed('noc-alerts-hub-enabled', true);
+    const grafanaSource = new GrafanaWebhookSource();
+
+    const app = express();
+    app.use(cookieParser());
+    app.use(express.json());
+    app.use(
+      '/api/alerts',
+      createAlertsRouter({
+        ingestAlert,
+        listAlerts,
+        acknowledgeAlert,
+        ingestKeys: { 'fiber-collector': FIBER_KEY, grafana: GRAFANA_KEY },
+        featureFlagRepo: flagRepo,
+        grafanaSource,
+        auth: createAuthMiddleware(new EchoAuthProvider()),
+        requirePerm,
+      }),
+    );
+    app.use(errorHandler);
+
+    const res = await request(app)
+      .post('/api/alerts/ingest/grafana')
+      .set('X-API-Key', GRAFANA_KEY)
+      .send({
+        status: 'firing',
+        alerts: [
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r0' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-ok-1' },
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r1' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-boom' },
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r2' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-ok-2' },
+        ],
+      });
+
+    expect(res.status).not.toBe(500);
+    expect(res.status).toBe(207);
+
+    const stored = await realRepo.list({});
+    expect(stored).toHaveLength(2);
+    expect(stored.map((a) => a.fingerprint).sort()).toEqual(['fp-ok-1', 'fp-ok-2']);
+
+    const body = res.body as { data: unknown[]; results: Array<{ index: number; status: string; fingerprint?: string; error?: string }> };
+    expect(body.data).toHaveLength(2);
+    const boomResult = body.results.find((r) => r.fingerprint === 'fp-boom');
+    expect(boomResult?.status).toBe('error');
+    expect(boomResult?.error).toMatch(/fp-boom/i);
   });
 
   // B4 — grouped webhook con 2 elementos de fingerprint distinto.

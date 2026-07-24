@@ -14,6 +14,19 @@ import type { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/Graf
 /** Factory matching `requirePerm` exported from app.ts (DIP-clean injection, molde accessPoints.routes). */
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
 
+/**
+ * F-B2/F-B3 (fix wave) — per-`alerts[]`-element outcome reported alongside
+ * `data` on `POST /ingest/grafana`. `fingerprint` is absent for `skipped`
+ * entries (mapping never got far enough to know one — F-B4's derivation only
+ * runs once `alertname` resolved).
+ */
+interface GrafanaIngestElementResult {
+  index: number;
+  fingerprint?: string;
+  status: 'ok' | 'error' | 'skipped';
+  error?: string;
+}
+
 const VALID_SEVERITIES: readonly NocAlertSeverity[] = ['critical', 'warning', 'info'];
 const VALID_STATUSES: readonly NocAlertStatus[] = ['firing', 'resolved'];
 
@@ -190,22 +203,49 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
         // canonical shape `parseIngestBody` validates below; it needs its own
         // mapper (`GrafanaWebhookSource`) that also fans a SINGLE webhook out
         // into N `IngestAlert.execute()` calls, one per `alerts[]` element
-        // (spec.md "Grouped alerts produce N NocAlerts"). Malformed → 400
-        // atomically, NOTHING is persisted for a rejected batch.
+        // (spec.md "Grouped alerts produce N NocAlerts"). Only a malformed
+        // SOBRE (no `alerts` array at all) → 400, nothing persisted.
         if (source === 'grafana') {
           if (!grafanaSource) {
             throw new Error('alerts.routes: grafanaSource dependency missing for source "grafana"');
           }
-          const mapped = grafanaSource.mapWebhook(req.body);
-          if (typeof mapped === 'string') {
-            res.status(400).json({ error: mapped, code: 'VALIDATION_ERROR' });
+          const mapResult = grafanaSource.mapWebhook(req.body);
+          if (typeof mapResult === 'string') {
+            res.status(400).json({ error: mapResult, code: 'VALIDATION_ERROR' });
             return;
           }
+
+          // F-B2/F-B3 (fix wave, HIGH — fan-out parcial) — each `alerts[]`
+          // element is ingested in ISOLATION: a mapping failure (F-B3) or an
+          // `ingestAlert.execute()` throw for ONE element (F-B2, e.g. a
+          // transient repo error) must NEVER take down its siblings, and must
+          // NEVER surface as a bare 500 with partial persistence already
+          // committed underneath it. Upserts are idempotent by fingerprint —
+          // a future retry of a failed/skipped element self-heals.
+          const results: GrafanaIngestElementResult[] = mapResult.skipped.map((s) => ({
+            index: s.index,
+            status: 'skipped' as const,
+            error: s.reason,
+          }));
+
           const created: NocAlert[] = [];
-          for (const input of mapped) {
-            created.push(await ingestAlert.execute(input));
+          for (const { index, input } of mapResult.mapped) {
+            try {
+              const alert = await ingestAlert.execute(input);
+              created.push(alert);
+              results.push({ index, fingerprint: input.fingerprint, status: 'ok' });
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              results.push({ index, fingerprint: input.fingerprint, status: 'error', error: message });
+            }
           }
-          res.status(201).json({ data: created.map(toNocAlertDto) });
+          results.sort((r1, r2) => r1.index - r2.index);
+
+          // 201 when every element made it in clean; 207 (multi-status) when
+          // some were skipped/errored but at least one succeeded — never a
+          // flat 500/400 that hides a partial success.
+          const hasFailures = results.some((r) => r.status !== 'ok');
+          res.status(hasFailures ? 207 : 201).json({ data: created.map(toNocAlertDto), results });
           return;
         }
 
