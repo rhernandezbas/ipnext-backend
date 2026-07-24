@@ -244,6 +244,24 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
           // 201 when every element made it in clean; 207 (multi-status) when
           // some were skipped/errored but at least one succeeded — never a
           // flat 500/400 that hides a partial success.
+          //
+          // FIX WAVE (regression from F-B2) — `created.length === 0` needs a
+          // closer look before defaulting to 207: a 2xx here tells
+          // Grafana/Alertmanager "delivered", and it will NEVER retry — if the
+          // reason nothing persisted was a TRANSIENT failure (repo down mid
+          // incident), the alert is lost in silence. Only a batch where every
+          // element was `skipped` (malformed, retry wouldn't change the
+          // outcome) may stay 2xx with nothing persisted.
+          if (created.length === 0) {
+            const hasTransientError = results.some((r) => r.status === 'error');
+            if (hasTransientError) {
+              res.status(503).json({ error: 'Failed to ingest all alerts in this webhook', code: 'INGEST_FAILED', results });
+              return;
+            }
+            res.status(207).json({ data: [], results });
+            return;
+          }
+
           const hasFailures = results.some((r) => r.status !== 'ok');
           res.status(hasFailures ? 207 : 201).json({ data: created.map(toNocAlertDto), results });
           return;

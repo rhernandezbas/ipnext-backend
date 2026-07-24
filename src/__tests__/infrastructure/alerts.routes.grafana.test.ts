@@ -318,6 +318,100 @@ describe('POST /api/alerts/ingest/grafana — B5 mapeo + delegación a IngestAle
     expect(boomResult?.error).toMatch(/fp-boom/i);
   });
 
+  // FIX WAVE (regresión de F-B2) — decisión revisada: si el repo se cae y
+  // TODOS los elementos fallan (`created.length === 0`, todos `status:'error'`
+  // transitorio), un 207 (2xx) le dice a Grafana/Alertmanager "entregado" y
+  // NUNCA reintenta — la alerta se pierde en silencio, justo durante un
+  // incidente. Debe responder 5xx para que el sender reintente (los upserts
+  // son idempotentes por fingerprint, el retry es seguro).
+  it('el repo tira en LOS TRES elementos de un batch → 5xx (retry), no 207 (no se pierde en silencio)', async () => {
+    const roleRepo = new InMemoryRbacRoleRepository();
+    const userRoleRepo = new InMemoryRbacUserRoleRepository();
+    const permRepo = new InMemoryRbacPermissionRepository();
+    const rolePermRepo = new InMemoryRbacRolePermissionRepository();
+    const userRepo = new InMemoryRbacUserRepository(userRoleRepo, roleRepo);
+    const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
+    void permRepo;
+    void rolePermRepo;
+
+    const realRepo = new InMemoryNocAlertRepository();
+    const publisher = new NoOpAlertEventPublisher();
+
+    // Wrapper: throws for EVERY element — simula el repo caído por completo
+    // (ej. DB down), no un fallo aislado a un elemento.
+    const deadRepo: typeof realRepo = Object.assign(Object.create(Object.getPrototypeOf(realRepo)), realRepo);
+    deadRepo.upsertByFingerprint = async () => {
+      throw new Error('simulated repo outage');
+    };
+
+    const ingestAlert = new IngestAlert(deadRepo, publisher);
+    const listAlerts = new ListAlerts(realRepo);
+    const acknowledgeAlert = new AcknowledgeAlert(realRepo);
+    const flagRepo = new InMemoryFeatureFlagRepository();
+    flagRepo.seed('noc-alerts-hub-enabled', true);
+    const grafanaSource = new GrafanaWebhookSource();
+
+    const app = express();
+    app.use(cookieParser());
+    app.use(express.json());
+    app.use(
+      '/api/alerts',
+      createAlertsRouter({
+        ingestAlert,
+        listAlerts,
+        acknowledgeAlert,
+        ingestKeys: { 'fiber-collector': FIBER_KEY, grafana: GRAFANA_KEY },
+        featureFlagRepo: flagRepo,
+        grafanaSource,
+        auth: createAuthMiddleware(new EchoAuthProvider()),
+        requirePerm,
+      }),
+    );
+    app.use(errorHandler);
+
+    const res = await request(app)
+      .post('/api/alerts/ingest/grafana')
+      .set('X-API-Key', GRAFANA_KEY)
+      .send({
+        status: 'firing',
+        alerts: [
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r0' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-dead-0' },
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r1' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-dead-1' },
+          { status: 'firing', labels: { alertname: 'HighCpu', router: 'r2' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-dead-2' },
+        ],
+      });
+
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(res.status).toBeLessThan(600);
+    expect(await realRepo.list({})).toHaveLength(0);
+  });
+
+  // FIX WAVE — complemento del caso anterior: cuando TODOS los elementos son
+  // `skipped` (malformados, ninguno llega a `ingestAlert.execute`), el retry
+  // NO ayuda — pegaría contra la misma validación una y otra vez. Acá SÍ debe
+  // seguir siendo 2xx (no 5xx), a diferencia del caso "repo caído".
+  it('todos los elementos malformados (skipped) en un batch → 2xx, no 5xx (el retry no ayuda)', async () => {
+    const { app, repo } = await buildApp();
+
+    const res = await request(app)
+      .post('/api/alerts/ingest/grafana')
+      .set('X-API-Key', GRAFANA_KEY)
+      .send({
+        status: 'firing',
+        alerts: [
+          { status: 'bogus-status-1', labels: { alertname: 'HighCpu', router: 'r0' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-skip-0' },
+          { status: 'bogus-status-2', labels: { alertname: 'HighCpu', router: 'r1' }, annotations: {}, startsAt: '2026-07-24T10:00:00.000Z', fingerprint: 'fp-skip-1' },
+        ],
+      });
+
+    expect(res.status).toBeGreaterThanOrEqual(200);
+    expect(res.status).toBeLessThan(300);
+    expect(await repo.list({})).toHaveLength(0);
+    const body = res.body as { data: unknown[]; results: Array<{ index: number; status: string }> };
+    expect(body.data).toHaveLength(0);
+    expect(body.results.every((r) => r.status === 'skipped')).toBe(true);
+  });
+
   // B4 — grouped webhook con 2 elementos de fingerprint distinto.
   it('webhook agrupado con 2 alertas de fingerprint distinto → 2 NocAlert creados', async () => {
     const { app, repo } = await buildApp();
