@@ -10,11 +10,16 @@ import { join } from 'path';
 describe('Alerts composition root (noc-alerts-hub Fase A)', () => {
   let appSrc: string;
   let moduleSrc: string;
+  let routesSrc: string;
 
   beforeAll(() => {
     appSrc = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'http', 'app.ts'), 'utf8');
     moduleSrc = readFileSync(
       join(__dirname, '..', '..', 'infrastructure', 'http', 'composeAlertsModule.ts'),
+      'utf8',
+    );
+    routesSrc = readFileSync(
+      join(__dirname, '..', '..', 'infrastructure', 'http', 'routes', 'alerts.routes.ts'),
       'utf8',
     );
   });
@@ -45,8 +50,28 @@ describe('Alerts composition root (noc-alerts-hub Fase A)', () => {
     expect(moduleSrc).toMatch(/new AcknowledgeAlert\(/);
   });
 
-  it('(e) publisher wired es NoOpAlertEventPublisher (Fase A dark — AlertEventBus es Fase C)', () => {
-    expect(moduleSrc).toMatch(/new NoOpAlertEventPublisher\(\)/);
+  // C5/C14 (Fase C, noc-alert-realtime) — el publisher dark de Fase A
+  // (NoOpAlertEventPublisher) se reemplaza por el AlertEventBus REAL; la MISMA
+  // instancia se comparte entre IngestAlert/AcknowledgeAlert (publisher) y el
+  // router (eventBus para /stream) — design.md "la ruta SSE se suscribe al
+  // bus, NUNCA al use-case".
+  it('(e) publisher wired es AlertEventBus real (Fase C — reemplaza el NoOp dark de Fase A)', () => {
+    expect(moduleSrc).toMatch(/new AlertEventBus\(\)/);
+    expect(moduleSrc).not.toMatch(/new NoOpAlertEventPublisher\(\)/);
+  });
+
+  it('(j) IngestAlert/AcknowledgeAlert y el router comparten la MISMA instancia de eventBus', () => {
+    expect(moduleSrc).toMatch(/new IngestAlert\(\s*repo\s*,\s*eventBus\s*\)/);
+    expect(moduleSrc).toMatch(/new AcknowledgeAlert\(\s*repo\s*,\s*eventBus\s*\)/);
+    expect(moduleSrc).toMatch(/eventBus(\s*,|\s*:\s*eventBus)/);
+  });
+
+  it('(k) GET /stream montado con auth+readPerm, se suscribe al eventBus y hace heartbeat', () => {
+    expect(routesSrc).toMatch(/router\.get\(\s*['"]\/stream['"]\s*,\s*auth\s*,\s*readPerm/);
+    expect(routesSrc).toMatch(/eventBus\.subscribe\(/);
+    expect(routesSrc).toMatch(/:\s*ping\\n\\n/);
+    expect(routesSrc).toMatch(/text\/event-stream/);
+    expect(routesSrc).toMatch(/X-Accel-Buffering/);
   });
 
   it('(f) ingestKey sale de config.alerts.fiberIngestKey (canónico, colector fibra)', () => {

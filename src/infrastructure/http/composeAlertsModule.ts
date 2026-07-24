@@ -8,7 +8,7 @@ import { ListAlerts } from '@application/use-cases/alerts/ListAlerts';
 import { AcknowledgeAlert } from '@application/use-cases/alerts/AcknowledgeAlert';
 import { PrismaNocAlertRepository } from '@infrastructure/adapters/prisma/PrismaNocAlertRepository';
 import { PrismaFeatureFlagRepository } from '@infrastructure/adapters/prisma/PrismaFeatureFlagRepository';
-import { NoOpAlertEventPublisher } from '@infrastructure/adapters/in-memory/NoOpAlertEventPublisher';
+import { AlertEventBus } from '@infrastructure/events/AlertEventBus';
 import { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
 import { createAlertsRouter } from './routes/alerts.routes';
 import { createAuthMiddleware } from './middleware/authMiddleware';
@@ -26,9 +26,17 @@ export interface ComposeAlertsModuleDeps {
  * router) in ONE place, OFF app.ts's God Object body (known_debt, design.md
  * "File Changes" ⚠). Keeps the app.ts mount to a single `app.use(...)` call.
  *
- * Publisher = `NoOpAlertEventPublisher` — Fase A ingestion is dark by design
- * (spec.md "Dark ingestion"); `AlertEventBus`/SSE replaces it in Fase C.
+ * Publisher = `AlertEventBus` (Fase C, `noc-alert-realtime`) — a SINGLE shared
+ * instance wired both as the `AlertEventPublisher` port `IngestAlert`/
+ * `AcknowledgeAlert` publish to, AND passed to the router so `GET /stream`
+ * subscribes to the SAME bus (design.md "la ruta SSE se suscribe al bus,
+ * NUNCA al use-case"). Real-time is NOT gated behind `noc-alerts-telegram-send`
+ * — that flag only controls the Fase D OUTBOUND Telegram send; the internal
+ * panel/SSE is part of the hub itself and stays lit even while Telegram stays
+ * dark (design.md "Flags de convivencia", `noc-alerts-hub-enabled` scopes
+ * "Ingesta + persistencia + panel + SSE", separately from `noc-alerts-telegram-send`).
  *
+
  * `ingestKeys` (F3, fix wave) — `POST /api/alerts/ingest/{source}` (spec.md
  * "Alert ingestion endpoint auth"), each known source keyed by ITS OWN secret
  * so rotating `fiberIngestKey` never forces rotating `grafanaIngestKey` (and
@@ -49,20 +57,21 @@ export interface ComposeAlertsModuleDeps {
  */
 export function composeAlertsModule(deps: ComposeAlertsModuleDeps): Router {
   const repo = new PrismaNocAlertRepository();
-  const publisher = new NoOpAlertEventPublisher();
+  const eventBus = new AlertEventBus();
   const featureFlagRepo = new PrismaFeatureFlagRepository();
   const grafanaSource = new GrafanaWebhookSource();
 
   return createAlertsRouter({
-    ingestAlert: new IngestAlert(repo, publisher),
+    ingestAlert: new IngestAlert(repo, eventBus),
     listAlerts: new ListAlerts(repo),
-    acknowledgeAlert: new AcknowledgeAlert(repo),
+    acknowledgeAlert: new AcknowledgeAlert(repo, eventBus),
     ingestKeys: {
       'fiber-collector': config.alerts.fiberIngestKey,
       grafana: config.alerts.grafanaIngestKey,
     },
     featureFlagRepo,
     grafanaSource,
+    eventBus,
     auth: createAuthMiddleware(deps.authAdapter, deps.sessionRepo),
     requirePerm: deps.requirePerm,
   });

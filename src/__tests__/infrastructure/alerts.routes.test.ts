@@ -127,7 +127,7 @@ async function buildApp(opts: BuildAppOpts = {}): Promise<Fixture> {
   const publisher = new NoOpAlertEventPublisher();
   const ingestAlert = new IngestAlert(repo, publisher);
   const listAlerts = new ListAlerts(repo);
-  const acknowledgeAlert = new AcknowledgeAlert(repo);
+  const acknowledgeAlert = new AcknowledgeAlert(repo, publisher);
 
   const flagRepo = new InMemoryFeatureFlagRepository();
   if (opts.hubEnabled !== false) {
