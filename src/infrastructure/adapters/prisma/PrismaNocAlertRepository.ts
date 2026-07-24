@@ -143,4 +143,14 @@ export class PrismaNocAlertRepository implements NocAlertRepository {
     });
     return toNocAlert(row);
   }
+
+  async attachTelegramMessage(id: string, chatId: string, messageId: string): Promise<NocAlert | null> {
+    const existingRow = await (prisma as any).nocAlert.findUnique({ where: { id } });
+    if (!existingRow) return null;
+    const row = await (prisma as any).nocAlert.update({
+      where: { id },
+      data: { telegramChatId: chatId, telegramMessageId: messageId },
+    });
+    return toNocAlert(row);
+  }
 }

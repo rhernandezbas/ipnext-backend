@@ -67,4 +67,12 @@ export class InMemoryNocAlertRepository implements NocAlertRepository {
   seed(alert: NocAlert): void {
     this.byId.set(alert.id, { ...alert });
   }
+
+  async attachTelegramMessage(id: string, chatId: string, messageId: string): Promise<NocAlert | null> {
+    const existing = this.byId.get(id);
+    if (!existing) return null;
+    const updated: NocAlert = { ...existing, telegramChatId: chatId, telegramMessageId: messageId };
+    this.byId.set(id, updated);
+    return { ...updated };
+  }
 }

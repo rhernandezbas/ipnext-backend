@@ -11,6 +11,7 @@ describe('Alerts composition root (noc-alerts-hub Fase A)', () => {
   let appSrc: string;
   let moduleSrc: string;
   let routesSrc: string;
+  let apiKeyMiddlewareSrc: string;
 
   beforeAll(() => {
     appSrc = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'http', 'app.ts'), 'utf8');
@@ -20,6 +21,10 @@ describe('Alerts composition root (noc-alerts-hub Fase A)', () => {
     );
     routesSrc = readFileSync(
       join(__dirname, '..', '..', 'infrastructure', 'http', 'routes', 'alerts.routes.ts'),
+      'utf8',
+    );
+    apiKeyMiddlewareSrc = readFileSync(
+      join(__dirname, '..', '..', 'infrastructure', 'http', 'middleware', 'apiKeyMiddleware.ts'),
       'utf8',
     );
   });
@@ -62,8 +67,47 @@ describe('Alerts composition root (noc-alerts-hub Fase A)', () => {
 
   it('(j) IngestAlert/AcknowledgeAlert y el router comparten la MISMA instancia de eventBus', () => {
     expect(moduleSrc).toMatch(/new IngestAlert\(\s*repo\s*,\s*eventBus\s*\)/);
-    expect(moduleSrc).toMatch(/new AcknowledgeAlert\(\s*repo\s*,\s*eventBus\s*\)/);
+    // D — AcknowledgeAlert ahora toma un 3er param (telegramNotifier, D13) — el
+    // regex ya NO exige `)` pegado a `eventBus`, solo que repo/eventBus sigan
+    // siendo los primeros dos args, en ese orden.
+    expect(moduleSrc).toMatch(/new AcknowledgeAlert\(\s*repo\s*,\s*eventBus\s*,/);
     expect(moduleSrc).toMatch(/eventBus(\s*,|\s*:\s*eventBus)/);
+  });
+
+  // D (`noc-alert-telegram`) — TelegramBotGateway saliente + webhook entrante.
+  describe('Fase D — Telegram bidireccional', () => {
+    it('(l) composeAlertsModule instancia HttpTelegramGateway + TelegramBotGateway + NotifyAlert', () => {
+      expect(moduleSrc).toMatch(/new HttpTelegramGateway\(/);
+      expect(moduleSrc).toMatch(/new TelegramBotGateway\(\s*telegramGateway\s*,/);
+      expect(moduleSrc).toMatch(/new NotifyAlert\(/);
+    });
+
+    it('(m) NotifyAlert se suscribe al eventBus (mismo bus que SSE) y solo reacciona a "firing"', () => {
+      expect(moduleSrc).toMatch(/eventBus\.subscribe\(/);
+      expect(moduleSrc).toMatch(/notifyAlert\.execute\(/);
+      expect(moduleSrc).toMatch(/event\.type\s*!==\s*'firing'/);
+    });
+
+    it('(n) AcknowledgeAlert recibe el MISMO telegramNotifier que se le pasa al router', () => {
+      expect(moduleSrc).toMatch(/new AcknowledgeAlert\(\s*repo\s*,\s*eventBus\s*,\s*telegramNotifier\s*\)/);
+      expect(moduleSrc).toMatch(/telegramGateway(\s*,|\s*:\s*telegramGateway)/);
+    });
+
+    it('(o) telegramBotToken/telegramChatId/telegramWebhookSecret salen de config.alerts', () => {
+      expect(moduleSrc).toMatch(/config\.alerts\.telegramBotToken/);
+      expect(moduleSrc).toMatch(/config\.alerts\.telegramChatId/);
+      expect(moduleSrc).toMatch(/config\.alerts\.telegramWebhookSecret/);
+    });
+
+    it('(p) el webhook /telegram/webhook está montado en alerts.routes.ts con secret-token + callback ack:<id>', () => {
+      expect(routesSrc).toMatch(/router\.post\(\s*['"]\/telegram\/webhook['"]/);
+      expect(routesSrc).toMatch(/telegramWebhookAuth/);
+      expect(routesSrc).toMatch(/\^ack:/);
+      expect(routesSrc).toMatch(/acknowledgeAlert\.execute\(/);
+      // El header en sí lo compara createTelegramSecretMiddleware (apiKeyMiddleware.ts).
+      expect(apiKeyMiddlewareSrc).toMatch(/x-telegram-bot-api-secret-token/i);
+      expect(apiKeyMiddlewareSrc).toMatch(/createTelegramSecretMiddleware/);
+    });
   });
 
   it('(k) GET /stream montado con auth+readPerm, se suscribe al eventBus y hace heartbeat', () => {

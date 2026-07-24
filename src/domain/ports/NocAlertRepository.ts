@@ -13,4 +13,11 @@ export interface NocAlertRepository {
   findById(id: string): Promise<NocAlert | null>;
   list(filters: NocAlertListFilters): Promise<NocAlert[]>;
   acknowledge(id: string, by: string, at: string, note?: string): Promise<NocAlert | null>;
+  /**
+   * Fase D (`noc-alert-telegram`) — persists the `chatId`/`messageId` returned
+   * by `AlertNotifier.notify` right after a successful outbound Telegram send,
+   * so a later `editAck` knows WHICH message to edit. `null` if the id doesn't
+   * exist (mirrors `acknowledge`'s not-found contract).
+   */
+  attachTelegramMessage(id: string, chatId: string, messageId: string): Promise<NocAlert | null>;
 }
