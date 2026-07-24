@@ -2,6 +2,7 @@ import { IngestAlert } from '@application/use-cases/alerts/IngestAlert';
 import { InMemoryNocAlertRepository } from '@infrastructure/adapters/in-memory/InMemoryNocAlertRepository';
 import { NoOpAlertEventPublisher } from '@infrastructure/adapters/in-memory/NoOpAlertEventPublisher';
 import { NoOpAlertNotifier } from '@infrastructure/adapters/in-memory/NoOpAlertNotifier';
+import { AlertEventBus } from '@infrastructure/events/AlertEventBus';
 import { NocAlertInput } from '@domain/entities/nocAlert';
 
 function makeInput(overrides: Partial<NocAlertInput> = {}): NocAlertInput {
@@ -153,5 +154,27 @@ describe('IngestAlert', () => {
     // in this test's scope, must never be touched.
     expect(notifier.notifyCalls).toHaveLength(0);
     expect(notifier.editAckCalls).toHaveLength(0);
+  });
+
+  // F-C2 (fix wave, MEDIUM) — con el AlertEventBus REAL (no el NoOp, que nunca
+  // tira), un subscriber SSE que lanza (ej. socket destruido a mitad de
+  // res.write) no debe hacer que execute() propague la excepción: el persist
+  // ya se completó OK, así que el caller (la ruta /ingest/:source) tiene que
+  // ver un resultado normal, NUNCA un 500 espurio.
+  it('con un subscriber que tira en el AlertEventBus real, execute() NO tira — el persist ya se completó', async () => {
+    const repo = new InMemoryNocAlertRepository();
+    const bus = new AlertEventBus();
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    bus.subscribe(() => {
+      throw new Error('res.write sobre socket destruido');
+    });
+    const useCase = new IngestAlert(repo, bus);
+
+    await expect(useCase.execute(makeInput())).resolves.toMatchObject({ status: 'firing' });
+
+    const stored = await repo.list({});
+    expect(stored).toHaveLength(1);
+
+    errorSpy.mockRestore();
   });
 });

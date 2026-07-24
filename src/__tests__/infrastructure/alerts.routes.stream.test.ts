@@ -41,6 +41,26 @@ import type { AuthProvider } from '@domain/ports/AuthProvider';
 import type { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import type { NocAlert } from '@domain/entities/nocAlert';
+import type { FeatureFlag, FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+
+/**
+ * F-C1 (fix wave, MEDIUM) — fake que SIEMPRE rechaza, a diferencia de
+ * `InMemoryFeatureFlagRepository` que nunca rechaza. Simula un hipo de DB
+ * (Prisma) durante `GET /stream`: el handler async NO tenía `next`/try-catch,
+ * así que este reject quedaba como unhandledRejection y la respuesta NUNCA se
+ * mandaba (cliente colgado hasta timeout).
+ */
+class RejectingFeatureFlagRepository implements FeatureFlagRepository {
+  async list(): Promise<FeatureFlag[]> {
+    throw new Error('DB hipó (list)');
+  }
+  async get(): Promise<FeatureFlag | null> {
+    throw new Error('DB hipó (get)');
+  }
+  async setEnabled(): Promise<FeatureFlag> {
+    throw new Error('DB hipó (setEnabled)');
+  }
+}
 
 jest.mock('@infrastructure/config', () => ({
   config: { externalApi: { apiKey: '' }, alerts: { grafanaIngestKey: '', fiberIngestKey: '' } },
@@ -108,6 +128,8 @@ interface Fixture {
 interface BuildServerOpts {
   hubEnabled?: boolean;
   heartbeatIntervalMs?: number;
+  /** F-C1 (fix wave) — override para inyectar un repo que rechaza. */
+  featureFlagRepo?: FeatureFlagRepository;
 }
 
 async function buildServer(opts: BuildServerOpts = {}): Promise<Fixture> {
@@ -159,8 +181,9 @@ async function buildServer(opts: BuildServerOpts = {}): Promise<Fixture> {
   const listAlerts = new ListAlerts(repo);
   const acknowledgeAlert = new AcknowledgeAlert(repo, eventBus);
 
-  const flagRepo = new InMemoryFeatureFlagRepository();
-  flagRepo.seed('noc-alerts-hub-enabled', opts.hubEnabled !== false);
+  const inMemoryFlagRepo = new InMemoryFeatureFlagRepository();
+  inMemoryFlagRepo.seed('noc-alerts-hub-enabled', opts.hubEnabled !== false);
+  const flagRepo = opts.featureFlagRepo ?? inMemoryFlagRepo;
 
   const app = express();
   app.use(cookieParser());
@@ -338,6 +361,21 @@ describe('GET /api/alerts/stream', () => {
 
     expect(eventBus.listenerCount()).toBe(0);
 
+    await closeServer(server);
+  });
+
+  // F-C1 (fix wave, MEDIUM) — el handler async de /stream tragaba rejections:
+  // sin next/try-catch, un featureFlagRepo.get() que rechaza (DB hipa) dejaba
+  // la conexión colgada (unhandledRejection, la respuesta nunca se mandaba).
+  it('si featureFlagRepo.get() rechaza (DB hipa), el request termina con 500 — NO queda colgado', async () => {
+    const { server, port, readUserId } = await buildServer({ featureFlagRepo: new RejectingFeatureFlagRepository() });
+
+    const { req, res } = await rawGet(port, '/api/alerts/stream', `auth_token=${readUserId}`);
+
+    expect(res.statusCode).toBe(500);
+    expect(res.headers['content-type']).not.toMatch(/text\/event-stream/);
+
+    req.destroy();
     await closeServer(server);
   });
 

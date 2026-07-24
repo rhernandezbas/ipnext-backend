@@ -28,8 +28,25 @@ export class AlertEventBus implements AlertEventPublisher {
     this.emitter.setMaxListeners(0);
   }
 
+  /**
+   * F-C2 (fix wave, MEDIUM) — NUNCA usar `emitter.emit(...)` a pelo acá: si un
+   * listener tira (ej. `res.write` sobre un socket SSE ya destruido), Node
+   * propaga la excepción sincrónicamente desde `emit()` — eso mata el fan-out
+   * para los subscribers SIGUIENTES y hace que `publish()` propague hacia el
+   * caller (`IngestAlert`/`AcknowledgeAlert`), devolviendo un 500 aunque el
+   * persist ya se completó OK. Iterar los listeners a mano con try/catch POR
+   * listener aísla cada uno: uno que tira no afecta a los demás ni a quien
+   * llamó a `publish()`. El error se loguea (no se re-lanza).
+   */
   publish(event: NocAlertEvent): void {
-    this.emitter.emit(CHANNEL, event);
+    const listeners = this.emitter.listeners(CHANNEL) as Array<(event: NocAlertEvent) => void>;
+    for (const listener of listeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error('[AlertEventBus] subscriber lanzó al procesar un evento — aislado, no afecta a los demás', err);
+      }
+    }
   }
 
   /**

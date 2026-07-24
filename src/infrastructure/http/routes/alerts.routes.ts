@@ -306,58 +306,93 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
   // requires session auth, not API key": SAME auth+RBAC molde as every other
   // human-facing route on this router (`auth` cookie + `monitoring.read`) —
   // NEVER `apiKeyMiddleware` (that's machine-to-machine, ingestion only).
-  router.get('/stream', auth, readPerm, async (req: Request, res: Response): Promise<void> => {
-    // Convivencia (design.md "Flags de convivencia" — noc-alerts-hub-enabled
-    // scopes "Ingesta + persistencia + panel + SSE"): same kill-switch as
-    // /ingest/:source (F5), read fresh per-connection so a toggle from the
-    // panel takes effect without a deploy. NOT gated by noc-alerts-telegram-send
-    // — that flag only controls the Fase D OUTBOUND Telegram send, unrelated
-    // to this internal stream.
-    const flag = await featureFlagRepo.get(NOC_ALERTS_HUB_ENABLED_FLAG);
-    if (!(flag?.enabled ?? true)) {
-      res.status(503).json({ error: 'NOC alerts hub is disabled', code: 'NOC_ALERTS_HUB_DISABLED' });
-      return;
+  router.get('/stream', auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    // F-C1 (fix wave, MEDIUM) — este handler es async y hasta acá NO tenía
+    // next/try-catch (a diferencia de sus hermanos POST /ingest, GET /,
+    // POST /:id/acknowledge). Si `await featureFlagRepo.get(...)` (u otra
+    // promesa del cuerpo) rechaza — DB hipa — quedaba como unhandledRejection
+    // y la respuesta NUNCA se mandaba: cliente colgado hasta timeout. Envolver
+    // todo el cuerpo en try/catch: si los headers todavía no se mandaron,
+    // next(err) (mismo camino que el resto del router, cae en errorHandler);
+    // si YA se mandaron (falla después de writeHead/flushHeaders, ej. dentro
+    // de un listener), no se puede mandar JSON — solo cerrar limpio.
+    try {
+      // Convivencia (design.md "Flags de convivencia" — noc-alerts-hub-enabled
+      // scopes "Ingesta + persistencia + panel + SSE"): same kill-switch as
+      // /ingest/:source (F5), read fresh per-connection so a toggle from the
+      // panel takes effect without a deploy. NOT gated by noc-alerts-telegram-send
+      // — that flag only controls the Fase D OUTBOUND Telegram send, unrelated
+      // to this internal stream.
+      const flag = await featureFlagRepo.get(NOC_ALERTS_HUB_ENABLED_FLAG);
+      if (!(flag?.enabled ?? true)) {
+        res.status(503).json({ error: 'NOC alerts hub is disabled', code: 'NOC_ALERTS_HUB_DISABLED' });
+        return;
+      }
+
+      if (!eventBus) {
+        throw new Error('alerts.routes: eventBus dependency missing for GET /stream');
+      }
+
+      // Anti-buffering headers for the EasyPanel proxy (spec.md "Stream connection
+      // with permission opens with correct SSE headers") + immediate flush — the
+      // client must get headers WITHOUT waiting for the first event.
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.flushHeaders();
+
+      // design.md "la ruta SSE se suscribe al bus, NUNCA al use-case" — every
+      // NocAlertEvent published by IngestAlert/AcknowledgeAlert (via the SAME
+      // AlertEventBus instance composeAlertsModule shares) becomes one SSE frame.
+      // The frame carries BOTH the event `type` and the DTO (spec.md "Acknowledging
+      // an alert... recibe un frame SSE con el evento acked y el NocAlertDto
+      // actualizado") — never the raw entity.
+      //
+      // F-C2/F-C3 (fix wave) — guard `writable` ANTES de escribir: sobre un
+      // socket ya cerrado/destruido `res.write` tira, y aunque AlertEventBus.publish
+      // ya aísla ese throw por subscriber, evitarlo acá es más barato y más limpio.
+      const listener = (event: NocAlertEvent): void => {
+        if (res.writableEnded || !res.writable) return;
+        res.write(`data: ${JSON.stringify({ type: event.type, alert: toNocAlertDto(event.alert) })}\n\n`);
+      };
+      const unsubscribe = eventBus.subscribe(listener);
+
+      // spec.md "Heartbeat keeps the connection alive through proxies" — a
+      // comment frame (`: ping\n\n`, no `data:` prefix so EventSource's
+      // `onmessage` never fires for it) every `heartbeatIntervalMs`.
+      const heartbeat = setInterval(() => {
+        if (res.writableEnded || !res.writable) return;
+        res.write(': ping\n\n');
+      }, heartbeatIntervalMs);
+
+      // F-C3 (fix wave, nit) — cleanup idempotente: `req.on('close')` y
+      // `res.on('error')` pueden ambos disparar para la misma desconexión
+      // (ej. el socket revienta con error Y luego se cierra) — sin el guard,
+      // el segundo dispararía un doble unsubscribe/clearInterval.
+      let cleanedUp = false;
+      const cleanup = (): void => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clearInterval(heartbeat);
+        unsubscribe();
+      };
+
+      // spec.md "Disconnecting a client unsubscribes it from the bus" (C13) —
+      // no listener may outlive its connection, else every reconnect leaks one.
+      req.on('close', cleanup);
+      // F-C3 — mismo cleanup ante un error del socket de respuesta (ej. ECONNRESET
+      // durante un write), no solo el cierre "prolijo" de req.on('close').
+      res.on('error', cleanup);
+    } catch (err) {
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
+      next(err);
     }
-
-    if (!eventBus) {
-      throw new Error('alerts.routes: eventBus dependency missing for GET /stream');
-    }
-
-    // Anti-buffering headers for the EasyPanel proxy (spec.md "Stream connection
-    // with permission opens with correct SSE headers") + immediate flush — the
-    // client must get headers WITHOUT waiting for the first event.
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    res.flushHeaders();
-
-    // design.md "la ruta SSE se suscribe al bus, NUNCA al use-case" — every
-    // NocAlertEvent published by IngestAlert/AcknowledgeAlert (via the SAME
-    // AlertEventBus instance composeAlertsModule shares) becomes one SSE frame.
-    // The frame carries BOTH the event `type` and the DTO (spec.md "Acknowledging
-    // an alert... recibe un frame SSE con el evento acked y el NocAlertDto
-    // actualizado") — never the raw entity.
-    const listener = (event: NocAlertEvent): void => {
-      res.write(`data: ${JSON.stringify({ type: event.type, alert: toNocAlertDto(event.alert) })}\n\n`);
-    };
-    const unsubscribe = eventBus.subscribe(listener);
-
-    // spec.md "Heartbeat keeps the connection alive through proxies" — a
-    // comment frame (`: ping\n\n`, no `data:` prefix so EventSource's
-    // `onmessage` never fires for it) every `heartbeatIntervalMs`.
-    const heartbeat = setInterval(() => {
-      res.write(': ping\n\n');
-    }, heartbeatIntervalMs);
-
-    // spec.md "Disconnecting a client unsubscribes it from the bus" (C13) —
-    // no listener may outlive its connection, else every reconnect leaks one.
-    req.on('close', () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-    });
   });
 
   // GET / — filtered list, monitoring.read.

@@ -98,4 +98,31 @@ describe('AlertEventBus', () => {
     unsubscribe();
     expect(bus.listenerCount()).toBe(0);
   });
+
+  // F-C2 (fix wave, MEDIUM) — un listener que tira (ej. res.write sobre socket
+  // destruido) NO debe romper el fan-out para los subscribers restantes NI
+  // propagar la excepción fuera de publish() (eso tiraría abajo a
+  // IngestAlert.execute/AcknowledgeAlert.execute con un 500 aunque el persist
+  // ya se completó OK).
+  it('un subscriber que tira en su callback NO bloquea a los demás ni hace que publish() propague', () => {
+    const bus = new AlertEventBus();
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const receivedA: NocAlertEvent[] = [];
+    const receivedC: NocAlertEvent[] = [];
+
+    bus.subscribe((event) => receivedA.push(event));
+    bus.subscribe(() => {
+      throw new Error('res.write sobre socket destruido');
+    });
+    bus.subscribe((event) => receivedC.push(event));
+
+    const event: NocAlertEvent = { type: 'firing', alert: makeAlert() };
+    expect(() => bus.publish(event)).not.toThrow();
+
+    expect(receivedA).toEqual([event]);
+    expect(receivedC).toEqual([event]);
+    expect(errorSpy).toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+  });
 });
