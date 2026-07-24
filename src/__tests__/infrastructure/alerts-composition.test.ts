@@ -56,6 +56,16 @@ describe('Alerts composition root (noc-alerts-hub Fase A)', () => {
   it('(g) auth de las rutas RBAC = createAuthMiddleware(deps.authAdapter, deps.sessionRepo)', () => {
     expect(moduleSrc).toMatch(/createAuthMiddleware\(\s*deps\.authAdapter\s*,\s*deps\.sessionRepo\s*\)/);
   });
+
+  // B8 (Fase B — noc-alert-grafana-source) — GrafanaWebhookSource wiring.
+  it('(h) composeAlertsModule instancia GrafanaWebhookSource y lo pasa como grafanaSource', () => {
+    expect(moduleSrc).toMatch(/new GrafanaWebhookSource\(\)/);
+    expect(moduleSrc).toMatch(/grafanaSource(\s*,|\s*:\s*grafanaSource)/);
+  });
+
+  it('(i) ingestKey de grafana sale de config.alerts.grafanaIngestKey', () => {
+    expect(moduleSrc).toMatch(/config\.alerts\.grafanaIngestKey/);
+  });
 });
 
 describe("RBAC — 'monitoring' + 'acknowledge_alert' YA existen (no requiere seed nuevo)", () => {

@@ -3,15 +3,29 @@ import { IngestAlert } from '@application/use-cases/alerts/IngestAlert';
 import { ListAlerts } from '@application/use-cases/alerts/ListAlerts';
 import { AcknowledgeAlert } from '@application/use-cases/alerts/AcknowledgeAlert';
 import { toNocAlertDto } from '@application/dto/nocAlert';
-import { NocAlertInput, NocAlertSeverity, NocAlertStatus } from '@domain/entities/nocAlert';
+import { NocAlert, NocAlertInput, NocAlertSeverity, NocAlertStatus } from '@domain/entities/nocAlert';
 import { NocAlertListFilters } from '@domain/ports/NocAlertRepository';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { createApiKeyMiddleware } from '../middleware/apiKeyMiddleware';
 import { createExternalWriteRateLimiter } from '../middleware/rateLimiters';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+import type { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
 
 /** Factory matching `requirePerm` exported from app.ts (DIP-clean injection, molde accessPoints.routes). */
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
+
+/**
+ * F-B2/F-B3 (fix wave) — per-`alerts[]`-element outcome reported alongside
+ * `data` on `POST /ingest/grafana`. `fingerprint` is absent for `skipped`
+ * entries (mapping never got far enough to know one — F-B4's derivation only
+ * runs once `alertname` resolved).
+ */
+interface GrafanaIngestElementResult {
+  index: number;
+  fingerprint?: string;
+  status: 'ok' | 'error' | 'skipped';
+  error?: string;
+}
 
 const VALID_SEVERITIES: readonly NocAlertSeverity[] = ['critical', 'warning', 'info'];
 const VALID_STATUSES: readonly NocAlertStatus[] = ['firing', 'resolved'];
@@ -33,6 +47,16 @@ export interface AlertsRouterDeps {
    * contrato que `createApiKeyMiddleware`).
    */
   ingestKeys: Record<string, string>;
+  /**
+   * Fase B (`noc-alert-grafana-source`) — `POST /ingest/grafana` receives
+   * Grafana Alerting's OWN webhook shape (`{status, alerts: [...]}`), NOT the
+   * canonical shape `parseIngestBody` below validates. `GrafanaWebhookSource`
+   * owns that mapping; the route only needs `mapWebhook`. Optional so Fase A
+   * fixtures/tests that never exercise `/ingest/grafana` don't need to build
+   * one — if `source === 'grafana'` and this is missing, the route 500s via
+   * the generic error handler (composeAlertsModule ALWAYS wires it in prod).
+   */
+  grafanaSource?: Pick<GrafanaWebhookSource, 'mapWebhook'>;
   /**
    * F5 (fix wave) — kill-switch de convivencia (design.md "Flags de convivencia").
    * La ingesta lee este flag EN CADA REQUEST (no cacheado) — así el toggle desde
@@ -137,7 +161,7 @@ function parseIngestBody(body: unknown, source: string): NocAlertInput | string 
 }
 
 export function createAlertsRouter(deps: AlertsRouterDeps): Router {
-  const { ingestAlert, listAlerts, acknowledgeAlert, ingestKeys, featureFlagRepo, auth, requirePerm } = deps;
+  const { ingestAlert, listAlerts, acknowledgeAlert, ingestKeys, featureFlagRepo, grafanaSource, auth, requirePerm } = deps;
   const router = Router();
 
   const readPerm = requirePerm('monitoring', 'read');
@@ -172,6 +196,74 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
         const flag = await featureFlagRepo.get(NOC_ALERTS_HUB_ENABLED_FLAG);
         if (!(flag?.enabled ?? true)) {
           res.status(503).json({ error: 'NOC alerts hub is disabled', code: 'NOC_ALERTS_HUB_DISABLED' });
+          return;
+        }
+
+        // Fase B — Grafana's webhook body (`{status, alerts: [...]}`) is NOT the
+        // canonical shape `parseIngestBody` validates below; it needs its own
+        // mapper (`GrafanaWebhookSource`) that also fans a SINGLE webhook out
+        // into N `IngestAlert.execute()` calls, one per `alerts[]` element
+        // (spec.md "Grouped alerts produce N NocAlerts"). Only a malformed
+        // SOBRE (no `alerts` array at all) → 400, nothing persisted.
+        if (source === 'grafana') {
+          if (!grafanaSource) {
+            throw new Error('alerts.routes: grafanaSource dependency missing for source "grafana"');
+          }
+          const mapResult = grafanaSource.mapWebhook(req.body);
+          if (typeof mapResult === 'string') {
+            res.status(400).json({ error: mapResult, code: 'VALIDATION_ERROR' });
+            return;
+          }
+
+          // F-B2/F-B3 (fix wave, HIGH — fan-out parcial) — each `alerts[]`
+          // element is ingested in ISOLATION: a mapping failure (F-B3) or an
+          // `ingestAlert.execute()` throw for ONE element (F-B2, e.g. a
+          // transient repo error) must NEVER take down its siblings, and must
+          // NEVER surface as a bare 500 with partial persistence already
+          // committed underneath it. Upserts are idempotent by fingerprint —
+          // a future retry of a failed/skipped element self-heals.
+          const results: GrafanaIngestElementResult[] = mapResult.skipped.map((s) => ({
+            index: s.index,
+            status: 'skipped' as const,
+            error: s.reason,
+          }));
+
+          const created: NocAlert[] = [];
+          for (const { index, input } of mapResult.mapped) {
+            try {
+              const alert = await ingestAlert.execute(input);
+              created.push(alert);
+              results.push({ index, fingerprint: input.fingerprint, status: 'ok' });
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              results.push({ index, fingerprint: input.fingerprint, status: 'error', error: message });
+            }
+          }
+          results.sort((r1, r2) => r1.index - r2.index);
+
+          // 201 when every element made it in clean; 207 (multi-status) when
+          // some were skipped/errored but at least one succeeded — never a
+          // flat 500/400 that hides a partial success.
+          //
+          // FIX WAVE (regression from F-B2) — `created.length === 0` needs a
+          // closer look before defaulting to 207: a 2xx here tells
+          // Grafana/Alertmanager "delivered", and it will NEVER retry — if the
+          // reason nothing persisted was a TRANSIENT failure (repo down mid
+          // incident), the alert is lost in silence. Only a batch where every
+          // element was `skipped` (malformed, retry wouldn't change the
+          // outcome) may stay 2xx with nothing persisted.
+          if (created.length === 0) {
+            const hasTransientError = results.some((r) => r.status === 'error');
+            if (hasTransientError) {
+              res.status(503).json({ error: 'Failed to ingest all alerts in this webhook', code: 'INGEST_FAILED', results });
+              return;
+            }
+            res.status(207).json({ data: [], results });
+            return;
+          }
+
+          const hasFailures = results.some((r) => r.status !== 'ok');
+          res.status(hasFailures ? 207 : 201).json({ data: created.map(toNocAlertDto), results });
           return;
         }
 
