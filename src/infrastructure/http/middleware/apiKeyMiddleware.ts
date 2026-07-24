@@ -1,5 +1,27 @@
 import { Request, Response, NextFunction } from 'express';
+import { timingSafeEqual } from 'crypto';
 import { config } from '@infrastructure/config';
+
+/**
+ * F7 (fix wave, noc-alerts-hub) — constant-time key comparison. `!==` on strings
+ * short-circuits on the first differing byte, leaking a timing signal an attacker
+ * can use to brute-force the key one byte at a time. `timingSafeEqual` needs
+ * equal-length buffers or it throws — pad the shorter one with a fixed-length
+ * buffer so the comparison itself still runs in constant time relative to the
+ * padded length (only the final boolean depends on the real equality), instead
+ * of returning early on a length mismatch.
+ */
+function safeCompare(provided: string, configured: string): boolean {
+  const providedBuf = Buffer.from(provided);
+  const configuredBuf = Buffer.from(configured);
+  const len = Math.max(providedBuf.length, configuredBuf.length, 1);
+  const paddedProvided = Buffer.alloc(len);
+  const paddedConfigured = Buffer.alloc(len);
+  providedBuf.copy(paddedProvided);
+  configuredBuf.copy(paddedConfigured);
+  const buffersEqual = timingSafeEqual(paddedProvided, paddedConfigured);
+  return buffersEqual && providedBuf.length === configuredBuf.length;
+}
 
 /**
  * API-key middleware factory. Reads the key from X-API-Key header OR
@@ -36,7 +58,7 @@ export function createApiKeyMiddleware(configuredKey: string = config.externalAp
       }
     }
 
-    if (!providedKey || providedKey !== configuredKey) {
+    if (!providedKey || !safeCompare(providedKey, configuredKey)) {
       res.status(401).json({ error: 'Invalid or missing API key', code: 'UNAUTHORIZED' });
       return;
     }

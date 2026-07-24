@@ -14,6 +14,15 @@ export class InMemoryNocAlertRepository implements NocAlertRepository {
 
   async upsertByFingerprint(input: NocAlertInput): Promise<NocAlert> {
     const existing = this.findBySourceFingerprint(input.source, input.fingerprint);
+    // F6 (fix wave) — the domain fn stays pure; the adapter logs the A6 warning
+    // (resolved ingest with no prior firing) since it already knows the case.
+    if (!existing && input.status === 'resolved') {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[NocAlert] resolved ingest with no prior firing for (${input.source}, ${input.fingerprint}) — ` +
+          'creating a resolved row anyway (startsAt = endsAt). Possible late/out-of-order webhook.',
+      );
+    }
     const next = computeNocAlertIngest(existing, input, new Date().toISOString(), randomUUID);
     this.byId.set(next.id, next);
     return { ...next };
@@ -36,6 +45,12 @@ export class InMemoryNocAlertRepository implements NocAlertRepository {
   async acknowledge(id: string, by: string, at: string, note?: string): Promise<NocAlert | null> {
     const existing = this.byId.get(id);
     if (!existing) return null;
+    // F4 (fix wave) — ACK is idempotent: MTTA = time to the FIRST ack. A second
+    // ack must NOT move ackBy/ackAt/ackNote (that would inflate the reported
+    // MTTA every time someone re-acks) — return the already-acked row as-is.
+    if (existing.acknowledged) {
+      return { ...existing };
+    }
     const updated: NocAlert = {
       ...existing,
       acknowledged: true,

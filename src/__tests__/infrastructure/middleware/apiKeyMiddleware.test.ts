@@ -173,4 +173,60 @@ describe('createApiKeyMiddleware', () => {
       expect(next).not.toHaveBeenCalled();
     });
   });
+
+  // F7 (fix wave, noc-alerts-hub) — comparación constant-time (crypto.timingSafeEqual)
+  // en vez de `!==`. Estos tests son de COMPORTAMIENTO (no de implementación): deben
+  // seguir rechazando/aceptando exactamente igual que antes, timing aparte.
+  describe('constant-time comparison (F7)', () => {
+    const CONFIGURED_KEY = 'test-api-key-abc123';
+
+    beforeEach(() => {
+      mockConfig.externalApi.apiKey = CONFIGURED_KEY;
+    });
+
+    it('rechaza una key del MISMO largo que difiere en un solo carácter', () => {
+      const sameLengthWrongKey = 'test-api-key-abc124'; // difiere en el último char
+      expect(sameLengthWrongKey.length).toBe(CONFIGURED_KEY.length);
+      const mw = createApiKeyMiddleware();
+      const req = makeReq({ 'x-api-key': sameLengthWrongKey });
+      const res = makeRes() as unknown as Response;
+
+      mw(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una key MÁS CORTA que la configurada (no debe tirar por buffers de largo distinto)', () => {
+      const mw = createApiKeyMiddleware();
+      const req = makeReq({ 'x-api-key': 'short' });
+      const res = makeRes() as unknown as Response;
+
+      expect(() => mw(req, res, next)).not.toThrow();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una key MÁS LARGA que la configurada', () => {
+      const mw = createApiKeyMiddleware();
+      const req = makeReq({ 'x-api-key': `${CONFIGURED_KEY}-extra-suffix` });
+      const res = makeRes() as unknown as Response;
+
+      mw(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('sigue aceptando la key exacta', () => {
+      const mw = createApiKeyMiddleware();
+      const req = makeReq({ 'x-api-key': CONFIGURED_KEY });
+      const res = makeRes() as unknown as Response;
+
+      mw(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+  });
 });

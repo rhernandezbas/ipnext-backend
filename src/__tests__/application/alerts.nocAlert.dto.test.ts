@@ -41,6 +41,22 @@ describe('computeMttaSeconds', () => {
   it('calcula ackAt - startsAt en segundos', () => {
     expect(computeMttaSeconds('2026-07-24T10:00:00.000Z', '2026-07-24T10:05:00.000Z')).toBe(300);
   });
+
+  // F6 (fix wave) — clamp a >= 0: si el reloj de la fuente está desincronizado
+  // ackAt puede caer (en ms) antes que startsAt; un MTTA negativo no tiene
+  // sentido de negocio y no debe reportarse como tal.
+  it('clampea a 0 si ackAt es anterior a startsAt (clock skew)', () => {
+    expect(computeMttaSeconds('2026-07-24T10:00:05.000Z', '2026-07-24T10:00:00.000Z')).toBe(0);
+  });
+
+  // F6 (fix wave) — NaN guard: una fecha inválida no debe filtrar NaN al DTO.
+  it('retorna null (no NaN) si startsAt es una fecha inválida', () => {
+    expect(computeMttaSeconds('ayer', '2026-07-24T10:05:00.000Z')).toBeNull();
+  });
+
+  it('retorna null (no NaN) si ackAt es una fecha inválida', () => {
+    expect(computeMttaSeconds('2026-07-24T10:00:00.000Z', 'ayer')).toBeNull();
+  });
 });
 
 describe('toNocAlertDto', () => {

@@ -84,6 +84,16 @@ export class PrismaNocAlertRepository implements NocAlertRepository {
     });
     const existing = existingRow ? toNocAlert(existingRow) : null;
 
+    // F6 (fix wave) — same as InMemoryNocAlertRepository: the domain fn stays
+    // pure, this adapter logs the A6 warning (resolved ingest, no prior firing).
+    if (!existing && input.status === 'resolved') {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[NocAlert] resolved ingest with no prior firing for (${input.source}, ${input.fingerprint}) — ` +
+          'creating a resolved row anyway (startsAt = endsAt). Possible late/out-of-order webhook.',
+      );
+    }
+
     const nowIso = new Date().toISOString();
     const next = computeNocAlertIngest(existing, input, nowIso, () => existing?.id ?? randomUUID());
 
@@ -114,6 +124,12 @@ export class PrismaNocAlertRepository implements NocAlertRepository {
   async acknowledge(id: string, by: string, at: string, note?: string): Promise<NocAlert | null> {
     const existingRow = await (prisma as any).nocAlert.findUnique({ where: { id } });
     if (!existingRow) return null;
+
+    // F4 (fix wave) — ACK is idempotent: MTTA = time to the FIRST ack. Mirrors
+    // InMemoryNocAlertRepository.acknowledge — see that file for the rationale.
+    if (existingRow.acknowledged) {
+      return toNocAlert(existingRow);
+    }
 
     const row = await (prisma as any).nocAlert.update({
       where: { id },

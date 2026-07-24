@@ -103,6 +103,38 @@ describe('IngestAlert', () => {
     expect(publisher.published[0]).toEqual({ type: 'firing', alert });
   });
 
+  // F6 (fix wave) — gap de cobertura señalado por revisión adversarial: la
+  // transición MÁS riesgosa del ciclo de vida (re-fire tras resolved) tenía
+  // código correcto (computeNocAlertIngest, rama `resurrecting`) pero CERO test
+  // explícito ejercitándola end-to-end vía el use-case.
+  it('re-fire tras resolved RESUCITA la fila: firing, startsAt nuevo, endsAt null, ACK reseteado', async () => {
+    const repo = new InMemoryNocAlertRepository();
+    const publisher = new NoOpAlertEventPublisher();
+    const useCase = new IngestAlert(repo, publisher);
+
+    const firing = await useCase.execute(makeInput());
+    const resolved = await useCase.execute(
+      makeInput({ status: 'resolved', endsAt: '2026-07-24T11:00:00.000Z' }),
+    );
+    await repo.acknowledge(resolved.id, 'juan.perez', '2026-07-24T11:05:00.000Z', 'cerrado');
+
+    const resurrected = await useCase.execute(
+      makeInput({ status: 'firing', startsAt: '2026-07-25T09:00:00.000Z' }),
+    );
+
+    expect(resurrected.id).toBe(firing.id);
+    expect(resurrected.status).toBe('firing');
+    expect(resurrected.startsAt).toBe('2026-07-25T09:00:00.000Z');
+    expect(resurrected.endsAt).toBeNull();
+    expect(resurrected.acknowledged).toBe(false);
+    expect(resurrected.ackBy).toBeNull();
+    expect(resurrected.ackAt).toBeNull();
+    expect(resurrected.ackNote).toBeNull();
+
+    const stored = await repo.list({});
+    expect(stored).toHaveLength(1);
+  });
+
   // A9 — dark ingestion (spec.md "Dark ingestion — no outbound side-effects").
   it('dark ingestion: con publisher no-op, ingesta persiste y NO invoca ningún notifier', async () => {
     const repo = new InMemoryNocAlertRepository();

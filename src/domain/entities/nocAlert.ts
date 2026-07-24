@@ -161,11 +161,10 @@ export function computeNocAlertIngest(
     }
 
     // A6 — resolved with no prior firing record: create anyway (do not discard silently).
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[NocAlert] resolved ingest with no prior firing for (${input.source}, ${input.fingerprint}) — ` +
-        'creating a resolved row anyway (startsAt = endsAt). Possible late/out-of-order webhook.',
-    );
+    // F6 (fix wave): this function stays PURE — no console/I-O here. The caller
+    // (adapter: InMemory/PrismaNocAlertRepository) knows `existing === null` and
+    // `input.status === 'resolved'` BEFORE calling this function, so it logs the
+    // warning itself instead of the domain doing side effects.
     const endsAt = input.endsAt ?? now;
     return {
       id: generateId(),

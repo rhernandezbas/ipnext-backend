@@ -41,8 +41,15 @@ export interface NocAlertDto {
  */
 export function computeMttaSeconds(startsAt: string, ackAt: string | null): number | null {
   if (!ackAt) return null;
-  const diffMs = Date.parse(ackAt) - Date.parse(startsAt);
-  return Math.round(diffMs / 1000);
+  const startMs = Date.parse(startsAt);
+  const ackMs = Date.parse(ackAt);
+  // F6 (fix wave) — NaN guard: an invalid date string must not leak a NaN
+  // through the DTO (NaN silently breaks any downstream arithmetic/serialization
+  // consumer). Clamp guard: clock skew between fuentes could make ackAt < startsAt
+  // by a few ms — negative MTTA is nonsensical, clamp to 0 instead of reporting it.
+  if (Number.isNaN(startMs) || Number.isNaN(ackMs)) return null;
+  const diffMs = ackMs - startMs;
+  return Math.max(0, Math.round(diffMs / 1000));
 }
 
 export function toNocAlertDto(alert: NocAlert): NocAlertDto {

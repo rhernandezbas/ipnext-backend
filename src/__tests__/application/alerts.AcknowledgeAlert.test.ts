@@ -71,4 +71,22 @@ describe('AcknowledgeAlert', () => {
 
     expect(result?.ackNote).toBe('en investigación');
   });
+
+  // F4 (fix wave) — MTTA = tiempo al PRIMER ack (decisión de producto/estándar).
+  // Un segundo ACK (otro usuario, u otro momento) NO debe pisar ackBy/ackAt/ackNote
+  // — antes se pisaba incondicionalmente, lo que inflaba el MTTA cada vez que
+  // alguien reconocía de nuevo una alerta ya ackeada.
+  it('ACK es idempotente: un segundo ack NO pisa ackBy/ackAt/ackNote del primero', async () => {
+    const repo = new InMemoryNocAlertRepository();
+    seedAlert(repo);
+    const useCase = new AcknowledgeAlert(repo);
+
+    const first = await useCase.execute('alert-1', 'juan.perez', '2026-07-24T10:15:00.000Z', 'primera nota');
+    const second = await useCase.execute('alert-1', 'maria.gomez', '2026-07-24T12:00:00.000Z', 'segunda nota');
+
+    expect(second?.ackBy).toBe('juan.perez');
+    expect(second?.ackAt).toBe('2026-07-24T10:15:00.000Z');
+    expect(second?.ackNote).toBe('primera nota');
+    expect(second).toEqual(first);
+  });
 });
