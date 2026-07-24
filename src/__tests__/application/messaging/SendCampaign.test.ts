@@ -48,6 +48,7 @@ import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
 import { FakeCampaignInboxProjector } from '../../helpers/FakeCampaignInboxProjector';
 import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+import type { CampaignTaskTransitionPort } from '@domain/ports/CampaignTaskTransitionPort';
 
 /** PRNG determinística (mulberry32) — shuffle reproducible, sin flakiness en CI. */
 function mulberry32(seed: number): () => number {
@@ -271,7 +272,15 @@ async function seedCampaign(
     // (comportamiento actual intacto, sin enganche de labeling).
     chatwootLabel?: string | null;
     variableSpec?: CampaignVariableSpec;
-    recipients: { clientId: string | null; contactName?: string | null; phoneNormalized: string; phoneE164: string }[];
+    recipients: {
+      clientId: string | null;
+      contactName?: string | null;
+      phoneNormalized: string;
+      phoneE164: string;
+      taskId?: string | null;
+      taskFromStageId?: string | null;
+      taskResultingStageId?: string | null;
+    }[];
   },
 ) {
   const campaign = await campaignRepo.create({
@@ -1744,5 +1753,101 @@ describe('SendCampaign', () => {
       expect(result.failedCount).toBe(0);
       expect(chatwootGateway.addConversationLabelsCalls).toHaveLength(1);
     });
+  });
+});
+
+describe('SendCampaign — transición de tarea (bulk-task-stage-transition, TRANS-1/4)', () => {
+  const taskRecipient = { clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001', taskId: 't10', taskFromStageId: 'sA', taskResultingStageId: 'sB' };
+
+  function makeTaskTransition(impl?: () => Promise<'moved' | 'skipped_not_in_origin' | 'skipped_iclass'>) {
+    const calls: { taskId: string; fromStageId: string; toStageId: string }[] = [];
+    const port: CampaignTaskTransitionPort = {
+      transition: jest.fn(async (input) => {
+        calls.push(input);
+        return impl ? impl() : 'moved';
+      }),
+    };
+    return { port, calls };
+  }
+
+  it('TRANS-1: envío OK de un recipient task → transición llamada con {taskId, fromStageId, toStageId}', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+    const { port, calls } = makeTaskTransition();
+    const uc = new SendCampaign(campaignRepo, lookup, new InMemoryTemplateMessagingGateway(), new ImmediateRateLimiter(), undefined, undefined, undefined, undefined, port);
+    const { campaign } = await seedCampaign(campaignRepo, { recipients: [taskRecipient] });
+
+    await uc.execute({ campaignId: campaign.id });
+
+    expect(port.transition).toHaveBeenCalledTimes(1);
+    expect(calls[0]).toEqual({ taskId: 't10', fromStageId: 'sA', toStageId: 'sB' });
+  });
+
+  it('TRANS-1: envío FALLIDO → la tarea NO transiciona', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+    const { port } = makeTaskTransition();
+    const templatePort = new InMemoryTemplateMessagingGateway({ rejectPhone: '+5493364000001' });
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter(), undefined, undefined, undefined, undefined, port);
+    const { campaign } = await seedCampaign(campaignRepo, { recipients: [taskRecipient] });
+
+    const result = await uc.execute({ campaignId: campaign.id });
+
+    expect(result.failedCount).toBe(1);
+    expect(port.transition).not.toHaveBeenCalled();
+  });
+
+  it('TRANS-4: recipient task SIN destino (taskResultingStageId null) → NO transiciona', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+    const { port } = makeTaskTransition();
+    const uc = new SendCampaign(campaignRepo, lookup, new InMemoryTemplateMessagingGateway(), new ImmediateRateLimiter(), undefined, undefined, undefined, undefined, port);
+    const { campaign } = await seedCampaign(campaignRepo, {
+      recipients: [{ ...taskRecipient, taskResultingStageId: null }],
+    });
+
+    await uc.execute({ campaignId: campaign.id });
+
+    expect(port.transition).not.toHaveBeenCalled();
+  });
+
+  it('recipient NO-task (taskId null) → NO transiciona', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+    const { port } = makeTaskTransition();
+    const uc = new SendCampaign(campaignRepo, lookup, new InMemoryTemplateMessagingGateway(), new ImmediateRateLimiter(), undefined, undefined, undefined, undefined, port);
+    const { campaign } = await seedCampaign(campaignRepo, {
+      recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+    });
+
+    await uc.execute({ campaignId: campaign.id });
+
+    expect(port.transition).not.toHaveBeenCalled();
+  });
+
+  it('TRANS-1: la transición TIRA → el recipient queda sent (NO failed), campaña done', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+    const { port } = makeTaskTransition(async () => { throw new Error('boom'); });
+    const uc = new SendCampaign(campaignRepo, lookup, new InMemoryTemplateMessagingGateway(), new ImmediateRateLimiter(), undefined, undefined, undefined, undefined, port);
+    const { campaign } = await seedCampaign(campaignRepo, { recipients: [taskRecipient] });
+
+    const result = await uc.execute({ campaignId: campaign.id });
+
+    expect(result.status).toBe('done');
+    expect(result.sentCount).toBe(1);
+    expect(result.failedCount).toBe(0);
+    const recipients = await campaignRepo.listRecipients(campaign.id);
+    expect(recipients.data[0].status).toBe('sent'); // NUNCA failed
+  });
+
+  it('sin taskTransition inyectado (backcompat) → envío normal, sin efecto', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1' })]);
+    const uc = new SendCampaign(campaignRepo, lookup, new InMemoryTemplateMessagingGateway(), new ImmediateRateLimiter());
+    const { campaign } = await seedCampaign(campaignRepo, { recipients: [taskRecipient] });
+
+    const result = await uc.execute({ campaignId: campaign.id });
+    expect(result.sentCount).toBe(1);
   });
 });

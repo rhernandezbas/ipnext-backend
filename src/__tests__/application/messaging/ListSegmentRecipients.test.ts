@@ -40,6 +40,7 @@ function makeSegmentSource(rows: FakeClientRow[]): CampaignSegmentSource {
 function makeTaskSource(clientIds: string[], noCustomerCount = 0): TaskRecipientSource {
   return {
     listClientIdsByOpenTaskStages: async () => clientIds,
+    listOpenTasksByStages: async () => clientIds.map((c: string, i: number) => ({ taskId: `t-${i}-${c}`, clientId: c, fromStageId: 'stageA' })),
     countOpenTasksWithoutCustomer: async () => noCustomerCount,
   };
 }

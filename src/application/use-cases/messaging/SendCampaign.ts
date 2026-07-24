@@ -7,6 +7,7 @@ import type { SendTemplateResult } from '@domain/ports/TemplateMessagingPort';
 import type { CampaignInboxProjector } from '@domain/ports/CampaignInboxProjector';
 import type { ChatwootGateway } from '@domain/ports/ChatwootGateway';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+import type { CampaignTaskTransitionPort } from '@domain/ports/CampaignTaskTransitionPort';
 import { CampaignNotFoundError, TemplateProviderConfigError } from '@domain/errors/messaging-bulk';
 import { sendWithRetry, CampaignRetryOptions } from './campaignBackoff';
 
@@ -74,6 +75,13 @@ export class SendCampaign {
      */
     private readonly chatwootGateway?: ChatwootGateway,
     private readonly featureFlags?: FeatureFlagRepository,
+    /**
+     * bulk-task-stage-transition (D4, TRANS-1) — OPCIONAL (backcompat, mismo molde que
+     * `inboxProjector`): AUSENTE → SendCampaign se comporta EXACTO como antes (ninguna
+     * tarea transiciona). Presente → tras persistir `sent`, transiciona la tarea del
+     * recipient `source:'task'` (best-effort, aislado — un fallo NUNCA re-marca `failed`).
+     */
+    private readonly taskTransition?: CampaignTaskTransitionPort,
   ) {}
 
   async execute(input: SendCampaignInput): Promise<Campaign> {
@@ -289,6 +297,37 @@ export class SendCampaign {
     // todo lo anterior, MISMO contrato aislado que `projectToInbox`: nunca re-marca
     // `failed`, nunca toca `sentCount` (el envío ya está `sent`).
     await this.applyChatwootLabel(campaign, recipient, chatwootIds);
+
+    // bulk-task-stage-transition (TRANS-1) — transición de la tarea DESPUÉS de todo,
+    // MISMO contrato aislado/best-effort: solo filas source:'task' con destino B; un fallo
+    // se loguea y se traga (JAMÁS re-marca `failed` → el envío ya está `sent`).
+    await this.transitionTaskIfNeeded(recipient);
+  }
+
+  /**
+   * bulk-task-stage-transition (TRANS-1..3) — transiciona la tarea del recipient al
+   * estado resultante snapshoteado. No-op si: no hay port inyectado (backcompat), el
+   * recipient no es de tarea (`taskId` null), o no había destino (`taskResultingStageId`
+   * null). El guard still-in-A y el guard anti-send_to_iclass viven en el port. AISLADA:
+   * cualquier error se loguea y se traga (el envío ya está `sent`; re-marcarlo `failed`
+   * lo volvería re-enviable).
+   */
+  private async transitionTaskIfNeeded(recipient: CampaignRecipient): Promise<void> {
+    if (!this.taskTransition || recipient.taskId == null || recipient.taskResultingStageId == null) return;
+    if (recipient.taskFromStageId == null) return; // defensivo — un recipient task siempre lo tiene
+    try {
+      await this.taskTransition.transition({
+        taskId: recipient.taskId,
+        fromStageId: recipient.taskFromStageId,
+        toStageId: recipient.taskResultingStageId,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[SendCampaign] transición de tarea falló para recipient ${recipient.id} (taskId=${recipient.taskId}, best-effort/aislada, el envío ya está 'sent'):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   /**

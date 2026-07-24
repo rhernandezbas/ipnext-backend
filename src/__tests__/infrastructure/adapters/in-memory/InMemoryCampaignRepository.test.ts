@@ -200,3 +200,32 @@ describe('InMemoryCampaignRepository', () => {
     expect(sentOrFailed.data.map((r) => r.clientId).sort()).toEqual(['c1', 'c2']);
   });
 });
+
+describe('InMemoryCampaignRepository — recipients per-tarea (bulk-task-stage-transition)', () => {
+  it('2 tareas del mismo cliente/teléfono → 2 recipients (NO colapsan por phone), con snapshots task', async () => {
+    const repo = new InMemoryCampaignRepository();
+    const campaign = await repo.create(makeCreateData());
+
+    const created = await repo.bulkCreateRecipients(campaign.id, [
+      { clientId: 'c1', phoneNormalized: '3364111111', phoneE164: '+5493364111111', taskId: 't10', taskFromStageId: 'sA', taskResultingStageId: 'sB' },
+      { clientId: 'c1', phoneNormalized: '3364111111', phoneE164: '+5493364111111', taskId: 't11', taskFromStageId: 'sA', taskResultingStageId: 'sB' },
+    ]);
+
+    expect(created).toHaveLength(2);
+    expect(created.map((r) => r.taskId).sort()).toEqual(['t10', 't11']);
+    expect(created.every((r) => r.taskFromStageId === 'sA' && r.taskResultingStageId === 'sB')).toBe(true);
+  });
+
+  it('retry idempotente por taskId (re-crear el mismo lote task no duplica)', async () => {
+    const repo = new InMemoryCampaignRepository();
+    const campaign = await repo.create(makeCreateData());
+    const row = { clientId: 'c1', phoneNormalized: '3364111111', phoneE164: '+5493364111111', taskId: 't10', taskFromStageId: 'sA', taskResultingStageId: 'sB' };
+
+    await repo.bulkCreateRecipients(campaign.id, [row]);
+    const second = await repo.bulkCreateRecipients(campaign.id, [row]);
+
+    expect(second).toHaveLength(1);
+    const all = await repo.listRecipients(campaign.id, { limit: 100 });
+    expect(all.data.filter((r) => r.taskId === 't10')).toHaveLength(1);
+  });
+});

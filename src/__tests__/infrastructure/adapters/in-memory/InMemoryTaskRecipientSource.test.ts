@@ -85,3 +85,28 @@ describe('InMemoryTaskRecipientSource', () => {
     expect(noCustomerCount).toBe(1);
   });
 });
+
+describe('InMemoryTaskRecipientSource.listOpenTasksByStages (bulk-task-stage-transition, per-tarea)', () => {
+  it('2 tareas del mismo cliente en un stage elegido → 2 filas (NO distinct)', async () => {
+    const source = new InMemoryTaskRecipientSource([
+      { taskId: 't10', clientId: 'c1', stageId: 'stageA', isClosed: false, generalStatus: 'open' },
+      { taskId: 't11', clientId: 'c1', stageId: 'stageA', isClosed: false, generalStatus: 'open' },
+    ]);
+    const rows = await source.listOpenTasksByStages(['stageA']);
+    expect(rows).toEqual([
+      { taskId: 't10', clientId: 'c1', fromStageId: 'stageA' },
+      { taskId: 't11', clientId: 'c1', fromStageId: 'stageA' },
+    ]);
+  });
+
+  it('excluye tareas de red (customerId null), cerradas y descartadas', async () => {
+    const source = new InMemoryTaskRecipientSource([
+      { taskId: 't1', clientId: null, stageId: 'stageA', isClosed: false, generalStatus: 'open' },
+      { taskId: 't2', clientId: 'c1', stageId: 'stageA', isClosed: true, generalStatus: 'closed' },
+      { taskId: 't3', clientId: 'c2', stageId: 'stageA', isClosed: false, generalStatus: 'dismissed' },
+      { taskId: 't4', clientId: 'c3', stageId: 'stageA', isClosed: false, generalStatus: 'open' },
+    ]);
+    const rows = await source.listOpenTasksByStages(['stageA']);
+    expect(rows).toEqual([{ taskId: 't4', clientId: 'c3', fromStageId: 'stageA' }]);
+  });
+});

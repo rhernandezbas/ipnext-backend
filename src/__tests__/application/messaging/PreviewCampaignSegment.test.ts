@@ -53,6 +53,7 @@ function makeSegmentSource(rows: FakeClientRow[]): CampaignSegmentSource {
 function makeTaskSource(clientIds: string[], noCustomerCount = 0): TaskRecipientSource {
   return {
     listClientIdsByOpenTaskStages: async () => clientIds,
+    listOpenTasksByStages: async () => clientIds.map((c: string, i: number) => ({ taskId: `t-${i}-${c}`, clientId: c, fromStageId: 'stageA' })),
     countOpenTasksWithoutCustomer: async () => noCustomerCount,
   };
 }
@@ -550,5 +551,46 @@ describe('PreviewCampaignSegment', () => {
       expect(result.skipped).toEqual({ optedOut: 1, duplicatePhone: 0, invalidPhone: 0 });
       expect(result.noCustomerCount).toBe(0);
     });
+  });
+});
+
+describe('PreviewCampaignSegment — taskWillTransitionCount (bulk-task-stage-transition, TRANS-6)', () => {
+  it('2 tareas de un cliente + destino configurado → count 2 y taskWillTransitionCount 2', async () => {
+    const segmentSource = { listSegmentRecipients: async () => [] };
+    const manualSource = { findRecipientCandidatesByIds: async (ids: string[]) => ids.map((clientId) => ({ clientId, name: 'C', phone: '3364111111', balanceDue: 0, whatsappOptOutAt: null, status: 'active' })) };
+    const taskSource = {
+      listClientIdsByOpenTaskStages: async () => ['c1'],
+      listOpenTasksByStages: async () => [
+        { taskId: 't10', clientId: 'c1', fromStageId: 'sA' },
+        { taskId: 't11', clientId: 'c1', fromStageId: 'sA' },
+      ],
+      countOpenTasksWithoutCustomer: async () => 0,
+    };
+    const transitionConfig = { getResultingStageId: async () => 'sB', getResultingStage: async () => null, setResultingStageId: async () => {} };
+    const stageConfig = { listMappedStageIds: async () => ['sA'], getMappedStages: async () => [], replaceMappedStages: async () => {} };
+
+    const uc = new PreviewCampaignSegment(segmentSource as any, manualSource as any, taskSource as any, stageConfig as any, transitionConfig as any);
+    const out = await uc.execute({ statuses: [], taskStageIds: ['sA'] } as any);
+
+    expect(out.count).toBe(2);
+    expect(out.taskWillTransitionCount).toBe(2);
+  });
+
+  it('sin destino configurado → taskWillTransitionCount 0 (solo se envía)', async () => {
+    const segmentSource = { listSegmentRecipients: async () => [] };
+    const manualSource = { findRecipientCandidatesByIds: async (ids: string[]) => ids.map((clientId) => ({ clientId, name: 'C', phone: '3364111111', balanceDue: 0, whatsappOptOutAt: null, status: 'active' })) };
+    const taskSource = {
+      listClientIdsByOpenTaskStages: async () => ['c1'],
+      listOpenTasksByStages: async () => [{ taskId: 't10', clientId: 'c1', fromStageId: 'sA' }],
+      countOpenTasksWithoutCustomer: async () => 0,
+    };
+    const transitionConfig = { getResultingStageId: async () => null, getResultingStage: async () => null, setResultingStageId: async () => {} };
+    const stageConfig = { listMappedStageIds: async () => ['sA'], getMappedStages: async () => [], replaceMappedStages: async () => {} };
+
+    const uc = new PreviewCampaignSegment(segmentSource as any, manualSource as any, taskSource as any, stageConfig as any, transitionConfig as any);
+    const out = await uc.execute({ statuses: [], taskStageIds: ['sA'] } as any);
+
+    expect(out.count).toBe(1);
+    expect(out.taskWillTransitionCount).toBe(0);
   });
 });

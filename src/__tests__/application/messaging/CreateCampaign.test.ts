@@ -70,6 +70,7 @@ function makeCandidate(overrides: Partial<CampaignRecipientCandidate> = {}): Cam
 function makeTaskSource(clientIds: string[], noCustomerCount = 0): TaskRecipientSource {
   return {
     listClientIdsByOpenTaskStages: jest.fn(async () => clientIds),
+    listOpenTasksByStages: jest.fn(async () => clientIds.map((c: string, i: number) => ({ taskId: `t-${i}-${c}`, clientId: c, fromStageId: 'stageA' }))),
     countOpenTasksWithoutCustomer: jest.fn(async () => noCustomerCount),
   };
 }
@@ -682,6 +683,7 @@ describe('CreateCampaign', () => {
       let openClientIds = ['c1'];
       const taskSource: TaskRecipientSource = {
         listClientIdsByOpenTaskStages: jest.fn(async () => openClientIds),
+        listOpenTasksByStages: jest.fn(async () => openClientIds.map((c: string, i: number) => ({ taskId: `t-${i}-${c}`, clientId: c, fromStageId: 'stageA' }))),
         countOpenTasksWithoutCustomer: jest.fn(async () => 0),
       };
       const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort, manualSource, taskSource, taskConfigRepo);

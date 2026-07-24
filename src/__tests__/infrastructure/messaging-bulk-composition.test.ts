@@ -65,10 +65,23 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     // undefined como 6º) — pineado en detalle por
     // `messaging-composition.test.ts` (describe dedicado B6), acá sólo se
     // actualiza el regex para no quedar roto/desactualizado.
+    // bulk-task-stage-transition (TRANS-1, lección W6) — SendCampaign gana el 9º arg
+    // `taskTransition`: sin esto la transición de tarea queda MUERTA en prod (param opcional).
     expect(window).toMatch(
-      /new SendCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*rateLimiter,\s*campaignInboxProjector,\s*undefined,\s*chatwootGatewayForBulk,\s*featureFlagRepoForBulk\)/,
+      /new SendCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*rateLimiter,\s*campaignInboxProjector,\s*undefined,\s*chatwootGatewayForBulk,\s*featureFlagRepoForBulk,\s*taskTransition\)/,
     );
     expect(window).toMatch(/new CampaignRunner\(sendCampaign,\s*campaignRepo,\s*new PgAdvisoryLock\(\)\)/);
+  });
+
+  it('(e3) bulk-task-stage-transition: TransitionTaskAfterSend importado e instanciado con schedulingRepo/stageRepo/moveTaskToStage (anti-W6, transición VIVA)', () => {
+    expect(appSrc).toMatch(
+      /import\s*\{\s*TransitionTaskAfterSend\s*\}\s*from\s*['"]@application\/use-cases\/messaging\/TransitionTaskAfterSend['"]/,
+    );
+    const idx = appSrc.indexOf('// ─── messaging-bulk (F2)');
+    const end = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(", idx);
+    const window = appSrc.slice(idx, end);
+    expect(window).toMatch(/const taskTransition = new TransitionTaskAfterSend\(schedulingRepo,\s*stageRepo,\s*moveTaskToStage\)/);
+    expect(window).toMatch(/const taskStageTransitionConfigRepoForBulk = new PrismaTaskStageTransitionConfigRepository\(\)/);
   });
 
   it('(e2) PrismaCampaignInboxProjector importado e instanciado con los repos F1 + campaignRepo (anti-W6, proyección VIVA en prod)', () => {
@@ -97,8 +110,10 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     // OPCIONALES más AL FINAL (taskRecipientSource/taskStageConfigRepo, 5to
     // dominio) — anti-W6, sin esto el dominio "Tarea" queda cableado a la nada
     // en prod (lección ya citada en el propio design).
-    expect(window).toMatch(/new PreviewCampaignSegment\(customerAdapter,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo\)/);
-    expect(window).toMatch(/new CreateCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo\)/);
+    expect(window).toMatch(/new PreviewCampaignSegment\(customerAdapter,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo,\s*taskStageTransitionConfigRepoForBulk\)/);
+    // bulk-task-stage-transition — CreateCampaign gana el 7º arg (taskStageTransitionConfigRepoForBulk):
+    // sin esto el estado resultante NO se snapshotea al create → la transición nunca dispara.
+    expect(window).toMatch(/new CreateCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo,\s*taskStageTransitionConfigRepoForBulk\)/);
     expect(window).toMatch(/^\s*campaignRunner,\s*$/m);
     expect(window).toMatch(/new GetCampaign\(campaignRepo\)/);
     expect(window).toMatch(/new ListCampaigns\(campaignRepo\)/);

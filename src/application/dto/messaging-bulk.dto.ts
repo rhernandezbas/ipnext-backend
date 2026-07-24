@@ -135,6 +135,13 @@ export interface PreviewSegmentOutput {
    * calcula se wirea en B5 — todo caller real siempre lo expone.
    */
   noCustomerCount?: number;
+  /**
+   * bulk-task-stage-transition (TRANS-6) — cuántas TAREAS transicionarán de estado
+   * al enviar (recipients `source:'task'` con un estado resultante configurado). `0`
+   * si no hay destino global configurado o no hay dominio tarea. El FE lo usa para el
+   * hint "N tareas pasarán a <estado>".
+   */
+  taskWillTransitionCount?: number;
 }
 
 // ─── Paginado de destinatarios resueltos (messaging-bulk v1.1, ListSegmentRecipients) ──

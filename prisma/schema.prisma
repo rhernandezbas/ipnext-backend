@@ -541,6 +541,11 @@ model Stage {
   // mapeo solo, sin job de limpieza.
   whatsappTaskStageRecipientConfig WhatsappTaskStageRecipientConfig?
 
+  // bulk-task-stage-transition (D1) — back-relation del singleton de transición cuando
+  // este Stage es el estado resultante global. Lista por el modelo relacional de Prisma
+  // (la unicidad del singleton la garantiza el id fijo, no la FK).
+  taskTransitionConfigs WhatsappTaskStageTransitionConfig[] @relation("TaskTransitionResultingStage")
+
   @@unique([workflowId, code])
   @@index([workflowId, order])
 }
@@ -555,6 +560,18 @@ model WhatsappTaskStageRecipientConfig {
   stageId   String   @unique
   stage     Stage    @relation(fields: [stageId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
+}
+
+// bulk-task-stage-transition (D1, TTC-1) — SINGLETON: el ÚNICO estado resultante global
+// al que transicionan las tareas cuando el bulk WhatsApp las envía. Molde NocBroadcastConfig
+// (id fijo "singleton", una sola fila). `resultingStageId` null = sin transición (el dominio
+// task sigue siendo solo filtro). onDelete SetNull: si se borra el Stage destino, la config
+// sobrevive sin destino (no cae la campaña).
+model WhatsappTaskStageTransitionConfig {
+  id               String   @id @default("singleton")
+  resultingStageId String?
+  resultingStage   Stage?   @relation("TaskTransitionResultingStage", fields: [resultingStageId], references: [id], onDelete: SetNull)
+  updatedAt        DateTime @updatedAt
 }
 
 model ProjectCategory {
@@ -1419,6 +1436,9 @@ model ScheduledTask {
   returnSuggestions ReturnSuggestion[]
   // EPIC #38 W6 — material deduction suggestions staged for this task
   materialDeductionSuggestions MaterialDeductionSuggestion[]
+
+  // bulk-task-stage-transition — recipients del bulk WhatsApp cuya emisión salió por ESTA tarea.
+  taskCampaignRecipients CampaignRecipient[] @relation("TaskCampaignRecipients")
 
   @@index([stageId])
   @@index([projectId])
@@ -3418,12 +3438,25 @@ model CampaignRecipient {
   // messaging-bulk-inbox (F1) — back-relation 1:1 del mensaje bulk proyectado (idempotencia).
   bulkMessage            ChatMessage?
   error                  String?                  // motivo del fallo por-fila (best-effort, no aborta el lote)
+  // bulk-task-stage-transition — SOLO en filas source:'task' (per-tarea). taskId = la tarea
+  // por la que sale el mensaje; taskFromStageId = origen A (guard still-in-A al enviar);
+  // taskResultingStageId = destino B global snapshoteado (null = sin transición). onDelete
+  // SetNull: si la tarea se borra, el recipient sobrevive (auditoría de lo enviado).
+  taskId                 String?
+  task                   ScheduledTask?           @relation("TaskCampaignRecipients", fields: [taskId], references: [id], onDelete: SetNull)
+  taskFromStageId        String?
+  taskResultingStageId   String?
   sentAt                 DateTime?
   deliveredAt            DateTime?                // recién se llena en F3 (status callback Twilio)
   createdAt              DateTime                 @default(now())
   updatedAt              DateTime                 @updatedAt
 
-  @@unique([campaignId, clientId])   // idempotencia de creación de recipients + resumible
+  // bulk-task-stage-transition — idempotencia PER-TAREA. Reemplaza @@unique([campaignId, clientId]):
+  // un cliente puede aparecer N veces (una por tarea). Postgres trata cada NULL como distinto en un
+  // unique index → las filas no-task (taskId NULL) conviven sin restricción (equivale a un unique
+  // PARCIAL WHERE taskId IS NOT NULL, sin SQL a mano). El dedup por cliente de los otros dominios
+  // lo garantiza resolveCombinedRecipients (byClientId), ya no la constraint.
+  @@unique([campaignId, taskId])
   @@index([campaignId, status])       // progreso poleable + resume (WHERE status IN queued/failed)
   @@index([conversationId])           // etiqueta #1 — JOIN Conversation×CampaignRecipient
 }

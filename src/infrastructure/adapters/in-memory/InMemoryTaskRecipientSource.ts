@@ -1,4 +1,4 @@
-import { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import { OpenTaskRow, TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
 
 /**
  * Fixture shape for a `ScheduledTask` row (test-only, mirrors `stageId`/`isClosed`/
@@ -16,6 +16,13 @@ export interface TaskFixture {
   stageId: string;
   isClosed: boolean;
   generalStatus: 'open' | 'closed' | 'dismissed';
+  /**
+   * bulk-task-stage-transition — id de la tarea (para `listOpenTasksByStages`
+   * per-tarea). OPCIONAL: los fixtures viejos que solo ejercen
+   * `listClientIdsByOpenTaskStages`/`countOpenTasksWithoutCustomer` no lo necesitan;
+   * cuando falta, se sintetiza uno estable por índice.
+   */
+  taskId?: string;
 }
 
 /**
@@ -38,6 +45,21 @@ export class InMemoryTaskRecipientSource implements TaskRecipientSource {
       distinct.add(task.clientId);
     }
     return Array.from(distinct);
+  }
+
+  async listOpenTasksByStages(stageIds: string[]): Promise<OpenTaskRow[]> {
+    const rows: OpenTaskRow[] = [];
+    this.tasks.forEach((task, index) => {
+      if (!stageIds.includes(task.stageId)) return;
+      if (task.generalStatus !== 'open') return;
+      if (task.clientId === null) return;
+      rows.push({
+        taskId: task.taskId ?? `task-${index}`,
+        clientId: task.clientId,
+        fromStageId: task.stageId,
+      });
+    });
+    return rows;
   }
 
   async countOpenTasksWithoutCustomer(stageIds: string[]): Promise<number> {

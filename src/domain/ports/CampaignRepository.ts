@@ -58,6 +58,10 @@ export interface CampaignRecipientCreateRow {
   contactName?: string | null;
   phoneNormalized: string;
   phoneE164: string;
+  /** bulk-task-stage-transition — snapshots per-tarea (solo filas source:'task'). */
+  taskId?: string | null;
+  taskFromStageId?: string | null;
+  taskResultingStageId?: string | null;
 }
 
 export interface CampaignRecipientPatch {

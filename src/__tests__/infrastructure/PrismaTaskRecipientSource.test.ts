@@ -61,6 +61,28 @@ describe('PrismaTaskRecipientSource (B2.6)', () => {
     expect(result).toBe(3);
   });
 
+  it('bulk-task-stage-transition — listOpenTasksByStages: findMany SIN distinct (per-tarea), select id+customerId+stageId', async () => {
+    mockPrisma.scheduledTask.findMany.mockResolvedValue([
+      { id: 't10', customerId: 'c1', stageId: 'stageA' },
+      { id: 't11', customerId: 'c1', stageId: 'stageA' },
+    ]);
+
+    const source = new PrismaTaskRecipientSource();
+    const result = await source.listOpenTasksByStages(['stageA']);
+
+    expect(mockPrisma.scheduledTask.findMany).toHaveBeenCalledWith({
+      where: { stageId: { in: ['stageA'] }, customerId: { not: null }, generalStatus: 'open' },
+      select: { id: true, customerId: true, stageId: true },
+    });
+    // per-tarea: 2 filas del mismo cliente, NO colapsadas
+    expect(result).toEqual([
+      { taskId: 't10', clientId: 'c1', fromStageId: 'stageA' },
+      { taskId: 't11', clientId: 'c1', fromStageId: 'stageA' },
+    ]);
+    // el where NO lleva distinct
+    expect(mockPrisma.scheduledTask.findMany.mock.calls[0]![0]).not.toHaveProperty('distinct');
+  });
+
   it('fix wave (F1, HIGH) — NUNCA envía isClosed en el where (el flag legacy es engañoso: dismissed tiene isClosed:false)', async () => {
     mockPrisma.scheduledTask.findMany.mockResolvedValue([]);
     mockPrisma.scheduledTask.count.mockResolvedValue(0);

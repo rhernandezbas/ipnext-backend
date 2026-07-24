@@ -13,6 +13,7 @@ import {
 import { TooManyManualContactsError, TooManyTaskStateRecipientsError } from '@domain/errors/messaging-bulk';
 import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter, ManualRecipientSource } from '@domain/ports/CustomerRepository';
 import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import type { TaskStageTransitionConfigRepository } from '@domain/ports/TaskStageTransitionConfigRepository';
 
 function makeCandidate(overrides: Partial<CampaignRecipientCandidate> = {}): CampaignRecipientCandidate {
   return {
@@ -48,8 +49,25 @@ function makeManualSource(candidates: CampaignRecipientCandidate[]): ManualRecip
  * directamente el resultado YA distinct que el port prometería.
  */
 function makeTaskSource(clientIds: string[], noCustomerCount = 0): TaskRecipientSource {
+  // bulk-task-stage-transition — per-tarea: una tarea POR clientId (compat con los
+  // tests que pasaban clientIds distinct). `listClientIdsByOpenTaskStages` se conserva.
   return {
-    listClientIdsByOpenTaskStages: jest.fn(async () => clientIds),
+    listClientIdsByOpenTaskStages: jest.fn(async () => [...new Set(clientIds)]),
+    listOpenTasksByStages: jest.fn(async () =>
+      clientIds.map((clientId, i) => ({ taskId: `t-${i}-${clientId}`, clientId, fromStageId: 'stageA' })),
+    ),
+    countOpenTasksWithoutCustomer: jest.fn(async () => noCustomerCount),
+  };
+}
+
+/** bulk-task-stage-transition — fake per-tarea EXPLÍCITO (para multi-tarea del mismo cliente). */
+function makeTaskSourceFromRows(
+  rows: { taskId: string; clientId: string; fromStageId: string }[],
+  noCustomerCount = 0,
+): TaskRecipientSource {
+  return {
+    listClientIdsByOpenTaskStages: jest.fn(async () => [...new Set(rows.map((r) => r.clientId))]),
+    listOpenTasksByStages: jest.fn(async () => rows),
     countOpenTasksWithoutCustomer: jest.fn(async () => noCustomerCount),
   };
 }
@@ -395,7 +413,7 @@ describe('resolveCombinedRecipients — 5to dominio (taskStageIds, TASK-1..TASK-
 
     expect(result.resolved).toHaveLength(1);
     expect(result.resolved[0]).toMatchObject({ clientId: 'c1', source: 'task' });
-    expect(taskSource.listClientIdsByOpenTaskStages).toHaveBeenCalledWith(['stageA', 'stageB']);
+    expect(taskSource.listOpenTasksByStages).toHaveBeenCalledWith(['stageA', 'stageB']);
   });
 
   it('TASK-3 escenario 2: stage mapeado sin tareas abiertas (port devuelve []) → 0 por ese origen, sin error', async () => {
@@ -630,5 +648,104 @@ describe('resolveCombinedRecipients — 5to dominio (taskStageIds, TASK-1..TASK-
     expect(result.resolved.every((r) => r.source === 'task')).toBe(true);
     expect(result.taskSkipped.optedOut).toBe(1);
     expect(result.noCustomerCount).toBe(3);
+  });
+});
+
+describe('resolveCombinedRecipients — reforma per-tarea (bulk-task-stage-transition)', () => {
+  function makeTransitionConfig(resultingStageId: string | null): TaskStageTransitionConfigRepository {
+    return {
+      getResultingStageId: jest.fn(async () => resultingStageId),
+      getResultingStage: jest.fn(async () => null),
+      setResultingStageId: jest.fn(async () => {}),
+    };
+  }
+
+  it('TASK-3 MODIFIED: cliente con 2 tareas en un stage elegido → 2 recipients source:task (NO 1)', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'active' })]);
+    const taskSource = makeTaskSourceFromRows([
+      { taskId: 't10', clientId: 'c1', fromStageId: 'stageA' },
+      { taskId: 't11', clientId: 'c1', fromStageId: 'stageA' },
+    ]);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    const taskRecipients = result.resolved.filter((r) => r.source === 'task');
+    expect(taskRecipients).toHaveLength(2);
+    expect(taskRecipients.map((r) => r.taskId).sort()).toEqual(['t10', 't11']);
+    expect(taskRecipients.every((r) => r.clientId === 'c1' && r.phoneE164 === '+5493364111111')).toBe(true);
+  });
+
+  it('TASK-8 MODIFIED: cada recipient task snapshotea el destino B global + su origen A', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'active' })]);
+    const taskSource = makeTaskSourceFromRows([{ taskId: 't10', clientId: 'c1', fromStageId: 'stageA' }]);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+      taskTransitionConfig: makeTransitionConfig('sB'),
+    });
+
+    expect(result.resolved[0]).toMatchObject({
+      source: 'task',
+      taskId: 't10',
+      taskFromStageId: 'stageA',
+      taskResultingStageId: 'sB',
+    });
+  });
+
+  it('sin taskTransitionConfig → taskResultingStageId null (sin transición)', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: '3364111111', status: 'active' })]);
+    const taskSource = makeTaskSourceFromRows([{ taskId: 't10', clientId: 'c1', fromStageId: 'stageA' }]);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+    });
+
+    expect(result.resolved[0].taskResultingStageId ?? null).toBeNull();
+  });
+
+  it('config con B pero cliente opted-out → NINGÚN recipient, contado por tarea', async () => {
+    const segmentSource = makeSegmentSource([]);
+    const manualSource = makeManualSource([makeCandidate({ clientId: 'c1', phone: '3364111111', whatsappOptOutAt: new Date().toISOString() })]);
+    const taskSource = makeTaskSourceFromRows([
+      { taskId: 't10', clientId: 'c1', fromStageId: 'stageA' },
+      { taskId: 't11', clientId: 'c1', fromStageId: 'stageA' },
+    ]);
+
+    const result = await resolveCombinedRecipients({
+      segment: { statuses: [] },
+      manualClientIds: [],
+      manualContacts: [],
+      taskStageIds: ['stageA'],
+      segmentSource,
+      manualRecipientSource: manualSource,
+      taskRecipientSource: taskSource,
+      taskTransitionConfig: makeTransitionConfig('sB'),
+    });
+
+    expect(result.resolved.filter((r) => r.source === 'task')).toHaveLength(0);
+    expect(result.taskSkipped.optedOut).toBe(2); // 2 tareas contadas
   });
 });

@@ -141,6 +141,15 @@ export interface CampaignRecipient {
   conversationId: string | null;
   /** Motivo del fallo por-fila, SANEADO (HIST-3 — nunca el payload crudo del proveedor). */
   error: string | null;
+  /**
+   * bulk-task-stage-transition — SOLO en filas `source:'task'` (per-tarea). `taskId`
+   * = la tarea por la que salió el mensaje; `taskFromStageId` = origen A (guard
+   * still-in-A al enviar); `taskResultingStageId` = destino B global snapshoteado
+   * (`null` = sin transición). `null` en todos los otros dominios.
+   */
+  taskId: string | null;
+  taskFromStageId: string | null;
+  taskResultingStageId: string | null;
   sentAt: string | null;
   /** Recién se llena en F3 (status callback Twilio). */
   deliveredAt: string | null;

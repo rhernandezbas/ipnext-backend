@@ -232,9 +232,9 @@ describe('Messaging composition root (chatwoot-hub-sendpath, B6) — flag + chat
     );
   });
 
-  it('(b) SendCampaign recibe chatwootGatewayForBulk + featureFlagRepoForBulk (7º/8º arg, backoffOpts explícito undefined)', () => {
+  it('(b) SendCampaign recibe chatwootGatewayForBulk + featureFlagRepoForBulk (7º/8º arg) + taskTransition (9º, bulk-task-stage-transition)', () => {
     expect(bulkBlockWindow).toMatch(
-      /new SendCampaign\(\s*campaignRepo,\s*customerAdapter,\s*templatePort,\s*rateLimiter,\s*campaignInboxProjector,\s*undefined,\s*chatwootGatewayForBulk,\s*featureFlagRepoForBulk\s*\)/,
+      /new SendCampaign\(\s*campaignRepo,\s*customerAdapter,\s*templatePort,\s*rateLimiter,\s*campaignInboxProjector,\s*undefined,\s*chatwootGatewayForBulk,\s*featureFlagRepoForBulk,\s*taskTransition\s*\)/,
     );
   });
 

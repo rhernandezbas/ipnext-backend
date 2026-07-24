@@ -71,6 +71,7 @@ function makeManualSource(candidates: CampaignRecipientCandidate[]): ManualRecip
 function makeTaskSource(clientIds: string[] = []): TaskRecipientSource {
   return {
     listClientIdsByOpenTaskStages: jest.fn(async () => clientIds),
+    listOpenTasksByStages: jest.fn(async () => clientIds.map((c: string, i: number) => ({ taskId: `t-${i}-${c}`, clientId: c, fromStageId: 'stageA' }))),
     countOpenTasksWithoutCustomer: jest.fn(async () => 0),
   };
 }

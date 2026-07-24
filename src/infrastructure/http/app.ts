@@ -847,6 +847,7 @@ import { PreviewCampaignSegment } from '@application/use-cases/messaging/Preview
 import { ListSegmentRecipients } from '@application/use-cases/messaging/ListSegmentRecipients';
 import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign';
 import { SendCampaign } from '@application/use-cases/messaging/SendCampaign';
+import { TransitionTaskAfterSend } from '@application/use-cases/messaging/TransitionTaskAfterSend';
 import { GetCampaign } from '@application/use-cases/messaging/GetCampaign';
 import { ListCampaigns } from '@application/use-cases/messaging/ListCampaigns';
 import { AuthorizeCampaignSend } from '@application/use-cases/messaging/AuthorizeCampaignSend';
@@ -886,6 +887,10 @@ import { PrismaTaskStageRecipientConfigRepository } from '../adapters/prisma/Pri
 import { GetTaskStageRecipientConfig } from '@application/use-cases/GetTaskStageRecipientConfig';
 import { UpdateTaskStageRecipientConfig } from '@application/use-cases/UpdateTaskStageRecipientConfig';
 import { createTaskStageConfigRouter } from './routes/taskStageConfig.routes';
+// bulk-task-stage-transition (B1.8) — config singleton del estado resultante global.
+import { PrismaTaskStageTransitionConfigRepository } from '../adapters/prisma/PrismaTaskStageTransitionConfigRepository';
+import { GetTaskStageTransitionConfig } from '@application/use-cases/GetTaskStageTransitionConfig';
+import { SetTaskStageTransitionConfig } from '@application/use-cases/SetTaskStageTransitionConfig';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -3055,11 +3060,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // instancias es funcionalmente equivalente.
     const taskRecipientSource = new PrismaTaskRecipientSource();
     const taskStageConfigRepo = new PrismaTaskStageRecipientConfigRepository();
+    // bulk-task-stage-transition — config del estado resultante global (snapshot al create)
+    // + el port de transición que reusa el `moveTaskToStage` (línea ~1963) ya wireado con
+    // recorder (rastro `stage_changed` en el feed) y el sendTaskToIClass (aunque el guard
+    // anti-send_to_iclass del port lo bloquea como destino).
+    const taskStageTransitionConfigRepoForBulk = new PrismaTaskStageTransitionConfigRepository();
+    const taskTransition = new TransitionTaskAfterSend(schedulingRepo, stageRepo, moveTaskToStage);
     // customerAdapter (línea ~872) YA implementa CampaignSegmentSource +
     // CampaignRecipientLookup (Batch 6) — misma instancia, sin duplicar wiring.
-    // `backoffOpts` (6º arg) explícito `undefined` para no correr los 2 args
-    // opcionales nuevos (D1) — el gateway/flag van al FINAL de la firma.
-    const sendCampaign = new SendCampaign(campaignRepo, customerAdapter, templatePort, rateLimiter, campaignInboxProjector, undefined, chatwootGatewayForBulk, featureFlagRepoForBulk);
+    // `backoffOpts` (6º arg) explícito `undefined`; `taskTransition` es el 9º arg (TRANS-1).
+    const sendCampaign = new SendCampaign(campaignRepo, customerAdapter, templatePort, rateLimiter, campaignInboxProjector, undefined, chatwootGatewayForBulk, featureFlagRepoForBulk, taskTransition);
     const campaignRunner = new CampaignRunner(sendCampaign, campaignRepo, new PgAdvisoryLock());
 
     // bulk-granular-perms — resuelve las acciones `messaging` del usuario (o
@@ -3088,7 +3098,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // segmento ∪ lista manual cuando el composer la pasa.
       // bulk-task-recipients (D3/D5, B6) — 2 args OPCIONALES más AL FINAL
       // (taskRecipientSource/taskStageConfigRepo, 5to dominio "Tarea").
-      new PreviewCampaignSegment(customerAdapter, customerAdapter, taskRecipientSource, taskStageConfigRepo),
+      new PreviewCampaignSegment(customerAdapter, customerAdapter, taskRecipientSource, taskStageConfigRepo, taskStageTransitionConfigRepoForBulk),
       // v1.1 (preview modal paginado) + bulk-csv-recipients (DET-1, cierra deuda
       // F4) — reusa customerAdapter (misma instancia que PreviewCampaignSegment,
       // ya implementa CampaignSegmentSource + ManualRecipientSource), sin infra nueva.
@@ -3098,7 +3108,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // manual-recipients (MAN-1): customerAdapter como ManualRecipientSource
       // (misma instancia) resuelve la lista manual combinable con el segmento.
       // bulk-task-recipients (D3/D5, B6) — mismos 2 args opcionales al final.
-      new CreateCampaign(campaignRepo, customerAdapter, templatePort, customerAdapter, taskRecipientSource, taskStageConfigRepo),
+      new CreateCampaign(campaignRepo, customerAdapter, templatePort, customerAdapter, taskRecipientSource, taskStageConfigRepo, taskStageTransitionConfigRepoForBulk),
       campaignRunner,
       new GetCampaign(campaignRepo),
       new ListCampaigns(campaignRepo),
@@ -3210,6 +3220,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // composer); PUT = messaging:manage (solo supervisores editan el mapeo).
   {
     const taskStageConfigRepoForRoute = new PrismaTaskStageRecipientConfigRepository();
+    // bulk-task-stage-transition (B1.8) — config singleton del estado resultante global;
+    // el Set valida existencia + prohíbe send_to_iclass reusando el `stageRepo` de scheduling.
+    const taskStageTransitionConfigRepo = new PrismaTaskStageTransitionConfigRepository();
     app.use('/api/messaging/config/task-stages', createTaskStageConfigRouter(
       authAdapter,
       {
@@ -3218,6 +3231,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       },
       new GetTaskStageRecipientConfig(taskStageConfigRepoForRoute),
       new UpdateTaskStageRecipientConfig(taskStageConfigRepoForRoute),
+      new GetTaskStageTransitionConfig(taskStageTransitionConfigRepo),
+      new SetTaskStageTransitionConfig(taskStageTransitionConfigRepo, stageRepo),
     ));
   }
 

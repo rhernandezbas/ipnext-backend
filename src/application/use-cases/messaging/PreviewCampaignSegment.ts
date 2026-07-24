@@ -1,6 +1,7 @@
 import type { CampaignSegmentSource, ManualRecipientSource } from '@domain/ports/CustomerRepository';
 import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
 import type { TaskStageRecipientConfigRepository } from '@domain/ports/TaskStageRecipientConfigRepository';
+import type { TaskStageTransitionConfigRepository } from '@domain/ports/TaskStageTransitionConfigRepository';
 import type { PreviewSegmentInput, PreviewSegmentOutput } from '@application/dto/messaging-bulk.dto';
 import { assertHasRecipients } from './assertHasRecipients';
 import { assertTaskStagesEligible } from './assertTaskStagesEligible';
@@ -31,6 +32,8 @@ export class PreviewCampaignSegment {
     // `manualRecipientSource`, no rompen la aridad de los tests ya verdes).
     private readonly taskRecipientSource?: TaskRecipientSource,
     private readonly taskStageConfigRepo?: TaskStageRecipientConfigRepository,
+    // bulk-task-stage-transition (TRANS-6) — para el hint "N tareas transicionarán".
+    private readonly taskTransitionConfig?: TaskStageTransitionConfigRepository,
   ) {}
 
   async execute(input: PreviewSegmentInput): Promise<PreviewSegmentOutput> {
@@ -63,10 +66,19 @@ export class PreviewCampaignSegment {
         segmentSource: this.segmentSource,
         manualRecipientSource: this.manualRecipientSource,
         taskRecipientSource: this.taskRecipientSource,
+        taskTransitionConfig: this.taskTransitionConfig,
       });
+
+    // bulk-task-stage-transition (TRANS-6) — cuántas TAREAS transicionarán de estado al
+    // enviar (recipients source:'task' con un destino B snapshoteado). 0 si no hay destino
+    // configurado o no hay dominio tarea.
+    const taskWillTransitionCount = resolved.filter(
+      (r) => r.source === 'task' && r.taskResultingStageId != null,
+    ).length;
 
     return {
       count: resolved.length,
+      taskWillTransitionCount,
       sample: resolved.slice(0, SAMPLE_SIZE).map((r) => ({
         clientId: r.clientId,
         name: r.name,

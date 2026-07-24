@@ -65,6 +65,9 @@ export function toCampaignRecipient(row: any): CampaignRecipient {
     chatwootConversationId: row.chatwootConversationId ?? null,
     conversationId: row.conversationId ?? null,
     error: row.error ?? null,
+    taskId: row.taskId ?? null,
+    taskFromStageId: row.taskFromStageId ?? null,
+    taskResultingStageId: row.taskResultingStageId ?? null,
     sentAt: row.sentAt instanceof Date ? row.sentAt.toISOString() : (row.sentAt ?? null),
     deliveredAt: row.deliveredAt instanceof Date ? row.deliveredAt.toISOString() : (row.deliveredAt ?? null),
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
@@ -161,12 +164,21 @@ export class PrismaCampaignRepository implements CampaignRepository, ActiveCampa
   async bulkCreateRecipients(campaignId: string, rows: CampaignRecipientCreateRow[]): Promise<CampaignRecipient[]> {
     if (rows.length === 0) return [];
 
+    // bulk-task-stage-transition — idempotencia (retry): filas task por `taskId`
+    // (dos tareas del mismo cliente/teléfono son DOS recipients, decisión 3), el
+    // resto por `phoneNormalized` (comportamiento previo). Mirror del
+    // @@unique([campaignId, taskId]) real.
     const existing = await prisma.campaignRecipient.findMany({
       where: { campaignId },
-      select: { phoneNormalized: true },
+      select: { phoneNormalized: true, taskId: true },
     });
-    const existingPhones = new Set(existing.map((e) => e.phoneNormalized));
-    const toInsert = rows.filter((r) => !existingPhones.has(r.phoneNormalized));
+    const existingTaskIds = new Set(existing.map((e) => e.taskId).filter((t): t is string => t != null));
+    const existingNonTaskPhones = new Set(
+      existing.filter((e) => e.taskId == null).map((e) => e.phoneNormalized),
+    );
+    const toInsert = rows.filter((r) =>
+      r.taskId != null ? !existingTaskIds.has(r.taskId) : !existingNonTaskPhones.has(r.phoneNormalized),
+    );
 
     if (toInsert.length > 0) {
       await prisma.campaignRecipient.createMany({
@@ -176,14 +188,26 @@ export class PrismaCampaignRepository implements CampaignRepository, ActiveCampa
           contactName: r.contactName ?? null,
           phoneNormalized: r.phoneNormalized,
           phoneE164: r.phoneE164,
+          taskId: r.taskId ?? null,
+          taskFromStageId: r.taskFromStageId ?? null,
+          taskResultingStageId: r.taskResultingStageId ?? null,
         })),
         skipDuplicates: true,
       });
     }
 
-    const phoneNormalizedSet = rows.map((r) => r.phoneNormalized);
+    // Recupera lo persistido de ESTE lote: filas task por taskId, no-task por phone
+    // (con taskId null para no traer una fila task que comparte teléfono).
+    const taskIds = rows.map((r) => r.taskId).filter((t): t is string => t != null);
+    const nonTaskPhones = rows.filter((r) => r.taskId == null).map((r) => r.phoneNormalized);
     const persisted = await prisma.campaignRecipient.findMany({
-      where: { campaignId, phoneNormalized: { in: phoneNormalizedSet } },
+      where: {
+        campaignId,
+        OR: [
+          ...(taskIds.length > 0 ? [{ taskId: { in: taskIds } }] : []),
+          ...(nonTaskPhones.length > 0 ? [{ taskId: null, phoneNormalized: { in: nonTaskPhones } }] : []),
+        ],
+      },
     });
     return persisted.map(toCampaignRecipient);
   }

@@ -371,7 +371,7 @@ export class TooManyTaskStateRecipientsError extends DomainError {
 
   constructor(received: number, max: number) {
     super(
-      `El estado/los estados de tarea seleccionados resuelven a ${received} clientes, superando el máximo de ${max}. Acotá los estados seleccionados.`,
+      `El estado/los estados de tarea seleccionados resuelven a ${received} tareas abiertas, superando el máximo de ${max}. Acotá los estados seleccionados.`,
       'TOO_MANY_TASK_STATE_RECIPIENTS',
     );
     this.name = 'TooManyTaskStateRecipientsError';

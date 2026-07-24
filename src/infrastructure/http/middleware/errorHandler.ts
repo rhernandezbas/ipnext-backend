@@ -270,6 +270,7 @@ const statusMap: Record<string, number> = {
   // ya mapeado arriba).
   TASK_STAGE_NOT_ELIGIBLE: 422,
   TOO_MANY_TASK_STATE_RECIPIENTS: 422,
+  RESULTING_STAGE_NOT_ALLOWED: 422,
 };
 
 /** Express global error-handling middleware. */

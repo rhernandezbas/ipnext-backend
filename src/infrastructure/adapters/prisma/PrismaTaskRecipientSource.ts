@@ -1,4 +1,4 @@
-import { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import { OpenTaskRow, TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
 import { prisma } from '../../database/prisma';
 
 /**
@@ -23,6 +23,20 @@ export class PrismaTaskRecipientSource implements TaskRecipientSource {
       distinct: ['customerId'],
     });
     return rows.map((row) => row.customerId as string);
+  }
+
+  async listOpenTasksByStages(stageIds: string[]): Promise<OpenTaskRow[]> {
+    // bulk-task-stage-transition (D2) — UNA fila POR TAREA (NO distinct): un cliente con
+    // 2 tareas en los stages pedidos devuelve 2 filas. `stageId` es el origen A (guard).
+    const rows: { id: string; customerId: string | null; stageId: string }[] = await prisma.scheduledTask.findMany({
+      where: { stageId: { in: stageIds }, customerId: { not: null }, generalStatus: 'open' },
+      select: { id: true, customerId: true, stageId: true },
+    });
+    return rows.map((row) => ({
+      taskId: row.id,
+      clientId: row.customerId as string,
+      fromStageId: row.stageId,
+    }));
   }
 
   async countOpenTasksWithoutCustomer(stageIds: string[]): Promise<number> {

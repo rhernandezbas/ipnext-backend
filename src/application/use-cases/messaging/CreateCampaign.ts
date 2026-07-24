@@ -3,6 +3,7 @@ import type { CampaignSegmentSource, ManualRecipientSource } from '@domain/ports
 import type { TemplateMessagingPort } from '@domain/ports/TemplateMessagingPort';
 import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
 import type { TaskStageRecipientConfigRepository } from '@domain/ports/TaskStageRecipientConfigRepository';
+import type { TaskStageTransitionConfigRepository } from '@domain/ports/TaskStageTransitionConfigRepository';
 import type { CreateCampaignInput, CreateCampaignOutput } from '@application/dto/messaging-bulk.dto';
 import {
   TemplateNotApprovedError,
@@ -43,6 +44,8 @@ export class CreateCampaign {
     // `manualRecipientSource`, no rompen la aridad de los tests ya verdes).
     private readonly taskRecipientSource?: TaskRecipientSource,
     private readonly taskStageConfigRepo?: TaskStageRecipientConfigRepository,
+    // bulk-task-stage-transition — config del estado resultante global (snapshot al create).
+    private readonly taskTransitionConfig?: TaskStageTransitionConfigRepository,
   ) {}
 
   async execute(input: CreateCampaignInput): Promise<CreateCampaignOutput> {
@@ -93,6 +96,7 @@ export class CreateCampaign {
       segmentSource: this.segmentSource,
       manualRecipientSource: this.manualRecipientSource,
       taskRecipientSource: this.taskRecipientSource,
+      taskTransitionConfig: this.taskTransitionConfig,
     });
 
     // CAMP-4 — cero destinatarios (segmento + manual resueltos a nada) se rechaza,
@@ -153,6 +157,10 @@ export class CreateCampaign {
         contactName: r.clientId === null ? r.name : null,
         phoneNormalized: r.phoneNormalized,
         phoneE164: r.phoneE164,
+        // bulk-task-stage-transition — snapshot per-tarea (solo filas source:'task').
+        taskId: r.taskId ?? null,
+        taskFromStageId: r.taskFromStageId ?? null,
+        taskResultingStageId: r.taskResultingStageId ?? null,
       })),
     );
 

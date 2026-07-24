@@ -3,6 +3,7 @@ import type {
   ManualRecipientSource,
 } from '@domain/ports/CustomerRepository';
 import type { TaskRecipientSource } from '@domain/ports/TaskRecipientSource';
+import type { TaskStageTransitionConfigRepository } from '@domain/ports/TaskStageTransitionConfigRepository';
 import {
   ManualRecipientsNotFoundError,
   TooManyManualRecipientsError,
@@ -71,6 +72,15 @@ export interface CombinedResolvedRecipient {
   balanceDue: number | null;
   status: string;
   source: RecipientSource;
+  /**
+   * bulk-task-stage-transition — SOLO en filas `source:'task'` (per-tarea). `taskId`
+   * es la tarea por la que sale el mensaje; `taskFromStageId` el origen A (guard
+   * still-in-A al enviar); `taskResultingStageId` el destino B global snapshoteado
+   * (o `null` si no hay transición configurada). Ausentes en los otros dominios.
+   */
+  taskId?: string;
+  taskFromStageId?: string;
+  taskResultingStageId?: string | null;
 }
 
 /**
@@ -174,6 +184,12 @@ export async function resolveCombinedRecipients(params: {
   taskStageIds?: string[];
   /** bulk-task-recipients (D2) — opcional, molde `manualRecipientSource`. */
   taskRecipientSource?: TaskRecipientSource;
+  /**
+   * bulk-task-stage-transition (D2) — config del estado resultante ÚNICO GLOBAL.
+   * Se lee UNA vez por resolución y se snapshotea igual en todos los recipients task.
+   * Ausente → `taskResultingStageId` null (sin transición).
+   */
+  taskTransitionConfig?: TaskStageTransitionConfigRepository;
 }): Promise<CombinedRecipientsResult> {
   const {
     segment,
@@ -183,6 +199,7 @@ export async function resolveCombinedRecipients(params: {
     manualRecipientSource,
     taskStageIds = [],
     taskRecipientSource,
+    taskTransitionConfig,
   } = params;
 
   // FIX-3 — cota superior ANTES de tocar la DB (segmento o manual): un payload
@@ -400,57 +417,105 @@ export async function resolveCombinedRecipients(params: {
       // Defensivo — nunca ocurre en el wiring real (app.ts inyecta PrismaTaskRecipientSource).
       throw new Error('resolveCombinedRecipients: taskRecipientSource requerido para taskStageIds');
     }
-    // 1. Distinct crudo del port.
-    const taskClientIds = await taskRecipientSource.listClientIdsByOpenTaskStages(taskStageIds);
-    // 2. Cap — ANTES de filtrar overlap/hidratar (TASK-4, sobre el set crudo).
-    if (taskClientIds.length > MAX_TASK_STATE_RECIPIENTS) {
-      throw new TooManyTaskStateRecipientsError(taskClientIds.length, MAX_TASK_STATE_RECIPIENTS);
+    // bulk-task-stage-transition — el destino B global se lee UNA vez y se snapshotea
+    // igual en TODOS los recipients task (congela el mapeo — TASK-8/decisión 5).
+    const taskResultingStageId =
+      taskTransitionConfig != null ? await taskTransitionConfig.getResultingStageId() : null;
+
+    // 1. Filas POR TAREA (NO client-DISTINCT) — cada tarea es una unidad de envío.
+    const taskRows = await taskRecipientSource.listOpenTasksByStages(taskStageIds);
+    // 2. Cap — ahora cuenta TAREAS (TASK-4, sobre el set crudo de tareas).
+    if (taskRows.length > MAX_TASK_STATE_RECIPIENTS) {
+      throw new TooManyTaskStateRecipientsError(taskRows.length, MAX_TASK_STATE_RECIPIENTS);
     }
-    // 3. Filtra los ya presentes/procesados por seg∪manual∪csv (overlap, silencioso).
-    // fix wave (F2, MED) — CONTRA TODOS los candidateIds ya PROCESADOS de esas 3
-    // fuentes (admitidos Y EXCLUIDOS), no solo los admitidos (`byClientId`): un
-    // candidato EXCLUIDO (ej. opt-out) por el segmento/manual/csv que TAMBIÉN tiene
-    // una tarea abierta NO debe re-procesarse acá — antes del fix se re-hidrataba y
-    // se contaba una SEGUNDA vez en `taskSkipped` + una fila duplicada en
-    // `excludedDetail` (source:'task'). Mismo criterio D-pattern que el filtro manual
-    // (`:243`, filtra contra `segmentCandidateIds`, no contra los resueltos).
-    const newClientIds = taskClientIds.filter(
-      (id) =>
-        !byClientId.has(id) &&
-        !segmentCandidateIds.has(id) &&
-        !manualCandidateIds.has(id) &&
-        !csvLinkedCandidateIds.has(id),
-    );
-    if (newClientIds.length > 0) {
+    // 3. Overlap por CLIENTE contra seg∪manual∪csv (admitidos Y excluidos): una tarea de
+    // un cliente ya procesado por otra fuente NO genera mensaje task (precedencia — el
+    // cliente conserva su source; su tarea NO transiciona). Silencioso.
+    const alreadyProcessed = (id: string): boolean =>
+      byClientId.has(id) ||
+      segmentCandidateIds.has(id) ||
+      manualCandidateIds.has(id) ||
+      csvLinkedCandidateIds.has(id);
+    const freshTasks = taskRows.filter((t) => !alreadyProcessed(t.clientId));
+
+    if (freshTasks.length > 0) {
       if (!manualRecipientSource) {
-        // Defensivo — nunca ocurre en el wiring real (app.ts inyecta customerAdapter
-        // como ManualRecipientSource, misma instancia que hidrata el dominio manual).
+        // Defensivo — nunca ocurre en el wiring real (app.ts inyecta customerAdapter).
         throw new Error('resolveCombinedRecipients: manualRecipientSource requerido para hidratar taskStageIds');
       }
-      // 4. Hidrata (CERO port nuevo, D2) + compliance (opt-out/teléfono/dedup interno).
-      const candidates = await manualRecipientSource.findRecipientCandidatesByIds(newClientIds);
-      const r = resolveRecipients(candidates);
-      taskSkipped.optedOut = r.excludedOptOut;
-      taskSkipped.invalidPhone = r.excludedNoPhone;
-      taskSkipped.duplicatePhone = r.dedupCollapsed;
-      taskExcludedDetail.push(...r.excluded.map((e) => toExcludedDetail(e, 'task')));
+      // 4. Hidrata los clientes DISTINCT (una query batch) y calcula compliance POR
+      // CLIENTE (opt-out / teléfono inválido) — el resultado se aplica luego POR TAREA.
+      const uniqueClientIds = [...new Set(freshTasks.map((t) => t.clientId))];
+      const candidates = await manualRecipientSource.findRecipientCandidatesByIds(uniqueClientIds);
+      type TaskValid = { name: string; phoneNormalized: string; phoneE164: string; balanceDue: number | null; status: string };
+      const validByClient = new Map<string, TaskValid>();
+      const excludedByClient = new Map<string, { reason: ExclusionReason; name: string; phone: string; status: string }>();
+      for (const c of candidates) {
+        if (c.whatsappOptOutAt != null) {
+          excludedByClient.set(c.clientId, { reason: 'opt_out', name: c.name, phone: c.phone ?? '', status: c.status ?? 'unknown' });
+          continue;
+        }
+        const phoneE164 = toWhatsAppE164(c.phone);
+        const phoneNormalized = normalizePhone(c.phone);
+        if (phoneE164 === null || phoneNormalized === null) {
+          excludedByClient.set(c.clientId, { reason: 'telefono_invalido', name: c.name, phone: c.phone ?? '', status: c.status ?? 'unknown' });
+          continue;
+        }
+        validByClient.set(c.clientId, { name: c.name, phoneNormalized, phoneE164, balanceDue: c.balanceDue, status: c.status ?? 'unknown' });
+      }
 
-      // 5. admit() propio — dedup cross-source por teléfono (molde CSV `:307-321`).
-      for (const c of r.resolved) {
-        if (byClientId.has(c.clientId)) continue; // defensivo (overlap ya filtrado en el paso 3)
-        if (seenPhones.has(c.phoneNormalized)) {
-          taskSkipped.duplicatePhone++;
-          taskExcludedDetail.push({
-            name: c.name,
-            phone: c.phoneE164,
-            reason: 'duplicado',
+      // Snapshot de los teléfonos YA vistos por seg∪manual∪csv (ANTES del loop de tareas):
+      // el dedup CROSS-SOURCE sí aplica (una tarea cuyo teléfono ya lo tomó otra fuente NO
+      // se re-envía), pero el INTRA-task NO — por eso se compara contra este snapshot fijo y
+      // NUNCA se le agregan los teléfonos de las tareas (dos tareas del mismo cliente/teléfono
+      // pasan las dos, decisión 3).
+      const phonesFromOtherSources = new Set(seenPhones);
+
+      // 5. UNA emisión POR TAREA — sin dedup intra-task. Los skip-counts y el excludedDetail
+      // se cuentan POR TAREA (honestidad per-tarea del preview).
+      for (const task of freshTasks) {
+        const valid = validByClient.get(task.clientId);
+        if (valid) {
+          if (phonesFromOtherSources.has(valid.phoneNormalized)) {
+            // cross-source: el teléfono ya lo tomó segmento/manual/csv (otro cliente/registro).
+            taskSkipped.duplicatePhone++;
+            taskExcludedDetail.push({
+              name: valid.name,
+              phone: valid.phoneE164,
+              reason: 'duplicado',
+              source: 'task',
+              clientId: task.clientId,
+              status: valid.status,
+            });
+            continue;
+          }
+          resolved.push({
+            clientId: task.clientId,
+            name: valid.name,
+            phoneNormalized: valid.phoneNormalized,
+            phoneE164: valid.phoneE164,
+            balanceDue: valid.balanceDue,
+            status: valid.status,
             source: 'task',
-            clientId: c.clientId,
-            status: c.status,
+            taskId: task.taskId,
+            taskFromStageId: task.fromStageId,
+            taskResultingStageId,
           });
           continue;
         }
-        admit({ ...c, source: 'task' });
+        const excluded = excludedByClient.get(task.clientId);
+        if (excluded) {
+          if (excluded.reason === 'opt_out') taskSkipped.optedOut++;
+          else taskSkipped.invalidPhone++;
+          taskExcludedDetail.push({
+            name: excluded.name,
+            phone: excluded.phone,
+            reason: excluded.reason,
+            source: 'task',
+            clientId: task.clientId,
+            status: excluded.status,
+          });
+        }
       }
     }
   }

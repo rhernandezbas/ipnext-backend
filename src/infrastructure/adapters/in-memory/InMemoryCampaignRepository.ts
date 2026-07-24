@@ -115,9 +115,14 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
   ): Promise<CampaignRecipient[]> {
     const result: CampaignRecipient[] = [];
     for (const row of rows) {
-      const existing = Array.from(this.recipients.values()).find(
-        (r) => r.campaignId === campaignId && r.phoneNormalized === row.phoneNormalized,
-      );
+      // bulk-task-stage-transition — idempotencia: filas task por `taskId` (dos tareas del
+      // mismo cliente/teléfono son DOS recipients, decisión 3); el resto por `phoneNormalized`
+      // (comportamiento previo). Mirror del @@unique([campaignId, taskId]) real (NULLs distintos).
+      const existing = Array.from(this.recipients.values()).find((r) => {
+        if (r.campaignId !== campaignId) return false;
+        if (row.taskId != null) return r.taskId === row.taskId;
+        return r.taskId === null && r.phoneNormalized === row.phoneNormalized;
+      });
       if (existing) {
         result.push({ ...existing });
         continue;
@@ -134,6 +139,9 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
         chatwootConversationId: null,
         conversationId: null,
         error: null,
+        taskId: row.taskId ?? null,
+        taskFromStageId: row.taskFromStageId ?? null,
+        taskResultingStageId: row.taskResultingStageId ?? null,
         sentAt: null,
         deliveredAt: null,
         createdAt: this.now().toISOString(),
