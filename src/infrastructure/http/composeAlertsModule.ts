@@ -9,6 +9,7 @@ import { AcknowledgeAlert } from '@application/use-cases/alerts/AcknowledgeAlert
 import { PrismaNocAlertRepository } from '@infrastructure/adapters/prisma/PrismaNocAlertRepository';
 import { PrismaFeatureFlagRepository } from '@infrastructure/adapters/prisma/PrismaFeatureFlagRepository';
 import { NoOpAlertEventPublisher } from '@infrastructure/adapters/in-memory/NoOpAlertEventPublisher';
+import { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
 import { createAlertsRouter } from './routes/alerts.routes';
 import { createAuthMiddleware } from './middleware/authMiddleware';
 
@@ -39,11 +40,18 @@ export interface ComposeAlertsModuleDeps {
  * `featureFlagRepo` (F5, fix wave) — `PrismaFeatureFlagRepository`, same
  * instance-per-request-cycle pattern as `GetGigaredConfig`/`createGigaredReadyMiddleware`
  * (molde gigared-integration). Backs the `noc-alerts-hub-enabled` kill-switch.
+ *
+ * `grafanaSource` (Fase B, `noc-alert-grafana-source`) — `GrafanaWebhookSource`
+ * maps Grafana Alerting's own webhook shape (`{status, alerts: [...]}`) into
+ * the canonical `NocAlertInput`, one call per `alerts[]` element, delegating
+ * each to the SAME `IngestAlert` instantiated above. Stateless, no ports to
+ * inject — plain `new`.
  */
 export function composeAlertsModule(deps: ComposeAlertsModuleDeps): Router {
   const repo = new PrismaNocAlertRepository();
   const publisher = new NoOpAlertEventPublisher();
   const featureFlagRepo = new PrismaFeatureFlagRepository();
+  const grafanaSource = new GrafanaWebhookSource();
 
   return createAlertsRouter({
     ingestAlert: new IngestAlert(repo, publisher),
@@ -54,6 +62,7 @@ export function composeAlertsModule(deps: ComposeAlertsModuleDeps): Router {
       grafana: config.alerts.grafanaIngestKey,
     },
     featureFlagRepo,
+    grafanaSource,
     auth: createAuthMiddleware(deps.authAdapter, deps.sessionRepo),
     requirePerm: deps.requirePerm,
   });

@@ -3,12 +3,13 @@ import { IngestAlert } from '@application/use-cases/alerts/IngestAlert';
 import { ListAlerts } from '@application/use-cases/alerts/ListAlerts';
 import { AcknowledgeAlert } from '@application/use-cases/alerts/AcknowledgeAlert';
 import { toNocAlertDto } from '@application/dto/nocAlert';
-import { NocAlertInput, NocAlertSeverity, NocAlertStatus } from '@domain/entities/nocAlert';
+import { NocAlert, NocAlertInput, NocAlertSeverity, NocAlertStatus } from '@domain/entities/nocAlert';
 import { NocAlertListFilters } from '@domain/ports/NocAlertRepository';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { createApiKeyMiddleware } from '../middleware/apiKeyMiddleware';
 import { createExternalWriteRateLimiter } from '../middleware/rateLimiters';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
+import type { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
 
 /** Factory matching `requirePerm` exported from app.ts (DIP-clean injection, molde accessPoints.routes). */
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
@@ -33,6 +34,16 @@ export interface AlertsRouterDeps {
    * contrato que `createApiKeyMiddleware`).
    */
   ingestKeys: Record<string, string>;
+  /**
+   * Fase B (`noc-alert-grafana-source`) — `POST /ingest/grafana` receives
+   * Grafana Alerting's OWN webhook shape (`{status, alerts: [...]}`), NOT the
+   * canonical shape `parseIngestBody` below validates. `GrafanaWebhookSource`
+   * owns that mapping; the route only needs `mapWebhook`. Optional so Fase A
+   * fixtures/tests that never exercise `/ingest/grafana` don't need to build
+   * one — if `source === 'grafana'` and this is missing, the route 500s via
+   * the generic error handler (composeAlertsModule ALWAYS wires it in prod).
+   */
+  grafanaSource?: Pick<GrafanaWebhookSource, 'mapWebhook'>;
   /**
    * F5 (fix wave) — kill-switch de convivencia (design.md "Flags de convivencia").
    * La ingesta lee este flag EN CADA REQUEST (no cacheado) — así el toggle desde
@@ -137,7 +148,7 @@ function parseIngestBody(body: unknown, source: string): NocAlertInput | string 
 }
 
 export function createAlertsRouter(deps: AlertsRouterDeps): Router {
-  const { ingestAlert, listAlerts, acknowledgeAlert, ingestKeys, featureFlagRepo, auth, requirePerm } = deps;
+  const { ingestAlert, listAlerts, acknowledgeAlert, ingestKeys, featureFlagRepo, grafanaSource, auth, requirePerm } = deps;
   const router = Router();
 
   const readPerm = requirePerm('monitoring', 'read');
@@ -172,6 +183,29 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
         const flag = await featureFlagRepo.get(NOC_ALERTS_HUB_ENABLED_FLAG);
         if (!(flag?.enabled ?? true)) {
           res.status(503).json({ error: 'NOC alerts hub is disabled', code: 'NOC_ALERTS_HUB_DISABLED' });
+          return;
+        }
+
+        // Fase B — Grafana's webhook body (`{status, alerts: [...]}`) is NOT the
+        // canonical shape `parseIngestBody` validates below; it needs its own
+        // mapper (`GrafanaWebhookSource`) that also fans a SINGLE webhook out
+        // into N `IngestAlert.execute()` calls, one per `alerts[]` element
+        // (spec.md "Grouped alerts produce N NocAlerts"). Malformed → 400
+        // atomically, NOTHING is persisted for a rejected batch.
+        if (source === 'grafana') {
+          if (!grafanaSource) {
+            throw new Error('alerts.routes: grafanaSource dependency missing for source "grafana"');
+          }
+          const mapped = grafanaSource.mapWebhook(req.body);
+          if (typeof mapped === 'string') {
+            res.status(400).json({ error: mapped, code: 'VALIDATION_ERROR' });
+            return;
+          }
+          const created: NocAlert[] = [];
+          for (const input of mapped) {
+            created.push(await ingestAlert.execute(input));
+          }
+          res.status(201).json({ data: created.map(toNocAlertDto) });
           return;
         }
 
