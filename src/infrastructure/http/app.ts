@@ -772,6 +772,8 @@ import { createZonesRouter } from './routes/zones.routes';
 // ── External API v1 — API-key auth, read-only, machine-to-machine ────────────
 import { createExternalV1Router } from './routes/externalV1.routes';
 import { createApiKeyMiddleware } from './middleware/apiKeyMiddleware';
+// ── NOC Alerts Hub (noc-alerts-hub, Fase A) — wiring vive en composeAlertsModule ─
+import { composeAlertsModule } from './composeAlertsModule';
 import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
 import { ListZones } from '@application/use-cases/ListZones';
 import { CreateZone } from '@application/use-cases/CreateZone';
@@ -2826,6 +2828,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       },
     ));
   }
+
+  // ─── NOC Alerts Hub (noc-alerts-hub, Fase A) — dark launch, ver design.md ──────
+  // Heavy wiring (repo/use-cases/publisher no-op) vive en composeAlertsModule()
+  // (evita inflar este God Object — design.md "File Changes" ⚠).
+  app.use('/api/alerts', composeAlertsModule({ authAdapter, sessionRepo, requirePerm }));
 
   // ─── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send ───────
   {

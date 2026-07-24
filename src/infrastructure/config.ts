@@ -412,6 +412,28 @@ export const config = {
   },
 
   /**
+   * NOC Alerts Hub (noc-alerts-hub, Fase A) — machine-to-machine ingest keys,
+   * ONE per fuente (Grafana webhook / colector fibra Rust), so rotating one
+   * never forces rotating the other (design.md "POST /api/alerts/ingest canónico
+   * + /ingest/grafana"). `createApiKeyMiddleware(key)` fails closed (401) when a
+   * key is empty — same contract as `externalApi.apiKey` above.
+   *
+   * DEVIATION from tasks.md A23 ("fail-fast al import"): kept OPT-IN instead of
+   * added to REQUIRED_VARS. REQUIRED_VARS only holds the original 5 vars — every
+   * integration key added since (externalApi.apiKey, CHATWOOT_*, TWILIO_*,
+   * SMARTOLT_*, ...) follows the SAME opt-in pattern (empty default, feature
+   * degrades/fails-closed at request time, boot never dies). Adding these two to
+   * REQUIRED_VARS would process.exit(1) on every existing deployment/CI run that
+   * doesn't set them yet (none currently do) — that is the OPPOSITE of "dark
+   * launch". Fail-closed-at-request achieves the same security intent (no key →
+   * no access) without an unannounced boot-breaking change.
+   */
+  alerts: {
+    grafanaIngestKey: process.env.GRAFANA_INGEST_KEY ?? '',
+    fiberIngestKey: process.env.FIBER_INGEST_KEY ?? '',
+  },
+
+  /**
    * Network audit — BRAS NE8000 configuration.
    * FIX8: IP del NE8000 inyectable via env var (NE8000_NAS_IP) en lugar de hardcodeada
    * en el use case (application layer). Se inyecta al construir ListNe8000PppoeAudit en app.ts.

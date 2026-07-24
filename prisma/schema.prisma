@@ -2298,6 +2298,67 @@ model MonitoringAlert {
   @@index([acknowledged])
 }
 
+// =============================================
+// NOC ALERTS HUB (noc-alerts-hub, Fase A)
+// =============================================
+
+/// NocAlert — hub unificado de alertas NOC (Grafana + colector fibra Rust, Fase B/E).
+/// NUEVA tabla, NO reusa MonitoringAlert ni Notification — ver design.md "Decision:
+/// Entidad NocAlert nueva (no reusar MonitoringAlert)":
+///   - MonitoringAlert: scaffold device-céntrico ROTO (acknowledgedAt hardcodeado a
+///     null en PrismaMonitoringRepository.ts, 0 `.create()` reales) — `type` es un
+///     enum cerrado que asume "device" (offline/high_latency/...), incompatible con
+///     BGP/DDoS/rectificador/ONU/PON. Queda dormido e intacto.
+///   - Notification: bandeja de campana genérica (title/read) — NocAlert la puede
+///     alimentar best-effort (Fase C+), no la reemplaza.
+/// Dedup por (source, fingerprint) — ver `computeNocAlertIngest` (domain) para el
+/// ciclo de vida firing/resolved completo.
+model NocAlert {
+  id          String @id @default(uuid())
+  source      String
+  fingerprint String
+
+  alertname String
+  severity  String
+  status    String @default("firing")
+
+  entityType String
+  entityName String
+  entityRef  String?
+
+  metricName  String?
+  metricValue Float?
+  metricUnit  String?
+  threshold   Float?
+
+  message     String
+  explanation String?
+  link        String?
+
+  startsAt  DateTime
+  firstSeen DateTime  @default(now())
+  lastSeen  DateTime  @default(now())
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  acknowledged Boolean   @default(false)
+  ackBy        String?
+  ackAt        DateTime?
+  ackNote      String?
+
+  /// Fase D+ — nivel de escalado (N1/N2/N3), absorbe olt_watch. No usado en Fase A.
+  escalationState String?
+
+  /// Fase D — para editar el mensaje de Telegram al ackear. No usado en Fase A.
+  telegramChatId    String?
+  telegramMessageId String?
+
+  @@unique([source, fingerprint])
+  @@index([status])
+  @@index([severity])
+}
+
 /// Watermark/cursor store for incremental syncs (e.g. the Gestión Real mirror).
 model SyncState {
   entity      String    @id

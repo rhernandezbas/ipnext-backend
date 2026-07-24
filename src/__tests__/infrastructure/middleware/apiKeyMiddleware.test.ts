@@ -132,4 +132,45 @@ describe('createApiKeyMiddleware', () => {
       expect(next).not.toHaveBeenCalled();
     });
   });
+
+  // A18 — factory parametrizada por key explícita (source-specific: grafanaIngestKey
+  // / fiberIngestKey), SIN romper /api/external/v1 (`createApiKeyMiddleware()` sin
+  // args sigue leyendo config.externalApi.apiKey — ver describe blocks arriba).
+  describe('explicit configuredKey param (per-source key, A18)', () => {
+    it('usa la key EXPLÍCITA, ignorando config.externalApi.apiKey', () => {
+      mockConfig.externalApi.apiKey = 'unrelated-external-api-key';
+      const mw = createApiKeyMiddleware('grafana-explicit-key');
+      const req = makeReq({ 'x-api-key': 'grafana-explicit-key' });
+      const res = makeRes() as unknown as Response;
+
+      mw(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it('rechaza la key de OTRA fuente aunque sea válida para config.externalApi.apiKey', () => {
+      const EXTERNAL_KEY = 'unrelated-external-api-key';
+      mockConfig.externalApi.apiKey = EXTERNAL_KEY;
+      const mw = createApiKeyMiddleware('grafana-explicit-key');
+      const req = makeReq({ 'x-api-key': EXTERNAL_KEY });
+      const res = makeRes() as unknown as Response;
+
+      mw(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('key explícita vacía → fail-closed (401) sin importar el header', () => {
+      const mw = createApiKeyMiddleware('');
+      const req = makeReq({ 'x-api-key': 'anything' });
+      const res = makeRes() as unknown as Response;
+
+      mw(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    });
+  });
 });
