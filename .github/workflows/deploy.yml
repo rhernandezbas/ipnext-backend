@@ -100,6 +100,11 @@ jobs:
             -e AIROS_SSH_USER="ubnt" \
             -e AIROS_SSH_PASSWORDS="${{ secrets.AIROS_SSH_PASSWORDS }}" \
             -e EXTERNAL_API_KEY="${{ secrets.EXTERNAL_API_KEY }}" \
+            -e GRAFANA_INGEST_KEY="${{ secrets.GRAFANA_INGEST_KEY }}" \
+            -e FIBER_INGEST_KEY="${{ secrets.FIBER_INGEST_KEY }}" \
+            -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+            -e TELEGRAM_CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -e TELEGRAM_WEBHOOK_SECRET="${{ secrets.TELEGRAM_WEBHOOK_SECRET }}" \
             -e MINIO_ENDPOINT="${{ secrets.MINIO_ENDPOINT }}" \
             -e MINIO_PORT="${{ secrets.MINIO_PORT }}" \
             -e MINIO_USE_SSL="${{ secrets.MINIO_USE_SSL }}" \
