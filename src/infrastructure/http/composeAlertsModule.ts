@@ -2,13 +2,17 @@ import { Router, RequestHandler } from 'express';
 import { config } from '@infrastructure/config';
 import type { AuthProvider } from '@domain/ports/AuthProvider';
 import type { SessionRepository } from '@domain/ports/SessionRepository';
+import type { AuditEventRepository } from '@domain/ports/AuditEventRepository';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { IngestAlert } from '@application/use-cases/alerts/IngestAlert';
 import { ListAlerts } from '@application/use-cases/alerts/ListAlerts';
 import { AcknowledgeAlert } from '@application/use-cases/alerts/AcknowledgeAlert';
 import { NotifyAlert } from '@application/use-cases/alerts/NotifyAlert';
+import { GetAlertThresholds } from '@application/use-cases/alerts/GetAlertThresholds';
+import { UpdateAlertThresholds } from '@application/use-cases/alerts/UpdateAlertThresholds';
 import { PrismaNocAlertRepository } from '@infrastructure/adapters/prisma/PrismaNocAlertRepository';
 import { PrismaFeatureFlagRepository } from '@infrastructure/adapters/prisma/PrismaFeatureFlagRepository';
+import { PrismaNocAlertThresholdsConfigRepository } from '@infrastructure/adapters/prisma/PrismaNocAlertThresholdsConfigRepository';
 import { AlertEventBus } from '@infrastructure/events/AlertEventBus';
 import { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
 import { HttpTelegramGateway } from '@infrastructure/adapters/telegram/TelegramGateway';
@@ -23,6 +27,14 @@ export interface ComposeAlertsModuleDeps {
   /** app.ts's module-level `requirePerm`, injected — NOT re-derived here (single
    *  rbacUserRepo instance stays the source of truth, avoids a 2nd wiring path). */
   requirePerm: (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
+  /**
+   * F2 (noc-alerts-config) — app.ts's module-level `auditEventRepo` singleton
+   * (the SAME instance `auditMutationsMiddleware` + the audit-events query
+   * endpoint already share), injected so `AcknowledgeAlert`'s structured ACK
+   * audit writes to the SAME table via the SAME repo instance — not a 2nd
+   * `PrismaAuditEventRepository()` wiring path.
+   */
+  auditEventRepo: AuditEventRepository;
 }
 
 /**
@@ -79,6 +91,7 @@ export function composeAlertsModule(deps: ComposeAlertsModuleDeps): Router {
   const eventBus = new AlertEventBus();
   const featureFlagRepo = new PrismaFeatureFlagRepository();
   const grafanaSource = new GrafanaWebhookSource();
+  const thresholdsRepo = new PrismaNocAlertThresholdsConfigRepository();
 
   const telegramGateway = new HttpTelegramGateway({ botToken: config.alerts.telegramBotToken });
   const telegramNotifier = new TelegramBotGateway(telegramGateway, config.alerts.telegramChatId);
@@ -94,7 +107,9 @@ export function composeAlertsModule(deps: ComposeAlertsModuleDeps): Router {
   return createAlertsRouter({
     ingestAlert: new IngestAlert(repo, eventBus),
     listAlerts: new ListAlerts(repo),
-    acknowledgeAlert: new AcknowledgeAlert(repo, eventBus, telegramNotifier),
+    acknowledgeAlert: new AcknowledgeAlert(repo, eventBus, telegramNotifier, deps.auditEventRepo),
+    getAlertThresholds: new GetAlertThresholds(thresholdsRepo),
+    updateAlertThresholds: new UpdateAlertThresholds(thresholdsRepo),
     ingestKeys: {
       'fiber-collector': config.alerts.fiberIngestKey,
       grafana: config.alerts.grafanaIngestKey,

@@ -2,12 +2,15 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { IngestAlert } from '@application/use-cases/alerts/IngestAlert';
 import { ListAlerts } from '@application/use-cases/alerts/ListAlerts';
 import { AcknowledgeAlert } from '@application/use-cases/alerts/AcknowledgeAlert';
+import { GetAlertThresholds } from '@application/use-cases/alerts/GetAlertThresholds';
+import { UpdateAlertThresholds } from '@application/use-cases/alerts/UpdateAlertThresholds';
 import { toNocAlertDto } from '@application/dto/nocAlert';
+import { UpdateNocAlertThresholdsSchema } from '@application/dto/nocAlertThresholds.dto';
 import { NocAlert, NocAlertInput, NocAlertSeverity, NocAlertStatus } from '@domain/entities/nocAlert';
 import { NocAlertListFilters } from '@domain/ports/NocAlertRepository';
 import type { NocAlertEvent } from '@domain/ports/AlertEventPublisher';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
-import { createApiKeyMiddleware, createTelegramSecretMiddleware } from '../middleware/apiKeyMiddleware';
+import { createApiKeyMiddleware, createTelegramSecretMiddleware, safeCompare } from '../middleware/apiKeyMiddleware';
 import { createExternalWriteRateLimiter } from '../middleware/rateLimiters';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import type { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
@@ -110,6 +113,57 @@ export interface AlertsRouterDeps {
    * alert correctly, it just skips that one UX nicety.
    */
   telegramGateway?: Pick<TelegramGateway, 'answerCallbackQuery'>;
+  /**
+   * F1 (noc-alerts-config, `noc-alert-thresholds`) — `GET/PUT /thresholds`.
+   * Optional (same convivencia pattern as `grafanaSource`/`eventBus`): test
+   * fixtures that never exercise `/thresholds` don't need to build these.
+   * `composeAlertsModule` ALWAYS wires both in prod. Missing at request time
+   * → 500 via the generic error handler (mirrors `grafanaSource`'s guard).
+   */
+  getAlertThresholds?: GetAlertThresholds;
+  updateAlertThresholds?: UpdateAlertThresholds;
+}
+
+/**
+ * F1 (noc-alerts-config) — dual auth for `GET /thresholds`: the Rust
+ * collector authenticates with THE SAME `fiberIngestKey` already used for
+ * `POST /ingest/fiber-collector` (`deps.ingestKeys['fiber-collector']` —
+ * reused, not a separate config key, so rotating one key never forgets the
+ * other); the panel authenticates with session cookie + `monitoring.manage`.
+ * spec.md "Machine read access via fiberIngestKey, read-only" + "Missing or
+ * invalid API key without session is rejected" (401 when NEITHER matches).
+ * `PUT` never uses this — it's session+`monitoring.manage` ONLY (see the
+ * route registration below), so the machine key can never edit.
+ */
+function createThresholdsReadAuth(fiberKey: string, auth: RequestHandler, managePerm: RequestHandler): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (fiberKey) {
+      let providedKey: string | undefined;
+      const xApiKey = req.headers['x-api-key'];
+      if (typeof xApiKey === 'string' && xApiKey.length > 0) {
+        providedKey = xApiKey;
+      } else {
+        const authHeader = req.headers['authorization'];
+        if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+          providedKey = authHeader.slice('Bearer '.length);
+        }
+      }
+      if (providedKey && safeCompare(providedKey, fiberKey)) {
+        next();
+        return;
+      }
+    }
+    // No valid machine key — fall back to session + monitoring.manage. A
+    // missing/invalid session 401s from `auth` itself (never reaches `next`
+    // with an error here since createAuthMiddleware ends the response).
+    auth(req, res, (err?: unknown) => {
+      if (err) {
+        next(err);
+        return;
+      }
+      managePerm(req, res, next);
+    });
+  };
 }
 
 /** Minimal shape of the Telegram Bot API `Update` this webhook cares about. */
@@ -214,7 +268,9 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
 
   const readPerm = requirePerm('monitoring', 'read');
   const ackPerm = requirePerm('monitoring', 'acknowledge_alert');
+  const managePerm = requirePerm('monitoring', 'manage');
   const ingestRateLimiter = deps.ingestRateLimiter ?? createExternalWriteRateLimiter();
+  const thresholdsReadAuth = createThresholdsReadAuth(ingestKeys['fiber-collector'] ?? '', auth, managePerm);
 
   // POST /ingest/:source — per-source canonical ingestion (F3, spec.md "Alert
   // ingestion endpoint auth"). Machine-to-machine, no RBAC, no req.user. The
@@ -450,6 +506,42 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
     }
   });
 
+  // GET /thresholds — F1 (noc-alerts-config, `noc-alert-thresholds`). Dual
+  // auth: fiberIngestKey (Rust collector, read-only) OR session+monitoring.manage
+  // (panel). Flat DTO, NO {data:...} envelope — the collector `serde_json::
+  // from_str`s the response body DIRECTLY into its `Thresholds` struct.
+  router.get('/thresholds', thresholdsReadAuth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!deps.getAlertThresholds) {
+        throw new Error('alerts.routes: getAlertThresholds dependency missing for GET /thresholds');
+      }
+      res.json(await deps.getAlertThresholds.execute());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // PUT /thresholds — HUMAN ONLY (session + monitoring.manage). The machine
+  // fiberIngestKey is intentionally NOT accepted here (spec.md "Fiber
+  // collector cannot edit thresholds via its API key") — no dual-auth on
+  // this route, just the standard auth+requirePerm pair every other
+  // RBAC-guarded route on this router uses.
+  router.put('/thresholds', auth, managePerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const parsed = UpdateNocAlertThresholdsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+      return;
+    }
+    try {
+      if (!deps.updateAlertThresholds) {
+        throw new Error('alerts.routes: updateAlertThresholds dependency missing for PUT /thresholds');
+      }
+      res.json(await deps.updateAlertThresholds.execute(parsed.data));
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // POST /:id/acknowledge — monitoring.acknowledge_alert.
   router.post(
     '/:id/acknowledge',
@@ -459,7 +551,18 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
       try {
         const by = req.user?.username ?? req.user?.id ?? 'unknown';
         const note = typeof req.body?.note === 'string' ? req.body.note : undefined;
-        const alert = await acknowledgeAlert.execute(req.params['id'] as string, by, new Date().toISOString(), note);
+        const alert = await acknowledgeAlert.execute(req.params['id'] as string, by, new Date().toISOString(), note, 'panel');
+        // F2 (noc-alerts-config) — AcknowledgeAlert already wrote the RICH
+        // structured AuditEvent (entityType='NocAlert', actor, channel='panel')
+        // when it found the alert. Mark __auditEmitted so the generic
+        // auditMutationsMiddleware doesn't ALSO write its action=null
+        // duplicate for this same request — same dedupe flag
+        // createRequestAuditService uses (auditMutationsMiddleware.ts).
+        // Idempotent re-acks (alert found, nothing changed) still suppress
+        // the generic row: a no-op re-ack isn't audit-worthy noise either way.
+        if (alert) {
+          res.locals['__auditEmitted'] = true;
+        }
         if (!alert) {
           res.status(404).json({ error: 'NocAlert not found', code: 'NOC_ALERT_NOT_FOUND' });
           return;
@@ -505,7 +608,12 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
         // panel route already relies on) — nothing created/modified. Still a
         // 2xx: Telegram must not retry indefinitely on a callback that will
         // NEVER resolve to a real alert.
-        const alert = await acknowledgeAlert.execute(alertId, ackBy, new Date().toISOString());
+        // F2 (noc-alerts-config) — channel='telegram' so the structured
+        // AuditEvent's afterJson.channel/actor reflect the REAL source
+        // (this route is excluded from auditMutationsMiddleware entirely —
+        // see EXCLUDED_MUTATION_PATH_PREFIXES — so there's no generic row to
+        // dedupe against here, unlike the panel route).
+        const alert = await acknowledgeAlert.execute(alertId, ackBy, new Date().toISOString(), undefined, 'telegram');
 
         if (telegramGateway) {
           const ackText = alert ? 'Tomado ✅' : 'Alerta no encontrada';
