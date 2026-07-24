@@ -136,6 +136,31 @@ describe('IngestAlert', () => {
     expect(stored).toHaveLength(1);
   });
 
+  // F-D2 (fix wave, necesario junto con F-D1) — la fila resuelta llevaba
+  // telegramChatId/telegramMessageId del incidente ANTERIOR (mensaje ya
+  // "tomado"/cerrado en Telegram). Combinado con el guard de F-D1
+  // (NotifyAlert no re-notifica si esos campos ya están seteados), sin este
+  // reset una resurrección (incidente NUEVO) NUNCA se notificaría — quedaría
+  // atada para siempre al messageId del incidente viejo.
+  it('re-fire tras resolved RESETEA telegramChatId/telegramMessageId (para que NotifyAlert pueda re-notificar el incidente nuevo)', async () => {
+    const repo = new InMemoryNocAlertRepository();
+    const publisher = new NoOpAlertEventPublisher();
+    const useCase = new IngestAlert(repo, publisher);
+
+    await useCase.execute(makeInput());
+    const resolved = await useCase.execute(
+      makeInput({ status: 'resolved', endsAt: '2026-07-24T11:00:00.000Z' }),
+    );
+    await repo.attachTelegramMessage(resolved.id, 'chat-42', 'msg-99');
+
+    const resurrected = await useCase.execute(
+      makeInput({ status: 'firing', startsAt: '2026-07-25T09:00:00.000Z' }),
+    );
+
+    expect(resurrected.telegramChatId).toBeNull();
+    expect(resurrected.telegramMessageId).toBeNull();
+  });
+
   // A9 — dark ingestion (spec.md "Dark ingestion — no outbound side-effects").
   it('dark ingestion: con publisher no-op, ingesta persiste y NO invoca ningún notifier', async () => {
     const repo = new InMemoryNocAlertRepository();

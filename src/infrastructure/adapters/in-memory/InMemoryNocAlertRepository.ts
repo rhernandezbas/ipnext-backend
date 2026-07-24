@@ -42,14 +42,17 @@ export class InMemoryNocAlertRepository implements NocAlertRepository {
       .map((a) => ({ ...a }));
   }
 
-  async acknowledge(id: string, by: string, at: string, note?: string): Promise<NocAlert | null> {
+  async acknowledge(id: string, by: string, at: string, note?: string): Promise<{ alert: NocAlert; changed: boolean } | null> {
     const existing = this.byId.get(id);
     if (!existing) return null;
     // F4 (fix wave) — ACK is idempotent: MTTA = time to the FIRST ack. A second
     // ack must NOT move ackBy/ackAt/ackNote (that would inflate the reported
     // MTTA every time someone re-acks) — return the already-acked row as-is.
+    // F-D4 (fix wave) — `changed: false` here is what lets AcknowledgeAlert
+    // tell "nothing actually happened" apart from "first ack, go edit
+    // Telegram/publish" WITHOUT racing a separate pre-check read.
     if (existing.acknowledged) {
-      return { ...existing };
+      return { alert: { ...existing }, changed: false };
     }
     const updated: NocAlert = {
       ...existing,
@@ -60,11 +63,19 @@ export class InMemoryNocAlertRepository implements NocAlertRepository {
       updatedAt: at,
     };
     this.byId.set(id, updated);
-    return { ...updated };
+    return { alert: { ...updated }, changed: true };
   }
 
   /** Test seam — pre-populate a row directly (bypasses the ingest lifecycle rules). */
   seed(alert: NocAlert): void {
     this.byId.set(alert.id, { ...alert });
+  }
+
+  async attachTelegramMessage(id: string, chatId: string, messageId: string): Promise<NocAlert | null> {
+    const existing = this.byId.get(id);
+    if (!existing) return null;
+    const updated: NocAlert = { ...existing, telegramChatId: chatId, telegramMessageId: messageId };
+    this.byId.set(id, updated);
+    return { ...updated };
   }
 }

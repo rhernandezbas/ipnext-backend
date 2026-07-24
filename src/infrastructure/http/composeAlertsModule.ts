@@ -6,10 +6,14 @@ import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { IngestAlert } from '@application/use-cases/alerts/IngestAlert';
 import { ListAlerts } from '@application/use-cases/alerts/ListAlerts';
 import { AcknowledgeAlert } from '@application/use-cases/alerts/AcknowledgeAlert';
+import { NotifyAlert } from '@application/use-cases/alerts/NotifyAlert';
 import { PrismaNocAlertRepository } from '@infrastructure/adapters/prisma/PrismaNocAlertRepository';
 import { PrismaFeatureFlagRepository } from '@infrastructure/adapters/prisma/PrismaFeatureFlagRepository';
 import { AlertEventBus } from '@infrastructure/events/AlertEventBus';
 import { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
+import { HttpTelegramGateway } from '@infrastructure/adapters/telegram/TelegramGateway';
+import { TelegramBotGateway } from '@infrastructure/adapters/telegram/TelegramBotGateway';
+import { createTelegramSecretMiddleware } from './middleware/apiKeyMiddleware';
 import { createAlertsRouter } from './routes/alerts.routes';
 import { createAuthMiddleware } from './middleware/authMiddleware';
 
@@ -54,6 +58,21 @@ export interface ComposeAlertsModuleDeps {
  * the canonical `NocAlertInput`, one call per `alerts[]` element, delegating
  * each to the SAME `IngestAlert` instantiated above. Stateless, no ports to
  * inject — plain `new`.
+ *
+ * Fase D (`noc-alert-telegram`) — `TelegramBotGateway` (implements the
+ * `AlertNotifier` port) replaces the dark `NoOpAlertNotifier` default: it's
+ * wired as an `eventBus.subscribe(...)` listener (design.md Data Flow —
+ * `AlertEventPublisher(port)` branches into BOTH SSE and Telegram, peers off
+ * the SAME publish, not a call chain from `IngestAlert`), so on every
+ * `'firing'` event it runs `NotifyAlert` — which checks the
+ * `noc-alerts-telegram-send` flag FIRST (default OFF, convivencia) before
+ * ever touching the gateway. The subscription is fire-and-forget (`.catch`
+ * logs, never throws back into `AlertEventBus.publish`'s synchronous
+ * per-listener try/catch, which doesn't await async listeners at all). The
+ * SAME `telegramNotifier` instance is also handed to `AcknowledgeAlert` so
+ * ACKs from EITHER channel (panel or the `/telegram/webhook` callback) edit
+ * the existing Telegram message (spec.md "Acknowledge edits the Telegram
+ * message on either channel").
  */
 export function composeAlertsModule(deps: ComposeAlertsModuleDeps): Router {
   const repo = new PrismaNocAlertRepository();
@@ -61,10 +80,21 @@ export function composeAlertsModule(deps: ComposeAlertsModuleDeps): Router {
   const featureFlagRepo = new PrismaFeatureFlagRepository();
   const grafanaSource = new GrafanaWebhookSource();
 
+  const telegramGateway = new HttpTelegramGateway({ botToken: config.alerts.telegramBotToken });
+  const telegramNotifier = new TelegramBotGateway(telegramGateway, config.alerts.telegramChatId);
+  const notifyAlert = new NotifyAlert(repo, telegramNotifier, featureFlagRepo);
+
+  eventBus.subscribe((event) => {
+    if (event.type !== 'firing') return;
+    notifyAlert.execute(event.alert).catch((err) => {
+      console.error('[composeAlertsModule] NotifyAlert (Telegram) falló', err);
+    });
+  });
+
   return createAlertsRouter({
     ingestAlert: new IngestAlert(repo, eventBus),
     listAlerts: new ListAlerts(repo),
-    acknowledgeAlert: new AcknowledgeAlert(repo, eventBus),
+    acknowledgeAlert: new AcknowledgeAlert(repo, eventBus, telegramNotifier),
     ingestKeys: {
       'fiber-collector': config.alerts.fiberIngestKey,
       grafana: config.alerts.grafanaIngestKey,
@@ -74,5 +104,7 @@ export function composeAlertsModule(deps: ComposeAlertsModuleDeps): Router {
     eventBus,
     auth: createAuthMiddleware(deps.authAdapter, deps.sessionRepo),
     requirePerm: deps.requirePerm,
+    telegramWebhookAuth: createTelegramSecretMiddleware(config.alerts.telegramWebhookSecret),
+    telegramGateway,
   });
 }

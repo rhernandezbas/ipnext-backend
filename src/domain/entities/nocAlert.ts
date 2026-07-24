@@ -199,6 +199,15 @@ export function computeNocAlertIngest(
       ackBy: resurrecting ? null : existing.ackBy,
       ackAt: resurrecting ? null : existing.ackAt,
       ackNote: resurrecting ? null : existing.ackNote,
+      // F-D2 (fix wave) — a resurrection is a NEW incident, not a continuation
+      // of the one Telegram already has a message for. Reset alongside ACK
+      // (same "new occurrence, clean slate" reasoning) so `NotifyAlert`'s
+      // F-D1 guard (skip if telegramChatId/telegramMessageId already set)
+      // doesn't permanently pin this alert to the PREVIOUS incident's message
+      // — without this reset, a resurrected alert would never get notified
+      // again.
+      telegramChatId: resurrecting ? null : existing.telegramChatId,
+      telegramMessageId: resurrecting ? null : existing.telegramMessageId,
       updatedAt: now,
     };
   }

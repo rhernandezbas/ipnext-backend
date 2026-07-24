@@ -431,6 +431,33 @@ export const config = {
   alerts: {
     grafanaIngestKey: process.env.GRAFANA_INGEST_KEY ?? '',
     fiberIngestKey: process.env.FIBER_INGEST_KEY ?? '',
+
+    /**
+     * Fase D (`noc-alert-telegram`) — bot de Telegram bidireccional del hub.
+     *
+     * DEVIATION from tasks.md D14 ("fail-fast de telegramBotToken/
+     * telegramWebhookSecret al import"): kept OPT-IN instead, SAME reasoning
+     * as the DEVIATION already documented above for grafanaIngestKey/
+     * fiberIngestKey, now reinforced by the Fase D convivencia contract
+     * itself (design.md "Restricción dura de convivencia" + the explicit task
+     * instruction: "opt-in, empty default — los secrets se setean en el
+     * cutover"). The flag `noc-alerts-telegram-send` is seeded OFF (Fase A
+     * migration) for the ENTIRE convivencia window — with it OFF,
+     * `TelegramBotGateway` is never invoked regardless of whether these are
+     * set. Fail-fasting on an empty token/secret would process.exit(1) on
+     * every CURRENT deployment (none set these yet) for a channel that's
+     * intentionally dark — the opposite of dark-launch. With the flag ON and
+     * an empty token, `TelegramBotGateway.notify` fails best-effort (caught,
+     * logged, returns null) instead of taking the boot down; an empty
+     * `telegramWebhookSecret` makes `createTelegramSecretMiddleware` fail
+     * CLOSED (401 on every request) — same "no key → no access" intent as
+     * `externalApi.apiKey`, achieved at request-time, not at boot.
+     */
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
+    /** Chat/canal NOC de destino de los `notify()` salientes. */
+    telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
+    /** Compara contra `X-Telegram-Bot-Api-Secret-Token` en `POST /telegram/webhook`. */
+    telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET ?? '',
   },
 
   /**

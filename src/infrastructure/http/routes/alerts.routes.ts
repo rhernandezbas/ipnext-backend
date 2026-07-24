@@ -7,11 +7,12 @@ import { NocAlert, NocAlertInput, NocAlertSeverity, NocAlertStatus } from '@doma
 import { NocAlertListFilters } from '@domain/ports/NocAlertRepository';
 import type { NocAlertEvent } from '@domain/ports/AlertEventPublisher';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
-import { createApiKeyMiddleware } from '../middleware/apiKeyMiddleware';
+import { createApiKeyMiddleware, createTelegramSecretMiddleware } from '../middleware/apiKeyMiddleware';
 import { createExternalWriteRateLimiter } from '../middleware/rateLimiters';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import type { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
 import type { AlertEventBus } from '@infrastructure/events/AlertEventBus';
+import type { TelegramGateway } from '@infrastructure/adapters/telegram/TelegramGateway';
 
 /** Factory matching `requirePerm` exported from app.ts (DIP-clean injection, molde accessPoints.routes). */
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
@@ -94,6 +95,30 @@ export interface AlertsRouterDeps {
   /** Session auth (`createAuthMiddleware(...)`) applied to the RBAC-guarded routes ONLY. */
   auth: RequestHandler;
   requirePerm: RequirePerm;
+  /**
+   * Fase D (`noc-alert-telegram`) — guards `POST /telegram/webhook`. Optional
+   * (same convivencia pattern as `grafanaSource`/`eventBus`): tests that never
+   * exercise the webhook don't need to build one. Falls back to
+   * `createTelegramSecretMiddleware()` (reads `config.alerts.telegramWebhookSecret`
+   * directly) when omitted — an unconfigured secret still fails CLOSED (401 on
+   * every request), never open.
+   */
+  telegramWebhookAuth?: RequestHandler;
+  /**
+   * Fase D — used ONLY for `answerCallbackQuery` (stops Telegram's client-side
+   * spinner on the button). Optional: without it the webhook still acks the
+   * alert correctly, it just skips that one UX nicety.
+   */
+  telegramGateway?: Pick<TelegramGateway, 'answerCallbackQuery'>;
+}
+
+/** Minimal shape of the Telegram Bot API `Update` this webhook cares about. */
+interface TelegramCallbackUpdate {
+  callback_query?: {
+    id: string;
+    data?: string;
+    from?: { id: number; username?: string; first_name?: string };
+  };
 }
 
 /**
@@ -182,8 +207,9 @@ function parseIngestBody(body: unknown, source: string): NocAlertInput | string 
 }
 
 export function createAlertsRouter(deps: AlertsRouterDeps): Router {
-  const { ingestAlert, listAlerts, acknowledgeAlert, ingestKeys, featureFlagRepo, grafanaSource, eventBus, auth, requirePerm } = deps;
+  const { ingestAlert, listAlerts, acknowledgeAlert, ingestKeys, featureFlagRepo, grafanaSource, eventBus, auth, requirePerm, telegramGateway } = deps;
   const heartbeatIntervalMs = deps.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  const telegramWebhookAuth = deps.telegramWebhookAuth ?? createTelegramSecretMiddleware();
   const router = Router();
 
   const readPerm = requirePerm('monitoring', 'read');
@@ -439,6 +465,61 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
           return;
         }
         res.json(toNocAlertDto(alert));
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // POST /telegram/webhook — Fase D (`noc-alert-telegram`). Machine-to-machine
+  // (Telegram's servers), guarded by the shared secret header, NOT session
+  // auth/RBAC. spec.md "A Telegram button callback acknowledges the alert" +
+  // "Double acknowledge is idempotent across channels" + "Callback for a
+  // non-existent alert does not error the webhook".
+  router.post(
+    '/telegram/webhook',
+    telegramWebhookAuth,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const update = (req.body ?? {}) as TelegramCallbackUpdate;
+        const callbackQuery = update.callback_query;
+
+        // Not a button callback (e.g. a plain message update) — 2xx, Telegram
+        // must never retry an update it's not going to act on differently.
+        if (!callbackQuery || typeof callbackQuery.data !== 'string') {
+          res.status(200).json({ ok: true });
+          return;
+        }
+
+        const match = /^ack:(.+)$/.exec(callbackQuery.data);
+        if (!match) {
+          res.status(200).json({ ok: true });
+          return;
+        }
+        const alertId = match[1] as string;
+
+        const from = callbackQuery.from;
+        const ackBy = from ? `telegram:${from.username ?? from.id}` : 'telegram:unknown';
+
+        // Non-existent id → AcknowledgeAlert returns null (same contract the
+        // panel route already relies on) — nothing created/modified. Still a
+        // 2xx: Telegram must not retry indefinitely on a callback that will
+        // NEVER resolve to a real alert.
+        const alert = await acknowledgeAlert.execute(alertId, ackBy, new Date().toISOString());
+
+        if (telegramGateway) {
+          const ackText = alert ? 'Tomado ✅' : 'Alerta no encontrada';
+          try {
+            await telegramGateway.answerCallbackQuery(callbackQuery.id, ackText);
+          } catch {
+            // F-D3 (fix wave, MEDIUM) — best-effort UX nicety (stops Telegram's
+            // client-side button spinner). The ACK itself already persisted
+            // above; a flake HERE must not 500 the webhook — that would make
+            // Telegram retry a callback whose ack already succeeded.
+          }
+        }
+
+        res.status(200).json({ ok: true });
       } catch (err) {
         next(err);
       }
