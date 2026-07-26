@@ -78,6 +78,56 @@ describe('RadiusAuthIngestScheduler', () => {
     expect(summary.error).toContain('boom');
   });
 
+  // ── Regresión: espiral de re-lectura completa (incidente 2026-07-26) ─────────
+  // El catch guardaba `cursor: null`, BORRANDO la marca de agua. El tick siguiente
+  // arrancaba sin cursor -> traía TODA la historia -> lote más grande -> más chance
+  // de timeout -> borraba el cursor otra vez. Cada fallo agrandaba el siguiente
+  // intento hasta reventar el heap de V8 (~4 GB) y matar el proceso.
+  it('un error NO borra el cursor: preserva la marca de agua previa', async () => {
+    const { scheduler, stateRepo, ingest } = makeHarness(true);
+    await stateRepo.save({
+      entity:      LOCK_KEY,
+      cursor:      '2026-06-22T10:00:00Z',
+      lastRunAt:   new Date('2026-06-22T11:00:00Z'),
+      lastResult:  'ok',
+      itemsSynced: 10,
+    });
+
+    jest.spyOn(ingest, 'run').mockRejectedValueOnce(new Error('boom'));
+    await scheduler.runOnce();
+
+    const after = await stateRepo.get(LOCK_KEY);
+    expect(after?.cursor).toBe('2026-06-22T10:00:00Z');
+    expect(after?.lastResult).toContain('error: boom');
+  });
+
+  it('un error sin estado previo deja el cursor en null (no inventa marca de agua)', async () => {
+    const { scheduler, stateRepo, ingest } = makeHarness(true);
+    jest.spyOn(ingest, 'run').mockRejectedValueOnce(new Error('boom'));
+    await scheduler.runOnce();
+
+    const after = await stateRepo.get(LOCK_KEY);
+    expect(after?.cursor).toBeNull();
+    expect(after?.lastResult).toContain('error: boom');
+  });
+
+  // El caso que importa: el ingest suele fallar POR la DB (el incidente fue un timeout
+  // de transacción). Si la lectura del estado previo también falla, escribir un
+  // `cursor: null` de fallback reintroduciría la espiral justo cuando la DB sufre.
+  // Regla: si no puedo CONFIRMAR el cursor, no escribo nada. Perder visibilidad del
+  // error en SyncState (el log igual sale) es infinitamente más barato que borrarlo.
+  it('si no puede leer el estado previo NO escribe: nunca arriesga borrar el cursor', async () => {
+    const { scheduler, stateRepo, ingest } = makeHarness(true);
+    jest.spyOn(ingest, 'run').mockRejectedValueOnce(new Error('boom'));
+    jest.spyOn(stateRepo, 'get').mockRejectedValueOnce(new Error('db down'));
+    const saveSpy = jest.spyOn(stateRepo, 'save');
+
+    const summary = await scheduler.runOnce();
+
+    expect(summary.error).toContain('boom');
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
   it('libera el lock despues de cada run', async () => {
     const { scheduler, lock } = makeHarness(true);
     const releaseSpy = jest.spyOn(lock, 'release');
