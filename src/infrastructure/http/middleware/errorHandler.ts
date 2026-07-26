@@ -9,6 +9,20 @@ import { domainErrorToCode } from '@application/util/domainErrorToCode';
  * exercise THIS handler so the mapping cannot drift out from under the tests.
  */
 const statusMap: Record<string, number> = {
+  // ai-assistant-multiagent — configuración de agentes IA (CFG-1/CFG-2/CFG-3, EVAL-2).
+  // El MOTOR nunca llega acá: RUN-1 exige que degrade a no-op sin propagar. Estos son
+  // errores de la capa de CONFIGURACIÓN, donde un input inválido debe rebotar temprano.
+  ASSISTANT_PROFILE_NOT_FOUND: 404,
+  ASSISTANT_PROFILE_ALREADY_EXISTS: 409,
+  ASSISTANT_INTENT_NOT_FOUND: 404,
+  ASSISTANT_INTENT_NAME_CONFLICT: 409,
+  // 400 y no 422: una key inexistente no es una regla de negocio incumplida, es un
+  // request que referencia algo que no existe en el catálogo.
+  UNKNOWN_ASSISTANT_DATA_SOURCE: 400,
+  UNKNOWN_ASSISTANT_ACTION: 400,
+  // 409: el request es válido, pero el estado del sistema (sin eval registrado) lo bloquea.
+  ASSISTANT_ACTION_REQUIRES_EVAL: 409,
+  INVALID_ASSISTANT_EVAL_RUN: 422,
   // zones (customer-zones-map)
   ZONE_NOT_FOUND: 404,
   INVALID_POLYGON: 422,

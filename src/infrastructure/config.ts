@@ -133,6 +133,26 @@ export const config = {
   },
 
   /**
+   * ai-assistant-multiagent — asistente IA conversacional sobre Chatwoot.
+   *
+   * ⚠️ Sin `apiKey` el adapter degrada a no-op (RUN-1): el motor no lanza, no responde, y
+   * queda auditado. **Deliberadamente NO es fail-fast como el resto de config.ts** — un
+   * deploy sin la key debe dejar el bot mudo, jamás impedir que levante el server. El
+   * asistente es una feature opcional detrás de un flag; la mensajería, la facturación y el
+   * RADIUS no pueden caerse porque falte una credencial de IA.
+   *
+   * LECCIÓN (incidente ORCHESTRATOR_BASE_URL, 2026-06-20): los gates mockean HTTP y NO cazan
+   * una env var faltante en prod. Setear con `gh secret set DEEPSEEK_API_KEY` + la línea
+   * `-e DEEPSEEK_API_KEY` en el step `Deploy container` de `deploy.yml`.
+   */
+  assistant: {
+    /** API oficial de DeepSeek. Los datos van a servidores en China — de ahí la regla de cero PII. */
+    baseUrl: process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com',
+    apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+    timeoutMs: parseInt(process.env.DEEPSEEK_TIMEOUT_MS || '20000', 10),
+  },
+
+  /**
    * UISP NMS mirror sync. Opt-in: absent env → client null → scheduler skip with log.
    * NOT in REQUIRED_VARS — no fail-fast at boot.
    * UISP uses a self-signed internal TLS cert (rejectUnauthorized: false in adapter).

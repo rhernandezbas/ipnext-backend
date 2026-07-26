@@ -2489,6 +2489,15 @@ model TicketAreaCatalog {
   tickets   Ticket[]
   // F1.5-C2 (asignación) — back-relation del área LOCAL de Conversation (mirror WhatsApp).
   conversations Conversation[]
+  // ai-assistant-multiagent (CFG-1) — perfil del asistente IA de ESTA área. 1:1 (el FK del
+  // otro lado es @unique). Este catálogo YA es compartido por Ticket.areaId y
+  // Conversation.areaId, así que UN perfil sirve a las dos superficies sin duplicar nada.
+  // onDelete: Cascade del lado del perfil ⇒ borrar el área se lleva su configuración.
+  assistantProfile AssistantProfile?
+  // RTR-0 — back-relation del área designada como DEFAULT (la que atiende lo que entra sin
+  // clasificar). onDelete: SetNull del otro lado: borrar el área deja el ruteo sin default
+  // (las conversaciones sin área dejan de atenderse) en vez de romper la config.
+  assistantRoutingDefault AssistantRoutingConfig[]
 
   @@map("TicketAreaCatalog")
 }
@@ -3586,4 +3595,165 @@ model SmartOltOltConfig {
   mgmtVlan           Int?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ai-assistant-multiagent — asistente IA configurable POR ÁREA, sobre conversaciones
+// de WhatsApp (mirror Chatwoot) Y tickets. Ver openspec/changes/ai-assistant-multiagent/.
+//
+// PRINCIPIO RECTOR (D6 del proposal): la CONFIGURACIÓN es 100% editable en runtime;
+// sólo las CAPACIDADES nuevas (una fuente de datos o una acción que hoy no existe)
+// requieren código. Por eso las intenciones son FILAS (AssistantIntent), NO un enum
+// hardcodeado: agregar comportamiento es cargar datos desde la UI, sin deploy.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// CFG-1 — un perfil por área. `enabled` nace en FALSE: un perfil recién creado NUNCA
+// habla hasta que alguien lo habilite explícitamente (la ausencia de configuración
+// SIEMPRE resuelve a "no hablar", nunca a "improvisar" — RTR-3).
+model AssistantProfile {
+  id     String            @id @default(uuid())
+  areaId String            @unique
+  area   TicketAreaCatalog @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  enabled        Boolean @default(false)
+  persona        String  @default("")
+  handoffMessage String  @default("")
+  // Modelo de redacción (paso 4 del pipeline, D1). Editable por área.
+  model          String  @default("deepseek-chat")
+  // Modelo del CLASIFICADOR (paso 1). NULL ⇒ usa `model`. Permite un modelo más chico y
+  // barato para clasificar, que es una llamada corta y de set cerrado.
+  classifierModel String?
+  timeoutMs       Int     @default(20000)
+  // Keys de AssistantAction habilitadas para ESTE perfil (ACT-1). Una acción no listada
+  // acá resuelve a handoff aunque la intención la referencie.
+  enabledActions  String[] @default([])
+
+  intents   AssistantIntent[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+}
+
+// CFG-2 — una intención = una FILA. Alta/baja/edición SIN deploy. `description` y
+// `examples[]` son el material que lee el clasificador (RTR-2): el universo de candidatas
+// es SIEMPRE el de las intents enabled DEL PERFIL DEL ÁREA, nunca un vocabulario global.
+model AssistantIntent {
+  id        String           @id @default(uuid())
+  profileId String
+  profile   AssistantProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String
+  examples    String[] @default([])
+  enabled     Boolean  @default(true)
+  // Qué datos ve esta intención. Cada key MUST existir en AssistantDataSource (CFG-3,
+  // validado en configuración con 400) — el motor resuelve SÓLO estas fuentes.
+  dataSourceKeys String[] @default([])
+  responseGuide  String   @default("")
+  // Qué hace. MUST existir en AssistantAction Y estar en profile.enabledActions (ACT-1).
+  actionKey      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, name])
+  @@index([profileId])
+}
+
+// CFG-3 — CATÁLOGO de fuentes. La implementación de cada `key` vive en CÓDIGO
+// (AssistantDataSourceRegistry, D2). Esta tabla sólo permite HABILITAR/deshabilitar:
+// NO existe endpoint para CREAR fuentes desde la UI — cada fuente es una puerta a la
+// base, y definirlas por formulario sería una inyección con formulario bonito.
+// Seed idempotente por migración. `noc.cortes` arranca DESHABILITADA: mientras el hub
+// NOC esté en modo oscuro, responder "no hay cortes" sería afirmar sin saber.
+model AssistantDataSource {
+  key       String   @id
+  label     String
+  enabled   Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+// CFG-3 — CATÁLOGO de acciones, con su nivel de riesgo (§7 del proposal):
+//   green  → comment_internal, suggest_area   (los ve un empleado, daño ~0)
+//   yellow → whatsapp_reply, comment_public   (los ve el cliente)
+//   red    → close_ticket, create_task        (entierra un problema / despacha cuadrilla)
+// ACT-2: ninguna `red` viene habilitada en el seed; habilitarla requiere acto explícito
+// y una corrida de eval registrada (EVAL-2).
+model AssistantAction {
+  key       String   @id
+  label     String
+  riskLevel String
+  updatedAt DateTime @updatedAt
+}
+
+// RTR-0 — ruteo cuando la conversación NO tiene área.
+//
+// Hallazgo que obliga a esto (2026-07-26): `Conversation.areaId` lo escribe ÚNICAMENTE
+// `SetConversationArea`, una acción manual en la UI de Prominense — y los agentes trabajan
+// dentro de CHATWOOT. O sea: las conversaciones de WhatsApp entran con `areaId = NULL` y
+// nadie las clasifica, así que un motor que exigiera área NUNCA se activaría.
+//
+// Solución elegida por el usuario: **agente default + re-ruteo**. Este singleton dice qué
+// área atiende lo que entra sin clasificar. El agente default responde; si detecta que el
+// tema pertenece a otra área con agente propio, reasigna y esa área toma la conversación.
+//
+// Molde config-singleton del repo (NocAlertThresholdsConfig / NocBroadcastConfig).
+// `defaultAreaId` NULL = sin agente default ⇒ las conversaciones sin área no se atienden
+// (comportamiento seguro por defecto: el seed lo deja en NULL).
+model AssistantRoutingConfig {
+  id            String             @id @default("singleton")
+  defaultAreaId String?
+  defaultArea   TicketAreaCatalog? @relation(fields: [defaultAreaId], references: [id], onDelete: SetNull)
+  /// RTR-0 — habilita el re-ruteo a otras áreas. OFF ⇒ el agente default atiende todo y
+  /// nunca reasigna (menos llamadas al modelo, menos superficie).
+  rerouteEnabled Boolean           @default(false)
+  updatedAt     DateTime           @updatedAt
+}
+
+// EVAL-1/EVAL-2 — corridas de evaluación del asistente.
+//
+// NO es una métrica decorativa: es el CANDADO de las acciones `riskLevel:'red'`. Sin al menos
+// una corrida registrada, `resolve_conversation` no se puede habilitar.
+//
+// Las dos particiones se guardan SEPARADAS a propósito. Un "accuracy" único esconde el modo
+// de falla que importa: el benchmark de IrisAgent sobre tickets reales (jul-2026) mostró un
+// modelo que resuelve casi todo y es el PEOR resistiendo alucinaciones — con un promedio
+// único habría salido primero.
+model AssistantEvalRun {
+  id                String   @id @default(uuid())
+  model             String
+  /// Partición de RESOLUCIÓN: la respuesta correcta existe y se conoce.
+  resolutionTotal   Int
+  resolutionCorrect Int
+  /// Partición de ABSTENCIÓN: no hay respuesta buena; el acierto es CALLARSE.
+  abstentionTotal   Int
+  abstentionCorrect Int
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// OBS-1 — auditoría de CADA invocación del motor (responda o no). MUST NOT contener PII
+// ni el prompt crudo: sólo qué agente actuó, con qué intención, qué fuentes resolvió y
+// en qué terminó. Es la fuente de verdad para depurar por qué el bot dijo (o calló) algo.
+model AssistantRun {
+  id          String  @id @default(uuid())
+  profileId   String?
+  areaId      String?
+  subjectType String // 'conversation' | 'ticket'
+  subjectId   String
+  // NULL ⇒ el clasificador no matcheó ninguna intención habilitada (default deny, RTR-3).
+  intentName  String?
+  dataSources String[] @default([])
+  actionKey   String?
+  // 'replied' | 'handoff' | 'noop' | 'rejected_numbers' | 'error'
+  // `rejected_numbers` = SEC-4 descartó la salida porque el modelo escribió una cifra que
+  // no estaba en los hechos inyectados. Es la métrica de alucinación atajada.
+  outcome   String
+  reason    String?
+  latencyMs Int?
+  createdAt DateTime @default(now())
+
+  @@index([subjectType, subjectId])
+  @@index([createdAt])
 }

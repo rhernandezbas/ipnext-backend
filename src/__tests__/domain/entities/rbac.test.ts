@@ -24,8 +24,14 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 35 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news)', () => {
-    expect(RBAC_MODULES).toHaveLength(35);
+  it('contains exactly 36 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant)', () => {
+    expect(RBAC_MODULES).toHaveLength(36);
+  });
+
+  it('includes the assistant module (ai-assistant-multiagent)', () => {
+    // Módulo PROPIO y no una sub-acción de `messaging`: responder un WhatsApp y configurar
+    // un bot que responde solo, a escala y sin supervisión, son responsabilidades distintas.
+    expect(RBAC_MODULES).toContain('assistant');
   });
 
   it('includes all 14 original module codes', () => {

@@ -9,6 +9,7 @@ import type {
   RecordConversationEventInput,
 } from '@domain/ports/ConversationEventRepository';
 import { MessageNotMirroredYetError } from '@domain/errors/messaging';
+import type { ReplyWithAssistantCommand } from '@application/use-cases/assistant/ReplyWithAssistant';
 import { toWhatsAppE164 } from './toWhatsAppE164';
 import { deriveConversationPreview } from './conversationPreview';
 import { computeStatusTransition } from './conversationStatusTransition';
@@ -201,6 +202,13 @@ export class ReceiveChatwootWebhook {
      * él, el webhook se comporta EXACTAMENTE como antes (cero regresión).
      */
     private readonly eventRepo?: ConversationEventRepository,
+    /**
+     * ai-assistant-multiagent (RUN-2) — asistente IA conversacional. Opcional (los call sites
+     * de 3/5/6/7-arg siguen compilando). Sin él, el webhook se comporta EXACTAMENTE como
+     * antes del change: cero regresión. Con él, dispara en rama aislada y best-effort tras
+     * espejar el mensaje.
+     */
+    private readonly assistant?: { execute(command: ReplyWithAssistantCommand): Promise<unknown> },
   ) {}
 
   async execute(deliveryId: string, payload: ChatwootWebhookPayload): Promise<void> {
@@ -393,6 +401,59 @@ export class ReceiveChatwootWebhook {
     });
 
     await this.captureAttachments(message.id, payload.attachments);
+
+    // ai-assistant-multiagent (RUN-2) — el asistente IA, en rama AISLADA y best-effort
+    // (mismo molde que `captureAttachments` / `maybeAdoptBulkConversation`): el mensaje YA
+    // se espejó arriba, así que un fallo del bot no puede desandar nada ni impedir el ack
+    // 200. Va AL FINAL a propósito — el espejado es el trabajo crítico del webhook; el bot
+    // es un efecto secundario.
+    await this.maybeReplyWithAssistant(conversation.id, conversation.areaId ?? null, {
+      direction,
+      isPrivate: isPrivateNote,
+      canReply: payload.conversation?.can_reply ?? conversation.canReply ?? false,
+      contactPhone: sender?.phone_number ?? null,
+    });
+  }
+
+  /**
+   * ai-assistant-multiagent (RUN-2) — dispara el asistente sin poder romper el webhook.
+   *
+   * Doble red: el propio `ReplyWithAssistant` nunca lanza (RUN-1), y además esto va envuelto
+   * en try/catch. Redundante a propósito — si alguien rompe la garantía del motor en un
+   * refactor futuro, el webhook sigue ackeando 200 y Chatwoot no entra en tormenta de
+   * reintentos de Sidekiq.
+   *
+   * Sin `assistant` inyectado (call sites existentes de 3/5/6/7 args) es un no-op silencioso:
+   * el webhook se comporta EXACTAMENTE como antes del change (cero regresión).
+   */
+  private async maybeReplyWithAssistant(
+    conversationId: string,
+    areaId: string | null,
+    input: {
+      direction: 'inbound' | 'outbound' | null;
+      isPrivate: boolean;
+      canReply: boolean;
+      contactPhone: string | null;
+    },
+  ): Promise<void> {
+    if (!this.assistant) return;
+
+    try {
+      await this.assistant.execute({
+        conversationId,
+        areaId,
+        direction: input.direction,
+        isPrivate: input.isPrivate,
+        canReply: input.canReply,
+        contactPhone: input.contactPhone,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[messaging] el asistente IA falló (aislado, el webhook igual ackea 200)', {
+        conversationId,
+        error: err instanceof Error ? err.message : err,
+      });
+    }
   }
 
   /**

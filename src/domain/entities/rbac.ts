@@ -151,6 +151,11 @@ export const RBAC_MODULES = [
   'actions',
   // Inbox de mensajería omnicanal (messaging-inbox F1) — WhatsApp vía Chatwoot
   'messaging',
+  // ai-assistant-multiagent — configuración del asistente IA conversacional.
+  // Módulo PROPIO y no una sub-acción de `messaging` a propósito: responder un WhatsApp y
+  // configurar un bot que responde solo, de forma autónoma y a escala, son responsabilidades
+  // de distinto peso. Un agente puede tener messaging.* sin poder tocar qué dice el bot.
+  'assistant',
   // internal-news — tablón interno del equipo. Usa las base actions read/manage
   // sin agregar action codes nuevos (mismo criterio que 'uisp').
   'news',
