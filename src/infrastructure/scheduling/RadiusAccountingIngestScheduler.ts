@@ -14,7 +14,7 @@
 import type { IngestRadiusAccounting, IngestRunResult } from '@application/use-cases/IngestRadiusAccounting';
 import type { DistributedLock } from '@domain/ports/DistributedLock';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
-import type { SyncStateRepository } from '@domain/ports/SyncStateRepository';
+import type { SyncStateRepository, SyncState } from '@domain/ports/SyncStateRepository';
 
 const LOCK_KEY = 'radius-accounting-ingest';
 const FLAG_KEY = 'radius-accounting-ingest';
@@ -99,13 +99,30 @@ export class RadiusAccountingIngestScheduler {
         this.log(`[radius-ingest] ERROR: ${message}`);
         // Best-effort: persistir error en SyncState para visibilidad operacional
         if (this.stateRepo) {
-          await this.stateRepo.save({
-            entity:      LOCK_KEY,
-            cursor:      null,
-            lastRunAt:   new Date(),
-            lastResult:  `error: ${message}`,
-            itemsSynced: 0,
-          }).catch(() => { /* ignore */ });
+          // El cursor NO se toca cuando falla (incidente 2026-07-26 — mismo bug que en
+          // RadiusAuthIngestScheduler, que ahí YA había explotado). Guardar `cursor: null`
+          // borraba la marca de agua y condenaba al tick siguiente a re-leer toda la
+          // historia: lote más grande -> más chance de timeout -> otro borrado. Espiral
+          // hasta agotar el heap. Preservándolo, la falla queda acotada al mismo delta.
+          // Si NO se puede leer el estado previo no se escribe NADA (espejo del scheduler
+          // de auth): el ingest suele fallar POR la DB, y un `cursor: null` de fallback
+          // reintroduciría la espiral justo cuando la DB está sufriendo.
+          let prev: SyncState | null = null;
+          let canWrite = true;
+          try {
+            prev = await this.stateRepo.get(LOCK_KEY);
+          } catch {
+            canWrite = false;
+          }
+          if (canWrite) {
+            await this.stateRepo.save({
+              entity:      LOCK_KEY,
+              cursor:      prev?.cursor ?? null,
+              lastRunAt:   new Date(),
+              lastResult:  `error: ${message}`,
+              itemsSynced: 0,
+            }).catch(() => { /* ignore */ });
+          }
         }
         return { error: message };
       } finally {

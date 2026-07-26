@@ -12,7 +12,7 @@
 import type { IngestRadiusAuth, IngestAuthRunResult } from '@application/use-cases/IngestRadiusAuth';
 import type { DistributedLock } from '@domain/ports/DistributedLock';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
-import type { SyncStateRepository } from '@domain/ports/SyncStateRepository';
+import type { SyncStateRepository, SyncState } from '@domain/ports/SyncStateRepository';
 
 const LOCK_KEY = 'radius-auth-ingest';
 const FLAG_KEY = 'radius-auth-ingest';
@@ -93,13 +93,32 @@ export class RadiusAuthIngestScheduler {
         const message = (err as Error).message;
         this.log(`[radius-auth-ingest] ERROR: ${message}`);
         if (this.stateRepo) {
-          await this.stateRepo.save({
-            entity:      LOCK_KEY,
-            cursor:      null,
-            lastRunAt:   new Date(),
-            lastResult:  `error: ${message}`,
-            itemsSynced: 0,
-          }).catch(() => { /* ignore */ });
+          // El cursor NO se toca cuando falla (incidente 2026-07-26). Guardar `cursor: null`
+          // BORRABA la marca de agua: el tick siguiente arrancaba sin cursor, traía TODA la
+          // historia, el lote más grande tenía más chance de pasarse del timeout de Prisma,
+          // y volvía a borrar el cursor. Cada fallo agrandaba el siguiente intento hasta
+          // reventar el heap de V8 (~4 GB) y matar el proceso. Preservando el cursor la
+          // falla queda ACOTADA: se reintenta el mismo delta chico.
+          // Si NO se puede leer el estado previo no se escribe NADA: el ingest suele
+          // fallar POR la DB, y un `cursor: null` de fallback reintroduciría la espiral
+          // justo cuando la DB está sufriendo. Perder la visibilidad del error en
+          // SyncState (el log igual sale) es mucho más barato que borrar el cursor.
+          let prev: SyncState | null = null;
+          let canWrite = true;
+          try {
+            prev = await this.stateRepo.get(LOCK_KEY);
+          } catch {
+            canWrite = false;
+          }
+          if (canWrite) {
+            await this.stateRepo.save({
+              entity:      LOCK_KEY,
+              cursor:      prev?.cursor ?? null,
+              lastRunAt:   new Date(),
+              lastResult:  `error: ${message}`,
+              itemsSynced: 0,
+            }).catch(() => { /* ignore */ });
+          }
         }
         return { error: message };
       } finally {
