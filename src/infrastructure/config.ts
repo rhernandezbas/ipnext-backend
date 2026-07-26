@@ -492,10 +492,16 @@ export const config = {
      * en el 1er request → NaN/0/negativo cae al default (600), nunca a 0.
      */
     ingestRateLimit: {
-      limit: (() => {
-        const n = parseInt(process.env.ALERTS_INGEST_RATE_LIMIT || '', 10);
-        return Number.isInteger(n) && n > 0 ? n : 600;
-      })(),
+      // Se usa `parsePositiveInt` (helper ya existente y testeado) en vez de un
+      // `parseInt` propio: `parseInt` CORTA en el primer no-dígito, así que
+      // `"1e9"` daría limit=1 → 429 desde el 2do request = outage de la
+      // ingesta (hallazgo del review adversarial). Además agrega el techo que
+      // el parseo manual no tenía.
+      limit: parsePositiveInt(process.env.ALERTS_INGEST_RATE_LIMIT, {
+        default: 600,
+        min: 1,
+        max: 100_000,
+      }),
       windowMs: parseIntervalMs(process.env.ALERTS_INGEST_RATE_WINDOW_MS, {
         default: 60 * 1000,
         min: 1_000,
