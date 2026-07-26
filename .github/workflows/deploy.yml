@@ -102,6 +102,8 @@ jobs:
             -e EXTERNAL_API_KEY="${{ secrets.EXTERNAL_API_KEY }}" \
             -e GRAFANA_INGEST_KEY="${{ secrets.GRAFANA_INGEST_KEY }}" \
             -e FIBER_INGEST_KEY="${{ secrets.FIBER_INGEST_KEY }}" \
+            -e ALERTS_INGEST_RATE_LIMIT="${{ secrets.ALERTS_INGEST_RATE_LIMIT }}" \
+            -e ALERTS_INGEST_RATE_WINDOW_MS="${{ secrets.ALERTS_INGEST_RATE_WINDOW_MS }}" \
             -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
             -e TELEGRAM_CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -e TELEGRAM_WEBHOOK_SECRET="${{ secrets.TELEGRAM_WEBHOOK_SECRET }}" \

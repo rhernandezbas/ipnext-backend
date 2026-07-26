@@ -478,6 +478,36 @@ export const config = {
     telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
     /** Compara contra `X-Telegram-Bot-Api-Secret-Token` en `POST /telegram/webhook`. */
     telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET ?? '',
+
+    /**
+     * alerts-ingest-ratelimit (fix, incidente en vivo 2026-07-26) — límite del
+     * rate limiter DEDICADO de `POST /ingest/:source` (`createIngestRateLimiter`,
+     * rateLimiters.ts). Reusar el limiter del API externo (30 req/60s) ya
+     * rebotaba alertas reales del colector de fibra (~29 req/ciclo, al filo de
+     * 30). Default 600/60s — cubre un incidente grande (hasta 600 ONUs
+     * degradando en un mismo ciclo) sin dejar la ruta sin techo. Configurable
+     * por env por si el tamaño del colector/incidente cambia sin redeploy.
+     * Mismo patrón defensivo que `loginRateLimit.limit`: un secret mal seteado
+     * ("0"/"-5"/no-numérico) no puede tumbar la ingesta con un 429 inmediato
+     * en el 1er request → NaN/0/negativo cae al default (600), nunca a 0.
+     */
+    ingestRateLimit: {
+      // Se usa `parsePositiveInt` (helper ya existente y testeado) en vez de un
+      // `parseInt` propio: `parseInt` CORTA en el primer no-dígito, así que
+      // `"1e9"` daría limit=1 → 429 desde el 2do request = outage de la
+      // ingesta (hallazgo del review adversarial). Además agrega el techo que
+      // el parseo manual no tenía.
+      limit: parsePositiveInt(process.env.ALERTS_INGEST_RATE_LIMIT, {
+        default: 600,
+        min: 1,
+        max: 100_000,
+      }),
+      windowMs: parseIntervalMs(process.env.ALERTS_INGEST_RATE_WINDOW_MS, {
+        default: 60 * 1000,
+        min: 1_000,
+        max: 60 * 60 * 1000,
+      }),
+    },
   },
 
   /**

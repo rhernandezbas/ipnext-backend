@@ -18,6 +18,7 @@ import { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWe
 import { HttpTelegramGateway } from '@infrastructure/adapters/telegram/TelegramGateway';
 import { TelegramBotGateway } from '@infrastructure/adapters/telegram/TelegramBotGateway';
 import { createTelegramSecretMiddleware } from './middleware/apiKeyMiddleware';
+import { createIngestRateLimiter } from './middleware/rateLimiters';
 import { createAlertsRouter } from './routes/alerts.routes';
 import { createAuthMiddleware } from './middleware/authMiddleware';
 
@@ -117,6 +118,10 @@ export function composeAlertsModule(deps: ComposeAlertsModuleDeps): Router {
     featureFlagRepo,
     grafanaSource,
     eventBus,
+    // alerts-ingest-ratelimit (fix) — limiter DEDICADO de ingesta (default
+    // 600/60s, config.alerts.ingestRateLimit), NUNCA el default de 30/60s
+    // pensado para el API externo (createExternalWriteRateLimiter).
+    ingestRateLimiter: createIngestRateLimiter(config.alerts.ingestRateLimit),
     auth: createAuthMiddleware(deps.authAdapter, deps.sessionRepo),
     requirePerm: deps.requirePerm,
     telegramWebhookAuth: createTelegramSecretMiddleware(config.alerts.telegramWebhookSecret),
