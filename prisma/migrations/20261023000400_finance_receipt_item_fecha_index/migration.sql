@@ -1,0 +1,22 @@
+-- fix-wave-3 LOW (read-path asymmetry) — FinanceReceiptItem was write-only
+-- (upsertBatch and nothing else) while FinanceReceiptApplication already had
+-- listByMonth/listByClientAndMonth + an index on appliedDate. This index
+-- supports the new PrismaFinanceReceiptItemRepository.listByMonth's
+-- `WHERE fecha BETWEEN ...`, so the cash-collected metric (spec.md) has a
+-- ready-made read path at least as fast as summing `aplicaciones`.
+-- 100% ADITIVA: one index, no data migration needed.
+--
+-- fix-wave-4 W2 (DEUDA anotada, index NOT dropped) — this column turned out
+-- to be the WRONG cut: measured live (500 recibos, junio 2026), 56/499 items
+-- (10,4% of the cash) have NO `fecha` at all on the wire, so a
+-- `WHERE fecha BETWEEN ...` silently drops them from every month. The
+-- monthly read now cuts by the PARENT RECEIPT's `fechaRecibo` instead (see
+-- `PrismaFinanceReceiptItemRepository.listByMonth`), which already has its
+-- own index — `FinancePaymentReceipt_fechaRecibo_idx`, migration
+-- `20261023000000_finance_receipts_foundation`. This index is therefore
+-- UNUSED by the current read path. Left in place (harmless, aditiva, no
+-- rollback needed) instead of a destructive DROP INDEX — a future write-side
+-- dedupe/audit query keyed on `fecha` could still use it.
+
+-- CreateIndex
+CREATE INDEX "FinanceReceiptItem_fecha_idx" ON "FinanceReceiptItem"("fecha");

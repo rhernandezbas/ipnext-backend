@@ -95,6 +95,12 @@ export const KNOWN_ACTIONS = [
   'bulk_inactive',
   'bulk_baja',
   'bulk_numbers',
+  // finance-growth Fase 1 — módulo `finance` (RBAC dos capas, separado de
+  // `billing`). `sync` YA existe (iclass.sync) y se REUSA para
+  // `finance:sync` — no se duplica.
+  'manage_costs',
+  'manage_targets',
+  'manage_inflation',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.
@@ -154,6 +160,10 @@ export const RBAC_MODULES = [
   // internal-news — tablón interno del equipo. Usa las base actions read/manage
   // sin agregar action codes nuevos (mismo criterio que 'uisp').
   'news',
+  // finance-growth Fase 1 — "Finanzas — Crecimiento" (unit economics de un ISP,
+  // sobre cobranza real GR). DELIBERADAMENTE separado de `billing` (cementerio
+  // Splynx) — ver design.md Decision 6.
+  'finance',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

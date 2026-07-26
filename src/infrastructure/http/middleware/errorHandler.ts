@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { DomainError } from '@domain/errors';
 import { OrchestratorRejectedError } from '@domain/errors/pppoe';
+import { FinanceSyncLockBusyError } from '@domain/errors/finance';
 import { domainErrorToCode } from '@application/util/domainErrorToCode';
 
 /**
@@ -271,6 +272,12 @@ const statusMap: Record<string, number> = {
   TASK_STAGE_NOT_ELIGIBLE: 422,
   TOO_MANY_TASK_STATE_RECIPIENTS: 422,
   RESULTING_STAGE_NOT_ALLOWED: 422,
+  // finance-growth Fase 1 (fix-wave-3 R10) — RearmFinanceReceiptsBackfill's
+  // lock IS load-bearing (it and a concurrent tick write the SAME `cursor`
+  // column); a busy lock is transient/retriable, never a 500. `Retry-After`
+  // is set below from `err.retryAfterSeconds` (dynamic, same pattern as
+  // OrchestratorRejectedError's dynamic status).
+  FINANCE_SYNC_LOCK_BUSY: 503,
 };
 
 /** Express global error-handling middleware. */
@@ -288,6 +295,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     const status = err instanceof OrchestratorRejectedError
       ? err.upstreamStatus
       : (statusMap[err.code] ?? 400);
+    // fix-wave-3 R10 — a busy load-bearing lock is retriable; tell the caller
+    // how long to wait instead of leaving it to guess (or hammer immediately).
+    if (err instanceof FinanceSyncLockBusyError) {
+      res.set('Retry-After', String(err.retryAfterSeconds));
+    }
     const mapped = domainErrorToCode(err);
     const body: Record<string, unknown> = { error: err.message, code: err.code };
     // Surface the missing field names so the front-end can drive its modal.

@@ -891,6 +891,16 @@ import { createTaskStageConfigRouter } from './routes/taskStageConfig.routes';
 import { PrismaTaskStageTransitionConfigRepository } from '../adapters/prisma/PrismaTaskStageTransitionConfigRepository';
 import { GetTaskStageTransitionConfig } from '@application/use-cases/GetTaskStageTransitionConfig';
 import { SetTaskStageTransitionConfig } from '@application/use-cases/SetTaskStageTransitionConfig';
+// finance-growth Fase 1 — ingest global de cobranza GR (design.md Decision 4b).
+import { createFinanceGrowthRouter } from './routes/financeGrowth.routes';
+import { ListFinanceInvoiceTypes } from '@application/use-cases/finance/ListFinanceInvoiceTypes';
+import { ReclassifyFinanceInvoiceType } from '@application/use-cases/finance/ReclassifyFinanceInvoiceType';
+import { GetFinanceSyncStatus } from '@application/use-cases/finance/GetFinanceSyncStatus';
+import { ForceFinanceDeltaRun } from '@application/use-cases/finance/ForceFinanceDeltaRun';
+import { RearmFinanceReceiptsBackfill } from '@application/use-cases/finance/RearmFinanceReceiptsBackfill';
+import { PrismaFinanceInvoiceTypeClassificationRepository } from '../adapters/prisma/PrismaFinanceInvoiceTypeClassificationRepository';
+import { FinanceReceiptIngestScheduler, FinanceReceiptIngestSchedulerStatus } from '../scheduling/FinanceReceiptIngestScheduler';
+import { FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -1021,7 +1031,23 @@ const resolveUserPermissions = new ResolveUserPermissions(rbacUserRoleRepo, rbac
 export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
   requirePermission(rbacUserRepo, m, a);
 
-export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, backfillScheduler?: BackfillScheduler | null, uispSyncScheduler?: UispSyncScheduler | null) {
+// finance-growth Fase 1 — pacing snapshot when the scheduler is disabled/not
+// yet bootstrapped (GR off, or GR_CUIT/GR_SECRET missing) — GET /sync/status
+// still responds 200 with an honest "idle" snapshot instead of 500.
+// fix-wave-2 LOW: was hardcoded to 20000 — now mirrors
+// FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS so a change to the base pacing default
+// doesn't leave this idle snapshot silently out of sync with reality.
+const FINANCE_RECEIPT_INGEST_IDLE_STATUS: FinanceReceiptIngestSchedulerStatus = {
+  requestIntervalMs: FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS.requestIntervalMs,
+  effectiveIntervalMs: FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS.requestIntervalMs,
+  degraded: false,
+  consecutiveFailures: 0,
+  activeLane: 'idle',
+  // fix-wave-2 R3 — no scheduler instance at all ⇒ definitionally not running.
+  enabled: false,
+};
+
+export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, backfillScheduler?: BackfillScheduler | null, uispSyncScheduler?: UispSyncScheduler | null, financeReceiptIngestScheduler?: FinanceReceiptIngestScheduler | null) {
   const app = express();
 
   // SDD #6a — behind EasyPanel's proxy; trust the first hop so the rate limiter
@@ -3312,6 +3338,39 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     createExternalNews,
     rbacUserRepo,
     rateLimiter: createExternalWriteRateLimiter(),
+  }));
+
+  // finance-growth Fase 1 — /api/finance/growth/* (design.md Wiring). The
+  // ROUTE's own dependencies (invoice-type catalog + sync state readers) are
+  // REAL Prisma repos, built here regardless of whether the scheduler itself
+  // is running — `getPacingStatus` reads the LIVE scheduler snapshot when
+  // wired, or an honest "idle" default when GR is off/misconfigured.
+  const financeInvoiceTypesRepo = new PrismaFinanceInvoiceTypeClassificationRepository();
+  const financeSyncStateRepo = new PrismaSyncStateRepository();
+  // fix-wave-1 F8 — ForceFinanceDeltaRun acquires the SAME lock key the
+  // scheduler's tick() holds (`finance-receipts-ingest`) before touching
+  // SyncState. fix-wave-2 R2 replaced the original read-modify-write with a
+  // TARGETED single-column update (`clearLastRunAt`) — the lock is no longer
+  // load-bearing there (the write is safe in either order), which is why
+  // fix-wave-3 R10 made it proceed unlocked, instead of throwing, when the
+  // lock stays busy for the whole retry budget.
+  const financeForceRunLock = new PgAdvisoryLock();
+  app.use('/api/finance/growth', createFinanceGrowthRouter({
+    auth: createAuthMiddleware(authAdapter, sessionRepo),
+    requirePerm,
+    listInvoiceTypes: new ListFinanceInvoiceTypes(financeInvoiceTypesRepo),
+    reclassifyInvoiceType: new ReclassifyFinanceInvoiceType(financeInvoiceTypesRepo),
+    getSyncStatus: new GetFinanceSyncStatus(financeSyncStateRepo),
+    forceDeltaRun: new ForceFinanceDeltaRun(financeSyncStateRepo, financeForceRunLock),
+    // fix-wave-2 R6 — reuses the SAME `financeForceRunLock` instance as
+    // `ForceFinanceDeltaRun` (safe: PgAdvisoryLock's re-entrancy caveat only
+    // matters WITHIN one connection; this still correctly contends against
+    // the scheduler's OWN separate `PgAdvisoryLock` connection in
+    // `bootstrapFinanceReceiptsIngest.ts`).
+    rearmBackfill: new RearmFinanceReceiptsBackfill(financeSyncStateRepo, financeForceRunLock),
+    // fix-wave-2 R3 — `isEnabled()`, NOT `!= null` (see FinanceGrowthRouterDeps docblock).
+    isSchedulerRunning: () => financeReceiptIngestScheduler?.isEnabled() ?? false,
+    getPacingStatus: () => financeReceiptIngestScheduler?.status ?? FINANCE_RECEIPT_INGEST_IDLE_STATUS,
   }));
 
   // 404

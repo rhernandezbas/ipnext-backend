@@ -7,6 +7,8 @@ import {
   FetchClientsResult,
   FetchContractsDeltaParams,
   FetchContractsDeltaResult,
+  FetchReceiptsParams,
+  FetchReceiptsResult,
   GetServiceOrdersParams,
 } from '@domain/ports/GestionRealPort';
 import {
@@ -14,8 +16,13 @@ import {
   GrClientBalance,
   GrContract,
   GrInvoice,
+  GrReceipt,
+  GrReceiptApplication,
+  GrReceiptItem,
+  GrReceiptRetencion,
   GrServiceOrder,
 } from '@domain/entities/gestionReal';
+import { isRealAnnulment } from '@application/use-cases/finance/financeDates';
 
 export interface GestionRealClientOptions {
   baseUrl: string;
@@ -188,6 +195,24 @@ export class GestionRealClient implements GestionRealPort {
 
     const { data } = await this.postWithRetry(payload);
     return parseServiceOrdersResponse(data);
+  }
+
+  /**
+   * finance-growth Fase 1 (design.md Decision 0) — global payment-receipt sync
+   * via the `recibos` action, paginated by offset. `fechaDesde`/`fechaHasta`
+   * are forwarded EXACTLY as given (caller-formatted DD-MM-AAAA) — `recibos`
+   * responds HTTP 500 (not error 91) on an ISO date, so this method never
+   * reformats or re-derives them.
+   */
+  async fetchReceipts(params: FetchReceiptsParams): Promise<FetchReceiptsResult> {
+    const { data } = await this.postWithRetry({
+      action: 'recibos',
+      fecha_desde: params.fechaDesde,
+      fecha_hasta: params.fechaHasta,
+      cantidad: params.cantidad,
+      offset: params.offset,
+    });
+    return parseReceiptsResponse(data, params.offset);
   }
 }
 
@@ -471,16 +496,23 @@ function parseGrInvoices(invoices: unknown): GrInvoice[] {
 
 /**
  * GR invoice amounts arrive as real JSON floats (e.g. 35121.37, or -500 for
- * credit notes). Accept the number directly; fall back to parseFloat for a
- * stringified value; 0 on anything unparseable. Unlike `parseArNumber`, these
- * are NOT AR-locale strings.
+ * credit notes) OR as a plain-decimal string (measured 100% of
+ * aplicaciones/items/retenciones in the `recibos` action: `"19999.00"`).
+ *
+ * fix-wave-2 LOW: this used to `parseFloat` a string directly with NO locale
+ * guard — safe today only because the measured sample never contained a
+ * comma, but this file's OWN `parseArNumber` exists precisely because GR
+ * emits AR-locale strings ("1.234,56" — thousands dot, decimal COMMA) on
+ * OTHER nodes. `parseFloat("1.234,56")` silently reads only the `"1.234"`
+ * prefix (stops at the comma) → **1000x undercounts money**, with no error,
+ * no warning — exactly the "fail-open to zero/garbage in silence" pattern
+ * this codebase explicitly refuses for money. Delegates to `parseArNumber`
+ * so a stray comma anywhere in `recibos` money fields is parsed CORRECTLY
+ * instead of truncated.
  */
 function grFloat(v: unknown): number {
   if (typeof v === 'number') return isFinite(v) ? v : 0;
-  const s = str(v);
-  if (s === null) return 0;
-  const n = parseFloat(s);
-  return isFinite(n) ? n : 0;
+  return parseArNumber(str(v));
 }
 
 /** Pull the MercadoPago link out of a GR `payments_url` object, or null. */
@@ -568,6 +600,190 @@ function parseOrderDomicilio(
     localidad: nested(d, 'localidad', 'valor') ?? nested(d, 'localidad', 'codigo'),
     provincia: nested(d, 'provincia', 'valor') ?? nested(d, 'provincia', 'codigo'),
   };
+}
+
+/**
+ * Normalize a GR node that may be an ARRAY or a dict keyed-by-id into a
+ * uniform `{key, value}` list. Same defensive idiom already used for
+ * `clientesObj`/`parseServiceOrdersResponse` — the forma exacta of the
+ * `recibos` root/`aplicaciones` node was NOT confirmed live (proposal,
+ * pregunta NO-bloqueante #3), so this handles BOTH from day one.
+ */
+function toEntriesList(node: unknown): Array<{ key: string; value: unknown }> {
+  if (Array.isArray(node)) {
+    return node.map((value, idx) => ({ key: String(idx), value }));
+  }
+  if (node && typeof node === 'object') {
+    return Object.entries(node as Record<string, unknown>).map(([key, value]) => ({ key, value }));
+  }
+  return [];
+}
+
+/**
+ * Parse the GR `recibos` action response (finance-growth Fase 1, design.md
+ * Decision 0). Defensive against dict-keyed-by-id OR array root/aplicaciones
+ * nodes (gotcha #2). A receipt with a REAL annulment (`fecha_anulacion`
+ * distinct from the GR centinela `"00-00-0000 00:00:00"`) is EXCLUDED
+ * entirely here — neither it nor its applications ever reach the application
+ * layer (spec.md "A voided receipt is excluded from ingestion").
+ *
+ * fix-wave-1 F3: GR reports ITS OWN errors with HTTP 200 — measured live:
+ * `POST {action:"cuenta_corriente"}` → 200 `{"error":"91","descripcion":"No Se
+ * indicó la Acción"}`, no `recibos` node. Silently reading that as `{total:0,
+ * receipts:[]}` is INDISTINGUISHABLE from a legitimately empty date range —
+ * the delta lane would then persist a plain cursor (days lost forever) and the
+ * backfill lane would advance past a whole month (163 months in ~55 minutes of
+ * GR errors, observed). A non-zero `error` MUST throw so the caller's
+ * try/catch records `lastResult: error:` and the cursor does NOT advance. A
+ * legitimate empty TAIL page (measured: offset=900, total=828) returns
+ * `error:0` with no `recibos` node — that must NOT throw (see F12 guard,
+ * `offset < total`, applied by the callers, not here).
+ *
+ * `pageOffset` (fix-wave-1 F11, secondary/"mismo criterio" finding): ONLY
+ * used as a disambiguator for the array-root fallback key below, when an
+ * individual receipt lacks its own `id`. A bare array index is unique only
+ * WITHIN one page; across pages of the same paginated scan (`offset` varies,
+ * `key` resets to "0", "1", ...) two different receipts could otherwise
+ * collide on the same fallback grReceiptId. Defaults to 0 for callers that
+ * don't page (e.g. direct unit tests).
+ */
+export function parseReceiptsResponse(data: unknown, pageOffset = 0): FetchReceiptsResult {
+  const root = (data ?? {}) as Record<string, unknown>;
+  const errorCode = root.error;
+  if (errorCode !== undefined && errorCode !== null && String(errorCode) !== '0') {
+    const descripcion = str(root.descripcion) ?? '(sin descripcion)';
+    throw new Error(`GR recibos error ${errorCode}: ${descripcion}`);
+  }
+
+  const total = parseInt(String(root.resultados ?? '0'), 10) || 0;
+  // A dict-keyed root's `key` IS the real GR id — safe to use verbatim. An
+  // array root's `key` is a bare POSITIONAL index — only unique WITHIN this
+  // page, so the fallback (no `raw.id`) must fold in `pageOffset` too.
+  //
+  // fix-wave-3 LOW — measured live against 100 real recibos: `recibos`,
+  // `aplicaciones`, `items`, and `retenciones` are ALL dict-keyed in every
+  // sample, and their keys are real GR ids, GLOBALLY unique across ALL
+  // sampled receipts (0 reused, e.g. `186316`/`550823`/`186389`). The
+  // `rootIsArray` branch below (and its `parseReceiptItems`/
+  // `parseReceiptRetenciones` siblings) is therefore CONFIRMED DEAD CODE
+  // against the real GR API today — kept as defense-in-depth in case GR ever
+  // changes its response shape, not because it is reachable now. Documented
+  // here so this is a deliberate, known-inert guard, not an open risk.
+  const rootIsArray = Array.isArray(root.recibos);
+
+  const receipts: GrReceipt[] = [];
+  for (const { key, value } of toEntriesList(root.recibos)) {
+    if (!value || typeof value !== 'object') continue;
+    const raw = value as Record<string, unknown>;
+
+    if (isRealAnnulment(raw.fecha_anulacion, key)) continue;
+
+    // F2: the client id is NESTED at `cliente.cliente_id` — measured 100/100
+    // live recibos, NEVER at the receipt root as `cliente_id`.
+    const grReceiptId = str(raw.id) ?? (rootIsArray ? `page${pageOffset}-${key}` : key);
+    receipts.push({
+      grReceiptId,
+      clienteGrId: nested(raw, 'cliente', 'cliente_id'),
+      recaudador: str(raw.recaudador),
+      // F1: the field is `fecha_recibo`, NOT `fecha` — measured 100/100 live
+      // recibos. `fecha` does not exist on this node; reading it silently
+      // produced a null `DateTime?` on every row (no throw, no signal).
+      fechaRecibo: str(raw.fecha_recibo),
+      fechaConfirmacion: str(raw.fecha_confirmacion),
+      fechaAnulacion: null,
+      observaciones: decodeEntities(str(raw.observaciones)),
+      applications: parseReceiptApplications(raw.aplicaciones, grReceiptId),
+      // fix-wave-2 R1: `items`/`retenciones` were previously discarded entirely
+      // — `aplicaciones` (debt cancelled) is NOT cash; `items` is the only node
+      // GR reports that IS cash, and `retenciones` are tax certificates, never
+      // cash. Ground truth (June 2026, 4.839 recibos): SUM(aplicaciones) -
+      // SUM(items) - SUM(retenciones) = -0.00, exact identity. Discarding these
+      // overstated collected cash by exactly the retenciones total (0.931%,
+      // $1.376.248,31 in June alone) and, unpersisted, was irrecoverable
+      // without re-ingesting all 163 months of history.
+      items: parseReceiptItems(raw.items, grReceiptId),
+      retenciones: parseReceiptRetenciones(raw.retenciones, grReceiptId),
+    });
+  }
+
+  return { total, receipts };
+}
+
+/**
+ * Parse one receipt's `items` node (dict OR array, see `toEntriesList`) — the
+ * payment-method lines that represent CASH actually received (fix-wave-2 R1).
+ * Same F11 identity idiom as `parseReceiptApplications`: the synthetic
+ * `${grReceiptId}-item-${key}` is ALWAYS used, GR's own per-line `id`/index is
+ * never trusted as a global key.
+ */
+function parseReceiptItems(node: unknown, grReceiptId: string): GrReceiptItem[] {
+  const out: GrReceiptItem[] = [];
+  for (const { key, value } of toEntriesList(node)) {
+    if (!value || typeof value !== 'object') continue;
+    const i = value as Record<string, unknown>;
+    out.push({
+      grItemId: `${grReceiptId}-item-${key}`,
+      banco: str(i.banco),
+      cajaCuentaId: str(i.caja_cuenta_id),
+      destino: str(i.destino),
+      fecha: str(i.fecha),
+      importe: grFloat(i.importe),
+      moneda: str(i.moneda),
+      numeroTransferencia: str(i.numero_transferencia),
+      tipo: str(i.tipo),
+    });
+  }
+  return out;
+}
+
+/**
+ * Parse one receipt's `retenciones` node (dict OR array) — tax-withholding
+ * certificates, NEVER cash (fix-wave-2 R1). Same F11 identity idiom: synthetic
+ * `${grReceiptId}-ret-${key}`.
+ */
+function parseReceiptRetenciones(node: unknown, grReceiptId: string): GrReceiptRetencion[] {
+  const out: GrReceiptRetencion[] = [];
+  for (const { key, value } of toEntriesList(node)) {
+    if (!value || typeof value !== 'object') continue;
+    const r = value as Record<string, unknown>;
+    out.push({
+      grRetencionId: `${grReceiptId}-ret-${key}`,
+      tipo: str(r.tipo),
+      importe: grFloat(r.importe),
+      fecha: str(r.fecha),
+    });
+  }
+  return out;
+}
+
+/**
+ * Parse one receipt's `aplicaciones` node (dict OR array, see `toEntriesList`).
+ *
+ * fix-wave-1 F11 (convergent finding, 2 reviewers): the identity is ALWAYS the
+ * synthetic `${grReceiptId}-${key}` — GR's own `aplicaciones[].id` is NEVER
+ * trusted, even when present. GR's `id` here is commonly just the per-receipt
+ * LINE INDEX ("1", "2", ...), not a globally unique value; using it as a
+ * global PK means two unrelated receipts whose first application both report
+ * `id:"1"` collide, and the second `upsert` silently overwrites the first
+ * one's real collected revenue with no error. The synthetic key is exactly as
+ * unique as it needs to be (scoped to the already-unique `grReceiptId`) and
+ * never depends on an unverified GR uniqueness guarantee.
+ */
+function parseReceiptApplications(node: unknown, grReceiptId: string): GrReceiptApplication[] {
+  const out: GrReceiptApplication[] = [];
+  for (const { key, value } of toEntriesList(node)) {
+    if (!value || typeof value !== 'object') continue;
+    const a = value as Record<string, unknown>;
+    out.push({
+      grApplicationId: `${grReceiptId}-${key}`,
+      tipo: str(a.tipo),
+      sucursal: str(a.sucursal),
+      numero: str(a.numero),
+      importe: grFloat(a.importe),
+      fecha: str(a.fecha),
+    });
+  }
+  return out;
 }
 
 /** Pull the first PPPoE username out of the GR "conexiones" object. */

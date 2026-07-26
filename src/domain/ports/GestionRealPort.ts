@@ -1,4 +1,4 @@
-import { GrClient, GrClientBalance, GrContract, GrServiceOrder } from '../entities/gestionReal';
+import { GrClient, GrClientBalance, GrContract, GrReceipt, GrServiceOrder } from '../entities/gestionReal';
 
 export interface FetchContractsDeltaParams {
   /** Lower bound "DD-MM-AAAA". */
@@ -54,6 +54,28 @@ export interface GetServiceOrdersParams {
   fechaHasta?: string;
 }
 
+/** Params for the `recibos` (payment receipts) GR action — finance-growth Fase 1. */
+export interface FetchReceiptsParams {
+  /**
+   * Lower bound, format "DD-MM-AAAA" — MANDATORY format. Verified live: `recibos`
+   * responds HTTP 500 (not error 91) when given an ISO date. Callers must format
+   * dates with the same DD-MM-AAAA convention already used by `fetchContractsModifiedSince`.
+   */
+  fechaDesde: string;
+  /** Upper bound, format "DD-MM-AAAA". Same mandatory-format gotcha as `fechaDesde`. */
+  fechaHasta: string;
+  /** Page size — GR caps at 100. */
+  cantidad: number;
+  offset: number;
+}
+
+export interface FetchReceiptsResult {
+  /** Total rows matching the date range (GR "resultados"), drives paging. */
+  total: number;
+  /** Already excludes receipts with a REAL annulment (design.md Decision 0, gotcha 3). */
+  receipts: GrReceipt[];
+}
+
 /**
  * Upstream port for the Gestión Real external API. The adapter owns auth,
  * transport and payload normalization; the application layer only sees this.
@@ -70,4 +92,12 @@ export interface GestionRealPort {
    * Each item carries its OWN cliente_id — the parser stamps grClienteId PER ITEM.
    */
   fetchContractsModifiedSince(params: FetchContractsDeltaParams): Promise<FetchContractsDeltaResult>;
+  /**
+   * Global payment-receipt sync by date range (action:recibos), paginated by
+   * offset — finance-growth Fase 1, design.md Decision 0. NEVER iterate
+   * `fetchClientBalance`'s `invoices[]` per-client for the full population —
+   * that endpoint is deuda ABIERTA only (verified live: 0 invoices for a
+   * client al día), not a historical feed.
+   */
+  fetchReceipts(params: FetchReceiptsParams): Promise<FetchReceiptsResult>;
 }

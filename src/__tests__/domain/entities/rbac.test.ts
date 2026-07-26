@@ -24,8 +24,8 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 35 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news)', () => {
-    expect(RBAC_MODULES).toHaveLength(35);
+  it('contains exactly 36 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 finance)', () => {
+    expect(RBAC_MODULES).toHaveLength(36);
   });
 
   it('includes all 14 original module codes', () => {
@@ -79,6 +79,10 @@ describe('RBAC_MODULES constant', () => {
 
   it('includes the news module (internal-news — tablón interno del equipo)', () => {
     expect(RBAC_MODULES).toContain('news');
+  });
+
+  it('includes the finance module (finance-growth Fase 1 — separado de billing, deliberadamente)', () => {
+    expect(RBAC_MODULES).toContain('finance');
   });
 
   it('is readonly (as const)', () => {
@@ -144,8 +148,14 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 53 valid action codes (47 prior + 6 bulk-granular-perms: bulk_active/late/blocked/inactive/baja/numbers)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(53);
+  it('contains exactly 56 valid action codes (53 prior + 3 finance-growth Fase 1: manage_costs/manage_targets/manage_inflation — `sync` already existed, reused)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(56);
+  });
+
+  it('includes the 3 finance-growth Fase 1 sub-actions (manage_costs/manage_targets/manage_inflation)', () => {
+    expect(KNOWN_ACTIONS).toContain('manage_costs');
+    expect(KNOWN_ACTIONS).toContain('manage_targets');
+    expect(KNOWN_ACTIONS).toContain('manage_inflation');
   });
 
   it("includes bulk (messaging-bulk F2 — disparar/ver campañas masivas)", () => {
