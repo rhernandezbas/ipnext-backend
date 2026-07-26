@@ -51,6 +51,12 @@ jobs:
           docker network create ipnext-net 2>/dev/null || true
           # Force-remove old container (stop+rm in one). Fail loud if it can't.
           docker rm -f ipnext-new-backend 2>/dev/null || true
+          # DIAGNOSTICO TEMPORAL (2026-07-26): leak residual de memoria que sobrevive al
+          # fix del cursor del ingest RADIUS. NODE_OPTIONS con --heapsnapshot-near-heap-limit=1
+          # hace que V8 escriba UN heap snapshot en /app JUSTO ANTES del OOM, que es el
+          # momento mas informativo. OJO: --heapsnapshot-signal NO se acepta en NODE_OPTIONS
+          # (Node aborta al arrancar) — verificado en el container de prod antes de tocar esto.
+          # QUITAR esta linea cuando el leak este identificado (el snapshot pesa GBs).
           docker run -d \
             --name ipnext-new-backend \
             --network ipnext-net \
@@ -60,6 +66,7 @@ jobs:
             -e NODE_ENV=development \
             -e PORT=3000 \
             -e PRISMA_LOG_QUERIES="false" \
+            -e NODE_OPTIONS="--heapsnapshot-near-heap-limit=1" \
             -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
             -e COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}" \
