@@ -11,7 +11,7 @@ import { NocAlertListFilters } from '@domain/ports/NocAlertRepository';
 import type { NocAlertEvent } from '@domain/ports/AlertEventPublisher';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { createApiKeyMiddleware, createTelegramSecretMiddleware, safeCompare } from '../middleware/apiKeyMiddleware';
-import { createExternalWriteRateLimiter } from '../middleware/rateLimiters';
+import { createIngestRateLimiter } from '../middleware/rateLimiters';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import type { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
 import type { AlertEventBus } from '@infrastructure/events/AlertEventBus';
@@ -80,8 +80,12 @@ export interface AlertsRouterDeps {
    */
   featureFlagRepo: FeatureFlagRepository;
   /**
-   * F7 (fix wave) — inyectable para tests (limit/window chicos); en producción
-   * `composeAlertsModule` no lo pasa y cae al default de `createExternalWriteRateLimiter()`.
+   * F7 (fix wave) — inyectable para tests (limit/window chicos). En producción
+   * `composeAlertsModule` SÍ lo pasa (`createIngestRateLimiter(config.alerts.ingestRateLimit)`,
+   * fix alerts-ingest-ratelimit) — el fallback de acá NUNCA debe volver a ser
+   * `createExternalWriteRateLimiter()` (30/60s, pensado para el API externo de
+   * tickets): eso fue el bug real medido en prod (el colector de fibra postea
+   * ~29 requests de golpe por ciclo y ya rebotaba 429 al filo de esos 30).
    */
   ingestRateLimiter?: RequestHandler;
   /**
@@ -269,7 +273,7 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
   const readPerm = requirePerm('monitoring', 'read');
   const ackPerm = requirePerm('monitoring', 'acknowledge_alert');
   const managePerm = requirePerm('monitoring', 'manage');
-  const ingestRateLimiter = deps.ingestRateLimiter ?? createExternalWriteRateLimiter();
+  const ingestRateLimiter = deps.ingestRateLimiter ?? createIngestRateLimiter();
   const thresholdsReadAuth = createThresholdsReadAuth(ingestKeys['fiber-collector'] ?? '', auth, managePerm);
 
   // POST /ingest/:source — per-source canonical ingestion (F3, spec.md "Alert
