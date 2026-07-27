@@ -351,64 +351,64 @@
 > targets/IPC configurables).
 
 ### Domain
-- [ ] 3.1 `src/domain/ports/FinanceMonthlySnapshotRepository.ts`: `get`/`listRange`/`upsert`.
-- [ ] 3.2 `src/domain/ports/FinanceCohortSnapshotRepository.ts`: `listByCohort`/`upsert`.
-- [ ] 3.3 `InMemoryFinanceMonthlySnapshotRepository.ts`, `InMemoryFinanceCohortSnapshotRepository.ts`.
+- [x] 3.1 `src/domain/ports/FinanceMonthlySnapshotRepository.ts`: `get`/`listRange`/`upsert`.
+- [x] 3.2 `src/domain/ports/FinanceCohortSnapshotRepository.ts`: `listByCohort`/`upsert`.
+- [x] 3.3 `InMemoryFinanceMonthlySnapshotRepository.ts`, `InMemoryFinanceCohortSnapshotRepository.ts`.
 
 ### Atribución cobranza→contrato (el seam más crítico del change — Decision 1 del design)
-- [ ] 3.4 RED: cliente con 1 contrato activo en el mes → `attributionConfidence: 'exact'`, monto = cobranza
+- [x] 3.4 RED: cliente con 1 contrato activo en el mes → `attributionConfidence: 'exact'`, monto = cobranza
   neteada completa del mes (`FinanceReceiptApplication` del cliente, netada por `FinanceInvoiceTypeClassification`).
-- [ ] 3.5 RED: cliente con 2 contratos, ambos planes con fila en `FinancePlanPrice` → reparto proporcional,
+- [x] 3.5 RED: cliente con 2 contratos, ambos planes con fila en `FinancePlanPrice` → reparto proporcional,
   `attributionConfidence: 'estimated'`, la suma de ambos reparto = cobranza neteada (sin perder centavos por
   redondeo — test explícito de esa invariante).
-- [ ] 3.6 RED: cliente con 2 contratos, NINGÚN plan con fila en `FinancePlanPrice` → reparto igual,
+- [x] 3.6 RED: cliente con 2 contratos, NINGÚN plan con fila en `FinancePlanPrice` → reparto igual,
   `attributionConfidence: 'estimated-equal'`.
-- [ ] 3.7 RED: cliente con 2 contratos, SOLO UNO de los planes con fila en `FinancePlanPrice` → definir y
+- [x] 3.7 RED: cliente con 2 contratos, SOLO UNO de los planes con fila en `FinancePlanPrice` → definir y
   testear el criterio exacto (recomendado: tratar el plan sin precio configurado como peso proporcional 0,
   documentado en el código — si ambos terminan en 0, cae a `estimated-equal`).
-- [ ] 3.8 GREEN: función pura `attributeCollectedAmountToContracts(applications, contracts, planPrices)` en
+- [x] 3.8 GREEN: función pura `attributeCollectedAmountToContracts(applications, contracts, planPrices)` en
   `src/application/use-cases/finance/` (no un use case en sí, un helper reusado por 3.9 y por `ComputeCacAndPayback`).
 
 ### Neteo de tipos de comprobante
-- [ ] 3.9 RED: aplicación `revenue` suma, `contra` resta, `excluded` se ignora, `unclassified` se excluye de
+- [x] 3.9 RED: aplicación `revenue` suma, `contra` resta, `excluded` se ignora, `unclassified` se excluye de
   la cobranza pero suma a `unclassifiedAmountArs` — fixtures de `FinanceReceiptApplication`, no de `Invoice`.
-- [ ] 3.10 GREEN: función pura `netCollectedAmountForMonth(applications, classifications)`.
-- [ ] 3.11 RED: un cliente cuyo `clientGrId` no resuelve a ningún `Client` local (orphan — recibo llegó antes
+- [x] 3.10 GREEN: función pura `netCollectedAmountForMonth(applications, classifications)`.
+- [x] 3.11 RED: un cliente cuyo `clientGrId` no resuelve a ningún `Client` local (orphan — recibo llegó antes
   que el mirror del cliente) se cuenta y logea, NUNCA aborta el cómputo del mes (mismo criterio de
   resiliencia que el "orphan guard" de `SyncGestionRealContractsDelta`).
 
 ### `BuildFinanceMonthlySnapshot`
-- [ ] 3.12 RED: un mes con 1 activación, MRR atribuido conocido → `mrrNewArs` = ese MRR, resto del bridge en 0.
-- [ ] 3.13 RED: un mes con 1 upgrade (dirección derivada con el MISMO criterio que
+- [x] 3.12 RED: un mes con 1 activación, MRR atribuido conocido → `mrrNewArs` = ese MRR, resto del bridge en 0.
+- [x] 3.13 RED: un mes con 1 upgrade (dirección derivada con el MISMO criterio que
   `ListInternetServiceHistory.deriveDirection` — reusar esa función, no reimplementarla) → delta de MRR en
   `mrrUpgradeArs`.
-- [ ] 3.14 RED: un mes con 1 downgrade → delta de MRR en `mrrDowngradeArs`.
-- [ ] 3.15 RED: un mes con 1 baja → MRR atribuido del contrato en `mrrChurnArs`.
-- [ ] 3.16 RED: invariante del bridge — `mrrInicialArs + mrrNewArs + mrrUpgradeArs - mrrDowngradeArs -
+- [x] 3.14 RED: un mes con 1 downgrade → delta de MRR en `mrrDowngradeArs`.
+- [x] 3.15 RED: un mes con 1 baja → MRR atribuido del contrato en `mrrChurnArs`.
+- [x] 3.16 RED: invariante del bridge — `mrrInicialArs + mrrNewArs + mrrUpgradeArs - mrrDowngradeArs -
   mrrChurnArs == mrrFinalArs` (tolerancia de redondeo ≤1) para un mes con los 4 tipos de evento combinados.
-- [ ] 3.17 RED: `churnContractsPct`/`churnRevenuePct` calculados correctamente contra un fixture con pesos de
+- [x] 3.17 RED: `churnContractsPct`/`churnRevenuePct` calculados correctamente contra un fixture con pesos de
   MRR distintos por contrato dado de baja (test que prueba explícitamente que revenue-churn NO es un simple
   conteo — mismo escenario del spec).
-- [ ] 3.18 RED: `attributionPct` = MRR `exact` / MRR total, con fixture mixto `exact`+`estimated`.
-- [ ] 3.19 GREEN: `src/application/use-cases/finance/BuildFinanceMonthlySnapshot.ts`.
-- [ ] 3.20 REFACTOR.
+- [x] 3.18 RED: `attributionPct` = MRR `exact` / MRR total, con fixture mixto `exact`+`estimated`.
+- [x] 3.19 GREEN: `src/application/use-cases/finance/BuildFinanceMonthlySnapshot.ts`.
+- [x] 3.20 REFACTOR.
 
 ### `BuildFinanceCohortSnapshot`
-- [ ] 3.21 RED: cohorte de N altas en un mes → `survivingCount` a 3 meses cuenta correctamente los
+- [x] 3.21 RED: cohorte de N altas en un mes → `survivingCount` a 3 meses cuenta correctamente los
   contratos SIN evento `deactivated` antes de esa fecha de corte.
-- [ ] 3.22 RED: cohorte más joven que 12 meses → NO genera fila `monthsElapsed: 12` (no inventa el dato).
-- [ ] 3.23 GREEN: `src/application/use-cases/finance/BuildFinanceCohortSnapshot.ts`.
+- [x] 3.22 RED: cohorte más joven que 12 meses → NO genera fila `monthsElapsed: 12` (no inventa el dato).
+- [x] 3.23 GREEN: `src/application/use-cases/finance/BuildFinanceCohortSnapshot.ts`.
 
 ### Schema + migración
-- [ ] 3.24 `prisma/schema.prisma`: `FinanceMonthlySnapshot`, `FinanceCohortSnapshot`.
-- [ ] 3.25 Migración aditiva `prisma/migrations/*_finance_growth_snapshots/`.
-- [ ] 3.26 `PrismaFinanceMonthlySnapshotRepository.ts`, `PrismaFinanceCohortSnapshotRepository.ts`.
+- [x] 3.24 `prisma/schema.prisma`: `FinanceMonthlySnapshot`, `FinanceCohortSnapshot`.
+- [x] 3.25 Migración aditiva `prisma/migrations/*_finance_growth_snapshots/`.
+- [x] 3.26 `PrismaFinanceMonthlySnapshotRepository.ts`, `PrismaFinanceCohortSnapshotRepository.ts`.
 
 ### Wiring nocturno
-- [ ] 3.27 `src/infrastructure/scheduling/bootstrapFinanceSnapshotJob.ts`: corre de madrugada (offset de
+- [x] 3.27 `src/infrastructure/scheduling/bootstrapFinanceSnapshotJob.ts`: corre de madrugada (offset de
   horario documentado en `design.md`), leyendo lo que el carril delta (continuo, Decision 4b) ya haya
   cubierto a esa hora; `.unref()`. No depende del progreso del backfill.
-- [ ] 3.28 `app.ts`: wiring del job; actualizar el composition-root test de Fase 1 (1.58) para incluir este
+- [x] 3.28 `app.ts`: wiring del job; actualizar el composition-root test de Fase 1 (1.58) para incluir este
   segundo job (el bootstrap de ingest de Fase 1 ya es uno solo, ver 1.57-1.58).
 
 ### fix-wave-2 (2026-07-27) — resolver el gap de plan-code que el rework MRR-contratado dejó abierto
