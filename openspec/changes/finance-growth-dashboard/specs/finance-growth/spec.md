@@ -985,3 +985,19 @@ precio distinto) — y verificar la identidad **al centavo** (no sólo dentro de
 Requirement permite como techo, no como resultado esperado). Ver
 `src/__tests__/application/finance/BuildFinanceMonthlySnapshot.test.ts` para la implementación de referencia
 de este criterio.
+#### Scenario: An unconfigured technology cost is NEVER read as a CAC of zero (Fase 4, la trampa predicha por el review de Fase 3)
+> `FinanceTechnologyCost` (Fase 2) tiene sus 3 columnas de costo en `@default(0)` — la MISMA tabla de config
+> vacía que ya demostró el patrón `?? 0` en Fase 2 (ver "A new technology with no configured cost defaults to
+> zero" arriba). Ahí ese default es correcto (el catálogo de tecnologías SIEMPRE debe listarse completo). Acá
+> NO lo es: un CAC en `0` no se lee como "falta cargar el costo", se lee como "toda venta de esta tecnología
+> es instantáneamente rentable" — el bug más peligroso posible en esta pantalla, porque no revienta, se ve
+> como una buena noticia.
+- GIVEN una tecnología existente en el catálogo `ContractTechnology` (ej. "Fibra") que NUNCA tuvo una fila
+  configurada en `FinanceTechnologyCost`, y una alta de esa tecnología con cash atribuido real ese mes
+- WHEN se consulta `GET /api/finance/growth/cac?technology=Fibra&yearMonth=...`
+- THEN la respuesta trae `costConfigured: false`, `costoVentaArs: null`, `costoInstalacionArs: null`,
+  `cacArs: null` — NUNCA `0`
+- AND cada alta de `altasDelMes` trae `paybackMonths: null` (no hay CAC contra el cual calcular un payback,
+  aunque `mrrAtribuidoArs` sea positivo) y `lossMaking: false` — NUNCA `true` interpretado como "no hay ventas
+  a pérdida" cuando en realidad es "no se puede saber"
+
