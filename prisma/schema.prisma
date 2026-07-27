@@ -3893,6 +3893,25 @@ model AssistantRoutingConfig {
   updatedAt     DateTime           @updatedAt
 }
 
+/// Credenciales del proveedor de IA, editables desde la UI (molde NocBroadcastConfig).
+///
+/// `apiKey` es un SECRETO: el DTO de lectura NUNCA lo serializa completo — expone
+/// `hasApiKey` + `apiKeyLast4`. Y un PUT con `apiKey` vacío PRESERVA la guardada, para que
+/// editar la baseUrl desde el formulario no pise la key con la máscara que se mostró.
+///
+/// ⚠️ TRADEOFF ACEPTADO: la key queda en la base, así que la ve cualquiera con acceso a
+/// Postgres (pgweb vía saturno). A cambio se puede rotar desde la UI sin deploy. Mismo
+/// criterio que ya se tomó para `NocBroadcastConfig.evolutionApiKey`.
+///
+/// Vacío ⇒ se usa el env var (`DEEPSEEK_API_KEY`). La DB PISA al env; borrar el valor acá
+/// devuelve el control a los secrets sin tocar código.
+model AssistantProviderConfig {
+  id        String   @id @default("singleton")
+  baseUrl   String   @default("")
+  apiKey    String   @default("")
+  updatedAt DateTime @updatedAt
+}
+
 // EVAL-1/EVAL-2 — corridas de evaluación del asistente.
 //
 // NO es una métrica decorativa: es el CANDADO de las acciones `riskLevel:'red'`. Sin al menos
