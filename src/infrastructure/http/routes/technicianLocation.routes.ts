@@ -61,8 +61,26 @@ const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 /** Días hacia atrás que despacho puede ver con el permiso operativo (hoy y ayer). */
 const OPERATIONAL_JOURNEY_DAYS = 1;
 
-/** Rango máximo del barrido de cierres sospechosos. IClass ya topea en 30 días. */
-const MAX_AUDIT_RANGE_DAYS = 30;
+/**
+ * Rango máximo del barrido de cierres.
+ *
+ * Antes eran 30 días. Esa cota se puso como límite de SEGURIDAD (que un solo GET no
+ * tumbara la integración IClass entera), nunca como límite de usabilidad — y medido en
+ * producción quedó demostrado que el rango permitido no era el rango que responde:
+ *
+ *   7 días  → 504, y React Query reintenta: ~2 min de spinner antes del error
+ *   3 días  → 200 OK en 60-90 s
+ *   1 día   → 200 OK, rápido
+ *
+ * Con ~16 OS/día y un `getServiceOrderHistory` EN SERIE por orden, el costo es lineal:
+ * ~1,5 s por orden. 3 días ≈ 48 órdenes ≈ 72 s; 7 días ≈ 112 órdenes ≈ 168 s, por encima
+ * del timeout del gateway. Permitir un rango que SIEMPRE devuelve 504 no es permisividad,
+ * es una trampa: el auditor espera dos minutos para no recibir nada.
+ *
+ * 3 es el mayor valor con evidencia medida de responder 200. La cota de seguridad sigue
+ * cumpliéndose — es más estricta, no menos.
+ */
+const MAX_AUDIT_RANGE_DAYS = 3;
 
 export function createTechnicianLocationRouter(deps: TechnicianLocationRouterDeps): Router {
   const router = Router();
@@ -92,8 +110,13 @@ export function createTechnicianLocationRouter(deps: TechnicianLocationRouterDep
         if (rangeDays > MAX_AUDIT_RANGE_DAYS) {
           // Sin esta cota, un solo GET dispara un getServiceOrderHistory por orden EN
           // SERIE y satura IClass, tumbando el closure loop y la creación de OS.
+          // El mensaje dice el límite Y por qué: si sólo dijera "no puede superar N", el
+          // auditor lo lee como burocracia y reintenta hasta comerse el timeout.
           res.status(400).json({
-            error: `El rango no puede superar ${MAX_AUDIT_RANGE_DAYS} días (pedido: ${Math.round(rangeDays)}).`,
+            error:
+              `El rango no puede superar ${MAX_AUDIT_RANGE_DAYS} días (pedido: ${Math.round(rangeDays)}). ` +
+              `El barrido consulta el histórico de cada orden contra IClass en serie; por encima de ` +
+              `${MAX_AUDIT_RANGE_DAYS} días la consulta no llega a responder. Partí el período en tramos.`,
           });
           return;
         }

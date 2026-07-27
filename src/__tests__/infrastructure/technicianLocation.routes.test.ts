@@ -103,7 +103,7 @@ describe('technicianLocation.routes — permission gating (two SEPARATE permissi
     expect(audit.status).toBe(403);
 
     const suspicious = await request(app).get(
-      '/api/technicians/audit/suspicious-closures?from=2026-07-01&to=2026-07-26',
+      '/api/technicians/audit/suspicious-closures?from=2026-07-23&to=2026-07-26',
     );
     expect(suspicious.status).toBe(403);
   });
@@ -159,7 +159,7 @@ describe('technicianLocation.routes — payloads', () => {
   it('GET /audit/suspicious-closures returns candidates, never verdicts', async () => {
     const { app } = makeApp({ requireRead: allow, requireAudit: allow });
     const res = await request(app).get(
-      '/api/technicians/audit/suspicious-closures?from=2026-07-01&to=2026-07-26',
+      '/api/technicians/audit/suspicious-closures?from=2026-07-23&to=2026-07-26',
     );
     expect(res.status).toBe(200);
     expect(res.body.data[0].isCandidateForReview).toBe(true);

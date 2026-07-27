@@ -128,7 +128,7 @@ describe('3.1 — el permiso operativo NO habilita vigilancia histórica', () =>
 });
 
 describe('3.3 — el rango de la auditoría está acotado', () => {
-  it('rejects a range longer than 30 days', async () => {
+  it('rejects an unbounded range outright', async () => {
     // Sin cota, un GET disparaba un getServiceOrderHistory EN SERIE por orden y saturaba
     // IClass, rompiendo el closure loop y la creación de OS de toda la empresa.
     const { app, iclass } = makeApp({});
@@ -137,6 +137,57 @@ describe('3.3 — el rango de la auditoría está acotado', () => {
     );
     expect(res.status).toBe(400);
     expect(iclass.listServiceOrders).not.toHaveBeenCalled();
+  });
+
+  /**
+   * La cota vieja (30 días) era una cota de SEGURIDAD — evitar que un GET tumbara la
+   * integración IClass entera. Nunca fue una cota de usabilidad, y medido en producción
+   * quedó demostrado que ni siquiera 7 días responde:
+   *
+   *   7 días → 504 × 2 (React Query reintenta: ~2 min de spinner y después error)
+   *   3 días → 200 OK en 60-90 s
+   *   1 día  → 200 OK, rápido
+   *
+   * Un rango que SIEMPRE devuelve 504 no es un rango permitido: es una trampa. La cota
+   * baja al mayor valor con evidencia de responder 200.
+   */
+  it('rejects 7 days — el rango que en producción daba 504 × 2', async () => {
+    const { app, iclass } = makeApp({});
+    const res = await request(app).get(
+      '/api/technicians/audit/suspicious-closures?from=2026-07-19&to=2026-07-26',
+    );
+    expect(res.status).toBe(400);
+    // El mensaje tiene que decir el límite NUEVO: si dice 30, el auditor reintenta
+    // con 20 y vuelve a comerse el timeout.
+    expect(String(res.body.error)).toContain('3');
+    expect(String(res.body.error)).not.toContain('30');
+    expect(iclass.listServiceOrders).not.toHaveBeenCalled();
+  });
+
+  it('rejects 4 days — un día por encima de lo medido no tiene evidencia que lo sostenga', async () => {
+    const { app, iclass } = makeApp({});
+    const res = await request(app).get(
+      '/api/technicians/audit/suspicious-closures?from=2026-07-22&to=2026-07-26',
+    );
+    expect(res.status).toBe(400);
+    expect(iclass.listServiceOrders).not.toHaveBeenCalled();
+  });
+
+  it('accepts 3 days — el techo medido (60-90 s, 200 OK)', async () => {
+    const { app, iclass } = makeApp({});
+    const res = await request(app).get(
+      '/api/technicians/audit/suspicious-closures?from=2026-07-23&to=2026-07-26',
+    );
+    expect(res.status).toBe(200);
+    expect(iclass.listServiceOrders).toHaveBeenCalled();
+  });
+
+  it('accepts a single day — el default de la pantalla', async () => {
+    const { app } = makeApp({});
+    const res = await request(app).get(
+      '/api/technicians/audit/suspicious-closures?from=2026-07-26&to=2026-07-26',
+    );
+    expect(res.status).toBe(200);
   });
 
   it('rejects an inverted range', async () => {
@@ -155,13 +206,6 @@ describe('3.3 — el rango de la auditoría está acotado', () => {
     expect(res.status).toBe(400);
   });
 
-  it('accepts a valid 30-day range', async () => {
-    const { app } = makeApp({});
-    const res = await request(app).get(
-      '/api/technicians/audit/suspicious-closures?from=2026-07-01&to=2026-07-26',
-    );
-    expect(res.status).toBe(200);
-  });
 });
 
 describe('3.4 — los errores no filtran internos', () => {
@@ -200,7 +244,7 @@ describe('3.5 — el módulo technicians no es una puerta lateral al padrón de 
   it('does not expose customer PII in the suspicious-closures list either', async () => {
     const { app } = makeApp({});
     const res = await request(app).get(
-      '/api/technicians/audit/suspicious-closures?from=2026-07-01&to=2026-07-26',
+      '/api/technicians/audit/suspicious-closures?from=2026-07-23&to=2026-07-26',
     );
     const body = JSON.stringify(res.body);
     expect(body).not.toContain('FERNANDEZ MARIA CRISTINA');
@@ -253,7 +297,7 @@ describe('3.6 — thresholdMinutes hace lo que dice hacer', () => {
     // Lo que se verifica es que el parámetro LLEGA: antes se validaba y se descartaba,
     // así que un auditor pedía 30 y recibía resultados de 5 sin saberlo.
     const res = await request(app).get(
-      '/api/technicians/audit/suspicious-closures?from=2026-07-01&to=2026-07-26&thresholdMinutes=90',
+      '/api/technicians/audit/suspicious-closures?from=2026-07-23&to=2026-07-26&thresholdMinutes=90',
     );
     expect(res.status).toBe(200);
     expect(res.body.meta?.thresholdMinutes).toBe(90);
@@ -263,7 +307,7 @@ describe('3.6 — thresholdMinutes hace lo que dice hacer', () => {
   it('echoes the DEFAULT threshold when none is given', async () => {
     const { app } = makeApp({});
     const res = await request(app).get(
-      '/api/technicians/audit/suspicious-closures?from=2026-07-01&to=2026-07-26',
+      '/api/technicians/audit/suspicious-closures?from=2026-07-23&to=2026-07-26',
     );
     expect(res.body.meta?.thresholdMinutes).toBe(5);
   });
