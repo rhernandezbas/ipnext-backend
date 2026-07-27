@@ -473,49 +473,125 @@ real, no sólo leídos): 2 🔴 bloqueantes + 3 acotados
 ## Fase 4 — API de lectura
 
 ### `GetFinanceOverview` (deflactación en lectura — Decision 4/6 del design)
-- [ ] 4.1 RED: rango de meses todos con IPC cargado → serie real calculada correctamente con el
+- [x] 4.1 RED: rango de meses todos con IPC cargado → serie real calculada correctamente con el
   encadenamiento desde `inflationBaseYearMonth` (test con valores conocidos a mano, verificar la fórmula
   exacta del design).
-- [ ] 4.2 RED: un mes SIN IPC dentro del rango → la serie real se trunca ahí, `realSeriesTruncatedAt`
-  refleja ese mes, la serie nominal sigue completa para todo el rango.
-- [ ] 4.3 RED: `inflationBaseYearMonth` sin configurar (`""`) → toda la serie real es `null`,
-  `realSeriesTruncatedAt` = el primer mes del rango pedido (no crashea, no inventa una base).
-- [ ] 4.4 GREEN: `src/application/use-cases/finance/GetFinanceOverview.ts`.
-- [ ] 4.5 RED (supertest): `GET /api/finance/growth/overview` sin `finance:read` → `403`; con permiso → `200`
+- [x] 4.2 RED: un mes SIN IPC dentro del rango → la serie real se trunca ahí (fix-wave-4: expuesto vía
+  `realSeriesMissingMonths: string[]`, no un único `realSeriesTruncatedAt` — ver fix-wave-4 abajo), la
+  serie nominal sigue completa para todo el rango.
+- [x] 4.3 RED: `inflationBaseYearMonth` sin configurar (`""`) → toda la serie real es `null`,
+  `realSeriesMissingMonths` = TODOS los meses del rango pedido (no crashea, no inventa una base).
+- [x] 4.4 GREEN: `src/application/use-cases/finance/GetFinanceOverview.ts`.
+- [x] 4.5 RED (supertest): `GET /api/finance/growth/overview` sin `finance:read` → `403`; con permiso → `200`
   con el shape exacto del contrato HTTP (test campo por campo, no solo `toMatchObject` parcial), incluyendo
   `metricBasis: 'cash_collected'` — el test que previene que alguien lo interprete como facturación emitida.
-- [ ] 4.6 GREEN: ruta montada.
+- [x] 4.6 GREEN: ruta montada.
 
 ### `GetFinanceCohorts`
-- [ ] 4.7 RED+GREEN: use case + ruta `GET /cohorts`, guard `finance:read`, shape campo por campo.
+- [x] 4.7 RED+GREEN: use case + ruta `GET /cohorts`, guard `finance:read`, shape campo por campo.
 
 ### `ComputeCacAndPayback`
-- [ ] 4.8 RED: payback dentro del umbral → `lossMaking: false`.
-- [ ] 4.9 RED: payback por encima de `maxPaybackMonths` → `lossMaking: true`.
-- [ ] 4.10 RED: `mrrAtribuidoArs: 0` → `paybackMonths: null` (no divide por cero, no devuelve `Infinity`).
-- [ ] 4.11 GREEN: use case + ruta `GET /cac`, guard `finance:read`.
+- [x] 4.8 RED: payback dentro del umbral → `lossMaking: false`.
+- [x] 4.9 RED: payback por encima de `maxPaybackMonths` → `lossMaking: true`.
+- [x] 4.10 RED: `mrrAtribuidoArs: 0` → `paybackMonths: null` (no divide por cero, no devuelve `Infinity`).
+- [x] 4.11 GREEN: use case + ruta `GET /cac`, guard `finance:read`.
 
 ### `RankEarlyChurnByVendor`
-- [ ] 4.12 RED: vendedor con alto volumen pero alto churn temprano se distingue del vendedor con altas
-  sanas (fixture del escenario del spec — 50 altas/30 churn vs 20 altas/1 churn).
-- [ ] 4.13 RED: ordenamiento DESC por `earlyChurnPct`, no por `altasTotal`.
-- [ ] 4.14 GREEN: use case + ruta `GET /vendors/early-churn`, guard `finance:read`.
+- [x] 4.12 RED: vendedor con alto volumen pero alto churn temprano se distingue del vendedor con altas
+  sanas. **fix-wave-4 🔵14: el fixture original (50 altas/30 churn vs 20 altas/1 churn) NO discriminaba** —
+  A ganaba por volumen Y por tasa; reescrito con el caso discriminante (A: 10 altas/8 churn=80% vs B: 50
+  altas/5 churn=10% — A gana por tasa a pesar de 5x menos altas).
+- [x] 4.13 RED: ordenamiento DESC por `earlyChurnPct`, no por `altasTotal` (mismo fixture discriminante de 4.12).
+- [x] 4.14 GREEN: use case + ruta `GET /vendors/early-churn`, guard `finance:read`.
 
 ### `RankNetGrowthByNode`
-- [ ] 4.15 RED: nodo con más bajas que altas → `netGrowth` negativo; contratos sin nodo asignado se agrupan
+- [x] 4.15 RED: nodo con más bajas que altas → `netGrowth` negativo; contratos sin nodo asignado se agrupan
   bajo `networkSiteId: null` (no se pierden ni rompen el agregado).
-- [ ] 4.16 GREEN: use case + ruta `GET /nodes/growth`, guard `finance:read`.
+- [x] 4.16 GREEN: use case + ruta `GET /nodes/growth`, guard `finance:read`.
 
 ### `RankCancellationReasonsByLostRevenue`
-- [ ] 4.17 RED: motivo con menos bajas pero mayor MRR perdido queda primero en el ranking (fixture del
+- [x] 4.17 RED: motivo con menos bajas pero mayor MRR perdido queda primero en el ranking (fixture del
   escenario del spec — "mudanza" vs "precio").
-- [ ] 4.18 RED: `Contract.motivoBaja` null → cae a `ContractServiceEvent.reason`; ambos null → agrupa bajo
+- [x] 4.18 RED: `Contract.motivoBaja` null → cae a `ContractServiceEvent.reason`; ambos null → agrupa bajo
   `"sin especificar"`.
-- [ ] 4.19 GREEN: use case + ruta `GET /motivos-baja`, guard `finance:read`.
+- [x] 4.19 GREEN: use case + ruta `GET /motivos-baja`, guard `finance:read`.
 
 ### Passthrough de modificaciones de contrato
-- [ ] 4.20 Confirmar el mount actual de `ListInternetServiceHistory` (path real en `app.ts`) y documentar en
-  `design.md`/FE el endpoint exacto a consumir — SIN crear una ruta nueva ni duplicar el use case.
+- [x] 4.20 Confirmar el mount actual de `ListInternetServiceHistory` (path real en `app.ts`) y documentar en
+  `design.md`/FE el endpoint exacto a consumir — SIN crear una ruta nueva ni duplicar el use case. Confirmado
+  fix-wave-4: monta en `GET /api/pppoe/activation-history` bajo el guard `pppoe:read` (NO `finance:read`) —
+  documentado como la única excepción de guard en design.md, sin cambio de comportamiento (decisión de
+  producto pendiente para Fase 5).
+
+### fix-wave-4 (2026-07-27) — re-review CON ARITMÉTICA VERIFICADA de la Fase 4 completa: 4 🔴 + 9 🟡, todos
+cerrados + los 🔵 baratos (14, 14b, 15, 16, 17)
+- [x] RED→GREEN 🔴1: `realSeriesTruncatedAt` (un solo mes) no podía describir un hueco no-contiguo en ambas
+  direcciones desde `base`. Reemplazado por `realSeriesMissingMonths: string[]` (BREAKING) —
+  `buildChainedIndex` simplificado (ya no calcula ningún marcador de truncamiento, el `Map` de índices es la
+  única fuente de verdad), `GetFinanceOverview` deriva la lista de `allMonths.filter(m =>
+  !chainedIndexByMonth.has(m))`. Cierra 🟡13 gratis (un hueco antes de `from` ya no puede filtrarse como
+  coordenada fuera de rango). Tests: `financeInflation.test.ts`, `GetFinanceOverview.test.ts` (describe
+  "fix-wave-4 🔴1"/"🟡13"), `financeGrowth.routes.test.ts`.
+- [x] RED→GREEN 🔴2 + 🟡6: `GET /cac` perdía en silencio las altas con `technology: null` (la MAYORÍA de los
+  contratos derivados de GR) de TODAS las tecnologías. Campo nuevo `altasDelMesSinTecnologia: number`
+  (BREAKING) + match de tecnología case-insensitive (antes case-sensitive pese a que el catálogo ya resuelve
+  case-insensitive). Tests: `ComputeCacAndPayback.test.ts` (describe "fix-wave-4 🔴2"/"🟡6").
+- [x] RED→GREEN 🔴3: `GET /motivos-baja` colapsaba a `mrrPerdidoArs: 0` en TODAS las filas cuando
+  `FinancePlanPrice` está vacía (medido: estado real de prod, 387/387 sin precio) — el ranking por plata
+  perdía su razón de ser sin señal. Campo nuevo `bajasSinPrecio: number` POR MOTIVO (BREAKING). Tests:
+  `RankCancellationReasonsByLostRevenue.test.ts` (describe "fix-wave-4 🔴3").
+- [x] RED→GREEN 🔴4: la ventana "temprano" se medía desde el 1° del mes calendario de la alta, no desde la
+  alta real — subestimaba sistemáticamente el churn de vendedores que cierran a fin de mes. Función nueva
+  `addCalendarMonthsToDate` (`financeDates.ts`, con clamp de día long→short mes) reemplaza
+  `addMonthsToYearMonth(arYearMonth(...))`. Sin cambio de forma. Tests: `financeDates.test.ts`,
+  `RankEarlyChurnByVendor.test.ts` (describe "fix-wave-4 🔴4").
+- [x] RED→GREEN 🟡5: altas inmaduras diluían `earlyChurnPct` al contar en el denominador `altasTotal`. Campo
+  nuevo `altasMaduras: number` (BREAKING) como denominador REAL (madura = ventana cerrada O ya churneó
+  temprano); `earlyChurnPct: number` → `number | null` (BREAKING, `null` sin altas maduras). Tests:
+  `RankEarlyChurnByVendor.test.ts` (describe "fix-wave-4 🟡5").
+- [x] RED→GREEN 🟡7: `costConfigured: true` no distinguía "cargado" de "fila en cero" (las 3 columnas de
+  `FinanceTechnologyCost` son `@default(0)`). Campo nuevo `costIsZero: boolean` (BREAKING). Tests:
+  `ComputeCacAndPayback.test.ts` (describe "fix-wave-4 🟡7").
+- [x] RED→GREEN 🟡8: `activated`+`reactivated` del mismo contrato se contaban DOS VECES en
+  `RankEarlyChurnByVendor`/`RankNetGrowthByNode` (`ComputeCacAndPayback` ya deduplicaba). Dedup por
+  `contractId` replicado en los 3. Sin cambio de forma. Tests: `RankEarlyChurnByVendor.test.ts`,
+  `RankNetGrowthByNode.test.ts` (describe "fix-wave-4 🟡8").
+- [x] RED→GREEN 🟡9: `GET /cohorts` devolvía `[]` mudo (estado real de prod: el backfill nunca corrió) sin
+  distinguir "no computado" de "no hubo altas". Campo nuevo `monthsWithoutCohortSnapshot: string[]`
+  (BREAKING), mismo patrón que `/overview`. Tests: `GetFinanceCohorts.test.ts` (describe "fix-wave-4 🟡9").
+- [x] RED→GREEN 🟡10: `motivos-baja` no normalizaba (`"Contrato"`/`"  Contrato  "`, `"Precio"`/`"precio"`
+  partían la plata en dos filas). Agrupado por `trim().toLowerCase()`, conserva el primer casing como
+  display. Sin cambio de forma. Tests: `RankCancellationReasonsByLostRevenue.test.ts` (describe "fix-wave-4
+  🟡10").
+- [x] RED→GREEN 🟡11: el `||` del vendedor no manejaba whitespace-only (`"   "` abría su propio bucket).
+  `.trim()` antes del `||`. Sin cambio de forma. Tests: `RankEarlyChurnByVendor.test.ts` (describe "fix-wave-4
+  🟡11").
+- [x] RED→GREEN 🟡12: `monthlyRatePct <= -100` rompía `buildChainedIndex` (`chainedIndex: 0` →
+  `mrrFinalRealArs: Infinity`, sólo "sobrevivía" como `null` en JSON por accidente de
+  `JSON.stringify(Infinity)`). Guard de una línea en `UpdateFinanceInflationIndex`. Tests:
+  `UpdateFinanceInflationIndex.test.ts` (describe "B: rejects monthlyRatePct <= -100").
+- [x] RED→GREEN 🔵14: test tautológico de `RankEarlyChurnByVendor` (4.12/4.13, ver arriba) reescrito con
+  fixture discriminante.
+- [x] RED→GREEN 🔵14b: cobertura de contrato en tests de ruta — `/vendors/early-churn`, `/nodes/growth`,
+  `/motivos-baja` sólo tenían wire tests con `[]`; agregado un test no-vacío por endpoint con `toEqual`
+  exacto sobre la fila. `/overview` agregó un test dedicado de `churnRevenuePct: null` sobreviviendo a HTTP
+  sin coerción (el test viejo fijaba `0`, que un `?? 0` hubiera dejado pasar igual).
+- [x] RED→GREEN 🔵15: `maxPaybackMonths: 0` sin guard de `>= 1` — `UpdateFinanceTargets` ahora exige `>= 1`.
+  Tests: `UpdateFinanceTargets.test.ts` (describe "🔵15").
+- [x] RED→GREEN 🔵16: empates sin desempate determinístico en los 3 rankings — desempate secundario ASC por
+  `vendedor`/`networkSiteId` (nulls al final)/`motivo` agregado a los 3. Tests: `RankNetGrowthByNode.test.ts`,
+  `RankCancellationReasonsByLostRevenue.test.ts` (describe "fix-wave-4 🔵16"; el de vendors ya lo cubre el
+  fixture discriminante de 🔵14).
+- [x] RED→GREEN 🔵17: sin límite de ancho de rango — `assertYearMonthRangeWidth` (`financeDates.ts`, cap 240
+  meses) agregado a los 5 endpoints de lectura. Tests: `financeDates.test.ts` +
+  un test por use case (describe "fix-wave-4 🔵17").
+- [ ] Documentado, NO arreglado: 🔵18 (`pct: 0` en vez de `null` para una cohorte con `originalCount: 0` —
+  requeriría volver `CohortSurvivalPoint.pct` nullable, deuda de bajo riesgo, ver design.md) y el guard
+  asimétrico `pppoe:read` del passthrough de `/contract-changes` (ver 4.20 arriba y design.md).
+- [x] `design.md`/`spec.md` actualizados: sección "fix-wave-4" en design.md (HTTP Contract campo por campo +
+  changelog), Requirements de spec.md actualizados con los escenarios de cada 🔴/🟡ranking + el fixture
+  discriminante de early-churn.
+- [x] Gate: `npx tsc --noEmit` (0 errores) + `npx jest` (suite completa) verdes tras el fix wave.
 
 ## Fase 5 — FE (sección nueva)
 

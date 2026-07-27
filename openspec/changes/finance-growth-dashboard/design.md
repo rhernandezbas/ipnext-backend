@@ -348,10 +348,12 @@ real(m) = nominal(m) × chainedIndex(base) / chainedIndex(m)
 
 **Gotcha de huecos (obligatorio del brief)**: si falta `monthlyRatePct` para algún mes DENTRO del rango
 pedido, la cadena se corta ahí — NO se asume `0%` (eso subestima la inflación real y produce un "falso
-crecimiento real" tan placebo como el nominal sin ajustar) y NO se interpola. La serie real se trunca en el
-último mes con dato consecutivo desde la base, y la respuesta incluye `realSeriesTruncatedAt` con el primer
-mes faltante. La serie **nominal** y de **contratos** (que no dependen del IPC) se siguen devolviendo
-completas — el usuario nunca pierde TODA la vista por un mes de carga olvidado.
+crecimiento real" tan placebo como el nominal sin ajustar) y NO se interpola. **fix-wave-4 🔴1**: la
+respuesta incluye `realSeriesMissingMonths: string[]` (la lista EXHAUSTIVA de meses de `[from, to]` sin valor
+real) — NO un único cutoff (`realSeriesTruncatedAt`, el diseño original), porque un hueco en cada dirección
+desde `base` deja un conjunto de meses reales NO contiguo que un solo marcador no puede describir. La serie
+**nominal** y de **contratos** (que no dependen del IPC) se siguen devolviendo completas — el usuario nunca
+pierde TODA la vista por un mes de carga olvidado.
 
 ### Decision 4 — Volumen: ingest paceado + snapshots nocturnos para el bridge/cohortes, queries vivas para rankings
 
@@ -787,6 +789,11 @@ decisión de a CUÁL de los dos carriles llamar en cada tick, y el pacing/backof
 
 Prefijo `/api/finance/growth`. Todas las rutas requieren sesión (`createAuthMiddleware`) + el guard indicado.
 
+> **fix-wave-4 (2026-07-27) — el contrato de los 5 endpoints de este bloque cambió de FORMA** (no sólo de
+> comportamiento) contra lo que Fase 5 va a consumir. Ver la sección "fix-wave-4" en el changelog de este
+> documento para la justificación de cada campo nuevo/renombrado. Los 5 endpoints TAMBIÉN rechazan ahora un
+> `[from, to]` mayor a 240 meses con `400` (🔵17, `assertYearMonthRangeWidth`).
+
 ### `GET /overview?from=YYYY-MM&to=YYYY-MM`
 Guard: `finance:read`.
 
@@ -812,14 +819,14 @@ Response `200`:
     mrrDowngradeArs: number;
     mrrChurnArs: number;
     mrrFinalArs: number;
-    mrrFinalRealArs: number | null;  // null si el mes está más allá de realSeriesTruncatedAt
+    mrrFinalRealArs: number | null;  // null si yearMonth ∈ realSeriesMissingMonths
     bridgeResidualArs: number;       // fix-wave-3 🟡4: mrrFinal - (mrrInicial+new+upgrade-downgrade-churn); 0 en el caso sano, VISIBLE en cualquier otro
     unpricedContractsActive: number; // contratos activos al cierre sin precio contratado resoluble (F2)
     unpricedContractsPct: number;    // 0-100
     unpricedPlanChangeEvents: number;
     enforcementPlanChangeEventsExcluded: number; // fix-wave-3 🔴1: eventos 'modified' del mes sobre un código IP-REDUCCION/IP-BAJA, excluidos de mrrUpgrade/mrrDowngrade
     revenueTotalArs: number;         // COBRANZA REAL — cash puro, SIN bridge, TODO el universo
-    revenueTotalRealArs: number | null;
+    revenueTotalRealArs: number | null; // null si yearMonth ∈ realSeriesMissingMonths
     collectionRatePct: number | null; // TASA DE COBRANZA = revenueInternetAttributedArs / mrrFinalArs * 100 (fix-wave-3 🔴2: numerador corregido, misma población que el denominador); null si mrrFinalArs es 0
     revenueAttributableArs: number;   // Capa B diagnóstico (attributionPct), NO alimenta el bridge
     unclassifiedAmountArs: number;
@@ -828,7 +835,13 @@ Response `200`:
     churnContractsPct: number;       // 0-100 — excluye alta+baja mismo mes (F3) y baja+re-alta mismo mes (F7)
     churnRevenuePct: number | null;  // null si no había contratos activos al inicio del mes (sin base — F4)
   }>;
-  realSeriesTruncatedAt: string | null; // "YYYY-MM" del primer mes SIN IPC dentro del rango, o null si completa
+  monthsWithoutSnapshot: string[]; // meses de [from,to] SIN fila en FinanceMonthlySnapshot — omitidos de `months`, nunca una fila de ceros
+  // fix-wave-4 🔴1 (BREAKING — reemplaza `realSeriesTruncatedAt: string | null`): la lista EXHAUSTIVA de
+  // meses de [from,to] cuyo valor real no pudo encadenarse desde `inflationBaseYearMonth` — leer la nulidad
+  // de mrrFinalRealArs/revenueTotalRealArs DIRECTAMENTE de cada fila, o cruzar contra esta lista; un único
+  // "truncatedAt" no podía describir un hueco no-contiguo (huecos en AMBAS direcciones desde `base` dejan un
+  // conjunto de meses reales NO contiguo, ver financeInflation.ts).
+  realSeriesMissingMonths: string[];
   inflationBaseYearMonth: string;       // eco de FinanceTargetsConfig, "" si nunca se configuró
   metricBasis: 'cash_collected';        // constante — declara explícitamente que revenueTotalArs/*RealArs de
                                          // este payload es cobranza real, NUNCA facturación emitida (Decision 0).
@@ -852,6 +865,13 @@ Response `200`:
       m12: { survivingCount: number; pct: number } | null;
     };
   }>;
+  // fix-wave-4 🟡9 (BREAKING — campo nuevo): meses de [fromCohort,toCohort] SIN NINGUNA fila en
+  // FinanceCohortSnapshot (el job/backfill nunca corrió para ese mes) — mismo patrón que
+  // `monthsWithoutSnapshot` de /overview. Un mes ausente de `cohorts` Y presente acá = "nunca computado"; un
+  // mes ausente de `cohorts` pero NO presente acá no puede pasar (si se computó, aparece con originalCount
+  // >= 0). Sin este campo, `cohorts: []` era indistinguible entre "el job nunca corrió" (medido: es el
+  // estado real de prod hoy) y "no hubo altas en ningún mes del rango".
+  monthsWithoutCohortSnapshot: string[];
 }
 ```
 
@@ -862,18 +882,30 @@ Response `200`:
 ```ts
 {
   technology: string;
-  costoVentaArs: number;
-  costoInstalacionArs: number;
-  cacArs: number;                 // costoVentaArs + costoInstalacionArs
+  costConfigured: boolean;        // false = NO existe fila en FinanceTechnologyCost — costos/cacArs abajo son null, NUNCA 0
+  // fix-wave-4 🟡7 (BREAKING — campo nuevo): true cuando `costConfigured` es true PERO
+  // costoVentaArs+costoInstalacionArs === 0 — las 3 columnas de FinanceTechnologyCost son @default(0), así
+  // que una fila creada y nunca completada es indistinguible de una tecnología GENUINAMENTE gratis bajo
+  // `costConfigured` solo.
+  costIsZero: boolean;
+  costoVentaArs: number | null;
+  costoInstalacionArs: number | null;
+  cacArs: number | null;           // costoVentaArs + costoInstalacionArs, null si costConfigured es false
   altasDelMes: Array<{
     contractId: string;
     clientId: string;
-    customerName: string;
+    customerName: string | null;
     mrrAtribuidoArs: number;
     attributionConfidence: 'exact' | 'estimated' | 'estimated-equal';
-    paybackMonths: number | null; // null si mrrAtribuidoArs es 0 (no divide por cero)
+    paybackMonths: number | null; // null si mrrAtribuidoArs es 0 O cacArs es null (nunca divide por cero/null)
     lossMaking: boolean;          // paybackMonths > FinanceTargetsConfig.maxPaybackMonths
-  }>;
+  }>;                              // SÓLO altas cuyo Contract.technology matchea `technology` (case-insensitive, fix-wave-4 🟡6)
+  // fix-wave-4 🔴2 (BREAKING — campo nuevo): altas del mes (dedupeadas por contrato, mismo criterio que
+  // `altasDelMes`) cuyo `Contract.technology` es `null` — UNRESOLVABLE, no "de otra tecnología". Antes de
+  // este campo, esas altas desaparecían SIN SEÑAL de `altasDelMes` de TODAS las tecnologías; medido: 5 altas
+  // reales con cash cobrado y `technology: null` rendían `altasDelMes: []` con un `cacArs` sano — "CAC
+  // $30.000, cero ventas" cuando la verdad era "5 ventas sin clasificar".
+  altasDelMesSinTecnologia: number;
   maxPaybackMonths: number;       // eco de FinanceTargetsConfig
 }
 ```
@@ -886,11 +918,19 @@ Response `200`:
 {
   windowMonths: number;  // = FinanceTargetsConfig.maxPaybackMonths, la ventana "temprano"
   vendors: Array<{
-    vendedor: string;         // Contract.vendedor
-    altasTotal: number;
+    vendedor: string;         // Contract.vendedor, trimeado (fix-wave-4 🟡11); "sin vendedor" si null/vacío/whitespace
+    altasTotal: number;       // TODAS las altas (deduplicadas activated+reactivated por contrato, fix-wave-4 🟡8), maduras o no
     altasChurneadasTemprano: number;
-    earlyChurnPct: number;    // 0-100
-  }>; // ordenado DESC por earlyChurnPct
+    // fix-wave-4 🟡5 (BREAKING — campo nuevo): DENOMINADOR real de earlyChurnPct, NO altasTotal. "Madura" =
+    // su ventana "temprano" ya cerró (ahora >= cutoff, medido desde la fecha REAL de la alta — fix-wave-4
+    // 🔴4, nunca desde el 1° de su mes calendario) O ya churneó temprano (veredicto sellado
+    // independientemente de si el resto de la ventana transcurrió). Una alta inmadura que NO churneó
+    // todavía no tiene veredicto — incluirla en el denominador como "no churneó" diluía la tasa real
+    // (medido: 10 maduras/5 churn = 50% real, + 10 de "la semana pasada" = 25% reportado bajo el
+    // denominador viejo).
+    altasMaduras: number;
+    earlyChurnPct: number | null; // fix-wave-4 🟡5 (BREAKING — era `number`): null cuando altasMaduras es 0, NUNCA un 0% adivinado
+  }>; // ordenado DESC por earlyChurnPct (nulls al final), desempate ASC por vendedor (fix-wave-4 🔵16)
 }
 ```
 
@@ -903,10 +943,10 @@ Response `200`:
   nodes: Array<{
     networkSiteId: string | null;   // null = contratos sin nodo asignado, agrupados aparte
     networkSiteName: string | null;
-    altas: number;
+    altas: number;                  // deduplicadas activated+reactivated por contrato (fix-wave-4 🟡8) — sin cambio de forma, sólo de conteo
     bajas: number;
     netGrowth: number;              // altas - bajas
-  }>; // ordenado ASC por netGrowth (los más negativos primero — son los que necesitan atención)
+  }>; // ordenado ASC por netGrowth (los más negativos primero), desempate ASC por networkSiteId — nulls al final (fix-wave-4 🔵16)
 }
 ```
 
@@ -917,10 +957,16 @@ Response `200`:
 ```ts
 {
   motivos: Array<{
-    motivo: string;              // Contract.motivoBaja o ContractServiceEvent.reason; "sin especificar" si ambos null
+    motivo: string;              // Contract.motivoBaja o ContractServiceEvent.reason; trim + case-insensitive al agrupar (fix-wave-4 🟡10); "sin especificar" si ambos null/vacíos
     bajas: number;
     mrrPerdidoArs: number;
-  }>; // ordenado DESC por mrrPerdidoArs (NO por `bajas`)
+    // fix-wave-4 🔴3 (BREAKING — campo nuevo): cuántas de `bajas`, DENTRO de este motivo, tienen un precio
+    // NO resoluble (sin plan, o un plan ausente de FinancePlanPrice) y por eso contribuyen `0` a
+    // `mrrPerdidoArs` en vez de su pérdida real. Medido en el estado real de prod: FinancePlanPrice VACÍA
+    // (387/387 contratos sin precio) ⇒ TODAS las filas leían `mrrPerdidoArs: 0`, el orden DESC colapsaba a
+    // orden de inserción, y la razón de ser del endpoint (rankear por plata) desaparecía sin señal.
+    bajasSinPrecio: number;
+  }>; // ordenado DESC por mrrPerdidoArs (NO por `bajas`), desempate ASC por motivo (fix-wave-4 🔵16)
 }
 ```
 
@@ -929,6 +975,13 @@ Guard: `finance:read`. **No es un endpoint nuevo real** — es un passthrough do
 `GET /api/pppoe/internet-history` (o el path real de `ListInternetServiceHistory` — confirmar en Fase 4 el
 mount actual) con los mismos query params. Se documenta acá para que el contrato BE↔FE de finance-growth no
 quede incompleto, pero la implementación NO duplica lógica.
+
+> **fix-wave-4 — confirmado, GUARD ASIMÉTRICO, para Fase 5**: el passthrough REAL monta en
+> `GET /api/pppoe/activation-history`, bajo el guard **`pppoe:read`**, NO `finance:read` — la única excepción
+> a "los 6 endpoints de finance-growth usan `finance:*`". Un usuario con `finance:read` pero SIN `pppoe:read`
+> come `403` en este endpoint específico y en ningún otro de la sección. La Fase 5 debe manejar ese `403`
+> como un caso separado del resto de la sección (o decidir, como cambio de producto, si agregar `finance:read`
+> como guard alternativo ahí) — no arreglado en esta fix wave, sólo documentado.
 
 ### `GET /config/technology-costs` · `PUT /config/technology-costs/:technologyName`
 Guard: `GET` → `finance:read`; `PUT` → `finance:manage_costs`.
@@ -1162,7 +1215,8 @@ código). El FE consume `useMyPermissions().can('finance.read')` / `<RequirePerm
   #3 del proposal), NO anidada bajo el grupo "Finanzas" existente.
 - Página principal: KPI tiles (contratos activos, MRR nominal vs. real del último mes, ARPU, churn
   contratos%, churn revenue%) + gráfico de bridge (waterfall) + toggle nominal/real con leyenda de
-  `realSeriesTruncatedAt` cuando aplica (mensaje explícito, no un gráfico que se corta sin explicación).
+  `realSeriesMissingMonths` cuando aplica (fix-wave-4 🔴1 — lista completa, no un único cutoff; mensaje
+  explícito por cada tramo sin dato, no un gráfico que se corta sin explicación).
   Disclaimer visible y permanente (no un tooltip escondido) anclado a `metricBasis: 'cash_collected'`:
   "Basado en cobranza real, no en facturación emitida" — mismo espíritu honesto que `attributionPct`.
 - Página de cohortes: matriz/heatmap de supervivencia 3/6/12 meses.
@@ -1401,3 +1455,142 @@ código). El FE consume `useMyPermissions().can('finance.read')` / `<RequirePerm
     resolvió, y **(j)** en sí queda como registro histórico de la deuda original, no como estado actual; la
     tabla de Use Cases (`BuildFinanceMonthlySnapshot`) ahora incluye `PppoeServiceRepository`, que faltaba
     pese a estar inyectado desde fix-wave-2.
+
+- **fix-wave-4 (2026-07-27) — Fase 4, re-review CON ARITMÉTICA VERIFICADA (escenarios ejecutados contra el
+  código real, la Fase 4 completa): 4 🔴 + 9 🟡, TODOS corregidos esta ronda + los 🔵 baratos (14, 14b, 15, 16,
+  17) — ver abajo (🔵18 y el passthrough `pppoe:read`) lo que queda documentado como deuda:**
+
+  - **🔴 1 — `realSeriesTruncatedAt` no podía describir un hueco no-contiguo.** Medido: `base=2026-03`,
+    `from=2026-01`, `to=2026-06`, IPC cargado sólo en 2026-03/04 ⇒ el conjunto de meses con valor real era
+    `{02, 03, 04}` (NO contiguo desde el inicio del rango), con `{01, 05, 06}` sin valor —
+    `truncatedAt: "2026-01"` (la convención de reporte de un hueco backward) escondía que 02/03/04 SÍ tenían
+    valor. **Decisión tomada: reemplazar por `realSeriesMissingMonths: string[]`** (opción (a) del fix wave,
+    no la (b) de dejarlo como campo informativo) — un solo marcador NUNCA puede describir más de un corte, y
+    la lista es tan barata de construir como el marcador (`allMonths.filter(m => !chainedIndexByMonth.has(m))`,
+    ver `GetFinanceOverview.execute`). `buildChainedIndex` se simplificó en el proceso: ya NO calcula ni
+    devuelve ningún marcador de truncamiento — el `Map` de índices encadenados es la única fuente de verdad,
+    y el llamador deriva la ausencia directamente de sus keys. Esto también cierra 🟡13 gratis: un hueco
+    cronológicamente ANTERIOR a `from` (necesario sólo para encadenar `base`→`from`) ya no podía "filtrarse"
+    como una coordenada fuera de rango, porque `realSeriesMissingMonths` sólo enumera meses de `[from, to]` —
+    nunca de fuera. Contrato **BREAKING**: `realSeriesTruncatedAt: string | null` → `realSeriesMissingMonths:
+    string[]` en `GET /overview`.
+  - **🔴 2 — `GET /cac` devolvía `altasDelMes: []` para altas REALES con `technology: null`, sin ninguna
+    señal.** `Contract.technology` es `null` para la MAYORÍA de los contratos derivados de GR (documentado en
+    `ContractRepository.findFinanceDetailsByIds`) — la comparación estricta `!== canonicalName` las excluía
+    en silencio de TODAS las tecnologías. Medido: 5 altas reales de marzo, cash cobrado, costo configurado ⇒
+    `{"cacArs":30000,"altasDelMes":[]}`, leído como "cero ventas" cuando la verdad es "5 ventas sin
+    clasificar". **Fix**: campo nuevo `altasDelMesSinTecnologia: number` (cuenta las altas del mes, dedupeadas
+    por contrato, cuyo `technology` es `null` — nunca las de OTRA tecnología, esas están correctamente
+    excluidas). **Y 🟡6 en el mismo fix**: el match de tecnología era case-SENSITIVE mientras
+    `ContractTechnologyRepository.getByName` (que resuelve `canonicalName`) ya es case-insensitive —
+    `"fibra"` contra catálogo `"Fibra"` se tragaba la venta en silencio; normalizado con `.toLowerCase()` en
+    ambos lados de la comparación. Contrato **BREAKING (campo agregado)**: `altasDelMesSinTecnologia: number`
+    nuevo en `GET /cac`.
+  - **🔴 3 — `GET /motivos-baja` colapsaba a `$0` en todas las filas en el estado real de prod.**
+    `FinancePlanPrice` vacía (387/387 contratos sin precio, medido) ⇒ 3 bajas "Precio" + 10 "Mudanza" salían
+    ambas en `mrrPerdidoArs: 0`, el orden DESC colapsaba a orden de inserción, y la razón de ser del endpoint
+    (rankear por plata, no por cantidad) desaparecía sin señal — el docblock afirmaba "same honesty rule as
+    `unpricedContractsActive`" pero ese SÍ es un campo expuesto y acá no había ninguno. **Fix**: campo nuevo
+    `bajasSinPrecio: number` POR MOTIVO (no sólo un total global) — se eligió per-row porque permite ver, para
+    CADA motivo del ranking, si su `mrrPerdidoArs` es confiable o no; un total global solo no distinguiría
+    cuál de los N motivos está más afectado. Contrato **BREAKING (campo agregado)**: `bajasSinPrecio: number`
+    nuevo en cada fila de `motivos` de `GET /motivos-baja`.
+  - **🔴 4 — la ventana de "churn temprano" se medía desde el 1° del mes calendario de la alta, no desde la
+    alta misma.** `RankEarlyChurnByVendor` computaba `cutoff = yearMonthToDateRange(addMonthsToYearMonth(
+    arYearMonth(altaDate), windowMonths)).start` — flooreaba la alta a su MES antes de sumar meses, perdiendo
+    hasta 30 días de ventana según el día del mes de la alta. Medido: alta `2026-01-31`, baja 160 días
+    después (`2026-07-10`) — DENTRO de los 6 meses reales desde el día 31 (cutoff real `2026-07-31`), pero
+    FUERA del cutoff buggeado (`2026-07-01`) ⇒ `earlyChurnPct: 0` cuando debía contar. Subestimaba
+    sistemáticamente el churn temprano, pegando más fuerte en vendedores que cierran a fin de mes — justo los
+    que la métrica existe para exponer. **Fix**: función nueva `addCalendarMonthsToDate` (`financeDates.ts`) —
+    suma meses calendario sobre la fecha REAL (con clamp de día en transición largo→corto mes, mismo criterio
+    que `IngestGestionRealOrders.monthsBack` pero forward + UTC), usada directamente sobre `new
+    Date(alta.createdAt)`. Sin cambio de forma en el contrato (el bug era puramente de cálculo).
+
+  **🟡 de la misma tanda (agregan campos al contrato, corregidos junto con los 🔴 para no dejar una segunda
+  ronda de drift):**
+  - **🟡 5 — altas inmaduras contaban como "0% churn" y diluían el denominador.** Medido: 10 altas maduras (5
+    churnearon = 50% real) + 10 altas de la semana pasada (ninguna tuvo tiempo de churnear) ⇒ el denominador
+    `altasTotal: 20` reportaba `earlyChurnPct: 25`, hundiendo en el ranking al vendedor cuyas ventas más
+    recientes simplemente no maduraron aún. **Decisión: `altasMaduras` como DENOMINADOR** (no sólo expuesto
+    para que el FE decida) — "maduro" = la ventana ya cerró (`now >= cutoffInstant`) O el veredicto ya está
+    sellado porque churneó temprano (un churn ya observado es definitivo, sin importar si el resto de la
+    ventana técnicamente no transcurrió). Se justifica encadenar el DENOMINADOR (no sólo exponer el dato)
+    porque el mismo principio de "nunca adivinar" que gobierna `GetFinanceCohorts` (null cuando la cohorte
+    no llegó a esa edad) aplica acá: una tasa calculada sobre datos que todavía no pueden tener un veredicto
+    es una tasa inventada, no una tasa real con ruido. Cuando `altasMaduras: 0`, `earlyChurnPct` es `null`
+    (nunca un `0%` adivinado). Contrato **BREAKING**: `altasMaduras: number` nuevo, `earlyChurnPct: number` →
+    `number | null` en `GET /vendors/early-churn`.
+  - **🟡 6 — ver 🔴2 (case-insensitive del filtro de tecnología), cerrado en el mismo fix.**
+  - **🟡 7 — `costConfigured: true` no distinguía "cargado" de "fila de ceros".** Las 3 columnas de
+    `FinanceTechnologyCost` son `@default(0)` — una fila creada y nunca completada es indistinguible de una
+    tecnología genuinamente gratuita. **Decisión: campo nuevo `costIsZero: boolean`** (`true` sólo cuando
+    `costConfigured` es `true` Y `cacArs === 0`) — se prefirió a la alternativa de redefinir `costConfigured`
+    (que hubiera roto la semántica ya establecida "existe una fila o no") porque agregar un campo nuevo deja
+    el contrato existente intacto y el FE decide libremente cómo combinarlos (`costConfigured && costIsZero`
+    = "cargado pero en cero, revisar"; `!costConfigured` = "nunca cargado"). Contrato **BREAKING (campo
+    agregado)**: `costIsZero: boolean` nuevo en `GET /cac`.
+  - **🟡 8 — `activated` + `reactivated` del mismo contrato se contaban DOS VECES** en
+    `RankEarlyChurnByVendor` y `RankNetGrowthByNode` (`ComputeCacAndPayback` YA deduplicaba explícitamente
+    por este caso desde su fix-wave original) — el mismo mes podía mostrar N altas en `/cac` y N+k en
+    `/vendors/early-churn`/`/nodes/growth`. **Fix**: mismo criterio de dedup (Set por `contractId`, quedándose
+    con el evento cronológicamente más temprano) replicado en los 3 use cases. Sin cambio de forma (el bug
+    era de conteo, no de campos).
+  - **🟡 9 — `GET /cohorts` devolvía el `[]` mudo que `/overview` ya había aprendido a no devolver.** Estado
+    real de prod: el backfill de `FinanceCohortSnapshot` nunca corrió. **Fix**: campo nuevo
+    `monthsWithoutCohortSnapshot: string[]`, mismo patrón que `monthsWithoutSnapshot` de `/overview` — un mes
+    ausente de `cohorts` Y presente en esta lista significa "nunca computado"; un mes ausente de esta lista
+    pero con `originalCount: 0` significa "computado, cero altas ese mes". Contrato **BREAKING (campo
+    agregado)**: `monthsWithoutCohortSnapshot: string[]` nuevo en `GET /cohorts`.
+  - **🟡 10 — `/motivos-baja` no normalizaba el motivo.** `"Contrato"`/`"  Contrato  "` y `"Precio"`/`"precio"`
+    (texto libre de GR, sin vocabulario fijo) armaban filas separadas, partiendo la plata perdida entre ellas.
+    **Fix**: agrupado por una clave `trim().toLowerCase()`, conservando el PRIMER casing visto como valor de
+    display (nunca reescribe lo que el operador tipeó, sólo deja de tratar espacios/casing como motivos
+    distintos). De paso, `.trim()` ANTES del fallback `||` — un `motivoBaja: "   "` (no-vacío, truthy bajo
+    `||` solo) pasaba sin caer al siguiente eslabón de la cadena.
+  - **🟡 11 — el `||` del vendedor no manejaba whitespace-only.** Mismo patrón que 🟡10 pero en
+    `RankEarlyChurnByVendor`: `vendedor: "   "` armaba su propio bucket en vez de agrupar bajo "sin vendedor".
+    **Fix**: `.trim()` antes del `||`.
+  - **🟡 12 — `monthlyRatePct <= -100` rompía la matemática encadenada.** Verificado escribiendo y leyendo:
+    `-100` ⇒ `chainedIndex = 0` ⇒ `mrrFinalRealArs: Infinity`, que sobrevivía en la respuesta SÓLO porque
+    `JSON.stringify(Infinity) === "null"` — el tipo `number | null` del DTO es una mentira en runtime para
+    cualquier consumidor que no sea `res.json` (un export CSV futuro, por ejemplo). `-150` invertía el signo
+    de toda la cadena. **Fix**: guard de una línea en `UpdateFinanceInflationIndex` — rechaza `<= -100`.
+
+  **🔵 baratos, corregidos esta ronda (no cambian la forma del contrato salvo donde se indica):**
+  - **🔵 14 — el test "4.12/4.13" de `RankEarlyChurnByVendor` era tautológico.** El fixture (A: 50 altas/60%
+    vs B: 20 altas/5%) hacía que A ganara por CUALQUIERA de los dos criterios (volumen O tasa) — no
+    discriminaba el bug que decía cubrir. **Fix**: reescrito con el caso discriminante confirmado por la
+    review (A: 10 altas/80% vs B: 50 altas/10% — A gana por tasa a pesar de tener 5x menos altas).
+  - **🔵 14b — cobertura de contrato en los tests de ruta.** `/vendors/early-churn`, `/nodes/growth` y
+    `/motivos-baja` sólo tenían tests de wire con respuesta VACÍA (`[]`) — el shape de las FILAS (lo que la
+    Fase 5 va a tipar) nunca se asertaba sobre HTTP. **Fix**: un test no-vacío por endpoint, `toEqual` exacto
+    sobre la fila completa. También: el test de `/overview` fijaba `churnRevenuePct: 0` (un valor que un `??
+    0` hubiera dejado pasar igual) — agregado un test dedicado que siembra `null` explícito y verifica que
+    sobrevive a la respuesta HTTP sin coerción.
+  - **🔵 15 — `maxPaybackMonths: 0` no tenía guard de `>= 1`.** Un payback de 0 meses no es un valor de
+    negocio real — degenera el cutoff de "temprano" a la fecha exacta de la alta (ventana vacía) y el umbral
+    de `lossMaking` a "cualquier payback es pérdida". **Fix**: `UpdateFinanceTargets` ahora exige `>= 1`
+    (antes `>= 0`).
+  - **🔵 16 — empates sin desempate determinístico en los 3 rankings.** `Array.sort` sobre un `Map` iterado
+    con valores empatados (`earlyChurnPct`, `netGrowth`, `mrrPerdidoArs`) no garantiza el mismo orden entre
+    corridas. **Fix**: desempate secundario determinístico en los 3 (ASC por `vendedor`/`networkSiteId`
+    — nulls al final —/`motivo`, según corresponda).
+  - **🔵 17 — sin límite de ancho de rango (`1990-01..2026-12` ⇒ 444 meses).** **Fix**: `assertYearMonthRangeWidth`
+    (`financeDates.ts`, cap de 240 meses/20 años — mismo cap que `BackfillFinanceMonthlySnapshots` ya usa para
+    su propio rango) aplicado a los 5 endpoints de lectura (`/overview`, `/cohorts`, `/vendors/early-churn`,
+    `/nodes/growth`, `/motivos-baja`).
+
+  **Documentado, NO arreglado esta ronda (deuda de bajo riesgo o requiere una decisión de producto):**
+  - **🔵 18 — una cohorte con `originalCount: 0` reporta `pct: 0`** en vez de `null` (división por cero
+    evitada, pero el "0%" es indistinguible de una cohorte real con 0% de supervivencia). No arreglado:
+    requeriría volver `CohortSurvivalPoint.pct` nullable, un cambio de forma adicional que esta ronda no
+    forzó porque el caso (`originalCount: 0` con el mes SÍ computado) es un edge case sin evidencia de
+    ocurrir en prod — una cohorte mensual sin ninguna alta es infrecuente pero no imposible; se deja
+    documentado para que la Fase 5 decida si vale la pena el cambio de forma.
+  - **`GET /api/pppoe/activation-history` (passthrough de `/contract-changes`) monta bajo el guard
+    `pppoe:read`, NO `finance:read`.** Confirmado en esta ronda — un usuario con `finance:read` pero SIN
+    `pppoe:read` come `403` en ese endpoint específico, la única excepción a "los 6 endpoints de finance-growth
+    usan el guard `finance:*`". Documentado para que la Fase 5 lo sepa ANTES de tipar el cliente HTTP
+    (necesita manejar el `403` de ese endpoint como un caso separado, o la Fase 5/6 debe decidir si agregar
+    `finance:read` como guard alternativo ahí — decisión de producto, no de esta fix wave).

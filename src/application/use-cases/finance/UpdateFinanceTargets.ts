@@ -32,8 +32,14 @@ export class UpdateFinanceTargets {
       throw new FinanceValidationError('churnTargetPct must be a number between 0 and 100');
     }
     assertDecimalBounds(input.churnTargetPct, 'churnTargetPct', PCT_PRECISION, PCT_SCALE);
-    if (!Number.isInteger(input.maxPaybackMonths) || input.maxPaybackMonths < 0) {
-      throw new FinanceValidationError('maxPaybackMonths must be a non-negative integer');
+    // fix-wave-4 🔵15 — `>= 1`, not `>= 0`: a 0-month payback window is not a
+    // real business value. It degenerates `RankEarlyChurnByVendor`'s
+    // "temprano" cutoff to the alta instant itself (an empty window, every
+    // alta trivially "matures" instantly) and `ComputeCacAndPayback`'s
+    // `lossMaking` threshold to "any payback at all is loss-making" —
+    // closed at the source instead of leaving every consumer to guard it.
+    if (!Number.isInteger(input.maxPaybackMonths) || input.maxPaybackMonths < 1) {
+      throw new FinanceValidationError('maxPaybackMonths must be a positive integer (>= 1)');
     }
     assertInt32Range(input.maxPaybackMonths, 'maxPaybackMonths');
     if (!Number.isInteger(input.monthlyNewContractsGoal) || input.monthlyNewContractsGoal < 0) {

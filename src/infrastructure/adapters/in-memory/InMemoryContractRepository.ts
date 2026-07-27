@@ -9,6 +9,7 @@ import {
   ContractLocationResult,
   ContractNetworkAssignmentResult,
   UpdateNetworkAssignmentInput,
+  ContractFinanceDetails,
 } from '@domain/ports/ContractRepository';
 import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 
@@ -190,5 +191,25 @@ export class InMemoryContractRepository implements ContractRepository {
       accessPointId: data.accessPointId,
     };
     return { ...this.networkAssignments[id] };
+  }
+
+  /** finance-growth Fase 4 — mirrors the Prisma adapter's projection, sourced from `items` + the parallel `vendedores`/`motivoBajas` arrays. */
+  async findFinanceDetailsByIds(contractIds: string[]): Promise<Map<string, ContractFinanceDetails>> {
+    const idSet = new Set(contractIds);
+    const result = new Map<string, ContractFinanceDetails>();
+    this.items.forEach((c, idx) => {
+      if (!idSet.has(c.id)) return;
+      result.set(c.id, {
+        id: c.id,
+        clientId: c.clientId,
+        customerName: c.clientName,
+        vendedor: this.vendedores[idx] ?? null,
+        motivoBaja: this.motivoBajas[idx] ?? null,
+        technology: c.technology,
+        networkSiteId: c.networkSiteId,
+        networkSiteName: c.networkSiteName,
+      });
+    });
+    return result;
   }
 }

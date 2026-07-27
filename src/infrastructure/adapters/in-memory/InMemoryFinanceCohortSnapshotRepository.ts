@@ -17,6 +17,13 @@ export class InMemoryFinanceCohortSnapshotRepository implements FinanceCohortSna
       .map((r) => ({ ...r }));
   }
 
+  async listByCohortRange(fromCohort: string, toCohort: string): Promise<FinanceCohortSnapshot[]> {
+    return Array.from(this.rows.values())
+      .filter((r) => r.cohortYearMonth >= fromCohort && r.cohortYearMonth <= toCohort)
+      .sort((a, b) => (a.cohortYearMonth === b.cohortYearMonth ? a.monthsElapsed - b.monthsElapsed : a.cohortYearMonth < b.cohortYearMonth ? -1 : 1))
+      .map((r) => ({ ...r }));
+  }
+
   async upsert(
     cohortYearMonth: string,
     monthsElapsed: number,

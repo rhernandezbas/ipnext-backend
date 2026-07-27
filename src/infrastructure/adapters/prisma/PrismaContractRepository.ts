@@ -8,6 +8,7 @@ import {
   ContractLocationResult,
   ContractNetworkAssignmentResult,
   UpdateNetworkAssignmentInput,
+  ContractFinanceDetails,
 } from '@domain/ports/ContractRepository';
 import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 import { prisma } from '../../database/prisma';
@@ -226,5 +227,40 @@ export class PrismaContractRepository implements ContractRepository {
       if ((err as { code?: string })?.code === 'P2025') return null;
       throw err;
     }
+  }
+
+  /**
+   * finance-growth Fase 4 — see `ContractRepository.findFinanceDetailsByIds`'s
+   * docblock for why `technology` is the RAW column (never `deriveTechnology`).
+   */
+  async findFinanceDetailsByIds(contractIds: string[]): Promise<Map<string, ContractFinanceDetails>> {
+    const result = new Map<string, ContractFinanceDetails>();
+    if (contractIds.length === 0) return result;
+    const rows = await prisma.contract.findMany({
+      where: { id: { in: contractIds } },
+      select: {
+        id: true,
+        clientId: true,
+        vendedor: true,
+        motivoBaja: true,
+        technology: true,
+        networkSiteId: true,
+        client: { select: { name: true } },
+        networkSite: { select: { name: true } },
+      },
+    });
+    for (const r of rows) {
+      result.set(r.id, {
+        id: r.id,
+        clientId: r.clientId,
+        customerName: r.client?.name ?? null,
+        vendedor: r.vendedor ?? null,
+        motivoBaja: r.motivoBaja ?? null,
+        technology: r.technology ?? null,
+        networkSiteId: r.networkSiteId ?? null,
+        networkSiteName: r.networkSite?.name ?? null,
+      });
+    }
+    return result;
   }
 }

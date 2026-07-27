@@ -69,6 +69,26 @@ export interface UpdateNetworkAssignmentInput {
   accessPointId: string | null;
 }
 
+/**
+ * finance-growth Fase 4 — batch projection of the `Contract` fields the
+ * rankings need (`vendors/early-churn`, `nodes/growth`, `motivos-baja`, `cac`):
+ * `vendedor` (GR agente), `motivoBaja` (GR-owned cancellation reason),
+ * `technology` (raw catalog-matched column — see `findFinanceDetailsByIds`'s
+ * docblock on why this is NOT derived via `deriveTechnology`), and the
+ * node assignment (`networkSiteId`/`networkSiteName`). `customerName` travels
+ * here too so the CAC listing doesn't need a second round-trip.
+ */
+export interface ContractFinanceDetails {
+  id: string;
+  clientId: string;
+  customerName: string | null;
+  vendedor: string | null;
+  motivoBaja: string | null;
+  technology: string | null;
+  networkSiteId: string | null;
+  networkSiteName: string | null;
+}
+
 export interface ContractRepository {
   /** Global paginated listing across all clients, with optional filters. */
   list(query: ListContractsQuery): Promise<PaginatedResult<ContractListItem>>;
@@ -141,4 +161,21 @@ export interface ContractRepository {
     id: string,
     data: UpdateNetworkAssignmentInput,
   ): Promise<ContractNetworkAssignmentResult | null>;
+
+  /**
+   * finance-growth Fase 4 — ONE query for every `contractId` in `contractIds`
+   * (never N+1), keyed by contract id. `technology` is the RAW `Contract.technology`
+   * column, matched EXACTLY the same way `ContractTechnologyRepository.countContractsUsingTechnology`
+   * already does — deliberately NOT `deriveTechnology(technology, plan)` (that
+   * helper returns a DIFFERENT, hardcoded vocabulary — 'Fiber'/'Wireless',
+   * English — used by Recaptación/ListContracts, which does not match the
+   * ADMIN-managed `ContractTechnology.name` catalog finance-growth's CAC keys
+   * off of, e.g. "Fibra"). Declared limitation (deuda): `Contract.technology`
+   * is NULL for most GR-derived contracts (only manually-tagged contracts
+   * resolve here) — `ComputeCacAndPayback` will show few/no altas for a
+   * technology until that column gets backfilled; this is the SAME kind of
+   * honest gap as `unpricedContractsActive`, never silently guessed.
+   * A contractId absent from the DB is simply omitted from the returned Map.
+   */
+  findFinanceDetailsByIds(contractIds: string[]): Promise<Map<string, ContractFinanceDetails>>;
 }

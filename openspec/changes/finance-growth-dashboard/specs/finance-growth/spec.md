@@ -559,6 +559,16 @@ reportar cuántas de ellas siguen activas 3, 6 y 12 meses después.
   no se inventa un mes de alta que no se puede determinar, y NO infla el `originalCount` de la cohorte del
   mes en que ocurrió la reactivación
 
+#### Scenario: A cohort month never computed at all is distinguishable from one with no altas (fix-wave-4 🟡9)
+> Medido en prod: el backfill de `FinanceCohortSnapshot` nunca corrió — `GET /cohorts` responde el `[]` mudo
+> que `/overview` ya había aprendido a no devolver por su cuenta (`monthsWithoutSnapshot`).
+- GIVEN un rango de meses donde `FinanceCohortSnapshot` NO tiene ninguna fila (el job/backfill nunca corrió
+  para esos meses)
+- WHEN se consulta `GET /cohorts` para ese rango
+- THEN `cohorts` es `[]` PERO `monthsWithoutCohortSnapshot` lista cada uno de esos meses — el FE puede
+  distinguir "no computado todavía" de "no hubo altas ese mes" (que en cambio SÍ aparecería como una fila con
+  `originalCount: 0`, si el job corrió y encontró cero altas)
+
 ### Requirement: CAC and payback, per technology, flags loss-making plans
 El sistema DEBE (MUST) computar, por tecnología, `CAC = costoVentaArs + costoInstalacionArs` (de
 `FinanceTechnologyCost`) y `paybackMonths = CAC / mrrDelAlta`, y DEBE (MUST) marcar como alerta cualquier
@@ -576,38 +586,116 @@ alta cuyo `paybackMonths` exceda `FinanceTargetsConfig.maxPaybackMonths`.
 - WHEN se computa el CAC/payback del mes
 - THEN esa alta aparece en la lista de ventas a pérdida, con su `paybackMonths` calculado
 
+#### Scenario: Altas whose technology cannot be classified are surfaced, never silently read as "no sales" (fix-wave-4 🔴2)
+> `Contract.technology` es `null` para la MAYORÍA de los contratos derivados de GR (ver
+> `ContractRepository.findFinanceDetailsByIds`). Antes de este fix, esas altas desaparecían de
+> `altasDelMes` en TODAS las tecnologías sin ninguna señal — la respuesta decía "CAC $X, cero ventas este
+> mes" cuando la verdad era "N ventas reales que no puedo clasificar".
+- GIVEN 5 altas reales del mes con cash cobrado, `technology: null` en las 5, y un costo configurado para
+  "Fibra"
+- WHEN se consulta `GET /cac?technology=Fibra&yearMonth=...`
+- THEN `altasDelMes` es `[]` (correcto, ninguna resuelve a "Fibra"), pero `altasDelMesSinTecnologia: 5`
+  distingue explícitamente "no vendiste" de "vendiste pero no sé de qué tecnología"
+
+#### Scenario: The technology filter matches case-insensitively, same criterion as the catalog's own resolution (fix-wave-4 🟡6)
+- GIVEN un contrato con `Contract.technology: "fibra"` (minúscula) y el catálogo `ContractTechnology` tiene
+  "Fibra" (con mayúscula) como nombre canónico
+- WHEN se consulta `GET /cac?technology=Fibra&yearMonth=...`
+- THEN esa alta aparece en `altasDelMes` — el mismatch de casing NUNCA la excluye en silencio
+
+#### Scenario: A configured cost row whose values are all zero is distinguishable from "no configurado" (fix-wave-4 🟡7)
+> Las 3 columnas de `FinanceTechnologyCost` son `@default(0)` — una fila creada y nunca completada es
+> indistinguible de una tecnología genuinamente gratuita bajo `costConfigured: true` solo.
+- GIVEN una fila de `FinanceTechnologyCost` EXISTE para "Fibra" pero sus 3 columnas están en `0`
+- WHEN se consulta `GET /cac?technology=Fibra&yearMonth=...`
+- THEN `costConfigured: true` Y `costIsZero: true` — el FE puede distinguir "cargado en cero" de "nunca
+  cargado" (`costConfigured: false`)
+
 ### Requirement: Early-churn-by-vendor ranking exposes short-lived sales, not just volume
 El sistema DEBE (MUST) exponer, por `Contract.vendedor`, tanto el conteo de altas como el conteo de esas
 altas que reciben un evento `deactivated` dentro de una ventana temprana configurable (mismo
 `maxPaybackMonths` como proxy de "temprano", salvo que el usuario defina otro corte), de forma que un
-vendedor con muchas altas pero alto churn temprano NO quede indistinguible de uno con altas sanas.
+vendedor con muchas altas pero alto churn temprano NO quede indistinguible de uno con altas sanas. La
+ventana "temprana" se mide en meses calendario DESDE LA FECHA REAL DE LA ALTA (no desde el 1° del mes en que
+ocurrió) — dos altas del mismo mes pero de días distintos tienen cutoffs distintos.
 
-#### Scenario: A vendor with high volume but high early churn is distinguishable from a healthy one
-- GIVEN el vendedor A con 50 altas en el mes de las cuales 30 se dan de baja dentro de la ventana temprana, y
-  el vendedor B con 20 altas de las cuales 1 se da de baja en la misma ventana
+#### Scenario: A vendor with FEWER sales but a HIGHER early-churn rate ranks first (fix-wave-4 🔵14 — discriminating fixture)
+> El escenario anterior de este Requirement (A: 50 altas/60% vs B: 20 altas/5%) NO discriminaba el bug que
+> decía cubrir — A ganaba tanto por tasa CUANTO por volumen, así que un ranking por volumen puro también
+> hubiera pasado el test. Reemplazado por un fixture donde el criterio de volumen y el de tasa DIVERGEN.
+- GIVEN el vendedor A con 10 altas maduras de las cuales 8 se dan de baja dentro de la ventana temprana
+  (80%), y el vendedor B con 50 altas maduras de las cuales 5 se dan de baja en la misma ventana (10%)
 - WHEN se consulta el ranking de churn temprano por vendedor
-- THEN el vendedor A aparece con una tasa de churn temprano (60%) sustancialmente mayor que B (5%), aun
-  cuando A tiene más altas totales que B
+- THEN el vendedor A aparece PRIMERO pese a tener 5 veces menos altas que B — el orden es por
+  `earlyChurnPct`, nunca por volumen
+
+#### Scenario: Immature altas are excluded from the denominator, not counted as silent successes (fix-wave-4 🟡5)
+> Antes de este fix, `earlyChurnPct` dividía por `altasTotal` (TODAS las altas del rango, maduras o no). Una
+> alta de la semana pasada que técnicamente no tuvo tiempo de fallar todavía contaba como "no churneó",
+> diluyendo la tasa real y hundiendo en el ranking a vendedores cuyas ventas más recientes simplemente no
+> maduraron aún.
+- GIVEN un vendedor con 10 altas maduras (su ventana ya cerró) de las cuales 5 churnearon temprano, MÁS 10
+  altas de la semana pasada (su ventana todavía no cerró y ninguna churneó todavía)
+- WHEN se consulta el ranking de churn temprano por vendedor
+- THEN `altasMaduras: 10` (NO 20), `altasChurneadasTemprano: 5`, y `earlyChurnPct: 50` (NO 25) — las
+  altas inmaduras se exponen (`altasTotal: 20`) pero NO diluyen la tasa
+- AND si TODAS las altas de un vendedor son inmaduras (`altasMaduras: 0`), `earlyChurnPct` es `null`, nunca
+  un `0%` adivinado
+
+#### Scenario: An alta on the last day of the month gets its FULL window, not one truncated to the 1st (fix-wave-4 🔴4)
+> El código anterior media la ventana desde el 1° del mes calendario de la alta, no desde la fecha real —
+> una alta del día 31 perdía hasta 30 días de su propia ventana, subestimando el churn temprano
+> sistemáticamente en los vendedores que cierran ventas a fin de mes.
+- GIVEN una alta ocurrida el día 31 de un mes, con una ventana de 6 meses, y una baja ~160 días después (DENTRO
+  de los 6 meses calendario reales desde el día 31, pero fuera de los 6 meses medidos desde el día 1)
+- WHEN se consulta el ranking de churn temprano por vendedor
+- THEN esa baja SÍ cuenta como churn temprano — la ventana se mide desde la fecha REAL de la alta
 
 ### Requirement: Net growth by node/AP surfaces technical churn, not just commercial
 El sistema DEBE (MUST) computar, por `Contract.networkSiteId`/`accessPointId`, altas menos bajas del mes, de
 forma que un nodo con crecimiento neto negativo sea identificable sin necesitar el cruce con `noc-alerts-hub`
-(el diseño no cierra la puerta a ese cruce, pero no lo implementa).
+(el diseño no cierra la puerta a ese cruce, pero no lo implementa). Una misma venta nunca debe contarse dos
+veces: un contrato con evento `activated` Y `reactivated` dentro del mismo rango cuenta como UNA sola alta
+(fix-wave-4 🟡8 — mismo criterio de deduplicación que `/cac` y `/vendors/early-churn`).
 
 #### Scenario: A node with more churn than activations shows negative net growth
 - GIVEN un nodo con 2 altas y 8 bajas en el mes
 - WHEN se consulta el crecimiento neto por nodo
 - THEN ese nodo aparece con `netGrowth: -6`
 
+#### Scenario: An activated+reactivated pair on the same contract counts as ONE alta (fix-wave-4 🟡8)
+- GIVEN un contrato con un evento `activated` y, más tarde en el mismo rango, un evento `reactivated`
+- WHEN se consulta el crecimiento neto de su nodo
+- THEN `altas` cuenta ESE contrato una sola vez, no dos — el mismo criterio que `/cac`'s dedup por
+  `contractId` evita que el mismo mes muestre un conteo de altas distinto entre endpoints
+
 ### Requirement: Cancellation-reason ranking is ordered by lost revenue, not count
 El sistema DEBE (MUST) ordenar el ranking de `Contract.motivoBaja` (o `ContractServiceEvent.reason` cuando
-`motivoBaja` es null) por MRR perdido acumulado, NO por cantidad de bajas.
+`motivoBaja` es null) por MRR perdido acumulado, NO por cantidad de bajas. `motivo` se normaliza (trim +
+comparación case-insensitive) antes de agrupar — un mismo motivo con distinto casing o espacios en blanco
+(datos GR de texto libre, sin vocabulario fijo) NUNCA parte la plata en dos filas (fix-wave-4 🟡10).
 
 #### Scenario: A less-frequent reason with higher-value contracts outranks a frequent low-value one
 - GIVEN el motivo "mudanza" con 10 bajas de contratos de $5.000/mes ($50.000 perdidos) y el motivo "precio"
   con 15 bajas de contratos de $2.000/mes ($30.000 perdidos)
 - WHEN se consulta el ranking de motivos de baja
 - THEN "mudanza" aparece primero pese a tener menos bajas, porque perdió más plata
+
+#### Scenario: Unpriced bajas are surfaced per motivo, never silently collapsed to $0 (fix-wave-4 🔴3)
+> Medido en prod: `FinancePlanPrice` está VACÍA (387/387 contratos sin precio). Sin este campo, TODAS las
+> filas leen `mrrPerdidoArs: 0`, el orden DESC colapsa a orden de inserción, y la razón de ser del endpoint
+> (rankear por plata, no por cantidad) desaparece sin ninguna señal.
+- GIVEN `FinancePlanPrice` completamente vacía, 3 bajas de motivo "Precio" y 10 de "Mudanza", todas con un
+  plan que no resuelve a ningún precio
+- WHEN se consulta el ranking de motivos de baja
+- THEN ambas filas muestran `mrrPerdidoArs: 0` PERO `bajasSinPrecio: 3` y `bajasSinPrecio: 10`
+  respectivamente — el FE puede distinguir "no perdieron plata" de "no puedo calcular cuánta plata perdieron"
+
+#### Scenario: "Contrato" and "  Contrato  " group under one row, never two (fix-wave-4 🟡10)
+- GIVEN dos bajas, una con `motivoBaja: "Contrato"` y otra con `motivoBaja: "  Contrato  "` (espacios en
+  blanco de más, dato GR de texto libre)
+- WHEN se consulta el ranking de motivos de baja
+- THEN ambas bajas caen en la MISMA fila (`bajas: 2`), no en dos filas separadas que parten la plata perdida
 
 ### Requirement: Nominal vs. inflation-adjusted (real) revenue series
 El sistema DEBE (MUST) exponer, para cualquier rango de meses, tanto la serie **nominal** de cobranza (cash
@@ -630,8 +718,30 @@ collected, ver Decision 0) como la serie **real** deflactada por `FinanceInflati
 #### Scenario: A missing month breaks the real series honestly (no silent interpolation)
 - GIVEN una serie de 12 meses donde el mes 7 no tiene `FinanceInflationIndex` cargado
 - WHEN se consulta la serie real para el rango completo
-- THEN la serie real se trunca en el mes 6 (inclusive), el payload incluye
-  `realSeriesTruncatedAt: "<mes 7>"`, y la serie nominal y de contratos SIGUEN completas para los 12 meses
+- THEN la serie real se trunca en el mes 6 (inclusive), el payload incluye `"<mes 7>"` y todo mes posterior
+  en `realSeriesMissingMonths`, y la serie nominal y de contratos SIGUEN completas para los 12 meses
+
+#### Scenario: A gap in EACH direction leaves a non-contiguous set of real months, never describable by a single cutoff (fix-wave-4 🔴1)
+> `realSeriesTruncatedAt: string | null` (un solo mes) reemplazado por `realSeriesMissingMonths: string[]`
+> (la lista exhaustiva). Medido: `base=2026-03`, rango `[2026-01, 2026-06]`, IPC cargado SOLO en 2026-03 y
+> 2026-04 ⇒ el conjunto de meses con valor real es `{02, 03, 04}` (NO contiguo desde el principio del rango)
+> mientras `{01, 05, 06}` quedan sin valor — un único `truncatedAt` no puede describir esta forma; el FE no
+> podía derivar la nulidad de 02/03/04 (que SÍ tienen valor) a partir de ese campo.
+- GIVEN IPC cargado únicamente en los meses que encadenan hacia 2026-02, 2026-03 (base) y 2026-04, con huecos
+  tanto antes como después de esos tres meses dentro del rango pedido
+- WHEN se consulta la serie real para `[2026-01, 2026-06]`
+- THEN `realSeriesMissingMonths` es exactamente `["2026-01", "2026-05", "2026-06"]`, y `mrrFinalRealArs` es
+  un valor real (no `null`) para 2026-02/03/04
+
+#### Scenario: A chain gap chronologically before "from" never leaks into the response (fix-wave-4 🟡13)
+> Antes de este fix, un hueco entre `inflationBaseYearMonth` y `from` (necesario solo para encadenar hasta
+> el rango visible, pero cronológicamente ANTERIOR a él) se reportaba como `truncatedAt`, una coordenada
+> fuera del rango pedido — inútil para el FE, que nunca preguntó por ese mes.
+- GIVEN `inflationBaseYearMonth` muy anterior al rango pedido, con un hueco de IPC entre la base y el rango
+  visible que rompe la cadena antes de llegar a `from`
+- WHEN se consulta la serie real para ese rango
+- THEN `realSeriesMissingMonths` sólo contiene meses DENTRO de `[from, to]` — nunca el mes del hueco si ese
+  mes cae fuera del rango pedido
 
 ### Requirement: Contract-modification listing reuses the existing plan-direction derivation
 El sistema DEBE (MUST) exponer las modificaciones de contrato (upgrades/downgrades) reutilizando
@@ -710,6 +820,23 @@ no corresponda (costos, precios, porcentajes) sin aplicar actualizaciones parcia
 - THEN responde `400` con un mensaje que nombra la cota de la columna, y no persiste nada
 - AND el mismo criterio aplica a los costos (`Decimal(12,2)`), los porcentajes (`Decimal(5,2)`) y los enteros
   (`maxPaybackMonths`/`monthlyNewContractsGoal`, `INTEGER` de 32 bits)
+
+#### Scenario: A monthlyRatePct of -100 or worse is rejected, it breaks the chained-index math (fix-wave-4 🟡12)
+> `-100` produce `chainedIndex = 0` en `buildChainedIndex` (división por cero) ⇒ `mrrFinalRealArs: Infinity`,
+> que solo "sobrevive" en la respuesta porque `JSON.stringify(Infinity) === "null"` — el tipo `number | null`
+> del DTO es una MENTIRA en runtime para cualquier consumidor que no sea `res.json` (ej. un export CSV
+> futuro). Un valor menor a `-100` invierte el signo de la cadena completa.
+- GIVEN un usuario con `finance:manage_inflation`
+- WHEN envía `PUT .../config/inflation/2026-01` con `monthlyRatePct: -100` (o cualquier valor `<= -100`)
+- THEN responde `400` y no persiste nada — ninguna deflación mensual real llega al 100%
+
+#### Scenario: maxPaybackMonths must be at least 1, never 0 (fix-wave-4 🔵15)
+> Un payback de 0 meses no es un valor de negocio real: degenera el cutoff de "temprano" de
+> `RankEarlyChurnByVendor` a la fecha exacta de la alta (ventana vacía) y el umbral de `lossMaking` de
+> `ComputeCacAndPayback` a "cualquier payback es pérdida".
+- GIVEN un usuario con `finance:manage_targets`
+- WHEN envía `PUT /config/targets` con `maxPaybackMonths: 0`
+- THEN responde `400` y no actualiza ningún campo del singleton
 
 #### Scenario: An empty range filter means "no filter", not an invalid one
 - GIVEN la serie de IPC tiene filas cargadas
@@ -803,6 +930,17 @@ nuevo que computar.
 - THEN el campo `snapshotJob.lastResult` refleja el error de la última corrida — el panel NUNCA muestra el
   mismo estado para "todo salió bien, nada cambió" y "el job lleva días muerto"
 
+### Requirement: Read endpoints cap the width of "from"/"to" ranges
+El sistema DEBE (MUST) rechazar, en cada uno de los 5 endpoints de lectura de Fase 4
+(`/overview`, `/cohorts`, `/vendors/early-churn`, `/nodes/growth`, `/motivos-baja`), un rango `[from, to]`
+que exceda 240 meses (20 años) — el mismo cap defensivo que `POST /sync/backfill-snapshots` ya aplica a su
+propio rango (fix-wave-4 🔵17).
+
+#### Scenario: An absurdly wide range is rejected instead of walking decades of history
+- GIVEN un request con `from: "1990-01"` y `to: "2026-12"` (444 meses)
+- WHEN se consulta cualquiera de los 5 endpoints de lectura de Fase 4
+- THEN responde `400`, sin ejecutar ninguna query contra los repositorios
+
 ## Testing Notes
 
 Molde de `SyncGestionRealContractsDelta` (cursor de fecha) + `BackfillGrContractsBatch`/
@@ -828,8 +966,12 @@ escenario de este spec (`exact`/`estimated`/`estimated-equal`) necesita su propi
 `recibos` necesita un test explícito de normalización dict→lista (fixture con `aplicaciones` como objeto
 keyed-by-id, igual que el fixture ya usado para `clientes_consulta`) y un test de exclusión de anulados. Los
 tests de rutas usan supertest con repos in-memory inyectados y cubren los 2 caminos de permisos (con/sin cada
-acción) por endpoint de escritura. El test de la serie real truncada (`realSeriesTruncatedAt`) es
-obligatorio — es el escenario que previene el placebo inflacionario que motivó el pedido completo.
+acción) por endpoint de escritura. El test de la serie real truncada (`realSeriesMissingMonths`, fix-wave-4
+🔴1 — reemplaza el `realSeriesTruncatedAt` original) es obligatorio — es el escenario que previene el placebo
+inflacionario que motivó el pedido completo. Los tests de ranking (`/vendors/early-churn`, `/nodes/growth`,
+`/motivos-baja`) DEBEN usar fixtures que DISCRIMINEN el criterio de ordenamiento bajo prueba (ej. volumen vs.
+tasa) — un fixture donde ambos criterios coinciden en el mismo ganador no prueba nada (fix-wave-4 🔵14: el
+fixture original de early-churn, 50 altas/60% vs 20 altas/5%, no discriminaba).
 
 **REWORK 2026-07-27 — criterio obligatorio para el test de la identidad del bridge**: un fixture donde el cash
 (o cualquier otro insumo) de cada contrato se fija A MANO en exactamente el valor que hace cerrar la cuenta NO

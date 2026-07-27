@@ -5,6 +5,8 @@
  * GR-shape mapping.
  */
 
+import { FinanceValidationError } from '@domain/errors/finance';
+
 /** GR's null-date centinela — appears wherever a date field is "not set" (fecha_anulacion, fecha_creacion, ...). */
 export const GR_NULL_DATE_SENTINEL = '00-00-0000 00:00:00';
 
@@ -151,6 +153,32 @@ export function compareYearMonth(a: string, b: string): number {
 }
 
 /**
+ * finance-growth Fase 4 fix-wave-4 (🔴4) — `d` + `months` WHOLE calendar
+ * months from the REAL instant `d`, clamping the day to the last valid day of
+ * the target month (same long→short guard as `IngestGestionRealOrders.
+ * monthsBack`, forward + UTC-based here instead of local-time backward — this
+ * repo's finance module pins everything to UTC, see `yearMonthToDateRange`).
+ *
+ * `RankEarlyChurnByVendor`'s "temprano" cutoff used to be computed as
+ * `addMonthsToYearMonth(arYearMonth(altaDate), windowMonths)` — floor the
+ * alta to its calendar MONTH first, THEN add months, THEN take the 1st of
+ * that resulting month as the cutoff. That silently shrinks the window by up
+ * to 30 days depending purely on the alta's DAY OF MONTH: an alta on the 31st
+ * gets its true 6-month window measured from the 1st, not the 31st — a
+ * systematic UNDER-count of early churn that hits hardest on end-of-month
+ * altas (exactly the vendors who close deals at month-end). This function
+ * measures from the actual alta INSTANT, matching design.md's own wording
+ * ("calendar months AFTER THE ALTA", not after the alta's month).
+ */
+export function addCalendarMonthsToDate(d: Date, months: number): Date {
+  const y = d.getUTCFullYear();
+  const targetMonthIndex = d.getUTCMonth() + months;
+  const lastDayOfTargetMonth = new Date(Date.UTC(y, targetMonthIndex + 1, 0)).getUTCDate();
+  const day = Math.min(d.getUTCDate(), lastDayOfTargetMonth);
+  return new Date(Date.UTC(y, targetMonthIndex, day, d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds()));
+}
+
+/**
  * True for a well-formed "YYYY-MM" (4-digit year, month 01-12). Guards
  * against a corrupted/truncated backfill cursor (fix-wave-1 F14) — e.g. a
  * legacy flat "2026-03" cursor misread by `lastIndexOf(':')` arithmetic as
@@ -180,6 +208,45 @@ export function yearMonthToDateRange(yearMonth: string): { start: Date; endExclu
   const start = new Date(Date.UTC(y, m - 1, 1, 3, 0, 0));
   const endExclusive = new Date(Date.UTC(y, m, 1, 3, 0, 0));
   return { start, endExclusive };
+}
+
+/**
+ * finance-growth Fase 4 — every "YYYY-MM" from `from` to `to`, inclusive,
+ * ascending. Used by `GetFinanceOverview` to know the FULL calendar range a
+ * request covers, independent of which months actually have a
+ * `FinanceMonthlySnapshot` row — the difference is `monthsWithoutSnapshot`
+ * (a missing snapshot is never silently read as "zero that month").
+ */
+export function enumerateYearMonths(from: string, to: string): string[] {
+  const months: string[] = [];
+  let cur = from;
+  while (compareYearMonth(cur, to) <= 0) {
+    months.push(cur);
+    cur = addMonthsToYearMonth(cur, 1);
+  }
+  return months;
+}
+
+/**
+ * finance-growth Fase 4 fix-wave-4 (🔵17) — defensive cap against a
+ * fat-fingered range (e.g. `1990-01..2026-12`, 444 months) walking every
+ * `GET /overview`/`/cohorts`/`/vendors/early-churn`/`/nodes/growth`/
+ * `/motivos-baja` request across decades of history with no upper bound.
+ * Same 240-month (20-year) generous cap `BackfillFinanceMonthlySnapshots`
+ * already established for its own range, applied here to every Fase 4 read
+ * endpoint's `[from, to]`. Callers pass an ALREADY-validated `isValidYearMonth`
+ * pair (this does not re-validate format) and a `FinanceValidationError`
+ * (never a generic `Error`) so a too-wide range comes back as a `400`, not a
+ * `500` from the guard use cases wire up per-endpoint.
+ */
+export const MAX_YEAR_MONTH_RANGE_MONTHS = 240;
+
+export function assertYearMonthRangeWidth(from: string, to: string): void {
+  if (enumerateYearMonths(from, to).length > MAX_YEAR_MONTH_RANGE_MONTHS) {
+    throw new FinanceValidationError(
+      `"from"/"to" abarca más de ${MAX_YEAR_MONTH_RANGE_MONTHS} meses (${MAX_YEAR_MONTH_RANGE_MONTHS / 12} años) — pedí un rango más chico.`,
+    );
+  }
 }
 
 /** "YYYY-MM" → the GR `fecha_desde`/`fecha_hasta` window covering that whole calendar month. */

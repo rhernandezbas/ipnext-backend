@@ -29,7 +29,20 @@ import {
   toFinanceInflationIndexDto,
   UpdateFinanceInflationIndexSchema,
   BackfillFinanceMonthlySnapshotsSchema,
+  toFinanceOverviewDto,
+  toFinanceCohortsDto,
+  toFinanceCacDto,
+  toFinanceVendorEarlyChurnDto,
+  toFinanceNodeGrowthDto,
+  toFinanceCancellationReasonsDto,
 } from '@application/dto/financeGrowth.dto';
+// finance-growth Fase 4 — read API (design.md HTTP Contract, tasks.md 4.x).
+import { GetFinanceOverview } from '@application/use-cases/finance/GetFinanceOverview';
+import { GetFinanceCohorts } from '@application/use-cases/finance/GetFinanceCohorts';
+import { ComputeCacAndPayback } from '@application/use-cases/finance/ComputeCacAndPayback';
+import { RankEarlyChurnByVendor } from '@application/use-cases/finance/RankEarlyChurnByVendor';
+import { RankNetGrowthByNode } from '@application/use-cases/finance/RankNetGrowthByNode';
+import { RankCancellationReasonsByLostRevenue } from '@application/use-cases/finance/RankCancellationReasonsByLostRevenue';
 
 /** Factory matching `requirePerm` exported from app.ts (molde `alerts.routes.ts`). */
 type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => RequestHandler;
@@ -81,6 +94,28 @@ export interface FinanceGrowthRouterDeps {
    * months, no matter how much receipt history Fase 1 backfills.
    */
   backfillSnapshots: BackfillFinanceMonthlySnapshots;
+
+  // ── finance-growth Fase 4 — read API (design.md HTTP Contract) ──────────
+  getOverview: GetFinanceOverview;
+  getCohorts: GetFinanceCohorts;
+  computeCac: ComputeCacAndPayback;
+  rankEarlyChurnByVendor: RankEarlyChurnByVendor;
+  rankNetGrowthByNode: RankNetGrowthByNode;
+  rankCancellationReasons: RankCancellationReasonsByLostRevenue;
+}
+
+/**
+ * finance-growth Fase 4 — extracts a required, non-empty string query param.
+ * `undefined` on failure lets the caller respond `400` immediately instead of
+ * calling a use case with `from: undefined` (a TS-illegal call the compiler
+ * would otherwise force into an unsafe cast). Every Fase 4 read endpoint
+ * treats its range params as MANDATORY dimensions, not optional filters —
+ * unlike `/config/inflation` (spec.md "empty range filter means no filter",
+ * a DIFFERENT endpoint with a documented optional-filter contract).
+ */
+function requireStringQuery(req: Request, name: string): string | undefined {
+  const raw = req.query[name];
+  return typeof raw === 'string' && raw !== '' ? raw : undefined;
 }
 
 /**
@@ -366,6 +401,111 @@ export function createFinanceGrowthRouter(deps: FinanceGrowthRouterDeps): Router
     try {
       const status = await deps.getSyncStatus.execute();
       res.json(toFinanceSyncStatusDto(status, deps.getPacingStatus()));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // finance-growth Fase 4 — read API (design.md HTTP Contract). All GETs,
+  // all `finance:read`. No `:id`-style catch-all exists in this router (no
+  // ordering hazard), but these are still literal paths, mounted here
+  // deliberately BEFORE nothing needs shadowing — documented per the repo's
+  // "sub-recursos antes de cualquier catch-all" convention for when Fase 6
+  // ever adds one.
+  // ══════════════════════════════════════════════════════════════════════
+
+  // GET /overview?from=YYYY-MM&to=YYYY-MM — finance:read.
+  router.get('/overview', deps.auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const from = requireStringQuery(req, 'from');
+    const to = requireStringQuery(req, 'to');
+    if (from === undefined || to === undefined) {
+      res.status(400).json({ error: '"from" y "to" son requeridos (formato "YYYY-MM")', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    try {
+      const result = await deps.getOverview.execute(from, to);
+      res.json(toFinanceOverviewDto(result));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET /cohorts?fromCohort=YYYY-MM&toCohort=YYYY-MM — finance:read.
+  router.get('/cohorts', deps.auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const fromCohort = requireStringQuery(req, 'fromCohort');
+    const toCohort = requireStringQuery(req, 'toCohort');
+    if (fromCohort === undefined || toCohort === undefined) {
+      res.status(400).json({ error: '"fromCohort" y "toCohort" son requeridos (formato "YYYY-MM")', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    try {
+      const result = await deps.getCohorts.execute(fromCohort, toCohort);
+      res.json(toFinanceCohortsDto(result));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET /cac?technology=&yearMonth=YYYY-MM — finance:read.
+  router.get('/cac', deps.auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const technology = requireStringQuery(req, 'technology');
+    const yearMonth = requireStringQuery(req, 'yearMonth');
+    if (technology === undefined || yearMonth === undefined) {
+      res.status(400).json({ error: '"technology" y "yearMonth" son requeridos', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    try {
+      const result = await deps.computeCac.execute(technology, yearMonth);
+      res.json(toFinanceCacDto(result));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET /vendors/early-churn?from=YYYY-MM&to=YYYY-MM — finance:read.
+  router.get('/vendors/early-churn', deps.auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const from = requireStringQuery(req, 'from');
+    const to = requireStringQuery(req, 'to');
+    if (from === undefined || to === undefined) {
+      res.status(400).json({ error: '"from" y "to" son requeridos (formato "YYYY-MM")', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    try {
+      const result = await deps.rankEarlyChurnByVendor.execute(from, to);
+      res.json(toFinanceVendorEarlyChurnDto(result));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET /nodes/growth?from=YYYY-MM&to=YYYY-MM — finance:read.
+  router.get('/nodes/growth', deps.auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const from = requireStringQuery(req, 'from');
+    const to = requireStringQuery(req, 'to');
+    if (from === undefined || to === undefined) {
+      res.status(400).json({ error: '"from" y "to" son requeridos (formato "YYYY-MM")', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    try {
+      const result = await deps.rankNetGrowthByNode.execute(from, to);
+      res.json(toFinanceNodeGrowthDto(result));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // GET /motivos-baja?from=YYYY-MM&to=YYYY-MM — finance:read.
+  router.get('/motivos-baja', deps.auth, readPerm, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const from = requireStringQuery(req, 'from');
+    const to = requireStringQuery(req, 'to');
+    if (from === undefined || to === undefined) {
+      res.status(400).json({ error: '"from" y "to" son requeridos (formato "YYYY-MM")', code: 'VALIDATION_ERROR' });
+      return;
+    }
+    try {
+      const result = await deps.rankCancellationReasons.execute(from, to);
+      res.json(toFinanceCancellationReasonsDto(result));
     } catch (err) {
       next(err);
     }

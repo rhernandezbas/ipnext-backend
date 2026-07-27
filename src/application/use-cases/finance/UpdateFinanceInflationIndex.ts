@@ -39,6 +39,17 @@ export class UpdateFinanceInflationIndex {
       throw new FinanceValidationError('monthlyRatePct must be a finite number');
     }
     assertDecimalBounds(input.monthlyRatePct, 'monthlyRatePct', RATE_PRECISION, RATE_SCALE);
+    // fix-wave-4 🟡12 — `<= -100` breaks `buildChainedIndex`'s multiplicative
+    // math: `-100` divides the chain by zero (`chainedIndex = 0` →
+    // `mrrFinalRealArs: Infinity`, which "survives" only because
+    // `JSON.stringify(Infinity) === "null"` — a LIE against the DTO's
+    // `number | null` type for any consumer that isn't `res.json`), and
+    // anything below `-100` flips the chain's sign, turning a positive MRR
+    // into a plausible-looking NEGATIVE number. No real single-month
+    // deflation reaches 100%, so this is rejected outright.
+    if (input.monthlyRatePct <= -100) {
+      throw new FinanceValidationError('monthlyRatePct must be greater than -100 (a -100% or worse single-month rate breaks the chained-index math)');
+    }
 
     return this.repo.upsert(yearMonth, {
       monthlyRatePct: roundToScale(input.monthlyRatePct, RATE_SCALE),

@@ -25,6 +25,7 @@ function makeRepo(overrides: Partial<ContractRepository> = {}): ContractReposito
     findAllContractTechnologies: jest.fn().mockResolvedValue([]),
     getNetworkAssignments: jest.fn().mockResolvedValue([]),
     updateNetworkAssignment: jest.fn(),
+    findFinanceDetailsByIds: jest.fn().mockResolvedValue(new Map()),
     ...overrides,
   };
 }

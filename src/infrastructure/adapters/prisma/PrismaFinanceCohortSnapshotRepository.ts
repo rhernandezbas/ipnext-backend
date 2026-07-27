@@ -31,6 +31,14 @@ export class PrismaFinanceCohortSnapshotRepository implements FinanceCohortSnaps
     return rows.map(toEntity);
   }
 
+  async listByCohortRange(fromCohort: string, toCohort: string): Promise<FinanceCohortSnapshot[]> {
+    const rows = await this.table.findMany({
+      where: { cohortYearMonth: { gte: fromCohort, lte: toCohort } },
+      orderBy: [{ cohortYearMonth: 'asc' }, { monthsElapsed: 'asc' }],
+    });
+    return rows.map(toEntity);
+  }
+
   async upsert(
     cohortYearMonth: string,
     monthsElapsed: number,

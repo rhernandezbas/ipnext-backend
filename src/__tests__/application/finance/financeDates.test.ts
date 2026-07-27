@@ -10,7 +10,10 @@ import {
   isValidYearMonth,
   isValidGrDate,
   GR_NULL_DATE_SENTINEL,
+  addCalendarMonthsToDate,
+  assertYearMonthRangeWidth,
 } from '@application/use-cases/finance/financeDates';
+import { FinanceValidationError } from '@domain/errors/finance';
 
 describe('financeDates', () => {
   describe('isRealAnnulment', () => {
@@ -203,6 +206,38 @@ describe('financeDates', () => {
       const { start, endExclusive } = yearMonthToDateRange('2026-06');
       expect(start.toISOString()).toBe('2026-06-01T03:00:00.000Z');
       expect(endExclusive.toISOString()).toBe('2026-07-01T03:00:00.000Z');
+    });
+  });
+
+  describe('addCalendarMonthsToDate (fix-wave-4 🔴4)', () => {
+    it('adds whole calendar months to the REAL instant, not floored to day 1', () => {
+      const d = addCalendarMonthsToDate(new Date('2026-01-15T12:00:00.000Z'), 6);
+      expect(d.toISOString()).toBe('2026-07-15T12:00:00.000Z');
+    });
+
+    it('clamps the day on a long->short month transition (Jan 31 + 1 month -> Feb 28, never Mar 3)', () => {
+      const d = addCalendarMonthsToDate(new Date('2026-01-31T12:00:00.000Z'), 1);
+      expect(d.toISOString()).toBe('2026-02-28T12:00:00.000Z'); // 2026 is not a leap year
+    });
+
+    it('clamps correctly across a leap-year February', () => {
+      const d = addCalendarMonthsToDate(new Date('2028-01-31T12:00:00.000Z'), 1);
+      expect(d.toISOString()).toBe('2028-02-29T12:00:00.000Z'); // 2028 IS a leap year
+    });
+
+    it('rolls over into the next year when the month index overflows', () => {
+      const d = addCalendarMonthsToDate(new Date('2026-11-15T12:00:00.000Z'), 6);
+      expect(d.toISOString()).toBe('2027-05-15T12:00:00.000Z');
+    });
+  });
+
+  describe('assertYearMonthRangeWidth (fix-wave-4 🔵17)', () => {
+    it('does not throw for a range at or under the 240-month (20-year) cap', () => {
+      expect(() => assertYearMonthRangeWidth('2007-01', '2026-12')).not.toThrow(); // exactly 240 months
+    });
+
+    it('throws FinanceValidationError for a range wider than 240 months', () => {
+      expect(() => assertYearMonthRangeWidth('1990-01', '2026-12')).toThrow(FinanceValidationError);
     });
   });
 });

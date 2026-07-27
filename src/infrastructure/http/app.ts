@@ -928,6 +928,13 @@ import { PrismaFinanceCohortSnapshotRepository } from '../adapters/prisma/Prisma
 import { BuildFinanceMonthlySnapshot } from '@application/use-cases/finance/BuildFinanceMonthlySnapshot';
 import { BuildFinanceCohortSnapshot } from '@application/use-cases/finance/BuildFinanceCohortSnapshot';
 import { BackfillFinanceMonthlySnapshots } from '@application/use-cases/finance/BackfillFinanceMonthlySnapshots';
+// finance-growth Fase 4 — read API (design.md HTTP Contract, tasks.md 4.x).
+import { GetFinanceOverview } from '@application/use-cases/finance/GetFinanceOverview';
+import { GetFinanceCohorts } from '@application/use-cases/finance/GetFinanceCohorts';
+import { ComputeCacAndPayback } from '@application/use-cases/finance/ComputeCacAndPayback';
+import { RankEarlyChurnByVendor } from '@application/use-cases/finance/RankEarlyChurnByVendor';
+import { RankNetGrowthByNode } from '@application/use-cases/finance/RankNetGrowthByNode';
+import { RankCancellationReasonsByLostRevenue } from '@application/use-cases/finance/RankCancellationReasonsByLostRevenue';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -3442,6 +3449,43 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     ),
     new BuildFinanceCohortSnapshot(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository(), new PrismaFinanceCohortSnapshotRepository()),
   );
+  // finance-growth Fase 4 — read API. Fresh Prisma repos per use case (molde
+  // the rest of this composition root — these adapters are stateless); reuses
+  // the ALREADY-declared financeTargetsConfigRepo/financePlanPriceRepo/
+  // financeTechnologyCostRepo/financeTechnologyCatalogRepo instances above
+  // (Fase 2) rather than duplicating them.
+  const financeSnapshotRepo = new PrismaFinanceMonthlySnapshotRepository();
+  const financeCohortRepo = new PrismaFinanceCohortSnapshotRepository();
+  const financeContractRepo = new PrismaContractRepository();
+  const financeServiceCatalogRepo = new PrismaServiceCatalogRepository();
+  const getOverview = new GetFinanceOverview(financeSnapshotRepo, financeInflationIndexRepo, financeTargetsConfigRepo);
+  const getCohorts = new GetFinanceCohorts(financeCohortRepo);
+  const computeCac = new ComputeCacAndPayback(
+    financeTechnologyCostRepo,
+    financeTechnologyCatalogRepo,
+    financeTargetsConfigRepo,
+    new PrismaContractServiceEventRepository(),
+    financeServiceCatalogRepo,
+    financeContractRepo,
+    new PrismaPppoeServiceRepository(),
+    financePlanPriceRepo,
+    new PrismaFinanceReceiptItemRepository(),
+    new PrismaClientMirrorReadRepository(),
+  );
+  const rankEarlyChurnByVendor = new RankEarlyChurnByVendor(
+    new PrismaContractServiceEventRepository(),
+    financeServiceCatalogRepo,
+    financeContractRepo,
+    financeTargetsConfigRepo,
+  );
+  const rankNetGrowthByNode = new RankNetGrowthByNode(new PrismaContractServiceEventRepository(), financeServiceCatalogRepo, financeContractRepo);
+  const rankCancellationReasons = new RankCancellationReasonsByLostRevenue(
+    new PrismaContractServiceEventRepository(),
+    financeServiceCatalogRepo,
+    financeContractRepo,
+    new PrismaPppoeServiceRepository(),
+    financePlanPriceRepo,
+  );
   app.use('/api/finance/growth', createFinanceGrowthRouter({
     auth: createAuthMiddleware(authAdapter, sessionRepo),
     requirePerm,
@@ -3467,6 +3511,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listInflationIndex: new ListFinanceInflationIndex(financeInflationIndexRepo),
     updateInflationIndex: new UpdateFinanceInflationIndex(financeInflationIndexRepo),
     backfillSnapshots,
+    getOverview,
+    getCohorts,
+    computeCac,
+    rankEarlyChurnByVendor,
+    rankNetGrowthByNode,
+    rankCancellationReasons,
   }));
 
   // 404

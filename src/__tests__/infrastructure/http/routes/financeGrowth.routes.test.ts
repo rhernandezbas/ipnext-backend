@@ -1,6 +1,7 @@
 import request from 'supertest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import { arYearMonth } from '@application/use-cases/finance/financeDates';
 
 import { createFinanceGrowthRouter } from '@infrastructure/http/routes/financeGrowth.routes';
 import { ListFinanceInvoiceTypes } from '@application/use-cases/finance/ListFinanceInvoiceTypes';
@@ -29,6 +30,22 @@ import { InMemoryFinanceTargetsConfigRepository } from '@infrastructure/adapters
 import { InMemoryFinanceInflationIndexRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceInflationIndexRepository';
 import { InMemoryContractTechnologyRepository } from '@infrastructure/adapters/in-memory/InMemoryContractTechnologyRepository';
 import { InMemoryPlanRepository } from '@infrastructure/adapters/in-memory/InMemoryPlanRepository';
+// finance-growth Fase 4 — read API.
+import { GetFinanceOverview } from '@application/use-cases/finance/GetFinanceOverview';
+import { GetFinanceCohorts } from '@application/use-cases/finance/GetFinanceCohorts';
+import { ComputeCacAndPayback } from '@application/use-cases/finance/ComputeCacAndPayback';
+import { RankEarlyChurnByVendor } from '@application/use-cases/finance/RankEarlyChurnByVendor';
+import { RankNetGrowthByNode } from '@application/use-cases/finance/RankNetGrowthByNode';
+import { RankCancellationReasonsByLostRevenue } from '@application/use-cases/finance/RankCancellationReasonsByLostRevenue';
+import { InMemoryFinanceMonthlySnapshotRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceMonthlySnapshotRepository';
+import { InMemoryFinanceCohortSnapshotRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceCohortSnapshotRepository';
+import { InMemoryContractServiceEventRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceEventRepository';
+import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
+import { InMemoryContractRepository } from '@infrastructure/adapters/in-memory/InMemoryContractRepository';
+import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
+import { InMemoryFinancePaymentReceiptRepository } from '@infrastructure/adapters/in-memory/InMemoryFinancePaymentReceiptRepository';
+import { InMemoryFinanceReceiptItemRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceReceiptItemRepository';
+import { InMemoryClientMirrorReadRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorReadRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
 import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
@@ -194,6 +211,36 @@ async function buildApp(overrides: { rearmBackfill?: RearmFinanceReceiptsBackfil
     }),
   } as unknown as BackfillFinanceMonthlySnapshots;
 
+  // ── finance-growth Fase 4 — read API (in-memory, same molde as the rest of this file). ──
+  const catalogRepo = new InMemoryServiceCatalogRepository();
+  const internet = await catalogRepo.create({ name: 'INTERNET' });
+  const eventRepo = new InMemoryContractServiceEventRepository();
+  const contractRepo = new InMemoryContractRepository();
+  const pppoeRepo = new InMemoryPppoeServiceRepository();
+  const snapshotRepo = new InMemoryFinanceMonthlySnapshotRepository();
+  const cohortRepo = new InMemoryFinanceCohortSnapshotRepository();
+  const receiptRepo = new InMemoryFinancePaymentReceiptRepository();
+  const itemRepo = new InMemoryFinanceReceiptItemRepository(receiptRepo);
+  const clientLinks = new InMemoryClientMirrorReadRepository();
+
+  const getOverview = new GetFinanceOverview(snapshotRepo, inflationIndex, targetsConfig);
+  const getCohorts = new GetFinanceCohorts(cohortRepo);
+  const computeCac = new ComputeCacAndPayback(
+    technologyCosts,
+    technologies,
+    targetsConfig,
+    eventRepo,
+    catalogRepo,
+    contractRepo,
+    pppoeRepo,
+    planPrices,
+    itemRepo,
+    clientLinks,
+  );
+  const rankEarlyChurnByVendor = new RankEarlyChurnByVendor(eventRepo, catalogRepo, contractRepo, targetsConfig);
+  const rankNetGrowthByNode = new RankNetGrowthByNode(eventRepo, catalogRepo, contractRepo);
+  const rankCancellationReasons = new RankCancellationReasonsByLostRevenue(eventRepo, catalogRepo, contractRepo, pppoeRepo, planPrices);
+
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
@@ -219,6 +266,12 @@ async function buildApp(overrides: { rearmBackfill?: RearmFinanceReceiptsBackfil
       listInflationIndex,
       updateInflationIndex,
       backfillSnapshots,
+      getOverview,
+      getCohorts,
+      computeCac,
+      rankEarlyChurnByVendor,
+      rankNetGrowthByNode,
+      rankCancellationReasons,
     }),
   );
   app.use(errorHandler);
@@ -240,6 +293,16 @@ async function buildApp(overrides: { rearmBackfill?: RearmFinanceReceiptsBackfil
     noPermUserId: noPermUser.id,
     targetsUserId: targetsUser.id,
     inflationUserId: inflationUser.id,
+    // Fase 4 test seams.
+    internet,
+    eventRepo,
+    contractRepo,
+    pppoeRepo,
+    snapshotRepo,
+    cohortRepo,
+    receiptRepo,
+    itemRepo,
+    clientLinks,
   };
 }
 
@@ -741,5 +804,316 @@ describe('GET/PUT /api/finance/growth/config/inflation (task 2.32)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.index).toEqual([{ yearMonth: '2026-03', monthlyRatePct: 3.1, source: 'INDEC' }]);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// finance-growth Fase 4 — read API (design.md HTTP Contract). Each route:
+// 403 without `finance:read`, 200 with the EXACT shape (field by field, not
+// `toMatchObject`) with it.
+// ════════════════════════════════════════════════════════════════════════
+
+describe('GET /api/finance/growth/overview', () => {
+  it('sin finance:read → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/overview?from=2026-01&to=2026-01'), noPermUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('con finance:read → 200 con el shape EXACTO del contrato, incluyendo metricBasis: cash_collected', async () => {
+    const { app, readUserId, snapshotRepo } = await buildApp();
+    await snapshotRepo.upsert('2026-01', {
+      contractsActive: 10,
+      contractsNew: 1,
+      contractsChurned: 0,
+      contractsUpgraded: 0,
+      contractsDowngraded: 0,
+      mrrInicialArs: 100000,
+      mrrNewArs: 10000,
+      mrrUpgradeArs: 0,
+      mrrDowngradeArs: 0,
+      mrrChurnArs: 0,
+      mrrFinalArs: 110000,
+      bridgeResidualArs: 0,
+      unpricedContractsActive: 0,
+      unpricedContractsPct: 0,
+      unpricedPlanChangeEvents: 0,
+      enforcementPlanChangeEventsExcluded: 0,
+      revenueTotalArs: 105000,
+      collectionRatePct: 95.45,
+      revenueAttributableArs: 100000,
+      unclassifiedAmountArs: 0,
+      attributionPct: 95.24,
+      arpuArs: 10500,
+      churnContractsPct: 0,
+      churnRevenuePct: 0,
+    });
+
+    const res = await asUser(request(app).get('/api/finance/growth/overview?from=2026-01&to=2026-01'), readUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      months: [
+        {
+          yearMonth: '2026-01',
+          contractsActive: 10,
+          contractsNew: 1,
+          contractsChurned: 0,
+          contractsUpgraded: 0,
+          contractsDowngraded: 0,
+          mrrInicialArs: 100000,
+          mrrNewArs: 10000,
+          mrrUpgradeArs: 0,
+          mrrDowngradeArs: 0,
+          mrrChurnArs: 0,
+          mrrFinalArs: 110000,
+          mrrFinalRealArs: null, // no inflationBaseYearMonth configured
+          bridgeResidualArs: 0,
+          unpricedContractsActive: 0,
+          unpricedContractsPct: 0,
+          unpricedPlanChangeEvents: 0,
+          enforcementPlanChangeEventsExcluded: 0,
+          revenueTotalArs: 105000,
+          revenueTotalRealArs: null,
+          collectionRatePct: 95.45,
+          revenueAttributableArs: 100000,
+          unclassifiedAmountArs: 0,
+          attributionPct: 95.24,
+          arpuArs: 10500,
+          churnContractsPct: 0,
+          churnRevenuePct: 0,
+        },
+      ],
+      monthsWithoutSnapshot: [],
+      realSeriesMissingMonths: ['2026-01'],
+      inflationBaseYearMonth: '',
+      metricBasis: 'cash_collected',
+    });
+  });
+
+  it('sin from/to → 400', async () => {
+    const { app, readUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/overview'), readUserId);
+    expect(res.status).toBe(400);
+  });
+
+  // 🔵14b — the existing 200 test above fixes `churnRevenuePct: 0`, a value a
+  // `?? 0` bug would pass through unchanged. This seeds `null` explicitly so
+  // the assertion actually has evidentiary value against that class of bug.
+  it('churnRevenuePct/collectionRatePct null survive to the wire, never coerced to 0', async () => {
+    const { app, readUserId, snapshotRepo } = await buildApp();
+    await snapshotRepo.upsert('2026-01', {
+      contractsActive: 0,
+      contractsNew: 0,
+      contractsChurned: 0,
+      contractsUpgraded: 0,
+      contractsDowngraded: 0,
+      mrrInicialArs: 0,
+      mrrNewArs: 0,
+      mrrUpgradeArs: 0,
+      mrrDowngradeArs: 0,
+      mrrChurnArs: 0,
+      mrrFinalArs: 0,
+      bridgeResidualArs: 0,
+      unpricedContractsActive: 0,
+      unpricedContractsPct: 0,
+      unpricedPlanChangeEvents: 0,
+      enforcementPlanChangeEventsExcluded: 0,
+      revenueTotalArs: 0,
+      collectionRatePct: null,
+      revenueAttributableArs: 0,
+      unclassifiedAmountArs: 0,
+      attributionPct: 0,
+      arpuArs: 0,
+      churnContractsPct: 0,
+      churnRevenuePct: null,
+    });
+
+    const res = await asUser(request(app).get('/api/finance/growth/overview?from=2026-01&to=2026-01'), readUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body.months[0].churnRevenuePct).toBeNull();
+    expect(res.body.months[0].collectionRatePct).toBeNull();
+  });
+});
+
+describe('GET /api/finance/growth/cohorts', () => {
+  it('sin finance:read → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/cohorts?fromCohort=2026-01&toCohort=2026-01'), noPermUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('con finance:read → 200 con el shape exacto', async () => {
+    const { app, readUserId, cohortRepo } = await buildApp();
+    await cohortRepo.upsert('2026-01', 3, { originalCount: 20, survivingCount: 18 });
+
+    const res = await asUser(request(app).get('/api/finance/growth/cohorts?fromCohort=2026-01&toCohort=2026-01'), readUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      cohorts: [{ cohortYearMonth: '2026-01', originalCount: 20, survival: { m3: { survivingCount: 18, pct: 90 }, m6: null, m12: null } }],
+      monthsWithoutCohortSnapshot: [],
+    });
+  });
+
+  // fix-wave-4 🟡9/🔵14b — an entirely empty range must surface EVERY month
+  // in monthsWithoutCohortSnapshot, never the mute `[]` /overview already
+  // learned not to return on its own.
+  it('sin ningún FinanceCohortSnapshot en el rango → cohorts:[] pero monthsWithoutCohortSnapshot lista TODOS los meses', async () => {
+    const { app, readUserId } = await buildApp();
+
+    const res = await asUser(request(app).get('/api/finance/growth/cohorts?fromCohort=2026-01&toCohort=2026-02'), readUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cohorts: [], monthsWithoutCohortSnapshot: ['2026-01', '2026-02'] });
+  });
+});
+
+describe('GET /api/finance/growth/cac', () => {
+  it('sin finance:read → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/cac?technology=Fibra&yearMonth=2026-03'), noPermUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('con finance:read y tecnología SIN costo configurado → 200, costConfigured:false, cacArs:null (nunca 0)', async () => {
+    const { app, readUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/cac?technology=Fibra&yearMonth=2026-03'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      technology: 'Fibra',
+      costConfigured: false,
+      costIsZero: false,
+      costoVentaArs: null,
+      costoInstalacionArs: null,
+      cacArs: null,
+      altasDelMes: [],
+      altasDelMesSinTecnologia: 0,
+      maxPaybackMonths: 12,
+    });
+  });
+
+  it('tecnología inexistente en el catálogo → 404', async () => {
+    const { app, readUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/cac?technology=Fibrra&yearMonth=2026-03'), readUserId);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('FINANCE_TECHNOLOGY_NOT_FOUND');
+  });
+
+  // fix-wave-4 🔴2/🔵14b — a non-empty, real-shaped response (the empty-array
+  // test above proves nothing about `altasDelMes`' row shape, the exact class
+  // of gap the review flagged).
+  it('con altas reales, technology:null y costo configurado → altasDelMesSinTecnologia surfaces the count, altasDelMes stays scoped to the matched technology', async () => {
+    const { app, readUserId, technologyCosts, contractRepo, eventRepo, internet } = await buildApp();
+    await technologyCosts.upsert('Fibra', { costoVentaArs: 20000, costoInstalacionArs: 10000, costoMensualServicioArs: 0, comisionVentaPct: 0, updatedByUserId: null });
+    contractRepo.seed({ id: 'untagged-1', clientId: 'client-untagged-1', clientName: 'Cliente Untagged', plan: 'IP-100', technology: null });
+    eventRepo.setContractClient('untagged-1', 'client-untagged-1', 'Cliente Untagged');
+    await eventRepo.record({ contractId: 'untagged-1', serviceCatalogId: internet.id, eventType: 'activated', actorId: null, actorName: 'sistema' });
+    const currentYearMonth = arYearMonth(new Date()); // eventRepo stamps createdAt with the REAL clock (no override seam here).
+
+    const res = await asUser(request(app).get(`/api/finance/growth/cac?technology=Fibra&yearMonth=${currentYearMonth}`), readUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body.altasDelMes).toEqual([]);
+    expect(res.body.altasDelMesSinTecnologia).toBe(1);
+    expect(res.body.costConfigured).toBe(true);
+    expect(res.body.cacArs).toBe(30000);
+  });
+});
+
+describe('GET /api/finance/growth/vendors/early-churn', () => {
+  it('sin finance:read → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/vendors/early-churn?from=2026-01&to=2026-01'), noPermUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('con finance:read → 200 con el shape exacto (vacío sin datos)', async () => {
+    const { app, readUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/vendors/early-churn?from=2026-01&to=2026-01'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ windowMonths: 12, vendors: [] });
+  });
+
+  // fix-wave-4 🔵14b — a non-empty, real-shaped response asserting the ROW
+  // shape field-by-field, including the new altasMaduras/nullable earlyChurnPct.
+  it('con una alta reciente (aún inmadura para la ventana de 12 meses) → altasMaduras:0, earlyChurnPct:null (nunca un 0% adivinado)', async () => {
+    const { app, readUserId, contractRepo, eventRepo, internet } = await buildApp();
+    contractRepo.seed({ id: 'c1', clientId: 'client-1', clientName: 'Cliente 1', plan: 'IP-100', vendedor: 'Vendedor Nuevo' });
+    eventRepo.setContractClient('c1', 'client-1', 'Cliente 1');
+    await eventRepo.record({ contractId: 'c1', serviceCatalogId: internet.id, eventType: 'activated', actorId: null, actorName: 'sistema' });
+    const currentYearMonth = arYearMonth(new Date());
+
+    const res = await asUser(request(app).get(`/api/finance/growth/vendors/early-churn?from=${currentYearMonth}&to=${currentYearMonth}`), readUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      windowMonths: 12,
+      vendors: [{ vendedor: 'Vendedor Nuevo', altasTotal: 1, altasChurneadasTemprano: 0, altasMaduras: 0, earlyChurnPct: null }],
+    });
+  });
+});
+
+describe('GET /api/finance/growth/nodes/growth', () => {
+  it('sin finance:read → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/nodes/growth?from=2026-01&to=2026-01'), noPermUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('con finance:read → 200 con el shape exacto (vacío sin datos)', async () => {
+    const { app, readUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/nodes/growth?from=2026-01&to=2026-01'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ nodes: [] });
+  });
+
+  // fix-wave-4 🔵14b — a non-empty, real-shaped response asserting the ROW
+  // shape field-by-field, the exact class of gap the review flagged (only
+  // the empty-array wire test existed before).
+  it('con una alta real → 200 con la fila del nodo, shape exacto', async () => {
+    const { app, readUserId, contractRepo, eventRepo, internet } = await buildApp();
+    contractRepo.seed({ id: 'c1', clientId: 'client-1', clientName: 'Cliente 1', plan: 'IP-100', networkSiteId: 'node-1', networkSiteName: 'Nodo Centro' });
+    eventRepo.setContractClient('c1', 'client-1', 'Cliente 1');
+    await eventRepo.record({ contractId: 'c1', serviceCatalogId: internet.id, eventType: 'activated', actorId: null, actorName: 'sistema' });
+    const currentYearMonth = arYearMonth(new Date());
+
+    const res = await asUser(request(app).get(`/api/finance/growth/nodes/growth?from=${currentYearMonth}&to=${currentYearMonth}`), readUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ nodes: [{ networkSiteId: 'node-1', networkSiteName: 'Nodo Centro', altas: 1, bajas: 0, netGrowth: 1 }] });
+  });
+});
+
+describe('GET /api/finance/growth/motivos-baja', () => {
+  it('sin finance:read → 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/motivos-baja?from=2026-01&to=2026-01'), noPermUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('con finance:read → 200 con el shape exacto (vacío sin datos)', async () => {
+    const { app, readUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/finance/growth/motivos-baja?from=2026-01&to=2026-01'), readUserId);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ motivos: [] });
+  });
+
+  // fix-wave-4 🔴3/🔵14b — a non-empty, real-shaped response asserting the
+  // ROW shape field-by-field, including the new bajasSinPrecio.
+  it('con una baja real y NINGÚN FinancePlanPrice cargado → 200 con bajasSinPrecio:1, mrrPerdidoArs:0 (nunca un cero mudo)', async () => {
+    const { app, readUserId, contractRepo, eventRepo, pppoeRepo, internet } = await buildApp();
+    contractRepo.seed({ id: 'c1', clientId: 'client-1', clientName: 'Cliente 1', plan: 'IP-100', motivoBaja: 'Mudanza' });
+    eventRepo.setContractClient('c1', 'client-1', 'Cliente 1');
+    await eventRepo.record({ contractId: 'c1', serviceCatalogId: internet.id, eventType: 'activated', actorId: null, actorName: 'sistema' });
+    await pppoeRepo.upsertByUsername({ username: 'pppoe-c1', password: 'x', profile: 'IP-100', nasId: null, contractId: 'c1', status: 'enabled' });
+    await eventRepo.record({ contractId: 'c1', serviceCatalogId: internet.id, eventType: 'deactivated', actorId: null, actorName: 'sistema' });
+    const currentYearMonth = arYearMonth(new Date());
+
+    const res = await asUser(request(app).get(`/api/finance/growth/motivos-baja?from=${currentYearMonth}&to=${currentYearMonth}`), readUserId);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ motivos: [{ motivo: 'Mudanza', bajas: 1, mrrPerdidoArs: 0, bajasSinPrecio: 1 }] });
   });
 });

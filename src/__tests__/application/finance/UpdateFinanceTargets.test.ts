@@ -39,6 +39,21 @@ describe('UpdateFinanceTargets (tasks 2.23-2.24)', () => {
     await expect(useCase.execute({ ...validPayload, monthlyNewContractsGoal: -1 })).rejects.toBeInstanceOf(FinanceValidationError);
   });
 
+  // ── fix-wave-4 🔵15 — `maxPaybackMonths: 0` used to pass (only `>= 0` was
+  // checked). A 0-month "temprano"/payback window is not a real business
+  // value — it degenerates `RankEarlyChurnByVendor`'s cutoff to the alta
+  // instant itself (an empty window) and `ComputeCacAndPayback`'s lossMaking
+  // threshold to "any payback at all is loss-making". Requiring `>= 1` closes
+  // that degenerate case at the source instead of in every consumer.
+  it('🔵15: rejects maxPaybackMonths: 0 (a 0-month payback window is not a real value), no partial update', async () => {
+    const repo = new InMemoryFinanceTargetsConfigRepository();
+    repo.seed({ churnTargetPct: 5, maxPaybackMonths: 12, monthlyNewContractsGoal: 0, inflationBaseYearMonth: '' });
+    const useCase = new UpdateFinanceTargets(repo);
+
+    await expect(useCase.execute({ ...validPayload, maxPaybackMonths: 0 })).rejects.toBeInstanceOf(FinanceValidationError);
+    expect(await repo.get()).toMatchObject({ maxPaybackMonths: 12 }); // untouched
+  });
+
   it('2.24: a full valid payload persists all 4 fields', async () => {
     const repo = new InMemoryFinanceTargetsConfigRepository();
     const useCase = new UpdateFinanceTargets(repo);
