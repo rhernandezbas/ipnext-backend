@@ -14,6 +14,9 @@ import { GetAssistantProviderConfig } from '@application/use-cases/assistant/Get
 import { UpdateAssistantProviderConfig } from '@application/use-cases/assistant/UpdateAssistantProviderConfig';
 import { TestAssistantConnection } from '@application/use-cases/assistant/TestAssistantConnection';
 import { PrismaAssistantProviderConfigRepository } from '@infrastructure/adapters/prisma/PrismaAssistantProviderConfigRepository';
+import { PrismaAssistantRoutingConfigRepository } from '@infrastructure/adapters/prisma/PrismaAssistantRoutingConfigRepository';
+import { GetAssistantRoutingConfig } from '@application/use-cases/assistant/GetAssistantRoutingConfig';
+import { UpdateAssistantRoutingConfig } from '@application/use-cases/assistant/UpdateAssistantRoutingConfig';
 import { HttpDeepSeekAssistant } from '@infrastructure/adapters/deepseek/HttpDeepSeekAssistant';
 import { config } from '@infrastructure/config';
 import { PrismaAssistantRunRepository } from '@infrastructure/adapters/prisma/PrismaAssistantRunRepository';
@@ -53,6 +56,7 @@ export function composeAssistantModule(deps: ComposeAssistantModuleDeps): Router
   // `NoEvalRecordedGate`, que era el placeholder fail-closed mientras el eval no existía.
   const evalGate = new PrismaAssistantEvalRepository();
   const providerRepo = new PrismaAssistantProviderConfigRepository();
+  const routingRepo = new PrismaAssistantRoutingConfigRepository();
   const envCredentials = { baseUrl: config.assistant.baseUrl, apiKey: config.assistant.apiKey };
 
   return createAssistantRouter({
@@ -64,6 +68,9 @@ export function composeAssistantModule(deps: ComposeAssistantModuleDeps): Router
     deleteIntent: new DeleteAssistantIntent(intentRepo),
     listCatalogs: new ListAssistantCatalogs(catalogRepo),
     listRuns: new ListAssistantRuns(new PrismaAssistantRunRepository()),
+    getRoutingConfig: new GetAssistantRoutingConfig(routingRepo),
+    // Valida contra los MISMOS perfiles que lee el motor: un default sin agente sería un bot mudo.
+    updateRoutingConfig: new UpdateAssistantRoutingConfig(routingRepo, profileRepo),
     getProviderConfig: new GetAssistantProviderConfig(providerRepo, envCredentials),
     updateProviderConfig: new UpdateAssistantProviderConfig(providerRepo, envCredentials),
     // La prueba construye un adapter EFÍMERO con las credenciales resueltas: verifica lo que

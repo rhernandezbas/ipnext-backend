@@ -13,6 +13,9 @@ import { ListAssistantRuns } from '@application/use-cases/assistant/ListAssistan
 import { GetAssistantProviderConfig } from '@application/use-cases/assistant/GetAssistantProviderConfig';
 import { UpdateAssistantProviderConfig } from '@application/use-cases/assistant/UpdateAssistantProviderConfig';
 import { TestAssistantConnection } from '@application/use-cases/assistant/TestAssistantConnection';
+import { GetAssistantRoutingConfig } from '@application/use-cases/assistant/GetAssistantRoutingConfig';
+import { UpdateAssistantRoutingConfig } from '@application/use-cases/assistant/UpdateAssistantRoutingConfig';
+import { InMemoryAssistantRoutingConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryAssistantRoutingConfigRepository';
 import { InMemoryAssistantProviderConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryAssistantProviderConfigRepository';
 import {
   InMemoryAssistantIntentRepository,
@@ -38,6 +41,7 @@ function buildApp(opts: { hasEval?: boolean; canManage?: boolean } = {}) {
   const evalGate: AssistantEvalGate = { hasRecordedRun: async () => opts.hasEval ?? false };
   const provider = new InMemoryAssistantProviderConfigRepository();
   const envCredentials = { baseUrl: 'https://api.deepseek.com', apiKey: '' };
+  const routing = new InMemoryAssistantRoutingConfigRepository();
 
   const app = express();
   app.use(express.json());
@@ -63,6 +67,8 @@ function buildApp(opts: { hasEval?: boolean; canManage?: boolean } = {}) {
         }),
         'deepseek-chat',
       ),
+      getRoutingConfig: new GetAssistantRoutingConfig(routing),
+      updateRoutingConfig: new UpdateAssistantRoutingConfig(routing, profiles),
       auth: (_req, _res, next) => next(),
       requirePerm: (_module, action) => (_req, res, next) => {
         // Simula el guard granular: `manage` se puede denegar para probar las dos capas.
@@ -76,7 +82,7 @@ function buildApp(opts: { hasEval?: boolean; canManage?: boolean } = {}) {
   );
   app.use(errorHandler);
 
-  return { app, profiles, intents, runs, provider };
+  return { app, profiles, intents, runs, provider, routing };
 }
 
 describe('GET /api/assistant/catalogs', () => {
@@ -419,5 +425,108 @@ describe('/api/assistant/provider/test — la prueba corre en el servidor', () =
     const { app } = buildApp({ canManage: false });
 
     await request(app).post('/api/assistant/provider/test').expect(403);
+  });
+});
+
+/**
+ * RTR-0 — la perilla del ruteo, por HTTP y con use cases REALES.
+ *
+ * Sin estos endpoints `defaultAreaId` no se puede escribir por ningún lado, y el motor hace
+ * no-op en TODAS las conversaciones. La feature estuvo en producción, verde y muerta.
+ */
+describe('GET /api/assistant/routing', () => {
+  it('sin configurar: nadie atiende lo que entra sin área', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app).get('/api/assistant/routing').expect(200);
+
+    expect(res.body.data).toEqual({ defaultAreaId: null, rerouteEnabled: false });
+  });
+
+  it('devuelve lo guardado', async () => {
+    const { app, profiles } = buildApp();
+    await profiles.create({ areaId: 'area-soporte' });
+    await request(app)
+      .put('/api/assistant/routing')
+      .send({ defaultAreaId: 'area-soporte', rerouteEnabled: true })
+      .expect(200);
+
+    const res = await request(app).get('/api/assistant/routing').expect(200);
+
+    expect(res.body.data).toEqual({ defaultAreaId: 'area-soporte', rerouteEnabled: true });
+  });
+});
+
+describe('PUT /api/assistant/routing', () => {
+  it('apuntar a un área CON agente la deja como default', async () => {
+    const { app, profiles, routing } = buildApp();
+    await profiles.create({ areaId: 'area-soporte' });
+
+    await request(app)
+      .put('/api/assistant/routing')
+      .send({ defaultAreaId: 'area-soporte', rerouteEnabled: false })
+      .expect(200);
+
+    // El viaje completo: HTTP → zod → use case → repo. Sin esto el passthrough puede estar roto.
+    expect(await routing.get()).toMatchObject({ defaultAreaId: 'area-soporte' });
+  });
+
+  it('apuntar a un área SIN agente devuelve 400 accionable, no un 500', async () => {
+    const { app, routing } = buildApp();
+
+    const res = await request(app)
+      .put('/api/assistant/routing')
+      .send({ defaultAreaId: 'area-fantasma', rerouteEnabled: false })
+      .expect(400);
+
+    expect(res.body.code).toBe('ASSISTANT_DEFAULT_AREA_WITHOUT_AGENT');
+    expect(res.body.error).toMatch(/area-fantasma/);
+    // Y sobre todo: NO se guardó nada a medias.
+    expect(await routing.get()).toMatchObject({ defaultAreaId: null });
+  });
+
+  it('apagar el ruteo (null) siempre se puede', async () => {
+    const { app, profiles } = buildApp();
+    await profiles.create({ areaId: 'area-soporte' });
+    await request(app)
+      .put('/api/assistant/routing')
+      .send({ defaultAreaId: 'area-soporte', rerouteEnabled: true })
+      .expect(200);
+
+    const res = await request(app)
+      .put('/api/assistant/routing')
+      .send({ defaultAreaId: null, rerouteEnabled: false })
+      .expect(200);
+
+    expect(res.body.data.defaultAreaId).toBeNull();
+  });
+
+  it('un body inválido es 400 (safeParse), NUNCA un 500', async () => {
+    const { app } = buildApp();
+
+    await request(app)
+      .put('/api/assistant/routing')
+      .send({ defaultAreaId: 123, rerouteEnabled: 'sí' })
+      .expect(400);
+  });
+
+  it('rerouteEnabled es obligatorio: no se infiere un default silencioso', async () => {
+    const { app, profiles } = buildApp();
+    await profiles.create({ areaId: 'area-soporte' });
+
+    await request(app)
+      .put('/api/assistant/routing')
+      .send({ defaultAreaId: 'area-soporte' })
+      .expect(400);
+  });
+
+  it('leer NO requiere manage, pero escribir SÍ', async () => {
+    const { app } = buildApp({ canManage: false });
+
+    await request(app).get('/api/assistant/routing').expect(200);
+    await request(app)
+      .put('/api/assistant/routing')
+      .send({ defaultAreaId: null, rerouteEnabled: false })
+      .expect(403);
   });
 });

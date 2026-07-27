@@ -11,6 +11,8 @@ import type { ListAssistantRuns } from '@application/use-cases/assistant/ListAss
 import type { GetAssistantProviderConfig } from '@application/use-cases/assistant/GetAssistantProviderConfig';
 import type { UpdateAssistantProviderConfig } from '@application/use-cases/assistant/UpdateAssistantProviderConfig';
 import type { TestAssistantConnection } from '@application/use-cases/assistant/TestAssistantConnection';
+import type { GetAssistantRoutingConfig } from '@application/use-cases/assistant/GetAssistantRoutingConfig';
+import type { UpdateAssistantRoutingConfig } from '@application/use-cases/assistant/UpdateAssistantRoutingConfig';
 import type { PermissionAction, RbacModuleCode } from '@domain/entities/rbac';
 
 /** Factory que expone `app.ts` (inyección DIP-limpia, molde `alerts.routes`). */
@@ -28,6 +30,8 @@ export interface AssistantRouterDeps {
   getProviderConfig: GetAssistantProviderConfig;
   updateProviderConfig: UpdateAssistantProviderConfig;
   testConnection: TestAssistantConnection;
+  getRoutingConfig: GetAssistantRoutingConfig;
+  updateRoutingConfig: UpdateAssistantRoutingConfig;
   auth: RequestHandler;
   requirePerm: RequirePerm;
 }
@@ -107,6 +111,19 @@ const ListRunsQuerySchema = z.object({
  * sin esa regla, editar la baseUrl desde el formulario guardaría la máscara como key.
  * Borrarla de verdad requiere `clearApiKey: true`, un acto explícito.
  */
+/**
+ * RTR-0 — el ruteo se reemplaza ENTERO, no se parchea: son dos campos y la semántica de
+ * "ausente" sería ambigua (¿no lo tocaste, o lo querés en null?). `rerouteEnabled` es
+ * obligatorio a propósito: inferir un default silencioso acá cambia el comportamiento del bot.
+ *
+ * `defaultAreaId` acepta null EXPLÍCITO — es la forma de apagar el ruteo, y tiene que ser
+ * decible. Lo que NO acepta es string vacío: sería un id que no matchea con nada.
+ */
+const UpdateRoutingSchema = z.object({
+  defaultAreaId: z.string().min(1).nullable(),
+  rerouteEnabled: z.boolean(),
+});
+
 const UpdateProviderSchema = z.object({
   baseUrl: z.string().url().or(z.literal('')).optional(),
   apiKey: z.string().max(500).optional(),
@@ -208,6 +225,32 @@ export function createAssistantRouter(deps: AssistantRouterDeps): Router {
     managePerm,
     asyncHandler(async (_req, res) => {
       res.json({ data: await deps.testConnection.execute() });
+    }),
+  );
+
+  // ── Ruteo (RTR-0) — quién atiende lo que entra SIN área ──────────────────
+  /**
+   * Sin `defaultAreaId` el motor hace no-op en todas las conversaciones: `Conversation.areaId`
+   * entra siempre en NULL porque los agentes trabajan dentro de Chatwoot. Esta es, literalmente,
+   * la perilla que decide si el asistente existe o no.
+   */
+  router.get(
+    '/routing',
+    deps.auth,
+    readPerm,
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await deps.getRoutingConfig.execute() });
+    }),
+  );
+
+  router.put(
+    '/routing',
+    deps.auth,
+    managePerm,
+    asyncHandler(async (req, res) => {
+      const body = parseOr400(UpdateRoutingSchema, req.body, res);
+      if (!body) return;
+      res.json({ data: await deps.updateRoutingConfig.execute(body) });
     }),
   );
 
