@@ -3587,3 +3587,112 @@ model SmartOltOltConfig {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
+
+// ============================================================================
+// Auditoría GPS de técnicos (change iclass-gps-audit).
+//
+// IClass retiene el rastro de las cuadrillas ~30 días ROLLING (verificado
+// 2026-07-26: el punto más viejo era del 25-06 con fecha actual 26-07). Sin esta
+// copia propia no hay auditoría histórica posible: el dato se pierde solo.
+//
+// El rastro pertenece a la CUADRILLA, no a la orden de servicio: un técnico
+// registra puntos toda la jornada haya o no haya órdenes. La OS es un filtro de
+// consulta sobre el rastro, nunca su origen.
+// ============================================================================
+
+model TeamLocationPoint {
+  id String @id @default(uuid())
+
+  /// Login de la cuadrilla en IClass — clave de negocio estable y ÚNICA identidad
+  /// que necesita un punto. El id numérico de IClass (el que se extrae de las URLs
+  /// embebidas) sólo hace falta para LLAMAR a la API, no para almacenar el rastro:
+  /// es un atributo de la cuadrilla, no del breadcrumb. Guardarlo acá sería
+  /// denormalizar un dato que el dominio no modela.
+  teamLogin String
+
+  latitude  Float
+  longitude Float
+
+  /// Instante del fix, normalizado a UTC desde la hora ARGENTINA que emite IClass.
+  recordedAt DateTime
+
+  /// `raio` de IClass: precisión en metros, VERBATIM. Observado: 3,8 a 102,5 m.
+  /// NULLABLE a propósito: precisión DESCONOCIDA no es 0. Mapear una precisión
+  /// ausente a 0 la vuelve "GPS perfecto" y habilita la lectura más dura posible
+  /// contra el técnico. Un punto sin precisión puede probar presencia, nunca condenar.
+  accuracyM Float?
+
+  /// `origem`(es). Es una lista porque IClass emite el MISMO punto físico por dos
+  /// vías distintas (se observó origem 1 y 3 con timestamp y coordenadas idénticas);
+  /// la deduplicación los colapsa en una fila conservando ambos orígenes.
+  sources Int[]
+
+  ingestedAt DateTime @default(now())
+
+  /// Identidad natural del punto. IClass NO provee un id de breadcrumb, así que la
+  /// tupla (cuadrilla, instante, coordenadas) es la clave. `sources` queda FUERA a
+  /// propósito: el mismo fix por dos fuentes es UN punto, no dos.
+  @@unique([teamLogin, recordedAt, latitude, longitude])
+  /// Consulta por ventana de trabajo (auditoría) Y soporte del `DISTINCT ON` del mapa
+  /// en vivo, que necesita `recordedAt DESC` para resolverse con un index scan.
+  ///
+  /// NOTA: es prefijo del unique de arriba, así que a primera vista parece redundante —
+  /// pero el unique NO sirve para el `ORDER BY "teamLogin", "recordedAt" DESC` del
+  /// DISTINCT ON (su tercera y cuarta columna estorban) y además éste es más angosto,
+  /// con lo que el range scan de la ventana toca menos páginas. Decisión escrita, no
+  /// accidente (hallazgo 4.5).
+  @@index([teamLogin, recordedAt(sort: Desc)])
+  /// Purga por retención (12 meses).
+  @@index([recordedAt])
+}
+
+/// Observabilidad del ingest. El modo de falla peligroso de este ingest es el
+/// SILENCIOSO —traer de menos y parecer exitoso—, así que cada corrida deja
+/// contadores explícitos y la lista de cuadrillas que NO se leyeron completas.
+model TeamLocationIngestRun {
+  id              String   @id @default(uuid())
+  startedAt       DateTime
+  finishedAt      DateTime
+  teamsProcessed  Int
+  pointsNew       Int
+  pointsDuplicate Int
+  pointsPurged    Int
+  pagesRead       Int
+  /// Puntos que IClass devolvió pero no se pudieron leer. Un salto acá delata un
+  /// cambio de contrato de la API, que si no se vería como "corrida exitosa, 0 datos".
+  pointsDropped   Int      @default(0)
+  incompleteTeams String[]
+  createdAt       DateTime @default(now())
+
+  @@index([startedAt])
+}
+
+/// Estado del ingest POR CUADRILLA (change iclass-gps-audit, hallazgo 2.2).
+///
+/// Existe para romper el RATCHET DEL WATERMARK. El rastro de IClass viene DESCENDENTE,
+/// así que una lectura parcial trae los puntos MÁS NUEVOS. Si el watermark se derivara
+/// de `MAX(recordedAt)` de lo persistido, saltaría POR ENCIMA del hueco y la corrida
+/// siguiente cortaría en la página 1 reportando "limpio": la cola nunca se volvería a
+/// pedir e IClass la purga a los 30 días.
+///
+/// `contiguousWatermark` sólo avanza cuando la lectura fue COMPLETA. Mientras haya un
+/// hueco pendiente, el ingest sigue releyendo desde antes del hueco.
+model TeamLocationIngestState {
+  id String @id @default(uuid())
+
+  /// Login de la cuadrilla — clave de negocio estable.
+  teamLogin String @unique
+
+  /// Hasta acá el rastro está leído SIN huecos. Es el watermark de lectura.
+  /// `null` = nunca se completó una lectura para esta cuadrilla.
+  contiguousWatermark DateTime?
+
+  /// Última vez que una lectura quedó incompleta. Sirve para alertar si persiste.
+  lastIncompleteAt DateTime?
+
+  /// Corridas incompletas consecutivas. Un valor que crece es una alarma: el rastro se
+  /// está perdiendo y quedan menos de 30 días para recuperarlo.
+  consecutiveIncomplete Int @default(0)
+
+  updatedAt DateTime @updatedAt
+}

@@ -19,6 +19,9 @@ import {
   SoEquipmentEvent,
 } from '@domain/entities/iclass-closed-order';
 import { IClassUnavailableError, IClassRejectedError } from '@domain/errors/iclass';
+import type { TeamLocationPoint } from '@domain/entities/team-location-point';
+import type { TeamDescriptor, TeamTrailPage } from '@domain/ports/TeamLocationSource';
+import { parseIClassDateTime } from '@domain/services/iclassDateTime';
 
 /** Default cluster — the only IPNEXT cluster in IClass. */
 const DEFAULT_CLUSTER = 'IPNEXT INTERNET';
@@ -512,6 +515,203 @@ export class IClassClient implements IClassPort {
       .filter(t => t.login.length > 0);
   }
 
+  // ── Rastro GPS de cuadrillas (change iclass-gps-audit) ────────────────────
+  //
+  // OJO — estos métodos NO usan `fetchAllPages`. Esa función corta con
+  // `if (!body.hasMoreElements || ...) break;` y IClass **no devuelve**
+  // `hasMoreElements` (medido en vivo 2026-07-26 sobre /serviceorders con
+  // pagesize=60: las páginas 1, 2 y 3 traen 60 objetos y el paginador sólo
+  // expone currentpage/pagesize/offset). Ese defecto está registrado como bug
+  // aparte en el BACKLOG; acá se pagina con una condición propia y testeada.
+
+  /** Tamaño de página del rastro. */
+  private static readonly LOCATIONS_PAGE_SIZE = 100;
+  /** Páginas vacías consecutivas necesarias para dar el rastro por terminado. */
+  private static readonly LOCATIONS_EMPTY_PAGES_TO_STOP = 2;
+  /** Tope duro de páginas — backstop ante un paginado que nunca se vacíe. */
+  private static readonly LOCATIONS_MAX_PAGES = 200;
+  /** Solapamiento del watermark: cubre breadcrumbs bufferados offline (hallazgo 2.7). */
+  private static readonly LOCATIONS_WATERMARK_OVERLAP_MS = 2 * 60 * 60 * 1000;
+  /** Tolerancia de reloj hacia el futuro antes de descartar un punto (hallazgo 2.8). */
+  private static readonly LOCATIONS_FUTURE_TOLERANCE_MS = 60 * 60 * 1000;
+
+  /**
+   * Catálogo de cuadrillas con su id interno de IClass resuelto.
+   *
+   * Existe aparte de `listTeams()` porque necesita un dato que aquel no expone: el id
+   * numérico, que IClass **no devuelve** en el campo `id` (llega `null`) y sólo aparece
+   * embebido en las URLs de sub-recursos (`localizacoes: "/teams/{id}/locations"`).
+   */
+  async listTeamLocationDescriptors(): Promise<TeamDescriptor[]> {
+    const data = await this.authedGet<unknown>(
+      `/teams?thirdPartyId=${this.thirdPartyId}&pagesize=200`,
+    );
+    // Un rate limit acá devolvía un ROSTER VACÍO en silencio: el ingest no procesaba
+    // ninguna cuadrilla y el mapa mostraba cero, todo reportado como éxito (hallazgo 2.1).
+    if (isRateLimited(data)) {
+      throw new IClassUnavailableError('IClass rate-limited al listar cuadrillas');
+    }
+    const body = (data ?? {}) as {
+      objects?: Array<{
+        login?: unknown;
+        nome?: unknown;
+        name?: unknown;
+        status?: unknown;
+        localizacoes?: unknown;
+      }>;
+    };
+
+    const out: TeamDescriptor[] = [];
+    for (const o of body.objects ?? []) {
+      const login = String(o.login ?? '').trim();
+      if (!login) continue;
+      const externalId = parseTeamIdFromLocationsUrl(o.localizacoes);
+      if (!externalId) continue; // sin id no hay rastro que pedir
+      out.push({
+        login,
+        name: String(o.nome ?? o.name ?? '').trim(),
+        externalId,
+        status: o.status != null ? String(o.status).trim() : null,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Rastro completo de una cuadrilla, con paginación ROBUSTA.
+   *
+   * Reglas (delta REQ-ICLASS-LOC-2, verificadas contra la API real):
+   *  - NO cortar ante una página con menos ítems que el pagesize. Medido: cortar ahí
+   *    trajo 2.600 de 6.286 puntos — 59% perdido, en silencio.
+   *  - Cortar sólo tras DOS páginas vacías o 204 consecutivas.
+   *  - No mirar hasMoreElements/totalpages/totalobjects: IClass los omite.
+   *
+   * @param stopAtOrBefore watermark: el rastro viene DESCENDENTE, así que al alcanzar
+   *        un punto que ya se tiene persistido se deja de paginar.
+   */
+  async listTeamLocations(
+    externalId: string,
+    teamLogin: string,
+    stopAtOrBefore?: Date | null,
+    now: Date = new Date(),
+  ): Promise<TeamTrailPage> {
+    const points: TeamLocationPoint[] = [];
+    // SOLAPAMIENTO (hallazgo 2.7): un celular sin señal bufferea fixes y los sube al
+    // reconectar, con timestamps ANTERIORES al watermark. Sin solapamiento se descartan
+    // para siempre — justo el caso que la auditoría más necesita resolver. La dedup por
+    // unique de la base absorbe lo que se relee, así que releer es gratis.
+    const watermarkMs = stopAtOrBefore
+      ? stopAtOrBefore.getTime() - IClassClient.LOCATIONS_WATERMARK_OVERLAP_MS
+      : null;
+    // Cota superior de cordura: un reloj adelantado en el dispositivo (o un dato corrupto)
+    // insertaría un punto en el futuro que se volvería el watermark y bloquearía el ingest
+    // por años, en silencio (hallazgo 2.8).
+    const maxAcceptableMs = now.getTime() + IClassClient.LOCATIONS_FUTURE_TOLERANCE_MS;
+
+    let page = 1;
+    let pagesRead = 0;
+    let consecutiveEmpty = 0;
+    let pointsDropped = 0;
+
+    while (page <= IClassClient.LOCATIONS_MAX_PAGES) {
+      let data: unknown;
+      try {
+        data = await this.authedGet<unknown>(
+          `/teams/${externalId}/locations?pagesize=${IClassClient.LOCATIONS_PAGE_SIZE}&pagenumber=${page}`,
+        );
+      } catch {
+        // Rate-limit persistente o error de transporte: se devuelve lo leído hasta acá
+        // marcado como INCOMPLETO. Nunca reportar éxito con datos parciales.
+        return { points, pagesRead, incomplete: true, pointsDropped };
+      }
+      pagesRead++;
+
+      // EL RATE LIMIT DE ICLASS LLEGA COMO HTTP 200 CON TEXTO PLANO (hallazgo 2.1).
+      // Tratarlo como página vacía cortaba el rastro con incomplete:false. Este es el
+      // único método del cliente que no lo chequeaba; los otros cuatro sí.
+      if (isRateLimited(data)) {
+        return { points, pagesRead, incomplete: true, pointsDropped };
+      }
+
+      // 204 / cuerpo vacío → no es objeto.
+      const objects =
+        data && typeof data === 'object' && Array.isArray((data as { objects?: unknown[] }).objects)
+          ? ((data as { objects: unknown[] }).objects as unknown[])
+          : [];
+
+      if (objects.length === 0) {
+        consecutiveEmpty++;
+        if (consecutiveEmpty >= IClassClient.LOCATIONS_EMPTY_PAGES_TO_STOP) {
+          return { points, pagesRead, incomplete: false, pointsDropped };
+        }
+        page++;
+        continue;
+      }
+      consecutiveEmpty = 0;
+
+      let reachedWatermark = false;
+      let parsedInPage = 0;
+      for (const raw of objects) {
+        const point = parseTeamLocationPoint(raw, teamLogin);
+        if (!point) {
+          // ILEGIBLE: el contrato de la API cambió. Alimenta el detector de página muerta.
+          pointsDropped++;
+          continue;
+        }
+        // R9 de la re-review: un punto FUTURO sí se pudo PARSEAR — se descarta por
+        // política, no por ilegibilidad. Contarlo como no-parseado hacía que un
+        // dispositivo con el reloj adelantado (cuyos puntos van PRIMERO, porque el rastro
+        // es descendente) llenara la página 1 y disparara `incomplete` para siempre: el
+        // watermark contiguo no avanzaba nunca y la cuadrilla quedaba congelada
+        // releyendo lo mismo hasta que IClass purgara el resto. El fix 2.8 habría
+        // cambiado "envenenar el watermark 10 años" por "no ingestar nunca más".
+        parsedInPage++;
+        if (point.recordedAt.getTime() > maxAcceptableMs) {
+          pointsDropped++;
+          continue;
+        }
+        // ESTRICTO (hallazgo 2.6): con `<=` se perdía el segundo punto del mismo instante
+        // con distinta coordenada, que el unique de la base considera una fila legítima.
+        if (watermarkMs !== null && point.recordedAt.getTime() < watermarkMs) {
+          reachedWatermark = true;
+          continue;
+        }
+        points.push(point);
+      }
+
+      // Una página LLENA de la que no se pudo parsear NADA significa que el contrato
+      // cambió. Seguir paginando en silencio produce "0 puntos, corrida exitosa".
+      if (parsedInPage === 0) {
+        return { points, pagesRead, incomplete: true, pointsDropped };
+      }
+
+      if (reachedWatermark) {
+        return { points, pagesRead, incomplete: false, pointsDropped };
+      }
+
+      page++;
+    }
+
+    // Se agotó el tope de páginas sin llegar al final natural del rastro: hay más datos
+    // que no se leyeron (hallazgo 2.3). El backstop contra el loop infinito no puede
+    // hacerse pasar por una lectura completa.
+    return { points, pagesRead, incomplete: true, pointsDropped };
+  }
+
+  /**
+   * Última posición conocida de una cuadrilla.
+   * `null` ante 204 — es la respuesta NORMAL para cuadrillas sin rastro (5 de los 11
+   * logins de IPNEXT son cuentas canceladas o duplicadas). Tratarlo como error rompería
+   * el ingest en cada corrida.
+   */
+  async getLastTeamLocation(login: string): Promise<TeamLocationPoint | null> {
+    const data = await this.authedGet<unknown>(
+      `/teams/lastlocation?login=${encodeURIComponent(login)}`,
+    );
+    if (!data || typeof data !== 'object') return null;
+    return parseTeamLocationPoint(data, login);
+  }
+
   /**
    * Update a Service Order in IClass (assign team + schedule window).
    * POST /serviceorders/update with nested soScheduleUpdateIn payload.
@@ -668,10 +868,22 @@ function strOrNull(v: unknown): string | null {
 }
 
 function numOrNull(v: unknown): number | null {
-  if (v === null || v === undefined || v === '') return null;
-  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+
+  const raw = String(v).trim();
+  if (raw === '') return null;
+
+  // COMA DECIMAL (re-review R5): IClass es lusófono y puede emitir "-34,70084".
+  // `parseFloat` lo TRUNCA a -34 sin error y sin NaN — 78 km de desvío sobre el dato
+  // que DECIDE el veredicto de presencia (addressLat/addressLng), y `Number.isFinite`
+  // lo deja pasar. Se normaliza la coma antes de convertir, y se usa `Number` (no
+  // `parseFloat`) para que "34abc" dé NaN en vez de 34.
+  const normalized = raw.includes(',') && !raw.includes('.') ? raw.replace(',', '.') : raw;
+  const n = Number(normalized);
   return Number.isFinite(n) ? n : null;
 }
+
 
 /**
  * Parse an IClass date into an ISO-8601 string (Buenos Aires, -03:00), or null.
@@ -867,4 +1079,68 @@ export function formatScheduleDate(d: Date): string {
   const ss = get('second');
   // -0300 (Argentina): IClass interprets the offset, so it MUST match the wall-clock.
   return `${yyyy}-${MM}-${dd} ${hh}:${mi}:${ss} -0300`;
+}
+
+// ── Parsers del rastro GPS de cuadrillas (change iclass-gps-audit) ───────────
+
+/**
+ * Extrae el id numérico de la cuadrilla del path embebido en `localizacoes`
+ * (`/teams/{id}/locations`). IClass devuelve `id: null` en el listado de teams, así que
+ * esta URL es la ÚNICA fuente del identificador.
+ */
+export function parseTeamIdFromLocationsUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const m = /\/teams\/(\d+)\//.exec(raw);
+  return m ? m[1] : null;
+}
+
+/**
+ * `TeamLocationDTO` de IClass → punto del dominio.
+ *
+ * Devuelve `null` si el timestamp o las coordenadas no son legibles: un punto ilegible
+ * se descarta, nunca se emite con `Invalid Date` o `NaN` (eso se propaga silencioso y
+ * explota lejos del origen).
+ *
+ * `raio` (precisión) y `origem` se conservan VERBATIM: sin la precisión no se puede
+ * calificar honestamente un veredicto de presencia.
+ */
+export function parseTeamLocationPoint(raw: unknown, teamLogin: string): TeamLocationPoint | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+
+  // OJO: `Number(null)` y `Number('')` dan 0, que ES finito y pasaría el guard, metiendo
+  // un punto en el Golfo de Guinea como si fuera legítimo. Se exige que el valor crudo
+  // sea number o string no vacío ANTES de convertir.
+  const latitude = toFiniteNumber(o.latitude);
+  const longitude = toFiniteNumber(o.longitude);
+  if (latitude === null || longitude === null) return null;
+
+  const recordedAt = parseIClassDateTime(
+    typeof o.dataRegistro === 'string' ? o.dataRegistro : null,
+  );
+  if (!recordedAt) return null;
+
+  const accuracy = toFiniteNumber(o.raio);
+  const origem = toFiniteNumber(o.origem);
+
+  return {
+    teamLogin,
+    latitude,
+    longitude,
+    recordedAt,
+    // Precisión ausente o inválida ⇒ DESCONOCIDA (null), nunca 0: un 0 significaría
+    // "GPS perfecto" y es la lectura más dura posible contra el técnico.
+    accuracyMeters: accuracy !== null && accuracy >= 0 ? accuracy : null,
+    sources: origem !== null ? [origem] : [],
+  };
+}
+
+/** Convierte a número finito sólo desde `number` o `string` no vacía. `null` en cualquier otro caso. */
+function toFiniteNumber(raw: unknown): number | null {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }

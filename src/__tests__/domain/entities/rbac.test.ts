@@ -24,8 +24,12 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 35 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news)', () => {
-    expect(RBAC_MODULES).toHaveLength(35);
+  it('contains exactly 36 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 technicians)', () => {
+    expect(RBAC_MODULES).toHaveLength(36);
+  });
+
+  it('includes technicians (iclass-gps-audit — ubicación y auditoría de presencia de cuadrillas)', () => {
+    expect(RBAC_MODULES).toContain('technicians');
   });
 
   it('includes all 14 original module codes', () => {
@@ -144,8 +148,16 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 53 valid action codes (47 prior + 6 bulk-granular-perms: bulk_active/late/blocked/inactive/baja/numbers)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(53);
+  it('contains exactly 55 valid action codes (53 prior + 2 iclass-gps-audit: location_read/location_audit)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(55);
+  });
+
+  it('includes location_read and location_audit as SEPARATE actions (iclass-gps-audit)', () => {
+    // Son dos a propósito: el mapa en vivo (despacho) NO debe arrastrar la auditoría
+    // histórica de una persona. Si alguien las colapsa en una sola, este test cae.
+    expect(KNOWN_ACTIONS).toContain('location_read');
+    expect(KNOWN_ACTIONS).toContain('location_audit');
+    expect(KNOWN_ACTIONS.filter((a) => a.startsWith('location_'))).toHaveLength(2);
   });
 
   it("includes bulk (messaging-bulk F2 — disparar/ver campañas masivas)", () => {
