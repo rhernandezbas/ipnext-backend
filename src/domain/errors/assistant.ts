@@ -125,3 +125,28 @@ export class AssistantActionRequiresEvalError extends DomainError {
     this.keys = keys;
   }
 }
+
+/**
+ * RTR-0 — se intentó poner como área default una que NO tiene agente configurado.
+ *
+ * Rechazar esto es el punto: guardarlo no falla en ningún lado. El motor haría
+ * `findByAreaId` → `null` → no-op, en silencio, para SIEMPRE. La pantalla mostraría un ruteo
+ * "configurado" y el bot no contestaría nunca. Es más honesto un 400 accionable ahora que un
+ * silencio inexplicable después.
+ *
+ * No distingue "el área no existe" de "existe pero no tiene agente": las dos terminan en el
+ * mismo no-op, y el operador hace lo mismo en ambos casos (crear el agente).
+ */
+export class AssistantDefaultAreaWithoutAgentError extends DomainError {
+  public readonly areaId: string;
+
+  constructor(areaId: string) {
+    super(
+      `El área "${areaId}" no tiene agente configurado, así que no puede ser el área default: ` +
+        'el asistente no respondería nada. Creá el agente para esa área primero.',
+      'ASSISTANT_DEFAULT_AREA_WITHOUT_AGENT',
+    );
+    this.name = 'AssistantDefaultAreaWithoutAgentError';
+    this.areaId = areaId;
+  }
+}
