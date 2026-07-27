@@ -3,19 +3,10 @@ import type {
   RecordAssistantEvalRunInput,
 } from '@domain/ports/AssistantEvalRepository';
 import { InvalidAssistantEvalRunError } from '@domain/errors/assistant';
-
-export interface AssistantEvalRunDto {
-  id: string;
-  model: string;
-  /** Aciertos sobre casos con respuesta conocida. `null` si la partición vino vacía. */
-  resolutionAccuracy: number | null;
-  /** **La métrica que importa**: cuántas veces se calló cuando debía. `null` si vacía. */
-  abstentionRate: number | null;
-  resolutionTotal: number;
-  abstentionTotal: number;
-  notes: string | null;
-  createdAt: string;
-}
+import {
+  toAssistantEvalRunDto,
+  type AssistantEvalRunDto,
+} from '@application/dto/assistantEval.dto';
 
 /**
  * ai-assistant-multiagent (EVAL-1) — registra una corrida de evaluación.
@@ -36,16 +27,9 @@ export class RecordAssistantEvalRun {
 
     const run = await this.evals.record(input);
 
-    return {
-      id: run.id,
-      model: run.model,
-      resolutionAccuracy: ratio(run.resolutionCorrect, run.resolutionTotal),
-      abstentionRate: ratio(run.abstentionCorrect, run.abstentionTotal),
-      resolutionTotal: run.resolutionTotal,
-      abstentionTotal: run.abstentionTotal,
-      notes: run.notes,
-      createdAt: run.createdAt,
-    };
+    // Mismo mapper que el listado: dos formas de derivar la misma tasa es cómo terminan
+    // mostrando números distintos para la misma corrida.
+    return toAssistantEvalRunDto(run);
   }
 }
 
@@ -74,8 +58,4 @@ function assertValid(input: RecordAssistantEvalRunInput): void {
   if (problems.length > 0) {
     throw new InvalidAssistantEvalRunError(problems);
   }
-}
-
-function ratio(correct: number, total: number): number | null {
-  return total === 0 ? null : Number((correct / total).toFixed(4));
 }

@@ -17,6 +17,9 @@ import { PrismaAssistantProviderConfigRepository } from '@infrastructure/adapter
 import { PrismaAssistantRoutingConfigRepository } from '@infrastructure/adapters/prisma/PrismaAssistantRoutingConfigRepository';
 import { GetAssistantRoutingConfig } from '@application/use-cases/assistant/GetAssistantRoutingConfig';
 import { UpdateAssistantRoutingConfig } from '@application/use-cases/assistant/UpdateAssistantRoutingConfig';
+import { RecordAssistantEvalRun } from '@application/use-cases/assistant/RecordAssistantEvalRun';
+import { ListAssistantEvalRuns } from '@application/use-cases/assistant/ListAssistantEvalRuns';
+import { SetAssistantDataSourceEnabled } from '@application/use-cases/assistant/SetAssistantDataSourceEnabled';
 import { HttpDeepSeekAssistant } from '@infrastructure/adapters/deepseek/HttpDeepSeekAssistant';
 import { config } from '@infrastructure/config';
 import { PrismaAssistantRunRepository } from '@infrastructure/adapters/prisma/PrismaAssistantRunRepository';
@@ -68,6 +71,12 @@ export function composeAssistantModule(deps: ComposeAssistantModuleDeps): Router
     deleteIntent: new DeleteAssistantIntent(intentRepo),
     listCatalogs: new ListAssistantCatalogs(catalogRepo),
     listRuns: new ListAssistantRuns(new PrismaAssistantRunRepository()),
+    // `evalGate` YA es el PrismaAssistantEvalRepository: registrar por esta ruta destraba el
+    // mismo candado que consulta UpdateAssistantProfile. Una instancia distinta acá dejaría
+    // el circuito abierto sin que ningún test unitario lo note.
+    recordEvalRun: new RecordAssistantEvalRun(evalGate),
+    listEvalRuns: new ListAssistantEvalRuns(evalGate),
+    setDataSourceEnabled: new SetAssistantDataSourceEnabled(catalogRepo),
     getRoutingConfig: new GetAssistantRoutingConfig(routingRepo),
     // Valida contra los MISMOS perfiles que lee el motor: un default sin agente sería un bot mudo.
     updateRoutingConfig: new UpdateAssistantRoutingConfig(routingRepo, profileRepo),
