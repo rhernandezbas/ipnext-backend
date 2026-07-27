@@ -443,7 +443,9 @@ no corresponda (costos, precios, porcentajes) sin aplicar actualizaciones parcia
 - THEN la fila se crea/actualiza, y el próximo cálculo de CAC para "Fibra" usa esos valores
 
 #### Scenario: A negative cost value is rejected without partial update
-- GIVEN una fila existente de `FinanceTechnologyCost` para "Wireless"
+- GIVEN una fila existente de `FinanceTechnologyCost` para "Wireless", **y "Wireless" existe en el catálogo
+  `ContractTechnology`** (si no existiera, el guard de existencia responde `404` antes de validar el payload —
+  ver el escenario del 404 más abajo)
 - WHEN un usuario con `finance:manage_costs` envía `PUT .../technology-costs/Wireless` con
   `costoInstalacionArs: -500`
 - THEN responde `400` y ninguno de los campos de esa fila cambia
@@ -452,6 +454,45 @@ no corresponda (costos, precios, porcentajes) sin aplicar actualizaciones parcia
 - GIVEN una tecnología existe en `ContractTechnology` pero nunca se configuró su costo
 - WHEN se consulta `GET /api/finance/growth/config/technology-costs`
 - THEN esa tecnología aparece en la lista con todos los costos en `0`, no se omite ni rompe la respuesta
+
+#### Scenario: Writing a cost for a technology absent from the catalog is rejected with 404, not silently persisted
+> Contrato agregado por la fix wave 1 de la Fase 2. Antes devolvía `200 OK` y persistía una fila que el `GET`
+> (LEFT JOIN sobre el catálogo) **nunca mostraba**: el operador creía haber cargado los costos y no lo había
+> hecho. En la Fase 3 eso se lee como `cacArs: 0` y `lossMaking: false` para TODAS las altas — un CAC de cero
+> no se interpreta como "falta configurar", se interpreta como "todo rentable".
+- GIVEN un `technologyName` que NO existe en el catálogo `ContractTechnology` (un typo como "Fibrra", o el
+  nombre viejo después de un rename del catálogo)
+- WHEN un usuario con `finance:manage_costs` hace `PUT .../technology-costs/Fibrra` con un payload válido
+- THEN responde `404` con `code: FINANCE_TECHNOLOGY_NOT_FOUND` y **no persiste ninguna fila**
+- AND el mismo criterio aplica a `PUT .../plan-prices/:planCode` con `code: FINANCE_PLAN_NOT_FOUND`
+- AND el guard de existencia corre **ANTES** de validar el payload: un nombre inexistente con valores
+  inválidos responde `404` (el path identifica el recurso), no `400`
+
+#### Scenario: The persisted key is the catalog's canonical name, not the raw path segment
+- GIVEN la tecnología existe en el catálogo como "Fibra"
+- WHEN un usuario con `finance:manage_costs` hace `PUT .../technology-costs/fibra` (distinto casing)
+- THEN la fila se persiste bajo el nombre canónico "Fibra", **no** se crea una segunda fila variante de casing
+  (la resolución del catálogo es case-insensitive y el upsert usa el nombre canónico que devuelve)
+
+#### Scenario: A value exceeding the column's precision is rejected with 400, never a 500
+> Contrato agregado por la fix wave 1 de la Fase 2. Las columnas tienen precisión fija y la validación sólo
+> chequeaba `isFinite` + rango de negocio, así que el overflow lo rechazaba **Postgres** con un error que no es
+> de dominio ⇒ `500 INTERNAL_ERROR` opaco. Caso real: un operador que pega el índice del INDEC en vez de la
+> tasa mensual.
+- GIVEN la columna `monthlyRatePct` es `Decimal(6,3)` (magnitud máxima `999.999`)
+- WHEN un usuario con `finance:manage_inflation` envía `PUT .../config/inflation/2026-01` con
+  `monthlyRatePct: 42000`
+- THEN responde `400` con un mensaje que nombra la cota de la columna, y no persiste nada
+- AND el mismo criterio aplica a los costos (`Decimal(12,2)`), los porcentajes (`Decimal(5,2)`) y los enteros
+  (`maxPaybackMonths`/`monthlyNewContractsGoal`, `INTEGER` de 32 bits)
+
+#### Scenario: An empty range filter means "no filter", not an invalid one
+- GIVEN la serie de IPC tiene filas cargadas
+- WHEN se consulta `GET /api/finance/growth/config/inflation?from=&to=` (lo que emite `URLSearchParams`
+  cuando el filtro está sin setear)
+- THEN responde `200` con la serie COMPLETA, no `400`
+- AND un valor presente pero mal formado (`?from=2026-1`, sin `padStart`) SÍ responde `400`, porque la
+  comparación es lexicográfica y devolvería silenciosamente el tramo equivocado de la serie
 
 ### Requirement: Two-layer permission model — BE guard + FE gate, module `finance`
 El sistema DEBE (MUST) exponer un módulo RBAC nuevo `finance` (separado de `billing`), con acciones `read`,
