@@ -774,6 +774,12 @@ import { createExternalV1Router } from './routes/externalV1.routes';
 import { createApiKeyMiddleware } from './middleware/apiKeyMiddleware';
 // ── NOC Alerts Hub (noc-alerts-hub, Fase A) — wiring vive en composeAlertsModule ─
 import { composeAlertsModule } from './composeAlertsModule';
+// ── ai-assistant-multiagent — config del asistente IA; wiring en composeAssistantModule ─
+import { composeAssistantModule } from './composeAssistantModule';
+// ── ai-assistant-multiagent — MOTOR del asistente; wiring en composeAssistantEngine ─────
+import { composeAssistantEngine } from './composeAssistantEngine';
+import { ChatMessageThreadReader } from '@infrastructure/adapters/assistant/ChatMessageThreadReader';
+import { CustomerAssistantClientResolver } from '@infrastructure/adapters/assistant/CustomerAssistantClientResolver';
 import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
 import { ListZones } from '@application/use-cases/ListZones';
 import { CreateZone } from '@application/use-cases/CreateZone';
@@ -2865,6 +2871,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // (evita inflar este God Object — design.md "File Changes" ⚠).
   app.use('/api/alerts', composeAlertsModule({ authAdapter, sessionRepo, requirePerm, auditEventRepo }));
 
+  // ─── ai-assistant-multiagent — CONFIGURACIÓN del asistente IA conversacional ────
+  // Sólo la config (perfiles/intenciones/catálogos). El MOTOR se engancha aparte en
+  // ReceiveChatwootWebhook (Batch 6) y arranca apagado por el flag `ai-assistant-enabled`:
+  // así la configuración puede estar viva y editándose con el bot completamente mudo.
+  app.use('/api/assistant', composeAssistantModule({ authAdapter, sessionRepo, requirePerm }));
+
   // ─── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send ───────
   {
     const conversationRepo = new PrismaConversationRepository();
@@ -2940,6 +2952,25 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // (riesgo pineado por el composition-root test de abajo).
     const featureFlagRepo = new PrismaFeatureFlagRepository();
 
+    // ─── ai-assistant-multiagent (T6.3) — MOTOR del asistente IA ────────────────
+    // Se construye ANTES del router porque se inyecta como 8º arg de
+    // `ReceiveChatwootWebhook`. Arranca MUDO: el flag `ai-assistant-enabled` viene en
+    // false desde la migración y cada perfil nace apagado.
+    // ⚠️ Sin esta línea, el motor existiría pero NADIE lo llamaría — exactamente el bug W6
+    // del EPIC #38 (rutas cableadas, hook nunca inyectado, CI verde, feature muerta en prod).
+    // Pineado por `assistant-composition.test.ts`.
+    const assistantEngine = composeAssistantEngine({
+      conversationRepo,
+      customerRepo: customerAdapter,
+      chatwootGateway,
+      sendMessage: new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway, chatAttachmentRepo, chatMediaDownloadTrigger, conversationMentionRepo, userLookupForScheduling),
+      setConversationArea: new SetConversationArea(conversationRepo, ticketAreaRepo, conversationEventRepo),
+      setConversationStatus: new SetConversationStatus(conversationRepo, chatwootGateway, conversationEventRepo),
+      listTasks,
+      threadReader: new ChatMessageThreadReader(chatMessageRepo),
+      clientResolver: new CustomerAssistantClientResolver(customerAdapter, customerAdapter),
+    });
+
     app.use('/api/messaging', createMessagingRouter(
       // messaging-bulk (F2, Batch 6, OPT-2) — 6º arg `customerAdapter` (opcional):
       // ya implementa `CampaignSegmentSource & OptOutRegistry` (misma instancia
@@ -2947,7 +2978,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // el opt-out inbound queda MUERTO en prod (lección W6).
       // conversation-events (Ola 2) — 7º arg `conversationEventRepo`: registra 'created'
       // (actor null) y resolved/reopened Chatwoot-driven, best-effort.
-      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger, customerAdapter, conversationEventRepo),
+      // ai-assistant-multiagent (RUN-2) — 8º arg `assistantEngine`: dispara el bot en rama
+      // AISLADA tras espejar el mensaje. Mudo hasta que se prenda el flag.
+      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger, customerAdapter, conversationEventRepo, assistantEngine),
       new ListConversations(conversationRepo),
       new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone, chatAttachmentRepo, chatMediaDownloadTrigger),
       new ListChatMessages(conversationRepo, chatMessageRepo, chatAttachmentRepo),

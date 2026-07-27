@@ -133,6 +133,26 @@ export const config = {
   },
 
   /**
+   * ai-assistant-multiagent — asistente IA conversacional sobre Chatwoot.
+   *
+   * ⚠️ Sin `apiKey` el adapter degrada a no-op (RUN-1): el motor no lanza, no responde, y
+   * queda auditado. **Deliberadamente NO es fail-fast como el resto de config.ts** — un
+   * deploy sin la key debe dejar el bot mudo, jamás impedir que levante el server. El
+   * asistente es una feature opcional detrás de un flag; la mensajería, la facturación y el
+   * RADIUS no pueden caerse porque falte una credencial de IA.
+   *
+   * LECCIÓN (incidente ORCHESTRATOR_BASE_URL, 2026-06-20): los gates mockean HTTP y NO cazan
+   * una env var faltante en prod. Setear con `gh secret set DEEPSEEK_API_KEY` + la línea
+   * `-e DEEPSEEK_API_KEY` en el step `Deploy container` de `deploy.yml`.
+   */
+  assistant: {
+    /** API oficial de DeepSeek. Los datos van a servidores en China — de ahí la regla de cero PII. */
+    baseUrl: process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com',
+    apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+    timeoutMs: parseInt(process.env.DEEPSEEK_TIMEOUT_MS || '20000', 10),
+  },
+
+  /**
    * UISP NMS mirror sync. Opt-in: absent env → client null → scheduler skip with log.
    * NOT in REQUIRED_VARS — no fail-fast at boot.
    * UISP uses a self-signed internal TLS cert (rejectUnauthorized: false in adapter).
@@ -458,6 +478,36 @@ export const config = {
     telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
     /** Compara contra `X-Telegram-Bot-Api-Secret-Token` en `POST /telegram/webhook`. */
     telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET ?? '',
+
+    /**
+     * alerts-ingest-ratelimit (fix, incidente en vivo 2026-07-26) — límite del
+     * rate limiter DEDICADO de `POST /ingest/:source` (`createIngestRateLimiter`,
+     * rateLimiters.ts). Reusar el limiter del API externo (30 req/60s) ya
+     * rebotaba alertas reales del colector de fibra (~29 req/ciclo, al filo de
+     * 30). Default 600/60s — cubre un incidente grande (hasta 600 ONUs
+     * degradando en un mismo ciclo) sin dejar la ruta sin techo. Configurable
+     * por env por si el tamaño del colector/incidente cambia sin redeploy.
+     * Mismo patrón defensivo que `loginRateLimit.limit`: un secret mal seteado
+     * ("0"/"-5"/no-numérico) no puede tumbar la ingesta con un 429 inmediato
+     * en el 1er request → NaN/0/negativo cae al default (600), nunca a 0.
+     */
+    ingestRateLimit: {
+      // Se usa `parsePositiveInt` (helper ya existente y testeado) en vez de un
+      // `parseInt` propio: `parseInt` CORTA en el primer no-dígito, así que
+      // `"1e9"` daría limit=1 → 429 desde el 2do request = outage de la
+      // ingesta (hallazgo del review adversarial). Además agrega el techo que
+      // el parseo manual no tenía.
+      limit: parsePositiveInt(process.env.ALERTS_INGEST_RATE_LIMIT, {
+        default: 600,
+        min: 1,
+        max: 100_000,
+      }),
+      windowMs: parseIntervalMs(process.env.ALERTS_INGEST_RATE_WINDOW_MS, {
+        default: 60 * 1000,
+        min: 1_000,
+        max: 60 * 60 * 1000,
+      }),
+    },
   },
 
   /**

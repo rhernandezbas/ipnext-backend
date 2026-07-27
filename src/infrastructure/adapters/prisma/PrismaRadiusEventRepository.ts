@@ -26,6 +26,17 @@ function model(): any {
   return (prisma as any).radiusEvent;
 }
 
+/**
+ * Tope de operaciones por `$transaction` (incidente 2026-07-26). Espejo EXACTO de
+ * `PrismaRadiusAuthEventRepository.UPSERT_CHUNK_SIZE` — los dos repos comparten el
+ * mismo patrón y el mismo riesgo, no pueden divergir.
+ *
+ * En el ingest de accounting el cursor todavía estaba sano en prod, pero el tick ya
+ * corría >5 min (81.238 filas / 163 páginas): estaba a UN timeout de entrar en la
+ * misma espiral que ya había volteado al de auth.
+ */
+export const UPSERT_CHUNK_SIZE = 100;
+
 export class PrismaRadiusEventRepository implements RadiusEventRepository {
   async upsertMany(rows: RadiusEventUpsert[]): Promise<number> {
     if (rows.length === 0) return 0;
@@ -33,10 +44,13 @@ export class PrismaRadiusEventRepository implements RadiusEventRepository {
     // FIX7a: envolver en $transaction para atomicidad.
     // Antes: Promise.all de upserts independientes → fallo parcial no se rollbackea
     // y count devuelto era rows.length (mentía si alguno fallaba).
-    // Con $transaction: todos los upserts son atómicos. Si uno falla, rollback total.
-    await (prisma as any).$transaction(
-      rows.map((row) =>
-        model().upsert({
+    // 2026-07-26: la atomicidad ahora es POR LOTE, no por página entera (ver
+    // UPSERT_CHUNK_SIZE). Seguro por idempotencia del upsert + cursor preservado.
+    for (let i = 0; i < rows.length; i += UPSERT_CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + UPSERT_CHUNK_SIZE);
+      await (prisma as any).$transaction(
+        chunk.map((row) =>
+          model().upsert({
           where: { sourceUniqueId: row.sourceUniqueId },
           create: {
             sourceUniqueId: row.sourceUniqueId,
@@ -69,9 +83,10 @@ export class PrismaRadiusEventRepository implements RadiusEventRepository {
             macAddress:  row.macAddress,
             vlanId:      row.vlanId,
           },
-        }),
-      ),
-    );
+          }),
+        ),
+      );
+    }
 
     return rows.length;
   }

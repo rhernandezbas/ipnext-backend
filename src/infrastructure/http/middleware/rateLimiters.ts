@@ -128,3 +128,49 @@ export function createExternalWriteRateLimiter(opts: ExternalWriteRateLimitOptio
     },
   });
 }
+
+/**
+ * alerts-ingest-ratelimit (fix, incidente en vivo 2026-07-26) — `POST
+ * /api/alerts/ingest/:source` reusaba `createExternalWriteRateLimiter()`
+ * (30 req/60s por IP), pensado para el API externo de tickets (escritura
+ * pública genérica). El colector de fibra (VM 130) postea UNA request por
+ * alerta: ~29/ciclo (9 PON + 20 individuales) cada 30 min — al filo de 30/min,
+ * ya rebotó alertas reales con `HTTP 429` en prod. Durante un INCIDENTE
+ * (muchas ONUs degradando a la vez) el burst crece mucho más → se pierden
+ * alertas justo cuando más importan. Esta ruta es máquina-a-máquina,
+ * autenticada con shared-secret POR FUENTE (ver `ingestKeys` en
+ * `alerts.routes.ts`) — el rate limit acá es protección anti-abuso, NO
+ * shaping de throughput de un consumidor propio ya autenticado.
+ *
+ * Default: 600 req/60s. Cubre un incidente grande (hasta 600 ONUs degradando
+ * en un mismo ciclo de 30 min, ~20x el burst normal medido) sin dejar de ser
+ * un techo real: un abuso sostenido de miles de req/min contra la key de un
+ * source siendo la única clave compartida hoy (deuda ya documentada en
+ * `createExternalWriteRateLimiter`) igual queda cortado. Configurable por env
+ * (`ALERTS_INGEST_RATE_LIMIT` / `ALERTS_INGEST_RATE_WINDOW_MS`, ver
+ * `config.ts`) por si el ciclo del colector o el tamaño de un incidente real
+ * cambian sin requerir un redeploy de código.
+ */
+export interface IngestRateLimitOptions {
+  windowMs?: number;
+  limit?: number;
+}
+
+const DEFAULT_INGEST_WINDOW_MS = 60 * 1000; // 1 min
+const DEFAULT_INGEST_LIMIT = 600; // 600 req/min — ver justificación arriba.
+
+export function createIngestRateLimiter(opts: IngestRateLimitOptions = {}): RequestHandler {
+  return rateLimit({
+    windowMs: opts.windowMs ?? DEFAULT_INGEST_WINDOW_MS,
+    limit: opts.limit ?? DEFAULT_INGEST_LIMIT,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request) => `ip:${ipKeyGenerator(req.ip ?? '')}`,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({
+        error: 'Too many requests. Retry later.',
+        code: 'RATE_LIMITED',
+      });
+    },
+  });
+}

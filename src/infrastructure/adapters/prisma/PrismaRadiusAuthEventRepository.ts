@@ -24,14 +24,31 @@ function model(): any {
   return (prisma as any).radiusAuthEvent;
 }
 
+/**
+ * Tope de operaciones por `$transaction` (incidente 2026-07-26).
+ *
+ * Antes se mandaba la página ENTERA (hasta 500 upserts) en una sola transacción.
+ * Cada upsert es un round-trip propio, así que con la DB lenta el lote se pasaba
+ * del timeout de Prisma — medido en prod: **5245 ms contra 5000 ms**, fallaba por
+ * 245 ms. Ese fallo disparaba el borrado del cursor en el scheduler y con él la
+ * espiral que agotaba el heap de V8.
+ *
+ * Tradeoff ACEPTADO: se pierde la atomicidad "toda la página o nada". Es seguro
+ * porque el upsert es idempotente por `sourceUniqueId` y, al preservarse ahora el
+ * cursor ante un error, el próximo tick re-aplica los lotes ya escritos sin duplicar.
+ */
+export const UPSERT_CHUNK_SIZE = 100;
+
 export class PrismaRadiusAuthEventRepository implements RadiusAuthEventRepository {
   async upsertMany(rows: RadiusAuthEventUpsert[]): Promise<number> {
     if (rows.length === 0) return 0;
 
-    // $transaction: todos los upserts son atómicos. Si uno falla, rollback total.
-    await (prisma as any).$transaction(
-      rows.map((row) =>
-        model().upsert({
+    for (let i = 0; i < rows.length; i += UPSERT_CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + UPSERT_CHUNK_SIZE);
+      // $transaction por LOTE: los upserts del lote son atómicos entre sí.
+      await (prisma as any).$transaction(
+        chunk.map((row) =>
+          model().upsert({
           where: { sourceUniqueId: row.sourceUniqueId },
           create: {
             sourceUniqueId: row.sourceUniqueId,
@@ -47,9 +64,10 @@ export class PrismaRadiusAuthEventRepository implements RadiusAuthEventRepositor
             // reason NO se pisa: queda congelado al valor del primer ingest (igual que authdate).
             class: row.class,
           },
-        }),
-      ),
-    );
+          }),
+        ),
+      );
+    }
 
     return rows.length;
   }

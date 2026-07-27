@@ -24,8 +24,19 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 36 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 finance)', () => {
-    expect(RBAC_MODULES).toHaveLength(36);
+  // Resolución de merge (finance-growth-dashboard ⨯ ai-assistant-multiagent, 2026-07-26):
+  // los dos changes se construyeron en paralelo y CADA UNO afirmaba 36 porque contaba su
+  // propio módulo sobre una base de 35. Mergeados, la realidad son 37 — verificado contando
+  // las entradas reales de `RBAC_MODULES` (sin duplicados). Se conservan las DOS aserciones
+  // de módulo: quedarse con una sola habría dejado el otro módulo sin pin.
+  it('contains exactly 37 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance)', () => {
+    expect(RBAC_MODULES).toHaveLength(37);
+  });
+
+  it('includes the assistant module (ai-assistant-multiagent)', () => {
+    // Módulo PROPIO y no una sub-acción de `messaging`: responder un WhatsApp y configurar
+    // un bot que responde solo, a escala y sin supervisión, son responsabilidades distintas.
+    expect(RBAC_MODULES).toContain('assistant');
   });
 
   it('includes all 14 original module codes', () => {

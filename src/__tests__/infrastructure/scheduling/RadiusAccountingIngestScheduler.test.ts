@@ -86,6 +86,53 @@ describe('RadiusAccountingIngestScheduler', () => {
     expect(summary.error).toContain('boom');
   });
 
+  // ── Regresión: espiral de re-lectura completa (incidente 2026-07-26) ─────────
+  // Mismo bug que en RadiusAuthIngestScheduler: el catch guardaba `cursor: null`.
+  // Acá el cursor todavía estaba sano en prod, pero el tick ya corría >5 min
+  // (81k filas / 163 páginas) -> estaba a UN fallo de entrar en la misma espiral.
+  it('un error NO borra el cursor: preserva la marca de agua previa', async () => {
+    const { scheduler, stateRepo, ingest } = makeHarness(true);
+    await stateRepo.save({
+      entity:      LOCK_KEY,
+      cursor:      '2026-06-22T10:00:00Z',
+      lastRunAt:   new Date('2026-06-22T11:00:00Z'),
+      lastResult:  'ok',
+      itemsSynced: 10,
+    });
+
+    jest.spyOn(ingest, 'run').mockRejectedValueOnce(new Error('boom'));
+    await scheduler.runOnce();
+
+    const after = await stateRepo.get(LOCK_KEY);
+    expect(after?.cursor).toBe('2026-06-22T10:00:00Z');
+    expect(after?.lastResult).toContain('error: boom');
+  });
+
+  it('un error sin estado previo deja el cursor en null (no inventa marca de agua)', async () => {
+    const { scheduler, stateRepo, ingest } = makeHarness(true);
+    jest.spyOn(ingest, 'run').mockRejectedValueOnce(new Error('boom'));
+    await scheduler.runOnce();
+
+    const after = await stateRepo.get(LOCK_KEY);
+    expect(after?.cursor).toBeNull();
+    expect(after?.lastResult).toContain('error: boom');
+  });
+
+  // Espejo del test del scheduler de auth: si no se puede CONFIRMAR el cursor previo
+  // (la DB es justamente lo que suele fallar), no se escribe nada. Un `cursor: null`
+  // de fallback reintroduciría la espiral en el peor momento posible.
+  it('si no puede leer el estado previo NO escribe: nunca arriesga borrar el cursor', async () => {
+    const { scheduler, stateRepo, ingest } = makeHarness(true);
+    jest.spyOn(ingest, 'run').mockRejectedValueOnce(new Error('boom'));
+    jest.spyOn(stateRepo, 'get').mockRejectedValueOnce(new Error('db down'));
+    const saveSpy = jest.spyOn(stateRepo, 'save');
+
+    const summary = await scheduler.runOnce();
+
+    expect(summary.error).toContain('boom');
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
   it('purga borra > retencion, recientes permanecen', async () => {
     const { scheduler, ingest } = makeHarness(true);
     jest.spyOn(ingest, 'run').mockResolvedValueOnce({ upserted: 5, pages: 1, purgedRows: 3, newCursor: '2026-06-22T10:00:00Z' });

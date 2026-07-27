@@ -146,6 +146,22 @@ describe('Alerts composition root (noc-alerts-hub Fase A)', () => {
   it('(i) ingestKey de grafana sale de config.alerts.grafanaIngestKey', () => {
     expect(moduleSrc).toMatch(/config\.alerts\.grafanaIngestKey/);
   });
+
+  // alerts-ingest-ratelimit (fix, incidente en vivo 2026-07-26) — anti "feature
+  // muerta en prod" (molde W6): sin esta línea, `ingestRateLimiter` queda
+  // `undefined` y el router cae a SU propio default (createIngestRateLimiter()
+  // sin config) — funcionalmente ok, pero pierde la configurabilidad por env
+  // (`ALERTS_INGEST_RATE_LIMIT`/`ALERTS_INGEST_RATE_WINDOW_MS`) que el fix pide.
+  // Este test pinea que composeAlertsModule SIGA pasando el limiter dedicado
+  // con la config real, y que jamás vuelva a ser createExternalWriteRateLimiter
+  // (30/60s, API externo) — ese fue el bug real medido en prod.
+  it('(r) ingestRateLimiter = createIngestRateLimiter(config.alerts.ingestRateLimit) — NUNCA createExternalWriteRateLimiter', () => {
+    expect(moduleSrc).toMatch(
+      /ingestRateLimiter:\s*createIngestRateLimiter\(\s*config\.alerts\.ingestRateLimit\s*\)/,
+    );
+    // El bug real: NUNCA wirear ingestRateLimiter con el limiter del API externo.
+    expect(moduleSrc).not.toMatch(/ingestRateLimiter:\s*createExternalWriteRateLimiter\(/);
+  });
 });
 
 describe('Fase F1 (noc-alerts-config) — umbrales editables (`noc-alert-thresholds`)', () => {
