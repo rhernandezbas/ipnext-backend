@@ -195,6 +195,49 @@ describe('Fase F1 (noc-alerts-config) — umbrales editables (`noc-alert-thresho
   });
 });
 
+// Fase 1 (`noc-alerts-level-reconciliation`, `noc-alert-announced-state`) — anti
+// "feature muerta": pinea que `GET /ingest/:source/state` está REALMENTE montado
+// con el auth per-source (no la key genérica del helper de thresholds) y que
+// reusa `ListAlerts` (sin duplicar el filtro source+status). A diferencia de
+// F1/Fase A, esta pieza NO toca `composeAlertsModule.ts` — reusa `listAlerts`,
+// `ingestKeys` y `featureFlagRepo` ya wireados ahí; el pin vive solo sobre
+// `alerts.routes.ts`.
+describe('Fase 1 (noc-alerts-level-reconciliation) — estado anunciado (`GET /ingest/:source/state`)', () => {
+  let routesSrc: string;
+
+  beforeAll(() => {
+    routesSrc = readFileSync(
+      join(__dirname, '..', '..', 'infrastructure', 'http', 'routes', 'alerts.routes.ts'),
+      'utf8',
+    );
+  });
+
+  it('GET /ingest/:source/state está montado con el auth per-source dedicado', () => {
+    expect(routesSrc).toMatch(/router\.get\(\s*['"]\/ingest\/:source\/state['"]\s*,\s*ingestStateReadAuth/);
+    expect(routesSrc).toMatch(/createIngestStateReadAuth\(/);
+  });
+
+  it('el auth per-source es DISTINTO del molde de /thresholds (readPerm, no managePerm — mínimo privilegio)', () => {
+    expect(routesSrc).toMatch(/createIngestStateReadAuth\(\s*ingestKeys\s*,\s*auth\s*,\s*readPerm\s*\)/);
+  });
+
+  it('reusa ListAlerts con {source, status: "firing"} — sin duplicar el filtro', () => {
+    expect(routesSrc).toMatch(/listAlerts\.execute\(\{\s*source\s*,\s*status:\s*'firing'\s*\}\)/);
+  });
+
+  it('la respuesta pasa por toNocAlertStateDto (proyección mínima, sin envelope {data})', () => {
+    expect(routesSrc).toMatch(/res\.json\(alerts\.map\(toNocAlertStateDto\)\)/);
+  });
+
+  it('el kill-switch noc-alerts-hub-enabled se chequea dentro del handler de /state', () => {
+    const idx = routesSrc.indexOf("'/ingest/:source/state'");
+    expect(idx).toBeGreaterThan(-1);
+    const window = routesSrc.slice(idx, idx + 1200);
+    expect(window).toMatch(/NOC_ALERTS_HUB_ENABLED_FLAG/);
+    expect(window).toMatch(/NOC_ALERTS_HUB_DISABLED/);
+  });
+});
+
 describe('Migración 20261022000000_noc_alert_thresholds — tabla + seed idempotente', () => {
   let sql: string;
 
