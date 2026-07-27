@@ -793,8 +793,14 @@ Guard: `GET` → `finance:read`; `PUT` → `finance:manage_costs`.
 ```ts
 { costoVentaArs: number; costoInstalacionArs: number; costoMensualServicioArs: number; comisionVentaPct: number }
 ```
-Validación: los 4 campos son requeridos, numéricos, `>= 0`; `comisionVentaPct <= 100`. Cualquier violación →
-`400`, sin actualización parcial.
+Validación: los 4 campos son requeridos, numéricos, `>= 0`; `comisionVentaPct <= 100`; **cotas de precisión
+derivadas del schema** (`Decimal(12,2)` para los 3 costos ARS, `Decimal(5,2)` para el pct — fix-wave-1 A).
+Cualquier violación → `400`, sin actualización parcial. **`technologyName` debe existir en el catálogo
+`ContractTechnology` (`getByName`, case-insensitive) → `404 FINANCE_TECHNOLOGY_NOT_FOUND` si no, chequeado
+ANTES de cualquier validación de payload (fix-wave-1 D)** — sin este guard, un typo o una tecnología renombrada
+después de configurar sus costos upsertea un huérfano invisible (el `GET` está driveado por el catálogo, nunca
+por esta tabla). El upsert usa el nombre CANÓNICO del catálogo (`tech.name`), no el string crudo del path, para
+no crear una fila case-variant duplicada.
 
 ### `GET /config/plan-prices` · `PUT /config/plan-prices/:planCode`
 Guard: `GET` → `finance:read`; `PUT` → `finance:manage_costs`.
@@ -803,7 +809,13 @@ Guard: `GET` → `finance:read`; `PUT` → `finance:manage_costs`.
 ```ts
 { plans: Array<{ planCode: string; planName: string; estimatedMonthlyPrice: number; updatedAt: string | null }> }
 ```
-`PUT` body: `{ estimatedMonthlyPrice: number }` (`>= 0`, `400` si no).
+Orden: por `planCode` (natural sort, fix-wave-1 LOW E — `PlanRepository.list()` no garantiza orden).
+
+`PUT` body: `{ estimatedMonthlyPrice: number }` (`>= 0`, cota `Decimal(12,2)`, `400` si no). `planCode` debe
+existir en el catálogo `Plan` (`findByCode`) → `404 FINANCE_PLAN_NOT_FOUND` si no (fix-wave-1 D, mismo criterio
+que technology-costs). Response `200` incluye `planName` (fix-wave-1 LOW F — el use case ya resuelve el `plan`
+del catálogo para el guard D, así que exponerlo es gratis; antes de este fix el PUT omitía `planName` mientras
+el GET siempre lo trae, la asimetría exacta que produjo el incidente de filas en blanco del FE).
 
 ### `GET /config/targets` · `PUT /config/targets`
 Guard: `GET` → `finance:read`; `PUT` → `finance:manage_targets`.
@@ -816,16 +828,25 @@ Guard: `GET` → `finance:read`; `PUT` → `finance:manage_targets`.
   inflationBaseYearMonth: string; // "" = sin configurar
 }
 ```
-Validación PUT: los 4 campos requeridos; `churnTargetPct` 0-100; `maxPaybackMonths`/`monthlyNewContractsGoal`
-enteros `>= 0`; `inflationBaseYearMonth` vacío o formato `YYYY-MM`. `400` sin parcial si falla.
+Validación PUT: los 4 campos requeridos; `churnTargetPct` 0-100 + cota `Decimal(5,2)` (fix-wave-1 A, redundante
+con el rango de negocio pero consistente con el resto de los settables); `maxPaybackMonths`/
+`monthlyNewContractsGoal` enteros `>= 0` + cota de 32 bits (`Int` de Postgres, fix-wave-1 A — sin esta cota un
+`1e10` llegaba a Postgres como "integer out of range", `500` opaco en vez de `400`); `inflationBaseYearMonth`
+vacío o formato `YYYY-MM`. `400` sin parcial si falla.
 
 ### `GET /config/inflation?from=YYYY-MM&to=YYYY-MM` · `PUT /config/inflation/:yearMonth`
 Guard: `GET` → `finance:read`; `PUT` → `finance:manage_inflation` (acción separada de `manage_costs` —
 permite que quien carga el IPC mensual no tenga acceso a tocar comisiones/costos comerciales).
 
-`GET` response: `{ index: Array<{ yearMonth: string; monthlyRatePct: number; source: string | null }> }`
+`GET` response: `{ index: Array<{ yearMonth: string; monthlyRatePct: number; source: string | null }> }`.
+`from`/`to` se validan con `isValidYearMonth` → `400` si alguno está mal formado (fix-wave-1 B — antes viajaban
+crudos a un `gte`/`lte` de string; un `from` sin `padStart` tipo `2026-1` comparaba lexicográficamente y
+devolvía el rango EQUIVOCADO con `200`, sin señal).
 `PUT` body: `{ monthlyRatePct: number; source?: string }`. `yearMonth` en el path, formato `YYYY-MM`
-validado; `400` si el path no matchea el formato o `monthlyRatePct` no es numérico.
+validado; `monthlyRatePct` numérico + cota `Decimal(6,3)` (magnitud `< 1000`, fix-wave-1 A — sin esta cota, un
+operador pegando el índice INDEC en vez de la tasa mensual, ej. `42000`, llegaba a Postgres como "numeric field
+overflow", `500` opaco en vez de `400`); `400` si el path no matchea el formato o `monthlyRatePct` no es
+numérico/excede la cota.
 
 ### `GET /config/invoice-types` · `PATCH /config/invoice-types/:grType`
 Guard: `GET` → `finance:read`; `PATCH` → `finance:manage_costs` (reclasificar un tipo de comprobante es una
@@ -1031,3 +1052,40 @@ código). El FE consume `useMyPermissions().can('finance.read')` / `<RequirePerm
   (d) `grInvoiceId` con `tipo` null en `mapGrReceipt.ts` — comportamiento no verificado contra un caso real.
   (e) test RBAC 1.55 (`ListAllPermissionsWithModule.test.ts`) pendiente desde fix-wave-1, no tocado por esta
   ronda.
+- **Deuda declarada, fix-wave-1 (Fase 2)** — 2 revisores adversariales (uno con mutation testing real sobre
+  `financeGrowth.routes.test.ts`) encontraron 4 🟡 (D/C/B/A, todos cerrados esta ronda) + 8 🔵. De los 🔵:
+  **E** (orden no determinístico de `GET /config/plan-prices`), **F** (`PUT /config/plan-prices/:planCode` sin
+  `planName`) y **G** (sin test de payload parcial en `PUT /config/targets`) quedaron **cerrados** esta ronda
+  (ver HTTP Contract arriba). Quedan abiertos, deliberadamente:
+  - **(f) Huérfanos de `FinanceTechnologyCost`/`FinancePlanPrice` PRE-EXISTENTES al fix D no se limpian ni se
+    exponen.** El fix D (existencia contra catálogo → `404`) cierra la puerta a NUEVOS huérfanos vía `PUT`, pero
+    no toca filas que ya pudieran existir de un typo/rename anterior a esta ronda — no hay endpoint para
+    listarlas ni borrarlas. Riesgo bajo en la práctica (Fase 2 recién sale de fix-wave, sin uso en prod
+    todavía), pero si esta ronda se archiva con datos de prueba cargados manualmente, revisar antes de Fase 3.
+  - **(f bis) `PUT /api/contract-technologies/:id` (rename) sigue sin propagar a `FinanceTechnologyCost.technologyName`.**
+    Es un agujero DISTINTO de la deuda #2 (falta de FK): incluso con FK, un rename sin cascada rompería el join
+    salvo que la FK apunte por `id` en vez de por `name` — que es exactamente lo que resolvería esto de raíz.
+    Decisión: no implementar un cascade ad-hoc en `UpdateContractTechnology` (acoplaría el módulo de catálogo de
+    tecnologías al módulo de finanzas, cross-cutting que el resto del código evita). La solución correcta es la
+    deuda #2 en sí — migrar `FinanceTechnologyCost`/`FinancePlanPrice` a clave por `id` (FK real) en vez de
+    clave natural — momento en el que un rename deja de poder romper nada. Documentado, no forzado esta ronda.
+  - **(g) H — `PrismaPlanRepository.list()` no filtra por `status`,** por lo que `GET /config/plan-prices`
+    también lista planes dados de baja. Cosmético (ruido en la UI de config, ningún número de negocio se ve
+    afectado). No corregido: `ListPlans` (el use case hermano para el catálogo de planes) TAMPOCO filtra por
+    `status` — introducir el filtro solo acá crearía una inconsistencia nueva entre las dos vistas del mismo
+    catálogo. Si se corrige, debe ser una decisión de producto sobre AMBOS use cases a la vez, no un parche
+    aislado en finance-growth.
+  - **(h) I — `inflationBaseYearMonth` no valida plausibilidad** (un ancla `'0000-01'` pasa el formato). Por
+    Decision 3 el mes ancla no necesita fila propia hoy, así que no es bug de Fase 2 — el guard de plausibilidad
+    (ej. rechazar años fuera de un rango razonable) requiere elegir un umbral arbitrario, que es mejor decidir
+    en Fase 4 cuando `GetFinanceOverview` (el consumidor real del ancla) exista y se sepa qué rango es plausible
+    en la práctica, en vez de inventar uno ahora sin ese contexto.
+  - **(i) — Flanco estructural: los 4 adapters Prisma de Fase 2
+    (`PrismaFinanceTechnologyCostRepository`/`PrismaFinancePlanPriceRepository`/`PrismaFinanceTargetsConfigRepository`/
+    `PrismaFinanceInflationIndexRepository`) tienen CERO cobertura de test y no son ejecutables sin una DB real
+    en este harness.** Los hallazgos A (overflow de precisión) y E (orden de heap de Postgres) y el redondeo de
+    escala salieron TODOS de ahí — son comportamientos de Postgres que ningún doble in-memory puede modelar sin
+    reimplementar el motor. El fix de A cierra el síntoma (valida ANTES de llegar a Prisma), pero el adapter en
+    sí sigue sin un solo test que ejercite `gte`/`lte` de string, el fallback a defaults del singleton, o el
+    round-trip real de `Decimal`. No bloqueante para archivar Fase 2 (no hace falta levantar Postgres en CI para
+    esto), pero cualquier fase futura que toque estos adapters debe asumir que están, en los hechos, sin probar.

@@ -4,6 +4,10 @@ import {
   FinanceInvoiceTypeClassification,
 } from '@domain/ports/FinanceInvoiceTypeClassificationRepository';
 import { FinanceSyncStatus } from '@application/use-cases/finance/GetFinanceSyncStatus';
+import { FinanceTechnologyCostView } from '@application/use-cases/finance/GetFinanceTechnologyCosts';
+import { FinancePlanPriceView } from '@application/use-cases/finance/GetFinancePlanPrices';
+import { FinanceTargetsConfig } from '@domain/ports/FinanceTargetsConfigRepository';
+import { FinanceInflationIndex } from '@domain/ports/FinanceInflationIndexRepository';
 
 // ── GET /config/invoice-types ────────────────────────────────────────────
 
@@ -106,3 +110,102 @@ export function toFinanceSyncStatusDto(
     },
   };
 }
+
+// ── Fase 2 — GET /config/technology-costs · PUT /config/technology-costs/:technologyName ──
+
+export interface FinanceTechnologyCostDto {
+  technologyName: string;
+  costoVentaArs: number;
+  costoInstalacionArs: number;
+  costoMensualServicioArs: number;
+  comisionVentaPct: number;
+  updatedAt: string | null;
+}
+
+export function toFinanceTechnologyCostDto(v: FinanceTechnologyCostView): FinanceTechnologyCostDto {
+  return {
+    technologyName: v.technologyName,
+    costoVentaArs: v.costoVentaArs,
+    costoInstalacionArs: v.costoInstalacionArs,
+    costoMensualServicioArs: v.costoMensualServicioArs,
+    comisionVentaPct: v.comisionVentaPct,
+    updatedAt: v.updatedAt?.toISOString() ?? null,
+  };
+}
+
+/**
+ * Shape-only (required + numeric) validation for the PUT body — design.md
+ * "los 4 campos son requeridos, numéricos". Business rules (>= 0, <= 100) are
+ * enforced in `UpdateFinanceTechnologyCost` itself (unit-testable without an
+ * HTTP layer, spec.md "sin aplicar actualizaciones parciales").
+ */
+export const UpdateFinanceTechnologyCostSchema = z.object({
+  costoVentaArs: z.number(),
+  costoInstalacionArs: z.number(),
+  costoMensualServicioArs: z.number(),
+  comisionVentaPct: z.number(),
+});
+
+// ── Fase 2 — GET /config/plan-prices · PUT /config/plan-prices/:planCode ──
+
+export interface FinancePlanPriceDto {
+  planCode: string;
+  planName: string;
+  estimatedMonthlyPrice: number;
+  updatedAt: string | null;
+}
+
+export function toFinancePlanPriceDto(v: FinancePlanPriceView): FinancePlanPriceDto {
+  return {
+    planCode: v.planCode,
+    planName: v.planName,
+    estimatedMonthlyPrice: v.estimatedMonthlyPrice,
+    updatedAt: v.updatedAt?.toISOString() ?? null,
+  };
+}
+
+export const UpdateFinancePlanPriceSchema = z.object({
+  estimatedMonthlyPrice: z.number(),
+});
+
+// ── Fase 2 — GET /config/targets · PUT /config/targets ──
+
+export interface FinanceTargetsDto {
+  churnTargetPct: number;
+  maxPaybackMonths: number;
+  monthlyNewContractsGoal: number;
+  inflationBaseYearMonth: string;
+}
+
+export function toFinanceTargetsDto(c: FinanceTargetsConfig): FinanceTargetsDto {
+  return {
+    churnTargetPct: c.churnTargetPct,
+    maxPaybackMonths: c.maxPaybackMonths,
+    monthlyNewContractsGoal: c.monthlyNewContractsGoal,
+    inflationBaseYearMonth: c.inflationBaseYearMonth,
+  };
+}
+
+export const UpdateFinanceTargetsSchema = z.object({
+  churnTargetPct: z.number(),
+  maxPaybackMonths: z.number(),
+  monthlyNewContractsGoal: z.number(),
+  inflationBaseYearMonth: z.string(),
+});
+
+// ── Fase 2 — GET /config/inflation · PUT /config/inflation/:yearMonth ──
+
+export interface FinanceInflationIndexDto {
+  yearMonth: string;
+  monthlyRatePct: number;
+  source: string | null;
+}
+
+export function toFinanceInflationIndexDto(i: FinanceInflationIndex): FinanceInflationIndexDto {
+  return { yearMonth: i.yearMonth, monthlyRatePct: i.monthlyRatePct, source: i.source };
+}
+
+export const UpdateFinanceInflationIndexSchema = z.object({
+  monthlyRatePct: z.number(),
+  source: z.string().optional(),
+});

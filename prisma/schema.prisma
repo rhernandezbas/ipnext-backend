@@ -2603,6 +2603,61 @@ model FinanceReceiptApplication {
   @@index([receiptId])
 }
 
+/// finance-growth Fase 2 (design.md Data Model) — costo por tecnología, clave
+/// natural `technologyName` (= `ContractTechnology.name`, SIN FK — deuda
+/// declarada #2). `comisionVentaPct` viaja en esta misma fila: decisión
+/// declarada del change, la comisión de venta va POR TECNOLOGÍA, igual que el
+/// resto de los costos (no por plan ni global).
+model FinanceTechnologyCost {
+  technologyName          String   @id
+  costoVentaArs           Decimal  @default(0) @db.Decimal(12, 2)
+  costoInstalacionArs     Decimal  @default(0) @db.Decimal(12, 2)
+  costoMensualServicioArs Decimal  @default(0) @db.Decimal(12, 2)
+  comisionVentaPct        Decimal  @default(0) @db.Decimal(5, 2)
+  updatedByUserId         String?
+  updatedAt               DateTime @updatedAt
+}
+
+/// finance-growth Fase 2 (design.md Data Model) — precio mensual ESTIMADO por
+/// plan, clave natural `planCode` (= `Plan.code`, SIN FK). Uso EXCLUSIVO:
+/// reparto proporcional de la atribución Capa B (Decision 1) + "what-if" de
+/// CAC/payback — NUNCA la fuente de la cobranza agregada.
+model FinancePlanPrice {
+  planCode              String   @id
+  estimatedMonthlyPrice Decimal  @default(0) @db.Decimal(12, 2)
+  updatedByUserId       String?
+  updatedAt             DateTime @updatedAt
+}
+
+/// finance-growth Fase 2 (design.md Data Model) — metas y config global,
+/// molde singleton (mismo criterio que `FinanceReceiptSyncConfig`).
+/// `inflationBaseYearMonth: ""` = sin configurar (la serie real de
+/// `GetFinanceOverview`, Fase 4, no está disponible hasta que se cargue un
+/// mes ancla).
+model FinanceTargetsConfig {
+  id                      String   @id @default("singleton")
+  churnTargetPct          Decimal  @default(5) @db.Decimal(5, 2)
+  maxPaybackMonths        Int      @default(12)
+  monthlyNewContractsGoal Int      @default(0)
+  inflationBaseYearMonth  String   @default("")
+  updatedAt               DateTime @updatedAt
+}
+
+/// finance-growth Fase 2 (design.md Decision 3) — índice IPC mensual cargado
+/// a mano: `monthlyRatePct` es la variación mensual TAL CUAL la publica INDEC
+/// (ej. `4.2` para +4.2% ese mes), no un índice base-100 precalculado. El
+/// encadenamiento (`chainedIndex`) es responsabilidad del consumidor de
+/// lectura (`GetFinanceOverview`, Fase 4) — esta tabla solo persiste la serie
+/// cruda. Fail-loud ante huecos: un mes faltante trunca la serie real, nunca
+/// se interpola ni se asume `0%`.
+model FinanceInflationIndex {
+  yearMonth      String   @id
+  monthlyRatePct Decimal  @db.Decimal(6, 3)
+  source         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
 // =============================================
 // SUPPORT DOMAIN
 // =============================================

@@ -105,6 +105,41 @@ describe('finance-growth composition root — Fase 1 receipt-ingest wiring', () 
   // A source-text pin (molde the rest of this file) closes that residual gap
   // cheaply, without needing a live Prisma connection to exercise bootstrap
   // itself.
+  // Fase 2 — pins that the settables CRUD (technology-costs/plan-prices/
+  // targets/inflation) is wired with REAL Prisma repos, not a fixture quietly
+  // filtering into prod (same rationale as the Fase 1 pins above — a
+  // composition-root gap here is invisible to unit tests, which always wire
+  // their OWN in-memory doubles regardless of what app.ts actually does).
+  describe('Fase 2: settables CRUD wiring', () => {
+    it('imports the 4 new Prisma repos + their use cases', () => {
+      expect(appSrc).toContain("from '../adapters/prisma/PrismaFinanceTechnologyCostRepository'");
+      expect(appSrc).toContain("from '../adapters/prisma/PrismaFinancePlanPriceRepository'");
+      expect(appSrc).toContain("from '../adapters/prisma/PrismaFinanceTargetsConfigRepository'");
+      expect(appSrc).toContain("from '../adapters/prisma/PrismaFinanceInflationIndexRepository'");
+    });
+
+    it('wires all 8 Fase 2 use cases into createFinanceGrowthRouter with REAL repos', () => {
+      const callWindow = financeRouterCall();
+      expect(callWindow).toContain('new GetFinanceTechnologyCosts(financeTechnologyCostRepo, financeTechnologyCatalogRepo)');
+      expect(callWindow).toContain('new UpdateFinanceTechnologyCost(financeTechnologyCostRepo, financeTechnologyCatalogRepo)');
+      expect(callWindow).toContain('new GetFinancePlanPrices(financePlanPriceRepo, financePlanCatalogRepo)');
+      expect(callWindow).toContain('new UpdateFinancePlanPrice(financePlanPriceRepo, financePlanCatalogRepo)');
+      expect(callWindow).toContain('new GetFinanceTargets(financeTargetsConfigRepo)');
+      expect(callWindow).toContain('new UpdateFinanceTargets(financeTargetsConfigRepo)');
+      expect(callWindow).toContain('new ListFinanceInflationIndex(financeInflationIndexRepo)');
+      expect(callWindow).toContain('new UpdateFinanceInflationIndex(financeInflationIndexRepo)');
+    });
+
+    // fix-wave-1 D — `Update*` must consult the SAME catalog repo instance
+    // `Get*` uses (not a fresh, disconnected `new Prisma...Repository()` per
+    // use case) — pins that the 404 guard is wired against the real catalog,
+    // not silently dropped by a future refactor that re-inlines `new X()`.
+    it("D: UpdateFinanceTechnologyCost/UpdateFinancePlanPrice share the catalog repo instance with their Get* siblings", () => {
+      expect(appSrc).toMatch(/const financeTechnologyCatalogRepo = new PrismaContractTechnologyRepository\(\);/);
+      expect(appSrc).toMatch(/const financePlanCatalogRepo = new PrismaPlanRepository\(\);/);
+    });
+  });
+
   describe('R9: bootstrapFinanceReceiptsIngest wires itemRepo/retencionRepo into BOTH use cases', () => {
     it('imports the real Prisma item/retención repos', () => {
       expect(bootstrapSrc).toContain("from '../adapters/prisma/PrismaFinanceReceiptItemRepository'");

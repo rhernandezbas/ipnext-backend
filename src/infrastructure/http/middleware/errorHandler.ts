@@ -292,6 +292,12 @@ const statusMap: Record<string, number> = {
   // is set below from `err.retryAfterSeconds` (dynamic, same pattern as
   // OrchestratorRejectedError's dynamic status).
   FINANCE_SYNC_LOCK_BUSY: 503,
+  // finance-growth Fase 2 fix-wave-1 (finding D) — a PUT against a
+  // technologyName/planCode that doesn't exist in its catalog (ContractTechnology/Plan)
+  // is a reference to something absent, not a business-rule violation:
+  // semantically a 404, same criterion as CLIENT_NOT_FOUND/TICKET_NOT_FOUND above.
+  FINANCE_TECHNOLOGY_NOT_FOUND: 404,
+  FINANCE_PLAN_NOT_FOUND: 404,
 };
 
 /** Express global error-handling middleware. */

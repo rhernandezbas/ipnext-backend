@@ -907,6 +907,19 @@ import { RearmFinanceReceiptsBackfill } from '@application/use-cases/finance/Rea
 import { PrismaFinanceInvoiceTypeClassificationRepository } from '../adapters/prisma/PrismaFinanceInvoiceTypeClassificationRepository';
 import { FinanceReceiptIngestScheduler, FinanceReceiptIngestSchedulerStatus } from '../scheduling/FinanceReceiptIngestScheduler';
 import { FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
+// finance-growth Fase 2 — settables CRUD (design.md HTTP Contract).
+import { PrismaFinanceTechnologyCostRepository } from '../adapters/prisma/PrismaFinanceTechnologyCostRepository';
+import { PrismaFinancePlanPriceRepository } from '../adapters/prisma/PrismaFinancePlanPriceRepository';
+import { PrismaFinanceTargetsConfigRepository } from '../adapters/prisma/PrismaFinanceTargetsConfigRepository';
+import { PrismaFinanceInflationIndexRepository } from '../adapters/prisma/PrismaFinanceInflationIndexRepository';
+import { GetFinanceTechnologyCosts } from '@application/use-cases/finance/GetFinanceTechnologyCosts';
+import { UpdateFinanceTechnologyCost } from '@application/use-cases/finance/UpdateFinanceTechnologyCost';
+import { GetFinancePlanPrices } from '@application/use-cases/finance/GetFinancePlanPrices';
+import { UpdateFinancePlanPrice } from '@application/use-cases/finance/UpdateFinancePlanPrice';
+import { GetFinanceTargets } from '@application/use-cases/finance/GetFinanceTargets';
+import { UpdateFinanceTargets } from '@application/use-cases/finance/UpdateFinanceTargets';
+import { ListFinanceInflationIndex } from '@application/use-cases/finance/ListFinanceInflationIndex';
+import { UpdateFinanceInflationIndex } from '@application/use-cases/finance/UpdateFinanceInflationIndex';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -3388,6 +3401,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // fix-wave-3 R10 made it proceed unlocked, instead of throwing, when the
   // lock stays busy for the whole retry budget.
   const financeForceRunLock = new PgAdvisoryLock();
+  // finance-growth Fase 2 — settables CRUD. Fresh Prisma repos (molde
+  // `PrismaPlanRepository`, instantiated per-mount-site elsewhere too — these
+  // adapters are stateless). `ContractTechnologyRepository`/`PlanRepository`
+  // drive the LEFT JOIN default-zero behavior (design.md "Get..." use cases).
+  const financeTechnologyCostRepo = new PrismaFinanceTechnologyCostRepository();
+  const financePlanPriceRepo = new PrismaFinancePlanPriceRepository();
+  const financeTargetsConfigRepo = new PrismaFinanceTargetsConfigRepository();
+  const financeInflationIndexRepo = new PrismaFinanceInflationIndexRepository();
+  // fix-wave-1 D — shared instances so `Get*` and `Update*` consult the SAME
+  // catalog repo (stateless adapters, but one instance keeps the composition
+  // window's intent obvious): `Update*` now 404s a technologyName/planCode
+  // absent from the catalog BEFORE upserting (see `FinanceTechnologyNotFoundError`).
+  const financeTechnologyCatalogRepo = new PrismaContractTechnologyRepository();
+  const financePlanCatalogRepo = new PrismaPlanRepository();
   app.use('/api/finance/growth', createFinanceGrowthRouter({
     auth: createAuthMiddleware(authAdapter, sessionRepo),
     requirePerm,
@@ -3404,6 +3431,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // fix-wave-2 R3 — `isEnabled()`, NOT `!= null` (see FinanceGrowthRouterDeps docblock).
     isSchedulerRunning: () => financeReceiptIngestScheduler?.isEnabled() ?? false,
     getPacingStatus: () => financeReceiptIngestScheduler?.status ?? FINANCE_RECEIPT_INGEST_IDLE_STATUS,
+    getTechnologyCosts: new GetFinanceTechnologyCosts(financeTechnologyCostRepo, financeTechnologyCatalogRepo),
+    updateTechnologyCost: new UpdateFinanceTechnologyCost(financeTechnologyCostRepo, financeTechnologyCatalogRepo),
+    getPlanPrices: new GetFinancePlanPrices(financePlanPriceRepo, financePlanCatalogRepo),
+    updatePlanPrice: new UpdateFinancePlanPrice(financePlanPriceRepo, financePlanCatalogRepo),
+    getTargets: new GetFinanceTargets(financeTargetsConfigRepo),
+    updateTargets: new UpdateFinanceTargets(financeTargetsConfigRepo),
+    listInflationIndex: new ListFinanceInflationIndex(financeInflationIndexRepo),
+    updateInflationIndex: new UpdateFinanceInflationIndex(financeInflationIndexRepo),
   }));
 
   // 404

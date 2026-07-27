@@ -260,68 +260,89 @@
 ## Fase 2 — Configuración (settables)
 
 ### Domain
-- [ ] 2.1 `src/domain/ports/FinanceTechnologyCostRepository.ts`: `list`/`getByTechnology`/`upsert`.
-- [ ] 2.2 `src/domain/ports/FinancePlanPriceRepository.ts`: `list`/`getByPlanCode`/`upsert`.
-- [ ] 2.3 `src/domain/ports/FinanceTargetsConfigRepository.ts`: `get`/`update`.
-- [ ] 2.4 `src/domain/ports/FinanceInflationIndexRepository.ts`: `list(fromYearMonth?, toYearMonth?)`/`upsert`.
+- [x] 2.1 `src/domain/ports/FinanceTechnologyCostRepository.ts`: `list`/`getByTechnology`/`upsert`.
+- [x] 2.2 `src/domain/ports/FinancePlanPriceRepository.ts`: `list`/`getByPlanCode`/`upsert`.
+- [x] 2.3 `src/domain/ports/FinanceTargetsConfigRepository.ts`: `get`/`update`.
+- [x] 2.4 `src/domain/ports/FinanceInflationIndexRepository.ts`: `list(fromYearMonth?, toYearMonth?)`/`upsert`.
 
 ### Test doubles
-- [ ] 2.5 `InMemoryFinanceTechnologyCostRepository.ts`, `InMemoryFinancePlanPriceRepository.ts`,
+- [x] 2.5 `InMemoryFinanceTechnologyCostRepository.ts`, `InMemoryFinancePlanPriceRepository.ts`,
   `InMemoryFinanceTargetsConfigRepository.ts`, `InMemoryFinanceInflationIndexRepository.ts`.
 
 ### `FinanceTechnologyCost` — CRUD
-- [ ] 2.6 RED: `GetFinanceTechnologyCosts` — LEFT JOIN contra `ContractTechnologyRepository.list()`, una
+- [x] 2.6 RED: `GetFinanceTechnologyCosts` — LEFT JOIN contra `ContractTechnologyRepository.list()`, una
   tecnología sin fila configurada aparece con todos los costos en `0` (no se omite).
-- [ ] 2.7 GREEN: `src/application/use-cases/finance/GetFinanceTechnologyCosts.ts`.
-- [ ] 2.8 RED: `UpdateFinanceTechnologyCost` rechaza `costoInstalacionArs < 0` sin persistir ningún campo
+- [x] 2.7 GREEN: `src/application/use-cases/finance/GetFinanceTechnologyCosts.ts`.
+- [x] 2.8 RED: `UpdateFinanceTechnologyCost` rechaza `costoInstalacionArs < 0` sin persistir ningún campo
   (ni los válidos del mismo payload).
-- [ ] 2.9 RED: `UpdateFinanceTechnologyCost` rechaza `comisionVentaPct > 100`.
-- [ ] 2.10 RED: payload completo y válido → upsert exitoso, `updatedByUserId` seteado desde el actor.
-- [ ] 2.11 GREEN: `src/application/use-cases/finance/UpdateFinanceTechnologyCost.ts`.
-- [ ] 2.12 RED (supertest): `GET /api/finance/growth/config/technology-costs` sin `finance:read` → `403`.
-- [ ] 2.13 RED (supertest): `PUT /api/finance/growth/config/technology-costs/:technologyName` sin
+- [x] 2.9 RED: `UpdateFinanceTechnologyCost` rechaza `comisionVentaPct > 100`.
+- [x] 2.10 RED: payload completo y válido → upsert exitoso, `updatedByUserId` seteado desde el actor.
+- [x] 2.11 GREEN: `src/application/use-cases/finance/UpdateFinanceTechnologyCost.ts`.
+- [x] 2.12 RED (supertest): `GET /api/finance/growth/config/technology-costs` sin `finance:read` → `403`.
+- [x] 2.13 RED (supertest): `PUT /api/finance/growth/config/technology-costs/:technologyName` sin
   `finance:manage_costs` → `403`, sin cambio; con permiso y payload inválido → `400` sin cambio; con
   payload válido → `200` y un `GET` posterior refleja el cambio.
-- [ ] 2.14 GREEN: rutas montadas.
+- [x] 2.14 GREEN: rutas montadas.
 
 ### `FinancePlanPrice` — CRUD
-- [ ] 2.15 RED: `GetFinancePlanPrices` — LEFT JOIN contra `PlanRepository.list()`, plan sin precio
+- [x] 2.15 RED: `GetFinancePlanPrices` — LEFT JOIN contra `PlanRepository.list()`, plan sin precio
   configurado aparece con `estimatedMonthlyPrice: 0`.
-- [ ] 2.16 GREEN: `src/application/use-cases/finance/GetFinancePlanPrices.ts`.
-- [ ] 2.17 RED: `UpdateFinancePlanPrice` rechaza valor negativo sin persistir.
-- [ ] 2.18 GREEN: `src/application/use-cases/finance/UpdateFinancePlanPrice.ts`.
-- [ ] 2.19 RED (supertest): `GET`/`PUT /api/finance/growth/config/plan-prices[/:planCode]` — mismos 2
+- [x] 2.16 GREEN: `src/application/use-cases/finance/GetFinancePlanPrices.ts`.
+- [x] 2.17 RED: `UpdateFinancePlanPrice` rechaza valor negativo sin persistir.
+- [x] 2.18 GREEN: `src/application/use-cases/finance/UpdateFinancePlanPrice.ts`.
+- [x] 2.19 RED (supertest): `GET`/`PUT /api/finance/growth/config/plan-prices[/:planCode]` — mismos 2
   caminos de permiso que 2.12/2.13, adaptados a `finance:manage_costs`.
-- [ ] 2.20 GREEN: rutas montadas.
+- [x] 2.20 GREEN: rutas montadas.
 
 ### `FinanceTargetsConfig` — singleton
-- [ ] 2.21 RED: `GetFinanceTargets` devuelve los defaults seedeados si nunca se editó.
-- [ ] 2.22 GREEN: `src/application/use-cases/finance/GetFinanceTargets.ts`.
-- [ ] 2.23 RED: `UpdateFinanceTargets` rechaza `churnTargetPct` fuera de `0-100`, o `inflationBaseYearMonth`
+- [x] 2.21 RED: `GetFinanceTargets` devuelve los defaults seedeados si nunca se editó.
+- [x] 2.22 GREEN: `src/application/use-cases/finance/GetFinanceTargets.ts`.
+- [x] 2.23 RED: `UpdateFinanceTargets` rechaza `churnTargetPct` fuera de `0-100`, o `inflationBaseYearMonth`
   con formato inválido (ni `""` ni `YYYY-MM`), sin actualización parcial.
-- [ ] 2.24 RED: payload completo válido → persiste los 4 campos.
-- [ ] 2.25 GREEN: `src/application/use-cases/finance/UpdateFinanceTargets.ts`.
-- [ ] 2.26 RED (supertest): `GET`/`PUT /api/finance/growth/config/targets` con guard `finance:read`/
+- [x] 2.24 RED: payload completo válido → persiste los 4 campos.
+- [x] 2.25 GREEN: `src/application/use-cases/finance/UpdateFinanceTargets.ts`.
+- [x] 2.26 RED (supertest): `GET`/`PUT /api/finance/growth/config/targets` con guard `finance:read`/
   `finance:manage_targets` respectivamente (caminos con/sin permiso, molde 2.13).
-- [ ] 2.27 GREEN: rutas montadas.
+- [x] 2.27 GREEN: rutas montadas.
 
 ### `FinanceInflationIndex` — serie mensual
-- [ ] 2.28 RED: `ListFinanceInflationIndex` filtra por rango `from`/`to`, ordenado ascendente por `yearMonth`.
-- [ ] 2.29 GREEN: `src/application/use-cases/finance/ListFinanceInflationIndex.ts`.
-- [ ] 2.30 RED: `UpdateFinanceInflationIndex` rechaza `yearMonth` con formato inválido en el path, y
+- [x] 2.28 RED: `ListFinanceInflationIndex` filtra por rango `from`/`to`, ordenado ascendente por `yearMonth`.
+- [x] 2.29 GREEN: `src/application/use-cases/finance/ListFinanceInflationIndex.ts`.
+- [x] 2.30 RED: `UpdateFinanceInflationIndex` rechaza `yearMonth` con formato inválido en el path, y
   `monthlyRatePct` no numérico, sin persistir.
-- [ ] 2.31 GREEN: `src/application/use-cases/finance/UpdateFinanceInflationIndex.ts`.
-- [ ] 2.32 RED (supertest): `GET`/`PUT /api/finance/growth/config/inflation[/:yearMonth]` con guard
+- [x] 2.31 GREEN: `src/application/use-cases/finance/UpdateFinanceInflationIndex.ts`.
+- [x] 2.32 RED (supertest): `GET`/`PUT /api/finance/growth/config/inflation[/:yearMonth]` con guard
   `finance:read`/`finance:manage_inflation` (acción separada de `manage_costs` — test explícito de que
   `manage_costs` SOLO no alcanza para editar inflación).
-- [ ] 2.33 GREEN: rutas montadas.
+- [x] 2.33 GREEN: rutas montadas.
 
 ### Schema + migración
-- [ ] 2.34 `prisma/schema.prisma`: `FinanceTechnologyCost`, `FinancePlanPrice`, `FinanceTargetsConfig`,
+- [x] 2.34 `prisma/schema.prisma`: `FinanceTechnologyCost`, `FinancePlanPrice`, `FinanceTargetsConfig`,
   `FinanceInflationIndex`.
-- [ ] 2.35 Migración aditiva `prisma/migrations/*_finance_growth_config/`: crea las 4 tablas + seed
+- [x] 2.35 Migración aditiva `prisma/migrations/*_finance_growth_config/`: crea las 4 tablas + seed
   `FinanceTargetsConfig{id:'singleton'}` (`ON CONFLICT DO NOTHING`). Sin `BEGIN`/`COMMIT` manual.
-- [ ] 2.36 `Prisma{FinanceTechnologyCost,FinancePlanPrice,FinanceTargetsConfig,FinanceInflationIndex}Repository.ts`.
+- [x] 2.36 `Prisma{FinanceTechnologyCost,FinancePlanPrice,FinanceTargetsConfig,FinanceInflationIndex}Repository.ts`.
+
+### fix-wave-1 (2026-07-26) — 2 revisores adversariales (uno con mutation testing real), 4 🟡, 0 🔴
+- [x] D — `UpdateFinanceTechnologyCost`/`UpdateFinancePlanPrice` ahora chequean existencia contra el catálogo
+  (`ContractTechnologyRepository.getByName`/`PlanRepository.findByCode`) ANTES de upsertear → `404
+  FINANCE_TECHNOLOGY_NOT_FOUND`/`FINANCE_PLAN_NOT_FOUND` si no existe, en vez de crear un huérfano invisible
+  para el `GET` (LEFT JOIN driveado por el catálogo). Upsert usa el nombre/código CANÓNICO del catálogo.
+  Huérfanos pre-existentes y la falta de propagación de un rename documentados como deuda (f)/(f bis) arriba.
+- [x] C — `financeGrowth.routes.test.ts`: nuevas assertions sobre `updatedByUserId` vía el repo in-memory en
+  los 2 endpoints con actor (cierra mutación M3, verificado reproduciendo la mutación y viéndola fallar).
+- [x] B — `GET /config/inflation` valida `from`/`to` con `isValidYearMonth` (400 si inválidos) + test con
+  query string real que verifica el filtro (cierra mutación M2, verificado igual que C).
+- [x] A — cotas de precisión/escala derivadas del schema (`Decimal(12,2)`/`Decimal(6,3)`/`Decimal(5,2)`/`Int`
+  32-bit) en los 4 `Update*`, vía `src/application/use-cases/finance/financeDecimal.ts`
+  (`assertDecimalBounds`/`assertInt32Range`/`roundToScale`). El redondeo explícito a la escala de columna
+  ANTES de persistir hace que el doble in-memory y Prisma/Postgres coincidan en el valor observable.
+- [x] LOW E — `GetFinancePlanPrices` ordena por `planCode` (natural sort) — el port no garantiza orden.
+- [x] LOW F — `PUT /config/plan-prices/:planCode` incluye `planName` en la respuesta (gratis: el use case ya
+  lo resuelve para el guard D).
+- [x] LOW G — test de payload parcial en `PUT /config/targets` (protege el invariante de reemplazo total).
+- [ ] LOW H/I y el hueco estructural de cobertura de los 4 adapters Prisma: documentados como deuda, no
+  cerrados esta ronda (ver "Deuda declarada, fix-wave-1 (Fase 2)" en design.md).
 
 ## Fase 3 — Motor de métricas (snapshots nocturnos)
 
