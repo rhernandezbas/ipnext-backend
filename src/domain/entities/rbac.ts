@@ -95,6 +95,13 @@ export const KNOWN_ACTIONS = [
   'bulk_inactive',
   'bulk_baja',
   'bulk_numbers',
+  // iclass-gps-audit — ubicación de técnicos. DOS acciones SEPARADAS a propósito:
+  // 'location_read'  → mapa en vivo (despacho/NOC lo necesita para operar).
+  // 'location_audit' → auditoría histórica por OS (sólo supervisión).
+  // El uso operativo NO debe arrastrar la capacidad de auditar el historial
+  // completo de una persona; por eso no alcanza con una sola acción.
+  'location_read',
+  'location_audit',
   // finance-growth Fase 1 — módulo `finance` (RBAC dos capas, separado de
   // `billing`). `sync` YA existe (iclass.sync) y se REUSA para
   // `finance:sync` — no se duplica.
@@ -165,6 +172,10 @@ export const RBAC_MODULES = [
   // internal-news — tablón interno del equipo. Usa las base actions read/manage
   // sin agregar action codes nuevos (mismo criterio que 'uisp').
   'news',
+  // iclass-gps-audit — ubicación y auditoría de presencia de las cuadrillas.
+  // Módulo propio (no cuelga de 'iclass') porque el dato es de PERSONAS y su
+  // visibilidad se decide aparte de la integración que lo provee.
+  'technicians',
   // finance-growth Fase 1 — "Finanzas — Crecimiento" (unit economics de un ISP,
   // sobre cobranza real GR). DELIBERADAMENTE separado de `billing` (cementerio
   // Splynx) — ver design.md Decision 6.

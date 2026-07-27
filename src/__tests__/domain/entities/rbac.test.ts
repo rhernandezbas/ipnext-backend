@@ -29,14 +29,24 @@ describe('RBAC_MODULES constant', () => {
   // propio módulo sobre una base de 35. Mergeados, la realidad son 37 — verificado contando
   // las entradas reales de `RBAC_MODULES` (sin duplicados). Se conservan las DOS aserciones
   // de módulo: quedarse con una sola habría dejado el otro módulo sin pin.
-  it('contains exactly 37 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance)', () => {
-    expect(RBAC_MODULES).toHaveLength(37);
+  //
+  // Resolución de merge (iclass-gps-audit ⨯ main, 2026-07-27): mismo patrón otra vez.
+  // `technicians` se construyó en paralelo sobre la misma base de 35 y afirmaba 36.
+  // Unidos los tres módulos (assistant + finance + technicians) sobre esa base, el
+  // conteo REAL es 38 — verificado contando las entradas del array, no sumando.
+  // Se conservan las TRES aserciones `toContain`: cada módulo mantiene su propio pin.
+  it('contains exactly 38 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance + 1 technicians)', () => {
+    expect(RBAC_MODULES).toHaveLength(38);
   });
 
   it('includes the assistant module (ai-assistant-multiagent)', () => {
     // Módulo PROPIO y no una sub-acción de `messaging`: responder un WhatsApp y configurar
     // un bot que responde solo, a escala y sin supervisión, son responsabilidades distintas.
     expect(RBAC_MODULES).toContain('assistant');
+  });
+
+  it('includes technicians (iclass-gps-audit — ubicación y auditoría de presencia de cuadrillas)', () => {
+    expect(RBAC_MODULES).toContain('technicians');
   });
 
   it('includes all 14 original module codes', () => {
@@ -159,14 +169,26 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 56 valid action codes (53 prior + 3 finance-growth Fase 1: manage_costs/manage_targets/manage_inflation — `sync` already existed, reused)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(56);
+  // Resolución de merge (iclass-gps-audit ⨯ main, 2026-07-27): finance-growth sumó 3
+  // acciones (manage_costs/manage_targets/manage_inflation) y iclass-gps-audit sumó 2
+  // (location_read/location_audit), ambos sobre la misma base de 53. Unidas las cinco,
+  // el conteo REAL es 58 — verificado contando el array, sin duplicados.
+  it('contains exactly 58 valid action codes (53 prior + 3 finance-growth Fase 1: manage_costs/manage_targets/manage_inflation — `sync` already existed, reused — + 2 iclass-gps-audit: location_read/location_audit)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(58);
   });
 
   it('includes the 3 finance-growth Fase 1 sub-actions (manage_costs/manage_targets/manage_inflation)', () => {
     expect(KNOWN_ACTIONS).toContain('manage_costs');
     expect(KNOWN_ACTIONS).toContain('manage_targets');
     expect(KNOWN_ACTIONS).toContain('manage_inflation');
+  });
+
+  it('includes location_read and location_audit as SEPARATE actions (iclass-gps-audit)', () => {
+    // Son dos a propósito: el mapa en vivo (despacho) NO debe arrastrar la auditoría
+    // histórica de una persona. Si alguien las colapsa en una sola, este test cae.
+    expect(KNOWN_ACTIONS).toContain('location_read');
+    expect(KNOWN_ACTIONS).toContain('location_audit');
+    expect(KNOWN_ACTIONS.filter((a) => a.startsWith('location_'))).toHaveLength(2);
   });
 
   it("includes bulk (messaging-bulk F2 — disparar/ver campañas masivas)", () => {

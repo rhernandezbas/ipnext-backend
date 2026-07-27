@@ -14,6 +14,7 @@ import { bootstrapRadiusAutoCure } from './infrastructure/scheduling/bootstrapRa
 import { bootstrapChatMediaDownload } from './infrastructure/scheduling/bootstrapChatMediaDownload';
 import { bootstrapAutoProvisionFiber } from './infrastructure/scheduling/bootstrapAutoProvisionFiber';
 import { bootstrapSnoozeReactivation } from './infrastructure/scheduling/bootstrapSnoozeReactivation';
+import { bootstrapTeamLocationIngest } from './infrastructure/scheduling/bootstrapTeamLocationIngest';
 import { bootstrapFinanceReceiptsIngest } from './infrastructure/scheduling/bootstrapFinanceReceiptsIngest';
 import { bootstrapFinanceSnapshotJob } from './infrastructure/scheduling/bootstrapFinanceSnapshotJob';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
@@ -99,6 +100,13 @@ void (async () => {
   void bootstrapRadiusAutoCure()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[radius-auto-cure] bootstrap failed (server kept alive):', (err as Error).message));
+  // iclass-gps-audit — ingest del rastro GPS de cuadrillas. Opt-in (envs ICLASS_*),
+  // DARK por default (flag 'iclass-gps-ingest'). Cada 6 h: IClass retiene ~30 días,
+  // así que aun con varias corridas fallidas seguidas sobra margen antes de perder dato.
+  void bootstrapTeamLocationIngest()
+    .then((scheduler) => scheduler?.start())
+    .catch((err) => console.error('[gps-ingest] bootstrap failed (server kept alive):', (err as Error).message));
+
   // messaging-inbox-v2-media (F1.5 fase A, Tanda 1) — reintento de descarga de media
   // entrante — opt-in, dark by default (flag 'chat-media-download').
   void bootstrapChatMediaDownload()
