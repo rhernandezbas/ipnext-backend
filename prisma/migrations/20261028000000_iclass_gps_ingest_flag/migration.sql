@@ -1,0 +1,31 @@
+-- Feature flag: iclass-gps-ingest (default OFF — DARK).
+--
+-- El change `iclass-gps-audit` (20261025000000_team_location_gps_audit +
+-- 20261025000100_technicians_location_permissions) se mergeó y deployó SIN sembrar la
+-- fila del flag. Verificado en producción: la tabla FeatureFlag tiene 27 filas y
+-- 'iclass-gps-ingest' no es ninguna de ellas, así que la feature quedó IMPOSIBLE de
+-- activar:
+--   * SetFeatureFlag hace `repo.get(key)` y tira FeatureFlagNotFoundError si no existe
+--     (es un update, NO un upsert),
+--   * el errorHandler mapea FLAG_NOT_FOUND a 404,
+--   * featureFlags.routes sólo expone GET / , GET /:key y PATCH /:key — no hay POST.
+-- Resultado para el operador: clickea la card, confirma, y recibe un 404 con el cartel
+-- "No se pudo cambiar el estado. Reintentá en unos segundos". Reintentar nunca funciona.
+-- La fila sólo puede nacer desde una migración.
+--
+-- Se siembra en FALSE a propósito: TeamLocationIngestScheduler re-lee el flag EN CADA
+-- tick, así que sembrarlo apagado no cambia ni un byte del comportamiento observable
+-- (el ingest contra IClass sigue dormido). Prenderlo es la decisión del go-live, no del
+-- deploy.
+--
+-- Mismo patrón exacto que los flags hermanos:
+--   20260825000000_pppoe_auto_move_flag        ('pppoe-auto-move')
+--   20260917000100_radius_auto_cure_flag       ('radius-auto-cure')
+--   20260924000000_fiber_auto_watcher          ('fiber-auto-provision-watcher')
+--   20261023000000_ai_assistant_multiagent     ('ai-assistant-enabled')
+--
+-- Idempotente: ON CONFLICT DO NOTHING sobre el PK `key`. Sin BEGIN/COMMIT explícito
+-- (Prisma envuelve cada migración en su propia transacción).
+INSERT INTO "FeatureFlag" ("key", "enabled", "updatedAt")
+VALUES ('iclass-gps-ingest', false, NOW())
+ON CONFLICT DO NOTHING;
