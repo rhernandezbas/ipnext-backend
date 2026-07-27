@@ -25,6 +25,8 @@ import { ClienteServicioResolver } from '@infrastructure/adapters/assistant/Clie
 import { OsAbiertasResolver } from '@infrastructure/adapters/assistant/OsAbiertasResolver';
 import { ChatwootAssistantConversationGateway } from '@infrastructure/adapters/assistant/ChatwootAssistantConversationGateway';
 import { HttpDeepSeekAssistant } from '@infrastructure/adapters/deepseek/HttpDeepSeekAssistant';
+import { PrismaAssistantProviderConfigRepository } from '@infrastructure/adapters/prisma/PrismaAssistantProviderConfigRepository';
+import { resolveProviderCredentials } from '@domain/ports/AssistantProviderConfigRepository';
 
 export interface ComposeAssistantEngineDeps {
   conversationRepo: ConversationRepository;
@@ -56,6 +58,7 @@ export interface ComposeAssistantEngineDeps {
  */
 export function composeAssistantEngine(deps: ComposeAssistantEngineDeps): ReplyWithAssistant {
   const catalogRepo = new PrismaAssistantCatalogRepository();
+  const providerRepo = new PrismaAssistantProviderConfigRepository();
 
   const registry = new AssistantDataSourceRegistryImpl([
     new ClienteSaldoResolver(deps.customerRepo, deps.refreshBalance),
@@ -75,6 +78,13 @@ export function composeAssistantEngine(deps: ComposeAssistantEngineDeps): ReplyW
       baseUrl: config.assistant.baseUrl,
       apiKey: config.assistant.apiKey,
       timeoutMs: config.assistant.timeoutMs,
+      // Credenciales POR INVOCACIÓN: la DB pisa al env. Rotar la key desde la pantalla toma
+      // efecto en el próximo mensaje, no en el próximo deploy.
+      resolveCredentials: async () =>
+        resolveProviderCredentials(await providerRepo.get(), {
+          baseUrl: config.assistant.baseUrl,
+          apiKey: config.assistant.apiKey,
+        }),
     }),
     new ChatwootAssistantConversationGateway(
       deps.conversationRepo,

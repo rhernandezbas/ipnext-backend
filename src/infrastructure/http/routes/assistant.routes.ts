@@ -8,6 +8,9 @@ import type { UpdateAssistantIntent } from '@application/use-cases/assistant/Upd
 import type { DeleteAssistantIntent } from '@application/use-cases/assistant/DeleteAssistantIntent';
 import type { ListAssistantCatalogs } from '@application/use-cases/assistant/ListAssistantCatalogs';
 import type { ListAssistantRuns } from '@application/use-cases/assistant/ListAssistantRuns';
+import type { GetAssistantProviderConfig } from '@application/use-cases/assistant/GetAssistantProviderConfig';
+import type { UpdateAssistantProviderConfig } from '@application/use-cases/assistant/UpdateAssistantProviderConfig';
+import type { TestAssistantConnection } from '@application/use-cases/assistant/TestAssistantConnection';
 import type { PermissionAction, RbacModuleCode } from '@domain/entities/rbac';
 
 /** Factory que expone `app.ts` (inyección DIP-limpia, molde `alerts.routes`). */
@@ -22,6 +25,9 @@ export interface AssistantRouterDeps {
   deleteIntent: DeleteAssistantIntent;
   listCatalogs: ListAssistantCatalogs;
   listRuns: ListAssistantRuns;
+  getProviderConfig: GetAssistantProviderConfig;
+  updateProviderConfig: UpdateAssistantProviderConfig;
+  testConnection: TestAssistantConnection;
   auth: RequestHandler;
   requirePerm: RequirePerm;
 }
@@ -96,6 +102,17 @@ const ListRunsQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 });
 
+/**
+ * Credenciales del proveedor. `apiKey` es OPCIONAL y un valor vacío PRESERVA la guardada —
+ * sin esa regla, editar la baseUrl desde el formulario guardaría la máscara como key.
+ * Borrarla de verdad requiere `clearApiKey: true`, un acto explícito.
+ */
+const UpdateProviderSchema = z.object({
+  baseUrl: z.string().url().or(z.literal('')).optional(),
+  apiKey: z.string().max(500).optional(),
+  clearApiKey: z.boolean().optional(),
+});
+
 /** Envuelve un handler async para que un rejection llegue al errorHandler y no cuelgue. */
 function asyncHandler(
   fn: (req: Request, res: Response) => Promise<void>,
@@ -153,6 +170,44 @@ export function createAssistantRouter(deps: AssistantRouterDeps): Router {
       const query = parseOr400(ListRunsQuerySchema, req.query, res);
       if (!query) return;
       res.json({ data: await deps.listRuns.execute(query) });
+    }),
+  );
+
+  // ── Proveedor de IA — credenciales (ENMASCARADAS al leer) ────────────────
+  router.get(
+    '/provider',
+    deps.auth,
+    readPerm,
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await deps.getProviderConfig.execute() });
+    }),
+  );
+
+  router.put(
+    '/provider',
+    deps.auth,
+    managePerm,
+    asyncHandler(async (req, res) => {
+      const body = parseOr400(UpdateProviderSchema, req.body, res);
+      if (!body) return;
+      res.json({ data: await deps.updateProviderConfig.execute(body) });
+    }),
+  );
+
+  /**
+   * "Probar conexión" — la llamada al proveedor sale DEL SERVIDOR. El front sólo aprieta el
+   * botón y recibe ok/error; la credencial nunca baja al navegador.
+   *
+   * Responde 200 incluso cuando la prueba falla: el fallo es el RESULTADO de la operación, no
+   * un error del request. Un 5xx acá haría que el FE lo trate como "se rompió la app" en vez
+   * de mostrar "la key no anda".
+   */
+  router.post(
+    '/provider/test',
+    deps.auth,
+    managePerm,
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await deps.testConnection.execute() });
     }),
   );
 

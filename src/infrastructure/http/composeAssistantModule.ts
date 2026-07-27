@@ -10,6 +10,12 @@ import { UpdateAssistantIntent } from '@application/use-cases/assistant/UpdateAs
 import { DeleteAssistantIntent } from '@application/use-cases/assistant/DeleteAssistantIntent';
 import { ListAssistantCatalogs } from '@application/use-cases/assistant/ListAssistantCatalogs';
 import { ListAssistantRuns } from '@application/use-cases/assistant/ListAssistantRuns';
+import { GetAssistantProviderConfig } from '@application/use-cases/assistant/GetAssistantProviderConfig';
+import { UpdateAssistantProviderConfig } from '@application/use-cases/assistant/UpdateAssistantProviderConfig';
+import { TestAssistantConnection } from '@application/use-cases/assistant/TestAssistantConnection';
+import { PrismaAssistantProviderConfigRepository } from '@infrastructure/adapters/prisma/PrismaAssistantProviderConfigRepository';
+import { HttpDeepSeekAssistant } from '@infrastructure/adapters/deepseek/HttpDeepSeekAssistant';
+import { config } from '@infrastructure/config';
 import { PrismaAssistantRunRepository } from '@infrastructure/adapters/prisma/PrismaAssistantRunRepository';
 import {
   PrismaAssistantIntentRepository,
@@ -46,6 +52,8 @@ export function composeAssistantModule(deps: ComposeAssistantModuleDeps): Router
   // EVAL-2 — gate REAL (Batch 8): consulta las corridas persistidas. Reemplaza al
   // `NoEvalRecordedGate`, que era el placeholder fail-closed mientras el eval no existía.
   const evalGate = new PrismaAssistantEvalRepository();
+  const providerRepo = new PrismaAssistantProviderConfigRepository();
+  const envCredentials = { baseUrl: config.assistant.baseUrl, apiKey: config.assistant.apiKey };
 
   return createAssistantRouter({
     createProfile: new CreateAssistantProfile(profileRepo),
@@ -56,6 +64,21 @@ export function composeAssistantModule(deps: ComposeAssistantModuleDeps): Router
     deleteIntent: new DeleteAssistantIntent(intentRepo),
     listCatalogs: new ListAssistantCatalogs(catalogRepo),
     listRuns: new ListAssistantRuns(new PrismaAssistantRunRepository()),
+    getProviderConfig: new GetAssistantProviderConfig(providerRepo, envCredentials),
+    updateProviderConfig: new UpdateAssistantProviderConfig(providerRepo, envCredentials),
+    // La prueba construye un adapter EFÍMERO con las credenciales resueltas: verifica lo que
+    // realmente se va a usar, no un ping inventado.
+    testConnection: new TestAssistantConnection(
+      providerRepo,
+      envCredentials,
+      (credentials) =>
+        new HttpDeepSeekAssistant({
+          baseUrl: credentials.baseUrl,
+          apiKey: credentials.apiKey,
+          timeoutMs: config.assistant.timeoutMs,
+        }),
+      'deepseek-chat',
+    ),
     auth: createAuthMiddleware(deps.authAdapter, deps.sessionRepo),
     requirePerm: deps.requirePerm,
   });

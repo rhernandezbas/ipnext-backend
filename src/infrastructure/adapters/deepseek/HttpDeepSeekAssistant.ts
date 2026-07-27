@@ -36,6 +36,15 @@ export interface HttpDeepSeekAssistantOptions {
   timeoutMs?: number;
   /** Inyectable para tests: nunca se pega a la API real desde la suite. */
   client?: AxiosInstance;
+  /**
+   * Resolución de credenciales POR INVOCACIÓN (config editable en runtime). Cuando está
+   * presente gana sobre `baseUrl`/`apiKey` del constructor.
+   *
+   * Es por invocación y NO cacheado al boot a propósito: si el operador rota la key desde la
+   * pantalla de configuración, tiene que tomar efecto en el próximo mensaje — no en el
+   * próximo deploy. Mismo criterio que el flag `ai-assistant-enabled`.
+   */
+  resolveCredentials?: () => Promise<{ baseUrl: string; apiKey: string }>;
 }
 
 interface ChatCompletionMessage {
@@ -46,9 +55,11 @@ interface ChatCompletionMessage {
 export class HttpDeepSeekAssistant implements AssistantRuntime {
   private readonly http: AxiosInstance;
   private readonly apiKey: string;
+  private readonly resolveCredentials?: () => Promise<{ baseUrl: string; apiKey: string }>;
 
   constructor(options: HttpDeepSeekAssistantOptions) {
     this.apiKey = options.apiKey;
+    this.resolveCredentials = options.resolveCredentials;
     this.http =
       options.client ??
       axios.create({
@@ -59,7 +70,8 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
   }
 
   async classify(request: AssistantClassifyRequest): Promise<AssistantClassifyResult> {
-    if (!this.apiKey) return { kind: 'unavailable' };
+    const apiKey = await this.currentApiKey();
+    if (!apiKey) return { kind: 'unavailable' };
     if (request.candidates.length === 0) {
       // Perfil sin intenciones habilitadas: no hay nada que clasificar. Se ahorra la llamada
       // y se trata como charla — saludar no requiere que existan temas configurados.
@@ -85,7 +97,7 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
       'Respondé ÚNICAMENTE con la clave, sin explicar y sin agregar nada más.',
     ].join('\n');
 
-    const raw = await this.complete(request.model, system, request.thread, request.timeoutMs, 32);
+    const raw = await this.complete(request.model, system, request.thread, request.timeoutMs, 32, apiKey);
     if (raw === null) return { kind: 'unavailable' };
 
     const answer = raw.trim();
@@ -99,7 +111,8 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
   }
 
   async generate(request: AssistantGenerateRequest): Promise<AssistantGenerateResult> {
-    if (!this.apiKey) return { kind: 'unavailable' };
+    const apiKey = await this.currentApiKey();
+    if (!apiKey) return { kind: 'unavailable' };
 
     const isChatMode = request.facts === null;
 
@@ -127,7 +140,7 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
       .filter((line) => line !== '')
       .join('\n');
 
-    const raw = await this.complete(request.model, system, request.thread, request.timeoutMs, 600);
+    const raw = await this.complete(request.model, system, request.thread, request.timeoutMs, 600, apiKey);
     if (raw === null) return { kind: 'unavailable' };
 
     const text = raw.trim();
@@ -136,6 +149,20 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
     if (text.includes(CANNOT_ANSWER_SENTINEL)) return { kind: 'cannot_answer' };
 
     return { kind: 'text', text };
+  }
+
+  /**
+   * Credencial vigente. Con `resolveCredentials` se relee en CADA llamada, así una rotación
+   * desde la UI toma efecto en el próximo mensaje. Si la resolución falla, se degrada a
+   * "sin credencial" (⇒ `unavailable`): jamás lanza (RUN-1).
+   */
+  private async currentApiKey(): Promise<string> {
+    if (!this.resolveCredentials) return this.apiKey;
+    try {
+      return (await this.resolveCredentials()).apiKey;
+    } catch {
+      return '';
+    }
   }
 
   /**
@@ -148,6 +175,7 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
     thread: AssistantThreadTurn[],
     timeoutMs: number,
     maxTokens: number,
+    apiKey: string,
   ): Promise<string | null> {
     const messages: ChatCompletionMessage[] = [
       { role: 'system', content: system },
@@ -164,7 +192,7 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
         { model, messages, max_tokens: maxTokens, stream: false },
         {
           timeout: timeoutMs,
-          headers: { Authorization: `Bearer ${this.apiKey}` },
+          headers: { Authorization: `Bearer ${apiKey}` },
         },
       );
 

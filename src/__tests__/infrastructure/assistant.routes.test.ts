@@ -10,6 +10,10 @@ import { UpdateAssistantIntent } from '@application/use-cases/assistant/UpdateAs
 import { DeleteAssistantIntent } from '@application/use-cases/assistant/DeleteAssistantIntent';
 import { ListAssistantCatalogs } from '@application/use-cases/assistant/ListAssistantCatalogs';
 import { ListAssistantRuns } from '@application/use-cases/assistant/ListAssistantRuns';
+import { GetAssistantProviderConfig } from '@application/use-cases/assistant/GetAssistantProviderConfig';
+import { UpdateAssistantProviderConfig } from '@application/use-cases/assistant/UpdateAssistantProviderConfig';
+import { TestAssistantConnection } from '@application/use-cases/assistant/TestAssistantConnection';
+import { InMemoryAssistantProviderConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryAssistantProviderConfigRepository';
 import {
   InMemoryAssistantIntentRepository,
   InMemoryAssistantProfileRepository,
@@ -32,6 +36,8 @@ function buildApp(opts: { hasEval?: boolean; canManage?: boolean } = {}) {
   const catalog = new InMemoryAssistantCatalogRepository();
   const runs = new InMemoryAssistantRunRepository();
   const evalGate: AssistantEvalGate = { hasRecordedRun: async () => opts.hasEval ?? false };
+  const provider = new InMemoryAssistantProviderConfigRepository();
+  const envCredentials = { baseUrl: 'https://api.deepseek.com', apiKey: '' };
 
   const app = express();
   app.use(express.json());
@@ -46,6 +52,17 @@ function buildApp(opts: { hasEval?: boolean; canManage?: boolean } = {}) {
       deleteIntent: new DeleteAssistantIntent(intents),
       listCatalogs: new ListAssistantCatalogs(catalog),
       listRuns: new ListAssistantRuns(runs),
+      getProviderConfig: new GetAssistantProviderConfig(provider, envCredentials),
+      updateProviderConfig: new UpdateAssistantProviderConfig(provider, envCredentials),
+      testConnection: new TestAssistantConnection(
+        provider,
+        envCredentials,
+        () => ({
+          classify: async () => ({ kind: 'unavailable' }),
+          generate: async () => ({ kind: 'text', text: 'OK' }),
+        }),
+        'deepseek-chat',
+      ),
       auth: (_req, _res, next) => next(),
       requirePerm: (_module, action) => (_req, res, next) => {
         // Simula el guard granular: `manage` se puede denegar para probar las dos capas.
@@ -59,7 +76,7 @@ function buildApp(opts: { hasEval?: boolean; canManage?: boolean } = {}) {
   );
   app.use(errorHandler);
 
-  return { app, profiles, intents, runs };
+  return { app, profiles, intents, runs, provider };
 }
 
 describe('GET /api/assistant/catalogs', () => {
@@ -302,5 +319,105 @@ describe('GET /api/assistant/runs — OBS-1', () => {
 
     expect(res.body.data.items[0].profileId).toBeUndefined();
     expect(JSON.stringify(res.body)).not.toContain('p1');
+  });
+});
+
+describe('/api/assistant/provider — la API key NUNCA baja al navegador', () => {
+  it('GET sin credencial cargada avisa que no hay ninguna', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app).get('/api/assistant/provider').expect(200);
+
+    expect(res.body.data.hasApiKey).toBe(false);
+    expect(res.body.data.source).toBe('none');
+  });
+
+  it('tras guardar una key, el GET devuelve MÁSCARA, jamás la key', async () => {
+    const { app } = buildApp();
+    await request(app)
+      .put('/api/assistant/provider')
+      .send({ apiKey: 'sk-super-secreta-9876' })
+      .expect(200);
+
+    const res = await request(app).get('/api/assistant/provider').expect(200);
+
+    // La prueba dura: el body COMPLETO no contiene la key.
+    expect(JSON.stringify(res.body)).not.toContain('sk-super-secreta-9876');
+    expect(res.body.data.apiKeyLast4).toBe('9876');
+    expect(res.body.data.source).toBe('db');
+  });
+
+  it('ni siquiera el response del PUT repite la key que acabás de mandar', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app)
+      .put('/api/assistant/provider')
+      .send({ apiKey: 'sk-super-secreta-9876' })
+      .expect(200);
+
+    expect(JSON.stringify(res.body)).not.toContain('sk-super-secreta-9876');
+  });
+
+  it('editar la baseUrl NO borra la key guardada', async () => {
+    const { app } = buildApp();
+    await request(app).put('/api/assistant/provider').send({ apiKey: 'sk-guardada-4321' });
+
+    await request(app)
+      .put('/api/assistant/provider')
+      .send({ baseUrl: 'https://otro.host' })
+      .expect(200);
+
+    const res = await request(app).get('/api/assistant/provider');
+    expect(res.body.data.apiKeyLast4).toBe('4321');
+  });
+
+  it('borrar la key requiere clearApiKey explícito', async () => {
+    const { app } = buildApp();
+    await request(app).put('/api/assistant/provider').send({ apiKey: 'sk-guardada-4321' });
+
+    await request(app).put('/api/assistant/provider').send({ clearApiKey: true }).expect(200);
+
+    const res = await request(app).get('/api/assistant/provider');
+    expect(res.body.data.hasApiKey).toBe(false);
+  });
+
+  it('una baseUrl inválida ⇒ 400', async () => {
+    const { app } = buildApp();
+
+    await request(app).put('/api/assistant/provider').send({ baseUrl: 'no-es-url' }).expect(400);
+  });
+
+  it('RBAC: guardar credenciales exige assistant.manage', async () => {
+    const { app } = buildApp({ canManage: false });
+
+    await request(app).put('/api/assistant/provider').send({ apiKey: 'sk-x' }).expect(403);
+  });
+});
+
+describe('/api/assistant/provider/test — la prueba corre en el servidor', () => {
+  it('sin credencial responde 200 con ok:false y un mensaje accionable', async () => {
+    // 200 y no 5xx: el fallo es el RESULTADO de la prueba, no un error del request.
+    const { app } = buildApp();
+
+    const res = await request(app).post('/api/assistant/provider/test').expect(200);
+
+    expect(res.body.data.ok).toBe(false);
+    expect(res.body.data.detail).toMatch(/API key/);
+  });
+
+  it('con credencial cargada, prueba y responde ok', async () => {
+    const { app } = buildApp();
+    await request(app).put('/api/assistant/provider').send({ apiKey: 'sk-valida-1111' });
+
+    const res = await request(app).post('/api/assistant/provider/test').expect(200);
+
+    expect(res.body.data.ok).toBe(true);
+    expect(JSON.stringify(res.body)).not.toContain('sk-valida-1111');
+  });
+
+  it('RBAC: probar exige assistant.manage', async () => {
+    const { app } = buildApp({ canManage: false });
+
+    await request(app).post('/api/assistant/provider/test').expect(403);
   });
 });
