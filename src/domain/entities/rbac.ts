@@ -102,6 +102,12 @@ export const KNOWN_ACTIONS = [
   // completo de una persona; por eso no alcanza con una sola acción.
   'location_read',
   'location_audit',
+  // finance-growth Fase 1 — módulo `finance` (RBAC dos capas, separado de
+  // `billing`). `sync` YA existe (iclass.sync) y se REUSA para
+  // `finance:sync` — no se duplica.
+  'manage_costs',
+  'manage_targets',
+  'manage_inflation',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.
@@ -158,6 +164,11 @@ export const RBAC_MODULES = [
   'actions',
   // Inbox de mensajería omnicanal (messaging-inbox F1) — WhatsApp vía Chatwoot
   'messaging',
+  // ai-assistant-multiagent — configuración del asistente IA conversacional.
+  // Módulo PROPIO y no una sub-acción de `messaging` a propósito: responder un WhatsApp y
+  // configurar un bot que responde solo, de forma autónoma y a escala, son responsabilidades
+  // de distinto peso. Un agente puede tener messaging.* sin poder tocar qué dice el bot.
+  'assistant',
   // internal-news — tablón interno del equipo. Usa las base actions read/manage
   // sin agregar action codes nuevos (mismo criterio que 'uisp').
   'news',
@@ -165,6 +176,10 @@ export const RBAC_MODULES = [
   // Módulo propio (no cuelga de 'iclass') porque el dato es de PERSONAS y su
   // visibilidad se decide aparte de la integración que lo provee.
   'technicians',
+  // finance-growth Fase 1 — "Finanzas — Crecimiento" (unit economics de un ISP,
+  // sobre cobranza real GR). DELIBERADAMENTE separado de `billing` (cementerio
+  // Splynx) — ver design.md Decision 6.
+  'finance',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

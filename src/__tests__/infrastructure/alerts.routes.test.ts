@@ -24,7 +24,7 @@ import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMem
 import { requirePermission } from '@infrastructure/http/middleware/requirePermission';
 import { createAuthMiddleware } from '@infrastructure/http/middleware/authMiddleware';
 import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
-import { createExternalWriteRateLimiter } from '@infrastructure/http/middleware/rateLimiters';
+import { createIngestRateLimiter } from '@infrastructure/http/middleware/rateLimiters';
 
 import type { AuthProvider } from '@domain/ports/AuthProvider';
 import type { User } from '@domain/entities/auth';
@@ -148,7 +148,7 @@ async function buildApp(opts: BuildAppOpts = {}): Promise<Fixture> {
       ingestKeys: { 'fiber-collector': FIBER_KEY, grafana: GRAFANA_KEY },
       featureFlagRepo: flagRepo,
       ingestRateLimiter: opts.ingestRateLimiterOpts
-        ? createExternalWriteRateLimiter(opts.ingestRateLimiterOpts)
+        ? createIngestRateLimiter(opts.ingestRateLimiterOpts)
         : undefined,
       auth: createAuthMiddleware(new EchoAuthProvider()),
       requirePerm,
@@ -360,7 +360,7 @@ describe('POST /api/alerts/ingest/:source', () => {
     });
   });
 
-  // F7 — rate limiter dedicado (reusa createExternalWriteRateLimiter, molde external write).
+  // F7 — rate limiter dedicado (createIngestRateLimiter, NO el del API externo).
   it('F7 — rate limiter aplicado: request de más devuelve 429', async () => {
     const { app } = await buildApp({ ingestRateLimiterOpts: { windowMs: 60_000, limit: 2 } });
 
@@ -377,6 +377,32 @@ describe('POST /api/alerts/ingest/:source', () => {
     expect(r1.status).toBe(201);
     expect(r2.status).toBe(201);
     expect(r3.status).toBe(429);
+  });
+
+  // alerts-ingest-ratelimit (fix, 2026-07-26) — incidente en vivo: el colector de
+  // fibra postea ~29 requests de golpe cada ciclo y con el limiter reusado del API
+  // externo (30/60s) ya rebotaba alertas reales con 429. Sin override, `createAlertsRouter`
+  // debe caer a `createIngestRateLimiter()` (default generoso), NO a
+  // `createExternalWriteRateLimiter()` (30/60s) — este test prueba el FALLBACK real,
+  // no solo el caso con override chico de arriba.
+  it('sin ingestRateLimiter explícito, el default deja pasar un burst > 30 (ya no reusa el limiter de 30/min del API externo)', async () => {
+    const { app } = await buildApp();
+
+    const send = () =>
+      request(app)
+        .post('/api/alerts/ingest/fiber-collector')
+        .set('X-API-Key', FIBER_KEY)
+        .send(validIngestBody());
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 50; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await send();
+      statuses.push(res.status);
+    }
+
+    expect(statuses).not.toContain(429);
+    expect(statuses.every((s) => s === 201)).toBe(true);
   });
 });
 

@@ -4,12 +4,15 @@ import {
   FetchClientsResult,
   FetchContractsDeltaParams,
   FetchContractsDeltaResult,
+  FetchReceiptsParams,
+  FetchReceiptsResult,
   GetServiceOrdersParams,
 } from '@domain/ports/GestionRealPort';
 import {
   GrClient,
   GrClientBalance,
   GrContract,
+  GrReceipt,
   GrServiceOrder,
 } from '@domain/entities/gestionReal';
 
@@ -37,6 +40,10 @@ export class InMemoryGestionRealPort implements GestionRealPort {
   contractsModified: GrContract[] = [];
   /** Records every fetchContractsModifiedSince call for assertions. */
   contractsDeltaCalls: FetchContractsDeltaParams[] = [];
+  /** finance-growth Fase 1 — fixture receipts, filtered by `fechaRecibo` day-window + paginated. */
+  receipts: GrReceipt[] = [];
+  /** Records every fetchReceipts call for assertions. */
+  receiptsCalls: FetchReceiptsParams[] = [];
 
   async fetchClients(params: FetchClientsParams): Promise<FetchClientsResult> {
     this.calls.push(params);
@@ -110,6 +117,25 @@ export class InMemoryGestionRealPort implements GestionRealPort {
     });
     const page = matched.slice(p.offset, p.offset + p.cantidad);
     return { total: matched.length, contracts: page };
+  }
+
+  /**
+   * finance-growth Fase 1 — mirrors the real `recibos` server-side filtering:
+   * a day-granular `[fechaDesde, fechaHasta]` window over `fechaRecibo`, paged
+   * by offset. Real annulments are ALREADY excluded upstream (parser-level in
+   * `GestionRealClient`), so this fixture is not expected to hold voided rows.
+   */
+  async fetchReceipts(p: FetchReceiptsParams): Promise<FetchReceiptsResult> {
+    this.receiptsCalls.push(p);
+    const from = parseGrDate(p.fechaDesde);
+    const toExclusive = parseGrDate(p.fechaHasta) + 24 * 60 * 60 * 1000;
+    const matched = this.receipts.filter((r) => {
+      if (!r.fechaRecibo) return false;
+      const ts = parseGrDateTime(r.fechaRecibo);
+      return ts >= from && ts < toExclusive;
+    });
+    const page = matched.slice(p.offset, p.offset + p.cantidad);
+    return { total: matched.length, receipts: page };
   }
 }
 

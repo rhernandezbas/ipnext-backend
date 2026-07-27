@@ -183,4 +183,64 @@ describe('InMemoryPppoeServiceRepository', () => {
       expect(updated!.nasId).toBe('nas-nuevo');
     });
   });
+
+  // ── finance-growth fix-wave-2 — findCurrentProfilesByContractIds (multi-servicio tie-break) ──
+  describe('findCurrentProfilesByContractIds', () => {
+    it('un contrato con UN PppoeService: devuelve su profile', async () => {
+      await repo.upsertByUsername({ username: 'u1', password: 'p', nasId: 'n1', contractId: 'C1', profile: 'IP-30' });
+      const map = await repo.findCurrentProfilesByContractIds(['C1']);
+      expect(map.get('C1')).toBe('IP-30');
+    });
+
+    it('un contrato SIN ningún PppoeService: está AUSENTE del Map (nunca un profile inventado)', async () => {
+      const map = await repo.findCurrentProfilesByContractIds(['C-nope']);
+      expect(map.has('C-nope')).toBe(false);
+    });
+
+    it('un contrato con contractId desasociado (PppoeService.contractId=null tras clearContractId) no aporta ninguna fila', async () => {
+      const s = await repo.upsertByUsername({ username: 'u1', password: 'p', nasId: 'n1', contractId: 'C1', profile: 'IP-30' });
+      await repo.clearContractId(s.id);
+      const map = await repo.findCurrentProfilesByContractIds(['C1']);
+      expect(map.has('C1')).toBe(false);
+    });
+
+    it('multi-servicio: PREFIERE el enabled sobre el terminated, sin importar antigüedad', async () => {
+      const now = { t: new Date('2026-01-01T00:00:00.000Z') };
+      const r = new InMemoryPppoeServiceRepository({ now: () => now.t });
+      const old = await r.upsertByUsername({ username: 'old', password: 'p', nasId: 'n1', contractId: 'C1', profile: 'IP-30', status: 'terminated' });
+      now.t = new Date('2026-06-01T00:00:00.000Z');
+      await r.upsertByUsername({ username: 'new', password: 'p', nasId: 'n1', contractId: 'C1', profile: 'IP-100', status: 'enabled' });
+      // sanity: the terminated row really is older
+      expect(new Date(old.createdAt).getTime()).toBeLessThan(new Date('2026-06-01T00:00:00.000Z').getTime());
+
+      const map = await r.findCurrentProfilesByContractIds(['C1']);
+      expect(map.get('C1')).toBe('IP-100'); // enabled wins over terminated even though it's newer, not older
+    });
+
+    it('multi-servicio: entre dos NO-terminated, gana el más RECIENTE (createdAt desc)', async () => {
+      const now = { t: new Date('2026-01-01T00:00:00.000Z') };
+      const r = new InMemoryPppoeServiceRepository({ now: () => now.t });
+      await r.upsertByUsername({ username: 'first', password: 'p', nasId: 'n1', contractId: 'C1', profile: 'IP-30', status: 'disabled' });
+      now.t = new Date('2026-03-01T00:00:00.000Z');
+      await r.upsertByUsername({ username: 'second', password: 'p', nasId: 'n1', contractId: 'C1', profile: 'IP-100', status: 'enabled' });
+
+      const map = await r.findCurrentProfilesByContractIds(['C1']);
+      expect(map.get('C1')).toBe('IP-100');
+    });
+
+    it('un contrato con TODAS sus filas terminated: todavía resuelve la última terminated (mejor señal que nada) — nunca crashea', async () => {
+      await repo.upsertByUsername({ username: 'gone', password: 'p', nasId: 'n1', contractId: 'C1', profile: 'IP-30', status: 'terminated' });
+      const map = await repo.findCurrentProfilesByContractIds(['C1']);
+      expect(map.get('C1')).toBe('IP-30');
+    });
+
+    it('batch: resuelve VARIOS contratos en una sola llamada, cada uno con su propio winner', async () => {
+      await repo.upsertByUsername({ username: 'a', password: 'p', nasId: 'n1', contractId: 'C1', profile: 'IP-30' });
+      await repo.upsertByUsername({ username: 'b', password: 'p', nasId: 'n1', contractId: 'C2', profile: 'IP-100' });
+      const map = await repo.findCurrentProfilesByContractIds(['C1', 'C2', 'C-nope']);
+      expect(map.get('C1')).toBe('IP-30');
+      expect(map.get('C2')).toBe('IP-100');
+      expect(map.has('C-nope')).toBe(false);
+    });
+  });
 });

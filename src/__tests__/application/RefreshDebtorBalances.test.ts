@@ -38,6 +38,10 @@ function makeInactiveClient(id: string): GrClient {
   return { ...makeDebtor(id), status: 'Inactivo', statusCode: '3' };
 }
 
+function makeIncobrableClient(id: string): GrClient {
+  return { ...makeDebtor(id), status: 'Incobrable', statusCode: '4' };
+}
+
 function makeBajaClient(id: string): GrClient {
   return { ...makeDebtor(id), status: 'Baja', statusCode: '6' };
 }
@@ -299,5 +303,51 @@ describe('RefreshDebtorBalances', () => {
     // SyncState must reflect the failure, NOT 'ok'
     const saved = await state.get('gr-debtor-balances');
     expect(saved?.lastResult).toMatch(/error:/);
+  });
+
+  // finance-growth Fase 1 (design.md Decision 0) — the debtor-like sync extends
+  // to estado 4 (Incobrable), NEVER to estado 1 (Activo — verified live: always
+  // zero invoices, so adding it would only waste GR calls).
+  it('fetches balances for clients in estado Incobrable (4)', async () => {
+    gr.clients = [makeIncobrableClient('N1'), makeActiveClient('A1')];
+    gr.balancesByClient['N1'] = makeBalance('N1', 7000);
+
+    const result = await uc.execute();
+
+    expect(gr.balanceCalls).toContain('N1');
+    expect(gr.balanceCalls).not.toContain('A1');
+    expect(result.refreshed).toBe(1);
+    expect(result.errors).toBe(0);
+  });
+
+  it('estado Activo (1) is STILL never enumerated by the debtor-like sync', async () => {
+    gr.clients = [makeActiveClient('A1'), makeActiveClient('A2')];
+
+    const result = await uc.execute();
+
+    expect(gr.calls.some((c) => c.estado === '1')).toBe(false);
+    expect(result.refreshed).toBe(0);
+    expect(gr.balanceCalls).toHaveLength(0);
+  });
+
+  it('covers debtors, inactives, incobrables and bajas together — excludes activos', async () => {
+    gr.clients = [
+      makeDebtor('D1'),
+      makeInactiveClient('I1'),
+      makeIncobrableClient('N1'),
+      makeBajaClient('B1'),
+      makeActiveClient('A1'),
+    ];
+    gr.balancesByClient['D1'] = makeBalance('D1', 1000);
+    gr.balancesByClient['I1'] = makeBalance('I1', 2000);
+    gr.balancesByClient['N1'] = makeBalance('N1', 3000);
+    gr.balancesByClient['B1'] = makeBalance('B1', 4000);
+
+    const result = await uc.execute();
+
+    expect(gr.balanceCalls).toEqual(expect.arrayContaining(['D1', 'I1', 'N1', 'B1']));
+    expect(gr.balanceCalls).not.toContain('A1');
+    expect(result.refreshed).toBe(4);
+    expect(result.errors).toBe(0);
   });
 });

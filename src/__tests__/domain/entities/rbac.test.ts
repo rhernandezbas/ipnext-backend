@@ -24,8 +24,25 @@ import {
 } from '../../../domain/entities/rbac';
 
 describe('RBAC_MODULES constant', () => {
-  it('contains exactly 36 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 technicians)', () => {
-    expect(RBAC_MODULES).toHaveLength(36);
+  // Resolución de merge (finance-growth-dashboard ⨯ ai-assistant-multiagent, 2026-07-26):
+  // los dos changes se construyeron en paralelo y CADA UNO afirmaba 36 porque contaba su
+  // propio módulo sobre una base de 35. Mergeados, la realidad son 37 — verificado contando
+  // las entradas reales de `RBAC_MODULES` (sin duplicados). Se conservan las DOS aserciones
+  // de módulo: quedarse con una sola habría dejado el otro módulo sin pin.
+  //
+  // Resolución de merge (iclass-gps-audit ⨯ main, 2026-07-27): mismo patrón otra vez.
+  // `technicians` se construyó en paralelo sobre la misma base de 35 y afirmaba 36.
+  // Unidos los tres módulos (assistant + finance + technicians) sobre esa base, el
+  // conteo REAL es 38 — verificado contando las entradas del array, no sumando.
+  // Se conservan las TRES aserciones `toContain`: cada módulo mantiene su propio pin.
+  it('contains exactly 38 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance + 1 technicians)', () => {
+    expect(RBAC_MODULES).toHaveLength(38);
+  });
+
+  it('includes the assistant module (ai-assistant-multiagent)', () => {
+    // Módulo PROPIO y no una sub-acción de `messaging`: responder un WhatsApp y configurar
+    // un bot que responde solo, a escala y sin supervisión, son responsabilidades distintas.
+    expect(RBAC_MODULES).toContain('assistant');
   });
 
   it('includes technicians (iclass-gps-audit — ubicación y auditoría de presencia de cuadrillas)', () => {
@@ -83,6 +100,10 @@ describe('RBAC_MODULES constant', () => {
 
   it('includes the news module (internal-news — tablón interno del equipo)', () => {
     expect(RBAC_MODULES).toContain('news');
+  });
+
+  it('includes the finance module (finance-growth Fase 1 — separado de billing, deliberadamente)', () => {
+    expect(RBAC_MODULES).toContain('finance');
   });
 
   it('is readonly (as const)', () => {
@@ -148,8 +169,18 @@ describe('PermissionAction type', () => {
 });
 
 describe('KNOWN_ACTIONS constant', () => {
-  it('contains exactly 55 valid action codes (53 prior + 2 iclass-gps-audit: location_read/location_audit)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(55);
+  // Resolución de merge (iclass-gps-audit ⨯ main, 2026-07-27): finance-growth sumó 3
+  // acciones (manage_costs/manage_targets/manage_inflation) y iclass-gps-audit sumó 2
+  // (location_read/location_audit), ambos sobre la misma base de 53. Unidas las cinco,
+  // el conteo REAL es 58 — verificado contando el array, sin duplicados.
+  it('contains exactly 58 valid action codes (53 prior + 3 finance-growth Fase 1: manage_costs/manage_targets/manage_inflation — `sync` already existed, reused — + 2 iclass-gps-audit: location_read/location_audit)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(58);
+  });
+
+  it('includes the 3 finance-growth Fase 1 sub-actions (manage_costs/manage_targets/manage_inflation)', () => {
+    expect(KNOWN_ACTIONS).toContain('manage_costs');
+    expect(KNOWN_ACTIONS).toContain('manage_targets');
+    expect(KNOWN_ACTIONS).toContain('manage_inflation');
   });
 
   it('includes location_read and location_audit as SEPARATE actions (iclass-gps-audit)', () => {

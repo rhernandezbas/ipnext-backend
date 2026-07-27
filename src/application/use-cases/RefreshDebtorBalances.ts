@@ -3,8 +3,13 @@ import { ClientMirrorRepository } from '@domain/ports/ClientMirrorRepository';
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 
 const SYNC_ENTITY = 'gr-debtor-balances';
-/** Estados GR que requieren balance: Deudor (2), Inactivo (3), Baja (6). */
-const DEBTOR_LIKE_STATUSES = ['2', '3', '6'] as const;
+/**
+ * Estados GR que requieren balance: Deudor (2), Inactivo (3), Incobrable (4),
+ * Baja (6). finance-growth Fase 1 (design.md Decision 0) agregó el estado 4 —
+ * NUNCA se agrega el estado 1 (Activo): verificado en vivo que siempre
+ * devuelve cero facturas, así que enumerarlo solo desperdiciaría llamadas GR.
+ */
+const DEBTOR_LIKE_STATUSES = ['2', '3', '4', '6'] as const;
 const DEFAULT_PAGE_SIZE = 100;
 
 export interface RefreshDebtorBalancesResult {

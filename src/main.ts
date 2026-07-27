@@ -15,6 +15,8 @@ import { bootstrapChatMediaDownload } from './infrastructure/scheduling/bootstra
 import { bootstrapAutoProvisionFiber } from './infrastructure/scheduling/bootstrapAutoProvisionFiber';
 import { bootstrapSnoozeReactivation } from './infrastructure/scheduling/bootstrapSnoozeReactivation';
 import { bootstrapTeamLocationIngest } from './infrastructure/scheduling/bootstrapTeamLocationIngest';
+import { bootstrapFinanceReceiptsIngest } from './infrastructure/scheduling/bootstrapFinanceReceiptsIngest';
+import { bootstrapFinanceSnapshotJob } from './infrastructure/scheduling/bootstrapFinanceSnapshotJob';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
 import { bootstrapSystemUsers } from './infrastructure/bootstrap/bootstrapSystemUsers';
@@ -59,8 +61,14 @@ void (async () => {
   // (f) UISP mirror sync — opt-in (absent env → scheduler skips each tick)
   const uispSync = await bootstrapUispSync(300_000);
 
+  // (g) finance-growth Fase 1 — receipt ingest scheduler (design.md Decision 4b).
+  // Awaited BEFORE createApp (like backfillScheduler/uispSync) because
+  // GET /api/finance/growth/sync/status needs the LIVE pacing snapshot —
+  // unlike gr-sync/gr-ingest (fire-and-forget, no route depends on their instance).
+  const financeReceiptIngest = await bootstrapFinanceReceiptsIngest();
+
   // (e) createApp wires both schedulers into the closure router — must run after await
-  const app = createApp(taskAutocomplete, backfillScheduler, uispSync);
+  const app = createApp(taskAutocomplete, backfillScheduler, uispSync, financeReceiptIngest);
 
   app.listen(config.port, () => {
     console.log(`[server] Running on port ${config.port}`);
@@ -115,9 +123,23 @@ void (async () => {
   void bootstrapSnoozeReactivation()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[snooze-reactivation] bootstrap failed (server kept alive):', (err as Error).message));
+  // finance-growth Fase 3 — nightly MRR bridge/cohort snapshot job (design.md
+  // Wiring). Fire-and-forget after listen, same as gr-sync: no route needs
+  // this scheduler's live instance (unlike financeReceiptIngest, which
+  // GET /sync/status reads directly).
+  void bootstrapFinanceSnapshotJob()
+    .then((scheduler) => scheduler.start())
+    .catch((err) => console.error('[finance-snapshot] bootstrap failed (server kept alive):', (err as Error).message));
 
   // Start schedulers — both start dormant (gated by feature flags).
   iclassClosure?.start();
   taskAutocomplete?.start();
   uispSync.start();
+  // finance-growth Fase 1 — null ONLY when GR itself is off/misconfigured
+  // (GR_SYNC_ENABLED/GR_CUIT/GR_SECRET — bootstrapFinanceReceiptsIngest
+  // already logged why). fix-wave-2 R3: `FinanceReceiptSyncConfig.enabled`
+  // does NOT gate this anymore (F6) — the scheduler always starts ticking
+  // when GR is on, and re-reads the live `enabled` kill-switch every tick
+  // instead (`scheduler.isEnabled()`, consulted by the sync/run 503 guard).
+  financeReceiptIngest?.start();
 })().catch((err) => console.error('[server] fatal bootstrap error:', err));

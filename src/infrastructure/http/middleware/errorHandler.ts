@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { DomainError } from '@domain/errors';
 import { OrchestratorRejectedError } from '@domain/errors/pppoe';
+import { FinanceSyncLockBusyError } from '@domain/errors/finance';
 import { domainErrorToCode } from '@application/util/domainErrorToCode';
 
 /**
@@ -9,6 +10,20 @@ import { domainErrorToCode } from '@application/util/domainErrorToCode';
  * exercise THIS handler so the mapping cannot drift out from under the tests.
  */
 const statusMap: Record<string, number> = {
+  // ai-assistant-multiagent — configuración de agentes IA (CFG-1/CFG-2/CFG-3, EVAL-2).
+  // El MOTOR nunca llega acá: RUN-1 exige que degrade a no-op sin propagar. Estos son
+  // errores de la capa de CONFIGURACIÓN, donde un input inválido debe rebotar temprano.
+  ASSISTANT_PROFILE_NOT_FOUND: 404,
+  ASSISTANT_PROFILE_ALREADY_EXISTS: 409,
+  ASSISTANT_INTENT_NOT_FOUND: 404,
+  ASSISTANT_INTENT_NAME_CONFLICT: 409,
+  // 400 y no 422: una key inexistente no es una regla de negocio incumplida, es un
+  // request que referencia algo que no existe en el catálogo.
+  UNKNOWN_ASSISTANT_DATA_SOURCE: 400,
+  UNKNOWN_ASSISTANT_ACTION: 400,
+  // 409: el request es válido, pero el estado del sistema (sin eval registrado) lo bloquea.
+  ASSISTANT_ACTION_REQUIRES_EVAL: 409,
+  INVALID_ASSISTANT_EVAL_RUN: 422,
   // zones (customer-zones-map)
   ZONE_NOT_FOUND: 404,
   INVALID_POLYGON: 422,
@@ -271,6 +286,18 @@ const statusMap: Record<string, number> = {
   TASK_STAGE_NOT_ELIGIBLE: 422,
   TOO_MANY_TASK_STATE_RECIPIENTS: 422,
   RESULTING_STAGE_NOT_ALLOWED: 422,
+  // finance-growth Fase 1 (fix-wave-3 R10) — RearmFinanceReceiptsBackfill's
+  // lock IS load-bearing (it and a concurrent tick write the SAME `cursor`
+  // column); a busy lock is transient/retriable, never a 500. `Retry-After`
+  // is set below from `err.retryAfterSeconds` (dynamic, same pattern as
+  // OrchestratorRejectedError's dynamic status).
+  FINANCE_SYNC_LOCK_BUSY: 503,
+  // finance-growth Fase 2 fix-wave-1 (finding D) — a PUT against a
+  // technologyName/planCode that doesn't exist in its catalog (ContractTechnology/Plan)
+  // is a reference to something absent, not a business-rule violation:
+  // semantically a 404, same criterion as CLIENT_NOT_FOUND/TICKET_NOT_FOUND above.
+  FINANCE_TECHNOLOGY_NOT_FOUND: 404,
+  FINANCE_PLAN_NOT_FOUND: 404,
 };
 
 /** Express global error-handling middleware. */
@@ -288,6 +315,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     const status = err instanceof OrchestratorRejectedError
       ? err.upstreamStatus
       : (statusMap[err.code] ?? 400);
+    // fix-wave-3 R10 — a busy load-bearing lock is retriable; tell the caller
+    // how long to wait instead of leaving it to guess (or hammer immediately).
+    if (err instanceof FinanceSyncLockBusyError) {
+      res.set('Retry-After', String(err.retryAfterSeconds));
+    }
     const mapped = domainErrorToCode(err);
     const body: Record<string, unknown> = { error: err.message, code: err.code };
     // Surface the missing field names so the front-end can drive its modal.

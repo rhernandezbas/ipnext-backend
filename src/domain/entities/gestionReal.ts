@@ -162,3 +162,106 @@ export interface GrServiceOrder {
   /** Full raw GR payload for the order, for debug/fidelity. */
   raw: Record<string, unknown>;
 }
+
+/**
+ * One entry of `recibo.aplicaciones[]` — the payment applied to a SINGLE
+ * comprobante. `tipo`/`sucursal`/`numero` together form the composite identity
+ * `"{tipo}-{sucursal}-{numero}"`, EXACTLY the same identity `Invoice.grInvoiceId`
+ * already uses (gr-invoices-sync) — see `grReceiptApplicationInvoiceId()` in
+ * `mapGrReceipt.ts`. `importe` is the amount of THIS application (a receipt can
+ * pay N comprobantes — finance-growth Fase 1, Decision 0b).
+ */
+export interface GrReceiptApplication {
+  /** GR application id — the object key when `aplicaciones` is dict-keyed-by-id. */
+  grApplicationId: string;
+  /** Comprobante type, e.g. "FB"/"FA"/"FX"/"ID". Part of the composite identity. */
+  tipo: string | null;
+  /** Sucursal code. Part of the composite identity. */
+  sucursal: string | null;
+  /** Invoice number. Part of the composite identity. */
+  numero: string | null;
+  /** Amount applied to this comprobante (JSON float). */
+  importe: number;
+  /** Application date "DD-MM-YYYY". */
+  fecha: string | null;
+}
+
+/**
+ * One entry of `recibo.items[]` — a payment-method line (medio de cobro),
+ * e.g. a MercadoPago transfer or a bank deposit. fix-wave-2 R1: this is the
+ * ONLY node GR reports that represents cash ACTUALLY received — `aplicaciones`
+ * is the debt CANCELLED, which can exceed cash when a receipt also carries
+ * `retenciones` (tax withholding certificates, never cash). Measured live
+ * (June 2026, 4.839 recibos): `SUM(aplicaciones) - SUM(items) - SUM(retenciones)
+ * = -0.00` — an exact identity, 0 mismatches.
+ */
+export interface GrReceiptItem {
+  /** Synthetic `${grReceiptId}-item-${key}` — same F11 rationale as `GrReceiptApplication.grApplicationId`: GR's own per-line index is never trusted as a global id. */
+  grItemId: string;
+  banco: string | null;
+  cajaCuentaId: string | null;
+  destino: string | null;
+  /** Line date "DD-MM-YYYY" (or as GR provides it). */
+  fecha: string | null;
+  importe: number;
+  moneda: string | null;
+  numeroTransferencia: string | null;
+  tipo: string | null;
+}
+
+/**
+ * One entry of `recibo.retenciones[]` — a tax-withholding certificate
+ * (retiva/retgan/retib/retpat — open vocabulary, no enum) applied against the
+ * receipt. fix-wave-2 R1: NEVER cash — a receipt can be 100% retenciones with
+ * zero `items` (measured: 7 of 18 June-2026 receipts carrying `retenciones`
+ * have NO `items` at all, e.g. recibo `333605`: aplicaciones 20.850,60 =
+ * retenciones 20.850,60, cash 0,00). Persisted as its own line so the
+ * cobranza/retenciones split stays reversible without re-ingesting history.
+ */
+export interface GrReceiptRetencion {
+  /** Synthetic `${grReceiptId}-ret-${key}` — same F11 rationale as `grApplicationId`. */
+  grRetencionId: string;
+  tipo: string | null;
+  importe: number;
+  /** Line date "DD-MM-YYYY" (or as GR provides it), when present. */
+  fecha: string | null;
+}
+
+/**
+ * Normalized GR payment receipt (`recibos` action, finance-growth Fase 1).
+ * `fechaAnulacion` is null when the receipt is NOT voided — a receipt whose raw
+ * `fecha_anulacion` differs from the GR null-date centinela
+ * (`"00-00-0000 00:00:00"`) is a REAL annulment and is EXCLUDED entirely by the
+ * parser (`parseReceiptsResponse` in `GestionRealClient.ts`); a `GrReceipt` that
+ * reaches the application layer is NEVER voided (design.md Decision 0, gotcha 3).
+ */
+export interface GrReceipt {
+  /** GR receipt id — the object key when the `recibos` root is dict-keyed-by-id. */
+  grReceiptId: string;
+  /** GR client id this receipt belongs to (raw field `cliente_id`). */
+  clienteGrId: string | null;
+  /** Collection channel, e.g. "mercadopago"/"manual" — open vocabulary, no enum. */
+  recaudador: string | null;
+  /**
+   * Receipt date, GR wire format "DD-MM-YYYY" — DATE-ONLY. fix-wave-2 LOW: this
+   * docblock previously (wrongly) claimed "DD-MM-YYYY HH:MM:SS"; measured live
+   * (100/100 June-2026 recibos) `fecha_recibo` NEVER carries a time component —
+   * `fecha_confirmacion` is the field that does.
+   */
+  fechaRecibo: string | null;
+  /** Confirmation date "DD-MM-YYYY HH:MM:SS" — this IS the field that carries a time, when GR reports one. */
+  fechaConfirmacion: string | null;
+  /** Always null here — see the class doc comment above (real annulments never reach this type). */
+  fechaAnulacion: string | null;
+  observaciones: string | null;
+  applications: GrReceiptApplication[];
+  /**
+   * fix-wave-2 R1 — optional so lightweight pre-existing test fixtures (that
+   * predate items/retenciones) keep compiling unchanged; the REAL parser
+   * (`GestionRealClient.parseReceiptsResponse`) always populates these (empty
+   * array when GR omits the node, never `undefined`). Callers should read via
+   * `r.items ?? []` / `r.retenciones ?? []` (see `mapGrReceipt.ts`).
+   */
+  items?: GrReceiptItem[];
+  retenciones?: GrReceiptRetencion[];
+}

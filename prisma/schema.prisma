@@ -2475,6 +2475,263 @@ model TicketSlaConfig {
 }
 
 // =============================================
+// FINANCE-GROWTH DOMAIN — Fase 1 (ingest de cobranza GR)
+// =============================================
+
+/// finance-growth Fase 1 — clasificación de tipos de comprobante GR (`grType`),
+/// filas en vez de enum (design.md Decision 2 — vocabulario ajeno, puede crecer
+/// sin deploy). `bucket` es VARCHAR validado en el use case, no un enum Postgres
+/// (mismo criterio que RbacPermission.action). Seed inicial: solo `FB` (mayoría
+/// absoluta verificada en vivo) — el resto se auto-alta `unclassified` al vuelo.
+model FinanceInvoiceTypeClassification {
+  grType    String   @id
+  bucket    String   @default("unclassified") @db.VarChar(32)
+  label     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// finance-growth Fase 1 (design.md Decision 4b) — pacing del ingest de
+/// recibos: presupuesto de requests COMPARTIDO entre el carril delta
+/// (prioridad absoluta) y el carril backfill (newest→oldest). Molde
+/// GestionRealIngestConfig; NO tiene endpoint HTTP propio en este change (es
+/// un knob operativo, no un settable de negocio).
+model FinanceReceiptSyncConfig {
+  id                       String   @id @default("singleton")
+  enabled                  Boolean  @default(true)
+  requestIntervalMs        Int      @default(20000)
+  maxRequestIntervalMs     Int      @default(300000)
+  deltaCheckIntervalMs     Int      @default(300000)
+  backfillFloorYearMonth   String   @default("2013-01")
+  /// fix-wave-2 LOW — moved out of a hardcoded scheduler constant so the whole
+  /// pacing model stays editable in DB without a redeploy (same rationale as
+  /// the rest of this table, F6).
+  deltaStarvationThreshold Int      @default(3)
+  updatedAt                DateTime @updatedAt
+}
+
+/// finance-growth Fase 1 (design.md Decision 0) — recibo de cobranza GR
+/// (action `recibos`). `Invoice` queda INTOCADO (Decision 0b) — este es un
+/// mirror propio, sin el invariante destructivo de replace-all por cliente
+/// que `ClientMirrorRepository.upsertInvoices` ya tiene en producción.
+model FinancePaymentReceipt {
+  grReceiptId       String    @id
+  clientGrId        String?
+  recaudador        String?
+  fechaRecibo       DateTime?
+  fechaConfirmacion DateTime?
+  /// Auditoría, no filtro en runtime — un recibo con anulación REAL nunca
+  /// llega hasta acá (excluido por el parser de GestionRealClient).
+  anulado           Boolean   @default(false)
+  observaciones     String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  applications FinanceReceiptApplication[]
+  items        FinanceReceiptItem[]
+  retenciones  FinanceReceiptRetencion[]
+
+  @@index([clientGrId])
+  @@index([fechaRecibo])
+  // finance-growth Fase 3 rework (J2) — the per-client cash attribution walk
+  // (`listByClientAndMonth` on items/applications, JOINed through this
+  // table) filters by BOTH columns together every time; the single-column
+  // indexes above don't back that combination as well as a compound one.
+  // Added defensively (index-only, zero code-path change) — the N+1 query
+  // SHAPE itself (one query per client per month in the attribution loop)
+  // is accepted as documented debt, see BuildFinanceMonthlySnapshot's
+  // closing report; this index at least caps the per-query cost.
+  @@index([clientGrId, fechaRecibo])
+}
+
+/// fix-wave-2 R1 — línea de `recibo.items[]`: CASH efectivamente recibido (medio
+/// de cobro: transferencia/depósito/etc). Es la base de la métrica "cash
+/// collected" del spec (`aplicaciones` es deuda CANCELADA, no necesariamente
+/// cash — puede exceder el cash cuando el recibo también trae `retenciones`).
+/// Medido en vivo (junio 2026, 4.839 recibos): SUM(aplicaciones) - SUM(items) -
+/// SUM(retenciones) = -0.00, identidad exacta. Persistida en tabla propia
+/// (nunca inferida) para que el split cobranza/retenciones sea reversible sin
+/// re-ingerir los 163 meses de historia — ver design.md Decision 0/0b.
+model FinanceReceiptItem {
+  grItemId            String                @id
+  receiptId           String
+  receipt             FinancePaymentReceipt @relation(fields: [receiptId], references: [grReceiptId])
+  banco               String?
+  cajaCuentaId        String?
+  destino             String?
+  fecha               DateTime?
+  amount              Decimal               @db.Decimal(12, 2)
+  moneda              String?
+  numeroTransferencia String?
+  tipo                String?
+
+  @@index([receiptId])
+  /// fix-wave-3 LOW — added to support PrismaFinanceReceiptItemRepository.listByMonth's
+  /// `WHERE fecha BETWEEN ...`. fix-wave-4 W2: that cut was WRONG (11,2% of
+  /// items measured live with no `fecha` at all — see migration
+  /// `20261023000400`'s comment) and the read path now cuts by the parent
+  /// receipt's `fechaRecibo` (already indexed, `@@index([fechaRecibo])`
+  /// above) instead. This index is UNUSED by the current read path; kept
+  /// (not dropped) as a harmless leftover, see the migration comment.
+  @@index([fecha])
+}
+
+/// fix-wave-2 R1 — línea de `recibo.retenciones[]`: certificado de retención
+/// impositiva (retiva/retgan/retib/retpat — vocabulario abierto, sin enum).
+/// NUNCA cash — un recibo puede ser 100% retenciones con `items` vacío (medido:
+/// 7 de 18 recibos de junio 2026 con `retenciones` no traen `items`). Se
+/// expone como serie APARTE de la métrica de cash, nunca neteada en silencio.
+model FinanceReceiptRetencion {
+  grRetencionId String                @id
+  receiptId     String
+  receipt       FinancePaymentReceipt @relation(fields: [receiptId], references: [grReceiptId])
+  tipo          String?
+  amount        Decimal               @db.Decimal(12, 2)
+  fecha         DateTime?
+
+  @@index([receiptId])
+}
+
+/// finance-growth Fase 1 (design.md Decision 0b) — aplicación de un recibo a
+/// UN comprobante (relación 1-N recibo→aplicaciones). `grInvoiceId` comparte
+/// la MISMA identidad compuesta que `Invoice.grInvoiceId`
+/// (`"{tipo}-{sucursal}-{numero}"`) pero SIN FK dura (deuda declarada #6) —
+/// `grType` viaja en la propia aplicación, así que el motor de métricas nunca
+/// necesita joinear `Invoice`.
+model FinanceReceiptApplication {
+  grApplicationId String    @id
+  receiptId       String
+  receipt         FinancePaymentReceipt @relation(fields: [receiptId], references: [grReceiptId])
+  grInvoiceId     String
+  grType          String
+  amount          Decimal   @db.Decimal(12, 2)
+  appliedDate     DateTime?
+
+  @@index([grInvoiceId])
+  @@index([appliedDate])
+  @@index([receiptId])
+}
+
+/// finance-growth Fase 2 (design.md Data Model) — costo por tecnología, clave
+/// natural `technologyName` (= `ContractTechnology.name`, SIN FK — deuda
+/// declarada #2). `comisionVentaPct` viaja en esta misma fila: decisión
+/// declarada del change, la comisión de venta va POR TECNOLOGÍA, igual que el
+/// resto de los costos (no por plan ni global).
+model FinanceTechnologyCost {
+  technologyName          String   @id
+  costoVentaArs           Decimal  @default(0) @db.Decimal(12, 2)
+  costoInstalacionArs     Decimal  @default(0) @db.Decimal(12, 2)
+  costoMensualServicioArs Decimal  @default(0) @db.Decimal(12, 2)
+  comisionVentaPct        Decimal  @default(0) @db.Decimal(5, 2)
+  updatedByUserId         String?
+  updatedAt               DateTime @updatedAt
+}
+
+/// finance-growth Fase 2 (design.md Data Model) — precio mensual ESTIMADO por
+/// plan, clave natural `planCode` (= `Plan.code`, SIN FK). Uso EXCLUSIVO:
+/// reparto proporcional de la atribución Capa B (Decision 1) + "what-if" de
+/// CAC/payback — NUNCA la fuente de la cobranza agregada.
+model FinancePlanPrice {
+  planCode              String   @id
+  estimatedMonthlyPrice Decimal  @default(0) @db.Decimal(12, 2)
+  updatedByUserId       String?
+  updatedAt             DateTime @updatedAt
+}
+
+/// finance-growth Fase 2 (design.md Data Model) — metas y config global,
+/// molde singleton (mismo criterio que `FinanceReceiptSyncConfig`).
+/// `inflationBaseYearMonth: ""` = sin configurar (la serie real de
+/// `GetFinanceOverview`, Fase 4, no está disponible hasta que se cargue un
+/// mes ancla).
+model FinanceTargetsConfig {
+  id                      String   @id @default("singleton")
+  churnTargetPct          Decimal  @default(5) @db.Decimal(5, 2)
+  maxPaybackMonths        Int      @default(12)
+  monthlyNewContractsGoal Int      @default(0)
+  inflationBaseYearMonth  String   @default("")
+  updatedAt               DateTime @updatedAt
+}
+
+/// finance-growth Fase 2 (design.md Decision 3) — índice IPC mensual cargado
+/// a mano: `monthlyRatePct` es la variación mensual TAL CUAL la publica INDEC
+/// (ej. `4.2` para +4.2% ese mes), no un índice base-100 precalculado. El
+/// encadenamiento (`chainedIndex`) es responsabilidad del consumidor de
+/// lectura (`GetFinanceOverview`, Fase 4) — esta tabla solo persiste la serie
+/// cruda. Fail-loud ante huecos: un mes faltante trunca la serie real, nunca
+/// se interpola ni se asume `0%`.
+model FinanceInflationIndex {
+  yearMonth      String   @id
+  monthlyRatePct Decimal  @db.Decimal(6, 3)
+  source         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+/// finance-growth Fase 3 (design.md Decision 4) — precomputed monthly MRR
+/// bridge/churn/revenue snapshot, built nightly by `BuildFinanceMonthlySnapshot`.
+/// All `*Ars` fields are NOMINAL — nominal/real deflation happens at READ
+/// time (`GetFinanceOverview`, Fase 4), chained from `FinanceInflationIndex`,
+/// so loading a late IPC value updates the real series immediately without
+/// recomputing snapshots.
+model FinanceMonthlySnapshot {
+  yearMonth               String   @id
+  contractsActive         Int
+  contractsNew            Int
+  contractsChurned        Int
+  contractsUpgraded       Int
+  contractsDowngraded     Int
+  mrrInicialArs           Decimal  @db.Decimal(14, 2)
+  mrrNewArs               Decimal  @db.Decimal(14, 2)
+  mrrUpgradeArs           Decimal  @db.Decimal(14, 2)
+  mrrDowngradeArs         Decimal  @db.Decimal(14, 2)
+  mrrChurnArs             Decimal  @db.Decimal(14, 2)
+  mrrFinalArs             Decimal  @db.Decimal(14, 2)
+  // fix-wave-3 (🟡 4) — mrrFinal - (mrrInicial+new+upgrade-downgrade-churn).
+  // 0 en el caso sano; hace VISIBLE cualquier hueco del bridge (extremo sin
+  // precio, evento 'modified' perdido, etc.) en vez de dejarlo pasar en silencio.
+  bridgeResidualArs       Decimal  @default(0) @db.Decimal(14, 2)
+  // finance-growth Fase 3 REWORK (F2) — contratos activos al cierre del mes
+  // cuyo precio contratado no pudo resolverse; excluidos de mrrFinalArs,
+  // nunca un cero silencioso.
+  unpricedContractsActive Int      @default(0)
+  unpricedContractsPct    Decimal  @default(0) @db.Decimal(5, 2)
+  unpricedPlanChangeEvents Int     @default(0)
+  // fix-wave-3 (🔴 1) — eventos 'modified' del mes donde el plan viejo o
+  // nuevo es un código de ENFORCEMENT (IP-REDUCCION/IP-BAJA) — excluidos de
+  // mrrUpgrade/mrrDowngrade aunque tengan precio resoluble en FinancePlanPrice.
+  enforcementPlanChangeEventsExcluded Int @default(0)
+  revenueTotalArs         Decimal  @db.Decimal(14, 2)
+  // finance-growth Fase 3 REWORK — tasa de cobranza (cobranza / MRR
+  // contratado). Nullable: null cuando mrrFinalArs es 0 (sin base contra la
+  // cual comparar), nunca "0% cobrado".
+  collectionRatePct       Decimal? @db.Decimal(9, 2)
+  revenueAttributableArs  Decimal  @db.Decimal(14, 2)
+  unclassifiedAmountArs   Decimal  @default(0) @db.Decimal(14, 2)
+  attributionPct          Decimal  @db.Decimal(5, 2)
+  arpuArs                 Decimal  @db.Decimal(12, 2)
+  churnContractsPct       Decimal  @db.Decimal(5, 2)
+  // finance-growth Fase 3 REWORK (F4) — nullable: null cuando no había
+  // ningún contrato activo al inicio del mes (sin base), nunca "0% churn".
+  churnRevenuePct         Decimal? @db.Decimal(5, 2)
+  computedAt              DateTime @default(now())
+}
+
+/// finance-growth Fase 3 (design.md Decision 4) — retention cohort row: of
+/// the contracts activated in `cohortYearMonth` (`originalCount`), how many
+/// (`survivingCount`) were still active `monthsElapsed` (3 | 6 | 12) months
+/// later. A cohort younger than `monthsElapsed` never gets that row (no
+/// invented data).
+model FinanceCohortSnapshot {
+  cohortYearMonth String
+  monthsElapsed   Int
+  originalCount   Int
+  survivingCount  Int
+  computedAt      DateTime @default(now())
+
+  @@id([cohortYearMonth, monthsElapsed])
+}
+
+// =============================================
 // SUPPORT DOMAIN
 // =============================================
 
@@ -2489,6 +2746,15 @@ model TicketAreaCatalog {
   tickets   Ticket[]
   // F1.5-C2 (asignación) — back-relation del área LOCAL de Conversation (mirror WhatsApp).
   conversations Conversation[]
+  // ai-assistant-multiagent (CFG-1) — perfil del asistente IA de ESTA área. 1:1 (el FK del
+  // otro lado es @unique). Este catálogo YA es compartido por Ticket.areaId y
+  // Conversation.areaId, así que UN perfil sirve a las dos superficies sin duplicar nada.
+  // onDelete: Cascade del lado del perfil ⇒ borrar el área se lleva su configuración.
+  assistantProfile AssistantProfile?
+  // RTR-0 — back-relation del área designada como DEFAULT (la que atiende lo que entra sin
+  // clasificar). onDelete: SetNull del otro lado: borrar el área deja el ruteo sin default
+  // (las conversaciones sin área dejan de atenderse) en vez de romper la config.
+  assistantRoutingDefault AssistantRoutingConfig[]
 
   @@map("TicketAreaCatalog")
 }
@@ -3695,4 +3961,183 @@ model TeamLocationIngestState {
   consecutiveIncomplete Int @default(0)
 
   updatedAt DateTime @updatedAt
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// ai-assistant-multiagent — asistente IA configurable POR ÁREA, sobre conversaciones
+// de WhatsApp (mirror Chatwoot) Y tickets. Ver openspec/changes/ai-assistant-multiagent/.
+//
+// PRINCIPIO RECTOR (D6 del proposal): la CONFIGURACIÓN es 100% editable en runtime;
+// sólo las CAPACIDADES nuevas (una fuente de datos o una acción que hoy no existe)
+// requieren código. Por eso las intenciones son FILAS (AssistantIntent), NO un enum
+// hardcodeado: agregar comportamiento es cargar datos desde la UI, sin deploy.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// CFG-1 — un perfil por área. `enabled` nace en FALSE: un perfil recién creado NUNCA
+// habla hasta que alguien lo habilite explícitamente (la ausencia de configuración
+// SIEMPRE resuelve a "no hablar", nunca a "improvisar" — RTR-3).
+model AssistantProfile {
+  id     String            @id @default(uuid())
+  areaId String            @unique
+  area   TicketAreaCatalog @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  enabled        Boolean @default(false)
+  persona        String  @default("")
+  handoffMessage String  @default("")
+  // Modelo de redacción (paso 4 del pipeline, D1). Editable por área.
+  model          String  @default("deepseek-chat")
+  // Modelo del CLASIFICADOR (paso 1). NULL ⇒ usa `model`. Permite un modelo más chico y
+  // barato para clasificar, que es una llamada corta y de set cerrado.
+  classifierModel String?
+  timeoutMs       Int     @default(20000)
+  // Keys de AssistantAction habilitadas para ESTE perfil (ACT-1). Una acción no listada
+  // acá resuelve a handoff aunque la intención la referencie.
+  enabledActions  String[] @default([])
+
+  intents   AssistantIntent[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+}
+
+// CFG-2 — una intención = una FILA. Alta/baja/edición SIN deploy. `description` y
+// `examples[]` son el material que lee el clasificador (RTR-2): el universo de candidatas
+// es SIEMPRE el de las intents enabled DEL PERFIL DEL ÁREA, nunca un vocabulario global.
+model AssistantIntent {
+  id        String           @id @default(uuid())
+  profileId String
+  profile   AssistantProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String
+  examples    String[] @default([])
+  enabled     Boolean  @default(true)
+  // Qué datos ve esta intención. Cada key MUST existir en AssistantDataSource (CFG-3,
+  // validado en configuración con 400) — el motor resuelve SÓLO estas fuentes.
+  dataSourceKeys String[] @default([])
+  responseGuide  String   @default("")
+  // Qué hace. MUST existir en AssistantAction Y estar en profile.enabledActions (ACT-1).
+  actionKey      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, name])
+  @@index([profileId])
+}
+
+// CFG-3 — CATÁLOGO de fuentes. La implementación de cada `key` vive en CÓDIGO
+// (AssistantDataSourceRegistry, D2). Esta tabla sólo permite HABILITAR/deshabilitar:
+// NO existe endpoint para CREAR fuentes desde la UI — cada fuente es una puerta a la
+// base, y definirlas por formulario sería una inyección con formulario bonito.
+// Seed idempotente por migración. `noc.cortes` arranca DESHABILITADA: mientras el hub
+// NOC esté en modo oscuro, responder "no hay cortes" sería afirmar sin saber.
+model AssistantDataSource {
+  key       String   @id
+  label     String
+  enabled   Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+// CFG-3 — CATÁLOGO de acciones, con su nivel de riesgo (§7 del proposal):
+//   green  → comment_internal, suggest_area   (los ve un empleado, daño ~0)
+//   yellow → whatsapp_reply, comment_public   (los ve el cliente)
+//   red    → close_ticket, create_task        (entierra un problema / despacha cuadrilla)
+// ACT-2: ninguna `red` viene habilitada en el seed; habilitarla requiere acto explícito
+// y una corrida de eval registrada (EVAL-2).
+model AssistantAction {
+  key       String   @id
+  label     String
+  riskLevel String
+  updatedAt DateTime @updatedAt
+}
+
+// RTR-0 — ruteo cuando la conversación NO tiene área.
+//
+// Hallazgo que obliga a esto (2026-07-26): `Conversation.areaId` lo escribe ÚNICAMENTE
+// `SetConversationArea`, una acción manual en la UI de Prominense — y los agentes trabajan
+// dentro de CHATWOOT. O sea: las conversaciones de WhatsApp entran con `areaId = NULL` y
+// nadie las clasifica, así que un motor que exigiera área NUNCA se activaría.
+//
+// Solución elegida por el usuario: **agente default + re-ruteo**. Este singleton dice qué
+// área atiende lo que entra sin clasificar. El agente default responde; si detecta que el
+// tema pertenece a otra área con agente propio, reasigna y esa área toma la conversación.
+//
+// Molde config-singleton del repo (NocAlertThresholdsConfig / NocBroadcastConfig).
+// `defaultAreaId` NULL = sin agente default ⇒ las conversaciones sin área no se atienden
+// (comportamiento seguro por defecto: el seed lo deja en NULL).
+model AssistantRoutingConfig {
+  id            String             @id @default("singleton")
+  defaultAreaId String?
+  defaultArea   TicketAreaCatalog? @relation(fields: [defaultAreaId], references: [id], onDelete: SetNull)
+  /// RTR-0 — habilita el re-ruteo a otras áreas. OFF ⇒ el agente default atiende todo y
+  /// nunca reasigna (menos llamadas al modelo, menos superficie).
+  rerouteEnabled Boolean           @default(false)
+  updatedAt     DateTime           @updatedAt
+}
+
+/// Credenciales del proveedor de IA, editables desde la UI (molde NocBroadcastConfig).
+///
+/// `apiKey` es un SECRETO: el DTO de lectura NUNCA lo serializa completo — expone
+/// `hasApiKey` + `apiKeyLast4`. Y un PUT con `apiKey` vacío PRESERVA la guardada, para que
+/// editar la baseUrl desde el formulario no pise la key con la máscara que se mostró.
+///
+/// ⚠️ TRADEOFF ACEPTADO: la key queda en la base, así que la ve cualquiera con acceso a
+/// Postgres (pgweb vía saturno). A cambio se puede rotar desde la UI sin deploy. Mismo
+/// criterio que ya se tomó para `NocBroadcastConfig.evolutionApiKey`.
+///
+/// Vacío ⇒ se usa el env var (`DEEPSEEK_API_KEY`). La DB PISA al env; borrar el valor acá
+/// devuelve el control a los secrets sin tocar código.
+model AssistantProviderConfig {
+  id        String   @id @default("singleton")
+  baseUrl   String   @default("")
+  apiKey    String   @default("")
+  updatedAt DateTime @updatedAt
+}
+
+// EVAL-1/EVAL-2 — corridas de evaluación del asistente.
+//
+// NO es una métrica decorativa: es el CANDADO de las acciones `riskLevel:'red'`. Sin al menos
+// una corrida registrada, `resolve_conversation` no se puede habilitar.
+//
+// Las dos particiones se guardan SEPARADAS a propósito. Un "accuracy" único esconde el modo
+// de falla que importa: el benchmark de IrisAgent sobre tickets reales (jul-2026) mostró un
+// modelo que resuelve casi todo y es el PEOR resistiendo alucinaciones — con un promedio
+// único habría salido primero.
+model AssistantEvalRun {
+  id                String   @id @default(uuid())
+  model             String
+  /// Partición de RESOLUCIÓN: la respuesta correcta existe y se conoce.
+  resolutionTotal   Int
+  resolutionCorrect Int
+  /// Partición de ABSTENCIÓN: no hay respuesta buena; el acierto es CALLARSE.
+  abstentionTotal   Int
+  abstentionCorrect Int
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// OBS-1 — auditoría de CADA invocación del motor (responda o no). MUST NOT contener PII
+// ni el prompt crudo: sólo qué agente actuó, con qué intención, qué fuentes resolvió y
+// en qué terminó. Es la fuente de verdad para depurar por qué el bot dijo (o calló) algo.
+model AssistantRun {
+  id          String  @id @default(uuid())
+  profileId   String?
+  areaId      String?
+  subjectType String // 'conversation' | 'ticket'
+  subjectId   String
+  // NULL ⇒ el clasificador no matcheó ninguna intención habilitada (default deny, RTR-3).
+  intentName  String?
+  dataSources String[] @default([])
+  actionKey   String?
+  // 'replied' | 'handoff' | 'noop' | 'rejected_numbers' | 'error'
+  // `rejected_numbers` = SEC-4 descartó la salida porque el modelo escribió una cifra que
+  // no estaba en los hechos inyectados. Es la métrica de alucinación atajada.
+  outcome   String
+  reason    String?
+  latencyMs Int?
+  createdAt DateTime @default(now())
+
+  @@index([subjectType, subjectId])
+  @@index([createdAt])
 }

@@ -4,14 +4,14 @@ import { ListAlerts } from '@application/use-cases/alerts/ListAlerts';
 import { AcknowledgeAlert } from '@application/use-cases/alerts/AcknowledgeAlert';
 import { GetAlertThresholds } from '@application/use-cases/alerts/GetAlertThresholds';
 import { UpdateAlertThresholds } from '@application/use-cases/alerts/UpdateAlertThresholds';
-import { toNocAlertDto } from '@application/dto/nocAlert';
+import { toNocAlertDto, toNocAlertStateDto } from '@application/dto/nocAlert';
 import { UpdateNocAlertThresholdsSchema } from '@application/dto/nocAlertThresholds.dto';
 import { NocAlert, NocAlertInput, NocAlertSeverity, NocAlertStatus } from '@domain/entities/nocAlert';
 import { NocAlertListFilters } from '@domain/ports/NocAlertRepository';
 import type { NocAlertEvent } from '@domain/ports/AlertEventPublisher';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { createApiKeyMiddleware, createTelegramSecretMiddleware, safeCompare } from '../middleware/apiKeyMiddleware';
-import { createExternalWriteRateLimiter } from '../middleware/rateLimiters';
+import { createIngestRateLimiter } from '../middleware/rateLimiters';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import type { GrafanaWebhookSource } from '@infrastructure/adapters/grafana/GrafanaWebhookSource';
 import type { AlertEventBus } from '@infrastructure/events/AlertEventBus';
@@ -80,8 +80,12 @@ export interface AlertsRouterDeps {
    */
   featureFlagRepo: FeatureFlagRepository;
   /**
-   * F7 (fix wave) — inyectable para tests (limit/window chicos); en producción
-   * `composeAlertsModule` no lo pasa y cae al default de `createExternalWriteRateLimiter()`.
+   * F7 (fix wave) — inyectable para tests (limit/window chicos). En producción
+   * `composeAlertsModule` SÍ lo pasa (`createIngestRateLimiter(config.alerts.ingestRateLimit)`,
+   * fix alerts-ingest-ratelimit) — el fallback de acá NUNCA debe volver a ser
+   * `createExternalWriteRateLimiter()` (30/60s, pensado para el API externo de
+   * tickets): eso fue el bug real medido en prod (el colector de fibra postea
+   * ~29 requests de golpe por ciclo y ya rebotaba 429 al filo de esos 30).
    */
   ingestRateLimiter?: RequestHandler;
   /**
@@ -162,6 +166,60 @@ function createThresholdsReadAuth(fiberKey: string, auth: RequestHandler, manage
         return;
       }
       managePerm(req, res, next);
+    });
+  };
+}
+
+/**
+ * Fase 1 (`noc-alerts-level-reconciliation`) — dual auth for
+ * `GET /ingest/:source/state`, SCOPED per source (design.md Decision 1): the
+ * Rust collector authenticates with `ingestKeys[:source]` — the SAME key
+ * `POST /ingest/:source` already checks — but a source's key can ONLY read
+ * its OWN state (fiber-collector's key never reads grafana's, minimum
+ * privilege). An unknown `:source` 404s BEFORE any key is even compared
+ * (spec.md "Fuente desconocida responde 404"), same contract as the POST
+ * ingest route. The session fallback uses `monitoring.read` (NOT `.manage`
+ * like `createThresholdsReadAuth` — this is a read-only status query, not
+ * config). Molde: `createThresholdsReadAuth` above.
+ */
+function createIngestStateReadAuth(
+  ingestKeys: Record<string, string>,
+  auth: RequestHandler,
+  readPerm: RequestHandler,
+): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const source = req.params['source'] as string;
+    const key = ingestKeys[source];
+    if (key === undefined) {
+      res.status(404).json({ error: `Unknown ingest source: ${source}`, code: 'UNKNOWN_INGEST_SOURCE' });
+      return;
+    }
+
+    if (key) {
+      let providedKey: string | undefined;
+      const xApiKey = req.headers['x-api-key'];
+      if (typeof xApiKey === 'string' && xApiKey.length > 0) {
+        providedKey = xApiKey;
+      } else {
+        const authHeader = req.headers['authorization'];
+        if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+          providedKey = authHeader.slice('Bearer '.length);
+        }
+      }
+      if (providedKey && safeCompare(providedKey, key)) {
+        next();
+        return;
+      }
+    }
+
+    // No valid machine key for THIS source — fall back to session +
+    // monitoring.read. A missing/invalid session 401s from `auth` itself.
+    auth(req, res, (err?: unknown) => {
+      if (err) {
+        next(err);
+        return;
+      }
+      readPerm(req, res, next);
     });
   };
 }
@@ -269,8 +327,9 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
   const readPerm = requirePerm('monitoring', 'read');
   const ackPerm = requirePerm('monitoring', 'acknowledge_alert');
   const managePerm = requirePerm('monitoring', 'manage');
-  const ingestRateLimiter = deps.ingestRateLimiter ?? createExternalWriteRateLimiter();
+  const ingestRateLimiter = deps.ingestRateLimiter ?? createIngestRateLimiter();
   const thresholdsReadAuth = createThresholdsReadAuth(ingestKeys['fiber-collector'] ?? '', auth, managePerm);
+  const ingestStateReadAuth = createIngestStateReadAuth(ingestKeys, auth, readPerm);
 
   // POST /ingest/:source — per-source canonical ingestion (F3, spec.md "Alert
   // ingestion endpoint auth"). Machine-to-machine, no RBAC, no req.user. The
@@ -378,6 +437,35 @@ export function createAlertsRouter(deps: AlertsRouterDeps): Router {
         }
         const alert = await ingestAlert.execute(parsed);
         res.status(201).json(toNocAlertDto(alert));
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // GET /ingest/:source/state — Fase 1 (`noc-alerts-level-reconciliation`,
+  // `noc-alert-announced-state`). Machine read access SCOPED per source (auth
+  // dual, ver `createIngestStateReadAuth` arriba) + fallback sesión+monitoring.read.
+  // Reusa `ListAlerts` con `{source, status:'firing'}` — YA filtra por ambos,
+  // sin duplicar lógica (design.md "ListAlerts ya filtra source+status").
+  // Respuesta: array PLANO (sin envelope `{data}`), proyección mínima vía
+  // `toNocAlertStateDto` — mismo criterio que `GET /thresholds`. Kill-switch
+  // `noc-alerts-hub-enabled` se chequea DESPUÉS de la auth (mismo orden que
+  // `POST /ingest/:source`): un request sin credenciales válidas nunca llega
+  // a saber si el hub está prendido o apagado.
+  router.get(
+    '/ingest/:source/state',
+    ingestStateReadAuth,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const flag = await featureFlagRepo.get(NOC_ALERTS_HUB_ENABLED_FLAG);
+        if (!(flag?.enabled ?? true)) {
+          res.status(503).json({ error: 'NOC alerts hub is disabled', code: 'NOC_ALERTS_HUB_DISABLED' });
+          return;
+        }
+        const source = req.params['source'] as string;
+        const alerts = await listAlerts.execute({ source, status: 'firing' });
+        res.json(alerts.map(toNocAlertStateDto));
       } catch (err) {
         next(err);
       }

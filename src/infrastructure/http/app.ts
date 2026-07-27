@@ -782,6 +782,12 @@ import { createExternalV1Router } from './routes/externalV1.routes';
 import { createApiKeyMiddleware } from './middleware/apiKeyMiddleware';
 // ── NOC Alerts Hub (noc-alerts-hub, Fase A) — wiring vive en composeAlertsModule ─
 import { composeAlertsModule } from './composeAlertsModule';
+// ── ai-assistant-multiagent — config del asistente IA; wiring en composeAssistantModule ─
+import { composeAssistantModule } from './composeAssistantModule';
+// ── ai-assistant-multiagent — MOTOR del asistente; wiring en composeAssistantEngine ─────
+import { composeAssistantEngine } from './composeAssistantEngine';
+import { ChatMessageThreadReader } from '@infrastructure/adapters/assistant/ChatMessageThreadReader';
+import { CustomerAssistantClientResolver } from '@infrastructure/adapters/assistant/CustomerAssistantClientResolver';
 import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
 import { ListZones } from '@application/use-cases/ListZones';
 import { CreateZone } from '@application/use-cases/CreateZone';
@@ -899,6 +905,37 @@ import { createTaskStageConfigRouter } from './routes/taskStageConfig.routes';
 import { PrismaTaskStageTransitionConfigRepository } from '../adapters/prisma/PrismaTaskStageTransitionConfigRepository';
 import { GetTaskStageTransitionConfig } from '@application/use-cases/GetTaskStageTransitionConfig';
 import { SetTaskStageTransitionConfig } from '@application/use-cases/SetTaskStageTransitionConfig';
+// finance-growth Fase 1 — ingest global de cobranza GR (design.md Decision 4b).
+import { createFinanceGrowthRouter } from './routes/financeGrowth.routes';
+import { ListFinanceInvoiceTypes } from '@application/use-cases/finance/ListFinanceInvoiceTypes';
+import { ReclassifyFinanceInvoiceType } from '@application/use-cases/finance/ReclassifyFinanceInvoiceType';
+import { GetFinanceSyncStatus } from '@application/use-cases/finance/GetFinanceSyncStatus';
+import { ForceFinanceDeltaRun } from '@application/use-cases/finance/ForceFinanceDeltaRun';
+import { RearmFinanceReceiptsBackfill } from '@application/use-cases/finance/RearmFinanceReceiptsBackfill';
+import { PrismaFinanceInvoiceTypeClassificationRepository } from '../adapters/prisma/PrismaFinanceInvoiceTypeClassificationRepository';
+import { FinanceReceiptIngestScheduler, FinanceReceiptIngestSchedulerStatus } from '../scheduling/FinanceReceiptIngestScheduler';
+import { FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
+// finance-growth Fase 2 — settables CRUD (design.md HTTP Contract).
+import { PrismaFinanceTechnologyCostRepository } from '../adapters/prisma/PrismaFinanceTechnologyCostRepository';
+import { PrismaFinancePlanPriceRepository } from '../adapters/prisma/PrismaFinancePlanPriceRepository';
+import { PrismaFinanceTargetsConfigRepository } from '../adapters/prisma/PrismaFinanceTargetsConfigRepository';
+import { PrismaFinanceInflationIndexRepository } from '../adapters/prisma/PrismaFinanceInflationIndexRepository';
+import { GetFinanceTechnologyCosts } from '@application/use-cases/finance/GetFinanceTechnologyCosts';
+import { UpdateFinanceTechnologyCost } from '@application/use-cases/finance/UpdateFinanceTechnologyCost';
+import { GetFinancePlanPrices } from '@application/use-cases/finance/GetFinancePlanPrices';
+import { UpdateFinancePlanPrice } from '@application/use-cases/finance/UpdateFinancePlanPrice';
+import { GetFinanceTargets } from '@application/use-cases/finance/GetFinanceTargets';
+import { UpdateFinanceTargets } from '@application/use-cases/finance/UpdateFinanceTargets';
+import { ListFinanceInflationIndex } from '@application/use-cases/finance/ListFinanceInflationIndex';
+import { UpdateFinanceInflationIndex } from '@application/use-cases/finance/UpdateFinanceInflationIndex';
+// finance-growth Fase 3 rework (J1) — manual backfill trigger for FinanceMonthlySnapshot/FinanceCohortSnapshot.
+import { PrismaFinanceReceiptItemRepository } from '../adapters/prisma/PrismaFinanceReceiptItemRepository';
+import { PrismaFinanceReceiptApplicationRepository } from '../adapters/prisma/PrismaFinanceReceiptApplicationRepository';
+import { PrismaFinanceMonthlySnapshotRepository } from '../adapters/prisma/PrismaFinanceMonthlySnapshotRepository';
+import { PrismaFinanceCohortSnapshotRepository } from '../adapters/prisma/PrismaFinanceCohortSnapshotRepository';
+import { BuildFinanceMonthlySnapshot } from '@application/use-cases/finance/BuildFinanceMonthlySnapshot';
+import { BuildFinanceCohortSnapshot } from '@application/use-cases/finance/BuildFinanceCohortSnapshot';
+import { BackfillFinanceMonthlySnapshots } from '@application/use-cases/finance/BackfillFinanceMonthlySnapshots';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -1029,7 +1066,23 @@ const resolveUserPermissions = new ResolveUserPermissions(rbacUserRoleRepo, rbac
 export const requirePerm = (m: RbacModuleCode, a: PermissionAction) =>
   requirePermission(rbacUserRepo, m, a);
 
-export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, backfillScheduler?: BackfillScheduler | null, uispSyncScheduler?: UispSyncScheduler | null) {
+// finance-growth Fase 1 — pacing snapshot when the scheduler is disabled/not
+// yet bootstrapped (GR off, or GR_CUIT/GR_SECRET missing) — GET /sync/status
+// still responds 200 with an honest "idle" snapshot instead of 500.
+// fix-wave-2 LOW: was hardcoded to 20000 — now mirrors
+// FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS so a change to the base pacing default
+// doesn't leave this idle snapshot silently out of sync with reality.
+const FINANCE_RECEIPT_INGEST_IDLE_STATUS: FinanceReceiptIngestSchedulerStatus = {
+  requestIntervalMs: FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS.requestIntervalMs,
+  effectiveIntervalMs: FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS.requestIntervalMs,
+  degraded: false,
+  consecutiveFailures: 0,
+  activeLane: 'idle',
+  // fix-wave-2 R3 — no scheduler instance at all ⇒ definitionally not running.
+  enabled: false,
+};
+
+export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, backfillScheduler?: BackfillScheduler | null, uispSyncScheduler?: UispSyncScheduler | null, financeReceiptIngestScheduler?: FinanceReceiptIngestScheduler | null) {
   const app = express();
 
   // SDD #6a — behind EasyPanel's proxy; trust the first hop so the rate limiter
@@ -2874,6 +2927,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // (evita inflar este God Object — design.md "File Changes" ⚠).
   app.use('/api/alerts', composeAlertsModule({ authAdapter, sessionRepo, requirePerm, auditEventRepo }));
 
+  // ─── ai-assistant-multiagent — CONFIGURACIÓN del asistente IA conversacional ────
+  // Sólo la config (perfiles/intenciones/catálogos). El MOTOR se engancha aparte en
+  // ReceiveChatwootWebhook (Batch 6) y arranca apagado por el flag `ai-assistant-enabled`:
+  // así la configuración puede estar viva y editándose con el bot completamente mudo.
+  app.use('/api/assistant', composeAssistantModule({ authAdapter, sessionRepo, requirePerm }));
+
   // ─── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send ───────
   {
     const conversationRepo = new PrismaConversationRepository();
@@ -2949,6 +3008,25 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // (riesgo pineado por el composition-root test de abajo).
     const featureFlagRepo = new PrismaFeatureFlagRepository();
 
+    // ─── ai-assistant-multiagent (T6.3) — MOTOR del asistente IA ────────────────
+    // Se construye ANTES del router porque se inyecta como 8º arg de
+    // `ReceiveChatwootWebhook`. Arranca MUDO: el flag `ai-assistant-enabled` viene en
+    // false desde la migración y cada perfil nace apagado.
+    // ⚠️ Sin esta línea, el motor existiría pero NADIE lo llamaría — exactamente el bug W6
+    // del EPIC #38 (rutas cableadas, hook nunca inyectado, CI verde, feature muerta en prod).
+    // Pineado por `assistant-composition.test.ts`.
+    const assistantEngine = composeAssistantEngine({
+      conversationRepo,
+      customerRepo: customerAdapter,
+      chatwootGateway,
+      sendMessage: new SendMessage(conversationRepo, chatMessageRepo, chatwootGateway, chatAttachmentRepo, chatMediaDownloadTrigger, conversationMentionRepo, userLookupForScheduling),
+      setConversationArea: new SetConversationArea(conversationRepo, ticketAreaRepo, conversationEventRepo),
+      setConversationStatus: new SetConversationStatus(conversationRepo, chatwootGateway, conversationEventRepo),
+      listTasks,
+      threadReader: new ChatMessageThreadReader(chatMessageRepo),
+      clientResolver: new CustomerAssistantClientResolver(customerAdapter, customerAdapter),
+    });
+
     app.use('/api/messaging', createMessagingRouter(
       // messaging-bulk (F2, Batch 6, OPT-2) — 6º arg `customerAdapter` (opcional):
       // ya implementa `CampaignSegmentSource & OptOutRegistry` (misma instancia
@@ -2956,7 +3034,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // el opt-out inbound queda MUERTO en prod (lección W6).
       // conversation-events (Ola 2) — 7º arg `conversationEventRepo`: registra 'created'
       // (actor null) y resolved/reopened Chatwoot-driven, best-effort.
-      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger, customerAdapter, conversationEventRepo),
+      // ai-assistant-multiagent (RUN-2) — 8º arg `assistantEngine`: dispara el bot en rama
+      // AISLADA tras espejar el mensaje. Mudo hasta que se prenda el flag.
+      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger, customerAdapter, conversationEventRepo, assistantEngine),
       new ListConversations(conversationRepo),
       new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone, chatAttachmentRepo, chatMediaDownloadTrigger),
       new ListChatMessages(conversationRepo, chatMessageRepo, chatAttachmentRepo),
@@ -3347,6 +3427,81 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     createExternalNews,
     rbacUserRepo,
     rateLimiter: createExternalWriteRateLimiter(),
+  }));
+
+  // finance-growth Fase 1 — /api/finance/growth/* (design.md Wiring). The
+  // ROUTE's own dependencies (invoice-type catalog + sync state readers) are
+  // REAL Prisma repos, built here regardless of whether the scheduler itself
+  // is running — `getPacingStatus` reads the LIVE scheduler snapshot when
+  // wired, or an honest "idle" default when GR is off/misconfigured.
+  const financeInvoiceTypesRepo = new PrismaFinanceInvoiceTypeClassificationRepository();
+  const financeSyncStateRepo = new PrismaSyncStateRepository();
+  // fix-wave-1 F8 — ForceFinanceDeltaRun acquires the SAME lock key the
+  // scheduler's tick() holds (`finance-receipts-ingest`) before touching
+  // SyncState. fix-wave-2 R2 replaced the original read-modify-write with a
+  // TARGETED single-column update (`clearLastRunAt`) — the lock is no longer
+  // load-bearing there (the write is safe in either order), which is why
+  // fix-wave-3 R10 made it proceed unlocked, instead of throwing, when the
+  // lock stays busy for the whole retry budget.
+  const financeForceRunLock = new PgAdvisoryLock();
+  // finance-growth Fase 2 — settables CRUD. Fresh Prisma repos (molde
+  // `PrismaPlanRepository`, instantiated per-mount-site elsewhere too — these
+  // adapters are stateless). `ContractTechnologyRepository`/`PlanRepository`
+  // drive the LEFT JOIN default-zero behavior (design.md "Get..." use cases).
+  const financeTechnologyCostRepo = new PrismaFinanceTechnologyCostRepository();
+  const financePlanPriceRepo = new PrismaFinancePlanPriceRepository();
+  const financeTargetsConfigRepo = new PrismaFinanceTargetsConfigRepository();
+  const financeInflationIndexRepo = new PrismaFinanceInflationIndexRepository();
+  // fix-wave-1 D — shared instances so `Get*` and `Update*` consult the SAME
+  // catalog repo (stateless adapters, but one instance keeps the composition
+  // window's intent obvious): `Update*` now 404s a technologyName/planCode
+  // absent from the catalog BEFORE upserting (see `FinanceTechnologyNotFoundError`).
+  const financeTechnologyCatalogRepo = new PrismaContractTechnologyRepository();
+  const financePlanCatalogRepo = new PrismaPlanRepository();
+  // finance-growth Fase 3 rework (J1) — BackfillFinanceMonthlySnapshots wired
+  // with REAL Prisma repos (composition-root test pins this, molde the rest
+  // of this file). Reuses financeInvoiceTypesRepo/financePlanPriceRepo
+  // (already declared above, stateless) rather than duplicating instances.
+  const backfillSnapshots = new BackfillFinanceMonthlySnapshots(
+    new BuildFinanceMonthlySnapshot(
+      new PrismaContractServiceEventRepository(),
+      new PrismaServiceCatalogRepository(),
+      financePlanCatalogRepo,
+      new PrismaPppoeServiceRepository(),
+      new PrismaClientMirrorReadRepository(),
+      new PrismaFinanceReceiptItemRepository(),
+      new PrismaFinanceReceiptApplicationRepository(),
+      financeInvoiceTypesRepo,
+      financePlanPriceRepo,
+      new PrismaFinanceMonthlySnapshotRepository(),
+    ),
+    new BuildFinanceCohortSnapshot(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository(), new PrismaFinanceCohortSnapshotRepository()),
+  );
+  app.use('/api/finance/growth', createFinanceGrowthRouter({
+    auth: createAuthMiddleware(authAdapter, sessionRepo),
+    requirePerm,
+    listInvoiceTypes: new ListFinanceInvoiceTypes(financeInvoiceTypesRepo),
+    reclassifyInvoiceType: new ReclassifyFinanceInvoiceType(financeInvoiceTypesRepo),
+    getSyncStatus: new GetFinanceSyncStatus(financeSyncStateRepo),
+    forceDeltaRun: new ForceFinanceDeltaRun(financeSyncStateRepo, financeForceRunLock),
+    // fix-wave-2 R6 — reuses the SAME `financeForceRunLock` instance as
+    // `ForceFinanceDeltaRun` (safe: PgAdvisoryLock's re-entrancy caveat only
+    // matters WITHIN one connection; this still correctly contends against
+    // the scheduler's OWN separate `PgAdvisoryLock` connection in
+    // `bootstrapFinanceReceiptsIngest.ts`).
+    rearmBackfill: new RearmFinanceReceiptsBackfill(financeSyncStateRepo, financeForceRunLock),
+    // fix-wave-2 R3 — `isEnabled()`, NOT `!= null` (see FinanceGrowthRouterDeps docblock).
+    isSchedulerRunning: () => financeReceiptIngestScheduler?.isEnabled() ?? false,
+    getPacingStatus: () => financeReceiptIngestScheduler?.status ?? FINANCE_RECEIPT_INGEST_IDLE_STATUS,
+    getTechnologyCosts: new GetFinanceTechnologyCosts(financeTechnologyCostRepo, financeTechnologyCatalogRepo),
+    updateTechnologyCost: new UpdateFinanceTechnologyCost(financeTechnologyCostRepo, financeTechnologyCatalogRepo),
+    getPlanPrices: new GetFinancePlanPrices(financePlanPriceRepo, financePlanCatalogRepo),
+    updatePlanPrice: new UpdateFinancePlanPrice(financePlanPriceRepo, financePlanCatalogRepo),
+    getTargets: new GetFinanceTargets(financeTargetsConfigRepo),
+    updateTargets: new UpdateFinanceTargets(financeTargetsConfigRepo),
+    listInflationIndex: new ListFinanceInflationIndex(financeInflationIndexRepo),
+    updateInflationIndex: new UpdateFinanceInflationIndex(financeInflationIndexRepo),
+    backfillSnapshots,
   }));
 
   // 404
