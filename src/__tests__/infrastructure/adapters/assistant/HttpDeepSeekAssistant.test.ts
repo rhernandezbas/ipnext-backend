@@ -157,3 +157,75 @@ describe('HttpDeepSeekAssistant — MUST NOT THROW', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe('HttpDeepSeekAssistant — credenciales resueltas por invocación', () => {
+  // La firma explícita del spy es lo que permite afirmar sobre el config del request
+  // (baseURL + Authorization). Con `jest.fn(async () => …)` las calls son tuplas vacías.
+  type PostConfig = { baseURL?: string; headers: Record<string, string> };
+
+  const spyClient = () => {
+    const spy = jest.fn(async (_url: string, _body: unknown, _config: PostConfig) => ({
+      data: { choices: [{ message: { content: 'hola' } }] },
+    }));
+    return { spy, client: { post: spy } as unknown as AxiosInstance };
+  };
+
+  const withResolver = (client: AxiosInstance, resolved: { baseUrl: string; apiKey: string }) =>
+    new HttpDeepSeekAssistant({
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'sk-del-deploy',
+      client,
+      resolveCredentials: async () => resolved,
+    });
+
+  it('la API key resuelta pisa a la del constructor', async () => {
+    const { spy, client } = spyClient();
+
+    await withResolver(client, {
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'sk-de-la-ui',
+    }).generate(generateReq);
+
+    expect(spy.mock.calls[0][2].headers.Authorization).toBe('Bearer sk-de-la-ui');
+  });
+
+  it('la URL resuelta pisa a la del constructor', async () => {
+    // Sin esto, "Probar conexión" (que SÍ honra la URL nueva) diría "OK" contra un endpoint
+    // que el bot no usa. Un falso verde es peor que un error: no te frena.
+    const { spy, client } = spyClient();
+
+    await withResolver(client, {
+      baseUrl: 'https://gateway.interno',
+      apiKey: 'sk-x',
+    }).generate(generateReq);
+
+    expect(spy.mock.calls[0][2].baseURL).toBe('https://gateway.interno');
+  });
+
+  it('classify también honra la URL resuelta', async () => {
+    const { spy, client } = spyClient();
+
+    await withResolver(client, {
+      baseUrl: 'https://gateway.interno',
+      apiKey: 'sk-x',
+    }).classify(classifyReq);
+
+    expect(spy.mock.calls[0][2].baseURL).toBe('https://gateway.interno');
+  });
+
+  it('si resolver la credencial EXPLOTA ⇒ unavailable y no se llama a la API', async () => {
+    // La resolución pega a la DB. Una DB caída no puede volverse un throw dentro del webhook.
+    const { spy, client } = spyClient();
+    const adapter = new HttpDeepSeekAssistant({
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'sk-del-deploy',
+      client,
+      resolveCredentials: async () => {
+        throw new Error('DB caída');
+      },
+    });
+
+    await expect(adapter.generate(generateReq)).resolves.toEqual({ kind: 'unavailable' });
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
