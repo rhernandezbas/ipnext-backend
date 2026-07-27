@@ -15,6 +15,10 @@ import { UpdateAssistantProviderConfig } from '@application/use-cases/assistant/
 import { TestAssistantConnection } from '@application/use-cases/assistant/TestAssistantConnection';
 import { GetAssistantRoutingConfig } from '@application/use-cases/assistant/GetAssistantRoutingConfig';
 import { UpdateAssistantRoutingConfig } from '@application/use-cases/assistant/UpdateAssistantRoutingConfig';
+import { RecordAssistantEvalRun } from '@application/use-cases/assistant/RecordAssistantEvalRun';
+import { ListAssistantEvalRuns } from '@application/use-cases/assistant/ListAssistantEvalRuns';
+import { SetAssistantDataSourceEnabled } from '@application/use-cases/assistant/SetAssistantDataSourceEnabled';
+import { InMemoryAssistantEvalRepository } from '@infrastructure/adapters/in-memory/InMemoryAssistantEvalRepository';
 import { InMemoryAssistantRoutingConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryAssistantRoutingConfigRepository';
 import { InMemoryAssistantProviderConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryAssistantProviderConfigRepository';
 import {
@@ -38,10 +42,16 @@ function buildApp(opts: { hasEval?: boolean; canManage?: boolean } = {}) {
   const intents = new InMemoryAssistantIntentRepository();
   const catalog = new InMemoryAssistantCatalogRepository();
   const runs = new InMemoryAssistantRunRepository();
-  const evalGate: AssistantEvalGate = { hasRecordedRun: async () => opts.hasEval ?? false };
+  // Sin `hasEval` explícito el gate consulta el repo REAL de corridas: así el test del seam
+  // (registrar eval ⇒ poder habilitar `resolve_conversation`) prueba el circuito completo, no
+  // dos mitades que podrían no tocarse. Con `hasEval` se sigue pudiendo forzar el estado.
+  const evalGate: AssistantEvalGate = {
+    hasRecordedRun: async () => opts.hasEval ?? evals.hasRecordedRun(),
+  };
   const provider = new InMemoryAssistantProviderConfigRepository();
   const envCredentials = { baseUrl: 'https://api.deepseek.com', apiKey: '' };
   const routing = new InMemoryAssistantRoutingConfigRepository();
+  const evals = new InMemoryAssistantEvalRepository();
 
   const app = express();
   app.use(express.json());
@@ -67,6 +77,9 @@ function buildApp(opts: { hasEval?: boolean; canManage?: boolean } = {}) {
         }),
         'deepseek-chat',
       ),
+      recordEvalRun: new RecordAssistantEvalRun(evals),
+      listEvalRuns: new ListAssistantEvalRuns(evals),
+      setDataSourceEnabled: new SetAssistantDataSourceEnabled(catalog),
       getRoutingConfig: new GetAssistantRoutingConfig(routing),
       updateRoutingConfig: new UpdateAssistantRoutingConfig(routing, profiles),
       auth: (_req, _res, next) => next(),
@@ -82,7 +95,7 @@ function buildApp(opts: { hasEval?: boolean; canManage?: boolean } = {}) {
   );
   app.use(errorHandler);
 
-  return { app, profiles, intents, runs, provider, routing };
+  return { app, profiles, intents, runs, provider, routing, evals, catalog };
 }
 
 describe('GET /api/assistant/catalogs', () => {
@@ -527,6 +540,185 @@ describe('PUT /api/assistant/routing', () => {
     await request(app)
       .put('/api/assistant/routing')
       .send({ defaultAreaId: null, rerouteEnabled: false })
+      .expect(403);
+  });
+});
+
+/**
+ * EVAL-1/EVAL-2 — el candado de `resolve_conversation`, por HTTP.
+ *
+ * El use case de registro EXISTÍA pero huérfano: ninguna ruta lo llamaba, así que la acción
+ * roja no se podía destrabar por ningún camino. Estos tests cierran ese seam.
+ */
+const VALID_EVAL = {
+  model: 'deepseek-chat',
+  resolutionTotal: 80,
+  resolutionCorrect: 68,
+  abstentionTotal: 20,
+  abstentionCorrect: 18,
+  notes: '100 conversaciones reales',
+};
+
+describe('POST /api/assistant/evals', () => {
+  it('una corrida válida se registra con sus tasas derivadas', async () => {
+    const { app, evals } = buildApp();
+
+    const res = await request(app).post('/api/assistant/evals').send(VALID_EVAL).expect(201);
+
+    expect(res.body.data.abstentionRate).toBeCloseTo(0.9);
+    expect(await evals.hasAnyRun()).toBe(true);
+  });
+
+  it('sin partición de abstención devuelve 422 (bien formado pero inválido), NO 500', async () => {
+    // El corazón del candado: un eval que sólo mide resolución destrabaría la acción roja con
+    // un número que no dice nada sobre si el bot sabe callarse.
+    //
+    // 422 y no 400 a propósito, y el repo ya lo tenía mapeado así: el body está bien FORMADO
+    // (zod pasa), lo que falla es la regla de dominio. Esa distinción le dice al FE si el
+    // problema es cómo mandó los datos o qué datos mandó.
+    const { app, evals } = buildApp();
+
+    const res = await request(app)
+      .post('/api/assistant/evals')
+      .send({ ...VALID_EVAL, abstentionTotal: 0, abstentionCorrect: 0 })
+      .expect(422);
+
+    expect(res.body.code).toBe('INVALID_ASSISTANT_EVAL_RUN');
+    expect(await evals.hasAnyRun()).toBe(false);
+  });
+
+  it('un body con tipos mal es 400 por zod, nunca un 500', async () => {
+    const { app } = buildApp();
+
+    await request(app)
+      .post('/api/assistant/evals')
+      .send({ model: 123, resolutionTotal: 'ochenta' })
+      .expect(400);
+  });
+
+  it('registrar exige manage', async () => {
+    const { app } = buildApp({ canManage: false });
+
+    await request(app).post('/api/assistant/evals').send(VALID_EVAL).expect(403);
+  });
+
+  it('registrar DESTRABA de verdad la acción roja (seam completo con el gate)', async () => {
+    // Lo que importa no es que el POST responda 201, sino que DESPUÉS se pueda habilitar
+    // `resolve_conversation`. Antes de esta ruta, ese rechazo era permanente.
+    const { app } = buildApp();
+    const created = await request(app)
+      .post('/api/assistant/profiles')
+      .send({ areaId: 'area-1' })
+      .expect(201);
+    const id = created.body.data.id;
+
+    // 409: no es un pedido mal armado, es un conflicto con el estado actual (no hay eval).
+    await request(app)
+      .patch(`/api/assistant/profiles/${id}`)
+      .send({ enabledActions: ['resolve_conversation'] })
+      .expect(409);
+
+    await request(app).post('/api/assistant/evals').send(VALID_EVAL).expect(201);
+
+    await request(app)
+      .patch(`/api/assistant/profiles/${id}`)
+      .send({ enabledActions: ['resolve_conversation'] })
+      .expect(200);
+  });
+});
+
+describe('GET /api/assistant/evals', () => {
+  it('sin corridas devuelve lista vacía', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app).get('/api/assistant/evals').expect(200);
+
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('lo registrado se puede auditar después — un candado invisible es un trámite', async () => {
+    const { app } = buildApp();
+    await request(app)
+      .post('/api/assistant/evals')
+      .send({ ...VALID_EVAL, notes: 'muestra de julio' })
+      .expect(201);
+
+    const res = await request(app).get('/api/assistant/evals').expect(200);
+
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].notes).toBe('muestra de julio');
+  });
+
+  it('leer NO requiere manage', async () => {
+    const { app } = buildApp({ canManage: false });
+
+    await request(app).get('/api/assistant/evals').expect(200);
+  });
+});
+
+describe('PATCH /api/assistant/catalogs/data-sources/:key', () => {
+  it('prende noc.cortes — el tilde que el seed prometía y no existía', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app)
+      .patch('/api/assistant/catalogs/data-sources/noc.cortes')
+      .send({ enabled: true })
+      .expect(200);
+
+    expect(res.body.data.enabled).toBe(true);
+
+    // Y se ve reflejado en el catálogo que consume el FE.
+    const catalogs = await request(app).get('/api/assistant/catalogs').expect(200);
+    const source = catalogs.body.data.dataSources.find(
+      (s: { key: string }) => s.key === 'noc.cortes',
+    );
+    expect(source.enabled).toBe(true);
+  });
+
+  it('se puede volver a apagar', async () => {
+    const { app } = buildApp();
+
+    await request(app)
+      .patch('/api/assistant/catalogs/data-sources/cliente.saldo')
+      .send({ enabled: false })
+      .expect(200);
+
+    const catalogs = await request(app).get('/api/assistant/catalogs');
+    const source = catalogs.body.data.dataSources.find(
+      (s: { key: string }) => s.key === 'cliente.saldo',
+    );
+    expect(source.enabled).toBe(false);
+  });
+
+  it('una key desconocida es 400 nombrando la key, no un 500', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app)
+      .patch('/api/assistant/catalogs/data-sources/cliente.inventada')
+      .send({ enabled: true })
+      .expect(400);
+
+    expect(res.body.error).toMatch(/cliente\.inventada/);
+  });
+
+  it('NO se puede crear una fuente nueva por esta vía (frontera R5)', async () => {
+    const { app } = buildApp();
+
+    await request(app)
+      .patch('/api/assistant/catalogs/data-sources/cliente.tarjeta')
+      .send({ enabled: true })
+      .expect(400);
+
+    const catalogs = await request(app).get('/api/assistant/catalogs');
+    expect(catalogs.body.data.dataSources).toHaveLength(4);
+  });
+
+  it('togglear exige manage', async () => {
+    const { app } = buildApp({ canManage: false });
+
+    await request(app)
+      .patch('/api/assistant/catalogs/data-sources/noc.cortes')
+      .send({ enabled: true })
       .expect(403);
   });
 });

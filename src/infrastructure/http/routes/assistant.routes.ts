@@ -13,6 +13,9 @@ import type { UpdateAssistantProviderConfig } from '@application/use-cases/assis
 import type { TestAssistantConnection } from '@application/use-cases/assistant/TestAssistantConnection';
 import type { GetAssistantRoutingConfig } from '@application/use-cases/assistant/GetAssistantRoutingConfig';
 import type { UpdateAssistantRoutingConfig } from '@application/use-cases/assistant/UpdateAssistantRoutingConfig';
+import type { RecordAssistantEvalRun } from '@application/use-cases/assistant/RecordAssistantEvalRun';
+import type { ListAssistantEvalRuns } from '@application/use-cases/assistant/ListAssistantEvalRuns';
+import type { SetAssistantDataSourceEnabled } from '@application/use-cases/assistant/SetAssistantDataSourceEnabled';
 import type { PermissionAction, RbacModuleCode } from '@domain/entities/rbac';
 
 /** Factory que expone `app.ts` (inyección DIP-limpia, molde `alerts.routes`). */
@@ -30,6 +33,9 @@ export interface AssistantRouterDeps {
   getProviderConfig: GetAssistantProviderConfig;
   updateProviderConfig: UpdateAssistantProviderConfig;
   testConnection: TestAssistantConnection;
+  recordEvalRun: RecordAssistantEvalRun;
+  listEvalRuns: ListAssistantEvalRuns;
+  setDataSourceEnabled: SetAssistantDataSourceEnabled;
   getRoutingConfig: GetAssistantRoutingConfig;
   updateRoutingConfig: UpdateAssistantRoutingConfig;
   auth: RequestHandler;
@@ -119,6 +125,25 @@ const ListRunsQuerySchema = z.object({
  * `defaultAreaId` acepta null EXPLÍCITO — es la forma de apagar el ruteo, y tiene que ser
  * decible. Lo que NO acepta es string vacío: sería un id que no matchea con nada.
  */
+/**
+ * EVAL-1 — los NÚMEROS de la corrida, no un "ya la corrí".
+ *
+ * Todos los campos son obligatorios y enteros no negativos. Que el endpoint exija los conteos
+ * es lo que hace del eval una salvaguarda y no un trámite: la regla de fondo (la partición de
+ * abstención no puede estar vacía) la impone el use case, porque es de dominio, no de forma.
+ */
+const RecordEvalSchema = z.object({
+  model: z.string().trim().min(1).max(120),
+  resolutionTotal: z.number().int().nonnegative(),
+  resolutionCorrect: z.number().int().nonnegative(),
+  abstentionTotal: z.number().int().nonnegative(),
+  abstentionCorrect: z.number().int().nonnegative(),
+  notes: z.string().max(2000).nullish().transform((v) => v ?? null),
+});
+
+/** Toggle de una fuente EXISTENTE. No hay alta por acá: frontera R5. */
+const ToggleDataSourceSchema = z.object({ enabled: z.boolean() });
+
 const UpdateRoutingSchema = z.object({
   defaultAreaId: z.string().min(1).nullable(),
   rerouteEnabled: z.boolean(),
@@ -225,6 +250,54 @@ export function createAssistantRouter(deps: AssistantRouterDeps): Router {
     managePerm,
     asyncHandler(async (_req, res) => {
       res.json({ data: await deps.testConnection.execute() });
+    }),
+  );
+
+  // ── Evaluaciones (EVAL-1/EVAL-2) — el candado de las acciones de riesgo ──
+  /**
+   * Sin una corrida registrada, `resolve_conversation` no se puede habilitar. El use case de
+   * registro existía desde el change original pero HUÉRFANO: ninguna ruta lo llamaba, así que
+   * el candado no tenía llave y la acción quedaba trabada para siempre.
+   *
+   * Listar existe para que el candado sea AUDITABLE: si nadie puede ver qué corrida lo
+   * destrabó ni con qué números, deja de ser una salvaguarda y pasa a ser un trámite.
+   */
+  router.get(
+    '/evals',
+    deps.auth,
+    readPerm,
+    asyncHandler(async (_req, res) => {
+      res.json({ data: await deps.listEvalRuns.execute() });
+    }),
+  );
+
+  router.post(
+    '/evals',
+    deps.auth,
+    managePerm,
+    asyncHandler(async (req, res) => {
+      const body = parseOr400(RecordEvalSchema, req.body, res);
+      if (!body) return;
+      res.status(201).json({ data: await deps.recordEvalRun.execute(body) });
+    }),
+  );
+
+  /**
+   * Toggle de una fuente de datos del catálogo. `noc.cortes` nace apagada (el hub NOC está en
+   * modo oscuro) y el seed prometía "se prende con un tilde" — este es ese tilde.
+   *
+   * Sólo TOGGLEA: dar de alta una fuente requiere código y review (frontera R5), porque cada
+   * una es una puerta a la base.
+   */
+  router.patch(
+    '/catalogs/data-sources/:key',
+    deps.auth,
+    managePerm,
+    asyncHandler(async (req, res) => {
+      const body = parseOr400(ToggleDataSourceSchema, req.body, res);
+      if (!body) return;
+      const key = String(req.params['key']);
+      res.json({ data: await deps.setDataSourceEnabled.execute(key, body.enabled) });
     }),
   );
 
