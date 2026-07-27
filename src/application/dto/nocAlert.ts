@@ -52,6 +52,30 @@ export function computeMttaSeconds(startsAt: string, ackAt: string | null): numb
   return Math.max(0, Math.round(diffMs / 1000));
 }
 
+/**
+ * NocAlertStateDto — Fase 1 (`noc-alerts-level-reconciliation`), proyección
+ * MÍNIMA para `GET /api/alerts/ingest/:source/state` (spec.md
+ * "Proyección mínima, solo firing, sin envelope"). Deliberadamente MÁS chico
+ * que `NocAlertDto`: el colector Rust solo necesita reconciliar por
+ * fingerprint+severidad+ACK, nunca `message`/`entity`/`explanation` (esos
+ * viajan en el POST de ingesta, no hace falta repetirlos acá).
+ */
+export interface NocAlertStateDto {
+  fingerprint: string;
+  severity: NocAlertSeverity;
+  startsAt: string;
+  acknowledged: boolean;
+}
+
+export function toNocAlertStateDto(alert: NocAlert): NocAlertStateDto {
+  return {
+    fingerprint: alert.fingerprint,
+    severity: alert.severity,
+    startsAt: alert.startsAt,
+    acknowledged: alert.acknowledged,
+  };
+}
+
 export function toNocAlertDto(alert: NocAlert): NocAlertDto {
   return {
     id: alert.id,
