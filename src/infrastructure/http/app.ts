@@ -561,6 +561,14 @@ import { SyncIClassTeams } from '@application/use-cases/SyncIClassTeams';
 import { ListIClassTeams } from '@application/use-cases/ListIClassTeams';
 import { PrismaIClassTeamRepository } from '../adapters/prisma/PrismaIClassTeamRepository';
 import { createIClassTeamsRouter } from './routes/iclassTeams.routes';
+// iclass-gps-audit — ubicación de cuadrillas + auditoría de presencia en sitio
+import { createTechnicianLocationRouter } from './routes/technicianLocation.routes';
+import { buildTeamLocationSource } from './iclass.factory';
+import { PrismaTeamLocationRepository } from '../adapters/prisma/PrismaTeamLocationRepository';
+import { GetTeamsLiveStatus } from '@application/use-cases/GetTeamsLiveStatus';
+import { GetTeamDailyJourney } from '@application/use-cases/GetTeamDailyJourney';
+import { AuditServiceOrderPresence } from '@application/use-cases/AuditServiceOrderPresence';
+import { ListSuspiciousClosures } from '@application/use-cases/ListSuspiciousClosures';
 // iclass-ops-config (Ola A: mapeo técnico↔cuadrilla + auto-asignar; Ola C: dispatch preview)
 import { SetTechnicianTeamMapping } from '@application/use-cases/SetTechnicianTeamMapping';
 import { ListTechnicianTeamMappings } from '@application/use-cases/ListTechnicianTeamMappings';
@@ -2352,6 +2360,33 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     requirePerm('iclass', 'read'),
     requirePerm('iclass', 'manage'),
   ));
+
+  // iclass-gps-audit — ubicación de cuadrillas + auditoría de presencia en sitio.
+  // DOS permisos SEPARADOS: location_read (mapa en vivo, despacho) vs location_audit
+  // (auditoría histórica, supervisión). El primero NO habilita el segundo.
+  // Sólo se monta con credenciales de IClass configuradas: sin fuente de rastro la
+  // feature no tiene de dónde leer, y montar rutas que siempre fallan confunde más
+  // que ayudar.
+  const teamLocationSource = buildTeamLocationSource();
+  if (teamLocationSource) {
+    const teamLocationRepo = new PrismaTeamLocationRepository();
+    app.use('/api/technicians', createTechnicianLocationRouter({
+      getTeamsLiveStatus: new GetTeamsLiveStatus({ repo: teamLocationRepo, source: teamLocationSource }),
+      getTeamDailyJourney: new GetTeamDailyJourney({ repo: teamLocationRepo }),
+      auditServiceOrderPresence: new AuditServiceOrderPresence({
+        iclass: buildIClassClient(),
+        repo: teamLocationRepo,
+      }),
+      listSuspiciousClosures: new ListSuspiciousClosures({ iclass: buildIClassClient() }),
+      requireLocationRead: requirePerm('technicians', 'location_read'),
+      requireLocationAudit: requirePerm('technicians', 'location_audit'),
+      authProvider: authAdapter,
+      // sessionRepo es OBLIGATORIO acá: sin él `createAuthMiddleware` cae al chequeo
+      // legacy de JWT y la REVOCACIÓN DE SESIÓN no tiene efecto sobre estas rutas —
+      // un ex-empleado seguiría viendo el GPS de todas las cuadrillas hasta 8 h.
+      sessionRepo,
+    }));
+  }
 
   // iclass-ops-config (Ola A) — technician↔team mapping: GET /technician-teams, PATCH /technician-teams/:userId
   app.use('/api/admin/iclass', createIClassTechnicianTeamsRouter(
