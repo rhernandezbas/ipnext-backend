@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { PppoeService, EnforcedState, PppoeDisplayStatus, pppoeDisplayStatus } from '@domain/entities/pppoeService';
+import { PppoeService, EnforcedState, PppoeDisplayStatus, pppoeDisplayStatus, pickCurrentPppoeService } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 import { PppoeUsernameTakenError } from '@domain/errors/pppoe';
 // pppoe-search-bulk-plan: MAC search helpers — SAME logic as Prisma adapter (parity).
@@ -383,5 +383,27 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
     if (!found) return null;
     found.username = newUsername;
     return { ...found };
+  }
+
+  /**
+   * finance-growth fix-wave-2 — batch resolution using the SHARED domain
+   * tie-break (`pickCurrentPppoeService`), never a locally-reimplemented
+   * criterion (that's exactly what drifted from the Prisma adapter before).
+   */
+  async findCurrentProfilesByContractIds(contractIds: string[]): Promise<Map<string, string | null>> {
+    const ids = new Set(contractIds);
+    const byContract = new Map<string, PppoeService[]>();
+    for (const s of this.store) {
+      if (s.contractId === null || !ids.has(s.contractId)) continue;
+      const list = byContract.get(s.contractId);
+      if (list) list.push(s);
+      else byContract.set(s.contractId, [s]);
+    }
+    const result = new Map<string, string | null>();
+    for (const [contractId, rows] of byContract) {
+      const winner = pickCurrentPppoeService(rows);
+      if (winner) result.set(contractId, winner.profile ?? null);
+    }
+    return result;
   }
 }

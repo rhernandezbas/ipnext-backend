@@ -1,4 +1,4 @@
-import { PppoeService, EnforcedState, PppoeDisplayStatus } from '@domain/entities/pppoeService';
+import { PppoeService, EnforcedState, PppoeDisplayStatus, pickCurrentPppoeService } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
 import { PppoeUsernameTakenError } from '@domain/errors/pppoe';
 import { prisma } from '../../database/prisma';
@@ -449,6 +449,56 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
       if (err?.code === 'P2025') return null; // no existe
       throw err;
     }
+  }
+
+  /**
+   * finance-growth fix-wave-2 — ONE batch query (`contractId IN (...)`),
+   * never N+1. Tie-break for contracts with multiple rows delegates to the
+   * SHARED domain helper `pickCurrentPppoeService` — the exact same function
+   * `InMemoryPppoeServiceRepository` calls, so the two adapters cannot drift
+   * on this criterion.
+   *
+   * fix-wave-3 (🟡 3 + 🔵 secrets) — two fixes on top:
+   *  1. `orderBy: [{createdAt:'desc'},{id:'asc'}]` — defense in depth (same
+   *     convention as `list()` above). The REAL determinism guarantee is
+   *     `pickCurrentPppoeService`'s own `id` tiebreak (it re-sorts the FULL
+   *     result regardless of fetch order), but this keeps the query itself
+   *     aligned with the rest of the adapter. Before this, `findMany()` with
+   *     NO `orderBy` returned Postgres's heap-scan order — not guaranteed
+   *     stable across runs — and a genuine `createdAt` tie (e.g. bulk-import
+   *     rows created in the same millisecond) used to resolve by whatever
+   *     order the rows happened to arrive in, measured to flip the same
+   *     month's MRR between 10000 and 15000 across two runs.
+   *  2. Explicit `select` (SECURITY) — this projection exists ONLY to
+   *     resolve a plan CODE; `password` (and every other PPPoE field this
+   *     use case doesn't need) is NEVER read into memory. Same convention as
+   *     `findByUsernames` above. Before this fix, a bare `findMany({ where })`
+   *     pulled every column — including the RADIUS `password` — for EVERY
+   *     PPPoE row of EVERY contract touched by a finance snapshot run (once
+   *     per month × up to 163 months in a full backfill).
+   */
+  async findCurrentProfilesByContractIds(contractIds: string[]): Promise<Map<string, string | null>> {
+    if (contractIds.length === 0) return new Map();
+    const rows: Array<{ id: string; contractId: string | null; profile: string | null; status: string; createdAt: Date | string }> =
+      await model().findMany({
+        where: { contractId: { in: contractIds } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        select: { id: true, contractId: true, profile: true, status: true, createdAt: true },
+      });
+    const byContract = new Map<string, Array<{ id: string; profile: string | null; status: string; createdAt: string }>>();
+    for (const row of rows) {
+      if (row.contractId === null) continue;
+      const entry = { id: row.id, profile: row.profile ?? null, status: row.status, createdAt: new Date(row.createdAt).toISOString() };
+      const list = byContract.get(row.contractId);
+      if (list) list.push(entry);
+      else byContract.set(row.contractId, [entry]);
+    }
+    const result = new Map<string, string | null>();
+    for (const [contractId, contractRows] of byContract) {
+      const winner = pickCurrentPppoeService(contractRows);
+      if (winner) result.set(contractId, winner.profile ?? null);
+    }
+    return result;
   }
 }
 

@@ -411,6 +411,65 @@
 - [ ] 3.28 `app.ts`: wiring del job; actualizar el composition-root test de Fase 1 (1.58) para incluir este
   segundo job (el bootstrap de ingest de Fase 1 ya es uno solo, ver 1.57-1.58).
 
+### fix-wave-2 (2026-07-27) — resolver el gap de plan-code que el rework MRR-contratado dejó abierto
+El rework de `BuildFinanceMonthlySnapshot` (MRR contratado, ver design.md Decision 1) derivaba el plan
+EXCLUSIVAMENTE de eventos `'modified'` de `ContractServiceEvent`, dejando `planCode: null` de por vida a todo
+contrato que nunca cambió de plan — la mayoría de los contratos estables en producción. Se cerró usando
+`PppoeService.profile` (fuente verificada: `ChangePppoePlanService` escribe el mismo valor ahí y en
+`oldPlan`/`newPlan`) con rebobinado vía `'modified'` para fechas pasadas.
+- [x] RED→GREEN: `contractLifecycle.resolvedPlanCodeAt` (rewind desde `PppoeService.profile`) —
+  `src/__tests__/application/finance/contractLifecycle.test.ts`.
+- [x] RED→GREEN: nuevo port `PppoeServiceRepository.findCurrentProfilesByContractIds` (batch, nunca N+1),
+  tie-break compartido `pickCurrentPppoeService` (domain) usado IDÉNTICO por el adapter Prisma y el in-memory —
+  `src/__tests__/infrastructure/PrismaPppoeServiceRepository.findCurrentProfilesByContractIds.test.ts`,
+  `src/__tests__/infrastructure/InMemoryPppoeServiceRepository.test.ts`.
+- [x] RED→GREEN: `BuildFinanceMonthlySnapshot` wireado con el nuevo repo; casos de enforcement (corte por mora
+  NO zerea el MRR — `profile` nunca se pisa al cortar), multi-servicio/desasociado, y "sin PPPoE" (sigue
+  `unpriced` visible) — `src/__tests__/application/finance/BuildFinanceMonthlySnapshot.test.ts`.
+- [x] Bridge de 9 movimientos re-verificado: sigue cerrando EXACTO al centavo con la nueva resolución.
+- [x] `design.md`/`spec.md` actualizados con la evidencia y las 3 decisiones (enforcement, multi-servicio,
+  sin PPPoE).
+
+### fix-wave-3 (2026-07-27) — re-review CON ARITMÉTICA VERIFICADA (escenarios ejecutados contra el código
+real, no sólo leídos): 2 🔴 bloqueantes + 3 acotados
+- [x] RED→GREEN 🔴1: el loop de PLATA (`mrrUpgradeArs`/`mrrDowngradeArs`) no excluía planes de enforcement
+  (`IP-REDUCCION`/`IP-BAJA`) — el de conteos (`deriveDirection`) y `resolvedPlanCodeAt` sí. Guard
+  `isEnforcementPlan` agregado, contado en el campo nuevo `enforcementPlanChangeEventsExcluded` (nunca en
+  silencio) — `src/__tests__/application/finance/BuildFinanceMonthlySnapshot.test.ts` (describe "fix-wave-3
+  🔴 1"), reproduce los 4 escenarios medidos por la review (IP-REDUCCION priceada, IP-BAJA, baja mismo mes con
+  doble conteo, N reducciones escaladas).
+- [x] RED→GREEN 🔴2: `collectionRatePct` mezclaba `revenueTotalArs` (Capa A, TODO el universo) sobre
+  `mrrFinalArs` (sólo internet) — podía superar 100%. Numerador corregido a `revenueInternetAttributedArs`
+  (misma población que el denominador) — `BuildFinanceMonthlySnapshot.test.ts` (describe "fix-wave-3 🔴 2"),
+  reproduce el caso medido (contrato de internet + cliente TV-only, 500% → 100%).
+- [x] RED→GREEN 🟡3: resultado no reproducible entre corridas — `PrismaPppoeServiceRepository
+  .findCurrentProfilesByContractIds` sin `orderBy` + `pickCurrentPppoeService` sin desempate final por `id`
+  ante un empate genuino de `createdAt`. Desempate por `id` agregado al helper de dominio (compartido por
+  ambos adapters, generalizado a `Pick<PppoeService,'status'|'createdAt'|'id'>`) + `orderBy` en el adapter
+  Prisma — `src/__tests__/infrastructure/PrismaPppoeServiceRepository.findCurrentProfilesByContractIds.test.ts`.
+- [x] RED→GREEN 🟡4: el residuo del bridge no tenía señal cuando no cerraba. Campo nuevo `bridgeResidualArs`
+  (snapshot + DTO), `0` en el caso sano (asertado en el test de los 9 movimientos), valor real del hueco en
+  cualquier otro caso — identidad ahora asertada en el test F2/C1 de precio irresoluble que antes montaba el
+  caso sin verificarla. Migración aditiva `20261024000300_finance_snapshot_bridge_residual_enforcement`.
+- [x] RED→GREEN 🔵5a: `BackfillFinanceMonthlySnapshots` sin techo temporal hacia adelante — guard `to <= mes
+  actual` (reloj inyectable) agregado — `src/__tests__/application/finance/BackfillFinanceMonthlySnapshots.test.ts`.
+- [x] RED→GREEN 🔵5b: `findCurrentProfilesByContractIds` traía `password` de TODOS los PPPoE a memoria sin
+  `select` — proyección restringida a `{id, contractId, profile, status, createdAt}` (mismo fix que 🟡3, mismo
+  método).
+- [x] `design.md`/`spec.md` actualizados: sección "Deuda declarada — fix-wave-3" en design.md, requirements
+  corregidos en spec.md (collection rate, enforcement en el bridge de plata, bridgeResidualArs, alcance del
+  Requirement "Contract-modification listing...", guard del backfill), tabla de dependencias de
+  `BuildFinanceMonthlySnapshot` corregida (faltaba `PppoeServiceRepository`).
+- [ ] **BLOQUEADO — decisión pendiente del usuario, NO ejecutar sin ella**: backfill histórico masivo de
+  `FinanceMonthlySnapshot` hacia meses viejos (más allá de una ventana reciente con precios representativos).
+  `FinancePlanPrice` no tiene historia de precios — el MRR contratado histórico valuado a precios de HOY es
+  ficción (medido: mismo contrato, mismo plan, `mrrFinalArs` idéntico en 2019 y 2026 pese a que el precio real
+  de 2019 era ~60x menor). Ver design.md "Deuda declarada — fix-wave-3" y spec.md Requirement "Monthly
+  snapshots must be backfillable on demand..." para las 3 opciones sobre la mesa — ninguna implementada.
+- [ ] Documentado, no arreglado: riesgo de `TransferPppoe` sobre meses pasados de un contrato DESTINO con
+  historia propia (ver design.md); multi-PPPoE por contrato — el desempate elige un ganador, no suma
+  (subvalúa el MRR de un contrato multi-servicio; ver design.md).
+
 ## Fase 4 — API de lectura
 
 ### `GetFinanceOverview` (deflactación en lectura — Decision 4/6 del design)

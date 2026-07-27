@@ -120,6 +120,31 @@ export function previousYearMonth(yearMonth: string): string {
   return `${y}-${String(m).padStart(2, '0')}`;
 }
 
+/**
+ * finance-growth Fase 3 — "YYYY-MM" + N (positive or negative) calendar months.
+ * Used by `BuildFinanceCohortSnapshot` to compute the 3/6/12-month survival
+ * cutoff months from a cohort's alta month, and by the nightly snapshot job to
+ * walk a bounded lookback window. `previousYearMonth` stays the single-step
+ * newest→oldest primitive the ingest scheduler already depends on; this is
+ * the general N-step version, expressed IN TERMS OF it for n<0 so both never
+ * diverge on the borrow/carry arithmetic.
+ */
+export function addMonthsToYearMonth(yearMonth: string, n: number): string {
+  if (n === 0) return yearMonth;
+  if (n < 0) {
+    let result = yearMonth;
+    for (let i = 0; i < -n; i++) result = previousYearMonth(result);
+    return result;
+  }
+  const [yStr, mStr] = yearMonth.split('-');
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const zeroBased = (m - 1) + n;
+  const newY = y + Math.floor(zeroBased / 12);
+  const newM = (zeroBased % 12) + 1;
+  return `${newY}-${String(newM).padStart(2, '0')}`;
+}
+
 /** Lexicographic compare of two "YYYY-MM" strings (safe: fixed-width, zero-padded). */
 export function compareYearMonth(a: string, b: string): number {
   return a.localeCompare(b);

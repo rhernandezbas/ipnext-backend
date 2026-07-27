@@ -15,6 +15,7 @@ import { bootstrapChatMediaDownload } from './infrastructure/scheduling/bootstra
 import { bootstrapAutoProvisionFiber } from './infrastructure/scheduling/bootstrapAutoProvisionFiber';
 import { bootstrapSnoozeReactivation } from './infrastructure/scheduling/bootstrapSnoozeReactivation';
 import { bootstrapFinanceReceiptsIngest } from './infrastructure/scheduling/bootstrapFinanceReceiptsIngest';
+import { bootstrapFinanceSnapshotJob } from './infrastructure/scheduling/bootstrapFinanceSnapshotJob';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
 import { bootstrapSystemUsers } from './infrastructure/bootstrap/bootstrapSystemUsers';
@@ -114,6 +115,13 @@ void (async () => {
   void bootstrapSnoozeReactivation()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[snooze-reactivation] bootstrap failed (server kept alive):', (err as Error).message));
+  // finance-growth Fase 3 — nightly MRR bridge/cohort snapshot job (design.md
+  // Wiring). Fire-and-forget after listen, same as gr-sync: no route needs
+  // this scheduler's live instance (unlike financeReceiptIngest, which
+  // GET /sync/status reads directly).
+  void bootstrapFinanceSnapshotJob()
+    .then((scheduler) => scheduler.start())
+    .catch((err) => console.error('[finance-snapshot] bootstrap failed (server kept alive):', (err as Error).message));
 
   // Start schedulers — both start dormant (gated by feature flags).
   iclassClosure?.start();

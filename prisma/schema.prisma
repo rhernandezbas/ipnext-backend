@@ -2533,6 +2533,15 @@ model FinancePaymentReceipt {
 
   @@index([clientGrId])
   @@index([fechaRecibo])
+  // finance-growth Fase 3 rework (J2) — the per-client cash attribution walk
+  // (`listByClientAndMonth` on items/applications, JOINed through this
+  // table) filters by BOTH columns together every time; the single-column
+  // indexes above don't back that combination as well as a compound one.
+  // Added defensively (index-only, zero code-path change) — the N+1 query
+  // SHAPE itself (one query per client per month in the attribution loop)
+  // is accepted as documented debt, see BuildFinanceMonthlySnapshot's
+  // closing report; this index at least caps the per-query cost.
+  @@index([clientGrId, fechaRecibo])
 }
 
 /// fix-wave-2 R1 — línea de `recibo.items[]`: CASH efectivamente recibido (medio
@@ -2656,6 +2665,70 @@ model FinanceInflationIndex {
   source         String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+}
+
+/// finance-growth Fase 3 (design.md Decision 4) — precomputed monthly MRR
+/// bridge/churn/revenue snapshot, built nightly by `BuildFinanceMonthlySnapshot`.
+/// All `*Ars` fields are NOMINAL — nominal/real deflation happens at READ
+/// time (`GetFinanceOverview`, Fase 4), chained from `FinanceInflationIndex`,
+/// so loading a late IPC value updates the real series immediately without
+/// recomputing snapshots.
+model FinanceMonthlySnapshot {
+  yearMonth               String   @id
+  contractsActive         Int
+  contractsNew            Int
+  contractsChurned        Int
+  contractsUpgraded       Int
+  contractsDowngraded     Int
+  mrrInicialArs           Decimal  @db.Decimal(14, 2)
+  mrrNewArs               Decimal  @db.Decimal(14, 2)
+  mrrUpgradeArs           Decimal  @db.Decimal(14, 2)
+  mrrDowngradeArs         Decimal  @db.Decimal(14, 2)
+  mrrChurnArs             Decimal  @db.Decimal(14, 2)
+  mrrFinalArs             Decimal  @db.Decimal(14, 2)
+  // fix-wave-3 (🟡 4) — mrrFinal - (mrrInicial+new+upgrade-downgrade-churn).
+  // 0 en el caso sano; hace VISIBLE cualquier hueco del bridge (extremo sin
+  // precio, evento 'modified' perdido, etc.) en vez de dejarlo pasar en silencio.
+  bridgeResidualArs       Decimal  @default(0) @db.Decimal(14, 2)
+  // finance-growth Fase 3 REWORK (F2) — contratos activos al cierre del mes
+  // cuyo precio contratado no pudo resolverse; excluidos de mrrFinalArs,
+  // nunca un cero silencioso.
+  unpricedContractsActive Int      @default(0)
+  unpricedContractsPct    Decimal  @default(0) @db.Decimal(5, 2)
+  unpricedPlanChangeEvents Int     @default(0)
+  // fix-wave-3 (🔴 1) — eventos 'modified' del mes donde el plan viejo o
+  // nuevo es un código de ENFORCEMENT (IP-REDUCCION/IP-BAJA) — excluidos de
+  // mrrUpgrade/mrrDowngrade aunque tengan precio resoluble en FinancePlanPrice.
+  enforcementPlanChangeEventsExcluded Int @default(0)
+  revenueTotalArs         Decimal  @db.Decimal(14, 2)
+  // finance-growth Fase 3 REWORK — tasa de cobranza (cobranza / MRR
+  // contratado). Nullable: null cuando mrrFinalArs es 0 (sin base contra la
+  // cual comparar), nunca "0% cobrado".
+  collectionRatePct       Decimal? @db.Decimal(9, 2)
+  revenueAttributableArs  Decimal  @db.Decimal(14, 2)
+  unclassifiedAmountArs   Decimal  @default(0) @db.Decimal(14, 2)
+  attributionPct          Decimal  @db.Decimal(5, 2)
+  arpuArs                 Decimal  @db.Decimal(12, 2)
+  churnContractsPct       Decimal  @db.Decimal(5, 2)
+  // finance-growth Fase 3 REWORK (F4) — nullable: null cuando no había
+  // ningún contrato activo al inicio del mes (sin base), nunca "0% churn".
+  churnRevenuePct         Decimal? @db.Decimal(5, 2)
+  computedAt              DateTime @default(now())
+}
+
+/// finance-growth Fase 3 (design.md Decision 4) — retention cohort row: of
+/// the contracts activated in `cohortYearMonth` (`originalCount`), how many
+/// (`survivingCount`) were still active `monthsElapsed` (3 | 6 | 12) months
+/// later. A cohort younger than `monthsElapsed` never gets that row (no
+/// invented data).
+model FinanceCohortSnapshot {
+  cohortYearMonth String
+  monthsElapsed   Int
+  originalCount   Int
+  survivingCount  Int
+  computedAt      DateTime @default(now())
+
+  @@id([cohortYearMonth, monthsElapsed])
 }
 
 // =============================================

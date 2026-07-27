@@ -198,4 +198,31 @@ export interface PppoeServiceRepository {
    * Es el resolver de `target='debtors'` (status='late') sin depender de RADIUS.
    */
   listByClientStatus(status: string): Promise<PppoeService[]>;
+
+  /**
+   * finance-growth fix-wave-2 — BATCH resolution of each contract's CURRENT
+   * commercial plan code (`profile`), for MRR-CONTRATADO pricing
+   * (`BuildFinanceMonthlySnapshot` / `contractLifecycle.resolvedPlanCodeAt`).
+   *
+   * `profile` is the source of truth for a contract's plan because it's the
+   * ONLY field `ChangePppoePlanService` writes on a real plan change — and it
+   * stamps the SAME value onto the `ContractServiceEvent.oldPlan`/`newPlan`
+   * it records (see that service: `oldPlan: service.profile ?? null, newPlan:
+   * profile`), so both sources share one vocabulary by construction. It is
+   * NEVER touched by enforcement (`reduce`/`block`/`restore` — see
+   * `RouterOsEnforcementAdapter`/`OrchestratorEnforcementAdapter`, which patch
+   * the ROUTER only): a contract cut for mora keeps its real commercial
+   * `profile` in this repo the whole time it's cut.
+   *
+   * Tie-break when a contract has MULTIPLE `PppoeService` rows — see
+   * `pickCurrentPppoeService` (domain, SHARED by both adapters so they can
+   * never independently drift on this criterion).
+   *
+   * A contract absent from the returned Map has NO resolvable PPPoE service
+   * at all (zero rows, or `contractId` was cleared via `clearContractId`/
+   * `onDelete: SetNull`) — the caller treats this exactly like a `null`
+   * profile: honestly `unpriced`, NEVER a silent price of 0. MUST resolve in
+   * a SINGLE batch query (`contractId IN (...)`), never N+1.
+   */
+  findCurrentProfilesByContractIds(contractIds: string[]): Promise<Map<string, string | null>>;
 }

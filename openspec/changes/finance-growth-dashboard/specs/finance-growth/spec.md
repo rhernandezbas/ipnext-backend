@@ -11,12 +11,22 @@ clasificación robusta de tipos de comprobante, configuración
 editable de costos/metas/inflación, motor de métricas (bridge de MRR, churn de contratos e ingresos, cohortes
 de retención, CAC/payback, ranking de churn temprano por vendedor, crecimiento neto por nodo, ranking de
 motivos de baja) y la API de lectura que alimenta la sección nueva del sidebar (fuera del cementerio Splynx
-"Finanzas"). **Toda métrica de "revenue"/MRR de este spec es cobranza real (cash collected), nunca facturación
-emitida (accrual)** — limitación estructural documentada, no una elección estética; el timing del pago puede
-desfasar un mes contra otro. **Fuera de alcance de este spec**: cualquier página del módulo `billing`
+"Finanzas"). **Fuera de alcance de este spec**: cualquier página del módulo `billing`
 existente, costo de instalación REAL desde inventario (fase posterior, documentada como extensión en
 `design.md`), reconstrucción de facturación emitida (técnicamente imposible con la API actual), y sync/
 escritura hacia GR fuera de lectura de recibos/facturas.
+
+**REWORK 2026-07-27 — DOS NÚMEROS, DOS PREGUNTAS (decisión LOCK del usuario, ver Requirement "MRR bridge" y
+"Cobranza real y tasa de cobranza" más abajo).** Una re-review adversarial encontró que el bridge de MRR
+original (definido sobre cobranza) es estructuralmente incapaz de cerrar: cash se mueve por mora, pagos
+adelantados, regularizaciones e inflación — ninguno de los cuales es un evento de contrato. Este spec ahora
+distingue explícitamente DOS números que responden DOS preguntas distintas, nunca mezclados:
+1. **MRR CONTRATADO** (Σ precio de plan × contratos activos) — el bridge corre sobre ESTO y cierra por
+   construcción, porque esta base sólo cambia por altas/upgrades/downgrades/bajas. Responde *"¿crece la base y
+   su valor?"*.
+2. **COBRANZA REAL** (cash collected, sin cambios respecto de la definición original — `FinanceReceiptItem`,
+   nunca facturación emitida) — serie propia, SIN bridge. Responde *"¿entró plata?"*.
+3. **Tasa de cobranza** (cobranza / MRR contratado) conecta ambas series.
 
 ## Requirements
 
@@ -208,6 +218,14 @@ contra una lista fija en código. Un `grType` sin fila en el catálogo se DEBE (
 - WHEN se recomputa el snapshot del mes correspondiente (próxima corrida nocturna)
 - THEN las aplicaciones `grType: 'XZ'` de ese mes pasan a sumar a la cobranza
 
+#### Scenario: An application with a null appliedDate still reaches unclassifiedAmountArs (rework 2026-07-27, F9)
+- GIVEN una aplicación con `grType` sin clasificar y `appliedDate: null` (el campo puede faltar en el wire),
+  pero cuyo recibo padre tiene `fechaRecibo` dentro del mes consultado
+- WHEN se computa `unclassifiedAmountArs` del mes
+- THEN el monto de esa aplicación SÍ se cuenta (el corte es por `receipt.fechaRecibo`, nunca por el
+  `appliedDate` propio y nullable de la aplicación) — el watchdog que existe específicamente para que la plata
+  mal clasificada nunca desaparezca no puede tener el mismo agujero de fecha que se corrigió para `items`
+
 ### Requirement: The growth metric basis is cash collected, never issued invoicing, never debt cancelled
 El sistema DEBE (MUST) documentar y exponer que toda cifra de "revenue"/MRR de este spec proviene de cobranza
 real, NUNCA de facturación emitida — GR no expone un endpoint de facturación/comprobantes emitidos (verificado
@@ -252,10 +270,17 @@ retenciones (0,931% en junio 2026).
   aceptado y documentado, no se intenta reconstruir el mes de emisión
 
 ### Requirement: Two-layer attribution — accounting truth vs. operational estimate
+
+> **REWORK 2026-07-27**: esta atribución (Capa A/Capa B) YA NO alimenta el bridge de MRR (ese rol pasó a MRR
+> CONTRATADO, ver Decision 1b de `design.md`) — sigue existiendo como diagnóstico de cobranza (ARPU,
+> `attributionPct`). La población que mide `attributionPct` se corrigió (F6): antes excluía contratos que se
+> daban de baja durante el mes del denominador, escondiendo hasta la mitad del cash real de algún mes; ahora
+> incluye TODO contrato de internet tocado durante el mes (activo al cierre O dado de baja durante el mes).
+
 El sistema DEBE (MUST) separar explícitamente (a) la verdad contable de cobranza total por mes (Capa A,
 directa de `FinanceReceiptApplication` neteada, sin estimación) de (b) la atribución de esa cobranza a nivel
 de CONTRATO individual (Capa B, estimación cuando el cliente tiene más de un contrato activo), y DEBE (MUST)
-exponer el porcentaje de MRR atribuible con confianza en cada snapshot mensual.
+exponer el porcentaje de cobranza atribuible con confianza en cada snapshot mensual.
 
 #### Scenario: Single-contract client — collected amount IS the contract's MRR, no estimation
 - GIVEN un cliente con exactamente 1 contrato activo en el mes
@@ -276,47 +301,215 @@ exponer el porcentaje de MRR atribuible con confianza en cada snapshot mensual.
 - THEN el monto se reparte en partes iguales entre los contratos, marcado
   `attributionConfidence: 'estimated-equal'`
 
-#### Scenario: Monthly snapshot exposes the attributable-MRR percentage
+#### Scenario: Monthly snapshot exposes the attributable-cash percentage
 - GIVEN un mes con una mezcla de contratos `exact`/`estimated`/`estimated-equal`
 - WHEN se consulta el snapshot de ese mes vía la API de overview
-- THEN el payload incluye `attributionPct` = (MRR de contratos `exact`) / (MRR total del mes), sin
-  disimular el número aunque sea bajo
+- THEN el payload incluye `attributionPct` = (cobranza de contratos `exact`) / (cobranza total atribuida a
+  TODOS los contratos de internet tocados el mes), sin disimular el número aunque sea bajo
 
-### Requirement: MRR bridge (waterfall) per month
-El sistema DEBE (MUST) computar, para cada mes con datos, el bridge `MRR inicial → +altas → +upgrades −
-downgrades − bajas = MRR final`, derivado de `ContractServiceEvent` (eventType `activated`/`deactivated`/
-`reactivated`/`modified`) cruzado con la atribución de MRR por contrato del mes.
+#### Scenario: A contract that collects cash and then churns mid-month is not invisible to attributionPct (rework 2026-07-27, F6)
+- GIVEN dos contratos de internet: uno cobra su cuota y se da de baja a mitad de mes, el otro sobrevive
+  cobrando el mismo monto
+- WHEN se computa `attributionPct` del mes
+- THEN el denominador incluye la cobranza de AMBOS contratos, no sólo la del que sigue activo al cierre — el
+  contrato que se fue no queda invisible a la métrica ni esconde su mitad del cash real del mes
+
+#### Scenario: ARPU divides by internet-client cash only, never the whole-company cobranza figure (rework 2026-07-27, F5)
+- GIVEN un mes con un cliente de internet que paga su cuota y un cliente SIN ningún contrato de internet
+  (ej. sólo TV) que paga un monto mucho mayor
+- WHEN se computa `arpuArs`
+- THEN el numerador es SÓLO la cobranza atribuida a clientes con contrato de internet activo al cierre del
+  mes — el pago del cliente sin internet cuenta en `revenueTotalArs` (Capa A, cobranza total) pero NUNCA en
+  `arpuArs`
+
+### Requirement: MRR bridge (waterfall) per month, over MRR CONTRATADO — never over cash
+
+> **REWORK 2026-07-27 (decisión LOCK, Decision 1b de `design.md`)**: el bridge original corría sobre cobranza
+> (cash). Una re-review adversarial + cálculo a mano demostró que eso es estructuralmente incorrecto — el cash
+> se mueve por mora, pagos adelantados, regularizaciones e inflación, ninguno de los cuales es
+> altas/upgrades/downgrades/bajas. El bridge se REDEFINE para correr sobre **MRR CONTRATADO** (Σ precio de
+> plan × contratos activos, vía `FinancePlanPrice`) — una base que sólo cambia por esos 4 eventos, así que
+> cierra por construcción. La cobranza real SIGUE existiendo (ver el Requirement "Cobranza real y tasa de
+> cobranza" nuevo, más abajo) — simplemente deja de ser la base del bridge.
+
+El sistema DEBE (MUST) computar, para cada mes con datos, el bridge `MRR contratado inicial → +altas →
++upgrades − downgrades − bajas = MRR contratado final`, derivado de `ContractServiceEvent` (eventType
+`activated`/`deactivated`/`reactivated`/`modified`) cruzado con `FinancePlanPrice`. `mrrInicialArs`/
+`mrrFinalArs` se computan FRESH en cada corrida (nunca encadenados de un snapshot anterior almacenado) — un
+mes salteado en el histórico de snapshots NUNCA debe poder zeroear silenciosamente la base de un mes
+posterior.
 
 #### Scenario: An activation adds to mrrNewArs
-- GIVEN un contrato con un evento `activated` dentro del mes, con MRR atribuido estimable
+- GIVEN un contrato con un evento `activated` dentro del mes, activo al cierre del mes, con precio de plan
+  resoluble
 - WHEN se computa el snapshot del mes
-- THEN su MRR atribuido suma a `mrrNewArs` del bridge
+- THEN su precio de plan (al cierre del mes, subsumiendo cualquier upgrade/downgrade posterior dentro del
+  mismo mes) suma a `mrrNewArs` del bridge
 
-#### Scenario: A plan upgrade adds the delta to mrrUpgradeArs
-- GIVEN un contrato con un evento `modified` de cambio de plan cuya dirección derivada (mismo criterio que
-  `ListInternetServiceHistory`) es `upgrade`
+#### Scenario: A plan upgrade adds the price delta to mrrUpgradeArs
+- GIVEN un contrato YA activo al inicio del mes, con un evento `modified` de cambio de plan dentro del mes
+  donde AMBOS planes (viejo y nuevo) tienen fila en `FinancePlanPrice`
 - WHEN se computa el snapshot del mes
-- THEN la diferencia de MRR atribuido (nuevo − viejo) suma a `mrrUpgradeArs`
+- THEN la diferencia de PRECIO (nuevo − viejo, sólo si es positiva) suma a `mrrUpgradeArs` — este bucket es
+  price-sign based, NO el mismo criterio kbps-based que `contractsUpgraded`/`ListInternetServiceHistory` (un
+  cambio de plan "lateral", mismos kbps pero distinto precio, SÍ mueve este bucket aunque no tenga dirección
+  kbps)
 
-#### Scenario: A plan downgrade subtracts the delta into mrrDowngradeArs
-- GIVEN un contrato con un evento `modified` de cambio de plan cuya dirección derivada es `downgrade`
+#### Scenario: A plan downgrade subtracts the price delta into mrrDowngradeArs
+- GIVEN el mismo contexto pero la diferencia de precio es negativa
 - WHEN se computa el snapshot del mes
-- THEN la diferencia de MRR atribuido resta en `mrrDowngradeArs`
+- THEN el valor absoluto de la diferencia resta en `mrrDowngradeArs`
 
-#### Scenario: A deactivation subtracts from mrrChurnArs
-- GIVEN un contrato con un evento `deactivated` dentro del mes
+#### Scenario: A plan-change event with an unresolvable price is excluded, never guessed as zero
+- GIVEN un contrato activo al inicio del mes con un evento `modified` donde el plan VIEJO, el NUEVO, o ambos,
+  NO tienen fila en `FinancePlanPrice`
 - WHEN se computa el snapshot del mes
-- THEN su MRR atribuido (del último mes con cobranza registrada) resta de `mrrChurnArs`
+- THEN ese evento NO contribuye a `mrrUpgradeArs` ni a `mrrDowngradeArs` (nunca trata el lado sin precio como
+  si valiera `0` — eso triplicaba el delta real en el bug medido antes de este rework), y se cuenta en
+  `unpricedPlanChangeEvents`
 
-#### Scenario: The bridge is internally consistent
-- GIVEN un snapshot mensual ya calculado
+#### Scenario: A plan-change event that lands on an enforcement code is excluded from the money buckets, even if that code has a price (fix-wave-3 🔴 1)
+> Re-review con aritmética verificada (fix-wave-3): el conteo kbps-based (`contractsUpgraded`/
+> `contractsDowngraded`, vía `deriveDirection`) y `mrrInicialArs`/`mrrFinalArs` (vía `resolvedPlanCodeAt`) ya
+> excluían los códigos de enforcement (`IP-REDUCCION`/`IP-BAJA`); este bucket de PLATA era el único de los tres
+> que no lo hacía. Medido: un solo evento `IP-100(15000)`→`IP-REDUCCION` con `IP-REDUCCION` PRICEADA en
+> `FinancePlanPrice` (5000) — algo alcanzable desde la UI, `GetFinancePlanPrices`/`UpdateFinancePlanPrice` no
+> excluyen estos códigos del catálogo editable — producía un `mrrDowngradeArs` fantasma de 10000 y un gap del
+> bridge de -10000, pese a que el contrato NUNCA cambió su plan comercial real.
+- GIVEN un contrato activo al inicio del mes con un evento `modified` donde el plan VIEJO, el NUEVO, o ambos,
+  son un código de ENFORCEMENT (`IP-REDUCCION`/`IP-BAJA`) — incluso si ese código tiene una fila en
+  `FinancePlanPrice`
+- WHEN se computa el snapshot del mes
+- THEN ese evento NO contribuye a `mrrUpgradeArs` ni a `mrrDowngradeArs` (nunca se trata como un cambio
+  comercial real), y se cuenta por separado en `enforcementPlanChangeEventsExcluded` — nunca en silencio, y
+  nunca mezclado con `unpricedPlanChangeEvents` (acá el precio SÍ puede ser resoluble; la exclusión es por el
+  código en sí)
+
+#### Scenario: A deactivation subtracts from mrrChurnArs — only for a contract that does NOT come back same month
+- GIVEN un contrato activo al inicio del mes, con un evento `deactivated` dentro del mes, y SIN volver a estar
+  activo al cierre del mismo mes
+- WHEN se computa el snapshot del mes
+- THEN su precio de plan (al momento de la baja, incluyendo cualquier upgrade/downgrade previo dentro del
+  mismo mes) resta de `mrrChurnArs`
+
+#### Scenario: A same-month deactivation+reactivation does NOT count as churn for the bridge
+- GIVEN un contrato activo al inicio del mes que recibe un evento `deactivated` y luego `reactivated` DENTRO
+  del mismo mes (el cliente nunca se fue realmente)
+- WHEN se computa el snapshot del mes
+- THEN ese contrato NO resta de `mrrChurnArs` y su precio sigue contando en `mrrFinalArs` sin cambios — aunque
+  los contadores RAW `contractsNew`/`contractsChurned` (informativos, actividad cruda) sí reflejan que
+  ocurrieron ambos eventos
+
+#### Scenario: A same-month activation+deactivation contributes zero to the bridge, not a phantom gap
+- GIVEN un contrato que se activa Y se da de baja dentro del MISMO mes (nunca estuvo activo ni al inicio ni al
+  cierre del mes)
+- WHEN se computa el snapshot del mes
+- THEN no contribuye a `mrrInicialArs`, `mrrNewArs`, `mrrChurnArs` ni `mrrFinalArs` — su paso por el mes neteó
+  a cero, consistente con no estar activo en ninguno de los dos extremos
+
+#### Scenario: The bridge is internally consistent — EXACT, not just within tolerance, when every touched contract is priced
+- GIVEN un snapshot mensual ya calculado donde todo contrato tocado por altas/upgrades/downgrades/bajas ese
+  mes tiene precio de plan resoluble en ambos extremos de su transición
 - WHEN se suman `mrrInicialArs + mrrNewArs + mrrUpgradeArs − mrrDowngradeArs − mrrChurnArs`
-- THEN el resultado es igual a `mrrFinalArs` del mismo snapshot (tolerancia de redondeo ≤ 1 unidad de moneda)
+- THEN el resultado es EXACTAMENTE igual a `mrrFinalArs` del mismo snapshot (la tolerancia de redondeo ≤ 1
+  unidad de moneda sigue siendo el techo aceptable, no el resultado esperado en el caso completamente priceado)
+
+#### Scenario: A bridge that does NOT close exposes the gap as bridgeResidualArs, never silently (fix-wave-3 🟡 4)
+> Re-review con aritmética verificada: antes de este campo, un caso donde el bridge no cerraba (un extremo sin
+> precio, un evento `'modified'` perdido por el `try/catch` best-effort de `ChangePppoePlanService`, o
+> cualquier caso futuro no previsto) no dejaba NINGUNA señal — el gap medido llegaba a -15000 con
+> `unpricedContractsActive: 0`, ninguna bandera apuntando al problema.
+- GIVEN un snapshot mensual donde `mrrInicialArs + mrrNewArs + mrrUpgradeArs − mrrDowngradeArs − mrrChurnArs`
+  NO es igual a `mrrFinalArs` (por ejemplo, un evento de cambio de plan con el precio VIEJO irresoluble)
+- WHEN se consulta el snapshot
+- THEN `bridgeResidualArs` = `mrrFinalArs − (mrrInicialArs + mrrNewArs + mrrUpgradeArs − mrrDowngradeArs −
+  mrrChurnArs)`, EXACTAMENTE `0` en el caso sano y el valor real del hueco en cualquier otro caso — nunca
+  omitido del payload
+
+### Requirement: Contracted-price visibility — a contract with no resolvable price is never a silent zero
+
+> **NUEVO (rework 2026-07-27, F2)** — consecuencia directa de que el bridge ahora dependa de `FinancePlanPrice`:
+> un contrato sin precio resoluble (plan code irresoluble, o plan sin fila en `FinancePlanPrice`) contribuye
+> `0` al MRR contratado. Ese `0` DEBE (MUST) ser visible, nunca indistinguible de "el contrato realmente vale
+> cero".
+>
+> **fix-wave-2 (2026-07-27) — la fuente del plan es `PppoeService.profile`** (el ÚNICO campo que
+> `ChangePppoePlanService` escribe en un cambio de plan real, y que stampea el MISMO valor en el
+> `oldPlan`/`newPlan` del `ContractServiceEvent` `'modified'` que registra), rebobinado hacia atrás con la
+> historia `'modified'` del contrato (`contractLifecycle.resolvedPlanCodeAt`) para resolver el plan en
+> cualquier mes pasado. Esto da cobertura COMPLETA para todo contrato con un `PppoeService` resoluble — antes,
+> un contrato que JAMÁS tuvo un evento `'modified'` real quedaba `unpriced` de por vida, aunque estuviera
+> conectado y pagando desde el día uno.
+
+#### Scenario: An active contract with an unresolvable price is counted, not hidden
+- GIVEN un contrato activo al cierre del mes cuyo precio no puede resolverse (sin `PppoeService` resoluble en
+  absoluto, o plan resuelto sin fila en `FinancePlanPrice`)
+- WHEN se computa el snapshot del mes
+- THEN ese contrato NO suma a `mrrFinalArs`, y se cuenta en `unpricedContractsActive`/`unpricedContractsPct`
+  del snapshot
+
+#### Scenario: A contract that never had a plan-change event still has a resolvable price, sourced from its PppoeService profile
+- GIVEN un contrato activo con un `PppoeService` cuyo `profile` es un plan con fila en `FinancePlanPrice`, pero
+  SIN ningún evento `'modified'` de cambio de plan en su historia
+- WHEN se computa el snapshot del mes
+- THEN su precio de plan se resuelve igual (desde `PppoeService.profile`) y suma a `mrrFinalArs` — NO se cuenta
+  en `unpricedContractsActive`
+
+#### Scenario: A contract cut for mora keeps its full contracted price — enforcement never zeroes the MRR
+- GIVEN un contrato con `PppoeService.enforcedState` en `'reduced'` o `'blocked'` (corte por mora), cuyo
+  `profile` sigue siendo su plan comercial (el enforcement NUNCA pisa `profile` — ver
+  `RouterOsEnforcementAdapter`/`OrchestratorEnforcementAdapter`, que parchean el router/orchestrator, nunca la
+  fila de `PppoeService`)
+- WHEN se computa el snapshot del mes
+- THEN el contrato sigue sumando su precio COMPLETO a `mrrFinalArs` — estar cortado NO es lo mismo que no
+  tener plan contratado
+
+### Requirement: Real cash collection and the collection rate — a series independent of the MRR bridge
+
+> **NUEVO (rework 2026-07-27, decisión LOCK #2/#3)** — la cobranza real (cash puro, sin cambios respecto de
+> la definición original de "cash collected") sigue existiendo como serie PROPIA, sin bridge. La tasa de
+> cobranza es la métrica nueva que conecta esta serie con el MRR contratado.
+>
+> **fix-wave-3 (🔴 2, re-review con aritmética verificada)** — el numerador de `collectionRatePct` se corrigió
+> de `revenueTotalArs` (Capa A, cash de TODO el universo — incluye clientes SOLO-TV, decisión LOCK) a
+> `revenueInternetAttributedArs` (Capa B, cash atribuido a contratos de internet — la MISMA población que
+> `mrrFinalArs`, el denominador). Mezclar una población whole-company contra un denominador internet-only
+> dejaba pasar valores > 100% para una base que pagó EXACTAMENTE lo que debía: medido, 1 contrato de internet
+> (MRR 10000) que paga 10000 exacto + 1 cliente SOLO-TV que paga 40000 daba `collectionRatePct: 500` cuando la
+> verdad es `100`. `revenueTotalArs` en sí (Capa A, expuesto aparte) NO cambia — sigue siendo cash de TODO el
+> universo, sin bridge.
+
+El sistema DEBE (MUST) exponer `revenueTotalArs` (cash collected, `FinanceReceiptItem`, TODO el universo,
+sin bridge — Requirement "growth metric basis" sin cambios) y `collectionRatePct` = `revenueInternetAttributedArs
+/ mrrFinalArs * 100` (misma población — internet — en ambos lados de la razón, NUNCA `revenueTotalArs`, que
+incluye clientes sin contrato de internet), `null` cuando `mrrFinalArs` es `0` (sin base contratada contra la
+cual comparar — nunca un `0%` que insinúe "no se cobró nada").
+
+#### Scenario: A non-paying debtor does not distort the contracted MRR bridge
+- GIVEN un contrato activo TODO el mes sin ningún evento de contrato, cuyo cliente no paga NADA ese mes
+- WHEN se computa el snapshot del mes
+- THEN `mrrInicialArs`/`mrrFinalArs` del contrato NO cambian (siguen reflejando su precio contratado), y
+  `revenueTotalArs` refleja el cash real (0 de este contrato) de forma completamente independiente
+
+#### Scenario: A collection rate below 100% signals payment lag, not a lie about the contracted base
+- GIVEN un mes donde `revenueInternetAttributedArs` es menor que `mrrFinalArs`
+- WHEN se consulta el snapshot
+- THEN `collectionRatePct` refleja ese déficit (< 100), sin que el bridge de MRR contratado se vea afectado
+
+#### Scenario: A TV-only client's cash never inflates collectionRatePct past what internet clients actually paid (fix-wave-3 🔴 2)
+- GIVEN un contrato de internet con MRR contratado 10000 que paga exactamente 10000 ese mes, y un cliente
+  SOLO-TV (sin contrato de internet) que paga 40000 el mismo mes
+- WHEN se computa el snapshot del mes
+- THEN `revenueTotalArs` es 50000 (Capa A, sin cambios — todo el universo), pero `collectionRatePct` es `100`
+  (NUNCA 500) — el numerador de la tasa está scopeado a la MISMA población de internet que `mrrFinalArs`
 
 ### Requirement: Churn is measured at the contract level, in both units and revenue
 El sistema DEBE (MUST) computar churn en dos sabores por mes: `churnContractsPct` (contratos dados de baja /
-contratos activos al inicio del mes) y `churnRevenuePct` (MRR perdido por baja / MRR inicial del mes). Un
-cliente con 2 contratos que da de baja 1 cuenta como churn de 1 contrato, NO como churn de cliente.
+contratos activos al inicio del mes) y `churnRevenuePct` (MRR contratado perdido por baja / MRR contratado
+inicial del mes). Un cliente con 2 contratos que da de baja 1 cuenta como churn de 1 contrato, NO como churn
+de cliente. Ninguno de los dos cuenta un contrato que se activó y se dio de baja DENTRO del mismo mes (nunca
+estuvo en la base de inicio de mes), ni uno que se dio de baja y volvió a activarse dentro del mismo mes (el
+cliente nunca se fue realmente).
 
 #### Scenario: A client with 2 contracts that cancels 1 counts as contraction, not full churn
 - GIVEN un cliente con 2 contratos activos, uno de los cuales recibe un evento `deactivated` en el mes
@@ -324,8 +517,22 @@ cliente con 2 contratos que da de baja 1 cuenta como churn de 1 contrato, NO com
 - THEN el contrato dado de baja cuenta en `churnContractsPct`/`churnRevenuePct`, pero el cliente NO se
   considera "churneado" (su otro contrato sigue activo)
 
-#### Scenario: Revenue churn weighs by plan value, not by contract count
-- GIVEN dos bajas en el mismo mes: un contrato de 50 Mbps y uno de 500 Mbps, con MRR atribuido distinto
+#### Scenario: An activation-and-cancellation within the same month never pushes churnContractsPct past 100%
+- GIVEN una base de N contratos activos al inicio del mes que no se mueven, más M contratos que se activan Y
+  se dan de baja dentro del mismo mes
+- WHEN se computa el churn del mes
+- THEN `churnContractsPct` NO cuenta esos M contratos (nunca estuvieron en la base de inicio de mes) — el
+  resultado nunca puede superar el 100% de la base real
+
+#### Scenario: churnRevenuePct is null, never a lying zero, when there is no starting base to measure against
+- GIVEN un mes donde no había NINGÚN contrato activo al inicio del mes (o el snapshot del mes anterior nunca
+  se computó — el cálculo es fresco, no depende de que exista)
+- WHEN se consulta `churnRevenuePct`
+- THEN el valor es `null` — nunca un `0` que un lector confunda con "no hubo churn"
+
+#### Scenario: Revenue churn weighs by contracted plan price, not by contract count
+- GIVEN dos bajas en el mismo mes: un contrato de 50 Mbps y uno de 500 Mbps, con precio de plan contratado
+  distinto
 - WHEN se computa `churnRevenuePct`
 - THEN el contrato de 500 Mbps pesa más en el resultado que el de 50 Mbps (no es un simple conteo)
 
@@ -343,6 +550,14 @@ reportar cuántas de ellas siguen activas 3, 6 y 12 meses después.
 - WHEN se consulta esa cohorte
 - THEN existen los puntos `monthsElapsed: 3` y `monthsElapsed: 6` (si corresponde) pero NO existe
   `monthsElapsed: 12` (no inventa un dato que no puede existir aún)
+
+#### Scenario: A contract whose only recorded event is `reactivated` belongs to no cohort (rework 2026-07-27, F8)
+- GIVEN un contrato cuyo evento MÁS ANTIGUO registrado es `reactivated` (su `activated` real precede al
+  histórico rastreado, ej. datos legacy) — NUNCA tuvo un evento `activated` en el log
+- WHEN se agrupan las altas por mes de cohorte
+- THEN ese contrato NO se asigna a NINGÚN mes de cohorte (ni al mes de su `reactivated`, ni a ningún otro) —
+  no se inventa un mes de alta que no se puede determinar, y NO infla el `originalCount` de la cohorte del
+  mes en que ocurrió la reactivación
 
 ### Requirement: CAC and payback, per technology, flags loss-making plans
 El sistema DEBE (MUST) computar, por tecnología, `CAC = costoVentaArs + costoInstalacionArs` (de
@@ -422,6 +637,16 @@ collected, ver Decision 0) como la serie **real** deflactada por `FinanceInflati
 El sistema DEBE (MUST) exponer las modificaciones de contrato (upgrades/downgrades) reutilizando
 `ListInternetServiceHistory` y su criterio de derivación de dirección por `downloadKbps`, sin implementar un
 segundo criterio de comparación de planes.
+
+> **Alcance corregido (fix-wave-3, deriva de artefactos detectada por la re-review)**: este Requirement
+> aplica al listado de modificaciones y a los CONTADORES `contractsUpgraded`/`contractsDowngraded`
+> (kbps-based, vía `deriveDirection`) — NUNCA a `mrrUpgradeArs`/`mrrDowngradeArs` (PLATA), que son
+> deliberadamente price-sign based (ver el Requirement "MRR contracted bridge..." más arriba, escenario "A
+> plan upgrade adds the price delta..."): un cambio "lateral" (mismos kbps, precio distinto) no tiene
+> dirección kbps pero SÍ mueve plata, y `deriveDirection` lo clasificaría como `null`. Los dos criterios son
+> ejes ortogonales E INTENCIONALMENTE distintos — no es una violación de este Requirement, es el "segundo
+> criterio de comparación" correcto para una pregunta distinta (actividad en unidades vs. impacto en plata).
+> Esta nota corrige una lectura ambigua del texto original, no cambia comportamiento.
 
 #### Scenario: An upgrade/downgrade shown in finance-growth matches the internet-history page
 - GIVEN un evento `modified` de cambio de plan que `ListInternetServiceHistory` clasifica como `upgrade`
@@ -523,6 +748,61 @@ BE NUNCA debe aceptar "solo autenticado" como sustituto del guard.
   `finance.manage_inflation`, `finance.sync` (namespace con PUNTO, no colon — mismo criterio que el resto
   del catálogo, `ResolveUserPermissions.ts`)
 
+### Requirement: Monthly snapshots must be backfillable on demand, and the nightly job's status must be observable
+
+> **NUEVO (rework 2026-07-27, J1/J3)**: el job nocturno (`FinanceSnapshotScheduler`) recomputa SÓLO el mes
+> actual y el anterior, siempre — por diseño (agrega meses ya cerrados, no un backlog). Sin un trigger manual
+> para rangos históricos, `FinanceMonthlySnapshot` nunca tendría filas para meses más viejos, sin importar
+> cuánta historia de recibos traiga el ingest de Fase 1 — el bridge retroactivo de MRR contratado, la razón de
+> ser de este change, nunca llegaría a existir.
+
+El sistema DEBE (MUST) exponer un trigger manual (`POST /api/finance/growth/sync/backfill-snapshots`, guard
+`finance:sync`) que compute `FinanceMonthlySnapshot` y `FinanceCohortSnapshot` para un rango `[from, to]`
+explícito, inclusive, sin abortar el resto del rango si un mes individual falla. El sistema DEBE (MUST)
+también persistir el estado de la ÚLTIMA corrida del job nocturno (éxito/error, meses computados) de forma
+consultable — un job que falla TODAS las noches DEBE ser distinguible de uno que simplemente no tuvo nada
+nuevo que computar.
+
+#### Scenario: An explicit range backfill computes both the monthly and cohort snapshot for every month in it
+- GIVEN un rango `from: "2020-01"`, `to: "2020-06"` sin snapshots previos para esos meses
+- WHEN un usuario con `finance:sync` hace `POST /api/finance/growth/sync/backfill-snapshots` con ese rango
+- THEN los 6 meses quedan computados en `FinanceMonthlySnapshot`/`FinanceCohortSnapshot`, en la respuesta
+  `monthsComputed`
+
+#### Scenario: A single poisoned month does not abort the rest of the backfill range
+- GIVEN un rango de varios meses donde uno de ellos falla (ej. un error transitorio de repositorio)
+- WHEN corre el backfill
+- THEN los demás meses del rango se computan igual, y el mes fallido aparece en `monthsFailed` con su error
+
+#### Scenario: A "to" beyond the current month is rejected without computing anything (fix-wave-3 🔵 5)
+> Sin este guard, un `to` futuro (fat-fingered, o un bug del FE construyendo el rango) computaría y
+> PERSISTIRÍA snapshots en cero para meses que todavía no ocurrieron — un `GetFinanceOverview` leería eso como
+> una caída a cero al final de la serie, no como "todavía no hay datos".
+- GIVEN un rango cuyo `to` es un mes calendario POSTERIOR al mes actual (ej. `to: "2030-12"` con el sistema en
+  `2026-07`)
+- WHEN un usuario con `finance:sync` hace `POST /api/finance/growth/sync/backfill-snapshots` con ese rango
+- THEN responde con error, NINGÚN mes del rango se computa ni se persiste, y `to` igual al mes actual (nunca
+  posterior) sigue siendo válido
+
+> **LIMITACIÓN CONOCIDA, sin resolver — decisión pendiente del usuario (fix-wave-3)**: `FinancePlanPrice` NO
+> tiene historia de precios (`planCode` es la clave, un ÚNICO `estimatedMonthlyPrice` vigente). El bridge
+> resuelve el MRR contratado de CUALQUIER mes pasado contra el precio ACTUAL del plan — medido, el mismo
+> contrato da `mrrFinalArs(2019-06) = 42000` y `mrrFinalArs(2026-06) = 42000` para el MISMO plan, cuando el
+> precio real de 2019 rondaba los $700. Con la inflación argentina, el MRR contratado histórico valuado a
+> precios de hoy es ficción, y ese número queda CONGELADO en `FinanceMonthlySnapshot` hasta que alguien vuelva
+> a correr el backfill para ese mes. El backfill histórico hacia atrás de este change (más allá de una
+> ventana reciente donde los precios cargados sean representativos) **NO DEBE ejecutarse** hasta que el
+> usuario decida entre: (a) agregar historia de precios a `FinancePlanPrice` (`validFrom`/vigencia por
+> período), (b) limitar el backfill histórico a una fecha de corte donde los precios actuales sean
+> representativos, o (c) aceptar la ficción con el número explícitamente etiquetado como tal en la UI. Ninguna
+> de las tres se implementó en este fix-wave.
+
+#### Scenario: A failing nightly job is distinguishable from a job with nothing new to compute
+- GIVEN el job nocturno de snapshots falla varias noches seguidas
+- WHEN se consulta `GET /api/finance/growth/sync/status`
+- THEN el campo `snapshotJob.lastResult` refleja el error de la última corrida — el panel NUNCA muestra el
+  mismo estado para "todo salió bien, nada cambió" y "el job lleva días muerto"
+
 ## Testing Notes
 
 Molde de `SyncGestionRealContractsDelta` (cursor de fecha) + `BackfillGrContractsBatch`/
@@ -550,3 +830,16 @@ keyed-by-id, igual que el fixture ya usado para `clientes_consulta`) y un test d
 tests de rutas usan supertest con repos in-memory inyectados y cubren los 2 caminos de permisos (con/sin cada
 acción) por endpoint de escritura. El test de la serie real truncada (`realSeriesTruncatedAt`) es
 obligatorio — es el escenario que previene el placebo inflacionario que motivó el pedido completo.
+
+**REWORK 2026-07-27 — criterio obligatorio para el test de la identidad del bridge**: un fixture donde el cash
+(o cualquier otro insumo) de cada contrato se fija A MANO en exactamente el valor que hace cerrar la cuenta NO
+prueba nada — es una tautología (cambiar un número del fixture exige cambiar la aserción en lockstep, así que
+NUNCA puede fallar por una regresión real). El test de la identidad del bridge DEBE construir movimientos de
+contrato REALES y no rigged para que cierren — como mínimo: un contrato estable que NO paga nada ese mes
+(prueba que el MRR contratado es inmune al cash), un contrato que regulariza pagando de más (misma prueba),
+alta+baja dentro del mismo mes, alta+upgrade dentro del mismo mes, upgrade+baja dentro del mismo mes,
+baja+re-alta dentro del mismo mes (el cliente nunca se fue), y un cambio de plan "lateral" (mismos kbps,
+precio distinto) — y verificar la identidad **al centavo** (no sólo dentro de la tolerancia ≤1 que el
+Requirement permite como techo, no como resultado esperado). Ver
+`src/__tests__/application/finance/BuildFinanceMonthlySnapshot.test.ts` para la implementación de referencia
+de este criterio.

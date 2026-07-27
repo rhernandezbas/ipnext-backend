@@ -13,6 +13,7 @@ import { GetFinanceTargets } from '@application/use-cases/finance/GetFinanceTarg
 import { UpdateFinanceTargets } from '@application/use-cases/finance/UpdateFinanceTargets';
 import { ListFinanceInflationIndex } from '@application/use-cases/finance/ListFinanceInflationIndex';
 import { UpdateFinanceInflationIndex } from '@application/use-cases/finance/UpdateFinanceInflationIndex';
+import { BackfillFinanceMonthlySnapshots } from '@application/use-cases/finance/BackfillFinanceMonthlySnapshots';
 import { isValidYearMonth } from '@application/use-cases/finance/financeDates';
 import {
   toFinanceInvoiceTypeDto,
@@ -27,6 +28,7 @@ import {
   UpdateFinanceTargetsSchema,
   toFinanceInflationIndexDto,
   UpdateFinanceInflationIndexSchema,
+  BackfillFinanceMonthlySnapshotsSchema,
 } from '@application/dto/financeGrowth.dto';
 
 /** Factory matching `requirePerm` exported from app.ts (molde `alerts.routes.ts`). */
@@ -70,6 +72,15 @@ export interface FinanceGrowthRouterDeps {
   updateTargets: UpdateFinanceTargets;
   listInflationIndex: ListFinanceInflationIndex;
   updateInflationIndex: UpdateFinanceInflationIndex;
+
+  /**
+   * finance-growth Fase 3 rework (J1) — manual trigger for the backfill of
+   * `FinanceMonthlySnapshot`/`FinanceCohortSnapshot` over an explicit
+   * `[from, to]` range. Without this, the nightly job's 2-month rolling
+   * window (`FinanceSnapshotScheduler`) would NEVER produce rows for older
+   * months, no matter how much receipt history Fase 1 backfills.
+   */
+  backfillSnapshots: BackfillFinanceMonthlySnapshots;
 }
 
 /**
@@ -323,6 +334,32 @@ export function createFinanceGrowthRouter(deps: FinanceGrowthRouterDeps): Router
       next(err);
     }
   });
+
+  // POST /sync/backfill-snapshots — finance:sync (finance-growth Fase 3
+  // rework, J1). Synchronous (this is a bounded, admin-triggered one-shot,
+  // NOT a resumable background scheduler — see BackfillFinanceMonthlySnapshots'
+  // docblock) — computes BuildFinanceMonthlySnapshot + BuildFinanceCohortSnapshot
+  // for every month in `[from, to]` inclusive, one month failing doesn't
+  // abort the rest. This is the ONLY way `FinanceMonthlySnapshot` ever gets
+  // rows for months older than the nightly job's 2-month rolling window.
+  router.post(
+    '/sync/backfill-snapshots',
+    deps.auth,
+    syncPerm,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      const parsed = BackfillFinanceMonthlySnapshotsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const result = await deps.backfillSnapshots.execute(parsed.data.from, parsed.data.to);
+        res.status(200).json(result);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   // GET /sync/status — finance:read.
   router.get('/sync/status', deps.auth, readPerm, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {

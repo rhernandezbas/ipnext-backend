@@ -920,6 +920,14 @@ import { GetFinanceTargets } from '@application/use-cases/finance/GetFinanceTarg
 import { UpdateFinanceTargets } from '@application/use-cases/finance/UpdateFinanceTargets';
 import { ListFinanceInflationIndex } from '@application/use-cases/finance/ListFinanceInflationIndex';
 import { UpdateFinanceInflationIndex } from '@application/use-cases/finance/UpdateFinanceInflationIndex';
+// finance-growth Fase 3 rework (J1) — manual backfill trigger for FinanceMonthlySnapshot/FinanceCohortSnapshot.
+import { PrismaFinanceReceiptItemRepository } from '../adapters/prisma/PrismaFinanceReceiptItemRepository';
+import { PrismaFinanceReceiptApplicationRepository } from '../adapters/prisma/PrismaFinanceReceiptApplicationRepository';
+import { PrismaFinanceMonthlySnapshotRepository } from '../adapters/prisma/PrismaFinanceMonthlySnapshotRepository';
+import { PrismaFinanceCohortSnapshotRepository } from '../adapters/prisma/PrismaFinanceCohortSnapshotRepository';
+import { BuildFinanceMonthlySnapshot } from '@application/use-cases/finance/BuildFinanceMonthlySnapshot';
+import { BuildFinanceCohortSnapshot } from '@application/use-cases/finance/BuildFinanceCohortSnapshot';
+import { BackfillFinanceMonthlySnapshots } from '@application/use-cases/finance/BackfillFinanceMonthlySnapshots';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -3415,6 +3423,25 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // absent from the catalog BEFORE upserting (see `FinanceTechnologyNotFoundError`).
   const financeTechnologyCatalogRepo = new PrismaContractTechnologyRepository();
   const financePlanCatalogRepo = new PrismaPlanRepository();
+  // finance-growth Fase 3 rework (J1) — BackfillFinanceMonthlySnapshots wired
+  // with REAL Prisma repos (composition-root test pins this, molde the rest
+  // of this file). Reuses financeInvoiceTypesRepo/financePlanPriceRepo
+  // (already declared above, stateless) rather than duplicating instances.
+  const backfillSnapshots = new BackfillFinanceMonthlySnapshots(
+    new BuildFinanceMonthlySnapshot(
+      new PrismaContractServiceEventRepository(),
+      new PrismaServiceCatalogRepository(),
+      financePlanCatalogRepo,
+      new PrismaPppoeServiceRepository(),
+      new PrismaClientMirrorReadRepository(),
+      new PrismaFinanceReceiptItemRepository(),
+      new PrismaFinanceReceiptApplicationRepository(),
+      financeInvoiceTypesRepo,
+      financePlanPriceRepo,
+      new PrismaFinanceMonthlySnapshotRepository(),
+    ),
+    new BuildFinanceCohortSnapshot(new PrismaContractServiceEventRepository(), new PrismaServiceCatalogRepository(), new PrismaFinanceCohortSnapshotRepository()),
+  );
   app.use('/api/finance/growth', createFinanceGrowthRouter({
     auth: createAuthMiddleware(authAdapter, sessionRepo),
     requirePerm,
@@ -3439,6 +3466,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     updateTargets: new UpdateFinanceTargets(financeTargetsConfigRepo),
     listInflationIndex: new ListFinanceInflationIndex(financeInflationIndexRepo),
     updateInflationIndex: new UpdateFinanceInflationIndex(financeInflationIndexRepo),
+    backfillSnapshots,
   }));
 
   // 404

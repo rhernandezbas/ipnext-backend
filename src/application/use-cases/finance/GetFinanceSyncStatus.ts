@@ -5,6 +5,8 @@ import { isValidYearMonth } from './financeDates';
 const DELTA_ENTITY = 'finance-receipts-delta';
 const BACKFILL_ENTITY = 'finance-receipts-backfill';
 const DEBTOR_BALANCES_ENTITY = 'gr-debtor-balances';
+/** finance-growth Fase 3 rework (J3) — SAME entity key `FinanceSnapshotScheduler` writes to via `SyncStateRepository`. */
+export const SNAPSHOT_JOB_ENTITY = 'finance-snapshot-job';
 
 export interface FinanceDeltaStatus {
   lastRunAt: Date | null;
@@ -33,10 +35,18 @@ export interface FinanceDebtorBalancesStatus {
   itemsSynced: number;
 }
 
+/** finance-growth Fase 3 rework (J3) — same shape as `FinanceDebtorBalancesStatus`, kept as its own named type for clarity at the call site. */
+export interface FinanceSnapshotJobStatus {
+  lastRunAt: Date | null;
+  lastResult: string | null;
+  itemsSynced: number;
+}
+
 export interface FinanceSyncStatus {
   delta: FinanceDeltaStatus;
   backfill: FinanceBackfillStatus;
   debtorBalances: FinanceDebtorBalancesStatus;
+  snapshotJob: FinanceSnapshotJobStatus;
 }
 
 /**
@@ -53,10 +63,11 @@ export class GetFinanceSyncStatus {
   constructor(private readonly state: SyncStateRepository) {}
 
   async execute(): Promise<FinanceSyncStatus> {
-    const [delta, backfill, debtor] = await Promise.all([
+    const [delta, backfill, debtor, snapshotJob] = await Promise.all([
       this.state.get(DELTA_ENTITY),
       this.state.get(BACKFILL_ENTITY),
       this.state.get(DEBTOR_BALANCES_ENTITY),
+      this.state.get(SNAPSHOT_JOB_ENTITY),
     ]);
 
     const pendingPages = deltaCursorHasPendingPages(delta?.cursor ?? null);
@@ -112,6 +123,12 @@ export class GetFinanceSyncStatus {
       itemsSynced: debtor?.itemsSynced ?? 0,
     };
 
-    return { delta: deltaStatus, backfill: backfillStatus, debtorBalances };
+    const snapshotJobStatus: FinanceSnapshotJobStatus = {
+      lastRunAt: snapshotJob?.lastRunAt ?? null,
+      lastResult: snapshotJob?.lastResult ?? null,
+      itemsSynced: snapshotJob?.itemsSynced ?? 0,
+    };
+
+    return { delta: deltaStatus, backfill: backfillStatus, debtorBalances, snapshotJob: snapshotJobStatus };
   }
 }

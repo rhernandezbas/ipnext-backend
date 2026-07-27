@@ -9,10 +9,15 @@ export class InMemoryFinanceReceiptApplicationRepository implements FinanceRecei
   rows = new Map<string, FinanceReceiptApplication>();
 
   /**
-   * Optional reference to the sibling receipts repo, used ONLY to resolve
-   * `clientGrId` for `listByClientAndMonth` (the domain type here has no
-   * `clientGrId` of its own — it travels on the parent receipt, same as the
-   * real schema's FK relation). Omit it in tests that never exercise that method.
+   * Reference to the sibling receipts repo. finance-growth Fase 3 rework
+   * (F9) — REQUIRED by both read methods now: the monthly cut moved from
+   * this application's own nullable `appliedDate` to the PARENT RECEIPT's
+   * `fechaRecibo` (mirrors `InMemoryFinanceReceiptItemRepository`'s
+   * fix-wave-4 W2 fix), so `listByMonth` needs to resolve the receipt too.
+   * Still optional at the type level so tests that never call either read
+   * method (only `upsertBatch`, e.g. the ingest use-case tests) don't need
+   * to thread it — both methods throw loudly instead of silently returning
+   * `[]`/wrong rows when it's missing (fix-wave-1 F13 criterion).
    */
   constructor(private readonly receipts?: InMemoryFinancePaymentReceiptRepository) {}
 
@@ -20,22 +25,37 @@ export class InMemoryFinanceReceiptApplicationRepository implements FinanceRecei
     for (const a of applications) this.rows.set(a.grApplicationId, { ...a });
   }
 
+  /**
+   * finance-growth Fase 3 rework (F9) — cuts by the parent receipt's
+   * `fechaRecibo`, NOT `application.appliedDate` (that was the bug: an
+   * application with `appliedDate: null` vanished from every month under the
+   * old `a.appliedDate && arYearMonth(a.appliedDate) === ym` filter, and
+   * `unclassifiedAmountArs` — the watchdog that exists so misclassified
+   * money never disappears silently — inherited that exact blind spot).
+   */
   async listByMonth(yearMonth: string): Promise<FinanceReceiptApplication[]> {
-    return Array.from(this.rows.values()).filter((a) => a.appliedDate && arYearMonth(a.appliedDate) === yearMonth);
+    this.assertReceiptsWired('listByMonth');
+    return Array.from(this.rows.values()).filter((a) => {
+      const fechaRecibo = this.receipts!.rows.get(a.receiptId)?.fechaRecibo;
+      return !!fechaRecibo && arYearMonth(fechaRecibo) === yearMonth;
+    });
   }
 
   async listByClientAndMonth(clientGrId: string, yearMonth: string): Promise<FinanceReceiptApplication[]> {
-    // fix-wave-1 F13: NEVER silently return `[]` when the sibling repo wasn't
-    // threaded in — that produced a self-confirming mock (a Fase 3 test that
-    // forgets to wire it asserts "atribución = $0" and PASSES, hiding a real
-    // attribution bug). The real Prisma adapter resolves this via a JOIN that
-    // never "forgets"; the in-memory double must fail loudly on the same gap.
-    if (!this.receipts) {
-      throw new Error(
-        'InMemoryFinanceReceiptApplicationRepository.listByClientAndMonth() requires the sibling receipts repo — construct with `new InMemoryFinanceReceiptApplicationRepository(receiptsRepo)`.',
-      );
-    }
+    this.assertReceiptsWired('listByClientAndMonth');
     const monthRows = await this.listByMonth(yearMonth);
     return monthRows.filter((a) => this.receipts!.rows.get(a.receiptId)?.clientGrId === clientGrId);
+  }
+
+  // fix-wave-1 F13 criterion, applied to BOTH read methods since the F9 fix
+  // moved the date cut onto the sibling repo — NEVER silently return
+  // `[]`/wrong rows when it wasn't threaded in; that would produce a
+  // self-confirming mock for whoever builds against this double.
+  private assertReceiptsWired(method: string): void {
+    if (!this.receipts) {
+      throw new Error(
+        `InMemoryFinanceReceiptApplicationRepository.${method}() requires the sibling receipts repo — construct with \`new InMemoryFinanceReceiptApplicationRepository(receiptsRepo)\`.`,
+      );
+    }
   }
 }

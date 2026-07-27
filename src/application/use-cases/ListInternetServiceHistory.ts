@@ -80,8 +80,13 @@ export class ListInternetServiceHistory {
  * cuando: el evento NO es 'modified', falta alguno de los códigos, alguno es plan de ENFORCEMENT
  * (IP-REDUCCION / IP-BAJA — corte/reducción, no un cambio comercial), algún código no está en el
  * catálogo, o los kbps son iguales (cambio lateral).
+ *
+ * finance-growth Fase 3 (design.md — "la dirección upgrade/downgrade se DERIVA del catálogo Plan
+ * ... reusar ese criterio, no inventar otro") — EXPORTADA para que
+ * `BuildFinanceMonthlySnapshot` (bridge de MRR) use EXACTAMENTE este mismo criterio en vez de
+ * reimplementar una segunda comparación de planes que podría divergir de esta página.
  */
-function deriveDirection(
+export function deriveDirection(
   eventType: string,
   oldPlan: string | null,
   newPlan: string | null,

@@ -22,6 +22,7 @@ import { GetFinanceTargets } from '@application/use-cases/finance/GetFinanceTarg
 import { UpdateFinanceTargets } from '@application/use-cases/finance/UpdateFinanceTargets';
 import { ListFinanceInflationIndex } from '@application/use-cases/finance/ListFinanceInflationIndex';
 import { UpdateFinanceInflationIndex } from '@application/use-cases/finance/UpdateFinanceInflationIndex';
+import { BackfillFinanceMonthlySnapshots } from '@application/use-cases/finance/BackfillFinanceMonthlySnapshots';
 import { InMemoryFinanceTechnologyCostRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceTechnologyCostRepository';
 import { InMemoryFinancePlanPriceRepository } from '@infrastructure/adapters/in-memory/InMemoryFinancePlanPriceRepository';
 import { InMemoryFinanceTargetsConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceTargetsConfigRepository';
@@ -181,6 +182,18 @@ async function buildApp(overrides: { rearmBackfill?: RearmFinanceReceiptsBackfil
   const listInflationIndex = new ListFinanceInflationIndex(inflationIndex);
   const updateInflationIndex = new UpdateFinanceInflationIndex(inflationIndex);
 
+  // finance-growth Fase 3 rework (J1) — route-level test only needs the
+  // guard + shape wiring, not the full metrics engine; a lightweight fake
+  // satisfying the `.execute()` contract is enough here (the engine ITSELF
+  // is covered exhaustively by BuildFinanceMonthlySnapshot.test.ts).
+  const backfillSnapshotsCalls: Array<[string, string]> = [];
+  const backfillSnapshots = {
+    execute: jest.fn(async (from: string, to: string) => {
+      backfillSnapshotsCalls.push([from, to]);
+      return { monthsComputed: [from], monthsFailed: [] };
+    }),
+  } as unknown as BackfillFinanceMonthlySnapshots;
+
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
@@ -205,6 +218,7 @@ async function buildApp(overrides: { rearmBackfill?: RearmFinanceReceiptsBackfil
       updateTargets,
       listInflationIndex,
       updateInflationIndex,
+      backfillSnapshots,
     }),
   );
   app.use(errorHandler);
@@ -219,6 +233,7 @@ async function buildApp(overrides: { rearmBackfill?: RearmFinanceReceiptsBackfil
     planPrices,
     targetsConfig,
     inflationIndex,
+    backfillSnapshotsCalls,
     readUserId: readUser.id,
     costsUserId: costsUser.id,
     syncUserId: syncUser.id,
@@ -369,6 +384,32 @@ describe('POST /api/finance/growth/sync/rearm-backfill', () => {
     expect(res.status).toBe(503);
     expect(res.headers['retry-after']).toBe('3');
     expect(res.body.code).toBe('FINANCE_SYNC_LOCK_BUSY');
+  });
+});
+
+// finance-growth Fase 3 rework (J1) — the manual trigger for months the
+// nightly job's 2-month rolling window never reaches.
+describe('POST /api/finance/growth/sync/backfill-snapshots', () => {
+  it('sin finance:sync → 403, nada disparado', async () => {
+    const { app, noPermUserId, backfillSnapshotsCalls } = await buildApp();
+    const res = await asUser(request(app).post('/api/finance/growth/sync/backfill-snapshots'), noPermUserId).send({ from: '2026-01', to: '2026-03' });
+    expect(res.status).toBe(403);
+    expect(backfillSnapshotsCalls).toEqual([]);
+  });
+
+  it('con finance:sync y rango válido → 200, delega al use case', async () => {
+    const { app, syncUserId, backfillSnapshotsCalls } = await buildApp();
+    const res = await asUser(request(app).post('/api/finance/growth/sync/backfill-snapshots'), syncUserId).send({ from: '2026-01', to: '2026-03' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ monthsComputed: ['2026-01'], monthsFailed: [] });
+    expect(backfillSnapshotsCalls).toEqual([['2026-01', '2026-03']]);
+  });
+
+  it('con formato inválido → 400, nada disparado', async () => {
+    const { app, syncUserId, backfillSnapshotsCalls } = await buildApp();
+    const res = await asUser(request(app).post('/api/finance/growth/sync/backfill-snapshots'), syncUserId).send({ from: '2026-1', to: '2026-03' });
+    expect(res.status).toBe(400);
+    expect(backfillSnapshotsCalls).toEqual([]);
   });
 });
 

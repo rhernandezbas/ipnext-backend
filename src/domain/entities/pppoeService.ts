@@ -60,6 +60,67 @@ export function isPppoeDisplayStatus(v: string | undefined): v is PppoeDisplaySt
   return v !== undefined && (PPPOE_DISPLAY_STATUSES as readonly string[]).includes(v);
 }
 
+/**
+ * pppoe-tie-break (finance-growth fix-wave-2) — deterministic winner when a
+ * CONTRACT has more than one `PppoeService` row (multi-servicio, or a stale
+ * row left behind after a re-provision that created a new username instead
+ * of reusing the old one). Pure domain logic, SHARED verbatim by
+ * `PrismaPppoeServiceRepository.findCurrentProfilesByContractIds` and
+ * `InMemoryPppoeServiceRepository.findCurrentProfilesByContractIds` — a
+ * change here updates the tie-break for BOTH adapters at once, closing the
+ * exact class of bug this change already hit once (see design.md): the
+ * in-memory adapter silently drifting from a DIFFERENT criterion than the
+ * Prisma one, so a test wired against the fixture self-confirms a bug that
+ * never actually holds against the real DB.
+ *
+ * Order (first match wins): non-`'terminated'` beats `'terminated'` (a hard
+ * baja row is a tombstone, not a live service, but it is still a BETTER
+ * signal than nothing — it's used only when it is the ONLY row) > `'enabled'`
+ * beats any other status (e.g. `'disabled'`) > most recently created row wins
+ * ties (a re-provision after a hardware swap creates a NEW row; the newest
+ * one is the one actually in service today).
+ *
+ * Returns `undefined` when `rows` is empty — the caller treats this exactly
+ * like "no PPPoE service at all" (finance-growth fix-wave-2 point 3): the
+ * contract stays honestly `unpriced`, never a silent price of 0.
+ *
+ * fix-wave-3 (🟡 3) — generic over `T extends Pick<PppoeService, 'status' |
+ * 'createdAt' | 'id'>` so a caller that only needs the WINNER's identity
+ * (e.g. `PrismaPppoeServiceRepository.findCurrentProfilesByContractIds`,
+ * which must NEVER read `password` into memory — see its own docblock) can
+ * pass a narrow Prisma `select` projection instead of a full `PppoeService`,
+ * while `InMemoryPppoeServiceRepository` keeps passing full entities from its
+ * store unchanged (both satisfy the constraint).
+ *
+ * ALSO fix-wave-3 — added a FINAL tiebreak by `id` when both rank AND
+ * `createdAt` are exactly equal (e.g. rows inserted by the same bulk-import
+ * script in the same millisecond). Without it, `Array.prototype.sort`'s
+ * ES2019 stability guarantee means a genuine tie resolves by the INPUT
+ * array's order — which, for `PrismaPppoeServiceRepository` (no `ORDER BY`
+ * before this fix), is Postgres's heap-scan order: NOT guaranteed stable
+ * across runs, and observed to reshuffle after an `UPDATE`/`VACUUM`.
+ * Measured: identical rows, different fetch order → the SAME month's MRR
+ * computed as 10000 in one run and 15000 in the next. `id` carries no
+ * business meaning here; it's used ONLY because it's the one field
+ * guaranteed both unique and stable, giving every caller the exact same
+ * total order regardless of where the rows came from.
+ */
+export function pickCurrentPppoeService<T extends Pick<PppoeService, 'status' | 'createdAt' | 'id'>>(rows: T[]): T | undefined {
+  if (rows.length === 0) return undefined;
+  const rank = (s: Pick<PppoeService, 'status'>): number => {
+    if (s.status === 'terminated') return 2;
+    if (s.status !== 'enabled') return 1;
+    return 0;
+  };
+  return [...rows].sort((a, b) => {
+    const byRank = rank(a) - rank(b);
+    if (byRank !== 0) return byRank;
+    const byDate = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    if (byDate !== 0) return byDate;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  })[0];
+}
+
 export interface PppoeService {
   id: string;
   username: string;            // name del /ppp secret — clave de upsert

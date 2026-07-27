@@ -13,11 +13,16 @@ describe('finance-growth composition root — Fase 1 receipt-ingest wiring', () 
   let appSrc: string;
   let mainSrc: string;
   let bootstrapSrc: string;
+  let snapshotBootstrapSrc: string;
 
   beforeAll(() => {
     appSrc = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'http', 'app.ts'), 'utf8');
     mainSrc = readFileSync(join(__dirname, '..', '..', 'main.ts'), 'utf8');
     bootstrapSrc = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'scheduling', 'bootstrapFinanceReceiptsIngest.ts'), 'utf8');
+    snapshotBootstrapSrc = readFileSync(
+      join(__dirname, '..', '..', 'infrastructure', 'scheduling', 'bootstrapFinanceSnapshotJob.ts'),
+      'utf8',
+    );
   });
 
   it('app.ts imports FinanceReceiptIngestScheduler and createFinanceGrowthRouter', () => {
@@ -137,6 +142,35 @@ describe('finance-growth composition root — Fase 1 receipt-ingest wiring', () 
     it("D: UpdateFinanceTechnologyCost/UpdateFinancePlanPrice share the catalog repo instance with their Get* siblings", () => {
       expect(appSrc).toMatch(/const financeTechnologyCatalogRepo = new PrismaContractTechnologyRepository\(\);/);
       expect(appSrc).toMatch(/const financePlanCatalogRepo = new PrismaPlanRepository\(\);/);
+    });
+  });
+
+  // Fase 3 (task 3.28) — pins that the SECOND job (nightly MRR bridge/cohort
+  // snapshot, design.md Wiring) is actually wired in main.ts and built with
+  // REAL Prisma repos, not a fixture quietly filtering into prod. Unlike the
+  // Fase 1 ingest scheduler, this job has no HTTP route depending on its live
+  // instance, so it's fire-and-forget (molde bootstrapGestionRealSync) rather
+  // than awaited-before-createApp — the pins reflect that shape.
+  describe('Fase 3: nightly snapshot job wiring', () => {
+    it('main.ts imports and starts bootstrapFinanceSnapshotJob (fire-and-forget, like gr-sync)', () => {
+      expect(mainSrc).toContain("from './infrastructure/scheduling/bootstrapFinanceSnapshotJob'");
+      expect(mainSrc).toContain('bootstrapFinanceSnapshotJob()');
+      expect(mainSrc).toMatch(/bootstrapFinanceSnapshotJob\(\)\s*\n?\s*\.then\(\(scheduler\)\s*=>\s*scheduler\.start\(\)\)/);
+    });
+
+    it('bootstrapFinanceSnapshotJob wires BuildFinanceMonthlySnapshot/BuildFinanceCohortSnapshot with REAL Prisma repos', () => {
+      expect(snapshotBootstrapSrc).toContain("from '../adapters/prisma/PrismaContractServiceEventRepository'");
+      expect(snapshotBootstrapSrc).toContain("from '../adapters/prisma/PrismaFinanceMonthlySnapshotRepository'");
+      expect(snapshotBootstrapSrc).toContain("from '../adapters/prisma/PrismaFinanceCohortSnapshotRepository'");
+      expect(snapshotBootstrapSrc).toContain('new BuildFinanceMonthlySnapshot(');
+      expect(snapshotBootstrapSrc).toContain('new BuildFinanceCohortSnapshot(');
+      expect(snapshotBootstrapSrc).toContain('new FinanceSnapshotScheduler(');
+    });
+
+    it('uses its OWN PgAdvisoryLock/lock key, never sharing FinanceReceiptIngestScheduler\'s session', () => {
+      const start = snapshotBootstrapSrc.indexOf('new FinanceSnapshotScheduler(');
+      expect(start).toBeGreaterThan(-1);
+      expect(snapshotBootstrapSrc).toContain('new PgAdvisoryLock()');
     });
   });
 

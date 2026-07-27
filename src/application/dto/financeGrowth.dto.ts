@@ -35,6 +35,16 @@ export const ReclassifyFinanceInvoiceTypeSchema = z.object({
 });
 export type ReclassifyFinanceInvoiceTypeInput = z.infer<typeof ReclassifyFinanceInvoiceTypeSchema>;
 
+// ── POST /sync/backfill-snapshots (finance-growth Fase 3 rework, J1) ──────
+
+const YEAR_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+export const BackfillFinanceMonthlySnapshotsSchema = z.object({
+  from: z.string().regex(YEAR_MONTH_RE, 'from debe tener formato "YYYY-MM"'),
+  to: z.string().regex(YEAR_MONTH_RE, 'to debe tener formato "YYYY-MM"'),
+});
+export type BackfillFinanceMonthlySnapshotsInput = z.infer<typeof BackfillFinanceMonthlySnapshotsSchema>;
+
 // ── GET /sync/status ──────────────────────────────────────────────────────
 
 /**
@@ -80,6 +90,21 @@ export interface FinanceSyncStatusDto {
     lastResult: string | null;
     itemsSynced: number;
   };
+  /**
+   * finance-growth Fase 3 rework (J3) — before this field existed, the
+   * nightly `FinanceSnapshotScheduler` had NO persisted state at all: its
+   * errors went to `console.log` and a `runOnce()` return value nobody
+   * consumed (`main.ts` fire-and-forget). If the job failed EVERY night, the
+   * panel would show the last good month forever — indistinguishable from
+   * "nothing changed", the same class of lie the user already flagged in
+   * Fase 1 ("el status decía ok con el carril muerto"), except here there
+   * wasn't even a status that COULD lie.
+   */
+  snapshotJob: {
+    lastRunAt: string | null;
+    lastResult: string | null;
+    itemsSynced: number;
+  };
 }
 
 export function toFinanceSyncStatusDto(
@@ -107,6 +132,11 @@ export function toFinanceSyncStatusDto(
       lastRunAt: status.debtorBalances.lastRunAt?.toISOString() ?? null,
       lastResult: status.debtorBalances.lastResult,
       itemsSynced: status.debtorBalances.itemsSynced,
+    },
+    snapshotJob: {
+      lastRunAt: status.snapshotJob.lastRunAt?.toISOString() ?? null,
+      lastResult: status.snapshotJob.lastResult,
+      itemsSynced: status.snapshotJob.itemsSynced,
     },
   };
 }

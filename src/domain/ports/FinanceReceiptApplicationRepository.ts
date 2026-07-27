@@ -19,8 +19,18 @@ export interface FinanceReceiptApplication {
 export interface FinanceReceiptApplicationRepository {
   /** Idempotent upsert keyed by `grApplicationId`. */
   upsertBatch(applications: FinanceReceiptApplication[]): Promise<void>;
-  /** All applications whose `appliedDate` falls in the given "YYYY-MM" (Argentina calendar). */
+  /**
+   * finance-growth Fase 3 rework (F9) — cuts by the PARENT RECEIPT's
+   * `fechaRecibo`, NOT this application's own `appliedDate` (which is
+   * nullable — a `null` used to vanish from EVERY month with no error, the
+   * SAME blind spot `FinanceReceiptItemRepository` had until fix-wave-4 W2).
+   * `unclassifiedAmountArs` (the watchdog specifically built so misclassified
+   * money never disappears silently) inherited that exact hole: an
+   * application with `appliedDate: null` was invisible to `listByMonth`,
+   * so its amount never reached `unclassifiedAmountArs` either. Same
+   * criterion, same fix, mirrored from `FinanceReceiptItemRepository`.
+   */
   listByMonth(yearMonth: string): Promise<FinanceReceiptApplication[]>;
-  /** Applications for one client (via its receipts) within a given "YYYY-MM". Fase 3 attribution. */
+  /** Applications for one client within a given "YYYY-MM", cut by the parent receipt's `fechaRecibo` (same rationale as `listByMonth`). Fase 3 attribution. */
   listByClientAndMonth(clientGrId: string, yearMonth: string): Promise<FinanceReceiptApplication[]>;
 }
