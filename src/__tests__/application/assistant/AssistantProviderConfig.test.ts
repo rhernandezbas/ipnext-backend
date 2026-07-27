@@ -213,3 +213,39 @@ describe('TestAssistantConnection — la prueba corre en el SERVIDOR', () => {
     expect((await desdeEnv.execute()).detail).toMatch(/deploy/);
   });
 });
+
+describe('el DTO NO puede promover la URL del deploy a la DB', () => {
+  it('expone la baseUrl GUARDADA (vacía), no la efectiva', () => {
+    // El form muestra este valor y lo manda de vuelta al guardar. Si acá saliera la del env,
+    // el primer "Guardar" —aunque el operador sólo haya tocado la key— la escribiría en la DB.
+    // A partir de ahí la DB gana para siempre y DEEPSEEK_BASE_URL queda muerta en silencio.
+    const stored = { baseUrl: '', apiKey: 'sk-ui' };
+    const dto = toAssistantProviderConfigDto(stored, resolveProviderCredentials(stored, ENV));
+
+    expect(dto.baseUrl).toBe('');
+  });
+
+  it('expone por separado la URL que se está usando de verdad', () => {
+    const stored = { baseUrl: '', apiKey: 'sk-ui' };
+    const dto = toAssistantProviderConfigDto(stored, resolveProviderCredentials(stored, ENV));
+
+    // Para MOSTRAR (placeholder), no para reenviar.
+    expect(dto.effectiveBaseUrl).toBe('https://api.deepseek.com');
+  });
+
+  it('con una URL guardada, ambas coinciden', () => {
+    const stored = { baseUrl: 'https://gateway.interno', apiKey: 'sk-ui' };
+    const dto = toAssistantProviderConfigDto(stored, resolveProviderCredentials(stored, ENV));
+
+    expect(dto.baseUrl).toBe('https://gateway.interno');
+    expect(dto.effectiveBaseUrl).toBe('https://gateway.interno');
+  });
+
+  it('guardar la URL vacía deja el control en el env — reversible', async () => {
+    const repo = new FakeProviderConfigRepo({ baseUrl: 'https://gateway.interno', apiKey: 'sk' });
+
+    await repo.update({ baseUrl: '' });
+
+    expect(resolveProviderCredentials(await repo.get(), ENV).baseUrl).toBe(ENV.baseUrl);
+  });
+});

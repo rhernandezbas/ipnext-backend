@@ -11,7 +11,18 @@ import type { AssistantProviderConfig } from '@domain/ports/AssistantProviderCon
  * el navegador de todos los que abran la pantalla.
  */
 export interface AssistantProviderConfigDto {
+  /**
+   * URL **GUARDADA** en la DB. Vacía ⇒ se usa la del deploy. Es lo que edita el formulario.
+   *
+   * Acá va la guardada y NO la efectiva por la misma razón por la que la key va enmascarada:
+   * el form muestra este valor y lo manda de vuelta al guardar. Si saliera la efectiva, el
+   * primer "Guardar" —aunque el operador sólo haya tocado la key— escribiría la URL del env
+   * en la DB. Y como la DB pisa al env, `DEEPSEEK_BASE_URL` quedaría muerta en silencio para
+   * siempre. La reversibilidad se pierde sin que nadie toque nada.
+   */
   baseUrl: string;
+  /** URL realmente en uso (la guardada, o la del deploy si no hay guardada). Sólo para MOSTRAR. */
+  effectiveBaseUrl: string;
   /** True cuando hay una key EFECTIVA (de la DB o del env). */
   hasApiKey: boolean;
   /** Últimos 4 caracteres de la key guardada en la DB, o `null`. */
@@ -30,7 +41,8 @@ export function toAssistantProviderConfigDto(
   effective: { baseUrl: string; apiKey: string; source: 'db' | 'env' | 'none' },
 ): AssistantProviderConfigDto {
   return {
-    baseUrl: effective.baseUrl,
+    baseUrl: stored.baseUrl,
+    effectiveBaseUrl: effective.baseUrl,
     hasApiKey: effective.apiKey !== '',
     // Sólo de la key GUARDADA: mostrar los últimos 4 de una key que vive en un secret del
     // deploy filtraría parte de un valor que esta pantalla no administra.
