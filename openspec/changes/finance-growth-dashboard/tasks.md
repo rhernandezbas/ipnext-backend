@@ -1,0 +1,479 @@
+# Tasks: Finance Growth Dashboard
+
+> Strict TDD (RED→GREEN→REFACTOR). Cada item de use case/route es "test que falla → implementación".
+> Adapters fake = `InMemory{Entity}Repository` (NUNCA mockear Prisma). Orden = dependencia de datos
+> (Fase 1/2 en paralelo posible, 3 depende de 1+2, 4 depende de 3, 5 depende de 4).
+
+## Fase 1 — Ingest global de cobranza (recibos GR) — REESCRITA tras verificación en vivo (2026-07-26)
+
+> El spike de verificación original (1.0 en la versión previa) quedó RESUELTO por una llamada real a GR: NO
+> hace falta ejecutarlo. `cuentas.invoices[]` es SOLO deuda abierta (6/6 clientes activos → 0 facturas) — el
+> sync per-client NUNCA iba a servir de fundación de datos. Ver `design.md` Decision 0 para el detalle
+> completo. La fundación de datos pasa a ser el ingest global de `recibos` (backfill + delta), y el sync
+> per-client `RefreshDebtorBalances` sobrevive con una extensión mínima (estado `4`).
+>
+> **REESCRITURA 2 (2026-07-26, mismo día) — pacing, decisión LOCK del usuario**: el modelo de "1 mes
+> backfilleado por corrida nocturna" quedó DESCARTADO (163 meses de historia ⇒ ~5,4 meses de calendario para
+> cobertura completa — inaceptable). Se reemplaza por un goteo continuo con presupuesto de requests
+> COMPARTIDO entre dos carriles priorizados (delta con prioridad absoluta, backfill cediendo el turno), UNA
+> página GR por turno. Ver `design.md` Decision 4b. Esto agrega una pieza nueva
+> (`FinanceReceiptIngestScheduler`) y cambia el contrato de `execute()` de los dos use cases de ingest (antes
+> paginaban la unidad completa por corrida; ahora, una sola página). Conteo de Fase 1: 49 → **58 items**.
+
+### Domain — puerto GR extendido + entidades nuevas
+- [x] 1.1 `src/domain/entities/gestionReal.ts`: `GrReceipt` (`grReceiptId`, `clienteGrId`, `recaudador`,
+  `fechaRecibo`, `fechaConfirmacion`, `fechaAnulacion`, `observaciones`, `applications: GrReceiptApplication[]`)
+  y `GrReceiptApplication` (`grApplicationId`, `tipo`, `sucursal`, `numero`, `importe`, `fecha`).
+- [x] 1.2 `src/domain/ports/GestionRealPort.ts`: agregar `fetchReceipts(params: FetchReceiptsParams):
+  Promise<FetchReceiptsResult>`. `FetchReceiptsParams = {fechaDesde, fechaHasta, cantidad, offset}` (fechas
+  SIEMPRE `DD-MM-AAAA`, documentado en el JSDoc del tipo — GR responde HTTP 500 con ISO, verificado en vivo).
+- [x] 1.3 `src/domain/ports/FinanceInvoiceTypeClassificationRepository.ts`: interfaz `get`/`upsertIfAbsent`/
+  `list`/`updateBucket`.
+- [x] 1.4 `src/domain/ports/FinanceReceiptSyncConfigRepository.ts`: interfaz `get`/`update` (molde
+  `GestionRealIngestConfigRepository`).
+- [x] 1.5 `src/domain/ports/FinancePaymentReceiptRepository.ts`: `upsertBatch(receipts)`, `exists(grReceiptId)`.
+- [x] 1.6 `src/domain/ports/FinanceReceiptApplicationRepository.ts`: `upsertBatch(applications)`,
+  `listByMonth(yearMonth)`, `listByClientAndMonth(clientGrId, yearMonth)`.
+
+### Test doubles
+- [x] 1.7 `src/infrastructure/adapters/in-memory/InMemoryFinanceInvoiceTypeClassificationRepository.ts`.
+- [x] 1.8 `src/infrastructure/adapters/in-memory/InMemoryFinanceReceiptSyncConfigRepository.ts`.
+- [x] 1.9 `src/infrastructure/adapters/in-memory/InMemoryFinancePaymentReceiptRepository.ts`,
+  `InMemoryFinanceReceiptApplicationRepository.ts`.
+
+### `GestionRealClient.fetchReceipts` — parsing (el seam más delicado del ingest)
+- [x] 1.10 RED: la request usa `fecha_desde`/`fecha_hasta` en formato `DD-MM-AAAA` SIEMPRE (test que
+  inspecciona el body/query enviado, nunca ISO).
+- [x] 1.11 RED: normaliza `aplicaciones` cuando viene como OBJETO keyed-by-id (`Object.entries`, mismo
+  criterio ya usado en `parseServiceOrdersResponse`/`clientesObj` de `GestionRealClient.ts`) — 2 fixtures
+  (dict y array) deben producir la misma lista normalizada.
+- [x] 1.12 RED: normaliza el nodo raíz de la respuesta de `recibos` con el mismo criterio defensivo (dict O
+  array) — se confirma cuál es el caso real en el primer sync (pregunta NO-bloqueante #3 del proposal), el
+  parser no debe asumir uno solo.
+- [x] 1.13 RED: un recibo con `fecha_anulacion` distinto del centinela `"00-00-0000 00:00:00"` se EXCLUYE
+  del resultado parseado (ni el recibo ni sus aplicaciones aparecen).
+- [x] 1.14 RED: un recibo con `fecha_anulacion` == centinela se incluye normalmente (`anulado: false`).
+- [x] 1.15 RED: cada `aplicacion` mapea `grInvoiceId = "{tipo}-{sucursal}-{numero}"` reusando
+  `grInvoiceId()`/`parseGrInvoiceDate()` de `mapGrInvoice.ts` (NO reimplementar el parseo de fecha AR).
+- [x] 1.16 RED: un recibo con 2+ `aplicaciones` produce 2+ filas normalizadas, todas con el mismo
+  `grReceiptId`/`recaudador` de cabecera (relación 1-N verificada en vivo).
+- [x] 1.17 GREEN: `fetchReceipts` en `GestionRealClient.ts` (reusa el retry/backoff existente, no lo reimplementa).
+
+### `SyncGrReceiptsBackfillBatch` — REDISEÑADO (2026-07-26, decisión LOCK del usuario, Decision 4b de `design.md`)
+
+> **Cambio de contrato respecto de la versión anterior de este plan**: `execute()` YA NO pagina un mes
+> COMPLETO por corrida (eso era el batch nocturno "1 mes/noche" descartado). Ahora procesa **UNA sola página
+> GR (`cantidad=100`) por `execute()`** — es lo que permite compartir el presupuesto de requests con el
+> carril delta a nivel de tick. Molde de referencia: `BackfillGrContractsBatch`/`ArmGrContractsBackfill`
+> para la mecánica de cursor resumible, pero NO su loop `while(true)` interno.
+
+- [x] 1.18 RED: primera corrida (sin cursor en `SyncStateRepository` para `'finance-receipts-backfill'`)
+  arranca en el mes calendario actual, offset 0.
+- [x] 1.19 RED: `execute()` pagina EXACTAMENTE una página (`cantidad=100`) — test explícito de que NO sigue
+  paginando internamente el resto del mes (a diferencia del molde `BackfillGrContractsBatch`/
+  `SyncGestionRealContractsDelta`, que sí agotan su unidad en un solo `execute()`).
+- [x] 1.20 RED: una página que NO agota el mes (offset + tamaño de página < total reportado por GR) avanza
+  el offset persistido pero mantiene `cursorYearMonth` SIN CAMBIOS (sigue en el mismo mes).
+- [x] 1.21 RED: la página que SÍ agota el mes (menos de `cantidad` resultados, u offset+tamaño ≥ total)
+  avanza el cursor al mes calendario ANTERIOR con offset reseteado a `0` (newest→oldest, nunca al revés).
+- [x] 1.22 RED: resumibilidad — un `SyncStateRepository` con cursor `"{yearMonth}:{offset}"` a mitad de un
+  mes retoma ESE MISMO mes en ESE MISMO offset tras un "reinicio" simulado, sin reprocesar páginas ya
+  persistidas de ese mes.
+- [x] 1.23 RED: al llegar a `FinanceReceiptSyncConfig.backfillFloorYearMonth` y completarlo, se marca `done`
+  (cursor `null`, `lastResult: 'done'`) y la corrida siguiente es no-op.
+- [x] 1.24 RED: por cada aplicación persistida, llama `FinanceInvoiceTypeClassificationRepository.upsertIfAbsent(grType)`
+  — un `grType` ya clasificado NO se pisa; uno nuevo se crea con `bucket: 'unclassified'`.
+- [x] 1.25 RED: un error de página (timeout tras reintentos agotados de `GestionRealClient`) se cuenta y
+  logea; el cursor NO avanza más allá de la última página exitosa (ni offset ni mes).
+- [x] 1.26 GREEN: `src/application/use-cases/finance/SyncGrReceiptsBackfillBatch.ts` — `execute()` devuelve
+  `{pageProcessed, monthAdvanced, done}` (shape a definir en implementación) para que el scheduler pueda
+  loguear/observar sin adivinar el resultado.
+- [x] 1.27 REFACTOR.
+
+### `SyncGrReceiptsDelta` — REDISEÑADO (2026-07-26, Decision 4b de `design.md`)
+
+> Mismo cambio de contrato que el backfill: `execute()` procesa **UNA sola página** del rango "hasta hoy"
+> pendiente, no el rango completo en un `while(true)` (a diferencia del molde exacto
+> `SyncGestionRealContractsDelta`). Esto es lo que le permite al carril delta CEDER el resto de sus páginas
+> pendientes tick a tick sin monopolizar el proceso, aunque en la práctica su volumen (~160 recibos/día ≈ 2
+> páginas) rara vez necesita más de un par de ticks para ponerse al día.
+
+- [x] 1.28 RED: primera corrida (sin cursor) sincroniza SOLO el día de hoy, offset 0 — NO hace backfill
+  histórico (esa es responsabilidad exclusiva de `SyncGrReceiptsBackfillBatch`).
+- [x] 1.29 RED: `execute()` pagina EXACTAMENTE una página del rango `fechaDesde..fechaHasta`; si quedan más
+  páginas, persiste el cursor COMPUESTO `"{fechaDesde}:{fechaHasta}:{offset}"` (`hasPendingPages` se deriva
+  de que el cursor tenga este formato).
+- [x] 1.30 RED: al terminar de paginar TODO el rango, el cursor colapsa al formato PLANO `"{fechaHasta}"`
+  (mismo formato que `SyncGestionRealContractsDelta`), que la corrida siguiente lee como `fechaDesde` (overlap
+  ≥1 día).
+- [x] 1.31 RED: upsert idempotente por `grReceiptId`/`grApplicationId` — correr el delta 2 veces seguidas
+  (misma página o rango solapado) no duplica filas.
+- [x] 1.32 GREEN: `src/application/use-cases/finance/SyncGrReceiptsDelta.ts`.
+
+### `FinanceReceiptIngestScheduler` — árbitro del presupuesto compartido (NUEVO, Decision 4b de `design.md`)
+
+> Infraestructura, no use case (molde `GestionRealSyncScheduler`) — decide a qué carril le toca el turno en
+> cada tick y gestiona el backoff adaptativo. Se testea con un reloj/temporizador FALSO inyectable: CERO
+> `setTimeout`/`setInterval` reales en estos tests.
+
+- [x] 1.33 RED: si el carril delta tiene `hasPendingPages=true`, el scheduler le da el turno AUNQUE el
+  backfill también tenga trabajo pendiente (prioridad absoluta, sin excepción).
+- [x] 1.34 RED: si el carril delta NO tiene páginas pendientes y `deltaCheckIntervalMs` todavía NO venció, el
+  turno va al carril backfill.
+- [x] 1.35 RED: si el carril delta NO tiene páginas pendientes pero `deltaCheckIntervalMs` YA venció, el
+  turno vuelve al carril delta (chequeo periódico — "tiempo real", minutos no horas).
+- [x] 1.36 RED: un tick fallido (el use case invocado propaga un error, ya agotó los reintentos internos de
+  `GestionRealClient`) duplica `effectiveIntervalMs` (acotado por `maxRequestIntervalMs`) e incrementa
+  `consecutiveFailures`.
+- [x] 1.37 RED: el primer tick exitoso tras una degradación resetea `effectiveIntervalMs = requestIntervalMs`
+  y `consecutiveFailures = 0` de inmediato (no gradual).
+- [x] 1.38 RED: el scheduler adquiere `DistributedLock` antes de cada tick; si el lock ya está tomado por
+  otra réplica, el tick es no-op (no cuenta como fallo, no dispara backoff) — mismo criterio que
+  `GestionRealSyncScheduler`.
+- [x] 1.39 GREEN: `src/infrastructure/scheduling/FinanceReceiptIngestScheduler.ts`.
+- [x] 1.40 REFACTOR.
+
+### `RefreshDebtorBalances` — extensión mínima (estado Incobrable), sin reescritura de fondo
+- [x] 1.41 RED: `DEBTOR_LIKE_STATUSES` incluye `'4'` (Incobrable) — un cliente en ese estado se enumera y su
+  balance/facturas se persisten, igual que `2/3/6`.
+- [x] 1.42 RED: estado `'1'` (Activo) SIGUE sin enumerarse — test explícito de que NO se agregó (verificado
+  en vivo que siempre devuelve cero facturas; agregarlo sería puro desperdicio de llamadas GR).
+- [x] 1.43 GREEN: editar la constante en `RefreshDebtorBalances.ts` — único cambio a un use case existente
+  en toda la Fase 1.
+
+### Config singleton + schema
+- [x] 1.44 `prisma/schema.prisma`: `FinanceInvoiceTypeClassification`, `FinanceReceiptSyncConfig`
+  (`requestIntervalMs`/`maxRequestIntervalMs`/`deltaCheckIntervalMs`/`backfillFloorYearMonth` — ver Decision
+  4b, sin `backfillIntervalMs`/`deltaIntervalMs` de la versión previa), `FinancePaymentReceipt`,
+  `FinanceReceiptApplication`.
+- [x] 1.45 Migración aditiva `prisma/migrations/*_finance_receipts_foundation/`: crea las 4 tablas + seed
+  `FinanceInvoiceTypeClassification{grType:'FB', bucket:'revenue', label:'Factura B'}` + seed
+  `FinanceReceiptSyncConfig{id:'singleton', backfillFloorYearMonth:'2013-01'}` (defaults de pacing salen del
+  `@default` del schema, no hace falta listarlos en el seed), ambos `ON CONFLICT DO NOTHING`.
+  **Sin `BEGIN`/`COMMIT` manual** (Prisma ya envuelve en transacción).
+- [x] 1.46 `src/infrastructure/adapters/prisma/PrismaFinanceInvoiceTypeClassificationRepository.ts`,
+  `PrismaFinanceReceiptSyncConfigRepository.ts`.
+- [x] 1.47 `src/infrastructure/adapters/prisma/PrismaFinancePaymentReceiptRepository.ts`,
+  `PrismaFinanceReceiptApplicationRepository.ts` (upsert batch en transacción; usa los índices por
+  `clientGrId`/`appliedDate`/`grInvoiceId` ya declarados en el schema).
+
+### Rutas de config del sync + clasificación (lectura/reclasificación admin)
+- [x] 1.48 RED (supertest): `GET /api/finance/growth/config/invoice-types` sin `finance:read` → `403`; con
+  permiso → `200` con la lista completa incl. `unclassified`.
+- [x] 1.49 RED (supertest): `PATCH /api/finance/growth/config/invoice-types/:grType` sin `finance:manage_costs`
+  → `403`, sin cambio; con permiso y `bucket` válido → `200`, persiste; con `bucket: 'unclassified'`
+  explícito → `400`.
+- [x] 1.50 GREEN: rutas montadas en `financeGrowth.routes.ts` (creado en esta fase, se sigue ampliando en
+  fases siguientes).
+- [x] 1.51 RED (supertest): `POST /api/finance/growth/sync/run` sin `finance:sync` → `403`, nada disparado;
+  con permiso → `202 {started:true}` (fuerza al carril delta a correr en el próximo tick disponible, ignorando
+  `deltaCheckIntervalMs` — el delta YA tiene prioridad absoluta, así que esto solo salta la espera; el
+  backfill NUNCA se acelera manualmente desde acá, corre en su propio ritmo automático dentro del scheduler).
+- [x] 1.52 RED (supertest): `GET /api/finance/growth/sync/status` sin `finance:read` → `403`; con permiso →
+  `200` con el shape `{pacing, delta, backfill, debtorBalances}` exacto de `design.md` (campo por campo,
+  incluye `pacing.effectiveIntervalMs`/`pacing.degraded`/`pacing.activeLane`,
+  `delta.pendingPages`/`delta.coveredThroughDate`, `backfill.cursorYearMonth`/`backfill.cursorPageOffset`/
+  `backfill.done`).
+- [x] 1.53 GREEN: rutas de sync montadas.
+
+### RBAC (catálogo — necesario desde esta fase para poder testear los guards de arriba)
+- [x] 1.54 `src/domain/entities/rbac.ts`: agregar `'finance'` a `RBAC_MODULES`; agregar `'manage_costs'`,
+  `'manage_targets'`, `'manage_inflation'` a `KNOWN_ACTIONS` (`'sync'` ya existe, se reusa).
+- [x] 1.55 RED: test de `rbac.test.ts` (o el archivo de tests de catálogo existente) — `finance` module +
+  las 3 acciones nuevas aparecen en el catálogo expuesto por `ListAllPermissionsWithModule`.
+- [x] 1.56 Seed/migración del catálogo RBAC (si el repo siembra permisos vía migración — verificar molde de
+  `rbac-permission-catalog-extension` antes de escribir; si el catálogo se deriva en runtime de
+  `RBAC_MODULES`/`KNOWN_ACTIONS` sin seed de filas, este item se reduce a confirmar que no hace falta).
+
+### Wiring — UN solo bootstrap (reemplaza los 2 bootstraps independientes de la versión previa, Decision 4b)
+- [x] 1.57 `src/infrastructure/scheduling/bootstrapFinanceReceiptsIngest.ts` (molde
+  `bootstrapGestionRealSync.ts`): construye `FinanceReceiptIngestScheduler` con `SyncGrReceiptsDelta` +
+  `SyncGrReceiptsBackfillBatch` + `PgAdvisoryLock` (lock key `finance-receipts-ingest`) y lo arranca
+  (`setTimeout` recursivo con `effectiveIntervalMs`, NUNCA `setInterval` fijo). **Actualizado fix-wave-1
+  F6**: el gate de `enabled=false` NO vive acá — el scheduler existe siempre que GR esté prendido y relee
+  `FinanceReceiptSyncConfig.enabled` en VIVO en cada tick (kill-switch en runtime, sin redeploy).
+- [x] 1.58 `app.ts`: wiring del bootstrap + router de Fase 1; RED+GREEN de composition-root test (molde
+  `inventory-composition-root.test.ts`) — assert estático de que `app.ts` pasa las dependencias reales (no
+  un fixture) a `FinanceReceiptIngestScheduler`.
+
+### fix-wave-2 R1 (2026-07-26) — persistir `items`/`retenciones` por separado, decisión LOCK del usuario (Decision 0c)
+- [x] 1.59 `GrReceiptItem`/`GrReceiptRetencion` en `gestionReal.ts`; `GrReceipt.items`/`.retenciones`
+  (opcionales, backward-compat con fixtures pre-existentes).
+- [x] 1.60 `GestionRealClient.ts`: `parseReceiptItems`/`parseReceiptRetenciones` (mismo idioma dict/array +
+  synthetic id F11 que `parseReceiptApplications`); docblock de `fechaRecibo` corregido (date-only, no
+  `HH:MM:SS`).
+- [x] 1.61 `FinanceReceiptItemRepository`/`FinanceReceiptRetencionRepository` (domain/ports) +
+  `InMemory`/`Prisma` adapters.
+- [x] 1.62 `mapGrReceipt.ts`: mapea `items`/`retenciones`; `receiptIdentityHolds()` (guardrail
+  `SUM(aplicaciones) == SUM(items) + SUM(retenciones)`, WARNING en mismatch, nunca aborta).
+- [x] 1.63 `SyncGrReceiptsDelta`/`SyncGrReceiptsBackfillBatch`: persisten `items`/`retenciones` (repos
+  opcionales trailing, backward-compat con ~35 call sites de tests pre-existentes) + corren el guardrail de
+  identidad por recibo.
+- [x] 1.64 Migración aditiva `20261023000200_finance_receipt_items_retenciones`: tablas
+  `FinanceReceiptItem`/`FinanceReceiptRetencion`, FK a `FinancePaymentReceipt`, `Decimal(12,2)`.
+- [x] 1.65 `bootstrapFinanceReceiptsIngest.ts`: wiring de los 2 repos Prisma nuevos en ambos carriles.
+- [x] 1.66 Tests: fixture "payload real" corregido (`importe` string, `fecha_recibo` date-only) +
+  seam test "retenciones sin items ⇒ cash 0" + test de identidad — ver fix-wave-2-hallazgos.md R1.
+- [x] 1.67 `design.md` (Decision 0/0b/0c + Data Model + Ports) y `spec.md` (Requirement "metric basis")
+  actualizados para reflejar el modelo de datos de 3 tablas y la métrica base = cash puro (`items`).
+
+### fix-wave-2 (2026-07-26) — re-review de la ronda 1, R2-R6
+- [x] 1.68 R2 — `ForceFinanceDeltaRun`: reemplaza el read-modify-write de la fila completa por
+  `SyncStateRepository.clearLastRunAt` (update de UNA columna); presupuesto de lock re-medido (16×100ms).
+- [x] 1.69 R3 — `isSchedulerRunning()`/`isEnabled()` consultan el `enabled` LIVE (última lectura de un
+  tick) en vez de la mera existencia del objeto scheduler; `POST /sync/run` responde `503` cuando no hay
+  tick que vaya a recogerlo.
+- [x] 1.70 R4 — salud por-carril (`deltaConsecutiveFailures`/`backfillConsecutiveFailures` separados) para
+  que un carril sano no enmascare la degradación sostenida del otro en `/sync/status` ni en el circuit
+  breaker F4.
+- [x] 1.71 R5 — `readConfigSafely()`: un fallo de lectura de `FinanceReceiptSyncConfig` cae a
+  `FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS` (con backoff propio, `configConsecutiveFailures`) en vez de escapar
+  `tick()` sin capturar.
+- [x] 1.72 R6 — `RearmFinanceReceiptsBackfill`: update dirigido (`SyncStateRepository.rearmCursor`,
+  columnas `cursor`/`lastResult`) + serializado contra el MISMO lock que `tick()`.
+
+### fix-wave-3 (2026-07-26) — re-review de la ronda 2, R7-R10 + LOWs
+- [x] 1.73 R7 — `readConfigSafely()`: fallback ASIMÉTRICO — el pacing cae a
+  `FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS`, pero `enabled` conserva `this.currentEnabled` (último valor REAL
+  observado), nunca vuelve a `true` por un fallo de lectura. Cierra el bypass del kill-switch que R5 abrió
+  sin querer.
+- [x] 1.74 R8 — contador `grConsecutiveFailures` NUEVO, separado de `deltaConsecutiveFailures`/
+  `backfillConsecutiveFailures` (R4, sin tocar): `effectiveIntervalMs` deriva SOLO de la salud de GR (fetch)
+  + config/lock; el circuit-breaker F4 y `/sync/status` siguen derivando de la salud por-carril. Requiere
+  `FinanceReceiptPersistenceError` (`financeIngestErrors.ts`) para que los use cases distingan fallo de
+  fetch vs. fallo de persistencia. Decisión documentada en `design.md` Decision 4b.
+- [x] 1.75 R9 — `itemRepo`/`retencionRepo` pasan de opcionales-trailing a MANDATORIOS en
+  `SyncGrReceiptsDelta`/`SyncGrReceiptsBackfillBatch` (constructor lanza si faltan, mismo criterio F13);
+  ~35 call sites de test actualizados; composition-root test nuevo pineando el wiring de
+  `bootstrapFinanceReceiptsIngest.ts` (no sólo `app.ts`/`main.ts`).
+- [x] 1.76 R10 — `ForceFinanceDeltaRun`: procede SIN lock si el presupuesto se agota (best-effort real, la
+  escritura ya es segura por construcción desde R2). `RearmFinanceReceiptsBackfill`: presupuesto de lock
+  re-medido (40×100ms, hold real ~2-3s) + `FinanceSyncLockBusyError` (`domain/errors/finance.ts`) mapeado a
+  `503 Retry-After` en `errorHandler.ts` en vez de `500` genérico.
+- [x] 1.77 LOWs: fixture con `items`/`retenciones` EXPLÍCITAMENTE `null` (no sólo ausentes) en
+  `GestionRealClient.receipts.test.ts`; nota de código muerto confirmado en la rama array de
+  `parseReceiptsResponse`; `FinanceReceiptItemRepository.listByMonth`/`listByClientAndMonth` +
+  `@@index([fecha])` (migración `20261023000400`) para cerrar la asimetría de read-path con
+  `FinanceReceiptApplicationRepository`; docs stale corregidos (`app.ts`, `SyncStateRepository.ts`
+  `rearmCursor`, este archivo).
+
+## Fase 2 — Configuración (settables)
+
+### Domain
+- [ ] 2.1 `src/domain/ports/FinanceTechnologyCostRepository.ts`: `list`/`getByTechnology`/`upsert`.
+- [ ] 2.2 `src/domain/ports/FinancePlanPriceRepository.ts`: `list`/`getByPlanCode`/`upsert`.
+- [ ] 2.3 `src/domain/ports/FinanceTargetsConfigRepository.ts`: `get`/`update`.
+- [ ] 2.4 `src/domain/ports/FinanceInflationIndexRepository.ts`: `list(fromYearMonth?, toYearMonth?)`/`upsert`.
+
+### Test doubles
+- [ ] 2.5 `InMemoryFinanceTechnologyCostRepository.ts`, `InMemoryFinancePlanPriceRepository.ts`,
+  `InMemoryFinanceTargetsConfigRepository.ts`, `InMemoryFinanceInflationIndexRepository.ts`.
+
+### `FinanceTechnologyCost` — CRUD
+- [ ] 2.6 RED: `GetFinanceTechnologyCosts` — LEFT JOIN contra `ContractTechnologyRepository.list()`, una
+  tecnología sin fila configurada aparece con todos los costos en `0` (no se omite).
+- [ ] 2.7 GREEN: `src/application/use-cases/finance/GetFinanceTechnologyCosts.ts`.
+- [ ] 2.8 RED: `UpdateFinanceTechnologyCost` rechaza `costoInstalacionArs < 0` sin persistir ningún campo
+  (ni los válidos del mismo payload).
+- [ ] 2.9 RED: `UpdateFinanceTechnologyCost` rechaza `comisionVentaPct > 100`.
+- [ ] 2.10 RED: payload completo y válido → upsert exitoso, `updatedByUserId` seteado desde el actor.
+- [ ] 2.11 GREEN: `src/application/use-cases/finance/UpdateFinanceTechnologyCost.ts`.
+- [ ] 2.12 RED (supertest): `GET /api/finance/growth/config/technology-costs` sin `finance:read` → `403`.
+- [ ] 2.13 RED (supertest): `PUT /api/finance/growth/config/technology-costs/:technologyName` sin
+  `finance:manage_costs` → `403`, sin cambio; con permiso y payload inválido → `400` sin cambio; con
+  payload válido → `200` y un `GET` posterior refleja el cambio.
+- [ ] 2.14 GREEN: rutas montadas.
+
+### `FinancePlanPrice` — CRUD
+- [ ] 2.15 RED: `GetFinancePlanPrices` — LEFT JOIN contra `PlanRepository.list()`, plan sin precio
+  configurado aparece con `estimatedMonthlyPrice: 0`.
+- [ ] 2.16 GREEN: `src/application/use-cases/finance/GetFinancePlanPrices.ts`.
+- [ ] 2.17 RED: `UpdateFinancePlanPrice` rechaza valor negativo sin persistir.
+- [ ] 2.18 GREEN: `src/application/use-cases/finance/UpdateFinancePlanPrice.ts`.
+- [ ] 2.19 RED (supertest): `GET`/`PUT /api/finance/growth/config/plan-prices[/:planCode]` — mismos 2
+  caminos de permiso que 2.12/2.13, adaptados a `finance:manage_costs`.
+- [ ] 2.20 GREEN: rutas montadas.
+
+### `FinanceTargetsConfig` — singleton
+- [ ] 2.21 RED: `GetFinanceTargets` devuelve los defaults seedeados si nunca se editó.
+- [ ] 2.22 GREEN: `src/application/use-cases/finance/GetFinanceTargets.ts`.
+- [ ] 2.23 RED: `UpdateFinanceTargets` rechaza `churnTargetPct` fuera de `0-100`, o `inflationBaseYearMonth`
+  con formato inválido (ni `""` ni `YYYY-MM`), sin actualización parcial.
+- [ ] 2.24 RED: payload completo válido → persiste los 4 campos.
+- [ ] 2.25 GREEN: `src/application/use-cases/finance/UpdateFinanceTargets.ts`.
+- [ ] 2.26 RED (supertest): `GET`/`PUT /api/finance/growth/config/targets` con guard `finance:read`/
+  `finance:manage_targets` respectivamente (caminos con/sin permiso, molde 2.13).
+- [ ] 2.27 GREEN: rutas montadas.
+
+### `FinanceInflationIndex` — serie mensual
+- [ ] 2.28 RED: `ListFinanceInflationIndex` filtra por rango `from`/`to`, ordenado ascendente por `yearMonth`.
+- [ ] 2.29 GREEN: `src/application/use-cases/finance/ListFinanceInflationIndex.ts`.
+- [ ] 2.30 RED: `UpdateFinanceInflationIndex` rechaza `yearMonth` con formato inválido en el path, y
+  `monthlyRatePct` no numérico, sin persistir.
+- [ ] 2.31 GREEN: `src/application/use-cases/finance/UpdateFinanceInflationIndex.ts`.
+- [ ] 2.32 RED (supertest): `GET`/`PUT /api/finance/growth/config/inflation[/:yearMonth]` con guard
+  `finance:read`/`finance:manage_inflation` (acción separada de `manage_costs` — test explícito de que
+  `manage_costs` SOLO no alcanza para editar inflación).
+- [ ] 2.33 GREEN: rutas montadas.
+
+### Schema + migración
+- [ ] 2.34 `prisma/schema.prisma`: `FinanceTechnologyCost`, `FinancePlanPrice`, `FinanceTargetsConfig`,
+  `FinanceInflationIndex`.
+- [ ] 2.35 Migración aditiva `prisma/migrations/*_finance_growth_config/`: crea las 4 tablas + seed
+  `FinanceTargetsConfig{id:'singleton'}` (`ON CONFLICT DO NOTHING`). Sin `BEGIN`/`COMMIT` manual.
+- [ ] 2.36 `Prisma{FinanceTechnologyCost,FinancePlanPrice,FinanceTargetsConfig,FinanceInflationIndex}Repository.ts`.
+
+## Fase 3 — Motor de métricas (snapshots nocturnos)
+
+> Depende de Fase 1 (ingest de recibos operando — el bridge se puede empezar a testear con fixtures desde el
+> día 1, no hace falta esperar al backfill completo, ver `design.md` Decision 4) + Fase 2 (costos/precios/
+> targets/IPC configurables).
+
+### Domain
+- [ ] 3.1 `src/domain/ports/FinanceMonthlySnapshotRepository.ts`: `get`/`listRange`/`upsert`.
+- [ ] 3.2 `src/domain/ports/FinanceCohortSnapshotRepository.ts`: `listByCohort`/`upsert`.
+- [ ] 3.3 `InMemoryFinanceMonthlySnapshotRepository.ts`, `InMemoryFinanceCohortSnapshotRepository.ts`.
+
+### Atribución cobranza→contrato (el seam más crítico del change — Decision 1 del design)
+- [ ] 3.4 RED: cliente con 1 contrato activo en el mes → `attributionConfidence: 'exact'`, monto = cobranza
+  neteada completa del mes (`FinanceReceiptApplication` del cliente, netada por `FinanceInvoiceTypeClassification`).
+- [ ] 3.5 RED: cliente con 2 contratos, ambos planes con fila en `FinancePlanPrice` → reparto proporcional,
+  `attributionConfidence: 'estimated'`, la suma de ambos reparto = cobranza neteada (sin perder centavos por
+  redondeo — test explícito de esa invariante).
+- [ ] 3.6 RED: cliente con 2 contratos, NINGÚN plan con fila en `FinancePlanPrice` → reparto igual,
+  `attributionConfidence: 'estimated-equal'`.
+- [ ] 3.7 RED: cliente con 2 contratos, SOLO UNO de los planes con fila en `FinancePlanPrice` → definir y
+  testear el criterio exacto (recomendado: tratar el plan sin precio configurado como peso proporcional 0,
+  documentado en el código — si ambos terminan en 0, cae a `estimated-equal`).
+- [ ] 3.8 GREEN: función pura `attributeCollectedAmountToContracts(applications, contracts, planPrices)` en
+  `src/application/use-cases/finance/` (no un use case en sí, un helper reusado por 3.9 y por `ComputeCacAndPayback`).
+
+### Neteo de tipos de comprobante
+- [ ] 3.9 RED: aplicación `revenue` suma, `contra` resta, `excluded` se ignora, `unclassified` se excluye de
+  la cobranza pero suma a `unclassifiedAmountArs` — fixtures de `FinanceReceiptApplication`, no de `Invoice`.
+- [ ] 3.10 GREEN: función pura `netCollectedAmountForMonth(applications, classifications)`.
+- [ ] 3.11 RED: un cliente cuyo `clientGrId` no resuelve a ningún `Client` local (orphan — recibo llegó antes
+  que el mirror del cliente) se cuenta y logea, NUNCA aborta el cómputo del mes (mismo criterio de
+  resiliencia que el "orphan guard" de `SyncGestionRealContractsDelta`).
+
+### `BuildFinanceMonthlySnapshot`
+- [ ] 3.12 RED: un mes con 1 activación, MRR atribuido conocido → `mrrNewArs` = ese MRR, resto del bridge en 0.
+- [ ] 3.13 RED: un mes con 1 upgrade (dirección derivada con el MISMO criterio que
+  `ListInternetServiceHistory.deriveDirection` — reusar esa función, no reimplementarla) → delta de MRR en
+  `mrrUpgradeArs`.
+- [ ] 3.14 RED: un mes con 1 downgrade → delta de MRR en `mrrDowngradeArs`.
+- [ ] 3.15 RED: un mes con 1 baja → MRR atribuido del contrato en `mrrChurnArs`.
+- [ ] 3.16 RED: invariante del bridge — `mrrInicialArs + mrrNewArs + mrrUpgradeArs - mrrDowngradeArs -
+  mrrChurnArs == mrrFinalArs` (tolerancia de redondeo ≤1) para un mes con los 4 tipos de evento combinados.
+- [ ] 3.17 RED: `churnContractsPct`/`churnRevenuePct` calculados correctamente contra un fixture con pesos de
+  MRR distintos por contrato dado de baja (test que prueba explícitamente que revenue-churn NO es un simple
+  conteo — mismo escenario del spec).
+- [ ] 3.18 RED: `attributionPct` = MRR `exact` / MRR total, con fixture mixto `exact`+`estimated`.
+- [ ] 3.19 GREEN: `src/application/use-cases/finance/BuildFinanceMonthlySnapshot.ts`.
+- [ ] 3.20 REFACTOR.
+
+### `BuildFinanceCohortSnapshot`
+- [ ] 3.21 RED: cohorte de N altas en un mes → `survivingCount` a 3 meses cuenta correctamente los
+  contratos SIN evento `deactivated` antes de esa fecha de corte.
+- [ ] 3.22 RED: cohorte más joven que 12 meses → NO genera fila `monthsElapsed: 12` (no inventa el dato).
+- [ ] 3.23 GREEN: `src/application/use-cases/finance/BuildFinanceCohortSnapshot.ts`.
+
+### Schema + migración
+- [ ] 3.24 `prisma/schema.prisma`: `FinanceMonthlySnapshot`, `FinanceCohortSnapshot`.
+- [ ] 3.25 Migración aditiva `prisma/migrations/*_finance_growth_snapshots/`.
+- [ ] 3.26 `PrismaFinanceMonthlySnapshotRepository.ts`, `PrismaFinanceCohortSnapshotRepository.ts`.
+
+### Wiring nocturno
+- [ ] 3.27 `src/infrastructure/scheduling/bootstrapFinanceSnapshotJob.ts`: corre de madrugada (offset de
+  horario documentado en `design.md`), leyendo lo que el carril delta (continuo, Decision 4b) ya haya
+  cubierto a esa hora; `.unref()`. No depende del progreso del backfill.
+- [ ] 3.28 `app.ts`: wiring del job; actualizar el composition-root test de Fase 1 (1.58) para incluir este
+  segundo job (el bootstrap de ingest de Fase 1 ya es uno solo, ver 1.57-1.58).
+
+## Fase 4 — API de lectura
+
+### `GetFinanceOverview` (deflactación en lectura — Decision 4/6 del design)
+- [ ] 4.1 RED: rango de meses todos con IPC cargado → serie real calculada correctamente con el
+  encadenamiento desde `inflationBaseYearMonth` (test con valores conocidos a mano, verificar la fórmula
+  exacta del design).
+- [ ] 4.2 RED: un mes SIN IPC dentro del rango → la serie real se trunca ahí, `realSeriesTruncatedAt`
+  refleja ese mes, la serie nominal sigue completa para todo el rango.
+- [ ] 4.3 RED: `inflationBaseYearMonth` sin configurar (`""`) → toda la serie real es `null`,
+  `realSeriesTruncatedAt` = el primer mes del rango pedido (no crashea, no inventa una base).
+- [ ] 4.4 GREEN: `src/application/use-cases/finance/GetFinanceOverview.ts`.
+- [ ] 4.5 RED (supertest): `GET /api/finance/growth/overview` sin `finance:read` → `403`; con permiso → `200`
+  con el shape exacto del contrato HTTP (test campo por campo, no solo `toMatchObject` parcial), incluyendo
+  `metricBasis: 'cash_collected'` — el test que previene que alguien lo interprete como facturación emitida.
+- [ ] 4.6 GREEN: ruta montada.
+
+### `GetFinanceCohorts`
+- [ ] 4.7 RED+GREEN: use case + ruta `GET /cohorts`, guard `finance:read`, shape campo por campo.
+
+### `ComputeCacAndPayback`
+- [ ] 4.8 RED: payback dentro del umbral → `lossMaking: false`.
+- [ ] 4.9 RED: payback por encima de `maxPaybackMonths` → `lossMaking: true`.
+- [ ] 4.10 RED: `mrrAtribuidoArs: 0` → `paybackMonths: null` (no divide por cero, no devuelve `Infinity`).
+- [ ] 4.11 GREEN: use case + ruta `GET /cac`, guard `finance:read`.
+
+### `RankEarlyChurnByVendor`
+- [ ] 4.12 RED: vendedor con alto volumen pero alto churn temprano se distingue del vendedor con altas
+  sanas (fixture del escenario del spec — 50 altas/30 churn vs 20 altas/1 churn).
+- [ ] 4.13 RED: ordenamiento DESC por `earlyChurnPct`, no por `altasTotal`.
+- [ ] 4.14 GREEN: use case + ruta `GET /vendors/early-churn`, guard `finance:read`.
+
+### `RankNetGrowthByNode`
+- [ ] 4.15 RED: nodo con más bajas que altas → `netGrowth` negativo; contratos sin nodo asignado se agrupan
+  bajo `networkSiteId: null` (no se pierden ni rompen el agregado).
+- [ ] 4.16 GREEN: use case + ruta `GET /nodes/growth`, guard `finance:read`.
+
+### `RankCancellationReasonsByLostRevenue`
+- [ ] 4.17 RED: motivo con menos bajas pero mayor MRR perdido queda primero en el ranking (fixture del
+  escenario del spec — "mudanza" vs "precio").
+- [ ] 4.18 RED: `Contract.motivoBaja` null → cae a `ContractServiceEvent.reason`; ambos null → agrupa bajo
+  `"sin especificar"`.
+- [ ] 4.19 GREEN: use case + ruta `GET /motivos-baja`, guard `finance:read`.
+
+### Passthrough de modificaciones de contrato
+- [ ] 4.20 Confirmar el mount actual de `ListInternetServiceHistory` (path real en `app.ts`) y documentar en
+  `design.md`/FE el endpoint exacto a consumir — SIN crear una ruta nueva ni duplicar el use case.
+
+## Fase 5 — FE (sección nueva)
+
+> Skills obligatorias durante esta fase: `ui-ux-pro-max` (diseño estático, tokens, layout) y las skills de
+> motion de Emil Kowalski (micro-interacciones de las transiciones nominal↔real y de los estados de carga)
+> — invocarlas ANTES de escribir componentes, no como revisión posterior.
+
+- [ ] 5.1 Sidebar: ítem nuevo "Crecimiento Financiero" (o el nombre que confirme el usuario — pregunta
+  abierta NO-bloqueante #3), fuera del grupo "Finanzas" existente, oculto sin `finance.read`.
+- [ ] 5.2 Hook `useFinanceOverview.ts` (TanStack Query) consumiendo `GET /overview`; 4 estados
+  (loading/empty/error/success) explícitos.
+- [ ] 5.3 Página overview: KPI tiles + gráfico bridge (waterfall) + toggle nominal/real con mensaje visible
+  cuando `realSeriesTruncatedAt` no es null.
+- [ ] 5.4 Hook + página de cohortes: heatmap/matriz de supervivencia 3/6/12.
+- [ ] 5.5 Hook + página de CAC/payback: tabla de altas del mes con columna `lossMaking` resaltada.
+- [ ] 5.6 Hook + página de ranking vendedor: `earlyChurnPct` como columna primaria (jerarquía visual
+  invertida respecto de un ranking de ventas tradicional).
+- [ ] 5.7 Hook + página de crecimiento por nodo: lista/mapa con los nodos de `netGrowth` negativo
+  destacados.
+- [ ] 5.8 Hook + página de motivos de baja: tabla ordenada por `mrrPerdidoArs`.
+- [ ] 5.9 Página de settings — costos por tecnología: tabla editable, `Select` propio para elegir tecnología
+  (NO `<select>` nativo), validación de formulario espejando las reglas `400` del BE.
+- [ ] 5.10 Página de settings — precios por plan: misma estructura que 5.9.
+- [ ] 5.11 Página de settings — metas: formulario simple (singleton).
+- [ ] 5.12 Página de settings — índice IPC: tabla mes×valor editable, `Combobox` de mes (no `<input type=month>`
+  crudo si el design system ya tiene un componente de selección de período — verificar antes de crear uno).
+- [ ] 5.13 Página de settings — clasificación de tipos de comprobante: lista con badge `unclassified`
+  destacado (para que un admin lo note y reclasifique), acción de reclasificar con `finance.manage_costs`.
+- [ ] 5.14 Botón "sincronizar ahora" (`finance.sync`): deshabilitado con tooltip mientras hay una corrida en
+  curso (poll de `GET /sync/status`), nunca oculto sin más.
+- [ ] 5.15 A11y pass completo: contraste ≥4.5:1 calculado en ambos temas para las series nominal/real y los
+  badges de estado, touch targets ≥44px, `aria-live` en los contadores que cambian tras una acción (ej. tras
+  reclasificar un tipo de comprobante), labels asociados en todos los formularios de settings.
+- [ ] 5.16 Reuso de átomos existentes: `DataTable` para todas las tablas/rankings, `ConfirmModal` para
+  acciones destructivas/de reclasificación, `Pagination` donde el volumen lo pida, `Button`/`Tabs` para la
+  navegación entre las 5 sub-páginas.
+
+## Fase 6 (deferred — NO se implementa en este change)
+
+Costo de instalación real desde `ContractInstalledItem` + inventario (EPIC #38). Sin tasks — el punto de
+extensión queda documentado en `design.md` (Data Model → nota de extensión) para cuando se priorice.
