@@ -55,10 +55,12 @@ interface ChatCompletionMessage {
 export class HttpDeepSeekAssistant implements AssistantRuntime {
   private readonly http: AxiosInstance;
   private readonly apiKey: string;
+  private readonly baseUrl: string;
   private readonly resolveCredentials?: () => Promise<{ baseUrl: string; apiKey: string }>;
 
   constructor(options: HttpDeepSeekAssistantOptions) {
     this.apiKey = options.apiKey;
+    this.baseUrl = options.baseUrl;
     this.resolveCredentials = options.resolveCredentials;
     this.http =
       options.client ??
@@ -70,8 +72,8 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
   }
 
   async classify(request: AssistantClassifyRequest): Promise<AssistantClassifyResult> {
-    const apiKey = await this.currentApiKey();
-    if (!apiKey) return { kind: 'unavailable' };
+    const credentials = await this.currentCredentials();
+    if (!credentials.apiKey) return { kind: 'unavailable' };
     if (request.candidates.length === 0) {
       // Perfil sin intenciones habilitadas: no hay nada que clasificar. Se ahorra la llamada
       // y se trata como charla — saludar no requiere que existan temas configurados.
@@ -97,7 +99,14 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
       'Respondé ÚNICAMENTE con la clave, sin explicar y sin agregar nada más.',
     ].join('\n');
 
-    const raw = await this.complete(request.model, system, request.thread, request.timeoutMs, 32, apiKey);
+    const raw = await this.complete(
+      request.model,
+      system,
+      request.thread,
+      request.timeoutMs,
+      32,
+      credentials,
+    );
     if (raw === null) return { kind: 'unavailable' };
 
     const answer = raw.trim();
@@ -111,8 +120,8 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
   }
 
   async generate(request: AssistantGenerateRequest): Promise<AssistantGenerateResult> {
-    const apiKey = await this.currentApiKey();
-    if (!apiKey) return { kind: 'unavailable' };
+    const credentials = await this.currentCredentials();
+    if (!credentials.apiKey) return { kind: 'unavailable' };
 
     const isChatMode = request.facts === null;
 
@@ -140,7 +149,14 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
       .filter((line) => line !== '')
       .join('\n');
 
-    const raw = await this.complete(request.model, system, request.thread, request.timeoutMs, 600, apiKey);
+    const raw = await this.complete(
+      request.model,
+      system,
+      request.thread,
+      request.timeoutMs,
+      600,
+      credentials,
+    );
     if (raw === null) return { kind: 'unavailable' };
 
     const text = raw.trim();
@@ -152,16 +168,23 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
   }
 
   /**
-   * Credencial vigente. Con `resolveCredentials` se relee en CADA llamada, así una rotación
-   * desde la UI toma efecto en el próximo mensaje. Si la resolución falla, se degrada a
-   * "sin credencial" (⇒ `unavailable`): jamás lanza (RUN-1).
+   * Credenciales vigentes: **URL y key JUNTAS**. Con `resolveCredentials` se releen en CADA
+   * llamada, así una rotación desde la UI toma efecto en el próximo mensaje.
+   *
+   * La URL viaja acá y NO queda congelada en el `axios.create` a propósito. Si sólo se
+   * releyera la key, "Probar conexión" —que arma un adapter efímero con la URL nueva— diría
+   * "OK" contra un endpoint que el bot no usa. Un falso verde es peor que un error: el error
+   * te frena, el falso verde te confirma algo que no es cierto.
+   *
+   * Si la resolución falla (DB caída), se degrada a "sin credencial" ⇒ `unavailable`. Jamás
+   * lanza (RUN-1): esto corre dentro del webhook de Chatwoot.
    */
-  private async currentApiKey(): Promise<string> {
-    if (!this.resolveCredentials) return this.apiKey;
+  private async currentCredentials(): Promise<{ baseUrl: string; apiKey: string }> {
+    if (!this.resolveCredentials) return { baseUrl: this.baseUrl, apiKey: this.apiKey };
     try {
-      return (await this.resolveCredentials()).apiKey;
+      return await this.resolveCredentials();
     } catch {
-      return '';
+      return { baseUrl: this.baseUrl, apiKey: '' };
     }
   }
 
@@ -175,7 +198,7 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
     thread: AssistantThreadTurn[],
     timeoutMs: number,
     maxTokens: number,
-    apiKey: string,
+    credentials: { baseUrl: string; apiKey: string },
   ): Promise<string | null> {
     const messages: ChatCompletionMessage[] = [
       { role: 'system', content: system },
@@ -192,7 +215,10 @@ export class HttpDeepSeekAssistant implements AssistantRuntime {
         { model, messages, max_tokens: maxTokens, stream: false },
         {
           timeout: timeoutMs,
-          headers: { Authorization: `Bearer ${apiKey}` },
+          // El `baseURL` del request pisa al de la instancia: así la URL resuelta en runtime
+          // gana sobre la congelada en el constructor.
+          baseURL: credentials.baseUrl,
+          headers: { Authorization: `Bearer ${credentials.apiKey}` },
         },
       );
 
