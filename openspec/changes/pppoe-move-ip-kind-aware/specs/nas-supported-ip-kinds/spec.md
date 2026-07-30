@@ -19,7 +19,13 @@ sincronizar nada con el router o el RADIUS.
 
 ### Requirement: Supported kinds derived from the NAS pools
 El sistema DEBE (MUST) derivar `supportedIpKinds` de los `IpPool` asociados al NAS: una clase
-está soportada si y solo si existe al menos un pool `active` de ese `ipKind` para ese `nasId`.
+está soportada si y solo si existe al menos un pool con ese `ipKind` para ese `nasId`.
+
+> **El predicado DEBE ser IDÉNTICO al del allocator** (`FindFreeIp:45` → `pools.filter(p =>
+> p.ipKind === input.type)`): filtra por `ipKind` y nada más. La entidad de dominio `IpPool` NO
+> expone `status`, así que no se puede ni se debe filtrar por él acá. Si los dos predicados
+> divergen, el FE ofrece una clase que el allocator rechaza (o esconde una que aceptaría) — que
+> es exactamente el modo de falla que este change viene a eliminar.
 
 #### Scenario: NAS with only public pools supports only public
 - GIVEN un NAS con 18 pools `ipKind='public'` y 0 pools `cgnat` (caso real: NE8000 - Mercedes)
@@ -40,6 +46,11 @@ está soportada si y solo si existe al menos un pool `active` de ese `ipKind` pa
 - GIVEN un NAS sin ningún `IpPool` asociado
 - WHEN se resuelven sus clases soportadas
 - THEN `supportedIpKinds` es `[]` (vacío, NO se asume ninguna clase)
+
+#### Scenario: Legacy pools with null ipKind are ignored
+- GIVEN un NAS cuyos únicos pools tienen `ipKind: null` (pools legacy que no participan del allocator)
+- WHEN se resuelven sus clases soportadas
+- THEN `supportedIpKinds` es `[]`
 
 ### Requirement: Kinds must not degrade when the orchestrator is unavailable
 El cálculo de `supportedIpKinds` DEBE (MUST) ser independiente del `RadiusOrchestratorGateway`:

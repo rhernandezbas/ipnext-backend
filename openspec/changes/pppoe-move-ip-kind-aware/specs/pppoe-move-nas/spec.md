@@ -17,10 +17,26 @@ kick, registro en `PppoeNasMoveEvent`, abort sin mutar ante `NoFreeIp`) se conse
 El sistema DEBE (MUST) resolver el `poolType` del move a partir de las clases soportadas por el
 NAS destino (`supportedIpKinds`), y NO DEBE (MUST NOT) hardcodear `'cgnat'`.
 
-Regla de resolución:
-1. Si el destino soporta la clase actual del servicio (`ipTypePreference`) → usa esa clase.
-2. Si el destino soporta **exactamente una** clase distinta de la actual → usa esa (conversión).
-3. Si el destino no soporta ninguna clase → error tipado, nada mutado.
+> ⚠️ **REGLA CORREGIDA durante el apply (2026-07-29) — la suite completa refutó la versión
+> original de este spec.** Decía *"si el destino soporta la clase actual, usa esa"*, lo que hacía
+> ganar el `ipTypePreference` cuando el destino soporta AMBAS. Un test existente pinea lo
+> CONTRARIO desde la W1 (`move NORMAL sigue asignando cgnat aunque la preferencia persistida sea
+> 'public'`) y **tenía razón**: honrar la preferencia ahí cambiaba en silencio el comportamiento de
+> todos los servicios marcados `public` que hoy reciben cgnat al moverse. "Arreglar" ese test para
+> que pasara habría sido introducir una regresión silenciosa. La regla quedó más CONSERVADORA.
+>
+> **Segunda corrección:** la ADOPCIÓN de un pendiente NO pasa por esta resolución. Ahí el
+> `ipTypePreference` es un **REQUISITO**: un pendiente marcado `public` hacia un NAS sin pool
+> público DEBE fallar, no recibir una CGNAT en silencio (violaría la intención del operador).
+
+Regla de resolución — **solo para moves NORMALES** (con NAS origen):
+1. Si el destino soporta `cgnat` → usa `cgnat`. **Semántica W1 EXACTA**, incluso si el
+   `ipTypePreference` persistido es `public`.
+2. Si no soporta `cgnat` pero sí `public` → usa `public` (**conversión**, el fix del NE8000).
+3. Si no soporta ninguna clase → error tipado, nada mutado.
+
+Para la **ADOPCIÓN** (`nasId === null`): `poolType = s.ipTypePreference`, sin resolución, y falla
+si el destino no tiene pool de esa clase.
 
 #### Scenario: Move to a public-only NAS converts a CGNAT service
 - GIVEN un servicio con `ipTypePreference='cgnat'` e IP `100.64.60.200` en un NAS CGNAT
@@ -39,12 +55,26 @@ Regla de resolución:
 - AND `ipTypePreference` sigue siendo `'cgnat'`
 - AND el comportamiento es idéntico al previo a este change
 
-#### Scenario: Destination supporting both kinds keeps the persisted preference
+#### Scenario: Destination supporting both kinds always uses cgnat (W1 semantics)
 - GIVEN un servicio con `ipTypePreference='cgnat'`
 - AND el NAS destino soporta `cgnat` y `public` (caso real: RDA Agote)
 - WHEN se mueve el servicio
-- THEN se le asigna una IP del pool `cgnat` (gana la preferencia persistida)
+- THEN se le asigna una IP del pool `cgnat`
 - AND `ipTypePreference` NO cambia
+
+#### Scenario: A 'public' service moved to a NAS that supports both still gets cgnat
+- GIVEN un servicio con `ipTypePreference='public'`
+- AND el NAS destino soporta `cgnat` y `public`
+- WHEN se mueve el servicio (move NORMAL, no adopción)
+- THEN se le asigna una IP del pool `cgnat` — la preferencia NO manda en un move normal
+- AND el comportamiento es idéntico al previo a este change (test de regresión de la W1)
+
+#### Scenario: Adopting a 'public' pending into a NAS without public pool FAILS
+- GIVEN un servicio PENDIENTE (`nasId === null`) con `ipTypePreference='public'`
+- AND el NAS elegido para la adopción NO tiene pools públicos
+- WHEN se intenta adoptarlo
+- THEN falla con `NoPoolForNasTypeError` y el servicio sigue pendiente
+- AND NO se le asigna una IP CGNAT (la preferencia es un REQUISITO en la adopción)
 
 #### Scenario: Destination with no pools at all fails without mutating
 - GIVEN un NAS destino sin ningún `IpPool`
