@@ -48,10 +48,14 @@ export class PrismaPortalSessionRepository implements PortalSessionRepository {
   }
 
   async markRotated(id: string): Promise<boolean> {
-    // H2 — CAS: the `rotatedAt: null` guard in the WHERE makes the update
-    // atomic; count === 1 means THIS call won the rotation race.
+    // H2 — CAS: the WHERE guards make the update atomic; count === 1 means THIS
+    // call won the rotation race. Re-review fix: the row must be ALIVE — not
+    // just un-rotated (`rotatedAt: null`) but also un-revoked (`revokedAt:
+    // null`), or a refresh racing a change-password/global-revoke would "win"
+    // over an already-revoked session and mint a fresh chain for a just-purged
+    // account.
     const result = (await (this.db as any).portalSession.updateMany({
-      where: { id, rotatedAt: null },
+      where: { id, rotatedAt: null, revokedAt: null },
       data: { rotatedAt: new Date() },
     })) as { count: number };
     return result.count === 1;

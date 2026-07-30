@@ -36,6 +36,16 @@ describe('InMemoryPortalSessionRepository', () => {
     expect(found?.rotatedAt).not.toBeNull();
   });
 
+  it('markRotated() on a REVOKED session returns false — the CAS covers revoke-vs-rotate, not just rotate-vs-rotate (re-review fix)', async () => {
+    const repo = new InMemoryPortalSessionRepository();
+    const created = await repo.create({ accountId: 'acc-1', tokenHash: 'hash1', expiresAt: new Date(Date.now() + 60_000) });
+    await repo.revoke(created.id);
+
+    await expect(repo.markRotated(created.id)).resolves.toBe(false);
+    const found = await repo.findByTokenHash('hash1');
+    expect(found?.rotatedAt).toBeNull();
+  });
+
   it('revoke() sets revokedAt', async () => {
     const repo = new InMemoryPortalSessionRepository();
     const created = await repo.create({ accountId: 'acc-1', tokenHash: 'hash1', expiresAt: new Date(Date.now() + 60_000) });

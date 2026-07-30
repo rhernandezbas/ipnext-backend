@@ -82,6 +82,40 @@ describe('createPortalLoginIpRateLimiter (H3b — techo por IP sola)', () => {
     expect(over.status).toBe(429);
     expect(over.body.code).toBe('RATE_LIMITED');
   });
+
+  it('CGNAT (re-review): los logins EXITOSOS no consumen cupo — N > límite desde la MISMA IP sin 429; los fallidos sí topan', async () => {
+    const app = express();
+    app.use(express.json());
+    const limiter = createPortalLoginIpRateLimiter({ windowMs: 60_000, limit: 2 });
+    app.post('/login', limiter, (req, res) => {
+      const { password } = (req.body ?? {}) as { password?: unknown };
+      if (password === 'good') {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      res.status(401).json({ error: 'bad creds' });
+    });
+    // skipSuccessfulRequests decrementa el store en un microtask post-'finish' de
+    // la response — drenarlo antes del siguiente request para no medir la carrera.
+    const flushDecrement = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+    // 4 logins EXITOSOS (el doble del límite) detrás de la misma IP: ~15 clientes
+    // legítimos comparten IP pública en el CGNAT propio — un 2xx devuelve su cupo.
+    for (let i = 0; i < 4; i++) {
+      const ok = await request(app).post('/login').send({ dni: `2000000${i}`, password: 'good' });
+      expect({ attempt: i, status: ok.status }).toEqual({ attempt: i, status: 200 });
+      await flushDecrement();
+    }
+
+    // El barrido de enumeración (todo 401) sigue consumiendo y topa igual que antes.
+    expect((await request(app).post('/login').send({ dni: '10000001', password: 'bad' })).status).toBe(401);
+    await flushDecrement();
+    expect((await request(app).post('/login').send({ dni: '10000002', password: 'bad' })).status).toBe(401);
+    await flushDecrement();
+    const over = await request(app).post('/login').send({ dni: '10000003', password: 'bad' });
+    expect(over.status).toBe(429);
+    expect(over.body.code).toBe('RATE_LIMITED');
+  });
 });
 
 describe('createPortalGeneralRateLimiter', () => {

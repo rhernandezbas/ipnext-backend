@@ -1,5 +1,6 @@
 import { PortalLogin } from '@application/use-cases/portal/PortalLogin';
 import { RefreshPortalSession } from '@application/use-cases/portal/RefreshPortalSession';
+import { ChangePortalPassword } from '@application/use-cases/portal/ChangePortalPassword';
 import { InMemoryPortalAccountRepository } from '@infrastructure/adapters/in-memory/InMemoryPortalAccountRepository';
 import { InMemoryPortalSessionRepository } from '@infrastructure/adapters/in-memory/InMemoryPortalSessionRepository';
 import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMemoryPasswordHasher';
@@ -147,6 +148,67 @@ describe('RefreshPortalSession', () => {
       await expect(refresh.execute(winner.refreshToken)).rejects.toThrow(InvalidPortalRefreshTokenError);
       const winnerSession = await sessions.findByTokenHash(hashPortalRefreshToken(winner.refreshToken));
       expect(winnerSession?.revokedAt).not.toBeNull();
+    });
+  });
+
+  describe('re-review fix — el CAS de rotación también cubre revocar-vs-rotar', () => {
+    /** Proxy que congela la lectura: findByTokenHash devuelve el snapshot PRE-carrera
+     *  (lo que el request perdedor ya leyó antes de la escritura concurrente). */
+    function staleReadProxy(
+      sessions: InMemoryPortalSessionRepository,
+      snapshot: NonNullable<Awaited<ReturnType<InMemoryPortalSessionRepository['findByTokenHash']>>>,
+    ): InMemoryPortalSessionRepository {
+      return new Proxy(sessions, {
+        get(target, prop, receiver) {
+          if (prop === 'findByTokenHash') {
+            return async () => ({ ...snapshot });
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }
+
+    it('sesión REVOCADA entre el findByTokenHash y el markRotated → pierde el CAS, se trata como reuso y NO mintea', async () => {
+      const { login, accounts, hasher, sessions, tokenService } = makeUseCases();
+      await accounts.create({ clientId: 'client-1', dni: '30111222', passwordHash: await hasher.hash('Secret123') });
+      const { refreshToken: t1 } = await login.execute({ dni: '30111222', password: 'Secret123' });
+
+      // Snapshot PRE-revocación — lo que el refresh perdedor ya leyó.
+      const staleSnapshot = await sessions.findByTokenHash(hashPortalRefreshToken(t1));
+      expect(staleSnapshot?.revokedAt).toBeNull();
+
+      // Interpuesto: la sesión se REVOCA (logout global / admin) después de esa lectura.
+      await sessions.revoke(staleSnapshot!.id);
+
+      const createSpy = jest.spyOn(sessions, 'create');
+      const loserRefresh = new RefreshPortalSession(accounts, staleReadProxy(sessions, staleSnapshot!), tokenService);
+
+      // markRotated debe devolver false (la fila ya no está "viva") → reuso.
+      await expect(loserRefresh.execute(t1)).rejects.toThrow(PortalRefreshTokenReusedError);
+      // Jamás se mintea una sesión nueva colgando de una sesión revocada.
+      expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('integrado: change-password (revoca TODO) concurrente con un refresh del token viejo → el refresh NO mintea sesión nueva', async () => {
+      const { login, accounts, hasher, sessions, tokenService } = makeUseCases();
+      const account = await accounts.create({ clientId: 'client-1', dni: '30111222', passwordHash: await hasher.hash('Secret123') });
+      const { refreshToken: t1 } = await login.execute({ dni: '30111222', password: 'Secret123' });
+
+      // El refresh en vuelo ya pasó su lectura (snapshot pre-carrera)...
+      const staleSnapshot = await sessions.findByTokenHash(hashPortalRefreshToken(t1));
+
+      // ...y el cliente (que sospecha robo) cambia la password: revoca TODAS las sesiones.
+      const changePassword = new ChangePortalPassword(accounts, hasher, sessions);
+      await changePassword.execute({ accountId: account.id, currentPassword: 'Secret123', newPassword: 'NewSecret456' });
+
+      const createSpy = jest.spyOn(sessions, 'create');
+      const racingRefresh = new RefreshPortalSession(accounts, staleReadProxy(sessions, staleSnapshot!), tokenService);
+
+      // Si el CAS solo mirara rotatedAt, este refresh RESUCITARÍA la cuenta recién
+      // saneada minteando una cadena nueva post-revocación total.
+      await expect(racingRefresh.execute(t1)).rejects.toThrow(PortalRefreshTokenReusedError);
+      expect(createSpy).not.toHaveBeenCalled();
     });
   });
 

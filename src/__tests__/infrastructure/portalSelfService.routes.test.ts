@@ -344,11 +344,13 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
       expect(foreignRes.body).toEqual(missingRes.body);
     });
 
-    it(':number no entero positivo -> 400 VALIDATION_ERROR (parseo estricto, nunca 500 ni lookup)', async () => {
+    it(':number no entero positivo CANÓNICO -> 400 VALIDATION_ERROR (parseo estricto: sin ceros a la izquierda, nunca 500 ni lookup)', async () => {
       const stack = buildStack();
       const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
 
-      for (const bad of ['abc', '1.5', '-1', '0', '1e3', '00x', `${2 ** 32}`]) {
+      // '01'/'007' (re-review LOW): alias no canónicos del mismo recurso — cada
+      // ticket debe tener UNA sola URL; ceros a la izquierda son 400, no un lookup.
+      for (const bad of ['abc', '1.5', '-1', '0', '1e3', '00x', '01', '007', `${2 ** 32}`]) {
         const res = await request(stack.app).get(`/api/portal/tickets/${bad}`).set('Authorization', `Bearer ${token}`);
         expect({ value: bad, status: res.status }).toEqual({ value: bad, status: 400 });
         expect(res.body.code).toBe('VALIDATION_ERROR');

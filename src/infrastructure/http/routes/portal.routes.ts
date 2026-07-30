@@ -354,11 +354,13 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
       async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         const clientId = requireClientId(req, res);
         if (!clientId) return;
-        // Parseo ESTRICTO: solo digitos, entero positivo, dentro del rango Int
-        // de Postgres (sequenceNumber es Int) — cualquier otra cosa es 400, no
-        // un lookup ni un 500.
+        // Parseo ESTRICTO y CANÓNICO: entero positivo SIN ceros a la izquierda
+        // (re-review: '01'/'007' eran alias de la misma URL — cada ticket tiene
+        // UNA sola representacion), dentro del rango Int de Postgres
+        // (sequenceNumber es Int) — cualquier otra cosa es 400, no un lookup ni
+        // un 500.
         const raw = req.params['number'] as string;
-        const ticketNumber = /^\d+$/.test(raw) ? Number(raw) : NaN;
+        const ticketNumber = /^[1-9]\d*$/.test(raw) ? Number(raw) : NaN;
         if (!Number.isSafeInteger(ticketNumber) || ticketNumber < 1 || ticketNumber > 2_147_483_647) {
           res.status(400).json({ error: 'El número de ticket debe ser un entero positivo', code: 'VALIDATION_ERROR' });
           return;

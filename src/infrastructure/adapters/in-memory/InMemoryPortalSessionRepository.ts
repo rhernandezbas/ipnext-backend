@@ -30,10 +30,12 @@ export class InMemoryPortalSessionRepository implements PortalSessionRepository 
   }
 
   async markRotated(id: string): Promise<boolean> {
-    // H2 — CAS: true only when THIS call flips rotatedAt from null (mirror of
-    // the Prisma adapter's updateMany count === 1).
+    // H2 — CAS: true only when THIS call flips rotatedAt from null on an ALIVE
+    // (also un-revoked) row — mirror of the Prisma adapter's updateMany
+    // `{rotatedAt: null, revokedAt: null}` count === 1 (re-review fix:
+    // revoke-vs-rotate races lose too, not just rotate-vs-rotate).
     const row = this.store.find((s) => s.id === id);
-    if (row && row.rotatedAt === null) {
+    if (row && row.rotatedAt === null && row.revokedAt === null) {
       row.rotatedAt = new Date().toISOString();
       return true;
     }

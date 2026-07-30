@@ -225,6 +225,13 @@ export function createPortalLoginRateLimiter(opts: PortalLoginRateLimitOptions =
  * ese barrido: 30 intentos de login por IP cada 15 min, sin importar el dni.
  * Más laxo que el per-DNI (10) para no morder a un NAT chico legítimo; un
  * humano no intenta loguearse 30 veces en 15 min.
+ *
+ * Re-review fix — `skipSuccessfulRequests: true`: el CGNAT PROPIO del ISP mete
+ * ~15 clientes detrás de cada IP pública (`rda2-cgnat-manual-capacidad`), así
+ * que 30 logins/15min por IP los alcanza un pico legítimo (corte de luz, la
+ * app re-loguea en masa). Los logins 2xx devuelven su cupo al terminar la
+ * response (express-rate-limit decrementa en el 'finish' cuando status < 400);
+ * el barrido de enumeración es todo 401 y sigue topando exactamente igual.
  */
 export interface PortalLoginIpRateLimitOptions {
   windowMs?: number;
@@ -240,6 +247,7 @@ export function createPortalLoginIpRateLimiter(opts: PortalLoginIpRateLimitOptio
     limit: opts.limit ?? DEFAULT_PORTAL_LOGIN_IP_LIMIT,
     standardHeaders: true,
     legacyHeaders: false,
+    skipSuccessfulRequests: true,
     keyGenerator: (req: Request) => `ip:${ipKeyGenerator(req.ip ?? '')}`,
     handler: (_req: Request, res: Response) => {
       res.status(429).json({
