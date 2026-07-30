@@ -19,6 +19,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+/**
+ * M3 (fix wave) — regla del repo "tests sobre texto filtran comentarios": los
+ * asserts corren sobre el SQL EFECTIVO (sin `--` comments). Antes un comentario
+ * que dijera "grant portal.manage to administrador" hacia pasar la suite aunque
+ * el INSERT real no existiera.
+ */
+function stripSqlComments(sql: string): string {
+  return sql
+    .split('\n')
+    .map((line) => line.replace(/--.*$/, ''))
+    .join('\n');
+}
+
 describe('Migration: portal_manage_permission', () => {
   let migrationSql: string;
   let dirName: string;
@@ -30,7 +43,8 @@ describe('Migration: portal_manage_permission', () => {
     dirName = dirs[0];
     const migrationFile = path.join(migrationsDir, dirName, 'migration.sql');
     expect(fs.existsSync(migrationFile)).toBe(true);
-    migrationSql = fs.readFileSync(migrationFile, 'utf-8');
+    // M3 — SQL EFECTIVO: comentarios fuera ANTES de cualquier match.
+    migrationSql = stripSqlComments(fs.readFileSync(migrationFile, 'utf-8'));
   });
 
   it('migration dir name ends with _portal_manage_permission', () => {
@@ -50,13 +64,20 @@ describe('Migration: portal_manage_permission', () => {
   });
 
   it('grants portal.manage to administrador (idempotent, mirrors inventory.manage/clients.manage)', () => {
-    expect(migrationSql).toMatch(/INSERT INTO\s+"RbacRolePermission"/i);
-    expect(migrationSql).toMatch(/'administrador'/);
-    expect(migrationSql).toMatch(/ON CONFLICT\s*\(\s*"roleId"\s*,\s*"permissionId"\s*\)\s*DO NOTHING/i);
+    // M3 — el statement COMPLETO del grant en el SQL efectivo: el INSERT a
+    // RbacRolePermission cuyo WHERE filtra rol 'administrador' + modulo
+    // 'portal' + accion 'manage', cerrado con el ON CONFLICT idempotente.
+    // Un comentario no puede satisfacer este match (los comments ya se
+    // strippearon) ni un INSERT a otra tabla / de otro rol.
+    expect(migrationSql).toMatch(
+      /INSERT INTO\s+"RbacRolePermission"[\s\S]*?WHERE\s+r\."code"\s*=\s*'administrador'[\s\S]*?m\."code"\s*=\s*'portal'[\s\S]*?p\."action"\s*=\s*'manage'[\s\S]*?ON CONFLICT\s*\(\s*"roleId"\s*,\s*"permissionId"\s*\)\s*DO NOTHING/i,
+    );
   });
 
   it('grants portal.manage to super_admin (idempotent safety net)', () => {
-    expect(migrationSql).toMatch(/'super_admin'/);
+    expect(migrationSql).toMatch(
+      /INSERT INTO\s+"RbacRolePermission"[\s\S]*?WHERE\s+r\."code"\s*=\s*'super_admin'[\s\S]*?m\."code"\s*=\s*'portal'[\s\S]*?p\."action"\s*=\s*'manage'[\s\S]*?ON CONFLICT\s*\(\s*"roleId"\s*,\s*"permissionId"\s*\)\s*DO NOTHING/i,
+    );
   });
 
   it('does not wrap statements in an explicit BEGIN/COMMIT (Prisma wraps each migration)', () => {

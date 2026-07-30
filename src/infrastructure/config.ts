@@ -630,12 +630,18 @@ export const config = {
    * archivo): si el area configurada no existe en el catalogo real de prod,
    * el use case cae a la PRIMERA area de `list()` — jamas crea una area
    * nueva desde el portal. `||` (no `??`) para que un env vacio seteado por
-   * error tambien caiga al default, mismo criterio que `corsOrigin` arriba.
-   * Default "Atencion al cliente" (mismo default que
-   * DEFAULT_PORTAL_TICKET_AREA_NAME en CreatePortalTicket.ts — no se importa
-   * esa constante aca para no acoplar infra->application por un string).
+   * error (o un secret de GitHub sin definir, que llega como string vacio via
+   * deploy.yml) tambien caiga al default, mismo criterio que `corsOrigin`.
+   *
+   * H4a (fix wave): default "Soporte" — area que EXISTE en el seed canonico
+   * (20260704000000_ticket_area_catalog). El default anterior ("Atencion al
+   * cliente") no esta en ningun seed: sin la env var seteada la resolucion por
+   * nombre fallaba SIEMPRE y caia en silencio al fallback "primera area del
+   * catalogo" — perilla inerte. (CreatePortalTicket.ts conserva su propia
+   * constante solo como default de tests; el wiring de prod inyecta SIEMPRE
+   * este valor.)
    */
   portal: {
-    ticketAreaName: process.env.PORTAL_TICKET_AREA_NAME || 'Atención al cliente',
+    ticketAreaName: process.env.PORTAL_TICKET_AREA_NAME || 'Soporte',
   },
 };

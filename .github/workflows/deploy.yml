@@ -122,6 +122,7 @@ jobs:
             -e TWILIO_AUTH_TOKEN="${{ secrets.TWILIO_AUTH_TOKEN }}" \
             -e TWILIO_MESSAGING_SERVICE_SID="${{ secrets.TWILIO_MESSAGING_SERVICE_SID }}" \
             -e MESSAGING_BULK_RATE_PER_SEC="${{ secrets.MESSAGING_BULK_RATE_PER_SEC }}" \
+            -e PORTAL_TICKET_AREA_NAME="${{ secrets.PORTAL_TICKET_AREA_NAME }}" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
