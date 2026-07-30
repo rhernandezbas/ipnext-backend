@@ -61,7 +61,16 @@ export class RefreshPortalSession {
     }
 
     // Rotate: the presented token is now spent, a brand-new pair replaces it.
-    await this.sessions.markRotated(session.id);
+    // H2 (fix wave): markRotated is an atomic compare-and-swap — `false` means a
+    // CONCURRENT refresh already spent this token between our read above and
+    // this write (TOCTOU window). Same semantics as finding it rotated up
+    // front: reuse/theft signal, revoke the whole account, never mint a second
+    // chain.
+    const won = await this.sessions.markRotated(session.id);
+    if (!won) {
+      await this.sessions.revokeAllForAccount(session.accountId);
+      throw new PortalRefreshTokenReusedError();
+    }
     const newRefreshToken = generatePortalRefreshToken();
     await this.sessions.create({
       accountId: account.id,

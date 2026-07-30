@@ -99,6 +99,57 @@ describe('RefreshPortalSession', () => {
     await expect(refresh.execute(refreshToken)).rejects.toThrow(InvalidPortalRefreshTokenError);
   });
 
+  describe('H2 (fix wave) — rotación atómica: markRotated es un compare-and-swap', () => {
+    it('contrato del port (in-memory): markRotated devuelve true la PRIMERA vez y false después / para ids desconocidos', async () => {
+      const { accounts, sessions } = makeUseCases();
+      const account = await accounts.create({ clientId: 'client-1', dni: '30111222', passwordHash: 'h' });
+      const session = await sessions.create({
+        accountId: account.id,
+        tokenHash: hashPortalRefreshToken('raw'),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+      await expect(sessions.markRotated(session.id)).resolves.toBe(true);
+      await expect(sessions.markRotated(session.id)).resolves.toBe(false);
+      await expect(sessions.markRotated('no-such-id')).resolves.toBe(false);
+    });
+
+    it('carrera TOCTOU: dos refresh concurrentes con el MISMO token — el que pierde el CAS revoca TODO y falla como reuso (jamás dos cadenas)', async () => {
+      const { login, refresh, accounts, hasher, sessions, tokenService } = makeUseCases();
+      await accounts.create({ clientId: 'client-1', dni: '30111222', passwordHash: await hasher.hash('Secret123') });
+      const { refreshToken: t1 } = await login.execute({ dni: '30111222', password: 'Secret123' });
+
+      // Snapshot PRE-rotación de la sesión — lo que el request perdedor ya leyó
+      // antes de que el ganador escribiera rotatedAt (la ventana TOCTOU real).
+      const staleSnapshot = await sessions.findByTokenHash(hashPortalRefreshToken(t1));
+      expect(staleSnapshot?.rotatedAt).toBeNull();
+
+      // Ganador: refresh normal — rota t1 y mintea su propia cadena.
+      const winner = await refresh.execute(t1);
+
+      // Perdedor: su findByTokenHash devolvió el snapshot stale (pasó el check
+      // de reuso), pero llega SEGUNDO al markRotated — pierde el CAS.
+      const staleReadSessions = new Proxy(sessions, {
+        get(target, prop, receiver) {
+          if (prop === 'findByTokenHash') {
+            return async () => ({ ...staleSnapshot! });
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      const loserRefresh = new RefreshPortalSession(accounts, staleReadSessions, tokenService);
+
+      await expect(loserRefresh.execute(t1)).rejects.toThrow(PortalRefreshTokenReusedError);
+
+      // Señal de robo disparada: TODA la cuenta queda revocada — incluida la
+      // cadena que el ganador acababa de mintear.
+      await expect(refresh.execute(winner.refreshToken)).rejects.toThrow(InvalidPortalRefreshTokenError);
+      const winnerSession = await sessions.findByTokenHash(hashPortalRefreshToken(winner.refreshToken));
+      expect(winnerSession?.revokedAt).not.toBeNull();
+    });
+  });
+
   it('new access token carries the same accountId/clientId claims', async () => {
     const { login, refresh, accounts, hasher, tokenService } = makeUseCases();
     const account = await accounts.create({ clientId: 'client-77', dni: '30111222', passwordHash: await hasher.hash('Secret123') });

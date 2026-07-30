@@ -20,8 +20,17 @@ export interface PortalSessionRepository {
    * "expired/revoked". Callers apply `portalSession.policy.ts` on the result.
    */
   findByTokenHash(tokenHash: string): Promise<PortalSession | null>;
-  /** Marks the session as consumed by a rotation — a refresh is single-use. */
-  markRotated(id: string): Promise<void>;
+  /**
+   * Marks the session as consumed by a rotation — a refresh is single-use.
+   *
+   * H2 (fix wave): ATOMIC compare-and-swap. Returns `true` only when THIS call
+   * transitioned `rotatedAt` from null (exactly one row updated); `false` when
+   * the session was already rotated (or doesn't exist) — i.e. a concurrent
+   * refresh won the race. Callers MUST treat `false` as token reuse (theft
+   * signal), never as success: two concurrent refreshes of the same token must
+   * never mint two live chains.
+   */
+  markRotated(id: string): Promise<boolean>;
   revoke(id: string): Promise<void>;
   /** Revokes every non-revoked session of the account; returns how many were revoked. */
   revokeAllForAccount(accountId: string): Promise<number>;

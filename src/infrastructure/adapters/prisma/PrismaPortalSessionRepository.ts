@@ -47,11 +47,14 @@ export class PrismaPortalSessionRepository implements PortalSessionRepository {
     return row ? mapRow(row) : null;
   }
 
-  async markRotated(id: string): Promise<void> {
-    await (this.db as any).portalSession.updateMany({
+  async markRotated(id: string): Promise<boolean> {
+    // H2 — CAS: the `rotatedAt: null` guard in the WHERE makes the update
+    // atomic; count === 1 means THIS call won the rotation race.
+    const result = (await (this.db as any).portalSession.updateMany({
       where: { id, rotatedAt: null },
       data: { rotatedAt: new Date() },
-    });
+    })) as { count: number };
+    return result.count === 1;
   }
 
   async revoke(id: string): Promise<void> {

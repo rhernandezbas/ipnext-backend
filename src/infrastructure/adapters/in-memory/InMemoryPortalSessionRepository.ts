@@ -29,9 +29,15 @@ export class InMemoryPortalSessionRepository implements PortalSessionRepository 
     return row ? { ...row } : null;
   }
 
-  async markRotated(id: string): Promise<void> {
+  async markRotated(id: string): Promise<boolean> {
+    // H2 — CAS: true only when THIS call flips rotatedAt from null (mirror of
+    // the Prisma adapter's updateMany count === 1).
     const row = this.store.find((s) => s.id === id);
-    if (row && row.rotatedAt === null) row.rotatedAt = new Date().toISOString();
+    if (row && row.rotatedAt === null) {
+      row.rotatedAt = new Date().toISOString();
+      return true;
+    }
+    return false;
   }
 
   async revoke(id: string): Promise<void> {
