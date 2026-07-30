@@ -4,6 +4,7 @@ import {
   toClientLog,
   toInvoice,
   toActiveClientContact,
+  toPortalBalanceSummary,
 } from '../../infrastructure/adapters/prisma/PrismaCustomerRepository';
 import { CustomerStatus } from '../../domain/entities/customer';
 
@@ -227,6 +228,51 @@ describe('PrismaCustomerRepository mappers', () => {
       });
       expect(contact.phone).toBeNull();
       expect(contact.email).toBeNull();
+    });
+  });
+
+  // fix/portal-balance-from-invoices — mapper puro de
+  // `getPortalBalanceSummary` (aggregate + findFirst de Prisma -> PortalBalanceSummary).
+  describe('toPortalBalanceSummary', () => {
+    it('con impagas: suma balance (Decimal-like), usa max(createdAt) de las IMPAGAS (no de anyInvoice)', () => {
+      const fakeDecimal = { toNumber: () => 75000 };
+      const summary = toPortalBalanceSummary(
+        { _sum: { balance: fakeDecimal }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } },
+        { currency: 'ARS', createdAt: new Date('2026-07-20T00:00:00.000Z') },
+      );
+      expect(summary).toEqual({
+        unpaidBalance: 75000,
+        currency: 'ARS',
+        lastUpdatedAt: '2026-07-01T00:00:00.000Z',
+      });
+    });
+
+    it('sin impagas (todas pagadas): unpaidBalance 0, fecha = anyInvoice.createdAt', () => {
+      const summary = toPortalBalanceSummary(
+        { _sum: { balance: null }, _max: { createdAt: null } },
+        { currency: 'ARS', createdAt: new Date('2026-07-01T00:00:00.000Z') },
+      );
+      expect(summary).toEqual({
+        unpaidBalance: 0,
+        currency: 'ARS',
+        lastUpdatedAt: '2026-07-01T00:00:00.000Z',
+      });
+    });
+
+    it('sin NINGUNA factura (anyInvoice null): devuelve null, jamas unpaidBalance 0', () => {
+      const summary = toPortalBalanceSummary(
+        { _sum: { balance: null }, _max: { createdAt: null } },
+        null,
+      );
+      expect(summary).toBeNull();
+    });
+
+    it('preserva currency null cuando ninguna factura la tiene', () => {
+      const summary = toPortalBalanceSummary(
+        { _sum: { balance: 500 }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } },
+        { currency: null, createdAt: new Date('2026-07-01T00:00:00.000Z') },
+      );
+      expect(summary?.currency).toBeNull();
     });
   });
 });

@@ -63,6 +63,36 @@ export interface ActiveClientContact {
   email: string | null;
 }
 
+/**
+ * fix/portal-balance-from-invoices — resultado agregado del saldo del portal,
+ * calculado EXCLUSIVAMENTE sobre `Invoice` (Prominense), NUNCA sobre
+ * `Client.balanceDue` (el agregado que escribe el sync de GR). Motivo: en
+ * prod, GR puede reportar `balanceDue = 0` mientras `Invoice` tiene facturas
+ * vencidas impagas (visto con HERNANDEZ RONALD, 5 facturas vencidas por
+ * $100.886,90 con `Client.balanceDue = 0`) — el saldo y la lista de facturas
+ * SIEMPRE tienen que salir del mismo dato para no contradecirse de cara al
+ * cliente (portal-self-service spec "Mi resumen").
+ */
+export interface PortalBalanceSummary {
+  /**
+   * Suma de `Invoice.balance` de las facturas NO pagadas (`status != 'pagada'`)
+   * del cliente. `0` cuando TODAS las facturas espejadas están pagadas (=
+   * "al día", coherente con una lista de facturas vacía-de-deuda) — la
+   * ausencia total de facturas se modela devolviendo `null` en
+   * `getPortalBalanceSummary`, NUNCA con `unpaidBalance: 0`.
+   */
+  unpaidBalance: number;
+  /** Moneda de la factura más reciente del cliente (paga o no); `null` si ninguna la tiene. */
+  currency: string | null;
+  /**
+   * Frescura del NÚMERO mostrado (`unpaidBalance`), no una fecha inventada:
+   * `max(createdAt)` de las facturas impagas que componen la suma; si no hay
+   * impagas (todas pagadas), `max(createdAt)` de TODAS las facturas del
+   * cliente (seguimos teniendo datos, solo que ninguno es deuda viva).
+   */
+  lastUpdatedAt: string | null;
+}
+
 export interface CustomerRepository {
   list(query: ListClientsQuery): Promise<PaginatedResult<Customer>>;
   findById(id: string): Promise<Customer>;
@@ -72,6 +102,15 @@ export interface CustomerRepository {
   stats(): Promise<ClientStats>;
   listContracts(clientId: string): Promise<Contract[]>;
   listInvoices(clientId: string): Promise<import('../entities/billing').Invoice[]>;
+  /**
+   * fix/portal-balance-from-invoices — saldo del portal agregado EN LA DB
+   * (Prisma `aggregate`/`findFirst` sobre `Invoice`, jamás trayendo todas las
+   * filas a memoria — ver `PrismaCustomerRepository.getPortalBalanceSummary`).
+   * Devuelve `null` cuando el cliente no tiene NINGUNA factura espejada (
+   * "sin datos", distinto de `unpaidBalance: 0` = "al día"). Consumido por
+   * `GetPortalMe` (portal-self-service spec "Mi resumen").
+   */
+  getPortalBalanceSummary(clientId: string): Promise<PortalBalanceSummary | null>;
   listLogs(query: ListLogsQuery): Promise<PaginatedResult<ClientLog>>;
   /**
    * client-geolocation — update ONLY the Prominense-owned GPS fields.

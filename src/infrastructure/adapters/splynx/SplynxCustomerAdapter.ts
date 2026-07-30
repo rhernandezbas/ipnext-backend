@@ -155,6 +155,14 @@ export class SplynxCustomerAdapter implements CustomerRepository {
     throw new Error('SplynxCustomerAdapter.updateLocation is not implemented — location updates go through PrismaCustomerRepository');
   }
 
+  async getPortalBalanceSummary(): Promise<never> {
+    // fix/portal-balance-from-invoices — the portal balance is aggregated over
+    // Prominense-mirrored `Invoice` rows; Splynx (legacy, read-only source) is
+    // never wired to the portal use cases (see app.ts — GetPortalMe only takes
+    // PrismaCustomerRepository).
+    throw new Error('SplynxCustomerAdapter.getPortalBalanceSummary is not implemented — the portal balance comes exclusively from PrismaCustomerRepository');
+  }
+
   async listActiveContacts(): Promise<never> {
     throw new Error('SplynxCustomerAdapter.listActiveContacts is not implemented — recapture-active-client-match reads exclusively from PrismaCustomerRepository');
   }

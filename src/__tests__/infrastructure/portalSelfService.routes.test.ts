@@ -37,7 +37,7 @@ import { InMemoryTicketRepository } from '@infrastructure/adapters/in-memory/InM
 import { InMemoryTicketAreaCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketAreaCatalogRepository';
 import { JwtPortalTokenService } from '@infrastructure/adapters/jwt/JwtPortalTokenService';
 
-import type { CustomerRepository } from '@domain/ports/CustomerRepository';
+import type { CustomerRepository, PortalBalanceSummary } from '@domain/ports/CustomerRepository';
 import type { Customer, Contract } from '@domain/entities/customer';
 import type { Invoice } from '@domain/entities/billing';
 import { ClientNotFoundError } from '@domain/errors';
@@ -80,6 +80,29 @@ class FakeCustomerRepository implements Partial<CustomerRepository> {
   }
   async listContracts(clientId: string): Promise<Contract[]> { return this.contracts.get(clientId) ?? []; }
   async listInvoices(clientId: string): Promise<Invoice[]> { return this.invoices.get(clientId) ?? []; }
+
+  /**
+   * fix/portal-balance-from-invoices — mismo contrato que
+   * `PrismaCustomerRepository.getPortalBalanceSummary` (ver su doc), calculado
+   * EN MEMORIA sobre las facturas seedeadas. Este fake NO tiene `Invoice.createdAt`
+   * (la entidad de dominio no lo expone) — usa `issueDate` como proxy de
+   * frescura, suficiente para probar el WIRING de la ruta; la semántica exacta
+   * de `lastUpdatedAt` está unit-testeada en `GetPortalMe.test.ts` y
+   * `PrismaCustomerRepository.mappers.test.ts`.
+   */
+  async getPortalBalanceSummary(clientId: string): Promise<PortalBalanceSummary | null> {
+    const list = this.invoices.get(clientId) ?? [];
+    if (list.length === 0) return null;
+    const unpaid = list.filter((i) => i.status !== 'pagada');
+    const unpaidBalance = unpaid.reduce((sum, i) => sum + (i.balance ?? 0), 0);
+    const source = unpaid.length > 0 ? unpaid : list;
+    const lastUpdatedAt = source.reduce<string | null>(
+      (latest, i) => (!latest || i.issueDate > latest ? i.issueDate : latest),
+      null,
+    );
+    const mostRecent = list.reduce((a, b) => (b.issueDate > a.issueDate ? b : a));
+    return { unpaidBalance, currency: mostRecent.currency ?? null, lastUpdatedAt };
+  }
 }
 
 function buildStack() {
@@ -151,20 +174,23 @@ async function createAccountAndToken(
 
 describe('portal self-service + account-deletion routes — Fases 4/5/6', () => {
   describe('GET /api/portal/me', () => {
-    it('devuelve nombre/estado/saldo del cliente del token', async () => {
+    it('devuelve nombre/estado/saldo del cliente del token (saldo calculado sobre sus facturas, fix/portal-balance-from-invoices)', async () => {
       const stack = buildStack();
-      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', name: 'Ana', balanceDue: 500, balanceCurrency: 'ARS' }));
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', name: 'Ana' }));
+      stack.customers.seedInvoices('client-a', [
+        { id: 'i1', number: 'F-1', customerId: 'client-a', customerName: 'Ana', issueDate: '2026-01-01T00:00:00.000Z', dueDate: '2026-01-10T00:00:00.000Z', amount: 500, status: 'pendiente', lineItems: [], grInvoiceId: 'GR-1', balance: 500, grType: 'FB', currency: 'ARS', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+      ]);
       const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
 
       const res = await request(stack.app).get('/api/portal/me').set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ name: 'Ana', status: 'active', balance: 500, balanceCurrency: 'ARS', lastBalanceAt: null });
+      expect(res.body).toEqual({ name: 'Ana', status: 'active', balance: 500, balanceCurrency: 'ARS', lastBalanceAt: '2026-01-01T00:00:00.000Z' });
     });
 
-    it('scenario "Cliente sin saldo fetcheado": balance null, NUNCA 0', async () => {
+    it('scenario "Cliente sin facturas espejadas": balance null, NUNCA 0', async () => {
       const stack = buildStack();
-      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', balanceDue: null }));
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' })); // sin facturas
       const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
 
       const res = await request(stack.app).get('/api/portal/me').set('Authorization', `Bearer ${token}`);

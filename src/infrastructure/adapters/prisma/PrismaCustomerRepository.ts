@@ -12,6 +12,7 @@ import {
   CampaignRecipientLookup,
   ManualRecipientSource,
   OptOutRegistry,
+  PortalBalanceSummary,
 } from '@domain/ports/CustomerRepository';
 import { Customer, CustomerStatus, Contract, ClientLog } from '@domain/entities/customer';
 import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
@@ -149,6 +150,35 @@ export function toInvoice(row: any): Invoice {
     pdfUrl: row.pdfUrl ?? null,
     couponPdfUrl: row.couponPdfUrl ?? null,
     paymentUrl: row.paymentUrl ?? null,
+  };
+}
+
+/**
+ * fix/portal-balance-from-invoices — pure mapper (molde `toCampaignRecipientCandidate`)
+ * de los dos resultados narrow que arma `getPortalBalanceSummary` en un
+ * `PortalBalanceSummary` de dominio. Testeable SIN Prisma real (se le pasan
+ * shapes Decimal-like/Date fabricados, mismo criterio que `toInvoice` en
+ * `PrismaCustomerRepository.mappers.test.ts`).
+ *
+ * - `unpaidAgg` — `prisma.invoice.aggregate({ where: { clientId, status: { not: 'pagada' } },
+ *   _sum: { balance: true }, _max: { createdAt: true } })`.
+ * - `anyInvoice` — `prisma.invoice.findFirst({ where: { clientId }, orderBy: { createdAt: 'desc' },
+ *   select: { currency: true, createdAt: true } })`; `null` si el cliente no tiene NINGUNA
+ *   factura espejada (short-circuit a `null` — "sin datos", nunca `unpaidBalance: 0`).
+ */
+export function toPortalBalanceSummary(
+  unpaidAgg: { _sum: { balance: unknown }; _max: { createdAt: Date | null } },
+  anyInvoice: { currency: string | null; createdAt: Date } | null,
+): PortalBalanceSummary | null {
+  if (!anyInvoice) return null;
+  // Sin facturas impagas (todas pagadas): la fecha del NÚMERO mostrado (0)
+  // es la de la factura más reciente que tenemos — seguimos teniendo datos,
+  // solo que ninguno es deuda viva (ver doc de `lastUpdatedAt` en el port).
+  const lastUpdated = unpaidAgg._max.createdAt ?? anyInvoice.createdAt;
+  return {
+    unpaidBalance: decimalToNumberOrNull(unpaidAgg._sum.balance) ?? 0,
+    currency: anyInvoice.currency ?? null,
+    lastUpdatedAt: lastUpdated.toISOString(),
   };
 }
 
@@ -417,6 +447,31 @@ export class PrismaCustomerRepository
       orderBy: { issueDate: 'desc' },
     });
     return rows.map(toInvoice);
+  }
+
+  /**
+   * fix/portal-balance-from-invoices — saldo del portal calculado EN LA DB
+   * sobre `Invoice`, jamás sobre `Client.balanceDue` (el agregado del sync de
+   * GR, que puede quedar desincronizado de las facturas espejadas — visto en
+   * prod con HERNANDEZ RONALD: GR decía `balanceDue = 0` con 5 facturas
+   * vencidas por $100.886,90). DOS queries agregadas/narrow (`aggregate` +
+   * `findFirst`), NUNCA `findMany` + reduce en memoria — el costo es O(1)
+   * independientemente de cuántas facturas tenga el cliente.
+   */
+  async getPortalBalanceSummary(clientId: string): Promise<PortalBalanceSummary | null> {
+    const [unpaidAgg, anyInvoice] = await Promise.all([
+      prisma.invoice.aggregate({
+        where: { clientId, status: { not: 'pagada' as never } },
+        _sum: { balance: true },
+        _max: { createdAt: true },
+      }),
+      prisma.invoice.findFirst({
+        where: { clientId },
+        orderBy: { createdAt: 'desc' },
+        select: { currency: true, createdAt: true },
+      }),
+    ]);
+    return toPortalBalanceSummary(unpaidAgg, anyInvoice);
   }
 
   async listLogs(query: ListLogsQuery): Promise<PaginatedResult<ClientLog>> {

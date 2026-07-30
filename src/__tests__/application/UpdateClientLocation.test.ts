@@ -36,6 +36,7 @@ function makeRepo(overrides: Partial<CustomerRepository> = {}): CustomerReposito
     listLogs: jest.fn(),
     updateLocation: jest.fn().mockResolvedValue(BASE_CUSTOMER),
     listActiveContacts: jest.fn().mockResolvedValue([]),
+    getPortalBalanceSummary: jest.fn().mockResolvedValue(null),
     ...overrides,
   };
 }

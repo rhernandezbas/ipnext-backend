@@ -24,13 +24,37 @@ detalles por id (`GET /api/portal/tickets/:id`) DEBEN verificar pertenencia y re
 - **THEN** 404 idéntico al de un id inexistente (no filtrar existencia)
 
 ### Requirement: Mi resumen (`GET /api/portal/me`)
-DEBE (MUST) devolver un DTO con nombre, estado del cliente y saldo: `balanceDue`,
-`balanceCurrency` y `lastBalanceAt` del espejo local. `balanceDue = null` (sin fetch de GR aún)
-se expone como `balance: null` — la app lo muestra como "sin datos", NUNCA como $0.
+DEBE (MUST) devolver un DTO con nombre, estado del cliente y saldo: `balance`, `balanceCurrency`
+y `lastBalanceAt`. El saldo NO sale de `Client.balanceDue` (el agregado que escribe el sync de
+GR) — SIEMPRE se CALCULA sumando el `balance` de las facturas (`Invoice`, espejo local de
+Prominense) del cliente que NO están pagadas (`status != 'pagada'`), agregado en la base de datos
+(no trayendo todas las filas a memoria). Motivo (medido en prod, HERNANDEZ RONALD): GR puede
+reportar `balanceDue = 0` mientras `Invoice` tiene facturas vencidas impagas por $100.886,90 — el
+cliente vería "saldo $0" arriba y facturas con botón "Pagar" abajo, una contradicción de cara al
+cliente.
+
+`balance = 0` significa "al día" de verdad (el cliente tiene facturas y todas están pagadas).
+`balance = null` significa "sin datos": el cliente no tiene NINGUNA factura espejada todavía —
+NUNCA se colapsa a `0`. `balanceCurrency` sale de la moneda de las propias facturas
+(`Invoice.currency`), no de `Client.balanceCurrency`. `lastBalanceAt` describe la frescura del
+NÚMERO mostrado (`max(createdAt)` de las facturas impagas consideradas, o de todas si no hay
+impagas, o `null` sin facturas) — nunca una fecha que no corresponda al `balance` mostrado.
+
+#### Scenario: Cliente con deuda
+- **WHEN** el cliente tiene facturas con `status` `pendiente` y/o `vencida`
+- **THEN** el DTO trae `balance` = la suma de los `balance` de esas facturas (las `pagada` no
+  suman), con la `balanceCurrency` y `lastBalanceAt` coherentes con esas facturas
 
 #### Scenario: Cliente sin saldo fetcheado
-- **WHEN** `balanceDue` es null en el espejo
-- **THEN** el DTO trae `balance: null` (distinto de deuda cero)
+- **WHEN** el cliente NO tiene ninguna factura espejada en `Invoice`
+- **THEN** el DTO trae `balance: null` (sin datos, distinto de deuda cero)
+
+#### Scenario: El saldo nunca contradice la lista de facturas
+- **WHEN** se compara el `balance` de `GET /api/portal/me` con la lista de
+  `GET /api/portal/invoices` del mismo cliente
+- **THEN** `balance` es EXACTAMENTE igual a la suma de los `balance` de las facturas cuyo
+  `status` no es `pagada` en esa lista — ambos endpoints leen del mismo dato (`Invoice`), nunca
+  pueden mostrar números contradictorios
 
 ### Requirement: Mis facturas (`GET /api/portal/invoices`)
 DEBE (MUST) listar las facturas del cliente (DTO: `number`, `issueDate`, `dueDate`, `amount`,
