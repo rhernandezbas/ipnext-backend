@@ -23,6 +23,12 @@ interface JwtPayload {
   id: string;
   login: string;
   email: string;
+  /**
+   * customer-portal-api (Fase 2) — present only on portal tokens (`aud: 'portal'`).
+   * Absent on every staff token (today's and every legacy one) — that absence IS
+   * the compat contract: only an EXPLICIT `aud: 'portal'` gets rejected below.
+   */
+  aud?: string;
 }
 
 export class JwtAuthAdapter implements AuthProvider {
@@ -96,6 +102,15 @@ export class JwtAuthAdapter implements AuthProvider {
   async getSession(token: string): Promise<User> {
     try {
       const payload = jwt.verify(token, this.secret) as JwtPayload;
+      // customer-portal-api (Fase 2, task 2.4) — portal-auth spec "Token de portal
+      // contra ruta admin" → 401. A portal token verifies fine against the SAME
+      // secret (design decision: one secret, separated by audience) — the explicit
+      // `aud === 'portal'` check is the only thing standing between a portal token
+      // and full staff access. A token with no `aud` at all (every staff token)
+      // sails through unaffected — that's the compat contract.
+      if (payload.aud === 'portal') {
+        throw new AuthenticationError('Invalid or expired session');
+      }
       return {
         id: payload.id,
         username: payload.login,

@@ -20,6 +20,15 @@ declare global {
        * a los use cases. Ausente fuera de esas rutas.
        */
       messagingCanManage?: boolean;
+      /**
+       * customer-portal-api (Fase 2) — poblados por `portalAuthMiddleware` a partir
+       * del access token `aud=portal` (Bearer), NUNCA del body/query — anti-IDOR
+       * estructural: todo use case del portal recibe el `clientId` SOLO de acá, jamás
+       * de un parámetro que el cliente pueda manipular. Ausentes fuera de
+       * `/api/portal/*` (rutas admin usan `req.user`, universo separado).
+       */
+      portalAccountId?: string;
+      portalClientId?: string;
     }
   }
 }

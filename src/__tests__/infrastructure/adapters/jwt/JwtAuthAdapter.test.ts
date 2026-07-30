@@ -102,6 +102,34 @@ describe('JwtAuthAdapter', () => {
       await expect(adapter.getSession('invalid.token.here'))
         .rejects.toThrow(AuthenticationError);
     });
+
+    // customer-portal-api (Fase 2, task 2.4) — cross-audience rejection, admin side.
+    // portal-auth spec: "Token de portal contra ruta admin" → 401, jamás 200.
+    it('a token with aud=portal is REJECTED even if signed with the same secret (cross-audience)', async () => {
+      const { adapter } = makeAdapter();
+      const portalToken = jwt.sign({ sub: 'acc-1', clientId: 'client-1' }, TEST_SECRET, {
+        expiresIn: '15m',
+        audience: 'portal',
+      });
+      await expect(adapter.getSession(portalToken)).rejects.toThrow(AuthenticationError);
+    });
+
+    // Compat: a token WITHOUT any `aud` claim (every token issued before this
+    // change, and every staff token issued today) still authenticates as staff.
+    it('a token without any aud claim still authenticates as staff (compat)', async () => {
+      const { adapter, repo, hasher } = makeAdapter();
+      const hash = await hasher.hash('pass1234');
+      const created = await repo.create({
+        name: 'Gina',
+        email: 'gina@example.com',
+        login: 'gina',
+        passwordHash: hash,
+        status: 'active',
+      });
+      const { cookieValue } = await adapter.login({ username: 'gina', password: 'pass1234' });
+      const session = await adapter.getSession(cookieValue);
+      expect(session.id).toBe(created.id);
+    });
   });
 
   describe('logout', () => {
