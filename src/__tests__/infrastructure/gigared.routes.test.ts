@@ -1021,10 +1021,10 @@ describe('POST /customers/:id/register — 207 partial + result shape (B3, D3)',
 
   it('TvIdentityStampUnverifiedError (B1) → 503 { code:"TV_IDENTITY_UNVERIFIED", cic, internalId }', async () => {
     const port = fakePort({
-      listAccounts: jest.fn(async () => [fakeAccount({ cic: 'CLEANX', internalId: null })]),
+      listAccounts: jest.fn(async () => [fakeAccount({ cic: '0000009851', internalId: null })]),
       getAccountByInternalId: jest.fn()
         .mockRejectedValueOnce(new GigaredNotFoundError()) // probe: 404
-        .mockResolvedValue(fakeAccount({ cic: 'OTHER-CIC' })), // post-stamp: mismatch
+        .mockResolvedValue(fakeAccount({ cic: '0000009852' })), // post-stamp: mismatch
     });
     const app = await buildApp({ port });
     const res = await request(app)
@@ -1032,7 +1032,7 @@ describe('POST /customers/:id/register — 207 partial + result shape (B3, D3)',
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('TV_IDENTITY_UNVERIFIED');
-    expect(res.body.cic).toBe('CLEANX');
+    expect(res.body.cic).toBe('0000009851');
     expect(res.body.internalId).toBe('cust-1');
   });
 
@@ -1040,7 +1040,7 @@ describe('POST /customers/:id/register — 207 partial + result shape (B3, D3)',
     const register = jest.fn(async () => { throw new GigaredRejectedError('Conflict', 'email already in use'); });
     const listAccounts = jest.fn(async (filter?: { status?: string; email?: string }) => {
       if (filter?.email) return [fakeAccount({ internalId: 'cust-OTHER' })];
-      return [fakeAccount({ cic: 'POOLCIC', internalId: null })];
+      return [fakeAccount({ cic: '0000009853', internalId: null })];
     });
     const port = fakePort({
       register, listAccounts,

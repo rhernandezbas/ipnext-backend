@@ -24,7 +24,11 @@ describe('Gigared composition root (#47)', () => {
     // service-transfer — grew again (transferTv + its comment); widened once more.
     // gigared-tv-identity-hardening (D4/D7/B7) — grew again (listAccounts + transferTv gained
     // deps, plus their comments); widened once more.
-    const window = appSrc.slice(idx, idx + 2900);
+    // gigared-tv-cic-reuse — grew again (registerAccount gained the reuse-eligibility + audit
+    // deps and their comment); widened once more. NOTA: esta ventana se ensanchó 4 veces ya —
+    // es frágil por construcción. Un `indexOf` acotado al bloque de deps sería más honesto que
+    // un número mágico, pero cambiarlo excede el alcance de este change.
+    const window = appSrc.slice(idx, idx + 3400);
     expect(window).toMatch(/requirePerm\(\s*['"]tv['"]/);
   });
 

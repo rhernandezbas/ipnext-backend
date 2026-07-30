@@ -251,7 +251,17 @@ export class GigaredClient implements GigaredPort {
 
       // RFC 9457 type-based discrimination (#47d) — takes precedence over bare status.
       // cic-ownership (403): for our partner, "not owned" ≡ "not found".
-      if (type.endsWith('/cic-ownership-error')) return new GigaredNotFoundError();
+      if (type.endsWith('/cic-ownership-error')) {
+        // OBS-1.1 (gigared-tv-cic-reuse) — ANTES esta rama retornaba sin loguear, y el warn
+        // genérico de más abajo está guardado por `status !== 404`: el 403 se convertía en un
+        // NotFound MUDO. Fue exactamente lo que hizo invisible el incidente del 2026-07-30
+        // (el CIC corrupto '00065470 4' rompía el 100% de las altas sin una línea en los logs).
+        console.warn('[gigared] upstream', status, type, detail);
+        // FIX WAVE F3 — ÚNICA rama pre-write segura: el partner dice "no poseés esta cuenta",
+        // o sea que rechazó ANTES de crear nada. Se marca para que el reintento acotado del
+        // alta pueda descartar ese CIC y probar otro sin riesgo de doble registro.
+        return new GigaredNotFoundError(undefined, true);
+      }
       // external-service-error (424): the CUA's "no se encontró ..." is a real not-found;
       // any other 424 is the CUA genuinely failing → outage.
       if (type.endsWith('/external-service-error')) {
@@ -270,7 +280,14 @@ export class GigaredClient implements GigaredPort {
         return nf;
       }
 
-      // #47g — from here every branch is a non-NotFound failure → log it for prod diagnosis.
+      // #47g — de acá para abajo se loguea para el diagnóstico en prod.
+      //
+      // FIX WAVE F7 — el guard `status !== 404` se RESTAURA. Loguear todos los 404 (OBS-1.2)
+      // enterraba el fix de observabilidad en su propio ruido: el 404 es el HAPPY PATH de
+      // `GetGigaredCustomerAccount` ("este cliente no tiene TV" — cada apertura de panel), del
+      // probe idempotente de cada alta y del probe del destino en `TransferTvToCustomer`. La
+      // señal que de verdad faltaba era el 403 `cic-ownership-error`, y ésa se loguea arriba,
+      // en su propia rama, antes de retornar.
       if (status !== 404) console.warn('[gigared] upstream', status, type, detail);
 
       if (status === 401 || status === 403) return new GigaredAuthError('Gigared API key is invalid', detail);

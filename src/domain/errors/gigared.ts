@@ -48,7 +48,21 @@ export class GigaredAuthError extends DomainError {
 
 /** 404 from Gigared — account/CIC does not exist upstream. */
 export class GigaredNotFoundError extends DomainError {
-  constructor(message = 'Gigared account not found') {
+  constructor(
+    message = 'Gigared account not found',
+    /**
+     * FIX WAVE F3 (gigared-tv-cic-reuse) — PROVENANCE del not-found. `true` SÓLO cuando el
+     * partner respondió `403 cic-ownership-error` ("el revendedor no posee esta cuenta"): ahí
+     * rechazó ANTES de tocar nada, así que es seguro descartar ese CIC y probar otro.
+     *
+     * ⚠️ Un `GigaredNotFoundError` SIN esta marca NO prueba que no se haya creado nada: también
+     * nace de un `424 external-service-error` con detail "no se encontró", y un 424 significa
+     * que el partner ACEPTÓ el request y su downstream (el CUA) falló ⇒ estado DESCONOCIDO.
+     * Reintentar un `register` ahí puede crear una SEGUNDA cuenta real (doble cobro — es la
+     * lección F1 del hardening previo). Por eso el reintento acotado exige esta marca.
+     */
+    public readonly cicNotOwned = false,
+  ) {
     super(message, 'GIGARED_NOT_FOUND');
     this.name = 'GigaredNotFoundError';
   }
@@ -191,6 +205,42 @@ export class TvEmailOwnedByOtherError extends DomainError {
   ) {
     super(message, 'TV_EMAIL_OWNED_BY_OTHER');
     this.name = 'TvEmailOwnedByOtherError';
+  }
+}
+
+/**
+ * gigared-tv-cic-reuse — el LISTADO del pool `unregistered` falló contra el partner.
+ *
+ * WHY: hasta el 2026-07-30 esa llamada no estaba protegida, así que un `GigaredNotFoundError`
+ * del adapter se propagaba crudo y el operador veía un **404 "Gigared account not found"** al
+ * dar de ALTA — un mensaje que le lee como "el cliente no existe". Es una condición
+ * TRANSITORIA (el partner no respondió), no de datos → router 503, reintentable.
+ */
+export class TvPoolUnavailableError extends DomainError {
+  constructor(
+    public readonly detail?: string,
+    message = 'No se pudo consultar el pool de CICs de TV — reintentá en unos segundos',
+  ) {
+    super(message, 'TV_POOL_UNAVAILABLE');
+    this.name = 'TvPoolUnavailableError';
+  }
+}
+
+/**
+ * gigared-tv-cic-reuse — se agotaron los candidatos del reintento acotado: cada CIC probado
+ * resultó inservible para el partner (403 `cic-ownership-error` / 404 en el `register`).
+ *
+ * WHY: el incidente del 2026-07-30 fue exactamente esto sin reintento ni error propio — UN
+ * cic corrupto (`'00065470 4'`) era el único candidato y tumbaba el 100% de las altas con un
+ * 404 crudo. Es una condición de DATOS (los CICs del pool no sirven), no transitoria → 422.
+ */
+export class TvNoUsableCicError extends DomainError {
+  constructor(
+    public readonly attemptedCount: number,
+    message = 'Ningún CIC del pool resultó utilizable — contactá al administrador',
+  ) {
+    super(message, 'TV_NO_USABLE_CIC');
+    this.name = 'TvNoUsableCicError';
   }
 }
 

@@ -40,6 +40,8 @@ import {
   TvPoolPoisonedError,
   TvIdentityStampUnverifiedError,
   TvEmailOwnedByOtherError,
+  TvPoolUnavailableError,
+  TvNoUsableCicError,
 } from '@domain/errors/gigared';
 import { ClientNotFoundError } from '@domain/errors';
 import { ContractNotFoundError } from '@domain/errors/contractServices';
@@ -96,7 +98,12 @@ function sendUnhandled(res: Response, err: unknown, route: string): void {
 }
 
 /** Map a Gigared/domain error to its FROZEN wire-contract HTTP status + body. Returns false if unhandled. */
-function sendGigaredError(res: Response, err: unknown): boolean {
+/**
+ * gigared-tv-cic-reuse (T3.2) — EXPORTADA para poder testear el mapeo código→status
+ * directamente. Es el contrato de wire con el frontend; dejarlo sólo ejercitado de refilón
+ * end-to-end fue lo que dejó el branch de `TvPoolPoisonedError` sin test propio.
+ */
+export function sendGigaredError(res: Response, err: unknown): boolean {
   if (err instanceof GigaredNotConfiguredError) {
     res.status(503).json({ error: err.message, code: err.code });
     return true;
@@ -167,6 +174,19 @@ function sendGigaredError(res: Response, err: unknown): boolean {
   // NO_CIC_AVAILABLE. Sin test standalone del branch (ejercitado end-to-end en B3).
   if (err instanceof TvPoolPoisonedError) {
     res.status(422).json({ error: err.message, code: err.code, poisonedCount: err.poisonedCount });
+    return true;
+  }
+  // gigared-tv-cic-reuse — el LISTADO del pool falló contra el partner. Transitorio, no de
+  // datos → 503 reintentable. Antes esta llamada no estaba protegida y su NotFound salía
+  // como un 404 "Gigared account not found" en pleno ALTA (el bug del 2026-07-30).
+  if (err instanceof TvPoolUnavailableError) {
+    res.status(503).json({ error: err.message, code: err.code, detail: err.detail });
+    return true;
+  }
+  // gigared-tv-cic-reuse — se agotaron los candidatos del reintento acotado: ningún CIC del
+  // pool resultó utilizable. Condición de DATOS → 422, misma familia que TV_POOL_POISONED.
+  if (err instanceof TvNoUsableCicError) {
+    res.status(422).json({ error: err.message, code: err.code, attemptedCount: err.attemptedCount });
     return true;
   }
   // B1 (D-pool, part 2) — el readback post-stamp no confirmó la identidad recién estampada
