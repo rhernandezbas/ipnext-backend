@@ -12,13 +12,30 @@ import { join } from 'path';
  * self-service handlers only mount when their dep is truthy, so omitting one in
  * app.ts silently kills that endpoint with zero compile error).
  */
+/**
+ * L7 (fix wave) — regla del repo "tests sobre texto filtran comentarios": los
+ * matches corren sobre el source EFECTIVO (sin lineas de comentario). Antes un
+ * comentario que dijera `loginRateLimiter: ...` satisfacia el assert aunque el
+ * wiring real lo hubiera perdido. Solo se filtran lineas-comentario completas
+ * (`//`, `*`, `/*`) — no comments inline, para no romper strings con '//'.
+ */
+function stripCommentLines(src: string): string {
+  return src
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim();
+      return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
+    })
+    .join('\n');
+}
+
 describe('customer-portal-api composition root — Fase 7 wiring', () => {
   let appSrc: string;
   let configSrc: string;
 
   beforeAll(() => {
-    appSrc = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'http', 'app.ts'), 'utf8');
-    configSrc = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'config.ts'), 'utf8');
+    appSrc = stripCommentLines(readFileSync(join(__dirname, '..', '..', 'infrastructure', 'http', 'app.ts'), 'utf8'));
+    configSrc = stripCommentLines(readFileSync(join(__dirname, '..', '..', 'infrastructure', 'config.ts'), 'utf8'));
   });
 
   it('imports the portal routers', () => {
@@ -33,10 +50,12 @@ describe('customer-portal-api composition root — Fase 7 wiring', () => {
     expect(appSrc).toContain("from '../adapters/jwt/JwtPortalTokenService'");
   });
 
-  it('imports the portal middlewares + the 3 portal rate limiters', () => {
+  it('imports the portal middlewares + the 4 portal rate limiters', () => {
     expect(appSrc).toContain("from './middleware/portalAuthMiddleware'");
     expect(appSrc).toContain("from './middleware/portalKillSwitchMiddleware'");
     expect(appSrc).toContain('createPortalLoginRateLimiter');
+    // H3b (fix wave) — per-IP ceiling on /auth/login, wired explicitly.
+    expect(appSrc).toContain('createPortalLoginIpRateLimiter');
     expect(appSrc).toContain('createPortalGeneralRateLimiter');
     expect(appSrc).toContain('createPortalTicketCreateRateLimiter');
   });
@@ -83,9 +102,8 @@ describe('customer-portal-api composition root — Fase 7 wiring', () => {
     return appSrc.slice(start, end);
   };
 
-  it('mounts createPortalRouter at /api/portal', () => {
-    expect(appSrc).toContain("'/api/portal'");
-    expect(appSrc).toContain('createPortalRouter(');
+  it('mounts createPortalRouter at /api/portal (L7: mount + router en UN solo match — no dos toContain sueltos)', () => {
+    expect(appSrc).toMatch(/app\.use\(\s*'\/api\/portal'\s*,\s*createPortalRouter\(\{/);
   });
 
   it('createPortalRouter is wired with REAL use cases for auth (login/refresh/logout/change-password)', () => {
@@ -96,10 +114,11 @@ describe('customer-portal-api composition root — Fase 7 wiring', () => {
     expect(call).toMatch(/changePortalPassword\s*[,:]/);
   });
 
-  it('createPortalRouter is wired with the kill-switch + all 3 rate limiters (none omitted to a silent default)', () => {
+  it('createPortalRouter is wired with the kill-switch + all 4 rate limiters (none omitted to a silent default)', () => {
     const call = routerCall('createPortalRouter(');
     expect(call).toMatch(/killSwitch\s*[,:]/);
     expect(call).toMatch(/loginRateLimiter\s*[,:]/);
+    expect(call).toMatch(/\bloginIpRateLimiter\s*[,:]/);
     expect(call).toMatch(/generalRateLimiter\s*[,:]/);
     expect(call).toMatch(/ticketCreateRateLimiter\s*[,:]/);
   });
@@ -126,12 +145,11 @@ describe('customer-portal-api composition root — Fase 7 wiring', () => {
     expect(appSrc).toMatch(/createPortalKillSwitchMiddleware\(\s*settingsRepo\s*\)/);
   });
 
-  it('mounts createPortalAccountsAdminRouter at /api/admin/portal-accounts', () => {
-    expect(appSrc).toContain("'/api/admin/portal-accounts'");
-    expect(appSrc).toContain('createPortalAccountsAdminRouter(');
+  it('mounts createPortalAccountsAdminRouter at /api/admin/portal-accounts (L7: un solo match)', () => {
+    expect(appSrc).toMatch(/app\.use\(\s*'\/api\/admin\/portal-accounts'\s*,\s*createPortalAccountsAdminRouter\(\{/);
   });
 
-  it('createPortalAccountsAdminRouter is wired with the 5 admin use cases + authProvider + requirePortalManage', () => {
+  it('createPortalAccountsAdminRouter is wired with the 5 admin use cases + authProvider + sessionRepo + requirePortalManage', () => {
     const call = routerCall('createPortalAccountsAdminRouter(');
     expect(call).toMatch(/createPortalAccount\s*[,:]/);
     expect(call).toMatch(/regeneratePortalPassword\s*[,:]/);
@@ -139,6 +157,9 @@ describe('customer-portal-api composition root — Fase 7 wiring', () => {
     expect(call).toMatch(/deletePortalAccountAdmin\s*[,:]/);
     expect(call).toMatch(/listPortalAccounts\s*[,:]/);
     expect(call).toMatch(/authProvider\s*[,:]/);
+    // H1 (fix wave) — stateful staff auth: the shared staff SessionRepository
+    // must reach the router or a revoked session keeps operating the CRUD.
+    expect(call).toMatch(/\bsessionRepo\s*[,:]/);
     expect(call).toMatch(/requirePortalManage\s*[,:]/);
   });
 
@@ -154,12 +175,14 @@ describe('customer-portal-api composition root — Fase 7 wiring', () => {
     expect(call).toMatch(/config\.portal\.ticketAreaName/);
   });
 
-  it('DeleteMyPortalAccount is constructed with the portal account + session repos + hasher', () => {
+  it('DeleteMyPortalAccount is constructed with the portal account + session repos + hasher + DURABLE audit recorder (M5)', () => {
     const start = appSrc.indexOf('new DeleteMyPortalAccount(');
     expect(start).toBeGreaterThan(-1);
-    const end = appSrc.indexOf(')', start);
+    const end = appSrc.indexOf(');', start);
     const call = appSrc.slice(start, end);
     expect(call).toMatch(/passwordHasher/);
+    // M5 — el evento de borrado persiste en AuditEvent, no solo console.log.
+    expect(call).toMatch(/createPortalAccountDeletionAuditRecorder\(\s*auditEventRepo\s*\)/);
   });
 
   it('PortalLogin is constructed with a REAL PortalTokenService (JwtPortalTokenService), not a stub', () => {
@@ -179,9 +202,38 @@ describe('customer-portal-api composition root — Fase 7 wiring', () => {
       expect(requiredBlock).not.toContain('PORTAL_TICKET_AREA_NAME');
     });
 
-    it('has a default of "Atención al cliente" so a deploy without the env var still boots and resolves an area', () => {
+    it('H4a: default "Soporte" — un área que EXISTE en el seed canónico (20260704000000_ticket_area_catalog); el default viejo "Atención al cliente" no está en ningún seed', () => {
       expect(configSrc).toContain('PORTAL_TICKET_AREA_NAME');
-      expect(configSrc).toMatch(/portal:\s*\{[\s\S]{0,200}Atención al cliente/);
+      expect(configSrc).toMatch(/portal:\s*\{[\s\S]{0,400}\|\|\s*'Soporte'/);
+      // "Soporte" realmente existe en el seed canónico — el default no puede
+      // volver a apuntar a un área fantasma.
+      const seedSql = readFileSync(
+        join(__dirname, '..', '..', '..', 'prisma', 'migrations', '20260704000000_ticket_area_catalog', 'migration.sql'),
+        'utf8',
+      );
+      expect(seedSql).toContain("'Soporte'");
+    });
+
+    it('H4b: usa || (no ??) — el secret sin setear llega como string vacío y DEBE caer al default', () => {
+      const start = configSrc.indexOf('portal:');
+      const block = configSrc.slice(start, configSrc.indexOf('},', start));
+      expect(block).toMatch(/process\.env\.PORTAL_TICKET_AREA_NAME\s*\|\|/);
+      expect(block).not.toMatch(/process\.env\.PORTAL_TICKET_AREA_NAME\s*\?\?/);
+    });
+  });
+
+  describe('H4 — la perilla llega a prod (feature-sin-perilla guard)', () => {
+    it('H4b: deploy.yml forwardea PORTAL_TICKET_AREA_NAME al container (sin esta línea la env var jamás existe en prod)', () => {
+      const deployYml = readFileSync(
+        join(__dirname, '..', '..', '..', '.github', 'workflows', 'deploy.yml'),
+        'utf8',
+      );
+      expect(deployYml).toMatch(/-e PORTAL_TICKET_AREA_NAME="\$\{\{ secrets\.PORTAL_TICKET_AREA_NAME \}\}"/);
+    });
+
+    it('H4c: env.example documenta PORTAL_TICKET_AREA_NAME', () => {
+      const envExample = readFileSync(join(__dirname, '..', '..', '..', 'env.example'), 'utf8');
+      expect(envExample).toContain('PORTAL_TICKET_AREA_NAME');
     });
   });
 });

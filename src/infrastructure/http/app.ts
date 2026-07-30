@@ -7,6 +7,7 @@ import {
   createMessagingSendRateLimiter,
   createExternalWriteRateLimiter,
   createPortalLoginRateLimiter,
+  createPortalLoginIpRateLimiter,
   createPortalGeneralRateLimiter,
   createPortalTicketCreateRateLimiter,
 } from './middleware/rateLimiters';
@@ -956,6 +957,7 @@ import { createPortalRouter } from './routes/portal.routes';
 import { createPortalAccountsAdminRouter } from './routes/portalAccountsAdmin.routes';
 import { createPortalAuthMiddleware } from './middleware/portalAuthMiddleware';
 import { createPortalKillSwitchMiddleware } from './middleware/portalKillSwitchMiddleware';
+import { createPortalAccountDeletionAuditRecorder } from '../audit/portalAccountDeletionAudit';
 import { PrismaPortalAccountRepository } from '../adapters/prisma/PrismaPortalAccountRepository';
 import { PrismaPortalSessionRepository } from '../adapters/prisma/PrismaPortalSessionRepository';
 import { PrismaClientPortalLookup } from '../adapters/prisma/PrismaClientPortalLookup';
@@ -2250,8 +2252,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getRadiusConfig, updateRadiusConfig,
     findFreeIp,
   ));
+  // customer-portal-api fix wave C2 — /api/settings era el UNICO mount admin sin
+  // auth, y PUT /api/settings/client-portal es el plano de control del
+  // kill-switch del portal (un anonimo podia revertirlo o apagar el portal).
+  // Ningun consumidor legitimo no-autenticado encontrado (los route-tests montan
+  // el router directo, sin pasar por aca) — se protege el router ENTERO con el
+  // mismo patron stateful de los demas mounts admin.
   app.use(
     '/api/settings',
+    createAuthMiddleware(authAdapter, sessionRepo),
     createSettingsRouter(
       getSystemSettings,
       updateSystemSettings,
@@ -3604,7 +3613,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const portalLogin = new PortalLogin(portalAccountRepo, portalSessionRepo, passwordHasher, portalTokenService);
   const refreshPortalSession = new RefreshPortalSession(portalAccountRepo, portalSessionRepo, portalTokenService);
   const logoutPortal = new LogoutPortal(portalSessionRepo);
-  const changePortalPassword = new ChangePortalPassword(portalAccountRepo, passwordHasher);
+  // M1 (fix wave): con el session repo — el cambio de password revoca TODAS
+  // las sesiones de la cuenta (el refresh robado muere con la password vieja).
+  const changePortalPassword = new ChangePortalPassword(portalAccountRepo, passwordHasher, portalSessionRepo);
   const getPortalMe = new GetPortalMe(customerAdapter);
   const listPortalInvoices = new ListPortalInvoices(customerAdapter);
   const listPortalPlans = new ListPortalPlans(customerAdapter);
@@ -3615,14 +3626,23 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // es CONFIGURABLE (config.portal.ticketAreaName, PORTAL_TICKET_AREA_NAME env,
   // opt-in), nunca el literal hardcodeado del use case.
   const createPortalTicket = new CreatePortalTicket(ticketAdapter, ticketAreaRepo, config.portal.ticketAreaName);
-  const deleteMyPortalAccount = new DeleteMyPortalAccount(portalAccountRepo, portalSessionRepo, passwordHasher);
+  // M5 (fix wave): el evento de auditoría del borrado se PERSISTE en AuditEvent
+  // (durable, GET /api/admin/audit-events) además del log estructurado — el
+  // default del use case era solo console.log (moría con la rotación de logs).
+  const deleteMyPortalAccount = new DeleteMyPortalAccount(
+    portalAccountRepo, portalSessionRepo, passwordHasher,
+    createPortalAccountDeletionAuditRecorder(auditEventRepo),
+  );
 
   const portalAuthMw = createPortalAuthMiddleware(portalTokenService, portalAccountRepo);
   const portalKillSwitchMw = createPortalKillSwitchMiddleware(settingsRepo);
-  // W6: se instancian los 3 rate limiters EXPLICITAMENTE (aunque el router los
+  // W6: se instancian los 4 rate limiters EXPLICITAMENTE (aunque el router los
   // defaultea si se omiten) — el wiring queda pineado por el composition-root
   // test, nunca dependiente de un default silencioso.
   const portalLoginRateLimiter = createPortalLoginRateLimiter();
+  // H3b (fix wave): techo por IP sola además del (IP+dni) — corta el barrido
+  // de enumeración de DNIs que estrenaba un bucket nuevo por request.
+  const portalLoginIpRateLimiter = createPortalLoginIpRateLimiter();
   const portalGeneralRateLimiter = createPortalGeneralRateLimiter();
   const portalTicketCreateRateLimiter = createPortalTicketCreateRateLimiter();
 
@@ -3634,6 +3654,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     portalAuthMiddleware: portalAuthMw,
     killSwitch: portalKillSwitchMw,
     loginRateLimiter: portalLoginRateLimiter,
+    loginIpRateLimiter: portalLoginIpRateLimiter,
     generalRateLimiter: portalGeneralRateLimiter,
     getPortalMe,
     listPortalInvoices,
@@ -3663,6 +3684,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     deletePortalAccountAdmin,
     listPortalAccounts,
     authProvider: authAdapter,
+    // H1 (fix wave) — stateful staff auth: sin el sessionRepo una sesión
+    // revocada seguía operando el CRUD hasta que expirara el JWT.
+    sessionRepo,
     requirePortalManage: requirePerm('portal', 'manage'),
   }));
 
