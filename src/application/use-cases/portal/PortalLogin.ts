@@ -8,6 +8,15 @@ import { generatePortalRefreshToken, hashPortalRefreshToken } from '@domain/serv
 /** portal-auth spec: refresh session absolute lifetime — 30 days. */
 export const PORTAL_REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * H3a (fix wave) — timing-equalizer: hash bcrypt FIJO (cost 10, generado
+ * offline sobre un plaintext descartado) contra el que se corre un compare
+ * DUMMY en las ramas que no llegan al hash real (DNI inexistente / cuenta
+ * disabled). Sin esto, esas ramas respondían sin pagar el costo bcrypt y un
+ * atacante podía enumerar DNIs midiendo la latencia del 401.
+ */
+export const PORTAL_DUMMY_PASSWORD_HASH = '$2b$10$rgHVdMebNFgHpW2718SNWeGwiuHzAXjEAXovOsOT.xvRXGnn12qCK';
+
 export interface PortalLoginInput {
   dni: string;
   password: string;
@@ -20,14 +29,16 @@ export interface PortalLoginResult {
 }
 
 /**
- * PortalLogin — customer-portal-api (Fase 2, task 2.2).
+ * PortalLogin — customer-portal-api (Fase 2, task 2.2 + fix wave H3a).
  *
  * portal-auth spec "Login por DNI + password": DNI inexistente, password
  * incorrecta, y cuenta disabled TODOS lanzan la MISMA InvalidPortalCredentialsError
- * (anti-enumeration) — el orden de chequeos (existencia → status → password) sigue
- * el mismo criterio que LoginRbacUser (rechazar disabled ANTES del bcrypt.compare
- * evita el costo de hashing en cuentas que nunca van a pasar, y evita filtrar
- * "activo vs disabled" por timing).
+ * (anti-enumeration). H3a: el mensaje idéntico NO alcanza — las ramas "no
+ * existe" y "disabled" respondían sin pagar el bcrypt.compare, filtrando la
+ * existencia del DNI por TIMING. Por eso esas ramas ejecutan un compare DUMMY
+ * contra `PORTAL_DUMMY_PASSWORD_HASH` (mismo costo, resultado descartado)
+ * antes de lanzar el mismo error. Total: SIEMPRE exactamente un compare por
+ * intento de login, pase lo que pase.
  */
 export class PortalLogin {
   constructor(
@@ -42,10 +53,15 @@ export class PortalLogin {
   async execute(input: PortalLoginInput): Promise<PortalLoginResult> {
     const account = await this.accounts.findByDni(input.dni);
     if (!account) {
+      // H3a — dummy compare: iguala el costo con la rama de password real.
+      await this.hasher.compare(input.password, PORTAL_DUMMY_PASSWORD_HASH);
       throw new InvalidPortalCredentialsError();
     }
 
     if (account.status !== 'active') {
+      // H3a — dummy compare contra el hash FIJO (jamás contra el hash real de
+      // una cuenta disabled: su password no debe poder "acertarse" ni apagada).
+      await this.hasher.compare(input.password, PORTAL_DUMMY_PASSWORD_HASH);
       throw new InvalidPortalCredentialsError();
     }
 

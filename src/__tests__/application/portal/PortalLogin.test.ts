@@ -81,6 +81,44 @@ describe('PortalLogin', () => {
     await expect(useCase.execute({ dni: '30111222', password: 'Secret123' })).rejects.toThrow(InvalidPortalCredentialsError);
   });
 
+  describe('H3a (fix wave) — costo constante: dummy bcrypt compare en las ramas que no llegan al hash real', () => {
+    it('DNI inexistente: hasher.compare se ejecuta IGUAL (contra el hash dummy) antes del 401 genérico', async () => {
+      const { useCase, hasher } = makeUseCase();
+      const compareSpy = jest.spyOn(hasher, 'compare');
+
+      await expect(useCase.execute({ dni: '99999999', password: 'whatever' })).rejects.toThrow(InvalidPortalCredentialsError);
+
+      // Sin el dummy compare, esta rama respondía SIN costo bcrypt — un
+      // atacante distinguía "DNI existe" de "no existe" por timing.
+      expect(compareSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('cuenta disabled: hasher.compare se ejecuta IGUAL (contra el hash dummy) antes del 401 genérico', async () => {
+      const { useCase, accounts, hasher } = makeUseCase();
+      const account = await accounts.create({ clientId: 'client-1', dni: '30111222', passwordHash: await hasher.hash('Secret123') });
+      await accounts.update(account.id, { status: 'disabled' });
+      const compareSpy = jest.spyOn(hasher, 'compare');
+
+      await expect(useCase.execute({ dni: '30111222', password: 'Secret123' })).rejects.toThrow(InvalidPortalCredentialsError);
+
+      expect(compareSpy).toHaveBeenCalledTimes(1);
+      // El compare dummy JAMAS corre contra el hash real de la cuenta disabled
+      // (no debe poder "acertar" una password en una cuenta apagada).
+      expect(compareSpy).not.toHaveBeenCalledWith('Secret123', account.passwordHash);
+    });
+
+    it('login exitoso: UN solo compare (el real) — el dummy no duplica el costo del camino feliz', async () => {
+      const { useCase, accounts, hasher } = makeUseCase();
+      const account = await accounts.create({ clientId: 'client-1', dni: '30111222', passwordHash: await hasher.hash('Secret123') });
+      const compareSpy = jest.spyOn(hasher, 'compare');
+
+      await useCase.execute({ dni: '30111222', password: 'Secret123' });
+
+      expect(compareSpy).toHaveBeenCalledTimes(1);
+      expect(compareSpy).toHaveBeenCalledWith('Secret123', account.passwordHash);
+    });
+  });
+
   it('mustChangePassword reflects the account flag (false once already changed)', async () => {
     const { useCase, accounts, hasher } = makeUseCase();
     const account = await accounts.create({ clientId: 'client-1', dni: '30111222', passwordHash: await hasher.hash('Secret123') });

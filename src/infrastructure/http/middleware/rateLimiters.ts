@@ -201,9 +201,46 @@ export function createPortalLoginRateLimiter(opts: PortalLoginRateLimitOptions =
     keyGenerator: (req: Request) => {
       const ipKey = ipKeyGenerator(req.ip ?? '');
       const body = req.body as { dni?: unknown } | undefined;
-      const dni = typeof body?.dni === 'string' ? body.dni.trim() : '';
+      // H3c (fix wave): trim + TRUNCAR a 32 chars — un DNI real jamás llega ahí,
+      // pero un body malicioso de megabytes inflaba la key (y la memoria del
+      // store) a voluntad del atacante.
+      const dni = typeof body?.dni === 'string' ? body.dni.trim().slice(0, 32) : '';
       return `${ipKey}:${dni}`;
     },
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({
+        error: 'Demasiados intentos de inicio de sesión. Probá de nuevo más tarde.',
+        code: 'RATE_LIMITED',
+      });
+    },
+  });
+}
+
+/**
+ * customer-portal-api (fix wave H3b) — techo POR IP SOLA para
+ * `POST /api/portal/auth/login`, montado ADEMÁS del limiter (IP+dni) de arriba.
+ * El keying (IP+dni) evita el problema del NAT (`login-ratelimit-nat`) pero
+ * deja un agujero: un atacante que rota el dni en cada request estrena un
+ * bucket por intento — enumeración de DNIs sin techo real. Este limiter cierra
+ * ese barrido: 30 intentos de login por IP cada 15 min, sin importar el dni.
+ * Más laxo que el per-DNI (10) para no morder a un NAT chico legítimo; un
+ * humano no intenta loguearse 30 veces en 15 min.
+ */
+export interface PortalLoginIpRateLimitOptions {
+  windowMs?: number;
+  limit?: number;
+}
+
+const DEFAULT_PORTAL_LOGIN_IP_WINDOW_MS = 15 * 60 * 1000;
+const DEFAULT_PORTAL_LOGIN_IP_LIMIT = 30;
+
+export function createPortalLoginIpRateLimiter(opts: PortalLoginIpRateLimitOptions = {}): RequestHandler {
+  return rateLimit({
+    windowMs: opts.windowMs ?? DEFAULT_PORTAL_LOGIN_IP_WINDOW_MS,
+    limit: opts.limit ?? DEFAULT_PORTAL_LOGIN_IP_LIMIT,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request) => `ip:${ipKeyGenerator(req.ip ?? '')}`,
     handler: (_req: Request, res: Response) => {
       res.status(429).json({
         error: 'Demasiados intentos de inicio de sesión. Probá de nuevo más tarde.',
