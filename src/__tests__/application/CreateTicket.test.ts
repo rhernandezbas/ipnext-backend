@@ -30,6 +30,7 @@ function makeRepo(overrides?: Partial<TicketRepository>): TicketRepository {
   return {
     list: jest.fn(),
     getById: jest.fn(),
+    getBySequenceNumber: jest.fn(),
     getStats: jest.fn(),
     create: jest.fn().mockResolvedValue(mockTicket),
     update: jest.fn(),

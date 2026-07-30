@@ -53,6 +53,7 @@ describe('CreateTicket use case', () => {
     const badRepo = {
       list: jest.fn(),
       getById: jest.fn(),
+      getBySequenceNumber: jest.fn(),
       getStats: jest.fn(),
       create: jest.fn().mockRejectedValue(new Error('DB error')),
       update: jest.fn(),

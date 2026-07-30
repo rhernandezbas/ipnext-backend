@@ -1,5 +1,5 @@
 import { Ticket, TicketStats, TicketStatus, TicketPriority } from '../entities/ticket';
-import { PaginatedResult, PaginatedQuery } from '../../application/dto/pagination';
+import { PaginatedResult, PaginatedQuery } from '../entities/pagination';
 
 export interface ListTicketsQuery extends PaginatedQuery {
   search?: string;
@@ -63,6 +63,13 @@ export interface UpdateTicketData {
 export interface TicketRepository {
   list(query: ListTicketsQuery): Promise<PaginatedResult<Ticket>>;
   getById(id: string): Promise<Ticket | null>;
+  /**
+   * customer-portal-api (fix wave C3) — lookup by the public display number
+   * (`sequenceNumber`, unique). The portal DTOs deliberately never expose the
+   * internal UUID, so the portal detail endpoint resolves by this number; the
+   * caller (GetPortalTicket) enforces client ownership on the result.
+   */
+  getBySequenceNumber(sequenceNumber: number): Promise<Ticket | null>;
   getStats(): Promise<TicketStats>;
   create(data: CreateTicketData): Promise<Ticket>;
   update(id: string, data: UpdateTicketData): Promise<Ticket | null>;

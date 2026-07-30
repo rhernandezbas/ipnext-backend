@@ -179,6 +179,19 @@ export class PrismaTicketRepository implements TicketRepository {
     return row ? toTicket(row) : null;
   }
 
+  async getBySequenceNumber(sequenceNumber: number): Promise<Ticket | null> {
+    // C3 (customer-portal-api) — same include shape as getById; sequenceNumber
+    // is @unique in the schema so findUnique applies.
+    const row = await (prisma as any).ticket.findUnique({
+      where: { sequenceNumber },
+      include: {
+        ...INCLUDE,
+        tasks: { select: { id: true, sequenceNumber: true, title: true } },
+      },
+    });
+    return row ? toTicket(row) : null;
+  }
+
   async getStats(): Promise<TicketStats> {
     const [totalOpen, totalPending, totalClosed, byLow, byMedium, byHigh] = await (
       prisma as any

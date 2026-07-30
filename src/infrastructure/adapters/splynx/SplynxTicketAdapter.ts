@@ -73,6 +73,11 @@ export class SplynxTicketAdapter implements TicketRepository {
     return null;
   }
 
+  async getBySequenceNumber(_sequenceNumber: number): Promise<Ticket | null> {
+    // Stub — Splynx decabled (C3: mirror of getById; Splynx has no sequenceNumber concept).
+    return null;
+  }
+
   async getStats(): Promise<TicketStats> {
     const raw = await this.client.get<Record<string, unknown>[]>('/api/2.0/admin/support/ticket', { status: 'open', itemsPerPage: 1000 });
     const tickets = Array.isArray(raw) ? raw : [];

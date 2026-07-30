@@ -167,6 +167,10 @@ export class InMemoryTicketRepository implements TicketRepository {
     return this.tickets.find((t) => t.id === id) ?? null;
   }
 
+  async getBySequenceNumber(sequenceNumber: number): Promise<Ticket | null> {
+    return this.tickets.find((t) => t.sequenceNumber === sequenceNumber) ?? null;
+  }
+
   async getStats(): Promise<TicketStats> {
     const totalOpen = this.tickets.filter((t) => t.status === 'open').length;
     const totalPending = this.tickets.filter((t) => t.status === 'pending').length;
