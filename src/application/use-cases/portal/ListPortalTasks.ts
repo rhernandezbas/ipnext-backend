@@ -18,7 +18,7 @@ export class ListPortalTasks {
     const tasks = await this.scheduling.listTasks({ customerId: clientId });
     return tasks.map((t) => ({
       scheduledDate: t.startDate,
-      franja: derivePortalTaskTimeSlot(t.startDate),
+      timeSlot: derivePortalTaskTimeSlot(t.startDate),
       publicStatus: mapTaskStageToPortalStatus({
         stageCategory: t.stageCategory,
         generalStatus: t.generalStatus,

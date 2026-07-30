@@ -53,7 +53,6 @@ describe('ListPortalPlans — customer-portal-api Fase 4.3', () => {
 
     expect(result).toEqual([
       {
-        contractId: 'contract-1',
         plan: '50 Mb Simetrico',
         type: 'internet',
         status: 'active',
@@ -63,7 +62,7 @@ describe('ListPortalPlans — customer-portal-api Fase 4.3', () => {
     ]);
   });
 
-  it('no expone campos internos (vendedor, technology, gps, ip)', async () => {
+  it('no expone campos internos (vendedor, technology, gps, ip, contractId — L1: fuera del allow-list del spec)', async () => {
     const repo = new FakeCustomerRepository();
     repo.seedContracts('client-a', [makeContract({ id: 'contract-1' })]);
     const useCase = new ListPortalPlans(repo as unknown as CustomerRepository);
@@ -76,6 +75,9 @@ describe('ListPortalPlans — customer-portal-api Fase 4.3', () => {
     expect(dto['lat']).toBeUndefined();
     expect(dto['lng']).toBeUndefined();
     expect(dto['ip']).toBeUndefined();
+    // L1 (fix wave) — el id interno del contrato no viaja al portal.
+    expect(dto['contractId']).toBeUndefined();
+    expect(dto['id']).toBeUndefined();
   });
 
   it('anti-IDOR: dos clientes seedeados, cada llamada ve SOLO sus propios contratos', async () => {

@@ -25,6 +25,8 @@ import { ListPortalAccounts } from '@application/use-cases/portal-admin/ListPort
 
 import { InMemoryPortalAccountRepository } from '@infrastructure/adapters/in-memory/InMemoryPortalAccountRepository';
 import { InMemoryPortalSessionRepository } from '@infrastructure/adapters/in-memory/InMemoryPortalSessionRepository';
+import { InMemorySessionRepository } from '@infrastructure/adapters/in-memory/InMemorySessionRepository';
+import { hashToken } from '@infrastructure/auth/sessionToken';
 import { InMemoryClientPortalLookup } from '@infrastructure/adapters/in-memory/InMemoryClientPortalLookup';
 import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMemoryPasswordHasher';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
@@ -86,7 +88,7 @@ class SeedableRbacUserRepo extends InMemoryRbacUserRepository {
 
 const ALLOW: RequestHandler = (_req, _res, next) => next();
 
-function buildStack(opts: { requirePortalManage?: RequestHandler } = {}) {
+function buildStack(opts: { requirePortalManage?: RequestHandler; seedStaffSession?: boolean } = {}) {
   const accounts = new InMemoryPortalAccountRepository();
   const sessions = new InMemoryPortalSessionRepository();
   const clients = new InMemoryClientPortalLookup();
@@ -101,6 +103,15 @@ function buildStack(opts: { requirePortalManage?: RequestHandler } = {}) {
   const authProvider = new FakeAuthProvider();
   const requirePortalManage = opts.requirePortalManage ?? ALLOW;
 
+  // H1 (fix wave) — the router auth is STATEFUL now: the staff session row must
+  // exist and be alive in the staff SessionRepository, same as every other
+  // admin mount. Seeded by default so the CRUD-logic tests keep working; the
+  // revoked-session describe opts out.
+  const staffSessions = new InMemorySessionRepository();
+  if (opts.seedStaffSession !== false) {
+    staffSessions.seed({ tokenHash: hashToken('fake'), rbacUserId: 'staff-1', actorLogin: 'staff' });
+  }
+
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
@@ -113,11 +124,12 @@ function buildStack(opts: { requirePortalManage?: RequestHandler } = {}) {
       deletePortalAccountAdmin,
       listPortalAccounts,
       authProvider,
+      sessionRepo: staffSessions,
       requirePortalManage,
     }),
   );
 
-  return { app, accounts, sessions, clients, hasher };
+  return { app, accounts, sessions, clients, hasher, staffSessions };
 }
 
 /**
@@ -153,6 +165,9 @@ function buildRealAuthStack() {
       deletePortalAccountAdmin,
       listPortalAccounts,
       authProvider,
+      // H1 — empty session store: these tests exercise JWT-level rejection
+      // (aud=portal), which 401s BEFORE the session lookup.
+      sessionRepo: new InMemorySessionRepository(),
       requirePortalManage: ALLOW,
     }),
   );
@@ -239,6 +254,25 @@ describe('portalAccountsAdmin.routes', () => {
   });
 
   describe('GET /api/admin/portal-accounts', () => {
+    it('M2 (fix wave): ?page=abc → 200 con default page=1 (nunca NaN al repo, nunca 500)', async () => {
+      const { app, clients } = buildStack();
+      clients.seed('client-1', 'Cliente Uno', { documento: '30111222' });
+      await request(app).post('/api/admin/portal-accounts').set('Cookie', 'auth_token=fake').send({ clientId: 'client-1' });
+
+      const res = await request(app).get('/api/admin/portal-accounts?page=abc&limit=zz').set('Cookie', 'auth_token=fake');
+      expect(res.status).toBe(200);
+      expect(res.body.page).toBe(1);
+      expect(res.body.limit).toBe(25);
+      expect(res.body.data).toHaveLength(1);
+    });
+
+    it('M2 (fix wave): ?limit=999999 → cap 100', async () => {
+      const { app } = buildStack();
+      const res = await request(app).get('/api/admin/portal-accounts?limit=999999').set('Cookie', 'auth_token=fake');
+      expect(res.status).toBe(200);
+      expect(res.body.limit).toBe(100);
+    });
+
     it('200 lista paginada con nombre del cliente, dni, status, lastLoginAt', async () => {
       const { app, clients } = buildStack();
       clients.seed('client-1', 'Ronald Hernández', { documento: '17883799' });
@@ -407,12 +441,23 @@ describe('portalAccountsAdmin.routes', () => {
         const r = express.Router();
         r.post('/login', async (req: Request, res: Response) => {
           const { username, password } = req.body as { username: string; password: string };
-          const { cookieValue, cookieOptions } = await authProvider.login({ username, password });
+          const { user: loggedIn, cookieValue, cookieOptions } = await authProvider.login({ username, password });
+          await staffSessions.create({
+            rbacUserId: loggedIn.id,
+            actorLogin: username,
+            tokenHash: hashToken(cookieValue),
+            ip: null,
+            userAgent: null,
+          });
           res.cookie('auth_token', cookieValue, cookieOptions);
           res.status(200).json({ ok: true });
         });
         return r;
       })());
+      // H1 — stateful auth: the login route below must also materialize the
+      // staff session row (like the real /api/auth/login does) or every request
+      // would 401 before reaching requirePermission.
+      const staffSessions = new InMemorySessionRepository();
       app.use(
         '/api/admin/portal-accounts',
         createPortalAccountsAdminRouter({
@@ -430,6 +475,7 @@ describe('portalAccountsAdmin.routes', () => {
           deletePortalAccountAdmin: new DeletePortalAccountAdmin(new InMemoryPortalAccountRepository(), new InMemoryPortalSessionRepository()),
           listPortalAccounts: new ListPortalAccounts(new InMemoryPortalAccountRepository(), new InMemoryClientPortalLookup()),
           authProvider,
+          sessionRepo: staffSessions,
           requirePortalManage,
         }),
       );
@@ -439,6 +485,54 @@ describe('portalAccountsAdmin.routes', () => {
 
       const res = await request(app).get('/api/admin/portal-accounts').set('Cookie', cookie);
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('L6 (fix wave) — los catch-500 loguean el error antes de responder', () => {
+    it('un error inesperado en el list → 500 Y console.error con el error real', async () => {
+      const { app, accounts } = buildStack();
+      const boom = new Error('db exploded');
+      jest.spyOn(accounts, 'list').mockRejectedValue(boom);
+
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        const res = await request(app).get('/api/admin/portal-accounts').set('Cookie', 'auth_token=fake');
+        expect(res.status).toBe(500);
+        expect(res.body.code).toBe('INTERNAL_ERROR');
+        const logged = errorSpy.mock.calls.some((call) => call.includes(boom));
+        expect(logged).toBe(true);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('H1 (fix wave) — auth STATEFUL: sesión de staff revocada => 401 en TODO el CRUD', () => {
+    it('401 en las 5 rutas cuando la sesión no existe en el SessionRepository (revocada/expirada)', async () => {
+      // seedStaffSession:false => el provider ACEPTA el token pero no hay fila
+      // de sesión viva — exactamente el estado post-revocación.
+      const { app } = buildStack({ seedStaffSession: false });
+      const cookie = 'auth_token=fake';
+
+      expect((await request(app).get('/api/admin/portal-accounts').set('Cookie', cookie)).status).toBe(401);
+      expect((await request(app).post('/api/admin/portal-accounts').set('Cookie', cookie).send({ clientId: 'c1' })).status).toBe(401);
+      expect((await request(app).patch('/api/admin/portal-accounts/x').set('Cookie', cookie).send({ status: 'disabled' })).status).toBe(401);
+      expect((await request(app).post('/api/admin/portal-accounts/x/regenerate-password').set('Cookie', cookie)).status).toBe(401);
+      expect((await request(app).delete('/api/admin/portal-accounts/x').set('Cookie', cookie)).status).toBe(401);
+    });
+
+    it('401 tras REVOCAR una sesión que venía operando (el token deja de servir a mitad de vida)', async () => {
+      const { app, staffSessions } = buildStack();
+      const cookie = 'auth_token=fake';
+
+      const before = await request(app).get('/api/admin/portal-accounts').set('Cookie', cookie);
+      expect(before.status).toBe(200);
+
+      const revoked = await staffSessions.revokeAllForUser('staff-1');
+      expect(revoked).toBe(1);
+
+      const after = await request(app).get('/api/admin/portal-accounts').set('Cookie', cookie);
+      expect(after.status).toBe(401);
     });
   });
 

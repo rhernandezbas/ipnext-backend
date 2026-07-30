@@ -10,7 +10,7 @@ import jwt from 'jsonwebtoken';
 import { createPortalRouter } from '@infrastructure/http/routes/portal.routes';
 import { createPortalAuthMiddleware } from '@infrastructure/http/middleware/portalAuthMiddleware';
 import { createPortalKillSwitchMiddleware } from '@infrastructure/http/middleware/portalKillSwitchMiddleware';
-import { createPortalLoginRateLimiter, createPortalGeneralRateLimiter } from '@infrastructure/http/middleware/rateLimiters';
+import { createPortalLoginRateLimiter, createPortalLoginIpRateLimiter, createPortalGeneralRateLimiter } from '@infrastructure/http/middleware/rateLimiters';
 import { createAuthMiddleware } from '@infrastructure/http/middleware/authMiddleware';
 
 import { PortalLogin } from '@application/use-cases/portal/PortalLogin';
@@ -39,7 +39,7 @@ function buildStack() {
   const portalLogin = new PortalLogin(accounts, sessions, hasher, tokenService);
   const refreshPortalSession = new RefreshPortalSession(accounts, sessions, tokenService);
   const logoutPortal = new LogoutPortal(sessions);
-  const changePortalPassword = new ChangePortalPassword(accounts, hasher);
+  const changePortalPassword = new ChangePortalPassword(accounts, hasher, sessions);
 
   const portalAuthMiddleware = createPortalAuthMiddleware(tokenService, accounts);
   const killSwitch = createPortalKillSwitchMiddleware(settingsRepo, 30_000);
@@ -164,6 +164,15 @@ describe('portal.routes — portal-auth spec scenarios', () => {
     // t2 (the legit rotated session) must also be dead — proves "TODAS las sesiones".
     const stillUsable = await request(app).post('/api/portal/auth/refresh').send({ refreshToken: t2 });
     expect(stillUsable.status).toBe(401);
+
+    // L3 (fix wave): el body del 401 es INDISTINGUIBLE entre "reusado" e
+    // "inválido/expirado" — un atacante no puede confirmar que un refresh
+    // robado FUE válido alguna vez. La distinción vive solo en logs server-side.
+    const invalid = await request(app).post('/api/portal/auth/refresh').send({ refreshToken: 'never-existed' });
+    expect(invalid.status).toBe(401);
+    expect(reused.body).toEqual(invalid.body);
+    expect(stillUsable.body).toEqual(invalid.body);
+    expect(reused.body.code).toBe('INVALID_PORTAL_REFRESH_TOKEN');
     void sessions;
   });
 
@@ -206,6 +215,74 @@ describe('portal.routes — portal-auth spec scenarios', () => {
     const over = await hit(); // limiter configured to 3/window in buildStack()
     expect(over.status).toBe(429);
     expect(over.body.code).toBe('RATE_LIMITED');
+  });
+
+  it('H3b (fix wave): barrido de enumeración — DNIs DISTINTOS desde la misma IP topan con el limiter por-IP del login → 429', async () => {
+    const accounts = new InMemoryPortalAccountRepository();
+    const sessions = new InMemoryPortalSessionRepository();
+    const hasher = new InMemoryPasswordHasher();
+    const settingsRepo = new InMemorySettingsRepository();
+    const tokenService = new JwtPortalTokenService(TEST_SECRET);
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api/portal',
+      createPortalRouter({
+        portalLogin: new PortalLogin(accounts, sessions, hasher, tokenService),
+        refreshPortalSession: new RefreshPortalSession(accounts, sessions, tokenService),
+        logoutPortal: new LogoutPortal(sessions),
+        changePortalPassword: new ChangePortalPassword(accounts, hasher, sessions),
+        portalAuthMiddleware: createPortalAuthMiddleware(tokenService, accounts),
+        killSwitch: createPortalKillSwitchMiddleware(settingsRepo, 30_000),
+        // ip:dni generoso a propósito: lo que corta el barrido es el techo por IP.
+        loginRateLimiter: createPortalLoginRateLimiter({ windowMs: 60_000, limit: 100 }),
+        loginIpRateLimiter: createPortalLoginIpRateLimiter({ windowMs: 60_000, limit: 2 }),
+        generalRateLimiter: createPortalGeneralRateLimiter({ windowMs: 60_000, limit: 100 }),
+      }),
+    );
+
+    const hit = (dni: string) => request(app).post('/api/portal/auth/login').send({ dni, password: 'x' });
+    expect((await hit('10000001')).status).toBe(401);
+    expect((await hit('10000002')).status).toBe(401);
+    const over = await hit('10000003');
+    expect(over.status).toBe(429);
+    expect(over.body.code).toBe('RATE_LIMITED');
+  });
+
+  it('L6 (fix wave): un error inesperado en login → 500 Y el error se LOGUEA (no se traga — un bug de Prisma en prod sería invisible)', async () => {
+    const { app: _ignored, accounts, sessions, hasher, settingsRepo, tokenService } = buildStack();
+    void _ignored;
+    const boom = new Error('prisma exploded');
+    const brokenLogin = { execute: jest.fn().mockRejectedValue(boom) } as unknown as PortalLogin;
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api/portal',
+      createPortalRouter({
+        portalLogin: brokenLogin,
+        refreshPortalSession: new RefreshPortalSession(accounts, sessions, tokenService),
+        logoutPortal: new LogoutPortal(sessions),
+        changePortalPassword: new ChangePortalPassword(accounts, hasher, sessions),
+        portalAuthMiddleware: createPortalAuthMiddleware(tokenService, accounts),
+        killSwitch: createPortalKillSwitchMiddleware(settingsRepo, 30_000),
+        loginRateLimiter: createPortalLoginRateLimiter({ windowMs: 60_000, limit: 100 }),
+        generalRateLimiter: createPortalGeneralRateLimiter({ windowMs: 60_000, limit: 100 }),
+      }),
+    );
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const res = await request(app).post('/api/portal/auth/login').send({ dni: '30111222', password: 'x' });
+      expect(res.status).toBe(500);
+      expect(res.body.code).toBe('INTERNAL_ERROR');
+      expect(errorSpy).toHaveBeenCalled();
+      const logged = errorSpy.mock.calls.some((call) => call.includes(boom));
+      expect(logged).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('Portal apagado: enabled=false → 503 PORTAL_DISABLED en TODO /api/portal/*, incluido login', async () => {

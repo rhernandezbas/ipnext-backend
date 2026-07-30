@@ -50,6 +50,27 @@ describe('JwtPortalTokenService', () => {
       expect(service.verifyAccessToken(staffToken)).toBeNull();
     });
 
+    it('L4 (fix wave): returns null for a token signed with a DIFFERENT HMAC alg (HS512, same secret) — algorithms pinned to HS256', () => {
+      const service = new JwtPortalTokenService(TEST_SECRET);
+      // Mismo secret, mismos claims, otro algoritmo: sin el pin de `algorithms`
+      // esto verificaba OK (jsonwebtoken acepta cualquier HS* por default).
+      const hs512 = jwt.sign({ sub: 'acc-1', clientId: 'client-1' }, TEST_SECRET, {
+        algorithm: 'HS512',
+        expiresIn: 3600,
+        audience: 'portal',
+      });
+      expect(service.verifyAccessToken(hs512)).toBeNull();
+    });
+
+    it('L4 (fix wave): returns null for an unsigned alg=none token', () => {
+      const service = new JwtPortalTokenService(TEST_SECRET);
+      const none = jwt.sign({ sub: 'acc-1', clientId: 'client-1', aud: 'portal' }, '', {
+        algorithm: 'none',
+        expiresIn: 3600,
+      });
+      expect(service.verifyAccessToken(none)).toBeNull();
+    });
+
     it('returns null for an expired token', () => {
       const service = new JwtPortalTokenService(TEST_SECRET);
       const expired = jwt.sign({ sub: 'acc-1', clientId: 'client-1', aud: 'portal' }, TEST_SECRET, { expiresIn: -1 });

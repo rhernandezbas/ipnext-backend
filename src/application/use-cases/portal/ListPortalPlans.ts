@@ -13,8 +13,9 @@ export class ListPortalPlans {
 
   async execute(clientId: string): Promise<PortalPlanDto[]> {
     const contracts = await this.customers.listContracts(clientId);
+    // L1 (fix wave): SIN contractId — el id interno del contrato no esta en el
+    // allow-list del spec y no se filtra al portal.
     return contracts.map((c) => ({
-      contractId: c.id,
       plan: c.plan,
       type: c.type,
       status: c.status,

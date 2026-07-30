@@ -16,7 +16,7 @@ const STAGE_EN_PROGRESO = '10000000-0000-4000-a000-000000000002';
 const STAGE_HECHO = '10000000-0000-4000-a000-000000000003';
 
 describe('ListPortalTasks — customer-portal-api Fase 4.4', () => {
-  it('scenario "Cliente con visita programada": ve fecha, franja y "agendada" — nada mas', async () => {
+  it('scenario "Cliente con visita programada": ve fecha, timeSlot y "agendada" — nada mas (M6: wire 100% ingles)', async () => {
     const repo = new InMemorySchedulingRepository();
     repo.seedTask({
       id: 'task-a',
@@ -32,7 +32,7 @@ describe('ListPortalTasks — customer-portal-api Fase 4.4', () => {
     const result = await useCase.execute('client-a');
 
     expect(result).toEqual([
-      { scheduledDate: '2026-08-01T09:00:00-03:00', franja: 'mañana', publicStatus: 'agendada' },
+      { scheduledDate: '2026-08-01T09:00:00-03:00', timeSlot: 'mañana', publicStatus: 'agendada' },
     ]);
   });
 
@@ -51,14 +51,14 @@ describe('ListPortalTasks — customer-portal-api Fase 4.4', () => {
     expect(byDate.get('2026-08-04T10:00:00-03:00')).toBe('cancelada');
   });
 
-  it('sin startDate -> scheduledDate y franja null, no revienta', async () => {
+  it('sin startDate -> scheduledDate y timeSlot null, no revienta', async () => {
     const repo = new InMemorySchedulingRepository();
     repo.seedTask({ id: 't-sin-fecha', customerId: 'client-a', stageId: STAGE_NUEVO, startDate: null });
     const useCase = new ListPortalTasks(repo);
 
     const result = await useCase.execute('client-a');
 
-    expect(result).toEqual([{ scheduledDate: null, franja: null, publicStatus: 'agendada' }]);
+    expect(result).toEqual([{ scheduledDate: null, timeSlot: null, publicStatus: 'agendada' }]);
   });
 
   it('el DTO no expone tecnico/notas/materiales/nombre crudo del stage', async () => {

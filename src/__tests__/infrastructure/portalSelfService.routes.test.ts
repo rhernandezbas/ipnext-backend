@@ -97,7 +97,7 @@ function buildStack() {
   const portalLogin = new PortalLogin(accounts, sessions, hasher, tokenService);
   const refreshPortalSession = new RefreshPortalSession(accounts, sessions, tokenService);
   const logoutPortal = new LogoutPortal(sessions);
-  const changePortalPassword = new ChangePortalPassword(accounts, hasher);
+  const changePortalPassword = new ChangePortalPassword(accounts, hasher, sessions);
   const getPortalMe = new GetPortalMe(customers as unknown as CustomerRepository);
   const listPortalInvoices = new ListPortalInvoices(customers as unknown as CustomerRepository);
   const listPortalPlans = new ListPortalPlans(customers as unknown as CustomerRepository);
@@ -223,12 +223,14 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
       const res = await request(stack.app).get('/api/portal/plans').set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual([{ contractId: 'c1', plan: '50 Mb', type: 'internet', status: 'active', startDate: '2025-01-01T00:00:00.000Z', services: [{ name: 'INTERNET', status: 'active' }] }]);
+      // M6 — envelope unificado {data}; L1 — contractId FUERA del DTO (no está
+      // en el allow-list del spec: no se filtran ids internos de contrato).
+      expect(res.body).toEqual({ data: [{ plan: '50 Mb', type: 'internet', status: 'active', startDate: '2025-01-01T00:00:00.000Z', services: [{ name: 'INTERNET', status: 'active' }] }] });
     });
   });
 
   describe('GET /api/portal/tasks', () => {
-    it('scenario "Cliente con visita programada": fecha, franja y "agendada" — nada más', async () => {
+    it('scenario "Cliente con visita programada": fecha, timeSlot y "agendada" — nada más (M6: envelope {data} + wire 100% inglés)', async () => {
       const stack = buildStack();
       stack.scheduling.seedTask({ id: 'task-a', customerId: 'client-a', stageId: STAGE_NUEVO, startDate: '2026-08-01T09:00:00-03:00', assigneeName: 'Tecnico X', notes: 'nota interna' });
       const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
@@ -236,19 +238,26 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
       const res = await request(stack.app).get('/api/portal/tasks').set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual([{ scheduledDate: '2026-08-01T09:00:00-03:00', franja: 'mañana', publicStatus: 'agendada' }]);
+      expect(res.body).toEqual({ data: [{ scheduledDate: '2026-08-01T09:00:00-03:00', timeSlot: 'mañana', publicStatus: 'agendada' }] });
       expect(JSON.stringify(res.body)).not.toContain('Tecnico');
       expect(JSON.stringify(res.body)).not.toContain('nota interna');
+      // El nombre viejo del campo no debe sobrevivir en el wire.
+      expect(JSON.stringify(res.body)).not.toContain('franja');
     });
 
-    it('anti-IDOR: dos clientes seedeados, el token de A jamás ve tareas de B', async () => {
+    it('anti-IDOR: dos clientes con tareas DISTINGUIBLES (fechas distintas) — A ve SU contenido, jamás el de B (L2)', async () => {
       const stack = buildStack();
-      stack.scheduling.seedTask({ id: 'task-a', customerId: 'client-a', stageId: STAGE_NUEVO });
-      stack.scheduling.seedTask({ id: 'task-b', customerId: 'client-b', stageId: STAGE_NUEVO });
+      stack.scheduling.seedTask({ id: 'task-a', customerId: 'client-a', stageId: STAGE_NUEVO, startDate: '2026-08-01T09:00:00-03:00' });
+      stack.scheduling.seedTask({ id: 'task-b', customerId: 'client-b', stageId: STAGE_NUEVO, startDate: '2026-09-15T15:00:00-03:00' });
       const tokenA = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
 
       const res = await request(stack.app).get('/api/portal/tasks').set('Authorization', `Bearer ${tokenA}`);
-      expect(res.body).toHaveLength(1);
+      // L2 — assert del CONTENIDO, no solo del length: si el filtro de scope se
+      // rompiera devolviendo "una" tarea cualquiera, el length solo no lo caza.
+      expect(res.body.data).toEqual([
+        { scheduledDate: '2026-08-01T09:00:00-03:00', timeSlot: 'mañana', publicStatus: 'agendada' },
+      ]);
+      expect(JSON.stringify(res.body)).not.toContain('2026-09-15');
     });
   });
 
@@ -291,35 +300,93 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
     });
   });
 
-  describe('GET /api/portal/tickets/:id', () => {
-    it('devuelve el detalle del ticket propio', async () => {
+  describe('GET /api/portal/tickets/:number (C3 — navegable con el DTO, sin UUID)', () => {
+    it('navegación REAL de la app: POST 201 devuelve `number` → GET /tickets/{number} da el detalle (sin tocar el repo)', async () => {
       const stack = buildStack();
       const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
-      await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${token}`).send({ subject: 'Falla', description: 'detalle' });
+      const created = await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${token}`).send({ subject: 'Falla', description: 'detalle' });
+      expect(created.status).toBe(201);
+      expect(created.body.number).toEqual(expect.any(Number));
 
-      // El id real no viaja en el DTO de lista (solo `number`) — lo recuperamos
-      // del repo compartido para pegarle a GET /:id con el id interno real.
-      const rawTicket = (await stack.ticketRepo.list({ customerId: 'client-a' })).data[0]!;
-      const res = await request(stack.app).get(`/api/portal/tickets/${rawTicket.id}`).set('Authorization', `Bearer ${token}`);
+      const res = await request(stack.app).get(`/api/portal/tickets/${created.body.number}`).set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
       expect(res.body.subject).toBe('Falla');
+      expect(res.body.number).toBe(created.body.number);
       expect(res.body.comments).toBeUndefined();
+      expect(res.body.id).toBeUndefined();
     });
 
-    it('scenario "Ticket ajeno por id": 404 idéntico a un id inexistente', async () => {
+    it('navegación vía lista: el `number` del DTO de GET /tickets alcanza para pedir el detalle', async () => {
+      const stack = buildStack();
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+      await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${token}`).send({ subject: 'Desde lista', description: 'd' });
+
+      const listed = await request(stack.app).get('/api/portal/tickets').set('Authorization', `Bearer ${token}`);
+      const number: number = listed.body.data[0].number;
+
+      const res = await request(stack.app).get(`/api/portal/tickets/${number}`).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.subject).toBe('Desde lista');
+    });
+
+    it('scenario "Ticket ajeno": 404 idéntico a un number inexistente', async () => {
       const stack = buildStack();
       const tokenA = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
       const tokenB = await createAccountAndToken(stack, 'client-b', '30999888', 'OtherPass1');
-      await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${tokenB}`).send({ subject: 'De B', description: 'd' });
-      const ticketB = (await stack.ticketRepo.list({ customerId: 'client-b' })).data[0]!;
+      const createdB = await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${tokenB}`).send({ subject: 'De B', description: 'd' });
 
-      const foreignRes = await request(stack.app).get(`/api/portal/tickets/${ticketB.id}`).set('Authorization', `Bearer ${tokenA}`);
-      const missingRes = await request(stack.app).get('/api/portal/tickets/no-existe').set('Authorization', `Bearer ${tokenA}`);
+      const foreignRes = await request(stack.app).get(`/api/portal/tickets/${createdB.body.number}`).set('Authorization', `Bearer ${tokenA}`);
+      const missingRes = await request(stack.app).get('/api/portal/tickets/999999').set('Authorization', `Bearer ${tokenA}`);
 
       expect(foreignRes.status).toBe(404);
       expect(missingRes.status).toBe(404);
       expect(foreignRes.body).toEqual(missingRes.body);
+    });
+
+    it(':number no entero positivo -> 400 VALIDATION_ERROR (parseo estricto, nunca 500 ni lookup)', async () => {
+      const stack = buildStack();
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      for (const bad of ['abc', '1.5', '-1', '0', '1e3', '00x', `${2 ** 32}`]) {
+        const res = await request(stack.app).get(`/api/portal/tickets/${bad}`).set('Authorization', `Bearer ${token}`);
+        expect({ value: bad, status: res.status }).toEqual({ value: bad, status: 400 });
+        expect(res.body.code).toBe('VALIDATION_ERROR');
+      }
+    });
+  });
+
+  describe('M2 (fix wave) — paginado basura: parseo estricto en TODAS las rutas paginadas del portal', () => {
+    it('GET /tickets?page=abc → 200 con default page=1 (nunca NaN al repo, nunca 500)', async () => {
+      const stack = buildStack();
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+      await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${token}`).send({ subject: 'T', description: 'd' });
+
+      const res = await request(stack.app).get('/api/portal/tickets?page=abc&limit=xyz').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.page).toBe(1);
+      expect(res.body.limit).toBe(25);
+      expect(res.body.data).toHaveLength(1);
+    });
+
+    it('GET /tickets?limit=999999 → cap 100 (el techo lo pone la ruta, no el cliente)', async () => {
+      const stack = buildStack();
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/tickets?limit=999999').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.limit).toBe(100);
+    });
+
+    it('GET /invoices?page=-3&limit=999999 → 200 con page=1 y limit cap 100 (mismo helper, misma clase de fix)', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' }));
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/invoices?page=-3&limit=999999').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.page).toBe(1);
+      expect(res.body.limit).toBe(100);
     });
   });
 

@@ -1,5 +1,6 @@
 import { Router, Request, Response, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
 import { CreatePortalAccount } from '@application/use-cases/portal-admin/CreatePortalAccount';
 import { RegeneratePortalPassword } from '@application/use-cases/portal-admin/RegeneratePortalPassword';
@@ -13,6 +14,7 @@ import {
   PortalAccountAlreadyExistsError,
   PortalAccountDniRequiredError,
 } from '@domain/errors/portalAdmin.errors';
+import { parsePagination } from '../parsePagination';
 
 export interface PortalAccountsAdminRouterDeps {
   createPortalAccount: CreatePortalAccount;
@@ -22,6 +24,13 @@ export interface PortalAccountsAdminRouterDeps {
   listPortalAccounts: ListPortalAccounts;
   /** Builds the staff auth middleware (rejects `aud=portal`, same as every other admin router). */
   authProvider: AuthProvider;
+  /**
+   * H1 (fix wave) — staff SessionRepository for STATEFUL auth: without it,
+   * `createAuthMiddleware` degrades to the legacy stateless JWT-only check and a
+   * REVOKED staff session keeps operating the CRUD (incl. regenerating client
+   * passwords) until the JWT expires. Required, same as every other admin mount.
+   */
+  sessionRepo: SessionRepository;
   /** `requirePermission(userRepo, 'portal', 'manage')` — built by the caller (app.ts). */
   requirePortalManage: RequestHandler;
 }
@@ -48,7 +57,7 @@ export interface PortalAccountsAdminRouterDeps {
  */
 export function createPortalAccountsAdminRouter(deps: PortalAccountsAdminRouterDeps): Router {
   const router = Router();
-  const auth = createAuthMiddleware(deps.authProvider);
+  const auth = createAuthMiddleware(deps.authProvider, deps.sessionRepo);
   const guard = [auth, deps.requirePortalManage];
 
   router.post('/', ...guard, async (req: Request, res: Response): Promise<void> => {
@@ -72,18 +81,23 @@ export function createPortalAccountsAdminRouter(deps: PortalAccountsAdminRouterD
       } else if (err instanceof PortalAccountDniRequiredError) {
         res.status(422).json({ error: err.message, code: err.code });
       } else {
+        // L6 (fix wave): loguear SIEMPRE antes del 500 — el catch se tragaba el error.
+        console.error('[portal-admin] unexpected error on POST /', err);
         res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
       }
     }
   });
 
   router.get('/', ...guard, async (req: Request, res: Response): Promise<void> => {
-    const page = req.query['page'] ? Number(req.query['page']) : undefined;
-    const limit = req.query['limit'] ? Number(req.query['limit']) : undefined;
+    // M2 (fix wave) — parseo estricto compartido (entero >=1, cap 100): antes
+    // `Number('abc')` colaba NaN hasta el adapter (Prisma: skip/take NaN = 500).
+    const { page, limit } = parsePagination(req.query);
     try {
       const result = await deps.listPortalAccounts.execute({ page, limit });
       res.status(200).json(result);
-    } catch {
+    } catch (err) {
+      // L6 (fix wave): loguear SIEMPRE antes del 500 — el catch se tragaba el error.
+      console.error('[portal-admin] unexpected error on GET /', err);
       res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
     }
   });
@@ -101,6 +115,7 @@ export function createPortalAccountsAdminRouter(deps: PortalAccountsAdminRouterD
       if (err instanceof PortalAccountNotFoundError) {
         res.status(404).json({ error: err.message, code: err.code });
       } else {
+        console.error('[portal-admin] unexpected error on PATCH /:id', err);
         res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
       }
     }
@@ -114,6 +129,7 @@ export function createPortalAccountsAdminRouter(deps: PortalAccountsAdminRouterD
       if (err instanceof PortalAccountNotFoundError) {
         res.status(404).json({ error: err.message, code: err.code });
       } else {
+        console.error('[portal-admin] unexpected error on POST /:id/regenerate-password', err);
         res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
       }
     }
@@ -127,6 +143,7 @@ export function createPortalAccountsAdminRouter(deps: PortalAccountsAdminRouterD
       if (err instanceof PortalAccountNotFoundError) {
         res.status(404).json({ error: err.message, code: err.code });
       } else {
+        console.error('[portal-admin] unexpected error on DELETE /:id', err);
         res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
       }
     }

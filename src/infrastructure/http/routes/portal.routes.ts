@@ -22,9 +22,11 @@ import {
 } from '@domain/errors/portal.errors';
 import {
   createPortalLoginRateLimiter,
+  createPortalLoginIpRateLimiter,
   createPortalGeneralRateLimiter,
   createPortalTicketCreateRateLimiter,
 } from '../middleware/rateLimiters';
+import { parsePagination } from '../parsePagination';
 
 export interface PortalRouterDeps {
   portalLogin: PortalLogin;
@@ -37,6 +39,10 @@ export interface PortalRouterDeps {
   killSwitch: RequestHandler;
   /** Defaults to `createPortalLoginRateLimiter()` when omitted. */
   loginRateLimiter?: RequestHandler;
+  /** H3b (fix wave) — per-IP ceiling for `/auth/login`, mounted IN ADDITION to
+   * the (IP+dni) limiter (a dni-rotating sweep otherwise gets a fresh bucket
+   * per attempt). Defaults to `createPortalLoginIpRateLimiter()` when omitted. */
+  loginIpRateLimiter?: RequestHandler;
   /** Defaults to `createPortalGeneralRateLimiter()` when omitted. */
   generalRateLimiter?: RequestHandler;
 
@@ -63,7 +69,7 @@ export interface PortalRouterDeps {
  *
  * Mount order per route (DEVIATION from design.md §4's literal "kill-switch → rate
  * limit → auth" for the ONE authenticated route on this router):
- *   - `/auth/login`:            killSwitch → loginRateLimiter (IP+dni)      → handler
+ *   - `/auth/login`:            killSwitch → loginIpRateLimiter (IP sola, H3b) → loginRateLimiter (IP+dni) → handler
  *   - `/auth/refresh`:          killSwitch → generalRateLimiter (IP, no account yet) → handler
  *   - `/auth/logout`:           killSwitch → generalRateLimiter (IP, no account yet) → handler
  *   - `/auth/change-password`:  killSwitch → portalAuthMiddleware → generalRateLimiter (BY ACCOUNT) → handler
@@ -81,6 +87,7 @@ export interface PortalRouterDeps {
 export function createPortalRouter(deps: PortalRouterDeps): Router {
   const router = Router();
   const loginRateLimiter = deps.loginRateLimiter ?? createPortalLoginRateLimiter();
+  const loginIpRateLimiter = deps.loginIpRateLimiter ?? createPortalLoginIpRateLimiter();
   const generalRateLimiter = deps.generalRateLimiter ?? createPortalGeneralRateLimiter();
 
   // portal-auth spec "Kill-switch global del portal": in front of EVERY route on
@@ -88,7 +95,9 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
   // are ever evaluated.
   router.use(deps.killSwitch);
 
-  router.post('/auth/login', loginRateLimiter, async (req: Request, res: Response): Promise<void> => {
+  // H3b — orden: primero el techo por IP (barato, corta el barrido de DNIs),
+  // después el (IP+dni) que protege a cada cuenta puntual.
+  router.post('/auth/login', loginIpRateLimiter, loginRateLimiter, async (req: Request, res: Response): Promise<void> => {
     const { dni, password } = (req.body ?? {}) as { dni?: unknown; password?: unknown };
     if (typeof dni !== 'string' || !dni || typeof password !== 'string' || !password) {
       res.status(400).json({ error: 'dni y password son requeridos', code: 'VALIDATION_ERROR' });
@@ -101,6 +110,9 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
       if (err instanceof InvalidPortalCredentialsError) {
         res.status(401).json({ error: err.message, code: err.code });
       } else {
+        // L6 (fix wave): loguear SIEMPRE antes del 500 — sin esto un bug de
+        // Prisma en prod era invisible (el catch se tragaba el error).
+        console.error('[portal] unexpected error on POST /auth/login', err);
         res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
       }
     }
@@ -117,8 +129,17 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
       res.status(200).json(result);
     } catch (err) {
       if (err instanceof PortalRefreshTokenReusedError || err instanceof InvalidPortalRefreshTokenError) {
-        res.status(401).json({ error: err.message, code: err.code });
+        // L3 (fix wave): body GENERICO E IDENTICO para reusado/invalido/expirado
+        // — el code distinto de PortalRefreshTokenReusedError confirmaba a un
+        // atacante que su token robado FUE valido (y que ya gatillo la
+        // revocacion masiva). La distincion queda solo server-side:
+        if (err instanceof PortalRefreshTokenReusedError) {
+          console.warn('[portal] refresh token reuse detected — all sessions of the account were revoked');
+        }
+        res.status(401).json({ error: 'Refresh token inválido o expirado', code: 'INVALID_PORTAL_REFRESH_TOKEN' });
       } else {
+        // L6 (fix wave): loguear SIEMPRE antes del 500 (ver /auth/login).
+        console.error('[portal] unexpected error on POST /auth/refresh', err);
         res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
       }
     }
@@ -217,11 +238,9 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         const clientId = requireClientId(req, res);
         if (!clientId) return;
         try {
-          const { page, limit } = req.query as Record<string, string>;
-          const result = await listPortalInvoices.execute(clientId, {
-            page: page ? +page : undefined,
-            limit: limit ? +limit : undefined,
-          });
+          // M2 — parseo estricto compartido (entero >=1, cap 100): basura => default.
+          const { page, limit } = parsePagination(req.query);
+          const result = await listPortalInvoices.execute(clientId, { page, limit });
           res.status(200).json(result);
         } catch (err) {
           next(err);
@@ -241,7 +260,9 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         if (!clientId) return;
         try {
           const result = await listPortalPlans.execute(clientId);
-          res.status(200).json(result);
+          // M6 — contrato de envelope unificado: TODAS las colecciones del
+          // portal viajan como {data: [...]} (las paginadas ya lo hacian).
+          res.status(200).json({ data: result });
         } catch (err) {
           next(err);
         }
@@ -260,7 +281,8 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         if (!clientId) return;
         try {
           const result = await listPortalTasks.execute(clientId);
-          res.status(200).json(result);
+          // M6 — mismo envelope {data} que el resto de las colecciones del portal.
+          res.status(200).json({ data: result });
         } catch (err) {
           next(err);
         }
@@ -278,11 +300,9 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         const clientId = requireClientId(req, res);
         if (!clientId) return;
         try {
-          const { page, limit } = req.query as Record<string, string>;
-          const result = await listPortalTickets.execute(clientId, {
-            page: page ? +page : undefined,
-            limit: limit ? +limit : undefined,
-          });
+          // M2 — parseo estricto compartido (entero >=1, cap 100): basura => default.
+          const { page, limit } = parsePagination(req.query);
+          const result = await listPortalTickets.execute(clientId, { page, limit });
           res.status(200).json(result);
         } catch (err) {
           next(err);
@@ -326,15 +346,25 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
   if (deps.getPortalTicket) {
     const getPortalTicket = deps.getPortalTicket;
     router.get(
-      '/tickets/:id',
+      // C3 (fix wave) — el detalle se navega por el `number` publico del DTO
+      // (Ticket.sequenceNumber), NUNCA por el UUID interno que el portal no expone.
+      '/tickets/:number',
       deps.portalAuthMiddleware,
       generalRateLimiter,
       async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         const clientId = requireClientId(req, res);
         if (!clientId) return;
+        // Parseo ESTRICTO: solo digitos, entero positivo, dentro del rango Int
+        // de Postgres (sequenceNumber es Int) — cualquier otra cosa es 400, no
+        // un lookup ni un 500.
+        const raw = req.params['number'] as string;
+        const ticketNumber = /^\d+$/.test(raw) ? Number(raw) : NaN;
+        if (!Number.isSafeInteger(ticketNumber) || ticketNumber < 1 || ticketNumber > 2_147_483_647) {
+          res.status(400).json({ error: 'El número de ticket debe ser un entero positivo', code: 'VALIDATION_ERROR' });
+          return;
+        }
         try {
-          const id = req.params['id'] as string;
-          const result = await getPortalTicket.execute(clientId, id);
+          const result = await getPortalTicket.execute(clientId, ticketNumber);
           if (!result) {
             // portal-self-service spec "Ticket ajeno por id": 404 IDÉNTICO al de
             // un id inexistente — nunca se distingue "no existe" de "es de otro".

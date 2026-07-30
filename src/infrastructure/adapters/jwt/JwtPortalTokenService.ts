@@ -42,7 +42,10 @@ export class JwtPortalTokenService implements PortalTokenService {
 
   verifyAccessToken(token: string): PortalAccessTokenClaims | null {
     try {
-      const decoded = jwt.verify(token, this.secret, { audience: AUDIENCE }) as PortalJwtPayload;
+      // L4 (fix wave) — defensa en profundidad: algoritmo PINEADO. Sin esto,
+      // jsonwebtoken acepta cualquier HS* (p.ej. HS512 con el mismo secret);
+      // el pin elimina de raiz toda clase de confusion de algoritmo.
+      const decoded = jwt.verify(token, this.secret, { audience: AUDIENCE, algorithms: ['HS256'] }) as PortalJwtPayload;
       if (typeof decoded.sub !== 'string' || typeof decoded.clientId !== 'string') return null;
       return { accountId: decoded.sub, clientId: decoded.clientId };
     } catch {
