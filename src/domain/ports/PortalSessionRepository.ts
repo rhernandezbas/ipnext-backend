@@ -25,4 +25,16 @@ export interface PortalSessionRepository {
   revoke(id: string): Promise<void>;
   /** Revokes every non-revoked session of the account; returns how many were revoked. */
   revokeAllForAccount(accountId: string): Promise<number>;
+  /**
+   * customer-portal-api (Fase 6, task 6.1) — portal-account-deletion spec
+   * "Borrado in-app": hard-deletes EVERY session row of the account (not a
+   * revoke — the rows themselves disappear, no hashed tokens left behind).
+   * Called by `DeleteMyPortalAccount` BEFORE deleting the `PortalAccount`.
+   * Idempotent: returns how many rows were deleted (0 when the account had
+   * none). In Postgres this is also covered by `PortalSession.account`'s
+   * `onDelete: Cascade`, but the use case deletes explicitly rather than
+   * relying on a hidden DB cascade — same behavior on every adapter
+   * (in-memory has no FK cascade to fall back on).
+   */
+  deleteAllForAccount(accountId: string): Promise<number>;
 }

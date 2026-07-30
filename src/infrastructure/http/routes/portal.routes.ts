@@ -3,6 +3,14 @@ import { PortalLogin } from '@application/use-cases/portal/PortalLogin';
 import { RefreshPortalSession } from '@application/use-cases/portal/RefreshPortalSession';
 import { LogoutPortal } from '@application/use-cases/portal/LogoutPortal';
 import { ChangePortalPassword } from '@application/use-cases/portal/ChangePortalPassword';
+import { GetPortalMe } from '@application/use-cases/portal/GetPortalMe';
+import { ListPortalInvoices } from '@application/use-cases/portal/ListPortalInvoices';
+import { ListPortalPlans } from '@application/use-cases/portal/ListPortalPlans';
+import { ListPortalTasks } from '@application/use-cases/portal/ListPortalTasks';
+import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTickets';
+import { GetPortalTicket } from '@application/use-cases/portal/GetPortalTicket';
+import { CreatePortalTicket } from '@application/use-cases/portal/CreatePortalTicket';
+import { DeleteMyPortalAccount } from '@application/use-cases/portal/DeleteMyPortalAccount';
 import {
   InvalidPortalCredentialsError,
   InvalidPortalRefreshTokenError,
@@ -10,8 +18,13 @@ import {
   InvalidCurrentPortalPasswordError,
   PortalPasswordTooShortError,
   PortalAccountNotFoundError,
+  PortalTicketValidationError,
 } from '@domain/errors/portal.errors';
-import { createPortalLoginRateLimiter, createPortalGeneralRateLimiter } from '../middleware/rateLimiters';
+import {
+  createPortalLoginRateLimiter,
+  createPortalGeneralRateLimiter,
+  createPortalTicketCreateRateLimiter,
+} from '../middleware/rateLimiters';
 
 export interface PortalRouterDeps {
   portalLogin: PortalLogin;
@@ -26,6 +39,21 @@ export interface PortalRouterDeps {
   loginRateLimiter?: RequestHandler;
   /** Defaults to `createPortalGeneralRateLimiter()` when omitted. */
   generalRateLimiter?: RequestHandler;
+
+  // ── Fase 4/5/6 (self-service + borrado) — TODOS opcionales: cuando faltan,
+  // la ruta correspondiente simplemente no se monta (back-compat con el wiring
+  // de F2, que solo pasa los deps de auth). Fase 7 los inyecta desde app.ts.
+  getPortalMe?: GetPortalMe;
+  listPortalInvoices?: ListPortalInvoices;
+  listPortalPlans?: ListPortalPlans;
+  listPortalTasks?: ListPortalTasks;
+  listPortalTickets?: ListPortalTickets;
+  getPortalTicket?: GetPortalTicket;
+  createPortalTicket?: CreatePortalTicket;
+  deleteMyPortalAccount?: DeleteMyPortalAccount;
+  /** Defaults to `createPortalTicketCreateRateLimiter()` when omitted. Applied
+   * ONLY to `POST /tickets`, on top of `generalRateLimiter`. */
+  ticketCreateRateLimiter?: RequestHandler;
 }
 
 /**
@@ -140,6 +168,219 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
       }
     },
   );
+
+  // ── Fase 4/5/6 — self-service + borrado de cuenta ──────────────────────────
+  // Todas detrás de killSwitch (router.use de arriba) + portalAuthMiddleware +
+  // generalRateLimiter (por cuenta) — mismo orden que /auth/change-password.
+  // `req.portalClientId` es la ÚNICA fuente del clientId (anti-IDOR
+  // estructural, portal-self-service spec "Anclaje al cliente del token") —
+  // ningún handler de acá abajo lee un clientId de params/query/body.
+
+  const ticketCreateRateLimiter = deps.ticketCreateRateLimiter ?? createPortalTicketCreateRateLimiter();
+
+  function requireClientId(req: Request, res: Response): string | undefined {
+    const clientId = req.portalClientId;
+    if (!clientId) {
+      // Defensivo — portalAuthMiddleware siempre lo setea antes de next().
+      res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+      return undefined;
+    }
+    return clientId;
+  }
+
+  if (deps.getPortalMe) {
+    const getPortalMe = deps.getPortalMe;
+    router.get(
+      '/me',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await getPortalMe.execute(clientId);
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.listPortalInvoices) {
+    const listPortalInvoices = deps.listPortalInvoices;
+    router.get(
+      '/invoices',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const { page, limit } = req.query as Record<string, string>;
+          const result = await listPortalInvoices.execute(clientId, {
+            page: page ? +page : undefined,
+            limit: limit ? +limit : undefined,
+          });
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.listPortalPlans) {
+    const listPortalPlans = deps.listPortalPlans;
+    router.get(
+      '/plans',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await listPortalPlans.execute(clientId);
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.listPortalTasks) {
+    const listPortalTasks = deps.listPortalTasks;
+    router.get(
+      '/tasks',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await listPortalTasks.execute(clientId);
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.listPortalTickets) {
+    const listPortalTickets = deps.listPortalTickets;
+    router.get(
+      '/tickets',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const { page, limit } = req.query as Record<string, string>;
+          const result = await listPortalTickets.execute(clientId, {
+            page: page ? +page : undefined,
+            limit: limit ? +limit : undefined,
+          });
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  // POST /tickets montado ANTES de GET /tickets/:id — mismo router, sin
+  // colisión real (métodos distintos), pero mantiene el patrón "rutas
+  // estáticas antes que :id" del resto del repo (tickets.routes.ts).
+  if (deps.createPortalTicket) {
+    const createPortalTicket = deps.createPortalTicket;
+    router.post(
+      '/tickets',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      ticketCreateRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const { subject, description } = (req.body ?? {}) as { subject?: unknown; description?: unknown };
+        if (typeof subject !== 'string' || typeof description !== 'string') {
+          res.status(400).json({ error: 'subject y description son requeridos', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        try {
+          const result = await createPortalTicket.execute(clientId, { subject, description });
+          res.status(201).json(result);
+        } catch (err) {
+          if (err instanceof PortalTicketValidationError) {
+            res.status(400).json({ error: err.message, code: err.code });
+          } else {
+            next(err);
+          }
+        }
+      },
+    );
+  }
+
+  if (deps.getPortalTicket) {
+    const getPortalTicket = deps.getPortalTicket;
+    router.get(
+      '/tickets/:id',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const id = req.params['id'] as string;
+          const result = await getPortalTicket.execute(clientId, id);
+          if (!result) {
+            // portal-self-service spec "Ticket ajeno por id": 404 IDÉNTICO al de
+            // un id inexistente — nunca se distingue "no existe" de "es de otro".
+            res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
+            return;
+          }
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.deleteMyPortalAccount) {
+    const deleteMyPortalAccount = deps.deleteMyPortalAccount;
+    router.delete(
+      '/account',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const { password } = (req.body ?? {}) as { password?: unknown };
+        if (typeof password !== 'string' || !password) {
+          res.status(400).json({ error: 'password es requerida', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        try {
+          await deleteMyPortalAccount.execute({ accountId, password });
+          res.status(204).send();
+        } catch (err) {
+          if (err instanceof InvalidCurrentPortalPasswordError) {
+            res.status(401).json({ error: err.message, code: err.code });
+          } else if (err instanceof PortalAccountNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+          } else {
+            next(err);
+          }
+        }
+      },
+    );
+  }
 
   return router;
 }

@@ -68,4 +68,11 @@ export class PrismaPortalSessionRepository implements PortalSessionRepository {
     })) as { count: number };
     return result.count;
   }
+
+  async deleteAllForAccount(accountId: string): Promise<number> {
+    const result = (await (this.db as any).portalSession.deleteMany({
+      where: { accountId },
+    })) as { count: number };
+    return result.count;
+  }
 }

@@ -54,3 +54,18 @@ export class PortalPasswordTooShortError extends DomainError {
     this.name = 'PortalPasswordTooShortError';
   }
 }
+
+/**
+ * customer-portal-api (Fase 5, task 5.2) — portal-self-service spec "Payload
+ * inválido": falta `subject`/`description`, o exceden los largos máximos. Un
+ * único error de validación con el detalle en `message` (el campo puntual lo
+ * arma el caller — mirror del patrón de VALIDATION_ERROR ya usado en
+ * tickets.routes.ts / externalV1.routes.ts, pero como DomainError tipado para
+ * que `CreatePortalTicket` sea testeable sin pasar por la ruta).
+ */
+export class PortalTicketValidationError extends DomainError {
+  constructor(message: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'PortalTicketValidationError';
+  }
+}

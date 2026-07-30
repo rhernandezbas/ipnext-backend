@@ -50,4 +50,15 @@ export class InMemoryPortalSessionRepository implements PortalSessionRepository 
     }
     return count;
   }
+
+  async deleteAllForAccount(accountId: string): Promise<number> {
+    let count = 0;
+    for (let i = this.store.length - 1; i >= 0; i--) {
+      if (this.store[i]!.accountId === accountId) {
+        this.store.splice(i, 1);
+        count++;
+      }
+    }
+    return count;
+  }
 }

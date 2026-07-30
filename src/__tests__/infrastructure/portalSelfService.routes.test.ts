@@ -1,0 +1,368 @@
+/**
+ * customer-portal-api (Fases 4/5/6, tasks 4.5/5.1-5.3/6.2) — route-level coverage
+ * of every scenario in portal-self-service/spec.md + portal-account-deletion/spec.md,
+ * wired end to end with in-memory adapters (no Prisma, mismo criterio que
+ * portal.routes.test.ts de la Fase 2).
+ *
+ * Fixtures SIEMPRE con >=2 clientes (A y B) para las pruebas anti-IDOR — nunca
+ * un solo elemento (lección "fixtures degenerados").
+ */
+import express, { Request, Response } from 'express';
+import request from 'supertest';
+
+import { createPortalRouter } from '@infrastructure/http/routes/portal.routes';
+import { createPortalAuthMiddleware } from '@infrastructure/http/middleware/portalAuthMiddleware';
+import { createPortalKillSwitchMiddleware } from '@infrastructure/http/middleware/portalKillSwitchMiddleware';
+import { createPortalGeneralRateLimiter, createPortalTicketCreateRateLimiter } from '@infrastructure/http/middleware/rateLimiters';
+
+import { PortalLogin } from '@application/use-cases/portal/PortalLogin';
+import { RefreshPortalSession } from '@application/use-cases/portal/RefreshPortalSession';
+import { LogoutPortal } from '@application/use-cases/portal/LogoutPortal';
+import { ChangePortalPassword } from '@application/use-cases/portal/ChangePortalPassword';
+import { GetPortalMe } from '@application/use-cases/portal/GetPortalMe';
+import { ListPortalInvoices } from '@application/use-cases/portal/ListPortalInvoices';
+import { ListPortalPlans } from '@application/use-cases/portal/ListPortalPlans';
+import { ListPortalTasks } from '@application/use-cases/portal/ListPortalTasks';
+import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTickets';
+import { GetPortalTicket } from '@application/use-cases/portal/GetPortalTicket';
+import { CreatePortalTicket } from '@application/use-cases/portal/CreatePortalTicket';
+import { DeleteMyPortalAccount } from '@application/use-cases/portal/DeleteMyPortalAccount';
+
+import { InMemoryPortalAccountRepository } from '@infrastructure/adapters/in-memory/InMemoryPortalAccountRepository';
+import { InMemoryPortalSessionRepository } from '@infrastructure/adapters/in-memory/InMemoryPortalSessionRepository';
+import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMemoryPasswordHasher';
+import { InMemorySettingsRepository } from '@infrastructure/adapters/in-memory/InMemorySettingsRepository';
+import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
+import { InMemoryTicketRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketRepository';
+import { InMemoryTicketAreaCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketAreaCatalogRepository';
+import { JwtPortalTokenService } from '@infrastructure/adapters/jwt/JwtPortalTokenService';
+
+import type { CustomerRepository } from '@domain/ports/CustomerRepository';
+import type { Customer, Contract } from '@domain/entities/customer';
+import type { Invoice } from '@domain/entities/billing';
+import { ClientNotFoundError } from '@domain/errors';
+
+const TEST_SECRET = 'test-jwt-secret-32chars-minimum!';
+const STAGE_NUEVO = '10000000-0000-4000-a000-000000000001';
+
+function makeCustomer(overrides: Partial<Customer> & { id: string }): Customer {
+  return {
+    name: 'Cliente',
+    email: 'c@example.com',
+    phone: '1150001111',
+    status: 'active',
+    address: 'Calle 1',
+    city: 'CABA',
+    country: 'AR',
+    login: overrides.id,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    balanceDue: null,
+    balanceCurrency: null,
+    lastBalanceAt: null,
+    ...overrides,
+  };
+}
+
+/** Fake CustomerRepository INLINE MINIMO — convención del repo, ver GetPortalMe.test.ts. */
+class FakeCustomerRepository implements Partial<CustomerRepository> {
+  private customers = new Map<string, Customer>();
+  private contracts = new Map<string, Contract[]>();
+  private invoices = new Map<string, Invoice[]>();
+
+  seedCustomer(c: Customer): void { this.customers.set(c.id, c); }
+  seedContracts(clientId: string, contracts: Contract[]): void { this.contracts.set(clientId, contracts); }
+  seedInvoices(clientId: string, invoices: Invoice[]): void { this.invoices.set(clientId, invoices); }
+
+  async findById(id: string): Promise<Customer> {
+    const c = this.customers.get(id);
+    if (!c) throw new ClientNotFoundError(id);
+    return c;
+  }
+  async listContracts(clientId: string): Promise<Contract[]> { return this.contracts.get(clientId) ?? []; }
+  async listInvoices(clientId: string): Promise<Invoice[]> { return this.invoices.get(clientId) ?? []; }
+}
+
+function buildStack() {
+  const accounts = new InMemoryPortalAccountRepository();
+  const sessions = new InMemoryPortalSessionRepository();
+  const hasher = new InMemoryPasswordHasher();
+  const settingsRepo = new InMemorySettingsRepository();
+  const tokenService = new JwtPortalTokenService(TEST_SECRET);
+  const customers = new FakeCustomerRepository();
+  const scheduling = new InMemorySchedulingRepository();
+  const ticketRepo = new InMemoryTicketRepository();
+  const areaRepo = new InMemoryTicketAreaCatalogRepository();
+  ticketRepo.seedAreas(areaRepo);
+
+  const portalLogin = new PortalLogin(accounts, sessions, hasher, tokenService);
+  const refreshPortalSession = new RefreshPortalSession(accounts, sessions, tokenService);
+  const logoutPortal = new LogoutPortal(sessions);
+  const changePortalPassword = new ChangePortalPassword(accounts, hasher);
+  const getPortalMe = new GetPortalMe(customers as unknown as CustomerRepository);
+  const listPortalInvoices = new ListPortalInvoices(customers as unknown as CustomerRepository);
+  const listPortalPlans = new ListPortalPlans(customers as unknown as CustomerRepository);
+  const listPortalTasks = new ListPortalTasks(scheduling);
+  const listPortalTickets = new ListPortalTickets(ticketRepo);
+  const getPortalTicket = new GetPortalTicket(ticketRepo);
+  const createPortalTicket = new CreatePortalTicket(ticketRepo, areaRepo);
+  const deleteMyPortalAccount = new DeleteMyPortalAccount(accounts, sessions, hasher);
+
+  const portalAuthMiddleware = createPortalAuthMiddleware(tokenService, accounts);
+  const killSwitch = createPortalKillSwitchMiddleware(settingsRepo, 30_000);
+  const generalRateLimiter = createPortalGeneralRateLimiter({ windowMs: 60_000, limit: 1000 });
+  const ticketCreateRateLimiter = createPortalTicketCreateRateLimiter({ windowMs: 60_000, limit: 5 });
+
+  const app = express();
+  app.use(express.json());
+  app.use(
+    '/api/portal',
+    createPortalRouter({
+      portalLogin,
+      refreshPortalSession,
+      logoutPortal,
+      changePortalPassword,
+      portalAuthMiddleware,
+      killSwitch,
+      generalRateLimiter,
+      getPortalMe,
+      listPortalInvoices,
+      listPortalPlans,
+      listPortalTasks,
+      listPortalTickets,
+      getPortalTicket,
+      createPortalTicket,
+      deleteMyPortalAccount,
+      ticketCreateRateLimiter,
+    }),
+  );
+
+  return { app, accounts, sessions, hasher, tokenService, customers, scheduling, ticketRepo, areaRepo };
+}
+
+async function createAccountAndToken(
+  stack: ReturnType<typeof buildStack>,
+  clientId: string,
+  dni: string,
+  password: string,
+): Promise<string> {
+  const account = await stack.accounts.create({ clientId, dni, passwordHash: await stack.hasher.hash(password) });
+  return stack.tokenService.signAccessToken({ accountId: account.id, clientId: account.clientId });
+}
+
+describe('portal self-service + account-deletion routes — Fases 4/5/6', () => {
+  describe('GET /api/portal/me', () => {
+    it('devuelve nombre/estado/saldo del cliente del token', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', name: 'Ana', balanceDue: 500, balanceCurrency: 'ARS' }));
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/me').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ name: 'Ana', status: 'active', balance: 500, balanceCurrency: 'ARS', lastBalanceAt: null });
+    });
+
+    it('scenario "Cliente sin saldo fetcheado": balance null, NUNCA 0', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', balanceDue: null }));
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/me').set('Authorization', `Bearer ${token}`);
+      expect(res.body.balance).toBeNull();
+    });
+
+    it('anti-IDOR: dos clientes seedeados, el token de A jamás ve data de B', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', name: 'Cliente A' }));
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-b', name: 'Cliente B' }));
+      const tokenA = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/me').set('Authorization', `Bearer ${tokenA}`);
+      expect(res.body.name).toBe('Cliente A');
+    });
+
+    it('sin token -> 401', async () => {
+      const stack = buildStack();
+      const res = await request(stack.app).get('/api/portal/me');
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe('GET /api/portal/invoices', () => {
+    it('lista SOLO las facturas del cliente del token, sin lineItems/grInvoiceId', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' }));
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-b' }));
+      stack.customers.seedInvoices('client-a', [
+        { id: 'i1', number: 'F-1', customerId: 'client-a', customerName: 'A', issueDate: '2026-01-01T00:00:00.000Z', dueDate: '2026-01-10T00:00:00.000Z', amount: 100, status: 'pendiente', lineItems: [], grInvoiceId: 'GR-1', balance: 50, grType: 'FB', currency: 'PES', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+      ]);
+      stack.customers.seedInvoices('client-b', [
+        { id: 'i2', number: 'F-2', customerId: 'client-b', customerName: 'B', issueDate: '2026-01-01T00:00:00.000Z', dueDate: '2026-01-10T00:00:00.000Z', amount: 200, status: 'pendiente', lineItems: [], grInvoiceId: 'GR-2', balance: 100, grType: 'FB', currency: 'PES', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+      ]);
+      const tokenA = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/invoices').set('Authorization', `Bearer ${tokenA}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0].number).toBe('F-1');
+      expect(res.body.data[0].lineItems).toBeUndefined();
+      expect(res.body.data[0].grInvoiceId).toBeUndefined();
+    });
+  });
+
+  describe('GET /api/portal/plans', () => {
+    it('scenario "Cliente con contrato activo"', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' }));
+      stack.customers.seedContracts('client-a', [
+        { id: 'c1', code: null, type: 'internet', plan: '50 Mb', ip: '10.0.0.1', status: 'active', startDate: '2025-01-01T00:00:00.000Z', endDate: '', address: null, lat: null, lng: null, technology: null, name: null, vendedor: null, services: [{ id: 's1', serviceCatalogId: 'sc1', name: 'INTERNET', label: null, status: 'active', notes: null, createdAt: '2025-01-01T00:00:00.000Z' }] },
+      ]);
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/plans').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([{ contractId: 'c1', plan: '50 Mb', type: 'internet', status: 'active', startDate: '2025-01-01T00:00:00.000Z', services: [{ name: 'INTERNET', status: 'active' }] }]);
+    });
+  });
+
+  describe('GET /api/portal/tasks', () => {
+    it('scenario "Cliente con visita programada": fecha, franja y "agendada" — nada más', async () => {
+      const stack = buildStack();
+      stack.scheduling.seedTask({ id: 'task-a', customerId: 'client-a', stageId: STAGE_NUEVO, startDate: '2026-08-01T09:00:00-03:00', assigneeName: 'Tecnico X', notes: 'nota interna' });
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/tasks').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([{ scheduledDate: '2026-08-01T09:00:00-03:00', franja: 'mañana', publicStatus: 'agendada' }]);
+      expect(JSON.stringify(res.body)).not.toContain('Tecnico');
+      expect(JSON.stringify(res.body)).not.toContain('nota interna');
+    });
+
+    it('anti-IDOR: dos clientes seedeados, el token de A jamás ve tareas de B', async () => {
+      const stack = buildStack();
+      stack.scheduling.seedTask({ id: 'task-a', customerId: 'client-a', stageId: STAGE_NUEVO });
+      stack.scheduling.seedTask({ id: 'task-b', customerId: 'client-b', stageId: STAGE_NUEVO });
+      const tokenA = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/tasks').set('Authorization', `Bearer ${tokenA}`);
+      expect(res.body).toHaveLength(1);
+    });
+  });
+
+  describe('GET/POST /api/portal/tickets', () => {
+    it('scenario "Cliente crea un reclamo": queda creado, asociado a su cliente, visible al instante', async () => {
+      const stack = buildStack();
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const created = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda internet', description: 'Desde ayer' });
+      expect(created.status).toBe(201);
+      expect(created.body.subject).toBe('No anda internet');
+      expect(created.body.status).toBe('open');
+
+      const listed = await request(stack.app).get('/api/portal/tickets').set('Authorization', `Bearer ${token}`);
+      expect(listed.body.data).toHaveLength(1);
+      expect(listed.body.data[0].subject).toBe('No anda internet');
+    });
+
+    it('scenario "Payload inválido": falta subject/description -> 400', async () => {
+      const stack = buildStack();
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${token}`).send({ subject: '' });
+      expect(res.status).toBe(400);
+    });
+
+    it('anti-IDOR: GET /tickets del cliente A jamás incluye tickets de B', async () => {
+      const stack = buildStack();
+      const tokenA = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+      const tokenB = await createAccountAndToken(stack, 'client-b', '30999888', 'OtherPass1');
+
+      await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${tokenA}`).send({ subject: 'De A', description: 'd' });
+      await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${tokenB}`).send({ subject: 'De B', description: 'd' });
+
+      const listedA = await request(stack.app).get('/api/portal/tickets').set('Authorization', `Bearer ${tokenA}`);
+      expect(listedA.body.data.map((t: { subject: string }) => t.subject)).toEqual(['De A']);
+    });
+  });
+
+  describe('GET /api/portal/tickets/:id', () => {
+    it('devuelve el detalle del ticket propio', async () => {
+      const stack = buildStack();
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+      await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${token}`).send({ subject: 'Falla', description: 'detalle' });
+
+      // El id real no viaja en el DTO de lista (solo `number`) — lo recuperamos
+      // del repo compartido para pegarle a GET /:id con el id interno real.
+      const rawTicket = (await stack.ticketRepo.list({ customerId: 'client-a' })).data[0]!;
+      const res = await request(stack.app).get(`/api/portal/tickets/${rawTicket.id}`).set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.subject).toBe('Falla');
+      expect(res.body.comments).toBeUndefined();
+    });
+
+    it('scenario "Ticket ajeno por id": 404 idéntico a un id inexistente', async () => {
+      const stack = buildStack();
+      const tokenA = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+      const tokenB = await createAccountAndToken(stack, 'client-b', '30999888', 'OtherPass1');
+      await request(stack.app).post('/api/portal/tickets').set('Authorization', `Bearer ${tokenB}`).send({ subject: 'De B', description: 'd' });
+      const ticketB = (await stack.ticketRepo.list({ customerId: 'client-b' })).data[0]!;
+
+      const foreignRes = await request(stack.app).get(`/api/portal/tickets/${ticketB.id}`).set('Authorization', `Bearer ${tokenA}`);
+      const missingRes = await request(stack.app).get('/api/portal/tickets/no-existe').set('Authorization', `Bearer ${tokenA}`);
+
+      expect(foreignRes.status).toBe(404);
+      expect(missingRes.status).toBe(404);
+      expect(foreignRes.body).toEqual(missingRes.body);
+    });
+  });
+
+  describe('DELETE /api/portal/account', () => {
+    it('scenario "Cliente borra su cuenta desde la app": 204, y el próximo refresh da 401', async () => {
+      const stack = buildStack();
+      const account = await stack.accounts.create({ clientId: 'client-a', dni: '30111222', passwordHash: await stack.hasher.hash('Secret123') });
+      const token = stack.tokenService.signAccessToken({ accountId: account.id, clientId: account.clientId });
+      const loginRes = await request(stack.app).post('/api/portal/auth/login').send({ dni: '30111222', password: 'Secret123' });
+      const refreshToken: string = loginRes.body.refreshToken;
+
+      const res = await request(stack.app).delete('/api/portal/account').set('Authorization', `Bearer ${token}`).send({ password: 'Secret123' });
+      expect(res.status).toBe(204);
+
+      const afterDelete = await request(stack.app).post('/api/portal/auth/refresh').send({ refreshToken });
+      expect(afterDelete.status).toBe(401);
+
+      const loginAfterDelete = await request(stack.app).post('/api/portal/auth/login').send({ dni: '30111222', password: 'Secret123' });
+      expect(loginAfterDelete.status).toBe(401);
+    });
+
+    it('scenario "Confirmación incorrecta": 401 y la cuenta queda intacta', async () => {
+      const stack = buildStack();
+      const account = await stack.accounts.create({ clientId: 'client-a', dni: '30111222', passwordHash: await stack.hasher.hash('Secret123') });
+      const token = stack.tokenService.signAccessToken({ accountId: account.id, clientId: account.clientId });
+
+      const res = await request(stack.app).delete('/api/portal/account').set('Authorization', `Bearer ${token}`).send({ password: 'WrongPass' });
+      expect(res.status).toBe(401);
+
+      const stillThere = await stack.accounts.findById(account.id);
+      expect(stillThere).not.toBeNull();
+    });
+
+    it('no borra la cuenta de OTRO cliente (anti-IDOR: dos cuentas seedeadas)', async () => {
+      const stack = buildStack();
+      const accountA = await stack.accounts.create({ clientId: 'client-a', dni: '30111222', passwordHash: await stack.hasher.hash('Secret123') });
+      const accountB = await stack.accounts.create({ clientId: 'client-b', dni: '30999888', passwordHash: await stack.hasher.hash('OtherPass1') });
+      const tokenA = stack.tokenService.signAccessToken({ accountId: accountA.id, clientId: accountA.clientId });
+
+      await request(stack.app).delete('/api/portal/account').set('Authorization', `Bearer ${tokenA}`).send({ password: 'Secret123' });
+
+      expect(await stack.accounts.findById(accountA.id)).toBeNull();
+      expect(await stack.accounts.findById(accountB.id)).not.toBeNull();
+    });
+  });
+});
