@@ -63,8 +63,12 @@ aparte (`portalAccountsAdmin.routes.ts`) bajo el stack admin existente + `portal
 
 ### 5. Password autogenerada
 Generador criptográfico (`crypto.randomInt`) formato legible para dictado telefónico:
-`XXXX-9999-XXXX` (mayúsculas sin ambiguas O/0/I/1, ~60 bits). Se muestra UNA vez en la respuesta
-del create/regenerate; solo persiste el hash bcrypt (cost 10, el del repo). Nunca en logs.
+`XXXX-9999-XXXX` (mayúsculas sin ambiguas O/0/I/1, ~49 bits: 24^8 letras × 8^4 dígitos =
+2^48.7 — corregido en fix wave L8; el "~60 bits" original sobreestimaba). Suficiente contra
+ataque online: el techo real lo pone el rate limiting del login (10/15min por IP+DNI + 30/15min
+por IP), no la entropía; contra offline solo protege el hash bcrypt, que es el mismo en
+cualquier caso. Se muestra UNA vez en la respuesta del create/regenerate; solo persiste el
+hash bcrypt (cost 10, el del repo). Nunca en logs.
 
 ### 6. Tickets del portal: defaults por catálogo
 `CreatePortalTicket` usa el status inicial default del `TicketStatusCatalog` y un área del
