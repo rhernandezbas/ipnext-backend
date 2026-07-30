@@ -74,10 +74,12 @@
 - [x] 7.1 Wiring completo en `app.ts` + **composition-root test** (lección W6: el wiring se pinea)
 - [x] 7.2 Gate: suite completa + `tsc --noEmit` (corridos por el orquestador)
 - [x] 7.3 `sdd-verify`: matriz scenario→test de las 4 specs
-- [ ] 7.4 Review adversarial (focos: auth/audience-crossing · anti-IDOR · rate limits/kill-switch ·
-      contrato DTO) + fix waves hasta CLEAN
-- [ ] 7.5 Card BACKLOG actualizada + push con OK (deploy = migración aditiva + rutas nuevas) +
-      `gh run watch` verde + verificación EN VIVO (login beta + `/me` contra prod)
+- [x] 7.4 Review adversarial (4 revisores → 3 CRITICAL + 4 HIGH + 7 MEDIUM + ~12 LOW con la suite
+      en verde) + fix wave 22/22 + re-review focalizada (2 MEDIUM en los propios fixes) + fix wave
+      2 (3/3) → CLEAN
+- [x] 7.5 Push con OK del usuario (2026-07-30, `13f0514d`, run 30517918756 verde con migraciones) +
+      verificación EN VIVO: `/api/portal/*` → 503 PORTAL_DISABLED (nace DARK), settings anónimo →
+      401 (fix C2 activo en prod)
 
 ## Post-change (fuera de este change, registrados en el EPIC)
 
