@@ -232,47 +232,120 @@ describe('PrismaCustomerRepository mappers', () => {
   });
 
   // fix/portal-balance-from-invoices — mapper puro de
-  // `getPortalBalanceSummary` (aggregate + findFirst de Prisma -> PortalBalanceSummary).
+  // `getPortalBalanceSummary` (groupBy(currency) + findFirst de Prisma ->
+  // PortalBalanceSummary MULTI-MONEDA). Medido en prod: `Invoice.currency`
+  // tiene `PES`/`DOL` (codigos de GR, no ISO), y clientes con impagas en
+  // AMBAS monedas al mismo tiempo — este mapper es el que garantiza que
+  // NUNCA se sumen entre si.
   describe('toPortalBalanceSummary', () => {
-    it('con impagas: suma balance (Decimal-like), usa max(createdAt) de las IMPAGAS (no de anyInvoice)', () => {
+    it('una sola moneda con impagas: una entrada, suma balance (Decimal-like), ISO normalizado (PES -> ARS)', () => {
       const fakeDecimal = { toNumber: () => 75000 };
       const summary = toPortalBalanceSummary(
-        { _sum: { balance: fakeDecimal }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } },
-        { currency: 'ARS', createdAt: new Date('2026-07-20T00:00:00.000Z') },
+        [{ currency: 'PES', _sum: { balance: fakeDecimal }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } }],
+        { currency: 'PES', createdAt: new Date('2026-07-20T00:00:00.000Z') },
       );
       expect(summary).toEqual({
-        unpaidBalance: 75000,
-        currency: 'ARS',
+        balances: [{ currency: 'ARS', amount: 75000 }],
         lastUpdatedAt: '2026-07-01T00:00:00.000Z',
       });
     });
 
-    it('sin impagas (todas pagadas): unpaidBalance 0, fecha = anyInvoice.createdAt', () => {
+    it('DOL -> USD', () => {
       const summary = toPortalBalanceSummary(
-        { _sum: { balance: null }, _max: { createdAt: null } },
-        { currency: 'ARS', createdAt: new Date('2026-07-01T00:00:00.000Z') },
+        [{ currency: 'DOL', _sum: { balance: 15 }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } }],
+        { currency: 'DOL', createdAt: new Date('2026-07-01T00:00:00.000Z') },
+      );
+      expect(summary?.balances).toEqual([{ currency: 'USD', amount: 15 }]);
+    });
+
+    it('dos monedas con impagas: DOS entradas ordenadas por amount DESC, NINGUNA suma cruzada (el bug medido en prod)', () => {
+      const summary = toPortalBalanceSummary(
+        [
+          { currency: 'PES', _sum: { balance: 20000 }, _max: { createdAt: new Date('2026-06-01T00:00:00.000Z') } },
+          { currency: 'DOL', _sum: { balance: 50000 }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } },
+        ],
+        { currency: 'DOL', createdAt: new Date('2026-07-01T00:00:00.000Z') },
+      );
+      // El bug que este test reproduce: sumar ARS+USD en un solo numero daria
+      // 70000 "sin moneda" — acá tienen que quedar DOS entradas separadas,
+      // nunca colapsadas en un total unico.
+      expect(summary?.balances).toEqual([
+        { currency: 'USD', amount: 50000 },
+        { currency: 'ARS', amount: 20000 },
+      ]);
+      expect(summary?.balances.length).toBe(2);
+      // Anti-suma-cruzada: cada entrada preserva SU monto, ninguna moneda
+      // "presta" ni "roba" del total de la otra.
+      expect(summary?.balances.find((b) => b.currency === 'ARS')?.amount).toBe(20000);
+      expect(summary?.balances.find((b) => b.currency === 'USD')?.amount).toBe(50000);
+    });
+
+    it('re-agrupa codigos crudos distintos que mapean al mismo ISO (PES y pes -> una sola entrada ARS)', () => {
+      const summary = toPortalBalanceSummary(
+        [
+          { currency: 'PES', _sum: { balance: 10000 }, _max: { createdAt: new Date('2026-06-01T00:00:00.000Z') } },
+          { currency: 'pes', _sum: { balance: 5000 }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } },
+        ],
+        { currency: 'pes', createdAt: new Date('2026-07-01T00:00:00.000Z') },
+      );
+      expect(summary?.balances).toEqual([{ currency: 'ARS', amount: 15000 }]);
+    });
+
+    it('sin impagas (todas pagadas): UNA entrada en 0 con la moneda de la factura mas reciente, fecha = anyInvoice.createdAt', () => {
+      const summary = toPortalBalanceSummary(
+        [],
+        { currency: 'DOL', createdAt: new Date('2026-07-01T00:00:00.000Z') },
       );
       expect(summary).toEqual({
-        unpaidBalance: 0,
-        currency: 'ARS',
+        balances: [{ currency: 'USD', amount: 0 }],
         lastUpdatedAt: '2026-07-01T00:00:00.000Z',
       });
     });
 
-    it('sin NINGUNA factura (anyInvoice null): devuelve null, jamas unpaidBalance 0', () => {
-      const summary = toPortalBalanceSummary(
-        { _sum: { balance: null }, _max: { createdAt: null } },
-        null,
-      );
+    it('sin NINGUNA factura (anyInvoice null): devuelve null, jamas balances vacio ni en 0', () => {
+      const summary = toPortalBalanceSummary([], null);
       expect(summary).toBeNull();
     });
 
-    it('preserva currency null cuando ninguna factura la tiene', () => {
+    it('currency null en la UNICA moneda impaga: asume ARS (no hay con que confundirse)', () => {
       const summary = toPortalBalanceSummary(
-        { _sum: { balance: 500 }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } },
+        [{ currency: null, _sum: { balance: 500 }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } }],
         { currency: null, createdAt: new Date('2026-07-01T00:00:00.000Z') },
       );
-      expect(summary?.currency).toBeNull();
+      expect(summary?.balances).toEqual([{ currency: 'ARS', amount: 500 }]);
+    });
+
+    it('currency null CONVIVIENDO con una moneda conocida: se etiqueta DESCONOCIDA, jamas se fusiona con la moneda real', () => {
+      const summary = toPortalBalanceSummary(
+        [
+          { currency: 'PES', _sum: { balance: 1000 }, _max: { createdAt: new Date('2026-06-01T00:00:00.000Z') } },
+          { currency: null, _sum: { balance: 300 }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } },
+        ],
+        { currency: 'PES', createdAt: new Date('2026-07-01T00:00:00.000Z') },
+      );
+      expect(summary?.balances).toEqual([
+        { currency: 'ARS', amount: 1000 },
+        { currency: 'DESCONOCIDA', amount: 300 },
+      ]);
+    });
+
+    it('codigo desconocido (ni PES ni DOL) pasa TAL CUAL en mayusculas', () => {
+      const summary = toPortalBalanceSummary(
+        [{ currency: 'eur', _sum: { balance: 100 }, _max: { createdAt: new Date('2026-07-01T00:00:00.000Z') } }],
+        { currency: 'eur', createdAt: new Date('2026-07-01T00:00:00.000Z') },
+      );
+      expect(summary?.balances).toEqual([{ currency: 'EUR', amount: 100 }]);
+    });
+
+    it('lastUpdatedAt es el max(createdAt) GLOBAL entre TODAS las monedas impagas, no por-moneda', () => {
+      const summary = toPortalBalanceSummary(
+        [
+          { currency: 'PES', _sum: { balance: 1000 }, _max: { createdAt: new Date('2026-05-01T00:00:00.000Z') } },
+          { currency: 'DOL', _sum: { balance: 200 }, _max: { createdAt: new Date('2026-07-15T00:00:00.000Z') } },
+        ],
+        { currency: 'DOL', createdAt: new Date('2026-07-15T00:00:00.000Z') },
+      );
+      expect(summary?.lastUpdatedAt).toBe('2026-07-15T00:00:00.000Z');
     });
   });
 });

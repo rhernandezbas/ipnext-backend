@@ -13,11 +13,13 @@ import {
   ManualRecipientSource,
   OptOutRegistry,
   PortalBalanceSummary,
+  PortalBalanceEntry,
 } from '@domain/ports/CustomerRepository';
 import { Customer, CustomerStatus, Contract, ClientLog } from '@domain/entities/customer';
 import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
 import { PaginatedResult } from '@application/dto/pagination';
 import { ClientNotFoundError } from '@domain/errors';
+import { normalizeGrCurrency } from '@domain/services/normalizeGrCurrency';
 import { prisma } from '../../database/prisma';
 
 const DEFAULT_BALANCE_TTL_MINUTES = 60;
@@ -155,31 +157,83 @@ export function toInvoice(row: any): Invoice {
 
 /**
  * fix/portal-balance-from-invoices — pure mapper (molde `toCampaignRecipientCandidate`)
- * de los dos resultados narrow que arma `getPortalBalanceSummary` en un
- * `PortalBalanceSummary` de dominio. Testeable SIN Prisma real (se le pasan
- * shapes Decimal-like/Date fabricados, mismo criterio que `toInvoice` en
- * `PrismaCustomerRepository.mappers.test.ts`).
+ * de los resultados narrow que arma `getPortalBalanceSummary` en un
+ * `PortalBalanceSummary` de dominio, AGRUPADO POR MONEDA ISO. Testeable SIN
+ * Prisma real (se le pasan shapes Decimal-like/Date fabricados, mismo
+ * criterio que `toInvoice` en `PrismaCustomerRepository.mappers.test.ts`).
  *
- * - `unpaidAgg` — `prisma.invoice.aggregate({ where: { clientId, status: { not: 'pagada' } },
- *   _sum: { balance: true }, _max: { createdAt: true } })`.
+ * - `unpaidGroups` — `prisma.invoice.groupBy({ by: ['currency'], where: { clientId,
+ *   status: { not: 'pagada' } }, _sum: { balance: true }, _max: { createdAt: true } })`.
+ *   UNA fila por código crudo de moneda (`PES`/`DOL`/`null`/...) presente entre las
+ *   impagas del cliente — nunca fetch-all + reduce en memoria.
  * - `anyInvoice` — `prisma.invoice.findFirst({ where: { clientId }, orderBy: { createdAt: 'desc' },
  *   select: { currency: true, createdAt: true } })`; `null` si el cliente no tiene NINGUNA
- *   factura espejada (short-circuit a `null` — "sin datos", nunca `unpaidBalance: 0`).
+ *   factura espejada (short-circuit a `null` — "sin datos", nunca `balances: []`).
+ *
+ * Multi-moneda (medido en prod: `PES` 7430 filas / `DOL` 43 filas, 3 clientes
+ * con impagas en ambas) — cada grupo se normaliza a ISO 4217 vía
+ * `normalizeGrCurrency` y se RE-agrupa (dos códigos crudos distintos, ej.
+ * `PES`/`pes`, pueden mapear al mismo ISO y deben sumarse entre sí, pero
+ * monedas DISTINTAS jamás se suman). El resultado queda ordenado por `amount`
+ * DESC (contrato del port/DTO).
  */
 export function toPortalBalanceSummary(
-  unpaidAgg: { _sum: { balance: unknown }; _max: { createdAt: Date | null } },
+  unpaidGroups: ReadonlyArray<{
+    currency: string | null;
+    _sum: { balance: unknown };
+    _max: { createdAt: Date | null };
+  }>,
   anyInvoice: { currency: string | null; createdAt: Date } | null,
 ): PortalBalanceSummary | null {
   if (!anyInvoice) return null;
-  // Sin facturas impagas (todas pagadas): la fecha del NÚMERO mostrado (0)
-  // es la de la factura más reciente que tenemos — seguimos teniendo datos,
-  // solo que ninguno es deuda viva (ver doc de `lastUpdatedAt` en el port).
-  const lastUpdated = unpaidAgg._max.createdAt ?? anyInvoice.createdAt;
-  return {
-    unpaidBalance: decimalToNumberOrNull(unpaidAgg._sum.balance) ?? 0,
-    currency: anyInvoice.currency ?? null,
-    lastUpdatedAt: lastUpdated.toISOString(),
-  };
+
+  if (unpaidGroups.length === 0) {
+    // Sin impagas (todas pagadas): una sola entrada en 0, con la moneda de la
+    // factura más reciente overall — seguimos teniendo datos, solo que
+    // ninguno es deuda viva (ver doc de `balances`/`lastUpdatedAt` en el port).
+    return {
+      balances: [{ currency: normalizeGrCurrency(anyInvoice.currency) ?? 'DESCONOCIDA', amount: 0 }],
+      lastUpdatedAt: anyInvoice.createdAt.toISOString(),
+    };
+  }
+
+  // Frescura GLOBAL del número mostrado: la más reciente entre TODAS las
+  // monedas impagas (una sola fecha para todo el objeto — el port documenta
+  // que `lastUpdatedAt` no distingue por moneda).
+  const lastUpdated = unpaidGroups.reduce<Date | null>((latest, g) => {
+    const gMax = g._max.createdAt;
+    return gMax && (!latest || gMax > latest) ? gMax : latest;
+  }, null) ?? anyInvoice.createdAt;
+
+  // Re-agrupa por ISO normalizado; `null` (currency ausente) se acumula
+  // aparte porque su etiqueta final depende de si conviven o no monedas
+  // conocidas (ver `normalizeGrCurrency`).
+  const merged = new Map<string, number>();
+  let unknownCurrencyAmount: number | null = null;
+  for (const group of unpaidGroups) {
+    const amount = decimalToNumberOrNull(group._sum.balance) ?? 0;
+    const iso = normalizeGrCurrency(group.currency);
+    if (iso === null) {
+      unknownCurrencyAmount = (unknownCurrencyAmount ?? 0) + amount;
+      continue;
+    }
+    merged.set(iso, (merged.get(iso) ?? 0) + amount);
+  }
+
+  if (unknownCurrencyAmount !== null) {
+    // `Invoice.currency` ausente: si es la ÚNICA moneda con deuda del
+    // cliente, asumir ARS es seguro (nada real con qué confundirse). Si
+    // coexiste con monedas conocidas, se etiqueta 'DESCONOCIDA' — fusionarla
+    // con una moneda real mentiría sobre el total de esa moneda.
+    const label = merged.size === 0 ? 'ARS' : 'DESCONOCIDA';
+    merged.set(label, (merged.get(label) ?? 0) + unknownCurrencyAmount);
+  }
+
+  const balances: PortalBalanceEntry[] = Array.from(merged.entries())
+    .map(([currency, amount]) => ({ currency, amount }))
+    .sort((a, b) => b.amount - a.amount);
+
+  return { balances, lastUpdatedAt: lastUpdated.toISOString() };
 }
 
 /**
@@ -454,13 +508,22 @@ export class PrismaCustomerRepository
    * sobre `Invoice`, jamás sobre `Client.balanceDue` (el agregado del sync de
    * GR, que puede quedar desincronizado de las facturas espejadas — visto en
    * prod con HERNANDEZ RONALD: GR decía `balanceDue = 0` con 5 facturas
-   * vencidas por $100.886,90). DOS queries agregadas/narrow (`aggregate` +
-   * `findFirst`), NUNCA `findMany` + reduce en memoria — el costo es O(1)
-   * independientemente de cuántas facturas tenga el cliente.
+   * vencidas por $100.886,90). DOS queries agregadas/narrow (`groupBy` por
+   * moneda + `findFirst`), NUNCA `findMany` + reduce en memoria — el costo es
+   * O(monedas distintas), no O(facturas), independientemente de cuántas
+   * facturas tenga el cliente.
+   *
+   * Multi-moneda (fix wave) — `groupBy(['currency'])` reemplaza al `aggregate`
+   * anterior: medido en prod, `Invoice.currency` tiene `PES`/`DOL` (códigos de
+   * GR, no ISO) y hay clientes con impagas en las dos monedas al mismo tiempo.
+   * Sumarlas en un `aggregate` plano (sin agrupar) era el bug — un solo
+   * número mezclando pesos con dólares. La normalización a ISO 4217 pasa
+   * DESPUÉS del groupBy, en el mapper puro `toPortalBalanceSummary`.
    */
   async getPortalBalanceSummary(clientId: string): Promise<PortalBalanceSummary | null> {
-    const [unpaidAgg, anyInvoice] = await Promise.all([
-      prisma.invoice.aggregate({
+    const [unpaidGroups, anyInvoice] = await Promise.all([
+      prisma.invoice.groupBy({
+        by: ['currency'],
         where: { clientId, status: { not: 'pagada' as never } },
         _sum: { balance: true },
         _max: { createdAt: true },
@@ -471,7 +534,7 @@ export class PrismaCustomerRepository
         select: { currency: true, createdAt: true },
       }),
     ]);
-    return toPortalBalanceSummary(unpaidAgg, anyInvoice);
+    return toPortalBalanceSummary(unpaidGroups, anyInvoice);
   }
 
   async listLogs(query: ListLogsQuery): Promise<PaginatedResult<ClientLog>> {

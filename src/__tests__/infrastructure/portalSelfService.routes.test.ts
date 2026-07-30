@@ -41,6 +41,7 @@ import type { CustomerRepository, PortalBalanceSummary } from '@domain/ports/Cus
 import type { Customer, Contract } from '@domain/entities/customer';
 import type { Invoice } from '@domain/entities/billing';
 import { ClientNotFoundError } from '@domain/errors';
+import { normalizeGrCurrency } from '@domain/services/normalizeGrCurrency';
 
 const TEST_SECRET = 'test-jwt-secret-32chars-minimum!';
 const STAGE_NUEVO = '10000000-0000-4000-a000-000000000001';
@@ -89,19 +90,50 @@ class FakeCustomerRepository implements Partial<CustomerRepository> {
    * frescura, suficiente para probar el WIRING de la ruta; la semántica exacta
    * de `lastUpdatedAt` está unit-testeada en `GetPortalMe.test.ts` y
    * `PrismaCustomerRepository.mappers.test.ts`.
+   *
+   * fix wave (multi-moneda) — agrupa por moneda ISO normalizada
+   * (`normalizeGrCurrency`), mismo criterio que el mapper real: NUNCA suma
+   * monedas distintas en un solo número.
    */
   async getPortalBalanceSummary(clientId: string): Promise<PortalBalanceSummary | null> {
     const list = this.invoices.get(clientId) ?? [];
     if (list.length === 0) return null;
     const unpaid = list.filter((i) => i.status !== 'pagada');
-    const unpaidBalance = unpaid.reduce((sum, i) => sum + (i.balance ?? 0), 0);
-    const source = unpaid.length > 0 ? unpaid : list;
-    const lastUpdatedAt = source.reduce<string | null>(
+    const mostRecent = list.reduce((a, b) => (b.issueDate > a.issueDate ? b : a));
+
+    if (unpaid.length === 0) {
+      return {
+        balances: [{ currency: normalizeGrCurrency(mostRecent.currency) ?? 'DESCONOCIDA', amount: 0 }],
+        lastUpdatedAt: mostRecent.issueDate,
+      };
+    }
+
+    const merged = new Map<string, number>();
+    let unknownAmount: number | null = null;
+    for (const inv of unpaid) {
+      const iso = normalizeGrCurrency(inv.currency);
+      const amount = inv.balance ?? 0;
+      if (iso === null) {
+        unknownAmount = (unknownAmount ?? 0) + amount;
+        continue;
+      }
+      merged.set(iso, (merged.get(iso) ?? 0) + amount);
+    }
+    if (unknownAmount !== null) {
+      const label = merged.size === 0 ? 'ARS' : 'DESCONOCIDA';
+      merged.set(label, (merged.get(label) ?? 0) + unknownAmount);
+    }
+
+    const balances = Array.from(merged.entries())
+      .map(([currency, amount]) => ({ currency, amount }))
+      .sort((a, b) => b.amount - a.amount);
+
+    const lastUpdatedAt = unpaid.reduce<string | null>(
       (latest, i) => (!latest || i.issueDate > latest ? i.issueDate : latest),
       null,
-    );
-    const mostRecent = list.reduce((a, b) => (b.issueDate > a.issueDate ? b : a));
-    return { unpaidBalance, currency: mostRecent.currency ?? null, lastUpdatedAt };
+    ) as string;
+
+    return { balances, lastUpdatedAt };
   }
 }
 
@@ -185,16 +217,34 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
       const res = await request(stack.app).get('/api/portal/me').set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ name: 'Ana', status: 'active', balance: 500, balanceCurrency: 'ARS', lastBalanceAt: '2026-01-01T00:00:00.000Z' });
+      expect(res.body).toEqual({ name: 'Ana', status: 'active', balances: [{ currency: 'ARS', amount: 500 }], lastBalanceAt: '2026-01-01T00:00:00.000Z' });
     });
 
-    it('scenario "Cliente sin facturas espejadas": balance null, NUNCA 0', async () => {
+    it('scenario "Cliente sin facturas espejadas": balances null, NUNCA []', async () => {
       const stack = buildStack();
       stack.customers.seedCustomer(makeCustomer({ id: 'client-a' })); // sin facturas
       const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
 
       const res = await request(stack.app).get('/api/portal/me').set('Authorization', `Bearer ${token}`);
-      expect(res.body.balance).toBeNull();
+      expect(res.body.balances).toBeNull();
+    });
+
+    it('MULTI-MONEDA: cliente con impagas en PES (ARS) y DOL (USD) -> dos entradas en balances, jamás una suma', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', name: 'Ana' }));
+      stack.customers.seedInvoices('client-a', [
+        { id: 'i1', number: 'F-1', customerId: 'client-a', customerName: 'Ana', issueDate: '2026-01-01T00:00:00.000Z', dueDate: '2026-01-10T00:00:00.000Z', amount: 500, status: 'pendiente', lineItems: [], grInvoiceId: 'GR-1', balance: 500, grType: 'FB', currency: 'PES', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+        { id: 'i2', number: 'F-2', customerId: 'client-a', customerName: 'Ana', issueDate: '2026-02-01T00:00:00.000Z', dueDate: '2026-02-10T00:00:00.000Z', amount: 30, status: 'vencida', lineItems: [], grInvoiceId: 'GR-2', balance: 30, grType: 'FB', currency: 'DOL', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+      ]);
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/me').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.balances).toEqual([
+        { currency: 'ARS', amount: 500 },
+        { currency: 'USD', amount: 30 },
+      ]);
     });
 
     it('anti-IDOR: dos clientes seedeados, el token de A jamás ve data de B', async () => {

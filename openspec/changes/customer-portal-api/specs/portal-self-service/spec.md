@@ -24,37 +24,60 @@ detalles por id (`GET /api/portal/tickets/:id`) DEBEN verificar pertenencia y re
 - **THEN** 404 idéntico al de un id inexistente (no filtrar existencia)
 
 ### Requirement: Mi resumen (`GET /api/portal/me`)
-DEBE (MUST) devolver un DTO con nombre, estado del cliente y saldo: `balance`, `balanceCurrency`
+DEBE (MUST) devolver un DTO con nombre, estado del cliente y saldo: `balances` (array por moneda)
 y `lastBalanceAt`. El saldo NO sale de `Client.balanceDue` (el agregado que escribe el sync de
 GR) — SIEMPRE se CALCULA sumando el `balance` de las facturas (`Invoice`, espejo local de
 Prominense) del cliente que NO están pagadas (`status != 'pagada'`), agregado en la base de datos
-(no trayendo todas las filas a memoria). Motivo (medido en prod, HERNANDEZ RONALD): GR puede
-reportar `balanceDue = 0` mientras `Invoice` tiene facturas vencidas impagas por $100.886,90 — el
-cliente vería "saldo $0" arriba y facturas con botón "Pagar" abajo, una contradicción de cara al
-cliente.
+(no trayendo todas las filas a memoria, AGRUPADO POR MONEDA). Motivo (medido en prod, HERNANDEZ
+RONALD): GR puede reportar `balanceDue = 0` mientras `Invoice` tiene facturas vencidas impagas
+por $100.886,90 — el cliente vería "saldo $0" arriba y facturas con botón "Pagar" abajo, una
+contradicción de cara al cliente.
 
-`balance = 0` significa "al día" de verdad (el cliente tiene facturas y todas están pagadas).
-`balance = null` significa "sin datos": el cliente no tiene NINGUNA factura espejada todavía —
-NUNCA se colapsa a `0`. `balanceCurrency` sale de la moneda de las propias facturas
-(`Invoice.currency`), no de `Client.balanceCurrency`. `lastBalanceAt` describe la frescura del
-NÚMERO mostrado (`max(createdAt)` de las facturas impagas consideradas, o de todas si no hay
-impagas, o `null` sin facturas) — nunca una fecha que no corresponda al `balance` mostrado.
+**Multi-moneda (fix/portal-balance-from-invoices, fix wave)** — `Invoice.currency` guarda el
+código crudo de GR (medido en prod: `PES` 7430 filas, `DOL` 43 filas — NO son ISO 4217), y hay
+clientes con facturas impagas en LAS DOS monedas al mismo tiempo (3 medidos en prod). Sumar todas
+las monedas en un único `balance` es basura (mezcla pesos con dólares) — `balances` es un array
+con **una entrada por moneda ISO 4217** (`{ currency, amount }`, normalizada vía
+`normalizeGrCurrency`: `PES`→`ARS`, `DOL`→`USD`; un código desconocido se expone tal cual en
+mayúsculas — nunca se asume `ARS` para una moneda que no se puede confirmar), ordenado por
+`amount` DESC. **Monedas distintas JAMÁS se suman entre sí.**
 
-#### Scenario: Cliente con deuda
-- **WHEN** el cliente tiene facturas con `status` `pendiente` y/o `vencida`
-- **THEN** el DTO trae `balance` = la suma de los `balance` de esas facturas (las `pagada` no
-  suman), con la `balanceCurrency` y `lastBalanceAt` coherentes con esas facturas
+`balances: [{currency, amount: 0}]` (una sola entrada) significa "al día" de verdad (el cliente
+tiene facturas y todas están pagadas). `balances: null` significa "sin datos": el cliente no
+tiene NINGUNA factura espejada todavía — NUNCA se colapsa a `[]` ni a `0`. `lastBalanceAt`
+describe la frescura del NÚMERO mostrado (`max(createdAt)` de las facturas impagas consideradas,
+de CUALQUIER moneda, o de todas si no hay impagas, o `null` sin facturas) — nunca una fecha que
+no corresponda a `balances`.
+
+#### Scenario: Cliente con deuda en una sola moneda
+- **WHEN** el cliente tiene facturas con `status` `pendiente` y/o `vencida`, todas en la misma
+  moneda
+- **THEN** el DTO trae `balances` con UNA entrada = la suma de los `balance` de esas facturas
+  (las `pagada` no suman), con la moneda ISO normalizada y `lastBalanceAt` coherentes con esas
+  facturas
+
+#### Scenario: Cliente con impagas en dos monedas
+- **WHEN** el cliente tiene facturas impagas en más de una moneda (ej. `PES` y `DOL`)
+- **THEN** el DTO trae `balances` con UNA ENTRADA POR MONEDA (`ARS` y `USD` respectivamente),
+  cada una con la suma SOLO de sus propias facturas — JAMÁS una entrada única con la suma de
+  ambas monedas mezcladas
+
+#### Scenario: Normalización de moneda GR → ISO
+- **WHEN** `Invoice.currency` trae el código crudo de GR
+- **THEN** `PES` se expone como `ARS` y `DOL` como `USD`; un código que no es ninguno de los dos
+  se expone tal cual en mayúsculas (nunca se asume `ARS` para una moneda que no se puede
+  confirmar — asumir mentiría sobre el tipo de cambio real de esa factura)
 
 #### Scenario: Cliente sin saldo fetcheado
 - **WHEN** el cliente NO tiene ninguna factura espejada en `Invoice`
-- **THEN** el DTO trae `balance: null` (sin datos, distinto de deuda cero)
+- **THEN** el DTO trae `balances: null` (sin datos, distinto de deuda cero)
 
 #### Scenario: El saldo nunca contradice la lista de facturas
-- **WHEN** se compara el `balance` de `GET /api/portal/me` con la lista de
+- **WHEN** se compara `balances` de `GET /api/portal/me` con la lista de
   `GET /api/portal/invoices` del mismo cliente
-- **THEN** `balance` es EXACTAMENTE igual a la suma de los `balance` de las facturas cuyo
-  `status` no es `pagada` en esa lista — ambos endpoints leen del mismo dato (`Invoice`), nunca
-  pueden mostrar números contradictorios
+- **THEN** cada entrada de `balances` es EXACTAMENTE igual a la suma de los `balance`, POR
+  MONEDA, de las facturas cuyo `status` no es `pagada` en esa lista — ambos endpoints leen del
+  mismo dato (`Invoice`), nunca pueden mostrar números contradictorios
 
 ### Requirement: Mis facturas (`GET /api/portal/invoices`)
 DEBE (MUST) listar las facturas del cliente (DTO: `number`, `issueDate`, `dueDate`, `amount`,

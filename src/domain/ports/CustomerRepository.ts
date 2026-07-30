@@ -64,6 +64,23 @@ export interface ActiveClientContact {
 }
 
 /**
+ * fix/portal-balance-from-invoices — UNA entrada de saldo POR MONEDA ISO
+ * 4217 (nunca el código crudo de GR — ver `normalizeGrCurrency`). Distintas
+ * monedas jamás se suman entre sí: medido en prod, hay clientes con facturas
+ * impagas en `PES` (`ARS`) Y `DOL` (`USD`) al mismo tiempo — sumarlas daría
+ * un número sin sentido económico.
+ */
+export interface PortalBalanceEntry {
+  /** ISO 4217 normalizado (`normalizeGrCurrency`), o `'DESCONOCIDA'` si el
+   *  cliente tiene deuda con `Invoice.currency` ausente Y con al menos otra
+   *  moneda conocida (ver doc de `normalizeGrCurrency` para el porqué no se
+   *  fusiona con esa moneda conocida). */
+  currency: string;
+  /** Suma de `Invoice.balance` no pagado en ESTA moneda únicamente. */
+  amount: number;
+}
+
+/**
  * fix/portal-balance-from-invoices — resultado agregado del saldo del portal,
  * calculado EXCLUSIVAMENTE sobre `Invoice` (Prominense), NUNCA sobre
  * `Client.balanceDue` (el agregado que escribe el sync de GR). Motivo: en
@@ -72,25 +89,33 @@ export interface ActiveClientContact {
  * $100.886,90 con `Client.balanceDue = 0`) — el saldo y la lista de facturas
  * SIEMPRE tienen que salir del mismo dato para no contradecirse de cara al
  * cliente (portal-self-service spec "Mi resumen").
+ *
+ * fix wave (multi-moneda) — `Invoice.currency` NO está agrupado por moneda en
+ * la versión anterior de este tipo (`unpaidBalance: number` único): en prod,
+ * `Invoice.currency` tiene `PES` (7430 filas) y `DOL` (43 filas) — códigos de
+ * GR, NO ISO 4217 — y hay clientes con facturas impagas en AMBAS monedas.
+ * Sumarlas en un solo número es basura (mezcla pesos con dólares). Ahora
+ * `balances` trae UNA entrada por moneda ISO, ordenadas por `amount` DESC.
  */
 export interface PortalBalanceSummary {
   /**
-   * Suma de `Invoice.balance` de las facturas NO pagadas (`status != 'pagada'`)
-   * del cliente. `0` cuando TODAS las facturas espejadas están pagadas (=
-   * "al día", coherente con una lista de facturas vacía-de-deuda) — la
-   * ausencia total de facturas se modela devolviendo `null` en
-   * `getPortalBalanceSummary`, NUNCA con `unpaidBalance: 0`.
+   * Entradas por moneda, ordenadas por `amount` DESC. NUNCA vacío si este
+   * objeto no es `null` — el caso "todo pagado" se modela con UNA entrada
+   * `{ currency: <ISO de la factura más reciente>, amount: 0 }` (= "al día",
+   * coherente con una lista de facturas vacía-de-deuda). La ausencia total
+   * de facturas se modela devolviendo `null` en `getPortalBalanceSummary`,
+   * NUNCA con `balances: []`.
    */
-  unpaidBalance: number;
-  /** Moneda de la factura más reciente del cliente (paga o no); `null` si ninguna la tiene. */
-  currency: string | null;
+  balances: PortalBalanceEntry[];
   /**
-   * Frescura del NÚMERO mostrado (`unpaidBalance`), no una fecha inventada:
-   * `max(createdAt)` de las facturas impagas que componen la suma; si no hay
-   * impagas (todas pagadas), `max(createdAt)` de TODAS las facturas del
-   * cliente (seguimos teniendo datos, solo que ninguno es deuda viva).
+   * Frescura del NÚMERO mostrado (`balances`, sin distinguir por moneda —
+   * una sola fecha para todo el objeto), no una fecha inventada:
+   * `max(createdAt)` de las facturas impagas que componen la suma (de
+   * CUALQUIER moneda); si no hay impagas (todas pagadas), `max(createdAt)`
+   * de TODAS las facturas del cliente (seguimos teniendo datos, solo que
+   * ninguno es deuda viva).
    */
-  lastUpdatedAt: string | null;
+  lastUpdatedAt: string;
 }
 
 export interface CustomerRepository {
