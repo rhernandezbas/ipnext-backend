@@ -15,6 +15,8 @@ import {
   TvPoolPoisonedError,
   TvIdentityStampUnverifiedError,
   TvEmailOwnedByOtherError,
+  TvPoolUnavailableError,
+  TvNoUsableCicError,
 } from '@domain/errors/gigared';
 
 describe('Gigared domain errors (#47)', () => {
@@ -112,5 +114,29 @@ describe('Gigared domain errors (#47)', () => {
     expect(e.name).toBe('TvEmailOwnedByOtherError');
     expect(e.email).toBe('perez204382@gmail.com');
     expect(e.ownedByInternalId).toBe('cust-OTHER');
+  });
+
+  // gigared-tv-cic-reuse (T3.1) — el listado del pool falló. Es una condición TRANSITORIA
+  // (el partner no respondió), no de datos: 503 reintentable, jamás un 404 "account not found".
+  it('TvPoolUnavailableError → code TV_POOL_UNAVAILABLE, preserva la causa', () => {
+    const e = new TvPoolUnavailableError('timeout');
+    expect(e).toBeInstanceOf(DomainError);
+    expect(e.code).toBe('TV_POOL_UNAVAILABLE');
+    expect(e.name).toBe('TvPoolUnavailableError');
+    expect(e.detail).toBe('timeout');
+  });
+
+  it('TvPoolUnavailableError sin detail → detail undefined (no inventa texto)', () => {
+    expect(new TvPoolUnavailableError().detail).toBeUndefined();
+  });
+
+  // gigared-tv-cic-reuse (T3.1) — se agotaron los candidatos del reintento acotado. Es una
+  // condición de DATOS (los CICs del pool no sirven), no transitoria → 422.
+  it('TvNoUsableCicError → code TV_NO_USABLE_CIC, carries attemptedCount', () => {
+    const e = new TvNoUsableCicError(3);
+    expect(e).toBeInstanceOf(DomainError);
+    expect(e.code).toBe('TV_NO_USABLE_CIC');
+    expect(e.name).toBe('TvNoUsableCicError');
+    expect(e.attemptedCount).toBe(3);
   });
 });

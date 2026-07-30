@@ -412,6 +412,7 @@ import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPasswor
 import { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
 import { PrismaTvCredentialsReader } from '../adapters/prisma/PrismaTvCredentialsReader';
 import { PrismaClientTvCancellationRepository } from '../adapters/prisma/PrismaClientTvCancellationRepository';
+import { PrismaTvCicReuseEligibilityRepository } from '../adapters/prisma/PrismaTvCicReuseEligibilityRepository';
 import { PrismaClientTvActivationRepository } from '../adapters/prisma/PrismaClientTvActivationRepository';
 import { PrismaClientTvCancelStatusRepository } from '../adapters/prisma/PrismaClientTvCancelStatusRepository';
 import { CancelTvJobRunner } from '../scheduling/CancelTvJobRunner';
@@ -2630,6 +2631,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const gigaredContractLookup = { findById: (id: string) => prismaContractOwnershipLookup(id) };
   // #72 — local TV-cancel flag repo (Client.tvCancelledAt). GR sync never touches it.
   const gigaredTvCancellation = new PrismaClientTvCancellationRepository();
+  // gigared-tv-cic-reuse — decide si un CIC del pool que carga la identidad de OTRO cliente
+  // nuestro puede reutilizarse (cliente existe + tvCancelledAt seteado + sin fila de TV activa,
+  // las 3 en UNA query). Sin esto inyectado, RegisterGigaredAccount degrada al filtro B1
+  // original y NINGÚN cic reciclado se reutiliza: el alta queda rota con el CI en verde.
+  // Pinneado por gigared-composition.cicReuse.test.ts.
+  const gigaredCicReuseEligibility = new PrismaTvCicReuseEligibilityRepository();
   // #81 — TV reactivation seq repo (Client.tvActivationSeq). RegisterGigaredAccount lo incrementa
   // SOLO en re-alta para mintear un internal_id + mail frescos (nunca quemados). Mirror-only.
   const gigaredTvActivation = new PrismaClientTvActivationRepository();
@@ -2652,7 +2659,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup, gigaredTvCancellation),
     linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
     // #5 BE — pass eventRepo so register records 'alta'/'reactivacion' best-effort.
-    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, gigaredTvActivation, gigaredTvActivationEventRepo),
+    // gigared-tv-cic-reuse — los 3 últimos son POSICIONALES: pick (undefined = Math.random en
+    // prod), elegibilidad de reutilización de CICs y auditoría del cic reusado. El orden está
+    // pinneado por gigared-composition.cicReuse.test.ts.
+    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, gigaredTvActivation, gigaredTvActivationEventRepo, undefined, gigaredCicReuseEligibility, auditEventRepo),
     // #131 PARTE B -- pass gigaredTvActivationEventRepo so AddTvService can record 'reactivacion' on row reuse.
     addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvActivationEventRepo),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
