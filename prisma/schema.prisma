@@ -218,6 +218,9 @@ model Client {
   tvActivationEvents TvActivationEvent[]
   // messaging-bulk (F2) — back-relation a los destinatarios de campaña de este cliente.
   campaignRecipients CampaignRecipient[] @relation("ClientCampaignRecipients")
+  // customer-portal-api (Fase 1) — 1 cuenta de portal <-> 1 cliente (v1). Nullable: la
+  // mayoria de los clientes NO tiene cuenta (provisioning manual, beta inicial acotada).
+  portalAccount      PortalAccount?
 
   @@index([status])
   @@index([email])
@@ -497,6 +500,40 @@ model ClientPortalSettings {
   primaryColor             String   @default("#3B82F6")
   customCss                String?
   updatedAt                DateTime @updatedAt
+}
+
+// customer-portal-api (Fase 1) — identidad del portal de clientes. Migración ADITIVA,
+// no toca ninguna tabla existente. 1 cuenta <-> 1 cliente (v1). El DNI se materializa
+// ACA (no en Client.customAttributes) porque es la ruta caliente del login: columna
+// unica indexada, cero JSON scan. Ver design.md customer-portal-api §2.
+model PortalAccount {
+  id                 String    @id @default(uuid())
+  clientId           String    @unique
+  client             Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  dni                String    @unique
+  passwordHash       String
+  status             String    @default("active") // active | disabled
+  mustChangePassword Boolean   @default(true)
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  sessions           PortalSession[]
+}
+
+// Refresh tokens rotativos del portal. tokenHash = sha256 del refresh opaco (32 bytes
+// base64url) — el token crudo NUNCA se persiste. rotatedAt marca "ya se uso una vez";
+// reuso de un refresh rotado ⇒ señal de robo, revoca TODAS las sesiones de la cuenta.
+model PortalSession {
+  id         String    @id @default(uuid())
+  accountId  String
+  account    PortalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  rotatedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([accountId])
 }
 
 // =============================================
