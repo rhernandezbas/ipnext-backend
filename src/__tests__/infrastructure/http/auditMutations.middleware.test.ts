@@ -97,6 +97,32 @@ describe('auditMutationsMiddleware', () => {
     expect(JSON.stringify(ev.beforeJson)).not.toContain('secreto');
   });
 
+  it('C1 (portal fix wave): masks accessToken/refreshToken on portal auth bodies — live tokens never persist', async () => {
+    const { app, repo } = buildApp({ withUser: false });
+    // Mirror of POST /api/portal/auth/login: response carries LIVE tokens.
+    // (buildApp's /api/test echoes the request body back in the 201 response,
+    // exactly like the real login echoes tokens — good enough to pin masking on
+    // BOTH beforeJson (refresh/logout request bodies) and afterJson (login response).)
+    await request(app).post('/api/test').send({
+      accessToken: 'live-access-jwt',
+      refreshToken: 'live-refresh-opaque',
+      mustChangePassword: false,
+    });
+    await flush();
+
+    const ev = (await repo.list({ page: 1, pageSize: 10 })).items[0];
+    const before = ev.beforeJson as Record<string, unknown>;
+    const after = ev.afterJson as Record<string, unknown>;
+    expect(before['accessToken']).toBe('***');
+    expect(before['refreshToken']).toBe('***');
+    expect(after['accessToken']).toBe('***');
+    expect(after['refreshToken']).toBe('***');
+    expect(JSON.stringify(ev.beforeJson)).not.toContain('live-access-jwt');
+    expect(JSON.stringify(ev.afterJson)).not.toContain('live-refresh-opaque');
+    // Non-sensitive fields still audited.
+    expect(before['mustChangePassword']).toBe(false);
+  });
+
   it('does NOT create a generic event when a use case already emitted (dedupe)', async () => {
     const { app, repo } = buildApp({ emitOnUsers: true });
     await request(app).post('/api/users').send({ login: 'bob' });
@@ -202,6 +228,13 @@ describe('maskSensitive', () => {
       .toEqual({ apiKey: '***', baseUrl: 'https://x/api' });
     // snake_case variant also masked.
     expect(maskSensitive({ api_key: 'k' })).toEqual({ api_key: '***' });
+  });
+
+  it('masks accessToken/refreshToken (C1 portal fix wave) — case-insensitive', () => {
+    expect(maskSensitive({ accessToken: 'jwt', refreshToken: 'opaque', ok: 1 }))
+      .toEqual({ accessToken: '***', refreshToken: '***', ok: 1 });
+    expect(maskSensitive({ accesstoken: 'a', REFRESHTOKEN: 'b' }))
+      .toEqual({ accesstoken: '***', REFRESHTOKEN: '***' });
   });
 
   it('does NOT mask apiKeyLast4 — the masked tail is public', () => {

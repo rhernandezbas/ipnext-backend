@@ -52,6 +52,13 @@ const SENSITIVE_KEYS = new Set([
   // NOT 'apikeylast4' — the last-4 tail is the public preview returned by GET /config.
   'apikey',
   'api_key',
+  // customer-portal-api fix wave C1 — the portal auth surface moves LIVE tokens
+  // through mutation bodies: login/refresh RESPONSES carry {accessToken,
+  // refreshToken} and refresh/logout REQUESTS carry {refreshToken}. Without
+  // these keys the generic audit persisted usable portal credentials in
+  // AuditEvent (readable via GET /api/admin/audit-events).
+  'accesstoken',
+  'refreshtoken',
 ]);
 
 /**
