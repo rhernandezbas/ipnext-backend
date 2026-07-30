@@ -192,7 +192,14 @@ export interface PppoeServiceRepository {
    * tocar la fila; el caller distingue "fila borrada" vs "carrera perdida" re-leyendo por id.
    * OMITIDO (`undefined`) ⇒ comportamiento actual intacto (update incondicional por id).
    */
-  setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed', expectedNasId?: string | null): Promise<PppoeService | null>;
+  /**
+   * pppoe-move-ip-kind-aware: `ipTypePreference` OPCIONAL — se pasa SOLO cuando el move convierte
+   * la clase de IP (destino que no soporta la clase actual). Viaja en el MISMO update que el NAS y
+   * la IP a propósito: una segunda escritura podría fallar y dejar el servicio con IP nueva del
+   * pool público y preferencia 'cgnat' — un estado que ningún camino sabría reparar.
+   * OMITIDO (`undefined`) ⇒ la preferencia NO se toca (todos los moves sin conversión).
+   */
+  setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed', expectedNasId?: string | null, ipTypePreference?: IpKind): Promise<PppoeService | null>;
   /**
    * PPPoE de clientes con un `Client.status` dado (cruza pppoe→contract→client).
    * Es el resolver de `target='debtors'` (status='late') sin depender de RADIUS.

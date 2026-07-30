@@ -15,7 +15,9 @@ export class GetNasServer {
     const server = await this.repo.findNasServerById(id);
     if (!server) return null;
     if (!this.ipNetworkRepo || !this.orchestrator) {
-      return { ...maskNasServerSecrets(server), displayType: server.type };
+      // Camino degradado (espejo de ListNasServers): sin repo de red no hay de dónde derivar
+      // las clases de IP. `[]` = "no determinado".
+      return { ...maskNasServerSecrets(server), displayType: server.type, supportedIpKinds: [] };
     }
     // #1: provider creado por request (fresh instance -> cachedSessions no congela)
     const liveStats = new NasLiveStatsProvider(this.ipNetworkRepo, this.orchestrator);

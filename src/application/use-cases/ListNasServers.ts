@@ -14,7 +14,9 @@ export class ListNasServers {
   async execute(): Promise<NasServerDto[]> {
     const servers = await this.repo.findAllNasServers();
     if (!this.ipNetworkRepo || !this.orchestrator) {
-      return servers.map(s => ({ ...maskNasServerSecrets(s), displayType: s.type }));
+      // Camino degradado (sin repo de red cableado): no hay de dónde derivar las clases de IP.
+      // `[]` = "no determinado" → el FE ofrece ambas y el BE sigue siendo el gate.
+      return servers.map(s => ({ ...maskNasServerSecrets(s), displayType: s.type, supportedIpKinds: [] }));
     }
     // #1: provider creado por request (fresh instance -> cachedSessions no congela)
     const liveStats = new NasLiveStatsProvider(this.ipNetworkRepo, this.orchestrator);

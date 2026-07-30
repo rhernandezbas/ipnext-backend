@@ -1,5 +1,6 @@
 import { PppoeService, EnforcedState, PppoeDisplayStatus, pickCurrentPppoeService } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
+import type { IpKind } from '@domain/entities/network';
 import { PppoeUsernameTakenError } from '@domain/errors/pppoe';
 import { prisma } from '../../database/prisma';
 // pppoe-search-bulk-plan: MAC search helpers (pure domain, no infra deps).
@@ -375,10 +376,15 @@ export class PrismaPppoeServiceRepository implements PppoeServiceRepository {
    * adopción de un pendiente). Condición sin match ⇒ P2025 ⇒ null (el caller distingue
    * "fila borrada" vs "carrera doble-adopción perdida" re-leyendo por id).
    */
-  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed', expectedNasId?: string | null): Promise<PppoeService | null> {
+  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed', expectedNasId?: string | null, ipTypePreference?: IpKind): Promise<PppoeService | null> {
     try {
       const where = expectedNasId !== undefined ? { id, nasId: expectedNasId } : { id };
-      const row = await model().update({ where, data: { nasId, remoteAddress, ipMode } });
+      // pppoe-move-ip-kind-aware: la preferencia se incluye SOLO si el move convirtió la clase
+      // (spread condicional) — omitida, el campo queda intacto para todos los moves normales.
+      const row = await model().update({
+        where,
+        data: { nasId, remoteAddress, ipMode, ...(ipTypePreference !== undefined ? { ipTypePreference } : {}) },
+      });
       return toEntity(row);
     } catch (err: any) {
       if (err?.code === 'P2025') return null;

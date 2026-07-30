@@ -1,4 +1,6 @@
 import { NasServer, routesViaOrchestrator } from '@domain/entities/nas';
+import { IpKind } from '@domain/entities/network';
+import { supportedIpKinds } from '@domain/services/ipKindSupport';
 import { IpNetworkRepository } from '@domain/ports/IpNetworkRepository';
 import { RadiusOrchestratorGateway, OrchestratorSession } from '@domain/ports/RadiusOrchestratorGateway';
 import { ipInAnyRange } from '@domain/services/ipMath';
@@ -10,6 +12,14 @@ import { ipInAnyRange } from '@domain/services/ipMath';
 export interface NasServerDto extends NasServer {
   /** BRAS RADIUS para radius_orchestrator. Para el resto = type crudo. */
   displayType: string;
+  /**
+   * Clases de IP que este NAS puede asignar, DERIVADAS de sus pools (`IpPool.ipKind`).
+   * Aditivo de presentación igual que `displayType`: no se persiste, no toca `NasServer`.
+   *
+   * El FE lo usa para ofrecer solo los tipos posibles; el move lo usa para elegir el pool.
+   * `[]` = no se pudo determinar o el NAS no tiene pools → el FE muestra ambos y el BE rechaza.
+   */
+  supportedIpKinds: IpKind[];
 }
 
 /** Tamano de pagina para paginacion de sesiones del orchestrator. */
@@ -60,8 +70,14 @@ export class NasLiveStatsProvider {
     // #6: displayType se calcula ANTES del try — NUNCA degrada
     const displayType = routesViaOrchestrator(nas.type) ? 'BRAS RADIUS' : nas.type;
 
+    // pppoe-move-ip-kind-aware: las clases soportadas se resuelven en su PROPIO try, ANTES del
+    // early-return y FUERA del bloque del orchestrator. Si vivieran adentro de ese try
+    // desaparecerían cada vez que el RADIUS esté caído (los pools ya se leyeron bien de la DB),
+    // y el FE —sin clases— esconde ambos botones bloqueando por una causa no relacionada.
+    const kinds = await this.safeSupportedIpKinds(nas.id);
+
     if (!routesViaOrchestrator(nas.type)) {
-      return { ...nas, displayType };
+      return { ...nas, displayType, supportedIpKinds: kinds };
     }
 
     // #5: todo el bloque de live-stats en try/catch — cualquier fallo -> stored
@@ -87,10 +103,24 @@ export class NasLiveStatsProvider {
         lastSeen = new Date(maxMs).toISOString();
       }
 
-      return { ...nas, clientCount, lastSeen, displayType };
+      return { ...nas, clientCount, lastSeen, displayType, supportedIpKinds: kinds };
     } catch {
-      // #5: fallo total -> stored (best-effort), displayType ya calculado (#6)
-      return { ...nas, displayType };
+      // #5: fallo total -> stored (best-effort), displayType ya calculado (#6).
+      // supportedIpKinds NO degrada acá: se resolvió antes, con su propio try.
+      return { ...nas, displayType, supportedIpKinds: kinds };
+    }
+  }
+
+  /**
+   * Clases de IP soportadas por el NAS, best-effort. Un fallo de lectura de pools cae a `[]`
+   * (el FE lo interpreta como "no determinado" y ofrece ambas; el BE sigue siendo el gate)
+   * y NUNCA propaga: este campo no puede tumbar el listado de NAS.
+   */
+  private async safeSupportedIpKinds(nasId: string): Promise<IpKind[]> {
+    try {
+      return supportedIpKinds(await this.ipNetworkRepo.findPoolsByNas(nasId));
+    } catch {
+      return [];
     }
   }
 
