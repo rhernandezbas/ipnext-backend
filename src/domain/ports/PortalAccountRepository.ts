@@ -4,6 +4,7 @@
  * Lives in the domain layer. Zero imports from @infrastructure/* or Prisma.
  */
 import type { PortalAccount } from '../entities/portalAccount';
+import type { PaginatedResult, PaginatedQuery } from '../../application/dto/pagination';
 
 export interface CreatePortalAccountInput {
   clientId: string;
@@ -30,4 +31,10 @@ export interface PortalAccountRepository {
   /** Rejects if `id` does not exist. */
   update(id: string, patch: UpdatePortalAccountInput): Promise<PortalAccount>;
   delete(id: string): Promise<void>;
+  /**
+   * portal-accounts-admin (Fase 3) — paginated listing for `ListPortalAccounts`.
+   * Newest first (`createdAt desc`). Same page/limit defaulting contract as
+   * `CustomerRepository.list` (page=1, limit=25 when omitted/invalid).
+   */
+  list(query: PaginatedQuery): Promise<PaginatedResult<PortalAccount>>;
 }

@@ -10,6 +10,7 @@ import type {
   CreatePortalAccountInput,
   UpdatePortalAccountInput,
 } from '@domain/ports/PortalAccountRepository';
+import type { PaginatedResult, PaginatedQuery } from '@application/dto/pagination';
 
 type PortalAccountRow = {
   id: string;
@@ -80,5 +81,19 @@ export class PrismaPortalAccountRepository implements PortalAccountRepository {
 
   async delete(id: string): Promise<void> {
     await (this.db as any).portalAccount.delete({ where: { id } });
+  }
+
+  async list(query: PaginatedQuery): Promise<PaginatedResult<PortalAccount>> {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? query.limit : 25;
+    const [rows, total] = await Promise.all([
+      (this.db as any).portalAccount.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }) as Promise<PortalAccountRow[]>,
+      (this.db as any).portalAccount.count() as Promise<number>,
+    ]);
+    return { data: rows.map(mapRow), total, page, limit };
   }
 }

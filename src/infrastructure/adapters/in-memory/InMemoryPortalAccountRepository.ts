@@ -5,6 +5,7 @@ import type {
   CreatePortalAccountInput,
   UpdatePortalAccountInput,
 } from '@domain/ports/PortalAccountRepository';
+import type { PaginatedResult, PaginatedQuery } from '@application/dto/pagination';
 import { PortalAccountNotFoundError } from '@domain/errors/portal.errors';
 
 /** InMemoryPortalAccountRepository — test seam (Fase 1, task 1.3). */
@@ -58,5 +59,14 @@ export class InMemoryPortalAccountRepository implements PortalAccountRepository 
   async delete(id: string): Promise<void> {
     const idx = this.store.findIndex((a) => a.id === id);
     if (idx >= 0) this.store.splice(idx, 1);
+  }
+
+  async list(query: PaginatedQuery): Promise<PaginatedResult<PortalAccount>> {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? query.limit : 25;
+    const sorted = [...this.store].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const start = (page - 1) * limit;
+    const data = sorted.slice(start, start + limit).map((a) => ({ ...a }));
+    return { data, total: this.store.length, page, limit };
   }
 }
