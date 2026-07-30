@@ -24,6 +24,7 @@ import {
 } from '@domain/errors/pppoe';
 import { NoFreeIpError, NoPoolForNasTypeError } from '@domain/errors/network';
 import { ipInAnyRange } from '@domain/services/ipMath';
+import { supportedIpKinds, resolveMovePoolType } from '@domain/services/ipKindSupport';
 import { isDuplicateAutoEvent } from '@application/services/pppoeNasMoveThrottle';
 import { FindFreeIp } from './FindFreeIp';
 import { MovePppoeServiceToRouter } from './MovePppoeServiceToRouter';
@@ -169,10 +170,32 @@ export class MovePppoeToNas {
     }
 
     // pppoe-preprovision (D4/S4.3): mover un PENDIENTE (nasId null) = ADOPCIÓN — la IP sale del
-    // pool del `ipTypePreference` PERSISTIDO (la preferencia manda el pool). Un move NORMAL
-    // sigue asignando SIEMPRE cgnat (semántica W1 intacta: cgnat + force para no-cgnat).
+    // pool del `ipTypePreference` PERSISTIDO (la preferencia manda el pool).
     const esAdopcion = s.nasId === null;
-    const poolType = esAdopcion ? s.ipTypePreference : 'cgnat';
+
+    // pppoe-move-ip-kind-aware: el move NORMAL ya NO asume 'cgnat'. Resuelve la clase contra lo
+    // que el NAS DESTINO realmente soporta (derivado de sus pools). Antes estaba hardcodeado en
+    // 'cgnat' y eso dejó IMPOSIBLE mover al NE8000 cuando migró a 100% públicas (0 pools cgnat /
+    // 18 public, 3272 servicios) — la operación principal muerta, sin que ningún test lo viera.
+    //
+    // Si el destino solo acepta la otra clase, CONVIERTE (decisión del usuario 2026-07-29): la IP
+    // sale del pool del destino y la preferencia se actualiza. `null` = el destino no soporta
+    // ninguna clase → NoPoolForNasTypeError desde el allocator, ANTES de mutar nada.
+    // La ADOPCIÓN no pasa por la resolución: ahí la preferencia es un REQUISITO (un pendiente
+    // marcado 'public' hacia un NAS sin pool público DEBE fallar, no recibir cgnat en silencio).
+    // El move NORMAL sí resuelve: cgnat si el destino lo soporta (W1 exacta), public si no.
+    let poolType: PppoeService['ipTypePreference'];
+    if (esAdopcion) {
+      poolType = s.ipTypePreference;
+    } else {
+      const destinoKinds = supportedIpKinds(await this.networkRepo.findPoolsByNas(destino.id));
+      // `null` (destino sin pools de ninguna clase) → se pide la clase actual para que el
+      // allocator tire el NoPoolForNasTypeError nombrándola, ANTES de mutar nada.
+      poolType = resolveMovePoolType(destinoKinds) ?? s.ipTypePreference;
+    }
+    // La clase cambió ⇒ hay conversión: se persiste junto al NAS y la IP, en el MISMO update
+    // (una segunda escritura podría fallar y dejar el servicio con IP nueva y preferencia vieja).
+    const nuevaPreferencia = poolType !== s.ipTypePreference ? poolType : undefined;
 
     // 1. IP nueva del pool del destino. Pool lleno/inexistente → abort ANTES de tocar nada (S1.3);
     //    'public' en NAS sin pool público (adopción) → NoPoolForNasTypeError → failed_no_free_ip.
@@ -210,7 +233,7 @@ export class MovePppoeToNas {
     //    el lado DB por completo; el post-persist check de D6.4 queda como segunda red).
     let updated: PppoeService | null;
     try {
-      updated = await this.repo.setNasAndIp(s.id, destino.id, newIp, 'fixed', esAdopcion ? null : undefined);
+      updated = await this.repo.setNasAndIp(s.id, destino.id, newIp, 'fixed', esAdopcion ? null : undefined, nuevaPreferencia);
     } catch (err) {
       // Ajuste 4 / S1.8: el RADIUS YA quedó escrito — sin este evento la divergencia RADIUS↔DB
       // sería invisible (el watcher W2 NO la cura: compara sesión vs nasId, no la Framed-IP).

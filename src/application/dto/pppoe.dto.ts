@@ -256,6 +256,10 @@ export const UpdatePppoeBodySchema = z.object({
   password:      z.string().min(1).optional(),
   remoteAddress: z.string().nullable().optional(),
   status:        z.enum(['enabled', 'disabled']).optional(),
+  // pppoe-move-ip-kind-aware: clase de IP elegida en el modal. OPCIONAL — omitida no se toca.
+  // Enum estricto: un valor fuera de {cgnat,public} es 422, NUNCA se persiste basura en un campo
+  // que gobierna de qué pool sale la próxima IP del cliente.
+  ipTypePreference: z.enum(['cgnat', 'public']).optional(),
   // pppoe-plan-change-history: optional reason for the plan-change event.
   reason:        z.string().nullish(),
 }).refine(

@@ -1,4 +1,5 @@
 import { PppoeService } from '@domain/entities/pppoeService';
+import type { IpKind } from '@domain/entities/network';
 import { PppoeServiceRepository } from '@domain/ports/PppoeServiceRepository';
 import { PppoeRouterGateway, SecretInput } from '@domain/ports/PppoeRouterGateway';
 import { NasRepository } from '@domain/ports/NasRepository';
@@ -17,6 +18,14 @@ export interface UpdatePppoeServiceInput {
   password?: string;
   remoteAddress?: string | null;
   status?: string; // 'enabled' | 'disabled'
+  /**
+   * pppoe-move-ip-kind-aware: clase de IP elegida por el operador. Metadata LOCAL — gobierna de
+   * qué pool sale la PRÓXIMA IP asignada, no requiere llamada al plano de control (el RADIUS no
+   * tiene noción de "clase"; lo que ve es la Framed-IP concreta, que viaja en `remoteAddress`).
+   * Antes de esto el toggle Privada/Pública del modal era decorativo: alimentaba el sugeridor de
+   * IP pero la elección NUNCA salía al backend. OMITIDO ⇒ el campo NO se toca.
+   */
+  ipTypePreference?: IpKind;
   // pppoe-plan-change-history: reason + actor threaded from the route handler.
   reason?: string | null;
   actorId?: string | null;
@@ -63,6 +72,13 @@ export class UpdatePppoeService {
     /** pppoe-plan-change-history: optional; keeps back-compat with existing tests/callers that don't pass them. */
     private readonly catalogRepo?: ServiceCatalogRepository,
     private readonly eventRepo?: ContractServiceEventRepository,
+    /**
+     * pppoe-move-ip-kind-aware: allocator para AUTO-ASIGNAR una IP cuando el operador cambia la
+     * clase sin dar IP nueva (regla del usuario: con NAS, la IP se asigna sí o sí, para no dejar
+     * el servicio marcado 'public' con una CGNAT viva). Opcional: sin él, un cambio de clase sin
+     * IP solo persiste la clase (back-compat con callers/tests que no lo inyectan).
+     */
+    private readonly findFreeIp?: { execute(input: { nasId: string; type: IpKind }): Promise<string> },
   ) {
     // Build the shared ChangePppoePlanService only when the optional repos are available.
     // If they're absent (back-compat callers), fall back to the inline inline logic below.
@@ -76,9 +92,49 @@ export class UpdatePppoeService {
     if (!s) throw new PppoeServiceNotFoundError(input.id);
     // pppoe-preprovision (REQ-PRE-4): un pendiente de instalación (nasId null) no es editable
     // hasta la adopción — error tipado 409, jamás crash/NasNotFound confuso.
-    if (s.nasId === null) throw new PppoePendingInstallError(s.id);
+    //
+    // pppoe-move-ip-kind-aware — EXCEPCIÓN ACOTADA (regla del usuario 2026-07-29): cambiar SOLO
+    // la clase de IP de un pendiente SÍ se permite. Es metadata local: no toca el router, no
+    // necesita NAS, y la IP concreta la resuelve la adopción — o sea, es una INTENCIÓN a futuro,
+    // exactamente el sentido del campo. Antes había que borrar y recrear el pendiente para
+    // corregir la clase (el workaround terminate+recreate documentado en D7.1). Cualquier OTRO
+    // campo sigue rechazado: sin NAS no hay plano de control al que aplicarlo.
+    if (s.nasId === null) {
+      const soloClase =
+        input.ipTypePreference !== undefined &&
+        input.profile === undefined &&
+        input.password === undefined &&
+        input.remoteAddress === undefined &&
+        input.status === undefined;
+      if (!soloClase) throw new PppoePendingInstallError(s.id);
+      return this.repo.upsertByUsername({
+        username:         s.username,
+        password:         s.password,
+        profile:          s.profile,
+        remoteAddress:    s.remoteAddress,
+        status:           s.status,
+        nasId:            null,
+        contractId:       s.contractId,
+        ipTypePreference: input.ipTypePreference,
+      });
+    }
     const nas = await this.nasRepo.findNasServerById(s.nasId);
     if (!nas) throw new NasNotFoundError(s.nasId);
+
+    // pppoe-move-ip-kind-aware — CON NAS la clase no puede quedar descolgada de la IP: si el
+    // operador cambia la clase y NO manda IP, se auto-asigna una del pool de la clase nueva del
+    // propio NAS (regla del usuario 2026-07-29). Sin esto quedaría el estado que el usuario
+    // rechazó explícitamente: marcado 'public' con una CGNAT viva (caso `SantiagoGaleanoRo`).
+    // Se resuelve ANTES de tocar el plano de control: si el NAS no tiene pool de esa clase, el
+    // allocator tira NoPoolForNasTypeError y NADA se mutó. La IP resultante se inyecta en el
+    // flujo normal como si el operador la hubiera mandado (una sola ruta de escritura).
+    const claseCambia = input.ipTypePreference !== undefined && input.ipTypePreference !== s.ipTypePreference;
+    if (claseCambia && input.remoteAddress === undefined && this.findFreeIp) {
+      input = {
+        ...input,
+        remoteAddress: await this.findFreeIp.execute({ nasId: s.nasId, type: input.ipTypePreference! }),
+      };
+    }
 
     const profileChanged = input.profile !== undefined && input.profile && input.profile !== s.profile;
     const hasOtherFields =
@@ -134,6 +190,9 @@ export class UpdatePppoeService {
       status: input.status ?? s.status,
       nasId: s.nasId,
       contractId: s.contractId,
+      // pppoe-move-ip-kind-aware: spread condicional — el upsert ignora `undefined` y deja el
+      // campo intacto, así que un patch que no trae la clase no la pisa.
+      ...(input.ipTypePreference !== undefined ? { ipTypePreference: input.ipTypePreference } : {}),
     });
 
     // pppoe-plan-change-history: record 'modified' event best-effort when the profile changed.

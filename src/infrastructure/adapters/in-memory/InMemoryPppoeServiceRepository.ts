@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { PppoeService, EnforcedState, PppoeDisplayStatus, pppoeDisplayStatus, pickCurrentPppoeService } from '@domain/entities/pppoeService';
 import { PppoeServiceRepository, PppoeServiceUpsert, PppoeServiceWithClient } from '@domain/ports/PppoeServiceRepository';
+import type { IpKind } from '@domain/entities/network';
 import { PppoeUsernameTakenError } from '@domain/errors/pppoe';
 // pppoe-search-bulk-plan: MAC search helpers — SAME logic as Prisma adapter (parity).
 import { looksLikeMac, macSearchVariants } from '@domain/services/macSearch';
@@ -352,13 +353,16 @@ export class InMemoryPppoeServiceRepository implements PppoeServiceRepository {
    * pppoe-preprovision D7.3: `expectedNasId` PROVISTO ⇒ CAS por nasId actual (espejo del
    * `WHERE id AND nasId = ?` del adapter Prisma) — mismatch ⇒ null SIN tocar la fila.
    */
-  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed', expectedNasId?: string | null): Promise<PppoeService | null> {
+  async setNasAndIp(id: string, nasId: string, remoteAddress: string | null, ipMode: 'pool' | 'fixed', expectedNasId?: string | null, ipTypePreference?: IpKind): Promise<PppoeService | null> {
     const found = this.store.find(s => s.id === id);
     if (!found) return null;
     if (expectedNasId !== undefined && found.nasId !== expectedNasId) return null;
     found.nasId = nasId;
     found.remoteAddress = remoteAddress;
     found.ipMode = ipMode;
+    // pppoe-move-ip-kind-aware: espejo EXACTO del adapter Prisma — la preferencia se toca SOLO
+    // si el move convirtió la clase. Los dos adapters no pueden divergir.
+    if (ipTypePreference !== undefined) found.ipTypePreference = ipTypePreference;
     return { ...found };
   }
 

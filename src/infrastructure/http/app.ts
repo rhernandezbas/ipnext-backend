@@ -2729,7 +2729,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       requirePerm,
       new ListPppoeByContract(pppoeRepo),
       createPppoeSvc,
-      new UpdatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository()),
+      // pppoe-move-ip-kind-aware: `findFreeIp` inyectado para AUTO-ASIGNAR la IP cuando el
+      // operador cambia la clase sin dar IP nueva. Sin este argumento la feature queda MUERTA en
+      // prod aunque los tests pasen (los tests inyectan su propio wiring) — lección W6 del EPIC #38.
+      new UpdatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository(), findFreeIp),
       legacyMovePppoe,
       new DeactivatePppoeService(pppoeRepo, routerGw, nasRepoForPppoe, orchestrator, ensureInternet),
       enforcePppoe,
