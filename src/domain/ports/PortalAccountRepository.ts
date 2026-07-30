@@ -4,7 +4,7 @@
  * Lives in the domain layer. Zero imports from @infrastructure/* or Prisma.
  */
 import type { PortalAccount } from '../entities/portalAccount';
-import type { PaginatedResult, PaginatedQuery } from '../../application/dto/pagination';
+import type { PaginatedResult, PaginatedQuery } from '../entities/pagination';
 
 export interface CreatePortalAccountInput {
   clientId: string;

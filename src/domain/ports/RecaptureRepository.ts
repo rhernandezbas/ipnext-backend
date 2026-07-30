@@ -1,5 +1,5 @@
 import { RecaptureLead, RecaptureContact, RecaptureLeadStatus, RecaptureContactChannel, RecaptureContactOutcome } from '../entities/recaptureLead';
-import { PaginatedResult, PaginatedQuery } from '../../application/dto/pagination';
+import { PaginatedResult, PaginatedQuery } from '../entities/pagination';
 
 // ─── Query shapes ─────────────────────────────────────────────────────────────
 

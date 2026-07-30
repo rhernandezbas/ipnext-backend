@@ -1,5 +1,5 @@
 import { Customer, Contract, ClientLog } from '../entities/customer';
-import { PaginatedResult, PaginatedQuery } from '../../application/dto/pagination';
+import { PaginatedResult, PaginatedQuery } from '../entities/pagination';
 
 export interface ListClientsQuery extends PaginatedQuery {
   search?: string;

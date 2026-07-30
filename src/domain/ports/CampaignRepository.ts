@@ -6,7 +6,7 @@ import {
   CampaignStatus,
   CampaignVariableSpec,
 } from '../entities/campaign';
-import { PaginatedResult, PaginatedQuery } from '../../application/dto/pagination';
+import { PaginatedResult, PaginatedQuery } from '../entities/pagination';
 
 /** Datos para crear el header de una campaña (molde `ServiceCutBatchCreate`). */
 export interface CampaignCreateData {

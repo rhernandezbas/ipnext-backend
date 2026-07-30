@@ -1,4 +1,4 @@
-import { PaginatedQuery, PaginatedResult } from '../../application/dto/pagination';
+import { PaginatedQuery, PaginatedResult } from '../entities/pagination';
 
 /**
  * messaging-inbox (F1) — mirror row of `Conversation` (design §1). Dates are

@@ -1,5 +1,5 @@
 import { BillingSummary, Invoice, Payment, Transaction } from '../entities/billing';
-import { PaginatedResult, PaginatedQuery } from '../../application/dto/pagination';
+import { PaginatedResult, PaginatedQuery } from '../entities/pagination';
 
 export interface ListInvoicesQuery extends PaginatedQuery {
   status?: string;

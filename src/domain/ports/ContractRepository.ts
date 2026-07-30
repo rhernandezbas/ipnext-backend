@@ -1,4 +1,4 @@
-import { PaginatedResult, PaginatedQuery } from '../../application/dto/pagination';
+import { PaginatedResult, PaginatedQuery } from '../entities/pagination';
 
 /**
  * A row in the global contracts listing. Joins the Contract row with
