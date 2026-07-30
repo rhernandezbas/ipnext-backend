@@ -621,4 +621,21 @@ export const config = {
   messagingBulk: {
     ratePerSec: parsePositiveInt(process.env.MESSAGING_BULK_RATE_PER_SEC, { default: 80, max: 1000 }),
   },
+
+  /**
+   * customer-portal-api (Fase 7, task 7.1) — nombre del area de tickets a la
+   * que `CreatePortalTicket` intenta resolver los reclamos creados desde el
+   * portal de clientes (design.md "Tickets del portal: defaults por
+   * catalogo"). Opt-in / NO fail-fast (mismo patron que el resto de este
+   * archivo): si el area configurada no existe en el catalogo real de prod,
+   * el use case cae a la PRIMERA area de `list()` — jamas crea una area
+   * nueva desde el portal. `||` (no `??`) para que un env vacio seteado por
+   * error tambien caiga al default, mismo criterio que `corsOrigin` arriba.
+   * Default "Atencion al cliente" (mismo default que
+   * DEFAULT_PORTAL_TICKET_AREA_NAME en CreatePortalTicket.ts — no se importa
+   * esa constante aca para no acoplar infra->application por un string).
+   */
+  portal: {
+    ticketAreaName: process.env.PORTAL_TICKET_AREA_NAME || 'Atención al cliente',
+  },
 };

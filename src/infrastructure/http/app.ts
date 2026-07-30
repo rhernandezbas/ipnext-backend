@@ -2,7 +2,14 @@ import express, { Router, Request, Response } from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
-import { createLoginRateLimiter, createMessagingSendRateLimiter, createExternalWriteRateLimiter } from './middleware/rateLimiters';
+import {
+  createLoginRateLimiter,
+  createMessagingSendRateLimiter,
+  createExternalWriteRateLimiter,
+  createPortalLoginRateLimiter,
+  createPortalGeneralRateLimiter,
+  createPortalTicketCreateRateLimiter,
+} from './middleware/rateLimiters';
 import { SplynxClient } from '../adapters/splynx/SplynxClient';
 import { PrismaCustomerRepository } from '../adapters/prisma/PrismaCustomerRepository';
 // SplynxTicketAdapter preserved but decabled — see AD-2 in design.md
@@ -943,6 +950,33 @@ import { ComputeCacAndPayback } from '@application/use-cases/finance/ComputeCacA
 import { RankEarlyChurnByVendor } from '@application/use-cases/finance/RankEarlyChurnByVendor';
 import { RankNetGrowthByNode } from '@application/use-cases/finance/RankNetGrowthByNode';
 import { RankCancellationReasonsByLostRevenue } from '@application/use-cases/finance/RankCancellationReasonsByLostRevenue';
+
+// customer-portal-api Fase 7 (task 7.1) — wiring del portal de clientes.
+import { createPortalRouter } from './routes/portal.routes';
+import { createPortalAccountsAdminRouter } from './routes/portalAccountsAdmin.routes';
+import { createPortalAuthMiddleware } from './middleware/portalAuthMiddleware';
+import { createPortalKillSwitchMiddleware } from './middleware/portalKillSwitchMiddleware';
+import { PrismaPortalAccountRepository } from '../adapters/prisma/PrismaPortalAccountRepository';
+import { PrismaPortalSessionRepository } from '../adapters/prisma/PrismaPortalSessionRepository';
+import { PrismaClientPortalLookup } from '../adapters/prisma/PrismaClientPortalLookup';
+import { JwtPortalTokenService } from '../adapters/jwt/JwtPortalTokenService';
+import { PortalLogin } from '@application/use-cases/portal/PortalLogin';
+import { RefreshPortalSession } from '@application/use-cases/portal/RefreshPortalSession';
+import { LogoutPortal } from '@application/use-cases/portal/LogoutPortal';
+import { ChangePortalPassword } from '@application/use-cases/portal/ChangePortalPassword';
+import { GetPortalMe } from '@application/use-cases/portal/GetPortalMe';
+import { ListPortalInvoices } from '@application/use-cases/portal/ListPortalInvoices';
+import { ListPortalPlans } from '@application/use-cases/portal/ListPortalPlans';
+import { ListPortalTasks } from '@application/use-cases/portal/ListPortalTasks';
+import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTickets';
+import { GetPortalTicket } from '@application/use-cases/portal/GetPortalTicket';
+import { CreatePortalTicket } from '@application/use-cases/portal/CreatePortalTicket';
+import { DeleteMyPortalAccount } from '@application/use-cases/portal/DeleteMyPortalAccount';
+import { CreatePortalAccount } from '@application/use-cases/portal-admin/CreatePortalAccount';
+import { RegeneratePortalPassword } from '@application/use-cases/portal-admin/RegeneratePortalPassword';
+import { SetPortalAccountStatus } from '@application/use-cases/portal-admin/SetPortalAccountStatus';
+import { DeletePortalAccountAdmin } from '@application/use-cases/portal-admin/DeletePortalAccountAdmin';
+import { ListPortalAccounts } from '@application/use-cases/portal-admin/ListPortalAccounts';
 
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
@@ -3555,6 +3589,81 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     rankEarlyChurnByVendor,
     rankNetGrowthByNode,
     rankCancellationReasons,
+  }));
+
+  // customer-portal-api Fase 7 (task 7.1) — wiring completo del portal de
+  // clientes. Reusa customerAdapter/ticketAdapter/schedulingRepo/ticketAreaRepo/
+  // settingsRepo/authAdapter/passwordHasher/requirePerm ya declarados arriba
+  // (mismos adapters que usa el resto del sistema para esas tablas — no se
+  // duplica una instancia Prisma paralela).
+  const portalAccountRepo = new PrismaPortalAccountRepository();
+  const portalSessionRepo = new PrismaPortalSessionRepository();
+  const clientPortalLookup = new PrismaClientPortalLookup();
+  const portalTokenService = new JwtPortalTokenService();
+
+  const portalLogin = new PortalLogin(portalAccountRepo, portalSessionRepo, passwordHasher, portalTokenService);
+  const refreshPortalSession = new RefreshPortalSession(portalAccountRepo, portalSessionRepo, portalTokenService);
+  const logoutPortal = new LogoutPortal(portalSessionRepo);
+  const changePortalPassword = new ChangePortalPassword(portalAccountRepo, passwordHasher);
+  const getPortalMe = new GetPortalMe(customerAdapter);
+  const listPortalInvoices = new ListPortalInvoices(customerAdapter);
+  const listPortalPlans = new ListPortalPlans(customerAdapter);
+  const listPortalTasks = new ListPortalTasks(schedulingRepo);
+  const listPortalTickets = new ListPortalTickets(ticketAdapter);
+  const getPortalTicket = new GetPortalTicket(ticketAdapter);
+  // design.md "Tickets del portal: defaults por catalogo" — el nombre del area
+  // es CONFIGURABLE (config.portal.ticketAreaName, PORTAL_TICKET_AREA_NAME env,
+  // opt-in), nunca el literal hardcodeado del use case.
+  const createPortalTicket = new CreatePortalTicket(ticketAdapter, ticketAreaRepo, config.portal.ticketAreaName);
+  const deleteMyPortalAccount = new DeleteMyPortalAccount(portalAccountRepo, portalSessionRepo, passwordHasher);
+
+  const portalAuthMw = createPortalAuthMiddleware(portalTokenService, portalAccountRepo);
+  const portalKillSwitchMw = createPortalKillSwitchMiddleware(settingsRepo);
+  // W6: se instancian los 3 rate limiters EXPLICITAMENTE (aunque el router los
+  // defaultea si se omiten) — el wiring queda pineado por el composition-root
+  // test, nunca dependiente de un default silencioso.
+  const portalLoginRateLimiter = createPortalLoginRateLimiter();
+  const portalGeneralRateLimiter = createPortalGeneralRateLimiter();
+  const portalTicketCreateRateLimiter = createPortalTicketCreateRateLimiter();
+
+  app.use('/api/portal', createPortalRouter({
+    portalLogin,
+    refreshPortalSession,
+    logoutPortal,
+    changePortalPassword,
+    portalAuthMiddleware: portalAuthMw,
+    killSwitch: portalKillSwitchMw,
+    loginRateLimiter: portalLoginRateLimiter,
+    generalRateLimiter: portalGeneralRateLimiter,
+    getPortalMe,
+    listPortalInvoices,
+    listPortalPlans,
+    listPortalTasks,
+    listPortalTickets,
+    getPortalTicket,
+    createPortalTicket,
+    deleteMyPortalAccount,
+    ticketCreateRateLimiter: portalTicketCreateRateLimiter,
+  }));
+
+  // CRUD admin de cuentas del portal — staff auth (rechaza aud=portal) +
+  // portal.manage (guard granular, spec "TODAS las rutas del CRUD DEBEN exigir
+  // portal.manage — 'solo autenticado' NO alcanza"). design.md riesgo #3: sin
+  // page en Prominense FE todavia, el CRUD se opera por API hasta que exista.
+  const createPortalAccountUC = new CreatePortalAccount(portalAccountRepo, clientPortalLookup, passwordHasher);
+  const regeneratePortalPassword = new RegeneratePortalPassword(portalAccountRepo, portalSessionRepo, passwordHasher);
+  const setPortalAccountStatus = new SetPortalAccountStatus(portalAccountRepo, portalSessionRepo);
+  const deletePortalAccountAdmin = new DeletePortalAccountAdmin(portalAccountRepo, portalSessionRepo);
+  const listPortalAccounts = new ListPortalAccounts(portalAccountRepo, clientPortalLookup);
+
+  app.use('/api/admin/portal-accounts', createPortalAccountsAdminRouter({
+    createPortalAccount: createPortalAccountUC,
+    regeneratePortalPassword,
+    setPortalAccountStatus,
+    deletePortalAccountAdmin,
+    listPortalAccounts,
+    authProvider: authAdapter,
+    requirePortalManage: requirePerm('portal', 'manage'),
   }));
 
   // 404
