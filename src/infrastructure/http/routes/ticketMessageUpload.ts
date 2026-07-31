@@ -5,6 +5,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_TOTAL_BATCH_BYTES,
 } from '@application/use-cases/ticketMessageAttachments';
+import { createBoundedBatchStorage, BatchTooLargeStreamError } from './boundedBatchStorage';
 
 /**
  * ticketMessageUpload — portal-ticket-messaging (v2.B). Middleware de subida
@@ -21,11 +22,6 @@ import {
  */
 export const TICKET_MESSAGE_FILES_FIELD = 'files';
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_VIDEO_BYTES, files: MAX_ATTACHMENTS_PER_MESSAGE },
-});
-
 /**
  * F3 (fix wave) — margen para el overhead de multipart alrededor del techo real
  * de negocio (boundaries, headers de cada parte, nombre de archivo, el campo
@@ -33,6 +29,23 @@ const upload = multer({
  * legítimo justo al borde del límite.
  */
 const CONTENT_LENGTH_SAFETY_MARGIN_BYTES = 64 * 1024;
+
+/**
+ * G3 (fix wave FINAL) — el precheck de `Content-Length` de abajo es un
+ * fast-path (header presente y honesto/de más → 413 SIN leer un byte del
+ * body), pero NO es la protección real: con `Transfer-Encoding: chunked` no
+ * hay `Content-Length` (`Number(undefined)` = `NaN`) y el precheck se salta
+ * enteramente — multer bufferea entonces hasta `MAX_VIDEO_BYTES *
+ * MAX_ATTACHMENTS_PER_MESSAGE` (~200MB) ANTES de que el chequeo post-upload
+ * de abajo corra. `createBoundedBatchStorage` cierra eso por CONSTRUCCIÓN:
+ * cuenta los bytes reales que salen de cada stream (nunca un header) y aborta
+ * apenas el acumulado del request supera el presupuesto — el pico de RAM
+ * queda acotado sin importar qué diga (o no diga) `Content-Length`.
+ */
+const upload = multer({
+  storage: createBoundedBatchStorage(MAX_TOTAL_BATCH_BYTES + CONTENT_LENGTH_SAFETY_MARGIN_BYTES),
+  limits: { fileSize: MAX_VIDEO_BYTES, files: MAX_ATTACHMENTS_PER_MESSAGE },
+});
 
 function batchTooLargeResponse(): { error: string; code: 'BATCH_TOO_LARGE' } {
   return {
@@ -71,6 +84,15 @@ export function createTicketMessageUploadMiddleware(): RequestHandler {
           return;
         }
         next();
+        return;
+      }
+      // G3 (fix wave FINAL) — el corte real: el StorageEngine abortó a mitad
+      // de stream porque el acumulado REAL del request superó el presupuesto,
+      // sin haber consultado ningún header. Mismo 413/BATCH_TOO_LARGE que el
+      // precheck de Content-Length, para que el cliente vea el mismo contrato
+      // sin importar CUÁL de las dos líneas de defensa cortó.
+      if (err instanceof BatchTooLargeStreamError) {
+        res.status(413).json(batchTooLargeResponse());
         return;
       }
       if (err instanceof multer.MulterError) {
