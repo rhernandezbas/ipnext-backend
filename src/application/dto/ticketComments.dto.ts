@@ -96,11 +96,21 @@ export interface TicketCommentDto {
   createdAt: string;
   attachments: Array<{
     id: string;
+    // G11 (fix wave FINAL) — preservado a propósito: el FE lo espera
+    // (`ipnext-frontend/src/types/ticketComments.ts`,
+    // `TicketCommentAttachment.commentId: string`, campo requerido). Se
+    // dropeaba en el mapeo original sin motivo — no es sensible (a
+    // diferencia de `storageKey`, el layout del bucket).
+    commentId: string;
     kind: 'image' | 'audio' | 'video' | null;
     filename: string;
     mimeType: string | null;
     sizeBytes: number | null;
-    url: string;
+    // G11 — `null` (nunca `''`) para un adjunto legacy CORRUPTO sin
+    // storageKey NI url: un string vacío en `src` de un `<img>` puede
+    // reinterpretarse como "la página actual" en algunos navegadores — `null`
+    // es honesto ("no hay URL") y el FE puede chequearlo explícitamente.
+    url: string | null;
   }>;
 }
 
@@ -116,11 +126,12 @@ export function toTicketCommentDto(comment: TicketComment): TicketCommentDto {
     createdAt: comment.createdAt,
     attachments: comment.attachments.map((a) => ({
       id: a.id,
+      commentId: a.commentId,
       kind: a.kind,
       filename: a.filename,
       mimeType: a.mimeType ?? null,
       sizeBytes: a.sizeBytes ?? null,
-      url: a.storageKey != null ? `/api/tickets/messages/attachments/${a.id}/file` : (a.url ?? ''),
+      url: a.storageKey != null ? `/api/tickets/messages/attachments/${a.id}/file` : (a.url ?? null),
     })),
   };
 }
