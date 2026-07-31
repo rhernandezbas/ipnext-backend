@@ -1635,27 +1635,77 @@ model ScheduledTaskAttachment {
   @@index([taskId])
 }
 
+// portal-ticket-messaging (v2.B) — quién puede escribir un TicketComment y quién
+// puede VERLO. Dos dimensiones cerradas y chicas (2 valores cada una) — a
+// diferencia de TicketStatus (catálogo dinámico administrable, por eso String),
+// estas son binarias y estructurales al invariante central de la feature: un
+// typo de mayúsculas ("Public" vs "public") en un String hubiera podido saltear
+// silenciosamente el WHERE que protege el portal. Un enum de Prisma lo vuelve
+// imposible a nivel de tipo/columna — mismo criterio que TicketPriority (enum,
+// cerrado) vs TicketStatus (String, catálogo abierto).
+enum TicketCommentAuthorKind {
+  client
+  staff
+}
+
+enum TicketCommentVisibility {
+  public
+  internal
+}
+
 // #44 — Conversación persistida de tickets con adjuntos inline (espejo de TaskComment).
+// v2.B (portal-ticket-messaging) — ganó autoría (authorKind/authorId) y visibilidad
+// (visibility). INVARIANTE CENTRAL: visibility=internal NUNCA sale por /api/portal/*;
+// se filtra en la QUERY del repositorio (WHERE), no en el mapper.
 model TicketComment {
   id          String                    @id @default(uuid())
   ticketId    String
   ticket      Ticket                    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   authorName  String
+  // v2.B — quién escribió. Polimórfico A PROPÓSITO (PortalAccount.id si
+  // authorKind=client, RbacUser.id si authorKind=staff): la tabla destino
+  // difiere según el kind, así que NO hay una única FK posible sin partir el
+  // campo en dos columnas nullable. Se deja como String simple sin FK — la
+  // integridad referencial la garantiza el código que lo escribe (los use
+  // cases nunca leen authorId de fuera, siempre lo estampan ellos mismos desde
+  // la sesión/token), no la base. Null en comentarios viejos (backfill) y en
+  // cualquier alta que no tenga un id de autor resoluble.
+  authorId    String?
+  authorKind  TicketCommentAuthorKind
+  visibility  TicketCommentVisibility
   body        String
   createdAt   DateTime                  @default(now())
   attachments TicketCommentAttachment[]
 
   @@index([ticketId])
+  // v2.B — la query que protege el invariante central filtra por (ticketId,
+  // visibility) en cada request del portal; el índice compuesto la sirve sin
+  // scan completo del hilo del ticket.
+  @@index([ticketId, visibility])
 }
 
+// v2.B (portal-ticket-messaging) — ganó storageKey/kind para adjuntos de la NUEVA
+// mensajería (foto/audio/video), guardados en MinIO vía el patrón BE-proxy
+// (espejo de NewsPostAttachment: storageKey != null para binarios propios).
+// `url` se conserva para los adjuntos VIEJOS del sistema de notas internas
+// (data-URI base64 embebida en la columna, ver ticketComments.dto.ts) — ambos
+// mecanismos conviven en la misma tabla; storageKey != null identifica un
+// adjunto de la mensajería nueva, url != null uno del sistema viejo. Nunca
+// ambos a la vez.
 model TicketCommentAttachment {
-  id        String        @id @default(uuid())
-  commentId String
-  comment   TicketComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
-  url       String
-  filename  String
-  mimeType  String?
-  sizeBytes Int?
+  id         String        @id @default(uuid())
+  commentId  String
+  comment    TicketComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  url        String?
+  // v2.B — key de MinIO (patrón BE-proxy, igual que ScheduledTaskAttachment/
+  // NewsPostAttachment). Null para los adjuntos viejos (url data-URI).
+  storageKey String?
+  // v2.B — 'image' | 'audio' | 'video'. Null para adjuntos viejos (siempre imagen,
+  // pero nunca se etiquetó como tal).
+  kind       String?
+  filename   String
+  mimeType   String?
+  sizeBytes  Int?
 
   @@index([commentId])
 }
@@ -2868,6 +2918,17 @@ model Ticket {
 
   // #44 — Back-relation: persisted comments on this ticket.
   comments TicketComment[]
+
+  // v2.B (portal-ticket-messaging) — cursor de lectura por lado ("no leídos").
+  // Diseño simple a propósito (spec "No leídos por lado"): UN timestamp por
+  // lado en vez de una tabla de recibos por-mensaje — el badge solo necesita
+  // "¿hay algo nuevo desde la última vez que abrí el hilo?", no un tracking
+  // granular por mensaje. Null = "nunca abrió el hilo" (todo lo público/ajeno
+  // cuenta como no leído). Se estampa a `now()` cuando ese lado abre el hilo
+  // (GET del listado de mensajes correspondiente), NUNCA al escribir un
+  // mensaje propio.
+  clientMessagesReadAt DateTime?
+  staffMessagesReadAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
