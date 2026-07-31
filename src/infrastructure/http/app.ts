@@ -10,6 +10,7 @@ import {
   createPortalLoginIpRateLimiter,
   createPortalGeneralRateLimiter,
   createPortalTicketCreateRateLimiter,
+  createPortalTicketMessageSendRateLimiter,
 } from './middleware/rateLimiters';
 import { SplynxClient } from '../adapters/splynx/SplynxClient';
 import { PrismaCustomerRepository } from '../adapters/prisma/PrismaCustomerRepository';
@@ -96,6 +97,11 @@ import { createTaskCommentsRouter } from './routes/taskComments.routes';
 import { createTicketCommentsRouter } from './routes/ticketComments.routes';
 import { ListTicketComments } from '@application/use-cases/ListTicketComments';
 import { AddTicketComment } from '@application/use-cases/AddTicketComment';
+// portal-ticket-messaging (v2.B) — mensajería (respuesta PÚBLICA del staff), lado admin.
+import { createTicketMessagesRouter } from './routes/ticketMessages.routes';
+import { SendStaffTicketReply } from '@application/use-cases/SendStaffTicketReply';
+import { GetTicketUnreadCount } from '@application/use-cases/GetTicketUnreadCount';
+import { GetTicketMessageAttachmentFile } from '@application/use-cases/GetTicketMessageAttachmentFile';
 import { PrismaTicketCommentRepository } from '../adapters/prisma/PrismaTicketCommentRepository';
 import { createWorkflowsRouter } from './routes/workflows.routes';
 import { ReplaceTaskTemplateItems } from '@application/use-cases/ReplaceTaskTemplateItems';
@@ -975,6 +981,10 @@ import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTicke
 import { GetPortalTicket } from '@application/use-cases/portal/GetPortalTicket';
 import { CreatePortalTicket } from '@application/use-cases/portal/CreatePortalTicket';
 import { DeleteMyPortalAccount } from '@application/use-cases/portal/DeleteMyPortalAccount';
+// portal-ticket-messaging (v2.B) — mensajería interna de un reclamo, lado portal.
+import { ListPortalTicketMessages } from '@application/use-cases/portal/ListPortalTicketMessages';
+import { SendPortalTicketMessage } from '@application/use-cases/portal/SendPortalTicketMessage';
+import { GetPortalTicketMessageAttachmentFile } from '@application/use-cases/portal/GetPortalTicketMessageAttachmentFile';
 import { CreatePortalAccount } from '@application/use-cases/portal-admin/CreatePortalAccount';
 import { RegeneratePortalPassword } from '@application/use-cases/portal-admin/RegeneratePortalPassword';
 import { SetPortalAccountStatus } from '@application/use-cases/portal-admin/SetPortalAccountStatus';
@@ -2123,6 +2133,25 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       authProvider: authAdapter,
       requireRead: requirePerm('scheduling', 'read'),
       requireWrite: requirePerm('scheduling', 'write'),
+    },
+  ));
+
+  // portal-ticket-messaging (v2.B) — mensajería (respuesta PÚBLICA del staff),
+  // lado admin. Reusa `taskPhotoStorage` (patrón compartido — mismo bucket,
+  // distinto prefijo de key, ver newsMedia arriba) y `ticketCommentRepo`
+  // (mismo singleton que el CRUD de notas internas, línea ~1678). Montado en
+  // /api/tickets, paths disjuntos de ticketComments/tickets por nº de
+  // segmentos — ver el docblock de ticketMessages.routes.ts.
+  app.use('/api/tickets', createTicketMessagesRouter(
+    {
+      sendStaffTicketReply: new SendStaffTicketReply(ticketCommentRepo, ticketAdapter, taskPhotoStorage),
+      getTicketUnreadCount: new GetTicketUnreadCount(ticketAdapter, ticketCommentRepo),
+      getTicketMessageAttachmentFile: new GetTicketMessageAttachmentFile(ticketCommentRepo, taskPhotoStorage),
+    },
+    createAuthMiddleware(authAdapter, sessionRepo),
+    {
+      read: requirePerm('tickets', 'read'),
+      write: requirePerm('tickets', 'write'),
     },
   ));
 
@@ -3630,10 +3659,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const listPortalInvoices = new ListPortalInvoices(customerAdapter);
   const listPortalPlans = new ListPortalPlans(customerAdapter);
   const listPortalTasks = new ListPortalTasks(schedulingRepo);
-  const listPortalTickets = new ListPortalTickets(ticketAdapter);
+  // v2.B (portal-ticket-messaging) — reusa el MISMO `ticketCommentRepo` singleton
+  // que ya wirea el CRUD admin de comentarios (línea ~1678), no una instancia
+  // Prisma paralela.
+  const listPortalTickets = new ListPortalTickets(ticketAdapter, ticketCommentRepo);
   // v2.A (portal-ticket-contract) — customerAdapter resuelve el contrato
   // (pertenencia + label legible), mismo adapter que el resto del portal.
-  const getPortalTicket = new GetPortalTicket(ticketAdapter, customerAdapter);
+  const getPortalTicket = new GetPortalTicket(ticketAdapter, customerAdapter, ticketCommentRepo);
   // design.md "Tickets del portal: defaults por catalogo" — el nombre del area
   // es CONFIGURABLE (config.portal.ticketAreaName, PORTAL_TICKET_AREA_NAME env,
   // opt-in), nunca el literal hardcodeado del use case.
@@ -3645,6 +3677,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     portalAccountRepo, portalSessionRepo, passwordHasher,
     createPortalAccountDeletionAuditRecorder(auditEventRepo),
   );
+  // v2.B (portal-ticket-messaging) — reusa `ticketCommentRepo` (singleton, línea
+  // ~1678) y `taskPhotoStorage` (MinIO compartido, ver task-photos/newsMedia arriba).
+  const listPortalTicketMessages = new ListPortalTicketMessages(ticketAdapter, ticketCommentRepo);
+  const sendPortalTicketMessage = new SendPortalTicketMessage(ticketAdapter, ticketCommentRepo, taskPhotoStorage);
+  const getPortalTicketMessageAttachmentFile = new GetPortalTicketMessageAttachmentFile(ticketAdapter, ticketCommentRepo, taskPhotoStorage);
 
   const portalAuthMw = createPortalAuthMiddleware(portalTokenService, portalAccountRepo);
   const portalKillSwitchMw = createPortalKillSwitchMiddleware(settingsRepo);
@@ -3657,6 +3694,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const portalLoginIpRateLimiter = createPortalLoginIpRateLimiter();
   const portalGeneralRateLimiter = createPortalGeneralRateLimiter();
   const portalTicketCreateRateLimiter = createPortalTicketCreateRateLimiter();
+  const portalTicketMessageSendRateLimiter = createPortalTicketMessageSendRateLimiter();
 
   app.use('/api/portal', createPortalRouter({
     portalLogin,
@@ -3677,6 +3715,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     createPortalTicket,
     deleteMyPortalAccount,
     ticketCreateRateLimiter: portalTicketCreateRateLimiter,
+    listPortalTicketMessages,
+    sendPortalTicketMessage,
+    getPortalTicketMessageAttachmentFile,
+    ticketMessageSendRateLimiter: portalTicketMessageSendRateLimiter,
   }));
 
   // CRUD admin de cuentas del portal — staff auth (rechaza aud=portal) +
