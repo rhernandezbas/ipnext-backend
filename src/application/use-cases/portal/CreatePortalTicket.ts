@@ -130,6 +130,9 @@ export class CreatePortalTicket {
       contractId: contract?.id ?? null,
       // v2.A — campo legible (Contract.plan), ver doc de PortalTicketDetailDto.
       contractLabel: contract?.plan ?? null,
+      // v2.B — un ticket recién creado no tiene mensajes todavía: 0 sin
+      // necesidad de consultar el repo de comentarios acá.
+      unreadCount: 0,
     };
   }
 

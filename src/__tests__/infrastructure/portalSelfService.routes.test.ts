@@ -34,6 +34,7 @@ import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMem
 import { InMemorySettingsRepository } from '@infrastructure/adapters/in-memory/InMemorySettingsRepository';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryTicketRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketRepository';
+import { InMemoryTicketCommentRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketCommentRepository';
 import { InMemoryTicketAreaCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketAreaCatalogRepository';
 import { JwtPortalTokenService } from '@infrastructure/adapters/jwt/JwtPortalTokenService';
 
@@ -166,6 +167,7 @@ function buildStack() {
   const customers = new FakeCustomerRepository();
   const scheduling = new InMemorySchedulingRepository();
   const ticketRepo = new InMemoryTicketRepository();
+  const ticketCommentRepo = new InMemoryTicketCommentRepository();
   const areaRepo = new InMemoryTicketAreaCatalogRepository();
   ticketRepo.seedAreas(areaRepo);
 
@@ -177,10 +179,10 @@ function buildStack() {
   const listPortalInvoices = new ListPortalInvoices(customers as unknown as CustomerRepository);
   const listPortalPlans = new ListPortalPlans(customers as unknown as CustomerRepository);
   const listPortalTasks = new ListPortalTasks(scheduling);
-  const listPortalTickets = new ListPortalTickets(ticketRepo);
+  const listPortalTickets = new ListPortalTickets(ticketRepo, ticketCommentRepo);
   // v2.A (portal-ticket-contract) — mismo `customers` fake que el resto del
   // stack, reusado (no una instancia paralela) para la validación de contrato.
-  const getPortalTicket = new GetPortalTicket(ticketRepo, customers as unknown as CustomerRepository);
+  const getPortalTicket = new GetPortalTicket(ticketRepo, customers as unknown as CustomerRepository, ticketCommentRepo);
   const createPortalTicket = new CreatePortalTicket(ticketRepo, areaRepo, customers as unknown as CustomerRepository);
   const deleteMyPortalAccount = new DeleteMyPortalAccount(accounts, sessions, hasher);
 

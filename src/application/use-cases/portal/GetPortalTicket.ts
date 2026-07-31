@@ -1,5 +1,6 @@
 import type { TicketRepository } from '@domain/ports/TicketRepository';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
+import type { TicketCommentRepository } from '@domain/ports/TicketCommentRepository';
 import type { PortalTicketDetailDto } from '@application/dto/portal/portalTicket.dto';
 
 /**
@@ -24,11 +25,17 @@ import type { PortalTicketDetailDto } from '@application/dto/portal/portalTicket
  * de este use case (nunca se resuelve un contrato fuera del cliente del
  * token). Si el contrato ya no aparece en esa lista (borrado/dado de baja),
  * cae a `null` en vez de romper el detalle del ticket.
+ *
+ * v2.B (portal-ticket-messaging) — `unreadCount` (spec "No leídos por lado"),
+ * mismo cálculo que `ListPortalTickets`: públicos de staff después de
+ * `clientMessagesReadAt`. Ver esa clase para por qué NO se agregó a
+ * `GetTicket`/`TicketDto` (admin).
  */
 export class GetPortalTicket {
   constructor(
     private readonly tickets: TicketRepository,
     private readonly customers: Pick<CustomerRepository, 'listContracts'>,
+    private readonly comments: Pick<TicketCommentRepository, 'countUnread'>,
   ) {}
 
   async execute(clientId: string, ticketNumber: number): Promise<PortalTicketDetailDto | null> {
@@ -43,6 +50,9 @@ export class GetPortalTicket {
       contractLabel = contracts.find((c) => c.id === ticket.contractId)?.plan ?? null;
     }
 
+    const since = ticket.clientMessagesReadAt ? new Date(ticket.clientMessagesReadAt) : null;
+    const unreadCount = await this.comments.countUnread(ticket.id, 'client', since);
+
     return {
       number: ticket.sequenceNumber,
       subject: ticket.subject,
@@ -52,6 +62,7 @@ export class GetPortalTicket {
       updatedAt: ticket.updatedAt,
       contractId: ticket.contractId,
       contractLabel,
+      unreadCount,
     };
   }
 }

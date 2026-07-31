@@ -5,12 +5,16 @@
  * `Ticket.sequenceNumber` (el mismo "#N" que usa el admin — nunca el `id` UUID
  * interno). `status` es el string del catalogo (`Ticket.status`, ya resuelto por
  * el repo — nunca el id del catalogo). El detalle (`PortalTicketDetailDto`) NO
- * incluye `comments`: `TicketComment` (prisma/schema.prisma) no distingue
- * publico/interno (no hay columna `internal`/`visibility`), asi que exponer
- * CUALQUIER comentario del staff arriesgaria filtrar notas internas — fuera de
- * alcance de este spec ("comentarios de tickets de staff (internos)"). Si el
- * portal necesita comentarios en una fase futura, requiere primero una columna
- * de visibilidad en `TicketComment` (fuera de este change).
+ * incluye los mensajes en sí — esos viven en su propio endpoint
+ * (`GET /api/portal/tickets/:number/messages`, ver ListPortalTicketMessages),
+ * que SÍ filtra por `visibility=public` en la query del repositorio (v2.B,
+ * portal-ticket-messaging — la columna que esta nota decía que faltaba ya
+ * existe: `TicketComment.visibility`).
+ *
+ * `unreadCount` (v2.B) — spec "No leídos por lado": mensajes públicos escritos
+ * por staff después de `clientMessagesReadAt`. Para el badge de la app (lista Y
+ * detalle) — se limpia recién cuando el cliente ABRE el hilo
+ * (`GET .../messages`, ver ListPortalTicketMessages), nunca por ver la lista.
  */
 export interface PortalTicketListItemDto {
   number: number;
@@ -18,6 +22,7 @@ export interface PortalTicketListItemDto {
   status: string;
   createdAt: string;
   updatedAt: string;
+  unreadCount: number;
 }
 
 /**

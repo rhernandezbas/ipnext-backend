@@ -18,6 +18,7 @@
  */
 import { GetPortalTicket } from '@application/use-cases/portal/GetPortalTicket';
 import { InMemoryTicketRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketRepository';
+import { InMemoryTicketCommentRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketCommentRepository';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { Contract } from '@domain/entities/customer';
 
@@ -42,12 +43,13 @@ function makeContract(overrides: Partial<Contract> & { id: string }): Contract {
 }
 
 const NO_CONTRACTS: Pick<CustomerRepository, 'listContracts'> = { listContracts: async () => [] };
+const NO_COMMENTS = new InMemoryTicketCommentRepository();
 
 describe('GetPortalTicket — customer-portal-api Fase 5.1 (C3: lookup por sequenceNumber)', () => {
   it('devuelve el detalle SIN comentarios cuando el ticket es del cliente, buscado por su number', async () => {
     const repo = new InMemoryTicketRepository();
     const ticket = await repo.create({ subject: 'No anda internet', description: 'desde ayer', customerId: 'client-a' });
-    const useCase = new GetPortalTicket(repo, NO_CONTRACTS);
+    const useCase = new GetPortalTicket(repo, NO_CONTRACTS, NO_COMMENTS);
 
     const result = await useCase.execute('client-a', ticket.sequenceNumber);
 
@@ -60,6 +62,7 @@ describe('GetPortalTicket — customer-portal-api Fase 5.1 (C3: lookup por seque
       updatedAt: ticket.updatedAt,
       contractId: null,
       contractLabel: null,
+      unreadCount: 0,
     });
     expect((result as unknown as Record<string, unknown>)['comments']).toBeUndefined();
     // El DTO jamas filtra el UUID interno.
@@ -68,7 +71,7 @@ describe('GetPortalTicket — customer-portal-api Fase 5.1 (C3: lookup por seque
 
   it('number inexistente -> null', async () => {
     const repo = new InMemoryTicketRepository();
-    const useCase = new GetPortalTicket(repo, NO_CONTRACTS);
+    const useCase = new GetPortalTicket(repo, NO_CONTRACTS, NO_COMMENTS);
 
     const result = await useCase.execute('client-a', 999_999);
 
@@ -78,7 +81,7 @@ describe('GetPortalTicket — customer-portal-api Fase 5.1 (C3: lookup por seque
   it('anti-IDOR (scenario "Ticket ajeno por id"): number de OTRO cliente -> null, IGUAL que inexistente', async () => {
     const repo = new InMemoryTicketRepository();
     const ticketB = await repo.create({ subject: 'Ticket de B', description: 'd', customerId: 'client-b' });
-    const useCase = new GetPortalTicket(repo, NO_CONTRACTS);
+    const useCase = new GetPortalTicket(repo, NO_CONTRACTS, NO_COMMENTS);
 
     const resultForForeignTicket = await useCase.execute('client-a', ticketB.sequenceNumber);
     const resultForMissingTicket = await useCase.execute('client-a', 999_999);
@@ -94,7 +97,7 @@ describe('GetPortalTicket — customer-portal-api Fase 5.1 (C3: lookup por seque
       const customers: Pick<CustomerRepository, 'listContracts'> = {
         listContracts: async (clientId) => (clientId === 'client-a' ? [makeContract({ id: 'contract-a1', plan: '50 Mb Simetrico' })] : []),
       };
-      const useCase = new GetPortalTicket(repo, customers);
+      const useCase = new GetPortalTicket(repo, customers, NO_COMMENTS);
 
       const result = await useCase.execute('client-a', ticket.sequenceNumber);
 
@@ -105,12 +108,29 @@ describe('GetPortalTicket — customer-portal-api Fase 5.1 (C3: lookup por seque
     it('ticket con contractId que ya no aparece en los contratos del cliente -> contractLabel null, no rompe', async () => {
       const repo = new InMemoryTicketRepository();
       const ticket = await repo.create({ subject: 'No anda', description: 'd', customerId: 'client-a', contractId: 'contract-borrado' });
-      const useCase = new GetPortalTicket(repo, NO_CONTRACTS);
+      const useCase = new GetPortalTicket(repo, NO_CONTRACTS, NO_COMMENTS);
 
       const result = await useCase.execute('client-a', ticket.sequenceNumber);
 
       expect(result?.contractId).toBe('contract-borrado');
       expect(result?.contractLabel).toBeNull();
+    });
+  });
+
+  describe('v2.B (portal-ticket-messaging) — unreadCount', () => {
+    it('cuenta los públicos de staff después del cursor de lectura del cliente', async () => {
+      const repo = new InMemoryTicketRepository();
+      const comments = new InMemoryTicketCommentRepository();
+      const ticket = await repo.create({ subject: 'No anda', description: 'd', customerId: 'client-a' });
+      await comments.create({
+        id: 'm1', ticketId: ticket.id, authorId: null, authorKind: 'staff', visibility: 'public',
+        authorName: 'Soporte', body: 'Ya lo vemos', createdAt: new Date().toISOString(), attachments: [],
+      });
+      const useCase = new GetPortalTicket(repo, NO_CONTRACTS, comments);
+
+      const result = await useCase.execute('client-a', ticket.sequenceNumber);
+
+      expect(result?.unreadCount).toBe(1);
     });
   });
 });
