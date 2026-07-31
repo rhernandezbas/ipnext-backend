@@ -1,8 +1,7 @@
 /**
  * ticket-messaging-migration.test.ts — assertion estática (molde
  * messaging-internal-notes-migration.test.ts) sobre
- * 20261029000000_ticket_messaging Y su migración de seguimiento
- * 20261029000100_ticket_comment_drop_defaults.
+ * 20261029000000_ticket_messaging.
  *
  * F6 (fix wave, MEDIUM): `authorKind`/`visibility` se agregaban NULLABLE, se
  * backfilleaban, y RECIÉN DESPUÉS se marcaban NOT NULL — SIN DEFAULT. En el
@@ -13,19 +12,21 @@
  * queda en 500. El fix agrega `DEFAULT 'staff'` / `DEFAULT 'internal'` desde
  * el `ADD COLUMN` — el mismo valor SEGURO que ya usa el backfill de abajo.
  *
- * G5 (fix wave FINAL): el DEFAULT de F6 solo hacía falta durante la ventana
- * de deploy — dejarlo PERMANENTE en `schema.prisma` vuelve authorKind/
- * visibility opcionales para siempre en el input de `create` de Prisma (un
- * alta futura que se olvide de pasarlos compila igual y estampa 'staff' en
- * silencio). Este archivo (F6 original) ANTES solo asertaba el `.sql` — si
- * alguien volvía a agregar `@default` en `schema.prisma` sin la migración de
- * seguimiento, nada se ponía en rojo (el drift quedaba invisible hasta el
- * próximo `prisma migrate dev`, que lo detecta demasiado tarde). Las suites de
- * abajo cierran eso: aserta que `schema.prisma` NO tiene `@default` en esas
- * dos columnas, Y que la migración de seguimiento existe con el `DROP
- * DEFAULT` real.
+ * G5 (fix wave FINAL) había intentado sacar el DEFAULT del schema Y agregar
+ * una migración de seguimiento (20261029000100_ticket_comment_drop_defaults)
+ * con el DROP DEFAULT en ESTE MISMO release. Corrección posterior (orden de
+ * deploy): `prisma migrate deploy` aplica TODAS las migraciones pendientes
+ * de una sola pasada, ANTES del swap del container — con las dos migraciones
+ * en la misma branch, el DEFAULT se agregaba y se borraba en el MISMO
+ * deploy, reabriendo la ventana que estaba destinado a proteger. Se revirtió
+ * G5: la migración de seguimiento se sacó de esta branch y `schema.prisma`
+ * vuelve a tener `@default(staff)`/`@default(internal)` (schema y DB
+ * consistentes tras ESTE deploy). El DROP DEFAULT queda pendiente para un
+ * deploy FUTURO, una vez que el código de este release esté corriendo en
+ * todas las instancias — ver el docstring de `TicketComment` en
+ * `prisma/schema.prisma` y el spec de `portal-ticket-messaging`.
  */
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync } from 'fs';
 import { join } from 'path';
 
 describe('Migración 20261029000000_ticket_messaging', () => {
@@ -70,56 +71,22 @@ describe('Migración 20261029000000_ticket_messaging', () => {
   });
 });
 
-describe('G5 (fix wave FINAL) — schema.prisma NO tiene @default permanente en authorKind/visibility', () => {
+describe('corrección de orden de deploy — schema.prisma SÍ tiene @default en authorKind/visibility (consistente con la DB tras este deploy)', () => {
   let schema: string;
 
   beforeAll(() => {
     schema = readFileSync(join(__dirname, '..', '..', '..', 'prisma', 'schema.prisma'), 'utf8');
   });
 
-  it('el campo authorKind del modelo TicketComment no lleva @default — revert-probe: agregarlo de vuelta pone este test en rojo', () => {
+  it("el campo authorKind del modelo TicketComment lleva @default(staff) — protege la ventana de deploy; el DROP DEFAULT queda para un release futuro", () => {
     const line = schema.split('\n').find((l) => /^\s*authorKind\s+TicketCommentAuthorKind\b/.test(l));
     expect(line).toBeDefined();
-    expect(line).not.toMatch(/@default/);
+    expect(line).toMatch(/@default\(staff\)/);
   });
 
-  it('el campo visibility del modelo TicketComment no lleva @default — revert-probe: agregarlo de vuelta pone este test en rojo', () => {
+  it("el campo visibility del modelo TicketComment lleva @default(internal) — mismo criterio SEGURO que el backfill", () => {
     const line = schema.split('\n').find((l) => /^\s*visibility\s+TicketCommentVisibility\b/.test(l));
     expect(line).toBeDefined();
-    expect(line).not.toMatch(/@default/);
-  });
-});
-
-describe('G5 (fix wave FINAL) — migración de seguimiento 20261029000100_ticket_comment_drop_defaults', () => {
-  let sql: string;
-
-  beforeAll(() => {
-    sql = readFileSync(
-      join(__dirname, '..', '..', '..', 'prisma', 'migrations', '20261029000100_ticket_comment_drop_defaults', 'migration.sql'),
-      'utf8',
-    );
-  });
-
-  it('DROP DEFAULT en authorKind — la migración de seguimiento saca el DEFAULT que la original agregó', () => {
-    expect(sql).toMatch(/ALTER COLUMN "authorKind" DROP DEFAULT/);
-  });
-
-  it('DROP DEFAULT en visibility', () => {
-    expect(sql).toMatch(/ALTER COLUMN "visibility" DROP DEFAULT/);
-  });
-
-  it('el timestamp de la migración de seguimiento es MAYOR al de la original (aplica DESPUÉS, nunca antes)', () => {
-    const original = '20261029000000_ticket_messaging';
-    const followUp = '20261029000100_ticket_comment_drop_defaults';
-    expect(followUp.localeCompare(original)).toBeGreaterThan(0);
-  });
-
-  it('es la migración MÁS NUEVA del repo (ningún otro directorio de prisma/migrations la supera) — sin drift de orden', () => {
-    const migrationsDir = join(__dirname, '..', '..', '..', 'prisma', 'migrations');
-    const entries = readdirSync(migrationsDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort();
-    expect(entries[entries.length - 1]).toBe('20261029000100_ticket_comment_drop_defaults');
+    expect(line).toMatch(/@default\(internal\)/);
   });
 });

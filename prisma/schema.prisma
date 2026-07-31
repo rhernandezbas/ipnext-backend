@@ -1671,21 +1671,42 @@ model TicketComment {
   // la sesión/token), no la base. Null en comentarios viejos (backfill) y en
   // cualquier alta que no tenga un id de autor resoluble.
   authorId    String?
-  // G5 (fix wave FINAL) — SIN @default a propósito. F6 le había puesto
+  // G5→G12 (fix wave, corrección de orden de deploy): F6 agregó
   // @default(staff)/@default(internal) acá para espejar el DEFAULT que la
-  // migración original agregó en el ADD COLUMN (protegía el INSERT del código
-  // VIEJO durante la ventana de deploy) — pero un @default PERMANENTE en el
-  // schema hace que authorKind/visibility queden OPCIONALES para siempre en el
-  // input de `create` de Prisma: un `create` futuro que se olvide de pasarlos
-  // compila igual y estampa 'staff'/'internal' en silencio — un mensaje del
-  // CLIENTE mal-etiquetado como staff no cuenta en countUnread y se muestra
-  // como si lo hubiera escrito soporte. El DEFAULT solo hacía falta durante la
-  // ventana de deploy; la migración de seguimiento
-  // (20261029000100_ticket_comment_drop_defaults) lo saca de la DB DESPUÉS del
-  // swap — este schema ya refleja ese estado final (sin DEFAULT), no el
-  // intermedio. Ver ticket-messaging-migration.test.ts.
-  authorKind  TicketCommentAuthorKind
-  visibility  TicketCommentVisibility
+  // migración 20261029000000_ticket_messaging agrega en el ADD COLUMN —
+  // protege el INSERT del código VIEJO durante la ventana de deploy (entre
+  // que `migrate deploy` corre y el swap del container termina, el código
+  // viejo, que no conoce estas columnas, puede seguir insertando
+  // TicketComment sin especificarlas; sin DEFAULT esa ventana revienta con
+  // NOT NULL violation → 500 en POST /api/tickets/:id/comments).
+  //
+  // G5 había intentado sacar el DEFAULT en ESTE MISMO release agregando una
+  // migración de seguimiento (20261029000100_ticket_comment_drop_defaults)
+  // que hacía DROP DEFAULT — pero `prisma migrate deploy` aplica TODAS las
+  // migraciones pendientes de una sola pasada, ANTES del swap. Con las dos
+  // migraciones en la misma branch, el DEFAULT se agregaba y se borraba en
+  // el MISMO deploy, reabriendo exactamente la ventana que estaba destinado
+  // a proteger. Por eso el DEFAULT queda EN el schema ahora — es la única
+  // forma de que sobreviva hasta después del swap.
+  //
+  // PENDIENTE PARA EL PRÓXIMO DEPLOY (una vez que el código de ESTE release
+  // ya esté corriendo en TODAS las instancias — el que SIEMPRE estampa
+  // authorKind/visibility explícitamente: ver AddTicketComment,
+  // SendStaffTicketReply, SendPortalTicketMessage):
+  //   (a) sacar los @default de authorKind/visibility de este schema, y
+  //   (b) crear una migración NUEVA (release aparte) con
+  //       ALTER COLUMN "authorKind" DROP DEFAULT,
+  //       ALTER COLUMN "visibility" DROP DEFAULT;
+  // El DEFAULT permanente es un peligro: con @default, authorKind/visibility
+  // quedan OPCIONALES para siempre en el input de `create` de Prisma — un
+  // `create` futuro que se olvide de pasar authorKind compila igual y
+  // estampa 'staff' en silencio, lo cual puede esconder un mensaje del
+  // CLIENTE mal-etiquetado como staff (no cuenta en countUnread, se muestra
+  // como si lo hubiera escrito soporte). Ver ticket-messaging-migration.test.ts
+  // y el spec (Requirement: Backfill conservador de lo existente) para el
+  // seguimiento de este pendiente.
+  authorKind  TicketCommentAuthorKind @default(staff)
+  visibility  TicketCommentVisibility @default(internal)
   body        String
   createdAt   DateTime                  @default(now())
   attachments TicketCommentAttachment[]

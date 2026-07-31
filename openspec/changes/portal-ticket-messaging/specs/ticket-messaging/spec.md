@@ -44,6 +44,35 @@ de este cambio.
 - **WHEN** un cliente abre un reclamo que ya existía, con comentarios previos del equipo
 - **THEN** no ve NINGUNO de esos comentarios — solo lo que se escriba desde ahora como público
 
+> **Nota operativa — DROP DEFAULT pendiente para el PRÓXIMO deploy (corrección de orden de
+> deploy, revierte G5):** la migración `20261029000000_ticket_messaging` agrega `authorKind`/
+> `visibility` con `DEFAULT 'staff'`/`DEFAULT 'internal'` para proteger la ventana de deploy —
+> entre que `prisma migrate deploy` corre y el swap del container termina, el código VIEJO (que
+> no conoce estas columnas) puede seguir insertando `TicketComment` sin especificarlas; sin
+> DEFAULT esa ventana revienta con NOT NULL violation (500 en `POST /api/tickets/:id/comments`).
+> `schema.prisma` espeja ese DEFAULT con `@default(staff)`/`@default(internal)` a propósito —
+> **no** es drift.
+>
+> G5 había intentado sacar el DEFAULT en el MISMO release (schema sin `@default` + migración de
+> seguimiento `20261029000100_ticket_comment_drop_defaults` con `DROP DEFAULT`), pero
+> `prisma migrate deploy` aplica TODAS las migraciones pendientes de una sola pasada, ANTES del
+> swap — con las dos migraciones en la misma branch, el DEFAULT se agregaba y se borraba en el
+> MISMO deploy, reabriendo la ventana que estaba destinado a proteger. Se revirtió: la migración
+> de seguimiento se sacó de esta branch.
+>
+> **Una vez que el código de ESTE release esté corriendo en TODAS las instancias** (el que
+> SIEMPRE estampa `authorKind`/`visibility` explícitamente — `AddTicketComment`,
+> `SendStaffTicketReply`, `SendPortalTicketMessage`), un deploy FUTURO debe:
+> 1. sacar `@default(staff)`/`@default(internal)` de `authorKind`/`visibility` en `schema.prisma`, y
+> 2. crear una migración nueva (release aparte, nunca el mismo) con
+>    `ALTER COLUMN "authorKind" DROP DEFAULT, ALTER COLUMN "visibility" DROP DEFAULT;`
+>
+> El DEFAULT permanente es un peligro de tipos: con `@default`, un `create` futuro que se olvide
+> de pasar `authorKind` compila igual y estampa `'staff'` en silencio — puede esconder un mensaje
+> del CLIENTE mal-etiquetado como staff (no cuenta en `countUnread`, se muestra como si lo hubiera
+> escrito soporte). Ver `ticket-messaging-migration.test.ts` y el docstring de `TicketComment` en
+> `prisma/schema.prisma`.
+
 ### Requirement: El cliente lee y escribe en SU reclamo
 `GET /api/portal/tickets/:number/messages` DEBE (MUST) devolver **solo los `public`** del ticket
 del cliente del token, en orden cronológico. `POST` agrega un mensaje del cliente, con
