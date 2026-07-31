@@ -356,7 +356,16 @@ export class InMemoryTicketRepository implements TicketRepository {
     if (idx === -1) return;
     const existing = this.tickets[idx]!;
     const iso = at.toISOString();
-    this.tickets[idx] =
-      side === 'client' ? { ...existing, clientMessagesReadAt: iso } : { ...existing, staffMessagesReadAt: iso };
+    const field = side === 'client' ? 'clientMessagesReadAt' : 'staffMessagesReadAt';
+    const current = existing[field];
+    // G7 (fix wave FINAL) — cursor MONÓTONO a propósito: dos GET concurrentes
+    // (dos pestañas, un pull-to-refresh solapado) pueden resolver — y por lo
+    // tanto llamar acá — en cualquier orden. Si el `at` MÁS VIEJO "gana" la
+    // carrera de escritura por llegar último, un update incondicional
+    // RETROCEDE el cursor: mensajes ya marcados leídos (con un `at` más
+    // nuevo) vuelven a contar como no-leídos y el badge reaparece sin que
+    // haya un mensaje nuevo real. Solo avanza — nunca hacia atrás.
+    if (current != null && new Date(current).getTime() >= at.getTime()) return;
+    this.tickets[idx] = { ...existing, [field]: iso };
   }
 }

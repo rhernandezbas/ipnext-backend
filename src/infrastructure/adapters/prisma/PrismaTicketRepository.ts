@@ -368,8 +368,20 @@ export class PrismaTicketRepository implements TicketRepository {
     // F5 (fix wave) — `at` viene del caller (createdAt del último mensaje
     // listado), nunca `new Date()` acá adentro.
     const field = side === 'client' ? 'clientMessagesReadAt' : 'staffMessagesReadAt';
+    // G7 (fix wave FINAL) — cursor MONÓTONO por CONSTRUCCIÓN, en la query: dos
+    // GET concurrentes del mismo lado pueden llegar a la DB en cualquier
+    // orden. Un `updateMany` incondicional deja que el `at` MÁS VIEJO, si
+    // "gana" la carrera de escritura (llega último), RETROCEDA el cursor —
+    // mensajes ya marcados leídos vuelven a contar como no-leídos y el badge
+    // reaparece sin un mensaje nuevo real. El WHERE solo afecta la fila
+    // cuando el cursor actual es null (primera vez) o estrictamente anterior
+    // a `at` — nunca hacia atrás. Mismo criterio que
+    // `InMemoryTicketRepository.markMessagesRead`.
     await (prisma as any).ticket.updateMany({
-      where: { id: ticketId },
+      where: {
+        id: ticketId,
+        OR: [{ [field]: null }, { [field]: { lt: at } }],
+      },
       data: { [field]: at },
     });
   }

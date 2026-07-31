@@ -98,4 +98,14 @@ describe('AddTicketCommentSchema', () => {
     });
     expect(res.success).toBe(false);
   });
+
+  it('G6 (fix wave FINAL): rechaza un campo desconocido DENTRO de un attachment — hermano anidado de F2 (.strict() del objeto exterior no alcanza a los objetos anidados). Verificado contra el FE real (ipnext-frontend/src/types/ticketComments.ts): manda exactamente {url, filename, mimeType, sizeBytes}, así que este .strict() no rompe nada legítimo', () => {
+    const att = dataUri(300, 'image/png');
+    const res = AddTicketCommentSchema.safeParse({
+      attachments: [
+        { url: att.url, filename: 's.png', mimeType: 'image/png', sizeBytes: att.sizeBytes, visibility: 'public' },
+      ],
+    });
+    expect(res.success).toBe(false);
+  });
 });

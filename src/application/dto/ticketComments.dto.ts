@@ -8,6 +8,18 @@ const SVG_MIME_RE = /^image\/svg/i;
 const DATA_URI_RE = /^data:(image\/(?!svg)[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/;
 export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
+/**
+ * portal-ticket-messaging (v2.B) fix wave FINAL, G6 — `.strict()` A PROPÓSITO,
+ * hermano ANIDADO de F2 (`AddTicketCommentSchema` de abajo): el `.strict()`
+ * del objeto EXTERIOR no alcanza a los objetos anidados dentro de un array —
+ * zod valida cada elemento de `attachments` contra ESTE schema, así que sin
+ * su propio `.strict()`, un campo desconocido en un attachment individual se
+ * strippeaba en silencio en vez de rechazarse. Verificado contra el FE real
+ * (`ipnext-frontend/src/types/ticketComments.ts`,
+ * `AddTicketCommentInput.attachments`): manda exactamente
+ * `{url, filename, mimeType, sizeBytes}` — los mismos cuatro campos que este
+ * schema ya exige — así que `.strict()` acá no rompe ningún request legítimo.
+ */
 export const TicketCommentAttachmentSchema = z
   .object({
     url: z.string().regex(DATA_URI_RE),
@@ -17,6 +29,7 @@ export const TicketCommentAttachmentSchema = z
     }),
     sizeBytes: z.number().int().positive(),
   })
+  .strict()
   .superRefine((a, ctx) => {
     const m = DATA_URI_RE.exec(a.url);
     if (!m) return;

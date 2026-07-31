@@ -25,6 +25,7 @@ jest.mock('../../infrastructure/database/prisma', () => ({
       findMany: jest.fn(),
       count: jest.fn(),
       findUnique: jest.fn(),
+      updateMany: jest.fn(),
     },
     $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
   },
@@ -34,7 +35,7 @@ import { prisma } from '../../infrastructure/database/prisma';
 import { PrismaTicketRepository } from '../../infrastructure/adapters/prisma/PrismaTicketRepository';
 
 const mockPrisma = prisma as unknown as {
-  ticket: { findMany: jest.Mock; count: jest.Mock; findUnique: jest.Mock };
+  ticket: { findMany: jest.Mock; count: jest.Mock; findUnique: jest.Mock; updateMany: jest.Mock };
   $transaction: jest.Mock;
 };
 
@@ -87,5 +88,40 @@ describe('PrismaTicketRepository — getBySequenceNumber (usado por GetPortalTic
 
     const call = mockPrisma.ticket.findUnique.mock.calls[0][0];
     expect(call.where).toEqual({ sequenceNumber: 42 });
+  });
+});
+
+describe('PrismaTicketRepository — markMessagesRead (G7: cursor MONÓTONO por construcción)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.ticket.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  it('side=client: WHERE incluye el OR [cursor null, cursor < at] — revert-probe: volver a `where: { id: ticketId }` pone este test en rojo', async () => {
+    const repo = new PrismaTicketRepository();
+    const at = new Date('2026-01-01T00:10:00.000Z');
+
+    await repo.markMessagesRead('ticket-1', 'client', at);
+
+    const call = mockPrisma.ticket.updateMany.mock.calls[0][0];
+    expect(call.where).toEqual({
+      id: 'ticket-1',
+      OR: [{ clientMessagesReadAt: null }, { clientMessagesReadAt: { lt: at } }],
+    });
+    expect(call.data).toEqual({ clientMessagesReadAt: at });
+  });
+
+  it('side=staff: mismo guard, sobre staffMessagesReadAt', async () => {
+    const repo = new PrismaTicketRepository();
+    const at = new Date('2026-01-01T00:10:00.000Z');
+
+    await repo.markMessagesRead('ticket-1', 'staff', at);
+
+    const call = mockPrisma.ticket.updateMany.mock.calls[0][0];
+    expect(call.where).toEqual({
+      id: 'ticket-1',
+      OR: [{ staffMessagesReadAt: null }, { staffMessagesReadAt: { lt: at } }],
+    });
+    expect(call.data).toEqual({ staffMessagesReadAt: at });
   });
 });
