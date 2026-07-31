@@ -28,12 +28,27 @@ export const TicketCommentAttachmentSchema = z
     if (a.mimeType !== mime) ctx.addIssue({ code: 'custom', message: 'mimeType mismatch' });
   });
 
+/**
+ * portal-ticket-messaging (v2.B) fix wave, F2 — `.strict()` A PROPÓSITO, mismo
+ * criterio que `SendStaffTicketReplySchema` / `SendPortalTicketMessageSchema`:
+ * esta ruta (`POST /api/tickets/:ticketId/comments`) es el camino de las NOTAS
+ * INTERNAS de siempre (`AddTicketComment` estampa `authorKind: 'staff'` +
+ * `visibility: 'internal'` FIJOS, ver ese use case) — `visibility`/`authorKind`
+ * NUNCA viajan como parámetro del input. Antes de `.strict()`, zod los
+ * STRIPPEABA en silencio: `{body, visibility:'public', authorKind:'client'}`
+ * daba 201 con el comentario quedando `internal` igual — el resultado era
+ * seguro, pero un caller que creyera estar mandando un mensaje público al
+ * cliente nunca se enteraba de que no pasó nada. Ahora cualquier campo fuera
+ * del schema (este incluido) rechaza con 422/VALIDATION_ERROR — el mismo
+ * contrato que esta ruta ya usa para el resto de sus validaciones.
+ */
 export const AddTicketCommentSchema = z
   .object({
     body: z.string().default(''),
     authorName: z.string().min(1).optional(),
     attachments: z.array(TicketCommentAttachmentSchema).max(3).default([]),
   })
+  .strict()
   .refine((d) => d.body.trim().length > 0 || d.attachments.length > 0);
 
 export type AddTicketCommentDto = z.infer<typeof AddTicketCommentSchema>;
