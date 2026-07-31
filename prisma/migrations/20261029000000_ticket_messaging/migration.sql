@@ -24,12 +24,30 @@ CREATE TYPE "TicketCommentAuthorKind" AS ENUM ('client', 'staff');
 CREATE TYPE "TicketCommentVisibility" AS ENUM ('public', 'internal');
 
 -- AlterTable: TicketComment — columnas nuevas, NULLABLE por ahora (backfill abajo).
+--
+-- F6 (fix wave): authorKind/visibility llevan DEFAULT desde el alta. NO es para
+-- el backfill de abajo (que escribe TODAS las filas existentes explicitamente,
+-- con o sin default) sino para la VENTANA de deploy: en el pipeline,
+-- `migrate deploy` corre ANTES del swap del container — hasta que el codigo
+-- nuevo esta activo, cualquier INSERT del codigo VIEJO (que no conoce estas
+-- columnas) sigue funcionando porque el default resuelve el valor. Sin
+-- DEFAULT, esa ventana revienta con NOT NULL violation y
+-- POST /api/tickets/:id/comments queda en 500. 'staff'/'internal' es ademas
+-- el lado SEGURO — mismo criterio que el backfill.
 ALTER TABLE "TicketComment"
   ADD COLUMN "authorId" TEXT,
-  ADD COLUMN "authorKind" "TicketCommentAuthorKind",
-  ADD COLUMN "visibility" "TicketCommentVisibility";
+  ADD COLUMN "authorKind" "TicketCommentAuthorKind" DEFAULT 'staff',
+  ADD COLUMN "visibility" "TicketCommentVisibility" DEFAULT 'internal';
 
 -- Backfill conservador: TODO lo existente queda staff + internal (ver nota arriba).
+-- COSTO (F6, fix wave): reescribe TODAS las filas de TicketComment (UPDATE sin
+-- WHERE) dentro de la transaccion de la migracion — en una tabla grande esto
+-- es una transaccion larga (ROW EXCLUSIVE por fila, no bloquea lecturas, pero
+-- mantiene la migracion corriendo mas tiempo). Aceptado a proposito: la tabla
+-- de comentarios de tickets no es de las mas grandes del sistema; si esto se
+-- vuelve un problema en un futuro deploy, la alternativa es un backfill por
+-- lotes FUERA de la migracion (patron messaging-bulk-*), pero eso complica el
+-- rollout de un enum + NOT NULL en un solo paso.
 UPDATE "TicketComment" SET "authorKind" = 'staff', "visibility" = 'internal';
 
 -- Ahora que no quedan NULLs, se puede exigir NOT NULL en las dos columnas nuevas

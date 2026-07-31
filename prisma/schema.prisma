@@ -1671,8 +1671,13 @@ model TicketComment {
   // la sesión/token), no la base. Null en comentarios viejos (backfill) y en
   // cualquier alta que no tenga un id de autor resoluble.
   authorId    String?
-  authorKind  TicketCommentAuthorKind
-  visibility  TicketCommentVisibility
+  // F6 (fix wave) — @default espeja el DEFAULT agregado en el ADD COLUMN de la
+  // migración (protege el INSERT del código viejo durante la ventana de
+  // deploy, ver migration.sql): SIN esto acá, un futuro `prisma migrate dev`
+  // vería drift entre el historial de migraciones y este schema, y
+  // propondría una migración para BORRAR el default que ya está en la DB.
+  authorKind  TicketCommentAuthorKind  @default(staff)
+  visibility  TicketCommentVisibility  @default(internal)
   body        String
   createdAt   DateTime                  @default(now())
   attachments TicketCommentAttachment[]
