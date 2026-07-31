@@ -47,6 +47,31 @@ describe('GET /api/tickets/:id/comments', () => {
     expect(res.body).toEqual([]);
   });
 
+  it('F9 (fix wave): mapea a DTO — NUNCA expone storageKey (layout del bucket de MinIO); adjuntos de la mensajería nueva se sirven vía la ruta del BE, los legacy conservan su data-URI', async () => {
+    const { app, ticketId, commentRepo } = await buildApp();
+    await commentRepo.create({
+      id: 'c1', ticketId, authorId: 'acc-9', authorKind: 'client', visibility: 'public',
+      authorName: 'Cliente', body: 'hola', createdAt: new Date().toISOString(),
+      attachments: [
+        { id: 'att-new', commentId: 'c1', url: null, storageKey: 'tickets/t1/c1/att-new.jpg', kind: 'image', filename: 'foto.jpg', mimeType: 'image/jpeg', sizeBytes: 100 },
+        { id: 'att-legacy', commentId: 'c1', url: 'data:image/png;base64,AAAA', storageKey: null, kind: null, filename: 'legacy.png', mimeType: 'image/png', sizeBytes: 3 },
+      ],
+    });
+
+    const res = await request(app).get(`/api/tickets/${ticketId}/comments`);
+
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain('storageKey');
+    const [comment] = res.body;
+    expect(comment.attachments).toHaveLength(2);
+    const newAtt = comment.attachments.find((a: { id: string }) => a.id === 'att-new');
+    const legacyAtt = comment.attachments.find((a: { id: string }) => a.id === 'att-legacy');
+    // El adjunto NUEVO (storageKey) se sirve por la ruta del BE-proxy.
+    expect(newAtt.url).toBe('/api/tickets/messages/attachments/att-new/file');
+    // El adjunto LEGACY (data-URI en `url`) sigue tal cual — nunca se rompió.
+    expect(legacyAtt.url).toBe('data:image/png;base64,AAAA');
+  });
+
   it('returns 404 for a non-existent ticket', async () => {
     const { app } = await buildApp();
     const res = await request(app).get('/api/tickets/missing/comments');

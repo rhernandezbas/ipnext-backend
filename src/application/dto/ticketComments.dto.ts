@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TicketComment } from '@domain/entities/ticketComment';
 
 // SVG is excluded on purpose: it can carry <script>, so an inline SVG image is a
 // stored-XSS vector. We reject `image/svg`, `image/svg+xml`, etc. — in both the
@@ -52,3 +53,61 @@ export const AddTicketCommentSchema = z
   .refine((d) => d.body.trim().length > 0 || d.attachments.length > 0);
 
 export type AddTicketCommentDto = z.infer<typeof AddTicketCommentSchema>;
+
+/**
+ * F9 (fix wave) — DTO de salida de `ticketComments.routes.ts` (el CRUD de
+ * notas internas de siempre). Antes, la ruta devolvía la ENTIDAD `TicketComment`
+ * cruda (`res.json(comment[s])`), que desde v2.B incluye `storageKey` — el
+ * layout interno del bucket de MinIO no tiene por qué viajar al cliente.
+ *
+ * `authorId`/`visibility` SÍ se exponen a propósito (a diferencia del DTO del
+ * portal, `portalTicketMessage.dto.ts`): esta ruta es admin-only, y el
+ * criterio ya establecido para el equivalente de mensajería
+ * (`toTicketMessageDto`, `ticketMessage.dto.ts`) es que el staff ve todo el
+ * comentario.
+ *
+ * `url` por adjunto preserva AMBOS sistemas: los legacy (data-URI en `url`,
+ * `storageKey: null`, el único tipo que esta ruta puede CREAR — ver
+ * `AddTicketComment`) siguen tal cual; los de la mensajería nueva
+ * (`storageKey` no nulo, pueden aparecer acá si conviven en el mismo hilo que
+ * un `SendStaffTicketReply`) se sirven por la ruta BE-proxy existente.
+ */
+export interface TicketCommentDto {
+  id: string;
+  ticketId: string;
+  authorId: string | null;
+  authorKind: TicketComment['authorKind'];
+  visibility: TicketComment['visibility'];
+  authorName: string;
+  body: string;
+  createdAt: string;
+  attachments: Array<{
+    id: string;
+    kind: 'image' | 'audio' | 'video' | null;
+    filename: string;
+    mimeType: string | null;
+    sizeBytes: number | null;
+    url: string;
+  }>;
+}
+
+export function toTicketCommentDto(comment: TicketComment): TicketCommentDto {
+  return {
+    id: comment.id,
+    ticketId: comment.ticketId,
+    authorId: comment.authorId,
+    authorKind: comment.authorKind,
+    visibility: comment.visibility,
+    authorName: comment.authorName,
+    body: comment.body,
+    createdAt: comment.createdAt,
+    attachments: comment.attachments.map((a) => ({
+      id: a.id,
+      kind: a.kind,
+      filename: a.filename,
+      mimeType: a.mimeType ?? null,
+      sizeBytes: a.sizeBytes ?? null,
+      url: a.storageKey != null ? `/api/tickets/messages/attachments/${a.id}/file` : (a.url ?? ''),
+    })),
+  };
+}

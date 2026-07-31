@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { ListTicketComments } from '@application/use-cases/ListTicketComments';
 import { AddTicketComment } from '@application/use-cases/AddTicketComment';
-import { AddTicketCommentSchema } from '@application/dto/ticketComments.dto';
+import { AddTicketCommentSchema, toTicketCommentDto } from '@application/dto/ticketComments.dto';
 
 /** Per-route permission guards (tickets read/write). */
 export interface TicketCommentRoutePerms {
@@ -25,7 +25,8 @@ export function createTicketCommentsRouter(
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const comments = await listComments.execute(req.params['ticketId'] as string);
-        res.json(comments);
+        // F9 (fix wave) — DTO, no la entidad cruda (storageKey no debe viajar).
+        res.json(comments.map(toTicketCommentDto));
       } catch (err) {
         next(err);
       }
@@ -56,7 +57,8 @@ export function createTicketCommentsRouter(
           authorName: data.authorName ?? req.user?.username ?? 'System',
           attachments: data.attachments,
         });
-        res.status(201).json(comment);
+        // F9 (fix wave) — mismo criterio que el GET: DTO, no la entidad cruda.
+        res.status(201).json(toTicketCommentDto(comment));
       } catch (err) {
         next(err);
       }
