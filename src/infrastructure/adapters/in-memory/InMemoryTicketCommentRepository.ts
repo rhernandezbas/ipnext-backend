@@ -13,9 +13,18 @@ export class InMemoryTicketCommentRepository implements TicketCommentRepository 
   /**
    * portal-ticket-messaging (v2.B) — INVARIANTE CENTRAL: el filtro `visibility ===
    * 'public'` vive ACÁ, en la query del repo — no en un mapper aguas abajo. Si
-   * alguien invierte esta condición (`!== 'public'`), CUALQUIER test que ejercite
-   * este método con un fixture mixto (público + interno) debe fallar en rojo —
-   * ver ListPortalTicketMessages.test.ts "revert-probe".
+   * alguien invierte esta condición (`!== 'public'`), un test que ejercite ESTE
+   * adapter con un fixture mixto (público + interno) debe fallar en rojo — ver
+   * `ListPortalTicketMessages.test.ts` "revert-probe".
+   *
+   * CORRECCIÓN (fix wave F1): esa garantía es SOLO sobre este in-memory. En prod
+   * corre `PrismaTicketCommentRepository.listPublicByTicket`, un gemelo
+   * INDEPENDIENTE — invertir SU condición no toca este archivo, y hasta esta fix
+   * wave no había ningún test sobre el adapter Prisma (`rg -l
+   * PrismaTicketCommentRepository src/__tests__` daba vacío: un revisor borró el
+   * filtro del WHERE real y las 5 suites de mensajería quedaron 35/35 verde). Ver
+   * `PrismaTicketCommentRepository.where.test.ts` para el revert-probe que SÍ
+   * cubre el código que corre en prod.
    */
   async listPublicByTicket(ticketId: string): Promise<TicketComment[]> {
     return this.store
