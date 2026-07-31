@@ -49,13 +49,19 @@ export const MAX_MESSAGE_BODY_LEN = 4000;
 
 // SVG excluido a propósito (mismo motivo que newsAttachment.ts): puede llevar
 // <script>, stored-XSS si se sirve inline.
-const IMAGE_MIME_TO_EXT: Record<string, string> = {
+// G8 (fix wave FINAL) — exportados para el test de invariante
+// (`Object.keys(MAGIC_BYTE_SNIFFERS) ⊇ allowlist`): hoy, agregar un mimeType
+// a la allowlist SIN agregarle también su sniffer de magic bytes da un 415
+// silencioso en runtime (`matchesMagicBytes` devuelve `false` para cualquier
+// mimeType sin entrada en `MAGIC_BYTE_SNIFFERS`) y nada se pone rojo — el test
+// dedicado (`ticketMessageAttachments.snifferCoverage.test.ts`) cierra eso.
+export const IMAGE_MIME_TO_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
   'image/gif': 'gif',
 };
-const AUDIO_MIME_TO_EXT: Record<string, string> = {
+export const AUDIO_MIME_TO_EXT: Record<string, string> = {
   'audio/mpeg': 'mp3',
   'audio/mp4': 'm4a',
   'audio/aac': 'aac',
@@ -65,7 +71,7 @@ const AUDIO_MIME_TO_EXT: Record<string, string> = {
   'audio/webm': 'weba',
   'audio/x-m4a': 'm4a',
 };
-const VIDEO_MIME_TO_EXT: Record<string, string> = {
+export const VIDEO_MIME_TO_EXT: Record<string, string> = {
   'video/mp4': 'mp4',
   'video/quicktime': 'mov',
   'video/webm': 'webm',
@@ -151,7 +157,7 @@ function isAdts(buf: Buffer): boolean {
   return buf.length >= 2 && buf[0] === 0xff && (buf[1]! & 0xf6) === 0xf0;
 }
 
-const MAGIC_BYTE_SNIFFERS: Record<string, (buf: Buffer) => boolean> = {
+export const MAGIC_BYTE_SNIFFERS: Record<string, (buf: Buffer) => boolean> = {
   'image/jpeg': (b) => hasPrefixBytes(b, [0xff, 0xd8, 0xff]),
   'image/png': (b) => hasPrefixBytes(b, [0x89, 0x50, 0x4e, 0x47]),
   'image/gif': (b) => hasAsciiAt(b, 0, 'GIF87a') || hasAsciiAt(b, 0, 'GIF89a'),
