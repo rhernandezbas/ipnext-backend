@@ -167,6 +167,9 @@ const statusMap: Record<string, number> = {
   TICKET_MESSAGE_ATTACHMENT_TOO_LARGE: 413,
   TOO_MANY_TICKET_MESSAGE_ATTACHMENTS: 422,
   TICKET_MESSAGE_ATTACHMENT_NOT_FOUND: 404,
+  // F11 (fix wave) — MinIO caído (a diferencia de STORAGE_NOT_CONFIGURED, que
+  // es un problema de config): transitorio, 503 comunica mejor que el 500 genérico.
+  TICKET_MESSAGE_STORAGE_UNAVAILABLE: 503,
   // actions-worklist (W2) — worklist de titularidad
   OWNERSHIP_CASE_NOT_FOUND: 404,
   INVALID_CANDIDATE_PICK: 422,

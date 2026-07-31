@@ -13,8 +13,18 @@
  * Revert-probe (HIGH del reporte, aplicado acá): comentar el chequeo de
  * magic bytes hace que el test "ejecutable disfrazado" vuelva a pasar.
  */
-import { validateTicketMessageFilesBatch, TicketMessageFile } from '@application/use-cases/ticketMessageAttachments';
-import { UnsupportedTicketMessageAttachmentTypeError } from '@domain/errors/ticketMessage';
+import {
+  validateTicketMessageFilesBatch,
+  createTicketMessageWithAttachments,
+  TicketMessageFile,
+} from '@application/use-cases/ticketMessageAttachments';
+import {
+  UnsupportedTicketMessageAttachmentTypeError,
+  TicketMessageStorageUnavailableError,
+} from '@domain/errors/ticketMessage';
+import { InMemoryTicketCommentRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketCommentRepository';
+import { FileStorage } from '@domain/ports/FileStorage';
+import { StorageNotConfiguredError } from '@domain/errors/taskAttachment';
 
 function file(overrides: Partial<TicketMessageFile>): TicketMessageFile {
   return { buffer: Buffer.from([]), originalName: 'f', mimeType: 'image/jpeg', ...overrides };
@@ -66,5 +76,76 @@ describe('validateTicketMessageFilesBatch — F4 (fix wave): magic bytes del con
     const f = file({ buffer: Buffer.from([]), mimeType: 'image/jpeg' });
 
     expect(() => validateTicketMessageFilesBatch([f])).toThrow(UnsupportedTicketMessageAttachmentTypeError);
+  });
+});
+
+/**
+ * createTicketMessageWithAttachments — F11 (fix wave, LOW).
+ *
+ * Antes: si `fileStorage.save` fallaba porque MinIO está CAÍDO (a diferencia
+ * de "no configurado", que ya tiene `StorageNotConfiguredError` → 503), el
+ * error crudo (timeout, ECONNREFUSED, lo que tire el cliente MinIO) se
+ * compensaba (delete de lo ya guardado) y se re-lanzaba TAL CUAL — no era un
+ * `DomainError`, así que `errorHandler` caía al 500 genérico
+ * `[UNHANDLED ERROR]`. Un 503 comunica mejor "esto es transitorio, reintentá".
+ */
+describe('createTicketMessageWithAttachments — F11 (fix wave): MinIO caído -> 503, no 500 genérico', () => {
+  function jpeg(): TicketMessageFile {
+    return { buffer: REAL_BYTES['image/jpeg']!, originalName: 'foto.jpg', mimeType: 'image/jpeg' };
+  }
+
+  it('fileStorage.save() rechaza con un error NO-domain (ej. MinIO caído) -> TicketMessageStorageUnavailableError (503), con compensación de lo ya guardado', async () => {
+    const comments = new InMemoryTicketCommentRepository();
+    const deletedKeys: string[] = [];
+    let saveCalls = 0;
+    const storage: FileStorage = {
+      // Falla en el 2do archivo del lote — el 1ro ya se guardó y debe compensarse.
+      save: jest.fn(async () => {
+        saveCalls += 1;
+        if (saveCalls === 2) throw new Error('connect ECONNREFUSED 127.0.0.1:9000');
+      }),
+      get: jest.fn(async () => null),
+      delete: jest.fn(async (key: string) => { deletedKeys.push(key); }),
+    };
+
+    await expect(
+      createTicketMessageWithAttachments(comments, storage, {
+        ticketId: 't1',
+        authorId: 'acc-1',
+        authorKind: 'client',
+        visibility: 'public',
+        authorName: 'Cliente',
+        body: 'con fotos',
+        files: [jpeg(), jpeg()],
+      }),
+    ).rejects.toBeInstanceOf(TicketMessageStorageUnavailableError);
+
+    // Nada quedó persistido — la escritura es atómica (0 comentarios creados).
+    expect(await comments.listByTicket('t1')).toHaveLength(0);
+    // Compensación: se intenta delete() de AMBAS keys trackeadas (la del 1er
+    // archivo, que sí llegó a guardarse, y la del 2do, que falló — delete() es
+    // idempotente, así que compensar de más nunca es un problema).
+    expect(deletedKeys).toHaveLength(2);
+  });
+
+  it('un DomainError ya tipado (ej. StorageNotConfiguredError, "MinIO sin configurar") NO se re-envuelve — pasa tal cual, sigue siendo 503 por su propio código', async () => {
+    const comments = new InMemoryTicketCommentRepository();
+    const storage: FileStorage = {
+      save: jest.fn(async () => { throw new StorageNotConfiguredError('MinIO endpoint not configured'); }),
+      get: jest.fn(async () => null),
+      delete: jest.fn(async () => {}),
+    };
+
+    await expect(
+      createTicketMessageWithAttachments(comments, storage, {
+        ticketId: 't1',
+        authorId: 'acc-1',
+        authorKind: 'client',
+        visibility: 'public',
+        authorName: 'Cliente',
+        body: 'con foto',
+        files: [jpeg()],
+      }),
+    ).rejects.toBeInstanceOf(StorageNotConfiguredError);
   });
 });

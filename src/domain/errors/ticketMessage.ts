@@ -53,3 +53,19 @@ export class TicketMessageAttachmentNotFoundError extends DomainError {
     this.name = 'TicketMessageAttachmentNotFoundError';
   }
 }
+
+/**
+ * F11 (fix wave) — el storage (MinIO) no respondió al guardar un adjunto:
+ * caído/inalcanzable/timeout, DISTINTO de "no configurado"
+ * (`StorageNotConfiguredError`, `taskAttachment.ts`, también 503 pero por un
+ * motivo de config, no de infra caída). `createTicketMessageWithAttachments`
+ * envuelve acá cualquier error NO-domain que tire `fileStorage.save` — antes
+ * ese error crudo (ECONNREFUSED, timeout) caía al 500 genérico del
+ * errorHandler. HTTP → 503 (transitorio, vale la pena reintentar).
+ */
+export class TicketMessageStorageUnavailableError extends DomainError {
+  constructor(detail: string) {
+    super(`Ticket message attachment storage is unavailable: ${detail}`, 'TICKET_MESSAGE_STORAGE_UNAVAILABLE');
+    this.name = 'TicketMessageStorageUnavailableError';
+  }
+}

@@ -2,11 +2,13 @@ import { randomUUID } from 'crypto';
 import { FileStorage } from '@domain/ports/FileStorage';
 import { TicketCommentRepository } from '@domain/ports/TicketCommentRepository';
 import { TicketComment, TicketCommentAttachment, TicketCommentAttachmentKind, TicketCommentAuthorKind, TicketCommentVisibility } from '@domain/entities/ticketComment';
+import { DomainError } from '@domain/errors';
 import {
   TicketMessageValidationError,
   UnsupportedTicketMessageAttachmentTypeError,
   TicketMessageAttachmentTooLargeError,
   TooManyTicketMessageAttachmentsError,
+  TicketMessageStorageUnavailableError,
 } from '@domain/errors/ticketMessage';
 
 /**
@@ -191,6 +193,14 @@ export function validateTicketMessageFilesBatch(files: TicketMessageFile[]): Cla
   }
   const classified: Classification[] = [];
   for (const file of files) {
+    // F10 (fix wave, documentación) — un archivo de 0 bytes reporta el mismo
+    // 415 "tipo no soportado" que un mimeType fuera de la allowlist, A
+    // PROPÓSITO: 0 bytes no es un tamaño válido de NINGÚN formato permitido
+    // (ni siquiera el JPEG/PNG/etc. más chico posible pesa 0), así que "tipo
+    // no soportado" es honesto — no hay un `TicketMessageAttachmentTooLargeError`
+    // "al revés" que tenga más sentido acá. Corre ANTES del magic-byte sniffing
+    // de F4 (un buffer vacío no matchea ninguna firma de todos modos, pero el
+    // mensaje de error específico de "vacío" es más claro que el genérico).
     if (!(file.buffer.length > 0)) {
       throw new UnsupportedTicketMessageAttachmentTypeError(file.mimeType);
     }
@@ -263,7 +273,19 @@ export async function createTicketMessageWithAttachments(
       const storageKey = `tickets/${params.ticketId}/${commentId}/${id}.${c.ext}`;
 
       savedKeys.push(storageKey); // trackear ANTES del save (delete es idempotente)
-      await fileStorage.save({ key: storageKey, buffer: file.buffer, mimeType: c.mimeType });
+      try {
+        await fileStorage.save({ key: storageKey, buffer: file.buffer, mimeType: c.mimeType });
+      } catch (storageErr) {
+        // F11 (fix wave) — un error YA tipado (ej. `StorageNotConfiguredError`)
+        // pasa tal cual (ya tiene su propio código/status). Cualquier OTRA cosa
+        // (ECONNREFUSED, timeout — MinIO caído/inalcanzable) se envuelve en
+        // `TicketMessageStorageUnavailableError` (503) en vez de llegar cruda
+        // al errorHandler, que la mandaría al 500 genérico. El catch de abajo
+        // sigue haciendo la compensación con el error que sea.
+        throw storageErr instanceof DomainError
+          ? storageErr
+          : new TicketMessageStorageUnavailableError(String((storageErr as Error)?.message ?? storageErr));
+      }
 
       attachments.push({
         id,
