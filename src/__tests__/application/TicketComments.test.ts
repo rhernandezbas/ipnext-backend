@@ -95,6 +95,41 @@ describe('ListTicketComments', () => {
     const since = reloaded!.staffMessagesReadAt ? new Date(reloaded!.staffMessagesReadAt) : null;
     expect(await commentRepo.countUnread(ticketId, 'staff', since)).toBe(1);
   });
+
+  it('G4 (fix wave FINAL): ticket VACÍO (sin comentarios) — el cursor usa el instante ANTES del list(), no el momento después de listar', async () => {
+    const commentRepo = new InMemoryTicketCommentRepository();
+    const ticketRepo = new InMemoryTicketRepository();
+    const ticketId = await seedTicket(ticketRepo);
+    // Ticket recién creado, sin comentarios — el caso MÁS frecuente (todo
+    // ticket nace así). Bajo el bug, la rama vacía usaba now() capturado
+    // DESPUÉS de listByTicket: si el cliente escribe justo en la ventana de
+    // I/O de esa query, ese primer comentario quedaba marcado leído por el
+    // staff sin haberse mostrado nunca.
+    const list = new ListTicketComments(commentRepo, ticketRepo);
+
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z')); // t0: justo antes de listar
+
+    const originalListByTicket = commentRepo.listByTicket.bind(commentRepo);
+    jest.spyOn(commentRepo, 'listByTicket').mockImplementation(async (tId: string) => {
+      const result = await originalListByTicket(tId);
+      // Simula el tiempo que tarda la query real — ventana en la que el
+      // cliente puede escribir ANTES de que markMessagesRead corra.
+      jest.setSystemTime(new Date('2026-01-01T00:05:00.000Z'));
+      return result;
+    });
+
+    try {
+      await list.execute(ticketId);
+    } finally {
+      jest.useRealTimers();
+    }
+
+    const reloaded = await ticketRepo.getById(ticketId);
+    // El cursor DEBE quedar en t0, NUNCA en el instante posterior — cualquier
+    // comentario que "aterrice" en esa ventana sigue contando como no-leído.
+    expect(reloaded!.staffMessagesReadAt).toBe('2026-01-01T00:00:00.000Z');
+  });
 });
 
 describe('AddTicketComment', () => {

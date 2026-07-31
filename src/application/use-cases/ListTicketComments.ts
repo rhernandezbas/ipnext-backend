@@ -30,14 +30,22 @@ export class ListTicketComments {
   async execute(ticketId: string): Promise<TicketComment[]> {
     const ticket = await this.ticketRepo.getById(ticketId);
     if (!ticket) throw new TicketNotFoundError(ticketId);
+    // G4 (fix wave FINAL) — capturado ANTES de listar, a propósito: la rama
+    // vacía de abajo lo usa como cursor. Mismo bug/fix que
+    // `ListPortalTicketMessages` — un ticket recién creado SIEMPRE arranca sin
+    // comentarios (el caso MÁS frecuente), y con `now()` capturado DESPUÉS de
+    // `listByTicket` (el bug original, F5) el cliente podía escribir justo en
+    // la ventana de I/O de esa query y ese primer comentario quedaba marcado
+    // leído por el staff sin haberse mostrado nunca.
+    const t0 = new Date();
     const comments = await this.repo.listByTicket(ticketId);
     // F5 (fix wave) — mismo criterio que ListPortalTicketMessages: el cursor
     // usa el createdAt del ÚLTIMO comentario efectivamente listado, nunca
-    // now() (evita perder un comentario que aterriza en la ventana entre el
-    // list() y el mark). Lista vacía: se preserva now() (ver esa misma nota).
+    // now(). Lista vacía: usa `t0` (G4), capturado ANTES del list, para acotar
+    // la MISMA ventana de carrera en vez de reabrirla con un `now()` posterior.
     const at = comments.length > 0
       ? new Date(comments[comments.length - 1]!.createdAt)
-      : new Date();
+      : t0;
     await this.ticketRepo.markMessagesRead(ticketId, 'staff', at);
     return comments;
   }

@@ -26,21 +26,27 @@ export class ListPortalTicketMessages {
     const ticket = await this.tickets.getBySequenceNumber(ticketNumber);
     if (!ticket || ticket.customerId !== clientId) return null;
 
+    // G4 (fix wave FINAL) — capturado ANTES de listar, a propósito: la rama
+    // vacía de abajo lo usa como cursor. Un ticket recién creado SIEMPRE
+    // arranca sin comentarios (el caso MÁS frecuente) — con `now()` capturado
+    // DESPUÉS de `listPublicByTicket` (el bug original, F5), el operador podía
+    // responder justo en la ventana de I/O de esa query y ese primer mensaje
+    // quedaba marcado leído sin haberse mostrado nunca. `t0` cierra esa
+    // ventana: cualquier mensaje con `createdAt` posterior a este instante
+    // sigue contando como no-leído, exista o no la lista quede vacía.
+    const t0 = new Date();
     const publicComments = await this.comments.listPublicByTicket(ticket.id);
     // F5 (fix wave) — el cursor se estampa con el createdAt del ÚLTIMO mensaje
     // efectivamente listado arriba, NUNCA con `now()`: entre el
     // `listPublicByTicket` y el `markMessagesRead` puede aterrizar un mensaje
     // nuevo (el operador responde justo en ese instante) — con `now()` ese
     // mensaje quedaría marcado leído sin haber estado nunca en ESTA respuesta.
-    // Lista vacía: no hay mensaje del cual anclar el cursor — se preserva acá
-    // el comportamiento previo (now()) para no perder el contrato "abrir el
-    // hilo limpia el badge incluso sin mensajes" (ver test dedicado); la
-    // ventana de carrera remanente en ese caso queda acotada al borde
-    // 0→primer mensaje, no al caso general (mucho más frecuente) de un hilo
-    // con mensajes existentes, que es el que se reportó.
+    // Lista vacía: no hay mensaje del cual anclar el cursor — usa `t0` (G4),
+    // capturado ANTES del list, para acotar la MISMA ventana de carrera en
+    // vez de reabrirla con un `now()` posterior.
     const at = publicComments.length > 0
       ? new Date(publicComments[publicComments.length - 1]!.createdAt)
-      : new Date();
+      : t0;
     await this.tickets.markMessagesRead(ticket.id, 'client', at);
 
     const attachmentUrlPrefix = `/api/portal/tickets/${ticketNumber}/messages/attachments`;

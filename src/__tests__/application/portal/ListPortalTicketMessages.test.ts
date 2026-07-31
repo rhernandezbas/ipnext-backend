@@ -118,6 +118,42 @@ describe('ListPortalTicketMessages — customer-portal-api v2.B', () => {
     expect(reloaded!.clientMessagesReadAt).toBeNull();
   });
 
+  it('G4 (fix wave FINAL): hilo VACÍO — el cursor usa el instante capturado ANTES del list(), no el momento después de listar', async () => {
+    const ticketRepo = new InMemoryTicketRepository();
+    const commentRepo = new InMemoryTicketCommentRepository();
+    const ticket = await ticketRepo.create({ subject: 'S', description: 'D', customerId: 'client-a' });
+    // Hilo recién creado: SIN comentarios todavía — el caso MÁS frecuente
+    // (todo ticket nace así). Bajo el bug, la rama vacía usaba now(), capturado
+    // DESPUÉS de que listPublicByTicket resuelve — si el operador responde
+    // justo en esa ventana (I/O real de la query no es instantáneo), ese
+    // primer mensaje quedaba marcado leído sin haberse mostrado nunca.
+
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z')); // t0: justo antes de listar
+
+    const originalList = commentRepo.listPublicByTicket.bind(commentRepo);
+    jest.spyOn(commentRepo, 'listPublicByTicket').mockImplementation(async (ticketId: string) => {
+      const result = await originalList(ticketId);
+      // Simula el tiempo que tarda la query real — representa la ventana en la
+      // que el operador puede responder ANTES de que markMessagesRead corra.
+      jest.setSystemTime(new Date('2026-01-01T00:05:00.000Z'));
+      return result;
+    });
+
+    const useCase = new ListPortalTicketMessages(ticketRepo, commentRepo);
+    try {
+      await useCase.execute('client-a', ticket.sequenceNumber);
+    } finally {
+      jest.useRealTimers();
+    }
+
+    const reloaded = await ticketRepo.getBySequenceNumber(ticket.sequenceNumber);
+    // El cursor DEBE quedar en t0 (antes del list), NUNCA en el instante
+    // posterior — cualquier mensaje que "aterrice" en esa ventana de 5 minutos
+    // tiene que seguir contando como no-leído.
+    expect(reloaded!.clientMessagesReadAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
   it('mapea adjuntos de la mensajería nueva (storageKey) y excluye los del sistema viejo (solo url)', async () => {
     const ticketRepo = new InMemoryTicketRepository();
     const commentRepo = new InMemoryTicketCommentRepository();
