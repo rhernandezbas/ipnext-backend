@@ -1,6 +1,7 @@
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { PortalInvoiceDto } from '@application/dto/portal/portalInvoice.dto';
 import type { PaginatedQuery, PaginatedResult } from '@application/dto/pagination';
+import { normalizeGrCurrency } from '@domain/services/normalizeGrCurrency';
 
 /**
  * ListPortalInvoices — customer-portal-api (Fase 4, task 4.2).
@@ -35,6 +36,7 @@ function toPortalInvoiceDto(invoice: {
   amount: number;
   balance: number | null;
   status: string;
+  currency: string | null;
   pdfUrl: string | null;
   paymentUrl: string | null;
 }): PortalInvoiceDto {
@@ -45,6 +47,11 @@ function toPortalInvoiceDto(invoice: {
     amount: invoice.amount,
     balance: invoice.balance,
     status: invoice.status,
+    // 'DESCONOCIDA' nunca ARS: ver docstring de PortalInvoiceDto — a nivel de
+    // una sola factura no hay grupo con el que comparar (a diferencia de
+    // toPortalBalanceSummary), y Invoice.currency = null es el valor
+    // ESPERADO en facturas manuales (no-GR), no un edge case raro.
+    currency: normalizeGrCurrency(invoice.currency) ?? 'DESCONOCIDA',
     pdfUrl: invoice.pdfUrl,
     paymentUrl: invoice.paymentUrl,
   };

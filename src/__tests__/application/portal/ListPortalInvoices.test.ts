@@ -59,12 +59,55 @@ describe('ListPortalInvoices — customer-portal-api Fase 4.2', () => {
         amount: 1000,
         balance: 500,
         status: 'pendiente',
+        currency: 'ARS',
         pdfUrl: 'https://example.com/f1.pdf',
         paymentUrl: 'https://example.com/pay/f1',
       },
     ]);
     expect((result.data[0] as unknown as { lineItems?: unknown }).lineItems).toBeUndefined();
     expect((result.data[0] as unknown as { grInvoiceId?: unknown }).grInvoiceId).toBeUndefined();
+  });
+
+  describe('bug real (review de la app): PortalInvoiceDto expone currency normalizada', () => {
+    it('factura en PES (codigo GR) -> currency ARS (ISO 4217)', async () => {
+      const repo = new FakeCustomerRepository();
+      repo.seedInvoices('client-a', [makeInvoice({ id: 'inv-1', currency: 'PES' })]);
+      const useCase = new ListPortalInvoices(repo as unknown as CustomerRepository);
+
+      const result = await useCase.execute('client-a', {});
+
+      expect(result.data[0].currency).toBe('ARS');
+    });
+
+    it('factura en DOL (codigo GR) -> currency USD (ISO 4217) — el bug que cazo el review', async () => {
+      const repo = new FakeCustomerRepository();
+      repo.seedInvoices('client-a', [makeInvoice({ id: 'inv-1', currency: 'DOL' })]);
+      const useCase = new ListPortalInvoices(repo as unknown as CustomerRepository);
+
+      const result = await useCase.execute('client-a', {});
+
+      expect(result.data[0].currency).toBe('USD');
+    });
+
+    it('codigo de moneda desconocido -> pasa crudo en mayusculas (nunca se asume ARS)', async () => {
+      const repo = new FakeCustomerRepository();
+      repo.seedInvoices('client-a', [makeInvoice({ id: 'inv-1', currency: 'eur' })]);
+      const useCase = new ListPortalInvoices(repo as unknown as CustomerRepository);
+
+      const result = await useCase.execute('client-a', {});
+
+      expect(result.data[0].currency).toBe('EUR');
+    });
+
+    it('Invoice.currency null en la fila -> DESCONOCIDA, jamas se asume ARS por defecto', async () => {
+      const repo = new FakeCustomerRepository();
+      repo.seedInvoices('client-a', [makeInvoice({ id: 'inv-1', currency: null })]);
+      const useCase = new ListPortalInvoices(repo as unknown as CustomerRepository);
+
+      const result = await useCase.execute('client-a', {});
+
+      expect(result.data[0].currency).toBe('DESCONOCIDA');
+    });
   });
 
   it('scenario "Cliente consulta sus facturas": orden issueDate desc', async () => {

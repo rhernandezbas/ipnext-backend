@@ -307,6 +307,48 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
       expect(res.body.data[0].lineItems).toBeUndefined();
       expect(res.body.data[0].grInvoiceId).toBeUndefined();
     });
+
+    it('MULTI-MONEDA: PortalInvoiceDto.currency normalizado (bug real cazado por review de la app)', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' }));
+      stack.customers.seedInvoices('client-a', [
+        { id: 'i1', number: 'F-1', customerId: 'client-a', customerName: 'A', issueDate: '2026-01-01T00:00:00.000Z', dueDate: '2026-01-10T00:00:00.000Z', amount: 500, status: 'pendiente', lineItems: [], grInvoiceId: 'GR-1', balance: 500, grType: 'FB', currency: 'PES', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+        { id: 'i2', number: 'F-2', customerId: 'client-a', customerName: 'A', issueDate: '2026-02-01T00:00:00.000Z', dueDate: '2026-02-10T00:00:00.000Z', amount: 30, status: 'vencida', lineItems: [], grInvoiceId: 'GR-2', balance: 30, grType: 'FB', currency: 'DOL', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+      ]);
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/invoices').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      const byNumber = new Map(res.body.data.map((i: { number: string; currency: string }) => [i.number, i.currency]));
+      expect(byNumber.get('F-1')).toBe('ARS');
+      expect(byNumber.get('F-2')).toBe('USD');
+    });
+
+    it('COHERENCIA cruzada /invoices <-> /me: la suma por moneda de la lista coincide con balances[] (mismo cliente, misma historia)', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' }));
+      stack.customers.seedInvoices('client-a', [
+        { id: 'i1', number: 'F-1', customerId: 'client-a', customerName: 'A', issueDate: '2026-01-01T00:00:00.000Z', dueDate: '2026-01-10T00:00:00.000Z', amount: 500, status: 'pendiente', lineItems: [], grInvoiceId: 'GR-1', balance: 500, grType: 'FB', currency: 'PES', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+        { id: 'i2', number: 'F-2', customerId: 'client-a', customerName: 'A', issueDate: '2026-02-01T00:00:00.000Z', dueDate: '2026-02-10T00:00:00.000Z', amount: 20, status: 'vencida', lineItems: [], grInvoiceId: 'GR-2', balance: 20, grType: 'FB', currency: 'DOL', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+        { id: 'i3', number: 'F-3', customerId: 'client-a', customerName: 'A', issueDate: '2026-03-01T00:00:00.000Z', dueDate: '2026-03-10T00:00:00.000Z', amount: 10, status: 'vencida', lineItems: [], grInvoiceId: 'GR-3', balance: 10, grType: 'FB', currency: 'DOL', pdfUrl: null, couponPdfUrl: null, paymentUrl: null },
+      ]);
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const invoicesRes = await request(stack.app).get('/api/portal/invoices').set('Authorization', `Bearer ${token}`);
+      const meRes = await request(stack.app).get('/api/portal/me').set('Authorization', `Bearer ${token}`);
+
+      const sumByCurrency = new Map<string, number>();
+      for (const inv of invoicesRes.body.data as { currency: string; balance: number | null }[]) {
+        sumByCurrency.set(inv.currency, (sumByCurrency.get(inv.currency) ?? 0) + (inv.balance ?? 0));
+      }
+
+      expect(sumByCurrency.get('ARS')).toBe(500);
+      expect(sumByCurrency.get('USD')).toBe(30);
+      for (const entry of meRes.body.balances as { currency: string; amount: number }[]) {
+        expect(sumByCurrency.get(entry.currency)).toBe(entry.amount);
+      }
+    });
   });
 
   describe('GET /api/portal/plans', () => {
