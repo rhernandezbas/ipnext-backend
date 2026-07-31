@@ -84,6 +84,96 @@ function classify(mimeType: string): Classification | null {
   return null;
 }
 
+/**
+ * F4 (fix wave) — sniffing de magic bytes del CONTENIDO REAL, para cada uno de
+ * los 16 mimeTypes de la allowlist (`IMAGE/AUDIO/VIDEO_MIME_TO_EXT` arriba).
+ * Antes de esto, `classify()` solo miraba el `mimeType` DECLARADO por el
+ * cliente (el `Content-Type` de la parte multipart) — un ejecutable PE
+ * (`MZ...`) con `filename: payload.jpg` + `Content-Type: image/jpeg` pasaba
+ * limpio y quedaba guardado en MinIO con 201.
+ *
+ * Firmas usadas (primeros bytes, salvo donde se indica offset):
+ *   JPEG            FF D8 FF
+ *   PNG             89 50 4E 47
+ *   GIF             "GIF87a" / "GIF89a"
+ *   WEBP            "RIFF" (offset 0) + "WEBP" (offset 8) — contenedor RIFF
+ *   MP3             "ID3" (offset 0) o frame-sync MPEG (11 bits en 1: FF Ex-Fx)
+ *   AAC (ADTS)      frame-sync ADTS (FF F1 / FF F9) o "ADIF"
+ *   OGG             "OggS"
+ *   WAV/x-wav       "RIFF" (offset 0) + "WAVE" (offset 8)
+ *   WEBM (audio/video) EBML: 1A 45 DF A3
+ *   MP4/MOV/M4A/3GP "ftyp" en offset 4 — familia ISO base media (los cuatro
+ *                   contenedores comparten esta caja; no vale la pena
+ *                   distinguir el brand exacto acá, ver nota abajo)
+ *
+ * MP4/MOV/M4A/3GP comparten el mismo sniffer (`isIsoBaseMediaContainer`) a
+ * propósito: los cuatro son ISO Base Media File Format con distinto "brand"
+ * (mp42/isom/qt  /3gp4/M4A ...) — validar el brand exacto sería frágil (hay
+ * decenas de brands válidos según el encoder) y no aporta seguridad real: lo
+ * que este chequeo previene es "esto no es NINGÚN contenedor multimedia
+ * conocido", no "el brand exacto coincide con la extensión". El `mimeType`
+ * declarado sigue siendo la fuente de la extensión/kind con la que se guarda.
+ */
+function hasPrefixBytes(buf: Buffer, bytes: number[]): boolean {
+  if (buf.length < bytes.length) return false;
+  for (let i = 0; i < bytes.length; i++) if (buf[i] !== bytes[i]) return false;
+  return true;
+}
+
+function hasAsciiAt(buf: Buffer, offset: number, ascii: string): boolean {
+  if (buf.length < offset + ascii.length) return false;
+  return buf.toString('ascii', offset, offset + ascii.length) === ascii;
+}
+
+function isIsoBaseMediaContainer(buf: Buffer): boolean {
+  return hasAsciiAt(buf, 4, 'ftyp');
+}
+
+function isRiffContainer(buf: Buffer, subtype: string): boolean {
+  return hasAsciiAt(buf, 0, 'RIFF') && hasAsciiAt(buf, 8, subtype);
+}
+
+function isEbml(buf: Buffer): boolean {
+  return hasPrefixBytes(buf, [0x1a, 0x45, 0xdf, 0xa3]);
+}
+
+function isMp3(buf: Buffer): boolean {
+  if (hasAsciiAt(buf, 0, 'ID3')) return true;
+  // Frame sync MPEG: los 11 bits iniciales en 1 (mask 0xFFE0 sobre 2 bytes).
+  return buf.length >= 2 && buf[0] === 0xff && (buf[1]! & 0xe0) === 0xe0;
+}
+
+function isAdts(buf: Buffer): boolean {
+  if (hasAsciiAt(buf, 0, 'ADIF')) return true;
+  // Frame sync ADTS: FF Fx con los bits de MPEG-version/layer en 0 (mask 0xFFF6).
+  return buf.length >= 2 && buf[0] === 0xff && (buf[1]! & 0xf6) === 0xf0;
+}
+
+const MAGIC_BYTE_SNIFFERS: Record<string, (buf: Buffer) => boolean> = {
+  'image/jpeg': (b) => hasPrefixBytes(b, [0xff, 0xd8, 0xff]),
+  'image/png': (b) => hasPrefixBytes(b, [0x89, 0x50, 0x4e, 0x47]),
+  'image/gif': (b) => hasAsciiAt(b, 0, 'GIF87a') || hasAsciiAt(b, 0, 'GIF89a'),
+  'image/webp': (b) => isRiffContainer(b, 'WEBP'),
+  'audio/mpeg': isMp3,
+  'audio/mp4': isIsoBaseMediaContainer,
+  'audio/x-m4a': isIsoBaseMediaContainer,
+  'audio/aac': isAdts,
+  'audio/ogg': (b) => hasAsciiAt(b, 0, 'OggS'),
+  'audio/wav': (b) => isRiffContainer(b, 'WAVE'),
+  'audio/x-wav': (b) => isRiffContainer(b, 'WAVE'),
+  'audio/webm': isEbml,
+  'video/mp4': isIsoBaseMediaContainer,
+  'video/quicktime': isIsoBaseMediaContainer,
+  'video/webm': isEbml,
+  'video/3gpp': isIsoBaseMediaContainer,
+};
+
+/** true si el CONTENIDO REAL del buffer matchea la firma del `mimeType` declarado. */
+function matchesMagicBytes(mimeType: string, buffer: Buffer): boolean {
+  const sniff = MAGIC_BYTE_SNIFFERS[mimeType];
+  return sniff !== undefined && sniff(buffer);
+}
+
 export interface TicketMessageFile {
   buffer: Buffer;
   originalName: string;
@@ -106,6 +196,12 @@ export function validateTicketMessageFilesBatch(files: TicketMessageFile[]): Cla
     }
     const c = classify(file.mimeType);
     if (!c) throw new UnsupportedTicketMessageAttachmentTypeError(file.mimeType);
+    // F4 (fix wave) — el mimeType declarado ya está en la allowlist (arriba),
+    // pero eso solo prueba lo que el CLIENTE dijo. Confirmar contra el
+    // contenido real evita el disfraz (ejecutable con Content-Type: image/jpeg).
+    if (!matchesMagicBytes(file.mimeType, file.buffer)) {
+      throw new UnsupportedTicketMessageAttachmentTypeError(file.mimeType);
+    }
     if (file.buffer.length > c.maxBytes) {
       throw new TicketMessageAttachmentTooLargeError(c.kind, c.maxBytes);
     }

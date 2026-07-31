@@ -139,6 +139,22 @@ describe('POST /api/tickets/:id/messages — respuesta PÚBLICA del staff', () =
     expect(res.status).toBe(415);
     expect(await commentRepo.listByTicket(ticketId)).toHaveLength(0);
   });
+
+  it('F4 (fix wave): un ejecutable PE RENOMBRADO a .jpg con Content-Type: image/jpeg -> 415, nada se guarda en MinIO', async () => {
+    const { app, ticketId, commentRepo } = await buildApp();
+    // Cabecera DOS de un PE real: "MZ" + el resto del stub — el mimeType/nombre
+    // dicen "es una foto", el contenido dice lo contrario.
+    const peHeader = Buffer.from('MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00', 'binary');
+
+    const res = await request(app)
+      .post(`/api/tickets/${ticketId}/messages`)
+      .field('body', 'x')
+      .attach('files', peHeader, { filename: 'payload.jpg', contentType: 'image/jpeg' });
+
+    expect(res.status).toBe(415);
+    expect(res.body.code).toBe('UNSUPPORTED_TICKET_MESSAGE_ATTACHMENT_TYPE');
+    expect(await commentRepo.listByTicket(ticketId)).toHaveLength(0);
+  });
 });
 
 describe('GET /api/tickets/:id/messages/unread-count', () => {
