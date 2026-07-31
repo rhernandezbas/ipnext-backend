@@ -327,3 +327,39 @@ export function createPortalTicketCreateRateLimiter(opts: PortalTicketCreateRate
     },
   });
 }
+
+/**
+ * portal-ticket-messaging (v2.B) — rate limit PROPIO de
+ * `POST /api/portal/tickets/:number/messages` (spec "El cliente lee y escribe
+ * en SU reclamo": "POST agrega un mensaje del cliente, con validación de
+ * contenido y rate limit propio"). Más generoso que `ticketCreateRateLimiter`
+ * (5/hora — abrir un reclamo es un evento raro) porque una conversación normal
+ * intercambia varios mensajes seguidos ("¿probaste reiniciar el router?" / "sí,
+ * seguí igual" / adjunta una foto) — 20/5min da margen a un ida-y-vuelta real
+ * sin abrir la puerta a un abuso sostenido de payloads con adjuntos. Mismo
+ * keying (cuenta autenticada, o IP como fallback defensivo) que el resto del
+ * portal.
+ */
+export interface PortalTicketMessageSendRateLimitOptions {
+  windowMs?: number;
+  limit?: number;
+}
+
+const DEFAULT_PORTAL_TICKET_MESSAGE_SEND_WINDOW_MS = 5 * 60 * 1000; // 5 min
+const DEFAULT_PORTAL_TICKET_MESSAGE_SEND_LIMIT = 20;
+
+export function createPortalTicketMessageSendRateLimiter(opts: PortalTicketMessageSendRateLimitOptions = {}): RequestHandler {
+  return rateLimit({
+    windowMs: opts.windowMs ?? DEFAULT_PORTAL_TICKET_MESSAGE_SEND_WINDOW_MS,
+    limit: opts.limit ?? DEFAULT_PORTAL_TICKET_MESSAGE_SEND_LIMIT,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: keyByPortalAccountOrIp,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({
+        error: 'Demasiados mensajes enviados en poco tiempo. Probá de nuevo más tarde.',
+        code: 'RATE_LIMITED',
+      });
+    },
+  });
+}

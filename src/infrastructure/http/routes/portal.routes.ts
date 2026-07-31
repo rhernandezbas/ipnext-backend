@@ -11,6 +11,10 @@ import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTicke
 import { GetPortalTicket } from '@application/use-cases/portal/GetPortalTicket';
 import { CreatePortalTicket } from '@application/use-cases/portal/CreatePortalTicket';
 import { DeleteMyPortalAccount } from '@application/use-cases/portal/DeleteMyPortalAccount';
+import { ListPortalTicketMessages } from '@application/use-cases/portal/ListPortalTicketMessages';
+import { SendPortalTicketMessage } from '@application/use-cases/portal/SendPortalTicketMessage';
+import { GetPortalTicketMessageAttachmentFile } from '@application/use-cases/portal/GetPortalTicketMessageAttachmentFile';
+import { SendPortalTicketMessageSchema } from '@application/dto/portal/portalTicketMessage.dto';
 import {
   InvalidPortalCredentialsError,
   InvalidPortalRefreshTokenError,
@@ -27,8 +31,16 @@ import {
   createPortalLoginIpRateLimiter,
   createPortalGeneralRateLimiter,
   createPortalTicketCreateRateLimiter,
+  createPortalTicketMessageSendRateLimiter,
 } from '../middleware/rateLimiters';
 import { parsePagination } from '../parsePagination';
+import { createTicketMessageUploadMiddleware } from './ticketMessageUpload';
+
+/** Content-Disposition inline seguro (RFC 5987) — molde `newsMedia.routes.ts`. */
+function contentDisposition(filename: string): string {
+  const asciiFallback = filename.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  return `inline; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
 
 export interface PortalRouterDeps {
   portalLogin: PortalLogin;
@@ -62,6 +74,14 @@ export interface PortalRouterDeps {
   /** Defaults to `createPortalTicketCreateRateLimiter()` when omitted. Applied
    * ONLY to `POST /tickets`, on top of `generalRateLimiter`. */
   ticketCreateRateLimiter?: RequestHandler;
+
+  // ── portal-ticket-messaging (v2.B) — mensajería interna de un reclamo ──────
+  listPortalTicketMessages?: ListPortalTicketMessages;
+  sendPortalTicketMessage?: SendPortalTicketMessage;
+  getPortalTicketMessageAttachmentFile?: GetPortalTicketMessageAttachmentFile;
+  /** Defaults to `createPortalTicketMessageSendRateLimiter()` when omitted.
+   * Applied ONLY a `POST /tickets/:number/messages`, además de `generalRateLimiter`. */
+  ticketMessageSendRateLimiter?: RequestHandler;
 }
 
 /**
@@ -200,6 +220,8 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
   // ningún handler de acá abajo lee un clientId de params/query/body.
 
   const ticketCreateRateLimiter = deps.ticketCreateRateLimiter ?? createPortalTicketCreateRateLimiter();
+  const ticketMessageSendRateLimiter = deps.ticketMessageSendRateLimiter ?? createPortalTicketMessageSendRateLimiter();
+  const uploadTicketMessageFiles = createTicketMessageUploadMiddleware();
 
   function requireClientId(req: Request, res: Response): string | undefined {
     const clientId = req.portalClientId;
@@ -393,6 +415,121 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
             return;
           }
           res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ── portal-ticket-messaging (v2.B) ──────────────────────────────────────────
+  // Rutas de LITERAL primero (`/attachments/...` = 4 segmentos) antes que las
+  // que empiezan con `:number` (mismo criterio anti-shadowing que
+  // `ticketMessages.routes.ts` lado admin) — no es estrictamente necesario acá
+  // (Express desambigua por método + nº de segmentos igual), pero mantiene la
+  // convención de "literal antes que :param" del resto del archivo.
+  if (deps.getPortalTicketMessageAttachmentFile) {
+    const getAttachmentFile = deps.getPortalTicketMessageAttachmentFile;
+    router.get(
+      '/tickets/:number/messages/attachments/:attachmentId/file',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const raw = req.params['number'] as string;
+        const ticketNumber = /^[1-9]\d*$/.test(raw) ? Number(raw) : NaN;
+        if (!Number.isSafeInteger(ticketNumber) || ticketNumber < 1 || ticketNumber > 2_147_483_647) {
+          res.status(400).json({ error: 'El número de ticket debe ser un entero positivo', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        try {
+          const file = await getAttachmentFile.execute(clientId, ticketNumber, req.params['attachmentId'] as string);
+          if (!file) {
+            // spec "Adjunto de un reclamo ajeno": 404 indistinguible — no existe,
+            // es de otro ticket, o es un adjunto interno (nunca se filtra cuál).
+            res.status(404).json({ error: 'Attachment not found', code: 'TICKET_MESSAGE_ATTACHMENT_NOT_FOUND' });
+            return;
+          }
+          res.setHeader('Content-Type', file.mimeType);
+          res.setHeader('Content-Disposition', contentDisposition(file.filename));
+          res.send(file.buffer);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.listPortalTicketMessages) {
+    const listMessages = deps.listPortalTicketMessages;
+    router.get(
+      '/tickets/:number/messages',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const raw = req.params['number'] as string;
+        const ticketNumber = /^[1-9]\d*$/.test(raw) ? Number(raw) : NaN;
+        if (!Number.isSafeInteger(ticketNumber) || ticketNumber < 1 || ticketNumber > 2_147_483_647) {
+          res.status(400).json({ error: 'El número de ticket debe ser un entero positivo', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        try {
+          const result = await listMessages.execute(clientId, ticketNumber);
+          if (!result) {
+            // portal-self-service C3 spec, mismo contrato que GET /tickets/:number.
+            res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
+            return;
+          }
+          // M6 (convención existente) — envelope {data} para colecciones del portal.
+          res.status(200).json({ data: result });
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.sendPortalTicketMessage) {
+    const sendMessage = deps.sendPortalTicketMessage;
+    router.post(
+      '/tickets/:number/messages',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      ticketMessageSendRateLimiter,
+      uploadTicketMessageFiles,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        const raw = req.params['number'] as string;
+        const ticketNumber = /^[1-9]\d*$/.test(raw) ? Number(raw) : NaN;
+        if (!Number.isSafeInteger(ticketNumber) || ticketNumber < 1 || ticketNumber > 2_147_483_647) {
+          res.status(400).json({ error: 'El número de ticket debe ser un entero positivo', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        const parsed = SendPortalTicketMessageSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+        try {
+          const result = await sendMessage.execute(clientId, accountId, ticketNumber, {
+            body: parsed.data.body,
+            files: files.map((f) => ({ buffer: f.buffer, originalName: f.originalname, mimeType: f.mimetype })),
+          });
+          if (!result) {
+            res.status(404).json({ error: 'Ticket not found', code: 'TICKET_NOT_FOUND' });
+            return;
+          }
+          res.status(201).json(result);
         } catch (err) {
           next(err);
         }
