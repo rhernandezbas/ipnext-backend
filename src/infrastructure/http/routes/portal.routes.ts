@@ -223,6 +223,20 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
   const ticketMessageSendRateLimiter = deps.ticketMessageSendRateLimiter ?? createPortalTicketMessageSendRateLimiter();
   const uploadTicketMessageFiles = createTicketMessageUploadMiddleware();
 
+  /**
+   * F7 (fix wave, v2.B) — `ListPortalTickets.toDto` hace UN `countUnread` por
+   * ticket (N+1 deliberado, ver el docblock de ese use case): con el cap
+   * general del portal (`MAX_PAGE_LIMIT=100`, parsePagination.ts) un
+   * pull-to-refresh podía disparar hasta 100 COUNT por request. En vez de
+   * agregar una query `group by` al port SOLO para esta ruta ahora mismo, se
+   * elige bajar el techo EFECTIVO de esta ruta puntual a 25 (el mismo valor
+   * que ya es el default de página) — un cliente de "mis tickets" rara vez
+   * tiene más que un puñado de reclamos abiertos; si necesita más, pagina por
+   * `page`. `/invoices` y el resto de las rutas paginadas del portal siguen
+   * en el cap general de 100 (no hacen N+1).
+   */
+  const PORTAL_TICKETS_LIST_MAX_LIMIT = 25;
+
   function requireClientId(req: Request, res: Response): string | undefined {
     const clientId = req.portalClientId;
     if (!clientId) {
@@ -326,7 +340,12 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         try {
           // M2 — parseo estricto compartido (entero >=1, cap 100): basura => default.
           const { page, limit } = parsePagination(req.query);
-          const result = await listPortalTickets.execute(clientId, { page, limit });
+          // F7 — segundo cap, MÁS BAJO, propio de esta ruta (ver nota de
+          // PORTAL_TICKETS_LIST_MAX_LIMIT arriba): el N+1 de unreadCount hace
+          // que el tamaño de página importe acá de un modo que no aplica al
+          // resto de las rutas paginadas del portal.
+          const cappedLimit = limit === undefined ? undefined : Math.min(limit, PORTAL_TICKETS_LIST_MAX_LIMIT);
+          const result = await listPortalTickets.execute(clientId, { page, limit: cappedLimit });
           res.status(200).json(result);
         } catch (err) {
           next(err);

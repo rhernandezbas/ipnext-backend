@@ -17,6 +17,13 @@ import type { PaginatedQuery, PaginatedResult } from '@application/dto/paginatio
  * universo YA está acotado a la página de tickets de UN cliente (`customerId`
  * fijo), nunca al listado admin global (miles de tickets) — por eso `ListTickets`
  * (admin) NO se tocó para esto, ver `GetTicketUnreadCount`.
+ *
+ * F7 (fix wave) — con el cap GENERAL del portal (100, `parsePagination.ts`),
+ * este N+1 podía disparar hasta 100 COUNT por pull-to-refresh. En vez de
+ * agregar una query agregada (`group by`) al `TicketCommentRepository` solo
+ * para esto, `portal.routes.ts` le pone a ESTA ruta un segundo cap, más bajo
+ * (25 — el mismo valor que el default de página), documentado ahí. El límite
+ * REAL de este N+1 es entonces "hasta 25 COUNT por request", no 100.
  */
 export class ListPortalTickets {
   constructor(

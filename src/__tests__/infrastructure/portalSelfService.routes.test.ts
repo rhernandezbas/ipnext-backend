@@ -583,13 +583,13 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
       expect(res.body.data).toHaveLength(1);
     });
 
-    it('GET /tickets?limit=999999 → cap 100 (el techo lo pone la ruta, no el cliente)', async () => {
+    it('GET /tickets?limit=999999 → cap 25, propio de esta ruta (F7 fix wave: N+1 de unreadCount, techo más bajo que el general de 100)', async () => {
       const stack = buildStack();
       const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
 
       const res = await request(stack.app).get('/api/portal/tickets?limit=999999').set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(200);
-      expect(res.body.limit).toBe(100);
+      expect(res.body.limit).toBe(25);
     });
 
     it('GET /invoices?page=-3&limit=999999 → 200 con page=1 y limit cap 100 (mismo helper, misma clase de fix)', async () => {
