@@ -17,6 +17,7 @@ import {
   validateTicketMessageFilesBatch,
   createTicketMessageWithAttachments,
   TicketMessageFile,
+  TicketMessageLogger,
 } from '@application/use-cases/ticketMessageAttachments';
 import {
   UnsupportedTicketMessageAttachmentTypeError,
@@ -147,5 +148,74 @@ describe('createTicketMessageWithAttachments — F11 (fix wave): MinIO caído ->
         files: [jpeg()],
       }),
     ).rejects.toBeInstanceOf(StorageNotConfiguredError);
+  });
+});
+
+/**
+ * G9 (fix wave FINAL, LOW). F11 mapea el error crudo de MinIO a un 503
+ * tipado, pero `errorHandler.ts` manda `err.message` DIRECTO al body de la
+ * respuesta (`body.error = err.message`) — y el `message` de
+ * `TicketMessageStorageUnavailableError` interpolaba el detalle crudo
+ * (`connect ECONNREFUSED 127.0.0.1:9000`) DENTRO del mensaje público. Un
+ * cliente HTTP viendo esa IP/puerto internos no es una fuga grave, pero SÍ es
+ * infra que no debería cruzar el borde de la API. El fix: mensaje público
+ * genérico, detalle solo al log (vía el `TicketMessageLogger` inyectable que
+ * ya existe para las fallas de compensación).
+ */
+describe('createTicketMessageWithAttachments — G9 (fix wave FINAL): el detalle de infra NO viaja en el mensaje público', () => {
+  function jpeg(): TicketMessageFile {
+    return { buffer: REAL_BYTES['image/jpeg']!, originalName: 'foto.jpg', mimeType: 'image/jpeg' };
+  }
+
+  it('el mensaje público del error NO contiene el detalle crudo (ECONNREFUSED/IP/puerto) — revert-probe: volver a interpolar `detail` en el mensaje pone este test en rojo', async () => {
+    const comments = new InMemoryTicketCommentRepository();
+    const storage: FileStorage = {
+      save: jest.fn(async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:9000'); }),
+      get: jest.fn(async () => null),
+      delete: jest.fn(async () => {}),
+    };
+
+    let caught: unknown;
+    try {
+      await createTicketMessageWithAttachments(comments, storage, {
+        ticketId: 't1',
+        authorId: 'acc-1',
+        authorKind: 'client',
+        visibility: 'public',
+        authorName: 'Cliente',
+        body: 'con foto',
+        files: [jpeg()],
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(TicketMessageStorageUnavailableError);
+    expect((caught as Error).message).not.toMatch(/ECONNREFUSED|127\.0\.0\.1|:9000/);
+  });
+
+  it('el detalle crudo SÍ llega al log (vía el logger inyectado), para diagnóstico', async () => {
+    const comments = new InMemoryTicketCommentRepository();
+    const warnings: string[] = [];
+    const logger: TicketMessageLogger = { warn: (m) => { warnings.push(m); } };
+    const storage: FileStorage = {
+      save: jest.fn(async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:9000'); }),
+      get: jest.fn(async () => null),
+      delete: jest.fn(async () => {}),
+    };
+
+    await expect(
+      createTicketMessageWithAttachments(comments, storage, {
+        ticketId: 't1',
+        authorId: 'acc-1',
+        authorKind: 'client',
+        visibility: 'public',
+        authorName: 'Cliente',
+        body: 'con foto',
+        files: [jpeg()],
+      }, logger),
+    ).rejects.toBeInstanceOf(TicketMessageStorageUnavailableError);
+
+    expect(warnings.some((w) => w.includes('ECONNREFUSED'))).toBe(true);
   });
 });

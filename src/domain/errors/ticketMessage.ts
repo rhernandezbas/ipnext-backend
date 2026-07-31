@@ -63,9 +63,19 @@ export class TicketMessageAttachmentNotFoundError extends DomainError {
  * ese error crudo (ECONNREFUSED, timeout) caía al 500 genérico del
  * errorHandler. HTTP → 503 (transitorio, vale la pena reintentar).
  */
+/**
+ * G9 (fix wave FINAL) — `message` es GENÉRICO a propósito, sin el `detail`
+ * interpolado: `errorHandler.ts` manda `err.message` DIRECTO al body de la
+ * respuesta HTTP (`body.error = err.message`), así que cualquier detalle
+ * crudo acá (IP/puerto interno de MinIO, stack de ECONNREFUSED, lo que sea
+ * que tire el cliente de storage) cruzaría el borde de la API hacia
+ * cualquiera con la sesión de un cliente. `detail` se preserva como
+ * propiedad separada — SOLO para logging (ver `createTicketMessageWithAttachments`,
+ * que lo pasa al `TicketMessageLogger` en vez de dejarlo viajar en el error).
+ */
 export class TicketMessageStorageUnavailableError extends DomainError {
-  constructor(detail: string) {
-    super(`Ticket message attachment storage is unavailable: ${detail}`, 'TICKET_MESSAGE_STORAGE_UNAVAILABLE');
+  constructor(public readonly detail: string) {
+    super('Ticket message attachment storage is unavailable. Please retry shortly.', 'TICKET_MESSAGE_STORAGE_UNAVAILABLE');
     this.name = 'TicketMessageStorageUnavailableError';
   }
 }

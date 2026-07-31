@@ -288,9 +288,14 @@ export async function createTicketMessageWithAttachments(
         // `TicketMessageStorageUnavailableError` (503) en vez de llegar cruda
         // al errorHandler, que la mandaría al 500 genérico. El catch de abajo
         // sigue haciendo la compensación con el error que sea.
-        throw storageErr instanceof DomainError
-          ? storageErr
-          : new TicketMessageStorageUnavailableError(String((storageErr as Error)?.message ?? storageErr));
+        if (storageErr instanceof DomainError) throw storageErr;
+        const detail = String((storageErr as Error)?.message ?? storageErr);
+        // G9 (fix wave FINAL) — el detalle crudo (IP/puerto/stack de MinIO)
+        // se loguea ACÁ, nunca viaja en el mensaje público del error (ver
+        // `TicketMessageStorageUnavailableError` — su `message` es genérico
+        // a propósito, `errorHandler.ts` lo manda directo al body HTTP).
+        logger.warn(`[createTicketMessageWithAttachments] storage unavailable while saving "${storageKey}": ${detail}`);
+        throw new TicketMessageStorageUnavailableError(detail);
       }
 
       attachments.push({

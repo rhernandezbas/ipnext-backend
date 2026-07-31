@@ -10,6 +10,9 @@ import { GetPortalTicketMessageAttachmentFile } from '@application/use-cases/por
 import { InMemoryTicketRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketRepository';
 import { InMemoryTicketCommentRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketCommentRepository';
 import { InMemoryFileStorage } from '@infrastructure/adapters/in-memory/InMemoryFileStorage';
+import { TicketMessageStorageUnavailableError } from '@domain/errors/ticketMessage';
+import type { FileStorage } from '@domain/ports/FileStorage';
+import type { TicketMessageLogger } from '@application/use-cases/ticketMessageAttachments';
 
 describe('GetPortalTicketMessageAttachmentFile — customer-portal-api v2.B', () => {
   it('scenario "Cliente manda una foto del módem": adjunto público del PROPIO ticket -> se sirve', async () => {
@@ -75,5 +78,35 @@ describe('GetPortalTicketMessageAttachmentFile — customer-portal-api v2.B', ()
     const useCase = new GetPortalTicketMessageAttachmentFile(tickets, comments, storage);
 
     expect(await useCase.execute('client-a', ticket.sequenceNumber, 'a1')).toBeNull();
+  });
+
+  it('G10 (fix wave FINAL): MinIO caído en la LECTURA -> 503 TicketMessageStorageUnavailableError (mensaje genérico), no el crudo/500 — gemelo del lado admin', async () => {
+    const tickets = new InMemoryTicketRepository();
+    const comments = new InMemoryTicketCommentRepository();
+    const ticket = await tickets.create({ subject: 'S', description: 'D', customerId: 'client-a' });
+    await comments.create({
+      id: 'c1', ticketId: ticket.id, authorId: 'acc-1', authorKind: 'client', visibility: 'public',
+      authorName: 'Cliente', body: 'mirá', createdAt: new Date().toISOString(),
+      attachments: [{ id: 'a1', commentId: 'c1', url: null, storageKey: 'tickets/t/c/a1.jpg', kind: 'image', filename: 'foto.jpg', mimeType: 'image/jpeg', sizeBytes: 3 }],
+    });
+    const warnings: string[] = [];
+    const logger: TicketMessageLogger = { warn: (m) => { warnings.push(m); } };
+    const brokenStorage: FileStorage = {
+      save: jest.fn(async () => {}),
+      get: jest.fn(async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:9000'); }),
+      delete: jest.fn(async () => {}),
+    };
+    const useCase = new GetPortalTicketMessageAttachmentFile(tickets, comments, brokenStorage, logger);
+
+    let caught: unknown;
+    try {
+      await useCase.execute('client-a', ticket.sequenceNumber, 'a1');
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(TicketMessageStorageUnavailableError);
+    expect((caught as Error).message).not.toMatch(/ECONNREFUSED/);
+    expect(warnings.some((w) => w.includes('ECONNREFUSED'))).toBe(true);
   });
 });
