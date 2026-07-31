@@ -19,6 +19,8 @@ import {
   PortalPasswordTooShortError,
   PortalAccountNotFoundError,
   PortalTicketValidationError,
+  PortalContractRequiredError,
+  PortalContractNotFoundError,
 } from '@domain/errors/portal.errors';
 import {
   createPortalLoginRateLimiter,
@@ -324,16 +326,33 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
       async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         const clientId = requireClientId(req, res);
         if (!clientId) return;
-        const { subject, description } = (req.body ?? {}) as { subject?: unknown; description?: unknown };
+        const { subject, description, contractId } = (req.body ?? {}) as {
+          subject?: unknown;
+          description?: unknown;
+          contractId?: unknown;
+        };
         if (typeof subject !== 'string' || typeof description !== 'string') {
           res.status(400).json({ error: 'subject y description son requeridos', code: 'VALIDATION_ERROR' });
           return;
         }
+        // v2.A (portal-ticket-contract) — contractId es opcional EN EL BODY (la
+        // obligatoriedad condicional al cliente-con-contratos la resuelve el
+        // use case, ver CreatePortalTicket); acá solo se valida el TIPO.
+        if (contractId !== undefined && contractId !== null && typeof contractId !== 'string') {
+          res.status(400).json({ error: 'contractId inválido', code: 'VALIDATION_ERROR' });
+          return;
+        }
         try {
-          const result = await createPortalTicket.execute(clientId, { subject, description });
+          const result = await createPortalTicket.execute(clientId, { subject, description, contractId });
           res.status(201).json(result);
         } catch (err) {
-          if (err instanceof PortalTicketValidationError) {
+          if (err instanceof PortalContractRequiredError) {
+            res.status(400).json({ error: err.message, code: err.code });
+          } else if (err instanceof PortalContractNotFoundError) {
+            // v2.A — 404 indistinguible: mismo status y body para "no existe"
+            // y "es de otro cliente" (nunca se filtra cuál de los dos pasó).
+            res.status(404).json({ error: err.message, code: err.code });
+          } else if (err instanceof PortalTicketValidationError) {
             res.status(400).json({ error: err.message, code: err.code });
           } else {
             next(err);

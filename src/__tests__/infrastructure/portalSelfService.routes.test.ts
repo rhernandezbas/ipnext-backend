@@ -46,6 +46,26 @@ import { normalizeGrCurrency } from '@domain/services/normalizeGrCurrency';
 const TEST_SECRET = 'test-jwt-secret-32chars-minimum!';
 const STAGE_NUEVO = '10000000-0000-4000-a000-000000000001';
 
+function makeContract(overrides: Partial<Contract> & { id: string }): Contract {
+  return {
+    code: null,
+    type: 'internet',
+    plan: '50 Mb Simetrico',
+    ip: '10.0.0.1',
+    status: 'active',
+    startDate: '2025-01-01T00:00:00.000Z',
+    endDate: '',
+    address: null,
+    lat: null,
+    lng: null,
+    technology: null,
+    name: null,
+    vendedor: null,
+    services: [],
+    ...overrides,
+  };
+}
+
 function makeCustomer(overrides: Partial<Customer> & { id: string }): Customer {
   return {
     name: 'Cliente',
@@ -158,8 +178,10 @@ function buildStack() {
   const listPortalPlans = new ListPortalPlans(customers as unknown as CustomerRepository);
   const listPortalTasks = new ListPortalTasks(scheduling);
   const listPortalTickets = new ListPortalTickets(ticketRepo);
-  const getPortalTicket = new GetPortalTicket(ticketRepo);
-  const createPortalTicket = new CreatePortalTicket(ticketRepo, areaRepo);
+  // v2.A (portal-ticket-contract) — mismo `customers` fake que el resto del
+  // stack, reusado (no una instancia paralela) para la validación de contrato.
+  const getPortalTicket = new GetPortalTicket(ticketRepo, customers as unknown as CustomerRepository);
+  const createPortalTicket = new CreatePortalTicket(ticketRepo, areaRepo, customers as unknown as CustomerRepository);
   const deleteMyPortalAccount = new DeleteMyPortalAccount(accounts, sessions, hasher);
 
   const portalAuthMiddleware = createPortalAuthMiddleware(tokenService, accounts);
@@ -299,9 +321,9 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
       const res = await request(stack.app).get('/api/portal/plans').set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
-      // M6 — envelope unificado {data}; L1 — contractId FUERA del DTO (no está
-      // en el allow-list del spec: no se filtran ids internos de contrato).
-      expect(res.body).toEqual({ data: [{ plan: '50 Mb', type: 'internet', status: 'active', startDate: '2025-01-01T00:00:00.000Z', services: [{ name: 'INTERNET', status: 'active' }] }] });
+      // M6 — envelope unificado {data}; v2.A — contractId REINSTATED (ver
+      // portalPlan.dto.ts): la app lo necesita como selector de POST /tickets.
+      expect(res.body).toEqual({ data: [{ contractId: 'c1', plan: '50 Mb', type: 'internet', status: 'active', startDate: '2025-01-01T00:00:00.000Z', services: [{ name: 'INTERNET', status: 'active' }] }] });
     });
   });
 
@@ -373,6 +395,76 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
 
       const listedA = await request(stack.app).get('/api/portal/tickets').set('Authorization', `Bearer ${tokenA}`);
       expect(listedA.body.data.map((t: { subject: string }) => t.subject)).toEqual(['De A']);
+    });
+  });
+
+  describe('POST /api/portal/tickets — v2.A portal-ticket-contract ("seleccionar el contrato primero")', () => {
+    it('cliente CON contratos + contractId propio válido -> 201 y el ticket queda con ese contrato', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' }));
+      stack.customers.seedContracts('client-a', [makeContract({ id: 'contract-a1', plan: '50 Mb Simetrico' })]);
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda internet', description: 'Desde ayer', contractId: 'contract-a1' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.contractId).toBe('contract-a1');
+      expect(res.body.contractLabel).toBe('50 Mb Simetrico');
+    });
+
+    it('cliente CON contratos y SIN contractId -> 400 CONTRACT_REQUIRED', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' }));
+      stack.customers.seedContracts('client-a', [makeContract({ id: 'contract-a1' })]);
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda internet', description: 'Desde ayer' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('CONTRACT_REQUIRED');
+    });
+
+    it('contractId de OTRO cliente -> 404 con body IDÉNTICO al de un contractId inexistente (anti-enumeración)', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' }));
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-b' }));
+      stack.customers.seedContracts('client-a', [makeContract({ id: 'contract-a1' })]);
+      stack.customers.seedContracts('client-b', [makeContract({ id: 'contract-b1' })]);
+      const tokenA = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const foreignRes = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .send({ subject: 'No anda', description: 'd', contractId: 'contract-b1' });
+      const missingRes = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .send({ subject: 'No anda', description: 'd', contractId: 'no-existe' });
+
+      expect(foreignRes.status).toBe(404);
+      expect(missingRes.status).toBe(404);
+      expect(foreignRes.body).toEqual(missingRes.body);
+    });
+
+    it('cliente SIN contratos y sin contractId -> 201 con contractId: null (igual tiene derecho a pedir soporte)', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a' })); // sin seedContracts -> []
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda internet', description: 'Desde ayer' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.contractId).toBeNull();
+      expect(res.body.contractLabel).toBeNull();
     });
   });
 

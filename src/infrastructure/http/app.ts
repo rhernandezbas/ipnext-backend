@@ -3631,11 +3631,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const listPortalPlans = new ListPortalPlans(customerAdapter);
   const listPortalTasks = new ListPortalTasks(schedulingRepo);
   const listPortalTickets = new ListPortalTickets(ticketAdapter);
-  const getPortalTicket = new GetPortalTicket(ticketAdapter);
+  // v2.A (portal-ticket-contract) — customerAdapter resuelve el contrato
+  // (pertenencia + label legible), mismo adapter que el resto del portal.
+  const getPortalTicket = new GetPortalTicket(ticketAdapter, customerAdapter);
   // design.md "Tickets del portal: defaults por catalogo" — el nombre del area
   // es CONFIGURABLE (config.portal.ticketAreaName, PORTAL_TICKET_AREA_NAME env,
   // opt-in), nunca el literal hardcodeado del use case.
-  const createPortalTicket = new CreatePortalTicket(ticketAdapter, ticketAreaRepo, config.portal.ticketAreaName);
+  const createPortalTicket = new CreatePortalTicket(ticketAdapter, ticketAreaRepo, customerAdapter, config.portal.ticketAreaName);
   // M5 (fix wave): el evento de auditoría del borrado se PERSISTE en AuditEvent
   // (durable, GET /api/admin/audit-events) además del log estructurado — el
   // default del use case era solo console.log (moría con la rotación de logs).

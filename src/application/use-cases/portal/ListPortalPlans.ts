@@ -13,9 +13,10 @@ export class ListPortalPlans {
 
   async execute(clientId: string): Promise<PortalPlanDto[]> {
     const contracts = await this.customers.listContracts(clientId);
-    // L1 (fix wave): SIN contractId — el id interno del contrato no esta en el
-    // allow-list del spec y no se filtra al portal.
+    // v2.A (portal-ticket-contract) — contractId REINSTATED (ver doc de
+    // PortalPlanDto): la app lo necesita como selector para POST /tickets.
     return contracts.map((c) => ({
+      contractId: c.id,
       plan: c.plan,
       type: c.type,
       status: c.status,

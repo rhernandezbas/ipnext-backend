@@ -69,3 +69,32 @@ export class PortalTicketValidationError extends DomainError {
     this.name = 'PortalTicketValidationError';
   }
 }
+
+/**
+ * portal-ticket-contract (v2.A) — "el usuario pidió: para abrir un reclamo
+ * debería seleccionar el contrato primero". Un cliente CON al menos un
+ * contrato DEBE elegir uno al crear el reclamo (soporte necesita saber sobre
+ * qué servicio es); un cliente SIN contratos queda exento (igual tiene
+ * derecho a pedir soporte) — ver `CreatePortalTicket`.
+ */
+export class PortalContractRequiredError extends DomainError {
+  constructor() {
+    super('Debés seleccionar un contrato para crear el reclamo', 'CONTRACT_REQUIRED');
+    this.name = 'PortalContractRequiredError';
+  }
+}
+
+/**
+ * portal-ticket-contract (v2.A) — el `contractId` recibido no existe O
+ * pertenece a OTRO cliente. Un ÚNICO error para los dos casos — mismo
+ * criterio anti-enumeración que `GetPortalTicket`/"Ticket ajeno por id": la
+ * ruta responde el MISMO 404 sin filtrar cuál de los dos motivos ocurrió. El
+ * BE es la autoridad de esta validación: la app puede filtrar el selector con
+ * `/api/portal/plans`, pero nunca se confía en el `contractId` que manda.
+ */
+export class PortalContractNotFoundError extends DomainError {
+  constructor() {
+    super('Contrato no encontrado', 'CONTRACT_NOT_FOUND');
+    this.name = 'PortalContractNotFoundError';
+  }
+}
