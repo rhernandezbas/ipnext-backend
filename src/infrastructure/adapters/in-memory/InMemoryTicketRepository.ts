@@ -349,13 +349,14 @@ export class InMemoryTicketRepository implements TicketRepository {
     return result;
   }
 
-  async markMessagesRead(ticketId: string, side: 'client' | 'staff'): Promise<void> {
+  async markMessagesRead(ticketId: string, side: 'client' | 'staff', at: Date): Promise<void> {
     // v2.B — no-op silencioso si no existe (mismo criterio idempotente que delete()).
+    // F5 (fix wave) — `at` viene del caller, nunca se calcula acá adentro.
     const idx = this.tickets.findIndex((t) => t.id === ticketId);
     if (idx === -1) return;
     const existing = this.tickets[idx]!;
-    const now = nowIso();
+    const iso = at.toISOString();
     this.tickets[idx] =
-      side === 'client' ? { ...existing, clientMessagesReadAt: now } : { ...existing, staffMessagesReadAt: now };
+      side === 'client' ? { ...existing, clientMessagesReadAt: iso } : { ...existing, staffMessagesReadAt: iso };
   }
 }

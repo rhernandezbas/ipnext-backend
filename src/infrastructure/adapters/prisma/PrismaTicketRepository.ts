@@ -362,13 +362,15 @@ export class PrismaTicketRepository implements TicketRepository {
     return result;
   }
 
-  async markMessagesRead(ticketId: string, side: 'client' | 'staff'): Promise<void> {
+  async markMessagesRead(ticketId: string, side: 'client' | 'staff', at: Date): Promise<void> {
     // v2.B — no-op silencioso si no existe: `updateMany` con un id inexistente
     // afecta 0 filas sin tirar (a diferencia de `update`, que lanza P2025).
+    // F5 (fix wave) — `at` viene del caller (createdAt del último mensaje
+    // listado), nunca `new Date()` acá adentro.
     const field = side === 'client' ? 'clientMessagesReadAt' : 'staffMessagesReadAt';
     await (prisma as any).ticket.updateMany({
       where: { id: ticketId },
-      data: { [field]: new Date() },
+      data: { [field]: at },
     });
   }
 }

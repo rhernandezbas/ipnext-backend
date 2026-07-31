@@ -74,6 +74,38 @@ describe('ListPortalTicketMessages — customer-portal-api v2.B', () => {
     expect(reloaded!.clientMessagesReadAt).toBeTruthy();
   });
 
+  it('F5 (fix wave): el cursor usa el createdAt del ÚLTIMO mensaje LISTADO, no now() — un mensaje que "aterriza" después de leer sigue no-leído', async () => {
+    const ticketRepo = new InMemoryTicketRepository();
+    const commentRepo = new InMemoryTicketCommentRepository();
+    const ticket = await ticketRepo.create({ subject: 'S', description: 'D', customerId: 'client-a' });
+    await commentRepo.create(makeComment({
+      id: 'public-1', ticketId: ticket.id, visibility: 'public', authorKind: 'staff',
+      body: 'primera respuesta', createdAt: '2026-01-01T00:00:01.000Z',
+    }));
+
+    const useCase = new ListPortalTicketMessages(ticketRepo, commentRepo);
+    await useCase.execute('client-a', ticket.sequenceNumber);
+
+    // El cursor DEBE ser EXACTAMENTE el createdAt del último listado — nunca
+    // now() (que en este test correría muchísimo después de estas fechas fijas
+    // de 2026-01-01, ocultando cualquier mensaje "atrasado" que llegue en la
+    // ventana entre el list() y el mark real de producción).
+    const reloaded = await ticketRepo.getBySequenceNumber(ticket.sequenceNumber);
+    expect(reloaded!.clientMessagesReadAt).toBe('2026-01-01T00:00:01.000Z');
+
+    // Simula el mensaje que "aterriza" en la ventana de carrera: createdAt
+    // POSTERIOR al último listado (el operador respondió justo ahí), pero muy
+    // anterior al now() real del test — bajo el bug (cursor=now()), este
+    // mensaje quedaría marcado leído sin haber estado NUNCA en la respuesta
+    // del GET que el cliente recibió.
+    await commentRepo.create(makeComment({
+      id: 'public-2', ticketId: ticket.id, visibility: 'public', authorKind: 'staff',
+      body: 'segunda respuesta (llegó después)', createdAt: '2026-01-01T00:00:02.000Z',
+    }));
+    const since = reloaded!.clientMessagesReadAt ? new Date(reloaded!.clientMessagesReadAt) : null;
+    expect(await commentRepo.countUnread(ticket.id, 'client', since)).toBe(1);
+  });
+
   it('NO marca el cursor cuando el ticket es ajeno (nunca "abrió" nada)', async () => {
     const ticketRepo = new InMemoryTicketRepository();
     const commentRepo = new InMemoryTicketCommentRepository();

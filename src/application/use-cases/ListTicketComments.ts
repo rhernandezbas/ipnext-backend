@@ -21,7 +21,14 @@ export class ListTicketComments {
     const ticket = await this.ticketRepo.getById(ticketId);
     if (!ticket) throw new TicketNotFoundError(ticketId);
     const comments = await this.repo.listByTicket(ticketId);
-    await this.ticketRepo.markMessagesRead(ticketId, 'staff');
+    // F5 (fix wave) — mismo criterio que ListPortalTicketMessages: el cursor
+    // usa el createdAt del ÚLTIMO comentario efectivamente listado, nunca
+    // now() (evita perder un comentario que aterriza en la ventana entre el
+    // list() y el mark). Lista vacía: se preserva now() (ver esa misma nota).
+    const at = comments.length > 0
+      ? new Date(comments[comments.length - 1]!.createdAt)
+      : new Date();
+    await this.ticketRepo.markMessagesRead(ticketId, 'staff', at);
     return comments;
   }
 }

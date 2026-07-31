@@ -33,7 +33,7 @@ describe('GetTicketUnreadCount — portal-ticket-messaging v2.B (lado admin)', (
       id: 'm1', ticketId: ticket.id, authorId: 'acc-1', authorKind: 'client', visibility: 'public',
       authorName: 'Cliente', body: 'sigue sin andar', createdAt: new Date().toISOString(), attachments: [],
     });
-    await tickets.markMessagesRead(ticket.id, 'staff');
+    await tickets.markMessagesRead(ticket.id, 'staff', new Date());
     const useCase = new GetTicketUnreadCount(tickets, comments);
 
     expect(await useCase.execute(ticket.id)).toBe(0);

@@ -70,6 +70,31 @@ describe('ListTicketComments', () => {
 
     await expect(uc.execute('missing')).rejects.toBeInstanceOf(TicketNotFoundError);
   });
+
+  it('F5 (fix wave): el cursor staffMessagesReadAt usa el createdAt del ÚLTIMO comentario LISTADO, no now()', async () => {
+    const commentRepo = new InMemoryTicketCommentRepository();
+    const ticketRepo = new InMemoryTicketRepository();
+    const ticketId = await seedTicket(ticketRepo);
+    await commentRepo.create({
+      id: 'c-1', ticketId, authorId: 'acc-1', authorKind: 'client', visibility: 'public',
+      authorName: 'Cliente', body: 'sigue sin andar', createdAt: '2026-01-01T00:00:01.000Z', attachments: [],
+    });
+    const list = new ListTicketComments(commentRepo, ticketRepo);
+
+    await list.execute(ticketId);
+
+    const reloaded = await ticketRepo.getById(ticketId);
+    expect(reloaded!.staffMessagesReadAt).toBe('2026-01-01T00:00:01.000Z');
+
+    // Un mensaje que "aterriza" después del listado (createdAt posterior al
+    // último listado, muy anterior al now() real del test run) sigue no-leído.
+    await commentRepo.create({
+      id: 'c-2', ticketId, authorId: 'acc-1', authorKind: 'client', visibility: 'public',
+      authorName: 'Cliente', body: 'sigue el problema', createdAt: '2026-01-01T00:00:02.000Z', attachments: [],
+    });
+    const since = reloaded!.staffMessagesReadAt ? new Date(reloaded!.staffMessagesReadAt) : null;
+    expect(await commentRepo.countUnread(ticketId, 'staff', since)).toBe(1);
+  });
 });
 
 describe('AddTicketComment', () => {

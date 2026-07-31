@@ -102,10 +102,19 @@ export interface TicketRepository {
    */
   countClosedByClientIds(clientIds: string[]): Promise<Map<string, number>>;
   /**
-   * v2.B (portal-ticket-messaging) — estampa el cursor de lectura del lado dado a
-   * `now()`. Efecto secundario de "abrir el hilo" (GET de mensajes del lado
-   * correspondiente) — NUNCA se llama al escribir un mensaje propio. No-op
-   * silencioso si el ticket no existe (mismo criterio idempotente que `delete`).
+   * v2.B (portal-ticket-messaging) — estampa el cursor de lectura del lado dado
+   * al timestamp `at` explícito. Efecto secundario de "abrir el hilo" (GET de
+   * mensajes del lado correspondiente) — NUNCA se llama al escribir un mensaje
+   * propio. No-op silencioso si el ticket no existe (mismo criterio idempotente
+   * que `delete`).
+   *
+   * F5 (fix wave) — `at` es SIEMPRE explícito, el repo NUNCA calcula `now()`
+   * internamente: listar y marcar-leído son dos operaciones separadas, y un
+   * mensaje nuevo puede aterrizar en la ventana entre ambas. El caller (el use
+   * case que hizo el `list`) DEBE pasar el `createdAt` del ÚLTIMO mensaje
+   * efectivamente listado — nunca el reloj de pared del momento del mark — así
+   * el cursor nunca avanza más allá de lo que el caller realmente mostró en ESA
+   * respuesta. Ver `ListPortalTicketMessages` / `ListTicketComments`.
    */
-  markMessagesRead(ticketId: string, side: 'client' | 'staff'): Promise<void>;
+  markMessagesRead(ticketId: string, side: 'client' | 'staff', at: Date): Promise<void>;
 }
