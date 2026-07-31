@@ -155,4 +155,8 @@ export class SplynxTicketAdapter implements TicketRepository {
     // Stub — Splynx decabled (states-be, F1.5 spec #2, is Prisma-only).
     return new Map();
   }
+
+  async markMessagesRead(_ticketId: string, _side: 'client' | 'staff'): Promise<void> {
+    // Stub — Splynx decabled (v2.B, portal-ticket-messaging, is Prisma-only).
+  }
 }

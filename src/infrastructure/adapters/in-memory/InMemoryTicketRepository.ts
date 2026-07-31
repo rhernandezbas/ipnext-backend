@@ -226,6 +226,8 @@ export class InMemoryTicketRepository implements TicketRepository {
       grCasoId: null,
       resolvedAt: null, // #84 — null until close() is called
       archivedAt: null, // #85 — null until archive() is called
+      clientMessagesReadAt: null, // v2.B — null until markMessagesRead('client')
+      staffMessagesReadAt: null,  // v2.B — null until markMessagesRead('staff')
       createdAt: now,
       updatedAt: now,
     };
@@ -345,5 +347,15 @@ export class InMemoryTicketRepository implements TicketRepository {
       }
     }
     return result;
+  }
+
+  async markMessagesRead(ticketId: string, side: 'client' | 'staff'): Promise<void> {
+    // v2.B — no-op silencioso si no existe (mismo criterio idempotente que delete()).
+    const idx = this.tickets.findIndex((t) => t.id === ticketId);
+    if (idx === -1) return;
+    const existing = this.tickets[idx]!;
+    const now = nowIso();
+    this.tickets[idx] =
+      side === 'client' ? { ...existing, clientMessagesReadAt: now } : { ...existing, staffMessagesReadAt: now };
   }
 }

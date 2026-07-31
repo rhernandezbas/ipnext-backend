@@ -39,6 +39,7 @@ function makeRepo(overrides?: Partial<TicketRepository>): TicketRepository {
     delete: jest.fn(),
     countOpenByClientIds: jest.fn(),
     countClosedByClientIds: jest.fn(),
+    markMessagesRead: jest.fn(),
     ...overrides,
   };
 }

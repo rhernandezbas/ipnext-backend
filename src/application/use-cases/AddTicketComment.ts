@@ -16,6 +16,17 @@ export interface AddTicketCommentInput {
   }>;
 }
 
+/**
+ * portal-ticket-messaging (v2.B) — este use case es el camino de las NOTAS
+ * INTERNAS de siempre (el CRUD admin de comentarios, `POST /api/tickets/:id/
+ * comments`). `authorKind`/`visibility` se estampan FIJOS acá adentro —
+ * `staff` + `internal`, SIEMPRE — y no viajan como parámetro del input: es la
+ * ruta (este use case) la que determina la visibilidad, no el caller. Un
+ * operador que quiera responderle AL CLIENTE usa el use case nuevo
+ * `SendStaffTicketReply` (visibility=public fijo del otro lado) — dos rutas
+ * distintas, cada una con su valor cableado, en vez de un campo que alguien
+ * pueda setear mal.
+ */
 export class AddTicketComment {
   constructor(
     private readonly repo: TicketCommentRepository,
@@ -31,6 +42,8 @@ export class AddTicketComment {
       id: randomUUID(),
       commentId,
       url: a.url,
+      storageKey: null,
+      kind: null,
       filename: a.filename,
       mimeType: a.mimeType ?? null,
       sizeBytes: a.sizeBytes ?? null,
@@ -39,6 +52,9 @@ export class AddTicketComment {
     const comment: TicketComment = {
       id: commentId,
       ticketId: input.ticketId,
+      authorId: null,
+      authorKind: 'staff',
+      visibility: 'internal',
       authorName: input.authorName,
       body: input.body,
       createdAt: new Date().toISOString(),

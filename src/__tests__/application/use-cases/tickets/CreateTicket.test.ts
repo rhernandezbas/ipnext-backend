@@ -62,6 +62,7 @@ describe('CreateTicket use case', () => {
       delete: jest.fn(),
       countOpenByClientIds: jest.fn(),
       countClosedByClientIds: jest.fn(),
+      markMessagesRead: jest.fn(),
     };
     const createTicket = new CreateTicket(badRepo);
 

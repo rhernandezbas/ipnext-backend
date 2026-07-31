@@ -61,6 +61,14 @@ export function toTicket(row: any): Ticket {
       : (row.archivedAt ?? null),
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
+    // v2.B — cursor de lectura por lado ("no leídos"). Ausente en filas viejas
+    // (columnas recién agregadas) — null es el estado correcto ("nunca leyó").
+    clientMessagesReadAt: row.clientMessagesReadAt instanceof Date
+      ? row.clientMessagesReadAt.toISOString()
+      : (row.clientMessagesReadAt ?? null),
+    staffMessagesReadAt: row.staffMessagesReadAt instanceof Date
+      ? row.staffMessagesReadAt.toISOString()
+      : (row.staffMessagesReadAt ?? null),
     // #44 (D7) — related tasks only present when the query included them (getById).
     ...(Array.isArray(row.tasks) && {
       tasks: row.tasks.map((t: any) => ({
@@ -352,5 +360,15 @@ export class PrismaTicketRepository implements TicketRepository {
       result.set(row.customerId, row._count?._all ?? 0);
     }
     return result;
+  }
+
+  async markMessagesRead(ticketId: string, side: 'client' | 'staff'): Promise<void> {
+    // v2.B — no-op silencioso si no existe: `updateMany` con un id inexistente
+    // afecta 0 filas sin tirar (a diferencia de `update`, que lanza P2025).
+    const field = side === 'client' ? 'clientMessagesReadAt' : 'staffMessagesReadAt';
+    await (prisma as any).ticket.updateMany({
+      where: { id: ticketId },
+      data: { [field]: new Date() },
+    });
   }
 }

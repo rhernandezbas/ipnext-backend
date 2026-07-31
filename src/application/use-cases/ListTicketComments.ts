@@ -3,6 +3,14 @@ import { TicketRepository } from '@domain/ports/TicketRepository';
 import { TicketComment } from '@domain/entities/ticketComment';
 import { TicketNotFoundError } from '@domain/errors';
 
+/**
+ * v2.B (portal-ticket-messaging) — "abrir el hilo" del lado staff. Ver todos los
+ * comentarios (público + interno, ya con autoría/visibilidad marcadas) es el
+ * criterio elegido para "el operador leyó el ticket" — estampa el cursor
+ * `staffMessagesReadAt` como efecto secundario best-effort (nunca bloquea ni
+ * rompe la lectura si el ticket ya no existe: eso ya lo cubre el check de
+ * arriba, que lanza ANTES).
+ */
 export class ListTicketComments {
   constructor(
     private readonly repo: TicketCommentRepository,
@@ -12,6 +20,8 @@ export class ListTicketComments {
   async execute(ticketId: string): Promise<TicketComment[]> {
     const ticket = await this.ticketRepo.getById(ticketId);
     if (!ticket) throw new TicketNotFoundError(ticketId);
-    return this.repo.listByTicket(ticketId);
+    const comments = await this.repo.listByTicket(ticketId);
+    await this.ticketRepo.markMessagesRead(ticketId, 'staff');
+    return comments;
   }
 }

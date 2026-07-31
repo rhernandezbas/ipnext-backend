@@ -2,7 +2,17 @@ import { InMemoryTicketCommentRepository } from '../../infrastructure/adapters/i
 import { TicketComment } from '@domain/entities/ticketComment';
 
 function comment(id: string, createdAt: string): TicketComment {
-  return { id, ticketId: 't1', authorName: 'a', body: 'b', createdAt, attachments: [] };
+  return {
+    id,
+    ticketId: 't1',
+    authorId: null,
+    authorKind: 'staff',
+    visibility: 'internal',
+    authorName: 'a',
+    body: 'b',
+    createdAt,
+    attachments: [],
+  };
 }
 
 describe('InMemoryTicketCommentRepository.listByTicket', () => {

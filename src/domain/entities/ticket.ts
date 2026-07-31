@@ -35,6 +35,12 @@ export interface Ticket {
   // #44 (D7) — related tasks, enriched via PrismaTicketRepository.getById include.
   // Optional so existing fixtures/tests that don't set it keep compiling.
   tasks?: Array<{ id: string; sequenceNumber: number; title: string }>;
+  // v2.B (portal-ticket-messaging) — cursor de lectura por lado ("no leídos").
+  // Optional (no `| null` obligatorio) por la misma razón que `tasks`: los
+  // fixtures/tests existentes que construyen un Ticket a mano no deben romperse.
+  // Ausente/undefined se trata igual que null ("nunca leyó el hilo").
+  clientMessagesReadAt?: string | null;
+  staffMessagesReadAt?: string | null;
 }
 
 export interface TicketStats {

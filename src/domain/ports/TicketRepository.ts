@@ -101,4 +101,11 @@ export interface TicketRepository {
    * by clientId; clientIds with zero closed tickets MAY be absent (caller defaults to 0).
    */
   countClosedByClientIds(clientIds: string[]): Promise<Map<string, number>>;
+  /**
+   * v2.B (portal-ticket-messaging) — estampa el cursor de lectura del lado dado a
+   * `now()`. Efecto secundario de "abrir el hilo" (GET de mensajes del lado
+   * correspondiente) — NUNCA se llama al escribir un mensaje propio. No-op
+   * silencioso si el ticket no existe (mismo criterio idempotente que `delete`).
+   */
+  markMessagesRead(ticketId: string, side: 'client' | 'staff'): Promise<void>;
 }
