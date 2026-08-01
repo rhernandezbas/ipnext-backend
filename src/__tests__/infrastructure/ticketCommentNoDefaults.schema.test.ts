@@ -32,11 +32,23 @@ const MIGRATION_PATH = join(
   'migration.sql',
 );
 
+/**
+ * Parte en líneas normalizando CRLF.
+ *
+ * ⚠️ NO cambiar por `.split('\n')` a secas: en Windows el checkout deja CRLF, y
+ * entonces cada línea termina en `\r`. El `.` de una regex de JS **no matchea
+ * `\r`** (es un terminador de línea), así que un `/--.*$/` sin `m` nunca llega
+ * al `$` y **no borra el comentario**. Este test pasaba en un worktree recién
+ * escrito (LF) y fallaba en `main` (CRLF) por exactamente eso.
+ */
+function toLines(source: string): string[] {
+  return source.split(/\r?\n/);
+}
+
 /** Saca los comentarios `//` de línea del schema (Prisma no tiene comentarios
  * de bloque) — ver la advertencia del docstring de arriba. */
 function stripPrismaComments(source: string): string {
-  return source
-    .split('\n')
+  return toLines(source)
     .map((line) => line.replace(/\/\/.*$/, ''))
     .join('\n');
 }
@@ -56,13 +68,16 @@ describe('TicketComment: authorKind/visibility SIN @default (pendiente G5→G12 
     modelBody = ticketCommentModelBody(readFileSync(SCHEMA_PATH, 'utf8'));
   });
 
-  it('el helper que borra comentarios funciona (si no, todo este test miente)', () => {
+  it.each([
+    ['LF', '\n'],
+    ['CRLF', '\r\n'],
+  ])('el helper que borra comentarios funciona con finales %s (si no, todo este test miente)', (_label, eol) => {
     const fake = [
       'model TicketComment {',
       '  // historia: antes tenia authorKind TicketCommentAuthorKind @default(staff)',
       '  authorKind  TicketCommentAuthorKind',
       '}',
-    ].join('\n');
+    ].join(eol);
     const body = ticketCommentModelBody(fake);
     expect(body).not.toMatch(/@default/);
     expect(body).toMatch(/authorKind\s+TicketCommentAuthorKind/);
@@ -90,8 +105,7 @@ describe('TicketComment: authorKind/visibility SIN @default (pendiente G5→G12 
 
   it('la migración NO toca datos — un DROP DEFAULT no puede reescribir filas existentes', () => {
     const sql = readFileSync(MIGRATION_PATH, 'utf8');
-    const statements = sql
-      .split('\n')
+    const statements = toLines(sql)
       .map((l) => l.replace(/--.*$/, '').trim())
       .filter((l) => l.length > 0);
 
