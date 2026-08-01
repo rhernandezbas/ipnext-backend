@@ -1,10 +1,10 @@
-import { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
+import { TicketAreaCatalogRepository, TicketAreaCatalogWriteData } from '@domain/ports/TicketAreaCatalogRepository';
 import { TicketAreaCatalog } from '@domain/entities/ticket-area-catalog';
 import { TicketAreaNotFoundError, TicketAreaNameConflictError } from '@domain/errors/tickets';
 
 export class UpdateTicketArea {
   constructor(private readonly repo: TicketAreaCatalogRepository) {}
-  async execute(id: string, data: { name?: string; color?: string }): Promise<TicketAreaCatalog> {
+  async execute(id: string, data: Partial<TicketAreaCatalogWriteData>): Promise<TicketAreaCatalog> {
     const item = await this.repo.getById(id);
     if (!item) throw new TicketAreaNotFoundError(id);
 
