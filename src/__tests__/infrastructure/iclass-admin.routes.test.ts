@@ -54,7 +54,7 @@ function buildApp(opts: { iclassFails?: boolean } = {}) {
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
-  app.use('/api/admin/iclass', createIClassAdminRouter(syncUC, listUC, new FakeAuthProvider()));
+  app.use('/api/admin/iclass', createIClassAdminRouter(syncUC, listUC, new FakeAuthProvider(), undefined));
   app.use(errorHandler);
 
   return { app, soTypeRepo, iclassClient };
@@ -232,7 +232,7 @@ function buildAppWithFailingRepos() {
   app.use(express.json());
   app.use(
     '/api/admin/iclass',
-    createIClassAdminRouter(syncSoTypes, listSoTypes, new FakeAuthProvider(), syncNodes, listNodes),
+    createIClassAdminRouter(syncSoTypes, listSoTypes, new FakeAuthProvider(), undefined, syncNodes, listNodes),
   );
   app.use(errorHandler);
   return app;

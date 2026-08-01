@@ -168,6 +168,7 @@ async function buildApp(): Promise<Fixture> {
       closeTicket,
       statusRepo,
       authProvider,
+      undefined, // sessionRepo
       ticketRbacUserRepo,
       undefined, // createTaskFromTicket
       undefined, // taskRepo

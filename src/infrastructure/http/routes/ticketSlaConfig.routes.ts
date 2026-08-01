@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { GetTicketSlaConfig } from '@application/use-cases/GetTicketSlaConfig';
 import { UpdateTicketSlaConfig } from '@application/use-cases/UpdateTicketSlaConfig';
 import { UpdateTicketSlaConfigSchema } from '@application/dto/tickets.dto';
@@ -21,12 +22,13 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
  */
 export function createTicketSlaConfigRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   getConfig: GetTicketSlaConfig,
   updateConfig: UpdateTicketSlaConfig,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const readPerm = requirePerm('tickets', 'read');
   const managePerm = requirePerm('tickets', 'manage');
 

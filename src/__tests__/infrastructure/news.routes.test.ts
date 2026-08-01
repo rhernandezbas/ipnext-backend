@@ -152,6 +152,7 @@ async function buildApp(): Promise<Fixture> {
     '/api/news',
     createNewsRouter(
       new EchoAuthProvider(userRepo),
+      undefined,
       requirePerm,
       listNewsPosts,
       getNewsPost,

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { UpdateIngestConfigSchema } from '@application/dto/gestionRealIngest.dto';
 import { GetIngestConfig } from '@application/use-cases/GetIngestConfig';
 import { UpdateIngestConfig } from '@application/use-cases/UpdateIngestConfig';
@@ -22,13 +23,14 @@ import { ListNeedsReviewTasks } from '@application/use-cases/ListNeedsReviewTask
  */
 export function createGestionRealIngestRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   getIngestConfig: GetIngestConfig,
   updateIngestConfig: UpdateIngestConfig,
   getIngestStatus: GetIngestStatus,
   listNeedsReviewTasks: ListNeedsReviewTasks,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.get('/config', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

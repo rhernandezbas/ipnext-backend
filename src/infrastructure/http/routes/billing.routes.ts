@@ -4,6 +4,7 @@ import { ListInvoices } from '@application/use-cases/ListInvoices';
 import { ListPayments } from '@application/use-cases/ListPayments';
 import { ListTransactions } from '@application/use-cases/ListTransactions';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 
 const invoicesStore: Array<{
@@ -24,9 +25,10 @@ export function createBillingRouter(
   listPayments: ListPayments,
   listTransactions: ListTransactions,
   authProvider: JwtAuthAdapter,
+  sessionRepo: SessionRepository | undefined,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.get('/summary', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

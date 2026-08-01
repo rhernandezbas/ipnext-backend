@@ -65,7 +65,7 @@ function buildApp(opts: {
   app.use(express.json());
   app.use(
     '/api/admin/iclass',
-    createIClassStatusesRouter(syncUC, listUC, updateUC, new FakeAuthProvider(), requireRead, requireManage),
+    createIClassStatusesRouter(syncUC, listUC, updateUC, new FakeAuthProvider(), undefined, requireRead, requireManage),
   );
   app.use(errorHandler);
 

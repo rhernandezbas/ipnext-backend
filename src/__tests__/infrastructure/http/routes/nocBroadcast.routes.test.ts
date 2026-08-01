@@ -64,6 +64,7 @@ function buildApp(opts?: { read?: RequestHandler; manage?: RequestHandler }) {
     '/api/messaging/noc-broadcast',
     createNocBroadcastRouter(
       new FakeAuthProvider(),
+      undefined,
       { read: opts?.read ?? grant, manage: opts?.manage ?? grant },
       new GetNocBroadcastConfig(configRepo),
       new UpdateNocBroadcastConfig(configRepo),

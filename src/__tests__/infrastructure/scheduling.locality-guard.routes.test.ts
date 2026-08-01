@@ -103,7 +103,7 @@ function buildApp() {
   const listTasks = new ListTasks(repo);
   const getTask = new GetTask(repo);
 
-  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider));
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider, undefined));
   app.use(errorHandler);
 
   return { app, repo };

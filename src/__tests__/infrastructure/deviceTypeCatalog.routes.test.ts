@@ -129,6 +129,7 @@ async function buildApp(): Promise<Fixture> {
     '/api/inventory',
     createDeviceTypeCatalogRouter(
       new EchoAuthProvider(),
+      undefined,
       requirePerm,
       new ListDeviceType(catalogRepo),
       new GetDeviceType(catalogRepo),

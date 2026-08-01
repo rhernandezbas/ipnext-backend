@@ -10,6 +10,7 @@ import { GetClientStats } from '@application/use-cases/GetClientStats';
 import { DeleteCustomer } from '@application/use-cases/DeleteCustomer';
 import { UpdateClientLocation } from '@application/use-cases/UpdateClientLocation';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 import { ClientNotFoundError, SplynxUnavailableError } from '@domain/errors';
 import { InvalidLocationError } from '@domain/errors/geolocation';
@@ -109,6 +110,7 @@ export function createClientsRouter(
   getInvoices: GetClientInvoices,
   getLogs: GetClientLogs,
   authProvider: JwtAuthAdapter,
+  sessionRepo: SessionRepository | undefined,
   createCustomer: CreateCustomer,
   getClientStats: GetClientStats,
   deleteCustomer: DeleteCustomer,
@@ -116,7 +118,7 @@ export function createClientsRouter(
   requirePerm?: RequirePerm,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const writePerm: RequestHandler = requirePerm ? requirePerm('clients', 'write') : (_req, _res, next) => next();
 
   // IMPORTANT: /stats MUST be declared before /:id so the catch-all does not

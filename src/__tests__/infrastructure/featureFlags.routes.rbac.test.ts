@@ -126,6 +126,7 @@ async function buildFixture() {
     '/api/admin/feature-flags',
     createFeatureFlagsRouter(
       authProvider,
+      undefined,
       new ListFeatureFlags(flagRepo),
       new GetFeatureFlag(flagRepo),
       new SetFeatureFlag(flagRepo),

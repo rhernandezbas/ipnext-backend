@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListTicketAreas } from '@application/use-cases/ListTicketAreas';
 import { GetTicketArea } from '@application/use-cases/GetTicketArea';
 import { CreateTicketArea } from '@application/use-cases/CreateTicketArea';
@@ -19,6 +20,7 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
 
 export function createTicketAreasRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   listTicketAreas: ListTicketAreas,
   getTicketArea: GetTicketArea,
@@ -27,7 +29,7 @@ export function createTicketAreasRouter(
   deleteTicketArea: DeleteTicketArea,
 ): Router {
   const router = Router();
-  const auth       = createAuthMiddleware(authProvider);
+  const auth       = createAuthMiddleware(authProvider, sessionRepo);
   const readPerm   = requirePerm('tickets', 'read');
   const managePerm = requirePerm('tickets', 'manage');
 

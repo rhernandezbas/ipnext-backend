@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListContracts } from '@application/use-cases/ListContracts';
 import { GetContractStats } from '@application/use-cases/GetContractStats';
 import { UpdateContractLocation } from '@application/use-cases/UpdateContractLocation';
@@ -53,6 +54,7 @@ const SetContractNetworkAssignmentSchema = z
  */
 export function createContractsRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   listContracts: ListContracts,
   getContractStats: GetContractStats,
   updateContractLocation?: UpdateContractLocation,
@@ -60,7 +62,7 @@ export function createContractsRouter(
   setContractNetworkAssignment?: SetContractNetworkAssignment,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const writePerm: RequestHandler = requirePerm ? requirePerm('clients', 'write') : (_req, _res, next) => next();
   // PICK-3: gate granular reusando la action existente 'assign' (design §14.4) — cero cambios TS.
   const assignPerm: RequestHandler = requirePerm ? requirePerm('contracts', 'assign') : (_req, _res, next) => next();

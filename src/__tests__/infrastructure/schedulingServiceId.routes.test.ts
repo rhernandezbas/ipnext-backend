@@ -55,7 +55,7 @@ function buildApp() {
   const authProvider = new FakeAuthProvider();
 
   app.use('/api/scheduling',
-    createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider));
+    createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider, undefined));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);

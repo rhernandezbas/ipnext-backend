@@ -107,6 +107,7 @@ async function buildApp(): Promise<Fixture> {
   app.use(express.json());
   app.use('/api', createServiceCatalogRouter(
     new EchoAuthProvider(),
+    undefined,
     requirePerm,
     new ListServiceCatalog(repo),
     new CreateServiceCatalog(repo),

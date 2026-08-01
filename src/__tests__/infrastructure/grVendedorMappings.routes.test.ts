@@ -66,6 +66,7 @@ async function buildApp(opts: { denyAssign?: boolean } = {}) {
       setMapping,
       listVendedores,
       new FakeAuthProvider(),
+      undefined,
       // Single guard for the whole admin surface: recapture.assign.
       opts.denyAssign ? DENY : ALLOW,
     ),

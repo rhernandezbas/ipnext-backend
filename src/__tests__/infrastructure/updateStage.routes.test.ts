@@ -73,6 +73,7 @@ function buildApp(requirePerm = allowAll): AppBundle {
 
   app.use('/api/scheduling', createWorkflowsRouter(
     new FakeAuthProvider(),
+    undefined,
     requirePerm,
     new ListWorkflows(wfRepo),
     new GetWorkflow(wfRepo),

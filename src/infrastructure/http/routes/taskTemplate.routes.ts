@@ -8,6 +8,7 @@ import { ReplaceTaskTemplateItems } from '@application/use-cases/ReplaceTaskTemp
 import { TaskTemplate } from '@domain/entities/taskTemplate';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { CreateTaskTemplateSchema, UpdateTaskTemplateSchema } from '@application/dto/taskTemplate.dto';
 import { ReplaceTemplateItemsSchema } from '@application/dto/checklists.dto';
 import { TemplateNotFoundError } from '@domain/errors/checklist';
@@ -19,10 +20,11 @@ export function createTaskTemplateRouter(
   updateTemplate: UpdateTaskTemplate,
   deleteTemplate: DeleteTaskTemplate,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   replaceTemplateItems?: ReplaceTaskTemplateItems,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.get('/', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

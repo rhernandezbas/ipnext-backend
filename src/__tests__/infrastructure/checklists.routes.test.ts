@@ -78,6 +78,7 @@ function buildApp() {
     new DeleteTask(schedRepo),
     new MoveTaskToStage(schedRepo, stageRepo),
     authProvider,
+    undefined,
     stageRepo,
     checklistUCs,
   ));
@@ -89,6 +90,7 @@ function buildApp() {
     new UpdateTaskTemplate(templateRepo),
     new DeleteTaskTemplate(templateRepo),
     authProvider,
+    undefined,
     new ReplaceTaskTemplateItems(templateRepo),
   ));
 

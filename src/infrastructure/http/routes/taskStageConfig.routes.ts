@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { GetTaskStageRecipientConfig } from '@application/use-cases/GetTaskStageRecipientConfig';
 import { UpdateTaskStageRecipientConfig } from '@application/use-cases/UpdateTaskStageRecipientConfig';
 import { GetTaskStageTransitionConfig } from '@application/use-cases/GetTaskStageTransitionConfig';
@@ -37,6 +38,7 @@ const SetResultingStageSchema = z.object({
 
 export function createTaskStageConfigRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   perms: TaskStageConfigRoutePerms,
   getTaskStageRecipientConfig: GetTaskStageRecipientConfig,
   updateTaskStageRecipientConfig: UpdateTaskStageRecipientConfig,
@@ -44,7 +46,7 @@ export function createTaskStageConfigRouter(
   setTaskStageTransitionConfig: SetTaskStageTransitionConfig,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   // ─── GET / — mapeo actual + estado resultante (read) ────────────────────────
   router.get('/', auth, perms.read, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {

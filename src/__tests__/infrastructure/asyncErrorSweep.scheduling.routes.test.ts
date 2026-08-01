@@ -59,6 +59,7 @@ function buildApp(createTask: never = f): express.Express {
   app.use('/api/scheduling', createSchedulingRouter(
     f, f, createTask, f, f, f,   // listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage
     fakeAuthProvider,
+    undefined,                   // sessionRepo
     undefined,                   // stageRepo — POST / usa el stageId por defecto
     checklist,
     f,                           // setTaskInventoryReview

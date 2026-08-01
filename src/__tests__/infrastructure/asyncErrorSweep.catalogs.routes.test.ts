@@ -60,7 +60,7 @@ interface SweepCase {
 }
 
 const buildTicketStatuses = (): express.Express =>
-  appWith('/api/ticket-statuses', createTicketStatusesRouter(fakeAuthProvider, f, f, f, f, f));
+  appWith('/api/ticket-statuses', createTicketStatusesRouter(fakeAuthProvider, undefined, f, f, f, f, f));
 
 const cases: ReadonlyArray<SweepCase> = [
   {
@@ -71,32 +71,32 @@ const cases: ReadonlyArray<SweepCase> = [
   {
     name: 'ticketAreas GET /:id',
     path: '/api/ticket-areas/x',
-    build: () => appWith('/api/ticket-areas', createTicketAreasRouter(fakeAuthProvider, passthroughPerm, f, f, f, f, f)),
+    build: () => appWith('/api/ticket-areas', createTicketAreasRouter(fakeAuthProvider, undefined, passthroughPerm, f, f, f, f, f)),
   },
   {
     name: 'taskPriorities GET /task-priorities/:id',
     path: '/api/task-priorities/x',
-    build: () => appWith('/api', createTaskPrioritiesRouter(fakeAuthProvider, f, f, f, f, f)),
+    build: () => appWith('/api', createTaskPrioritiesRouter(fakeAuthProvider, undefined, f, f, f, f, f)),
   },
   {
     name: 'taskCategories GET /task-categories/:id',
     path: '/api/task-categories/x',
-    build: () => appWith('/api', createTaskCategoriesRouter(fakeAuthProvider, f, f, f, f, f)),
+    build: () => appWith('/api', createTaskCategoriesRouter(fakeAuthProvider, undefined, f, f, f, f, f)),
   },
   {
     name: 'materialTypeCatalog GET /material-types/:id',
     path: '/api/material-types/x',
-    build: () => appWith('/api', createMaterialTypeCatalogRouter(fakeAuthProvider, passthroughPerm, f, f, f, f, f, catalogService)),
+    build: () => appWith('/api', createMaterialTypeCatalogRouter(fakeAuthProvider, undefined, passthroughPerm, f, f, f, f, f, catalogService)),
   },
   {
     name: 'deviceTypeCatalog GET /device-types/:id',
     path: '/api/device-types/x',
-    build: () => appWith('/api', createDeviceTypeCatalogRouter(fakeAuthProvider, passthroughPerm, f, f, f, f, f, catalogService)),
+    build: () => appWith('/api', createDeviceTypeCatalogRouter(fakeAuthProvider, undefined, passthroughPerm, f, f, f, f, f, catalogService)),
   },
   {
     name: 'contractTechnologies GET /contract-technologies/:id',
     path: '/api/contract-technologies/x',
-    build: () => appWith('/api', createContractTechnologiesRouter(fakeAuthProvider, f, f, f, f, f)),
+    build: () => appWith('/api', createContractTechnologiesRouter(fakeAuthProvider, undefined, f, f, f, f, f)),
   },
   // ── Template completo sobre el representante (mismo shape en los 7) ──
   {

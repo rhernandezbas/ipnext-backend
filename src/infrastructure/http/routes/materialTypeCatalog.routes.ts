@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListMaterial } from '@application/use-cases/ListMaterial';
 import { GetMaterial } from '@application/use-cases/GetMaterial';
 import { CreateMaterial } from '@application/use-cases/CreateMaterial';
@@ -22,6 +23,7 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
 
 export function createMaterialTypeCatalogRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   list: ListMaterial,
   get: GetMaterial,
@@ -31,7 +33,7 @@ export function createMaterialTypeCatalogRouter(
   service: MaterialCatalogService,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const readPerm   = requirePerm('inventory', 'read');
   const managePerm = requirePerm('inventory', 'manage');
 

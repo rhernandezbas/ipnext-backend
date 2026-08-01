@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { SetVendedorMapping } from '@application/use-cases/SetVendedorMapping';
 import { ListVendedorMappings } from '@application/use-cases/ListVendedorMappings';
 import { ListDistinctVendedores } from '@application/use-cases/ListDistinctVendedores';
@@ -33,10 +34,11 @@ export function createGrVendedorMappingsRouter(
   setMapping: SetVendedorMapping,
   listVendedores: ListDistinctVendedores,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requireRecaptureAssign: RequestHandler,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   // GET /vendedor-mappings — list all mappings (recapture.assign)
   router.get('/vendedor-mappings', auth, requireRecaptureAssign, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {

@@ -98,6 +98,7 @@ async function buildApp(opts?: { inventoryManageGuard?: RequestHandler; scheduli
       new UpdateProject(projectRepo, categoryRepo as never, typeRepo as never, workflowRepo as never, adminRepo as never, partnerRepo as never),
       new DeleteProject(projectRepo),
       new FakeAuthProvider(),
+      undefined,
       assignUC,
       opts?.inventoryManageGuard,
       opts?.schedulingManageGuard,

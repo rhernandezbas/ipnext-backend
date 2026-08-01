@@ -75,7 +75,7 @@ function buildApp(activityRepo?: TaskActivityRepository) {
   const noop = (_req: Request, _res: Response, next: NextFunction) => next();
   app.use('/api/scheduling', createSchedulingRouter(
     new ListTasks(repo), new GetTask(repo), createTask, updateTask, new DeleteTask(repo), moveTaskToStage, new FakeAuth(),
-    undefined, undefined, undefined, undefined, undefined, getTaskActivity,
+    undefined, undefined, undefined, undefined, undefined, undefined, getTaskActivity,
   ));
   app.use('/api/scheduling', createTaskCommentsRouter(
     new ListTaskComments(commentRepo), addComment, new DeleteTaskComment(commentRepo, recorder), auth,

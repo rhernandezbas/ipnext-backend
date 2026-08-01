@@ -85,6 +85,7 @@ function buildApp() {
     new DeleteTask(repo),
     new MoveTaskToStage(repo, stageRepo),
     authProvider,
+    undefined, // sessionRepo
   );
   app.use('/api/scheduling', router);
 

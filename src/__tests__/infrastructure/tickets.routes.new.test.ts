@@ -82,7 +82,7 @@ function buildApp() {
 
   app.use(
     '/api/tickets',
-    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicket, closeTicket, statusRepo, authProvider, rbacUserRepo, undefined, undefined, undefined, areaRepo),
+    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicket, closeTicket, statusRepo, authProvider, undefined, rbacUserRepo, undefined, undefined, undefined, areaRepo),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {

@@ -59,7 +59,10 @@ async function buildApp(opts: BuildAppOptions = {}) {
   const updateProject = new UpdateProject(projectRepo, categoryRepo, typeRepo, workflowRepo, adminRepo, partnerRepo);
   const deleteProject = new DeleteProject(projectRepo);
 
-  app.use('/api/projects', createProjectsRouter(listProjects, getProject, createProject, updateProject, deleteProject, authProvider));
+  app.use(
+    '/api/projects',
+    createProjectsRouter(listProjects, getProject, createProject, updateProject, deleteProject, authProvider, undefined),
+  );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);

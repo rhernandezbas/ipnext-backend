@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import {
   CreateWorkflowSchema,
   UpdateWorkflowSchema,
@@ -55,6 +56,7 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
 
 export function createWorkflowsRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   listWorkflows: ListWorkflows,
   getWorkflow: GetWorkflow,
@@ -78,7 +80,7 @@ export function createWorkflowsRouter(
   deleteProjectType: DeleteProjectType,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const canRead   = requirePerm('scheduling', 'read');
   const canManage = requirePerm('scheduling', 'manage');
 

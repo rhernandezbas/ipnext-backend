@@ -53,7 +53,7 @@ function buildActivityApp() {
 
   app.use('/api/scheduling', createSchedulingRouter(
     listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, new FakeAuth(),
-    undefined, undefined, undefined, undefined, undefined, getTaskActivity,
+    undefined, undefined, undefined, undefined, undefined, undefined, getTaskActivity,
   ));
 
   app.use((_err: unknown, _req: Request, res: Response, _next: NextFunction): void => {

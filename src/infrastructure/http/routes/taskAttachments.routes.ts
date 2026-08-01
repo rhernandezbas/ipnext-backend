@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import multer from 'multer';
 import { AuthProvider } from '@domain/ports/AuthProvider';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { AttachPhotosToTask } from '@application/use-cases/AttachPhotosToTask';
 import { ListTaskAttachments } from '@application/use-cases/ListTaskAttachments';
 import { GetTaskAttachmentFile } from '@application/use-cases/GetTaskAttachmentFile';
@@ -40,6 +41,17 @@ export interface TaskAttachmentUseCases {
 
 export interface TaskAttachmentRouterDeps {
   authProvider: AuthProvider;
+  /**
+   * fix/auth-stateful-routers — staff SessionRepository for STATEFUL auth: without
+   * it, `createAuthMiddleware` degrades to the legacy stateless JWT-only check and a
+   * REVOKED staff session keeps operating this router until the JWT expires.
+   * The KEY is required (a caller can't silently forget it), but the value may be
+   * `undefined` — matching the `SessionRepository | undefined` convention used by
+   * every positional-style router this same change touched. app.ts always supplies
+   * the real production `sessionRepo` here; `undefined` only shows up in test
+   * fixtures unrelated to session semantics.
+   */
+  sessionRepo: SessionRepository | undefined;
   /** Gate de LECTURA de scheduling (requirePerm('scheduling','read')). */
   requireRead: RequestHandler;
   /** Gate de ESCRITURA de scheduling (requirePerm('scheduling','write')). */
@@ -67,7 +79,7 @@ export function createTaskAttachmentsRouter(
   deps: TaskAttachmentRouterDeps,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(deps.authProvider);
+  const auth = createAuthMiddleware(deps.authProvider, deps.sessionRepo);
 
   const upload = multer({
     storage: multer.memoryStorage(),

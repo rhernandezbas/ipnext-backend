@@ -93,6 +93,7 @@ function buildApp(): Harness {
     '/api/gestion-real-ingest',
     createGestionRealIngestRouter(
       authProvider,
+      undefined,
       getIngestConfig,
       updateIngestConfig,
       getIngestStatus,

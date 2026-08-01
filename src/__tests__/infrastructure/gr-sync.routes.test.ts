@@ -27,7 +27,7 @@ function buildApp() {
     getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }),
   } as unknown as AuthProvider;
 
-  app.use('/api/admin/gr-sync', createGrSyncRouter(authProvider, resetUC));
+  app.use('/api/admin/gr-sync', createGrSyncRouter(authProvider, undefined, resetUC));
   app.use(errorHandler);
 
   return { app, stateRepo };
@@ -69,7 +69,7 @@ function buildAppWithReconcile(grIds: string[], localIds: string[]) {
     getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }),
   } as unknown as AuthProvider;
 
-  app.use('/api/admin/gr-sync', createGrSyncRouter(authProvider, resetUC, reconcileUC));
+  app.use('/api/admin/gr-sync', createGrSyncRouter(authProvider, undefined, resetUC, reconcileUC));
   app.use(errorHandler);
 
   return { app };

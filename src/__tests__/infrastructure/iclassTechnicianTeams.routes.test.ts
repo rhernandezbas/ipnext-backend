@@ -71,6 +71,7 @@ async function buildApp(opts: { denyRead?: boolean; denyManage?: boolean } = {})
       listUC,
       setUC,
       new FakeAuthProvider(),
+      undefined,
       opts.denyRead ? DENY : ALLOW,
       opts.denyManage ? DENY : ALLOW,
     ),

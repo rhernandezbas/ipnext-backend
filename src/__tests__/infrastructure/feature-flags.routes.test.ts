@@ -34,7 +34,10 @@ function buildApp() {
     getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }),
   } as unknown as AuthProvider;
 
-  app.use('/api/admin/feature-flags', createFeatureFlagsRouter(authProvider, listUC, getUC, setUC, allowAllFlags));
+  app.use(
+    '/api/admin/feature-flags',
+    createFeatureFlagsRouter(authProvider, undefined, listUC, getUC, setUC, allowAllFlags),
+  );
 
   // Exercise the REAL production error handler so the FLAG_NOT_FOUND mapping
   // cannot drift out from under this test.
