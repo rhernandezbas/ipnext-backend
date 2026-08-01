@@ -71,22 +71,16 @@ describe('Migración 20261029000000_ticket_messaging', () => {
   });
 });
 
-describe('corrección de orden de deploy — schema.prisma SÍ tiene @default en authorKind/visibility (consistente con la DB tras este deploy)', () => {
-  let schema: string;
-
-  beforeAll(() => {
-    schema = readFileSync(join(__dirname, '..', '..', '..', 'prisma', 'schema.prisma'), 'utf8');
-  });
-
-  it("el campo authorKind del modelo TicketComment lleva @default(staff) — protege la ventana de deploy; el DROP DEFAULT queda para un release futuro", () => {
-    const line = schema.split('\n').find((l) => /^\s*authorKind\s+TicketCommentAuthorKind\b/.test(l));
-    expect(line).toBeDefined();
-    expect(line).toMatch(/@default\(staff\)/);
-  });
-
-  it("el campo visibility del modelo TicketComment lleva @default(internal) — mismo criterio SEGURO que el backfill", () => {
-    const line = schema.split('\n').find((l) => /^\s*visibility\s+TicketCommentVisibility\b/.test(l));
-    expect(line).toBeDefined();
-    expect(line).toMatch(/@default\(internal\)/);
-  });
-});
+// El describe que vivía acá fijaba que `schema.prisma` SÍ tuviera
+// `@default(staff)`/`@default(internal)` — correcto para AQUEL release, porque
+// el DEFAULT tenía que sobrevivir al swap del container. Se retiró el
+// 2026-08-01 junto con la migración 20261101000000_ticket_comment_drop_defaults,
+// que finalmente los saca (ver el docstring de `TicketComment` en el schema).
+//
+// Este test hizo EXACTAMENTE lo que tenía que hacer: se puso rojo apenas se
+// tocó el schema, obligando a justificar el cambio en vez de dejarlo pasar.
+//
+// El guard del estado NUEVO (que nadie los reintroduzca) vive en
+// `ticketCommentNoDefaults.schema.test.ts`. Las assertions de ESTA migración
+// (que el ADD COLUMN sí traía el DEFAULT) siguen arriba, intactas: describen un
+// archivo de migración ya aplicado y por lo tanto inmutable.

@@ -1,0 +1,37 @@
+-- ticket-messaging (G5→G12, cierre del pendiente) — saca el DEFAULT de
+-- TicketComment.authorKind / TicketComment.visibility.
+--
+-- POR QUÉ EXISTÍA EL DEFAULT: la migración 20261029000000_ticket_messaging
+-- agregó estas dos columnas NOT NULL con DEFAULT para proteger la VENTANA DE
+-- DEPLOY — entre que `prisma migrate deploy` corre y el swap del container
+-- termina, el código VIEJO (que no conoce las columnas) sigue insertando
+-- TicketComment sin especificarlas; sin DEFAULT esa ventana revienta con NOT
+-- NULL violation (500 en POST /api/tickets/:id/comments).
+--
+-- POR QUÉ SE SACA AHORA, Y EN UN RELEASE APARTE: `prisma migrate deploy`
+-- aplica TODAS las migraciones pendientes de una sola pasada, ANTES del swap.
+-- Si este DROP DEFAULT viajara en el mismo release que el ADD COLUMN, el
+-- DEFAULT nacería y moriría en el mismo deploy, reabriendo exactamente la
+-- ventana que estaba destinado a proteger. Por eso va acá, después de que el
+-- código que SIEMPRE estampa los dos campos lleva varios deploys corriendo.
+--
+-- PRECONDICIÓN VERIFICADA ANTES DE ESCRIBIR ESTO (no asumida):
+--   * UN SOLO escritor: `PrismaTicketCommentRepository.create`, que pasa
+--     `authorKind` y `visibility` explícitamente.
+--   * Los 3 use cases que lo llaman estampan literales FIJOS, nunca un
+--     parámetro: AddTicketComment (staff/internal), SendStaffTicketReply
+--     (staff/public), SendPortalTicketMessage (client/public).
+--   * `TicketComment.authorKind`/`.visibility` son REQUERIDOS en la entidad de
+--     dominio ⇒ TypeScript impide pasar undefined.
+--   * Cero INSERT por SQL crudo sobre esta tabla.
+--
+-- QUÉ GANA: un `create` futuro que se olvide de estos campos pasa a ser un
+-- error de TIPOS en compilación, en vez de estampar 'staff'/'internal' en
+-- silencio y dejar un mensaje del CLIENTE mostrado como si lo hubiera escrito
+-- soporte (y sin contar en countUnread).
+--
+-- NO toca datos: las 655 filas existentes ya tienen ambos valores materializados
+-- (un DEFAULT solo se aplica en el INSERT, no es un valor calculado).
+
+ALTER TABLE "TicketComment" ALTER COLUMN "authorKind" DROP DEFAULT;
+ALTER TABLE "TicketComment" ALTER COLUMN "visibility" DROP DEFAULT;
