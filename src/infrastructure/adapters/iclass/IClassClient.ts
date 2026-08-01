@@ -37,6 +37,26 @@ const RESULT_CODE_DISCOVERY_DAYS = 28;
 const SERVICE_ORDER_LOOKUP_DAYS = 29;
 /** Máximo de reintentos ante un HTTP 429 (rate-limit de estado). */
 const MAX_RATE_LIMIT_RETRIES = 4;
+/**
+ * Backstop de `fetchAllPages`: tope duro de páginas ante un endpoint cuyas páginas
+ * nunca vienen cortas/vacías (bucle infinito contra IClass). 200 páginas × pagesize
+ * 60-100 ≈ 12.000-20.000 items — muy por encima de cualquier ventana real medida
+ * (416 OS en 26 días para /serviceorders; los sub-recursos son listas de UNA sola OS,
+ * con como mucho unas pocas decenas de entradas). Si se alcanza, se corta Y SE
+ * LOGUEA — un corte silencioso es exactamente el bug que este método existe para
+ * evitar. Mismo valor que `LOCATIONS_MAX_PAGES`, por consistencia.
+ */
+const FETCH_ALL_PAGES_MAX_PAGES = 200;
+/**
+ * Páginas vacías consecutivas requeridas para dar por terminada la paginación en
+ * estrategia 'empty-run' — mismo criterio ya probado en `listTeamLocations` para
+ * /teams/{id}/locations (una página corta ahí NO implica que sea la última).
+ */
+const FETCH_ALL_PAGES_EMPTY_RUN_STOP = 2;
+
+/** Estrategia de corte de `fetchAllPages`, elegida por el llamador según evidencia
+ * medida del endpoint (ver JSDoc de `fetchAllPages`). */
+type FetchAllPagesStrategy = 'strict' | 'empty-run';
 
 export interface IClassClientOptions {
   baseUrl: string;
@@ -215,27 +235,51 @@ export class IClassClient implements IClassPort {
       pagesize: '60',
     });
     if (params.serviceOrderCode) base.set('serviceOrderCode', params.serviceOrderCode);
-    const raw = await this.fetchAllPages(`/serviceorders`, base);
+    // strict: verified live — 3 consecutive FULL pages of 60 on /serviceorders,
+    // then nothing more. No evidence of the /teams/{id}/locations anomaly here.
+    const raw = await this.fetchAllPages(`/serviceorders`, base, { strategy: 'strict' });
     return raw.map(o => parseServiceOrderSummary(o, this.clusterName));
   }
 
   async getServiceOrderHistory(iclassId: string): Promise<SoStatusHistoryEntry[]> {
-    const raw = await this.fetchAllPages(`/serviceorders/${iclassId}/history`, new URLSearchParams({ pagesize: '60' }));
+    // strict: bounded per-OS list on the same /serviceorders* list engine as
+    // listServiceOrders (a handful of status transitions per OS) — no evidence
+    // of the /teams/{id}/locations short-intermediate-page anomaly here.
+    const raw = await this.fetchAllPages(
+      `/serviceorders/${iclassId}/history`,
+      new URLSearchParams({ pagesize: '60' }),
+      { strategy: 'strict' },
+    );
     return raw.map(parseHistoryEntry);
   }
 
   async getServiceOrderChecklists(iclassId: string): Promise<SoChecklist[]> {
-    const raw = await this.fetchAllPages(`/serviceorders/${iclassId}/checklist`, new URLSearchParams({ pagesize: '60' }));
+    // strict — same reasoning as getServiceOrderHistory: bounded per-OS list.
+    const raw = await this.fetchAllPages(
+      `/serviceorders/${iclassId}/checklist`,
+      new URLSearchParams({ pagesize: '60' }),
+      { strategy: 'strict' },
+    );
     return raw.map(parseChecklist);
   }
 
   async getServiceOrderMaterials(iclassId: string): Promise<SoMaterial[]> {
-    const raw = await this.fetchAllPages(`/serviceorders/${iclassId}/materials`, new URLSearchParams({ pagesize: '60' }));
+    // strict — same reasoning as getServiceOrderHistory: bounded per-OS list.
+    const raw = await this.fetchAllPages(
+      `/serviceorders/${iclassId}/materials`,
+      new URLSearchParams({ pagesize: '60' }),
+      { strategy: 'strict' },
+    );
     return raw.map(parseMaterial);
   }
 
   async getServiceOrderEquipmentEvents(iclassId: string): Promise<SoEquipmentEvent[]> {
-    const raw = await this.fetchAllPages(`/serviceorders/${iclassId}/equipments/history`, new URLSearchParams({ pagesize: '60' }));
+    // strict — same reasoning as getServiceOrderHistory: bounded per-OS list.
+    const raw = await this.fetchAllPages(
+      `/serviceorders/${iclassId}/equipments/history`,
+      new URLSearchParams({ pagesize: '60' }),
+      { strategy: 'strict' },
+    );
     return raw.map(parseEquipmentEvent);
   }
 
@@ -248,6 +292,7 @@ export class IClassClient implements IClassPort {
     // (/serviceordertypes/{id}/resultcodes), which IS populated.
     const now = this.now();
     const begin = new Date(now.getTime() - RESULT_CODE_DISCOVERY_DAYS * 24 * 60 * 60 * 1000);
+    // strict — same endpoint/evidence as listServiceOrders (/serviceorders).
     const sos = await this.fetchAllPages(
       '/serviceorders',
       new URLSearchParams({
@@ -256,6 +301,7 @@ export class IClassClient implements IClassPort {
         updatedDate_end: formatListDate(now),
         pagesize: '60',
       }),
+      { strategy: 'strict' },
     );
 
     const soTypeIds = new Set<string>();
@@ -268,9 +314,13 @@ export class IClassClient implements IClassPort {
     const seen = new Set<string>();
     for (const id of soTypeIds) {
       await this.sleep(this.subresourceBackoffMs);
+      // strict — bounded catalog per soType (a handful of result codes), same
+      // family of endpoint as the other /serviceorders* list resources; no
+      // evidence of the /teams/{id}/locations anomaly here.
       const codes = await this.fetchAllPages(
         `/serviceordertypes/${id}/resultcodes`,
         new URLSearchParams({ pagesize: '100' }),
+        { strategy: 'strict' },
       );
       for (const c of codes) {
         const desc = parseResultCode(c, id);
@@ -285,18 +335,64 @@ export class IClassClient implements IClassPort {
   }
 
   /**
-   * GET a paginated IClass list resource, following pages while hasMoreElements.
-   * Treats 204 (empty body) as an empty list and retries once on the textual
-   * "Espere um pouco" rate-limit response. If the retry also returns a rate-limit,
-   * throws IClassUnavailableError — a persistent rate-limit must never be silently
-   * treated as an empty list (that would cause getServiceOrder to return null,
-   * which callers interpret as "OS not found" — a silent corruption).
+   * GET a paginated IClass list resource.
+   *
+   * IClass does NOT reliably expose pagination metadata: `hasMoreElements` is
+   * omitted regardless of `pagesize` (verified live against /serviceorders with
+   * pagesize=60 AND pagesize=1 — never present; only `currentpage`/`pagesize`/
+   * `offset` come back), and `totalpages`/`totalobjects` are equally unreliable.
+   * Trusting `hasMoreElements` broke this exact method: `!undefined === true`
+   * made it `break` after page 1 on EVERY call, silently, in production (see
+   * BACKLOG.md — SyncIClassStatuses saw ~13% of the OS in its 28-day window).
+   *
+   * Two cut strategies, picked per endpoint by the caller via `opts.strategy`:
+   *  - 'strict' (default): stop as soon as a page comes back with fewer items
+   *    than `pagesize` (or empty/204). Only safe where a short page reliably
+   *    means "this was the last page" — verified live for /serviceorders (3
+   *    consecutive FULL pages of 60, then nothing more). Every current call
+   *    site uses this; none has evidence of the anomaly below.
+   *  - 'empty-run': keep paginating through short-but-nonzero pages, stopping
+   *    only after FETCH_ALL_PAGES_EMPTY_RUN_STOP pages come back with ZERO
+   *    items in a row. Required for /teams/{id}/locations, where a live
+   *    measurement caught an intermediate page with FEWER than pagesize items
+   *    that was NOT the last page — cutting there lost 3.686 of 6.286 GPS
+   *    points (59%), in silence. That endpoint paginates on its own
+   *    (`listTeamLocations`, below) rather than through this method, but the
+   *    strategy lives here too so a future caller that hits the same anomaly
+   *    doesn't have to reinvent it.
+   *
+   * Guards that apply to BOTH strategies:
+   *  - Hard cap at FETCH_ALL_PAGES_MAX_PAGES — backstop against an endpoint
+   *    whose pages never come back short/empty, which would otherwise loop
+   *    forever against IClass. Logs a warning when hit: a silent truncation
+   *    here is exactly the bug this method exists to prevent.
+   *  - 204 / empty body ends pagination (unchanged from before this fix).
+   *  - The textual "Espere um pouco" rate-limit is retried once with backoff;
+   *    if it persists, throws IClassUnavailableError — a persistent rate-limit
+   *    must never be silently treated as an empty list (that would cause
+   *    getServiceOrder to return null, which callers interpret as "OS not
+   *    found" — a silent corruption). Unchanged from before this fix.
    */
-  private async fetchAllPages(path: string, params: URLSearchParams): Promise<Record<string, unknown>[]> {
+  private async fetchAllPages(
+    path: string,
+    params: URLSearchParams,
+    opts: { strategy?: FetchAllPagesStrategy } = {},
+  ): Promise<Record<string, unknown>[]> {
+    const strategy = opts.strategy ?? 'strict';
+    const pageSizeRaw = params.get('pagesize');
+    const pageSize = pageSizeRaw !== null ? parseInt(pageSizeRaw, 10) : NaN;
+    if (strategy === 'strict' && !Number.isFinite(pageSize)) {
+      // Programmer error: strict mode needs a numeric pagesize to tell a full
+      // page from an incomplete one. Every current call site sets it.
+      throw new Error(`fetchAllPages: strict strategy requires a numeric 'pagesize' param (got ${pageSizeRaw})`);
+    }
+
     const out: Record<string, unknown>[] = [];
     let page = 1;
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
+    let consecutiveEmpty = 0;
+    let cappedOut = true; // flipped to false by any natural exit below
+
+    while (page <= FETCH_ALL_PAGES_MAX_PAGES) {
       params.set('pagenumber', String(page));
       let data = await this.authedGet<unknown>(`${path}?${params.toString()}`);
       if (isRateLimited(data)) {
@@ -307,12 +403,39 @@ export class IClassClient implements IClassPort {
           throw new IClassUnavailableError('IClass rate-limited (Espere um pouco) on list');
         }
       }
-      if (!data || typeof data !== 'object') break; // 204 / empty body
-      const body = data as { objects?: unknown[]; hasMoreElements?: boolean };
+      if (!data || typeof data !== 'object') {
+        cappedOut = false;
+        break; // 204 / empty body — end of pagination
+      }
+      const body = data as { objects?: unknown[] };
       const objects = Array.isArray(body.objects) ? body.objects : [];
       for (const o of objects) if (o && typeof o === 'object') out.push(o as Record<string, unknown>);
-      if (!body.hasMoreElements || objects.length === 0) break;
+
+      if (strategy === 'empty-run') {
+        if (objects.length === 0) {
+          consecutiveEmpty++;
+          if (consecutiveEmpty >= FETCH_ALL_PAGES_EMPTY_RUN_STOP) {
+            cappedOut = false;
+            break;
+          }
+        } else {
+          consecutiveEmpty = 0;
+        }
+      } else {
+        // strict: a page shorter than pagesize (including empty) is the last one.
+        if (objects.length < pageSize) {
+          cappedOut = false;
+          break;
+        }
+      }
       page++;
+    }
+
+    if (cappedOut) {
+      console.warn(
+        `[iclass] fetchAllPages: tope de ${FETCH_ALL_PAGES_MAX_PAGES} páginas alcanzado en ${path} — puede haber datos sin leer`,
+        { path, strategy, itemsCollected: out.length },
+      );
     }
     return out;
   }
@@ -517,12 +640,13 @@ export class IClassClient implements IClassPort {
 
   // ── Rastro GPS de cuadrillas (change iclass-gps-audit) ────────────────────
   //
-  // OJO — estos métodos NO usan `fetchAllPages`. Esa función corta con
-  // `if (!body.hasMoreElements || ...) break;` y IClass **no devuelve**
-  // `hasMoreElements` (medido en vivo 2026-07-26 sobre /serviceorders con
-  // pagesize=60: las páginas 1, 2 y 3 traen 60 objetos y el paginador sólo
-  // expone currentpage/pagesize/offset). Ese defecto está registrado como bug
-  // aparte en el BACKLOG; acá se pagina con una condición propia y testeada.
+  // OJO — estos métodos NO usan `fetchAllPages`, aunque ahora esa función SÍ
+  // soporta la estrategia 'empty-run' que necesitan (fix del bug de paginación
+  // del BACKLOG: `fetchAllPages` confiaba en `hasMoreElements`, que IClass no
+  // devuelve, y cortaba en la página 1 SIEMPRE). Se mantienen con su loop
+  // propio — ya escrito, medido y testeado contra la anomalía específica de
+  // /teams/{id}/locations (página corta intermedia que NO era la última) —
+  // en vez de migrarlos para no tocar código en producción sin necesidad.
 
   /** Tamaño de página del rastro. */
   private static readonly LOCATIONS_PAGE_SIZE = 100;
