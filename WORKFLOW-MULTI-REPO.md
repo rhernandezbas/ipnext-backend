@@ -256,6 +256,14 @@ Reglas operativas del loop:
 - **`COOKIE_SECURE`**: controla el flag `Secure` de la cookie de sesion (SDD #6a), desacoplado de `NODE_ENV`. **Prod corre por HTTP plano (sin TLS)** → `COOKIE_SECURE=false` (si se setea `true` sin HTTPS, el browser descarta la cookie y se rompe el login). Pasa a `true` recién cuando haya HTTPS adelante.
 - Hay deuda de seguridad abierta en `BACKLOG.md`, sección "🔧 Deudas conocidas" (PAT de GitHub, credenciales en skills, enforcement de roles, leak de secretos NAS).
 
+## Distribución del APK de prueba (app de clientes)
+
+- **El APK se descarga desde el propio server, no por mail.** Gmail **bloquea los `.apk`** y topea en 25 MB (el nuestro pesa ~46), así que mandarlo por mail/Drive era un trámite manual en cada build. Montado el **2026-08-01**: `https://app.prometheus-alpha.xyz/descargas/ipnext.apk` con **usuario y contraseña** (basic auth de Traefik). Se abre en el navegador del celular y listo.
+- **Cómo publicar un build nuevo — el link NO cambia**: `scp -P 2222 <nuevo>.apk ronald@190.7.234.37:/opt/apk-downloads/ipnext.apk`.
+- **Montaje**: container `ipnext-apk-files` (`nginx:alpine`, red `easypanel`, sirve `/opt/apk-downloads` **read-only**) + `/etc/easypanel/traefik/config/apk-download.yaml` con `basicAuth` (`usersFile: /data/apk-users`, hash bcrypt generado con `htpasswd -nbB`) y `stripPrefix`. **Va como PATH del dominio existente** (no como subdominio) para no depender de un registro DNS nuevo.
+- **⚠️ Cuidado al tocar esa ruta**: comparte host con la API del portal. El router lleva `priority: 100` para que `PathPrefix(/descargas)` no se coma el `/api`. **Tras cualquier cambio ahí, verificar EN VIVO que `/api/portal/me` siga respondiendo** — un error de prioridad rompe el portal entero, no solo la descarga.
+- **Credenciales**: en `CREDENCIALES-LOCAL.md` (gitignored). **Reemplazo futuro**: el canal de **pruebas internas** de Play Console (hasta 100 testers, instala por la Store, con actualizaciones automáticas y sin "orígenes desconocidos") — requiere la cuenta de desarrollador.
+
 ## Servidor y runners self-hosted (infra)
 
 - **Host de prod + runners**: `190.7.234.37`, SSH por **puerto 2222**, usuario `ronald`. La **password NO se guarda en este archivo** (es un archivo commiteado = leak permanente). Usar **SSH key** y rotar la password. El `sudo` del host se pasa por **stdin**, jamas inline.
