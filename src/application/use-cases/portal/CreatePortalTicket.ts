@@ -6,6 +6,7 @@ import {
   PortalTicketValidationError,
   PortalContractRequiredError,
   PortalContractNotFoundError,
+  PortalTicketTopicNotFoundError,
 } from '@domain/errors/portal.errors';
 
 /** portal-self-service spec "Payload inválido" — mismos topes que la API externa
@@ -27,6 +28,15 @@ export interface CreatePortalTicketInput {
    * exigido cuando el cliente no tiene ninguno.
    */
   contractId?: string | null;
+  /**
+   * portal-ticket-topic — id de un `TicketAreaCatalog` con `portalVisible =
+   * true` (ver `GET /api/portal/ticket-topics`). Ausente / null / '' -> el
+   * camino de la opción "Otro / no sé" de la app: comportamiento VIEJO sin
+   * cambios (área del config + fallback, ver `resolveAreaId`). Presente pero
+   * inexistente O interno (`portalVisible = false`) -> `PortalTicketTopicNotFoundError`
+   * — el BE es la autoridad, nunca confía en lo que la app filtró.
+   */
+  topicId?: string | null;
 }
 
 /**
@@ -61,10 +71,15 @@ export interface CreatePortalTicketInput {
  *     ninguno), también es `PortalContractNotFoundError` — nunca se ignora
  *     un id ajeno en silencio.
  *
- * Área: resuelta por NOMBRE configurable (constructor param, default
- * `DEFAULT_PORTAL_TICKET_AREA_NAME`). Si no existe en el catálogo, cae a la
- * PRIMERA área que devuelva `list()` — jamás crea un área nueva desde el portal
- * (design.md §6).
+ * Área: portal-ticket-topic — el cliente puede ELEGIR un tópico
+ * (`topicId`, resuelto contra `TicketAreaCatalogRepository.getPortalVisibleById`,
+ * la ÚNICA autoridad: un id inexistente o interno —NOC/GigaRed— tira
+ * `PortalTicketTopicNotFoundError`, nunca se ignora en silencio). Sin
+ * `topicId` (ausente/null/'', el camino "Otro / no sé" de la app) se resuelve
+ * por NOMBRE configurable (constructor param, default
+ * `DEFAULT_PORTAL_TICKET_AREA_NAME`) — comportamiento ORIGINAL intacto: si el
+ * nombre configurado no existe en el catálogo, cae a la PRIMERA área que
+ * devuelva `list()` — jamás crea un área nueva desde el portal (design.md §6).
  */
 export class CreatePortalTicket {
   constructor(
@@ -110,7 +125,10 @@ export class CreatePortalTicket {
     }
     // else: sin contratos y sin contractId -> OK, contract queda null.
 
-    const areaId = await this.resolveAreaId();
+    // portal-ticket-topic — '' / '   ' se tratan como ausente, mismo criterio
+    // que `requestedContractId` arriba.
+    const requestedTopicId = input.topicId?.trim() || null;
+    const areaId = await this.resolveAreaId(requestedTopicId);
 
     const ticket = await this.tickets.create({
       subject,
@@ -136,7 +154,18 @@ export class CreatePortalTicket {
     };
   }
 
-  private async resolveAreaId(): Promise<string | null> {
+  private async resolveAreaId(topicId: string | null): Promise<string | null> {
+    if (topicId) {
+      // portal-ticket-topic — AUTORIDAD: `getPortalVisibleById` devuelve null
+      // tanto para un id inexistente como para uno de un área INTERNA
+      // (portalVisible=false, p.ej. NOC/GigaRed) — un único error para los
+      // dos casos, nunca se distingue cuál pasó (anti-enumeración).
+      const topic = await this.areas.getPortalVisibleById(topicId);
+      if (!topic) throw new PortalTicketTopicNotFoundError();
+      return topic.id;
+    }
+
+    // Sin topicId (camino "Otro / no sé" de la app) — comportamiento ORIGINAL.
     const configured = await this.areas.getByName(this.defaultAreaName);
     if (configured) return configured.id;
 
