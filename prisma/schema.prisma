@@ -1689,24 +1689,28 @@ model TicketComment {
   // a proteger. Por eso el DEFAULT queda EN el schema ahora — es la única
   // forma de que sobreviva hasta después del swap.
   //
-  // PENDIENTE PARA EL PRÓXIMO DEPLOY (una vez que el código de ESTE release
-  // ya esté corriendo en TODAS las instancias — el que SIEMPRE estampa
-  // authorKind/visibility explícitamente: ver AddTicketComment,
-  // SendStaffTicketReply, SendPortalTicketMessage):
-  //   (a) sacar los @default de authorKind/visibility de este schema, y
-  //   (b) crear una migración NUEVA (release aparte) con
-  //       ALTER COLUMN "authorKind" DROP DEFAULT,
-  //       ALTER COLUMN "visibility" DROP DEFAULT;
-  // El DEFAULT permanente es un peligro: con @default, authorKind/visibility
-  // quedan OPCIONALES para siempre en el input de `create` de Prisma — un
-  // `create` futuro que se olvide de pasar authorKind compila igual y
-  // estampa 'staff' en silencio, lo cual puede esconder un mensaje del
-  // CLIENTE mal-etiquetado como staff (no cuenta en countUnread, se muestra
-  // como si lo hubiera escrito soporte). Ver ticket-messaging-migration.test.ts
-  // y el spec (Requirement: Backfill conservador de lo existente) para el
-  // seguimiento de este pendiente.
-  authorKind  TicketCommentAuthorKind @default(staff)
-  visibility  TicketCommentVisibility @default(internal)
+  // ✅ SALDADO (2026-08-01, migración 20261101000000_ticket_comment_drop_defaults):
+  // los @default se SACARON, en un release aparte y DESPUÉS de que el código
+  // que siempre los estampa llevara 3 deploys corriendo en prod. La condición
+  // del plan ("una vez que el código de ESTE release ya esté en TODAS las
+  // instancias") estaba cumplida; verificado además que hay UN SOLO escritor
+  // (`PrismaTicketCommentRepository.create`), que los 3 use cases que lo
+  // llaman estampan literales FIJOS (`AddTicketComment` staff/internal,
+  // `SendStaffTicketReply` staff/public, `SendPortalTicketMessage`
+  // client/public) y que no existe ningún INSERT por SQL crudo.
+  //
+  // POR QUÉ el DEFAULT permanente era un peligro: con @default, estos dos
+  // campos quedan OPCIONALES para siempre en el input de `create` de Prisma —
+  // un `create` futuro que se olvide de pasar authorKind compila igual y
+  // estampa 'staff' en silencio, dejando un mensaje del CLIENTE mal-etiquetado
+  // como staff (no cuenta en countUnread y se muestra como si lo hubiera
+  // escrito soporte). Ahora ese olvido es un error de TIPOS, no un dato
+  // corrupto en silencio.
+  //
+  // NO volver a agregarlos: `ticketCommentNoDefaults.schema.test.ts` falla si
+  // alguien los reintroduce.
+  authorKind  TicketCommentAuthorKind
+  visibility  TicketCommentVisibility
   body        String
   createdAt   DateTime                  @default(now())
   attachments TicketCommentAttachment[]
