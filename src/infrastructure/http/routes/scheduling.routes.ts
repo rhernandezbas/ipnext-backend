@@ -27,6 +27,7 @@ import { AuthProvider } from '@domain/ports/AuthProvider';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import {
   CreateTaskSchema,
   UpdateTaskSchema,
@@ -118,6 +119,7 @@ export function createSchedulingRouter(
   deleteTask: DeleteTask,
   moveTaskToStage: MoveTaskToStage,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   stageRepo?: StageRepository,
   checklist?: ChecklistUseCases,
   setTaskInventoryReview?: SetTaskInventoryReview,
@@ -143,7 +145,7 @@ export function createSchedulingRouter(
   broadcastTaskToNoc?: BroadcastTaskToNoc,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const invWrite: RequestHandler = requireInventoryWrite ?? ((_req, _res, next) => next());
   const schedWrite: RequestHandler = requireSchedulingWrite ?? ((_req, _res, next) => next());
   const hardDelete: RequestHandler = requireHardDelete ?? ((_req, _res, next) => next());

@@ -158,6 +158,7 @@ async function buildApp(): Promise<Fixture> {
   app.use(express.json());
   app.use('/api', createContractServicesRouter(
     authProvider,
+    undefined,
     requirePerm,
     new UpdateContractName(contractRepo),
     new AddContractService(csRepo, catalogRepo, contractLookup, cseRepo),

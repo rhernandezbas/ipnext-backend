@@ -115,6 +115,7 @@ async function buildApp(): Promise<Fixture> {
     '/api/messaging/labels',
     createMessagingLabelsRouter(
       new EchoAuthProvider(),
+      undefined,
       requirePerm,
       new ListLabels(labelRepo),
       new CreateLabel(labelRepo),

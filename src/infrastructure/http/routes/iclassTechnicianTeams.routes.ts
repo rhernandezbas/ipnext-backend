@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { SetTechnicianTeamMapping } from '@application/use-cases/SetTechnicianTeamMapping';
 import { ListTechnicianTeamMappings } from '@application/use-cases/ListTechnicianTeamMappings';
 import {
@@ -22,11 +23,12 @@ export function createIClassTechnicianTeamsRouter(
   listMappings: ListTechnicianTeamMappings,
   setMapping: SetTechnicianTeamMapping,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requireIClassRead: RequestHandler,
   requireIClassManage: RequestHandler,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   // GET /technician-teams — list all mappings (iclass.read)
   router.get('/technician-teams', auth, requireIClassRead, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {

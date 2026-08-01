@@ -186,6 +186,7 @@ async function buildApp(): Promise<AppFixture> {
     new DeleteTask(tasks),
     new MoveTaskToStage(tasks, stageRepo),
     authProvider,
+    undefined, // sessionRepo
     stageRepo,
     undefined, // checklist
     undefined, // setTaskInventoryReview

@@ -38,6 +38,7 @@ function buildApp() {
       new UpdateTaskTemplate(repo),
       new DeleteTaskTemplate(repo),
       new FakeAuthProvider(),
+      undefined,
     ),
   );
 

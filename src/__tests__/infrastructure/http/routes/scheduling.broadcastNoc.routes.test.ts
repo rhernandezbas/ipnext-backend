@@ -89,6 +89,7 @@ async function buildApp(opts?: { write?: RequestHandler }) {
       new DeleteTask(repo),
       new MoveTaskToStage(repo, stageRepo),
       new FakeAuthProvider(),
+      undefined, // sessionRepo
       undefined, // stageRepo
       undefined, // checklist
       undefined, // setTaskInventoryReview

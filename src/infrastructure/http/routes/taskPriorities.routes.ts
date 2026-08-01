@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListTaskPriority } from '@application/use-cases/ListTaskPriority';
 import { GetTaskPriority } from '@application/use-cases/GetTaskPriority';
 import { CreateTaskPriority } from '@application/use-cases/CreateTaskPriority';
@@ -15,6 +16,7 @@ import {
 
 export function createTaskPrioritiesRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   listTaskPriority: ListTaskPriority,
   getTaskPriority: GetTaskPriority,
   createTaskPriority: CreateTaskPriority,
@@ -22,7 +24,7 @@ export function createTaskPrioritiesRouter(
   deleteTaskPriority: DeleteTaskPriority,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.get('/task-priorities', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

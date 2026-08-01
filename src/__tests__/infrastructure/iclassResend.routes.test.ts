@@ -210,6 +210,7 @@ async function buildApp(opts?: { iclassFails?: boolean }): Promise<AppFixture> {
     new DeleteTask(tasks),
     moveTaskToStage,
     authProvider,
+    undefined, // sessionRepo
     stageRepo,
     undefined, // checklist
     undefined, // setTaskInventoryReview

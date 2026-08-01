@@ -95,7 +95,7 @@ function buildApp() {
 
   app.use(
     '/api/tickets',
-    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicketUc, closeTicket, statusRepo, authProvider),
+    createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateStatus, updateTicketUc, closeTicket, statusRepo, authProvider, undefined),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {

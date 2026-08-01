@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { SyncIClassStatuses } from '@application/use-cases/SyncIClassStatuses';
 import { ListIClassStatusCatalog } from '@application/use-cases/ListIClassStatusCatalog';
 import { UpdateIClassStatusCatalog } from '@application/use-cases/UpdateIClassStatusCatalog';
@@ -24,11 +25,12 @@ export function createIClassStatusesRouter(
   listIClassStatusCatalog: ListIClassStatusCatalog,
   updateIClassStatusCatalog: UpdateIClassStatusCatalog,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requireIClassRead: RequestHandler,
   requireIClassManage: RequestHandler,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   // GET /statuses — list the status catalog (iclass.read)
   router.get('/statuses', auth, requireIClassRead, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {

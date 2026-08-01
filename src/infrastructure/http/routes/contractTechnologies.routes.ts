@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListContractTechnology } from '@application/use-cases/ListContractTechnology';
 import { GetContractTechnology } from '@application/use-cases/GetContractTechnology';
 import { CreateContractTechnology } from '@application/use-cases/CreateContractTechnology';
@@ -18,6 +19,7 @@ import {
 // This URL move is part of the lockstep rename; coordinated with the FE change.
 export function createContractTechnologiesRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   listContractTechnology: ListContractTechnology,
   getContractTechnology: GetContractTechnology,
   createContractTechnology: CreateContractTechnology,
@@ -25,7 +27,7 @@ export function createContractTechnologiesRouter(
   deleteContractTechnology: DeleteContractTechnology,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.get('/contract-technologies', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

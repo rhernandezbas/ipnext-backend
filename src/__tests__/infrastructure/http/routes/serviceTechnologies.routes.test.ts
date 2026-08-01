@@ -60,7 +60,7 @@ function buildApp(authFail = false): Harness {
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
-  app.use('/api', createServiceTechnologiesRouter(authProvider, list, get, create, update, del));
+  app.use('/api', createServiceTechnologiesRouter(authProvider, undefined, list, get, create, update, del));
   app.use(errorHandler);
 
   return { app, repo };

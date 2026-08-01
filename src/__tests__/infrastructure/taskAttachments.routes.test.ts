@@ -118,6 +118,7 @@ async function buildApp(opts: { mountSchedulingCatchAll?: boolean } = {}) {
     },
     {
       authProvider: new EchoAuthProvider(),
+      sessionRepo: undefined,
       requireRead: requirePerm('scheduling', 'read'),
       requireWrite: requirePerm('scheduling', 'write'),
     },

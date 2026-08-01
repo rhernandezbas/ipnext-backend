@@ -81,6 +81,7 @@ function buildApp(opts?: { read?: RequestHandler; manage?: RequestHandler; initi
     '/api/messaging/config/task-stages',
     createTaskStageConfigRouter(
       new FakeAuthProvider(),
+      undefined,
       { read: opts?.read ?? grant, manage: opts?.manage ?? grant },
       new GetTaskStageRecipientConfig(configRepo),
       new UpdateTaskStageRecipientConfig(configRepo),

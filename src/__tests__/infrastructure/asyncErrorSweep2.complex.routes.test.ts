@@ -71,12 +71,12 @@ const buildRadius = (): express.Express =>
   appWith('/api/radius', createRadiusRouter(fakeAuthProvider, undefined, passthroughPerm, f, f, f, f, f, f, f));
 
 const buildIClassClosure = (): express.Express =>
-  appWith('/api/iclass', createIClassClosureRouter(f, f, f, f, null, null, f, f, f, f, f, f, pt, fakeAuthProvider));
+  appWith('/api/iclass', createIClassClosureRouter(f, f, f, f, null, null, f, f, f, f, f, f, pt, fakeAuthProvider, undefined));
 
 const buildTaskAttachments = (): express.Express =>
   appWith('/api/scheduling', createTaskAttachmentsRouter(
     { attachPhotosToTask: f, listTaskAttachments: f, getTaskAttachmentFile: f, deleteTaskAttachment: f },
-    { authProvider: fakeAuthProvider, requireRead: pt, requireWrite: pt },
+    { authProvider: fakeAuthProvider, sessionRepo: undefined, requireRead: pt, requireWrite: pt },
   ));
 
 const buildTaskComments = (): express.Express =>
@@ -97,6 +97,7 @@ function buildScheduling(stageRepo: never | undefined): express.Express {
   return appWith('/api/scheduling', createSchedulingRouter(
     f, f, f, f, f, f,
     fakeAuthProvider,
+    undefined,
     stageRepo,
     checklist,
     f, undefined, undefined, f, undefined, undefined, f, undefined, f, undefined, undefined,

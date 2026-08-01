@@ -95,7 +95,7 @@ function buildApp(customerRepo: CustomerRepository, gr?: InMemoryGestionRealPort
 
   app.use('/api/clients', createClientsRouter(
     listClients, getDetail, getContracts, getInvoices, getLogs,
-    authStub, createCustomer, getStats, deleteCustomer,
+    authStub, undefined, createCustomer, getStats, deleteCustomer,
   ));
 
   // Simple error handler

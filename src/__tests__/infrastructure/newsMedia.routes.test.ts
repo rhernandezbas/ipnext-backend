@@ -135,6 +135,12 @@ async function buildApp(opts: { appPublicUrl?: string } = {}) {
     },
     {
       authProvider: new EchoAuthProvider(),
+      // Legacy stateless behaviour preserved on purpose — see createAuthMiddleware's
+      // `if (sessionRepo)` branch. `sessionRepo` is typed as required, but this file's
+      // tests assert plain cookie-based auth (no seeded Session rows), so a real
+      // (empty) SessionRepository would 401 every request. Cast bypasses the type
+      // check without changing runtime behaviour, same as `undefined` elsewhere.
+      sessionRepo: undefined as unknown as import('@domain/ports/SessionRepository').SessionRepository,
       requireRead: requirePerm('news', 'read'),
       requireManage: requirePerm('news', 'manage'),
     },

@@ -78,6 +78,7 @@ function buildApp(opts: {
     new DeleteTask(repo),
     new MoveTaskToStage(repo, stageRepo),
     authProvider,
+    undefined, // sessionRepo
     undefined, // stageRepo
     undefined, // checklist
     undefined, // setTaskInventoryReview

@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 
 import { ListNewsPosts } from '@application/use-cases/ListNewsPosts';
 import { GetNewsPost } from '@application/use-cases/GetNewsPost';
@@ -42,6 +43,7 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
  */
 export function createNewsRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   listNewsPosts: ListNewsPosts,
   getNewsPost: GetNewsPost,
@@ -56,7 +58,7 @@ export function createNewsRouter(
   deleteNewsCategory: DeleteNewsCategory,
 ): Router {
   const router = Router();
-  const auth       = createAuthMiddleware(authProvider);
+  const auth       = createAuthMiddleware(authProvider, sessionRepo);
   const readPerm   = requirePerm('news', 'read');
   const managePerm = requirePerm('news', 'manage');
 

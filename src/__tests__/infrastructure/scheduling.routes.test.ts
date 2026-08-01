@@ -115,7 +115,7 @@ function buildApp() {
 
   const authProvider = new FakeAuthProvider();
 
-  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider));
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authProvider, undefined));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);
@@ -524,7 +524,7 @@ describe('PATCH /:id/stage - projectName', () => {
     app.use('/api/scheduling', createSchedulingRouter(
       new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
       new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
-      moveTaskToStage, new FakeAuthProvider(),
+      moveTaskToStage, new FakeAuthProvider(), undefined,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
       console.error(err);
@@ -573,7 +573,7 @@ describe('PATCH /:id/stage - completedAt', () => {
     app.use('/api/scheduling', createSchedulingRouter(
       new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
       new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
-      moveTaskToStage, new FakeAuthProvider(),
+      moveTaskToStage, new FakeAuthProvider(), undefined,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
       res.status(500).json({ error: 'Internal server error' });
@@ -618,7 +618,7 @@ describe('PATCH /:id/stage - completedAt', () => {
     app.use('/api/scheduling', createSchedulingRouter(
       new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
       new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
-      moveTaskToStage, new FakeAuthProvider(),
+      moveTaskToStage, new FakeAuthProvider(), undefined,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
       res.status(500).json({ error: 'Internal server error' });
@@ -728,7 +728,7 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
 
     app.use('/api/scheduling', createSchedulingRouter(
       listTasks, getTask, createTask, updateTask, deleteTask,
-      moveTaskToStage, new FakeAuthProvider(), stageRepo,
+      moveTaskToStage, new FakeAuthProvider(), undefined, stageRepo,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
       console.error(err);
@@ -768,7 +768,7 @@ describe('REQ-STAGE-DEFAULT-1: create without stageId defaults to Default workfl
     app.use('/api/scheduling', createSchedulingRouter(
       new ListTasks(repo), new GetTask(repo), new CreateTask(repo, anyLookup, anyLookup, emptyLookup, anyLookup, emptyLookup),
       new UpdateTask(repo, anyLookup, anyLookup, emptyLookup, anyLookup, emptyLookup), new DeleteTask(repo),
-      moveTaskToStage, new FakeAuthProvider(), stageRepo,
+      moveTaskToStage, new FakeAuthProvider(), undefined, stageRepo,
     ));
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
       res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
@@ -890,7 +890,7 @@ function buildEnrichedApp(opts: {
 
   app.use('/api/scheduling', createSchedulingRouter(
     new ListTasks(repo), new GetTask(repo), createTask, updateTask, deleteTask,
-    moveTaskToStage, new FakeAuthProvider(),
+    moveTaskToStage, new FakeAuthProvider(), undefined,
   ));
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);
@@ -1244,7 +1244,7 @@ function buildIClassApp(opts: {
   app.use('/api/scheduling', createSchedulingRouter(
     new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
     new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
-    moveTaskToStage, new FakeAuthProvider(),
+    moveTaskToStage, new FakeAuthProvider(), undefined,
   ));
   app.use(errorHandler);
 
@@ -1406,7 +1406,7 @@ function buildBulkApp() {
   app.use('/api/scheduling', createSchedulingRouter(
     new ListTasks(repo), new GetTask(repo), new CreateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup),
     new UpdateTask(repo, emptyLookup, emptyLookup, emptyLookup, emptyLookup, emptyLookup), new DeleteTask(repo),
-    moveTaskToStage, new FakeAuthProvider(), stageRepo, undefined, undefined, bulkMoveTasksToStage,
+    moveTaskToStage, new FakeAuthProvider(), undefined, stageRepo, undefined, undefined, bulkMoveTasksToStage,
   ));
   app.use(errorHandler);
 

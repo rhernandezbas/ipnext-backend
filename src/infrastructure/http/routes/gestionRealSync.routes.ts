@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { UpdateSyncConfigSchema } from '@application/dto/gestionRealSync.dto';
 import { GetSyncConfig } from '@application/use-cases/GetSyncConfig';
 import { UpdateSyncConfig } from '@application/use-cases/UpdateSyncConfig';
@@ -27,6 +28,7 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
  */
 export function createGestionRealSyncRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   getSyncConfig: GetSyncConfig,
   updateSyncConfig: UpdateSyncConfig,
@@ -35,7 +37,7 @@ export function createGestionRealSyncRouter(
   resyncAllGr: ResyncAllGr,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.get(
     '/config',

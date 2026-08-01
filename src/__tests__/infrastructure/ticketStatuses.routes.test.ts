@@ -31,7 +31,7 @@ function buildApp() {
 
   app.use(
     '/api/tickets/statuses',
-    createTicketStatusesRouter(authProvider, listUC, getUC, createUC, updateUC, deleteUC),
+    createTicketStatusesRouter(authProvider, undefined, listUC, getUC, createUC, updateUC, deleteUC),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {

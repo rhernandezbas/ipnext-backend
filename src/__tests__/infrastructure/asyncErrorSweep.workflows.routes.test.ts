@@ -32,7 +32,7 @@ function buildApp(): express.Express {
   // 20 use cases posicionales — TODOS rechazan con error de infra; cada test
   // golpea una sola ruta, así que cada caso prueba su propio sitio de fallback.
   app.use('/api', createWorkflowsRouter(
-    fakeAuthProvider, passthroughPerm,
+    fakeAuthProvider, undefined, passthroughPerm,
     f, f, f, f, f,          // listWorkflows, getWorkflow, create, update, delete
     f, f, f, f, f,          // addStage, removeStage, reorderStages, updateStageColor, updateStage
     f, f, f, f, f,          // list/get/create/update/delete ProjectCategory

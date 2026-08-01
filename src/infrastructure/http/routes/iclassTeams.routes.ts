@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { SyncIClassTeams } from '@application/use-cases/SyncIClassTeams';
 import { ListIClassTeams } from '@application/use-cases/ListIClassTeams';
 import { toIClassTeamDTO } from '@application/dto/iclassTeam.dto';
@@ -20,11 +21,12 @@ export function createIClassTeamsRouter(
   syncIClassTeams: SyncIClassTeams,
   listIClassTeams: ListIClassTeams,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requireIClassRead: RequestHandler,
   requireIClassManage: RequestHandler,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   // POST /teams/sync — manual sync of team catalog (iclass.manage)
   // MUST be registered BEFORE /teams (no :id catch-all here, but order is consistent)

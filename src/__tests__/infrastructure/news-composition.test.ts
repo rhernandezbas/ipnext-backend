@@ -168,6 +168,7 @@ describe('internal-news composition root', () => {
       '/api/news',
       createNewsRouter(
         new FakeAuthProvider(),
+        undefined,
         requirePerm,
         new ListNewsPosts(postRepo),
         new GetNewsPost(postRepo),

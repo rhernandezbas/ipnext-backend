@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { UpdateContractName } from '@application/use-cases/UpdateContractName';
 import { AddContractService } from '@application/use-cases/AddContractService';
 import { UpdateContractService } from '@application/use-cases/UpdateContractService';
@@ -35,6 +36,7 @@ function actorOf(req: Request): { actorId: string | null; actorName: string } {
 
 export function createContractServicesRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   updateContractName: UpdateContractName,
   addSvc: AddContractService,
@@ -43,7 +45,7 @@ export function createContractServicesRouter(
   listHistory: ListContractServiceHistory,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const writePerm = requirePerm('clients', 'write');
   const readPerm  = requirePerm('clients', 'read');
 

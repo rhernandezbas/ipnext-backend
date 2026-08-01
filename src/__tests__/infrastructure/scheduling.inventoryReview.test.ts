@@ -72,6 +72,7 @@ function buildApp(requireInventoryWrite?: RequestHandler) {
     new DeleteTask(repo),
     new MoveTaskToStage(repo, stageRepo),
     authProvider,
+    undefined,            // sessionRepo
     stageRepo,
     undefined,            // checklist
     setTaskInventoryReview,

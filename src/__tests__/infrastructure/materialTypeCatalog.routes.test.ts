@@ -52,6 +52,7 @@ async function buildApp(perms: { read?: boolean; manage?: boolean } = { read: tr
 
   const router = createMaterialTypeCatalogRouter(
     new EchoAuthProvider(),
+    undefined,
     requirePerm,
     listUC, getUC, createUC, updateUC, deleteUC,
     service,
@@ -186,6 +187,7 @@ describe('materialTypeCatalog routes', () => {
 
       const router = createMaterialTypeCatalogRouter(
         new EchoAuthProvider(),
+        undefined,
         requirePerm,
         new ListMaterial(repo),
         new GetMaterial(repo),

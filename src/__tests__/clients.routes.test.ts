@@ -58,7 +58,18 @@ function buildApp() {
 
   app.use(
     '/api/clients',
-    createClientsRouter(listClients, getDetail, getContracts, getInvoices, getLogs, authProvider, createCustomer as never, { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never, { execute: jest.fn().mockResolvedValue(true) } as never),
+    createClientsRouter(
+      listClients,
+      getDetail,
+      getContracts,
+      getInvoices,
+      getLogs,
+      authProvider,
+      undefined,
+      createCustomer as never,
+      { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
+      { execute: jest.fn().mockResolvedValue(true) } as never,
+    ),
   );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
@@ -297,6 +308,7 @@ describe('GET /api/clients/:id/contracts', () => {
 
       a.use('/api/clients', createClientsRouter(
         listClients, getDetail, getContracts, getInvoices, getLogs, authProvider,
+        undefined,
         createCustomer as never,
         { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
         { execute: jest.fn().mockResolvedValue(true) } as never,
@@ -339,6 +351,7 @@ describe('GET /api/clients/:id/contracts', () => {
 
       a.use('/api/clients', createClientsRouter(
         listClients, getDetail, getContracts, getInvoices, getLogs, authProvider,
+        undefined,
         createCustomer as never,
         { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
         { execute: jest.fn().mockResolvedValue(true) } as never,
@@ -383,6 +396,7 @@ describe('GET /api/clients/:id/contracts', () => {
 
       a.use('/api/clients', createClientsRouter(
         listClients, getDetail, getContracts, getInvoices, getLogs, authProvider,
+        undefined,
         createCustomer as never,
         { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
         { execute: jest.fn().mockResolvedValue(true) } as never,
@@ -692,7 +706,7 @@ describe('DELETE /api/clients/:id — inventory RESTRICT FK', () => {
       getSession: jest.fn().mockResolvedValue({ id: '1', email: 'admin@test.com', role: 'admin' }),
     } as never;
     app.use('/api/clients', createClientsRouter(
-      stub, stub, stub, stub, stub, authProvider, stub,
+      stub, stub, stub, stub, stub, authProvider, undefined, stub,
       { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
       { execute: jest.fn(deleteImpl) } as never,
     ));

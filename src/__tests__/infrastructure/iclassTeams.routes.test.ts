@@ -58,7 +58,14 @@ function buildApp(opts: {
   app.use(express.json());
   app.use(
     '/api/admin/iclass',
-    createIClassTeamsRouter(syncUC, listUC, new FakeAuthProvider(), requireRead, requireManage),
+    createIClassTeamsRouter(
+      syncUC,
+      listUC,
+      new FakeAuthProvider(),
+      undefined,
+      requireRead,
+      requireManage,
+    ),
   );
   app.use(errorHandler);
 

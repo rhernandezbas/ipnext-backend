@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { ReferenceNotFoundError, ReferenceKind, ProjectHasActiveTasksError } from '@domain/errors/projects';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { CreateProjectSchema, PutProjectSchema, UpdateProjectSchema, ListProjectsQuerySchema } from '@application/dto/projects.dto';
 import { ListProjects } from '@application/use-cases/ListProjects';
 import { GetProject } from '@application/use-cases/GetProject';
@@ -25,6 +26,7 @@ export function createProjectsRouter(
   updateProject: UpdateProject,
   deleteProject: DeleteProject,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   assignIClassSoType?: AssignIClassSoTypeToProject,
   /** Guard for the `allowsEquipmentRetirement` mutation (inventory.manage). Pass-through when omitted. */
   requireInventoryManage?: RequestHandler,
@@ -32,7 +34,7 @@ export function createProjectsRouter(
   requireSchedulingManage?: RequestHandler,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const invManage: RequestHandler = requireInventoryManage ?? ((_req, _res, next) => next());
   const schedManage: RequestHandler = requireSchedulingManage ?? ((_req, _res, next) => next());
 

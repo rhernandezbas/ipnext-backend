@@ -117,6 +117,7 @@ async function buildApp(): Promise<Fixture> {
     '/api/tickets/areas',
     createTicketAreasRouter(
       new EchoAuthProvider(),
+      undefined,
       requirePerm,
       new ListTicketAreas(areaRepo),
       new GetTicketArea(areaRepo),

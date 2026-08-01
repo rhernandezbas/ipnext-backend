@@ -56,7 +56,10 @@ function buildApp() {
   const deleteProject = new DeleteProject(projectRepo);
 
   // Mount projects router at /api/projects (same order as app.ts)
-  app.use('/api/projects', createProjectsRouter(listProjects, getProject, createProject, updateProject, deleteProject, authProvider));
+  app.use(
+    '/api/projects',
+    createProjectsRouter(listProjects, getProject, createProject, updateProject, deleteProject, authProvider, undefined),
+  );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
     console.error(err);

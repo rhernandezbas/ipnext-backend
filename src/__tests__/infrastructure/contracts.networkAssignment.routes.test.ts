@@ -112,6 +112,7 @@ async function buildApp(opts: { withUseCase?: boolean } = {}): Promise<Fixture> 
   app.use(express.json());
   app.use('/api', createContractsRouter(
     new EchoAuthProvider() as any,
+    undefined,
     listContracts, getContractStats,
     undefined, requirePerm, setContractNetworkAssignment,
   ));

@@ -19,6 +19,7 @@ import { RbacUserRepository } from '@domain/ports/RbacUserRepository';
 import { ReferenceNotFoundError, ContractCustomerMismatchError } from '@domain/errors/scheduling';
 import { NoClosableStatusError, TicketAreaRequiredError, TicketAreaNotFoundError, TicketNotClosedError } from '@domain/errors/tickets';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { requirePermission } from '../middleware/requirePermission';
 import { JwtAuthAdapter } from '../../adapters/jwt/JwtAuthAdapter';
 
@@ -77,6 +78,7 @@ export function createTicketsRouter(
   closeTicket: CloseTicket,
   ticketStatusRepo: TicketStatusRepository,
   authProvider: JwtAuthAdapter,
+  sessionRepo: SessionRepository | undefined,
   // #48 — used to validate a body-provided reporterId exists before persisting.
   // Optional so legacy wirings/tests that never set an explicit reporter still work.
   rbacUserRepo?: RbacUserRepository,
@@ -94,7 +96,7 @@ export function createTicketsRouter(
   permissionUserRepo?: RbacUserRepository,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   // GET /stats — must come before /:id to avoid capture
   router.get('/stats', auth, async (_req: Request, res: Response): Promise<void> => {

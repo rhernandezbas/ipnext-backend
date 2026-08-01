@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListServiceCatalog } from '@application/use-cases/ListServiceCatalog';
 import { CreateServiceCatalog } from '@application/use-cases/CreateServiceCatalog';
 import { UpdateServiceCatalog } from '@application/use-cases/UpdateServiceCatalog';
@@ -20,6 +21,7 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
 
 export function createServiceCatalogRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   list: ListServiceCatalog,
   create: CreateServiceCatalog,
@@ -27,7 +29,7 @@ export function createServiceCatalogRouter(
   del: DeleteServiceCatalog,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const readPerm   = requirePerm('clients', 'read');
   const managePerm = requirePerm('clients', 'manage');
 

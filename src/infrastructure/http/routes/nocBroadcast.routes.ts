@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { UpdateNocBroadcastConfigSchema } from '@application/dto/nocBroadcast.dto';
 import { GetNocBroadcastConfig } from '@application/use-cases/nocBroadcast/GetNocBroadcastConfig';
 import { UpdateNocBroadcastConfig } from '@application/use-cases/nocBroadcast/UpdateNocBroadcastConfig';
@@ -29,13 +30,14 @@ export interface NocBroadcastRoutePerms {
 
 export function createNocBroadcastRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   perms: NocBroadcastRoutePerms,
   getNocBroadcastConfig: GetNocBroadcastConfig,
   updateNocBroadcastConfig: UpdateNocBroadcastConfig,
   sendNocBroadcastTest: SendNocBroadcastTest,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   // ─── GET /config — masked config DTO (read) ─────────────────────────────────
   router.get('/config', auth, perms.read, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {

@@ -2,6 +2,7 @@ import { Router, Request, Response, RequestHandler, NextFunction } from 'express
 import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListFeatureFlags } from '@application/use-cases/ListFeatureFlags';
 import { GetFeatureFlag } from '@application/use-cases/GetFeatureFlag';
 import { SetFeatureFlag } from '@application/use-cases/SetFeatureFlag';
@@ -10,6 +11,7 @@ const SetFeatureFlagSchema = z.object({ enabled: z.boolean() });
 
 export function createFeatureFlagsRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   listFeatureFlags: ListFeatureFlags,
   getFeatureFlag: GetFeatureFlag,
   setFeatureFlag: SetFeatureFlag,
@@ -17,7 +19,7 @@ export function createFeatureFlagsRouter(
   requireFlags: RequestHandler,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.get('/', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

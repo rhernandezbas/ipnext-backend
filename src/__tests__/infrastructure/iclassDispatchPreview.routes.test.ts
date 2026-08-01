@@ -56,6 +56,7 @@ async function buildApp(opts: { denyRead?: boolean } = {}) {
     createIClassDispatchPreviewRouter(
       getPreviewUC,
       new FakeAuthProvider(),
+      undefined,
       opts.denyRead ? DENY : ALLOW,
     ),
   );

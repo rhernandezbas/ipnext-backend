@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListTicketStatuses } from '@application/use-cases/ListTicketStatuses';
 import { GetTicketStatus } from '@application/use-cases/GetTicketStatus';
 import { CreateTicketStatus } from '@application/use-cases/CreateTicketStatus';
@@ -15,6 +16,7 @@ import {
 
 export function createTicketStatusesRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   listTicketStatuses: ListTicketStatuses,
   getTicketStatus: GetTicketStatus,
   createTicketStatus: CreateTicketStatus,
@@ -22,7 +24,7 @@ export function createTicketStatusesRouter(
   deleteTicketStatus: DeleteTicketStatus,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.get('/', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

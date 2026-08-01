@@ -14,6 +14,18 @@ const TOUCH_THROTTLE_MS = 5 * 60 * 1000;
  * STATEFUL: after verifying the JWT, the token's session must exist and not be
  * revoked, else 401 (SDD #5). `lastSeenAt` is touched at most every 5 min.
  * Without a `sessionRepo`, behaviour is the legacy stateless JWT-only check.
+ *
+ * fix/auth-stateful-routers: `sessionRepo` stays OPTIONAL here on purpose (see that
+ * change's report for why a mandatory param was rejected), but every router under
+ * `src/infrastructure/http/routes/` MUST call this with both arguments — omitting
+ * `sessionRepo` there means a REVOKED staff session keeps authenticating until the
+ * JWT expires (up to 8h). This is enforced by
+ * `src/__tests__/infrastructure/statefulAuthRoutes.architecture.test.ts`, which scans
+ * every file in that directory and fails, by name, on any single-argument call. If
+ * you are adding a new router that legitimately needs the legacy stateless mode
+ * (public/anonymous endpoints do NOT — see `profile.routes.ts` for the one real
+ * legacy exception, which never calls this function at all), add it to that test's
+ * `ALLOWLIST` with a reason, not just to app.ts.
  */
 export function createAuthMiddleware(authProvider: AuthProvider, sessionRepo?: SessionRepository) {
   return async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {

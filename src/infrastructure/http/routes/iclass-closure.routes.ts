@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { SyncIClassResultCodes } from '@application/use-cases/SyncIClassResultCodes';
 import { ListIClassResultCodes } from '@application/use-cases/ListIClassResultCodes';
 import { AssignResultCodeStage } from '@application/use-cases/AssignResultCodeStage';
@@ -55,9 +56,10 @@ export function createIClassClosureRouter(
   reconcile: ReconcileTaskClosure,
   requireIClassManage: RequestHandler,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.post('/result-codes/sync', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

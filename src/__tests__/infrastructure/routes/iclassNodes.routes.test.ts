@@ -58,7 +58,7 @@ function buildApp(opts: { iclassFails?: boolean } = {}) {
   app.use(express.json());
   app.use(
     '/api/admin/iclass',
-    createIClassAdminRouter(syncSoTypes, listSoTypes, new FakeAuthProvider(), syncNodes, listNodes),
+    createIClassAdminRouter(syncSoTypes, listSoTypes, new FakeAuthProvider(), undefined, syncNodes, listNodes),
   );
   app.use(errorHandler);
 

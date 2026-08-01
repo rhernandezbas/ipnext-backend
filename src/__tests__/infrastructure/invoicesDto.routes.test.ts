@@ -69,6 +69,7 @@ function buildApp(repo: CustomerRepository) {
     new GetClientInvoices(repo),
     new GetClientLogs(repo),
     authStub,
+    undefined,
     stub, // createCustomer
     { execute: jest.fn().mockResolvedValue({ total: 0, active: 0, inactive: 0, blocked: 0, late: 0 }) } as never,
     stub, // deleteCustomer

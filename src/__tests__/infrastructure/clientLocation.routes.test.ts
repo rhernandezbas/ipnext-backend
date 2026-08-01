@@ -147,6 +147,7 @@ async function buildApp(customerRepoOverrides: Partial<CustomerRepository> = {})
   app.use('/api/clients', createClientsRouter(
     listClients, getDetail, getContracts, getInvoices, getLogs,
     new EchoAuthProvider() as any,
+    undefined,
     createCustomer, getStats, deleteCustomer,
     updateClientLocation, requirePerm,
   ));

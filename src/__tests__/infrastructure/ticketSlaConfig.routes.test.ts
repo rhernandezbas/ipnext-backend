@@ -32,6 +32,7 @@ const allowPerm = (): RequestHandler => (_req, _res, next) => next();
 function buildApp(repo = new InMemoryTicketSlaConfigRepository()) {
   const router = createTicketSlaConfigRouter(
     new FakeAuthProvider(),
+    undefined,
     allowPerm,
     new GetTicketSlaConfig(repo),
     new UpdateTicketSlaConfig(repo),

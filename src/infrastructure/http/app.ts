@@ -1661,29 +1661,32 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/dashboard', createDashboardRouter(getDashboardStats, getDashboardShortcuts, getRecentActivity));
   app.use('/api/messages', createMessagesRouter(listMessages, getMessage, createMessage, markMessageAsRead, deleteMessage));
   app.use('/api/auth', createAuthRouter(authAdapter, rbacUserRepo, rbacUserRoleRepo, resolveUserPermissions, sessionRepo, createLoginRateLimiter(config.loginRateLimit)));
-  app.use('/api/clients', createClientsRouter(listClients, getDetail, getContracts, getInvoices, getLogs, authAdapter, createCustomer, getClientStats, deleteCustomer, updateClientLocation, requirePerm));
+  app.use('/api/clients', createClientsRouter(listClients, getDetail, getContracts, getInvoices, getLogs, authAdapter, sessionRepo, createCustomer, getClientStats, deleteCustomer, updateClientLocation, requirePerm));
   app.use('/api/customers', createClientCommentsRouter(getComments, createComment));
   // TicketStatus catalog — mounted BEFORE the tickets router to avoid /:id catch-all swallowing /statuses.
   app.use('/api/tickets/statuses', createTicketStatusesRouter(
     authAdapter,
+    sessionRepo,
     listTicketStatuses, getTicketStatus, createTicketStatus, updateTicketStatusCatalog, deleteTicketStatus,
   ));
   // TicketArea catalog — mounted BEFORE the tickets router (#49)
   app.use('/api/tickets/areas', createTicketAreasRouter(
     authAdapter,
+    sessionRepo,
     requirePerm,
     listTicketAreas, getTicketArea, createTicketArea, updateTicketArea, deleteTicketArea,
   ));
   // #79 — SLA timer config — mounted BEFORE the tickets router so /:id doesn't swallow it
   app.use('/api/tickets/sla-config', createTicketSlaConfigRouter(
     authAdapter,
+    sessionRepo,
     requirePerm,
     getTicketSlaConfig, updateTicketSlaConfig,
   ));
   // #85 — archive + hard-delete use cases
   const archiveTicket = new ArchiveTicket(ticketAdapter, ticketStatusRepo);
   const deleteTicketHard = new DeleteTicketHard(ticketAdapter);
-  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, ticketStatusRepo, authAdapter, rbacUserRepo, createTaskFromTicket, schedulingRepo, stageRepo, ticketAreaRepo, archiveTicket, deleteTicketHard, rbacUserRepo));
+  app.use('/api/tickets', createTicketsRouter(listTickets, getStats, createTicket, getTicket, updateTicketStatus, updateTicket, closeTicket, ticketStatusRepo, authAdapter, sessionRepo, rbacUserRepo, createTaskFromTicket, schedulingRepo, stageRepo, ticketAreaRepo, archiveTicket, deleteTicketHard, rbacUserRepo));
   // #44 — persisted ticket comments. Mounted on /api/tickets; the tickets router has no
   // catch-all and /:id does not capture /:id/comments (distinct segments), so no collision.
   const ticketCommentRepo = new PrismaTicketCommentRepository();
@@ -1696,7 +1699,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       write: requirePerm('tickets', 'write'),
     },
   ));
-  app.use('/api/billing', createBillingRouter(getSummary, listInvoices, listPayments, listTransactions, authAdapter));
+  app.use('/api/billing', createBillingRouter(getSummary, listInvoices, listPayments, listTransactions, authAdapter, sessionRepo));
   app.use('/api/billing', createBillingMonthlyRouter(getMonthly));
   app.use('/api/billing', createCreditNotesRouter(listCreditNotes, getCreditNote, createCreditNote, applyCreditNote, voidCreditNote));
   app.use('/api/billing', createProformasRouter(listProformas, createProforma, convertToInvoice, cancelProforma));
@@ -1706,6 +1709,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // that would otherwise swallow /workflows, /project-categories, /project-types.
   app.use('/api/scheduling', createWorkflowsRouter(
     authAdapter,
+    sessionRepo,
     requirePerm,
     listWorkflows, getWorkflow, createWorkflowUC, updateWorkflowUC, deleteWorkflowUC,
     addStageToWorkflow, removeStageFromWorkflow, reorderStages, updateStageColor, updateStageUC,
@@ -1715,11 +1719,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // TaskCategory catalog — mounted before the scheduling catch-all router.
   app.use('/api/scheduling', createTaskCategoriesRouter(
     authAdapter,
+    sessionRepo,
     listTaskCategory, getTaskCategory, createTaskCategory, updateTaskCategory, deleteTaskCategory,
   ));
   // ContractTechnology catalog — mounted at /api root (no catch-all conflict).
   app.use('/api', createContractTechnologiesRouter(
     authAdapter,
+    sessionRepo,
     listContractTechnology, getContractTechnology, createContractTechnology,
     updateContractTechnology, deleteContractTechnology,
   ));
@@ -1730,7 +1736,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new PrismaAccessPointRepository(),
   );
   // Global contracts listing — mounted at /api root, before the catch-all.
-  app.use('/api', createContractsRouter(authAdapter, listContracts, getContractStats, updateContractLocation, requirePerm, setContractNetworkAssignment));
+  app.use('/api', createContractsRouter(authAdapter, sessionRepo, listContracts, getContractStats, updateContractLocation, requirePerm, setContractNetworkAssignment));
   // #43 — ServiceCatalog ABM + ContractService CRUD + Contract name, mounted at /api root.
   const serviceCatalogRepo     = new PrismaServiceCatalogRepository();
   const contractServiceRepo    = new PrismaContractServiceRepository();
@@ -1742,6 +1748,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const contractLookup = { findById: (id: string) => prismaClientLookup('Contract', id) };
   app.use('/api', createServiceCatalogRouter(
     authAdapter,
+    sessionRepo,
     requirePerm,
     new ListServiceCatalog(serviceCatalogRepo),
     new CreateServiceCatalog(serviceCatalogRepo),
@@ -1750,6 +1757,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   ));
   app.use('/api', createContractServicesRouter(
     authAdapter,
+    sessionRepo,
     requirePerm,
     new UpdateContractName(contractRepo),
     new AddContractService(contractServiceRepo, serviceCatalogRepo, contractLookup, contractServiceEventRepo),
@@ -1761,11 +1769,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // TaskPriority catalog — also before the scheduling catch-all router.
   app.use('/api/scheduling', createTaskPrioritiesRouter(
     authAdapter,
+    sessionRepo,
     listTaskPriority, getTaskPriority, createTaskPriority, updateTaskPriority, deleteTaskPriority,
   ));
   // DeviceTypeCatalog — mounted at /api/inventory BEFORE any catch-all.
   app.use('/api/inventory', createDeviceTypeCatalogRouter(
     authAdapter,
+    sessionRepo,
     requirePerm,
     listDeviceType, getDeviceType, createDeviceType, updateDeviceType, deleteDeviceType,
     deviceTypeCatalogService,
@@ -1781,6 +1791,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const deleteMaterial = new DeleteMaterial(materialCatalogRepo);
   app.use('/api/inventory', createMaterialTypeCatalogRouter(
     authAdapter,
+    sessionRepo,
     requirePerm,
     listMaterial, getMaterial, createMaterial, updateMaterial, deleteMaterial,
     materialCatalogService,
@@ -1798,6 +1809,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const resyncAllGr = new ResyncAllGr(resetGrClientsCursor, armGrContractsBackfill);
   app.use('/api/gestion-real/sync', createGestionRealSyncRouter(
     authAdapter,
+    sessionRepo,
     requirePerm,
     new GetSyncConfig(grSyncConfigRepo),
     new UpdateSyncConfig(grSyncConfigRepo),
@@ -1808,11 +1820,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // Gestión Real mirror — read-only sync status endpoint (legacy, auth-only).
   app.use('/api/gestion-real', createGestionRealRouter(
     authAdapter,
+    sessionRepo,
     new GetGestionRealSyncStatus(new PrismaSyncStateRepository(), new PrismaMirrorCountsRepository()),
   ));
   // GR sync admin — reset the gr-clients cursor to force a full backfill next tick.
   app.use('/api/admin/gr-sync', createGrSyncRouter(
     authAdapter,
+    sessionRepo,
     resetGrClientsCursor,
     reconcileGrClients,
   ));
@@ -2132,6 +2146,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     },
     {
       authProvider: authAdapter,
+      sessionRepo,
       requireRead: requirePerm('scheduling', 'read'),
       requireWrite: requirePerm('scheduling', 'write'),
     },
@@ -2172,7 +2187,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     taskActivityRecorder,
   );
 
-  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authAdapter, stageRepo, {
+  app.use('/api/scheduling', createSchedulingRouter(listTasks, getTask, createTask, updateTask, deleteTask, moveTaskToStage, authAdapter, sessionRepo, stageRepo, {
     addChecklistItem: addChecklistItemUC,
     toggleChecklistItem: toggleChecklistItemUC,
     updateChecklistItem: updateChecklistItemUC,
@@ -2208,11 +2223,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const listIClassNodeCatalog = new ListIClassNodeCatalog(iclassNodeRepo);
   const assignIClassNodeToNetworkSite = new AssignIClassNodeToNetworkSite(networkSiteRepo, iclassNodeRepo);
 
-  app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter, assignIClassSoType, requirePerm('inventory', 'manage'), requirePerm('scheduling', 'manage')));
+  app.use('/api/projects', createProjectsRouter(listProjectsUC, getProjectUC, createProjectUC, updateProjectUC, deleteProjectUC, authAdapter, sessionRepo, assignIClassSoType, requirePerm('inventory', 'manage'), requirePerm('scheduling', 'manage')));
   // GR installation-order ingest admin — config/status/needs-review (projectRepo + schedulingRepo already built above).
   const grIngestConfigRepo = new PrismaGestionRealIngestConfigRepository();
   app.use('/api/gestion-real-ingest', createGestionRealIngestRouter(
     authAdapter,
+    sessionRepo,
     new GetIngestConfig(grIngestConfigRepo),
     new UpdateIngestConfig(grIngestConfigRepo, projectRepo),
     new GetIngestStatus(new PrismaSyncStateRepository()),
@@ -2228,6 +2244,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new UpdateTaskTemplate(taskTemplateRepo),
       new DeleteTaskTemplate(taskTemplateRepo),
       authAdapter,
+      sessionRepo,
       replaceTemplateItemsUC,
     ),
   );
@@ -2327,6 +2344,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // a deliberate contrast with the unguarded /api/notifications mount above.
   app.use('/api/news', createNewsRouter(
     authAdapter,
+    sessionRepo,
     requirePerm,
     listNewsPosts,
     getNewsPost,
@@ -2362,6 +2380,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       },
       {
         authProvider: authAdapter,
+        sessionRepo,
         requireRead: requirePerm('news', 'read'),
         requireManage: requirePerm('news', 'manage'),
       },
@@ -2369,7 +2388,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   }
 
   // IClass admin — SO type catalog sync + list (admin-only).
-  app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter, syncIClassNodes, listIClassNodeCatalog));
+  app.use('/api/admin/iclass', createIClassAdminRouter(syncIClassSoTypes, listIClassSoTypes, authAdapter, sessionRepo, syncIClassNodes, listIClassNodeCatalog));
 
   // IClass closure loop — result-code catalog + configurable result→stage mapping + status + backfill.
   // NOTE: iclassResultCodeRepo was declared earlier (before the scheduling router) so
@@ -2413,6 +2432,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     reconcileTaskClosure,
     requirePerm('iclass', 'manage'),
     authAdapter,
+    sessionRepo,
   ));
 
   // iclass-status-sync — status catalog: GET /statuses, POST /statuses/sync, PATCH /statuses/:statusCode
@@ -2422,6 +2442,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new ListIClassStatusCatalog(iclassStatusCatalogRepo),
     new UpdateIClassStatusCatalog(iclassStatusCatalogRepo),
     authAdapter,
+    sessionRepo,
     requirePerm('iclass', 'read'),
     requirePerm('iclass', 'manage'),
   ));
@@ -2431,6 +2452,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new SyncIClassTeams(buildIClassClient(), iclassTeamRepo),
     new ListIClassTeams(iclassTeamRepo),
     authAdapter,
+    sessionRepo,
     requirePerm('iclass', 'read'),
     requirePerm('iclass', 'manage'),
   ));
@@ -2467,6 +2489,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listTechnicianTeamMappings,
     setTechnicianTeamMapping,
     authAdapter,
+    sessionRepo,
     requirePerm('iclass', 'read'),
     requirePerm('iclass', 'manage'),
   ));
@@ -2480,6 +2503,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     new SetVendedorMapping(rbacUserRepo),
     new ListDistinctVendedores(contractRepo),
     authAdapter,
+    sessionRepo,
     requirePerm('recapture', 'assign'),
   ));
 
@@ -2489,6 +2513,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/admin/iclass', createIClassDispatchPreviewRouter(
     new GetIClassDispatchPreview(projectRepo),
     authAdapter,
+    sessionRepo,
     requirePerm('iclass', 'read'),
   ));
 
@@ -2499,6 +2524,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // featureFlagRepo is created earlier (wired into SendTaskToIClass).
   app.use('/api/admin/feature-flags', createFeatureFlagsRouter(
     authAdapter,
+    sessionRepo,
     new ListFeatureFlags(featureFlagRepo),
     new GetFeatureFlag(featureFlagRepo),
     new SetFeatureFlag(featureFlagRepo),
@@ -3208,6 +3234,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // (que no tiene ruta /labels; /conversations/:id/labels vive en otro subpath).
     app.use('/api/messaging/labels', createMessagingLabelsRouter(
       authAdapter,
+      sessionRepo,
       requirePerm,
       new ListLabels(conversationLabelRepo),
       new CreateLabel(conversationLabelRepo),
@@ -3406,6 +3433,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     const nocBroadcastGateway = new EvolutionApiHttpGateway({ configRepo: nocBroadcastConfigRepo });
     app.use('/api/messaging/noc-broadcast', createNocBroadcastRouter(
       authAdapter,
+      sessionRepo,
       {
         read: requirePerm('messaging', 'read'),
         manage: requirePerm('messaging', 'manage'),
@@ -3433,6 +3461,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     const taskStageTransitionConfigRepo = new PrismaTaskStageTransitionConfigRepository();
     app.use('/api/messaging/config/task-stages', createTaskStageConfigRouter(
       authAdapter,
+      sessionRepo,
       {
         read: requirePerm('messaging', 'read'),
         manage: requirePerm('messaging', 'manage'),

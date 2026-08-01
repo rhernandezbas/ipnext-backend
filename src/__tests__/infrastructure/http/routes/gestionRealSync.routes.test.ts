@@ -141,7 +141,7 @@ async function buildApp(): Promise<Fixture> {
   app.use(
     '/api/gestion-real/sync',
     createGestionRealSyncRouter(
-      new EchoAuthProvider(), requirePerm, getSyncConfig, updateSyncConfig, getSyncStatus, reset, resyncAll,
+      new EchoAuthProvider(), undefined, requirePerm, getSyncConfig, updateSyncConfig, getSyncStatus, reset, resyncAll,
     ),
   );
   app.use(errorHandler);

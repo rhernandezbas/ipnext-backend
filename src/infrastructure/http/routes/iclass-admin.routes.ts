@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { SyncIClassSoTypes } from '@application/use-cases/SyncIClassSoTypes';
 import { ListIClassSoTypes } from '@application/use-cases/ListIClassSoTypes';
 import { SyncIClassNodes } from '@application/use-cases/SyncIClassNodes';
@@ -45,11 +46,12 @@ export function createIClassAdminRouter(
   syncIClassSoTypes: SyncIClassSoTypes,
   listIClassSoTypes: ListIClassSoTypes,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   syncIClassNodes?: SyncIClassNodes,
   listIClassNodeCatalog?: ListIClassNodeCatalog,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   // POST /so-types/sync
   router.post('/so-types/sync', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {

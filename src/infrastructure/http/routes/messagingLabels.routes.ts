@@ -11,6 +11,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListLabels } from '@application/use-cases/messaging/ListLabels';
 import { CreateLabel } from '@application/use-cases/messaging/CreateLabel';
 import { UpdateLabel } from '@application/use-cases/messaging/UpdateLabel';
@@ -26,6 +27,7 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
 
 export function createMessagingLabelsRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   listLabels: ListLabels,
   createLabel: CreateLabel,
@@ -33,7 +35,7 @@ export function createMessagingLabelsRouter(
   deleteLabel: DeleteLabel,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const readPerm = requirePerm('messaging', 'read');
   const managePerm = requirePerm('messaging', 'manage');
 

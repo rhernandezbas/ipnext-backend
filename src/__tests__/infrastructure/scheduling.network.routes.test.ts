@@ -91,7 +91,7 @@ function buildApp() {
   const moveTaskToStage = new MoveTaskToStage(repo, stageRepo);
   const authProvider = new FakeAuthProvider();
 
-  app.use('/api/scheduling', createSchedulingRouter(listTasksUC(repo), getTaskUC(repo), createTask, updateTask, deleteTask, moveTaskToStage, authProvider));
+  app.use('/api/scheduling', createSchedulingRouter(listTasksUC(repo), getTaskUC(repo), createTask, updateTask, deleteTask, moveTaskToStage, authProvider, undefined));
 
   // Error handler que mapea errores conocidos
   app.use(errorHandler);

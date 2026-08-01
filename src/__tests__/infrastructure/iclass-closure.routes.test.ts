@@ -124,6 +124,7 @@ function buildApp(
     reconcileUseCases.reconcile,
     requireIClassManage as never,
     new FakeAuthProvider(),
+    undefined,
   );
   const app = express();
   app.use(cookieParser());
@@ -159,6 +160,7 @@ function buildAppNullScheduler() {
     buildReconcileUseCases().reconcile,
     ((_req: unknown, _res: unknown, next: () => void) => next()) as never,
     new FakeAuthProvider(),
+    undefined,
   );
   const app = express();
   app.use(cookieParser());
@@ -194,6 +196,7 @@ function buildAppNullBackfillScheduler() {
     buildReconcileUseCases().reconcile,
     ((_req: unknown, _res: unknown, next: () => void) => next()) as never,
     new FakeAuthProvider(),
+    undefined,
   );
   const app = express();
   app.use(cookieParser());

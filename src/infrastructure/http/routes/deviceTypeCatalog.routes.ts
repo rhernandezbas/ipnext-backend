@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction, RequestHandler } from 'express
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListDeviceType } from '@application/use-cases/ListDeviceType';
 import { GetDeviceType } from '@application/use-cases/GetDeviceType';
 import { CreateDeviceType } from '@application/use-cases/CreateDeviceType';
@@ -22,6 +23,7 @@ type RequirePerm = (module: RbacModuleCode, action: PermissionAction) => Request
 
 export function createDeviceTypeCatalogRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requirePerm: RequirePerm,
   list: ListDeviceType,
   get: GetDeviceType,
@@ -31,7 +33,7 @@ export function createDeviceTypeCatalogRouter(
   service: DeviceTypeCatalogService,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
   const readPerm   = requirePerm('inventory', 'read');
   const managePerm = requirePerm('inventory', 'manage');
 

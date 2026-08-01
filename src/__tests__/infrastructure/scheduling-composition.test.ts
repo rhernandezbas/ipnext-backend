@@ -94,6 +94,7 @@ function buildApp() {
   // workflows MUST be mounted BEFORE scheduling.
   app.use('/api/scheduling', createWorkflowsRouter(
     authProvider,
+    undefined,
     allowAll,
     new ListWorkflows(wfRepo),
     new GetWorkflow(wfRepo),
@@ -124,6 +125,7 @@ function buildApp() {
     new DeleteTask(schedRepo),
     new MoveTaskToStage(schedRepo, stageRepo),
     authProvider,
+    undefined,
     stageRepo,
     {
       addChecklistItem: new AddChecklistItem(schedRepo),

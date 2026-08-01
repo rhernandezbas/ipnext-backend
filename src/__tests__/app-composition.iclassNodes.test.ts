@@ -93,7 +93,14 @@ async function buildApp() {
   app.use(express.json());
   app.use(
     '/api/admin/iclass',
-    createIClassAdminRouter(syncSoTypes, listSoTypes, new FakeAuthProvider(), syncIClassNodes, listIClassNodeCatalog),
+    createIClassAdminRouter(
+      syncSoTypes,
+      listSoTypes,
+      new FakeAuthProvider(),
+      undefined,
+      syncIClassNodes,
+      listIClassNodeCatalog,
+    ),
   );
   app.use(
     '/api/network-sites',

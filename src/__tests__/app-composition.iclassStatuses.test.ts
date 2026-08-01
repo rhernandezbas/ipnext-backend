@@ -76,7 +76,15 @@ async function buildApp() {
   app.use(express.json());
   app.use(
     '/api/admin/iclass',
-    createIClassStatusesRouter(syncUC, listUC, updateUC, new FakeAuthProvider(), ALLOW as never, ALLOW as never),
+    createIClassStatusesRouter(
+      syncUC,
+      listUC,
+      updateUC,
+      new FakeAuthProvider(),
+      undefined,
+      ALLOW as never,
+      ALLOW as never,
+    ),
   );
   app.use(errorHandler);
 

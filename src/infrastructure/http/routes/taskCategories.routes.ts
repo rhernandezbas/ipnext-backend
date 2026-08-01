@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { ListTaskCategory } from '@application/use-cases/ListTaskCategory';
 import { GetTaskCategory } from '@application/use-cases/GetTaskCategory';
 import { CreateTaskCategory } from '@application/use-cases/CreateTaskCategory';
@@ -15,6 +16,7 @@ import {
 
 export function createTaskCategoriesRouter(
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   listTaskCategory: ListTaskCategory,
   getTaskCategory: GetTaskCategory,
   createTaskCategory: CreateTaskCategory,
@@ -22,7 +24,7 @@ export function createTaskCategoriesRouter(
   deleteTaskCategory: DeleteTaskCategory,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   router.get('/task-categories', auth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

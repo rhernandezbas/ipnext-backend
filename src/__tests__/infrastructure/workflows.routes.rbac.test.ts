@@ -155,6 +155,7 @@ async function buildApp(): Promise<Fixture> {
     '/api/scheduling',
     createWorkflowsRouter(
       new EchoAuthProvider(),
+      undefined,
       requirePerm,
       new ListWorkflows(wfRepo),
       new GetWorkflow(wfRepo),

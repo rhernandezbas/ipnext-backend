@@ -59,6 +59,7 @@ function buildApp() {
 
   app.use('/api/scheduling', createWorkflowsRouter(
     authProvider,
+    undefined,
     allowAll,
     new ListWorkflows(wfRepo),
     new GetWorkflow(wfRepo),
@@ -143,6 +144,7 @@ describe('GET /api/scheduling/workflows/:id', () => {
     const typeRepo = new InMemoryProjectTypeRepository();
     app.use('/api/scheduling', createWorkflowsRouter(
       new FakeAuthProvider(),
+      undefined,
       allowAll,
       new ListWorkflows(wfRepo), new GetWorkflow(wfRepo),
       new CreateWorkflow(wfRepo), new UpdateWorkflow(wfRepo),

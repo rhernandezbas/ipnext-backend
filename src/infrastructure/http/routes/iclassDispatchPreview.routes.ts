@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { createAuthMiddleware } from '../middleware/authMiddleware';
+import type { SessionRepository } from '@domain/ports/SessionRepository';
 import { GetIClassDispatchPreview } from '@application/use-cases/GetIClassDispatchPreview';
 import { toDispatchPreviewRowDTO } from '@application/dto/iclassDispatchPreview.dto';
 
@@ -14,10 +15,11 @@ import { toDispatchPreviewRowDTO } from '@application/dto/iclassDispatchPreview.
 export function createIClassDispatchPreviewRouter(
   getDispatchPreview: GetIClassDispatchPreview,
   authProvider: AuthProvider,
+  sessionRepo: SessionRepository | undefined,
   requireIClassRead: RequestHandler,
 ): Router {
   const router = Router();
-  const auth = createAuthMiddleware(authProvider);
+  const auth = createAuthMiddleware(authProvider, sessionRepo);
 
   // GET /dispatch-preview — read-only, describes dispatch rules per project
   router.get('/dispatch-preview', auth, requireIClassRead, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {

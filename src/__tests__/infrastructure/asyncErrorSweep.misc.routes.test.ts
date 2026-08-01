@@ -45,23 +45,23 @@ beforeAll(() => { errSpy = jest.spyOn(console, 'error').mockImplementation(() =>
 afterAll(() => { errSpy.mockRestore(); });
 
 const buildServiceCatalog = (): express.Express =>
-  appWith('/api', createServiceCatalogRouter(fakeAuthProvider, passthroughPerm, f, f, f, f));
+  appWith('/api', createServiceCatalogRouter(fakeAuthProvider, undefined, passthroughPerm, f, f, f, f));
 
 const buildContractServices = (): express.Express =>
-  appWith('/api', createContractServicesRouter(fakeAuthProvider, passthroughPerm, f, f, f, f, f));
+  appWith('/api', createContractServicesRouter(fakeAuthProvider, undefined, passthroughPerm, f, f, f, f, f));
 
 const buildProjects = (): express.Express =>
-  appWith('/api/projects', createProjectsRouter(f, f, f, f, f, fakeAuthProvider));
+  appWith('/api/projects', createProjectsRouter(f, f, f, f, f, fakeAuthProvider, undefined));
 
 const buildClients = (): express.Express =>
   // El router tipa authProvider como JwtAuthAdapter concreto; el stub del port alcanza.
-  appWith('/api/clients', createClientsRouter(f, f, f, f, f, fakeAuthProvider as never, f, f, f, f, passthroughPerm));
+  appWith('/api/clients', createClientsRouter(f, f, f, f, f, fakeAuthProvider as never, undefined, f, f, f, f, passthroughPerm));
 
 const buildTaskTemplates = (): express.Express =>
-  appWith('/api/task-templates', createTaskTemplateRouter(f, f, f, f, f, fakeAuthProvider, f));
+  appWith('/api/task-templates', createTaskTemplateRouter(f, f, f, f, f, fakeAuthProvider, undefined, f));
 
 const buildContracts = (): express.Express =>
-  appWith('/api', createContractsRouter(fakeAuthProvider, f, f, f, passthroughPerm));
+  appWith('/api', createContractsRouter(fakeAuthProvider, undefined, f, f, f, passthroughPerm));
 
 interface SweepCase {
   name: string;
