@@ -12,7 +12,12 @@
  * pide el constructor de CreatePortalTicket).
  */
 import { CreatePortalTicket, PORTAL_TICKET_SUBJECT_MAX_LEN, PORTAL_TICKET_DESCRIPTION_MAX_LEN } from '@application/use-cases/portal/CreatePortalTicket';
-import { PortalTicketValidationError, PortalContractRequiredError, PortalContractNotFoundError } from '@domain/errors/portal.errors';
+import {
+  PortalTicketValidationError,
+  PortalContractRequiredError,
+  PortalContractNotFoundError,
+  PortalTicketTopicNotFoundError,
+} from '@domain/errors/portal.errors';
 import { InMemoryTicketRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketRepository';
 import { InMemoryTicketAreaCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketAreaCatalogRepository';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
@@ -204,6 +209,68 @@ describe('CreatePortalTicket — customer-portal-api Fase 5.2', () => {
       await expect(
         useCase.execute('client-a', { subject: 'No anda', description: 'd', contractId: 'contract-x' }),
       ).rejects.toThrow(PortalContractNotFoundError);
+    });
+  });
+
+  describe('portal-ticket-topic — "el cliente ELIGE un tópico" (topicId)', () => {
+    it('sin topicId (ausente) -> comportamiento VIEJO intacto: área del config', async () => {
+      const tickets = new InMemoryTicketRepository();
+      const areas = new InMemoryTicketAreaCatalogRepository();
+      const supportArea = await areas.create({ name: 'Soporte Técnico', color: '#1' });
+      const useCase = new CreatePortalTicket(tickets, areas, NO_CONTRACTS, 'Soporte Técnico');
+
+      const result = await useCase.execute('client-a', { subject: 'No anda', description: 'd' });
+
+      const stored = await tickets.getBySequenceNumber(result.number);
+      expect(stored?.areaId).toBe(supportArea.id);
+    });
+
+    it('topicId de un área VISIBLE -> el ticket queda con ESA área (NO la del config)', async () => {
+      const tickets = new InMemoryTicketRepository();
+      const areas = new InMemoryTicketAreaCatalogRepository();
+      await areas.create({ name: 'Soporte', color: '#1' }); // área del config, NO debe usarse
+      const billing = await areas.create({ name: 'Facturación', color: '#2', portalVisible: true, portalLabel: 'Facturas y pagos' });
+      const useCase = new CreatePortalTicket(tickets, areas, NO_CONTRACTS, 'Soporte');
+
+      const result = await useCase.execute('client-a', { subject: 'Duda de factura', description: 'd', topicId: billing.id });
+
+      const stored = await tickets.getBySequenceNumber(result.number);
+      expect(stored?.areaId).toBe(billing.id);
+    });
+
+    it('topicId de un área INTERNA (NOC, portalVisible=false) -> PortalTicketTopicNotFoundError, NO se crea ningún ticket', async () => {
+      const tickets = new InMemoryTicketRepository();
+      const areas = new InMemoryTicketAreaCatalogRepository();
+      const noc = await areas.create({ name: 'NOC', color: '#1', portalVisible: false });
+      const useCase = new CreatePortalTicket(tickets, areas, NO_CONTRACTS);
+
+      await expect(
+        useCase.execute('client-a', { subject: 'No anda', description: 'd', topicId: noc.id }),
+      ).rejects.toThrow(PortalTicketTopicNotFoundError);
+      expect((await tickets.list({ customerId: 'client-a' })).data).toHaveLength(0);
+    });
+
+    it('topicId inexistente -> el MISMO PortalTicketTopicNotFoundError que uno interno (anti-enumeración)', async () => {
+      const tickets = new InMemoryTicketRepository();
+      const areas = new InMemoryTicketAreaCatalogRepository();
+      const useCase = new CreatePortalTicket(tickets, areas, NO_CONTRACTS);
+
+      await expect(
+        useCase.execute('client-a', { subject: 'No anda', description: 'd', topicId: 'no-existe' }),
+      ).rejects.toThrow(PortalTicketTopicNotFoundError);
+    });
+
+    it("topicId: '' y '   ' se tratan como ausente (usa el área del config, no tira error)", async () => {
+      const tickets = new InMemoryTicketRepository();
+      const areas = new InMemoryTicketAreaCatalogRepository();
+      const supportArea = await areas.create({ name: 'Soporte Técnico', color: '#1' });
+      const useCase = new CreatePortalTicket(tickets, areas, NO_CONTRACTS, 'Soporte Técnico');
+
+      const r1 = await useCase.execute('client-a', { subject: 'a', description: 'd', topicId: '' });
+      const r2 = await useCase.execute('client-a', { subject: 'b', description: 'd', topicId: '   ' });
+
+      expect((await tickets.getBySequenceNumber(r1.number))?.areaId).toBe(supportArea.id);
+      expect((await tickets.getBySequenceNumber(r2.number))?.areaId).toBe(supportArea.id);
     });
   });
 });

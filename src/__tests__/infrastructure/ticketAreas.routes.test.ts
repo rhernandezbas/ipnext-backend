@@ -269,6 +269,38 @@ describe('POST /api/tickets/areas', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('TICKET_AREA_NAME_CONFLICT');
   });
+
+  // portal-ticket-topic — "perilla de admin": crear/editar un área sin migration.
+  it('portal-ticket-topic: sin portal* -> 201 con los defaults seguros (portalVisible=false)', async () => {
+    const res = await asUser(
+      request(fx.app).post('/api/tickets/areas').send({ name: 'Soporte', color: '#6366f1' }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(201);
+    expect(res.body.portalVisible).toBe(false);
+    expect(res.body.portalLabel).toBeNull();
+    expect(res.body.portalDescription).toBeNull();
+    expect(res.body.portalOrder).toBe(0);
+  });
+
+  it('portal-ticket-topic: acepta portalVisible/portalLabel/portalDescription/portalOrder → 201', async () => {
+    const res = await asUser(
+      request(fx.app).post('/api/tickets/areas').send({
+        name: 'Facturación',
+        color: '#10b981',
+        portalVisible: true,
+        portalLabel: 'Facturas y pagos',
+        portalDescription: 'Dudas de tu factura, comprobantes, planes',
+        portalOrder: 2,
+      }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(201);
+    expect(res.body.portalVisible).toBe(true);
+    expect(res.body.portalLabel).toBe('Facturas y pagos');
+    expect(res.body.portalDescription).toBe('Dudas de tu factura, comprobantes, planes');
+    expect(res.body.portalOrder).toBe(2);
+  });
 });
 
 // ─── PUT ──────────────────────────────────────────────────────────────────────
@@ -315,6 +347,24 @@ describe('PUT /api/tickets/areas/:id', () => {
       fx.readOnlyUserId,
     );
     expect(res.status).toBe(403);
+  });
+
+  it('portal-ticket-topic: PUT puede activar portalVisible + cargar label/description/order sin migration', async () => {
+    const area = await fx.areaRepo.create({ name: 'Administración', color: '#f59e0b' });
+    const res = await asUser(
+      request(fx.app).put(`/api/tickets/areas/${area.id}`).send({
+        portalVisible: true,
+        portalLabel: 'Mis datos y contrato',
+        portalDescription: 'Titularidad, domicilio, datos personales',
+        portalOrder: 3,
+      }),
+      fx.manageUserId,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.portalVisible).toBe(true);
+    expect(res.body.portalLabel).toBe('Mis datos y contrato');
+    expect(res.body.portalDescription).toBe('Titularidad, domicilio, datos personales');
+    expect(res.body.portalOrder).toBe(3);
   });
 });
 

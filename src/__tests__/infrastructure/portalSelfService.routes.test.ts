@@ -26,6 +26,7 @@ import { ListPortalTasks } from '@application/use-cases/portal/ListPortalTasks';
 import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTickets';
 import { GetPortalTicket } from '@application/use-cases/portal/GetPortalTicket';
 import { CreatePortalTicket } from '@application/use-cases/portal/CreatePortalTicket';
+import { ListPortalTicketTopics } from '@application/use-cases/portal/ListPortalTicketTopics';
 import { DeleteMyPortalAccount } from '@application/use-cases/portal/DeleteMyPortalAccount';
 
 import { InMemoryPortalAccountRepository } from '@infrastructure/adapters/in-memory/InMemoryPortalAccountRepository';
@@ -184,6 +185,10 @@ function buildStack() {
   // stack, reusado (no una instancia paralela) para la validación de contrato.
   const getPortalTicket = new GetPortalTicket(ticketRepo, customers as unknown as CustomerRepository, ticketCommentRepo);
   const createPortalTicket = new CreatePortalTicket(ticketRepo, areaRepo, customers as unknown as CustomerRepository);
+  // portal-ticket-topic — mismo `areaRepo` in-memory que `createPortalTicket`
+  // (no una instancia paralela): el catálogo que alimenta el selector es el
+  // MISMO que valida `topicId` en POST /tickets.
+  const listPortalTicketTopics = new ListPortalTicketTopics(areaRepo);
   const deleteMyPortalAccount = new DeleteMyPortalAccount(accounts, sessions, hasher);
 
   const portalAuthMiddleware = createPortalAuthMiddleware(tokenService, accounts);
@@ -210,6 +215,7 @@ function buildStack() {
       listPortalTickets,
       getPortalTicket,
       createPortalTicket,
+      listPortalTicketTopics,
       deleteMyPortalAccount,
       ticketCreateRateLimiter,
     }),
@@ -439,6 +445,132 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
 
       const listedA = await request(stack.app).get('/api/portal/tickets').set('Authorization', `Bearer ${tokenA}`);
       expect(listedA.body.data.map((t: { subject: string }) => t.subject)).toEqual(['De A']);
+    });
+  });
+
+  describe('GET /api/portal/ticket-topics + POST /api/portal/tickets — portal-ticket-topic ("el cliente ELIGE un tópico")', () => {
+    it('GET /ticket-topics: solo áreas portalVisible=true, envelope {data}, label/description SIN name/color/portalVisible', async () => {
+      const stack = buildStack();
+      await stack.areaRepo.create({ name: 'Soporte', color: '#6366f1', portalVisible: true, portalLabel: 'Problemas técnicos', portalDescription: 'No anda internet, anda lento, falla la TV', portalOrder: 1 });
+      await stack.areaRepo.create({ name: 'Facturación', color: '#10b981', portalVisible: true, portalLabel: 'Facturas y pagos', portalDescription: 'Dudas de tu factura, comprobantes, planes', portalOrder: 2 });
+      await stack.areaRepo.create({ name: 'NOC', color: '#f00', portalVisible: false });
+      await stack.areaRepo.create({ name: 'GigaRed', color: '#0f0', portalVisible: false });
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app).get('/api/portal/ticket-topics').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(2);
+      expect(res.body.data).toEqual([
+        { id: expect.any(String), label: 'Problemas técnicos', description: 'No anda internet, anda lento, falla la TV' },
+        { id: expect.any(String), label: 'Facturas y pagos', description: 'Dudas de tu factura, comprobantes, planes' },
+      ]);
+      // NUNCA name interno, color, ni portalVisible en el JSON — ni siquiera como substring.
+      const raw = JSON.stringify(res.body);
+      expect(raw).not.toContain('"name"');
+      expect(raw).not.toContain('"color"');
+      expect(raw).not.toContain('portalVisible');
+      expect(raw).not.toContain('NOC');
+      expect(raw).not.toContain('GigaRed');
+    });
+
+    it('POST /tickets SIN topicId -> 201, usa el área del config (comportamiento viejo intacto)', async () => {
+      const stack = buildStack();
+      await stack.areaRepo.create({ name: 'NOC', color: '#1', portalVisible: false });
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda internet', description: 'Desde ayer' });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('POST /tickets con topicId de un área VISIBLE -> 201 y el ticket queda con ESA área', async () => {
+      const stack = buildStack();
+      const billing = await stack.areaRepo.create({ name: 'Facturación', color: '#1', portalVisible: true, portalLabel: 'Facturas y pagos' });
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'Duda de factura', description: 'No entiendo el monto', topicId: billing.id });
+
+      expect(res.status).toBe(201);
+      const stored = await stack.ticketRepo.getBySequenceNumber(res.body.number);
+      expect(stored?.areaId).toBe(billing.id);
+    });
+
+    it('POST /tickets con topicId de un área INTERNA (NOC) -> 404 TOPIC_NOT_FOUND, no crea ningún ticket', async () => {
+      const stack = buildStack();
+      const noc = await stack.areaRepo.create({ name: 'NOC', color: '#1', portalVisible: false });
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const res = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda internet', description: 'Desde ayer', topicId: noc.id });
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('TOPIC_NOT_FOUND');
+      const listed = await request(stack.app).get('/api/portal/tickets').set('Authorization', `Bearer ${token}`);
+      expect(listed.body.data).toHaveLength(0);
+    });
+
+    it('POST /tickets con topicId inexistente -> 404 TOPIC_NOT_FOUND, body IDÉNTICO al de un área interna (anti-enumeración)', async () => {
+      const stack = buildStack();
+      const noc = await stack.areaRepo.create({ name: 'NOC', color: '#1', portalVisible: false });
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const internalRes = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda', description: 'd', topicId: noc.id });
+      const missingRes = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda', description: 'd', topicId: 'no-existe' });
+
+      expect(internalRes.status).toBe(404);
+      expect(missingRes.status).toBe(404);
+      expect(internalRes.body).toEqual(missingRes.body);
+    });
+
+    it('POST /tickets con topicId de tipo inválido (número, objeto) -> 400 VALIDATION_ERROR', async () => {
+      const stack = buildStack();
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const numberRes = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda', description: 'd', topicId: 123 });
+      const objectRes = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda', description: 'd', topicId: { id: 'x' } });
+
+      expect(numberRes.status).toBe(400);
+      expect(numberRes.body.code).toBe('VALIDATION_ERROR');
+      expect(objectRes.status).toBe(400);
+      expect(objectRes.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it("topicId: '' y '   ' se tratan como ausente -> 201, área del config (no 400 ni 404)", async () => {
+      const stack = buildStack();
+      const token = await createAccountAndToken(stack, 'client-a', '30111222', 'Secret123');
+
+      const emptyRes = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda', description: 'd', topicId: '' });
+      const blankRes = await request(stack.app)
+        .post('/api/portal/tickets')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ subject: 'No anda', description: 'd', topicId: '   ' });
+
+      expect(emptyRes.status).toBe(201);
+      expect(blankRes.status).toBe(201);
     });
   });
 

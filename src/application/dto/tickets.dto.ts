@@ -62,12 +62,21 @@ export interface TicketDto {
 // anything that isn't a valid hex string at the edge.
 const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'color must be a 6-digit hex like #6366f1');
 
-// TicketArea catalog DTOs — name + pill color (#69)
+// TicketArea catalog DTOs — name + pill color (#69) + portal-ticket-topic (portalVisible/
+// portalLabel/portalDescription/portalOrder) — la "perilla" de admin: sin esto un
+// área nueva (o Soporte/Facturación/Administración editados por la migration) no
+// se puede tocar sin escribir SQL a mano.
 export const CreateTicketAreaSchema = z.object({
   // .trim() before .min(1): a name of " " or "Soporte " would otherwise slip
   // past the uniqueness conflict check by carrying invisible whitespace.
   name: z.string().trim().min(1),
   color: HexColorSchema,
+  // Default `false` — EL LADO SEGURO (mismo default que la columna); un área
+  // creada por el admin sin tocar este campo NO se expone al portal.
+  portalVisible: z.boolean().optional(),
+  portalLabel: z.string().trim().min(1).nullable().optional(),
+  portalDescription: z.string().trim().min(1).nullable().optional(),
+  portalOrder: z.number().int().optional(),
 });
 export const UpdateTicketAreaSchema = CreateTicketAreaSchema.partial();
 export type CreateTicketAreaInput = z.infer<typeof CreateTicketAreaSchema>;

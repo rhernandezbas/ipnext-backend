@@ -2862,6 +2862,22 @@ model TicketAreaCatalog {
   id        String   @id @default(uuid())
   name      String   @unique
   color     String   @default("#6366f1")
+  // portal-ticket-topic (BE) — el cliente del portal ELIGE un tópico al abrir
+  // un reclamo, en vez de que el área salga siempre del config. Default
+  // `false` A PROPÓSITO: es el lado SEGURO — un área nueva (o ya existente,
+  // como NOC/GigaRed, que son INTERNAS) NO se expone a clientes hasta que
+  // alguien lo decida explícitamente desde el admin. `getPortalVisibleById`
+  // es la AUTORIDAD de seguridad: filtra por esta columna DENTRO del WHERE,
+  // nunca en una capa de arriba (ver TicketAreaCatalogRepository).
+  portalVisible     Boolean  @default(false)
+  // Nombre que ve el CLIENTE en el selector de tópicos — el área interna
+  // sigue llamándose `name` como hoy. Null hasta que el admin lo cargue;
+  // ListPortalTicketTopics cae a `name` cuando es null.
+  portalLabel       String?
+  // Línea de ayuda que explica CUÁNDO elegir este tópico (portal, selector).
+  portalDescription String?
+  // Orden de presentación en el selector del portal (ASC; empata por `name`).
+  portalOrder       Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   tickets   Ticket[]

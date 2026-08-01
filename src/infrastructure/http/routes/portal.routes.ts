@@ -10,6 +10,7 @@ import { ListPortalTasks } from '@application/use-cases/portal/ListPortalTasks';
 import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTickets';
 import { GetPortalTicket } from '@application/use-cases/portal/GetPortalTicket';
 import { CreatePortalTicket } from '@application/use-cases/portal/CreatePortalTicket';
+import { ListPortalTicketTopics } from '@application/use-cases/portal/ListPortalTicketTopics';
 import { DeleteMyPortalAccount } from '@application/use-cases/portal/DeleteMyPortalAccount';
 import { ListPortalTicketMessages } from '@application/use-cases/portal/ListPortalTicketMessages';
 import { SendPortalTicketMessage } from '@application/use-cases/portal/SendPortalTicketMessage';
@@ -25,6 +26,7 @@ import {
   PortalTicketValidationError,
   PortalContractRequiredError,
   PortalContractNotFoundError,
+  PortalTicketTopicNotFoundError,
 } from '@domain/errors/portal.errors';
 import {
   createPortalLoginRateLimiter,
@@ -70,6 +72,8 @@ export interface PortalRouterDeps {
   listPortalTickets?: ListPortalTickets;
   getPortalTicket?: GetPortalTicket;
   createPortalTicket?: CreatePortalTicket;
+  /** portal-ticket-topic — `GET /ticket-topics`, el catálogo que alimenta el selector de `POST /tickets`. */
+  listPortalTicketTopics?: ListPortalTicketTopics;
   deleteMyPortalAccount?: DeleteMyPortalAccount;
   /** Defaults to `createPortalTicketCreateRateLimiter()` when omitted. Applied
    * ONLY to `POST /tickets`, on top of `generalRateLimiter`. */
@@ -328,6 +332,31 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
     );
   }
 
+  // portal-ticket-topic — catálogo de tópicos que el cliente puede elegir al
+  // abrir un reclamo. Ruta ESTÁTICA (`/ticket-topics`), sin colisión posible
+  // con `/tickets/:number` (segmento distinto) — igual se monta ANTES de
+  // `/tickets` por el mismo criterio "literal antes que :param" del resto del
+  // archivo.
+  if (deps.listPortalTicketTopics) {
+    const listPortalTicketTopics = deps.listPortalTicketTopics;
+    router.get(
+      '/ticket-topics',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await listPortalTicketTopics.execute();
+          // M6 — mismo envelope {data} que el resto de las colecciones del portal.
+          res.status(200).json({ data: result });
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
   if (deps.listPortalTickets) {
     const listPortalTickets = deps.listPortalTickets;
     router.get(
@@ -367,10 +396,11 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
       async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         const clientId = requireClientId(req, res);
         if (!clientId) return;
-        const { subject, description, contractId } = (req.body ?? {}) as {
+        const { subject, description, contractId, topicId } = (req.body ?? {}) as {
           subject?: unknown;
           description?: unknown;
           contractId?: unknown;
+          topicId?: unknown;
         };
         if (typeof subject !== 'string' || typeof description !== 'string') {
           res.status(400).json({ error: 'subject y description son requeridos', code: 'VALIDATION_ERROR' });
@@ -383,8 +413,15 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           res.status(400).json({ error: 'contractId inválido', code: 'VALIDATION_ERROR' });
           return;
         }
+        // portal-ticket-topic — topicId es opcional EN EL BODY (ausente/null/''
+        // = camino "Otro / no sé", ver CreatePortalTicket); acá solo se valida
+        // el TIPO, mismo criterio que contractId arriba.
+        if (topicId !== undefined && topicId !== null && typeof topicId !== 'string') {
+          res.status(400).json({ error: 'topicId inválido', code: 'VALIDATION_ERROR' });
+          return;
+        }
         try {
-          const result = await createPortalTicket.execute(clientId, { subject, description, contractId });
+          const result = await createPortalTicket.execute(clientId, { subject, description, contractId, topicId });
           res.status(201).json(result);
         } catch (err) {
           if (err instanceof PortalContractRequiredError) {
@@ -392,6 +429,11 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           } else if (err instanceof PortalContractNotFoundError) {
             // v2.A — 404 indistinguible: mismo status y body para "no existe"
             // y "es de otro cliente" (nunca se filtra cuál de los dos pasó).
+            res.status(404).json({ error: err.message, code: err.code });
+          } else if (err instanceof PortalTicketTopicNotFoundError) {
+            // portal-ticket-topic — 404 indistinguible: mismo status y body
+            // para "no existe" y "es un área interna" (NOC/GigaRed) — nunca se
+            // filtra cuál de los dos pasó.
             res.status(404).json({ error: err.message, code: err.code });
           } else if (err instanceof PortalTicketValidationError) {
             res.status(400).json({ error: err.message, code: err.code });

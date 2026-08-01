@@ -980,6 +980,7 @@ import { ListPortalTasks } from '@application/use-cases/portal/ListPortalTasks';
 import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTickets';
 import { GetPortalTicket } from '@application/use-cases/portal/GetPortalTicket';
 import { CreatePortalTicket } from '@application/use-cases/portal/CreatePortalTicket';
+import { ListPortalTicketTopics } from '@application/use-cases/portal/ListPortalTicketTopics';
 import { DeleteMyPortalAccount } from '@application/use-cases/portal/DeleteMyPortalAccount';
 // portal-ticket-messaging (v2.B) — mensajería interna de un reclamo, lado portal.
 import { ListPortalTicketMessages } from '@application/use-cases/portal/ListPortalTicketMessages';
@@ -3670,6 +3671,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // es CONFIGURABLE (config.portal.ticketAreaName, PORTAL_TICKET_AREA_NAME env,
   // opt-in), nunca el literal hardcodeado del use case.
   const createPortalTicket = new CreatePortalTicket(ticketAdapter, ticketAreaRepo, customerAdapter, config.portal.ticketAreaName);
+  // portal-ticket-topic — mismo `ticketAreaRepo` singleton que ya wirea el
+  // CRUD admin de áreas (línea ~1395) y `createPortalTicket` arriba.
+  const listPortalTicketTopics = new ListPortalTicketTopics(ticketAreaRepo);
   // M5 (fix wave): el evento de auditoría del borrado se PERSISTE en AuditEvent
   // (durable, GET /api/admin/audit-events) además del log estructurado — el
   // default del use case era solo console.log (moría con la rotación de logs).
@@ -3713,6 +3717,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listPortalTickets,
     getPortalTicket,
     createPortalTicket,
+    listPortalTicketTopics,
     deleteMyPortalAccount,
     ticketCreateRateLimiter: portalTicketCreateRateLimiter,
     listPortalTicketMessages,

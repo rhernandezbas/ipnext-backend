@@ -98,3 +98,19 @@ export class PortalContractNotFoundError extends DomainError {
     this.name = 'PortalContractNotFoundError';
   }
 }
+
+/**
+ * portal-ticket-topic — el `topicId` recibido en `POST /api/portal/tickets` no
+ * existe O es un área INTERNA (`portalVisible = false`, p.ej. NOC/GigaRed). Un
+ * ÚNICO error para los dos casos — mismo criterio anti-enumeración que
+ * `PortalContractNotFoundError`: la ruta responde el MISMO 404 sin filtrar cuál
+ * de los dos motivos ocurrió. Esta es LA invariante de seguridad del cambio: la
+ * app filtra el selector con `/api/portal/ticket-topics`, pero el BE nunca
+ * confía en el `topicId` que le llega — es la autoridad SIEMPRE.
+ */
+export class PortalTicketTopicNotFoundError extends DomainError {
+  constructor() {
+    super('Tópico no encontrado', 'TOPIC_NOT_FOUND');
+    this.name = 'PortalTicketTopicNotFoundError';
+  }
+}
