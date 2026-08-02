@@ -184,6 +184,14 @@ export const RBAC_MODULES = [
   // clientes. Usa las base actions read/manage sin agregar action codes nuevos
   // (mismo criterio que 'news'/'uisp').
   'promos',
+  // portal-push-notifications — envío de avisos de servicio push a la app de
+  // clientes desde el admin (`POST /api/notifications/push-service-alert`).
+  // Módulo PROPIO (no una sub-acción de `notifications`, el módulo del bell
+  // icon interno, ni de `portal`): "quién puede mandar un push a TODOS los
+  // clientes de un nodo" es una acción de alto alcance/riesgo, no una lectura
+  // de notificaciones. Reusa la action 'send' (ya existe, messaging-inbox F1)
+  // — sin agregar action codes nuevos, mismo criterio que 'promos'/'news'.
+  'push',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

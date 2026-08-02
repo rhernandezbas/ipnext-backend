@@ -644,4 +644,18 @@ export const config = {
   portal: {
     ticketAreaName: process.env.PORTAL_TICKET_AREA_NAME || 'Soporte',
   },
+
+  /**
+   * portal-push-notifications — service account de Firebase Cloud Messaging
+   * (HTTP v1), el JSON COMPLETO como string. Opt-in / NO fail-fast (mismo
+   * patrón que `assistant.apiKey`/`chatwoot`/`twilio`): sin esta env, el
+   * wiring usa `NoopPushSender` en vez de `FcmPushSender` — el registro de
+   * tokens, las preferencias y `POST /push-service-alert` funcionan IGUAL
+   * (dry-run, `dryRun: true` en la respuesta), nada tumba el boot. La
+   * credencial la carga el usuario después de crear el proyecto Firebase
+   * (`ipnextapp`) — el lado app (`google-services.json`) se cablea aparte.
+   */
+  firebase: {
+    serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON ?? '',
+  },
 };

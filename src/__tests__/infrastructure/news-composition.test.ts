@@ -100,21 +100,48 @@ describe('internal-news composition root', () => {
     expect(rbacSrc).toMatch(/'news',/);
   });
 
-  // ─── NEWS-HTTP-4 — notifications intocado ──────────────────────────────────
+  // ─── NEWS-HTTP-4 — notifications intocado (para ESTE change) ───────────────
+  //
+  // UPDATE (portal-push-notifications, 2026-08-02): esta suite pineaba
+  // "notifications.routes.ts nunca gana un requirePerm" para blindar contra
+  // que OTRA feature (como internal-news, dueña de esta suite) le agregara un
+  // guard de arrastre sin querer — el propio comentario original ya avisaba
+  // "that's Change B's job, not this one". `portal-push-notifications` ES esa
+  // Change B: agrega `POST /push-service-alert{,/preview}` (alto
+  // alcance/riesgo — manda a TODOS los clientes de un nodo) con
+  // `auth`+`requirePerm('push','send')` PROPIOS, sin tocar el guard (o la
+  // ausencia de guard) de las 4 rutas originales del bell icon interno
+  // (`GET /`, `PUT /read-all`, `PUT /:id/read`, `DELETE /:id`). El pin se
+  // angosta acá: en vez de "el archivo entero jamás dice requirePerm", ahora
+  // verifica PUNTUALMENTE que esas 4 rutas originales siguen sin
+  // auth/requirePerm en su cadena de middlewares.
 
-  it('notifications.routes.ts stays unguarded (untouched contrast, design §6.1)', () => {
-    // Sanity pin, not a modification check: confirms this change didn't quietly
-    // add guards to the pre-existing unguarded router (that's Change B's job, not this one).
-    expect(notificationsRoutesSrc).not.toMatch(/requirePerm/);
+  it('las 4 rutas ORIGINALES del bell icon (GET /, PUT /read-all, PUT /:id/read, DELETE /:id) siguen SIN auth/requirePerm', () => {
+    const originalRoutePatterns = [
+      /router\.get\(\s*'\/'\s*,\s*async/,
+      /router\.put\(\s*'\/read-all'\s*,\s*async/,
+      /router\.put\(\s*'\/:id\/read'\s*,\s*async/,
+      /router\.delete\(\s*'\/:id'\s*,\s*async/,
+    ];
+    for (const pattern of originalRoutePatterns) {
+      // El handler async va INMEDIATAMENTE después del path — cero middlewares
+      // (auth/requirePerm) intercalados, igual que antes de este change.
+      expect(notificationsRoutesSrc).toMatch(pattern);
+    }
   });
 
-  it('app.ts still mounts /api/notifications unchanged (no requirePerm/auth added to that line)', () => {
+  it('las rutas NUEVAS de push-service-alert SÍ llevan auth + requirePerm (push.send) — guard propio, no de arrastre', () => {
+    expect(notificationsRoutesSrc).toMatch(/requirePerm\('push',\s*'send'\)/);
+    expect(notificationsRoutesSrc).toContain("'/push-service-alert'");
+    expect(notificationsRoutesSrc).toContain("'/push-service-alert/preview'");
+  });
+
+  it('app.ts sigue montando /api/notifications con los 4 use cases originales del bell icon en el mismo orden', () => {
     const idx = appSrc.indexOf("app.use('/api/notifications'");
     expect(idx).toBeGreaterThan(-1);
-    const end = appSrc.indexOf(');', idx);
-    const window = appSrc.slice(idx, end + 2);
-    expect(window).not.toContain('requirePerm');
-    expect(window).not.toContain('createAuthMiddleware');
+    const end = appSrc.indexOf('));', idx);
+    const window = appSrc.slice(idx, end + 3);
+    expect(window).toMatch(/listNotifications,\s*markNotificationRead,\s*markAllNotificationsRead,\s*deleteNotification/);
   });
 
   // ─── (b) behavioral — router assembled with in-memory repos ────────────────

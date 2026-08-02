@@ -1008,6 +1008,20 @@ import { CreatePortalPromo } from '@application/use-cases/promos/CreatePortalPro
 import { UpdatePortalPromo } from '@application/use-cases/promos/UpdatePortalPromo';
 import { PreviewPromoAudience } from '@application/use-cases/promos/PreviewPromoAudience';
 
+// portal-push-notifications — dispositivos + preferencias (client-facing) y
+// avisos de servicio (admin, push.send).
+import { PrismaPortalPushTokenRepository } from '../adapters/prisma/PrismaPortalPushTokenRepository';
+import { PrismaPortalPushPreferenceRepository } from '../adapters/prisma/PrismaPortalPushPreferenceRepository';
+import { RegisterPortalPushToken } from '@application/use-cases/portal/RegisterPortalPushToken';
+import { UnregisterPortalPushToken } from '@application/use-cases/portal/UnregisterPortalPushToken';
+import { GetPortalPushPreferences } from '@application/use-cases/portal/GetPortalPushPreferences';
+import { UpdatePortalPushPreferences } from '@application/use-cases/portal/UpdatePortalPushPreferences';
+import { SendPushServiceAlert } from '@application/use-cases/notifications/SendPushServiceAlert';
+import { PreviewPushServiceAlert } from '@application/use-cases/notifications/PreviewPushServiceAlert';
+import { FcmPushSender } from '../adapters/fcm/FcmPushSender';
+import { NoopPushSender } from '../adapters/fcm/NoopPushSender';
+import type { PushSender } from '@domain/ports/PushSender';
+
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
  *
@@ -2355,7 +2369,33 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/reports', createReportsRouter(listReportDefinitions, generateReport, exportReport));
   app.use('/api/monitoring', createMonitoringRouter(getMonitoringStats, listMonitoringDevices, listMonitoringAlerts, acknowledgeAlert));
   app.use('/api/search', createSearchRouter(globalSearch));
-  app.use('/api/notifications', createNotificationsRouter(listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification));
+
+  // portal-push-notifications — avisos de servicio (admin, `push.send`).
+  // `pushSender`: `FcmPushSender` si `FIREBASE_SERVICE_ACCOUNT_JSON` está
+  // seteada Y es un JSON de service account válido; `NoopPushSender` en
+  // cualquier otro caso (incluida una env MAL configurada) — el boot NUNCA
+  // debe caer por una credencial de Firebase rota (mismo criterio "opt-in, no
+  // fail-fast" que `assistant`/`chatwoot`/`twilio` en config.ts).
+  const pushSender: PushSender = (() => {
+    if (!config.firebase.serviceAccountJson) return new NoopPushSender();
+    try {
+      return new FcmPushSender({ serviceAccountJson: config.firebase.serviceAccountJson });
+    } catch (err) {
+      console.error('[push] FIREBASE_SERVICE_ACCOUNT_JSON inválido — cae a NoopPushSender (dry-run)', err);
+      return new NoopPushSender();
+    }
+  })();
+  // Instancia propia (stateless, mismo `prisma` singleton que
+  // `portalPushTokenRepo` de la Fase 7 más abajo) — evita reordenar el wiring
+  // del portal solo para compartir un repo sin config/estado que compartir.
+  const pushServiceAlertTokenRepo = new PrismaPortalPushTokenRepository();
+  const sendPushServiceAlert = new SendPushServiceAlert(pushServiceAlertTokenRepo, pushSender, customerAdapter);
+  const previewPushServiceAlert = new PreviewPushServiceAlert(pushServiceAlertTokenRepo, customerAdapter);
+
+  app.use('/api/notifications', createNotificationsRouter(
+    listNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification,
+    authAdapter, sessionRepo, requirePerm, sendPushServiceAlert, previewPushServiceAlert,
+  ));
   // internal-news — /api/news carries auth + requirePerm on EVERY route (design §6.1),
   // a deliberate contrast with the unguarded /api/notifications mount above.
   app.use('/api/news', createNewsRouter(
@@ -3697,7 +3737,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
 
   const portalLogin = new PortalLogin(portalAccountRepo, portalSessionRepo, passwordHasher, portalTokenService);
   const refreshPortalSession = new RefreshPortalSession(portalAccountRepo, portalSessionRepo, portalTokenService);
-  const logoutPortal = new LogoutPortal(portalSessionRepo);
+  // portal-push-notifications — `portalPushTokenRepo` se declara ACÁ (antes de
+  // `logoutPortal`) porque `LogoutPortal` lo necesita para revocar el token de
+  // push del dispositivo que cierra sesión (ver el docblock del use case).
+  const portalPushTokenRepo = new PrismaPortalPushTokenRepository();
+  const portalPushPreferenceRepo = new PrismaPortalPushPreferenceRepository();
+  const logoutPortal = new LogoutPortal(portalSessionRepo, portalPushTokenRepo);
   // M1 (fix wave): con el session repo — el cambio de password revoca TODAS
   // las sesiones de la cuenta (el refresh robado muere con la password vieja).
   const changePortalPassword = new ChangePortalPassword(portalAccountRepo, passwordHasher, portalSessionRepo);
@@ -3761,6 +3806,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     ticketAdapter,
   );
 
+  // portal-push-notifications — registro de dispositivos + preferencias
+  // (client-facing). `portalPushTokenRepo`/`portalPushPreferenceRepo` ya se
+  // declararon arriba (junto a `logoutPortal`, que los necesita antes).
+  const registerPortalPushToken = new RegisterPortalPushToken(portalPushTokenRepo);
+  const unregisterPortalPushToken = new UnregisterPortalPushToken(portalPushTokenRepo);
+  const getPortalPushPreferences = new GetPortalPushPreferences(portalPushPreferenceRepo);
+  const updatePortalPushPreferences = new UpdatePortalPushPreferences(portalPushPreferenceRepo);
+
   const portalAuthMw = createPortalAuthMiddleware(portalTokenService, portalAccountRepo);
   const portalKillSwitchMw = createPortalKillSwitchMiddleware(settingsRepo);
   // W6: se instancian los 4 rate limiters EXPLICITAMENTE (aunque el router los
@@ -3803,6 +3856,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     interestInPortalPromo,
     dismissPortalPromo,
     listPortalBenefits,
+    registerPortalPushToken,
+    unregisterPortalPushToken,
+    getPortalPushPreferences,
+    updatePortalPushPreferences,
   }));
 
   // portal-promos — admin CRUD (`promos.read`/`promos.manage`).

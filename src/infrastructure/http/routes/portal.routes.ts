@@ -21,6 +21,11 @@ import { GetPortalPromo } from '@application/use-cases/portal/GetPortalPromo';
 import { InterestInPortalPromo } from '@application/use-cases/portal/InterestInPortalPromo';
 import { DismissPortalPromo } from '@application/use-cases/portal/DismissPortalPromo';
 import { ListPortalBenefits } from '@application/use-cases/portal/ListPortalBenefits';
+import { RegisterPortalPushToken } from '@application/use-cases/portal/RegisterPortalPushToken';
+import { UnregisterPortalPushToken } from '@application/use-cases/portal/UnregisterPortalPushToken';
+import { GetPortalPushPreferences } from '@application/use-cases/portal/GetPortalPushPreferences';
+import { UpdatePortalPushPreferences } from '@application/use-cases/portal/UpdatePortalPushPreferences';
+import { RegisterPortalPushTokenSchema, UnregisterPortalPushTokenSchema, UpdatePortalPushPreferencesSchema } from '@application/dto/portal/portalPush.dto';
 import {
   InvalidPortalCredentialsError,
   InvalidPortalRefreshTokenError,
@@ -100,6 +105,12 @@ export interface PortalRouterDeps {
 
   // ── portal-benefits — pestaña Catálogo (Disponibles/Activados) ─────────────
   listPortalBenefits?: ListPortalBenefits;
+
+  // ── portal-push-notifications — registro de dispositivos + preferencias ────
+  registerPortalPushToken?: RegisterPortalPushToken;
+  unregisterPortalPushToken?: UnregisterPortalPushToken;
+  getPortalPushPreferences?: GetPortalPushPreferences;
+  updatePortalPushPreferences?: UpdatePortalPushPreferences;
 }
 
 /**
@@ -186,10 +197,13 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
   });
 
   router.post('/auth/logout', generalRateLimiter, async (req: Request, res: Response): Promise<void> => {
-    const { refreshToken } = (req.body ?? {}) as { refreshToken?: unknown };
+    const { refreshToken, pushToken } = (req.body ?? {}) as { refreshToken?: unknown; pushToken?: unknown };
     if (typeof refreshToken === 'string' && refreshToken) {
       try {
-        await deps.logoutPortal.execute(refreshToken);
+        // portal-push-notifications — `pushToken` OPCIONAL: la app lo manda
+        // cuando quiere desregistrar SU token de este dispositivo en el MISMO
+        // viaje que el logout (ver el docblock de `LogoutPortal.execute`).
+        await deps.logoutPortal.execute(refreshToken, typeof pushToken === 'string' && pushToken ? pushToken : undefined);
       } catch {
         // best-effort — logout must never fail loudly on an already-dead token.
       }
@@ -768,6 +782,116 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         if (!clientId) return;
         try {
           const result = await listPortalBenefits.execute(clientId);
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ── portal-push-notifications — registro de dispositivos + preferencias ────
+  // Estáticas, sin colisión con ningún `:param` del archivo.
+
+  if (deps.registerPortalPushToken) {
+    const registerPortalPushToken = deps.registerPortalPushToken;
+    router.post(
+      '/push/register',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        const parsed = RegisterPortalPushTokenSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          await registerPortalPushToken.execute(accountId, parsed.data);
+          res.status(204).send();
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.unregisterPortalPushToken) {
+    const unregisterPortalPushToken = deps.unregisterPortalPushToken;
+    router.delete(
+      '/push/register',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        const parsed = UnregisterPortalPushTokenSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          // Idempotente y anti-enumeración: 204 SIEMPRE, exista el token o
+          // pertenezca a otra cuenta — mismo criterio que `LogoutPortal`.
+          await unregisterPortalPushToken.execute(accountId, parsed.data.token);
+          res.status(204).send();
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.getPortalPushPreferences) {
+    const getPortalPushPreferences = deps.getPortalPushPreferences;
+    router.get(
+      '/push/preferences',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        try {
+          const result = await getPortalPushPreferences.execute(accountId);
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.updatePortalPushPreferences) {
+    const updatePortalPushPreferences = deps.updatePortalPushPreferences;
+    router.put(
+      '/push/preferences',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        const parsed = UpdatePortalPushPreferencesSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        const appVersionHeader = req.header('X-App-Version');
+        const appVersion = typeof appVersionHeader === 'string' && appVersionHeader.trim() ? appVersionHeader.trim() : null;
+        try {
+          const result = await updatePortalPushPreferences.execute(accountId, parsed.data, appVersion);
           res.status(200).json(result);
         } catch (err) {
           next(err);
