@@ -17,6 +17,7 @@ import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memo
 import { InMemoryRbacPermissionRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacPermissionRepository';
 import { InMemoryRbacRolePermissionRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRolePermissionRepository';
 import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMemoryPasswordHasher';
+import { InMemoryOnuWifiCredentialRepository } from '@infrastructure/adapters/in-memory/InMemoryOnuWifiCredentialRepository';
 
 import { requirePermission } from '@infrastructure/http/middleware/requirePermission';
 import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
@@ -157,8 +158,9 @@ async function buildApp() {
 
   const wifi = new FakeAdminWifi();
   const provisioning = new FakeProvisioning();
-  const getAdminOnuWifiStatus = new GetAdminOnuWifiStatus(wifi);
-  const setAdminWifiBand = new SetAdminWifiBand(wifi);
+  const credentials = new InMemoryOnuWifiCredentialRepository();
+  const getAdminOnuWifiStatus = new GetAdminOnuWifiStatus(wifi, credentials);
+  const setAdminWifiBand = new SetAdminWifiBand(wifi, credentials);
   const enableOnuTr069 = new EnableOnuTr069(provisioning);
 
   const app = express();
@@ -170,7 +172,7 @@ async function buildApp() {
   );
   app.use(errorHandler);
 
-  return { app, wifi, provisioning, manageUserId: manageUser.id, readOnlyUserId: readUser.id, noPermUserId: noPermUser.id };
+  return { app, wifi, provisioning, credentials, manageUserId: manageUser.id, readOnlyUserId: readUser.id, noPermUserId: noPermUser.id };
 }
 
 function asUser(req: request.Test, userId: string): request.Test {
@@ -256,5 +258,67 @@ describe('caso 11 — SmartOLT no configurado en el resto de las rutas admin', (
     const res = await asUser(request(fx.app).put('/api/wifi/onu/HWTC1/band'), fx.manageUserId).send({ port: 'wifi_0/1', ssid: 'X', password: '12345678' });
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('SMARTOLT_NOT_CONFIGURED');
+  });
+});
+
+/**
+ * wifi-password-snapshot — mitad ADMIN de los casos TDD 1/2/7: el GET admin
+ * también expone `password` por banda (mismo snapshot que el portal, MISMA
+ * tabla), y el PUT admin graba `updatedBy: 'staff:<rbacUserId>'` — NUNCA
+ * 'portal', a diferencia del PUT del portal (ver `portalWifi.routes.test.ts`).
+ */
+describe('wifi-password-snapshot — admin /api/wifi', () => {
+  it('caso 1/2 (admin): GET expone password por banda tras un PUT; banda sin escribir -> null', async () => {
+    const fx = await buildApp();
+    fx.wifi.statusBySn.set('HWTC1', {
+      ...ONLINE_STATUS,
+      bands: [
+        { band: '2.4', port: 'wifi_0/1', ssid: 'Casa', enabled: true },
+        { band: '5', port: 'wifi_0/5', ssid: 'Casa_5G', enabled: true },
+      ],
+    });
+
+    const putRes = await asUser(request(fx.app).put('/api/wifi/onu/HWTC1/band'), fx.manageUserId).send({
+      port: 'wifi_0/1',
+      ssid: 'CasaNueva',
+      password: 'clave1234',
+    });
+    expect(putRes.status).toBe(200);
+
+    const getRes = await asUser(request(fx.app).get('/api/wifi/onu/HWTC1'), fx.manageUserId);
+    const bands = getRes.body.data.bands as Array<{ port: string; password: string | null }>;
+    expect(bands.find((b) => b.port === 'wifi_0/1')!.password).toBe('clave1234');
+    expect(bands.find((b) => b.port === 'wifi_0/5')!.password).toBeNull();
+  });
+
+  it('caso 7 (mitad admin): el PUT admin guarda updatedBy:"staff:<rbacUserId>" (NUNCA "portal")', async () => {
+    const fx = await buildApp();
+    fx.wifi.statusBySn.set('HWTC1', ONLINE_STATUS);
+
+    await asUser(request(fx.app).put('/api/wifi/onu/HWTC1/band'), fx.manageUserId).send({
+      port: 'wifi_0/1',
+      ssid: 'CasaNueva',
+      password: 'clave1234',
+    });
+
+    const saved = fx.credentials.all().find((c) => c.sn === 'HWTC1' && c.port === 'wifi_0/1');
+    expect(saved?.updatedBy).toBe(`staff:${fx.manageUserId}`);
+  });
+
+  it('si el snapshot falla, el PUT admin IGUAL responde 200 (el equipo ya cambió)', async () => {
+    const fx = await buildApp();
+    fx.wifi.statusBySn.set('HWTC1', ONLINE_STATUS);
+    fx.credentials.upsert = async () => {
+      throw new Error('DB caída (simulado)');
+    };
+
+    const res = await asUser(request(fx.app).put('/api/wifi/onu/HWTC1/band'), fx.manageUserId).send({
+      port: 'wifi_0/1',
+      ssid: 'CasaNueva',
+      password: 'clave1234',
+    });
+
+    expect(res.status).toBe(200);
+    expect(fx.wifi.setCalls).toHaveLength(1);
   });
 });

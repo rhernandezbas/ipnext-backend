@@ -1041,6 +1041,8 @@ import { GetAdminOnuWifiStatus } from '@application/use-cases/wifi/GetAdminOnuWi
 import { SetAdminWifiBand } from '@application/use-cases/wifi/SetAdminWifiBand';
 import { EnableOnuTr069 } from '@application/use-cases/wifi/EnableOnuTr069';
 import { createWifiRouter } from './routes/wifi.routes';
+// wifi-password-snapshot — snapshot de password (SmartOLT nunca la devuelve, ver el modelo).
+import { PrismaOnuWifiCredentialRepository } from '@infrastructure/adapters/prisma/PrismaOnuWifiCredentialRepository';
 
 // portal-equipment-reboot — "Reiniciar mi equipo" (extiende wifi-self-service:
 // reusa el MISMO smartoltWifiGateway/getOnuWifiStatus, elegibilidad MÁS AMPLIA).
@@ -3933,8 +3935,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     stepPauseMs: config.smartolt.stepPauseMs,
   });
   const resolveWifiEligibility = new ResolveWifiEligibility(customerAdapter, contractInventoryRepo, smartoltWifiGateway);
-  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, smartoltWifiGateway);
-  const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, smartoltWifiGateway);
+  // wifi-password-snapshot — instancia ÚNICA, compartida por el GET/PUT del
+  // portal y el GET/PUT admin de más abajo (una sola tabla, un solo repo).
+  const onuWifiCredentialRepo = new PrismaOnuWifiCredentialRepository();
+  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo);
+  const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo);
   const listPortalWifiDevices = new ListPortalWifiDevices(resolveWifiEligibility, smartoltWifiGateway);
 
   // portal-equipment-reboot — reusa la MISMA `smartoltWifiGateway` (mismo cache
@@ -4003,8 +4008,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // SERIAL, no por contrato — staff opera ONUs aunque no estén asociadas
   // todavía (proposal.md F0). Reusa la MISMA instancia de smartoltWifiGateway
   // de arriba (cache compartida entre portal y admin para la misma sn).
-  const getAdminOnuWifiStatus = new GetAdminOnuWifiStatus(smartoltWifiGateway);
-  const setAdminWifiBand = new SetAdminWifiBand(smartoltWifiGateway);
+  // wifi-password-snapshot — misma instancia de `onuWifiCredentialRepo` de
+  // arriba (una sola tabla; el GET admin ve la password que escribió el
+  // portal y viceversa).
+  const getAdminOnuWifiStatus = new GetAdminOnuWifiStatus(smartoltWifiGateway, onuWifiCredentialRepo);
+  const setAdminWifiBand = new SetAdminWifiBand(smartoltWifiGateway, onuWifiCredentialRepo);
   const enableOnuTr069 = new EnableOnuTr069(smartoltWifiGateway);
   app.use('/api/wifi', createWifiRouter(
     authAdapter,
