@@ -46,6 +46,14 @@ jobs:
             npm run bootstrap-rbac
 
       - name: Deploy container
+        # FIREBASE_SERVICE_ACCOUNT_JSON va por env: (NO inline ${{ }} en el shell):
+        # el JSON contiene comillas dobles que ROMPEN el quoting del `docker run`
+        # — exactamente el motivo del comentario del step bootstrap-rbac de arriba,
+        # y la causa del outage del 2026-08-02 (2 deploys en failure, prod 502).
+        # `-e VAR` sin valor reenvia la env del runner al container, sin shell
+        # en el medio.
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
           set -e
           docker network create ipnext-net 2>/dev/null || true
@@ -113,7 +121,7 @@ jobs:
             -e MINIO_ACCESS_KEY="${{ secrets.MINIO_ACCESS_KEY }}" \
             -e MINIO_SECRET_KEY="${{ secrets.MINIO_SECRET_KEY }}" \
             -e MINIO_BUCKET="${{ secrets.MINIO_BUCKET }}" \
-            -e FIREBASE_SERVICE_ACCOUNT_JSON="${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}" \
+            -e FIREBASE_SERVICE_ACCOUNT_JSON \
             -e CHATWOOT_BASE_URL="${{ secrets.CHATWOOT_BASE_URL }}" \
             -e CHATWOOT_ACCOUNT_ID="${{ secrets.CHATWOOT_ACCOUNT_ID }}" \
             -e CHATWOOT_API_TOKEN="${{ secrets.CHATWOOT_API_TOKEN }}" \
