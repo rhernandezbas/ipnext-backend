@@ -371,3 +371,42 @@ describe('SmartOltHttpGateway — pausas entre pasos (rate limit 10/s)', () => {
     expect(sleeps).toEqual([500]);
   });
 });
+
+/**
+ * wifi-portal-read-perf — la pausa anti-burst protege RÁFAGAS de escrituras
+ * encadenadas (10/s de SmartOLT). Un GET aislado disparado por el portal/app
+ * (getOnuWifiStatus, getRouterHosts, listUnconfiguredOnus) no arriesga ese
+ * límite y NO debe pagarla — antes de este fix, `lastCallAt` era de la
+ * instancia COMPARTIDA: un GET pagaba 2s de pausa por una escritura de OTRO
+ * flujo que había ocurrido segundos antes (medido en prod: 8-12s en
+ * GET /api/portal/wifi/:contractId/devices, al borde del timeout de 15s del
+ * cliente).
+ */
+describe('SmartOltHttpGateway — lecturas NO pagan la pausa anti-burst', () => {
+  it('getOnuWifiStatus/getRouterHosts/listUnconfiguredOnus NUNCA llaman a sleep, aun con una escritura previa', async () => {
+    const { gateway, sleeps, transport } = buildGateway({ stepPauseMs: 2000 });
+    transport.responses.set('onu/get_onu_details/HWTC1', { status: true, onu_details: { wifi_ports: [] } });
+    transport.responses.set('onu/get_onu_router_hosts/HWTC1', { status: true, response: { hostlist: {} } });
+    transport.responses.set('onu/unconfigured_onus', { status: true, response: [] });
+
+    await gateway.enableTr069('HWTC11112222', 'SmartOLT'); // escritura previa: marca lastCallAt
+    sleeps.length = 0;
+
+    await gateway.getOnuWifiStatus('HWTC1');
+    await gateway.getRouterHosts('HWTC1');
+    await gateway.listUnconfiguredOnus();
+
+    expect(sleeps).toEqual([]);
+  });
+
+  it('regresión: una ESCRITURA (setWifiBand) SIGUE pagando la pausa aunque medien lecturas en el medio', async () => {
+    const { gateway, sleeps, transport } = buildGateway({ stepPauseMs: 2000 });
+    transport.responses.set('onu/get_onu_details/HWTC1', { status: true, onu_details: { wifi_ports: [] } });
+
+    await gateway.enableTr069('HWTC11112222', 'SmartOLT'); // escritura: primera call, sin pausa, marca lastCallAt
+    await gateway.getOnuWifiStatus('HWTC1'); // lectura en el medio: NO "limpia" el anti-burst
+    await gateway.setWifiBand('HWTC11112222', { port: 'wifi_0/1', ssid: 'X', password: '12345678' }); // escritura
+
+    expect(sleeps).toEqual([2000]);
+  });
+});
