@@ -73,4 +73,12 @@ export interface OltProvisioningGateway {
    * (best-effort, no aborta el flujo).
    */
   setWifi(sn: string, input: SetWifiInput): Promise<void>;
+  /**
+   * portal-equipment-reboot — reinicia la ONU (POST onu/reboot/<sn>, skill
+   * smartolt-ipnext). Va por OMCI, NO por TR-069 — funciona incluso en un
+   * bridge sin puertos WiFi habilitados (a diferencia de `setWifi`, que sí
+   * depende de TR-069 estar prendido en el flujo del portal). Sin params
+   * extra, mismo patrón que `allowRemoteWanAccess`.
+   */
+  reboot(sn: string): Promise<void>;
 }

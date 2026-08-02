@@ -44,6 +44,7 @@ import {
   PortalTicketTopicNotFoundError,
 } from '@domain/errors/portal.errors';
 import { WifiContractNotFoundError, WifiNotEligibleError, WifiValidationError } from '@domain/errors/wifi';
+import { EquipmentContractNotFoundError, EquipmentNotEligibleError } from '@domain/errors/equipment';
 import {
   createPortalLoginRateLimiter,
   createPortalLoginIpRateLimiter,
@@ -51,6 +52,7 @@ import {
   createPortalTicketCreateRateLimiter,
   createPortalTicketMessageSendRateLimiter,
   createPortalWifiUpdateRateLimiter,
+  createPortalEquipmentRebootRateLimiter,
 } from '../middleware/rateLimiters';
 import { parsePagination } from '../parsePagination';
 import { createTicketMessageUploadMiddleware } from './ticketMessageUpload';
@@ -58,6 +60,8 @@ import { GetPortalWifiStatus } from '@application/use-cases/wifi/GetPortalWifiSt
 import { UpdatePortalWifiBand } from '@application/use-cases/wifi/UpdatePortalWifiBand';
 import { ListPortalWifiDevices } from '@application/use-cases/wifi/ListPortalWifiDevices';
 import { UpdatePortalWifiBandSchema } from '@application/dto/wifi.dto';
+import { GetPortalEquipmentStatus } from '@application/use-cases/equipment/GetPortalEquipmentStatus';
+import { RebootPortalEquipment } from '@application/use-cases/equipment/RebootPortalEquipment';
 
 /** Content-Disposition inline seguro (RFC 5987) — molde `newsMedia.routes.ts`. */
 function contentDisposition(filename: string): string {
@@ -136,6 +140,14 @@ export interface PortalRouterDeps {
   /** Defaults to `createPortalWifiUpdateRateLimiter()` when omitted. Applied
    * ONLY to `PUT /wifi/:contractId` — cada escritura reinicia la radio. */
   wifiUpdateRateLimiter?: RequestHandler;
+
+  // ── portal-equipment-reboot — "Reiniciar mi equipo" (extiende wifi-self-service) ──
+  getPortalEquipmentStatus?: GetPortalEquipmentStatus;
+  rebootPortalEquipment?: RebootPortalEquipment;
+  /** Defaults to `createPortalEquipmentRebootRateLimiter()` when omitted (2/hora
+   * por cuenta). Applied ONLY to `POST /equipment/:contractId/reboot` — cada
+   * reinicio corta el servicio ~2 minutos. */
+  equipmentRebootRateLimiter?: RequestHandler;
 }
 
 /**
@@ -280,6 +292,7 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
   const ticketMessageSendRateLimiter = deps.ticketMessageSendRateLimiter ?? createPortalTicketMessageSendRateLimiter();
   const uploadTicketMessageFiles = createTicketMessageUploadMiddleware();
   const wifiUpdateRateLimiter = deps.wifiUpdateRateLimiter ?? createPortalWifiUpdateRateLimiter();
+  const equipmentRebootRateLimiter = deps.equipmentRebootRateLimiter ?? createPortalEquipmentRebootRateLimiter();
 
   /**
    * F7 (fix wave, v2.B) — `ListPortalTickets.toDto` hace UN `countUnread` por
@@ -1115,6 +1128,72 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         } catch (err) {
           if (err instanceof WifiContractNotFoundError) {
             res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ── portal-equipment-reboot — "Reiniciar mi equipo" ─────────────────────────
+  // Extiende wifi-self-service (F0), NO lo duplica: reusa `ResolveEquipmentRebootEligibility`,
+  // que a su vez reusa el MISMO `WifiManagementPort.getOnuWifiStatus` (cache 60s)
+  // que "Mi WiFi" — pero la elegibilidad es MÁS AMPLIA (sin exigir TR-069 ni
+  // puertos WiFi, ver el docblock del resolver). `contractId` por PARAM,
+  // verificado SIEMPRE contra `req.portalClientId` (anti-IDOR estructural,
+  // mismo criterio que `/wifi/:contractId`): 404 indistinguible entre "no
+  // existe" y "es de otro cliente". `not_configured`/`no_onu` son ESTADOS
+  // NORMALES (200), nunca errores.
+
+  if (deps.getPortalEquipmentStatus) {
+    const getPortalEquipmentStatus = deps.getPortalEquipmentStatus;
+    router.get(
+      '/equipment/:contractId',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await getPortalEquipmentStatus.execute(clientId, req.params['contractId'] as string);
+          res.status(200).json(result);
+        } catch (err) {
+          if (err instanceof EquipmentContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.rebootPortalEquipment) {
+    const rebootPortalEquipment = deps.rebootPortalEquipment;
+    router.post(
+      '/equipment/:contractId/reboot',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      equipmentRebootRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          // REGLA DURA (docblock de `RebootPortalEquipment`): re-verifica la
+          // elegibilidad ENTERA antes de disparar el reinicio — nunca confía
+          // en un estado leído en un GET anterior.
+          await rebootPortalEquipment.execute(clientId, req.params['contractId'] as string);
+          res.status(202).json({ accepted: true });
+        } catch (err) {
+          if (err instanceof EquipmentContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof EquipmentNotEligibleError) {
+            // La ONU dejó de ser elegible entre el GET y este POST — 409: el
+            // request está bien formado, pero el ESTADO actual no lo permite.
+            res.status(409).json({ error: err.message, code: err.code, reason: err.reason });
             return;
           }
           next(err);

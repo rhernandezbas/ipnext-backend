@@ -13,9 +13,10 @@ export type RecordedGatewayCall =
   | { method: 'setMgmtIp'; sn: string; vlan: number }
   | { method: 'enableTr069'; sn: string; profile: string }
   | { method: 'allowRemoteWanAccess'; sn: string }
-  | { method: 'setWifi'; sn: string; input: SetWifiInput };
+  | { method: 'setWifi'; sn: string; input: SetWifiInput }
+  | { method: 'reboot'; sn: string };
 
-type WriteMethod = 'authorizeOnu' | 'setMgmtIp' | 'enableTr069' | 'allowRemoteWanAccess';
+type WriteMethod = 'authorizeOnu' | 'setMgmtIp' | 'enableTr069' | 'allowRemoteWanAccess' | 'reboot';
 
 /**
  * smartolt-provision (K2) — fake COMPLETO del gateway SmartOLT para tests
@@ -114,5 +115,12 @@ export class InMemoryOltProvisioningGateway implements OltProvisioningGateway {
       throw new OltProvisioningError('rejected', 'Invalid parameters');
     }
     this.calls.push({ method: 'setWifi', sn, input: { ...input } });
+  }
+
+  /** portal-equipment-reboot — sin dependencias previas modeladas (a diferencia de tr069/wifi, el reboot va por OMCI). */
+  async reboot(sn: string): Promise<void> {
+    this.guardUnreachable();
+    this.guardMethod('reboot');
+    this.calls.push({ method: 'reboot', sn });
   }
 }

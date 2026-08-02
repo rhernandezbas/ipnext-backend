@@ -1042,6 +1042,12 @@ import { SetAdminWifiBand } from '@application/use-cases/wifi/SetAdminWifiBand';
 import { EnableOnuTr069 } from '@application/use-cases/wifi/EnableOnuTr069';
 import { createWifiRouter } from './routes/wifi.routes';
 
+// portal-equipment-reboot — "Reiniciar mi equipo" (extiende wifi-self-service:
+// reusa el MISMO smartoltWifiGateway/getOnuWifiStatus, elegibilidad MÁS AMPLIA).
+import { ResolveEquipmentRebootEligibility } from '@application/use-cases/equipment/ResolveEquipmentRebootEligibility';
+import { GetPortalEquipmentStatus } from '@application/use-cases/equipment/GetPortalEquipmentStatus';
+import { RebootPortalEquipment } from '@application/use-cases/equipment/RebootPortalEquipment';
+
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
  *
@@ -3884,6 +3890,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, smartoltWifiGateway);
   const listPortalWifiDevices = new ListPortalWifiDevices(resolveWifiEligibility, smartoltWifiGateway);
 
+  // portal-equipment-reboot — reusa la MISMA `smartoltWifiGateway` (mismo cache
+  // 60s de `getOnuWifiStatus` que "Mi WiFi") para el resolver de elegibilidad,
+  // pero un `ResolveEquipmentRebootEligibility` PROPIO (elegibilidad más
+  // amplia — ver el docblock del use case). El `reboot(sn)` en sí es
+  // `OltProvisioningGateway` (K2), no `WifiManagementPort` — la MISMA
+  // instancia de `SmartOltHttpGateway` implementa ambos ports.
+  const resolveEquipmentRebootEligibility = new ResolveEquipmentRebootEligibility(
+    customerAdapter,
+    contractInventoryRepo,
+    smartoltWifiGateway,
+  );
+  const getPortalEquipmentStatus = new GetPortalEquipmentStatus(resolveEquipmentRebootEligibility);
+  const rebootPortalEquipment = new RebootPortalEquipment(resolveEquipmentRebootEligibility, smartoltWifiGateway);
+
   app.use('/api/portal', createPortalRouter({
     portalLogin,
     refreshPortalSession,
@@ -3924,6 +3944,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getPortalWifiStatus,
     updatePortalWifiBand,
     listPortalWifiDevices,
+    getPortalEquipmentStatus,
+    rebootPortalEquipment,
   }));
 
   // wifi-self-service (F0) — admin `/api/wifi` (wifi.read/wifi.manage). Por

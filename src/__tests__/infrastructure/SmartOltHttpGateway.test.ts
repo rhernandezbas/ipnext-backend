@@ -223,6 +223,14 @@ describe('SmartOltHttpGateway — POSTs form-encoded', () => {
     expect(transport.calls[0]!.url).toBe('onu/enable_allow_remote_access_to_wan_ip/HWTC11112222');
   });
 
+  it('reboot → POST onu/reboot/<sn> (portal-equipment-reboot, sin params extra)', async () => {
+    const { gateway, transport } = buildGateway();
+    await gateway.reboot('HWTC11112222');
+    const call = transport.calls[0]!;
+    expect(call).toMatchObject({ method: 'post', url: 'onu/reboot/HWTC11112222' });
+    expect(call.headers).toMatchObject({ 'X-Token': 'tok-123' });
+  });
+
   it('setWifi → POST onu/set_wifi_port_lan/<sn> con wifi_port/ssid/password/WPA2/dhcp "No control"', async () => {
     const { gateway, transport } = buildGateway();
 
