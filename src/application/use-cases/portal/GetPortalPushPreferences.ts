@@ -1,19 +1,23 @@
-import type { PortalPushPreferenceRepository } from '@domain/ports/PortalPushPreferenceRepository';
+import type { PortalPushTokenRepository } from '@domain/ports/PortalPushTokenRepository';
 import { toPortalPushPreferenceDto, type PortalPushPreferenceDto } from '@application/dto/portal/portalPush.dto';
 
 /**
- * GetPortalPushPreferences — `GET /api/portal/push/preferences` (portal-push-notifications).
+ * GetPortalPushPreferences — `GET /api/portal/push/preferences?token=` (push-per-device).
  *
- * Crea el registro con los defaults del schema (`serviceAlerts=true`,
- * `promos=false`) si la cuenta todavía no tiene uno — un cliente que nunca
- * tocó el toggle igual necesita ver un estado coherente la PRIMERA vez que
- * abre la pantalla de notificaciones.
+ * push-per-device — las preferencias son POR DISPOSITIVO, no por cuenta (ver
+ * el docblock de `PortalPushToken`): esta llamada YA NO usa
+ * `PortalPushPreferenceRepository` (huérfano, sin lecturas — ver su
+ * docblock). `token` DEBE pertenecer a `accountId` — `findForAccount` hace el
+ * ownership check; si el token no existe O es de otra cuenta, devuelve
+ * `null` y el caller (route) responde 404 indistinguible (anti-IDOR, mismo
+ * criterio que el resto del portal).
  */
 export class GetPortalPushPreferences {
-  constructor(private readonly prefs: Pick<PortalPushPreferenceRepository, 'getOrCreate'>) {}
+  constructor(private readonly tokens: Pick<PortalPushTokenRepository, 'findForAccount'>) {}
 
-  async execute(accountId: string): Promise<PortalPushPreferenceDto> {
-    const pref = await this.prefs.getOrCreate(accountId);
-    return toPortalPushPreferenceDto(pref);
+  async execute(accountId: string, token: string): Promise<PortalPushPreferenceDto | null> {
+    const row = await this.tokens.findForAccount(accountId, token);
+    if (!row) return null;
+    return toPortalPushPreferenceDto(row);
   }
 }

@@ -118,6 +118,28 @@ describe('SendPushServiceAlert', () => {
     expect(result.inboxed).toBe(6);
   });
 
+  it('caso obligatorio 5 (motivador del change, push-per-device) — dos teléfonos de la MISMA cuenta, uno con serviceAlerts=false: el envío le llega a UNO solo', async () => {
+    const tokens = new InMemoryPortalPushTokenRepository();
+    const register = new RegisterPortalPushToken(tokens);
+    tokens.seedAccount('account-family', 'client-family', true);
+    await register.execute('account-family', { token: 'phone-mom', platform: 'android' });
+    await register.execute('account-family', { token: 'phone-dad', platform: 'android' });
+    // El padre apaga los avisos de servicio en SU teléfono — la madre sigue recibiéndolos.
+    await tokens.updatePreferences('account-family', 'phone-dad', { serviceAlerts: false });
+
+    const segments = new FakeSegmentSource({});
+    const sender = new FakePushSender();
+    const notifications = new InMemoryPortalNotificationRepository();
+    const accounts = new FakeAccountDirectory([{ accountId: 'account-family', clientId: 'client-family' }]);
+    const useCase = new SendPushServiceAlert(tokens, sender, segments, notifications, accounts);
+
+    const result = await useCase.execute({ title: 'Corte programado', body: 'Volvemos a las 15:30' });
+
+    expect(result.recipients).toBe(1); // UNA cuenta, con >=1 token calificado
+    expect(result.devices).toBe(1); // UN SOLO teléfono recibió el push
+    expect(sender.sentTo[0]).toEqual(['phone-mom']);
+  });
+
   it('caso obligatorio 6 — con nodo: solo los clientes de ESE nodo', async () => {
     const { tokens, segments, accounts } = await buildFixture();
     // Habilito serviceAlerts en node-b para poder distinguir "excluido por nodo" de "excluido por preferencia".

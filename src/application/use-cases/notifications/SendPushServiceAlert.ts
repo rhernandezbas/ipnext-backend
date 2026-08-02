@@ -45,9 +45,12 @@ export interface SendPushServiceAlertResult {
  * portal-notification-inbox — TIMBRE vs REGISTRO (decisión explícita, no
  * "arreglar" agregando un filtro de `serviceAlerts` acá abajo):
  *   - El PUSH (arriba, `this.tokens.listServiceAlertTargets`) SÍ filtra por
- *     `serviceAlerts` — esa preferencia va a pasar a ser POR DISPOSITIVO
+ *     `serviceAlerts` — push-per-device: esa preferencia es POR DISPOSITIVO
  *     (una cuenta de portal puede ser compartida por una familia, cada
- *     teléfono es una persona distinta) y controla si ESE teléfono suena.
+ *     teléfono es una persona distinta) y controla si ESE teléfono suena. Una
+ *     cuenta con 2 dispositivos, uno con `serviceAlerts=false`, le llega a
+ *     UNO solo — `devices` cuenta tokens, `recipients` cuenta las cuentas
+ *     distintas con >=1 token calificado.
  *   - El BUZÓN (`this.accounts.listByClientIds`) NO mira `serviceAlerts`:
  *     escribe una fila `PortalNotification` para TODA cuenta del
  *     segmento/nodo del aviso. Que ningún teléfono haya sonado no significa

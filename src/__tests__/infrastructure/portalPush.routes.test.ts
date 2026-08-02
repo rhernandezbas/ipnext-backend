@@ -15,7 +15,6 @@ import { InMemoryPortalSessionRepository } from '@infrastructure/adapters/in-mem
 import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMemoryPasswordHasher';
 import { InMemorySettingsRepository } from '@infrastructure/adapters/in-memory/InMemorySettingsRepository';
 import { InMemoryPortalPushTokenRepository } from '@infrastructure/adapters/in-memory/InMemoryPortalPushTokenRepository';
-import { InMemoryPortalPushPreferenceRepository } from '@infrastructure/adapters/in-memory/InMemoryPortalPushPreferenceRepository';
 import { JwtPortalTokenService } from '@infrastructure/adapters/jwt/JwtPortalTokenService';
 
 import { PortalLogin } from '@application/use-cases/portal/PortalLogin';
@@ -34,7 +33,6 @@ function buildStack() {
   const settingsRepo = new InMemorySettingsRepository();
   const tokenService = new JwtPortalTokenService(TEST_SECRET);
   const pushTokens = new InMemoryPortalPushTokenRepository();
-  const pushPrefs = new InMemoryPortalPushPreferenceRepository();
 
   const portalLogin = new PortalLogin(accounts, sessions, hasher, tokenService);
   const logoutPortal = new LogoutPortal(sessions, pushTokens);
@@ -44,8 +42,11 @@ function buildStack() {
 
   const registerPortalPushToken = new RegisterPortalPushToken(pushTokens);
   const unregisterPortalPushToken = new UnregisterPortalPushToken(pushTokens);
-  const getPortalPushPreferences = new GetPortalPushPreferences(pushPrefs);
-  const updatePortalPushPreferences = new UpdatePortalPushPreferences(pushPrefs);
+  // push-per-device — las preferencias leen/escriben `pushTokens` directamente
+  // (ya NO hay un repo de preferencias separado, ver GetPortalPushPreferences/
+  // UpdatePortalPushPreferences).
+  const getPortalPushPreferences = new GetPortalPushPreferences(pushTokens);
+  const updatePortalPushPreferences = new UpdatePortalPushPreferences(pushTokens);
 
   const app = express();
   app.use(express.json());
@@ -66,7 +67,7 @@ function buildStack() {
     }),
   );
 
-  return { app, accounts, hasher, pushTokens, pushPrefs };
+  return { app, accounts, hasher, pushTokens };
 }
 
 async function loginAs(
@@ -169,54 +170,119 @@ describe('DELETE /api/portal/push/register', () => {
 });
 
 describe('GET /api/portal/push/preferences', () => {
-  it('caso obligatorio 3 (ruta) — crea defaults serviceAlerts=true, promos=false', async () => {
+  it('caso 3 — sin token en la query -> 400 VALIDATION_ERROR', async () => {
     const { app, accounts, hasher } = buildStack();
     const { accessToken } = await loginAs(app, accounts, hasher, 'client-1');
 
     const res = await request(app).get('/api/portal/push/preferences').set('Authorization', `Bearer ${accessToken}`);
 
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('caso obligatorio 3 (ruta) — devuelve los defaults serviceAlerts=true, promos=false DEL TOKEN', async () => {
+    const { app, accounts, hasher } = buildStack();
+    const { accessToken } = await loginAs(app, accounts, hasher, 'client-1');
+    await request(app)
+      .post('/api/portal/push/register')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ token: 'dev-1', platform: 'android' });
+
+    const res = await request(app)
+      .get('/api/portal/push/preferences?token=dev-1')
+      .set('Authorization', `Bearer ${accessToken}`);
+
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ serviceAlerts: true, promos: false });
+  });
+
+  it('caso obligatorio 2 (ruta) — token de OTRA cuenta -> 404 indistinguible (anti-IDOR)', async () => {
+    const { app, accounts, hasher } = buildStack();
+    const owner = await loginAs(app, accounts, hasher, 'client-owner');
+    await request(app)
+      .post('/api/portal/push/register')
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({ token: 'owner-dev', platform: 'android' });
+    const attacker = await loginAs(app, accounts, hasher, 'client-attacker');
+
+    const res = await request(app)
+      .get('/api/portal/push/preferences?token=owner-dev')
+      .set('Authorization', `Bearer ${attacker.accessToken}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PUSH_TOKEN_NOT_FOUND');
+  });
+
+  it('token que nunca existió -> el MISMO 404 que "es de otra cuenta" (nunca se filtra cuál pasó)', async () => {
+    const { app, accounts, hasher } = buildStack();
+    const { accessToken } = await loginAs(app, accounts, hasher, 'client-1');
+
+    const res = await request(app)
+      .get('/api/portal/push/preferences?token=nunca-existio')
+      .set('Authorization', `Bearer ${accessToken}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PUSH_TOKEN_NOT_FOUND');
   });
 });
 
 describe('PUT /api/portal/push/preferences', () => {
   it('caso obligatorio 4 (ruta) — promos false->true estampa el opt-in usando X-App-Version', async () => {
-    const { app, accounts, hasher, pushPrefs } = buildStack();
+    const { app, accounts, hasher, pushTokens } = buildStack();
     const { accessToken, account } = await loginAs(app, accounts, hasher, 'client-1');
+    await request(app)
+      .post('/api/portal/push/register')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ token: 'dev-1', platform: 'android' });
 
     const res = await request(app)
       .put('/api/portal/push/preferences')
       .set('Authorization', `Bearer ${accessToken}`)
       .set('X-App-Version', '1.4.0')
-      .send({ promos: true });
+      .send({ token: 'dev-1', promos: true });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ serviceAlerts: true, promos: true });
-    const raw = await pushPrefs.getOrCreate(account.id);
-    expect(raw.promosOptInAt).not.toBeNull();
-    expect(raw.promosOptInAppVersion).toBe('1.4.0');
+    const raw = await pushTokens.findForAccount(account.id, 'dev-1');
+    expect(raw?.promosOptInAt).not.toBeNull();
+    expect(raw?.promosOptInAppVersion).toBe('1.4.0');
   });
 
   it('promos true->false conserva el estampado (histórico) tras apagar de nuevo', async () => {
-    const { app, accounts, hasher, pushPrefs } = buildStack();
+    const { app, accounts, hasher, pushTokens } = buildStack();
     const { accessToken, account } = await loginAs(app, accounts, hasher, 'client-1');
+    await request(app)
+      .post('/api/portal/push/register')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ token: 'dev-1', platform: 'android' });
     await request(app)
       .put('/api/portal/push/preferences')
       .set('Authorization', `Bearer ${accessToken}`)
       .set('X-App-Version', '1.4.0')
-      .send({ promos: true });
+      .send({ token: 'dev-1', promos: true });
 
     const res = await request(app)
       .put('/api/portal/push/preferences')
       .set('Authorization', `Bearer ${accessToken}`)
       .set('X-App-Version', '1.5.0')
-      .send({ promos: false });
+      .send({ token: 'dev-1', promos: false });
 
     expect(res.status).toBe(200);
     expect(res.body.promos).toBe(false);
-    const raw = await pushPrefs.getOrCreate(account.id);
-    expect(raw.promosOptInAppVersion).toBe('1.4.0'); // NO se pisó con 1.5.0
+    const raw = await pushTokens.findForAccount(account.id, 'dev-1');
+    expect(raw?.promosOptInAppVersion).toBe('1.4.0'); // NO se pisó con 1.5.0
+  });
+
+  it('body sin token -> 400 (.strict(), token es obligatorio)', async () => {
+    const { app, accounts, hasher } = buildStack();
+    const { accessToken } = await loginAs(app, accounts, hasher, 'client-1');
+
+    const res = await request(app)
+      .put('/api/portal/push/preferences')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ promos: true });
+
+    expect(res.status).toBe(400);
   });
 
   it('body con campo desconocido -> 400 (.strict())', async () => {
@@ -226,9 +292,29 @@ describe('PUT /api/portal/push/preferences', () => {
     const res = await request(app)
       .put('/api/portal/push/preferences')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ promos: true, notAField: 1 });
+      .send({ token: 'dev-1', promos: true, notAField: 1 });
 
     expect(res.status).toBe(400);
+  });
+
+  it('caso obligatorio 2 (ruta) — PUT sobre token de OTRA cuenta -> 404 indistinguible, no modifica nada', async () => {
+    const { app, accounts, hasher, pushTokens } = buildStack();
+    const owner = await loginAs(app, accounts, hasher, 'client-owner');
+    await request(app)
+      .post('/api/portal/push/register')
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({ token: 'owner-dev', platform: 'android' });
+    const attacker = await loginAs(app, accounts, hasher, 'client-attacker');
+
+    const res = await request(app)
+      .put('/api/portal/push/preferences')
+      .set('Authorization', `Bearer ${attacker.accessToken}`)
+      .send({ token: 'owner-dev', serviceAlerts: false });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PUSH_TOKEN_NOT_FOUND');
+    const raw = await pushTokens.findForAccount(owner.account.id, 'owner-dev');
+    expect(raw?.serviceAlerts).toBe(true); // intacto — el intento ajeno no lo tocó
   });
 });
 
